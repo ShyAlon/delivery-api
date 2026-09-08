@@ -21,6 +21,15 @@ app = FastAPI(title="delivery-api", version="0.1.0")
 store = Store(config.DB_PATH)
 jobs = JobQueue(store)
 
+if config.ADMIN_TOKEN == "dev-admin-token":
+    import logging
+
+    logging.getLogger("delivery_api").warning(
+        "DELIVERY_ADMIN_TOKEN is unset - using the development default. "
+        "Anyone who knows this default can mint links. Set DELIVERY_ADMIN_TOKEN "
+        "before the service is reachable by anyone but you."
+    )
+
 
 @app.on_event("startup")
 async def _start():
@@ -51,7 +60,8 @@ class StartRequest(BaseModel):
 def create_link(req: LinkRequest):
     """One personal link per tester. No signup; the token gates the run."""
     if not check_global_budget(store.total_spend(), config.GLOBAL_BUDGET_USD):
-        raise HTTPException(402, "global spend cap reached; no new runs")
+        raise HTTPException(402, "global spend cap reached - no new runs will be minted. "
+                         "Raise DELIVERY_GLOBAL_BUDGET_USD (env) if this is expected usage.")
     link = store.create_link(req.founder_label)
     return {"url": f"/runs/start?token={link['token']}", **link}
 
@@ -99,7 +109,9 @@ def add_usage(run_id: str, rec: UsageRecord):
         check_run_budget(total, run["budget_usd"], run_id)
     except BudgetExceeded:
         store.set_state(run_id, RunState.BUDGET_STOPPED)
-        raise HTTPException(402, f"budget hard stop at ${total:.2f}")
+        raise HTTPException(402, f"run stopped by the budget guard at ${total:.2f} of its "
+                         f"${run['budget_usd']:.2f} cap - no further LLM calls were made. "
+                         "Raise DELIVERY_PER_RUN_BUDGET_USD and retry, or mint a new link.")
     return {"run_total_usd": total}
 
 
