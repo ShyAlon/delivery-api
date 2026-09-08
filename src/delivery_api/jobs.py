@@ -19,6 +19,7 @@ from typing import Awaitable, Callable
 from vmodel_contracts import RunState
 
 from .budget import BudgetExceeded
+from .errors import UserFacingError
 from .store import Store
 
 JobFn = Callable[[str], Awaitable[str]]  # run_id -> artifact ref
@@ -55,7 +56,14 @@ class JobQueue:
                 self.store.add_artifact(run_id, kind, ref)
             except BudgetExceeded:
                 self.store.set_state(run_id, RunState.BUDGET_STOPPED)
+            except UserFacingError as e:
+                # module wired in-process already translated the pain; keep it human
+                self.store.add_artifact(run_id, f"{kind}:error", e.render())
             except Exception as e:  # a failed job is a visible fact, not a silent drop
-                self.store.add_artifact(run_id, f"{kind}:error", str(e))
+                self.store.add_artifact(
+                    run_id, f"{kind}:error",
+                    f"{type(e).__name__}: {e} - this is a bug or an unhandled environment failure, "
+                    "not something the founder did wrong; check the service logs for the traceback.",
+                )
             finally:
                 self._queue.task_done()
