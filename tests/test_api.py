@@ -41,3 +41,47 @@ def test_budget_hard_stop(client):
     r = client.post(f"/runs/{run_id}/usage", json={"record_json": "{}", "cost_usd": 7.50})
     assert r.status_code == 402
     assert client.get(f"/runs/{run_id}").json()["state"] == "budget_stopped"
+
+
+# ---- error handling ----
+
+def test_budget_stop_message_is_actionable():
+    from delivery_api.budget import BudgetExceeded
+
+    e = BudgetExceeded("run-1", 6.01, 6.00)
+    msg = str(e)
+    assert "budget guard" in msg and "DELIVERY_PER_RUN_BUDGET_USD" in msg and "no further llm calls" in msg.lower()
+
+
+def test_job_failure_records_human_artifact(tmp_path):
+    import asyncio
+    import time
+
+    from delivery_api.errors import UserFacingError
+    from delivery_api.jobs import JobQueue
+    from delivery_api.store import Store
+
+    store = Store(str(tmp_path / "t.db"))
+    store.create_link("t")
+    run_id = store._db_run_id() if hasattr(store, "_db_run_id") else None
+    q = JobQueue(store)
+
+    async def boom(rid: str) -> str:
+        raise UserFacingError("Ollama is not running.", "ollama serve not started", "run `ollama serve`")
+
+    async def go():
+        await q.start()
+        q.register("generation", boom)
+        rid = store.db.execute("SELECT run_id FROM runs LIMIT 1").fetchone()[0]
+        await q.submit("generation", rid)
+        for _ in range(50):
+            arts = store.artifacts(rid)
+            if arts:
+                break
+            await asyncio.sleep(0.05)
+        await q.stop()
+        return rid
+
+    rid = asyncio.new_event_loop().run_until_complete(go())
+    arts = store.artifacts(rid)
+    assert any(a["kind"] == "generation:error" and "ollama serve" in a["ref"] for a in arts), arts
