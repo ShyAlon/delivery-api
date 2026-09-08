@@ -5,7 +5,11 @@ from __future__ import annotations
 
 class BudgetExceeded(RuntimeError):
     def __init__(self, run_id: str, spent: float, cap: float):
-        super().__init__(f"run {run_id} stopped: ${spent:.2f} spent of ${cap:.2f} cap")
+        super().__init__(
+            f"run {run_id} stopped by the budget guard: ${spent:.2f} spent of the ${cap:.2f} cap. "
+            "No further LLM calls will be made for this run. "
+            "To continue: raise the cap (DELIVERY_PER_RUN_BUDGET_USD) and retry, or mint a new link."
+        )
         self.run_id, self.spent, self.cap = run_id, spent, cap
 
 
