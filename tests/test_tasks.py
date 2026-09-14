@@ -28,19 +28,26 @@ def test_task_three_states_and_phase_progress():
         assert done["state"] == "done" and done["artifacts"][0]["name"] == "Verification report"
 
 
-def test_rerun_is_preview_only_until_policy_decision():
+def test_rerun_previews_then_archives_with_cause_and_audit():
     with TestClient(app) as client:
         task_id = client.post("/api/tasks", json={"title": "Policy seam"}).json()["task_id"]
         store.add_task_artifact(task_id, "architecture", "Architecture", "/a.json")
         preview = client.post(f"/api/tasks/{task_id}/rerun", json={
-            "from_phase": "srs", "policy": "wipe", "confirm_preview": False,
+            "from_phase": "srs", "confirm": False,
         })
-        assert preview.json()["status"] == "preview"
+        assert preview.json()["status"] == "preview" and preview.json()["policy"] == "archive"
         assert not store.task_artifacts(task_id)[0]["stale"]
-        blocked = client.post(f"/api/tasks/{task_id}/rerun", json={
-            "from_phase": "srs", "policy": "wipe", "confirm_preview": True,
+        applied = client.post(f"/api/tasks/{task_id}/rerun", json={
+            "from_phase": "srs", "confirm": True,
         })
-        assert blocked.status_code == 409
+        assert applied.status_code == 200 and applied.json()["generation"] == 2
+        artifact = store.task_artifacts(task_id)[0]
+        assert artifact["stale"] and "rerun from srs" in artifact["stale_reason"]
+        task = store.task(task_id)
+        assert all(p["gate_basis_changed"] for p in task["phases"][3:])
+        audit = client.get(f"/api/tasks/{task_id}/audit").json()
+        assert audit["actor_mode"] == "local user"
+        assert any(e["action"] == "task.rerun_prepared" for e in audit["entries"])
 
 
 def test_archive_policy_marks_downstream_stale_and_keeps_upstream():

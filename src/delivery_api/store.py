@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS phases (
   task_id TEXT NOT NULL, phase_key TEXT NOT NULL, label TEXT NOT NULL, position INTEGER NOT NULL,
   state TEXT NOT NULL DEFAULT 'pending', detail TEXT NOT NULL DEFAULT '',
-  completed INTEGER NOT NULL DEFAULT 0, total INTEGER,
+  completed INTEGER NOT NULL DEFAULT 0, total INTEGER, gate_basis_changed INTEGER NOT NULL DEFAULT 0,
   started_at REAL, completed_at REAL, PRIMARY KEY(task_id, phase_key)
 );
 CREATE TABLE IF NOT EXISTS events (
@@ -42,10 +42,15 @@ CREATE TABLE IF NOT EXISTS events (
   kind TEXT NOT NULL, message TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', ts REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, id);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, action TEXT NOT NULL,
+  task_id TEXT, detail TEXT NOT NULL DEFAULT '{}', ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_task ON audit_log(task_id, id);
 CREATE TABLE IF NOT EXISTS task_artifacts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, generation INTEGER NOT NULL,
   phase_key TEXT NOT NULL, name TEXT NOT NULL, ref TEXT NOT NULL, mime_type TEXT NOT NULL DEFAULT 'application/json',
-  stale INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL
+  stale INTEGER NOT NULL DEFAULT 0, stale_reason TEXT, created_at REAL NOT NULL
 );
 """
 
@@ -68,6 +73,17 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         self.db.executescript(SCHEMA)
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        """Small additive migrations keep local task history readable."""
+        phase_cols = {r[1] for r in self.db.execute("PRAGMA table_info(phases)")}
+        artifact_cols = {r[1] for r in self.db.execute("PRAGMA table_info(task_artifacts)")}
+        if "gate_basis_changed" not in phase_cols:
+            self.db.execute("ALTER TABLE phases ADD COLUMN gate_basis_changed INTEGER NOT NULL DEFAULT 0")
+        if "stale_reason" not in artifact_cols:
+            self.db.execute("ALTER TABLE task_artifacts ADD COLUMN stale_reason TEXT")
+        self.db.commit()
 
     def _commit(self):
         self.db.commit()
@@ -125,6 +141,7 @@ class Store:
                 "INSERT INTO phases(task_id,phase_key,label,position,state) VALUES (?,?,?,?, 'pending')",
                 [(task_id, key, label, i) for i, (key, label) in enumerate(PHASES)],
             )
+            self.audit("local user", "task.created", task_id, {"title": title})
             self._commit()
             return self.task(task_id)
 
@@ -139,7 +156,7 @@ class Store:
     def _task_record(self, row) -> dict:
         item = dict(row)
         item["phases"] = [dict(r) for r in self.db.execute(
-            "SELECT phase_key,label,position,state,detail,completed,total,started_at,completed_at "
+            "SELECT phase_key,label,position,state,detail,completed,total,gate_basis_changed,started_at,completed_at "
             "FROM phases WHERE task_id=? ORDER BY position", (item["task_id"],))]
         item["artifact_count"] = self.db.execute(
             "SELECT count(*) n FROM task_artifacts WHERE task_id=? AND stale=0", (item["task_id"],)).fetchone()["n"]
@@ -190,6 +207,23 @@ class Store:
             item = dict(row); item["payload"] = json.loads(item["payload"]); result.append(item)
         return result
 
+    def audit(self, actor: str, action: str, task_id: str | None = None, detail: dict | None = None) -> int:
+        with self._lock:
+            cur = self.db.execute("INSERT INTO audit_log(actor,action,task_id,detail,ts) VALUES (?,?,?,?,?)",
+                                  (actor, action, task_id, json.dumps(detail or {}), time.time()))
+            self._commit()
+            return cur.lastrowid
+
+    def audit_entries(self, task_id: str | None = None, limit: int = 500) -> list[dict]:
+        if task_id:
+            rows = self.db.execute("SELECT * FROM audit_log WHERE task_id=? ORDER BY id DESC LIMIT ?", (task_id, limit))
+        else:
+            rows = self.db.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,))
+        result=[]
+        for row in rows:
+            item=dict(row); item["detail"]=json.loads(item["detail"]); result.append(item)
+        return result
+
     def add_task_artifact(self, task_id: str, phase_key: str, name: str, ref: str,
                           mime_type: str = "application/json") -> None:
         task = self.task(task_id)
@@ -204,19 +238,23 @@ class Store:
         return [dict(r) for r in self.db.execute(
             f"SELECT * FROM task_artifacts WHERE {where} ORDER BY generation DESC,id", (task_id,))]
 
-    def prepare_rerun(self, task_id: str, from_phase: str, policy: str) -> int:
-        """The one rerun-policy seam. Only archive is active until the founder decides."""
+    def prepare_rerun(self, task_id: str, from_phase: str, policy: str = "archive", actor: str = "local user") -> int:
+        """Policy B: stale now, retain by generation, require downstream re-approval."""
         if policy != "archive":
-            raise ValueError("rerun policy is not decided; only the reversible archive preview is available")
+            raise ValueError("rerun policy is archive: downstream work is retained and marked stale")
         positions = dict((k, i) for i, (k, _) in enumerate(PHASES))
         if from_phase not in positions: raise KeyError(from_phase)
         with self._lock:
             downstream = [k for k, i in positions.items() if i >= positions[from_phase]]
             marks = ",".join("?" for _ in downstream)
-            self.db.execute(f"UPDATE task_artifacts SET stale=1 WHERE task_id=? AND phase_key IN ({marks})",
-                            (task_id, *downstream))
-            self.db.execute(f"UPDATE phases SET state='pending',detail='',completed=0,total=NULL,started_at=NULL,completed_at=NULL "
+            reason = f"generation basis changed: rerun from {from_phase}"
+            self.db.execute(f"UPDATE task_artifacts SET stale=1,stale_reason=? WHERE task_id=? AND phase_key IN ({marks})",
+                            (reason, task_id, *downstream))
+            self.db.execute(f"UPDATE phases SET state='pending',detail='',completed=0,total=NULL,gate_basis_changed=1,started_at=NULL,completed_at=NULL "
                             f"WHERE task_id=? AND phase_key IN ({marks})", (task_id, *downstream))
             self.db.execute("UPDATE tasks SET generation=generation+1,state='not_started',active_phase=NULL,updated_at=? WHERE task_id=?",
-                            (time.time(), task_id)); self._commit()
-            return self.task(task_id)["generation"]
+                            (time.time(), task_id))
+            generation = self.task(task_id)["generation"]
+            self.audit(actor, "task.rerun_prepared", task_id, {"from_phase": from_phase, "generation": generation, "policy": "archive", "stale_reason": reason})
+            self._commit()
+            return generation

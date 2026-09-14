@@ -134,21 +134,26 @@ async def task_stream(task_id: str):
 
 class RerunRequest(BaseModel):
     from_phase: str
-    policy: Literal["archive", "wipe", "overwrite"]
-    confirm_preview: bool = False
+    confirm: bool = False
 
 @app.post("/api/tasks/{task_id}/rerun")
 def rerun(task_id: str, req: RerunRequest):
     if not store.task(task_id): raise HTTPException(404, "task not found")
-    if not req.confirm_preview:
-        return {"status": "preview", "from_phase": req.from_phase, "policy": req.policy,
-                "message": "No artifacts changed. Confirm after the founder selects the rerun policy."}
-    try: generation = store.prepare_rerun(task_id, req.from_phase, req.policy)
+    if not req.confirm:
+        downstream = [p["phase_key"] for p in store.task(task_id)["phases"] if p["position"] >= next(p["position"] for p in store.task(task_id)["phases"] if p["phase_key"] == req.from_phase)]
+        return {"status": "preview", "from_phase": req.from_phase, "policy": "archive", "downstream": downstream,
+                "message": "Downstream artifacts will be marked stale and retained under their generation. Their gates will require re-approval."}
+    try: generation = store.prepare_rerun(task_id, req.from_phase, "archive", "local user")
     except (ValueError, KeyError) as e:
-        raise HTTPException(409, {"error": str(e), "cause": "The product-wide rerun policy is still open.",
-                                  "next": "Choose archive, wipe, or overwrite before enabling this action."})
+        raise HTTPException(409, {"error": str(e), "cause": "The selected phase is invalid.",
+                                  "next": "Choose one of the phases shown on this task."})
     store.add_event(task_id, "rerun", f"Prepared generation {generation} from {req.from_phase}", phase_key=req.from_phase)
-    return {"status": "prepared", "generation": generation}
+    return {"status": "prepared", "generation": generation, "policy": "archive"}
+
+@app.get("/api/tasks/{task_id}/audit")
+def task_audit(task_id: str):
+    if not store.task(task_id): raise HTTPException(404, "task not found")
+    return {"actor_mode": "local user", "entries": store.audit_entries(task_id)}
 
 @app.get("/health")
 def health(): return {"ok": True, "total_spend_usd": store.total_spend(), "tasks": len(store.list_tasks())}
