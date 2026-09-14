@@ -7,7 +7,7 @@ The thin local job-control server for the V-model CLIs, plus its reactive web UI
 ```bash
 cd ~/development/require/delivery-api
 python -m venv .venv && source .venv/bin/activate
-pip install -e .[dev]
+pip install -e '.[dev]'
 python -m delivery_api
 ```
 
