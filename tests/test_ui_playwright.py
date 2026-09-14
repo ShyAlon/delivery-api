@@ -37,6 +37,11 @@ s.add_event("live", "progress", "Generating CONOPS option 2/3", phase_key="conop
 s.create_task("Finished definition", "Artifacts ready", task_id="done")
 for key,_ in __import__("delivery_api.store", fromlist=["PHASES"]).PHASES: s.update_phase("done", key, "done")
 s.add_task_artifact("done", "architecture", "Architecture overview", "/architecture.json")
+s.create_task("Interactive simulation", "Recorded run, no process load", task_id="sim")
+s.configure_simulation("sim", "/tmp/recorded", "ollama/phi4")
+s.update_phase("sim", "intent", "done", detail="Recorded phase complete")
+s.set_gate_open("sim", "gate-conops", True)
+s.wait_at_gate("sim", "intent")
 '''
     subprocess.run([sys.executable, "-c", seed], check=True, env=env)
     port = _port()
@@ -64,8 +69,8 @@ def page(ui):
 def test_dashboard_draws_v_and_all_task_states(page, ui):
     page.goto(ui)
     page.locator(".task").first.wait_for()
-    assert page.locator(".task").count() == 3
-    assert page.locator(".v-map svg").count() == 3
+    assert page.locator(".task").count() == 4
+    assert page.locator(".v-map svg").count() == 4
     assert page.get_by_text("In progress").count() == 1
     assert page.get_by_text("Complete").count() == 1
 
@@ -89,3 +94,27 @@ def test_rerun_preview_explains_archive_and_audit_has_local_actor(page, ui):
     page.get_by_role("button", name="Audit").click()
     page.get_by_text("Task audit").wait_for()
     assert "local user" in page.locator(".dialog").inner_text()
+
+
+def test_gate_open_waiting_halo_and_decision_modal(page, ui):
+    page.goto(ui + "/tasks/sim/view")
+    waiting=page.locator('.gate.waiting')
+    assert waiting.count()==1 and waiting.is_visible()
+    assert page.locator('.gate.open').count()==1
+    page.screenshot(path="/downloads/vmodel-gates-open-and-waiting.png", full_page=True)
+    page.reload()
+    page.locator('.gate.waiting').click()
+    page.locator(".dialog").wait_for()
+    assert "gate" in page.locator(".dialog h2").inner_text().lower()
+    assert page.get_by_text("Waiting here · replay paused").is_visible()
+    assert page.get_by_text("actor: local user", exact=False).is_visible()
+    assert page.get_by_role("button", name="Redo").is_visible()
+    page.screenshot(path="/downloads/vmodel-gate-modal.png", full_page=True)
+
+
+def test_gate_redo_requires_steer_in_browser(page, ui):
+    page.goto(ui + "/tasks/sim/view")
+    page.locator('.gate.waiting').click()
+    page.get_by_role("button", name="Redo").click()
+    page.get_by_text("a redo needs a reason", exact=False).wait_for()
+    assert page.get_by_text("a redo needs a reason", exact=False).is_visible()

@@ -109,3 +109,52 @@ def test_http_layer_contains_no_database_calls():
     assert ".db." not in source
     assert ".execute(" not in source
     assert "sqlite3" not in source
+
+def test_simulation_import_pause_decide_and_complete_without_process(tmp_path):
+    import asyncio, json
+    from delivery_api.simulation import Simulation
+    from delivery_api.store import SQLiteStore
+    source=tmp_path/'recorded'; source.mkdir()
+    rows=[
+      {'session_id':'s-1','stage':'intent','provider':'ollama','model':'phi4','prompt_tokens':3,'completion_tokens':4,'ts':'2026-09-12T10:00:00Z'},
+      {'session_id':'s-1','stage':'conops','provider':'ollama','model':'phi4','prompt_tokens':5,'completion_tokens':6,'ts':'2026-09-12T10:00:02Z'},
+      {'session_id':'s-1','stage':'tests','provider':'ollama','model':'phi4','prompt_tokens':7,'completion_tokens':8,'ts':'2026-09-12T10:00:04Z'},
+    ]
+    (source/'usage.jsonl').write_text('\n'.join(json.dumps(x) for x in rows))
+    (source/'tests.json').write_text('{}')
+    isolated=SQLiteStore(str(tmp_path/'sim.db')); sim=Simulation(isolated)
+    task=sim.import_run(source)
+    assert task['simulated'] and task['state']=='not_started' and len(task['gates'])==6
+    isolated.set_gate_open(task['task_id'],'gate-conops',True)
+    async def go():
+      job=asyncio.create_task(sim.replay(task['task_id'],None))
+      for _ in range(100):
+        if isolated.task(task['task_id'])['state']=='waiting_gate': break
+        await asyncio.sleep(.01)
+      waiting=isolated.task(task['task_id'])
+      assert waiting['active_phase']=='intent'
+      isolated.decide_gate(task['task_id'],'gate-intent','redo',steer='Use a measurable outcome')
+      for _ in range(100):
+        if isolated.task(task['task_id'])['state']=='waiting_gate':
+          isolated.decide_gate(task['task_id'],'gate-tests' if waiting['active_phase']=='tests' else 'gate-intent','approve',selected_option='Approve')
+        await asyncio.sleep(.01)
+        if job.done(): break
+      # The conops gate was open, so no second pause before the tests event.
+      await asyncio.wait_for(job,1)
+    asyncio.run(go())
+    final=isolated.task(task['task_id'])
+    assert final['state']=='done' and final['artifact_count']==1
+    audit=isolated.audit_entries(task['task_id'])
+    assert any(x['action']=='gate.redo' and x['detail']['steer']=='Use a measurable outcome' for x in audit)
+    assert any(e['kind']=='complete' and e['payload'].get('simulated') is None for e in isolated.events(task['task_id']))
+
+
+def test_gate_decisions_require_explicit_provenance(tmp_path):
+    import pytest
+    from delivery_api.store import SQLiteStore
+    isolated=SQLiteStore(str(tmp_path/'gates.db')); tid=isolated.create_task('Gates')['task_id']
+    with pytest.raises(ValueError,match='steer'): isolated.decide_gate(tid,'gate-intent','redo')
+    with pytest.raises(ValueError,match='option'): isolated.decide_gate(tid,'gate-intent','approve')
+    isolated.decide_gate(tid,'gate-intent','edit',edited_text='Approved with this bounded scope')
+    row=next(g for g in isolated.task(tid)['gates'] if g['gate_key']=='gate-intent')
+    assert row['edited_text']=='Approved with this bounded scope'

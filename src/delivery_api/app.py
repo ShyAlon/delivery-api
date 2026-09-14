@@ -20,12 +20,14 @@ from .budget import BudgetExceeded, check_global_budget, check_run_budget
 from .jobs import JobQueue
 from .runner import ProcessRunner
 from .store import create_store
+from .simulation import Simulation
 
 WEB_DIR = Path(__file__).parent / "web"
 app = FastAPI(title="V-model console", version="0.2.0")
 store = create_store(config.DATABASE_URL)
 jobs = JobQueue(store)
 runner = ProcessRunner(store)
+simulation = Simulation(store)
 log = logging.getLogger("delivery_api.http")
 app.mount("/assets", StaticFiles(directory=WEB_DIR), name="assets")
 
@@ -174,6 +176,42 @@ def rerun(task_id: str, req: RerunRequest):
 def task_audit(task_id: str):
     if not store.task(task_id): raise HTTPException(404, "task not found")
     return {"actor_mode": "local user", "entries": store.audit_entries(task_id)}
+
+class SimulationImport(BaseModel):
+    source_dir: str
+    title: str | None = None
+
+@app.post("/api/simulations", status_code=201)
+def import_simulation(req: SimulationImport):
+    try: return simulation.import_run(Path(req.source_dir), req.title)
+    except ValueError as e: raise HTTPException(400, {"error": str(e), "cause": "The selected directory is not a recorded V-model run.", "next": "Choose an artifacts directory containing usage.jsonl."})
+
+class ReplayRequest(BaseModel):
+    speed: float | None = 100
+
+@app.post("/api/tasks/{task_id}/simulate")
+def replay_simulation(task_id: str, req: ReplayRequest):
+    try: simulation.start(task_id, None if req.speed in (None, 0) else req.speed)
+    except ValueError as e: raise HTTPException(409, {"error": str(e), "cause": "The task cannot start this replay.", "next": "Import a recorded run or wait for the current replay."})
+    store.audit("local user", "simulation.started", task_id, {"speed": "instant" if req.speed in (None,0) else req.speed})
+    return {"status":"started","simulated":True,"speed":"instant" if req.speed in (None,0) else req.speed}
+
+class GateToggle(BaseModel): is_open: bool
+@app.post("/api/tasks/{task_id}/gates/{gate_key}/toggle")
+def toggle_gate(task_id:str,gate_key:str,req:GateToggle):
+    try:return store.set_gate_open(task_id,gate_key,req.is_open,"local user")
+    except KeyError:raise HTTPException(404,"gate not found")
+
+class GateDecision(BaseModel):
+    action: Literal["approve","edit","redo"]
+    selected_option: str|None=None
+    edited_text: str|None=None
+    steer: str|None=None
+@app.post("/api/tasks/{task_id}/gates/{gate_key}/decide")
+def decide_gate(task_id:str,gate_key:str,req:GateDecision):
+    try:return store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor="local user")
+    except KeyError:raise HTTPException(404,"gate not found")
+    except ValueError as e:raise HTTPException(400,{"error":str(e),"cause":"The gate decision is incomplete.","next":"Choose, edit, or explain what the redo should change."})
 
 @app.get("/health")
 def health(): return {"ok": True, "total_spend_usd": store.total_spend(), "tasks": len(store.list_tasks())}

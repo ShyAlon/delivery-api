@@ -30,13 +30,19 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE TABLE IF NOT EXISTS tasks (
   task_id TEXT PRIMARY KEY, title TEXT NOT NULL, brief TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL, active_phase TEXT, model_route TEXT, generation INTEGER NOT NULL DEFAULT 1,
-  created_at REAL NOT NULL, updated_at REAL NOT NULL
+  created_at REAL NOT NULL, updated_at REAL NOT NULL, simulated INTEGER NOT NULL DEFAULT 0, source_dir TEXT
 );
 CREATE TABLE IF NOT EXISTS phases (
   task_id TEXT NOT NULL, phase_key TEXT NOT NULL, label TEXT NOT NULL, position INTEGER NOT NULL,
   state TEXT NOT NULL DEFAULT 'pending', detail TEXT NOT NULL DEFAULT '',
   completed INTEGER NOT NULL DEFAULT 0, total INTEGER, gate_basis_changed INTEGER NOT NULL DEFAULT 0,
   started_at REAL, completed_at REAL, PRIMARY KEY(task_id, phase_key)
+);
+CREATE TABLE IF NOT EXISTS gates (
+  task_id TEXT NOT NULL, gate_key TEXT NOT NULL, after_phase TEXT NOT NULL, label TEXT NOT NULL,
+  position INTEGER NOT NULL, is_open INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'idle',
+  options TEXT NOT NULL DEFAULT '[]', selected_option TEXT, edited_text TEXT, steer TEXT,
+  PRIMARY KEY(task_id, gate_key)
 );
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, phase_key TEXT,
@@ -95,6 +101,10 @@ class Storage(Protocol):
     def add_task_artifact(self, task_id: str, phase_key: str, name: str, ref: str, mime_type: str = "application/json") -> None: ...
     def task_artifacts(self, task_id: str, *, include_stale: bool = True) -> list[dict]: ...
     def prepare_rerun(self, task_id: str, from_phase: str, policy: str = "archive", actor: str = "local user") -> int: ...
+    def configure_simulation(self, task_id: str, source_dir: str, model_route: str) -> None: ...
+    def set_gate_open(self, task_id: str, gate_key: str, is_open: bool, actor: str = "local user") -> dict: ...
+    def wait_at_gate(self, task_id: str, after_phase: str) -> dict | None: ...
+    def decide_gate(self, task_id: str, gate_key: str, action: str, **decision) -> dict: ...
 
 
 class SQLiteStore:
@@ -111,10 +121,15 @@ class SQLiteStore:
         """Small additive migrations keep local task history readable."""
         phase_cols = {r[1] for r in self._db.execute("PRAGMA table_info(phases)")}
         artifact_cols = {r[1] for r in self._db.execute("PRAGMA table_info(task_artifacts)")}
+        task_cols = {r[1] for r in self._db.execute("PRAGMA table_info(tasks)")}
         if "gate_basis_changed" not in phase_cols:
             self._db.execute("ALTER TABLE phases ADD COLUMN gate_basis_changed INTEGER NOT NULL DEFAULT 0")
         if "stale_reason" not in artifact_cols:
             self._db.execute("ALTER TABLE task_artifacts ADD COLUMN stale_reason TEXT")
+        if "simulated" not in task_cols:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0")
+        if "source_dir" not in task_cols:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN source_dir TEXT")
         self._db.commit()
 
     def _commit(self):
@@ -173,11 +188,17 @@ class SQLiteStore:
     def create_task(self, title: str, brief: str = "", *, task_id: str | None = None) -> dict:
         with self._lock:
             task_id, now = task_id or secrets.token_hex(6), time.time()
-            self._db.execute("INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?)",
+            self._db.execute("INSERT INTO tasks(task_id,title,brief,state,active_phase,model_route,generation,created_at,updated_at,simulated,source_dir) VALUES (?,?,?,?,?,?,?,?,?,0,NULL)",
                             (task_id, title, brief, "not_started", None, None, 1, now, now))
             self._db.executemany(
                 "INSERT INTO phases(task_id,phase_key,label,position,state) VALUES (?,?,?,?, 'pending')",
                 [(task_id, key, label, i) for i, (key, label) in enumerate(PHASES)],
+            )
+            self._db.executemany(
+                "INSERT INTO gates(task_id,gate_key,after_phase,label,position,is_open,state,options) VALUES (?,?,?,?,?,0,'idle',?)",
+                [(task_id, f"gate-{key}", key, f"{label} gate", i,
+                  json.dumps([f"Approve {label}", "Choose another option"]))
+                 for i, (key, label) in enumerate(PHASES[:-1])],
             )
             self.audit("local user", "task.created", task_id, {"title": title})
             self._commit()
@@ -196,9 +217,52 @@ class SQLiteStore:
         item["phases"] = [dict(r) for r in self._db.execute(
             "SELECT phase_key,label,position,state,detail,completed,total,gate_basis_changed,started_at,completed_at "
             "FROM phases WHERE task_id=? ORDER BY position", (item["task_id"],))]
+        item["gates"] = [self._gate_record(r) for r in self._db.execute(
+            "SELECT * FROM gates WHERE task_id=? ORDER BY position", (item["task_id"],))]
         item["artifact_count"] = self._db.execute(
             "SELECT count(*) n FROM task_artifacts WHERE task_id=? AND stale=0", (item["task_id"],)).fetchone()["n"]
         return item
+
+    def _gate_record(self, row) -> dict:
+        item = dict(row); item["options"] = json.loads(item["options"]); return item
+
+    def configure_simulation(self, task_id: str, source_dir: str, model_route: str) -> None:
+        with self._lock:
+            self._db.execute("UPDATE tasks SET simulated=1,source_dir=?,model_route=?,updated_at=? WHERE task_id=?",
+                             (source_dir, model_route, time.time(), task_id)); self._commit()
+
+    def set_gate_open(self, task_id: str, gate_key: str, is_open: bool, actor: str = "local user") -> dict:
+        with self._lock:
+            self._db.execute("UPDATE gates SET is_open=? WHERE task_id=? AND gate_key=?", (int(is_open), task_id, gate_key))
+            self.audit(actor, "gate.toggled", task_id, {"gate": gate_key, "open": is_open, "provenance": "interactive V gate"})
+            self._commit()
+            row=self._db.execute("SELECT * FROM gates WHERE task_id=? AND gate_key=?",(task_id,gate_key)).fetchone()
+            if not row: raise KeyError(gate_key)
+            return self._gate_record(row)
+
+    def wait_at_gate(self, task_id: str, after_phase: str) -> dict | None:
+        with self._lock:
+            row=self._db.execute("SELECT * FROM gates WHERE task_id=? AND after_phase=?",(task_id,after_phase)).fetchone()
+            if not row or row["is_open"]: return None
+            self._db.execute("UPDATE gates SET state='waiting' WHERE task_id=? AND gate_key=?",(task_id,row["gate_key"]))
+            self._db.execute("UPDATE tasks SET state='waiting_gate',active_phase=?,updated_at=? WHERE task_id=?",(after_phase,time.time(),task_id))
+            self._commit(); return self._gate_record(self._db.execute("SELECT * FROM gates WHERE task_id=? AND gate_key=?",(task_id,row["gate_key"])).fetchone())
+
+    def decide_gate(self, task_id: str, gate_key: str, action: str, *, selected_option: str | None = None,
+                    edited_text: str | None = None, steer: str | None = None, actor: str = "local user") -> dict:
+        if action not in {"approve", "edit", "redo"}: raise ValueError("action must be approve, edit, or redo")
+        with self._lock:
+            row=self._db.execute("SELECT * FROM gates WHERE task_id=? AND gate_key=?",(task_id,gate_key)).fetchone()
+            if not row: raise KeyError(gate_key)
+            if action == "approve" and not selected_option: raise ValueError("choose an option to approve")
+            if action == "edit" and not edited_text: raise ValueError("edited option text is required")
+            if action == "redo" and not steer: raise ValueError("a redo needs a reason so it is a steer, not a reroll")
+            state = "redo" if action == "redo" else "decided"
+            self._db.execute("UPDATE gates SET state=?,selected_option=?,edited_text=?,steer=? WHERE task_id=? AND gate_key=?",
+                             (state,selected_option,edited_text,steer,task_id,gate_key))
+            self.audit(actor, f"gate.{action}", task_id, {"gate":gate_key,"selected_option":selected_option,"edited_text":edited_text,"steer":steer,"provenance":"interactive V gate"})
+            self._db.execute("UPDATE tasks SET state='running',updated_at=? WHERE task_id=?",(time.time(),task_id)); self._commit()
+            return self._gate_record(self._db.execute("SELECT * FROM gates WHERE task_id=? AND gate_key=?",(task_id,gate_key)).fetchone())
 
     def update_phase(self, task_id: str, phase_key: str, state: str, *, detail: str = "",
                      completed: int = 0, total: int | None = None) -> None:
@@ -290,6 +354,11 @@ class SQLiteStore:
                             (reason, task_id, *downstream))
             self._db.execute(f"UPDATE phases SET state='pending',detail='',completed=0,total=NULL,gate_basis_changed=1,started_at=NULL,completed_at=NULL "
                             f"WHERE task_id=? AND phase_key IN ({marks})", (task_id, *downstream))
+            gate_phases = [k for k in downstream if k != PHASES[-1][0]]
+            if gate_phases:
+                gate_marks = ",".join("?" for _ in gate_phases)
+                self._db.execute(f"UPDATE gates SET is_open=0,state='idle',selected_option=NULL,edited_text=NULL,steer=NULL "
+                                 f"WHERE task_id=? AND after_phase IN ({gate_marks})", (task_id, *gate_phases))
             self._db.execute("UPDATE tasks SET generation=generation+1,state='not_started',active_phase=NULL,updated_at=? WHERE task_id=?",
                             (time.time(), task_id))
             generation = self.task(task_id)["generation"]
