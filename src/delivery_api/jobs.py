@@ -20,14 +20,14 @@ from vmodel_contracts import RunState
 
 from .budget import BudgetExceeded
 from .errors import UserFacingError
-from .store import Store
+from .store import Storage
 
 JobFn = Callable[[str], Awaitable[str]]  # run_id -> artifact ref
 
 
 @dataclass
 class JobQueue:
-    store: Store
+    store: Storage
     _queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     _handlers: dict[str, JobFn] = field(default_factory=dict)
     _worker: asyncio.Task | None = None

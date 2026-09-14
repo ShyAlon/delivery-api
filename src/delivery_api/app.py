@@ -19,11 +19,11 @@ from . import config
 from .budget import BudgetExceeded, check_global_budget, check_run_budget
 from .jobs import JobQueue
 from .runner import ProcessRunner
-from .store import Store
+from .store import create_store
 
 WEB_DIR = Path(__file__).parent / "web"
 app = FastAPI(title="V-model console", version="0.2.0")
-store = Store(config.DB_PATH)
+store = create_store(config.DATABASE_URL)
 jobs = JobQueue(store)
 runner = ProcessRunner(store)
 log = logging.getLogger("delivery_api.http")
@@ -88,7 +88,7 @@ def start_run(req: StartRequest):
     run = store.run(link["run_id"])
     if run["state"] != RunState.CREATED.value: raise HTTPException(409, f"run already {run['state']}")
     store.set_state(link["run_id"], RunState.IN_INTERVIEW)
-    store.db.execute("UPDATE runs SET submission=? WHERE run_id=?", (req.model_dump_json(), link["run_id"])); store.db.commit()
+    store.set_submission(link["run_id"], req.model_dump_json())
     return {"run_id": link["run_id"], "state": RunState.IN_INTERVIEW.value}
 
 @app.get("/runs/{run_id}", response_model=RunStatus)

@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .store import PHASES, Store
+from .store import PHASES, Storage
 
 _PROGRESS = re.compile(r"(?:stage '([^']+)' call|([0-9]+)s elapsed|([0-9]+)/([0-9]+))", re.I)
 _PHASE_HINTS = {
@@ -19,7 +19,7 @@ _PHASE_HINTS = {
 
 @dataclass
 class ProcessRunner:
-    store: Store
+    store: Storage
     processes: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
 
     def _phase(self, text: str, fallback: str) -> str:

@@ -59,11 +59,10 @@ def test_job_failure_records_human_artifact(tmp_path):
 
     from delivery_api.errors import UserFacingError
     from delivery_api.jobs import JobQueue
-    from delivery_api.store import Store
+    from delivery_api.store import SQLiteStore
 
-    store = Store(str(tmp_path / "t.db"))
-    store.create_link("t")
-    run_id = store._db_run_id() if hasattr(store, "_db_run_id") else None
+    store = SQLiteStore(str(tmp_path / "t.db"))
+    run_id = store.create_link("t")["run_id"]
     q = JobQueue(store)
 
     async def boom(rid: str) -> str:
@@ -72,7 +71,7 @@ def test_job_failure_records_human_artifact(tmp_path):
     async def go():
         await q.start()
         q.register("generation", boom)
-        rid = store.db.execute("SELECT run_id FROM runs LIMIT 1").fetchone()[0]
+        rid = run_id
         await q.submit("generation", rid)
         for _ in range(50):
             arts = store.artifacts(rid)

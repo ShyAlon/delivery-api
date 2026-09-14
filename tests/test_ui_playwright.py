@@ -25,9 +25,9 @@ def ui(tmp_path_factory):
     env = {**os.environ, "DELIVERY_DB_PATH": str(db),
            "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     seed = '''
-from delivery_api.store import Store
+from delivery_api.store import SQLiteStore
 import os
-s=Store(os.environ["DELIVERY_DB_PATH"])
+s=SQLiteStore(os.environ["DELIVERY_DB_PATH"])
 s.create_task("Empty definition", "Awaiting its first run", task_id="empty")
 s.create_task("Live definition", "Detailed progress", task_id="live")
 s.set_model_route("live", "ollama/phi4")

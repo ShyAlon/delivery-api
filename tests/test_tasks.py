@@ -73,9 +73,9 @@ def test_process_runner_streams_cli_output_and_known_count(tmp_path):
     import asyncio
     import sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import Store
+    from delivery_api.store import SQLiteStore
 
-    isolated = Store(str(tmp_path / "runner.db"))
+    isolated = SQLiteStore(str(tmp_path / "runner.db"))
     task_id = isolated.create_task("Runner")['task_id']
     runner = ProcessRunner(isolated)
 
@@ -88,3 +88,24 @@ def test_process_runner_streams_cli_output_and_known_count(tmp_path):
     assert srs["state"] == "done"
     event = next(e for e in isolated.events(task_id) if e["kind"] == "progress")
     assert event["payload"] == {"completed": 4, "total": 9}
+
+
+def test_storage_factory_is_the_only_backend_selection_point(tmp_path):
+    from delivery_api.store import SQLiteStore, Storage, create_store
+
+    local = create_store(f"sqlite:///{tmp_path / 'portable.db'}")
+    assert isinstance(local, SQLiteStore)
+    assert isinstance(local, Storage)
+    task_id = local.create_task("Persist me")["task_id"]
+    del local
+    reopened = create_store(f"sqlite:///{tmp_path / 'portable.db'}")
+    assert reopened.task(task_id)["title"] == "Persist me"
+
+
+def test_http_layer_contains_no_database_calls():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "src" / "delivery_api" / "app.py").read_text()
+    assert ".db." not in source
+    assert ".execute(" not in source
+    assert "sqlite3" not in source
