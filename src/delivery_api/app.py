@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -24,7 +26,21 @@ app = FastAPI(title="V-model console", version="0.2.0")
 store = Store(config.DB_PATH)
 jobs = JobQueue(store)
 runner = ProcessRunner(store)
+log = logging.getLogger("delivery_api.http")
 app.mount("/assets", StaticFiles(directory=WEB_DIR), name="assets")
+
+@app.middleware("http")
+async def request_log(request, call_next):
+    started = time.monotonic()
+    try:
+        response = await call_next(request)
+    except Exception:
+        log.exception("request failed method=%s path=%s", request.method, request.url.path)
+        raise
+    log.info("request method=%s path=%s status=%s duration_ms=%d actor=local_user",
+             request.method, request.url.path, response.status_code,
+             (time.monotonic() - started) * 1000)
+    return response
 
 if config.ADMIN_TOKEN == "dev-admin-token":
     import logging
@@ -122,7 +138,8 @@ def task_events(task_id: str, after: int = Query(default=0, ge=0)):
 async def task_stream(task_id: str):
     if not store.task(task_id): raise HTTPException(404, "task not found")
     async def generate():
-        cursor = 0
+        existing = store.events(task_id)
+        cursor = existing[-1]["id"] if existing else 0
         while True:
             events = store.events(task_id, cursor)
             for event in events:
