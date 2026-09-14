@@ -1,0 +1,80 @@
+import json
+import os
+os.environ["DELIVERY_DB_PATH"] = ":memory:"
+
+from fastapi.testclient import TestClient
+from delivery_api.app import app, store
+
+
+def test_task_three_states_and_phase_progress():
+    with TestClient(app) as client:
+        made = client.post("/api/tasks", json={"title": "Astronomy explorer", "brief": "Kids learn through play"})
+        assert made.status_code == 201
+        task_id = made.json()["task_id"]
+        empty = client.get(f"/api/tasks/{task_id}").json()
+        assert empty["state"] == "not_started" and len(empty["phases"]) == 7 and not empty["artifacts"]
+
+        store.set_model_route(task_id, "distillation=ollama/phi4")
+        store.update_phase(task_id, "intent", "running", detail="coverage 3/11", completed=3, total=11)
+        store.add_event(task_id, "progress", "coverage 3/11", phase_key="intent", payload={"completed": 3, "total": 11})
+        running = client.get(f"/api/tasks/{task_id}").json()
+        assert running["state"] == "running" and running["phases"][0]["total"] == 11
+        assert running["events"][0]["payload"]["completed"] == 3
+
+        for key in ("intent", "conops", "needs", "srs", "architecture", "specs", "tests"):
+            store.update_phase(task_id, key, "done")
+        store.add_task_artifact(task_id, "tests", "Verification report", "/artifacts/report.json")
+        done = client.get(f"/api/tasks/{task_id}").json()
+        assert done["state"] == "done" and done["artifacts"][0]["name"] == "Verification report"
+
+
+def test_rerun_is_preview_only_until_policy_decision():
+    with TestClient(app) as client:
+        task_id = client.post("/api/tasks", json={"title": "Policy seam"}).json()["task_id"]
+        store.add_task_artifact(task_id, "architecture", "Architecture", "/a.json")
+        preview = client.post(f"/api/tasks/{task_id}/rerun", json={
+            "from_phase": "srs", "policy": "wipe", "confirm_preview": False,
+        })
+        assert preview.json()["status"] == "preview"
+        assert not store.task_artifacts(task_id)[0]["stale"]
+        blocked = client.post(f"/api/tasks/{task_id}/rerun", json={
+            "from_phase": "srs", "policy": "wipe", "confirm_preview": True,
+        })
+        assert blocked.status_code == 409
+
+
+def test_archive_policy_marks_downstream_stale_and_keeps_upstream():
+    task_id = store.create_task("Archive")['task_id']
+    store.add_task_artifact(task_id, "intent", "Intent", "/intent.json")
+    store.add_task_artifact(task_id, "architecture", "Architecture", "/arch.json")
+    generation = store.prepare_rerun(task_id, "srs", "archive")
+    arts = {a["phase_key"]: a for a in store.task_artifacts(task_id)}
+    assert generation == 2 and not arts["intent"]["stale"] and arts["architecture"]["stale"]
+
+
+def test_static_ui_and_deep_link_are_served():
+    with TestClient(app) as client:
+        assert "VECTOR" in client.get("/").text
+        assert "task-grid" in client.get("/assets/style.css").text
+        assert client.get("/tasks/any/view").status_code == 200
+
+
+def test_process_runner_streams_cli_output_and_known_count(tmp_path):
+    import asyncio
+    import sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import Store
+
+    isolated = Store(str(tmp_path / "runner.db"))
+    task_id = isolated.create_task("Runner")['task_id']
+    runner = ProcessRunner(isolated)
+
+    async def go():
+        return await runner.run(task_id, [sys.executable, "-c", "print('requirements 4/9')"], cwd=tmp_path, phase="srs")
+
+    assert asyncio.run(go()) == 0
+    task = isolated.task(task_id)
+    srs = next(p for p in task["phases"] if p["phase_key"] == "srs")
+    assert srs["state"] == "done"
+    event = next(e for e in isolated.events(task_id) if e["kind"] == "progress")
+    assert event["payload"] == {"completed": 4, "total": 9}

@@ -1,38 +1,26 @@
-# delivery-api
+# delivery-api / V-model console
 
-Orchestration and nothing else: run links, the run state machine, background
-jobs, storage, budget enforcement, and the per-stage cost rollup.
+The thin local job-control server for the V-model CLIs, plus its reactive web UI. The server owns process lifetime, durable task/phase/event state, SSE progress, artifacts and rerun generations. It does not reimplement interview or specification logic.
 
-## Decisions baked in
+## Run locally
 
-- **Links, not accounts** (scoping doc Decision 5): one personal token per
-  tester gates the run, ties interview/spec/verification together, and gives
-  per-tester rate limiting. Link creation is admin-only.
-- **Background jobs from line one** (ADR-0006): Vercel Hobby caps functions
-  at 300s and generation is a multi-minute pipeline. Nothing here is
-  request/response that will become a job later.
-- **The budget hard stop lives here**: modules report every LLM call to
-  `/runs/{id}/usage`; a call that crosses the per-run cap stops the run
-  (`budget_stopped`). Per-run cap default $6, global cap default $100
-  (scoping doc: ten testers worst case). The versioned price table lives
-  with the modules' telemetry; this service trusts only its own ledger.
-- **Zero-cost posture**: sqlite in the skeleton; the `Store` interface is
-  the seam where Supabase Free slots in. No paid infra without asking.
-
-## API
-
-```
-POST /links                  (admin) mint a tester link
-POST /runs                   start the run behind a link token
-GET  /runs/{id}              run state machine status
-POST /runs/{id}/usage        module cost reports (hard stop enforced)
-GET  /runs/{id}/artifacts    produced artifact refs
-GET  /health                 liveness + global spend
+```bash
+cd ~/development/require/delivery-api
+python -m venv .venv && source .venv/bin/activate
+pip install -e .[dev]
+python -m delivery_api
 ```
 
-## Boundary rule
+Open http://127.0.0.1:8000. API docs are at http://127.0.0.1:8000/docs.
 
-Talks to interview-engine, spec-generator, and verification-loop only through
-vmodel-contracts payloads. The skeleton can wire them in-process behind
-explicit flags for an all-in-one demo box; production wiring is service
-calls. Never shared code beyond the contracts package.
+The UI has a V-shaped process map per task and distinct not-started, running and completed views. Live events use SSE, while SQLite keeps tasks, progress and artifacts through browser or server restarts. Rerun policy is isolated in `Store.prepare_rerun`; archive is implemented as the reversible option, while wipe and overwrite remain blocked until the founder chooses.
+
+## One image
+
+```bash
+docker build -t vmodel .
+docker run --rm -p 8000:8000 -v "$PWD/.data:/data" \
+  -e DELIVERY_DB_PATH=/data/delivery.db vmodel
+```
+
+Ollama is never in the image. Local deployments route to host Ollama; cloud deployments use API providers through the engines' shared model-routing environment. Engine CLI wiring is the next slice: `ProcessRunner` already holds the process, line stream and heartbeat contract.
