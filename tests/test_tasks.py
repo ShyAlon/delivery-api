@@ -64,6 +64,9 @@ def test_static_ui_and_deep_link_are_served():
         assert "VECTOR" in client.get("/").text
         assert "task-grid" in client.get("/assets/style.css").text
         assert client.get("/tasks/any/view").status_code == 200
+        icon = client.get("/favicon.ico")
+        assert icon.status_code == 200 and icon.headers["content-type"].startswith("image/x-icon")
+        assert b"<link rel=\"icon\" href=\"/favicon.ico\"" in client.get("/").content
 
 
 def test_process_runner_streams_cli_output_and_known_count(tmp_path):

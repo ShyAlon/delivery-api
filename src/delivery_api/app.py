@@ -58,6 +58,9 @@ async def _stop(): await jobs.stop()
 @app.get("/", include_in_schema=False)
 def index(): return FileResponse(WEB_DIR / "index.html")
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon(): return FileResponse(WEB_DIR / "favicon.ico", media_type="image/x-icon")
+
 @app.get("/tasks/{task_id}/view", include_in_schema=False)
 def task_view(task_id: str): return FileResponse(WEB_DIR / "index.html")
 
