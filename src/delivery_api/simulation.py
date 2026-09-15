@@ -1,6 +1,6 @@
 """Validated, zero-process replay of recorded V-model runs."""
 from __future__ import annotations
-import asyncio,json,re,tempfile
+import asyncio,json,re,tempfile,os
 from datetime import datetime
 from pathlib import Path
 from .store import PHASES,Storage
@@ -67,7 +67,9 @@ class Simulation:
         # A browser upload contains only usage.jsonl, so it safely falls back to
         # the session ID unless the caller supplied a title.
         inferred=None
-        for intent_path in (source/"intent_model.json", source/"interview"/"intent_model.json"):
+        from vmodel_contracts.runtime import artifacts_root
+        canonical_intent = artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")) / sid / "interview" / "intent_model.json"
+        for intent_path in (source/"intent_model.json", source/"interview"/"intent_model.json", canonical_intent):
             if not intent_path.is_file(): continue
             try:
                 intent=json.loads(intent_path.read_text(encoding="utf-8"))

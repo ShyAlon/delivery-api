@@ -69,3 +69,16 @@ def test_import_title_override_and_session_fallback(tmp_path):
     sim=Simulation(SQLiteStore(str(tmp_path/'fallback.db')))
     assert sim.import_run(source)['title']=='Recorded run s-42'
     assert sim.import_run(source,'My replay')['title']=='My replay'
+
+
+def test_uploaded_jsonl_resolves_local_canonical_intent(monkeypatch,tmp_path):
+    from delivery_api.simulation import Simulation
+    from delivery_api.store import SQLiteStore
+    root=tmp_path/'artifacts';interview=root/'local-session'/'interview';interview.mkdir(parents=True)
+    (interview/'intent_model.json').write_text(json.dumps({"problem_statement":"Track Pokémon collection goals"}))
+    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root))
+    upload=tmp_path/'private-upload';upload.mkdir()
+    row={"stage":"probing","provider":"ollama","model":"phi4","ts":"2026-09-15T10:00:00+03:00","prompt_tokens":1,"completion_tokens":1,"session_id":"local-session"}
+    (upload/'usage.jsonl').write_text(json.dumps(row)+'\n')
+    task=Simulation(SQLiteStore(str(tmp_path/'local.db'))).import_run(upload)
+    assert task['title']=='Track Pokémon collection goals'
