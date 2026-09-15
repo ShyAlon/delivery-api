@@ -19,8 +19,10 @@ if [ -z "$PYTHON" ]; then
 fi
 # Editable installs do not automatically sync new runtime dependencies after a
 # pull. Check the full import surface, then refresh the existing venv when any
-# dependency is absent (including python-multipart for file uploads).
-if ! "$PYTHON" -c 'import delivery_api,uvicorn,multipart' >/dev/null 2>&1; then
+# dependency is absent. This includes the pinned cross-repo contracts API: an
+# editable delivery-api import alone can succeed while vmodel-contracts in the
+# same venv is stale after a pull.
+if ! "$PYTHON" -c 'import delivery_api,uvicorn,multipart; from vmodel_contracts import CANONICAL_STAGE_IDS; assert \"scope_tiebreak\" in CANONICAL_STAGE_IDS' >/dev/null 2>&1; then
   echo "== syncing delivery-api and UI dependencies into .venv =="
   if [ ! -x "$ROOT/.venv/bin/python" ]; then "$PYTHON" -m venv "$ROOT/.venv"; fi
   PYTHON="$ROOT/.venv/bin/python"
