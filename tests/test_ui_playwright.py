@@ -164,5 +164,5 @@ def test_task_filter_sort_rename_and_delete(page,ui):
     card.get_by_role('button',name='Delete').click()
     assert page.get_by_text('Original files in the artifacts folder stay on disk.').is_visible()
     page.get_by_role('button',name='Delete task').click()
-    page.get_by_text('Renamed empty definition',exact=True).wait_for(state='detached')
+    page.locator('#app').get_by_text('Renamed empty definition',exact=True).wait_for(state='detached')
     assert page.get_by_text('Renamed empty definition',exact=True).count()==0
