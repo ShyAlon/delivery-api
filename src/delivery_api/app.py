@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -21,7 +21,7 @@ from . import auth
 from .jobs import JobQueue
 from .runner import ProcessRunner
 from .store import create_store
-from .simulation import Simulation
+from .simulation import Simulation, ImportValidationError
 
 WEB_DIR = Path(__file__).parent / "web"
 app = FastAPI(title="V-model console", version="0.2.0")
@@ -238,14 +238,23 @@ def task_audit(task_id: str, request: Request):
     if not store.task(task_id): raise HTTPException(404, "task not found")
     return {"actor_mode": auth.actor(request).label, "entries": store.audit_entries(task_id)}
 
-class SimulationImport(BaseModel):
-    source_dir: str
-    title: str | None = None
-
 @app.post("/api/simulations", status_code=201)
-def import_simulation(req: SimulationImport):
-    try: return simulation.import_run(Path(req.source_dir), req.title)
-    except ValueError as e: raise HTTPException(400, {"error": str(e), "cause": "The selected directory is not a recorded V-model run.", "next": "Choose an artifacts directory containing usage.jsonl."})
+async def import_simulation(usage_file: UploadFile = File(...), title: str | None = Form(default=None)):
+    # Browsers cannot upload a directory as a path. The picker selects the
+    # run's usage.jsonl; persist a private copy so replay does not depend on
+    # client filesystem paths or browser-specific directory APIs.
+    if Path(usage_file.filename or "").name != "usage.jsonl":
+        raise HTTPException(400,{"error":"Select the run's usage.jsonl file.","cause":"The chosen file is not named usage.jsonl.","next":"Open the recorded run folder and choose usage.jsonl."})
+    import tempfile
+    root=Path(tempfile.mkdtemp(prefix="vmodel-import-"));dest=root/"usage.jsonl"
+    total=0
+    with dest.open("wb") as fh:
+        while chunk:=await usage_file.read(1024*1024):
+            total+=len(chunk)
+            if total>20_000_000: raise HTTPException(413,{"error":"The selected file is too large.","cause":"The 20 MB upload safety limit was exceeded.","next":"Choose the original usage.jsonl or archive the oversized recording."})
+            fh.write(chunk)
+    try:return simulation.import_run(root,title)
+    except ImportValidationError as e:raise HTTPException(400,{"error":str(e),"cause":e.cause,"next":e.next_action})
 
 class ReplayRequest(BaseModel):
     speed: float | None = 100

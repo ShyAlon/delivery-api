@@ -121,7 +121,7 @@ def test_simulation_import_pause_decide_and_complete_without_process(tmp_path):
       {'session_id':'s-1','stage':'tests','provider':'ollama','model':'phi4','prompt_tokens':7,'completion_tokens':8,'ts':'2026-09-12T10:00:04Z'},
     ]
     (source/'usage.jsonl').write_text('\n'.join(json.dumps(x) for x in rows))
-    (source/'tests.json').write_text('{}')
+    (source/'tests.json').write_text('[]')
     isolated=SQLiteStore(str(tmp_path/'sim.db')); sim=Simulation(isolated)
     task=sim.import_run(source)
     assert task['simulated'] and task['state']=='not_started' and len(task['gates'])==6
