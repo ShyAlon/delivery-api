@@ -145,3 +145,24 @@ def test_oauth_identity_and_logout_in_browser(tmp_path):
             browser.close()
     finally:
         proc.terminate();proc.wait(timeout=5)
+
+
+def test_task_filter_sort_rename_and_delete(page,ui):
+    page.goto(ui);page.locator('.task').first.wait_for()
+    page.locator('#taskfilter').fill('Finished definition')
+    assert page.locator('.task').count()==1
+    page.locator('#taskfilter').fill('')
+    page.locator('#tasksort').select_option('name-asc')
+    names=page.locator('.task h2').all_text_contents()
+    assert names==sorted(names)
+    card=page.locator('.task',has_text='Empty definition')
+    card.get_by_role('button',name='Rename').click()
+    page.locator('#renameform input[name=title]').fill('Renamed empty definition')
+    page.get_by_role('button',name='Save name').click()
+    page.get_by_text('Renamed empty definition',exact=True).wait_for()
+    card=page.locator('.task',has_text='Renamed empty definition')
+    card.get_by_role('button',name='Delete').click()
+    assert page.get_by_text('Original files in the artifacts folder stay on disk.').is_visible()
+    page.get_by_role('button',name='Delete task').click()
+    page.get_by_text('Renamed empty definition',exact=True).wait_for(state='detached')
+    assert page.get_by_text('Renamed empty definition',exact=True).count()==0

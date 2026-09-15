@@ -158,3 +158,31 @@ def test_gate_decisions_require_explicit_provenance(tmp_path):
     isolated.decide_gate(tid,'gate-intent','edit',edited_text='Approved with this bounded scope')
     row=next(g for g in isolated.task(tid)['gates'] if g['gate_key']=='gate-intent')
     assert row['edited_text']=='Approved with this bounded scope'
+
+
+def test_task_names_unique_rename_and_delete_cascade(tmp_path):
+    import pytest
+    from delivery_api.store import SQLiteStore
+    s=SQLiteStore(str(tmp_path/'manage.db'))
+    first=s.create_task('Alpha','one');second=s.create_task('Beta','two')
+    with pytest.raises(ValueError,match='already exists'):s.create_task('alpha')
+    with pytest.raises(ValueError,match='already exists'):s.rename_task(second['task_id'],'ALPHA')
+    renamed=s.rename_task(second['task_id'],'Gamma')
+    assert renamed['title']=='Gamma'
+    s.add_event(second['task_id'],'progress','x');s.add_task_artifact(second['task_id'],'tests','x','/x')
+    s.delete_task(second['task_id'])
+    assert s.task(second['task_id']) is None
+    assert not s.events(second['task_id']) and not s.task_artifacts(second['task_id'])
+    assert any(x['action']=='task.deleted' and x['task_id']==second['task_id'] for x in s.audit_entries())
+
+
+def test_task_management_api_structured_collisions_and_delete():
+    from fastapi.testclient import TestClient
+    with TestClient(app) as c:
+        a=c.post('/api/tasks',json={'title':'Unique API Task'});assert a.status_code==201
+        b=c.post('/api/tasks',json={'title':'unique api task'});assert b.status_code==409
+        assert set(b.json()['detail'])=={'error','cause','next'}
+        tid=a.json()['task_id']
+        r=c.patch(f'/api/tasks/{tid}',json={'title':'Renamed API Task'});assert r.status_code==200 and r.json()['title']=='Renamed API Task'
+        d=c.delete(f'/api/tasks/{tid}');assert d.status_code==204
+        assert c.get(f'/api/tasks/{tid}').status_code==404

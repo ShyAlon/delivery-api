@@ -106,6 +106,8 @@ class Storage(Protocol):
     def create_task(self, title: str, brief: str = "", *, task_id: str | None = None) -> dict: ...
     def list_tasks(self) -> list[dict]: ...
     def task(self, task_id: str) -> dict | None: ...
+    def rename_task(self, task_id: str, title: str, actor: str = "local user") -> dict: ...
+    def delete_task(self, task_id: str, actor: str = "local user") -> None: ...
     def update_phase(self, task_id: str, phase_key: str, state: str, **progress) -> None: ...
     def set_model_route(self, task_id: str, model_route: str) -> None: ...
     def add_event(self, task_id: str, kind: str, message: str, **context) -> int: ...
@@ -150,6 +152,14 @@ class SQLiteStore:
             self._db.execute("ALTER TABLE tasks ADD COLUMN owner_id TEXT")
         if "owner_id" not in run_cols:
             self._db.execute("ALTER TABLE runs ADD COLUMN owner_id TEXT")
+        # Older databases may contain duplicate labels. Preserve every task and
+        # make collisions explicit before installing the uniqueness invariant.
+        duplicates=self._db.execute("SELECT lower(title) k FROM tasks GROUP BY lower(title) HAVING count(*)>1").fetchall()
+        for dup in duplicates:
+            rows=self._db.execute("SELECT task_id,title FROM tasks WHERE lower(title)=? ORDER BY created_at,task_id",(dup["k"],)).fetchall()
+            for i,row in enumerate(rows[1:],2):
+                self._db.execute("UPDATE tasks SET title=? WHERE task_id=?",(f"{row['title']} ({i})",row["task_id"]))
+        self._db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_title_nocase ON tasks(title COLLATE NOCASE)")
         for col, ddl in (("user_id", "TEXT"), ("input_tokens", "INTEGER NOT NULL DEFAULT 0"), ("output_tokens", "INTEGER NOT NULL DEFAULT 0")):
             if col not in usage_cols: self._db.execute(f"ALTER TABLE usage ADD COLUMN {col} {ddl}")
         self._db.commit()
@@ -210,8 +220,13 @@ class SQLiteStore:
     def create_task(self, title: str, brief: str = "", *, task_id: str | None = None) -> dict:
         with self._lock:
             task_id, now = task_id or secrets.token_hex(6), time.time()
-            self._db.execute("INSERT INTO tasks(task_id,title,brief,state,active_phase,model_route,generation,created_at,updated_at,simulated,source_dir) VALUES (?,?,?,?,?,?,?,?,?,0,NULL)",
-                            (task_id, title, brief, "not_started", None, None, 1, now, now))
+            title=title.strip()
+            if not title: raise ValueError("task name cannot be empty")
+            try:
+                self._db.execute("INSERT INTO tasks(task_id,title,brief,state,active_phase,model_route,generation,created_at,updated_at,simulated,source_dir) VALUES (?,?,?,?,?,?,?,?,?,0,NULL)",
+                                (task_id, title, brief, "not_started", None, None, 1, now, now))
+            except sqlite3.IntegrityError as e:
+                raise ValueError(f"a task named {title!r} already exists") from e
             self._db.executemany(
                 "INSERT INTO phases(task_id,phase_key,label,position,state) VALUES (?,?,?,?, 'pending')",
                 [(task_id, key, label, i) for i, (key, label) in enumerate(PHASES)],
@@ -233,6 +248,31 @@ class SQLiteStore:
     def task(self, task_id: str) -> dict | None:
         row = self._db.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         return self._task_record(row) if row else None
+
+    def rename_task(self, task_id: str, title: str, actor: str = "local user") -> dict:
+        title=title.strip()
+        if not title: raise ValueError("task name cannot be empty")
+        with self._lock:
+            if not self.task(task_id): raise KeyError(task_id)
+            try:
+                self._db.execute("UPDATE tasks SET title=?,updated_at=? WHERE task_id=?",(title,time.time(),task_id))
+                self.audit(actor,"task.renamed",task_id,{"title":title});self._commit()
+            except sqlite3.IntegrityError as e:
+                raise ValueError(f"a task named {title!r} already exists") from e
+            return self.task(task_id)
+
+    def delete_task(self, task_id: str, actor: str = "local user") -> None:
+        with self._lock:
+            row=self._db.execute("SELECT title,state FROM tasks WHERE task_id=?",(task_id,)).fetchone()
+            if not row: raise KeyError(task_id)
+            if row["state"] in ("running","waiting_gate"):
+                raise ValueError("a running or paused replay cannot be deleted")
+            # Delete all UI-owned task data. Source artifacts are references and
+            # remain untouched on disk. Keep a tombstone audit entry.
+            for table in ("phases","gates","events","task_artifacts"):
+                self._db.execute(f"DELETE FROM {table} WHERE task_id=?",(task_id,))
+            self._db.execute("DELETE FROM tasks WHERE task_id=?",(task_id,))
+            self.audit(actor,"task.deleted",task_id,{"title":row["title"],"source_artifacts_deleted":False});self._commit()
 
     def _task_record(self, row) -> dict:
         item = dict(row)
