@@ -4,9 +4,10 @@ import asyncio,json,re,tempfile
 from datetime import datetime
 from pathlib import Path
 from .store import PHASES,Storage
+from vmodel_contracts import CANONICAL_STAGE_IDS
 
 ARTIFACTS={"needs":"needs.json","srs":"srs.json","architecture":"architecture.json","specs":"items.json","tests":"tests.json"}
-_ALLOWED_STAGES={"intent","conops","needs","srs","architecture","items","tests","review"}
+_ALLOWED_STAGES=CANONICAL_STAGE_IDS
 
 class ImportValidationError(ValueError):
     def __init__(self,error,cause,next_action):super().__init__(error);self.cause=cause;self.next_action=next_action
@@ -16,7 +17,9 @@ def _fail(error,cause,next_action):raise ImportValidationError(error,cause,next_
 def validate_recorded_run(source:Path)->tuple[list[dict],str]:
     source=source.expanduser().resolve()
     if not source.is_dir():_fail("The selected folder is not a directory.",f"No directory exists at {source}.","Choose the artifact folder produced by a completed or interrupted V-model run.")
-    usage=source/"usage.jsonl"
+    # A unified session root may contain logs in interview/ and spec/.
+    candidates=[source/"usage.jsonl",source/"interview"/"usage.jsonl",source/"spec"/"usage.jsonl"]
+    usage=next((p for p in candidates if p.is_file()),candidates[0])
     if not usage.is_file():_fail("The selected folder has no usage.jsonl.","It is not a recorded V-model run, or the recording is incomplete.","Choose the run's artifact folder, not an individual artifact file.")
     if usage.stat().st_size>20_000_000:_fail("usage.jsonl is too large to import.","The 20 MB safety limit was exceeded.","Choose the original run log or archive this file before importing.")
     rows=[];session=None
