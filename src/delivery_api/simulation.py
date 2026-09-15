@@ -63,7 +63,20 @@ class Simulation:
     def __init__(self,store:Storage):self.store,self.running=store,{}
     def import_run(self,source:Path,title:str|None=None)->dict:
         source=source.expanduser().resolve();rows,sid=validate_recorded_run(source)
-        task=self.store.create_task(title or f"Recorded run {sid}",f"Simulation from {source}")
+        # Unified session imports can name themselves from their interview intent.
+        # A browser upload contains only usage.jsonl, so it safely falls back to
+        # the session ID unless the caller supplied a title.
+        inferred=None
+        for intent_path in (source/"intent_model.json", source/"interview"/"intent_model.json"):
+            if not intent_path.is_file(): continue
+            try:
+                intent=json.loads(intent_path.read_text(encoding="utf-8"))
+                inferred=next((str(intent.get(k)).strip() for k in ("problem_statement","core_value_proposition")
+                               if isinstance(intent.get(k),str) and str(intent.get(k)).strip()),None)
+            except (OSError,json.JSONDecodeError):
+                pass
+            if inferred: break
+        task=self.store.create_task(title or inferred or f"Recorded run {sid}",f"Simulation from {source}")
         models=sorted({f"{r['provider']}/{r['model']}" for r in rows})
         self.store.configure_simulation(task["task_id"],str(source),", ".join(models));self.store.audit("local user","simulation.imported",task["task_id"],{"source":str(source),"events":len(rows),"validated":True});return self.store.task(task["task_id"])
     async def replay(self,task_id:str,speed:float|None):

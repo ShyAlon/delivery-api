@@ -260,9 +260,11 @@ class ReplayRequest(BaseModel):
     speed: float | None = 100
 
 @app.post("/api/tasks/{task_id}/simulate")
-def replay_simulation(task_id: str, req: ReplayRequest):
+async def replay_simulation(task_id: str, req: ReplayRequest):
     try: simulation.start(task_id, None if req.speed in (None, 0) else req.speed)
     except ValueError as e: raise HTTPException(409, {"error": str(e), "cause": "The task cannot start this replay.", "next": "Import a recorded run or wait for the current replay."})
+    except Exception as e:
+        raise HTTPException(500, {"error": "The recorded replay could not start.", "cause": f"{type(e).__name__}: {str(e)[:300]}", "next": "Retry once. If it repeats, restart scripts/run-ui.sh and open this task again."})
     store.audit("local user", "simulation.started", task_id, {"speed": "instant" if req.speed in (None,0) else req.speed})
     return {"status":"started","simulated":True,"speed":"instant" if req.speed in (None,0) else req.speed}
 

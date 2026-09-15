@@ -28,3 +28,44 @@ def test_interview_stage_vocabulary_and_unified_session_root(tmp_path):
     (interview/'usage.jsonl').write_text(json.dumps(row)+'\n')
     rows,sid=validate_recorded_run(root)
     assert rows==[row] and sid=='session'
+
+
+def test_simulate_endpoint_runs_on_asgi_event_loop(tmp_path):
+    row={"stage":"scope_tiebreak","provider":"ollama","model":"phi4","ts":"2026-09-15T10:00:00+03:00","prompt_tokens":1,"completion_tokens":1,"session_id":"asgi"}
+    with TestClient(app) as c:
+        imported=c.post('/api/simulations',files={'usage_file':('usage.jsonl',(json.dumps(row)+'\n').encode(),'application/json')},data={'title':'ASGI replay'})
+        assert imported.status_code==201
+        r=c.post(f"/api/tasks/{imported.json()['task_id']}/simulate",json={'speed':0})
+        assert r.status_code==200, r.text
+        assert r.json()=={'status':'started','simulated':True,'speed':'instant'}
+
+
+def test_simulate_start_failure_is_structured(monkeypatch):
+    with TestClient(app) as c:
+        monkeypatch.setattr('delivery_api.app.simulation.start',lambda *a,**k: (_ for _ in ()).throw(RuntimeError('loop unavailable')))
+        r=c.post('/api/tasks/anything/simulate',json={'speed':0})
+        assert r.status_code==500
+        detail=r.json()['detail']
+        assert set(detail)=={'error','cause','next'} and 'RuntimeError' in detail['cause']
+
+
+def test_unified_session_import_infers_title_from_intent(tmp_path):
+    from delivery_api.simulation import Simulation
+    from delivery_api.store import SQLiteStore
+    root=tmp_path/'meaningful-session'; interview=root/'interview';interview.mkdir(parents=True)
+    row={"stage":"probing","provider":"ollama","model":"phi4","ts":"2026-09-15T10:00:00+03:00","prompt_tokens":1,"completion_tokens":1,"session_id":"meaningful-session"}
+    (interview/'usage.jsonl').write_text(json.dumps(row)+'\n')
+    (interview/'intent_model.json').write_text(json.dumps({"problem_statement":"Help supply teams spot inventory risks"}))
+    task=Simulation(SQLiteStore(str(tmp_path/'name.db'))).import_run(root)
+    assert task['title']=='Help supply teams spot inventory risks'
+
+
+def test_import_title_override_and_session_fallback(tmp_path):
+    from delivery_api.simulation import Simulation
+    from delivery_api.store import SQLiteStore
+    source=tmp_path/'uploaded';source.mkdir()
+    row={"stage":"probing","provider":"ollama","model":"phi4","ts":"2026-09-15T10:00:00+03:00","prompt_tokens":1,"completion_tokens":1,"session_id":"s-42"}
+    (source/'usage.jsonl').write_text(json.dumps(row)+'\n')
+    sim=Simulation(SQLiteStore(str(tmp_path/'fallback.db')))
+    assert sim.import_run(source)['title']=='Recorded run s-42'
+    assert sim.import_run(source,'My replay')['title']=='My replay'
