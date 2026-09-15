@@ -1,6 +1,7 @@
 """Durable task, phase, event and artifact state backed by SQLite."""
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 import sqlite3
@@ -12,6 +13,18 @@ from typing import Protocol, runtime_checkable
 from vmodel_contracts import RunState
 
 SCHEMA = """
+
+CREATE TABLE IF NOT EXISTS users (
+  user_id TEXT PRIMARY KEY, provider TEXT NOT NULL, external_id TEXT NOT NULL, email TEXT,
+  label TEXT NOT NULL, token_quota INTEGER NOT NULL, is_admin INTEGER NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL, updated_at REAL NOT NULL, UNIQUE(provider,external_id)
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  session_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at REAL NOT NULL, created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oauth_states (
+  state_hash TEXT PRIMARY KEY, provider TEXT NOT NULL, expires_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS links (
   token TEXT PRIMARY KEY, run_id TEXT NOT NULL, founder_label TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1, created_at REAL NOT NULL
@@ -19,10 +32,11 @@ CREATE TABLE IF NOT EXISTS links (
 CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY, state TEXT NOT NULL, submission TEXT, session_ref TEXT,
   cost_usd REAL NOT NULL DEFAULT 0, budget_usd REAL NOT NULL,
-  created_at REAL NOT NULL, updated_at REAL NOT NULL
+  created_at REAL NOT NULL, updated_at REAL NOT NULL, owner_id TEXT
 );
 CREATE TABLE IF NOT EXISTS usage (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, record TEXT NOT NULL, ts REAL NOT NULL
+  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, record TEXT NOT NULL, ts REAL NOT NULL,
+  user_id TEXT, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS artifacts (
   run_id TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL, ts REAL NOT NULL
@@ -30,7 +44,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE TABLE IF NOT EXISTS tasks (
   task_id TEXT PRIMARY KEY, title TEXT NOT NULL, brief TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL, active_phase TEXT, model_route TEXT, generation INTEGER NOT NULL DEFAULT 1,
-  created_at REAL NOT NULL, updated_at REAL NOT NULL, simulated INTEGER NOT NULL DEFAULT 0, source_dir TEXT
+  created_at REAL NOT NULL, updated_at REAL NOT NULL, simulated INTEGER NOT NULL DEFAULT 0, source_dir TEXT, owner_id TEXT
 );
 CREATE TABLE IF NOT EXISTS phases (
   task_id TEXT NOT NULL, phase_key TEXT NOT NULL, label TEXT NOT NULL, position INTEGER NOT NULL,
@@ -122,6 +136,8 @@ class SQLiteStore:
         phase_cols = {r[1] for r in self._db.execute("PRAGMA table_info(phases)")}
         artifact_cols = {r[1] for r in self._db.execute("PRAGMA table_info(task_artifacts)")}
         task_cols = {r[1] for r in self._db.execute("PRAGMA table_info(tasks)")}
+        run_cols = {r[1] for r in self._db.execute("PRAGMA table_info(runs)")}
+        usage_cols = {r[1] for r in self._db.execute("PRAGMA table_info(usage)")}
         if "gate_basis_changed" not in phase_cols:
             self._db.execute("ALTER TABLE phases ADD COLUMN gate_basis_changed INTEGER NOT NULL DEFAULT 0")
         if "stale_reason" not in artifact_cols:
@@ -130,6 +146,12 @@ class SQLiteStore:
             self._db.execute("ALTER TABLE tasks ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0")
         if "source_dir" not in task_cols:
             self._db.execute("ALTER TABLE tasks ADD COLUMN source_dir TEXT")
+        if "owner_id" not in task_cols:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN owner_id TEXT")
+        if "owner_id" not in run_cols:
+            self._db.execute("ALTER TABLE runs ADD COLUMN owner_id TEXT")
+        for col, ddl in (("user_id", "TEXT"), ("input_tokens", "INTEGER NOT NULL DEFAULT 0"), ("output_tokens", "INTEGER NOT NULL DEFAULT 0")):
+            if col not in usage_cols: self._db.execute(f"ALTER TABLE usage ADD COLUMN {col} {ddl}")
         self._db.commit()
 
     def _commit(self):
@@ -365,6 +387,60 @@ class SQLiteStore:
             self.audit(actor, "task.rerun_prepared", task_id, {"from_phase": from_phase, "generation": generation, "policy": "archive", "stale_reason": reason})
             self._commit()
             return generation
+
+
+    # Authentication and per-user quota seam.
+    def create_oauth_state(self, state_hash: str, provider: str, expires_at: float) -> None:
+        with self._lock:
+            self._db.execute("INSERT INTO oauth_states VALUES (?,?,?)", (state_hash, provider, expires_at)); self._commit()
+
+    def consume_oauth_state(self, state_hash: str, provider: str, now: float) -> bool:
+        with self._lock:
+            row=self._db.execute("SELECT * FROM oauth_states WHERE state_hash=? AND provider=? AND expires_at>?",(state_hash,provider,now)).fetchone()
+            self._db.execute("DELETE FROM oauth_states WHERE state_hash=?",(state_hash,)); self._commit(); return bool(row)
+
+    def upsert_user(self, provider: str, external_id: str, email: str | None, label: str, token_quota: int, is_admin: bool) -> dict:
+        now=time.time(); user_id=f"{provider}:{external_id}"
+        with self._lock:
+            self._db.execute("INSERT INTO users(user_id,provider,external_id,email,label,token_quota,is_admin,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,external_id) DO UPDATE SET email=excluded.email,label=excluded.label,is_admin=excluded.is_admin,updated_at=excluded.updated_at",(user_id,provider,external_id,email,label,token_quota,int(is_admin),now,now)); self._commit()
+            return dict(self._db.execute("SELECT * FROM users WHERE user_id=?",(user_id,)).fetchone())
+
+    @staticmethod
+    def _session_key(session_id: str) -> str:
+        return hashlib.sha256(session_id.encode()).hexdigest()
+
+    def create_session(self, session_id: str, user_id: str, expires_at: float) -> None:
+        with self._lock:
+            self._db.execute("INSERT INTO sessions VALUES (?,?,?,?)",(self._session_key(session_id),user_id,expires_at,time.time())); self._commit()
+
+    def session(self, session_id: str) -> dict | None:
+        row=self._db.execute("SELECT s.*,u.label,u.email,u.is_admin FROM sessions s JOIN users u USING(user_id) WHERE session_id=?",(self._session_key(session_id),)).fetchone()
+        return dict(row) if row else None
+
+    def delete_session(self, session_id: str) -> None:
+        with self._lock: self._db.execute("DELETE FROM sessions WHERE session_id=?",(self._session_key(session_id),)); self._commit()
+
+    def user_quota(self, user_id: str) -> dict | None:
+        row=self._db.execute("SELECT user_id,label,email,token_quota,is_admin FROM users WHERE user_id=?",(user_id,)).fetchone()
+        if not row: return None
+        out=dict(row); out["tokens_used"]=self._db.execute("SELECT COALESCE(SUM(input_tokens+output_tokens),0) n FROM usage WHERE user_id=?",(user_id,)).fetchone()["n"]; return out
+
+    def set_user_quota(self, user_id: str, token_quota: int, actor: str) -> dict:
+        with self._lock:
+            if not self._db.execute("SELECT 1 FROM users WHERE user_id=?",(user_id,)).fetchone(): raise KeyError(user_id)
+            self._db.execute("UPDATE users SET token_quota=?,updated_at=? WHERE user_id=?",(token_quota,time.time(),user_id)); self.audit(actor,"quota.configured",detail={"user_id":user_id,"token_quota":token_quota}); self._commit(); return self.user_quota(user_id)
+
+    def quota_allows(self, user_id: str) -> tuple[bool, dict]:
+        q=self.user_quota(user_id)
+        if not q: return False,{"user_id":user_id,"token_quota":0,"tokens_used":0}
+        return q["tokens_used"] < q["token_quota"],q
+
+    def attribute_run(self, run_id: str, user_id: str) -> None:
+        with self._lock: self._db.execute("UPDATE runs SET owner_id=? WHERE run_id=?",(user_id,run_id)); self._commit()
+
+    def add_user_usage(self, run_id: str, user_id: str, record_json: str, cost_usd: float, input_tokens: int, output_tokens: int) -> float:
+        with self._lock:
+            self._db.execute("INSERT INTO usage(run_id,record,ts,user_id,input_tokens,output_tokens) VALUES(?,?,?,?,?,?)",(run_id,record_json,time.time(),user_id,input_tokens,output_tokens)); self._db.execute("UPDATE runs SET cost_usd=cost_usd+?,updated_at=? WHERE run_id=?",(cost_usd,time.time(),run_id)); self._commit(); return self.run(run_id)["cost_usd"]
 
 
 def create_store(database_url: str) -> Storage:

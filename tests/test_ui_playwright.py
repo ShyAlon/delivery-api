@@ -118,3 +118,30 @@ def test_gate_redo_requires_steer_in_browser(page, ui):
     page.get_by_role("button", name="Redo").click()
     page.get_by_text("a redo needs a reason", exact=False).wait_for()
     assert page.get_by_text("a redo needs a reason", exact=False).is_visible()
+
+
+def test_oauth_identity_and_logout_in_browser(tmp_path):
+    db=tmp_path/"oauth-ui.db";port=_port()
+    env={**os.environ,"DELIVERY_DB_PATH":str(db),"DELIVERY_SESSION_SECRET":"0123456789abcdef0123456789abcdef",
+         "DELIVERY_GOOGLE_CLIENT_ID":"id","DELIVERY_GOOGLE_CLIENT_SECRET":"secret",
+         "DELIVERY_COOKIE_SECURE":"0","PYTHONPATH":str(Path(__file__).parents[1]/"src")}
+    seed='''from delivery_api.store import SQLiteStore\nimport os,time\ns=SQLiteStore(os.environ["DELIVERY_DB_PATH"])\nu=s.upsert_user("google","42","shy@example.com","shy@example.com",1000,True)\ns.create_session("browser-session",u["user_id"],time.time()+1000)'''
+    subprocess.run([sys.executable,"-c",seed],check=True,env=env)
+    proc=subprocess.Popen([sys.executable,"-m","uvicorn","delivery_api.app:app","--host","127.0.0.1","--port",str(port)],env=env)
+    base=f"http://127.0.0.1:{port}"
+    try:
+        for _ in range(50):
+            try:
+                import urllib.request;urllib.request.urlopen(base+"/health",timeout=.2);break
+            except Exception:time.sleep(.1)
+        with sync_playwright() as p:
+            browser=p.chromium.launch(headless=True);context=browser.new_context()
+            context.add_cookies([{"name":"vmodel_session","value":"browser-session","url":base}])
+            page=context.new_page();page.goto(base)
+            page.get_by_text("shy@example.com").wait_for()
+            page.get_by_role("button",name="Logout").click()
+            page.get_by_text("Sign in",exact=True).wait_for()
+            assert page.get_by_role("link",name="google").is_visible()
+            browser.close()
+    finally:
+        proc.terminate();proc.wait(timeout=5)

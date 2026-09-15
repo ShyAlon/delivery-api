@@ -69,3 +69,40 @@ Production is one multi-architecture Docker image on a small Ubuntu VM. SQLite i
 5. Trigger the first deployment with `gh workflow run 'CI and deploy'`, or push to `main`. Watch it with `gh run watch`.
 
 The workflow uses `GITHUB_TOKEN` for GHCR. No registry password is stored. GitHub environments may optionally require manual production approval. Back up `/data/delivery.db` before database migrations; Hetzner VM backups are useful but do not replace an application-consistent SQLite copy.
+
+## Production authentication and per-user token quotas
+
+Local mode remains frictionless: if `DELIVERY_SESSION_SECRET` and OAuth client IDs are unset, requests run as `local user` with no login wall. Never use local mode on an exposed server.
+
+Production OAuth setup:
+
+1. Choose the public HTTPS origin, for example `https://vmodel.example.com`. OAuth callbacks are `https://vmodel.example.com/auth/google/callback` and `https://vmodel.example.com/auth/github/callback`.
+2. Google Cloud Console: create/select a project, open APIs & Services > OAuth consent screen, configure the app and authorized users/audience, then Credentials > Create credentials > OAuth client ID > Web application. Add the HTTPS origin and Google callback exactly. Copy the client ID and secret.
+3. GitHub: Settings > Developer settings > OAuth Apps > New OAuth App. Set Homepage URL to the HTTPS origin and Authorization callback URL to the GitHub callback exactly. Register, then generate and copy a client secret.
+4. Generate a session secret (`openssl rand -hex 32`) and set these only in the server environment, never in git:
+
+   ```bash
+   DELIVERY_SESSION_SECRET=...
+   DELIVERY_PUBLIC_ORIGIN=https://vmodel.example.com
+   DELIVERY_GOOGLE_CLIENT_ID=...
+   DELIVERY_GOOGLE_CLIENT_SECRET=...
+   DELIVERY_GITHUB_CLIENT_ID=...
+   DELIVERY_GITHUB_CLIENT_SECRET=...
+   DELIVERY_ADMIN_EMAILS=shy@example.com
+   DELIVERY_COOKIE_SECURE=1
+   DELIVERY_DEFAULT_USER_TOKEN_QUOTA=250000
+   ```
+
+5. Restart and verify `/api/auth` reports `mode: oauth`; sign in once with each provider and confirm logout clears the session. Cookies are opaque, HttpOnly, Secure, SameSite=Lax and expire after 12 hours by default. OAuth state is one-use and expires after ten minutes. Auth and run-start endpoints are rate-limited.
+
+Live mutations (create/start/rerun/gate decisions) require login when OAuth is configured. Task/replay browsing remains public. Audit rows use the signed-in email/identity.
+
+Token quotas are integer model tokens across input plus output. The usage ingest API accepts `input_tokens` and `output_tokens`, attributes them to the run owner, and a new run is rejected before launch once `tokens_used >= token_quota`. Every allow/reject decision is audited. Shy administers a user after their first login:
+
+```bash
+curl -X PUT https://vmodel.example.com/api/admin/users/google:PROVIDER_ID/quota \
+  -H 'Content-Type: application/json' --cookie 'vmodel_session=YOUR_ADMIN_BROWSER_SESSION' \
+  --data '{"token_quota":500000}'
+```
+
+Prefer the admin API from the authenticated web origin rather than copying cookies into a shell. `GET /api/admin/users/{user_id}/quota` reports the configured limit and consumed total. Only identities whose normalized email is in `DELIVERY_ADMIN_EMAILS` can use these endpoints.
