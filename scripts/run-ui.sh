@@ -17,8 +17,11 @@ if [ -z "$PYTHON" ]; then
     exit 1
   fi
 fi
-if ! "$PYTHON" -c 'import delivery_api,uvicorn' >/dev/null 2>&1; then
-  echo "== first run: installing delivery-api and UI dependencies into .venv =="
+# Editable installs do not automatically sync new runtime dependencies after a
+# pull. Check the full import surface, then refresh the existing venv when any
+# dependency is absent (including python-multipart for file uploads).
+if ! "$PYTHON" -c 'import delivery_api,uvicorn,multipart' >/dev/null 2>&1; then
+  echo "== syncing delivery-api and UI dependencies into .venv =="
   if [ ! -x "$ROOT/.venv/bin/python" ]; then "$PYTHON" -m venv "$ROOT/.venv"; fi
   PYTHON="$ROOT/.venv/bin/python"
   if ! "$PYTHON" -m pip install -e "$ROOT"; then

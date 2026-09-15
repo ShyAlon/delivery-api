@@ -5,5 +5,7 @@ def test_run_ui_script_is_self_contained_and_prints_url():
     assert p.stat().st_mode & 0o111
     assert 'http://$HOST:$PORT' in s
     assert '-m pip install -e "$ROOT"' in s
+    assert 'import delivery_api,uvicorn,multipart' in s
+    assert 'syncing delivery-api and UI dependencies' in s
     assert 'exec "$PYTHON" -m delivery_api' in s
     assert "Error:" in s and "Likely cause:" in s and "Next:" in s
