@@ -199,11 +199,12 @@ def rename_task(task_id:str,req:TaskRename,a:auth.Actor=Depends(auth.require_act
     except KeyError:raise HTTPException(404,{"error":"Task not found.","cause":"It may already have been deleted.","next":"Return to the task list."})
     except ValueError as e:raise HTTPException(409,{"error":str(e),"cause":"Task names must be unique (ignoring capitalization).","next":"Choose a different task name."})
 
-@app.delete("/api/tasks/{task_id}",status_code=204)
+@app.delete("/api/tasks/{task_id}")
 def delete_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     try:store.delete_task(task_id,a.label)
     except KeyError:raise HTTPException(404,{"error":"Task not found.","cause":"It may already have been deleted.","next":"Return to the task list."})
     except ValueError as e:raise HTTPException(409,{"error":str(e),"cause":"Active work must stop before its data is removed.","next":"Wait for the replay to finish, then delete the task."})
+    return {"status":"deleted","task_id":task_id,"source_artifacts_deleted":False}
 
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str):

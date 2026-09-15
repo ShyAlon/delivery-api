@@ -184,5 +184,5 @@ def test_task_management_api_structured_collisions_and_delete():
         assert set(b.json()['detail'])=={'error','cause','next'}
         tid=a.json()['task_id']
         r=c.patch(f'/api/tasks/{tid}',json={'title':'Renamed API Task'});assert r.status_code==200 and r.json()['title']=='Renamed API Task'
-        d=c.delete(f'/api/tasks/{tid}');assert d.status_code==204
+        d=c.delete(f'/api/tasks/{tid}');assert d.status_code==200 and d.json()['source_artifacts_deleted'] is False
         assert c.get(f'/api/tasks/{tid}').status_code==404
