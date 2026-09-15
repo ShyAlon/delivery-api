@@ -34,3 +34,38 @@ docker run --rm -p 8000:8000 -v "$PWD/.data:/data" \
 ```
 
 Ollama is never in the image. Local deployments route to host Ollama; cloud deployments use API providers through the engines' shared model-routing environment. Engine CLI wiring is the next slice: `ProcessRunner` already holds the process, line stream and heartbeat contract.
+
+## Hetzner production deployment
+
+Production is one multi-architecture Docker image on a small Ubuntu VM. SQLite is mounted from `/data`, outside the replaceable container. The container binds port 8000 to localhost only; put a TLS reverse proxy on ports 80/443 before public launch. Ollama is not deployed.
+
+`CI and deploy` runs on every push to `main`: pytest plus Playwright, an amd64/arm64 image build, GHCR push, then optional SSH deployment. Deployment is off until the repository variable `DEPLOY_ENABLED=true` exists, so CI stays green before a server is provisioned. Images are immutable `sha-<commit>` tags. The remote deploy keeps the previous image name and prints an exact rollback command if `/health` fails.
+
+### Provision once
+
+1. Create an Ubuntu 24.04 Hetzner CX22 in an EU region. Add the dedicated deploy public key during creation. Do not paste private keys into the server or chat.
+2. Copy and run the idempotent bootstrap as root:
+
+   ```bash
+   scp scripts/bootstrap-server.sh root@SERVER_IP:/tmp/
+   ssh root@SERVER_IP 'bash /tmp/bootstrap-server.sh'
+   ```
+
+3. Verify the non-root deployment route:
+
+   ```bash
+   ssh -i ~/.ssh/vmodel-deploy deploy@SERVER_IP docker version
+   ```
+
+4. Set repository configuration from a logged-in `gh` CLI:
+
+   ```bash
+   cd ~/development/require/delivery-api
+   printf '%s' 'SERVER_IP' | gh secret set HETZNER_HOST
+   gh secret set HETZNER_SSH_KEY < ~/.ssh/vmodel-deploy
+   gh variable set DEPLOY_ENABLED --body true
+   ```
+
+5. Trigger the first deployment with `gh workflow run 'CI and deploy'`, or push to `main`. Watch it with `gh run watch`.
+
+The workflow uses `GITHUB_TOKEN` for GHCR. No registry password is stored. GitHub environments may optionally require manual production approval. Back up `/data/delivery.db` before database migrations; Hetzner VM backups are useful but do not replace an application-consistent SQLite copy.
