@@ -381,7 +381,7 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     assert page.locator('.live-indicator.waiting').get_by_text('Waiting for your answer').is_visible()
     assert question.is_visible() and question.locator('p').inner_text()=='Which users need this?\nWhat outcome matters most?'
     page.route('**/api/tasks/live/answer',lambda route:route.fulfill(json={'status':'accepted'}))
-    composer.locator('textarea').fill('Caregivers');composer.locator('button').click()
+    composer.locator('textarea').fill('Caregivers');composer.locator('button[type=submit]').click()
     question.wait_for(state='hidden');assert question.is_hidden()
 
 def test_answer_failure_preserves_text_and_recovers_button(page,ui):
