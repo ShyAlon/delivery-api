@@ -545,3 +545,16 @@ def test_founder_dialog_fixed_controls_and_vertical_four_options(page,ui):
     style=selected.locator('.option-copy b').evaluate("e=>({weight:getComputedStyle(e).fontWeight,bg:getComputedStyle(e).backgroundColor})")
     assert int(style['weight'])>=700 and style['bg']!='rgba(0, 0, 0, 0)'
     page.screenshot(path='/downloads/founder-dialog-vertical-four-options.png',full_page=True)
+
+def test_founder_decision_outside_click_dismisses_and_persistent_bar_reopens(page,ui):
+    page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();live['events']=[]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');page.locator('#console').wait_for()
+    decision={'type':'founder_decision','title':'Choose one','prompt':'Choose to continue','options':[{'value':'1','label':'A','summary':'First'},{'value':'2','label':'B','summary':'Second'}]}
+    page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"conops",payload:{waiting_input:true,decision},ts:1720000300})',decision)
+    dialog=page.locator('.decision-dialog');dialog.wait_for();button=dialog.locator('.decision-submit')
+    assert float(button.evaluate("e=>getComputedStyle(e).borderRadius.replace('px','')"))>=12
+    page.locator('#modal').click(position={'x':5,'y':5});assert dialog.count()==0
+    launch=page.locator('#opendecision');assert launch.is_visible()
+    assert page.locator('.live-indicator.waiting').get_by_text('Waiting for your answer').is_visible()
+    launch.click();assert page.locator('.decision-dialog').is_visible()
