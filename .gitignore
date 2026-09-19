@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 delivery.db*
 artifacts/
+run.log
