@@ -219,3 +219,13 @@ def test_dashboard_routes_local_loading_to_session_folder_not_file_picker(page,u
     assert page.get_by_role("button",name="Import run").count()==0
     page.get_by_role("link",name="Load sessions").click()
     page.get_by_role("button",name="Artifacts folder").wait_for()
+
+def test_page_headers_stay_sticky_and_sessions_have_no_evidence_vault_hero(page,ui):
+    page.goto(ui+"/sessions")
+    controls=page.locator('.session-controls.page-head');controls.wait_for()
+    assert controls.evaluate("e=>getComputedStyle(e).position")=="sticky"
+    assert page.get_by_text("Evidence vault / completed sessions",exact=True).count()==0
+    assert page.get_by_text("Every decision,",exact=False).count()==0
+    page.goto(ui+"/tasks/done/view")
+    head=page.locator('.detail-head.page-head');head.wait_for()
+    assert head.evaluate("e=>getComputedStyle(e).position")=="sticky"

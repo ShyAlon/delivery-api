@@ -106,3 +106,8 @@ curl -X PUT https://vmodel.example.com/api/admin/users/google:PROVIDER_ID/quota 
 ```
 
 Prefer the admin API from the authenticated web origin rather than copying cookies into a shell. `GET /api/admin/users/{user_id}/quota` reports the configured limit and consumed total. Only identities whose normalized email is in `DELIVERY_ADMIN_EMAILS` can use these endpoints.
+
+## UI conventions
+
+- Every view-level page header remains visible while its page scrolls. Use the shared `page-head` class, which sticks below the global navigation and preserves the current translucent surface treatment.
+- Do not add a large promotional/marketing hero above a working collection. Put collection actions, filtering, and current source context in the sticky page header so the managed objects stay primary.
