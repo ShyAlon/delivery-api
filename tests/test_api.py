@@ -84,3 +84,17 @@ def test_job_failure_records_human_artifact(tmp_path):
     rid = asyncio.new_event_loop().run_until_complete(go())
     arts = store.artifacts(rid)
     assert any(a["kind"] == "generation:error" and "ollama serve" in a["ref"] for a in arts), arts
+
+def test_completed_sessions_are_discovered_and_bundle_is_projected(client,tmp_path,monkeypatch):
+ import json
+ from delivery_api import bundles
+ root=tmp_path/"artifacts";base=root/"s1";(base/"interview").mkdir(parents=True);(base/"spec").mkdir()
+ (base/"interview/intent_model.json").write_text(json.dumps({"problem_statement":"Family tasks"}))
+ (base/"spec/hands-free-run.json").write_text(json.dumps({"completed_at":"2026-09-19T00:00:00Z"}))
+ (base/"spec/bundle-integrity.json").write_text(json.dumps({"files_checked":14,"diagnostics":[]}))
+ (base/"spec/needs.json").write_text(json.dumps({"needs":[{"need_id":"N-1","statement":"Do work"}]}))
+ (base/"spec/srs.json").write_text(json.dumps({"functional":[{"requirement_id":"R-1","title":"Work","need_ids":["N-1"],"acceptance":[{"criterion_id":"AC-1","statement":"done"}]}]}))
+ monkeypatch.setattr(bundles,"root",lambda:root)
+ assert client.get('/api/sessions').json()['sessions'][0]['session_id']=='s1'
+ data=client.get('/api/sessions/s1').json();assert len(data['graph']['nodes'])==3
+ assert data['graph']['edges']==[{"from":"N-1","to":"R-1","kind":"realizes"},{"from":"R-1","to":"AC-1","kind":"accepts"}]

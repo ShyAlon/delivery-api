@@ -22,7 +22,19 @@ def _port():
 def ui(tmp_path_factory):
     root = tmp_path_factory.mktemp("ui")
     db = root / "ui.db"
-    env = {**os.environ, "DELIVERY_DB_PATH": str(db),
+    artifacts=root/"artifacts";session=artifacts/"golden-1";(session/"interview").mkdir(parents=True);(session/"spec").mkdir()
+    import json
+    (session/"interview/intent_model.json").write_text(json.dumps({"problem_statement":"Family task evidence"}))
+    (session/"interview/audit.jsonl").write_text(json.dumps({"event":"gate.auto_decision","gate":"concept","action":"select"})+"\n")
+    (session/"spec/hands-free-run.json").write_text(json.dumps({"completed_at":"2026-09-19T08:00:00Z"}))
+    (session/"spec/bundle-integrity.json").write_text(json.dumps({"files_checked":14,"diagnostics":[],"hashes":{"needs.json":"abc"}}))
+    (session/"spec/needs.json").write_text(json.dumps({"needs":[{"need_id":"N-1","statement":"Families need visible task status"}]}))
+    (session/"spec/srs.json").write_text(json.dumps({"functional":[{"requirement_id":"R-1","title":"Visible status","statement":"The system shall show status","need_ids":["N-1"],"acceptance":[{"criterion_id":"AC-1","statement":"Status is visible"}]}]}))
+    (session/"spec/architecture.json").write_text(json.dumps({"decisions":[{"decision_id":"ADR-1","title":"Progressive web app","decision":"Build a PWA","rationale":"Browser-first scope","options_considered":[{"option":"Native","reason":"Outside first release"}]}],"components":[{"name":"Task service","responsibility":"Track work"}]}))
+    (session/"spec/items.json").write_text(json.dumps([{"spec_id":"SPEC-1","title":"Task status module","requirement_ids":["R-1"]}]))
+    (session/"spec/tests.json").write_text(json.dumps([{"test_id":"T-1","title":"Status visible","criterion_ids":["AC-1"],"spec_ids":["SPEC-1"]}]))
+    (session/"spec/audit.jsonl").write_text(json.dumps({"event":"gate.simulated_expert_opinion","gate":"architecture","action":"approve","upstream_advisories":[{"artifact":"srs"}]})+"\n")
+    env = {**os.environ, "DELIVERY_DB_PATH": str(db),"VMODEL_ARTIFACTS_DIR":str(artifacts),
            "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     seed = '''
 from delivery_api.store import SQLiteStore
@@ -166,3 +178,24 @@ def test_task_filter_sort_rename_and_delete(page,ui):
     page.get_by_role('button',name='Delete task').click()
     page.locator('#app').get_by_text('Renamed empty definition',exact=True).wait_for(state='detached')
     assert page.get_by_text('Renamed empty definition',exact=True).count()==0
+
+
+def test_session_discovery_bundle_and_trace_diagram(page,ui):
+    page.goto(ui+"/sessions")
+    page.get_by_text("Family task evidence",exact=True).wait_for()
+    page.screenshot(path="/downloads/vmodel-bundle-sessions.png",full_page=True)
+    page.get_by_text("Family task evidence",exact=True).click()
+    page.get_by_text("Stakeholder needs").wait_for()
+    assert not page.get_by_text("Bundle integrity passed").is_visible()
+    page.screenshot(path="/downloads/vmodel-bundle-overview.png",full_page=True)
+    page.get_by_role("button",name="Traceability").click()
+    assert page.locator(".trace-node").count()==5
+    page.locator('.trace-node[data-node="R-1"]').click()
+    assert page.get_by_text("3 connected edges").is_visible()
+    page.screenshot(path="/downloads/vmodel-traceability-diagram.png",full_page=True)
+    page.get_by_role("button",name="Architecture").click()
+    assert page.get_by_text("Build a PWA").is_visible()
+    page.get_by_role("button",name="Reviews + gates").click()
+    assert page.get_by_text("gate.auto_decision",exact=True).is_visible()
+    page.get_by_role("button",name="Oracle").click()
+    assert page.get_by_text("Bundle integrity passed").is_visible()

@@ -22,6 +22,7 @@ from .jobs import JobQueue
 from .runner import ProcessRunner
 from .store import create_store
 from .simulation import Simulation, ImportValidationError
+from . import bundles
 
 WEB_DIR = Path(__file__).parent / "web"
 app = FastAPI(title="V-model console", version="0.2.0")
@@ -98,6 +99,20 @@ def favicon(): return FileResponse(WEB_DIR / "favicon.ico", media_type="image/x-
 
 @app.get("/tasks/{task_id}/view", include_in_schema=False)
 def task_view(task_id: str): return FileResponse(WEB_DIR / "index.html")
+
+@app.get("/sessions", include_in_schema=False)
+def sessions_view(): return FileResponse(WEB_DIR / "index.html")
+
+@app.get("/sessions/{session_id}/view", include_in_schema=False)
+def session_view(session_id: str): return FileResponse(WEB_DIR / "index.html")
+
+@app.get("/api/sessions")
+def sessions(): return {"sessions":bundles.discover()}
+
+@app.get("/api/sessions/{session_id}")
+def session_bundle(session_id: str):
+    try:return bundles.bundle(session_id)
+    except (FileNotFoundError,ValueError):raise HTTPException(404,"session bundle not found")
 
 
 def _admin(x_admin_token: str = Header(default="")) -> None:
