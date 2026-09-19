@@ -390,3 +390,17 @@ def test_answer_failure_preserves_text_and_recovers_button(page,ui):
     answer.fill('Do not lose this answer');button.click()
     page.get_by_text('Answer could not be sent.',exact=False).wait_for()
     assert answer.input_value()=='Do not lose this answer' and button.is_enabled() and button.inner_text()=='Send answer'
+
+def test_rerun_review_opens_top_dialog_and_escape_restores_flow(page,ui):
+    page.goto(ui+'/tasks/done/view');page.get_by_role('button',name='Rerun stage').click()
+    form=page.locator('#rerunform');form.wait_for();selected=form.locator('select').input_value()
+    page.route('**/api/tasks/done/rerun',lambda route:route.fulfill(json={'downstream':['architecture','specs','tests'],'message':'Earlier generation remains archived.'}))
+    page.get_by_role('button',name='Review impact').click()
+    confirm=page.get_by_role('dialog',name='Confirm rerun');confirm.wait_for()
+    assert confirm.is_visible() and confirm.get_by_role('button',name='Confirm rerun').evaluate('e=>document.activeElement===e')
+    assert form.is_visible() and form.locator('select').input_value()==selected
+    # The nested layer is visually above the preserved flow dialog.
+    assert confirm.evaluate("e=>Number(getComputedStyle(e.closest('.dialog-layer')).zIndex)") >= 1
+    page.keyboard.press('Escape');confirm.wait_for(state='detached')
+    assert form.is_visible() and form.locator('select').input_value()==selected
+    assert form.locator('select').evaluate('e=>document.activeElement===e')
