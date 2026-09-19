@@ -380,6 +380,8 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true,question:'Which users need this?\\nWhat outcome matters most?'},ts:1720000202})")
     assert page.locator('.live-indicator.waiting').get_by_text('Waiting for your answer').is_visible()
     assert question.is_visible() and question.locator('p').inner_text()=='Which users need this?\nWhat outcome matters most?'
+    parity=page.evaluate("([q,a])=>{let qs=getComputedStyle(q),as=getComputedStyle(a);return {qbg:qs.backgroundColor,abg:as.backgroundColor,qborder:qs.borderTopColor,aborder:as.borderTopColor,qr:qs.borderRadius,ar:as.borderRadius}}",[question.element_handle(),composer.element_handle()])
+    assert parity['qbg']==parity['abg'] and parity['qborder']==parity['aborder'] and parity['qr']==parity['ar']
     page.route('**/api/tasks/live/answer',lambda route:route.fulfill(json={'status':'accepted'}))
     composer.locator('textarea').fill('Caregivers');composer.locator('button[type=submit]').click()
     question.wait_for(state='hidden');assert question.is_hidden()
