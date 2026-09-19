@@ -42,3 +42,7 @@ nav{display:flex;gap:18px}.about-page{min-height:calc(100vh - 220px);display:gri
 .detail-layout>div{display:flex}.detail-layout>div>.panel{width:100%;display:flex;flex-direction:column}.detail-layout>div>.panel .live-console{height:auto;max-height:none;min-height:180px;flex:1}
 .detail-layout>div>.panel .live-console{height:0;min-height:180px;max-height:none;overflow-y:auto}
 .detail-layout>div>.panel .live-console{height:180px;min-height:180px;max-height:calc(100vh - 220px);flex:1 1 180px}
+/* Detail columns stretch through CSS Grid. Do not flex/shrink the panel's
+   contents to force equal heights: that crushes the status and question. */
+.detail-layout>div{display:block}.detail-layout>div>.panel{display:block;width:100%;height:100%}.detail-layout>div>.panel .live-console{height:clamp(220px,30vh,420px);min-height:220px;max-height:420px;overflow-y:auto}.live-indicator{flex:0 0 auto;white-space:nowrap}.progress-item{grid-template-columns:minmax(125px,auto) minmax(0,1fr) auto}.progress-item span,.current-question p,.console .line{min-width:0;overflow-wrap:anywhere;word-break:normal}.phase small{max-width:min(480px,45vw)}
+@media(max-width:1100px){.live-status-row{align-items:flex-start;flex-direction:column}.live-progress{width:100%;border-left:0;border-top:1px solid var(--line);padding:9px 0 0}.progress-item{grid-template-columns:minmax(125px,auto) minmax(0,1fr) auto}}

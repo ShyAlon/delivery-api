@@ -631,3 +631,25 @@ def test_every_phase_has_a_stable_data_log_path():
     from delivery_api.store import PHASES
     assert list(STAGE_LOG_PATHS)==[key for key,_ in PHASES]
     assert all(str(path).endswith(f'/logs/stages/{phase}.log') for phase,path in STAGE_LOG_PATHS.items())
+
+def test_only_active_phase_pulses_blue_and_waiting_prompt_does_not_store_you(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'states.db'));tid=store.create_task('Truthful states')['task_id']
+    store.update_phase(tid,'intent','running',detail='Intent work')
+    store.update_phase(tid,'conops','running',detail='CONOPS work')
+    task=store.task(tid)
+    assert next(p for p in task['phases'] if p['phase_key']=='intent')['state']=='awaiting_approval'
+    assert [p['phase_key'] for p in task['phases'] if p['state']=='running']==['conops']
+    script='print("Building CONOPS",flush=True);print("You: ",end="",flush=True);input()'
+    runner=ProcessRunner(store)
+    async def go():
+        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path,phase='conops'))
+        for _ in range(100):
+            if tid in runner.waiting:break
+            await asyncio.sleep(.01)
+        await runner.send_input(tid,'answer');await job
+    asyncio.run(go())
+    conops=next(p for p in store.task(tid)['phases'] if p['phase_key']=='conops')
+    assert conops['detail']!='You:'

@@ -366,7 +366,7 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     page.set_viewport_size({'width':1365,'height':800})
     page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
     dimensions=console.evaluate('e=>({h:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,max:getComputedStyle(e).maxHeight,scroll:e.scrollHeight>e.clientHeight})')
-    assert dimensions['h']>=180 and dimensions['min']=='180px' and dimensions['max']=='580px' and dimensions['scroll'] is True
+    assert dimensions['h']>=220 and dimensions['min']=='220px' and dimensions['max']=='420px' and dimensions['scroll'] is True
     composer=page.locator('#answerform');assert composer.is_visible()
     indicator=page.locator('.live-status-row .live-indicator');question=page.locator('#currentquestion');console_heading=page.locator('.console-heading')
     assert page.evaluate("([a,b,c,d])=>a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING&&b.compareDocumentPosition(c)&Node.DOCUMENT_POSITION_FOLLOWING&&c.compareDocumentPosition(d)&Node.DOCUMENT_POSITION_FOLLOWING",[indicator.element_handle(),question.element_handle(),composer.element_handle(),console_heading.element_handle()])
@@ -504,3 +504,23 @@ def test_stored_pending_decision_reopens_on_page_load_and_panels_align(page,ui):
     assert abs((boxes[0]['y']+boxes[0]['height'])-(boxes[1]['y']+boxes[1]['height']))<2
     console=page.locator('.live-console').bounding_box();assert console['height']>=180
     page.screenshot(path='/downloads/restart-decision-aligned-panels.png',full_page=True)
+
+def test_detail_layout_never_crushes_or_overlaps_at_user_viewport(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='conops';long='Reply with the option number or exact concept name, then ` - ` and why you chose it. This is an explicit founder decision.'
+    decision={'type':'founder_decision','title':'Choose the operating concept','prompt':long,'options':[{'value':'1','label':'Native','summary':'Installed'},{'value':'2','label':'PWA','summary':'Browser'}]}
+    live['events']=[{'id':1,'kind':'founder_decision','message':long,'phase_key':'conops','payload':{'waiting_input':True,'question':long,'decision':decision},'ts':1720000300}]
+    # Doctrine colors: approved green, generated yellow, active blue, pending gray.
+    states=['approved','awaiting_approval','running','pending','pending','pending','pending']
+    for phase,state in zip(live['phases'],states):phase['state']=state;phase['detail']='Waiting for founder approval' if state=='awaiting_approval' else ''
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.set_viewport_size({'width':1390,'height':827});page.goto(ui+'/tasks/live/view');page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape')
+    left=page.locator('.detail-layout>.panel');right=page.locator('.detail-layout>div>.panel')
+    lb,rb=left.bounding_box(),right.bounding_box();assert abs((lb['y']+lb['height'])-(rb['y']+rb['height']))<2
+    indicator=page.locator('.live-indicator');assert indicator.evaluate('e=>e.scrollWidth<=e.clientWidth')
+    question=page.locator('#currentquestion p');assert question.evaluate('e=>e.scrollHeight<=e.clientHeight')
+    progress=page.locator('.live-progress');assert progress.bounding_box()['x']>=right.bounding_box()['x']
+    palette={s:page.locator(f'.phase.{s} .dot').first.evaluate('e=>getComputedStyle(e).backgroundColor') for s in states}
+    assert palette['approved']=='rgb(22, 163, 106)' and palette['awaiting_approval']=='rgb(229, 182, 61)' and palette['running']=='rgb(78, 156, 247)' and palette['pending']=='rgb(242, 240, 233)'
+    assert page.locator('.phase.running').count()==1
+    console=page.locator('.live-console');assert console.evaluate('e=>getComputedStyle(e).wordBreak')=='normal'
+    page.screenshot(path='/downloads/detail-layout-clean-1390x827.png',full_page=True)

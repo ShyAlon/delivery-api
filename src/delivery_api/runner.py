@@ -99,7 +99,8 @@ class ProcessRunner:
                     match = _PROGRESS.search(line)
                     completed = int(match.group(3)) if match and match.group(3) else 0
                     total = int(match.group(4)) if match and match.group(4) else None
-                    self.store.update_phase(task_id, phase, "running", detail=line, completed=completed, total=total)
+                    detail=("Waiting for founder decision" if structured_decision else "Waiting for founder answer" if waiting_input else line)
+                    self.store.update_phase(task_id, phase, "running", detail=detail, completed=completed, total=total)
                     payload={"completed":completed,"total":total}
                     if waiting_input:
                         payload["waiting_input"]=True

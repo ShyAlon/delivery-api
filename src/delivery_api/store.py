@@ -356,6 +356,12 @@ class SQLiteStore:
                 raise KeyError(phase_key)
             started = current["started_at"] or (now if state == "running" else None)
             ended = now if state in ("done","approved","awaiting_approval") else None
+            if state == "running":
+                # A task has one active execution locus. Earlier generated work
+                # may wait for approval, but must not remain pulsing blue.
+                self._db.execute(
+                    "UPDATE phases SET state='awaiting_approval',detail=CASE WHEN detail='' THEN 'Generated; waiting for founder approval' ELSE detail END,completed_at=? "
+                    "WHERE task_id=? AND phase_key<>? AND state='running'",(now,task_id,phase_key))
             self._db.execute(
                 "UPDATE phases SET state=?,detail=?,completed=?,total=?,started_at=?,completed_at=? "
                 "WHERE task_id=? AND phase_key=?",
