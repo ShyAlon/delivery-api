@@ -207,6 +207,7 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
 
 def test_artifacts_folder_setting_validates_and_reports_sessions(page,ui):
     page.goto(ui+"/sessions");page.get_by_role("button",name="Artifacts folder").click()
+    page.screenshot(path="/downloads/vmodel-artifacts-folder-setting.png",full_page=True)
     page.locator('input[name="path"]').fill('/definitely/missing/artifacts')
     page.get_by_role("button",name="Validate & load sessions").click()
     page.get_by_text("Artifacts folder could not be loaded.").wait_for()
