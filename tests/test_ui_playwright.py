@@ -362,9 +362,11 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     page.set_viewport_size({'width':1365,'height':800})
     page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
     dimensions=console.evaluate('e=>({h:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,max:getComputedStyle(e).maxHeight,scroll:e.scrollHeight>e.clientHeight})')
-    assert dimensions=={'h':144,'min':'140px','max':'220px','scroll':True}
+    assert dimensions=={'h':120,'min':'120px','max':'180px','scroll':True}
     composer=page.locator('#answerform');assert composer.is_visible()
-    assert composer.bounding_box()['y']+composer.bounding_box()['height'] <= 800
+    indicator=page.locator('.live-status-row .live-indicator');question=page.locator('#currentquestion');console_heading=page.locator('.console-heading')
+    assert page.evaluate("([a,b,c,d])=>a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING&&b.compareDocumentPosition(c)&Node.DOCUMENT_POSITION_FOLLOWING&&c.compareDocumentPosition(d)&Node.DOCUMENT_POSITION_FOLLOWING",[indicator.element_handle(),question.element_handle(),composer.element_handle(),console_heading.element_handle()])
+    assert console.bounding_box()['y']+console.bounding_box()['height'] <= 800
     indicator=page.locator('.live-indicator.working');assert indicator.get_by_text('Working · Start').is_visible()
     assert indicator.locator('i').evaluate("e=>getComputedStyle(e).animationName")=='live-halo'
     page.screenshot(path='/downloads/requi-re-live-output.png',full_page=True)
@@ -377,7 +379,7 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     assert console.evaluate('e=>Math.abs(e.scrollHeight-e.scrollTop-e.clientHeight)<2')
     page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true,question:'Which users need this?\\nWhat outcome matters most?'},ts:1720000202})")
     assert page.locator('.live-indicator.waiting').get_by_text('Waiting for your answer').is_visible()
-    question=page.locator('#currentquestion');assert question.is_visible() and question.locator('p').inner_text()=='Which users need this?\nWhat outcome matters most?'
+    assert question.is_visible() and question.locator('p').inner_text()=='Which users need this?\nWhat outcome matters most?'
     page.route('**/api/tasks/live/answer',lambda route:route.fulfill(json={'status':'accepted'}))
     composer.locator('textarea').fill('Caregivers');composer.locator('button').click()
     question.wait_for(state='hidden');assert question.is_hidden()
