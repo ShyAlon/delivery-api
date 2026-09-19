@@ -151,9 +151,9 @@ def test_oauth_identity_and_logout_in_browser(tmp_path):
             context.add_cookies([{"name":"vmodel_session","value":"browser-session","url":base}])
             page=context.new_page();page.goto(base)
             page.get_by_text("shy@example.com").wait_for()
-            page.get_by_role("button",name="Logout").click()
-            page.get_by_text("Sign in",exact=True).wait_for()
-            assert page.get_by_role("link",name="google").is_visible()
+            page.get_by_role("button",name="Sign out").click()
+            page.get_by_text("Welcome to Vector",exact=True).wait_for()
+            assert page.get_by_role("button",name="Sign in").first.is_visible()
             browser.close()
     finally:
         proc.terminate();proc.wait(timeout=5)

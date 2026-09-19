@@ -17,7 +17,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
   user_id TEXT PRIMARY KEY, provider TEXT NOT NULL, external_id TEXT NOT NULL, email TEXT,
   label TEXT NOT NULL, token_quota INTEGER NOT NULL, is_admin INTEGER NOT NULL DEFAULT 0,
-  created_at REAL NOT NULL, updated_at REAL NOT NULL, UNIQUE(provider,external_id)
+  created_at REAL NOT NULL, updated_at REAL NOT NULL, password_hash TEXT, UNIQUE(provider,external_id)
 );
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at REAL NOT NULL, created_at REAL NOT NULL
@@ -140,6 +140,9 @@ class SQLiteStore:
         task_cols = {r[1] for r in self._db.execute("PRAGMA table_info(tasks)")}
         run_cols = {r[1] for r in self._db.execute("PRAGMA table_info(runs)")}
         usage_cols = {r[1] for r in self._db.execute("PRAGMA table_info(usage)")}
+        user_cols = {r[1] for r in self._db.execute("PRAGMA table_info(users)")}
+        if "password_hash" not in user_cols:
+            self._db.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
         if "gate_basis_changed" not in phase_cols:
             self._db.execute("ALTER TABLE phases ADD COLUMN gate_basis_changed INTEGER NOT NULL DEFAULT 0")
         if "stale_reason" not in artifact_cols:
@@ -444,6 +447,17 @@ class SQLiteStore:
         with self._lock:
             self._db.execute("INSERT INTO users(user_id,provider,external_id,email,label,token_quota,is_admin,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,external_id) DO UPDATE SET email=excluded.email,label=excluded.label,is_admin=excluded.is_admin,updated_at=excluded.updated_at",(user_id,provider,external_id,email,label,token_quota,int(is_admin),now,now)); self._commit()
             return dict(self._db.execute("SELECT * FROM users WHERE user_id=?",(user_id,)).fetchone())
+
+    def create_basic_user(self, username: str, password_hash: str, token_quota: int) -> dict:
+        now=time.time();username=username.strip().lower();user_id=f"basic:{username}"
+        with self._lock:
+            try:self._db.execute("INSERT INTO users(user_id,provider,external_id,label,token_quota,is_admin,created_at,updated_at,password_hash) VALUES(?,?,?,?,?,0,?,?,?)",(user_id,"basic",username,username,token_quota,now,now,password_hash));self._commit()
+            except sqlite3.IntegrityError as e:raise ValueError("That username is already in use.") from e
+            return dict(self._db.execute("SELECT * FROM users WHERE user_id=?",(user_id,)).fetchone())
+
+    def basic_user(self, username: str) -> dict | None:
+        row=self._db.execute("SELECT * FROM users WHERE provider='basic' AND external_id=?",(username.strip().lower(),)).fetchone()
+        return dict(row) if row else None
 
     @staticmethod
     def _session_key(session_id: str) -> str:

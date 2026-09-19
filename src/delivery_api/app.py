@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Upl
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
 
 from vmodel_contracts import RunState, RunStatus
 
@@ -74,8 +75,23 @@ def index(): return FileResponse(WEB_DIR / "index.html")
 @app.get("/api/auth")
 def auth_status(request: Request):
     a = auth.actor(request)
-    return {"mode": "oauth" if auth.enabled() else "local", "authenticated": a.id not in {"anonymous"},
-            "actor": a.label, "admin": a.admin, "providers": [p for p, ident in (("google",config.GOOGLE_CLIENT_ID),("github",config.GITHUB_CLIENT_ID)) if ident]}
+    mode="basic" if config.BASIC_AUTH_ENABLED else ("oauth" if auth.enabled() else "local")
+    return {"mode":mode,"authenticated":a.id not in {"anonymous"},"actor":a.label,"admin":a.admin,
+            "providers":[p for p,ident in (("google",config.GOOGLE_CLIENT_ID),("github",config.GITHUB_CLIENT_ID)) if ident],"workspace":"shared"}
+
+class BasicCredentials(BaseModel):
+    username: str = Field(min_length=3,max_length=32)
+    password: str = Field(min_length=1,max_length=256)
+
+def _auth_response(result):
+    actor,sid=result;response=JSONResponse({"status":"signed_in","actor":actor.label})
+    response.set_cookie(config.SESSION_COOKIE,sid,max_age=config.SESSION_TTL_SECONDS,httponly=True,secure=config.COOKIE_SECURE,samesite="lax",path="/");return response
+
+@app.post("/auth/signup")
+def signup(request:Request,body:BasicCredentials):return _auth_response(auth.basic_signup(request,body.username,body.password))
+
+@app.post("/auth/signin")
+def signin(request:Request,body:BasicCredentials):return _auth_response(auth.basic_signin(request,body.username,body.password))
 
 @app.get("/auth/{provider}/start")
 def oauth_start(request: Request, provider: str):
@@ -93,6 +109,9 @@ def logout(request: Request):
     if sid: store.delete_session(sid)
     from fastapi.responses import JSONResponse
     response=JSONResponse({"status":"signed_out"}); response.delete_cookie(config.SESSION_COOKIE,path="/"); return response
+
+@app.get("/about",include_in_schema=False)
+def about_page():return FileResponse(WEB_DIR / "index.html")
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon(): return FileResponse(WEB_DIR / "favicon.ico", media_type="image/x-icon")

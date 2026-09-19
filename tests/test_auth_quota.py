@@ -28,7 +28,7 @@ def test_local_mode_bypass_unchanged(monkeypatch,tmp_path):
     link=c.post("/links",json={"founder_label":"local"},headers={"x-admin-token":config.ADMIN_TOKEN}).json()
     r=c.post("/runs",json={"token":link["token"],"free_text":"web app"})
     assert r.status_code==200
-    assert c.get("/api/auth").json()=={"mode":"local","authenticated":True,"actor":"local user","admin":True,"providers":[]}
+    assert c.get("/api/auth").json()=={"mode":"local","authenticated":True,"actor":"local user","admin":True,"providers":[],"workspace":"shared"}
 
 
 def test_google_oauth_state_session_and_logout(monkeypatch,tmp_path):
@@ -115,3 +115,23 @@ def test_session_cookie_handle_is_not_stored_verbatim(monkeypatch,tmp_path):
     stored=store._db.execute("SELECT session_id FROM sessions").fetchone()["session_id"]
     assert stored != "opaque-cookie-value"
     assert store.session("opaque-cookie-value")["user_id"]==user["user_id"]
+
+def test_basic_signup_signin_wrong_password_and_session(monkeypatch,tmp_path):
+    store=SQLiteStore(str(tmp_path/"basic.db"));app.state.store=store;monkeypatch.setattr("delivery_api.app.store",store)
+    monkeypatch.setattr(config,"BASIC_AUTH_ENABLED",True);monkeypatch.setattr(config,"COOKIE_SECURE",False);auth.limiter=auth.RateLimiter()
+    c=TestClient(app)
+    assert c.get('/api/auth').json()['authenticated'] is False
+    weak=c.post('/auth/signup',json={'username':'shy','password':'short'},headers={'origin':'http://testserver'})
+    assert weak.status_code==400 and weak.json()['detail']['error']=='Password needs more strength.'
+    good=c.post('/auth/signup',json={'username':'shy.alon','password':'Strong pass 42!'},headers={'origin':'http://testserver'})
+    assert good.status_code==200 and good.json()['actor']=='shy.alon'
+    assert store.basic_user('shy.alon')['password_hash'].startswith('scrypt$')
+    assert 'Strong pass 42!' not in store.basic_user('shy.alon')['password_hash']
+    c.cookies.clear()
+    bad=c.post('/auth/signin',json={'username':'shy.alon','password':'Wrong pass 42!'},headers={'origin':'http://testserver'})
+    assert bad.status_code==401 and bad.json()['detail']['error']=='Sign-in did not work.'
+    signed=c.post('/auth/signin',json={'username':'shy.alon','password':'Strong pass 42!'},headers={'origin':'http://testserver'})
+    assert signed.status_code==200
+    c.cookies.update(signed.cookies);assert c.get('/api/auth').json()['actor']=='shy.alon'
+    assert c.post('/auth/logout',headers={'origin':'http://testserver'}).status_code==200
+    assert c.get('/api/auth').json()['authenticated'] is False

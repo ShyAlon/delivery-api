@@ -111,3 +111,9 @@ Prefer the admin API from the authenticated web origin rather than copying cooki
 
 - Every view-level page header remains visible while its page scrolls. Use the shared `page-head` class, which sticks below the global navigation and preserves the current translucent surface treatment.
 - Do not add a large promotional/marketing hero above a working collection. Put collection actions, filtering, and current source context in the sticky page header so the managed objects stay primary.
+
+### Local accounts and workspace
+
+`scripts/run-ui.sh` enables username/password accounts by default. Passwords require 12+ characters with uppercase, lowercase, number, and symbol, and are stored only as per-user salted scrypt hashes. Browser sessions use random opaque handles in HttpOnly, SameSite=Lax cookies; only their SHA-256 digests are stored. Set `DELIVERY_BASIC_AUTH_ENABLED=0` only when intentionally restoring the unauthenticated local development mode.
+
+Accounts identify actions, while discovered artifact sessions remain one shared local workspace. This fits the single-machine founder-demo workflow and avoids duplicating or moving the source artifact tree per account.

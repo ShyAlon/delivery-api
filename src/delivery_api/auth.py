@@ -6,6 +6,10 @@ server-side so logout/revocation takes effect immediately.
 from __future__ import annotations
 
 import hashlib
+import base64
+import hmac
+import os
+import re
 import secrets
 import threading
 import time
@@ -44,7 +48,41 @@ limiter = RateLimiter()
 
 
 def enabled() -> bool:
-    return bool(config.SESSION_SECRET and (config.GOOGLE_CLIENT_ID or config.GITHUB_CLIENT_ID))
+    return config.BASIC_AUTH_ENABLED or bool(config.SESSION_SECRET and (config.GOOGLE_CLIENT_ID or config.GITHUB_CLIENT_ID))
+
+def password_problem(password: str) -> str | None:
+    if len(password) < config.PASSWORD_MIN_LENGTH:return f"Use at least {config.PASSWORD_MIN_LENGTH} characters."
+    if not re.search(r"[A-Z]",password):return "Add an uppercase letter."
+    if not re.search(r"[a-z]",password):return "Add a lowercase letter."
+    if not re.search(r"[0-9]",password):return "Add a number."
+    if not re.search(r"[^A-Za-z0-9]",password):return "Add a symbol."
+    return None
+
+def hash_password(password: str) -> str:
+    salt=os.urandom(16);derived=hashlib.scrypt(password.encode(),salt=salt,n=2**14,r=8,p=1,dklen=32)
+    return "scrypt$16384$"+base64.urlsafe_b64encode(salt).decode()+"$"+base64.urlsafe_b64encode(derived).decode()
+
+def verify_password(password: str, stored: str) -> bool:
+    try:_,n,salt,digest=stored.split("$");actual=hashlib.scrypt(password.encode(),salt=base64.urlsafe_b64decode(salt),n=int(n),r=8,p=1,dklen=32);return hmac.compare_digest(actual,base64.urlsafe_b64decode(digest))
+    except (ValueError,TypeError):return False
+
+def basic_signup(request: Request, username: str, password: str) -> tuple[Actor,str]:
+    limiter.check("auth",_client_ip(request),config.AUTH_RATE_LIMIT)
+    username=username.strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,31}",username):raise HTTPException(400,{"error":"Username is not valid.","cause":"Use 3-32 lowercase letters, numbers, dots, dashes or underscores.","next":"Choose a username such as shy.alon."})
+    problem=password_problem(password)
+    if problem:raise HTTPException(400,{"error":"Password needs more strength.","cause":problem,"next":"Use 12+ characters with uppercase, lowercase, a number, and a symbol."})
+    try:user=request.app.state.store.create_basic_user(username,hash_password(password),config.DEFAULT_USER_TOKEN_QUOTA)
+    except ValueError as e:raise HTTPException(409,{"error":"Username is unavailable.","cause":str(e),"next":"Choose another username, or sign in if this is your account."})
+    return Actor(user["user_id"],user["label"]),_new_session(request,user)
+
+def basic_signin(request: Request, username: str, password: str) -> tuple[Actor,str]:
+    limiter.check("auth",_client_ip(request),config.AUTH_RATE_LIMIT);user=request.app.state.store.basic_user(username)
+    if not user or not user.get("password_hash") or not verify_password(password,user["password_hash"]):raise HTTPException(401,{"error":"Sign-in did not work.","cause":"The username or password is incorrect.","next":"Check both fields and try again, or create a new account."})
+    return Actor(user["user_id"],user["label"]),_new_session(request,user)
+
+def _new_session(request: Request,user: dict) -> str:
+    sid=secrets.token_urlsafe(32);request.app.state.store.create_session(sid,user["user_id"],time.time()+config.SESSION_TTL_SECONDS);return sid
 
 
 def _client_ip(request: Request) -> str:

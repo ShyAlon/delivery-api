@@ -39,8 +39,19 @@ def _discover(where:Path)->list[dict]:
   phases=[x for x,present in (("interview",has_interview),("spec",has_spec)) if present]
   diagnostics=integrity.get("diagnostics") if isinstance(integrity,dict) else None
   out.append({"session_id":d.name,"title":intent.get("problem_statement") or intent.get("core_value_proposition") or d.name,
-   "completed_at":run.get("completed_at"),"oracle_passed":bool(integrity) and not bool(diagnostics),"files_checked":integrity.get("files_checked",0),"phases":phases,"path":str(d)})
+   "completed_at":run.get("completed_at"),"oracle_passed":bool(integrity) and not bool(diagnostics),"files_checked":integrity.get("files_checked",0),"phases":phases,"phase_status":_phase_status(interview,spec,run,integrity),"path":str(d)})
  return sorted(out,key=lambda x:(x["completed_at"] or "",x["session_id"]),reverse=True)
+def _phase_status(interview:Path,spec:Path,run:dict,integrity:dict)->dict:
+ values={"interview":(interview/"intent_model.json").is_file(),"needs":(spec/"needs.json").is_file(),"srs":(spec/"srs.json").is_file(),"architecture":(spec/"architecture.json").is_file(),"specs":(spec/"items.json").is_file() or (spec/"spec_items.json").is_file(),"tests":(spec/"tests.json").is_file() or (spec/"test_specifications.json").is_file(),"reviews":(interview/"audit.jsonl").is_file() or (spec/"audit.jsonl").is_file(),"oracle":bool(integrity)}
+ explicit=run.get("phases",{}) if isinstance(run,dict) else {};diagnostics=integrity.get("diagnostics",[]) if isinstance(integrity,dict) else []
+ out={}
+ for key,present in values.items():
+  state=explicit.get(key) if isinstance(explicit,dict) else None;state=state.get("status") or state.get("state") if isinstance(state,dict) else state
+  related=[x for x in diagnostics if isinstance(x,dict) and x.get("phase") in (None,key)]
+  levels={str(x.get("severity",x.get("level","error"))).lower() for x in related}
+  out[key]="in_progress" if state in ("running","in_progress") else "error" if state in ("error","failed") or "error" in levels else "warning" if state in ("warning","warn") or levels & {"warning","warn"} else "done" if present else "not_started"
+ return out
+
 def discover()->list[dict]:return _discover(root())
 def _first(spec:Path,*names,default=None):
  for n in names:
