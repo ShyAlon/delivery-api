@@ -29,6 +29,7 @@ class ProcessRunner:
     store: Storage
     processes: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
     waiting: set[str] = field(default_factory=set)
+    interrupted_for_shutdown: set[str] = field(default_factory=set)
 
     def _phase(self, text: str, fallback: str) -> str:
         lower = text.lower()
@@ -87,7 +88,11 @@ class ProcessRunner:
                         payload["question"]="\n".join(prompt_lines).removesuffix("\nYou:").removesuffix("You:").strip()
                     self.store.add_event(task_id,"waiting_input" if waiting_input else "progress",line,phase_key=phase,payload=payload)
             code = await proc.wait()
-            if code == 0:
+            if task_id in self.interrupted_for_shutdown:
+                # Keep the durable task phase running: startup will recover it
+                # from the latest interview session checkpoint.
+                self.store.add_event(task_id,"interrupted","Server restart interrupted the engine; it will resume from its checkpoint",phase_key=phase)
+            elif code == 0:
                 current=self.store.task(task_id)
                 phase_row=next(p for p in current["phases"] if p["phase_key"]==phase)
                 if phase_row["state"] != "approved":
@@ -108,12 +113,13 @@ class ProcessRunner:
                 self.store.add_event(task_id,"error",error,phase_key=phase,payload={"exit_code":code,"module":missing_module,"cause":cause,"next":next_step})
             return code
         finally:
-            self.processes.pop(task_id, None);self.waiting.discard(task_id)
+            self.processes.pop(task_id, None);self.waiting.discard(task_id);self.interrupted_for_shutdown.discard(task_id)
 
     async def shutdown(self, grace_seconds: float = 3.0) -> None:
         active=list(self.processes.items())
         for task_id,proc in active:
             if proc.returncode is not None:continue
+            self.interrupted_for_shutdown.add(task_id)
             activity("engine.shutdown.signal","Stopping engine for server shutdown",task_id=task_id,pid=proc.pid,signal="SIGTERM")
             try:
                 os.killpg(proc.pid,signal.SIGTERM) if os.name == "posix" else proc.terminate()

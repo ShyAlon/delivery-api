@@ -42,7 +42,19 @@ def normalize_connection(connection):
     return connection if isinstance(connection,ConnectionAdapter) else ConnectionAdapter(connection)
 
 
+class ReplicaStateError(RuntimeError):
+    """The local file cannot be opened as an embedded replica without its sync metadata."""
+
+
 def connect_replica(path:Path,url:str,token:str,sync_interval:int=60):
     import libsql
     path.parent.mkdir(parents=True,exist_ok=True)
+    metadata=Path(str(path)+"-info")
+    # libSQL emits a native ERROR before raising for this state. Detect it in
+    # Python first: a plain SQLite DB is not an embedded replica and must stay
+    # available locally rather than producing a scary native failure line.
+    if path.exists() and not metadata.exists():
+        raise ReplicaStateError("the existing local SQLite database has no embedded-replica metadata; cloud sync is disabled until a separate replica is initialized")
+    if metadata.exists() and not path.exists():
+        raise ReplicaStateError("embedded-replica metadata exists without its database file; cloud sync is disabled until the replica pair is repaired")
     return normalize_connection(libsql.connect(str(path),sync_url=url,auth_token=token,sync_interval=sync_interval))

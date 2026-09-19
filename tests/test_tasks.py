@@ -520,3 +520,45 @@ def test_interview_preview_does_not_color_downstream_requirements(tmp_path):
     task=s.task(tid)
     assert next(p for p in task['phases'] if p['phase_key']=='srs')['state']=='pending'
     assert all(e['phase_key']=='intent' for e in s.events(tid) if e['kind']=='progress')
+
+def test_plain_sqlite_in_turso_mode_falls_back_before_native_metadata_error(monkeypatch,tmp_path):
+    import sqlite3
+    from delivery_api.store import TursoReplicaStore
+    db=tmp_path/'delivery.db';sqlite3.connect(db).execute('create table preserved(value text)').connection.commit()
+    events=[];monkeypatch.setattr('delivery_api.store.activity',lambda kind,message,**fields:events.append((kind,message,fields)))
+    store=TursoReplicaStore(str(db),'libsql://database.example','secret-token')
+    assert store._replica_available is False
+    assert any(k=='database.replica.offline' and 'no embedded-replica metadata' in f['error'] for k,_,f in events)
+    assert sqlite3.connect(db).execute("select name from sqlite_master where name='preserved'").fetchone()
+
+
+def test_startup_resume_recovers_checkpoint_session(monkeypatch,tmp_path):
+    import asyncio,sys
+    from delivery_api import app as app_module
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'resume.db'));tid=store.create_task('Interrupted')['task_id']
+    store.update_phase(tid,'intent','running',detail='Interviewing')
+    store.add_event(tid,'progress','session: 20260919-163600-abcd',phase_key='intent')
+    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
+    captured=[]
+    async def run(task_id,command,**kwargs):captured.append((task_id,command,kwargs));return 0
+    monkeypatch.setattr(app_module.runner,'run',run);monkeypatch.setattr(app_module.os,'environ',{**app_module.os.environ,'REQUI_RE_DIST':'1'})
+    async def go():
+        await app_module._resume_interrupted_interviews();await asyncio.sleep(.01)
+    asyncio.run(go())
+    assert captured and captured[0][0]==tid and captured[0][1][-2:]==['--session','20260919-163600-abcd']
+
+def test_shutdown_interruption_preserves_running_state_for_resume(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'shutdown.db'));tid=store.create_task('Restart me')['task_id'];runner=ProcessRunner(store)
+    async def go():
+        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c','import time;print("session: checkpoint-1",flush=True);time.sleep(30)'],cwd=tmp_path))
+        for _ in range(100):
+            if tid in runner.processes:break
+            await asyncio.sleep(.01)
+        await asyncio.sleep(.05);await runner.shutdown(.2);await job
+    asyncio.run(go())
+    assert store.task(tid)['state']=='running'
+    assert any(e['kind']=='interrupted' for e in store.events(tid))

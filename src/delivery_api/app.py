@@ -70,11 +70,37 @@ _stream_shutdown_events:set[asyncio.Event]=set()
 _previous_sigint=None
 _streams_closed_on_signal=0
 
+def _recorded_engine_session(task_id:str)->str|None:
+    for event in reversed(store.events(task_id)):
+        match=__import__('re').search(r"(?:^|\s)session:\s*([A-Za-z0-9._-]+)",event.get("message", ""))
+        if match:return match.group(1)
+    return None
+
+
+async def _resume_interrupted_interviews()->None:
+    """Reattach persisted interview checkpoints after a rebuild/restart."""
+    for task in store.list_tasks():
+        if task["state"]!="running" or task["task_id"] in runner.processes:continue
+        session=_recorded_engine_session(task["task_id"])
+        if not session:continue
+        built=os.environ.get("REQUI_RE_DIST")=="1"
+        engine_dir=(Path.cwd() if built else Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve())
+        try:runtime=(__import__('delivery_api.engine_runtime',fromlist=['EngineRuntime']).EngineRuntime(Path(sys.executable),(),((Path(sys.executable),True),)) if built else await resolve_engine_runtime(engine_dir))
+        except Exception as e:
+            activity("engine.resume.failed","Interrupted interview could not resume",task_id=task["task_id"],session=session,error=f"{type(e).__name__}: {str(e)[:180]}")
+            continue
+        async def resume(task_id=task["task_id"],session=session,runtime=runtime,engine_dir=engine_dir,built=built):
+            activity("engine.resume","Resuming interrupted interview from checkpoint",task_id=task_id,session=session)
+            await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})})
+        asyncio.create_task(resume())
+
+
 @app.on_event("startup")
 async def _start():
     global _previous_sigint
     config.validate_auth_config()
     await jobs.start()
+    await _resume_interrupted_interviews()
     # Uvicorn waits for open HTTP connections before lifespan shutdown. Close
     # SSE at signal time, then delegate to uvicorn's handler; a second SIGINT
     # still reaches uvicorn and forces its standard immediate exit.

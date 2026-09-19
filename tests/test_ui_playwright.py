@@ -396,6 +396,9 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     assert question.is_visible() and question.locator('p').inner_text()=='Which users need this?\nWhat outcome matters most?'
     page.evaluate('''liveSource.emit({kind:"progress",message:"[17:02:08] ... still working - stage 'probing' call, 30s elapsed",phase_key:"intent",payload:{},ts:1720000203})''')
     assert question.is_visible() and question.locator('p').inner_text()=='Which users need this?\nWhat outcome matters most?'
+    page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'conops',payload:{waiting_input:true,question:'Choose concept 1 or 2, then say why.'},ts:1720000203.5})")
+    assert question.locator('p').inner_text()=='Choose concept 1 or 2, then say why.'
+    assert composer.is_visible() and page.locator('.live-indicator.waiting').is_visible()
     page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true,question:'Second question?'},ts:1720000204})")
     assert question.locator('p').inner_text()=='Second question?'
     page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true,question:'Third question?'},ts:1720000205})")
