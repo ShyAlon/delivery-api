@@ -562,3 +562,18 @@ def test_shutdown_interruption_preserves_running_state_for_resume(tmp_path):
     asyncio.run(go())
     assert store.task(tid)['state']=='running'
     assert any(e['kind']=='interrupted' for e in store.events(tid))
+
+def test_startup_resume_recovers_legacy_sigterm_failure(monkeypatch,tmp_path):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'legacy-resume.db'));tid=store.create_task('Upgrade interrupted')['task_id']
+    store.update_phase(tid,'intent','running');store.add_event(tid,'progress','session: legacy-checkpoint',phase_key='intent')
+    store.update_phase(tid,'intent','failed');store.add_event(tid,'error','old shutdown',phase_key='intent',payload={'exit_code':-15})
+    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
+    captured=[]
+    async def run(*args,**kwargs):captured.append((args,kwargs));return 0
+    monkeypatch.setattr(app_module.runner,'run',run);monkeypatch.setattr(app_module.os,'environ',{**app_module.os.environ,'REQUI_RE_DIST':'1'})
+    async def go():await app_module._resume_interrupted_interviews();await asyncio.sleep(.01)
+    asyncio.run(go())
+    assert captured and captured[0][0][1][-1]=='legacy-checkpoint'

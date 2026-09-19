@@ -80,7 +80,14 @@ def _recorded_engine_session(task_id:str)->str|None:
 async def _resume_interrupted_interviews()->None:
     """Reattach persisted interview checkpoints after a rebuild/restart."""
     for task in store.list_tasks():
-        if task["state"]!="running" or task["task_id"] in runner.processes:continue
+        if task["task_id"] in runner.processes:continue
+        events=store.events(task["task_id"])
+        latest=events[-1] if events else {}
+        # Older builds classified their own SIGTERM during replacement as a
+        # failed engine run. Accept that one precise legacy state too, so an
+        # in-progress interview survives the first upgrade to this version.
+        legacy_restart=(task["state"]=="failed" and latest.get("kind")=="error" and latest.get("payload",{}).get("exit_code") in (-15,143))
+        if task["state"]!="running" and not legacy_restart:continue
         session=_recorded_engine_session(task["task_id"])
         if not session:continue
         built=os.environ.get("REQUI_RE_DIST")=="1"
