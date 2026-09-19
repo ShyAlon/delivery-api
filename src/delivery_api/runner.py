@@ -51,6 +51,7 @@ class ProcessRunner:
         traceback_started = False
         missing_module: str | None = None
         prompt_lines: list[str] = []
+        structured_buffer = ""
 
         # The child pipeline owns progress and LLM heartbeats. Its lines name
         # the in-flight stage and elapsed time. A second generic heartbeat here
@@ -63,14 +64,23 @@ class ProcessRunner:
             while True:
                 raw = await proc.stdout.read(512)
                 if not raw: break
-                for line in filter(None,(part.strip() for part in raw.decode(errors="replace").splitlines())):
+                text=structured_buffer+raw.decode(errors="replace")
+                structured_buffer=""
+                parts=text.splitlines()
+                for index,part in enumerate(parts):
+                    line=part.strip()
+                    if not line:continue
                     structured_decision=None
                     if line.startswith("REQUIRE_EVENT "):
                         import json
-                        try:
-                            candidate=json.loads(line.removeprefix("REQUIRE_EVENT "))
-                            if candidate.get("type")=="founder_decision" and isinstance(candidate.get("options"),list):structured_decision=candidate
-                        except (ValueError,TypeError):pass
+                        try:candidate=json.loads(line.removeprefix("REQUIRE_EVENT "))
+                        except json.JSONDecodeError:
+                            # StreamReader chunks do not respect line boundaries.
+                            # A structured option envelope commonly exceeds 512
+                            # bytes, so retain it until the producer's newline.
+                            structured_buffer="\n".join(parts[index:])
+                            break
+                        if candidate.get("type")=="founder_decision" and isinstance(candidate.get("options"),list):structured_decision=candidate
                     waiting_input = structured_decision is not None or line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line
                     if waiting_input:
                         prompt_lines.append(line)
@@ -79,7 +89,8 @@ class ProcessRunner:
                             activity("engine.waiting_input","Engine is waiting for an answer",task_id=task_id,question=" ".join(prompt_lines)[:240])
                     elif line and not _PROGRESS.search(line):
                         prompt_lines=[line]
-                    activity("engine.output","Engine raw output",task_id=task_id,stream="combined",line=line)
+                    if structured_decision is None:
+                        activity("engine.output","Engine raw output",task_id=task_id,stream="combined",line=line)
                     if line.startswith("Traceback (most recent call last):"): traceback_started=True
                     missing = _MISSING_MODULE.search(line)
                     if missing: missing_module=missing.group(1);traceback_started=True

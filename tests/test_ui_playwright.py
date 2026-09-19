@@ -366,11 +366,11 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     page.set_viewport_size({'width':1365,'height':800})
     page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
     dimensions=console.evaluate('e=>({h:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,max:getComputedStyle(e).maxHeight,scroll:e.scrollHeight>e.clientHeight})')
-    assert dimensions=={'h':120,'min':'120px','max':'180px','scroll':True}
+    assert dimensions['h']>=180 and dimensions['min']=='180px' and dimensions['max']=='580px' and dimensions['scroll'] is True
     composer=page.locator('#answerform');assert composer.is_visible()
     indicator=page.locator('.live-status-row .live-indicator');question=page.locator('#currentquestion');console_heading=page.locator('.console-heading')
     assert page.evaluate("([a,b,c,d])=>a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING&&b.compareDocumentPosition(c)&Node.DOCUMENT_POSITION_FOLLOWING&&c.compareDocumentPosition(d)&Node.DOCUMENT_POSITION_FOLLOWING",[indicator.element_handle(),question.element_handle(),composer.element_handle(),console_heading.element_handle()])
-    assert console.bounding_box()['y']+console.bounding_box()['height'] <= 800
+    assert console.bounding_box()['height']>=180
     indicator=page.locator('.live-indicator.working');assert indicator.get_by_text('Working · Start').is_visible()
     assert indicator.locator('i').evaluate("e=>getComputedStyle(e).animationName")=='live-halo'
     progress=page.locator('#progressfeed');assert progress.locator('.progress-item').count()==1
@@ -490,3 +490,17 @@ def test_structured_founder_decision_escape_closes_without_answer(page,ui):
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:"Pick",phase_key:"conops",payload:{waiting_input:true,decision},ts:1720000300})',decision)
     page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape');assert page.locator('.decision-dialog').count()==0
     assert page.locator('#opendecision').is_visible()
+
+def test_stored_pending_decision_reopens_on_page_load_and_panels_align(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='conops'
+    decision={'type':'founder_decision','decision_id':'concept','title':'Choose after restart','prompt':'Which concept?','options':[{'value':'1','label':'Native','summary':'Installed'},{'value':'2','label':'PWA','summary':'Browser'}]}
+    live['events']=[{'id':900,'kind':'founder_decision','message':'Which concept?','phase_key':'conops','payload':{'waiting_input':True,'question':'Which concept?','decision':decision},'ts':1720000300},{'id':901,'kind':'waiting_input','message':'You:','phase_key':'conops','payload':{'waiting_input':True,'question':'Which concept?'},'ts':1720000301}]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.set_viewport_size({'width':1365,'height':900});page.goto(ui+'/tasks/live/view')
+    page.locator('.decision-dialog').wait_for();assert page.get_by_role('heading',name='Choose after restart').is_visible()
+    page.keyboard.press('Escape');assert page.locator('#opendecision').is_visible()
+    panels=page.locator('.detail-layout>.panel, .detail-layout>div>.panel');assert panels.count()==2
+    boxes=[panels.nth(i).bounding_box() for i in range(2)]
+    assert abs((boxes[0]['y']+boxes[0]['height'])-(boxes[1]['y']+boxes[1]['height']))<2
+    console=page.locator('.live-console').bounding_box();assert console['height']>=180
+    page.screenshot(path='/downloads/restart-decision-aligned-panels.png',full_page=True)

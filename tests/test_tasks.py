@@ -595,3 +595,25 @@ def test_runner_preserves_structured_founder_decision_options(tmp_path):
     event=next(e for e in store.events(tid) if e['kind']=='founder_decision')
     assert event['payload']['decision']['options'][1]['label']=='PWA'
     assert 'REQUIRE_EVENT' not in event['message']
+
+def test_fragmented_large_founder_decision_is_reassembled(tmp_path):
+    import asyncio,json,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    options=[{"value":str(i),"label":f"Option {i}","summary":"Long description "*20,"advantages":["A"*90],"disadvantages":["D"*90]} for i in range(1,5)]
+    payload={"type":"founder_decision","decision_id":"large","title":"Choose","prompt":"Pick one","options":options}
+    encoded="REQUIRE_EVENT "+json.dumps(payload,separators=(',',':'))
+    assert len(encoded)>512
+    # Deliberately split inside JSON independently of stdout chunk behavior.
+    script=f'import sys,time;data={encoded!r};sys.stdout.write(data[:300]);sys.stdout.flush();time.sleep(.05);sys.stdout.write(data[300:]+"\\nYou: ");sys.stdout.flush();input()'
+    store=SQLiteStore(str(tmp_path/'fragment.db'));tid=store.create_task('Large decision')['task_id'];runner=ProcessRunner(store)
+    async def go():
+        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path))
+        for _ in range(100):
+            if tid in runner.waiting:break
+            await asyncio.sleep(.01)
+        await runner.send_input(tid,'3 - reason');await job
+    asyncio.run(go())
+    decisions=[e for e in store.events(tid) if e['kind']=='founder_decision']
+    assert len(decisions)==1 and len(decisions[0]['payload']['decision']['options'])==4
+    assert all('REQUIRE_EVENT' not in e['message'] for e in store.events(tid))
