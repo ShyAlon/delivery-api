@@ -184,7 +184,7 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     page.goto(ui+"/sessions")
     page.get_by_text("Family task evidence",exact=True).click()
     assert page.url.endswith("/sessions/golden-1/interview")
-    assert page.get_by_text("Intent model").is_visible()
+    page.get_by_text("Intent model").wait_for();assert page.get_by_text("Intent model").is_visible()
     assert not page.get_by_text("Stakeholder needs").is_visible()
     # Desktop phase navigation follows a compact V: left leg descends, right leg rises.
     pills={k:page.locator(f'[data-phase="{k}"]').bounding_box() for k in ("interview","needs","srs","architecture","specs","tests","reviews","oracle")}
@@ -192,6 +192,9 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     assert pills["specs"]["y"] > pills["tests"]["y"] > pills["reviews"]["y"] > pills["oracle"]["y"]
     assert pills["interview"]["x"] < pills["needs"]["x"] < pills["specs"]["x"] < pills["tests"]["x"] < pills["oracle"]["x"]
     assert page.locator(".bundle-panel .json-view").count()==0
+    assert page.locator('.phase-pill.status-done').count()==8
+    for status in ("done","error","warning","not_started","in_progress"):
+        assert page.locator(f'.phase-pill.status-{status}').evaluate_all("els=>els.every(e=>getComputedStyle(e).getPropertyValue('--phase-status').trim()!=='')")
     # Every pill is a real phase page, and route refresh is stable.
     page.get_by_role("link",name="Needs ↗").click()
     assert page.url.endswith("/sessions/golden-1/needs")
@@ -199,14 +202,14 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     assert not page.get_by_text("Intent model").is_visible()
     page.reload();assert page.get_by_role("link",name="Needs ↗").evaluate("e=>e.classList.contains('active')")
     page.get_by_role("link",name="SRS ↗").click()
-    assert page.get_by_text("System requirements").is_visible()
+    page.get_by_text("System requirements").wait_for();assert page.get_by_text("System requirements").is_visible()
     assert page.locator(".trace-node").count()==5
     node=page.locator('.trace-node[data-node="R-1"]')
     node.hover();tip=page.locator('#trace-tooltip');assert tip.is_visible()
     assert "R-1" in tip.inner_text() and "Visible status" in tip.inner_text()
     page.get_by_role("link",name="Architecture ↗").click()
     assert page.url.endswith("/sessions/golden-1/architecture")
-    assert page.get_by_text("Build a PWA").is_visible()
+    page.get_by_text("Build a PWA").wait_for();assert page.get_by_text("Build a PWA").is_visible()
     adr=page.locator('.inspect-item',has_text='ADR-1');adr.click()
     item_dialog=page.get_by_role("dialog",name="ADR-1 · Progressive web app")
     assert item_dialog.get_by_text("Alternatives considered").is_visible()
@@ -222,7 +225,7 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     expected={"specs":"Module specifications","tests":"Test specifications","reviews":"Gate decisions + review rounds","oracle":"Bundle integrity passed"}
     for route,title in expected.items():
         page.goto(f"{ui}/sessions/golden-1/{route}")
-        assert page.get_by_text(title,exact=True).is_visible()
+        page.get_by_text(title,exact=True).wait_for();assert page.get_by_text(title,exact=True).is_visible()
         assert page.get_by_role("link",name={"specs":"Module specs ↗","tests":"Tests ↗","reviews":"Reviews + gates ↗","oracle":"Oracle ↗"}[route]).evaluate("e=>e.classList.contains('active')")
     # Compact sticky header sits below global nav and content starts below it.
     head=page.locator('.detail-head.page-head');panel=page.locator('[data-panel="oracle"]')

@@ -85,4 +85,20 @@ def bundle(session:str)->dict:
   for source in (t.get("requirement_ids") or [])+(t.get("criterion_ids") or [])+(t.get("spec_ids") or []):edges.append({"from":source,"to":tid,"kind":"verified-by"})
  nodes=[n for n in nodes if n["id"]]
  coverage=_json(interview/"coverage.json",{}) or {}
- return {"session":next((x for x in discover() if x["session_id"]==session),{"session_id":session}),"intent":intent,"conops":conops,"coverage":coverage,"needs":_rows(needs,"needs"),"srs":srs,"requirements":reqs,"architecture":arch,"items":items,"tests":tests,"audits":audits,"integrity":integrity,"run":run,"graph":{"nodes":nodes,"edges":edges}}
+ # Status is derived from this session's artifacts, run state and diagnostics - never a UI constant.
+ diagnostic_rows=integrity.get("diagnostics",[]) if isinstance(integrity,dict) else []
+ phase_values={"interview":intent or conops,"needs":_rows(needs,"needs"),"srs":reqs,"architecture":arch,"specs":items,"tests":tests,"reviews":audits,"oracle":integrity}
+ phase_status={}
+ run_phases=run.get("phases",{}) if isinstance(run,dict) else {}
+ for key,value in phase_values.items():
+  explicit=run_phases.get(key) if isinstance(run_phases,dict) else None
+  explicit=explicit.get("status") or explicit.get("state") if isinstance(explicit,dict) else explicit
+  related=[d for d in diagnostic_rows if not isinstance(d,dict) or d.get("phase") in (None,key) or d.get("artifact","").startswith(key)]
+  severity={str(d.get("severity",d.get("level","error"))).lower() for d in related if isinstance(d,dict)}
+  if explicit in ("running","in_progress"):state="in_progress"
+  elif explicit in ("error","failed") or "error" in severity:state="error"
+  elif explicit in ("warning","warn") or severity & {"warning","warn"}:state="warning"
+  elif value:state="done"
+  else:state="not_started"
+  phase_status[key]=state
+ return {"session":next((x for x in discover() if x["session_id"]==session),{"session_id":session}),"phase_status":phase_status,"intent":intent,"conops":conops,"coverage":coverage,"needs":_rows(needs,"needs"),"srs":srs,"requirements":reqs,"architecture":arch,"items":items,"tests":tests,"audits":audits,"integrity":integrity,"run":run,"graph":{"nodes":nodes,"edges":edges}}
