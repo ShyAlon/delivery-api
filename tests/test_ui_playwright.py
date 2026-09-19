@@ -25,7 +25,7 @@ def ui(tmp_path_factory):
     artifacts=root/"artifacts";session=artifacts/"golden-1";(session/"interview").mkdir(parents=True);(session/"spec").mkdir()
     import json
     (session/"interview/intent_model.json").write_text(json.dumps({"problem_statement":"Family task evidence"}))
-    (session/"interview/audit.jsonl").write_text(json.dumps({"event":"gate.auto_decision","gate":"concept","action":"select"})+"\n")
+    (session/"interview/audit.jsonl").write_text("\n".join([json.dumps({"event":"gate.auto_decision","gate":"concept","action":"select"}),json.dumps({"event":"interviewee.answer","answer":{"text":"Caregivers need a calm shared view","confidence":"high"}})])+"\n")
     (session/"spec/hands-free-run.json").write_text(json.dumps({"completed_at":"2026-09-19T08:00:00Z"}))
     (session/"spec/bundle-integrity.json").write_text(json.dumps({"files_checked":14,"diagnostics":[],"hashes":{"needs.json":"abc"}}))
     (session/"spec/needs.json").write_text(json.dumps({"needs":[{"need_id":"N-1","statement":"Families need visible task status"}]}))
@@ -187,23 +187,36 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     page.get_by_text("Family task evidence",exact=True).click()
     page.get_by_text("Intent model").wait_for()
     assert page.locator("#intent").get_by_text("Family task evidence",exact=True).is_visible()
-    page.screenshot(path="/downloads/vmodel-interview-view.png",full_page=True)
-    page.get_by_role("button",name="Overview").click()
-    page.get_by_text("Stakeholder needs").wait_for()
-    assert not page.get_by_text("Bundle integrity passed").is_visible()
-    page.screenshot(path="/downloads/vmodel-bundle-overview.png",full_page=True)
-    page.get_by_role("button",name="Traceability").click()
+    # Human-readable page has no inline JSON payloads.
+    assert page.locator(".bundle-panel .json-view").count()==0
+    assert '"problem_statement"' not in page.locator("main").inner_text()
+    page.screenshot(path="/downloads/vmodel-bundle-human-readable.png",full_page=True)
+    assert page.get_by_text("Stakeholder needs").is_visible()
     assert page.locator(".trace-node").count()==5
     page.locator('.trace-node[data-node="R-1"]').click()
     assert page.get_by_text("3 connected edges").is_visible()
-    page.screenshot(path="/downloads/vmodel-traceability-diagram.png",full_page=True)
-    page.get_by_role("button",name="Architecture").click()
     assert page.get_by_text("Build a PWA").is_visible()
-    page.get_by_role("button",name="Reviews + gates").click()
-    assert page.get_by_text("gate.auto_decision",exact=True).is_visible()
-    page.get_by_role("button",name="Oracle").click()
+    assert page.get_by_text("gate.auto_decision",exact=True).first.is_visible()
+    answer=page.get_by_role("button",name="interviewee.answer Caregivers need a calm shared view · high View result ↗")
+    assert answer.is_visible()
+    assert '"confidence"' not in page.locator("main").inner_text()
+    answer.click();assert page.get_by_role("dialog",name="interviewee.answer").is_visible()
+    assert '"confidence": "high"' in page.get_by_role("dialog",name="interviewee.answer").inner_text()
+    page.locator("#modal").click(position={"x":4,"y":4})
     assert page.get_by_text("Bundle integrity passed").is_visible()
-
+    # Phase result is an on-demand, scrollable provider surface.
+    page.get_by_role("button",name="Architecture ↗").click()
+    dialog=page.get_by_role("dialog",name="Architecture")
+    dialog.wait_for();assert dialog.locator(".json-view").count()==1
+    assert '"decisions"' in dialog.inner_text()
+    page.locator("#modal").click(position={"x":4,"y":4})
+    assert dialog.count()==0
+    page.get_by_role("button",name="Oracle ↗").click()
+    page.keyboard.press("Escape")
+    assert page.get_by_role("dialog").count()==0
+    page.get_by_role("button",name="Tests ↗").click()
+    page.get_by_role("button",name="Close").click()
+    assert page.get_by_role("dialog").count()==0
 
 def test_artifacts_folder_setting_validates_and_reports_sessions(page,ui):
     page.goto(ui+"/sessions");page.get_by_role("button",name="Artifacts folder").click()
