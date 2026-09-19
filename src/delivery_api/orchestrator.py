@@ -63,8 +63,9 @@ class PhaseOrchestrator:
         if not baseline.exists():
             intent=json.loads((interview/"intent_model.json").read_text())
             baseline.write_text(json.dumps({"contract_version":intent["contract_version"],"baseline_version":"1.0","baseline_id":"pending-founder-choice","system_name":"Pending architecture baseline choice","mode":"greenfield","repositories":[],"immutable_decisions":[]},indent=2)+"\n")
-        repo=Path(os.environ.get("SPEC_GENERATOR_DIR",str(Path(__file__).resolve().parents[3]/"spec-generator"))).resolve()
-        built=os.environ.get("REQUI_RE_DIST")=="1";python=Path(sys.executable) if built else (repo/".venv/bin/python")
+        built=os.environ.get("REQUI_RE_DIST")=="1"
+        repo=(Path.cwd() if built else Path(os.environ.get("SPEC_GENERATOR_DIR",str(Path(__file__).resolve().parents[3]/"spec-generator"))).resolve())
+        python=Path(sys.executable) if built else (repo/".venv/bin/python")
         if not python.exists():python=Path(sys.executable)
         cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",TO_STAGE[phase]]
         if redo:cmd.extend(["--from",TO_STAGE[phase]])
