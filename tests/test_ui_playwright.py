@@ -30,7 +30,7 @@ def ui(tmp_path_factory):
     (session/"spec/bundle-integrity.json").write_text(json.dumps({"files_checked":14,"diagnostics":[],"hashes":{"needs.json":"abc"}}))
     (session/"spec/needs.json").write_text(json.dumps({"needs":[{"need_id":"N-1","statement":"Families need visible task status"}]}))
     (session/"spec/srs.json").write_text(json.dumps({"functional":[{"requirement_id":"R-1","title":"Visible status","statement":"The system shall show status","need_ids":["N-1"],"acceptance":[{"criterion_id":"AC-1","statement":"Status is visible"}]}]}))
-    (session/"spec/architecture.json").write_text(json.dumps({"decisions":[{"decision_id":"ADR-1","title":"Progressive web app","decision":"Build a PWA","rationale":"Browser-first scope","options_considered":[{"option":"Native","reason":"Outside first release"}]}],"components":[{"name":"Task service","responsibility":"Track work"}]}))
+    (session/"spec/architecture.json").write_text(json.dumps({"decisions":[{"decision_id":"ADR-1","title":"Progressive web app","decision":"Build a PWA","rationale":"Browser-first scope","options_considered":[{"option":"Native","summary":"A dedicated mobile client","pros":["Deeper device access"],"cons":["Two codebases"],"why_rejected":"Outside first release"}]}],"components":[{"name":"Task service","responsibility":"Track work"}]}))
     (session/"spec/items.json").write_text(json.dumps([{"spec_id":"SPEC-1","title":"Task status module","requirement_ids":["R-1"]}]))
     (session/"spec/tests.json").write_text(json.dumps([{"test_id":"T-1","title":"Status visible","criterion_ids":["AC-1"],"spec_ids":["SPEC-1"]}]))
     (session/"spec/audit.jsonl").write_text(json.dumps({"event":"gate.simulated_expert_opinion","gate":"architecture","action":"approve","upstream_advisories":[{"artifact":"srs"}]})+"\n")
@@ -211,11 +211,29 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     assert page.get_by_text("Bundle integrity passed").is_visible()
     # Phase result is an on-demand, scrollable provider surface.
     page.get_by_role("button",name="Architecture ↗").click()
+    assert "phase=architecture" in page.url
     dialog=page.get_by_role("dialog",name="Architecture")
     dialog.wait_for();assert dialog.locator(".json-view").count()==1
-    assert '"decisions"' in dialog.inner_text()
+    page.reload();dialog=page.get_by_role("dialog",name="Architecture");dialog.wait_for()
+    assert page.get_by_role("button",name="Architecture ↗").evaluate("e=>e.classList.contains('active')")
+    page.get_by_role("button",name="Close").click();assert "phase=" not in page.url
+    page.get_by_role("button",name="Tests ↗").click();assert "phase=tests" in page.url
+    assert page.get_by_role("dialog",name="Tests").is_visible()
+    page.go_back();assert "phase=" not in page.url
+    assert page.get_by_role("dialog").count()==0
+    page.go_forward();assert "phase=tests" in page.url
+    assert page.get_by_role("dialog",name="Tests").is_visible()
+    page.get_by_role("button",name="Close").click()
+    adr=page.locator('.inspect-item',has_text='ADR-1');adr.click()
+    item_dialog=page.get_by_role("dialog",name="ADR-1 · Progressive web app")
+    assert item_dialog.get_by_text("Alternatives considered").is_visible()
+    assert item_dialog.get_by_text("Native",exact=True).is_visible()
+    assert item_dialog.get_by_text("Deeper device access").is_visible()
+    assert item_dialog.get_by_text("Two codebases").is_visible()
+    assert item_dialog.get_by_text("Outside first release").is_visible()
+    assert item_dialog.locator('.json-view').count()==0
     page.locator("#modal").click(position={"x":4,"y":4})
-    assert dialog.count()==0
+    assert item_dialog.count()==0
     page.get_by_role("button",name="Oracle ↗").click()
     page.keyboard.press("Escape")
     assert page.get_by_role("dialog").count()==0
