@@ -198,6 +198,7 @@ def test_engine_runtime_skips_missing_dependency_and_selects_working_python(tmp_
     for path,rc in ((bad/'python',1),(good/'python',0)):
         path.write_text(f'#!/bin/sh\nexit {rc}\n');path.chmod(0o755)
     monkeypatch.setenv('INTERVIEW_ENGINE_PYTHON',str(bad/'python'))
+    monkeypatch.setattr('delivery_api.engine_runtime.saved_python',lambda:None)
     runtime=asyncio.run(resolve_engine_runtime(engine))
     assert runtime.python==good.joinpath('python').absolute()
     assert runtime.checked==(bad.joinpath('python').absolute(),good.joinpath('python').absolute())
@@ -282,3 +283,24 @@ def test_venv_python_symlink_is_invoked_literally_for_preflight(tmp_path,monkeyp
     runtime=asyncio.run(engine_runtime.resolve_engine_runtime(tmp_path,required_module='venv_only_probe'))
     assert runtime.python==python.absolute() and runtime.attempts==((python,True),)
     assert runtime.python!=python.resolve()
+
+def test_built_runtime_bypasses_interpreter_discovery(monkeypatch,tmp_path):
+    from delivery_api.app import app,store
+    from delivery_api.engine_runtime import EngineRuntime
+    from fastapi.testclient import TestClient
+    import sys,time
+    task_id='dist-runtime-test'
+    if store.task(task_id):store.delete_task(task_id)
+    store.create_task('Built runtime','One execution path',task_id=task_id)
+    async def forbidden(_):raise AssertionError('dist runtime must not discover interpreters')
+    calls=[]
+    async def fake_run(task_id,command,**kwargs):calls.append(command);return 0
+    from delivery_api import auth
+    auth.limiter=auth.RateLimiter()
+    monkeypatch.setenv('REQUI_RE_DIST','1');monkeypatch.setattr('delivery_api.app.resolve_engine_runtime',forbidden);monkeypatch.setattr('delivery_api.app.runner.run',fake_run)
+    response=TestClient(app).post(f'/api/tasks/{task_id}/start')
+    assert response.status_code==200
+    for _ in range(30):
+        if calls:break
+        time.sleep(.01)
+    assert calls and calls[0][0]==sys.executable and calls[0][1:3]==['-m','interview_engine.cli']

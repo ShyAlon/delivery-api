@@ -294,9 +294,10 @@ async def start_task_engine(task_id:str,a:auth.Actor=Depends(auth.require_actor)
     if task["state"]!="not_started":raise HTTPException(409,{"error":"This task already started.","cause":f"Its current state is {task['state']}.","next":"Open its live progress instead of starting it again."})
     idea=(task.get("brief") or task.get("title") or "").strip()
     if not idea:raise HTTPException(400,{"error":"The interview needs a starting idea.","cause":"This task has no brief.","next":"Add a sentence describing the product, then start again."})
-    engine_dir=Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve()
-    if not engine_dir.is_dir():raise HTTPException(503,{"error":"Interview engine is not available.","cause":f"Expected it at {engine_dir}.","next":"Run scripts/pull-all.sh, then restart the UI."})
-    try:runtime=await resolve_engine_runtime(engine_dir)
+    built_runtime=os.environ.get("REQUI_RE_DIST")=="1"
+    engine_dir=(Path.cwd() if built_runtime else Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve())
+    if not built_runtime and not engine_dir.is_dir():raise HTTPException(503,{"error":"Interview engine is not available.","cause":f"Expected it at {engine_dir}.","next":"Run scripts/pull-all.sh, then restart the UI."})
+    try:runtime=(__import__('delivery_api.engine_runtime',fromlist=['EngineRuntime']).EngineRuntime(Path(sys.executable),(),((Path(sys.executable),True),)) if built_runtime else await resolve_engine_runtime(engine_dir))
     except EngineRuntimeError as e:
         activity("engine.preflight.failed","Interview engine dependency preflight failed",task_id=task_id,actor=a.label,module=e.module,checked="; ".join(f"{path}={'ok' if ok else 'missing'}" for path,ok in e.attempts))
         command=f'python -m pip install -e "{engine_dir}"'
@@ -307,7 +308,7 @@ async def start_task_engine(task_id:str,a:auth.Actor=Depends(auth.require_actor)
     activity("engine.preflight.ok","Interview engine runtime resolved",task_id=task_id,actor=a.label,python=str(engine_python),checked="; ".join(f"{path}={'ok' if ok else 'missing'}" for path,ok in runtime.attempts))
     activity("engine.start","Interview engine launch requested",task_id=task_id,actor=a.label,python=str(engine_python))
     async def execute():
-        try:await runner.run(task_id,[str(engine_python),"-m","interview_engine.cli",idea],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1","PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})
+        try:await runner.run(task_id,[str(engine_python),"-m","interview_engine.cli",idea],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built_runtime else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})})
         except Exception as e:
             store.update_phase(task_id,"intent","failed",detail=f"Interview engine could not start: {type(e).__name__}: {str(e)[:180]}")
             store.add_event(task_id,"error","Interview engine could not start",phase_key="intent",payload={"cause":str(e)[:300],"next":"Check run.log and the interview-engine installation, then retry."})

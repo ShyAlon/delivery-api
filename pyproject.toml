@@ -34,6 +34,3 @@ packages = ["src/delivery_api"]
 
 [project.scripts]
 vmodel-server = "delivery_api.__main__:main"
-
-[tool.hatch.build.targets.wheel.force-include]
-"src/delivery_api/web" = "delivery_api/web"

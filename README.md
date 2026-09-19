@@ -121,3 +121,18 @@ Prefer the admin API from the authenticated web origin rather than copying cooki
 Accounts identify actions, while discovered artifact sessions remain one shared local workspace. This fits the single-machine founder-demo workflow and avoids duplicating or moving the source artifact tree per account.
 
 Basic-account identifiers are email addresses. Older pre-email basic usernames remain in the local database for audit continuity, but must be recreated with an email address to use the current sign-in UI; OAuth accounts are unaffected.
+
+## Development vs build/deploy
+
+Development keeps the sibling repositories editable and uses `scripts/run-ui.sh`. It can discover a compatible engine environment because source work may use different virtual environments.
+
+Deployment uses one built runtime. From `delivery-api`:
+
+```bash
+scripts/build-dist.sh
+./dist/requi-re/run-require.sh
+```
+
+`build-dist.sh` treats `delivery-api` as the build project. It expects the five Python package repositories and `vmodel-spec-app` beside it under the same `require/` folder, creates `dist/requi-re/runtime`, installs every executable package into that single environment, copies the shell support scripts, and writes `MANIFEST.txt` with every repository SHA, dirty-state marker, installed package version, build Python, and platform. Override the checkout root with `REQUI_RE_REPOS_ROOT`, the output with `REQUI_RE_DIST_DIR`, or build Python with `REQUI_RE_BUILD_PYTHON`.
+
+The built launcher sets distribution mode and always starts Requi.re and its interview subprocess with `runtime/bin/python`. It does no interpreter discovery. Copy the complete `dist/requi-re` folder to a machine with the same operating system and architecture, then run `run-require.sh`. The launcher refuses an incomplete or incompatible copy with Error / Likely cause / Next guidance.
