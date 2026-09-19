@@ -582,6 +582,6 @@ def test_answered_decision_clears_and_binary_approval_uses_same_dialog(page,ui):
     approval={'type':'founder_decision','decision_id':'intent-approval','title':'Approve the intent model','prompt':'Approve this intent model?','rationale_required':False,'answer_format':'<value>','options':[{'value':'y','label':'Approve','summary':'Continue'},{'value':'n','label':'Reject','summary':'Stop'}]}
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"intent",payload:{waiting_input:true,decision},ts:1720000300})',approval)
     dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.get_by_text('Approve',exact=True).is_visible() and dialog.get_by_text('Reject',exact=True).is_visible();assert dialog.locator('.decision-why').is_hidden()
+    page.screenshot(path='/downloads/typed-intent-approval.png',full_page=True)
     dialog.get_by_text('Approve',exact=True).click();dialog.locator('.decision-submit').click();page.locator('.decision-dialog').wait_for(state='detached');assert submitted==[{'answer':'y'}]
     assert page.locator('#opendecision').count()==0 and page.locator('.live-indicator').get_by_text('Decision received',exact=False).is_visible()
-    page.screenshot(path='/downloads/typed-intent-approval.png',full_page=True)
