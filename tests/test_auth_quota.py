@@ -121,17 +121,26 @@ def test_basic_signup_signin_wrong_password_and_session(monkeypatch,tmp_path):
     monkeypatch.setattr(config,"BASIC_AUTH_ENABLED",True);monkeypatch.setattr(config,"COOKIE_SECURE",False);auth.limiter=auth.RateLimiter()
     c=TestClient(app)
     assert c.get('/api/auth').json()['authenticated'] is False
-    weak=c.post('/auth/signup',json={'username':'shy','password':'short'},headers={'origin':'http://testserver'})
+    weak=c.post('/auth/signup',json={'username':'shy@example.com','password':'short'},headers={'origin':'http://testserver'})
     assert weak.status_code==400 and weak.json()['detail']['error']=='Password needs more strength.'
-    good=c.post('/auth/signup',json={'username':'shy.alon','password':'Strong pass 42!'},headers={'origin':'http://testserver'})
-    assert good.status_code==200 and good.json()['actor']=='shy.alon'
-    assert store.basic_user('shy.alon')['password_hash'].startswith('scrypt$')
-    assert 'Strong pass 42!' not in store.basic_user('shy.alon')['password_hash']
+    good=c.post('/auth/signup',json={'username':'shy@example.com','password':'Strong pass 42!'},headers={'origin':'http://testserver'})
+    assert good.status_code==200 and good.json()['actor']=='shy@example.com'
+    assert store.basic_user('shy@example.com')['password_hash'].startswith('scrypt$')
+    assert 'Strong pass 42!' not in store.basic_user('shy@example.com')['password_hash']
     c.cookies.clear()
-    bad=c.post('/auth/signin',json={'username':'shy.alon','password':'Wrong pass 42!'},headers={'origin':'http://testserver'})
+    bad=c.post('/auth/signin',json={'username':'shy@example.com','password':'Wrong pass 42!'},headers={'origin':'http://testserver'})
     assert bad.status_code==401 and bad.json()['detail']['error']=='Sign-in did not work.'
-    signed=c.post('/auth/signin',json={'username':'shy.alon','password':'Strong pass 42!'},headers={'origin':'http://testserver'})
+    signed=c.post('/auth/signin',json={'username':'shy@example.com','password':'Strong pass 42!'},headers={'origin':'http://testserver'})
     assert signed.status_code==200
-    c.cookies.update(signed.cookies);assert c.get('/api/auth').json()['actor']=='shy.alon'
+    c.cookies.update(signed.cookies);assert c.get('/api/auth').json()['actor']=='shy@example.com'
     assert c.post('/auth/logout',headers={'origin':'http://testserver'}).status_code==200
     assert c.get('/api/auth').json()['authenticated'] is False
+
+def test_basic_email_validation_and_availability(monkeypatch,tmp_path):
+    store=SQLiteStore(str(tmp_path/'email.db'));app.state.store=store;monkeypatch.setattr('delivery_api.app.store',store)
+    monkeypatch.setattr(config,'BASIC_AUTH_ENABLED',True);monkeypatch.setattr(config,'COOKIE_SECURE',False);auth.limiter=auth.RateLimiter();c=TestClient(app)
+    invalid=c.post('/auth/signup',json={'username':'not-an-email','password':'Strong pass 42!'},headers={'origin':'http://testserver'})
+    assert invalid.status_code==400 and invalid.json()['detail']['error']=='Email address is not valid.'
+    assert c.get('/auth/email-availability?email=shy@example.com').json()=={'email':'shy@example.com','valid':True,'available':True}
+    assert c.post('/auth/signup',json={'username':'Shy@Example.com','password':'Strong pass 42!'},headers={'origin':'http://testserver'}).status_code==200
+    assert c.get('/auth/email-availability?email=shy@example.com').json()['available'] is False

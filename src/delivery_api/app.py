@@ -89,12 +89,18 @@ def client_log(request:Request,body:ClientLog):
     activity("client."+body.kind,body.message,path=body.path,actor=auth.actor(request).label,client=request.client.host if request.client else "unknown")
 
 class BasicCredentials(BaseModel):
-    username: str = Field(min_length=3,max_length=32)
+    username: str = Field(min_length=3,max_length=254)
     password: str = Field(min_length=1,max_length=256)
 
 def _auth_response(result):
     actor,sid=result;response=JSONResponse({"status":"signed_in","actor":actor.label})
     response.set_cookie(config.SESSION_COOKIE,sid,max_age=config.SESSION_TTL_SECONDS,httponly=True,secure=config.COOKIE_SECURE,samesite="lax",path="/");return response
+
+@app.get("/auth/email-availability")
+def email_availability(request:Request,email:str=Query(min_length=3,max_length=254)):
+    normalized=auth.normalize_email(email);valid=auth.valid_email(normalized);available=valid and request.app.state.store.basic_user(normalized) is None
+    activity("auth.email.check","Email availability checked",email=normalized,valid=valid,available=available)
+    return {"email":normalized,"valid":valid,"available":available}
 
 @app.post("/auth/signup")
 def signup(request:Request,body:BasicCredentials):

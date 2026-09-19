@@ -51,6 +51,10 @@ limiter = RateLimiter()
 def enabled() -> bool:
     return config.BASIC_AUTH_ENABLED or bool(config.SESSION_SECRET and (config.GOOGLE_CLIENT_ID or config.GITHUB_CLIENT_ID))
 
+EMAIL_RE=re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
+def normalize_email(value:str)->str:return value.strip().lower()
+def valid_email(value:str)->bool:return len(value)<=254 and bool(EMAIL_RE.fullmatch(value.strip()))
+
 def password_problem(password: str) -> str | None:
     if len(password) < config.PASSWORD_MIN_LENGTH:return f"Use at least {config.PASSWORD_MIN_LENGTH} characters."
     if not re.search(r"[A-Z]",password):return "Add an uppercase letter."
@@ -69,8 +73,8 @@ def verify_password(password: str, stored: str) -> bool:
 
 def basic_signup(request: Request, username: str, password: str) -> tuple[Actor,str]:
     limiter.check("auth",_client_ip(request),config.AUTH_RATE_LIMIT)
-    username=username.strip().lower()
-    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,31}",username):raise HTTPException(400,{"error":"Username is not valid.","cause":"Use 3-32 lowercase letters, numbers, dots, dashes or underscores.","next":"Choose a username such as shy.alon."})
+    username=normalize_email(username)
+    if not valid_email(username):raise HTTPException(400,{"error":"Email address is not valid.","cause":"Enter a complete address with a local part, @, and a dotted domain.","next":"Check for missing characters or spaces, then try again."})
     problem=password_problem(password)
     if problem:raise HTTPException(400,{"error":"Password needs more strength.","cause":problem,"next":"Use 12+ characters with uppercase, lowercase, a number, and a symbol."})
     try:user=request.app.state.store.create_basic_user(username,hash_password(password),config.DEFAULT_USER_TOKEN_QUOTA)
@@ -78,7 +82,7 @@ def basic_signup(request: Request, username: str, password: str) -> tuple[Actor,
     return Actor(user["user_id"],user["label"]),_new_session(request,user)
 
 def basic_signin(request: Request, username: str, password: str) -> tuple[Actor,str]:
-    limiter.check("auth",_client_ip(request),config.AUTH_RATE_LIMIT);user=request.app.state.store.basic_user(username)
+    limiter.check("auth",_client_ip(request),config.AUTH_RATE_LIMIT);username=normalize_email(username);user=request.app.state.store.basic_user(username)
     if not user or not user.get("password_hash") or not verify_password(password,user["password_hash"]):raise HTTPException(401,{"error":"Sign-in did not work.","cause":"The username or password is incorrect.","next":"Check both fields and try again, or create a new account."})
     return Actor(user["user_id"],user["label"]),_new_session(request,user)
 

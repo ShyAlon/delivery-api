@@ -94,7 +94,7 @@ def test_not_started_running_and_done_pages(page, ui):
     assert page.get_by_text("Live engine output").is_visible()
     assert page.get_by_text("Generating CONOPS option 2/3").count() == 1
     page.goto(ui + "/tasks/done/view")
-    assert page.get_by_text("Artifacts", exact=True).is_visible()
+    page.get_by_text("Artifacts", exact=True).wait_for();assert page.get_by_text("Artifacts", exact=True).is_visible()
     assert page.get_by_text("Architecture overview").is_visible()
 
 
@@ -143,10 +143,13 @@ def test_basic_auth_browser_signup_signin_persists_and_logs(tmp_path):
         with sync_playwright() as p:
             browser=p.chromium.launch(headless=True);page=browser.new_page();page.goto(base+"/sessions")
             page.get_by_text("Welcome to Vector",exact=True).wait_for();page.get_by_role("button",name="Create account").click()
-            page.locator('input[name="username"]').fill('shy.local');page.locator('input[name="password"]').fill('Strong local 42!');page.locator('.auth-submit').click()
-            page.get_by_text('shy.local',exact=True).wait_for();assert page.url==base+'/'
-            assert page.locator('.avatar').inner_text()=='SL'
-            page.reload();page.get_by_text('shy.local',exact=True).wait_for();assert page.locator('.avatar').is_visible()
+            email=page.locator('input[name="username"]');email.fill('partial');assert page.locator('#emailstatus').inner_text()==''
+            email.blur();assert page.locator('#emailstatus').inner_text()=='Enter a complete email address.'
+            email.fill('shy@example.com');page.get_by_text('Email is available.').wait_for()
+            page.locator('input[name="password"]').fill('Strong local 42!');page.locator('.auth-submit').click()
+            page.get_by_text('shy@example.com',exact=True).wait_for();assert page.url==base+'/'
+            assert page.locator('.avatar').inner_text()=='SH'
+            page.reload();page.get_by_text('shy@example.com',exact=True).wait_for();assert page.locator('.avatar').is_visible()
             page.get_by_role('link',name='All sessions').click();page.get_by_text('Artifacts folder').wait_for()
             browser.close()
         assert 'auth.signup.success' in log.read_text() and 'client.navigation' in log.read_text()
@@ -276,7 +279,7 @@ def test_artifacts_folder_setting_validates_and_reports_sessions(page,ui):
 
 def test_dashboard_routes_local_loading_to_session_folder_not_file_picker(page,ui):
     page.goto(ui)
-    assert page.get_by_role("link",name="Load sessions").is_visible()
+    page.get_by_role("link",name="Load sessions").wait_for();assert page.get_by_role("link",name="Load sessions").is_visible()
     assert page.get_by_role("button",name="Import run").count()==0
     page.get_by_role("link",name="Load sessions").click()
     page.get_by_role("button",name="Artifacts folder").wait_for()
