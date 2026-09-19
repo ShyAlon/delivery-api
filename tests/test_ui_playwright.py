@@ -182,64 +182,53 @@ def test_task_filter_sort_rename_and_delete(page,ui):
 
 def test_session_discovery_bundle_and_trace_diagram(page,ui):
     page.goto(ui+"/sessions")
-    page.get_by_text("Family task evidence",exact=True).wait_for()
-    page.screenshot(path="/downloads/vmodel-bundle-sessions.png",full_page=True)
     page.get_by_text("Family task evidence",exact=True).click()
-    page.get_by_text("Intent model").wait_for()
-    assert page.locator("#intent").get_by_text("Family task evidence",exact=True).is_visible()
-    # Human-readable page has no inline JSON payloads.
+    assert page.url.endswith("/sessions/golden-1/interview")
+    assert page.get_by_text("Intent model").is_visible()
+    assert not page.get_by_text("Stakeholder needs").is_visible()
+    # Desktop phase navigation follows a compact V: left leg descends, right leg rises.
+    pills={k:page.locator(f'[data-phase="{k}"]').bounding_box() for k in ("interview","needs","srs","architecture","specs","tests","reviews","oracle")}
+    assert pills["interview"]["y"] < pills["needs"]["y"] < pills["srs"]["y"] < pills["architecture"]["y"] < pills["specs"]["y"]
+    assert pills["specs"]["y"] > pills["tests"]["y"] > pills["reviews"]["y"] > pills["oracle"]["y"]
+    assert pills["interview"]["x"] < pills["needs"]["x"] < pills["specs"]["x"] < pills["tests"]["x"] < pills["oracle"]["x"]
     assert page.locator(".bundle-panel .json-view").count()==0
-    assert '"problem_statement"' not in page.locator("main").inner_text()
-    page.screenshot(path="/downloads/vmodel-bundle-human-readable.png",full_page=True)
-    assert page.get_by_text("Stakeholder needs").is_visible()
+    # Every pill is a real phase page, and route refresh is stable.
+    page.get_by_role("link",name="Needs ↗").click()
+    assert page.url.endswith("/sessions/golden-1/needs")
+    assert page.locator('[data-panel="needs"]').evaluate("e=>({cls:e.className,path:location.pathname})")=={"cls":"bundle-panel","path":"/sessions/golden-1/needs"}
+    assert not page.get_by_text("Intent model").is_visible()
+    page.reload();assert page.get_by_role("link",name="Needs ↗").evaluate("e=>e.classList.contains('active')")
+    page.get_by_role("link",name="SRS ↗").click()
+    assert page.get_by_text("System requirements").is_visible()
     assert page.locator(".trace-node").count()==5
     node=page.locator('.trace-node[data-node="R-1"]')
     node.hover();tip=page.locator('#trace-tooltip');assert tip.is_visible()
-    assert "R-1" in tip.inner_text() and "Visible status" in tip.inner_text() and "requirement" in tip.inner_text().lower()
-    page.screenshot(path="/downloads/vmodel-traceability-tooltip.png",full_page=True)
-    page.locator('#node-detail').hover();assert not tip.is_visible()
-    node.click()
-    assert page.get_by_text("3 connected edges").is_visible()
+    assert "R-1" in tip.inner_text() and "Visible status" in tip.inner_text()
+    page.get_by_role("link",name="Architecture ↗").click()
+    assert page.url.endswith("/sessions/golden-1/architecture")
     assert page.get_by_text("Build a PWA").is_visible()
-    assert page.get_by_text("gate.auto_decision",exact=True).first.is_visible()
-    answer=page.locator('#interview-gates .inspect-json',has_text='Caregivers need a calm shared view')
-    assert answer.is_visible()
-    assert '"confidence"' not in page.locator("main").inner_text()
-    answer.click();assert page.get_by_role("dialog",name="interviewee.answer").is_visible()
-    assert '"confidence": "high"' in page.get_by_role("dialog",name="interviewee.answer").inner_text()
-    page.locator("#modal").click(position={"x":4,"y":4})
-    assert page.get_by_text("Bundle integrity passed").is_visible()
-    # Phase result is an on-demand, scrollable provider surface.
-    page.get_by_role("button",name="Architecture ↗").click()
-    assert "phase=architecture" in page.url
-    dialog=page.get_by_role("dialog",name="Architecture")
-    dialog.wait_for();assert dialog.locator(".json-view").count()==1
-    page.reload();dialog=page.get_by_role("dialog",name="Architecture");dialog.wait_for()
-    assert page.get_by_role("button",name="Architecture ↗").evaluate("e=>e.classList.contains('active')")
-    page.get_by_role("button",name="Close").click();assert "phase=" not in page.url
-    page.get_by_role("button",name="Tests ↗").click();assert "phase=tests" in page.url
-    assert page.get_by_role("dialog",name="Tests").is_visible()
-    page.go_back();assert "phase=" not in page.url
-    assert page.get_by_role("dialog").count()==0
-    page.go_forward();assert "phase=tests" in page.url
-    assert page.get_by_role("dialog",name="Tests").is_visible()
-    page.get_by_role("button",name="Close").click()
     adr=page.locator('.inspect-item',has_text='ADR-1');adr.click()
     item_dialog=page.get_by_role("dialog",name="ADR-1 · Progressive web app")
     assert item_dialog.get_by_text("Alternatives considered").is_visible()
-    assert item_dialog.get_by_text("Native",exact=True).is_visible()
-    assert item_dialog.get_by_text("Deeper device access").is_visible()
-    assert item_dialog.get_by_text("Two codebases").is_visible()
-    assert item_dialog.get_by_text("Outside first release").is_visible()
+    for text in ("Native","Deeper device access","Two codebases","Outside first release"):
+        assert item_dialog.get_by_text(text,exact=text=="Native").is_visible()
     assert item_dialog.locator('.json-view').count()==0
-    page.locator("#modal").click(position={"x":4,"y":4})
-    assert item_dialog.count()==0
-    page.get_by_role("button",name="Oracle ↗").click()
-    page.keyboard.press("Escape")
-    assert page.get_by_role("dialog").count()==0
-    page.get_by_role("button",name="Tests ↗").click()
     page.get_by_role("button",name="Close").click()
-    assert page.get_by_role("dialog").count()==0
+    # Ordinary readable cards open their JSON result.
+    page.get_by_text("Task service",exact=True).click()
+    assert page.get_by_role("dialog",name="Task service").locator('.json-view').count()==1
+    page.locator("#modal").click(position={"x":4,"y":4})
+    # Remaining phase routes each render only their own content.
+    expected={"specs":"Module specifications","tests":"Test specifications","reviews":"Gate decisions + review rounds","oracle":"Bundle integrity passed"}
+    for route,title in expected.items():
+        page.goto(f"{ui}/sessions/golden-1/{route}")
+        assert page.get_by_text(title,exact=True).is_visible()
+        assert page.get_by_role("link",name={"specs":"Module specs ↗","tests":"Tests ↗","reviews":"Reviews + gates ↗","oracle":"Oracle ↗"}[route]).evaluate("e=>e.classList.contains('active')")
+    # Compact sticky header sits below global nav and content starts below it.
+    head=page.locator('.detail-head.page-head');panel=page.locator('[data-panel="oracle"]')
+    assert head.bounding_box()["height"] < 150
+    assert panel.bounding_box()["y"] >= head.bounding_box()["y"]+head.bounding_box()["height"]
+    page.screenshot(path="/downloads/vmodel-phase-page-v-nav.png",full_page=True)
 
 def test_artifacts_folder_setting_validates_and_reports_sessions(page,ui):
     page.goto(ui+"/sessions");page.get_by_role("button",name="Artifacts folder").click()

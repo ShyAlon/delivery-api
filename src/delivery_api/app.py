@@ -106,6 +106,9 @@ def sessions_view(): return FileResponse(WEB_DIR / "index.html")
 @app.get("/sessions/{session_id}/view", include_in_schema=False)
 def session_view(session_id: str): return FileResponse(WEB_DIR / "index.html")
 
+@app.get("/sessions/{session_id}/{phase}", include_in_schema=False)
+def session_phase_view(session_id: str, phase: str): return FileResponse(WEB_DIR / "index.html")
+
 @app.get("/api/sessions")
 def sessions(): return {"sessions":bundles.discover(),"artifacts_root":str(bundles.root())}
 
