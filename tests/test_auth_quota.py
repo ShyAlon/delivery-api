@@ -145,3 +145,44 @@ def test_basic_email_validation_and_availability(monkeypatch,tmp_path):
     assert c.get('/auth/email-availability?email=shy@example.com').json()=={'email':'shy@example.com','valid':True,'available':True}
     assert c.post('/auth/signup',json={'username':'Shy@Example.com','password':'Strong pass 42!'},headers={'origin':'http://testserver'}).status_code==200
     assert c.get('/auth/email-availability?email=shy@example.com').json()['available'] is False
+
+def test_concurrent_authenticated_posts_never_miss_valid_session(monkeypatch,tmp_path):
+    """Regression for a shared embedded-replica connection under request concurrency."""
+    import concurrent.futures,sqlite3,threading
+    from delivery_api.store import TursoReplicaStore
+    class SessionCursor:
+        def __init__(self,owner,cursor):
+            self.owner=owner;self.description=cursor.description;self.row=cursor.fetchone()
+        def fetchone(self):
+            with self.owner.cursor_lock:
+                self.owner.active_session_fetches+=1
+                overlap=self.owner.active_session_fetches>1
+            time.sleep(.01)
+            with self.owner.cursor_lock:self.owner.active_session_fetches-=1
+            return None if overlap else self.row
+    class Replica:
+        def __init__(self,path):
+            self.inner=sqlite3.connect(path,check_same_thread=False);self.inner.row_factory=None
+            self.db_lock=threading.Lock();self.cursor_lock=threading.Lock();self.active_session_fetches=0
+        def execute(self,sql,*args,**kwargs):
+            if sql.startswith("SELECT s.*"):
+                with self.db_lock:return SessionCursor(self,self.inner.execute(sql,*args,**kwargs))
+            return self.inner.execute(sql,*args,**kwargs)
+        def executemany(self,*a,**k):return self.inner.executemany(*a,**k)
+        def executescript(self,*a,**k):return self.inner.executescript(*a,**k)
+        def commit(self):return self.inner.commit()
+        def sync(self):pass
+    store=TursoReplicaStore(str(tmp_path/'auth-replica.db'),'libsql://unused','token',connection=Replica(tmp_path/'auth-replica.db'))
+    app.state.store=store;monkeypatch.setattr('delivery_api.app.store',store);monkeypatch.setattr(config,'BASIC_AUTH_ENABLED',True);monkeypatch.setattr(config,'COOKIE_SECURE',False);monkeypatch.setattr(config,'RUN_START_RATE_LIMIT',1000);auth.limiter=auth.RateLimiter()
+    user=store.upsert_user('google','concurrent','shy.alon@gmail.com','shy.alon@gmail.com',1000,False);store.create_session('stable-session',user['user_id'],time.time()+1000)
+    task=store.create_task('Concurrent answers')['task_id']
+    async def accepted(task_id,text):pass
+    monkeypatch.setattr('delivery_api.app.runner.send_input',accepted)
+    def post(i):
+        c=TestClient(app);c.cookies.set(config.SESSION_COOKIE,'stable-session')
+        return c.post(f'/api/tasks/{task}/answer',json={'answer':f'answer {i}'},headers={'origin':'http://testserver'}).status_code
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        statuses=list(pool.map(post,range(24)))
+    assert statuses==[200]*24
+    # Do not leave the process-global limiter full for later API tests.
+    auth.limiter=auth.RateLimiter()

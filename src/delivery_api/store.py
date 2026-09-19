@@ -484,8 +484,13 @@ class SQLiteStore:
             self._db.execute("INSERT INTO sessions VALUES (?,?,?,?)",(self._session_key(session_id),user_id,expires_at,time.time())); self._commit()
 
     def session(self, session_id: str) -> dict | None:
-        row=self._db.execute("SELECT s.*,u.label,u.email,u.is_admin FROM sessions s JOIN users u USING(user_id) WHERE session_id=?",(self._session_key(session_id),)).fetchone()
-        return dict(row) if row else None
+        # The embedded libSQL connection is shared by FastAPI's threadpool.
+        # Serialize the complete execute/fetch operation with session writes;
+        # concurrent cursors on one native connection can otherwise expose a
+        # transient empty result even though the next lookup succeeds.
+        with self._lock:
+            row=self._db.execute("SELECT s.*,u.label,u.email,u.is_admin FROM sessions s JOIN users u USING(user_id) WHERE session_id=?",(self._session_key(session_id),)).fetchone()
+            return dict(row) if row else None
 
     def delete_session(self, session_id: str) -> None:
         with self._lock: self._db.execute("DELETE FROM sessions WHERE session_id=?",(self._session_key(session_id),)); self._commit()
