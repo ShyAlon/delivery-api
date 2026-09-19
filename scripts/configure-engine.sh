@@ -6,7 +6,7 @@ winners=()
 while IFS= read -r candidate; do
   [ -x "$candidate" ] || continue
   if "$candidate" -c 'import langchain_core' >/dev/null 2>&1; then winners+=("$candidate"); fi
-done < <(find "$REQUIRE_ROOT" -maxdepth 3 -type f -path '*/bin/python*' | sort)
+done < <(find "$REQUIRE_ROOT" -maxdepth 3 \( -type f -o -type l \) -path '*/bin/python*' | sort)
 if [ "${#winners[@]}" -eq 1 ]; then
   printf '%s\n' "${winners[0]}" > "$ROOT/.engine-python"
   printf 'Saved interview engine Python: %s\n' "${winners[0]}"
