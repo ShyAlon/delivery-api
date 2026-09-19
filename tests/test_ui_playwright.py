@@ -433,3 +433,15 @@ def test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled(page,ui):
     cancel.click();page.get_by_text('Send cancelled. Your answer is still here.').wait_for()
     assert send.is_enabled() and answer.input_value()=='A careful answer still in flight'
     if pending:pending[0].abort()
+
+def test_answer_enter_sends_and_control_enter_inserts_newline(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    sent=[]
+    page.route('**/api/tasks/live/answer',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
+    page.goto(ui+'/tasks/live/view');answer=page.locator('#answerform textarea')
+    answer.fill('Line one');answer.press('Control+Enter');answer.type('Line two')
+    assert answer.input_value()=='Line one\nLine two' and sent==[]
+    answer.press('Enter');page.get_by_text('Answer sent.',exact=False).wait_for()
+    assert sent==[{'answer':'Line one\nLine two'}]
