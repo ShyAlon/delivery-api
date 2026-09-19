@@ -539,6 +539,8 @@ def test_founder_dialog_fixed_controls_and_vertical_four_options(page,ui):
     assert head.bounding_box()['y']<compose.bounding_box()['y']<scroll.bounding_box()['y']
     assert dialog.locator('.decision-compose textarea').is_visible() and dialog.locator('.decision-compose button[type=submit]').is_visible()
     before=(head.bounding_box()['y'],compose.bounding_box()['y']);scroll.evaluate('e=>e.scrollTop=e.scrollHeight');after=(head.bounding_box()['y'],compose.bounding_box()['y']);assert before==after
+    title=dialog.get_by_role('heading',name='Choose the operating concept');tb=title.bounding_box();hb=head.bounding_box();assert title.is_visible() and tb['y']>=hb['y'] and tb['y']+tb['height']<=hb['y']+hb['height']
+    assert title.evaluate("e=>({opacity:getComputedStyle(e).opacity,position:getComputedStyle(e.closest('.decision-head')).position})")=={'opacity':'1','position':'relative'}
     cards.nth(2).click();selected=cards.nth(2);assert selected.evaluate("e=>e.classList.contains('selected')")
     style=selected.locator('.option-copy b').evaluate("e=>({weight:getComputedStyle(e).fontWeight,bg:getComputedStyle(e).backgroundColor})")
     assert int(style['weight'])>=700 and style['bg']!='rgba(0, 0, 0, 0)'
