@@ -389,7 +389,7 @@ def test_answer_failure_preserves_text_and_recovers_button(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
     page.route('**/api/tasks/live/answer',lambda route:route.fulfill(status=503,json={'detail':{'error':'Answer could not be sent.','cause':'Engine input is unavailable.','next':'Retry when the engine is waiting.'}}))
-    page.goto(ui+'/tasks/live/view');answer=page.locator('#answerform textarea');button=page.locator('#answerform button')
+    page.goto(ui+'/tasks/live/view');answer=page.locator('#answerform textarea');button=page.locator('#answerform button[type=submit]')
     answer.fill('Do not lose this answer');button.click()
     page.get_by_text('Answer could not be sent.',exact=False).wait_for()
     assert answer.input_value()=='Do not lose this answer' and button.is_enabled() and button.inner_text()=='Send answer'
@@ -407,3 +407,19 @@ def test_rerun_review_opens_top_dialog_and_escape_restores_flow(page,ui):
     page.keyboard.press('Escape');confirm.wait_for(state='detached')
     assert form.is_visible() and form.locator('select').input_value()==selected
     assert form.locator('select').evaluate('e=>document.activeElement===e')
+
+def test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    pending=[]
+    def hold(route):pending.append(route)
+    page.route('**/api/tasks/live/answer',hold)
+    page.goto(ui+'/tasks/live/view');answer=page.locator('#answerform textarea');send=page.locator('#answerform button[type=submit]');cancel=page.get_by_role('button',name='Cancel send')
+    answer.fill('A careful answer still in flight');send.click();cancel.wait_for()
+    page.wait_for_timeout(16000)
+    assert send.inner_text()=='Sending…' and send.is_disabled() and cancel.is_visible()
+    assert answer.input_value()=='A careful answer still in flight' and page.get_by_text('request timed out',exact=False).count()==0
+    cancel.click();page.get_by_text('Send cancelled. Your answer is still here.').wait_for()
+    assert send.is_enabled() and answer.input_value()=='A careful answer still in flight'
+    if pending:pending[0].abort()
