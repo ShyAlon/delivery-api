@@ -151,3 +151,15 @@ def test_start_task_missing_engine_dependency_is_human_readable(monkeypatch,tmp_
     text=' '.join(r.json()['detail'].values())
     assert 'langchain_core' in text and 'pip install -e' in text and 'Traceback' not in text
     assert store.task(tid)['state']=='not_started'
+
+def test_engine_python_settings_show_candidates_and_persist(monkeypatch,tmp_path,client):
+    from delivery_api import engine_runtime
+    good=tmp_path/'python';good.write_text('#!/bin/sh\nexit 0\n');good.chmod(0o755)
+    monkeypatch.setattr(engine_runtime,'SETTINGS_FILE',tmp_path/'.engine-python')
+    monkeypatch.setattr('delivery_api.app.discover_engine_runtimes',lambda _dir: __import__('asyncio').sleep(0,result=[good]))
+    async def save(path,_dir):engine_runtime.SETTINGS_FILE.write_text(path+'\n');return good
+    monkeypatch.setattr('delivery_api.app.save_python',save)
+    result=client.get('/api/settings/engine-python').json()
+    assert result['count']==1 and result['candidates']==[str(good)]
+    response=client.post('/api/settings/engine-python',json={'path':str(good)})
+    assert response.status_code==200 and response.json()['path']==str(good)
