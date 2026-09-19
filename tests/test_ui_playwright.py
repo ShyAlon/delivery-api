@@ -391,6 +391,8 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     page.route('**/api/tasks/live/answer',lambda route:route.fulfill(json={'status':'accepted'}))
     composer.locator('textarea').fill('Caregivers');composer.locator('button[type=submit]').click()
     assert question.is_visible() and question.locator('p').inner_text()=='Third question?'
+    page.evaluate("liveSource.emit({kind:'answer',message:'You: Caregivers',phase_key:'intent',payload:{transcript:true},ts:1720000206})")
+    assert console.locator('.line.answer',has_text='You: Caregivers').is_visible()
 
 def test_answer_failure_preserves_text_and_recovers_button(page,ui):
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")

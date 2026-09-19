@@ -347,7 +347,7 @@ class InterviewAnswer(BaseModel):answer:str=Field(min_length=1,max_length=8000)
 async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends(auth.require_actor)):
     try:await runner.send_input(task_id,body.answer)
     except RuntimeError as e:raise HTTPException(409,{"error":"The interview is not waiting for an answer.","cause":str(e),"next":"Wait for the next question in live output, then answer."})
-    store.add_event(task_id,"answer","Interview answer submitted",phase_key="intent",payload={"actor":a.label,"character_count":len(body.answer)})
+    store.add_event(task_id,"answer",f"You: {body.answer}",phase_key="intent",payload={"actor":a.label,"character_count":len(body.answer),"transcript":True})
     activity("engine.answer","Interview answer submitted",task_id=task_id,actor=a.label,character_count=len(body.answer))
     return {"status":"accepted"}
 

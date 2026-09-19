@@ -107,6 +107,19 @@ def test_process_runner_marks_input_prompts_distinct_from_work(tmp_path):
     assert waiting['payload']['question']=='What matters?'
 
 
+def test_answer_endpoint_appends_visible_transcript_line(monkeypatch):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.auth import Actor
+    from delivery_api.app import InterviewAnswer
+    task_id=app_module.store.create_task('Answer transcript')['task_id']
+    async def accepted(task,text):assert task==task_id and text=='Visible answer'
+    monkeypatch.setattr(app_module.runner,'send_input',accepted)
+    assert asyncio.run(app_module.answer_interview(task_id,InterviewAnswer(answer='Visible answer'),Actor('test','Tester'))) == {'status':'accepted'}
+    event=app_module.store.events(task_id)[-1]
+    assert event['kind']=='answer' and event['message']=='You: Visible answer' and event['payload']['transcript'] is True
+
+
 def test_storage_factory_is_the_only_backend_selection_point(tmp_path):
     from delivery_api.store import SQLiteStore, Storage, create_store
 
