@@ -346,6 +346,7 @@ def test_settings_creation_dialog_enter_and_escape(page,ui):
     path.press('Escape');assert page.locator('#rootform').count()==0
     page.get_by_role('button',name='Artifacts folder').click();path=page.locator('#rootform input[name="path"]')
     submitted=[]
+    page.route('**/api/settings/engine-python',lambda route:route.fulfill(json={'path':'','candidates':[],'count':0}) if route.request.method=='GET' else route.fulfill(json={'path':'','status':'saved'}))
     page.route('**/api/settings/artifacts-root',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(status=400,json={'detail':{'error':'Artifacts folder could not be loaded.','cause':'Test path is missing.','next':'Choose an existing folder.'}})))
     path.fill('/definitely/missing/by-enter');path.press('Enter')
     page.get_by_text('Artifacts folder could not be loaded.',exact=False).wait_for();assert submitted==[{'path':'/definitely/missing/by-enter'}]
