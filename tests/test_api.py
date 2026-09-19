@@ -122,6 +122,9 @@ def test_start_task_launches_interview_runner(monkeypatch,tmp_path):
     calls=[]
     async def fake_run(task_id,command,**kwargs):calls.append((task_id,command,kwargs));return 0
     monkeypatch.setattr('delivery_api.app.runner.run',fake_run)
+    from delivery_api.engine_runtime import EngineRuntime
+    async def fake_resolve(engine_dir):return EngineRuntime(__import__('pathlib').Path(__import__('sys').executable),())
+    monkeypatch.setattr('delivery_api.app.resolve_engine_runtime',fake_resolve)
     monkeypatch.setenv('INTERVIEW_ENGINE_DIR',str(tmp_path));tmp_path.mkdir(exist_ok=True)
     r=TestClient(app).post(f'/api/tasks/{tid}/start')
     assert r.status_code==200 and r.json()['status']=='started'
@@ -131,3 +134,20 @@ def test_start_task_launches_interview_runner(monkeypatch,tmp_path):
         time.sleep(.01)
     assert calls and calls[0][0]==tid and calls[0][1][1:3]==['-m','interview_engine.cli'] and calls[0][1][3]=='A calm family task app'
     assert store.task(tid)['state']=='running'
+
+
+def test_start_task_missing_engine_dependency_is_human_readable(monkeypatch,tmp_path):
+    from delivery_api.app import app,store
+    from delivery_api.engine_runtime import EngineRuntimeError
+    from fastapi.testclient import TestClient
+    tid='preflight-failure-test'
+    if store.task(tid):store.delete_task(tid)
+    store.create_task('Preflight failure','A product idea',task_id=tid)
+    engine=tmp_path/'interview-engine';engine.mkdir();python=tmp_path/'python'
+    async def fail(_):raise EngineRuntimeError(module='langchain_core',checked=(python,),engine_dir=engine)
+    monkeypatch.setattr('delivery_api.app.resolve_engine_runtime',fail);monkeypatch.setenv('INTERVIEW_ENGINE_DIR',str(engine))
+    r=TestClient(app).post(f'/api/tasks/{tid}/start')
+    assert r.status_code==503 and set(r.json()['detail'])=={'error','cause','next'}
+    text=' '.join(r.json()['detail'].values())
+    assert 'langchain_core' in text and 'pip install -e' in text and 'Traceback' not in text
+    assert store.task(tid)['state']=='not_started'

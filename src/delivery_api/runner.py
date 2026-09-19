@@ -9,7 +9,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .store import PHASES, Storage
+from .observability import event as activity
 
+_MISSING_MODULE = re.compile(r"ModuleNotFoundError: No module named [\'\"]([^\'\"]+)[\'\"]")
 _PROGRESS = re.compile(r"(?:stage '([^']+)' call|([0-9]+)s elapsed|([0-9]+)/([0-9]+))", re.I)
 _PHASE_HINTS = {
     "interview": "intent", "distill": "intent", "intent": "intent", "conops": "conops",
@@ -39,6 +41,8 @@ class ProcessRunner:
         )
         self.processes[task_id] = proc
         last_line = time.monotonic()
+        traceback_started = False
+        missing_module: str | None = None
 
         async def heartbeat():
             while proc.returncode is None:
@@ -57,21 +61,33 @@ class ProcessRunner:
                 if not raw: break
                 for line in filter(None,(part.strip() for part in raw.decode(errors="replace").splitlines())):
                     last_line = time.monotonic()
+                    activity("engine.output","Engine raw output",task_id=task_id,stream="combined",line=line)
+                    if line.startswith("Traceback (most recent call last):"): traceback_started=True
+                    missing = _MISSING_MODULE.search(line)
+                    if missing: missing_module=missing.group(1);traceback_started=True
+                    if traceback_started: continue
                     phase = self._phase(line, phase)
                     match = _PROGRESS.search(line)
                     completed = int(match.group(3)) if match and match.group(3) else 0
                     total = int(match.group(4)) if match and match.group(4) else None
                     self.store.update_phase(task_id, phase, "running", detail=line, completed=completed, total=total)
                     self.store.add_event(task_id, "progress", line, phase_key=phase,
-                                         payload={"completed": completed, "total": total})
+                                         payload={"completed": completed,"total":total})
             code = await proc.wait()
             if code == 0:
                 self.store.update_phase(task_id, phase, "done", detail="Engine stage complete")
                 self.store.add_event(task_id, "complete", "Engine process completed", phase_key=phase)
             else:
-                self.store.update_phase(task_id, phase, "failed", detail=f"Engine exited with status {code}")
-                self.store.add_event(task_id, "error", f"Engine exited with status {code}", phase_key=phase,
-                                     payload={"cause": "The CLI reported a failure.", "next": "Read the last progress line, fix the named cause, then resume this task."})
+                if missing_module:
+                    error=f"Error: engine dependency '{missing_module}' is missing. Likely cause: the selected Python environment is incomplete. Next: install interview-engine into that environment, restart Requi.re, and retry. Exit code: {code}."
+                    cause=f"Python could not import {missing_module}."
+                    next_step="Install the interview-engine dependencies in the resolved Python environment, then retry. The raw traceback is in run.log."
+                else:
+                    error=f"Error: interview engine stopped with exit code {code}. Likely cause: the CLI reported a runtime failure. Next: check run.log for the raw diagnostic, fix the named cause, then retry."
+                    cause="The CLI exited before the interview completed."
+                    next_step="Check run.log for the raw diagnostic, fix the named cause, then retry."
+                self.store.update_phase(task_id,phase,"failed",detail=error)
+                self.store.add_event(task_id,"error",error,phase_key=phase,payload={"exit_code":code,"module":missing_module,"cause":cause,"next":next_step})
             return code
         finally:
             beat.cancel(); self.processes.pop(task_id, None)

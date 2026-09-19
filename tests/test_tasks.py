@@ -187,3 +187,41 @@ def test_task_management_api_structured_collisions_and_delete():
         r=c.patch(f'/api/tasks/{tid}',json={'title':'Renamed API Task'});assert r.status_code==200 and r.json()['title']=='Renamed API Task'
         d=c.delete(f'/api/tasks/{tid}');assert d.status_code==200 and d.json()['source_artifacts_deleted'] is False
         assert c.get(f'/api/tasks/{tid}').status_code==404
+
+def test_engine_runtime_skips_missing_dependency_and_selects_working_python(tmp_path,monkeypatch):
+    import asyncio,os
+    from delivery_api.engine_runtime import resolve_engine_runtime
+    engine=tmp_path/'interview-engine';engine.mkdir()
+    bad=tmp_path/'bad';good=engine/'.venv/bin';bad.mkdir();good.mkdir(parents=True)
+    for path,rc in ((bad/'python',1),(good/'python',0)):
+        path.write_text(f'#!/bin/sh\nexit {rc}\n');path.chmod(0o755)
+    monkeypatch.setenv('INTERVIEW_ENGINE_PYTHON',str(bad/'python'))
+    runtime=asyncio.run(resolve_engine_runtime(engine))
+    assert runtime.python==good.joinpath('python').resolve()
+    assert runtime.checked==(bad.joinpath('python').resolve(),good.joinpath('python').resolve())
+
+
+def test_engine_runtime_missing_dependency_reports_all_interpreters(tmp_path,monkeypatch):
+    import asyncio
+    from delivery_api.engine_runtime import EngineRuntimeError,resolve_engine_runtime
+    engine=tmp_path/'interview-engine';python=engine/'.venv/bin/python';python.parent.mkdir(parents=True)
+    python.write_text('#!/bin/sh\nexit 1\n');python.chmod(0o755)
+    monkeypatch.setenv('INTERVIEW_ENGINE_PYTHON',str(python))
+    monkeypatch.setattr('delivery_api.engine_runtime._candidates',lambda _: [python])
+    try:asyncio.run(resolve_engine_runtime(engine))
+    except EngineRuntimeError as e:
+        assert e.module=='langchain_core' and e.checked==(python,)
+    else:assert False,'missing dependency preflight should fail'
+
+
+def test_process_runner_hides_traceback_and_classifies_missing_module(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    isolated=SQLiteStore(str(tmp_path/'failure.db'));task_id=isolated.create_task('Failure')['task_id']
+    script="import sys; print('Traceback (most recent call last):'); print('  File \\\"x.py\\\", line 1'); print(\\\"ModuleNotFoundError: No module named 'langchain_core'\\\"); sys.exit(1)"
+    assert asyncio.run(ProcessRunner(isolated).run(task_id,[sys.executable,'-c',script],cwd=tmp_path))==1
+    events=isolated.events(task_id);visible=' '.join(e['message'] for e in events)
+    assert 'Traceback' not in visible and 'File "x.py"' not in visible
+    error=next(e for e in events if e['kind']=='error')
+    assert 'langchain_core' in error['message'] and 'Likely cause:' in error['message'] and error['payload']['exit_code']==1
