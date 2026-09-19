@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Shared local configuration; process environment still has precedence.
+load_dotenv(override=False)
 
 # Abuse protection (scoping doc section 5): per-run hard cap + global cap.
 PER_RUN_BUDGET_USD = float(os.environ.get("DELIVERY_PER_RUN_BUDGET_USD", "6.00"))
@@ -20,6 +24,15 @@ DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 DATABASE_URL = os.environ.get("DELIVERY_DATABASE_URL", os.environ.get("DELIVERY_DB_PATH", f"sqlite:///{DEFAULT_DB_PATH}"))
 # Compatibility alias for older deployments; new code uses DATABASE_URL.
 DB_PATH = DATABASE_URL
+def local_database_path() -> Path:
+    if DATABASE_URL.startswith("sqlite:///"): return Path(DATABASE_URL.removeprefix("sqlite:///"))
+    if "://" not in DATABASE_URL:return Path(DATABASE_URL)
+    return DEFAULT_DB_PATH
+TURSO_DATABASE_URL = os.environ.get("TURSO_DATABASE_URL", "").strip()
+TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
+TURSO_SYNC_INTERVAL = int(os.environ.get("TURSO_SYNC_INTERVAL", "60"))
+if bool(TURSO_DATABASE_URL) != bool(TURSO_AUTH_TOKEN):
+    raise RuntimeError("Turso configuration is incomplete: set both TURSO_DATABASE_URL and TURSO_AUTH_TOKEN, or neither.")
 ARTIFACT_DIR = os.environ.get("DELIVERY_ARTIFACT_DIR", "artifacts")
 
 SESSION_SECRET = os.environ.get("DELIVERY_SESSION_SECRET", "")

@@ -20,7 +20,7 @@ PYTHON="$OUTPUT/runtime/bin/python"
 # Install runtime dependencies once, then install all local wheels without
 # letting historical direct-URL pins replace the checked-out contracts build.
 "$PYTHON" -m pip install fastapi uvicorn pydantic httpx python-multipart \
-  langgraph langgraph-checkpoint-sqlite langchain-core langchain-openai langchain-ollama
+  langgraph langgraph-checkpoint-sqlite langchain-core langchain-openai langchain-ollama libsql python-dotenv
 "$PYTHON" -m pip install --no-deps \
   "$REPOS_ROOT/vmodel-contracts" "$REPOS_ROOT/interview-engine" \
   "$REPOS_ROOT/spec-generator" "$REPOS_ROOT/verification-loop" "$PROJECT"

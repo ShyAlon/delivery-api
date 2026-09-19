@@ -31,7 +31,7 @@ from .observability import event as activity
 
 WEB_DIR = Path(__file__).parent / "web"
 app = FastAPI(title="Requi.re API", version="0.2.0")
-store = create_store(config.DATABASE_URL)
+store = (__import__('delivery_api.store',fromlist=['TursoReplicaStore']).TursoReplicaStore(str(config.local_database_path()),config.TURSO_DATABASE_URL,config.TURSO_AUTH_TOKEN,config.TURSO_SYNC_INTERVAL) if config.TURSO_DATABASE_URL else create_store(config.DATABASE_URL))
 jobs = JobQueue(store)
 runner = ProcessRunner(store)
 simulation = Simulation(store)

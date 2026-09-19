@@ -312,3 +312,54 @@ def test_default_database_is_stable_user_data_outside_repo_and_dist(monkeypatch,
     monkeypatch.delenv('DELIVERY_DATABASE_URL',raising=False);monkeypatch.delenv('DELIVERY_DB_PATH',raising=False);monkeypatch.setenv('XDG_DATA_HOME',str(tmp_path/'xdg'))
     assert config.default_data_dir()==tmp_path/'xdg'/'requi-re'
     assert config.default_data_dir()/'delivery.db' not in (tmp_path/'dist',Path.cwd())
+
+def test_turso_replica_writes_locally_and_syncs_account_session(monkeypatch,tmp_path):
+    import sqlite3
+    from delivery_api.store import TursoReplicaStore
+    class Replica:
+        def __init__(self,path):self.inner=sqlite3.connect(path,check_same_thread=False);self.inner.row_factory=sqlite3.Row;self.syncs=[]
+        def execute(self,*a,**k):return self.inner.execute(*a,**k)
+        def executemany(self,*a,**k):return self.inner.executemany(*a,**k)
+        def executescript(self,*a,**k):return self.inner.executescript(*a,**k)
+        def commit(self):return self.inner.commit()
+        def sync(self):self.syncs.append('attempted')
+    replica=Replica(tmp_path/'replica.db');events=[]
+    monkeypatch.setattr('delivery_api.store.activity',lambda kind,message,**fields:events.append((kind,message,fields)))
+    store=TursoReplicaStore(str(tmp_path/'replica.db'),'libsql://database.example','secret-token',connection=replica)
+    user=store.create_basic_user('cloud@example.com','salt$hash',100)
+    store.create_session('opaque-session',user['user_id'],9999999999)
+    store.delete_session('opaque-session')
+    assert store.basic_user('cloud@example.com')['user_id']==user['user_id']
+    assert len(replica.syncs)==4
+    rendered=repr(events)
+    assert 'secret-token' not in rendered and 'libsql://database.example' not in rendered
+
+
+def test_turso_sync_failure_keeps_local_write_available(monkeypatch,tmp_path):
+    import sqlite3
+    from delivery_api.store import TursoReplicaStore
+    class OfflineReplica:
+        def __init__(self,path):self.inner=sqlite3.connect(path,check_same_thread=False);self.inner.row_factory=sqlite3.Row
+        def execute(self,*a,**k):return self.inner.execute(*a,**k)
+        def executemany(self,*a,**k):return self.inner.executemany(*a,**k)
+        def executescript(self,*a,**k):return self.inner.executescript(*a,**k)
+        def commit(self):return self.inner.commit()
+        def sync(self):raise OSError('network offline')
+    events=[];monkeypatch.setattr('delivery_api.store.activity',lambda kind,message,**fields:events.append((kind,message,fields)))
+    store=TursoReplicaStore(str(tmp_path/'offline.db'),'libsql://database.example','secret-token',connection=OfflineReplica(tmp_path/'offline.db'))
+    user=store.create_basic_user('offline@example.com','salt$hash',100)
+    assert store.basic_user('offline@example.com')['user_id']==user['user_id']
+    assert any(kind=='database.sync.failed' for kind,_,_ in events)
+    assert 'secret-token' not in repr(events)
+
+def test_turso_initial_offline_start_falls_back_to_local_sqlite(monkeypatch,tmp_path):
+    from delivery_api.store import TursoReplicaStore
+    events=[]
+    monkeypatch.setattr('delivery_api.libsql_store.connect_replica',lambda *a,**k:(_ for _ in ()).throw(OSError('offline token must not leak')))
+    monkeypatch.setattr('delivery_api.store.activity',lambda kind,message,**fields:events.append((kind,message,fields)))
+    store=TursoReplicaStore(str(tmp_path/'startup-offline.db'),'libsql://database.example','super-secret-token')
+    user=store.create_basic_user('startup-offline@example.com','salt$hash',100)
+    assert store.basic_user('startup-offline@example.com')['user_id']==user['user_id']
+    rendered=repr(events)
+    assert 'database.replica.offline' in rendered and 'database.sync.failed' in rendered
+    assert 'super-secret-token' not in rendered and 'libsql://database.example' not in rendered

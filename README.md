@@ -138,3 +138,24 @@ scripts/build-dist.sh
 `build-dist.sh` treats `delivery-api` as the build project. It expects the five Python package repositories and `vmodel-spec-app` beside it under the same `require/` folder, creates `dist/requi-re/runtime`, installs every executable package into that single environment, copies the shell support scripts, and writes `MANIFEST.txt` with every repository SHA, dirty-state marker, installed package version, build Python, and platform. Override the checkout root with `REQUI_RE_REPOS_ROOT`, the output with `REQUI_RE_DIST_DIR`, or build Python with `REQUI_RE_BUILD_PYTHON`.
 
 The built launcher sets distribution mode and always starts Requi.re and its interview subprocess with `runtime/bin/python`. It does no interpreter discovery. Copy the complete `dist/requi-re` folder to a machine with the same operating system and architecture, then run `run-require.sh`. The launcher refuses an incomplete or incompatible copy with Error / Likely cause / Next guidance.
+
+## Optional Turso embedded replica
+
+Local SQLite remains the default. To keep local-speed reads and writes while syncing accounts and task state to Turso, create one database and token:
+
+```bash
+brew install tursodatabase/tap/turso
+turso auth signup
+turso db create requi-re
+turso db show requi-re --url
+turso db tokens create requi-re
+```
+
+Copy `.env.example` to `.env` in `delivery-api` (or beside `run-require.sh` in a built distribution), then set the values returned above:
+
+```dotenv
+TURSO_DATABASE_URL=libsql://requi-re-YOUR-ORG.turso.io
+TURSO_AUTH_TOKEN=YOUR-GENERATED-TOKEN
+```
+
+Restart Requi.re. With both values present, the stable local database at `~/.local/share/requi-re/delivery.db` becomes an embedded replica: normal operations use the local file; libSQL syncs in the background every 60 seconds; account creation and session create/revoke also attempt an immediate sync. If the network or Turso is unavailable, local reads and writes continue and the deferred sync is recorded in `run.log` without logging the URL or token. Set `TURSO_SYNC_INTERVAL` to change the background interval. If either URL or token is missing, startup stops with a clear configuration error instead of silently running an unintended mode. Remove both variables to return to pure local SQLite.

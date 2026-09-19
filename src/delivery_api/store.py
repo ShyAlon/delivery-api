@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from vmodel_contracts import RunState
+from .observability import event as activity
 
 SCHEMA = """
 
@@ -125,11 +126,11 @@ class Storage(Protocol):
 
 
 class SQLiteStore:
-    def __init__(self, path: str):
+    def __init__(self, path: str, connection=None):
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
+        self._db = connection or sqlite3.connect(path, check_same_thread=False)
+        if connection is None:self._db.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         self._db.executescript(SCHEMA)
         self._migrate_schema()
@@ -511,6 +512,36 @@ class SQLiteStore:
         with self._lock:
             self._db.execute("INSERT INTO usage(run_id,record,ts,user_id,input_tokens,output_tokens) VALUES(?,?,?,?,?,?)",(run_id,record_json,time.time(),user_id,input_tokens,output_tokens)); self._db.execute("UPDATE runs SET cost_usd=cost_usd+?,updated_at=? WHERE run_id=?",(cost_usd,time.time(),run_id)); self._commit(); return self.run(run_id)["cost_usd"]
 
+
+class TursoReplicaStore(SQLiteStore):
+    """Local libSQL replica; cloud sync is best-effort and never breaks requests."""
+    def __init__(self,path:str,url:str,token:str,sync_interval:int=60,connection=None):
+        self._replica_available=True
+        if connection is None:
+            from .libsql_store import connect_replica
+            try:connection=connect_replica(Path(path),url,token,sync_interval)
+            except Exception as e:
+                # libsql performs an initial pull while connecting. On a first
+                # offline start that can fail before returning a connection;
+                # keep the product usable on the stable SQLite file and retry
+                # replica mode on the next restart.
+                connection=None;self._replica_available=False
+                activity("database.replica.offline","Turso unavailable at startup; using the local database",error=f"{type(e).__name__}: {str(e)[:180]}")
+        self._sync_url=url
+        super().__init__(path,connection=connection)
+        self._safe_sync("schema bootstrap")
+    def _safe_sync(self,reason:str)->None:
+        if not self._replica_available:
+            activity("database.sync.failed","Turso replica sync deferred; local data remains available",reason=reason,error="replica connection unavailable; retry occurs on restart")
+            return
+        try:self._db.sync();activity("database.sync","Turso replica synchronized",reason=reason)
+        except Exception as e:activity("database.sync.failed","Turso replica sync deferred; local data remains available",reason=reason,error=f"{type(e).__name__}: {str(e)[:180]}")
+    def create_basic_user(self,*args,**kwargs):
+        result=super().create_basic_user(*args,**kwargs);self._safe_sync("account create");return result
+    def create_session(self,*args,**kwargs):
+        result=super().create_session(*args,**kwargs);self._safe_sync("session create");return result
+    def delete_session(self,*args,**kwargs):
+        result=super().delete_session(*args,**kwargs);self._safe_sync("session revoke");return result
 
 def create_store(database_url: str) -> Storage:
     """Select the persistence adapter in one place.
