@@ -197,7 +197,7 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     assert page.get_by_text("3 connected edges").is_visible()
     assert page.get_by_text("Build a PWA").is_visible()
     assert page.get_by_text("gate.auto_decision",exact=True).first.is_visible()
-    answer=page.get_by_role("button",name="interviewee.answer Caregivers need a calm shared view · high View result ↗")
+    answer=page.locator('#interview-gates .inspect-json',has_text='Caregivers need a calm shared view')
     assert answer.is_visible()
     assert '"confidence"' not in page.locator("main").inner_text()
     answer.click();assert page.get_by_role("dialog",name="interviewee.answer").is_visible()
