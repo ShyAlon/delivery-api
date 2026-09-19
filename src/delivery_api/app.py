@@ -24,6 +24,7 @@ from .runner import ProcessRunner
 from .store import create_store
 from .simulation import Simulation, ImportValidationError
 from . import bundles
+from .observability import event as activity
 
 WEB_DIR = Path(__file__).parent / "web"
 app = FastAPI(title="V-model console", version="0.2.0")
@@ -49,9 +50,8 @@ async def request_log(request, call_next):
         log.exception("request failed method=%s path=%s", request.method, request.url.path)
         raise
     who = auth.actor(request).label
-    log.info("request method=%s path=%s status=%s duration_ms=%d actor=%s",
-             request.method, request.url.path, response.status_code,
-             (time.monotonic() - started) * 1000, who)
+    activity("http.request","Request completed",method=request.method,path=request.url.path,status=response.status_code,duration_ms=int((time.monotonic()-started)*1000),actor=who,client=request.client.host if request.client else "unknown")
+    if response.status_code in (401,403):activity("access.blocked","Unauthorized or forbidden request",method=request.method,path=request.url.path,status=response.status_code,actor=who)
     return response
 
 if config.ADMIN_TOKEN == "dev-admin-token":
@@ -79,6 +79,15 @@ def auth_status(request: Request):
     return {"mode":mode,"authenticated":a.id not in {"anonymous"},"actor":a.label,"admin":a.admin,
             "providers":[p for p,ident in (("google",config.GOOGLE_CLIENT_ID),("github",config.GITHUB_CLIENT_ID)) if ident],"workspace":"shared"}
 
+class ClientLog(BaseModel):
+    kind:str=Field(max_length=80)
+    message:str=Field(max_length=500)
+    path:str=Field(max_length=500)
+
+@app.post("/api/client-log",status_code=204)
+def client_log(request:Request,body:ClientLog):
+    activity("client."+body.kind,body.message,path=body.path,actor=auth.actor(request).label,client=request.client.host if request.client else "unknown")
+
 class BasicCredentials(BaseModel):
     username: str = Field(min_length=3,max_length=32)
     password: str = Field(min_length=1,max_length=256)
@@ -88,10 +97,16 @@ def _auth_response(result):
     response.set_cookie(config.SESSION_COOKIE,sid,max_age=config.SESSION_TTL_SECONDS,httponly=True,secure=config.COOKIE_SECURE,samesite="lax",path="/");return response
 
 @app.post("/auth/signup")
-def signup(request:Request,body:BasicCredentials):return _auth_response(auth.basic_signup(request,body.username,body.password))
+def signup(request:Request,body:BasicCredentials):
+    activity("auth.signup.attempt","Signup attempted",username=body.username,client=request.client.host if request.client else "unknown")
+    try:result=auth.basic_signup(request,body.username,body.password);activity("auth.signup.success","Account created",username=body.username);return _auth_response(result)
+    except HTTPException as e:activity("auth.signup.failure","Signup rejected",username=body.username,status=e.status_code,reason=(e.detail.get("error") if isinstance(e.detail,dict) else e.detail));raise
 
 @app.post("/auth/signin")
-def signin(request:Request,body:BasicCredentials):return _auth_response(auth.basic_signin(request,body.username,body.password))
+def signin(request:Request,body:BasicCredentials):
+    activity("auth.signin.attempt","Sign-in attempted",username=body.username,client=request.client.host if request.client else "unknown")
+    try:result=auth.basic_signin(request,body.username,body.password);activity("auth.signin.success","Sign-in succeeded",username=body.username);return _auth_response(result)
+    except HTTPException as e:activity("auth.signin.failure","Sign-in rejected",username=body.username,status=e.status_code,reason=(e.detail.get("error") if isinstance(e.detail,dict) else e.detail));raise
 
 @app.get("/auth/{provider}/start")
 def oauth_start(request: Request, provider: str):
@@ -105,6 +120,7 @@ def oauth_callback(request: Request, provider: str, code: str, state: str):
 
 @app.post("/auth/logout")
 def logout(request: Request):
+    current=auth.actor(request);activity("auth.signout","Sign-out requested",actor=current.label)
     sid=request.cookies.get(config.SESSION_COOKIE)
     if sid: store.delete_session(sid)
     from fastapi.responses import JSONResponse

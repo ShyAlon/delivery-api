@@ -35,6 +35,9 @@ if ! "$PYTHON" -c 'import delivery_api,uvicorn,multipart; from vmodel_contracts 
 fi
 cd "$ROOT"
 export DELIVERY_BASIC_AUTH_ENABLED="${DELIVERY_BASIC_AUTH_ENABLED:-1}"
+# The local entry point serves plain http://127.0.0.1. Secure cookies are correct
+# in deployment, but browsers intentionally refuse them on this local origin.
+export DELIVERY_COOKIE_SECURE="${DELIVERY_COOKIE_SECURE:-0}"
 echo "V-model UI: http://$HOST:$PORT"
 echo "Data: ${DELIVERY_DATABASE_URL:-${DELIVERY_DB_PATH:-sqlite:///delivery.db}}"
 echo "Stop: Ctrl-C"

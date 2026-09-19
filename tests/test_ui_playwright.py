@@ -132,6 +132,26 @@ def test_gate_redo_requires_steer_in_browser(page, ui):
     assert page.get_by_text("a redo needs a reason", exact=False).is_visible()
 
 
+def test_basic_auth_browser_signup_signin_persists_and_logs(tmp_path):
+    db=tmp_path/"basic-ui.db";port=_port();log=Path(__file__).parents[1]/"run.log"
+    env={**os.environ,"DELIVERY_DB_PATH":str(db),"DELIVERY_BASIC_AUTH_ENABLED":"1","DELIVERY_COOKIE_SECURE":"0","PYTHONPATH":str(Path(__file__).parents[1]/"src")}
+    proc=subprocess.Popen([sys.executable,"-m","uvicorn","delivery_api.app:app","--host","127.0.0.1","--port",str(port)],env=env);base=f"http://127.0.0.1:{port}"
+    try:
+        for _ in range(50):
+            try:import urllib.request;urllib.request.urlopen(base+"/health",timeout=.2);break
+            except Exception:time.sleep(.1)
+        with sync_playwright() as p:
+            browser=p.chromium.launch(headless=True);page=browser.new_page();page.goto(base+"/sessions")
+            page.get_by_text("Welcome to Vector",exact=True).wait_for();page.get_by_role("button",name="Create account").click()
+            page.locator('input[name="username"]').fill('shy.local');page.locator('input[name="password"]').fill('Strong local 42!');page.locator('.auth-submit').click()
+            page.get_by_text('shy.local',exact=True).wait_for();assert page.url==base+'/'
+            assert page.locator('.avatar').inner_text()=='SL'
+            page.reload();page.get_by_text('shy.local',exact=True).wait_for();assert page.locator('.avatar').is_visible()
+            page.get_by_role('link',name='All sessions').click();page.get_by_text('Artifacts folder').wait_for()
+            browser.close()
+        assert 'auth.signup.success' in log.read_text() and 'client.navigation' in log.read_text()
+    finally:proc.terminate();proc.wait(timeout=5)
+
 def test_oauth_identity_and_logout_in_browser(tmp_path):
     db=tmp_path/"oauth-ui.db";port=_port()
     env={**os.environ,"DELIVERY_DB_PATH":str(db),"DELIVERY_SESSION_SECRET":"0123456789abcdef0123456789abcdef",

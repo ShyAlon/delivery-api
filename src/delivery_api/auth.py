@@ -20,6 +20,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from . import config
+from .observability import event as activity
 
 
 @dataclass(frozen=True)
@@ -82,7 +83,7 @@ def basic_signin(request: Request, username: str, password: str) -> tuple[Actor,
     return Actor(user["user_id"],user["label"]),_new_session(request,user)
 
 def _new_session(request: Request,user: dict) -> str:
-    sid=secrets.token_urlsafe(32);request.app.state.store.create_session(sid,user["user_id"],time.time()+config.SESSION_TTL_SECONDS);return sid
+    sid=secrets.token_urlsafe(32);request.app.state.store.create_session(sid,user["user_id"],time.time()+config.SESSION_TTL_SECONDS);activity("auth.session.created","Server session created",user_id=user["user_id"],expires_in_seconds=config.SESSION_TTL_SECONDS);return sid
 
 
 def _client_ip(request: Request) -> str:
@@ -95,7 +96,10 @@ def actor(request: Request, *, required: bool = False) -> Actor:
     sid = request.cookies.get(config.SESSION_COOKIE)
     row = request.app.state.store.session(sid) if sid else None
     if not row or row["expires_at"] <= time.time():
-        if required: raise HTTPException(401, "Sign in with Google or GitHub to perform this action.")
+        if sid:activity("auth.session.expired","Session handle was missing or expired",path=request.url.path,client=_client_ip(request))
+        if required:
+            activity("access.blocked","Authentication required",path=request.url.path,client=_client_ip(request))
+            raise HTTPException(401,{"error":"Sign in required.","cause":"Your session is missing or expired.","next":"Sign in, then retry this action."})
         return Actor("anonymous", "anonymous")
     return Actor(row["user_id"], row["label"], row.get("email"), bool(row.get("is_admin")))
 
