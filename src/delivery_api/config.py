@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 # Abuse protection (scoping doc section 5): per-run hard cap + global cap.
 PER_RUN_BUDGET_USD = float(os.environ.get("DELIVERY_PER_RUN_BUDGET_USD", "6.00"))
 GLOBAL_BUDGET_USD = float(os.environ.get("DELIVERY_GLOBAL_BUDGET_USD", "100.00"))
 ADMIN_TOKEN = os.environ.get("DELIVERY_ADMIN_TOKEN", "dev-admin-token")  # link creation is Shy-only
-DATABASE_URL = os.environ.get("DELIVERY_DATABASE_URL", os.environ.get("DELIVERY_DB_PATH", "sqlite:///delivery.db"))
+def default_data_dir() -> Path:
+    """Stable per-user data outside source and distribution trees."""
+    if os.environ.get("XDG_DATA_HOME"):
+        return Path(os.environ["XDG_DATA_HOME"]).expanduser() / "requi-re"
+    return Path.home() / ".local" / "share" / "requi-re"
+
+DEFAULT_DB_PATH = default_data_dir() / "delivery.db"
+DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+DATABASE_URL = os.environ.get("DELIVERY_DATABASE_URL", os.environ.get("DELIVERY_DB_PATH", f"sqlite:///{DEFAULT_DB_PATH}"))
 # Compatibility alias for older deployments; new code uses DATABASE_URL.
 DB_PATH = DATABASE_URL
 ARTIFACT_DIR = os.environ.get("DELIVERY_ARTIFACT_DIR", "artifacts")

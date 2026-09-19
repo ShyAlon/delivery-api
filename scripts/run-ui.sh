@@ -45,6 +45,9 @@ export DELIVERY_BASIC_AUTH_ENABLED="${DELIVERY_BASIC_AUTH_ENABLED:-1}"
 # in deployment, but browsers intentionally refuse them on this local origin.
 export DELIVERY_COOKIE_SECURE="${DELIVERY_COOKIE_SECURE:-0}"
 echo "V-model UI: http://$HOST:$PORT"
-echo "Data: ${DELIVERY_DATABASE_URL:-${DELIVERY_DB_PATH:-sqlite:///delivery.db}}"
+DEFAULT_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/requi-re"
+mkdir -p "$DEFAULT_DATA_HOME"
+export DELIVERY_DATABASE_URL="${DELIVERY_DATABASE_URL:-${DELIVERY_DB_PATH:-sqlite:///$DEFAULT_DATA_HOME/delivery.db}}"
+echo "Data: $DELIVERY_DATABASE_URL"
 echo "Stop: Ctrl-C"
 exec "$PYTHON" -m delivery_api

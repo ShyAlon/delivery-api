@@ -304,3 +304,11 @@ def test_built_runtime_bypasses_interpreter_discovery(monkeypatch,tmp_path):
         if calls:break
         time.sleep(.01)
     assert calls and calls[0][0]==sys.executable and calls[0][1:3]==['-m','interview_engine.cli']
+
+def test_default_database_is_stable_user_data_outside_repo_and_dist(monkeypatch,tmp_path):
+    import importlib
+    from pathlib import Path
+    from delivery_api import config
+    monkeypatch.delenv('DELIVERY_DATABASE_URL',raising=False);monkeypatch.delenv('DELIVERY_DB_PATH',raising=False);monkeypatch.setenv('XDG_DATA_HOME',str(tmp_path/'xdg'))
+    assert config.default_data_dir()==tmp_path/'xdg'/'requi-re'
+    assert config.default_data_dir()/'delivery.db' not in (tmp_path/'dist',Path.cwd())
