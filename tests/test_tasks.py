@@ -104,6 +104,7 @@ def test_process_runner_marks_input_prompts_distinct_from_work(tmp_path):
     assert any(e['kind']=='progress' and not e['payload'].get('waiting_input') for e in events)
     waiting=next(e for e in events if e['kind']=='waiting_input')
     assert waiting['payload']['waiting_input'] is True and waiting['message'].endswith('You:')
+    assert waiting['payload']['question']=='What matters?'
 
 
 def test_storage_factory_is_the_only_backend_selection_point(tmp_path):

@@ -24,6 +24,7 @@ _PHASE_HINTS = {
 class ProcessRunner:
     store: Storage
     processes: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
+    waiting: set[str] = field(default_factory=set)
 
     def _phase(self, text: str, fallback: str) -> str:
         lower = text.lower()
@@ -45,12 +46,15 @@ class ProcessRunner:
         last_line = time.monotonic()
         traceback_started = False
         missing_module: str | None = None
+        prompt_lines: list[str] = []
+        waiting_for_input = False
 
         async def heartbeat():
             while proc.returncode is None:
                 await asyncio.sleep(15)
-                self.store.add_event(task_id, "heartbeat", "Engine is still working", phase_key=phase,
-                                     payload={"silent_seconds": round(time.monotonic() - last_line)})
+                if task_id not in self.waiting:
+                    self.store.add_event(task_id, "heartbeat", "Engine is still working", phase_key=phase,
+                                         payload={"silent_seconds": round(time.monotonic() - last_line)})
 
         beat = asyncio.create_task(heartbeat())
         try:
@@ -64,6 +68,13 @@ class ProcessRunner:
                 for line in filter(None,(part.strip() for part in raw.decode(errors="replace").splitlines())):
                     last_line = time.monotonic()
                     waiting_input = line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line
+                    if waiting_input:
+                        prompt_lines.append(line)
+                        if not waiting_for_input:
+                            waiting_for_input=True;self.waiting.add(task_id)
+                            activity("engine.waiting_input","Engine is waiting for an answer",task_id=task_id,question=" ".join(prompt_lines)[:240])
+                    elif line and not _PROGRESS.search(line):
+                        prompt_lines=[line]
                     activity("engine.output","Engine raw output",task_id=task_id,stream="combined",line=line)
                     if line.startswith("Traceback (most recent call last):"): traceback_started=True
                     missing = _MISSING_MODULE.search(line)
@@ -75,7 +86,9 @@ class ProcessRunner:
                     total = int(match.group(4)) if match and match.group(4) else None
                     self.store.update_phase(task_id, phase, "running", detail=line, completed=completed, total=total)
                     payload={"completed":completed,"total":total}
-                    if waiting_input:payload["waiting_input"]=True
+                    if waiting_input:
+                        payload["waiting_input"]=True
+                        payload["question"]="\n".join(prompt_lines).removesuffix("\nYou:").removesuffix("You:").strip()
                     self.store.add_event(task_id,"waiting_input" if waiting_input else "progress",line,phase_key=phase,payload=payload)
             code = await proc.wait()
             if code == 0:
@@ -94,7 +107,7 @@ class ProcessRunner:
                 self.store.add_event(task_id,"error",error,phase_key=phase,payload={"exit_code":code,"module":missing_module,"cause":cause,"next":next_step})
             return code
         finally:
-            beat.cancel(); self.processes.pop(task_id, None)
+            beat.cancel(); self.processes.pop(task_id, None);self.waiting.discard(task_id)
 
     async def shutdown(self, grace_seconds: float = 3.0) -> None:
         active=list(self.processes.items())
@@ -119,3 +132,5 @@ class ProcessRunner:
         proc = self.processes.get(task_id)
         if not proc or not proc.stdin: raise RuntimeError("task is not waiting for input")
         proc.stdin.write((text + "\n").encode()); await proc.stdin.drain()
+        if task_id in self.waiting:
+            self.waiting.discard(task_id);activity("engine.input.resume","Answer received; engine resumed",task_id=task_id)

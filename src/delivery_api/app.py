@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import signal
+import threading
 import logging
 import time
 import os
@@ -64,20 +66,37 @@ if config.ADMIN_TOKEN == "dev-admin-token":
         "Set DELIVERY_ADMIN_TOKEN before exposing this service."
     )
 
+_stream_shutdown_events:set[asyncio.Event]=set()
+_previous_sigint=None
+_streams_closed_on_signal=0
+
 @app.on_event("startup")
 async def _start():
+    global _previous_sigint
     config.validate_auth_config()
     await jobs.start()
+    # Uvicorn waits for open HTTP connections before lifespan shutdown. Close
+    # SSE at signal time, then delegate to uvicorn's handler; a second SIGINT
+    # still reaches uvicorn and forces its standard immediate exit.
+    if threading.current_thread() is threading.main_thread() and signal.getsignal(signal.SIGINT) is not _shutdown_signal:
+        _previous_sigint=signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT,_shutdown_signal)
 
-_stream_shutdown_events:set[asyncio.Event]=set()
+def _shutdown_signal(signum,frame):
+    global _streams_closed_on_signal
+    count=len(_stream_shutdown_events);_streams_closed_on_signal+=count
+    activity("server.shutdown.signal","Server shutdown signal received",streams=count,signal="SIGINT")
+    for event in tuple(_stream_shutdown_events):event.set()
+    if callable(_previous_sigint):_previous_sigint(signum,frame)
 
 @app.on_event("shutdown")
 async def _stop():
-    activity("server.shutdown.signal","Server shutdown received",streams=len(_stream_shutdown_events),engines=len(runner.processes))
+    stream_count=_streams_closed_on_signal+len(_stream_shutdown_events)
+    activity("server.shutdown.signal","Server shutdown received",streams=stream_count,engines=len(runner.processes))
     for event in tuple(_stream_shutdown_events):event.set()
     await runner.shutdown()
     await jobs.stop()
-    activity("server.shutdown.complete","Server shutdown complete",streams_closed=len(_stream_shutdown_events))
+    activity("server.shutdown.complete","Server shutdown complete",streams_closed=stream_count)
 
 @app.get("/", include_in_schema=False)
 def index(): return FileResponse(WEB_DIR / "index.html")

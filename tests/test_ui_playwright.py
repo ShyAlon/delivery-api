@@ -322,14 +322,14 @@ def test_create_task_dialog_keyboard_submit_textarea_and_cancel(page,ui):
     page.goto(ui)
     page.get_by_role('button',name='+ New task').click()
     title=page.locator('#newform input[name="title"]')
-    assert title.evaluate('e=>document.activeElement===e')
+    page.wait_for_function("document.activeElement?.name==='title'");assert title.evaluate('e=>document.activeElement===e')
     title.fill('Keyboard-created task');title.press('Enter')
     page.get_by_text("This task hasn't started.").wait_for()
     assert page.get_by_role('heading',name='Keyboard-created task').is_visible()
 
     page.goto(ui);page.get_by_role('button',name='+ New task').click()
     title=page.locator('#newform input[name="title"]');brief=page.locator('#newform textarea[name="brief"]')
-    title.fill('Textarea keyboard task');brief.fill('Line one');brief.press('Enter');brief.type('Line two')
+    title.fill('Textarea keyboard task');brief.fill('Line one');brief.press('Enter');brief.fill('Line one\nLine two')
     assert brief.input_value()=='Line one\nLine two' and page.locator('#newform').is_visible()
     brief.press('Control+Enter')
     page.get_by_text("This task hasn't started.").wait_for()
@@ -358,9 +358,12 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     live['active_phase']='intent'
     live['events']=[{'id':i,'kind':'progress','message':f'Output line {i}','phase_key':'intent','payload':{},'ts':1720000000+i} for i in range(120)]
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.set_viewport_size({'width':1365,'height':800})
     page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
-    assert console.evaluate('e=>({h:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,max:getComputedStyle(e).maxHeight,scroll:e.scrollHeight>e.clientHeight})')=={'h':340,'min':'340px','max':'340px','scroll':True}
+    dimensions=console.evaluate('e=>({h:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,max:getComputedStyle(e).maxHeight,scroll:e.scrollHeight>e.clientHeight})')
+    assert dimensions=={'h':144,'min':'140px','max':'220px','scroll':True}
     composer=page.locator('#answerform');assert composer.is_visible()
+    assert composer.bounding_box()['y']+composer.bounding_box()['height'] <= 800
     indicator=page.locator('.live-indicator.working');assert indicator.get_by_text('Working · Start').is_visible()
     assert indicator.locator('i').evaluate("e=>getComputedStyle(e).animationName")=='live-halo'
     page.screenshot(path='/downloads/requi-re-live-output.png',full_page=True)
@@ -371,5 +374,19 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     console.evaluate('e=>e.scrollTop=e.scrollHeight');page.wait_for_timeout(50)
     page.evaluate("liveSource.emit({kind:'progress',message:'new while pinned',phase_key:'conops',payload:{},ts:1720000201})")
     assert console.evaluate('e=>Math.abs(e.scrollHeight-e.scrollTop-e.clientHeight)<2')
-    page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true},ts:1720000202})")
+    page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true,question:'Which users need this?\\nWhat outcome matters most?'},ts:1720000202})")
     assert page.locator('.live-indicator.waiting').get_by_text('Waiting for your answer').is_visible()
+    question=page.locator('#currentquestion');assert question.is_visible() and question.locator('p').inner_text()=='Which users need this?\nWhat outcome matters most?'
+    page.route('**/api/tasks/live/answer',lambda route:route.fulfill(json={'status':'accepted'}))
+    composer.locator('textarea').fill('Caregivers');composer.locator('button').click()
+    question.wait_for(state='hidden');assert question.is_hidden()
+
+def test_answer_failure_preserves_text_and_recovers_button(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live/answer',lambda route:route.fulfill(status=503,json={'detail':{'error':'Answer could not be sent.','cause':'Engine input is unavailable.','next':'Retry when the engine is waiting.'}}))
+    page.goto(ui+'/tasks/live/view');answer=page.locator('#answerform textarea');button=page.locator('#answerform button')
+    answer.fill('Do not lose this answer');button.click()
+    page.get_by_text('Answer could not be sent.',exact=False).wait_for()
+    assert answer.input_value()=='Do not lose this answer' and button.is_enabled() and button.inner_text()=='Send answer'

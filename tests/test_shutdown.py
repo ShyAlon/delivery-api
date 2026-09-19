@@ -36,8 +36,9 @@ uvicorn.run(app,host="127.0.0.1",port={port},log_level="warning")
             if server.poll() is not None:raise AssertionError(server.stderr.read())
             time.sleep(.05)
         assert pidfile.exists()
-        stream=subprocess.Popen([sys.executable,'-c',f"import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:{port}/api/tasks/shutdown-live/stream');print(r.readline())"],env=env)
-        time.sleep(.4);started=time.monotonic();server.send_signal(signal.SIGINT)
+        stream=subprocess.Popen([sys.executable,'-c',f"import time,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:{port}/api/tasks/shutdown-live/stream');r.readline();time.sleep(120)"],env=env)
+        time.sleep(.4);assert stream.poll() is None
+        started=time.monotonic();server.send_signal(signal.SIGINT)
         server.wait(timeout=7)
         assert time.monotonic()-started<7
         child=int(pidfile.read_text())
@@ -45,7 +46,7 @@ uvicorn.run(app,host="127.0.0.1",port={port},log_level="warning")
         except ProcessLookupError:pass
         else:raise AssertionError(f'engine child {{child}} survived server shutdown')
         log=(server.stdout.read()+server.stderr.read())
-        assert 'server.shutdown.signal' in log and 'engine.shutdown.signal' in log and 'server.shutdown.complete' in log
+        assert 'server.shutdown.signal' in log and "streams='1'" in log and 'engine.shutdown.signal' in log and 'server.shutdown.complete' in log and "streams_closed='1'" in log
     finally:
         if stream and stream.poll() is None:stream.kill();stream.wait()
         if server.poll() is None:server.kill();server.wait()
