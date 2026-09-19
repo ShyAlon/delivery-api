@@ -212,3 +212,10 @@ def test_artifacts_folder_setting_validates_and_reports_sessions(page,ui):
     page.get_by_role("button",name="Validate & load sessions").click()
     page.get_by_text("Artifacts folder could not be loaded.").wait_for()
     assert page.get_by_text("Likely cause:",exact=False).is_visible()
+
+def test_dashboard_routes_local_loading_to_session_folder_not_file_picker(page,ui):
+    page.goto(ui)
+    assert page.get_by_role("link",name="Load sessions").is_visible()
+    assert page.get_by_role("button",name="Import run").count()==0
+    page.get_by_role("link",name="Load sessions").click()
+    page.get_by_role("button",name="Artifacts folder").wait_for()
