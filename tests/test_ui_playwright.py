@@ -112,7 +112,8 @@ def test_not_started_running_and_done_pages(page, ui):
     assert page.get_by_text("Start engine · wiring next").count()==0
     page.goto(ui + "/tasks/live/view")
     page.get_by_text("Live engine output").wait_for();assert page.get_by_text("Live engine output").is_visible()
-    assert page.get_by_text("Generating CONOPS option 2/3").count() == 1
+    assert page.locator("#console").get_by_text("Generating CONOPS option 2/3").count() == 1
+    assert page.locator("#progressfeed").get_by_text("Generating CONOPS option 2/3").count() == 1
     page.goto(ui + "/tasks/done/view")
     page.get_by_text("Artifacts", exact=True).wait_for();assert page.get_by_text("Artifacts", exact=True).is_visible()
     assert page.get_by_text("Architecture overview").is_visible()
@@ -369,6 +370,8 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     assert console.bounding_box()['y']+console.bounding_box()['height'] <= 800
     indicator=page.locator('.live-indicator.working');assert indicator.get_by_text('Working · Start').is_visible()
     assert indicator.locator('i').evaluate("e=>getComputedStyle(e).animationName")=='live-halo'
+    progress=page.locator('#progressfeed');assert progress.locator('.progress-item').count()==1
+    first_stamp=progress.locator('.progress-item time').first.inner_text();assert '2024' in first_stamp and any(zone in first_stamp for zone in ('GMT','UTC','IDT','IST'))
     page.screenshot(path='/downloads/requi-re-live-output.png',full_page=True)
 
     console.evaluate('e=>e.scrollTop=60');page.wait_for_timeout(50);before=console.evaluate('e=>e.scrollTop')
@@ -377,6 +380,8 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     console.evaluate('e=>e.scrollTop=e.scrollHeight');page.wait_for_timeout(50)
     page.evaluate("liveSource.emit({kind:'progress',message:'new while pinned',phase_key:'conops',payload:{},ts:1720000201})")
     assert console.evaluate('e=>Math.abs(e.scrollHeight-e.scrollTop-e.clientHeight)<2')
+    assert progress.locator('.progress-item',has_text='new while pinned').is_visible()
+    assert progress.locator('.progress-item').count()==1
     page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true,question:'Which users need this?\\nWhat outcome matters most?'},ts:1720000202})")
     assert page.locator('.live-indicator.waiting').get_by_text('Waiting for your answer').is_visible()
     assert question.is_visible() and question.locator('p').inner_text()=='Which users need this?\nWhat outcome matters most?'
