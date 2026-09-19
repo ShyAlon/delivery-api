@@ -181,6 +181,7 @@ def test_task_filter_sort_rename_and_delete(page,ui):
 
 
 def test_session_discovery_bundle_and_trace_diagram(page,ui):
+    page.add_init_script("""Object.defineProperty(navigator,'clipboard',{value:{_text:'',writeText(v){this._text=v;return Promise.resolve()},readText(){return Promise.resolve(this._text)}}})""")
     page.goto(ui+"/sessions")
     page.get_by_text("Family task evidence",exact=True).click()
     assert page.url.endswith("/sessions/golden-1/interview")
@@ -192,12 +193,23 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     assert pills["specs"]["y"] > pills["tests"]["y"] > pills["reviews"]["y"] > pills["oracle"]["y"]
     assert pills["interview"]["x"] < pills["needs"]["x"] < pills["specs"]["x"] < pills["tests"]["x"] < pills["oracle"]["x"]
     assert page.locator(".bundle-panel .json-view").count()==0
+    answer=page.locator('#interview-gates .inspect-json',has_text='Interviewee Answer')
+    assert answer.is_visible();answer.click()
+    dialog=page.get_by_role("dialog",name="Interviewee Answer");assert dialog.is_visible()
+    dialog.get_by_role("button",name="Copy JSON").click()
+    assert dialog.get_by_role("button",name="JSON copied").is_visible()
+    assert '"confidence": "high"' in page.evaluate("navigator.clipboard.readText()")
+    page.get_by_role("button",name="Close").click()
     assert page.locator('.phase-pill.status-done').count()==8
     for status in ("done","error","warning","not_started","in_progress"):
         assert page.locator(f'.phase-pill.status-{status}').evaluate_all("els=>els.every(e=>getComputedStyle(e).getPropertyValue('--phase-status').trim()!=='')")
     # Every pill is a real phase page, and route refresh is stable.
+    page.evaluate("window.__spaToken=Math.random()")
+    body_handle=page.evaluate("window.__spaToken")
     page.get_by_role("link",name="Needs ↗").click()
     assert page.url.endswith("/sessions/golden-1/needs")
+    assert page.evaluate("window.__spaToken") == body_handle
+    page.locator('[data-panel="interview"]').wait_for(state="hidden")
     assert page.locator('[data-panel="needs"]').evaluate("e=>({cls:e.className,path:location.pathname})")=={"cls":"bundle-panel","path":"/sessions/golden-1/needs"}
     assert not page.get_by_text("Intent model").is_visible()
     page.reload();assert page.get_by_role("link",name="Needs ↗").evaluate("e=>e.classList.contains('active')")
@@ -211,8 +223,8 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     assert page.url.endswith("/sessions/golden-1/architecture")
     page.get_by_text("Build a PWA").wait_for();assert page.get_by_text("Build a PWA").is_visible()
     adr=page.locator('.inspect-item',has_text='ADR-1');adr.click()
-    item_dialog=page.get_by_role("dialog",name="ADR-1 · Progressive web app")
-    assert item_dialog.get_by_text("Alternatives considered").is_visible()
+    item_dialog=page.get_by_role("dialog",name="ADR 1 · Progressive Web App")
+    item_dialog.get_by_text("Alternatives considered").wait_for();assert item_dialog.get_by_text("Alternatives considered").is_visible()
     for text in ("Native","Deeper device access","Two codebases","Outside first release"):
         assert item_dialog.get_by_text(text,exact=text=="Native").is_visible()
     assert item_dialog.locator('.json-view').count()==0
@@ -229,6 +241,7 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
         assert page.get_by_role("link",name={"specs":"Module specs ↗","tests":"Tests ↗","reviews":"Reviews + gates ↗","oracle":"Oracle ↗"}[route]).evaluate("e=>e.classList.contains('active')")
     # Compact sticky header sits below global nav and content starts below it.
     head=page.locator('.detail-head.page-head');panel=page.locator('[data-panel="oracle"]')
+    assert head.evaluate("e=>e.parentElement.classList.contains('bundle-workspace')")
     assert head.bounding_box()["height"] < 150
     assert panel.bounding_box()["y"] >= head.bounding_box()["y"]+head.bounding_box()["height"]
     page.screenshot(path="/downloads/vmodel-phase-page-v-nav.png",full_page=True)
