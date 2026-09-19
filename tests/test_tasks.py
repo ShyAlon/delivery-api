@@ -88,7 +88,8 @@ def test_process_runner_streams_cli_output_and_known_count(tmp_path):
     assert asyncio.run(go()) == 0
     task = isolated.task(task_id)
     srs = next(p for p in task["phases"] if p["phase_key"] == "srs")
-    assert srs["state"] == "done"
+    assert srs["state"] == "awaiting_approval"
+    assert isolated.task(task_id)["state"] == "waiting_gate"
     event = next(e for e in isolated.events(task_id) if e["kind"] == "progress")
     assert event["payload"] == {"completed": 4, "total": 9}
 
@@ -480,3 +481,42 @@ for question in questions:
     asyncio.run(asyncio.wait_for(go(),5))
     questions=[e['payload']['question'] for e in store.events(task_id) if e['kind']=='waiting_input']
     assert questions==['First question?','Second question?','Third question?']
+
+def test_generated_phase_waits_yellow_until_founder_approval(tmp_path):
+    from delivery_api.store import SQLiteStore
+    s=SQLiteStore(str(tmp_path/'approval.db'));tid=s.create_task('Approval boundary')['task_id']
+    s.update_phase(tid,'conops','running',detail='Generating concept options')
+    s.update_phase(tid,'conops','awaiting_approval',detail='Generated; waiting for founder approval')
+    gate=s.wait_at_gate(tid,'conops');task=s.task(tid)
+    assert gate['state']=='waiting' and task['state']=='waiting_gate'
+    assert next(p for p in task['phases'] if p['phase_key']=='conops')['state']=='awaiting_approval'
+    assert s.rerun_prerequisite(tid,'needs')['phase_key']=='intent'
+    s.update_phase(tid,'intent','approved',detail='Founder approved')
+    assert s.rerun_prerequisite(tid,'needs')['phase_key']=='conops'
+    s.decide_gate(tid,'gate-conops','approve',selected_option='Approve Concept of operations',actor='founder@example.com')
+    phase=next(p for p in s.task(tid)['phases'] if p['phase_key']=='conops')
+    assert phase['state']=='approved' and phase['detail']=='Founder approved'
+    audit=next(a for a in s.audit_entries(tid) if a['action']=='gate.approve')
+    assert audit['actor']=='founder@example.com' and audit['detail']['phase']=='conops' and audit['detail']['approved_at']
+
+
+def test_open_gate_is_explicit_audited_bypass(tmp_path):
+    from delivery_api.store import SQLiteStore
+    s=SQLiteStore(str(tmp_path/'bypass.db'));tid=s.create_task('Policy bypass')['task_id']
+    s.update_phase(tid,'intent','awaiting_approval',detail='Generated')
+    s.set_gate_open(tid,'gate-intent',True,actor='admin@example.com')
+    assert s.wait_at_gate(tid,'intent') is None
+    assert next(p for p in s.task(tid)['phases'] if p['phase_key']=='intent')['state']=='approved'
+    assert any(a['action']=='gate.bypassed' and a['detail']['provenance']=='explicit open-gate policy' for a in s.audit_entries(tid))
+
+
+def test_interview_preview_does_not_color_downstream_requirements(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    s=SQLiteStore(str(tmp_path/'routing.db'));tid=s.create_task('No premature requirements')['task_id']
+    script="print('[17:00:00] -> Building scope and framing (phase 2/4)',flush=True);print('[17:00:01] ok Drafting requirement preview (phase 3/4)',flush=True)"
+    asyncio.run(ProcessRunner(s).run(tid,[sys.executable,'-c',script],cwd=tmp_path))
+    task=s.task(tid)
+    assert next(p for p in task['phases'] if p['phase_key']=='srs')['state']=='pending'
+    assert all(e['phase_key']=='intent' for e in s.events(tid) if e['kind']=='progress')

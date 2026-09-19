@@ -15,9 +15,13 @@ from .observability import event as activity
 _MISSING_MODULE = re.compile(r"ModuleNotFoundError: No module named [\'\"]([^\'\"]+)[\'\"]")
 _PROGRESS = re.compile(r"(?:stage '([^']+)' call|([0-9]+)s elapsed|([0-9]+)/([0-9]+))", re.I)
 _PHASE_HINTS = {
-    "interview": "intent", "distill": "intent", "intent": "intent", "conops": "conops",
-    "needs": "needs", "srs": "srs", "requirement": "srs", "architecture": "architecture",
-    "item": "specs", "spec": "specs", "test": "tests", "verification": "tests",
+    "conops": "conops", "concept option": "conops", "operational scenario": "conops",
+    "interview": "intent", "distill": "intent", "intent": "intent", "coverage": "intent",
+    "stakeholder need": "intent", "scope": "intent", "requirement preview": "intent",
+    # Only these explicit labels belong to later executables. Interview-engine
+    # preview prose must never paint downstream SRS/spec/test phases.
+    "stage 'srs'": "srs", "stage 'architecture'": "architecture",
+    "stage 'items'": "specs", "stage 'tests'": "tests", "stage 'verification'": "tests",
 }
 
 @dataclass
@@ -28,7 +32,7 @@ class ProcessRunner:
 
     def _phase(self, text: str, fallback: str) -> str:
         lower = text.lower()
-        return next((phase for word, phase in _PHASE_HINTS.items() if word in lower), fallback)
+        return next((phase for word, phase in sorted(_PHASE_HINTS.items(), key=lambda item: -len(item[0])) if word in lower), fallback)
 
     async def run(self, task_id: str, command: list[str], *, cwd: Path, phase: str = "intent",
                   env: dict[str, str] | None = None) -> int:
@@ -84,7 +88,12 @@ class ProcessRunner:
                     self.store.add_event(task_id,"waiting_input" if waiting_input else "progress",line,phase_key=phase,payload=payload)
             code = await proc.wait()
             if code == 0:
-                self.store.update_phase(task_id, phase, "done", detail="Engine stage complete")
+                current=self.store.task(task_id)
+                phase_row=next(p for p in current["phases"] if p["phase_key"]==phase)
+                if phase_row["state"] != "approved":
+                    self.store.update_phase(task_id, phase, "awaiting_approval", detail="Generated; waiting for founder approval")
+                    gate=self.store.wait_at_gate(task_id,phase)
+                    self.store.add_event(task_id,"gate","Generated artifact is waiting for founder approval",phase_key=phase,payload={"gate_key":gate["gate_key"] if gate else None})
                 self.store.add_event(task_id, "complete", "Engine process completed", phase_key=phase)
             else:
                 if missing_module:

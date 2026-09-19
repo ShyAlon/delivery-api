@@ -134,6 +134,9 @@ def test_gate_open_waiting_halo_and_decision_modal(page, ui):
     waiting=page.locator('.gate.waiting');waiting.wait_for()
     assert waiting.count()==1 and waiting.is_visible()
     assert page.locator('.gate.open').count()==1
+    awaiting=page.locator('.phase.awaiting_approval');assert awaiting.count()==1
+    palette=awaiting.locator('.dot').evaluate("e=>({background:getComputedStyle(e).backgroundColor,border:getComputedStyle(e).borderTopColor})")
+    assert palette['background']=='rgb(229, 182, 61)' and palette['border']=='rgb(229, 182, 61)'
     page.screenshot(path="/downloads/vmodel-gates-open-and-waiting.png", full_page=True)
     page.reload()
     page.locator('.gate.waiting').click()
