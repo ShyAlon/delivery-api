@@ -558,3 +558,17 @@ def test_founder_decision_outside_click_dismisses_and_persistent_bar_reopens(pag
     launch=page.locator('#opendecision');assert launch.is_visible()
     assert page.locator('.live-indicator.waiting').get_by_text('Waiting for your answer').is_visible()
     launch.click();assert page.locator('.decision-dialog').is_visible()
+
+def test_decision_ready_bar_is_first_and_sticky_during_page_scroll(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','title':'Choose the operating concept','prompt':'Choose','options':[{'value':'1','label':'A'},{'value':'2','label':'B'}]}
+    live['events']=[{'id':1,'kind':'founder_decision','message':'Choose','phase_key':'conops','payload':{'waiting_input':True,'question':'Choose','decision':decision},'ts':1720000300}]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.set_viewport_size({'width':1390,'height':620});page.goto(ui+'/tasks/live/view');page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape')
+    launch=page.locator('#opendecision');panel=page.locator('.detail-layout>div>.panel');assert launch.is_visible()
+    assert panel.evaluate("e=>e.firstElementChild.nextElementSibling?.id==='opendecision'")
+    assert launch.evaluate("e=>getComputedStyle(e).position")=='sticky'
+    page.evaluate('window.scrollTo(0,document.body.scrollHeight)');page.wait_for_timeout(100)
+    box=launch.bounding_box();assert box and box['y']>=80 and box['y']<160
+    assert launch.get_by_text('Required to continue',exact=False).is_visible()
+    launch.click();assert page.locator('.decision-dialog').is_visible()
+    page.screenshot(path='/downloads/decision-ready-sticky.png',full_page=False)
