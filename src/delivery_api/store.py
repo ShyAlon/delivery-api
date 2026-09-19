@@ -359,9 +359,19 @@ class SQLiteStore:
             if state == "running":
                 # A task has one active execution locus. Earlier generated work
                 # may wait for approval, but must not remain pulsing blue.
-                self._db.execute(
-                    "UPDATE phases SET state='awaiting_approval',detail=CASE WHEN detail='' THEN 'Generated; waiting for founder approval' ELSE detail END,completed_at=? "
-                    "WHERE task_id=? AND phase_key<>? AND state='running'",(now,task_id,phase_key))
+                active_index=next(i for i,(key,_) in enumerate(PHASES) if key==phase_key)
+                earlier=[key for key,_ in PHASES[:active_index]]
+                later=[key for key,_ in PHASES[active_index+1:]]
+                if earlier:
+                    marks=','.join('?' for _ in earlier)
+                    self._db.execute(
+                        f"UPDATE phases SET state='awaiting_approval',detail=CASE WHEN detail='' THEN 'Generated; waiting for founder approval' ELSE detail END,completed_at=? "
+                        f"WHERE task_id=? AND phase_key IN ({marks}) AND state='running'",(now,task_id,*earlier))
+                if later:
+                    marks=','.join('?' for _ in later)
+                    self._db.execute(
+                        f"UPDATE phases SET state='pending',detail='Blocked on upstream approval',completed=0,total=NULL,started_at=NULL,completed_at=NULL "
+                        f"WHERE task_id=? AND phase_key IN ({marks}) AND state IN ('running','awaiting_approval')",(task_id,*later))
             self._db.execute(
                 "UPDATE phases SET state=?,detail=?,completed=?,total=?,started_at=?,completed_at=? "
                 "WHERE task_id=? AND phase_key=?",

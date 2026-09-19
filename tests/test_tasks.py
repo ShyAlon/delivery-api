@@ -653,3 +653,12 @@ def test_only_active_phase_pulses_blue_and_waiting_prompt_does_not_store_you(tmp
     asyncio.run(go())
     conops=next(p for p in store.task(tid)['phases'] if p['phase_key']=='conops')
     assert conops['detail']!='You:'
+
+def test_active_upstream_phase_resets_false_downstream_waiting_state(tmp_path):
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'downstream.db'));tid=store.create_task('Reset false downstream')['task_id']
+    store.update_phase(tid,'specs','running',detail='You:')
+    store.update_phase(tid,'specs','awaiting_approval',detail='You:')
+    store.update_phase(tid,'intent','running',detail='Waiting for founder approval')
+    task=store.task(tid);specs=next(p for p in task['phases'] if p['phase_key']=='specs')
+    assert specs['state']=='pending' and specs['detail']=='Blocked on upstream approval'

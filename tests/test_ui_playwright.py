@@ -572,3 +572,16 @@ def test_decision_ready_bar_is_first_and_sticky_during_page_scroll(page,ui):
     assert launch.get_by_text('Required to continue',exact=False).is_visible()
     launch.click();assert page.locator('.decision-dialog').is_visible()
     page.screenshot(path='/downloads/decision-ready-sticky.png',full_page=False)
+
+def test_answered_decision_clears_and_binary_approval_uses_same_dialog(page,ui):
+    page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();concept={'type':'founder_decision','title':'Old concept decision','prompt':'Choose','options':[{'value':'1','label':'A'},{'value':'2','label':'B'}]}
+    live['events']=[{'id':10,'kind':'founder_decision','message':'Choose','phase_key':'conops','payload':{'waiting_input':True,'decision':concept},'ts':1720000000},{'id':11,'kind':'answer','message':'You: 1 - reason','phase_key':'conops','payload':{'transcript':True},'ts':1720000001}]
+    submitted=[];page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.route('**/api/tasks/live/answer',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
+    page.goto(ui+'/tasks/live/view');page.locator('#console').wait_for();assert page.locator('#opendecision').count()==0 and page.locator('.decision-dialog').count()==0
+    approval={'type':'founder_decision','decision_id':'intent-approval','title':'Approve the intent model','prompt':'Approve this intent model?','rationale_required':False,'answer_format':'<value>','options':[{'value':'y','label':'Approve','summary':'Continue'},{'value':'n','label':'Reject','summary':'Stop'}]}
+    page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"intent",payload:{waiting_input:true,decision},ts:1720000300})',approval)
+    dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.get_by_text('Approve',exact=True).is_visible() and dialog.get_by_text('Reject',exact=True).is_visible();assert dialog.locator('.decision-why').is_hidden()
+    dialog.get_by_text('Approve',exact=True).click();dialog.locator('.decision-submit').click();page.locator('.decision-dialog').wait_for(state='detached');assert submitted==[{'answer':'y'}]
+    assert page.locator('#opendecision').count()==0 and page.locator('.live-indicator').get_by_text('Decision received',exact=False).is_visible()
+    page.screenshot(path='/downloads/typed-intent-approval.png',full_page=True)
