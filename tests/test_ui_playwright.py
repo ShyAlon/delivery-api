@@ -25,6 +25,8 @@ def ui(tmp_path_factory):
     artifacts=root/"artifacts";session=artifacts/"golden-1";(session/"interview").mkdir(parents=True);(session/"spec").mkdir()
     import json
     (session/"interview/intent_model.json").write_text(json.dumps({"problem_statement":"Family task evidence"}))
+    partial=artifacts/"partial-interview";(partial/"interview").mkdir(parents=True)
+    (partial/"interview/intent_model.json").write_text(json.dumps({"problem_statement":"Partial discovery evidence"}))
     (session/"interview/audit.jsonl").write_text("\n".join([json.dumps({"event":"gate.auto_decision","gate":"concept","action":"select"}),json.dumps({"event":"interviewee.answer","answer":{"text":"Caregivers need a calm shared view","confidence":"high"}})])+"\n")
     (session/"spec/hands-free-run.json").write_text(json.dumps({"completed_at":"2026-09-19T08:00:00Z"}))
     (session/"spec/bundle-integrity.json").write_text(json.dumps({"files_checked":14,"diagnostics":[],"hashes":{"needs.json":"abc"}}))
@@ -83,13 +85,17 @@ def test_dashboard_draws_v_and_all_task_states(page, ui):
     page.locator(".task").first.wait_for()
     assert page.locator(".task").count() == 4
     assert page.locator(".v-map svg").count() == 4
+    assert page.get_by_text("Partial discovery evidence",exact=True).is_visible()
+    partial=page.locator('.session-card',has_text='Partial discovery evidence')
+    assert partial.locator('.session-v .status-done').count()==1
+    assert partial.locator('.session-v .status-not_started').count()==7
     assert page.get_by_text("In progress").count() == 1
     assert page.get_by_text("Complete").count() == 1
 
 
 def test_not_started_running_and_done_pages(page, ui):
     page.goto(ui + "/tasks/empty/view")
-    assert page.get_by_text("This task hasn't started.").is_visible()
+    page.get_by_text("This task hasn't started.").wait_for();assert page.get_by_text("This task hasn't started.").is_visible()
     page.goto(ui + "/tasks/live/view")
     assert page.get_by_text("Live engine output").is_visible()
     assert page.get_by_text("Generating CONOPS option 2/3").count() == 1
@@ -142,7 +148,11 @@ def test_basic_auth_browser_signup_signin_persists_and_logs(tmp_path):
             except Exception:time.sleep(.1)
         with sync_playwright() as p:
             browser=p.chromium.launch(headless=True);page=browser.new_page();page.goto(base+"/sessions")
-            page.get_by_text("Welcome to Vector",exact=True).wait_for();page.get_by_role("button",name="Create account").click()
+            page.get_by_text("Welcome to Vector",exact=True).wait_for()
+            page.evaluate("window.__guardToken=Math.random()")
+            page.get_by_role("link",name="All sessions").click()
+            assert page.evaluate("window.__guardToken") is not None and page.url==base+"/sessions"
+            page.get_by_role("button",name="Create account").click()
             email=page.locator('input[name="username"]');email.fill('partial');assert page.locator('#emailstatus').inner_text()==''
             email.blur();assert page.locator('#emailstatus').inner_text()=='Enter a complete email address.'
             email.fill('shy@example.com');page.get_by_text('Email is available.').wait_for()
