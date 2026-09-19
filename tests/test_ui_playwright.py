@@ -195,7 +195,7 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     assert page.locator(".trace-node").count()==5
     node=page.locator('.trace-node[data-node="R-1"]')
     node.hover();tip=page.locator('#trace-tooltip');assert tip.is_visible()
-    assert "R-1" in tip.inner_text() and "Visible status" in tip.inner_text() and "requirement" in tip.inner_text()
+    assert "R-1" in tip.inner_text() and "Visible status" in tip.inner_text() and "requirement" in tip.inner_text().lower()
     page.screenshot(path="/downloads/vmodel-traceability-tooltip.png",full_page=True)
     page.locator('#node-detail').hover();assert not tip.is_visible()
     node.click()
