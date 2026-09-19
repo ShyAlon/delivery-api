@@ -25,6 +25,7 @@ from .budget import BudgetExceeded, check_global_budget, check_run_budget
 from . import auth
 from .jobs import JobQueue
 from .runner import ProcessRunner
+from .orchestrator import PhaseOrchestrator
 from .engine_runtime import EngineRuntimeError, resolve_engine_runtime, discover_engine_runtimes, save_python, saved_python
 from .store import create_store
 from .simulation import Simulation, ImportValidationError
@@ -36,6 +37,8 @@ app = FastAPI(title="Requi.re API", version="0.2.0")
 store = (__import__('delivery_api.store',fromlist=['TursoReplicaStore']).TursoReplicaStore(str(config.local_database_path()),config.TURSO_DATABASE_URL,config.TURSO_AUTH_TOKEN,config.TURSO_SYNC_INTERVAL) if config.TURSO_DATABASE_URL else create_store(config.DATABASE_URL))
 jobs = JobQueue(store)
 runner = ProcessRunner(store)
+orchestrator = PhaseOrchestrator(store,runner)
+runner.on_complete = orchestrator.continue_after
 simulation = Simulation(store)
 app.state.store = store
 log = logging.getLogger("delivery_api.http")
@@ -98,7 +101,7 @@ async def _resume_interrupted_interviews()->None:
             continue
         async def resume(task_id=task["task_id"],session=session,runtime=runtime,engine_dir=engine_dir,built=built):
             activity("engine.resume","Resuming interrupted interview from checkpoint",task_id=task_id,session=session)
-            await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})})
+            await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"))
         asyncio.create_task(resume())
 
 
@@ -370,7 +373,7 @@ async def start_task_engine(task_id:str,a:auth.Actor=Depends(auth.require_actor)
     activity("engine.preflight.ok","Interview engine runtime resolved",task_id=task_id,actor=a.label,python=str(engine_python),checked="; ".join(f"{path}={'ok' if ok else 'missing'}" for path,ok in runtime.attempts))
     activity("engine.start","Interview engine launch requested",task_id=task_id,actor=a.label,python=str(engine_python))
     async def execute():
-        try:await runner.run(task_id,[str(engine_python),"-m","interview_engine.cli",idea],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built_runtime else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})})
+        try:await runner.run(task_id,[str(engine_python),"-m","interview_engine.cli",idea],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built_runtime else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"))
         except Exception as e:
             store.update_phase(task_id,"intent","failed",detail=f"Interview engine could not start: {type(e).__name__}: {str(e)[:180]}")
             store.add_event(task_id,"error","Interview engine could not start",phase_key="intent",payload={"cause":str(e)[:300],"next":"Check run.log and the interview-engine installation, then retry."})
@@ -383,8 +386,9 @@ class InterviewAnswer(BaseModel):answer:str=Field(min_length=1,max_length=8000)
 async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends(auth.require_actor)):
     try:await runner.send_input(task_id,body.answer)
     except RuntimeError as e:raise HTTPException(409,{"error":"The interview is not waiting for an answer.","cause":str(e),"next":"Wait for the next question in live output, then answer."})
-    store.add_event(task_id,"answer",f"You: {body.answer}",phase_key="intent",payload={"actor":a.label,"character_count":len(body.answer),"transcript":True})
-    activity("engine.answer","Interview answer submitted",task_id=task_id,actor=a.label,character_count=len(body.answer))
+    active_phase=(store.task(task_id) or {}).get("active_phase") or "intent"
+    store.add_event(task_id,"answer",f"You: {body.answer}",phase_key=active_phase,payload={"actor":a.label,"character_count":len(body.answer),"transcript":True})
+    activity("engine.answer","Founder answer submitted",task_id=task_id,phase=active_phase,actor=a.label,character_count=len(body.answer))
     return {"status":"accepted"}
 
 @app.get("/api/tasks/{task_id}")
@@ -488,8 +492,13 @@ class GateDecision(BaseModel):
     edited_text: str|None=None
     steer: str|None=None
 @app.post("/api/tasks/{task_id}/gates/{gate_key}/decide")
-def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,a:auth.Actor=Depends(auth.require_actor)):
-    try:return store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label)
+async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,a:auth.Actor=Depends(auth.require_actor)):
+    try:
+        gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label)
+        phase=gate["after_phase"]
+        if req.action=="redo":asyncio.create_task(orchestrator.launch(task_id,phase,redo=True))
+        else:asyncio.create_task(orchestrator.continue_after(task_id,phase))
+        return gate
     except KeyError:raise HTTPException(404,"gate not found")
     except ValueError as e:raise HTTPException(400,{"error":str(e),"cause":"The gate decision is incomplete.","next":"Choose, edit, or explain what the redo should change."})
 

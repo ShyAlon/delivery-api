@@ -662,3 +662,78 @@ def test_active_upstream_phase_resets_false_downstream_waiting_state(tmp_path):
     store.update_phase(tid,'intent','running',detail='Waiting for founder approval')
     task=store.task(tid);specs=next(p for p in task['phases'] if p['phase_key']=='specs')
     assert specs['state']=='pending' and specs['detail']=='Blocked on upstream approval'
+
+def test_protocol_envelope_never_reappears_in_following_you_question(tmp_path):
+    import asyncio,json,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    payload={"type":"founder_decision","decision_id":"safe","title":"Safe","prompt":"Approve the clean intent?","options":[{"value":"y","label":"Yes"},{"value":"n","label":"No"}]}
+    script=f'import json;print("REQUIRE_EVENT "+json.dumps({payload!r}),flush=True);print("You: ",end="",flush=True);input()'
+    store=SQLiteStore(str(tmp_path/'clean.db'));tid=store.create_task('Clean protocol')['task_id'];runner=ProcessRunner(store)
+    async def go():
+        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path))
+        for _ in range(100):
+            if tid in runner.waiting:break
+            await asyncio.sleep(.01)
+        await runner.send_input(tid,'y');await job
+    asyncio.run(go())
+    visible=' '.join(e['payload'].get('question','') for e in store.events(tid))
+    assert 'REQUIRE_EVENT' not in visible and 'founder_decision' not in visible
+
+
+def test_runner_can_close_engine_approved_phases(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'complete.db'));tid=store.create_task('Complete start')['task_id']
+    asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c','print("done")'],cwd=tmp_path,completion_phases=('intent','conops')))
+    phases={p['phase_key']:p for p in store.task(tid)['phases']}
+    assert phases['intent']['state']=='approved' and phases['conops']['state']=='approved'
+
+
+def test_orchestrator_phase_plan_launches_next_bounded_process(monkeypatch,tmp_path):
+    import asyncio,json
+    from delivery_api.orchestrator import PhaseOrchestrator,PLAN
+    from delivery_api.store import SQLiteStore
+    assert PLAN==(("needs","needs"),("srs","srs"),("architecture","architecture"),("specs","items"),("tests","tests"))
+    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
+    store=SQLiteStore(str(tmp_path/'plan.db'));tid=store.create_task('Planned product')['task_id'];store.add_event(tid,'progress','session: session-1',phase_key='intent')
+    interview=tmp_path/'artifacts'/'session-1'/'interview';interview.mkdir(parents=True)
+    (interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}));(interview/'conops.json').write_text('{}')
+    class Runner:
+        calls=[]
+        async def run(self,*a,**kw):self.calls.append((a,kw));return 0
+    runner=Runner();orch=PhaseOrchestrator(store,runner)
+    asyncio.run(orch.continue_after(tid,'conops'))
+    cmd=runner.calls[0][0][1]
+    assert runner.calls[0][1]['phase']=='needs' and cmd[-2:]==['--to','needs']
+    assert str(interview/'intent_model.json') in cmd and str(interview/'conops.json') in cmd
+
+
+def test_orchestrator_architecture_baseline_is_typed_decision(monkeypatch,tmp_path):
+    import asyncio,json
+    from delivery_api.orchestrator import PhaseOrchestrator
+    from delivery_api.store import SQLiteStore
+    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
+    store=SQLiteStore(str(tmp_path/'baseline.db'));tid=store.create_task('New Product')['task_id'];store.add_event(tid,'progress','session: s2',phase_key='intent')
+    interview=tmp_path/'artifacts'/'s2'/'interview';interview.mkdir(parents=True);(interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}));(interview/'conops.json').write_text('{}')
+    class Runner:
+        calls=[]
+        async def request_decision(self,task_id,phase,decision):
+            assert phase=='architecture' and decision['decision_id']=='system-baseline';return 'greenfield'
+        async def run(self,*a,**kw):self.calls.append((a,kw));return 0
+    runner=Runner();asyncio.run(PhaseOrchestrator(store,runner).continue_after(tid,'srs'))
+    baseline=json.loads((tmp_path/'artifacts'/'s2'/'spec'/'system-baseline.json').read_text())
+    assert baseline['mode']=='greenfield' and baseline['baseline_id']!='pending-founder-choice'
+    assert runner.calls[0][1]['phase']=='architecture'
+
+
+def test_runner_releases_process_before_completion_callback(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'handoff.db'));tid=store.create_task('Handoff')['task_id'];runner=ProcessRunner(store);observed=[]
+    async def next_stage(task_id,phase):observed.append((task_id not in runner.processes,phase))
+    runner.on_complete=next_stage
+    asyncio.run(runner.run(tid,[sys.executable,'-c','print("session: handoff")'],cwd=tmp_path,completion_phases=('intent','conops')))
+    assert observed==[(True,'conops')]

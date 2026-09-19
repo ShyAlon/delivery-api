@@ -30,15 +30,18 @@ class ProcessRunner:
     processes: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
     waiting: set[str] = field(default_factory=set)
     interrupted_for_shutdown: set[str] = field(default_factory=set)
+    decisions: dict[str, asyncio.Future] = field(default_factory=dict)
+    on_complete: object | None = None
 
     def _phase(self, text: str, fallback: str) -> str:
         lower = text.lower()
         return next((phase for word, phase in sorted(_PHASE_HINTS.items(), key=lambda item: -len(item[0])) if word in lower), fallback)
 
     async def run(self, task_id: str, command: list[str], *, cwd: Path, phase: str = "intent",
-                  env: dict[str, str] | None = None) -> int:
+                  env: dict[str, str] | None = None, completion_phases: tuple[str, ...] = (), infer_phase: bool = True) -> int:
         if task_id in self.processes:
             raise RuntimeError("task already has a live process")
+        launched_phase=phase
         self.store.update_phase(task_id, phase, "running", detail="Starting engine")
         self.store.add_event(task_id, "command", "Engine process started", phase_key=phase,
                              payload={"argv": command, "cwd": str(cwd)})
@@ -52,6 +55,7 @@ class ProcessRunner:
         missing_module: str | None = None
         prompt_lines: list[str] = []
         structured_buffer = ""
+        continuation_phase: str | None = None
 
         # The child pipeline owns progress and LLM heartbeats. Its lines name
         # the in-flight stage and elapsed time. A second generic heartbeat here
@@ -83,7 +87,10 @@ class ProcessRunner:
                         if candidate.get("type")=="founder_decision" and isinstance(candidate.get("options"),list):structured_decision=candidate
                     waiting_input = structured_decision is not None or line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line
                     if waiting_input:
-                        prompt_lines.append(line)
+                        # Keep protocol envelopes out of founder-visible question
+                        # reconstruction. A later bare ``You:`` prompt must reuse
+                        # only the event's human prompt.
+                        prompt_lines.append(structured_decision["prompt"] if structured_decision else line)
                         if task_id not in self.waiting:
                             self.waiting.add(task_id)
                             activity("engine.waiting_input","Engine is waiting for an answer",task_id=task_id,phase=phase,question=" ".join(prompt_lines)[:240])
@@ -95,7 +102,7 @@ class ProcessRunner:
                     missing = _MISSING_MODULE.search(line)
                     if missing: missing_module=missing.group(1);traceback_started=True
                     if traceback_started: continue
-                    phase = self._phase(line, phase)
+                    if infer_phase: phase = self._phase(line, phase)
                     match = _PROGRESS.search(line)
                     completed = int(match.group(3)) if match and match.group(3) else 0
                     total = int(match.group(4)) if match and match.group(4) else None
@@ -117,6 +124,10 @@ class ProcessRunner:
                 # from the latest interview session checkpoint.
                 self.store.add_event(task_id,"interrupted","Server restart interrupted the engine; it will resume from its checkpoint",phase_key=phase)
             elif code == 0:
+                # Executables can own founder decisions that approve artifacts.
+                # Callers declare those boundaries; ProcessRunner stays generic.
+                for completed_phase in completion_phases:
+                    self.store.update_phase(task_id, completed_phase, "approved", detail="Founder approved in the engine")
                 current=self.store.task(task_id)
                 phase_row=next(p for p in current["phases"] if p["phase_key"]==phase)
                 if phase_row["state"] != "approved":
@@ -124,6 +135,8 @@ class ProcessRunner:
                     gate=self.store.wait_at_gate(task_id,phase)
                     self.store.add_event(task_id,"gate","Generated artifact is waiting for founder approval",phase_key=phase,payload={"gate_key":gate["gate_key"] if gate else None})
                 self.store.add_event(task_id, "complete", "Engine process completed", phase_key=phase)
+                if completion_phases and self.on_complete is not None:
+                    continuation_phase = completion_phases[-1]
             else:
                 if missing_module:
                     error=f"Error: engine dependency '{missing_module}' is missing. Likely cause: the selected Python environment is incomplete. Next: install interview-engine into that environment, restart Requi.re, and retry. Exit code: {code}."
@@ -138,6 +151,10 @@ class ProcessRunner:
             return code
         finally:
             self.processes.pop(task_id, None);self.waiting.discard(task_id);self.interrupted_for_shutdown.discard(task_id)
+            # The finished process must release its task slot before the next
+            # executable starts. This is the shared process boundary.
+            if continuation_phase is not None and self.on_complete is not None:
+                await self.on_complete(task_id, continuation_phase)
 
     async def shutdown(self, grace_seconds: float = 3.0) -> None:
         active=list(self.processes.items())
@@ -159,7 +176,16 @@ class ProcessRunner:
                 await asyncio.gather(*(p.wait() for _,p in active),return_exceptions=True)
         activity("engine.shutdown.complete","Engine shutdown complete",processes=len(active))
 
+    async def request_decision(self, task_id: str, phase: str, decision: dict) -> str:
+        if task_id in self.decisions: raise RuntimeError("task already has a pending decision")
+        future=asyncio.get_running_loop().create_future();self.decisions[task_id]=future;self.waiting.add(task_id)
+        self.store.add_event(task_id,"founder_decision",decision["prompt"],phase_key=phase,payload={"waiting_input":True,"question":decision["prompt"],"decision":decision})
+        try:return await future
+        finally:self.decisions.pop(task_id,None);self.waiting.discard(task_id)
+
     async def send_input(self, task_id: str, text: str) -> None:
+        if task_id in self.decisions:
+            self.decisions[task_id].set_result(text);return
         proc = self.processes.get(task_id)
         if not proc or not proc.stdin: raise RuntimeError("task is not waiting for input")
         proc.stdin.write((text + "\n").encode()); await proc.stdin.drain()
