@@ -7,6 +7,28 @@ BOOTSTRAP_PYTHON="${REQUI_RE_BUILD_PYTHON:-python3}"; PACKAGES="delivery-api int
 CLEAN=${REQUI_RE_CLEAN:-0}; [ "${1:-}" = "--clean" ] && CLEAN=1
 [ $# -le 1 ] || { echo "Usage: scripts/build-dist.sh [--clean]"; exit 2; }
 for repo in $PACKAGES vmodel-spec-app; do [ -d "$REPOS_ROOT/$repo/.git" ] || { echo "Error: required repository '$repo' is missing."; echo "Likely cause: the Requi.re checkout is incomplete under $REPOS_ROOT."; echo "Next: clone $repo into $REPOS_ROOT, then retry."; exit 1; }; done
+echo "Resolved Requi.re source revisions:"
+for repo in $PACKAGES vmodel-spec-app; do
+  printf '  %-20s %s  %s\n' "$repo" "$(git -C "$REPOS_ROOT/$repo" rev-parse --short=12 HEAD)" "$REPOS_ROOT/$repo"
+  if git -C "$REPOS_ROOT/$repo" remote get-url origin >/dev/null 2>&1; then
+    git -C "$REPOS_ROOT/$repo" fetch --quiet origin 2>/dev/null || true
+    upstream=$(git -C "$REPOS_ROOT/$repo" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)
+    if [ -n "$upstream" ]; then
+      behind=$(git -C "$REPOS_ROOT/$repo" rev-list --count "HEAD..$upstream" 2>/dev/null || echo 0)
+      if [ "$behind" -gt 0 ]; then
+        echo "WARNING: $repo is $behind commit(s) behind $upstream. This build would mix repository versions."
+        echo "Next: git -C '$REPOS_ROOT/$repo' pull --ff-only, then rerun this build."
+        stale_repos="${stale_repos:-} $repo"
+      fi
+    fi
+  fi
+done
+if [ -n "${stale_repos:-}" ]; then
+  echo "Error: Requi.re source checkouts are not all current."
+  echo "Likely cause: only one sibling repository was pulled:${stale_repos}."
+  echo "Next: pull every listed checkout, then rerun scripts/build-dist.sh."
+  exit 1
+fi
 command -v "$BOOTSTRAP_PYTHON" >/dev/null || { echo "Error: build Python '$BOOTSTRAP_PYTHON' was not found."; echo "Likely cause: Python 3.10+ is not on PATH."; echo "Next: set REQUI_RE_BUILD_PYTHON=/path/to/python and retry."; exit 1; }
 PARENT=$(dirname "$OUTPUT"); mkdir -p "$PARENT"; STAGE="$PARENT/.requi-re-stage-$$"; BACKUP="$PARENT/.requi-re-previous-$$"
 cleanup(){ rm -rf "$STAGE"; }; trap cleanup EXIT
@@ -69,7 +91,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; PYTHON="$ROOT/runtime/bin/
 "$PYTHON" -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core, libsql' >/dev/null 2>&1 || { echo "Error: Requi.re runtime validation failed."; echo "Likely cause: the built folder is incomplete or incompatible."; echo "Next: rebuild on this operating system with scripts/build-dist.sh --clean."; exit 1; }
 export REQUI_RE_DIST=1 INTERVIEW_ENGINE_PYTHON="$PYTHON" DELIVERY_BASIC_AUTH_ENABLED="${DELIVERY_BASIC_AUTH_ENABLED:-1}" DELIVERY_COOKIE_SECURE="${DELIVERY_COOKIE_SECURE:-0}" OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/requi-re"; mkdir -p "$DATA_HOME"; export DELIVERY_DATABASE_URL="${DELIVERY_DATABASE_URL:-${DELIVERY_DB_PATH:-sqlite:///$DATA_HOME/delivery.db}}"
-echo "Data: $DELIVERY_DATABASE_URL"; cd "$ROOT"; exec "$PYTHON" -m delivery_api
+echo "Data: $DELIVERY_DATABASE_URL"
+echo "Installed Requi.re source revisions:"
+sed -n '/^Repositories:$/,/^Installed packages:$/p' "$ROOT/MANIFEST.txt" 2>/dev/null | sed '1d;$d' || true
+cd "$ROOT"; exec "$PYTHON" -m delivery_api
 EOF
 chmod +x "$STAGE/run-require.sh"
 "$PYTHON" -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core, libsql'
