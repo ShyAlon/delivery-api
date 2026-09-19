@@ -193,7 +193,12 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     page.screenshot(path="/downloads/vmodel-bundle-human-readable.png",full_page=True)
     assert page.get_by_text("Stakeholder needs").is_visible()
     assert page.locator(".trace-node").count()==5
-    page.locator('.trace-node[data-node="R-1"]').click()
+    node=page.locator('.trace-node[data-node="R-1"]')
+    node.hover();tip=page.locator('#trace-tooltip');assert tip.is_visible()
+    assert "R-1" in tip.inner_text() and "Visible status" in tip.inner_text() and "requirement" in tip.inner_text()
+    page.screenshot(path="/downloads/vmodel-traceability-tooltip.png",full_page=True)
+    page.locator('#node-detail').hover();assert not tip.is_visible()
+    node.click()
     assert page.get_by_text("3 connected edges").is_visible()
     assert page.get_by_text("Build a PWA").is_visible()
     assert page.get_by_text("gate.auto_decision",exact=True).first.is_visible()
