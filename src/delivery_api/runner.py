@@ -134,6 +134,10 @@ class ProcessRunner:
                     self.store.update_phase(task_id, phase, "awaiting_approval", detail="Generated; waiting for founder approval")
                     gate=self.store.wait_at_gate(task_id,phase)
                     self.store.add_event(task_id,"gate","Generated artifact is waiting for founder approval",phase_key=phase,payload={"gate_key":gate["gate_key"] if gate else None})
+                    # Explicit open-gate policy approves in wait_at_gate. It
+                    # must use the same continuation path as a founder click.
+                    if gate is None and next(p for p in self.store.task(task_id)["phases"] if p["phase_key"]==phase)["state"] == "approved":
+                        continuation_phase = phase
                 self.store.add_event(task_id, "complete", "Engine process completed", phase_key=phase)
                 if completion_phases and self.on_complete is not None:
                     continuation_phase = completion_phases[-1]

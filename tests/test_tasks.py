@@ -737,3 +737,15 @@ def test_runner_releases_process_before_completion_callback(tmp_path):
     runner.on_complete=next_stage
     asyncio.run(runner.run(tid,[sys.executable,'-c','print("session: handoff")'],cwd=tmp_path,completion_phases=('intent','conops')))
     assert observed==[(True,'conops')]
+
+
+def test_open_gate_uses_same_automatic_continuation_path(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'open.db'));tid=store.create_task('Open gate')['task_id'];store.set_gate_open(tid,'gate-needs',True)
+    runner=ProcessRunner(store);observed=[]
+    async def continue_after(task_id,phase):observed.append(phase)
+    runner.on_complete=continue_after
+    asyncio.run(runner.run(tid,[sys.executable,'-c','print("needs generated")'],cwd=tmp_path,phase='needs',infer_phase=False))
+    assert observed==['needs']
