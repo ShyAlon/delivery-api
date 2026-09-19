@@ -185,6 +185,10 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     page.get_by_text("Family task evidence",exact=True).wait_for()
     page.screenshot(path="/downloads/vmodel-bundle-sessions.png",full_page=True)
     page.get_by_text("Family task evidence",exact=True).click()
+    page.get_by_text("Intent model").wait_for()
+    assert page.locator("#intent").get_by_text("Family task evidence",exact=True).is_visible()
+    page.screenshot(path="/downloads/vmodel-interview-view.png",full_page=True)
+    page.get_by_role("button",name="Overview").click()
     page.get_by_text("Stakeholder needs").wait_for()
     assert not page.get_by_text("Bundle integrity passed").is_visible()
     page.screenshot(path="/downloads/vmodel-bundle-overview.png",full_page=True)
@@ -199,3 +203,11 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     assert page.get_by_text("gate.auto_decision",exact=True).is_visible()
     page.get_by_role("button",name="Oracle").click()
     assert page.get_by_text("Bundle integrity passed").is_visible()
+
+
+def test_artifacts_folder_setting_validates_and_reports_sessions(page,ui):
+    page.goto(ui+"/sessions");page.get_by_role("button",name="Artifacts folder").click()
+    page.locator('input[name="path"]').fill('/definitely/missing/artifacts')
+    page.get_by_role("button",name="Validate & load sessions").click()
+    page.get_by_text("Artifacts folder could not be loaded.").wait_for()
+    assert page.get_by_text("Likely cause:",exact=False).is_visible()

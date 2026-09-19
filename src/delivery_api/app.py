@@ -107,7 +107,13 @@ def sessions_view(): return FileResponse(WEB_DIR / "index.html")
 def session_view(session_id: str): return FileResponse(WEB_DIR / "index.html")
 
 @app.get("/api/sessions")
-def sessions(): return {"sessions":bundles.discover()}
+def sessions(): return {"sessions":bundles.discover(),"artifacts_root":str(bundles.root())}
+
+class ArtifactsRootRequest(BaseModel): path: str
+@app.post("/api/settings/artifacts-root")
+def set_artifacts_root(req: ArtifactsRootRequest, a: auth.Actor = Depends(auth.require_actor)):
+    try:return bundles.save_root(req.path)
+    except ValueError as e:raise HTTPException(400,{"error":"Artifacts folder could not be loaded.","cause":str(e),"next":"Choose the folder that directly contains your session directories, then validate again."})
 
 @app.get("/api/sessions/{session_id}")
 def session_bundle(session_id: str):

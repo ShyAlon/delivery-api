@@ -98,3 +98,16 @@ def test_completed_sessions_are_discovered_and_bundle_is_projected(client,tmp_pa
  assert client.get('/api/sessions').json()['sessions'][0]['session_id']=='s1'
  data=client.get('/api/sessions/s1').json();assert len(data['graph']['nodes'])==3
  assert data['graph']['edges']==[{"from":"N-1","to":"R-1","kind":"realizes"},{"from":"R-1","to":"AC-1","kind":"accepts"}]
+
+def test_artifacts_root_accepts_interview_only_spec_only_and_combined(client,tmp_path,monkeypatch):
+ from delivery_api import bundles
+ root=tmp_path/"artifacts"
+ for session,area,name in (("i","interview","intent_model.json"),("s","spec","srs.json"),("both","interview","conops.json"),("both","spec","bundle-integrity.json")):
+  p=root/session/area;p.mkdir(parents=True,exist_ok=True);(p/name).write_text('{}')
+ monkeypatch.setattr(bundles,"SETTINGS_FILE",tmp_path/"setting")
+ r=client.post('/api/settings/artifacts-root',json={'path':str(root)})
+ assert r.status_code==200 and r.json()['count']==3
+ rows={x['session_id']:x['phases'] for x in r.json()['sessions']}
+ assert rows=={'i':['interview'],'s':['spec'],'both':['interview','spec']}
+ r=client.post('/api/settings/artifacts-root',json={'path':str(tmp_path/'missing')})
+ assert r.status_code==400 and set(r.json()['detail'])=={'error','cause','next'}

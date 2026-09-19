@@ -4,22 +4,44 @@ import json,os,re
 from pathlib import Path
 from . import config
 
+SETTINGS_FILE=Path(__file__).resolve().parents[2]/".artifacts-root"
+def default_root()->Path:
+ return Path(__file__).resolve().parents[3]/"artifacts"
 def root()->Path:
  configured=os.environ.get("VMODEL_ARTIFACTS_DIR") or os.environ.get("DELIVERY_ARTIFACT_DIR")
- return Path(configured).expanduser().resolve() if configured else (Path(__file__).resolve().parents[3]/"artifacts")
+ if configured:return Path(configured).expanduser().resolve()
+ try:
+  saved=SETTINGS_FILE.read_text().strip()
+  if saved:return Path(saved).expanduser().resolve()
+ except OSError:pass
+ return default_root()
+def inspect_root(candidate:str)->dict:
+ path=Path(candidate).expanduser().resolve()
+ if not path.is_dir():raise ValueError(f"Artifacts folder does not exist: {path}")
+ sessions=_discover(path)
+ if not sessions:raise ValueError(f"No loadable sessions found in {path}; expected session/interview or session/spec folders")
+ return {"path":str(path),"sessions":sessions,"count":len(sessions)}
+def save_root(candidate:str)->dict:
+ result=inspect_root(candidate);SETTINGS_FILE.write_text(result["path"]+"\n");return result
 def _json(path:Path,default=None):
  try:return json.loads(path.read_text())
  except (OSError,json.JSONDecodeError):return default
-def discover()->list[dict]:
+def _discover(where:Path)->list[dict]:
  out=[]
- if not root().is_dir():return out
- for d in root().iterdir():
-  if not d.is_dir() or not (d/"spec").is_dir():continue
-  spec=d/"spec";run=_json(spec/"hands-free-run.json",{}) or {};integrity=_json(spec/"bundle-integrity.json",{}) or {};intent=_json(d/"interview/intent_model.json",{}) or {}
-  if not run and not integrity:continue
+ if not where.is_dir():return out
+ for d in where.iterdir():
+  if not d.is_dir():continue
+  interview=d/"interview";spec=d/"spec"
+  has_interview=interview.is_dir() and any((interview/n).is_file() for n in ("intent_model.json","conops.json","usage.jsonl"))
+  has_spec=spec.is_dir() and any((spec/n).is_file() for n in ("needs.json","srs.json","architecture.json","bundle-integrity.json","usage.jsonl"))
+  if not has_interview and not has_spec:continue
+  run=_json(spec/"hands-free-run.json",{}) or {};integrity=_json(spec/"bundle-integrity.json",{}) or {};intent=_json(interview/"intent_model.json",{}) or {}
+  phases=[x for x,present in (("interview",has_interview),("spec",has_spec)) if present]
+  diagnostics=integrity.get("diagnostics") if isinstance(integrity,dict) else None
   out.append({"session_id":d.name,"title":intent.get("problem_statement") or intent.get("core_value_proposition") or d.name,
-   "completed_at":run.get("completed_at"),"oracle_passed":not bool(integrity.get("diagnostics")),"files_checked":integrity.get("files_checked",0),"path":str(d)})
+   "completed_at":run.get("completed_at"),"oracle_passed":bool(integrity) and not bool(diagnostics),"files_checked":integrity.get("files_checked",0),"phases":phases,"path":str(d)})
  return sorted(out,key=lambda x:(x["completed_at"] or "",x["session_id"]),reverse=True)
+def discover()->list[dict]:return _discover(root())
 def _first(spec:Path,*names,default=None):
  for n in names:
   if (spec/n).is_file():return _json(spec/n,default)
@@ -62,4 +84,5 @@ def bundle(session:str)->dict:
   tid=t.get("test_id");nodes.append({"id":tid,"kind":"test","label":t.get("title") or t.get("name"),"data":t})
   for source in (t.get("requirement_ids") or [])+(t.get("criterion_ids") or [])+(t.get("spec_ids") or []):edges.append({"from":source,"to":tid,"kind":"verified-by"})
  nodes=[n for n in nodes if n["id"]]
- return {"session":next((x for x in discover() if x["session_id"]==session),{"session_id":session}),"intent":intent,"conops":conops,"needs":_rows(needs,"needs"),"srs":srs,"requirements":reqs,"architecture":arch,"items":items,"tests":tests,"audits":audits,"integrity":integrity,"run":run,"graph":{"nodes":nodes,"edges":edges}}
+ coverage=_json(interview/"coverage.json",{}) or {}
+ return {"session":next((x for x in discover() if x["session_id"]==session),{"session_id":session}),"intent":intent,"conops":conops,"coverage":coverage,"needs":_rows(needs,"needs"),"srs":srs,"requirements":reqs,"architecture":arch,"items":items,"tests":tests,"audits":audits,"integrity":integrity,"run":run,"graph":{"nodes":nodes,"edges":edges}}
