@@ -14,6 +14,15 @@ def test_launcher_health_was_exercised_by_documented_smoke_contract():
 def test_distribution_database_lives_outside_build_and_survives_rebuild():
     build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()
     assert 'XDG_DATA_HOME' in build and '/requi-re' in build
-    launcher=build.split("cat > \"$OUTPUT/run-require.sh\" <<'EOF'",1)[1].split('\nEOF',1)[0]
+    launcher=build.split("cat > \"$STAGE/run-require.sh\" <<'EOF'",1)[1].split('\nEOF',1)[0]
     assert 'DELIVERY_DATABASE_URL' in launcher and '$DATA_HOME/delivery.db' in launcher
-    assert 'rm -rf "$OUTPUT"' in build and 'delivery.db' not in build.split('rm -rf "$OUTPUT"',1)[0]
+    assert 'delivery.db' not in build[:build.index("cat > \"$STAGE/run-require.sh\"")]
+
+
+def test_incremental_build_has_cache_clean_and_atomic_promotion_contracts():
+    build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()
+    assert '.build-state' in build and 'decision=skip reason=unchanged' in build
+    assert '--clean' in build and 'REQUI_RE_CLEAN' in build
+    assert 'repo_fingerprint' in build and 'dependency-input-changed' in build
+    assert '.requi-re-stage-' in build and '.requi-re-previous-' in build
+    assert build.index('import delivery_api, interview_engine') < build.index('Atomic promotion')
