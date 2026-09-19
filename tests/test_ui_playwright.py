@@ -110,7 +110,7 @@ def test_rerun_preview_explains_archive_and_audit_has_local_actor(page, ui):
 
 def test_gate_open_waiting_halo_and_decision_modal(page, ui):
     page.goto(ui + "/tasks/sim/view")
-    waiting=page.locator('.gate.waiting')
+    waiting=page.locator('.gate.waiting');waiting.wait_for()
     assert waiting.count()==1 and waiting.is_visible()
     assert page.locator('.gate.open').count()==1
     page.screenshot(path="/downloads/vmodel-gates-open-and-waiting.png", full_page=True)
