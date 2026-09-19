@@ -430,3 +430,26 @@ def test_sse_stream_reads_events_from_turso_tuple_backend(monkeypatch,tmp_path):
         data=json.loads(chunk.split('data: ',1)[1])
         assert data['message']=='libSQL event' and data['payload']=={'completed':1}
     asyncio.run(read())
+
+def test_process_runner_emits_every_question_after_each_answer(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'questions.db'));task_id=store.create_task('Three questions')['task_id'];runner=ProcessRunner(store)
+    script="""questions=['First question?','Second question?','Third question?']
+for question in questions:
+ print(question,flush=True);input('You: ')
+"""
+    async def go():
+        run=asyncio.create_task(runner.run(task_id,[sys.executable,'-c',script],cwd=tmp_path))
+        answered=0
+        while not run.done():
+            waiting=[e for e in store.events(task_id) if e['kind']=='waiting_input']
+            if len(waiting)>answered:
+                assert waiting[-1]['payload']['question']==['First question?','Second question?','Third question?'][answered]
+                await runner.send_input(task_id,f'answer {answered+1}');answered+=1
+            await asyncio.sleep(.01)
+        assert await run==0 and answered==3
+    asyncio.run(asyncio.wait_for(go(),5))
+    questions=[e['payload']['question'] for e in store.events(task_id) if e['kind']=='waiting_input']
+    assert questions==['First question?','Second question?','Third question?']

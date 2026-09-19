@@ -47,7 +47,6 @@ class ProcessRunner:
         traceback_started = False
         missing_module: str | None = None
         prompt_lines: list[str] = []
-        waiting_for_input = False
 
         async def heartbeat():
             while proc.returncode is None:
@@ -70,8 +69,8 @@ class ProcessRunner:
                     waiting_input = line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line
                     if waiting_input:
                         prompt_lines.append(line)
-                        if not waiting_for_input:
-                            waiting_for_input=True;self.waiting.add(task_id)
+                        if task_id not in self.waiting:
+                            self.waiting.add(task_id)
                             activity("engine.waiting_input","Engine is waiting for an answer",task_id=task_id,question=" ".join(prompt_lines)[:240])
                     elif line and not _PROGRESS.search(line):
                         prompt_lines=[line]
