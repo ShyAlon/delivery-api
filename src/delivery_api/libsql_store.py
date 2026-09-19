@@ -28,6 +28,7 @@ class CursorAdapter:
             yield row
 
 class ConnectionAdapter:
+    """Expose sqlite3.Row-compatible results for every libSQL cursor."""
     def __init__(self,connection):self._connection=connection
     def execute(self,*args,**kwargs):return CursorAdapter(self._connection.execute(*args,**kwargs))
     def executemany(self,*args,**kwargs):return CursorAdapter(self._connection.executemany(*args,**kwargs))
@@ -36,7 +37,12 @@ class ConnectionAdapter:
     def sync(self):return self._connection.sync()
 
 
+def normalize_connection(connection):
+    """Keep tuple-shaped libSQL rows behind the storage adapter boundary."""
+    return connection if isinstance(connection,ConnectionAdapter) else ConnectionAdapter(connection)
+
+
 def connect_replica(path:Path,url:str,token:str,sync_interval:int=60):
     import libsql
     path.parent.mkdir(parents=True,exist_ok=True)
-    return ConnectionAdapter(libsql.connect(str(path),sync_url=url,auth_token=token,sync_interval=sync_interval))
+    return normalize_connection(libsql.connect(str(path),sync_url=url,auth_token=token,sync_interval=sync_interval))

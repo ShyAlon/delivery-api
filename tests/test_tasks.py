@@ -363,3 +363,54 @@ def test_turso_initial_offline_start_falls_back_to_local_sqlite(monkeypatch,tmp_
     rendered=repr(events)
     assert 'database.replica.offline' in rendered and 'database.sync.failed' in rendered
     assert 'super-secret-token' not in rendered and 'libsql://database.example' not in rendered
+
+def test_turso_tuple_rows_obey_complete_storage_row_contract(tmp_path):
+    """Real libSQL returns tuples; every storage method must still see mapping rows."""
+    import libsql
+    from delivery_api.store import TursoReplicaStore
+    raw=libsql.connect(str(tmp_path/'tuple-replica.db'))
+    class LocalReplica:
+        def execute(self,*a,**k):return raw.execute(*a,**k)
+        def executemany(self,*a,**k):return raw.executemany(*a,**k)
+        def executescript(self,*a,**k):return raw.executescript(*a,**k)
+        def commit(self):return raw.commit()
+        def sync(self):pass
+    store=TursoReplicaStore(str(tmp_path/'tuple-replica.db'),'libsql://unused.example','token',connection=LocalReplica())
+    link=store.create_link('founder');assert store.link(link['token'])['run_id']==link['run_id']
+    task_id=store.create_task('Tuple row task','Adapter contract')['task_id']
+    store.update_phase(task_id,'intent','running',detail='Interviewing')
+    store.add_event(task_id,'progress','Question ready',phase_key='intent',payload={'completed':1,'total':2})
+    store.audit('tester','adapter.checked',task_id,{'ok':True})
+    store.add_task_artifact(task_id,'intent','Intent','/intent.json')
+    task=store.task(task_id)
+    assert task['title']=='Tuple row task' and task['phases'][0]['detail']=='Interviewing'
+    assert store.events(task_id)[-1]['payload']=={'completed':1,'total':2}
+    assert any(e['detail']=={'ok':True} for e in store.audit_entries(task_id))
+    assert store.task_artifacts(task_id)[0]['name']=='Intent'
+
+
+def test_sse_stream_reads_events_from_turso_tuple_backend(monkeypatch,tmp_path):
+    import asyncio,json,libsql
+    from delivery_api import app as app_module
+    from delivery_api.store import TursoReplicaStore
+    raw=libsql.connect(str(tmp_path/'sse-replica.db'))
+    class LocalReplica:
+        def execute(self,*a,**k):return raw.execute(*a,**k)
+        def executemany(self,*a,**k):return raw.executemany(*a,**k)
+        def executescript(self,*a,**k):return raw.executescript(*a,**k)
+        def commit(self):return raw.commit()
+        def sync(self):pass
+    store=TursoReplicaStore(str(tmp_path/'sse-replica.db'),'libsql://unused.example','token',connection=LocalReplica())
+    task_id=store.create_task('SSE tuple task','')['task_id']
+    monkeypatch.setattr(app_module,'store',store)
+    async def read():
+        response=await app_module.task_stream(task_id)
+        iterator=response.body_iterator
+        heartbeat=await anext(iterator)
+        assert 'event: heartbeat' in heartbeat
+        store.add_event(task_id,'progress','libSQL event',phase_key='intent',payload={'completed':1})
+        chunk=await asyncio.wait_for(anext(iterator),3)
+        assert 'event: progress' in chunk
+        data=json.loads(chunk.split('data: ',1)[1])
+        assert data['message']=='libSQL event' and data['payload']=={'completed':1}
+    asyncio.run(read())

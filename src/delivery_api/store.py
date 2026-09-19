@@ -528,6 +528,9 @@ class TursoReplicaStore(SQLiteStore):
                 connection=None;self._replica_available=False
                 activity("database.replica.offline","Turso unavailable at startup; using the local database",error=f"{type(e).__name__}: {str(e)[:180]}")
         self._sync_url=url
+        if connection is not None:
+            from .libsql_store import normalize_connection
+            connection=normalize_connection(connection)
         super().__init__(path,connection=connection)
         self._safe_sync("schema bootstrap")
     def _safe_sync(self,reason:str)->None:
