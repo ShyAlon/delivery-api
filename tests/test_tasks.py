@@ -617,3 +617,17 @@ def test_fragmented_large_founder_decision_is_reassembled(tmp_path):
     decisions=[e for e in store.events(tid) if e['kind']=='founder_decision']
     assert len(decisions)==1 and len(decisions[0]['payload']['decision']['options'])==4
     assert all('REQUIRE_EVENT' not in e['message'] for e in store.events(tid))
+
+def test_activity_mirrors_phase_events_to_data_stage_log(monkeypatch,tmp_path):
+    from delivery_api import observability
+    path=tmp_path/'logs'/'stages'/'conops.log';monkeypatch.setitem(observability.STAGE_LOG_PATHS,'conops',path)
+    observability.event('engine.output','Structured stage line',task_id='t1',phase='conops')
+    assert path.is_file() and 'engine.output' in path.read_text() and 'Structured stage line' in path.read_text()
+    assert not (tmp_path/'logs'/'stages'/'intent.log').exists()
+
+
+def test_every_phase_has_a_stable_data_log_path():
+    from delivery_api.observability import STAGE_LOG_PATHS
+    from delivery_api.store import PHASES
+    assert list(STAGE_LOG_PATHS)==[key for key,_ in PHASES]
+    assert all(str(path).endswith(f'/logs/stages/{phase}.log') for phase,path in STAGE_LOG_PATHS.items())

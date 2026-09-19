@@ -86,11 +86,11 @@ class ProcessRunner:
                         prompt_lines.append(line)
                         if task_id not in self.waiting:
                             self.waiting.add(task_id)
-                            activity("engine.waiting_input","Engine is waiting for an answer",task_id=task_id,question=" ".join(prompt_lines)[:240])
+                            activity("engine.waiting_input","Engine is waiting for an answer",task_id=task_id,phase=phase,question=" ".join(prompt_lines)[:240])
                     elif line and not _PROGRESS.search(line):
                         prompt_lines=[line]
                     if structured_decision is None:
-                        activity("engine.output","Engine raw output",task_id=task_id,stream="combined",line=line)
+                        activity("engine.output","Engine raw output",task_id=task_id,phase=phase,stream="combined",line=line)
                     if line.startswith("Traceback (most recent call last):"): traceback_started=True
                     missing = _MISSING_MODULE.search(line)
                     if missing: missing_module=missing.group(1);traceback_started=True
@@ -163,4 +163,4 @@ class ProcessRunner:
         if not proc or not proc.stdin: raise RuntimeError("task is not waiting for input")
         proc.stdin.write((text + "\n").encode()); await proc.stdin.drain()
         if task_id in self.waiting:
-            self.waiting.discard(task_id);activity("engine.input.resume","Answer received; engine resumed",task_id=task_id)
+            self.waiting.discard(task_id);activity("engine.input.resume","Answer received; engine resumed",task_id=task_id,phase=self.store.task(task_id).get("active_phase"))

@@ -106,6 +106,9 @@ async def _resume_interrupted_interviews()->None:
 async def _start():
     global _previous_sigint
     config.validate_auth_config()
+    from .observability import LOG_PATH,stage_log_paths
+    print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
+    for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
     await jobs.start()
     await _resume_interrupted_interviews()
     # Uvicorn waits for open HTTP connections before lifespan shutdown. Close
