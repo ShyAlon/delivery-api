@@ -199,8 +199,8 @@ def test_engine_runtime_skips_missing_dependency_and_selects_working_python(tmp_
         path.write_text(f'#!/bin/sh\nexit {rc}\n');path.chmod(0o755)
     monkeypatch.setenv('INTERVIEW_ENGINE_PYTHON',str(bad/'python'))
     runtime=asyncio.run(resolve_engine_runtime(engine))
-    assert runtime.python==good.joinpath('python').resolve()
-    assert runtime.checked==(bad.joinpath('python').resolve(),good.joinpath('python').resolve())
+    assert runtime.python==good.joinpath('python').absolute()
+    assert runtime.checked==(bad.joinpath('python').absolute(),good.joinpath('python').absolute())
 
 
 def test_engine_runtime_missing_dependency_reports_all_interpreters(tmp_path,monkeypatch):
@@ -255,7 +255,7 @@ def test_engine_runtime_persisted_setting_precedes_fallback(tmp_path,monkeypatch
     monkeypatch.setattr(engine_runtime,'SETTINGS_FILE',tmp_path/'.engine-python');engine_runtime.SETTINGS_FILE.write_text(str(saved))
     monkeypatch.delenv('INTERVIEW_ENGINE_PYTHON',raising=False);monkeypatch.delenv('VMODEL_PYTHON',raising=False);monkeypatch.delenv('VIRTUAL_ENV',raising=False)
     monkeypatch.setattr(engine_runtime.sys,'executable',str(fallback))
-    assert engine_runtime._candidates(tmp_path/'interview-engine')[0]==saved.resolve()
+    assert engine_runtime._candidates(tmp_path/'interview-engine')[0]==saved.absolute()
 
 
 def test_engine_python_setting_rejects_interpreter_without_dependency(tmp_path,monkeypatch):
@@ -267,3 +267,18 @@ def test_engine_python_setting_rejects_interpreter_without_dependency(tmp_path,m
     except ValueError as e:assert 'langchain_core' in str(e)
     else:assert False,'bad engine Python must not persist'
     assert not engine_runtime.SETTINGS_FILE.exists()
+
+
+def test_venv_python_symlink_is_invoked_literally_for_preflight(tmp_path,monkeypatch):
+    import asyncio,subprocess,sys
+    from delivery_api import engine_runtime
+    venv=tmp_path/'engine-venv';subprocess.run([sys.executable,'-m','venv',str(venv)],check=True)
+    python=venv/'bin/python'
+    probe=venv/('Lib/site-packages' if sys.platform=='win32' else f'lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages')/'venv_only_probe.py'
+    probe.parent.mkdir(parents=True,exist_ok=True);probe.write_text('VALUE=1\n')
+    assert python.is_symlink(), 'regression requires the normal symlinked venv interpreter'
+    assert not asyncio.run(engine_runtime.validate_python(engine_runtime.Path(sys.executable),'venv_only_probe'))
+    monkeypatch.setattr(engine_runtime,'_candidates',lambda _:[python])
+    runtime=asyncio.run(engine_runtime.resolve_engine_runtime(tmp_path,required_module='venv_only_probe'))
+    assert runtime.python==python.absolute() and runtime.attempts==((python,True),)
+    assert runtime.python!=python.resolve()

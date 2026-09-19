@@ -298,13 +298,13 @@ async def start_task_engine(task_id:str,a:auth.Actor=Depends(auth.require_actor)
     if not engine_dir.is_dir():raise HTTPException(503,{"error":"Interview engine is not available.","cause":f"Expected it at {engine_dir}.","next":"Run scripts/pull-all.sh, then restart the UI."})
     try:runtime=await resolve_engine_runtime(engine_dir)
     except EngineRuntimeError as e:
-        activity("engine.preflight.failed","Interview engine dependency preflight failed",task_id=task_id,actor=a.label,module=e.module,checked=", ".join(map(str,e.checked)))
+        activity("engine.preflight.failed","Interview engine dependency preflight failed",task_id=task_id,actor=a.label,module=e.module,checked="; ".join(f"{path}={'ok' if ok else 'missing'}" for path,ok in e.attempts))
         command=f'python -m pip install -e "{engine_dir}"'
         raise HTTPException(503,{"error":f"Interview engine cannot start because Python module '{e.module}' is missing.","cause":"None of the available engine Python environments contains the interview runtime dependencies.","next":f"Activate the environment that runs interview-engine, then run: {command}. To select it explicitly, set INTERVIEW_ENGINE_PYTHON=/path/to/python before starting Requi.re."})
     engine_python=runtime.python
     store.update_phase(task_id,"intent","running",detail="Launching adaptive interview")
     store.audit(a.label,"interview.started",task_id,{"engine_dir":str(engine_dir),"python":str(engine_python)})
-    activity("engine.preflight.ok","Interview engine runtime resolved",task_id=task_id,actor=a.label,python=str(engine_python),checked=", ".join(map(str,runtime.checked)))
+    activity("engine.preflight.ok","Interview engine runtime resolved",task_id=task_id,actor=a.label,python=str(engine_python),checked="; ".join(f"{path}={'ok' if ok else 'missing'}" for path,ok in runtime.attempts))
     activity("engine.start","Interview engine launch requested",task_id=task_id,actor=a.label,python=str(engine_python))
     async def execute():
         try:await runner.run(task_id,[str(engine_python),"-m","interview_engine.cli",idea],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1","PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})
