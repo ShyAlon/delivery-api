@@ -317,3 +317,59 @@ def test_page_headers_stay_sticky_and_sessions_have_no_evidence_vault_hero(page,
     page.goto(ui+"/tasks/done/view")
     head=page.locator('.detail-head.page-head');head.wait_for()
     assert head.evaluate("e=>getComputedStyle(e).position")=="sticky"
+
+def test_create_task_dialog_keyboard_submit_textarea_and_cancel(page,ui):
+    page.goto(ui)
+    page.get_by_role('button',name='+ New task').click()
+    title=page.locator('#newform input[name="title"]')
+    assert title.evaluate('e=>document.activeElement===e')
+    title.fill('Keyboard-created task');title.press('Enter')
+    page.get_by_text("This task hasn't started.").wait_for()
+    assert page.get_by_role('heading',name='Keyboard-created task').is_visible()
+
+    page.goto(ui);page.get_by_role('button',name='+ New task').click()
+    title=page.locator('#newform input[name="title"]');brief=page.locator('#newform textarea[name="brief"]')
+    title.fill('Textarea keyboard task');brief.fill('Line one');brief.press('Enter');brief.type('Line two')
+    assert brief.input_value()=='Line one\nLine two' and page.locator('#newform').is_visible()
+    brief.press('Control+Enter')
+    page.get_by_text("This task hasn't started.").wait_for()
+    assert page.get_by_role('heading',name='Textarea keyboard task').is_visible()
+
+    page.goto(ui);page.locator('.task').first.wait_for();before=page.locator('.task').count();page.get_by_role('button',name='+ New task').click()
+    page.locator('#newform input[name="title"]').fill('Must not be created');page.keyboard.press('Escape')
+    assert page.locator('#newform').count()==0 and page.locator('.task').count()==before
+
+
+def test_settings_creation_dialog_enter_and_escape(page,ui):
+    page.goto(ui+'/sessions');page.get_by_role('button',name='Artifacts folder').click()
+    path=page.locator('#rootform input[name="path"]');page.wait_for_function("document.activeElement?.name==='path'");assert path.evaluate('e=>document.activeElement===e')
+    path.press('Escape');assert page.locator('#rootform').count()==0
+    page.get_by_role('button',name='Artifacts folder').click();path=page.locator('#rootform input[name="path"]')
+    submitted=[]
+    page.route('**/api/settings/artifacts-root',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(status=400,json={'detail':{'error':'Artifacts folder could not be loaded.','cause':'Test path is missing.','next':'Choose an existing folder.'}})))
+    path.fill('/definitely/missing/by-enter');path.press('Enter')
+    page.get_by_text('Artifacts folder could not be loaded.',exact=False).wait_for();assert submitted==[{'path':'/definitely/missing/by-enter'}]
+
+def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
+    # Own the stream in the browser so both pinned and deliberately unpinned
+    # behavior are deterministic without timing the server's polling loop.
+    page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json()
+    live['active_phase']='intent'
+    live['events']=[{'id':i,'kind':'progress','message':f'Output line {i}','phase_key':'intent','payload':{},'ts':1720000000+i} for i in range(120)]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
+    assert console.evaluate('e=>({h:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,max:getComputedStyle(e).maxHeight,scroll:e.scrollHeight>e.clientHeight})')=={'h':340,'min':'340px','max':'340px','scroll':True}
+    composer=page.locator('#answerform');assert composer.is_visible()
+    indicator=page.locator('.live-indicator.working');assert indicator.get_by_text('Working · Start').is_visible()
+    assert indicator.locator('i').evaluate("e=>getComputedStyle(e).animationName")=='live-halo'
+    page.screenshot(path='/downloads/requi-re-live-output.png',full_page=True)
+
+    console.evaluate('e=>e.scrollTop=60');page.wait_for_timeout(50);before=console.evaluate('e=>e.scrollTop')
+    page.evaluate("liveSource.emit({kind:'progress',message:'new while reading',phase_key:'conops',payload:{},ts:1720000200})")
+    assert console.evaluate('e=>e.scrollTop')==before
+    console.evaluate('e=>e.scrollTop=e.scrollHeight');page.wait_for_timeout(50)
+    page.evaluate("liveSource.emit({kind:'progress',message:'new while pinned',phase_key:'conops',payload:{},ts:1720000201})")
+    assert console.evaluate('e=>Math.abs(e.scrollHeight-e.scrollTop-e.clientHeight)<2')
+    page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true},ts:1720000202})")
+    assert page.locator('.live-indicator.waiting').get_by_text('Waiting for your answer').is_visible()

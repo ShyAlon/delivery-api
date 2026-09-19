@@ -69,8 +69,15 @@ async def _start():
     config.validate_auth_config()
     await jobs.start()
 
+_stream_shutdown_events:set[asyncio.Event]=set()
+
 @app.on_event("shutdown")
-async def _stop(): await jobs.stop()
+async def _stop():
+    activity("server.shutdown.signal","Server shutdown received",streams=len(_stream_shutdown_events),engines=len(runner.processes))
+    for event in tuple(_stream_shutdown_events):event.set()
+    await runner.shutdown()
+    await jobs.stop()
+    activity("server.shutdown.complete","Server shutdown complete",streams_closed=len(_stream_shutdown_events))
 
 @app.get("/", include_in_schema=False)
 def index(): return FileResponse(WEB_DIR / "index.html")
@@ -337,18 +344,23 @@ def task_events(task_id: str, after: int = Query(default=0, ge=0)):
     return {"events": store.events(task_id, after)}
 
 @app.get("/api/tasks/{task_id}/stream")
-async def task_stream(task_id: str):
+async def task_stream(task_id: str, request: Request):
     if not store.task(task_id): raise HTTPException(404, "task not found")
+    stop=asyncio.Event();_stream_shutdown_events.add(stop)
     async def generate():
-        existing = store.events(task_id)
-        cursor = existing[-1]["id"] if existing else 0
-        while True:
-            events = store.events(task_id, cursor)
-            for event in events:
-                cursor = event["id"]
-                yield f"id: {cursor}\nevent: progress\ndata: {json.dumps(event)}\n\n"
-            yield f"event: heartbeat\ndata: {json.dumps({'task_id': task_id})}\n\n"
-            await asyncio.sleep(2)
+        try:
+            existing = store.events(task_id)
+            cursor = existing[-1]["id"] if existing else 0
+            while not stop.is_set() and not await request.is_disconnected():
+                events = store.events(task_id, cursor)
+                for event in events:
+                    cursor = event["id"]
+                    yield f"id: {cursor}\nevent: progress\ndata: {json.dumps(event)}\n\n"
+                yield f"event: heartbeat\ndata: {json.dumps({'task_id': task_id})}\n\n"
+                try:await asyncio.wait_for(stop.wait(),2)
+                except asyncio.TimeoutError:pass
+        finally:
+            _stream_shutdown_events.discard(stop)
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 class RerunRequest(BaseModel):

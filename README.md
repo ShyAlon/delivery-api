@@ -2,20 +2,20 @@
 
 **From a real conversation to a spec you can prove.**
 
-`delivery-api` is the web and job-control repository for **Requi.re**, plus its reactive UI. The sibling `interview-engine`, `spec-engine`, and contract repositories remain separately named implementation components of the Requi.re product. The server owns process lifetime, durable task/phase/event state, SSE progress, artifacts and rerun generations. It does not reimplement interview or specification logic.
+`delivery-api` is the web and job-control repository for **Requi.re**, plus its reactive UI. The sibling `interview-engine`, `spec-generator`, `verification-loop`, `vmodel-contracts`, and `vmodel-spec-app` repositories remain separately named implementation components of the Requi.re product. The server owns process lifetime, durable task/phase/event state, SSE progress, artifacts and rerun generations. It does not reimplement interview or specification logic.
 
 ## Run locally
 
+The supported local entry point installs or refreshes the editable environment when needed, enables local email/password accounts, selects the engine interpreter, uses one Ollama request at a time, and opens the folder-based session workspace:
+
 ```bash
 cd ~/development/require/delivery-api
-python -m venv .venv && source .venv/bin/activate
-pip install -e '.[dev]'
-python -m delivery_api
+scripts/run-ui.sh
 ```
 
-Open http://127.0.0.1:8000. API docs are at http://127.0.0.1:8000/docs.
+Open http://127.0.0.1:8000. API docs are at http://127.0.0.1:8000/docs. The local model route intentionally uses `ollama/phi4`; `OLLAMA_NUM_PARALLEL=1` prevents overlapping local requests. Existing completed sessions load from the artifacts folder configured in the UI, not from a file picker.
 
-The UI has a V-shaped process map per task and distinct not-started, running and completed views. Live events use SSE, while SQLite keeps tasks, progress, audit history and artifacts through browser or server restarts.
+The UI has a V-shaped process map per task and distinct not-started, running, waiting-for-answer, and completed views. Live events use SSE. Live output has a fixed scrolling viewport so the answer composer remains visible. Visible bundle pages are human-readable; use the item actions to inspect source JSON on demand.
 
 ## Local persistence and the cloud seam
 
@@ -37,11 +37,11 @@ docker run --rm -p 8000:8000 -v "$PWD/.data:/data" \
   -e DELIVERY_DB_PATH=/data/delivery.db vmodel
 ```
 
-Ollama is never in the image. Local deployments route to host Ollama; cloud deployments use API providers through the engines' shared model-routing environment. The task view starts the sibling `interview-engine` CLI, streams its live output and heartbeats, and sends browser answers back to the process over stdin. Set `INTERVIEW_ENGINE_DIR` when that repository is not a sibling of this one.
+Ollama is never in the image. Local deployments route to host Ollama; cloud deployments use API providers through the engines' shared model-routing environment. Source development starts the sibling `interview-engine` CLI, streams live output and heartbeats, and sends browser answers over stdin. Set `INTERVIEW_ENGINE_DIR` when that repository is not a sibling. The single-runtime distribution described below installs the engine into its own runtime and needs no sibling checkout at launch.
 
 ## Hetzner production deployment
 
-Production is one multi-architecture Docker image on a small Ubuntu VM. SQLite is mounted from `/data`, outside the replaceable container. The container binds port 8000 to localhost only; put a TLS reverse proxy on ports 80/443 before public launch. Ollama is not deployed.
+Production is one multi-architecture Docker image on a small Ubuntu VM. Pure SQLite can be mounted from `/data`; optional Turso mode uses the same local file as an embedded replica. The container binds port 8000 to localhost only; put a TLS reverse proxy on ports 80/443 before public launch. Ollama is not deployed.
 
 `CI and deploy` runs on every push to `main`: pytest plus Playwright, an amd64/arm64 image build, GHCR push, then optional SSH deployment. Deployment is off until the repository variable `DEPLOY_ENABLED=true` exists, so CI stays green before a server is provisioned. Images are immutable `sha-<commit>` tags. The remote deploy keeps the previous image name and prints an exact rollback command if `/health` fails.
 
@@ -72,7 +72,7 @@ Production is one multi-architecture Docker image on a small Ubuntu VM. SQLite i
 
 5. Trigger the first deployment with `gh workflow run 'CI and deploy'`, or push to `main`. Watch it with `gh run watch`.
 
-The workflow uses `GITHUB_TOKEN` for GHCR. No registry password is stored. GitHub environments may optionally require manual production approval. Back up `/data/delivery.db` before database migrations; Hetzner VM backups are useful but do not replace an application-consistent SQLite copy.
+The workflow uses `GITHUB_TOKEN` for GHCR. No registry password is stored. GitHub environments may optionally require manual production approval. Back up the active local database before database migrations; Hetzner VM backups and Turso sync do not replace an application-consistent backup.
 
 ## Production authentication and per-user token quotas
 
@@ -118,11 +118,18 @@ Prefer the admin API from the authenticated web origin rather than copying cooki
 
 ### Local accounts and workspace
 
-`scripts/run-ui.sh` enables username/password accounts by default. Passwords require 12+ characters with uppercase, lowercase, number, and symbol, and are stored only as per-user salted scrypt hashes. Browser sessions use random opaque handles in HttpOnly, SameSite=Lax cookies; only their SHA-256 digests are stored. Set `DELIVERY_BASIC_AUTH_ENABLED=0` only when intentionally restoring the unauthenticated local development mode.
+`scripts/run-ui.sh` enables email/password accounts by default. Passwords require 12+ characters with uppercase, lowercase, number, and symbol, and are stored only as per-user salted scrypt hashes. Browser sessions use random opaque handles in HttpOnly, SameSite=Lax cookies; only their SHA-256 digests are stored. Set `DELIVERY_BASIC_AUTH_ENABLED=0` only when intentionally restoring the unauthenticated local development mode.
 
 Accounts identify actions, while discovered artifact sessions remain one shared local workspace. This fits the single-machine founder-demo workflow and avoids duplicating or moving the source artifact tree per account.
 
-Basic-account identifiers are email addresses. Older pre-email basic usernames remain in the local database for audit continuity, but must be recreated with an email address to use the current sign-in UI; OAuth accounts are unaffected.
+Email addresses are normalized to lowercase and must have a local part, `@`, and a dotted domain. Older pre-email identifiers remain in the local database for audit continuity, but must be recreated with an email address to use the current sign-in UI; OAuth accounts are unaffected.
+
+
+### Engine interpreter and logs
+
+Development mode starts `interview-engine` from its sibling folder. Interpreter precedence is: `INTERVIEW_ENGINE_PYTHON`, `VMODEL_PYTHON`, the interpreter saved through **Artifacts folder > Engine Python**, an engine virtual environment, the shared checkout virtual environment, then the active `VIRTUAL_ENV`. The UI validates candidates before saving one. A built distribution does not scan: both the server and engine always use `dist/requi-re/runtime/bin/python`.
+
+Requi.re writes structured, timestamped activity to the console and `run.log`, including navigation, authentication, engine preflight/output, task actions, and replica sync boundaries. User-visible failures stay in `Error / Likely cause / Next` form; raw Python and native-build diagnostics belong in `run.log` and `dist/requi-re-build.log`. Secrets such as Turso tokens are never logged.
 
 ## Development vs build/deploy
 

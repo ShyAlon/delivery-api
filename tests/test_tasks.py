@@ -93,6 +93,19 @@ def test_process_runner_streams_cli_output_and_known_count(tmp_path):
     assert event["payload"] == {"completed": 4, "total": 9}
 
 
+def test_process_runner_marks_input_prompts_distinct_from_work(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'waiting.db'));task_id=store.create_task('Waiting prompt')['task_id']
+    script="print('Generating interview question',flush=True);print('What matters?\\nYou:',end='',flush=True)"
+    assert asyncio.run(ProcessRunner(store).run(task_id,[sys.executable,'-c',script],cwd=tmp_path))==0
+    events=store.events(task_id)
+    assert any(e['kind']=='progress' and not e['payload'].get('waiting_input') for e in events)
+    waiting=next(e for e in events if e['kind']=='waiting_input')
+    assert waiting['payload']['waiting_input'] is True and waiting['message'].endswith('You:')
+
+
 def test_storage_factory_is_the_only_backend_selection_point(tmp_path):
     from delivery_api.store import SQLiteStore, Storage, create_store
 
@@ -404,7 +417,9 @@ def test_sse_stream_reads_events_from_turso_tuple_backend(monkeypatch,tmp_path):
     task_id=store.create_task('SSE tuple task','')['task_id']
     monkeypatch.setattr(app_module,'store',store)
     async def read():
-        response=await app_module.task_stream(task_id)
+        class Connected:
+            async def is_disconnected(self):return False
+        response=await app_module.task_stream(task_id,Connected())
         iterator=response.body_iterator
         heartbeat=await anext(iterator)
         assert 'event: heartbeat' in heartbeat

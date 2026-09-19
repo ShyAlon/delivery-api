@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import signal
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,6 +39,7 @@ class ProcessRunner:
         proc = await asyncio.create_subprocess_exec(
             *command, cwd=str(cwd), env={**os.environ, **(env or {})},
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            start_new_session=(os.name == "posix"),
         )
         self.processes[task_id] = proc
         last_line = time.monotonic()
@@ -61,6 +63,7 @@ class ProcessRunner:
                 if not raw: break
                 for line in filter(None,(part.strip() for part in raw.decode(errors="replace").splitlines())):
                     last_line = time.monotonic()
+                    waiting_input = line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line
                     activity("engine.output","Engine raw output",task_id=task_id,stream="combined",line=line)
                     if line.startswith("Traceback (most recent call last):"): traceback_started=True
                     missing = _MISSING_MODULE.search(line)
@@ -71,8 +74,9 @@ class ProcessRunner:
                     completed = int(match.group(3)) if match and match.group(3) else 0
                     total = int(match.group(4)) if match and match.group(4) else None
                     self.store.update_phase(task_id, phase, "running", detail=line, completed=completed, total=total)
-                    self.store.add_event(task_id, "progress", line, phase_key=phase,
-                                         payload={"completed": completed,"total":total})
+                    payload={"completed":completed,"total":total}
+                    if waiting_input:payload["waiting_input"]=True
+                    self.store.add_event(task_id,"waiting_input" if waiting_input else "progress",line,phase_key=phase,payload=payload)
             code = await proc.wait()
             if code == 0:
                 self.store.update_phase(task_id, phase, "done", detail="Engine stage complete")
@@ -91,6 +95,25 @@ class ProcessRunner:
             return code
         finally:
             beat.cancel(); self.processes.pop(task_id, None)
+
+    async def shutdown(self, grace_seconds: float = 3.0) -> None:
+        active=list(self.processes.items())
+        for task_id,proc in active:
+            if proc.returncode is not None:continue
+            activity("engine.shutdown.signal","Stopping engine for server shutdown",task_id=task_id,pid=proc.pid,signal="SIGTERM")
+            try:
+                os.killpg(proc.pid,signal.SIGTERM) if os.name == "posix" else proc.terminate()
+            except ProcessLookupError:pass
+        if active:
+            try:await asyncio.wait_for(asyncio.gather(*(p.wait() for _,p in active)),grace_seconds)
+            except asyncio.TimeoutError:
+                for task_id,proc in active:
+                    if proc.returncode is not None:continue
+                    activity("engine.shutdown.kill","Engine ignored shutdown grace period",task_id=task_id,pid=proc.pid,signal="SIGKILL")
+                    try:os.killpg(proc.pid,signal.SIGKILL) if os.name == "posix" else proc.kill()
+                    except ProcessLookupError:pass
+                await asyncio.gather(*(p.wait() for _,p in active),return_exceptions=True)
+        activity("engine.shutdown.complete","Engine shutdown complete",processes=len(active))
 
     async def send_input(self, task_id: str, text: str) -> None:
         proc = self.processes.get(task_id)
