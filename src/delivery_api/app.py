@@ -29,7 +29,7 @@ from . import bundles
 from .observability import event as activity
 
 WEB_DIR = Path(__file__).parent / "web"
-app = FastAPI(title="V-model console", version="0.2.0")
+app = FastAPI(title="Requi.re API", version="0.2.0")
 store = create_store(config.DATABASE_URL)
 jobs = JobQueue(store)
 runner = ProcessRunner(store)

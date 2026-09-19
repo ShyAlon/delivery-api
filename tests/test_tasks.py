@@ -61,7 +61,8 @@ def test_archive_policy_marks_downstream_stale_and_keeps_upstream():
 
 def test_static_ui_and_deep_link_are_served():
     with TestClient(app) as client:
-        assert "VECTOR" in client.get("/").text
+        html=client.get("/").text
+        assert "Requi.re" in html and "VECTOR" not in html and "Vector" not in html
         assert "task-grid" in client.get("/assets/style.css").text
         assert client.get("/tasks/any/view").status_code == 200
         icon = client.get("/favicon.ico")

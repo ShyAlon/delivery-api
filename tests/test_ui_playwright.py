@@ -93,6 +93,18 @@ def test_dashboard_draws_v_and_all_task_states(page, ui):
     assert page.get_by_text("Complete").count() == 1
 
 
+def test_require_brand_is_consistent(page, ui):
+    page.goto(ui)
+    assert page.title() == "Requi.re / Product definition workspace"
+    brand=page.locator('.brand-name')
+    assert brand.inner_text().startswith('Requi.re')
+    assert brand.locator('strong').inner_text()=='.re'
+    assert page.locator('body').inner_text().lower().find('vector') == -1
+    page.goto(ui+'/about')
+    assert page.get_by_text('About Requi.re',exact=True).is_visible()
+    assert page.locator('body').inner_text().lower().find('vector') == -1
+
+
 def test_not_started_running_and_done_pages(page, ui):
     page.goto(ui + "/tasks/empty/view")
     page.get_by_text("This task hasn't started.").wait_for();assert page.get_by_text("This task hasn't started.").is_visible()
@@ -150,7 +162,7 @@ def test_basic_auth_browser_signup_signin_persists_and_logs(tmp_path):
             except Exception:time.sleep(.1)
         with sync_playwright() as p:
             browser=p.chromium.launch(headless=True);page=browser.new_page();page.goto(base+"/sessions")
-            page.get_by_text("Welcome to Vector",exact=True).wait_for()
+            page.get_by_text("Welcome to Requi.re",exact=True).wait_for()
             page.evaluate("window.__guardToken=Math.random()")
             page.get_by_role("link",name="All sessions").click()
             assert page.evaluate("window.__guardToken") is not None and page.url==base+"/sessions"
@@ -187,7 +199,7 @@ def test_oauth_identity_and_logout_in_browser(tmp_path):
             page=context.new_page();page.goto(base)
             page.get_by_text("shy@example.com").wait_for()
             page.get_by_role("button",name="Sign out").click()
-            page.get_by_text("Welcome to Vector",exact=True).wait_for()
+            page.get_by_text("Welcome to Requi.re",exact=True).wait_for()
             assert page.get_by_role("button",name="Sign in").first.is_visible()
             browser.close()
     finally:

@@ -1,6 +1,8 @@
-# delivery-api / V-model console
+# Requi.re
 
-The thin local job-control server for the V-model CLIs, plus its reactive web UI. The server owns process lifetime, durable task/phase/event state, SSE progress, artifacts and rerun generations. It does not reimplement interview or specification logic.
+**From a real conversation to a spec you can prove.**
+
+`delivery-api` is the web and job-control repository for **Requi.re**, plus its reactive UI. The sibling `interview-engine`, `spec-engine`, and contract repositories remain separately named implementation components of the Requi.re product. The server owns process lifetime, durable task/phase/event state, SSE progress, artifacts and rerun generations. It does not reimplement interview or specification logic.
 
 ## Run locally
 
