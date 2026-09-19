@@ -64,7 +64,14 @@ class ProcessRunner:
                 raw = await proc.stdout.read(512)
                 if not raw: break
                 for line in filter(None,(part.strip() for part in raw.decode(errors="replace").splitlines())):
-                    waiting_input = line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line
+                    structured_decision=None
+                    if line.startswith("REQUIRE_EVENT "):
+                        import json
+                        try:
+                            candidate=json.loads(line.removeprefix("REQUIRE_EVENT "))
+                            if candidate.get("type")=="founder_decision" and isinstance(candidate.get("options"),list):structured_decision=candidate
+                        except (ValueError,TypeError):pass
+                    waiting_input = structured_decision is not None or line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line
                     if waiting_input:
                         prompt_lines.append(line)
                         if task_id not in self.waiting:
@@ -85,8 +92,13 @@ class ProcessRunner:
                     payload={"completed":completed,"total":total}
                     if waiting_input:
                         payload["waiting_input"]=True
-                        payload["question"]="\n".join(prompt_lines).removesuffix("\nYou:").removesuffix("You:").strip()
-                    self.store.add_event(task_id,"waiting_input" if waiting_input else "progress",line,phase_key=phase,payload=payload)
+                        payload["question"]=(structured_decision or {}).get("prompt") or "\n".join(prompt_lines).removesuffix("\nYou:").removesuffix("You:").strip()
+                        if structured_decision:payload["decision"]=structured_decision
+                    # The machine envelope belongs in structured payload only,
+                    # never in the founder-facing raw log.
+                    if structured_decision:
+                        self.store.add_event(task_id,"founder_decision",structured_decision["prompt"],phase_key=phase,payload=payload)
+                    else:self.store.add_event(task_id,"waiting_input" if waiting_input else "progress",line,phase_key=phase,payload=payload)
             code = await proc.wait()
             if task_id in self.interrupted_for_shutdown:
                 # Keep the durable task phase running: startup will recover it

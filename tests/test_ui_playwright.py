@@ -462,3 +462,31 @@ def test_answer_enter_sends_and_control_enter_inserts_newline(page,ui):
     assert answer.input_value()=='Line one\nLine two' and sent==[]
     answer.press('Enter');page.get_by_text('Answer sent.',exact=False).wait_for()
     assert sent==[{'answer':'Line one\nLine two'}]
+
+def test_structured_founder_decision_opens_large_card_dialog_and_formats_answer(page,ui):
+    page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();live['events']=[];live['active_phase']='conops'
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    submitted=[]
+    page.route('**/api/tasks/live/answer',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
+    page.goto(ui+'/tasks/live/view');page.locator('#console').wait_for()
+    decision={'type':'founder_decision','decision_id':'concept','title':'Choose the operating concept','prompt':'Which concept should the architecture execute?','rationale_required':True,'rationale_label':'Why is this right?','answer_format':'<value> - <rationale>','options':[{'value':'1','label':'Native app','summary':'Installed experience','advantages':['Fast offline'],'disadvantages':['App stores']},{'value':'2','label':'PWA','summary':'Browser first','advantages':['One deploy'],'disadvantages':['Limited APIs']}]}
+    page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"conops",payload:{waiting_input:true,question:decision.prompt,decision},ts:1720000300})',decision)
+    dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.is_visible()
+    assert dialog.get_by_text('Native app',exact=True).is_visible() and dialog.get_by_text('PWA',exact=True).is_visible()
+    assert dialog.get_by_text('Fast offline',exact=False).is_visible() and dialog.get_by_text('Limited APIs',exact=False).is_visible()
+    box=dialog.bounding_box();assert box['width']>900
+    dialog.get_by_text('PWA',exact=True).click();dialog.locator('textarea').fill('One deployment fits our team')
+    page.screenshot(path='/downloads/structured-founder-decision.png',full_page=True)
+    dialog.locator('textarea').press('Enter')
+    assert submitted==[{'answer':'2 - One deployment fits our team'}]
+
+
+def test_structured_founder_decision_escape_closes_without_answer(page,ui):
+    page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();live['events']=[]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');page.locator('#console').wait_for()
+    decision={'type':'founder_decision','title':'Choose','prompt':'Pick','options':[{'value':'1','label':'A','summary':'First'},{'value':'2','label':'B','summary':'Second'}]}
+    page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:"Pick",phase_key:"conops",payload:{waiting_input:true,decision},ts:1720000300})',decision)
+    page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape');assert page.locator('.decision-dialog').count()==0
+    assert page.locator('#opendecision').is_visible()

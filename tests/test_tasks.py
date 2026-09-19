@@ -577,3 +577,21 @@ def test_startup_resume_recovers_legacy_sigterm_failure(monkeypatch,tmp_path):
     async def go():await app_module._resume_interrupted_interviews();await asyncio.sleep(.01)
     asyncio.run(go())
     assert captured and captured[0][0][1][-1]=='legacy-checkpoint'
+
+def test_runner_preserves_structured_founder_decision_options(tmp_path):
+    import asyncio,json,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    payload={"type":"founder_decision","decision_id":"concept","title":"Choose one","prompt":"Which concept?","options":[{"value":"1","label":"Native","summary":"Installed","advantages":["Fast"],"disadvantages":["Stores"]},{"value":"2","label":"PWA","summary":"Browser","advantages":["Deploy"],"disadvantages":["APIs"]}],"rationale_required":True,"rationale_label":"Why?","answer_format":"<value> - <rationale>"}
+    script=f'import json;print("REQUIRE_EVENT "+json.dumps({payload!r}),flush=True);print("You: ",end="",flush=True);input()'
+    store=SQLiteStore(str(tmp_path/'decision.db'));tid=store.create_task('Decision')['task_id'];runner=ProcessRunner(store)
+    async def go():
+        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path))
+        for _ in range(100):
+            if tid in runner.waiting:break
+            await asyncio.sleep(.01)
+        await runner.send_input(tid,'2 - easier deployment');await job
+    asyncio.run(go())
+    event=next(e for e in store.events(tid) if e['kind']=='founder_decision')
+    assert event['payload']['decision']['options'][1]['label']=='PWA'
+    assert 'REQUIRE_EVENT' not in event['message']
