@@ -524,3 +524,22 @@ def test_detail_layout_never_crushes_or_overlaps_at_user_viewport(page,ui):
     assert page.locator('.phase.running').count()==1
     console=page.locator('.live-console');assert console.evaluate('e=>getComputedStyle(e).wordBreak')=='normal'
     page.screenshot(path='/downloads/detail-layout-clean-1390x827.png',full_page=True)
+
+def test_founder_dialog_fixed_controls_and_vertical_four_options(page,ui):
+    page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();live['events']=[]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.route('**/api/tasks/live/answer',lambda route:route.fulfill(json={'status':'accepted'}))
+    page.set_viewport_size({'width':1390,'height':827});page.goto(ui+'/tasks/live/view');page.locator('#console').wait_for()
+    options=[{'value':str(i),'label':name,'summary':'A deliberately detailed option summary.','advantages':['Clear advantage'],'disadvantages':['Known tradeoff']} for i,name in enumerate(['Native mobile','Progressive web app','Responsive web','Hybrid shell'],1)]
+    decision={'type':'founder_decision','title':'Choose the operating concept','prompt':'Which concept should the architecture execute?','rationale_label':'Why is this the right concept?','options':options}
+    page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"conops",payload:{waiting_input:true,decision},ts:1720000300})',decision)
+    dialog=page.locator('.decision-dialog');dialog.wait_for();cards=dialog.locator('.decision-option');assert cards.count()==4
+    boxes=[cards.nth(i).bounding_box() for i in range(4)];assert all(boxes[i+1]['y']>boxes[i]['y']+boxes[i]['height']-1 for i in range(3))
+    head=dialog.locator('.decision-head');compose=dialog.locator('.decision-compose');scroll=dialog.locator('.decision-scroll')
+    assert head.bounding_box()['y']<compose.bounding_box()['y']<scroll.bounding_box()['y']
+    assert dialog.locator('.decision-compose textarea').is_visible() and dialog.locator('.decision-compose button[type=submit]').is_visible()
+    before=(head.bounding_box()['y'],compose.bounding_box()['y']);scroll.evaluate('e=>e.scrollTop=e.scrollHeight');after=(head.bounding_box()['y'],compose.bounding_box()['y']);assert before==after
+    cards.nth(2).click();selected=cards.nth(2);assert selected.evaluate("e=>e.classList.contains('selected')")
+    style=selected.locator('.option-copy b').evaluate("e=>({weight:getComputedStyle(e).fontWeight,bg:getComputedStyle(e).backgroundColor})")
+    assert int(style['weight'])>=700 and style['bg']!='rgba(0, 0, 0, 0)'
+    page.screenshot(path='/downloads/founder-dialog-vertical-four-options.png',full_page=True)
