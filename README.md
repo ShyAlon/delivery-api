@@ -33,7 +33,7 @@ docker run --rm -p 8000:8000 -v "$PWD/.data:/data" \
   -e DELIVERY_DB_PATH=/data/delivery.db vmodel
 ```
 
-Ollama is never in the image. Local deployments route to host Ollama; cloud deployments use API providers through the engines' shared model-routing environment. Engine CLI wiring is the next slice: `ProcessRunner` already holds the process, line stream and heartbeat contract.
+Ollama is never in the image. Local deployments route to host Ollama; cloud deployments use API providers through the engines' shared model-routing environment. The task view starts the sibling `interview-engine` CLI, streams its live output and heartbeats, and sends browser answers back to the process over stdin. Set `INTERVIEW_ENGINE_DIR` when that repository is not a sibling of this one.
 
 ## Hetzner production deployment
 

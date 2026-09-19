@@ -111,3 +111,23 @@ def test_artifacts_root_accepts_interview_only_spec_only_and_combined(client,tmp
  assert rows=={'i':['interview'],'s':['spec'],'both':['interview','spec']}
  r=client.post('/api/settings/artifacts-root',json={'path':str(tmp_path/'missing')})
  assert r.status_code==400 and set(r.json()['detail'])=={'error','cause','next'}
+
+def test_start_task_launches_interview_runner(monkeypatch,tmp_path):
+    from delivery_api.app import app,store
+    from fastapi.testclient import TestClient
+    import asyncio
+    tid='start-engine-test'
+    if store.task(tid):store.delete_task(tid)
+    store.create_task('Start engine test','A calm family task app',task_id=tid)
+    calls=[]
+    async def fake_run(task_id,command,**kwargs):calls.append((task_id,command,kwargs));return 0
+    monkeypatch.setattr('delivery_api.app.runner.run',fake_run)
+    monkeypatch.setenv('INTERVIEW_ENGINE_DIR',str(tmp_path));tmp_path.mkdir(exist_ok=True)
+    r=TestClient(app).post(f'/api/tasks/{tid}/start')
+    assert r.status_code==200 and r.json()['status']=='started'
+    import time
+    for _ in range(20):
+        if calls:break
+        time.sleep(.01)
+    assert calls and calls[0][0]==tid and calls[0][1][1:3]==['-m','interview_engine.cli'] and calls[0][1][3]=='A calm family task app'
+    assert store.task(tid)['state']=='running'

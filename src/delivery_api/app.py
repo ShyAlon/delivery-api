@@ -5,6 +5,8 @@ import asyncio
 import json
 import logging
 import time
+import os
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -270,6 +272,37 @@ def delete_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     except KeyError:raise HTTPException(404,{"error":"Task not found.","cause":"It may already have been deleted.","next":"Return to the task list."})
     except ValueError as e:raise HTTPException(409,{"error":str(e),"cause":"Active work must stop before its data is removed.","next":"Wait for the replay to finish, then delete the task."})
     return {"status":"deleted","task_id":task_id,"source_artifacts_deleted":False}
+
+@app.post("/api/tasks/{task_id}/start")
+async def start_task_engine(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    task=store.task(task_id)
+    if not task:raise HTTPException(404,{"error":"Task not found.","cause":"It may have been deleted.","next":"Return to Home and choose another task."})
+    if task["state"]!="not_started":raise HTTPException(409,{"error":"This task already started.","cause":f"Its current state is {task['state']}.","next":"Open its live progress instead of starting it again."})
+    idea=(task.get("brief") or task.get("title") or "").strip()
+    if not idea:raise HTTPException(400,{"error":"The interview needs a starting idea.","cause":"This task has no brief.","next":"Add a sentence describing the product, then start again."})
+    engine_dir=Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve()
+    if not engine_dir.is_dir():raise HTTPException(503,{"error":"Interview engine is not available.","cause":f"Expected it at {engine_dir}.","next":"Run scripts/pull-all.sh, then restart the UI."})
+    engine_python=next((candidate for candidate in (engine_dir/".venv/bin/python",engine_dir/"venv/bin/python") if candidate.is_file()),Path(sys.executable))
+    store.update_phase(task_id,"intent","running",detail="Launching adaptive interview")
+    store.audit(a.label,"interview.started",task_id,{"engine_dir":str(engine_dir),"python":str(engine_python)})
+    activity("engine.start","Interview engine launch requested",task_id=task_id,actor=a.label,python=str(engine_python))
+    async def execute():
+        try:await runner.run(task_id,[str(engine_python),"-m","interview_engine.cli",idea],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1","PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})
+        except Exception as e:
+            store.update_phase(task_id,"intent","failed",detail=f"Interview engine could not start: {type(e).__name__}: {str(e)[:180]}")
+            store.add_event(task_id,"error","Interview engine could not start",phase_key="intent",payload={"cause":str(e)[:300],"next":"Check run.log and the interview-engine installation, then retry."})
+            activity("engine.failure","Interview engine failed",task_id=task_id,error=f"{type(e).__name__}: {e}")
+    asyncio.create_task(execute())
+    return {"status":"started","task_id":task_id,"next":f"/tasks/{task_id}/view"}
+
+class InterviewAnswer(BaseModel):answer:str=Field(min_length=1,max_length=8000)
+@app.post("/api/tasks/{task_id}/answer")
+async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends(auth.require_actor)):
+    try:await runner.send_input(task_id,body.answer)
+    except RuntimeError as e:raise HTTPException(409,{"error":"The interview is not waiting for an answer.","cause":str(e),"next":"Wait for the next question in live output, then answer."})
+    store.add_event(task_id,"answer","Interview answer submitted",phase_key="intent",payload={"actor":a.label,"character_count":len(body.answer)})
+    activity("engine.answer","Interview answer submitted",task_id=task_id,actor=a.label,character_count=len(body.answer))
+    return {"status":"accepted"}
 
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str):

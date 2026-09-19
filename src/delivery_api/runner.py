@@ -49,17 +49,21 @@ class ProcessRunner:
         beat = asyncio.create_task(heartbeat())
         try:
             assert proc.stdout
-            async for raw in proc.stdout:
-                line = raw.decode(errors="replace").rstrip()
-                if not line: continue
-                last_line = time.monotonic()
-                phase = self._phase(line, phase)
-                match = _PROGRESS.search(line)
-                completed = int(match.group(3)) if match and match.group(3) else 0
-                total = int(match.group(4)) if match and match.group(4) else None
-                self.store.update_phase(task_id, phase, "running", detail=line, completed=completed, total=total)
-                self.store.add_event(task_id, "progress", line, phase_key=phase,
-                                     payload={"completed": completed, "total": total})
+            # Read chunks, not lines: input() prompts normally have no trailing newline.
+            # Chunk reads expose the question immediately instead of making the browser
+            # look frozen while the engine waits for stdin.
+            while True:
+                raw = await proc.stdout.read(512)
+                if not raw: break
+                for line in filter(None,(part.strip() for part in raw.decode(errors="replace").splitlines())):
+                    last_line = time.monotonic()
+                    phase = self._phase(line, phase)
+                    match = _PROGRESS.search(line)
+                    completed = int(match.group(3)) if match and match.group(3) else 0
+                    total = int(match.group(4)) if match and match.group(4) else None
+                    self.store.update_phase(task_id, phase, "running", detail=line, completed=completed, total=total)
+                    self.store.add_event(task_id, "progress", line, phase_key=phase,
+                                         payload={"completed": completed, "total": total})
             code = await proc.wait()
             if code == 0:
                 self.store.update_phase(task_id, phase, "done", detail="Engine stage complete")

@@ -96,8 +96,10 @@ def test_dashboard_draws_v_and_all_task_states(page, ui):
 def test_not_started_running_and_done_pages(page, ui):
     page.goto(ui + "/tasks/empty/view")
     page.get_by_text("This task hasn't started.").wait_for();assert page.get_by_text("This task hasn't started.").is_visible()
+    start=page.get_by_role("button",name="Start interview");assert start.is_visible() and start.is_enabled()
+    assert page.get_by_text("Start engine · wiring next").count()==0
     page.goto(ui + "/tasks/live/view")
-    assert page.get_by_text("Live engine output").is_visible()
+    page.get_by_text("Live engine output").wait_for();assert page.get_by_text("Live engine output").is_visible()
     assert page.get_by_text("Generating CONOPS option 2/3").count() == 1
     page.goto(ui + "/tasks/done/view")
     page.get_by_text("Artifacts", exact=True).wait_for();assert page.get_by_text("Artifacts", exact=True).is_visible()
