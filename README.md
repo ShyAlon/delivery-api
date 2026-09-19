@@ -161,3 +161,13 @@ TURSO_AUTH_TOKEN=YOUR-GENERATED-TOKEN
 Restart Requi.re. With both values present, the stable local database at `~/.local/share/requi-re/delivery.db` becomes an embedded replica: normal operations use the local file; libSQL syncs in the background every 60 seconds; account creation and session create/revoke also attempt an immediate sync. If the network or Turso is unavailable, local reads and writes continue and the deferred sync is recorded in `run.log` without logging the URL or token. Set `TURSO_SYNC_INTERVAL` to change the background interval. If either URL or token is missing, startup stops with a clear configuration error instead of silently running an unintended mode. Remove both variables to return to pure local SQLite.
 
 The distribution build is incremental by default. It preserves the current runtime, hashes dependency inputs, and compares each repository SHA plus dirty diff hash with `.build-state`. Unchanged dependencies and packages print `boundary=... decision=skip reason=unchanged`; one changed repo rebuilds only that package. Use `scripts/build-dist.sh --clean` or `REQUI_RE_CLEAN=1` for a full rebuild. Every candidate build is validated in a staging folder and atomically promoted, so a missing repository, failed install, or failed import leaves the previous distribution runnable.
+
+### Native build prerequisite for libSQL
+
+The builder first asks pip for a binary libSQL wheel. When one exists, no compiler setup is needed. PyPI currently has no `libsql` wheel for CPython 3.14 on macOS arm64, so that combination must build libSQL from source and needs CMake plus Rust:
+
+```bash
+brew install cmake rust
+```
+
+The build checks this before dependency installation and stops with Error / Likely cause / Next instead of exposing Cargo/CMake output. Raw native-build output is saved to `dist/requi-re-build.log`. Because all work happens in staging, this failure leaves the last successful `dist/requi-re` launcher and runtime unchanged.

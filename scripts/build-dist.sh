@@ -19,13 +19,36 @@ DEP_INPUT="$DEPS|$($BOOTSTRAP_PYTHON --version 2>&1)"
 for repo in $PACKAGES; do DEP_INPUT="$DEP_INPUT|$(shasum -a 256 "$REPOS_ROOT/$repo/pyproject.toml" | awk '{print $1}')"; done
 DEP_HASH=$(printf '%s' "$DEP_INPUT" | shasum -a 256 | awk '{print $1}')
 PYTHON="$STAGE/runtime/bin/python"
+BUILD_LOG="$PARENT/requi-re-build.log"
+install_dependencies(){
+  local wheel_dir="$STAGE/.wheel-probe"; rm -rf "$wheel_dir"; mkdir -p "$wheel_dir"
+  if ! "$PYTHON" -m pip download --only-binary=:all: --no-deps libsql -d "$wheel_dir" >/dev/null 2>&1; then
+    missing=""; command -v cmake >/dev/null 2>&1 || missing="cmake"; command -v cargo >/dev/null 2>&1 || missing="${missing:+$missing and }rust"
+    if [ -n "$missing" ]; then
+      echo "Error: libSQL needs a source build on this Python/platform, but $missing is missing."
+      echo "Likely cause: PyPI has no prebuilt libsql wheel for $($PYTHON -c 'import sys,platform; print(f"Python {sys.version_info.major}.{sys.version_info.minor} {platform.system()} {platform.machine()}")')."
+      echo "Next: run: brew install cmake rust, then rerun scripts/build-dist.sh."
+      return 1
+    fi
+    echo "boundary=dependency package=libsql decision=source-build reason=no-compatible-wheel"
+  else
+    echo "boundary=dependency package=libsql decision=wheel reason=compatible-wheel-found"
+  fi
+  if ! "$PYTHON" -m pip install $DEPS >"$BUILD_LOG" 2>&1; then
+    echo "Error: Requi.re dependencies could not be installed."
+    if grep -qi 'cmake.*not installed\|No such file.*cmake' "$BUILD_LOG"; then echo "Likely cause: libSQL needs cmake for a source build on this Python/platform."; echo "Next: run: brew install cmake, then retry. Raw build output: $BUILD_LOG"
+    elif grep -qi 'cargo.*not found\|rust.*not found' "$BUILD_LOG"; then echo "Likely cause: libSQL needs the Rust toolchain for a source build on this Python/platform."; echo "Next: run: brew install rust, then retry. Raw build output: $BUILD_LOG"
+    else echo "Likely cause: pip or a native dependency build failed."; echo "Next: inspect $BUILD_LOG, fix the named dependency, then retry."; fi
+    return 1
+  fi
+}
 if [ "$CLEAN" = 1 ] || [ ! -x "$PYTHON" ]; then
   rm -rf "$STAGE/runtime"; "$BOOTSTRAP_PYTHON" -m venv "$STAGE/runtime"
   "$PYTHON" -m pip install --disable-pip-version-check --upgrade pip
   echo "boundary=dependencies decision=install reason=clean-or-missing-runtime"
-  "$PYTHON" -m pip install $DEPS
+  install_dependencies
 elif [ "$(state_get dependencies)" != "$DEP_HASH" ]; then
-  echo "boundary=dependencies decision=install reason=dependency-input-changed"; "$PYTHON" -m pip install $DEPS
+  echo "boundary=dependencies decision=install reason=dependency-input-changed"; install_dependencies
 else echo "boundary=dependencies decision=skip reason=unchanged"; fi
 : > "$STATE"; printf 'dependencies=%s\n' "$DEP_HASH" >> "$STATE"
 for repo in $PACKAGES; do

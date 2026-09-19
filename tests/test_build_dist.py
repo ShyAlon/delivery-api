@@ -26,3 +26,13 @@ def test_incremental_build_has_cache_clean_and_atomic_promotion_contracts():
     assert 'repo_fingerprint' in build and 'dependency-input-changed' in build
     assert '.requi-re-stage-' in build and '.requi-re-previous-' in build
     assert build.index('import delivery_api, interview_engine') < build.index('Atomic promotion')
+
+def test_libsql_source_build_preflight_and_friendly_failure_contract():
+    build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()
+    assert 'pip download --only-binary=:all: --no-deps libsql' in build
+    assert 'command -v cmake' in build and 'command -v cargo' in build
+    assert 'brew install cmake rust' in build
+    assert 'Error: libSQL needs a source build' in build
+    assert 'Likely cause:' in build and 'Raw build output:' in build
+    # Native installation occurs in staging, before atomic promotion.
+    assert build.index('install_dependencies(){') < build.index('Atomic promotion')
