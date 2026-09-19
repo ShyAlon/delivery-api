@@ -382,10 +382,16 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     assert console.evaluate('e=>Math.abs(e.scrollHeight-e.scrollTop-e.clientHeight)<2')
     assert progress.locator('.progress-item',has_text='new while pinned').is_visible()
     assert progress.locator('.progress-item').count()==1
+    page.evaluate('''liveSource.emit({kind:"progress",message:"[17:01:25] ... still working - stage 'conops' call, 30s elapsed",phase_key:"conops",payload:{},ts:1720000201.5})''')
+    inflight=progress.locator('.progress-item');assert inflight.get_by_text("stage 'conops' call",exact=False).is_visible()
+    assert inflight.get_by_text('30s elapsed',exact=False).is_visible() and inflight.locator('small').inner_text()=='Conops'
+    page.evaluate("liveSource.emit({kind:'progress',message:'[17:01:38] ok Planning CONOPS concept option 1/2 [42.6s]',phase_key:'conops',payload:{},ts:1720000201.8})")
+    assert progress.locator('.progress-item',has_text='ok Planning CONOPS concept option 1/2').is_visible()
+    assert not progress.get_by_text("stage 'conops' call",exact=False).is_visible()
     page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true,question:'Which users need this?\\nWhat outcome matters most?'},ts:1720000202})")
     assert page.locator('.live-indicator.waiting').get_by_text('Waiting for your answer').is_visible()
     assert question.is_visible() and question.locator('p').inner_text()=='Which users need this?\nWhat outcome matters most?'
-    page.evaluate("liveSource.emit({kind:'progress',message:'Engine is still working',phase_key:'intent',payload:{},ts:1720000203})")
+    page.evaluate('''liveSource.emit({kind:"progress",message:"[17:02:08] ... still working - stage 'probing' call, 30s elapsed",phase_key:"intent",payload:{},ts:1720000203})''')
     assert question.is_visible() and question.locator('p').inner_text()=='Which users need this?\nWhat outcome matters most?'
     page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true,question:'Second question?'},ts:1720000204})")
     assert question.locator('p').inner_text()=='Second question?'

@@ -93,6 +93,20 @@ def test_process_runner_streams_cli_output_and_known_count(tmp_path):
     assert event["payload"] == {"completed": 4, "total": 9}
 
 
+def test_process_runner_uses_child_stage_aware_heartbeat_without_generic_noise(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'heartbeat.db'));task_id=store.create_task('Useful heartbeat')['task_id']
+    script='print("[17:01:25] ... still working - stage \'conops\' call, 30s elapsed",flush=True)'
+    assert asyncio.run(ProcessRunner(store).run(task_id,[sys.executable,'-c',script],cwd=tmp_path))==0
+    events=store.events(task_id)
+    useful=next(e for e in events if 'still working' in e['message'])
+    assert useful['kind']=='progress' and useful['phase_key']=='conops'
+    assert "stage 'conops' call" in useful['message'] and '30s elapsed' in useful['message']
+    assert not any(e['message']=='Engine is still working' for e in events)
+
+
 def test_process_runner_marks_input_prompts_distinct_from_work(tmp_path):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner

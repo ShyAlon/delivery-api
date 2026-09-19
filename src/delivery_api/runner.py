@@ -43,19 +43,13 @@ class ProcessRunner:
             start_new_session=(os.name == "posix"),
         )
         self.processes[task_id] = proc
-        last_line = time.monotonic()
         traceback_started = False
         missing_module: str | None = None
         prompt_lines: list[str] = []
 
-        async def heartbeat():
-            while proc.returncode is None:
-                await asyncio.sleep(15)
-                if task_id not in self.waiting:
-                    self.store.add_event(task_id, "heartbeat", "Engine is still working", phase_key=phase,
-                                         payload={"silent_seconds": round(time.monotonic() - last_line)})
-
-        beat = asyncio.create_task(heartbeat())
+        # The child pipeline owns progress and LLM heartbeats. Its lines name
+        # the in-flight stage and elapsed time. A second generic heartbeat here
+        # used to overwrite that useful state with "Engine is still working".
         try:
             assert proc.stdout
             # Read chunks, not lines: input() prompts normally have no trailing newline.
@@ -65,7 +59,6 @@ class ProcessRunner:
                 raw = await proc.stdout.read(512)
                 if not raw: break
                 for line in filter(None,(part.strip() for part in raw.decode(errors="replace").splitlines())):
-                    last_line = time.monotonic()
                     waiting_input = line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line
                     if waiting_input:
                         prompt_lines.append(line)
@@ -106,7 +99,7 @@ class ProcessRunner:
                 self.store.add_event(task_id,"error",error,phase_key=phase,payload={"exit_code":code,"module":missing_module,"cause":cause,"next":next_step})
             return code
         finally:
-            beat.cancel(); self.processes.pop(task_id, None);self.waiting.discard(task_id)
+            self.processes.pop(task_id, None);self.waiting.discard(task_id)
 
     async def shutdown(self, grace_seconds: float = 3.0) -> None:
         active=list(self.processes.items())
