@@ -22,6 +22,7 @@ def _oauth(monkeypatch, tmp_path, quota=100):
 
 
 def test_local_mode_bypass_unchanged(monkeypatch,tmp_path):
+    auth.limiter=auth.RateLimiter()
     monkeypatch.setattr(config,"SESSION_SECRET","")
     store=SQLiteStore(str(tmp_path/"local.db")); monkeypatch.setattr("delivery_api.app.store",store); app.state.store=store
     c=TestClient(app)
