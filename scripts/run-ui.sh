@@ -33,6 +33,12 @@ if ! "$PYTHON" -c 'import delivery_api,uvicorn,multipart; from vmodel_contracts 
     exit 1
   fi
 fi
+# Engine runtime precedence: explicit environment, then persisted local setting,
+# then the server's deterministic venv scan/preflight.
+if [ -z "${INTERVIEW_ENGINE_PYTHON:-}" ] && [ -z "${VIRTUAL_ENV:-}" ] && [ -s "$ROOT/.engine-python" ]; then
+  saved_engine_python=$(sed -n '1p' "$ROOT/.engine-python")
+  if [ -x "$saved_engine_python" ]; then export INTERVIEW_ENGINE_PYTHON="$saved_engine_python"; fi
+fi
 cd "$ROOT"
 export DELIVERY_BASIC_AUTH_ENABLED="${DELIVERY_BASIC_AUTH_ENABLED:-1}"
 # The local entry point serves plain http://127.0.0.1. Secure cookies are correct

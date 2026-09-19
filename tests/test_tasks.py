@@ -32,6 +32,7 @@ def test_rerun_previews_then_archives_with_cause_and_audit():
     with TestClient(app) as client:
         task_id = client.post("/api/tasks", json={"title": "Policy seam"}).json()["task_id"]
         store.add_task_artifact(task_id, "architecture", "Architecture", "/a.json")
+        for phase in ("intent","conops","needs"): store.update_phase(task_id,phase,"done")
         preview = client.post(f"/api/tasks/{task_id}/rerun", json={
             "from_phase": "srs", "confirm": False,
         })
@@ -54,6 +55,7 @@ def test_archive_policy_marks_downstream_stale_and_keeps_upstream():
     task_id = store.create_task("Archive")['task_id']
     store.add_task_artifact(task_id, "intent", "Intent", "/intent.json")
     store.add_task_artifact(task_id, "architecture", "Architecture", "/arch.json")
+    for phase in ("intent","conops","needs"): store.update_phase(task_id,phase,"done")
     generation = store.prepare_rerun(task_id, "srs", "archive")
     arts = {a["phase_key"]: a for a in store.task_artifacts(task_id)}
     assert generation == 2 and not arts["intent"]["stale"] and arts["architecture"]["stale"]
@@ -225,3 +227,43 @@ def test_process_runner_hides_traceback_and_classifies_missing_module(tmp_path):
     assert 'Traceback' not in visible and 'File "x.py"' not in visible
     error=next(e for e in events if e['kind']=='error')
     assert 'langchain_core' in error['message'] and 'Likely cause:' in error['message'] and error['payload']['exit_code']==1
+
+
+def test_rerun_refuses_stage_with_unfulfilled_prerequisite():
+    with TestClient(app) as client:
+        task_id=store.create_task('Sequential rerun guard')['task_id']
+        store.update_phase(task_id,'intent','done')
+        response=client.post(f'/api/tasks/{task_id}/rerun',json={'from_phase':'needs','confirm':False})
+        assert response.status_code==409
+        detail=response.json()['detail']
+        assert set(detail)=={'error','cause','next'}
+        assert 'Concept of operations' in detail['error'] and "rerun 'Concept of operations' first" in detail['next']
+        assert store.task(task_id)['generation']==1
+
+
+def test_rerun_proceeds_when_every_upstream_phase_is_done():
+    with TestClient(app) as client:
+        task_id=store.create_task('Sequential rerun allowed')['task_id']
+        for phase in ('intent','conops','needs'):store.update_phase(task_id,phase,'done')
+        preview=client.post(f'/api/tasks/{task_id}/rerun',json={'from_phase':'srs','confirm':False})
+        assert preview.status_code==200 and preview.json()['from_phase']=='srs'
+
+def test_engine_runtime_persisted_setting_precedes_fallback(tmp_path,monkeypatch):
+    from delivery_api import engine_runtime
+    saved=tmp_path/'saved-python';fallback=tmp_path/'fallback-python'
+    for path in (saved,fallback):path.write_text('#!/bin/sh\nexit 0\n');path.chmod(0o755)
+    monkeypatch.setattr(engine_runtime,'SETTINGS_FILE',tmp_path/'.engine-python');engine_runtime.SETTINGS_FILE.write_text(str(saved))
+    monkeypatch.delenv('INTERVIEW_ENGINE_PYTHON',raising=False);monkeypatch.delenv('VMODEL_PYTHON',raising=False);monkeypatch.delenv('VIRTUAL_ENV',raising=False)
+    monkeypatch.setattr(engine_runtime.sys,'executable',str(fallback))
+    assert engine_runtime._candidates(tmp_path/'interview-engine')[0]==saved.resolve()
+
+
+def test_engine_python_setting_rejects_interpreter_without_dependency(tmp_path,monkeypatch):
+    import asyncio
+    from delivery_api import engine_runtime
+    bad=tmp_path/'python';bad.write_text('#!/bin/sh\nexit 1\n');bad.chmod(0o755)
+    monkeypatch.setattr(engine_runtime,'SETTINGS_FILE',tmp_path/'.engine-python')
+    try:asyncio.run(engine_runtime.save_python(str(bad),tmp_path))
+    except ValueError as e:assert 'langchain_core' in str(e)
+    else:assert False,'bad engine Python must not persist'
+    assert not engine_runtime.SETTINGS_FILE.exists()

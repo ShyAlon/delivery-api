@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS task_artifacts (
 """
 
 PHASES = (
-    ("intent", "Intent model"),
+    ("intent", "Start"),
     ("conops", "Concept of operations"),
     ("needs", "Stakeholder needs"),
     ("srs", "Requirements"),
@@ -116,6 +116,7 @@ class Storage(Protocol):
     def audit_entries(self, task_id: str | None = None, limit: int = 500) -> list[dict]: ...
     def add_task_artifact(self, task_id: str, phase_key: str, name: str, ref: str, mime_type: str = "application/json") -> None: ...
     def task_artifacts(self, task_id: str, *, include_stale: bool = True) -> list[dict]: ...
+    def rerun_prerequisite(self, task_id: str, from_phase: str) -> dict | None: ...
     def prepare_rerun(self, task_id: str, from_phase: str, policy: str = "archive", actor: str = "local user") -> int: ...
     def configure_simulation(self, task_id: str, source_dir: str, model_route: str) -> None: ...
     def set_gate_open(self, task_id: str, gate_key: str, is_open: bool, actor: str = "local user") -> dict: ...
@@ -405,12 +406,26 @@ class SQLiteStore:
         return [dict(r) for r in self._db.execute(
             f"SELECT * FROM task_artifacts WHERE {where} ORDER BY generation DESC,id", (task_id,))]
 
+    def rerun_prerequisite(self, task_id: str, from_phase: str) -> dict | None:
+        """Return the first unfulfilled upstream phase, or None when rerun is valid."""
+        positions = {key: i for i, (key, _) in enumerate(PHASES)}
+        if from_phase not in positions: raise KeyError(from_phase)
+        phases = self._db.execute(
+            "SELECT phase_key,label,state FROM phases WHERE task_id=? ORDER BY position", (task_id,)
+        ).fetchall()
+        if not phases: raise KeyError(task_id)
+        for phase in phases[:positions[from_phase]]:
+            if phase["state"] != "done": return dict(phase)
+        return None
+
     def prepare_rerun(self, task_id: str, from_phase: str, policy: str = "archive", actor: str = "local user") -> int:
         """Policy B: stale now, retain by generation, require downstream re-approval."""
         if policy != "archive":
             raise ValueError("rerun policy is archive: downstream work is retained and marked stale")
         positions = dict((k, i) for i, (k, _) in enumerate(PHASES))
         if from_phase not in positions: raise KeyError(from_phase)
+        missing = self.rerun_prerequisite(task_id, from_phase)
+        if missing: raise ValueError(f"prerequisite not fulfilled: {missing['label']} ({missing['phase_key']})")
         with self._lock:
             downstream = [k for k, i in positions.items() if i >= positions[from_phase]]
             marks = ",".join("?" for _ in downstream)

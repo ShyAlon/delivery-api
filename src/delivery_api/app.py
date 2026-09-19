@@ -23,7 +23,7 @@ from .budget import BudgetExceeded, check_global_budget, check_run_budget
 from . import auth
 from .jobs import JobQueue
 from .runner import ProcessRunner
-from .engine_runtime import EngineRuntimeError, resolve_engine_runtime
+from .engine_runtime import EngineRuntimeError, resolve_engine_runtime, discover_engine_runtimes, save_python, saved_python
 from .store import create_store
 from .simulation import Simulation, ImportValidationError
 from . import bundles
@@ -155,6 +155,19 @@ def session_phase_view(session_id: str, phase: str): return FileResponse(WEB_DIR
 
 @app.get("/api/sessions")
 def sessions(): return {"sessions":bundles.discover(),"artifacts_root":str(bundles.root())}
+
+@app.get("/api/settings/engine-python")
+async def engine_python_settings(a:auth.Actor=Depends(auth.require_actor)):
+    engine_dir=Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve()
+    candidates=await discover_engine_runtimes(engine_dir)
+    return {"path":str(saved_python() or ""),"candidates":[str(x) for x in candidates],"count":len(candidates)}
+class EnginePythonRequest(BaseModel):path:str
+@app.post("/api/settings/engine-python")
+async def set_engine_python(req:EnginePythonRequest,a:auth.Actor=Depends(auth.require_actor)):
+    engine_dir=Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve()
+    try:path=await save_python(req.path,engine_dir)
+    except ValueError as e:raise HTTPException(400,{"error":"Engine Python could not be saved.","cause":str(e),"next":"Choose one of the detected Python environments that passes the dependency check."})
+    activity("engine.settings","Engine Python saved",actor=a.label,python=str(path));return {"path":str(path),"status":"saved"}
 
 class ArtifactsRootRequest(BaseModel): path: str
 @app.post("/api/settings/artifacts-root")
@@ -343,9 +356,14 @@ class RerunRequest(BaseModel):
 
 @app.post("/api/tasks/{task_id}/rerun")
 def rerun(task_id: str, req: RerunRequest, request: Request, a: auth.Actor = Depends(auth.require_actor)):
-    if not store.task(task_id): raise HTTPException(404, "task not found")
+    task=store.task(task_id)
+    if not task: raise HTTPException(404, "task not found")
+    try:missing=store.rerun_prerequisite(task_id,req.from_phase)
+    except KeyError:raise HTTPException(409,{"error":f"Cannot rerun from unknown stage '{req.from_phase}'.","cause":"That stage is not part of this task.","next":"Choose one of the stages shown in the V-process."})
+    if missing:
+        raise HTTPException(409,{"error":f"Cannot rerun from {req.from_phase}: prerequisite '{missing['label']}' is not complete.","cause":"Stages are sequential; rerunning a downstream stage without its upstream result would produce ungrounded output.","next":f"Run or rerun '{missing['label']}' first, then retry {req.from_phase}."})
     if not req.confirm:
-        downstream = [p["phase_key"] for p in store.task(task_id)["phases"] if p["position"] >= next(p["position"] for p in store.task(task_id)["phases"] if p["phase_key"] == req.from_phase)]
+        downstream = [p["phase_key"] for p in task["phases"] if p["position"] >= next(p["position"] for p in task["phases"] if p["phase_key"] == req.from_phase)]
         return {"status": "preview", "from_phase": req.from_phase, "policy": "archive", "downstream": downstream,
                 "message": "Downstream artifacts will be marked stale and retained under their generation. Their gates will require re-approval."}
     try: generation = store.prepare_rerun(task_id, req.from_phase, "archive", a.label)

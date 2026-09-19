@@ -6,3 +6,4 @@ __pycache__/
 delivery.db*
 artifacts/
 run.log
+.engine-python

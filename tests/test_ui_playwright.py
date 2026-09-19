@@ -232,7 +232,7 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     page.goto(ui+"/sessions")
     page.get_by_text("Family task evidence",exact=True).click()
     assert page.url.endswith("/sessions/golden-1/interview")
-    page.get_by_text("Intent model").wait_for();assert page.get_by_text("Intent model").is_visible()
+    page.get_by_text("Start").wait_for();assert page.get_by_text("Start").is_visible()
     assert not page.get_by_text("Stakeholder needs").is_visible()
     # Desktop phase navigation follows a compact V: left leg descends, right leg rises.
     pills={k:page.locator(f'[data-phase="{k}"]').bounding_box() for k in ("interview","needs","srs","architecture","specs","tests","reviews","oracle")}
@@ -258,7 +258,7 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     assert page.evaluate("window.__spaToken") == body_handle
     page.locator('[data-panel="interview"]').wait_for(state="hidden")
     assert page.locator('[data-panel="needs"]').evaluate("e=>({cls:e.className,path:location.pathname})")=={"cls":"bundle-panel","path":"/sessions/golden-1/needs"}
-    assert not page.get_by_text("Intent model").is_visible()
+    assert not page.get_by_text("Start").is_visible()
     page.reload();assert page.get_by_role("link",name="Needs ↗").evaluate("e=>e.classList.contains('active')")
     page.get_by_role("link",name="SRS ↗").click()
     page.get_by_text("System requirements").wait_for();assert page.get_by_text("System requirements").is_visible()
