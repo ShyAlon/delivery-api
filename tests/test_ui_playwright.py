@@ -479,7 +479,7 @@ def test_structured_founder_decision_opens_large_card_dialog_and_formats_answer(
     dialog.get_by_text('PWA',exact=True).click();dialog.locator('textarea').fill('One deployment fits our team')
     page.screenshot(path='/downloads/structured-founder-decision.png',full_page=True)
     dialog.locator('textarea').press('Enter')
-    assert submitted==[{'answer':'2 - One deployment fits our team'}]
+    assert submitted==[{'answer':'2 - One deployment fits our team','decision_id':'concept'}]
 
 
 def test_structured_founder_decision_escape_closes_without_answer(page,ui):
@@ -583,5 +583,29 @@ def test_answered_decision_clears_and_binary_approval_uses_same_dialog(page,ui):
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"intent",payload:{waiting_input:true,decision},ts:1720000300})',approval)
     dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.get_by_text('Approve',exact=True).is_visible() and dialog.get_by_text('Reject',exact=True).is_visible();assert dialog.locator('.decision-why').is_hidden()
     page.screenshot(path='/downloads/typed-intent-approval.png',full_page=True)
-    assert dialog.locator('.decision-submit').is_hidden();dialog.get_by_text('Approve',exact=True).click();page.locator('.decision-dialog').wait_for(state='detached');assert submitted==[{'answer':'y'}]
+    assert dialog.locator('.decision-submit').is_hidden();dialog.get_by_text('Approve',exact=True).click();page.locator('.decision-dialog').wait_for(state='detached');assert submitted==[{'answer':'y','decision_id':'intent-approval'}]
     assert page.locator('#opendecision').count()==0 and page.locator('.live-indicator').get_by_text('Decision received',exact=False).is_visible()
+
+
+def test_stale_structured_decision_is_not_actionable_on_load(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'old-intent','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
+    live['events']=[{'id':91,'kind':'founder_decision','message':'Approve?','phase_key':'intent','payload':{'waiting_input':True,'decision':decision},'ts':1720000300}]
+    live['input_state']={'waiting':False,'process_live':False,'decision':None}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');page.locator('#console').wait_for()
+    assert page.locator('#opendecision').count()==0 and page.locator('.decision-dialog').count()==0
+
+
+def test_stale_decision_conflict_closes_and_refreshes_dialog(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
+    live['events']=[];live['input_state']={'waiting':True,'process_live':True,'decision':decision};calls={'get':0}
+    def task(route):
+        calls['get']+=1
+        if calls['get']>1:live['input_state']={'waiting':False,'process_live':False,'decision':None}
+        route.fulfill(json=live)
+    page.route('**/api/tasks/live',task)
+    page.route('**/api/tasks/live/answer',lambda route:route.fulfill(status=409,json={'detail':{'error':'Stale founder decision was not submitted.','cause':'The submitted decision is no longer open.','next':'Refresh shows the current state.','stale':True,'current_state':'running','active_phase':'needs'}}))
+    page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for();dialog.get_by_text('Reject',exact=True).click()
+    page.get_by_text('Stale founder decision was not submitted.',exact=False).wait_for();page.wait_for_timeout(900)
+    assert page.locator('.decision-dialog').count()==0 and page.locator('#opendecision').count()==0 and calls['get']>=2

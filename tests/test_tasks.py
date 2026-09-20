@@ -749,3 +749,32 @@ def test_open_gate_uses_same_automatic_continuation_path(tmp_path):
     runner.on_complete=continue_after
     asyncio.run(runner.run(tid,[sys.executable,'-c','print("needs generated")'],cwd=tmp_path,phase='needs',infer_phase=False))
     assert observed==['needs']
+
+
+def test_stale_answer_reports_actual_runtime_state_and_records_error(monkeypatch):
+    import asyncio
+    from fastapi import HTTPException
+    from delivery_api import app as app_module
+    from delivery_api.auth import Actor
+    from delivery_api.app import InterviewAnswer
+    task_id=app_module.store.create_task('Stale decision truth')['task_id']
+    async def stale(task,text):raise RuntimeError('task is not waiting for input')
+    monkeypatch.setattr(app_module.runner,'send_input',stale)
+    monkeypatch.setattr(app_module.runner,'input_state',lambda task:{'waiting':False,'process_live':False,'decision':None})
+    try:asyncio.run(app_module.answer_interview(task_id,InterviewAnswer(answer='n'),Actor('test','Tester')))
+    except HTTPException as exc:
+        assert exc.status_code==409 and exc.detail['stale'] is True
+        assert exc.detail['current_state']=='not_started' and exc.detail['active_phase'] is None
+        assert 'ended or restarted' in exc.detail['next']
+    else:raise AssertionError('stale submit should conflict')
+    event=app_module.store.events(task_id)[-1]
+    assert event['kind']=='error' and event['payload']['endpoint'].endswith('/answer')
+    assert event['payload']['http_status']==409 and event['payload']['process_live'] is False
+
+
+def test_task_projection_exposes_live_input_truth(monkeypatch):
+    from delivery_api import app as app_module
+    tid=app_module.store.create_task('Input truth projection')['task_id']
+    monkeypatch.setattr(app_module.runner,'input_state',lambda task:{'waiting':False,'process_live':False,'decision':None})
+    result=app_module.get_task(tid)
+    assert result['input_state']=={'waiting':False,'process_live':False,'decision':None}

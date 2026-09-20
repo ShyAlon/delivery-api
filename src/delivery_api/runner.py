@@ -31,6 +31,7 @@ class ProcessRunner:
     waiting: set[str] = field(default_factory=set)
     interrupted_for_shutdown: set[str] = field(default_factory=set)
     decisions: dict[str, asyncio.Future] = field(default_factory=dict)
+    pending_decisions: dict[str, dict] = field(default_factory=dict)
     on_complete: object | None = None
 
     def _phase(self, text: str, fallback: str) -> str:
@@ -84,7 +85,9 @@ class ProcessRunner:
                             # bytes, so retain it until the producer's newline.
                             structured_buffer="\n".join(parts[index:])
                             break
-                        if candidate.get("type")=="founder_decision" and isinstance(candidate.get("options"),list):structured_decision=candidate
+                        if candidate.get("type")=="founder_decision" and isinstance(candidate.get("options"),list):
+                            structured_decision=candidate
+                            self.pending_decisions[task_id]=candidate
                     waiting_input = structured_decision is not None or line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line
                     if waiting_input:
                         # Keep protocol envelopes out of founder-visible question
@@ -154,7 +157,7 @@ class ProcessRunner:
                 self.store.add_event(task_id,"error",error,phase_key=phase,payload={"exit_code":code,"module":missing_module,"cause":cause,"next":next_step})
             return code
         finally:
-            self.processes.pop(task_id, None);self.waiting.discard(task_id);self.interrupted_for_shutdown.discard(task_id)
+            self.processes.pop(task_id, None);self.waiting.discard(task_id);self.pending_decisions.pop(task_id,None);self.interrupted_for_shutdown.discard(task_id)
             # The finished process must release its task slot before the next
             # executable starts. This is the shared process boundary.
             if continuation_phase is not None and self.on_complete is not None:
@@ -182,16 +185,24 @@ class ProcessRunner:
 
     async def request_decision(self, task_id: str, phase: str, decision: dict) -> str:
         if task_id in self.decisions: raise RuntimeError("task already has a pending decision")
-        future=asyncio.get_running_loop().create_future();self.decisions[task_id]=future;self.waiting.add(task_id)
+        future=asyncio.get_running_loop().create_future();self.decisions[task_id]=future;self.pending_decisions[task_id]=decision;self.waiting.add(task_id)
         self.store.add_event(task_id,"founder_decision",decision["prompt"],phase_key=phase,payload={"waiting_input":True,"question":decision["prompt"],"decision":decision})
         try:return await future
-        finally:self.decisions.pop(task_id,None);self.waiting.discard(task_id)
+        finally:self.decisions.pop(task_id,None);self.pending_decisions.pop(task_id,None);self.waiting.discard(task_id)
+
+    def input_state(self, task_id: str) -> dict:
+        proc=self.processes.get(task_id)
+        return {"waiting":task_id in self.waiting and ((proc is not None and proc.returncode is None) or task_id in self.decisions),
+                "process_live":proc is not None and proc.returncode is None,
+                "decision":self.pending_decisions.get(task_id)}
 
     async def send_input(self, task_id: str, text: str) -> None:
         if task_id in self.decisions:
+            self.pending_decisions.pop(task_id,None);self.waiting.discard(task_id)
             self.decisions[task_id].set_result(text);return
         proc = self.processes.get(task_id)
         if not proc or not proc.stdin: raise RuntimeError("task is not waiting for input")
         proc.stdin.write((text + "\n").encode()); await proc.stdin.drain()
+        self.pending_decisions.pop(task_id,None)
         if task_id in self.waiting:
             self.waiting.discard(task_id);activity("engine.input.resume","Answer received; engine resumed",task_id=task_id,phase=self.store.task(task_id).get("active_phase"))

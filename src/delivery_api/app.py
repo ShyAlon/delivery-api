@@ -58,7 +58,10 @@ async def request_log(request, call_next):
         log.exception("request failed method=%s path=%s", request.method, request.url.path)
         raise
     who = auth.actor(request).label
-    activity("http.request","Request completed",method=request.method,path=request.url.path,status=response.status_code,duration_ms=int((time.monotonic()-started)*1000),actor=who,client=request.client.host if request.client else "unknown")
+    duration_ms=int((time.monotonic()-started)*1000)
+    activity("http.request","Request completed",method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
+    if response.status_code >= 400:
+        activity("http.error","API request returned an error",endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
     if response.status_code in (401,403):activity("access.blocked","Unauthorized or forbidden request",method=request.method,path=request.url.path,status=response.status_code,actor=who)
     return response
 
@@ -149,12 +152,13 @@ def auth_status(request: Request):
 
 class ClientLog(BaseModel):
     kind:str=Field(max_length=80)
-    message:str=Field(max_length=500)
-    path:str=Field(max_length=500)
+    message:str=Field(max_length=16000)
+    path:str=Field(max_length=1000)
+    detail:dict={}
 
 @app.post("/api/client-log",status_code=204)
 def client_log(request:Request,body:ClientLog):
-    activity("client."+body.kind,body.message,path=body.path,actor=auth.actor(request).label,client=request.client.host if request.client else "unknown")
+    activity("client."+body.kind,body.message,path=body.path,actor=auth.actor(request).label,client=request.client.host if request.client else "unknown",**body.detail)
 
 class BasicCredentials(BaseModel):
     username: str = Field(min_length=3,max_length=254)
@@ -381,13 +385,28 @@ async def start_task_engine(task_id:str,a:auth.Actor=Depends(auth.require_actor)
     asyncio.create_task(execute())
     return {"status":"started","task_id":task_id,"next":f"/tasks/{task_id}/view"}
 
-class InterviewAnswer(BaseModel):answer:str=Field(min_length=1,max_length=8000)
+class InterviewAnswer(BaseModel):
+    answer:str=Field(min_length=1,max_length=8000)
+    decision_id:str|None=Field(default=None,max_length=160)
 @app.post("/api/tasks/{task_id}/answer")
 async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends(auth.require_actor)):
+    task_before=store.task(task_id) or {};input_before=runner.input_state(task_id)
+    recent_answers=[{"event_id":event["id"],"phase_key":event.get("phase_key"),"decision_id":event.get("payload",{}).get("decision_id")} for event in store.events(task_id) if event.get("kind")=="answer"][-10:]
+    activity("api.answer.attempt","Founder answer submission received",endpoint=f"/api/tasks/{task_id}/answer",task_id=task_id,task_state=task_before.get("state"),active_phase=task_before.get("active_phase"),submitted_decision_id=body.decision_id,open_decision_id=(input_before.get("decision") or {}).get("decision_id"),process_live=input_before["process_live"],waiting=input_before["waiting"],recent_answer_events=json.dumps(recent_answers,separators=(",",":")))
     try:await runner.send_input(task_id,body.answer)
-    except RuntimeError as e:raise HTTPException(409,{"error":"The interview is not waiting for an answer.","cause":str(e),"next":"Wait for the next question in live output, then answer."})
+    except RuntimeError as e:
+        task=store.task(task_id) or {};state=runner.input_state(task_id);decision=state.get("decision") or {}
+        cause=(f"The task is {task.get('state','unknown')} in phase {task.get('active_phase','unknown')}; "
+               f"process_live={state['process_live']}, waiting={state['waiting']}. The submitted decision is no longer open.")
+        next_step=("The current engine question changed. Refreshing the task will show the live state; answer only the current prompt."
+                   if state["process_live"] else "The engine process has ended or restarted. Refresh the task; resume/restart the active phase instead of submitting this stale dialog.")
+        message="Stale founder decision was not submitted"
+        payload={"endpoint":f"/api/tasks/{task_id}/answer","http_status":409,"task_state":task.get("state"),"active_phase":task.get("active_phase"),"decision_id":body.decision_id or decision.get("decision_id"),"open_decision_id":decision.get("decision_id"),"recent_answer_events":recent_answers,"process_live":state["process_live"],"waiting":state["waiting"],"reason":str(e),"cause":cause,"next":next_step}
+        store.add_event(task_id,"error",f"Error: {message}. Likely cause: {cause} Next: {next_step}",phase_key=task.get("active_phase"),payload=payload)
+        activity("api.answer.stale",message,task_id=task_id,phase=task.get("active_phase"),**payload)
+        raise HTTPException(409,{"error":message+".","cause":cause,"next":next_step,"stale":True,"current_state":task.get("state"),"active_phase":task.get("active_phase")})
     active_phase=(store.task(task_id) or {}).get("active_phase") or "intent"
-    store.add_event(task_id,"answer",f"You: {body.answer}",phase_key=active_phase,payload={"actor":a.label,"character_count":len(body.answer),"transcript":True})
+    store.add_event(task_id,"answer",f"You: {body.answer}",phase_key=active_phase,payload={"actor":a.label,"character_count":len(body.answer),"transcript":True,"decision_id":body.decision_id})
     activity("engine.answer","Founder answer submitted",task_id=task_id,phase=active_phase,actor=a.label,character_count=len(body.answer))
     return {"status":"accepted"}
 
@@ -395,7 +414,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
 def get_task(task_id: str):
     task = store.task(task_id)
     if not task: raise HTTPException(404, "task not found")
-    return {**task, "events": store.events(task_id), "artifacts": store.task_artifacts(task_id)}
+    return {**task, "events": store.events(task_id), "artifacts": store.task_artifacts(task_id), "input_state":runner.input_state(task_id)}
 
 @app.get("/api/tasks/{task_id}/events")
 def task_events(task_id: str, after: int = Query(default=0, ge=0)):
