@@ -638,7 +638,18 @@ def test_detail_uses_one_large_v_process_without_duplicate_path_map(page,ui):
 def test_server_accepted_decision_event_closes_founder_box(page,ui):
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
-    live['input_state']={'waiting':True,'process_live':True,'decision':decision};page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    live['input_state']={'waiting':True,'process_live':True,'decision':decision};live['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':decision,'gate':None,'show_start':False,'show_progress':True,'show_engine_decision':True,'show_question':False,'show_answer_composer':False,'show_phase_gate':False,'show_artifacts':False,'show_console':True};page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
     page.goto(ui+'/tasks/live/view');page.locator('.decision-dialog').wait_for()
     page.evaluate("liveSource.emit({kind:'answer',message:'You: y',phase_key:'intent',payload:{decision_id:'intent-approval',answer:'y'},ts:1720000400})")
     page.locator('.decision-dialog').wait_for(state='detached');assert page.locator('#opendecision').count()==0
+
+def test_needs_gate_state_hides_stale_intent_prompt_and_opens_needs_gate(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();gate=next(g for g in live['gates'] if g['after_phase']=='needs');gate['state']='waiting'
+    live.update({'state':'waiting_gate','active_phase':'needs','input_state':{'waiting':False,'process_live':False,'decision':None},
+                 'ui_state':{'mode':'phase_gate','active_phase':'needs','process_live':False,'decision':None,'gate':gate,'show_start':False,'show_progress':False,'show_engine_decision':False,'show_question':False,'show_answer_composer':False,'show_phase_gate':True,'show_artifacts':False,'show_console':True}})
+    live['events']=[{'id':1,'kind':'waiting_input','message':'Approve this intent model? [y/N]','phase_key':'intent','payload':{'waiting_input':True,'question':'Approve this intent model? [y/N]'},'ts':1720000000}]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view')
+    page.locator('#gateform').wait_for();assert page.locator('.current-question').is_hidden() and page.locator('#answerform').is_hidden()
+    assert page.locator('.decision-dialog').count()==0 and page.locator('#opendecision').count()==0
+    assert page.locator('#gateform').get_by_text('Stakeholder needs gate',exact=True).is_visible()

@@ -66,6 +66,7 @@ class ProcessRunner:
         continuation_phase: str | None = None
         replay_decisions=dict(replay_decisions or {})
         replaying_prompt=False
+        typed_prompt_pending=False
 
         # The child pipeline owns progress and LLM heartbeats. Its lines name
         # the in-flight stage and elapsed time. A second generic heartbeat here
@@ -96,6 +97,7 @@ class ProcessRunner:
                             break
                         if candidate.get("type")=="founder_decision" and isinstance(candidate.get("options"),list):
                             structured_decision=candidate
+                            typed_prompt_pending=True
                             replay=replay_decisions.pop(str(candidate.get("decision_id") or ""),None)
                             if replay and replay.get("fingerprint")==decision_fingerprint(candidate):
                                 assert proc.stdin
@@ -105,8 +107,16 @@ class ProcessRunner:
                                 activity("engine.decision.replay","Replayed exact durable founder decision after restart",task_id=task_id,phase=phase,decision_id=candidate.get("decision_id"),fingerprint=replay["fingerprint"])
                                 structured_decision=None
                             else:self.pending_decisions[task_id]=candidate
-                    waiting_input = (not replaying_prompt) and (structured_decision is not None or line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line)
-                    if replaying_prompt and structured_decision is None and not (line.endswith(("You:", "[y/N]", "[y/N] ")) or "Approve this intent model?" in line):replaying_prompt=False
+                    blocking_prompt=line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line or bool(re.search(r"\[[A-Za-z]/[A-Za-z](?:/[A-Za-z])*\]",line))
+                    # Open interview questions remain free-text. Every bounded
+                    # choice prompt (yes/no or enumerated console command) must
+                    # be preceded by the shared typed decision event.
+                    bounded_prompt=("[y/N]" in line) or bool(re.search(r"\[[A-Za-z]/[A-Za-z](?:/[A-Za-z])+\]",line))
+                    if bounded_prompt and structured_decision is None and not typed_prompt_pending and not replaying_prompt:
+                        raise RuntimeError(f"untyped blocking choice prompt from engine: {line}")
+                    waiting_input = (not replaying_prompt) and (structured_decision is not None or blocking_prompt)
+                    if blocking_prompt:typed_prompt_pending=False
+                    if replaying_prompt and structured_decision is None and not blocking_prompt:replaying_prompt=False
                     if waiting_input:
                         # Keep protocol envelopes out of founder-visible question
                         # reconstruction. A later bare ``You:`` prompt must reuse

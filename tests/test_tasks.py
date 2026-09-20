@@ -920,3 +920,31 @@ def test_typed_answer_requires_current_matching_decision(tmp_path):
         else:assert False,'mismatched typed decision was accepted'
         await runner.send_input(tid,'y','live-choice');return await job
     assert asyncio.run(go())==0
+
+def test_ui_state_doctrine_phase_gate_supersedes_stale_engine_prompt(tmp_path):
+    from delivery_api.app import _task_ui_state
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'ui-state.db'));tid=store.create_task('Needs gate')['task_id']
+    store.update_phase(tid,'intent','approved');store.update_phase(tid,'conops','approved');store.update_phase(tid,'needs','awaiting_approval');store.wait_at_gate(tid,'needs')
+    task=store.task(tid);state=_task_ui_state(task,{'waiting':False,'process_live':False,'decision':None})
+    assert state['mode']=='phase_gate' and state['gate']['after_phase']=='needs'
+    assert state['show_phase_gate'] and not state['show_engine_decision'] and not state['show_question'] and not state['show_answer_composer']
+
+
+def test_ui_state_doctrine_only_live_input_can_show_engine_decision():
+    from delivery_api.app import _task_ui_state
+    decision={'type':'founder_decision','decision_id':'live','options':[{'value':'y','label':'Yes'}]}
+    task={'state':'running','active_phase':'intent','gates':[]}
+    live=_task_ui_state(task,{'waiting':True,'process_live':True,'decision':decision})
+    stale=_task_ui_state(task,{'waiting':False,'process_live':False,'decision':decision})
+    assert live['mode']=='engine_decision' and live['decision']==decision
+    assert stale['mode']=='error' and stale['decision'] is None and not stale['show_engine_decision']
+
+def test_untyped_blocking_console_prompt_fails_visibly(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'untyped.db'));tid=store.create_task('Untyped prompt')['task_id'];runner=ProcessRunner(store)
+    try:asyncio.run(runner.run(tid,[sys.executable,'-c','print("Continue? [y/N]",flush=True);input()'],cwd=tmp_path))
+    except RuntimeError as error:assert 'untyped blocking choice prompt' in str(error)
+    else:assert False,'an untyped blocking prompt was allowed to wait invisibly'

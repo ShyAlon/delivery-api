@@ -473,11 +473,34 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
     activity("engine.answer","Founder answer submitted",task_id=task_id,phase=active_phase,actor=a.label,character_count=len(body.answer))
     return {"status":"accepted"}
 
+def _task_ui_state(task:dict,input_state:dict)->dict:
+    """Single state doctrine for task-detail visibility and actionable input."""
+    waiting_gate=next((gate for gate in task.get("gates",[]) if gate.get("state")=="waiting" and gate.get("after_phase")==task.get("active_phase")),None)
+    live_decision=input_state.get("decision") if input_state.get("waiting") else None
+    process_live=bool(input_state.get("process_live"))
+    if task.get("state")=="not_started":mode="not_started"
+    elif task.get("state")=="done":mode="complete"
+    elif task.get("state")=="failed":mode="error"
+    elif waiting_gate:mode="phase_gate"
+    elif process_live and live_decision:mode="engine_decision"
+    elif process_live and input_state.get("waiting"):mode="engine_question"
+    elif process_live:mode="executing"
+    else:mode="error"
+    return {"mode":mode,"active_phase":task.get("active_phase"),"process_live":process_live,
+            "decision":live_decision if mode=="engine_decision" else None,
+            "gate":waiting_gate if mode=="phase_gate" else None,
+            "show_start":mode=="not_started","show_progress":mode in {"executing","engine_decision","engine_question"},
+            "show_engine_decision":mode=="engine_decision","show_question":mode=="engine_question",
+            "show_answer_composer":mode=="engine_question","show_phase_gate":mode=="phase_gate",
+            "show_artifacts":mode=="complete","show_console":mode not in {"not_started","complete"}}
+
+
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str):
     task = store.task(task_id)
     if not task: raise HTTPException(404, "task not found")
-    return {**task, "events": store.events(task_id), "artifacts": store.task_artifacts(task_id), "input_state":runner.input_state(task_id)}
+    input_state=runner.input_state(task_id)
+    return {**task, "events": store.events(task_id), "artifacts": store.task_artifacts(task_id), "input_state":input_state,"ui_state":_task_ui_state(task,input_state)}
 
 @app.get("/api/tasks/{task_id}/events")
 def task_events(task_id: str, after: int = Query(default=0, ge=0)):
