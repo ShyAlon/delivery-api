@@ -4,10 +4,7 @@ import asyncio,json,os,sys
 from dataclasses import dataclass
 from pathlib import Path
 from vmodel_contracts.runtime import artifacts_root
-
-PLAN=(("needs","needs"),("srs","srs"),("architecture","architecture"),("specs","items"),("tests","tests"))
-NEXT={"conops":"needs","intent":"needs","needs":"srs","srs":"architecture","architecture":"specs","specs":"tests"}
-TO_STAGE=dict(PLAN)
+from .phases import PHASE_BY_KEY, successor
 
 @dataclass
 class PhaseOrchestrator:
@@ -26,11 +23,12 @@ class PhaseOrchestrator:
         return sid,root,root/"interview",root/"spec"
 
     async def continue_after(self,task_id:str,phase:str)->None:
-        nxt=NEXT.get(phase)
-        if not nxt:return
+        next_definition=successor(phase)
+        if next_definition is None:return
+        nxt=next_definition.key
         from .observability import event as activity
         activity("orchestrator.continue","Launching next V-model phase",task_id=task_id,completed_phase=phase,next_phase=nxt)
-        if nxt=="architecture" and not self._baseline_exists(task_id):
+        if next_definition.prerequisite=="system-baseline" and not self._baseline_exists(task_id):
             await self._choose_baseline(task_id);return
         await self.launch(task_id,nxt)
 
@@ -71,8 +69,8 @@ class PhaseOrchestrator:
         repo=(Path.cwd() if built else Path(os.environ.get("SPEC_GENERATOR_DIR",str(Path(__file__).resolve().parents[3]/"spec-generator"))).resolve())
         python=Path(sys.executable) if built else (repo/".venv/bin/python")
         if not python.exists():python=Path(sys.executable)
-        cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",TO_STAGE[phase]]
-        if redo:cmd.extend(["--from",TO_STAGE[phase]])
+        cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",PHASE_BY_KEY[phase].generator_stage]
+        if redo:cmd.extend(["--from",PHASE_BY_KEY[phase].generator_stage])
         env={"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(repo/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})}
         code=await self.runner.run(task_id,cmd,cwd=repo,phase=phase,env=env,infer_phase=False)
         activity("orchestrator.exit","Phase subprocess exited",task_id=task_id,phase=phase,exit_code=code)

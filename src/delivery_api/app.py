@@ -97,17 +97,19 @@ def _reconcile_approved_prefixes()->None:
 
 async def _resume_orphaned_handoffs()->None:
     """Repair a durable completed boundary whose next subprocess never started."""
-    from .orchestrator import NEXT
+    from .phases import PHASE_DEFINITIONS, successor
     _reconcile_approved_prefixes()
     for task in store.list_tasks():
         task_id=task["task_id"]
         if task_id in runner.processes:continue
         states={phase["phase_key"]:phase["state"] for phase in task["phases"]}
-        phase_order={phase["phase_key"]:index for index,phase in enumerate(task["phases"])}
-        candidates=[(source,target) for source,target in NEXT.items()
-                    if states.get(source) in ("approved","done") and states.get(target) in ("pending","running")]
+        candidates=[]
+        for definition in PHASE_DEFINITIONS:
+            target=successor(definition.key)
+            if target and states.get(definition.key) in ("approved","done") and states.get(target.key) in ("pending","running"):
+                candidates.append((definition.key,target.key))
         if not candidates:continue
-        source,target=max(candidates,key=lambda item:phase_order[item[0]])
+        source,target=candidates[-1]
         async def recover(task_id=task_id,source=source,target=target):
             try:
                 activity("orchestrator.recover","Retrying orphaned completed handoff",task_id=task_id,completed_phase=source,next_phase=target)

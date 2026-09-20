@@ -76,15 +76,11 @@ CREATE TABLE IF NOT EXISTS task_artifacts (
 );
 """
 
-PHASES = (
-    ("intent", "Start"),
-    ("conops", "Concept of operations"),
-    ("needs", "Stakeholder needs"),
-    ("srs", "Requirements"),
-    ("architecture", "Architecture"),
-    ("specs", "Item specifications"),
-    ("tests", "Verification"),
-)
+from .phases import PHASE_DEFINITIONS, PHASE_POSITIONS, followers, predecessors
+
+# Compatibility projection for adapters and callers while the canonical source
+# remains PhaseDefinition.
+PHASES = tuple((phase.key, phase.label) for phase in PHASE_DEFINITIONS)
 
 
 @runtime_checkable
@@ -336,7 +332,7 @@ class SQLiteStore:
                              (state,selected_option,edited_text,steer,task_id,gate_key))
             if action == "redo":
                 self._db.execute("UPDATE phases SET state='running',detail=?,completed_at=NULL WHERE task_id=? AND phase_key=?",(f"Redo requested: {steer}",task_id,phase))
-                positions={k:i for i,(k,_) in enumerate(PHASES)};downstream=[k for k,i in positions.items() if i>positions[phase]]
+                downstream=[definition.key for definition in followers(phase)]
                 if downstream:
                     marks=','.join('?' for _ in downstream);self._db.execute(f"UPDATE phases SET state='pending',detail='',completed=0,total=NULL,started_at=NULL,completed_at=NULL WHERE task_id=? AND phase_key IN ({marks})",(task_id,*downstream))
             else:
@@ -359,9 +355,8 @@ class SQLiteStore:
             if state == "running":
                 # A task has one active execution locus. Earlier generated work
                 # may wait for approval, but must not remain pulsing blue.
-                active_index=next(i for i,(key,_) in enumerate(PHASES) if key==phase_key)
-                earlier=[key for key,_ in PHASES[:active_index]]
-                later=[key for key,_ in PHASES[active_index+1:]]
+                earlier=[phase.key for phase in predecessors(phase_key)]
+                later=[phase.key for phase in followers(phase_key)]
                 if earlier:
                     marks=','.join('?' for _ in earlier)
                     self._db.execute(
@@ -440,7 +435,7 @@ class SQLiteStore:
 
     def rerun_prerequisite(self, task_id: str, from_phase: str) -> dict | None:
         """Return the first unfulfilled upstream phase, or None when rerun is valid."""
-        positions = {key: i for i, (key, _) in enumerate(PHASES)}
+        positions = PHASE_POSITIONS
         if from_phase not in positions: raise KeyError(from_phase)
         phases = self._db.execute(
             "SELECT phase_key,label,state FROM phases WHERE task_id=? ORDER BY position", (task_id,)
@@ -454,7 +449,7 @@ class SQLiteStore:
         """Policy B: stale now, retain by generation, require downstream re-approval."""
         if policy != "archive":
             raise ValueError("rerun policy is archive: downstream work is retained and marked stale")
-        positions = dict((k, i) for i, (k, _) in enumerate(PHASES))
+        positions = PHASE_POSITIONS
         if from_phase not in positions: raise KeyError(from_phase)
         missing = self.rerun_prerequisite(task_id, from_phase)
         if missing: raise ValueError(f"prerequisite not fulfilled: {missing['label']} ({missing['phase_key']})")

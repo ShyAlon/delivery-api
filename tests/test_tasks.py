@@ -1024,3 +1024,12 @@ def test_orchestrator_owned_decision_is_live_without_subprocess(tmp_path):
         assert state=={'waiting':True,'process_live':True,'decision':decision}
         await runner.send_input(tid,'greenfield','system-baseline');assert await job=='greenfield'
     asyncio.run(go())
+
+def test_phase_configuration_is_canonical_and_complete():
+    from delivery_api.phases import PHASE_DEFINITIONS,PHASE_BY_KEY,successor
+    from delivery_api.store import PHASES
+    assert tuple((p.key,p.label) for p in PHASE_DEFINITIONS)==PHASES
+    assert [p.key for p in PHASE_DEFINITIONS]==['intent','conops','needs','srs','architecture','specs','tests']
+    assert [p.generator_stage for p in PHASE_DEFINITIONS[2:]]==['needs','srs','architecture','items','tests']
+    assert PHASE_BY_KEY['architecture'].prerequisite=='system-baseline'
+    assert [successor(p.key).key if successor(p.key) else None for p in PHASE_DEFINITIONS]==['conops','needs','srs','architecture','specs','tests',None]
