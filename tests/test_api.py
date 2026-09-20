@@ -195,3 +195,11 @@ def test_start_task_persists_and_routes_deepseek(monkeypatch,tmp_path):
     assert store.task(tid)['model_route']=='deepseek'
     assert calls[0]['env']['INTERVIEW_ENGINE_MODEL_PROBING']=='deepseek:deepseek-chat'
     assert 'secret' not in str(store.events(tid))
+
+def test_task_audit_accumulates_tokens_and_price(client):
+    from delivery_api.app import store
+    task=store.create_task('Priced audit totals');tid=task['task_id']
+    store.add_event(tid,'price','Price 25 units',phase_key='intent',payload={'tokens':10,'price':25})
+    store.add_event(tid,'price','Price 50 units',phase_key='needs',payload={'tokens':20,'price':50})
+    body=client.get(f'/api/tasks/{tid}/audit').json()
+    assert body['totals']=={'tokens':30,'price':75.0,'phases_priced':2}
