@@ -36,7 +36,8 @@ if [ "$CLEAN" != 1 ] && [ -x "$OUTPUT/runtime/bin/python" ]; then cp -a "$OUTPUT
 STATE="$STAGE/.build-state"; OLD_STATE="$OUTPUT/.build-state"
 state_get(){ [ -f "$OLD_STATE" ] && awk -F= -v key="$1" '$1==key{print substr($0,index($0,"=")+1);exit}' "$OLD_STATE" || true; }
 repo_fingerprint(){ local repo=$1 status diffhash; status=$(git -C "$REPOS_ROOT/$repo" status --porcelain); diffhash=clean; [ -n "$status" ] && diffhash=$(git -C "$REPOS_ROOT/$repo" diff --binary HEAD | shasum -a 256 | awk '{print $1}'); printf '%s:%s' "$(git -C "$REPOS_ROOT/$repo" rev-parse HEAD)" "$diffhash"; }
-DEPS='fastapi uvicorn pydantic httpx python-multipart langgraph langgraph-checkpoint-sqlite langchain-core langchain-openai langchain-ollama libsql python-dotenv'
+DEPS='fastapi uvicorn pydantic httpx python-multipart langgraph langgraph-checkpoint-sqlite langchain-core langchain-openai langchain-ollama python-dotenv'
+WITH_TURSO=${REQUI_RE_WITH_TURSO:-0}; [ "$WITH_TURSO" = 1 ] && DEPS="$DEPS libsql"
 DEP_INPUT="$DEPS|$($BOOTSTRAP_PYTHON --version 2>&1)"
 for repo in $PACKAGES; do DEP_INPUT="$DEP_INPUT|$(shasum -a 256 "$REPOS_ROOT/$repo/pyproject.toml" | awk '{print $1}')"; done
 DEP_HASH=$(printf '%s' "$DEP_INPUT" | shasum -a 256 | awk '{print $1}')
@@ -44,7 +45,7 @@ PYTHON="$STAGE/runtime/bin/python"
 BUILD_LOG="$PARENT/requi-re-build.log"
 install_dependencies(){
   local wheel_dir="$STAGE/.wheel-probe"; rm -rf "$wheel_dir"; mkdir -p "$wheel_dir"
-  if ! "$PYTHON" -m pip download --only-binary=:all: --no-deps libsql -d "$wheel_dir" >/dev/null 2>&1; then
+  if [ "$WITH_TURSO" = 1 ] && ! "$PYTHON" -m pip download --only-binary=:all: --no-deps libsql -d "$wheel_dir" >/dev/null 2>&1; then
     missing=""; command -v cmake >/dev/null 2>&1 || missing="cmake"; command -v cargo >/dev/null 2>&1 || missing="${missing:+$missing and }rust"
     if [ -n "$missing" ]; then
       echo "Error: libSQL needs a source build on this Python/platform, but $missing is missing."
@@ -53,8 +54,10 @@ install_dependencies(){
       return 1
     fi
     echo "boundary=dependency package=libsql decision=source-build reason=no-compatible-wheel"
-  else
+  elif [ "$WITH_TURSO" = 1 ]; then
     echo "boundary=dependency package=libsql decision=wheel reason=compatible-wheel-found"
+  else
+    echo "boundary=dependency package=libsql decision=skip reason=optional-turso-disabled"
   fi
   if ! "$PYTHON" -m pip install $DEPS >"$BUILD_LOG" 2>&1; then
     echo "Error: Requi.re dependencies could not be installed."
@@ -88,7 +91,7 @@ cat > "$STAGE/run-require.sh" <<'EOF'
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; PYTHON="$ROOT/runtime/bin/python"
 [ -x "$PYTHON" ] || { echo "Error: Requi.re runtime is incomplete."; echo "Likely cause: this launcher was separated from its built runtime."; echo "Next: copy the whole dist/requi-re folder and retry."; exit 1; }
-"$PYTHON" -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core, libsql' >/dev/null 2>&1 || { echo "Error: Requi.re runtime validation failed."; echo "Likely cause: the built folder is incomplete or incompatible."; echo "Next: rebuild on this operating system with scripts/build-dist.sh --clean."; exit 1; }
+"$PYTHON" -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core' >/dev/null 2>&1 || { echo "Error: Requi.re runtime validation failed."; echo "Likely cause: the built folder is incomplete or incompatible."; echo "Next: rebuild on this operating system with scripts/build-dist.sh --clean."; exit 1; }
 export REQUI_RE_DIST=1 INTERVIEW_ENGINE_PYTHON="$PYTHON" DELIVERY_BASIC_AUTH_ENABLED="${DELIVERY_BASIC_AUTH_ENABLED:-1}" DELIVERY_COOKIE_SECURE="${DELIVERY_COOKIE_SECURE:-0}" OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/requi-re"; mkdir -p "$DATA_HOME"; export DELIVERY_DATABASE_URL="${DELIVERY_DATABASE_URL:-${DELIVERY_DB_PATH:-sqlite:///$DATA_HOME/delivery.db}}"
 PID_FILE="$DATA_HOME/server.pid"
@@ -128,7 +131,7 @@ sed -n '/^Repositories:$/,/^Installed packages:$/p' "$ROOT/MANIFEST.txt" 2>/dev/
 cd "$ROOT"; exec "$PYTHON" -m delivery_api
 EOF
 chmod +x "$STAGE/run-require.sh"
-"$PYTHON" -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core, libsql'
+"$PYTHON" -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core'
 {
  printf 'Requi.re distribution manifest\nBuilt: '; date -u '+%Y-%m-%dT%H:%M:%SZ'; printf 'Build Python: '; "$PYTHON" --version; printf 'Platform: '; "$PYTHON" -c 'import platform; print(platform.platform())'; printf '\nRepositories:\n'
  for repo in $PACKAGES vmodel-spec-app; do printf '%-20s %s\n' "$repo" "$(repo_fingerprint "$repo")"; done

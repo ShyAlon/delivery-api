@@ -171,7 +171,7 @@ The distribution build is incremental by default. It preserves the current runti
 
 ### Native build prerequisite for libSQL
 
-The builder first asks pip for a binary libSQL wheel. When one exists, no compiler setup is needed. PyPI currently has no `libsql` wheel for CPython 3.14 on macOS arm64, so that combination must build libSQL from source and needs CMake plus Rust:
+Turso sync is optional and is not part of the local Requi.re runtime. To build a runtime that includes Turso support, opt in explicitly. The builder then asks pip for a binary libSQL wheel. If none exists for that Python/platform, the optional Turso build needs CMake plus Rust:
 
 ```bash
 brew install cmake rust
