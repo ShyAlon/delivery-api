@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("playwright.sync_api")
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 
 def _port():
@@ -715,3 +715,21 @@ def test_gate_checkbox_updates_in_place_without_navigation(page,ui):
     page.goto(ui+'/tasks/sim/view');page.locator('#gateform').wait_for();before=len(navigations);box=page.locator('#gateopen');box.check()
     page.get_by_text('Gate opened.',exact=True).wait_for();assert box.is_checked() and calls==[{'is_open':True}]
     assert len(navigations)==before and page.locator('#gateform').is_visible()
+
+def test_gate_dialog_explains_controls_and_tooltips_desktop_and_phone(page,ui):
+    live=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in live['gates'] if g['state']=='waiting');live['ui_state']={'mode':'phase_gate','active_phase':live['active_phase'],'process_live':False,'decision':None,'gate':gate}
+    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/sim/view');dialog=page.locator('#gateform');dialog.wait_for()
+    for text in ['This checkpoint decides','Approve the selected option','Approve your rewritten decision','Regenerate from this checkpoint']:
+        assert dialog.get_by_text(text,exact=False).is_visible()
+    help_button=dialog.get_by_role('button',name='What does opening a gate do?');help_button.focus();tip=dialog.get_by_role('tooltip').filter(has_text='auto-approves this checkpoint');expect(tip).to_be_visible()
+    page.screenshot(path='/downloads/gate-help-desktop.png',full_page=True)
+    page.set_viewport_size({'width':390,'height':844});page.goto(ui+'/tasks/sim/view');dialog=page.locator('#gateform');dialog.wait_for();dialog.get_by_role('button',name='Regenerate this phase').focus()
+    tip=dialog.get_by_role('tooltip').filter(has_text='keeps earlier generations');expect(tip).to_be_visible();box=tip.bounding_box();assert box['x']>=0 and box['x']+box['width']<=390
+    page.screenshot(path='/downloads/gate-help-phone.png',full_page=True)
+
+
+def test_decision_dialog_rationale_help_is_real_and_keyboard_accessible(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'concept','title':'Choose one','prompt':'Which concept?','rationale_required':True,'options':[{'value':'1','label':'Native'},{'value':'2','label':'PWA'}]};live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for();button=dialog.get_by_role('button',name='Why a rationale is requested');button.focus();expect(dialog.get_by_role('tooltip')).to_be_visible()
+    expect(dialog.get_by_role('tooltip').get_by_text('stored with the selected option',exact=False)).to_be_visible()
