@@ -692,3 +692,10 @@ def test_sse_snapshot_refresh_is_filtered_and_coalesced(page,ui):
     page.wait_for_timeout(250);assert calls['n']==baseline+1
     source=(Path(__file__).parents[1]/'src/delivery_api/web/app.js').read_text()
     assert "stateEvents=new Set" in source and 'snapshotPending' in source and 'setTimeout(snapshotRefresh,75)' in source
+
+
+def test_runtime_badge_survives_identity_render(page,ui):
+    page.route('**/health',lambda route:route.fulfill(json={'ok':True,'runtime_id':'7d6647f123456','repositories':{}}))
+    page.route('**/api/auth',lambda route:(page.wait_for_timeout(150),route.fulfill(json={'mode':'basic','authenticated':True,'actor':'shy@example.com','admin':True,'providers':[]})))
+    page.goto(ui+'/');badge=page.locator('#identity .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD 7d6647f'
+    page.locator('#identity').get_by_text('shy@example.com',exact=True).wait_for();assert page.locator('#identity .runtime-id').inner_text()=='BUILD 7d6647f'
