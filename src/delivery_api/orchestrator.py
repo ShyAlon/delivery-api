@@ -2,9 +2,15 @@
 from __future__ import annotations
 import asyncio,json,os,sys
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from vmodel_contracts.runtime import artifacts_root
 from .phases import PHASE_BY_KEY, successor
+
+class ExecutionMode(str,Enum):
+    START="start"
+    RESUME="resume"
+    REDO="redo"
 
 @dataclass
 class PhaseOrchestrator:
@@ -30,7 +36,7 @@ class PhaseOrchestrator:
         activity("orchestrator.continue","Launching next V-model phase",task_id=task_id,completed_phase=phase,next_phase=nxt)
         if next_definition.prerequisite=="system-baseline" and not self._baseline_exists(task_id):
             await self._choose_baseline(task_id);return
-        await self.launch(task_id,nxt)
+        await self.execute_phase(task_id,nxt)
 
     def _baseline_path(self,task_id:str)->Path:
         sid,_,interview,spec=self._paths(task_id);return spec/"system-baseline.json"
@@ -52,14 +58,17 @@ class PhaseOrchestrator:
             body={"contract_version":intent["contract_version"],"baseline_version":"1.0","baseline_id":f"{self._session(task_id)}-greenfield-v1","system_name":task["title"],"mode":"greenfield","repositories":[],"immutable_decisions":[]}
             p.write_text(json.dumps(body,indent=2)+"\n")
             self.store.add_event(task_id,"baseline","Greenfield architecture baseline confirmed",phase_key="architecture",payload={"mode":"greenfield","path":str(p)})
-            await self.launch(task_id,"architecture")
+            await self.execute_phase(task_id,"architecture")
         else:
             self.store.update_phase(task_id,"architecture","awaiting_approval",detail="Existing-system baseline required before architecture")
             self.store.add_event(task_id,"gate","Architecture paused for an existing SystemBaseline file",phase_key="architecture",payload={"cause":"Existing-system architecture needs repository facts.","next":"Import or place system-baseline.json in the session spec folder, then continue architecture."})
 
-    async def launch(self,task_id:str,phase:str,*,redo:bool=False)->None:
+    async def execute_phase(self,task_id:str,phase:str,*,mode:ExecutionMode=ExecutionMode.START)->None:
+        """Execute any configured generator phase through one lifecycle."""
         from .observability import event as activity
-        activity("orchestrator.launch","Preparing phase subprocess",task_id=task_id,phase=phase,redo=redo)
+        definition=PHASE_BY_KEY[phase]
+        if definition.executor!="generator":raise ValueError(f"{phase} is owned by {definition.executor}, not generator")
+        activity("orchestrator.launch","Preparing phase subprocess",task_id=task_id,phase=phase,mode=mode.value)
         sid,_,interview,spec=self._paths(task_id);spec.mkdir(parents=True,exist_ok=True)
         baseline=spec/"system-baseline.json"
         if not baseline.exists():
@@ -69,8 +78,12 @@ class PhaseOrchestrator:
         repo=(Path.cwd() if built else Path(os.environ.get("SPEC_GENERATOR_DIR",str(Path(__file__).resolve().parents[3]/"spec-generator"))).resolve())
         python=Path(sys.executable) if built else (repo/".venv/bin/python")
         if not python.exists():python=Path(sys.executable)
-        cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",PHASE_BY_KEY[phase].generator_stage]
-        if redo:cmd.extend(["--from",PHASE_BY_KEY[phase].generator_stage])
+        cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",definition.generator_stage]
+        if mode is ExecutionMode.REDO:cmd.extend(["--from",definition.generator_stage])
         env={"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(repo/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})}
         code=await self.runner.run(task_id,cmd,cwd=repo,phase=phase,env=env,infer_phase=False)
         activity("orchestrator.exit","Phase subprocess exited",task_id=task_id,phase=phase,exit_code=code)
+
+    async def launch(self,task_id:str,phase:str,*,redo:bool=False)->None:
+        """Compatibility adapter; new callers use execute_phase with a mode."""
+        await self.execute_phase(task_id,phase,mode=ExecutionMode.REDO if redo else ExecutionMode.START)

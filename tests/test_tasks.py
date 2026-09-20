@@ -1062,3 +1062,21 @@ def test_recovery_planner_assigns_exactly_one_action_per_task():
     assert plan_recovery(task,has_session=True).action=='reconcile'
     for p in phases:p['state']='pending'
     assert plan_recovery(task,has_session=True).action=='resume'
+
+def test_configured_phase_executor_rejects_wrong_owner_and_maps_redo(monkeypatch,tmp_path):
+    import asyncio,json
+    from delivery_api.orchestrator import ExecutionMode,PhaseOrchestrator
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'executor.db'));tid=store.create_task('Executor')['task_id']
+    store.add_event(tid,'progress','session: configured-executor',phase_key='intent')
+    root=tmp_path/'artifacts'/'configured-executor';(root/'interview').mkdir(parents=True);(root/'interview'/'intent_model.json').write_text(json.dumps({'contract_version':'1'}));(root/'interview'/'conops.json').write_text('{}')
+    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'));monkeypatch.setenv('REQUI_RE_DIST','1')
+    calls=[]
+    class Runner:
+        async def run(self,*args,**kwargs):calls.append((args,kwargs));return 0
+    orchestrator=PhaseOrchestrator(store,Runner())
+    asyncio.run(orchestrator.execute_phase(tid,'srs',mode=ExecutionMode.REDO))
+    command=calls[0][0][1];assert command[-2:]==['--from','srs'] and command[command.index('--to')+1]=='srs'
+    try:asyncio.run(orchestrator.execute_phase(tid,'intent'))
+    except ValueError as error:assert 'owned by interview' in str(error)
+    else:assert False

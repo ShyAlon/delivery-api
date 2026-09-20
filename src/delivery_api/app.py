@@ -550,8 +550,9 @@ def _task_ui_state(task:dict,input_state:dict)->dict:
 def get_task(task_id: str):
     task = store.task(task_id)
     if not task: raise HTTPException(404, "task not found")
-    input_state=runner.input_state(task_id)
-    return {**task, "events": store.events(task_id), "artifacts": store.task_artifacts(task_id), "input_state":input_state,"ui_state":_task_ui_state(task,input_state)}
+    input_state=runner.input_state(task_id);work=runner.work_state(task_id)
+    work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref} if work else None)
+    return {**task, "events": store.events(task_id), "artifacts": store.task_artifacts(task_id), "input_state":input_state,"active_work":work_state,"ui_state":_task_ui_state(task,input_state)}
 
 @app.get("/api/tasks/{task_id}/events")
 def task_events(task_id: str, after: int = Query(default=0, ge=0)):
@@ -652,7 +653,7 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
     try:
         gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label)
         phase=gate["after_phase"]
-        if req.action=="redo":asyncio.create_task(orchestrator.launch(task_id,phase,redo=True))
+        if req.action=="redo":asyncio.create_task(orchestrator.execute_phase(task_id,phase,mode=__import__('delivery_api.orchestrator',fromlist=['ExecutionMode']).ExecutionMode.REDO))
         else:asyncio.create_task(orchestrator.continue_after(task_id,phase))
         return gate
     except KeyError:raise HTTPException(404,"gate not found")
