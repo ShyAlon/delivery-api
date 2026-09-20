@@ -662,6 +662,27 @@ def _task_artifact(task_id:str,phase:str,name:str)->Path:
 def task_artifact_download(task_id:str,phase:str,name:str):
     return FileResponse(_task_artifact(task_id,phase,name),filename=name)
 
+_ARTIFACT_TITLES={"intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification"}
+
+def _interview_transcript_markdown(task_id:str)->str:
+    turns=[];pending=None
+    for event in store.events(task_id):
+        if event.get("phase_key") not in ("intent","conops"):continue
+        payload=event.get("payload") or {}
+        if event.get("kind") in ("waiting_input","founder_decision"):
+            question=str(payload.get("question") or event.get("message") or "").strip()
+            if question:
+                pending=question;turns.append([question,None])
+        elif event.get("kind")=="answer":
+            answer=str(payload.get("answer") or event.get("message","").removeprefix("You: ")).strip()
+            if turns and turns[-1][1] is None:turns[-1][1]=answer
+    complete=[turn for turn in turns if turn[1]]
+    if not complete:return ""
+    lines=["## Interview questions and answers"]
+    for index,(question,answer) in enumerate(complete,1):
+        lines.extend(["",f"### Question {index}",question,"",f"**Answer:** {answer}"])
+    return "\n".join(lines)
+
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}/view")
 def task_artifact_view(task_id:str,phase:str,name:str):
     path=_task_artifact(task_id,phase,name)
@@ -672,7 +693,12 @@ def task_artifact_view(task_id:str,phase:str,name:str):
         if sibling.is_file():display_path=sibling;text=sibling.read_text(errors="replace")
         try:raw=json.dumps(json.loads(raw),indent=2)
         except Exception:pass
-    return {"name":name,"phase":phase,"format":"markdown" if display_path.suffix==".md" else ("json" if path.suffix==".json" else "text"),"content":text,"raw_format":"json" if path.suffix==".json" else "text","raw_content":raw,"display_name":display_path.name}
+    display_format="markdown" if display_path.suffix==".md" else ("json" if path.suffix==".json" else "text")
+    transcript=_interview_transcript_markdown(task_id) if name=="intent_model.json" else ""
+    if transcript:
+        if display_format!="markdown":text=f"# {_ARTIFACT_TITLES[name]}\n\n"+text;display_format="markdown"
+        text=text.rstrip()+"\n\n"+transcript+"\n"
+    return {"name":name,"title":_ARTIFACT_TITLES.get(name,Path(name).stem.replace("_"," ").title()),"phase":phase,"format":display_format,"content":text,"raw_format":"json" if path.suffix==".json" else "text","raw_content":raw,"display_name":display_path.name}
 
 @app.get("/api/tasks/{task_id}/artifacts.zip")
 def task_artifacts_zip(task_id:str):

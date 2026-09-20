@@ -1312,3 +1312,17 @@ def test_orchestrator_phase_override_reaches_engine_and_is_durable(monkeypatch,t
     assert r.calls[0]['env']['SPEC_GENERATOR_MODEL_NEEDS']=='deepseek:deepseek-chat'
     event=[e for e in store.events(tid) if e['kind']=='model_route'][-1]
     assert event['payload']=={'route':'deepseek','provider':'deepseek','model':'deepseek-chat','mode':'redo'}
+
+def test_intent_artifact_view_has_content_title_and_interview_transcript(monkeypatch,tmp_path):
+    import json
+    from fastapi.testclient import TestClient
+    from delivery_api import app as app_module
+    from delivery_api.store import SQLiteStore
+    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=SQLiteStore(str(tmp_path/'intent-view.db'));tid=store.create_task('Habit app')['task_id'];store.add_event(tid,'progress','session: interview-view',phase_key='intent')
+    folder=root/'interview-view'/'interview';folder.mkdir(parents=True);(folder/'intent_model.json').write_text(json.dumps({'problem_statement':'Build habits'}));(folder/'intent_model.md').write_text('# What we understood\n\n**Problem:** Build habits')
+    store.add_event(tid,'waiting_input','You:',phase_key='intent',payload={'question':'Who needs this?','waiting_input':True});store.add_event(tid,'answer','You: Busy adults',phase_key='intent',payload={'answer':'Busy adults','transcript':True})
+    monkeypatch.setattr(app_module,'store',store)
+    body=TestClient(app_module.app).get(f'/api/tasks/{tid}/artifacts/intent/intent_model.json/view').json()
+    assert body['title']=='Needs and Scope' and body['format']=='markdown'
+    assert '**Problem:** Build habits' in body['content']
+    assert '## Interview questions and answers' in body['content'] and 'Who needs this?' in body['content'] and '**Answer:** Busy adults' in body['content']

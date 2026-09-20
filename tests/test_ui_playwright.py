@@ -864,3 +864,12 @@ def test_model_route_default_and_phase_override_controls(page,ui):
     override=page.locator('select[name="model_route"]');override.wait_for()
     assert override.locator('option').count()==3
     assert 'Task default' in override.locator('option').first.inner_text()
+
+def test_artifact_viewer_renders_content_title_bold_and_transcript(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json();live['state']='done';live['artifacts']=[{'phase_key':'intent','name':'intent_model.json','stale':False,'generation':1,'present':True,'valid':True,'validator':'IntentModel','validation_errors':[]}];live['ui_state']={'mode':'complete','active_phase':'tests','process_live':False,'decision':None,'gate':None}
+    payload={'name':'intent_model.json','title':'Needs and Scope','phase':'intent','format':'markdown','display_name':'intent_model.md','content':'# What we understood\n\n**Problem:** Build habits\n\n## Interview questions and answers\n\n### Question 1\nWho needs this?\n\n**Answer:** Busy adults','raw_format':'json','raw_content':'{}'}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.route('**/api/tasks/live/artifacts/intent/intent_model.json/view',lambda route:route.fulfill(json=payload));page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='intent_model.json').click();viewer=page.locator('.artifact-viewer');viewer.wait_for()
+    assert viewer.get_by_role('heading',name='Needs and Scope').is_visible()
+    assert viewer.locator('strong').filter(has_text='Problem:').count()==1 and viewer.locator('strong').filter(has_text='Answer:').count()==1
+    assert viewer.get_by_text('Who needs this?').is_visible() and viewer.get_by_text('Busy adults').is_visible()
+    page.screenshot(path='/downloads/intent-viewer-transcript.png',full_page=True)
