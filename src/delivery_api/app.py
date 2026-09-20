@@ -5,6 +5,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import json
 import signal
+import subprocess
 import threading
 import logging
 import time
@@ -648,7 +649,7 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
                 try:
                     model=getattr(__import__(validator[0],fromlist=[validator[1]]),validator[1]);model.model_validate_json(path.read_text());valid=True
                 except Exception as exc:valid=False;errors=[f"{type(exc).__name__}: {str(exc)[:600]}"]
-            records.append({"phase_key":phase.key,"name":filename,"ref":str(path),"mime_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","stale":False,"generation":task["generation"],"present":True,"valid":valid,"validator":validator[1] if validator else None,"validation_errors":errors,"validation_error":errors[0] if errors else None})
+            records.append({"phase_key":phase.key,"name":filename,"title":_ARTIFACT_TITLES.get(filename,Path(filename).stem.replace("_"," ").title()),"ref":str(path),"mime_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","stale":False,"generation":task["generation"],"present":True,"valid":valid,"validator":validator[1] if validator else None,"validation_errors":errors,"validation_error":errors[0] if errors else None})
     return records or store.task_artifacts(task_id)
 
 def _task_artifact(task_id:str,phase:str,name:str)->Path:
@@ -664,24 +665,50 @@ def task_artifact_download(task_id:str,phase:str,name:str):
 
 _ARTIFACT_TITLES={"intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification"}
 
+def _checkpoint_interview_turns(task_id:str)->list[tuple[str,str]]:
+    """Recover historical turns when old API events stored only answer lengths."""
+    session=_recorded_engine_session(task_id)
+    if not session:return []
+    from vmodel_contracts.runtime import artifacts_root
+    db=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"/"checkpoints.sqlite"
+    if not db.is_file():return []
+    built=os.environ.get("REQUI_RE_DIST")=="1"
+    engine_dir=(Path.cwd() if built else Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve())
+    python=Path(os.environ.get("INTERVIEW_ENGINE_PYTHON",sys.executable if built else str(engine_dir/".venv/bin/python")))
+    if not python.is_file():return []
+    script="import json,sqlite3,sys\nfrom langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\nfrom interview_engine.contracts import AppArchetype\nrow=sqlite3.connect(sys.argv[1]).execute('select type,checkpoint from checkpoints order by checkpoint_id desc limit 1').fetchone()\nif not row: print('[]');raise SystemExit\nobj=JsonPlusSerializer(allowed_msgpack_modules=[AppArchetype]).loads_typed((row[0],row[1]))\nmessages=(obj.get('channel_values') or {}).get('messages') or []\nout=[]\nfor m in messages:\n role=getattr(m,'type',None) or (m.get('type') if isinstance(m,dict) else None)\n content=getattr(m,'content',None) or (m.get('content') if isinstance(m,dict) else None)\n if role in ('ai','human') and isinstance(content,str):out.append([role,content])\nprint(json.dumps(out))"
+    try:
+        env={**os.environ,**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})}
+        result=subprocess.run([str(python),"-c",script,str(db)],capture_output=True,text=True,timeout=8,env=env)
+        if result.returncode:return []
+        messages=json.loads(result.stdout);turns=[];question=None
+        for role,content in messages:
+            if role=="ai":question=content.replace("[INTERVIEW COMPLETE]","").strip()
+            elif role=="human" and question:turns.append((question,content.strip()));question=None
+        return turns
+    except Exception:return []
+
 def _interview_transcript_markdown(task_id:str)->str:
-    turns=[];pending=None
+    turns=[]
     for event in store.events(task_id):
         if event.get("phase_key") not in ("intent","conops"):continue
         payload=event.get("payload") or {}
         if event.get("kind") in ("waiting_input","founder_decision"):
             question=str(payload.get("question") or event.get("message") or "").strip()
-            if question:
-                pending=question;turns.append([question,None])
+            if question:turns.append([question,None])
         elif event.get("kind")=="answer":
-            answer=str(payload.get("answer") or event.get("message","").removeprefix("You: ")).strip()
-            if turns and turns[-1][1] is None:turns[-1][1]=answer
-    complete=[turn for turn in turns if turn[1]]
+            message=event.get("message","")
+            answer=str(payload.get("answer") or (message.removeprefix("You: ") if message.startswith("You: ") else "")).strip()
+            if answer and turns and turns[-1][1] is None:turns[-1][1]=answer
+    complete=[tuple(turn) for turn in turns if turn[1]]
+    checkpoint_turns=_checkpoint_interview_turns(task_id)
+    if checkpoint_turns:complete=checkpoint_turns
     if not complete:return ""
     lines=["## Interview questions and answers"]
     for index,(question,answer) in enumerate(complete,1):
         lines.extend(["",f"### Question {index}",question,"",f"**Answer:** {answer}"])
     return "\n".join(lines)
+
 
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}/view")
 def task_artifact_view(task_id:str,phase:str,name:str):
