@@ -10,6 +10,9 @@ import logging
 import time
 import os
 import sys
+import mimetypes
+import zipfile
+import io
 from pathlib import Path
 from typing import Literal
 
@@ -602,13 +605,68 @@ def _task_ui_state(task:dict,input_state:dict)->dict:
             "gate":waiting_gate if mode=="phase_gate" else None,"diagnostic":diagnostic}
 
 
+def _task_artifact_snapshot(task_id:str)->list[dict]:
+    """Project real session files into task artifacts; filesystem is source evidence."""
+    task=store.task(task_id)
+    if not task:return []
+    session=_recorded_engine_session(task_id)
+    if not session:return store.task_artifacts(task_id)
+    from vmodel_contracts.runtime import artifacts_root
+    root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session
+    from .phases import PHASE_DEFINITIONS
+    records=[]
+    for phase in PHASE_DEFINITIONS:
+        folder=root/("interview" if phase.key in ("intent","conops") else "spec")
+        for filename in phase.artifacts:
+            path=folder/filename
+            if not path.is_file():continue
+            valid=True;error=None
+            try:
+                if path.suffix==".json":json.loads(path.read_text())
+            except Exception as exc:valid=False;error=f"{type(exc).__name__}: {exc}"
+            records.append({"phase_key":phase.key,"name":filename,"ref":str(path),"mime_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","stale":False,"generation":task["generation"],"present":True,"valid":valid,"validation_error":error})
+    return records or store.task_artifacts(task_id)
+
+def _task_artifact(task_id:str,phase:str,name:str)->Path:
+    artifact=next((a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==phase and a["name"]==name),None)
+    if not artifact:raise HTTPException(404,"artifact not found")
+    path=Path(artifact["ref"]).resolve()
+    if not path.is_file():raise HTTPException(404,"artifact file not found")
+    return path
+
+@app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}")
+def task_artifact_download(task_id:str,phase:str,name:str):
+    return FileResponse(_task_artifact(task_id,phase,name),filename=name)
+
+@app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}/view")
+def task_artifact_view(task_id:str,phase:str,name:str):
+    path=_task_artifact(task_id,phase,name)
+    if path.stat().st_size>2_000_000:raise HTTPException(413,"artifact is too large for inline viewing")
+    text=path.read_text(errors="replace")
+    if path.suffix==".json":
+        try:content=json.dumps(json.loads(text),indent=2)
+        except Exception:content=text
+        return {"name":name,"phase":phase,"format":"json","content":content}
+    return {"name":name,"phase":phase,"format":"markdown" if path.suffix==".md" else "text","content":text}
+
+@app.get("/api/tasks/{task_id}/artifacts.zip")
+def task_artifacts_zip(task_id:str):
+    records=_task_artifact_snapshot(task_id)
+    if not records:raise HTTPException(404,"no artifacts found")
+    data=io.BytesIO()
+    with zipfile.ZipFile(data,"w",zipfile.ZIP_DEFLATED) as archive:
+        for artifact in records:archive.write(artifact["ref"],f"{artifact['phase_key']}/{artifact['name']}")
+    from fastapi.responses import Response
+    title=(store.task(task_id) or {}).get("title","task").replace(" ","-").lower()
+    return Response(data.getvalue(),media_type="application/zip",headers={"Content-Disposition":f'attachment; filename="{title}-artifacts.zip"'})
+
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str):
     task = store.task(task_id)
     if not task: raise HTTPException(404, "task not found")
     input_state=runner.input_state(task_id);work=runner.work_state(task_id)
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
-    return {**task, "events": store.events(task_id), "artifacts": store.task_artifacts(task_id), "input_state":input_state,"active_work":work_state,"ui_state":_task_ui_state(task,input_state)}
+    return {**task, "events": store.events(task_id), "artifacts": _task_artifact_snapshot(task_id), "input_state":input_state,"active_work":work_state,"ui_state":_task_ui_state(task,input_state)}
 
 @app.get("/api/tasks/{task_id}/events")
 def task_events(task_id: str, after: int = Query(default=0, ge=0)):

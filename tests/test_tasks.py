@@ -1272,3 +1272,15 @@ def test_recovery_restores_final_approval_gate_owner(monkeypatch,tmp_path):
     asyncio.run(app_module._recover_tasks())
     task=store.task(tid);gate=next(g for g in task['gates'] if g['after_phase']=='tests')
     assert task['state']=='waiting_gate' and gate['state']=='waiting'
+
+def test_task_artifacts_project_real_session_files_and_download_zip(monkeypatch,tmp_path):
+    import json
+    from fastapi.testclient import TestClient
+    from delivery_api import app as app_module
+    from delivery_api.store import SQLiteStore
+    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=SQLiteStore(str(tmp_path/'artifacts.db'));tid=store.create_task('Verified product')['task_id'];store.add_event(tid,'progress','session: session-a',phase_key='intent')
+    (root/'session-a'/'interview').mkdir(parents=True);(root/'session-a'/'spec').mkdir();(root/'session-a'/'interview'/'intent_model.json').write_text('{}');(root/'session-a'/'spec'/'architecture.json').write_text(json.dumps({'contract_version':'0.16.0'}))
+    monkeypatch.setattr(app_module,'store',store)
+    records=app_module._task_artifact_snapshot(tid);assert {(x['phase_key'],x['name']) for x in records}=={('intent','intent_model.json'),('architecture','architecture.json')};assert all(x['present'] and x['valid'] for x in records)
+    client=TestClient(app_module.app);view=client.get(f'/api/tasks/{tid}/artifacts/architecture/architecture.json/view');assert view.status_code==200 and view.json()['format']=='json'
+    archive=client.get(f'/api/tasks/{tid}/artifacts.zip');assert archive.status_code==200 and archive.headers['content-type']=='application/zip'
