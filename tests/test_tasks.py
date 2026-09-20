@@ -1196,3 +1196,22 @@ def test_greenfield_correction_recovers_session_from_recent_requirement_path(mon
     baseline=json.loads(path.read_text())
     assert baseline['mode']=='greenfield' and baseline['baseline_id']==session+'-greenfield-v1'
     assert runner.calls and runner.calls[0][1]['phase']=='architecture'
+
+
+def test_requirement_resolution_logs_and_returns_actionable_unexpected_failure(monkeypatch,caplog):
+    import asyncio,logging
+    from fastapi import HTTPException
+    from delivery_api import app as app_module
+    from delivery_api.auth import Actor
+    class Work:owner='requirement';phase='architecture'
+    monkeypatch.setattr(app_module.runner,'work_state',lambda task_id:Work())
+    async def fail(task_id,action):raise RuntimeError('generator launch exploded')
+    monkeypatch.setattr(app_module.orchestrator,'resolve_baseline_requirement',fail)
+    caplog.set_level(logging.ERROR,logger='delivery_api.http')
+    try:asyncio.run(app_module.resolve_architecture_requirement('daily',app_module.RequirementResolution(action='greenfield'),Actor('shy','shy')))
+    except HTTPException as exc:
+        assert exc.status_code==500 and exc.detail['cause']=='RuntimeError: generator launch exploded'
+        assert 'remains recoverable' in exc.detail['next']
+    else:assert False
+    assert 'architecture requirement resolution failed task=daily action=greenfield' in caplog.text
+    assert 'RuntimeError: generator launch exploded' in caplog.text

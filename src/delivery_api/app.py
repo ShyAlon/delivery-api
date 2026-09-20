@@ -531,6 +531,10 @@ async def resolve_architecture_requirement(task_id:str,body:RequirementResolutio
     try:await orchestrator.resolve_baseline_requirement(task_id,body.action)
     except (ValueError,FileNotFoundError) as exc:
         raise HTTPException(422,{"error":"The architecture baseline is not ready.","cause":str(exc),"next":"Fix the SystemBaseline JSON at the shown path, or switch this product to Greenfield."})
+    except Exception as exc:
+        log.exception("architecture requirement resolution failed task=%s action=%s",task_id,body.action)
+        activity("requirement.resolve.failed","Architecture requirement resolution failed",task_id=task_id,action=body.action,error=f"{type(exc).__name__}: {str(exc)[:300]}")
+        raise HTTPException(500,{"error":"The architecture baseline could not be resolved.","cause":f"{type(exc).__name__}: {str(exc)[:300]}","next":"Copy debug info and check run.log; the requirement remains recoverable after restart."})
     store.audit(a.label,"requirement.resolved",task_id,{"phase":"architecture","action":body.action})
     return {"status":"resolved","action":body.action}
 
