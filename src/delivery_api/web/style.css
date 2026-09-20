@@ -55,3 +55,5 @@ nav{display:flex;gap:18px}.about-page{min-height:calc(100vh - 220px);display:gri
 /* The detailed task view uses one authoritative phase display. */
 .detail-layout>.panel>.panel-title{padding-bottom:17px;border-bottom:1px solid var(--line)}
 .phase-list-primary{gap:0;padding:8px 4px 2px}.phase-list-primary .phase{grid-template-columns:44px 1fr auto;gap:18px;padding:0 0 34px;min-height:82px}.phase-list-primary .phase:not(:last-child):before{left:15px;top:27px;bottom:-1px;width:2px}.phase-list-primary .phase .dot{width:31px;height:31px;border-width:2px}.phase-list-primary .phase.done .dot,.phase-list-primary .phase.approved .dot{box-shadow:inset 0 0 0 8px var(--card)}.phase-list-primary .phase b{font-size:18px;line-height:1.25}.phase-list-primary .phase small{font-size:12px;line-height:1.45;margin-top:7px;max-width:none;white-space:normal;overflow:visible}.phase-list-primary .phase time{font-size:10px;padding-top:4px}.phase-list-primary .bar{height:5px;margin-top:12px}
+
+.runtime-id{font:700 9px/1.2 var(--mono);letter-spacing:.08em;color:var(--muted);white-space:nowrap}

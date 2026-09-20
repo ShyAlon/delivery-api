@@ -581,6 +581,8 @@ def test_answered_decision_clears_and_binary_approval_uses_same_dialog(page,ui):
     submitted=[];page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.route('**/api/tasks/live/answer',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
     page.goto(ui+'/tasks/live/view');page.locator('#console').wait_for();assert page.locator('#opendecision').count()==0 and page.locator('.decision-dialog').count()==0
     approval={'type':'founder_decision','decision_id':'intent-approval','title':'Approve the intent model','prompt':'Approve this intent model?','rationale_required':False,'answer_format':'<value>','options':[{'value':'y','label':'Approve','summary':'Continue'},{'value':'n','label':'Reject','summary':'Stop'}]}
+    live['input_state']={'waiting':True,'process_live':True,'decision':approval};live['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':approval,'gate':None}
+    page.unroute('**/api/tasks/live');page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"intent",payload:{waiting_input:true,decision},ts:1720000300})',approval)
     dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.get_by_text('Approve',exact=True).is_visible() and dialog.get_by_text('Reject',exact=True).is_visible();assert dialog.locator('.decision-why').is_hidden()
     page.screenshot(path='/downloads/typed-intent-approval.png',full_page=True)
@@ -653,3 +655,27 @@ def test_needs_gate_state_hides_stale_intent_prompt_and_opens_needs_gate(page,ui
     page.locator('#gateform').wait_for();assert page.locator('.current-question').is_hidden() and page.locator('#answerform').is_hidden()
     assert page.locator('.decision-dialog').count()==0 and page.locator('#opendecision').count()==0
     assert page.locator('#gateform').get_by_text('Stakeholder needs gate',exact=True).is_visible()
+
+
+def test_managed_task_state_reducer_is_exhaustive_and_atomic(page,ui):
+    page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}close(){this.closed=true}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json()
+    decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve the intent model','prompt':'Approve this intent model?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
+    calls={'n':0}
+    def route(request):
+        calls['n']+=1
+        if calls['n']>1:
+            live['input_state']={'waiting':True,'process_live':True,'decision':decision}
+            live['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':decision,'gate':None}
+        request.fulfill(json=live)
+    page.route('**/api/tasks/live',route);page.goto(ui+'/tasks/live/view');page.locator('#console').wait_for()
+    page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"intent",payload:{waiting_input:true,decision},ts:1720000500})',decision)
+    dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.get_by_text('Approve',exact=True).is_visible()
+    assert page.locator('#answerform').is_hidden() and page.locator('#opendecision').is_visible()
+    page.screenshot(path='/downloads/managed-state-intent-decision.png',full_page=True)
+    source=(Path(__file__).parents[1]/'src/delivery_api/web/app.js').read_text()
+    assert 'TASK_UI_ACTIONS' in source and 'reduceTaskSnapshot' in source and 'next.mode!==view.mode' in source
+
+
+def test_runtime_build_identity_is_visible(page,ui):
+    page.goto(ui+'/');badge=page.locator('#identity .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD develop'
