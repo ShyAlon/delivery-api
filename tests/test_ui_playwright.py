@@ -792,9 +792,9 @@ def test_orchestrator_baseline_decision_renders_without_engine_process(page,ui):
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for()
     assert dialog.get_by_text('Greenfield',exact=True).is_visible();assert page.locator('.task-error-state').count()==0
 
-def test_account_menu_is_plain_list_with_single_button(page,ui):
+def test_account_menu_is_plain_list_with_explicit_actions(page,ui):
     page.goto(ui+'/');page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for()
-    assert menu.locator(':scope > li').count()==3;assert menu.locator('button').count()==1;assert menu.locator('button').inner_text()=='Sign out'
+    assert menu.locator(':scope > li').count()==4;assert menu.locator('button').all_inner_texts()==['Copy debug info','Sign out']
 
 def test_existing_system_requirement_names_file_format_path_and_next_step(page,ui):
     requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture is paused until real system facts are supplied.','path':'/artifacts/session/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':['baseline_id','system_name','mode: existing','repositories (at least one)'],'next':'Save the file, then restart Requi.re; recovery will launch Architecture.'}
@@ -808,3 +808,10 @@ def test_missing_resource_dialog_has_recovery_paths_and_greenfield_confirmation(
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');dialog=page.locator('.requirement-dialog');dialog.wait_for()
     assert dialog.get_by_text(requirement['path'],exact=True).is_visible();assert dialog.get_by_role('button',name="I've added the file · check it").is_visible();assert dialog.get_by_role('button',name='Copy fact checklist').is_visible();dialog.get_by_role('button',name='I chose Existing by mistake').click();confirm=page.get_by_role('dialog',name='Confirm Greenfield correction');confirm.wait_for();assert confirm.get_by_role('button',name='Switch & continue').is_visible()
     page.screenshot(path='/downloads/missing-resource-recovery.png',full_page=True)
+
+def test_copy_debug_info_includes_runtime_snapshot_and_resource_decision(page,ui):
+    page.add_init_script("""window.__copied='';Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>window.__copied=text}})""")
+    requirement={'kind':'external_input','title':'Baseline required','path':'/tmp/system-baseline.json','format':'SystemBaseline JSON'}
+    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');page.locator('.requirement-dialog').wait_for();page.keyboard.press('Escape');page.locator('#accountbutton').click();button=page.get_by_role('menuitem',name='Copy debug info');button.click();page.wait_for_function("window.__copied.length>0")
+    copied=page.evaluate('window.__copied');assert copied.startswith('Requi.re debug report');assert '"owner": "requirement"' in copied and '"detected": true' in copied and '"task_id": "live"' in copied
