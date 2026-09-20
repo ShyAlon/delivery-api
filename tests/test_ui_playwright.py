@@ -852,3 +852,15 @@ def test_artifact_viewer_uses_shared_dialog_shell_and_local_close(page,ui):
 
 def test_audit_uses_shared_dialog_sortable_filterable_sticky_table(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));entries=[{'ts':1720000200,'actor':'Shy','action':'gate.approve','detail':{'phase':'srs'}},{'ts':1720000100,'actor':'policy','action':'gate.bypassed','detail':{'phase':'needs'}}];page.route('**/api/tasks/live/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':entries}));page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='Audit').click();dialog=page.get_by_role('dialog',name='Task audit');dialog.wait_for();headers=dialog.locator('thead');assert headers.evaluate('(e)=>getComputedStyle(e).position')=='sticky';rows=dialog.locator('tbody tr');assert rows.count()==2;dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='Shy';dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='policy';dialog.get_by_label('Filter audit entries').fill('approve');assert rows.count()==1;assert rows.first.get_by_text('gate.approve').is_visible();close=dialog.get_by_role('button',name='Close task audit');vb=dialog.bounding_box();cb=close.bounding_box();assert cb['x']>=vb['x'] and cb['x']+cb['width']<=vb['x']+vb['width'];page.screenshot(path='/downloads/shared-audit-dialog.png',full_page=True);page.keyboard.press('Escape');assert dialog.count()==0
+
+def test_model_route_default_and_phase_override_controls(page,ui):
+    page.goto(ui+'/tasks/empty/view')
+    picker=page.locator('#defaultroute');picker.wait_for()
+    assert picker.locator('option').count()==2
+    assert picker.input_value()=='ollama'
+    deepseek=picker.locator('option[value="deepseek"]')
+    assert 'DeepSeek' in deepseek.inner_text()
+    page.goto(ui+'/tasks/sim/view')
+    override=page.locator('select[name="model_route"]');override.wait_for()
+    assert override.locator('option').count()==3
+    assert 'Task default' in override.locator('option').first.inner_text()
