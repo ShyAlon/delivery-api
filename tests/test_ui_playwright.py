@@ -679,3 +679,16 @@ def test_managed_task_state_reducer_is_exhaustive_and_atomic(page,ui):
 
 def test_runtime_build_identity_is_visible(page,ui):
     page.goto(ui+'/');badge=page.locator('#identity .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD develop'
+
+
+def test_sse_snapshot_refresh_is_filtered_and_coalesced(page,ui):
+    page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}close(){this.closed=true}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();calls={'n':0}
+    def route(request):calls.__setitem__('n',calls['n']+1);request.fulfill(json=live)
+    page.route('**/api/tasks/live',route);page.goto(ui+'/tasks/live/view');page.locator('#console').wait_for();baseline=calls['n']
+    page.evaluate("""for(let i=0;i<100;i++)liveSource.emit({kind:'progress',message:'line '+i,phase_key:'intent',payload:{},ts:1720001000+i})""")
+    page.wait_for_timeout(200);assert calls['n']==baseline
+    page.evaluate("""for(let i=0;i<50;i++)liveSource.emit({kind:'founder_decision',message:'decision '+i,phase_key:'intent',payload:{waiting_input:true},ts:1720002000+i})""")
+    page.wait_for_timeout(250);assert calls['n']==baseline+1
+    source=(Path(__file__).parents[1]/'src/delivery_api/web/app.js').read_text()
+    assert "stateEvents=new Set" in source and 'snapshotPending' in source and 'setTimeout(snapshotRefresh,75)' in source
