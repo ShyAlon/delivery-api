@@ -1033,3 +1033,20 @@ def test_phase_configuration_is_canonical_and_complete():
     assert [p.generator_stage for p in PHASE_DEFINITIONS[2:]]==['needs','srs','architecture','items','tests']
     assert PHASE_BY_KEY['architecture'].prerequisite=='system-baseline'
     assert [successor(p.key).key if successor(p.key) else None for p in PHASE_DEFINITIONS]==['conops','needs','srs','architecture','specs','tests',None]
+
+def test_active_work_is_one_standard_projection_for_subprocess_and_decision(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'active-work.db'));tid=store.create_task('Work')['task_id'];runner=ProcessRunner(store)
+    decision={'type':'founder_decision','decision_id':'choice','title':'Choose','prompt':'Choose?','options':[{'value':'y','label':'Yes'}]}
+    async def go():
+        process=asyncio.create_task(runner.run(tid,[sys.executable,'-c','import time;time.sleep(.2)'],cwd=tmp_path))
+        while runner.work_state(tid) is None:await asyncio.sleep(.001)
+        work=runner.work_state(tid);assert work.owner=='subprocess' and work.status=='running' and runner.input_state(tid)['process_live']
+        await process;assert runner.work_state(tid) is None
+        pending=asyncio.create_task(runner.request_decision(tid,'architecture',decision));await asyncio.sleep(0)
+        work=runner.work_state(tid);assert work.owner=='decision' and work.status=='waiting' and work.decision==decision
+        assert runner.input_state(tid)==work.input_state()
+        await runner.send_input(tid,'y','choice');assert await pending=='y';assert runner.work_state(tid) is None
+    asyncio.run(go())

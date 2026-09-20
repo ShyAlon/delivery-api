@@ -30,6 +30,19 @@ _PHASE_HINTS = {
     "stage 'items'": "specs", "stage 'tests'": "tests", "stage 'verification'": "tests",
 }
 
+@dataclass(frozen=True, slots=True)
+class ActiveWork:
+    owner: str
+    phase: str
+    status: str
+    started_at: float
+    decision: dict | None = None
+    durable_ref: str | None = None
+
+    def input_state(self) -> dict:
+        return {"waiting":self.status=="waiting", "process_live":self.status in ("running","waiting"), "decision":self.decision}
+
+
 @dataclass
 class ProcessRunner:
     store: Storage
@@ -38,6 +51,7 @@ class ProcessRunner:
     interrupted_for_shutdown: set[str] = field(default_factory=set)
     decisions: dict[str, asyncio.Future] = field(default_factory=dict)
     pending_decisions: dict[str, dict] = field(default_factory=dict)
+    active_work: dict[str, ActiveWork] = field(default_factory=dict)
     on_complete: object | None = None
 
     def _phase(self, text: str, fallback: str) -> str:
@@ -59,6 +73,7 @@ class ProcessRunner:
             start_new_session=(os.name == "posix"),
         )
         self.processes[task_id] = proc
+        self.active_work[task_id]=ActiveWork("subprocess",phase,"running",time.time(),durable_ref=str(proc.pid))
         traceback_started = False
         missing_module: str | None = None
         prompt_lines: list[str] = []
@@ -106,7 +121,10 @@ class ProcessRunner:
                                 self.store.add_event(task_id,"decision_replayed","Recovered founder decision; engine resumed",phase_key=phase,payload={"decision_id":candidate.get("decision_id"),"fingerprint":replay["fingerprint"],"recovery":True})
                                 activity("engine.decision.replay","Replayed exact durable founder decision after restart",task_id=task_id,phase=phase,decision_id=candidate.get("decision_id"),fingerprint=replay["fingerprint"])
                                 structured_decision=None
-                            else:self.pending_decisions[task_id]=candidate
+                            else:
+                                self.pending_decisions[task_id]=candidate
+                                current=self.active_work[task_id]
+                                self.active_work[task_id]=ActiveWork(current.owner,phase,"waiting",current.started_at,candidate,current.durable_ref)
                     blocking_prompt=structured_decision is None and (line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line or bool(re.search(r"\[[A-Za-z]/[A-Za-z](?:/[A-Za-z])*\]",line)))
                     # Open interview questions remain free-text. Every bounded
                     # choice prompt (yes/no or enumerated console command) must
@@ -118,6 +136,8 @@ class ProcessRunner:
                     if blocking_prompt:typed_prompt_pending=False
                     if replaying_prompt and structured_decision is None and not blocking_prompt:replaying_prompt=False
                     if waiting_input:
+                        current=self.active_work.get(task_id)
+                        if current:self.active_work[task_id]=ActiveWork(current.owner,phase,"waiting",current.started_at,structured_decision or current.decision,current.durable_ref)
                         # Keep protocol envelopes out of founder-visible question
                         # reconstruction. A later bare ``You:`` prompt must reuse
                         # only the event's human prompt.
@@ -202,7 +222,7 @@ class ProcessRunner:
             activity("engine.stream.failure","Engine stream handling failed visibly",task_id=task_id,phase=phase,error=f"{type(exc).__name__}: {exc}")
             raise
         finally:
-            self.processes.pop(task_id, None);self.waiting.discard(task_id);self.pending_decisions.pop(task_id,None);self.interrupted_for_shutdown.discard(task_id)
+            self.processes.pop(task_id, None);self.waiting.discard(task_id);self.pending_decisions.pop(task_id,None);self.active_work.pop(task_id,None);self.interrupted_for_shutdown.discard(task_id)
             # The finished process must release its task slot before the next
             # executable starts. This is the shared process boundary.
             if continuation_phase is not None and self.on_complete is not None:
@@ -239,19 +259,17 @@ class ProcessRunner:
     async def request_decision(self, task_id: str, phase: str, decision: dict) -> str:
         if task_id in self.decisions: raise RuntimeError("task already has a pending decision")
         future=asyncio.get_running_loop().create_future();self.decisions[task_id]=future;self.pending_decisions[task_id]=decision;self.waiting.add(task_id)
+        self.active_work[task_id]=ActiveWork("decision",phase,"waiting",time.time(),decision,str(decision.get("decision_id") or ""))
         self.store.add_event(task_id,"founder_decision",decision["prompt"],phase_key=phase,payload={"waiting_input":True,"question":decision["prompt"],"decision":decision})
         try:return await future
-        finally:self.decisions.pop(task_id,None);self.pending_decisions.pop(task_id,None);self.waiting.discard(task_id)
+        finally:self.decisions.pop(task_id,None);self.pending_decisions.pop(task_id,None);self.waiting.discard(task_id);self.active_work.pop(task_id,None)
+
+    def work_state(self, task_id: str) -> ActiveWork | None:
+        return self.active_work.get(task_id)
 
     def input_state(self, task_id: str) -> dict:
-        proc=self.processes.get(task_id)
-        decision_live=task_id in self.decisions
-        return {"waiting":task_id in self.waiting and ((proc is not None and proc.returncode is None) or decision_live),
-                # An orchestrator-owned typed decision is live work even without
-                # a subprocess. The UI must render it instead of calling the
-                # task orphaned while request_decision awaits its answer.
-                "process_live":(proc is not None and proc.returncode is None) or decision_live,
-                "decision":self.pending_decisions.get(task_id)}
+        work=self.work_state(task_id)
+        return work.input_state() if work else {"waiting":False,"process_live":False,"decision":None}
 
     async def send_input(self, task_id: str, text: str, decision_id: str | None = None) -> None:
         pending=self.pending_decisions.get(task_id)
@@ -264,5 +282,7 @@ class ProcessRunner:
         if not proc or not proc.stdin: raise RuntimeError("task is not waiting for input")
         proc.stdin.write((text + "\n").encode()); await proc.stdin.drain()
         self.pending_decisions.pop(task_id,None)
+        current=self.active_work.get(task_id)
+        if current:self.active_work[task_id]=ActiveWork(current.owner,current.phase,"running",current.started_at,None,current.durable_ref)
         if task_id in self.waiting:
             self.waiting.discard(task_id);activity("engine.input.resume","Answer received; engine resumed",task_id=task_id,phase=self.store.task(task_id).get("active_phase"))
