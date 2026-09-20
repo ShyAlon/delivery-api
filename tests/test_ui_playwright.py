@@ -706,3 +706,12 @@ def test_orphaned_running_task_renders_visible_recovery_error(page,ui):
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view')
     notice=page.locator('.task-error-state');notice.wait_for();assert notice.get_by_text('Engine is not running.',exact=True).is_visible()
     assert page.locator('.live-indicator').get_by_text('Engine stopped',exact=True).is_visible()
+
+def test_gate_checkbox_updates_in_place_without_navigation(page,ui):
+    live=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in live['gates'] if g['state']=='waiting');live['ui_state']={'mode':'phase_gate','active_phase':live['active_phase'],'process_live':False,'decision':None,'gate':gate};calls=[]
+    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/sim/gates/*/toggle',lambda route:(calls.append(route.request.post_data_json),route.fulfill(json={**gate,'is_open':route.request.post_data_json['is_open']})))
+    navigations=[];page.on('framenavigated',lambda frame:navigations.append(frame.url) if frame==page.main_frame else None)
+    page.goto(ui+'/tasks/sim/view');page.locator('#gateform').wait_for();before=len(navigations);box=page.locator('#gateopen');box.check()
+    page.get_by_text('Gate opened.',exact=True).wait_for();assert box.is_checked() and calls==[{'is_open':True}]
+    assert len(navigations)==before and page.locator('#gateform').is_visible()
