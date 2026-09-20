@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import signal
 import threading
@@ -51,39 +52,15 @@ def _runtime_version() -> dict:
 RUNTIME_VERSION=_runtime_version()
 
 WEB_DIR = Path(__file__).parent / "web"
-app = FastAPI(title="Requi.re API", version="0.2.0")
 store = (__import__('delivery_api.store',fromlist=['TursoReplicaStore']).TursoReplicaStore(str(config.local_database_path()),config.TURSO_DATABASE_URL,config.TURSO_AUTH_TOKEN,config.TURSO_SYNC_INTERVAL) if config.TURSO_DATABASE_URL else create_store(config.DATABASE_URL))
 jobs = JobQueue(store)
 runner = ProcessRunner(store)
 orchestrator = PhaseOrchestrator(store,runner)
 runner.on_complete = orchestrator.continue_after
 simulation = Simulation(store)
-app.state.store = store
 log = logging.getLogger("delivery_api.http")
-app.mount("/assets", StaticFiles(directory=WEB_DIR), name="assets")
 
-@app.middleware("http")
-async def request_log(request, call_next):
-    try:
-        auth.csrf_guard(request)
-    except HTTPException as e:
-        from fastapi.responses import JSONResponse
-        return JSONResponse({"detail": e.detail}, status_code=e.status_code)
-    started = time.monotonic()
-    try:
-        response = await call_next(request)
-    except Exception:
-        log.exception("request failed method=%s path=%s", request.method, request.url.path)
-        raise
-    who = auth.actor(request).label
-    duration_ms=int((time.monotonic()-started)*1000)
-    activity("http.request","Request completed",method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
-    if response.status_code >= 400:
-        activity("http.error","API request returned an error",endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
-    if request.url.path in {"/", "/assets/app.js"} or request.url.path.startswith("/tasks/"):
-        response.headers["Cache-Control"]="no-store, max-age=0"
-    if response.status_code in (401,403):activity("access.blocked","Unauthorized or forbidden request",method=request.method,path=request.url.path,status=response.status_code,actor=who)
-    return response
+
 
 if config.ADMIN_TOKEN == "dev-admin-token":
     import logging
@@ -169,23 +146,23 @@ async def _resume_interrupted_interviews()->None:
         asyncio.create_task(resume())
 
 
-@app.on_event("startup")
-async def _start():
+@asynccontextmanager
+async def lifespan(application:FastAPI):
     global _previous_sigint
     config.validate_auth_config()
     from .observability import LOG_PATH,stage_log_paths
     print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
-    await jobs.start()
-    await _resume_orphaned_handoffs()
-    await asyncio.sleep(0)
-    await _resume_interrupted_interviews()
-    # Uvicorn waits for open HTTP connections before lifespan shutdown. Close
-    # SSE at signal time, then delegate to uvicorn's handler; a second SIGINT
-    # still reaches uvicorn and forces its standard immediate exit.
+    await jobs.start();await _resume_orphaned_handoffs();await asyncio.sleep(0);await _resume_interrupted_interviews()
     if threading.current_thread() is threading.main_thread() and signal.getsignal(signal.SIGINT) is not _shutdown_signal:
-        _previous_sigint=signal.getsignal(signal.SIGINT)
-        signal.signal(signal.SIGINT,_shutdown_signal)
+        _previous_sigint=signal.getsignal(signal.SIGINT);signal.signal(signal.SIGINT,_shutdown_signal)
+    try:yield
+    finally:
+        stream_count=_streams_closed_on_signal+len(_stream_shutdown_events)
+        activity("server.shutdown.signal","Server shutdown received",streams=stream_count,engines=len(runner.processes))
+        for event in tuple(_stream_shutdown_events):event.set()
+        await runner.shutdown();await jobs.stop()
+        activity("server.shutdown.complete","Server shutdown complete",streams_closed=stream_count)
 
 def _shutdown_signal(signum,frame):
     global _streams_closed_on_signal
@@ -194,14 +171,33 @@ def _shutdown_signal(signum,frame):
     for event in tuple(_stream_shutdown_events):event.set()
     if callable(_previous_sigint):_previous_sigint(signum,frame)
 
-@app.on_event("shutdown")
-async def _stop():
-    stream_count=_streams_closed_on_signal+len(_stream_shutdown_events)
-    activity("server.shutdown.signal","Server shutdown received",streams=stream_count,engines=len(runner.processes))
-    for event in tuple(_stream_shutdown_events):event.set()
-    await runner.shutdown()
-    await jobs.stop()
-    activity("server.shutdown.complete","Server shutdown complete",streams_closed=stream_count)
+
+app = FastAPI(title="Requi.re API", version="0.2.0", lifespan=lifespan)
+app.state.store = store
+app.mount("/assets", StaticFiles(directory=WEB_DIR), name="assets")
+
+@app.middleware("http")
+async def request_log(request, call_next):
+    try:
+        auth.csrf_guard(request)
+    except HTTPException as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"detail": e.detail}, status_code=e.status_code)
+    started = time.monotonic()
+    try:
+        response = await call_next(request)
+    except Exception:
+        log.exception("request failed method=%s path=%s", request.method, request.url.path)
+        raise
+    who = auth.actor(request).label
+    duration_ms=int((time.monotonic()-started)*1000)
+    activity("http.request","Request completed",method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
+    if response.status_code >= 400:
+        activity("http.error","API request returned an error",endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
+    if request.url.path in {"/", "/assets/app.js"} or request.url.path.startswith("/tasks/"):
+        response.headers["Cache-Control"]="no-store, max-age=0"
+    if response.status_code in (401,403):activity("access.blocked","Unauthorized or forbidden request",method=request.method,path=request.url.path,status=response.status_code,actor=who)
+    return response
 
 @app.get("/", include_in_schema=False)
 def index(): return FileResponse(WEB_DIR / "index.html")
