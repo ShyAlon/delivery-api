@@ -82,9 +82,23 @@ def _recorded_engine_session(task_id:str)->str|None:
     return None
 
 
+def _reconcile_approved_prefixes()->None:
+    """Repair earlier phase rows contradicted by a durable downstream approval."""
+    for task in store.list_tasks():
+        phases=task.get("phases",[])
+        approved=[index for index,phase in enumerate(phases) if phase.get("state") in ("approved","done")]
+        if not approved:continue
+        furthest=max(approved)
+        for phase in phases[:furthest]:
+            if phase.get("state") not in ("approved","done"):
+                store.update_phase(task["task_id"],phase["phase_key"],"approved",detail="Recovered from durable downstream approval")
+                activity("orchestrator.reconcile","Repaired contradictory earlier phase state",task_id=task["task_id"],phase=phase["phase_key"],evidence_phase=phases[furthest]["phase_key"])
+
+
 async def _resume_orphaned_handoffs()->None:
     """Repair a durable completed boundary whose next subprocess never started."""
     from .orchestrator import NEXT
+    _reconcile_approved_prefixes()
     for task in store.list_tasks():
         task_id=task["task_id"]
         if task_id in runner.processes:continue

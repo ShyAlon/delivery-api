@@ -776,3 +776,12 @@ def test_recovered_run_hides_stale_sigterm_error_from_live_console(page,ui):
     ]
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
     assert 'Recovered checkpoint is running' in console.inner_text();assert 'exit code -15' not in console.inner_text();assert page.locator('.task-error-state').count()==0
+
+def test_live_elapsed_uses_latest_phase_command_not_parked_phase_start(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json();phase=next(p for p in live['phases'] if p['phase_key']==live['active_phase']);phase.update({'started_at':time.time()-22*3600,'completed':None,'total':None})
+    live['events'].append({'id':999,'kind':'command','message':'Engine process started','phase_key':live['active_phase'],'payload':{},'ts':time.time()-12*60})
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');scope=page.locator('.progress-scope');scope.wait_for()
+    assert '12 minutes so far' in scope.inner_text();assert '22 hours' not in scope.inner_text()
+
+def test_avatar_menu_does_not_emit_native_runtime_tooltip(page,ui):
+    page.goto(ui+'/');button=page.locator('#accountbutton');button.wait_for();assert page.locator('#identity').get_attribute('title') is None

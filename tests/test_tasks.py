@@ -994,3 +994,20 @@ def test_startup_resume_skips_historical_interview_after_durable_approval(monkey
     async def go():await app_module._resume_interrupted_interviews();await asyncio.sleep(.01)
     asyncio.run(go())
     assert captured==[]
+
+def test_startup_reconciles_contradictory_prefix_before_downstream_handoff(monkeypatch,tmp_path):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'reconcile.db'));tid=store.create_task('Corrupt recovered task')['task_id']
+    store.update_phase(tid,'intent','running',detail='Waiting for founder answer')
+    store.update_phase(tid,'needs','approved',detail='Approved by explicit open-gate policy')
+    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
+    calls=[]
+    async def continue_after(task_id,phase):calls.append((task_id,phase))
+    monkeypatch.setattr(app_module.orchestrator,'continue_after',continue_after)
+    async def go():await app_module._resume_orphaned_handoffs();await asyncio.sleep(.01)
+    asyncio.run(go())
+    states={p['phase_key']:p['state'] for p in store.task(tid)['phases']}
+    assert states['intent']=='approved' and states['conops']=='approved' and states['needs']=='approved'
+    assert calls==[(tid,'needs')]
