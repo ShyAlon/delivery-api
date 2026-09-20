@@ -693,9 +693,10 @@ def test_runner_can_close_engine_approved_phases(tmp_path):
 
 def test_orchestrator_phase_plan_launches_next_bounded_process(monkeypatch,tmp_path):
     import asyncio,json
-    from delivery_api.orchestrator import PhaseOrchestrator,PLAN
+    from delivery_api.orchestrator import PhaseOrchestrator
+    from delivery_api.phases import PHASE_DEFINITIONS
     from delivery_api.store import SQLiteStore
-    assert PLAN==(("needs","needs"),("srs","srs"),("architecture","architecture"),("specs","items"),("tests","tests"))
+    assert tuple((phase.key,phase.generator_stage) for phase in PHASE_DEFINITIONS if phase.executor=="generator")==(("needs","needs"),("srs","srs"),("architecture","architecture"),("specs","items"),("tests","tests"))
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
     store=SQLiteStore(str(tmp_path/'plan.db'));tid=store.create_task('Planned product')['task_id'];store.add_event(tid,'progress','session: session-1',phase_key='intent')
     interview=tmp_path/'artifacts'/'session-1'/'interview';interview.mkdir(parents=True)
