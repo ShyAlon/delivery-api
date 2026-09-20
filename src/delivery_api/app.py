@@ -178,10 +178,10 @@ async def _recover_tasks()->None:
         task_id=task["task_id"]
         if runner.work_state(task_id) is not None:continue
         events=store.events(task_id);session=_recorded_engine_session(task_id)
-        plan=plan_recovery(task,events[-1] if events else None,has_session=bool(session))
+        plan=plan_recovery({**task,"events":events},events[-1] if events else None,has_session=bool(session))
         if plan.action=="reconcile":
             _reconcile_approved_prefixes();task=store.task(task_id);events=store.events(task_id)
-            plan=plan_recovery(task,events[-1] if events else None,has_session=bool(session))
+            plan=plan_recovery({**task,"events":events},events[-1] if events else None,has_session=bool(session))
         if plan.action=="launch_successor":
             async def launch(task_id=task_id,phase=plan.phase):
                 try:
@@ -192,7 +192,8 @@ async def _recover_tasks()->None:
                     store.add_event(task_id,"error",message,phase_key=plan.target,payload={"cause":f"{type(exc).__name__}: {exc}","next":"Fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved.","completed_phase":phase,"next_phase":plan.target})
             asyncio.create_task(launch())
         elif plan.action=="restore_wait":
-            requirement=(events[-1].get("payload") or {}) if events else {}
+            requirement_event=next((event for event in reversed(events) if event.get("kind")=="requirement" and (event.get("payload") or {}).get("kind")=="external_input"),{})
+            requirement=(requirement_event.get("payload") or {})
             runner.pause_for_requirement(task_id,plan.phase or task.get("active_phase") or "architecture",requirement)
         elif plan.action=="resume" and session:
             await _resume_one_interview(task_id,session)

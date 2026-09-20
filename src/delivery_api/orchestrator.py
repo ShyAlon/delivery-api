@@ -79,7 +79,7 @@ class PhaseOrchestrator:
             SystemBaseline.model_validate_json(path.read_text())
         else:raise ValueError("unknown baseline requirement action")
         self.runner.active_work.pop(task_id,None)
-        self.store.add_event(task_id,"baseline","Architecture baseline requirement resolved",phase_key="architecture",payload={"mode":action,"path":str(path)})
+        self.store.add_event(task_id,"baseline","Architecture baseline requirement resolved",phase_key="architecture",payload={"mode":action,"path":str(path),"resolved":True})
         await self.execute_phase(task_id,"architecture")
 
     async def execute_phase(self,task_id:str,phase:str,*,mode:ExecutionMode=ExecutionMode.START)->None:

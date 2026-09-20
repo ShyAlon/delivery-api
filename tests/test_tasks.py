@@ -1104,3 +1104,24 @@ def test_recovery_restores_durable_external_input_wait(monkeypatch,tmp_path):
     async def go():await app_module._recover_tasks();await asyncio.sleep(.01)
     asyncio.run(go());work=runner.work_state(tid)
     assert work and work.owner=='requirement' and work.phase=='architecture' and work.requirement==requirement
+
+def test_recovery_requirement_owns_task_despite_later_obsolete_process_noise(monkeypatch,tmp_path):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'one-owner.db'));tid=store.create_task('One owner')['task_id']
+    for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
+    store.update_phase(tid,'architecture','awaiting_approval',detail='Baseline required')
+    requirement={'kind':'external_input','title':'Baseline required','path':str(tmp_path/'missing-system-baseline.json'),'format':'SystemBaseline JSON'}
+    store.add_event(tid,'requirement','Architecture paused',phase_key='architecture',payload=requirement)
+    store.add_event(tid,'command','Obsolete interview process started',phase_key='intent')
+    store.add_event(tid,'waiting_input','Approve this intent model? [y/N]',phase_key='intent',payload={'waiting_input':True})
+    runner=ProcessRunner(store);monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module,'runner',runner)
+    launched=[]
+    async def continue_after(*args):launched.append(args)
+    monkeypatch.setattr(app_module.orchestrator,'continue_after',continue_after)
+    async def go():await app_module._recover_tasks();await asyncio.sleep(.01)
+    asyncio.run(go());work=runner.work_state(tid)
+    assert work and work.owner=='requirement' and work.requirement==requirement
+    assert launched==[] and tid not in runner.processes
