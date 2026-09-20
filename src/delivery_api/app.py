@@ -62,6 +62,8 @@ async def request_log(request, call_next):
     activity("http.request","Request completed",method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
     if response.status_code >= 400:
         activity("http.error","API request returned an error",endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
+    if request.url.path in {"/", "/assets/app.js"} or request.url.path.startswith("/tasks/"):
+        response.headers["Cache-Control"]="no-store, max-age=0"
     if response.status_code in (401,403):activity("access.blocked","Unauthorized or forbidden request",method=request.method,path=request.url.path,status=response.status_code,actor=who)
     return response
 
@@ -93,7 +95,8 @@ async def _resume_interrupted_interviews()->None:
         # failed engine run. Accept that one precise legacy state too, so an
         # in-progress interview survives the first upgrade to this version.
         legacy_restart=(task["state"]=="failed" and latest.get("kind")=="error" and latest.get("payload",{}).get("exit_code") in (-15,143))
-        if task["state"]!="running" and not legacy_restart:continue
+        gate_parked=task["state"]=="waiting_gate"
+        if task["state"]!="running" and not legacy_restart and not gate_parked:continue
         session=_recorded_engine_session(task["task_id"])
         if not session:continue
         built=os.environ.get("REQUI_RE_DIST")=="1"
@@ -103,7 +106,7 @@ async def _resume_interrupted_interviews()->None:
             activity("engine.resume.failed","Interrupted interview could not resume",task_id=task["task_id"],session=session,error=f"{type(e).__name__}: {str(e)[:180]}")
             continue
         async def resume(task_id=task["task_id"],session=session,runtime=runtime,engine_dir=engine_dir,built=built):
-            activity("engine.resume","Resuming interrupted interview from checkpoint",task_id=task_id,session=session)
+            activity("engine.resume","Resuming interrupted or gate-parked interview from checkpoint",task_id=task_id,session=session,prior_state=(store.task(task_id) or {}).get("state"))
             await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"))
         asyncio.create_task(resume())
 

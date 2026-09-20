@@ -778,3 +778,21 @@ def test_task_projection_exposes_live_input_truth(monkeypatch):
     monkeypatch.setattr(app_module.runner,'input_state',lambda task:{'waiting':False,'process_live':False,'decision':None})
     result=app_module.get_task(tid)
     assert result['input_state']=={'waiting':False,'process_live':False,'decision':None}
+
+
+def test_restart_recovery_resumes_gate_parked_interview(monkeypatch,tmp_path):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'gate-parked.db'));tid=store.create_task('Resume orphaned gate')['task_id']
+    store.update_phase(tid,'conops','running');store.update_phase(tid,'conops','awaiting_approval');store.wait_at_gate(tid,'conops')
+    store.add_event(tid,'progress','session: orphaned-session',phase_key='conops')
+    assert store.task(tid)['state']=='waiting_gate'
+    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
+    captured=[]
+    async def run(*args,**kwargs):captured.append((args,kwargs));return 0
+    monkeypatch.setattr(app_module.runner,'run',run);monkeypatch.setattr(app_module.os,'environ',{**app_module.os.environ,'REQUI_RE_DIST':'1'})
+    async def go():await app_module._resume_interrupted_interviews();await asyncio.sleep(.01)
+    asyncio.run(go())
+    assert captured and captured[0][0][1][-1]=='orphaned-session'
+    assert captured[0][1]['completion_phases']==('intent','conops')
