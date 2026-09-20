@@ -979,3 +979,18 @@ def test_stream_parser_exception_fails_task_visibly_and_stops_child(monkeypatch,
     else:raise AssertionError('protocol failure was hidden')
     task=store.task(tid);assert task['state']=='failed' and tid not in runner.processes
     event=store.events(tid)[-1];assert event['kind']=='error' and 'engine stream handling stopped' in event['message']
+
+def test_startup_resume_skips_historical_interview_after_durable_approval(monkeypatch,tmp_path):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'completed-interview.db'));tid=store.create_task('Downstream already active')['task_id']
+    store.update_phase(tid,'intent','approved');store.update_phase(tid,'conops','approved');store.update_phase(tid,'needs','running')
+    store.add_event(tid,'progress','session: completed-interview-checkpoint',phase_key='intent')
+    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
+    captured=[]
+    async def run(*args,**kwargs):captured.append((args,kwargs));return 0
+    monkeypatch.setattr(app_module.runner,'run',run)
+    async def go():await app_module._resume_interrupted_interviews();await asyncio.sleep(.01)
+    asyncio.run(go())
+    assert captured==[]

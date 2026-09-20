@@ -133,6 +133,12 @@ async def _resume_interrupted_interviews()->None:
         # in-progress interview survives the first upgrade to this version.
         legacy_restart=(task["state"]=="failed" and latest.get("kind")=="error" and latest.get("payload",{}).get("exit_code") in (-15,143))
         gate_parked=task["state"]=="waiting_gate"
+        phase_states={phase["phase_key"]:phase["state"] for phase in task.get("phases",[])}
+        interview_complete=all(phase_states.get(phase) in ("approved","done") for phase in ("intent","conops"))
+        # Once the interview outputs are durably approved, their checkpoint is
+        # historical. Downstream recovery owns the task and must not race a
+        # second interview process that re-asks already accepted decisions.
+        if interview_complete:continue
         if task["state"]!="running" and not legacy_restart and not gate_parked:continue
         session=_recorded_engine_session(task["task_id"])
         if not session:continue

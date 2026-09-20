@@ -765,3 +765,14 @@ def test_live_progress_scope_and_account_menu_desktop_and_phone(page,ui):
     page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for();assert menu.get_by_text('shy@example.com',exact=True).is_visible();assert menu.get_by_text('BUILD abcdef1',exact=True).is_visible();assert menu.get_by_role('menuitem',name='Sign out').is_visible()
     page.screenshot(path='/downloads/live-scope-account-desktop.png',full_page=True);page.keyboard.press('Escape');assert menu.is_hidden()
     page.set_viewport_size({'width':390,'height':844});page.reload();scope.wait_for();page.locator('#accountbutton').click();menu.wait_for();page.screenshot(path='/downloads/live-scope-account-phone.png',full_page=True)
+
+def test_recovered_run_hides_stale_sigterm_error_from_live_console(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='intent';live['ui_state']={'mode':'executing','active_phase':'intent','process_live':True,'decision':None,'gate':None}
+    live['events']=[
+      {'id':1,'kind':'error','message':'Error: interview engine stopped with exit code -15.','phase_key':'intent','payload':{'exit_code':-15},'ts':1720000000},
+      {'id':2,'kind':'command','message':'Engine process started','phase_key':'intent','payload':{},'ts':1720000100},
+      {'id':3,'kind':'progress','message':'Recovered checkpoint is running','phase_key':'intent','payload':{},'ts':1720000101},
+    ]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
+    assert 'Recovered checkpoint is running' in console.inner_text();assert 'exit code -15' not in console.inner_text();assert page.locator('.task-error-state').count()==0
