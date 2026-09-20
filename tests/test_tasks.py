@@ -1011,3 +1011,16 @@ def test_startup_reconciles_contradictory_prefix_before_downstream_handoff(monke
     states={p['phase_key']:p['state'] for p in store.task(tid)['phases']}
     assert states['intent']=='approved' and states['conops']=='approved' and states['needs']=='approved'
     assert calls==[(tid,'needs')]
+
+def test_orchestrator_owned_decision_is_live_without_subprocess(tmp_path):
+    import asyncio
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'decision-live.db'));tid=store.create_task('Baseline')['task_id'];runner=ProcessRunner(store)
+    decision={'type':'founder_decision','decision_id':'system-baseline','title':'Choose baseline','prompt':'Which baseline?','options':[{'value':'greenfield','label':'Greenfield'}]}
+    async def go():
+        job=asyncio.create_task(runner.request_decision(tid,'architecture',decision))
+        await asyncio.sleep(0);state=runner.input_state(tid)
+        assert state=={'waiting':True,'process_live':True,'decision':decision}
+        await runner.send_input(tid,'greenfield','system-baseline');assert await job=='greenfield'
+    asyncio.run(go())

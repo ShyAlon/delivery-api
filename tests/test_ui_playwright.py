@@ -785,3 +785,13 @@ def test_live_elapsed_uses_latest_phase_command_not_parked_phase_start(page,ui):
 
 def test_avatar_menu_does_not_emit_native_runtime_tooltip(page,ui):
     page.goto(ui+'/');button=page.locator('#accountbutton');button.wait_for();assert page.locator('#identity').get_attribute('title') is None
+
+def test_orchestrator_baseline_decision_renders_without_engine_process(page,ui):
+    decision={'type':'founder_decision','decision_id':'system-baseline','title':'Choose the architecture baseline','prompt':'Greenfield or existing?','rationale_required':False,'options':[{'value':'greenfield','label':'Greenfield'},{'value':'existing','label':'Existing system'}]}
+    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['input_state']={'waiting':True,'process_live':True,'decision':decision};live['ui_state']={'mode':'engine_decision','active_phase':'architecture','process_live':True,'decision':decision,'gate':None}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for()
+    assert dialog.get_by_text('Greenfield',exact=True).is_visible();assert page.locator('.task-error-state').count()==0
+
+def test_account_menu_is_plain_list_with_single_button(page,ui):
+    page.goto(ui+'/');page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for()
+    assert menu.locator(':scope > li').count()==3;assert menu.locator('button').count()==1;assert menu.locator('button').inner_text()=='Sign out'

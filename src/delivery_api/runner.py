@@ -245,8 +245,12 @@ class ProcessRunner:
 
     def input_state(self, task_id: str) -> dict:
         proc=self.processes.get(task_id)
-        return {"waiting":task_id in self.waiting and ((proc is not None and proc.returncode is None) or task_id in self.decisions),
-                "process_live":proc is not None and proc.returncode is None,
+        decision_live=task_id in self.decisions
+        return {"waiting":task_id in self.waiting and ((proc is not None and proc.returncode is None) or decision_live),
+                # An orchestrator-owned typed decision is live work even without
+                # a subprocess. The UI must render it instead of calling the
+                # task orphaned while request_decision awaits its answer.
+                "process_live":(proc is not None and proc.returncode is None) or decision_live,
                 "decision":self.pending_decisions.get(task_id)}
 
     async def send_input(self, task_id: str, text: str, decision_id: str | None = None) -> None:
