@@ -1256,3 +1256,19 @@ def test_existing_database_migrates_missing_final_verification_gate(tmp_path):
     store._db.execute("DELETE FROM gates WHERE task_id=? AND after_phase='tests'",(tid,));store._db.commit();store._db.close()
     migrated=SQLiteStore(str(path));task=migrated.task(tid)
     assert any(g['after_phase']=='tests' and g['gate_key']=='gate-tests' for g in task['gates'])
+
+
+def test_recovery_restores_final_approval_gate_owner(monkeypatch,tmp_path):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'final-gate-recovery.db'));tid=store.create_task('Final recovery')['task_id']
+    for phase in ('intent','conops','needs','srs','architecture','specs'):store.update_phase(tid,phase,'approved')
+    store.update_phase(tid,'tests','running',detail='Generating tests')
+    store.update_phase(tid,'tests','awaiting_approval',detail='Generated; waiting for founder approval')
+    assert store.task(tid)['state']=='running'
+    runner=ProcessRunner(store);monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module,'runner',runner)
+    asyncio.run(app_module._recover_tasks())
+    task=store.task(tid);gate=next(g for g in task['gates'] if g['after_phase']=='tests')
+    assert task['state']=='waiting_gate' and gate['state']=='waiting'

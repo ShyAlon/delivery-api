@@ -206,6 +206,9 @@ async def _recover_tasks()->None:
                     message=f"Error: completed {phase} could not launch {plan.target}. Likely cause: {type(exc).__name__}: {exc}. Next: fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved."
                     store.add_event(task_id,"error",message,phase_key=plan.target,payload={"cause":f"{type(exc).__name__}: {exc}","next":"Fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved.","completed_phase":phase,"next_phase":plan.target})
             asyncio.create_task(launch())
+        elif plan.action=="restore_gate":
+            gate=store.wait_at_gate(task_id,plan.phase or task.get("active_phase"))
+            activity("gate.owner.restored","Restored founder approval gate",task_id=task_id,phase=plan.phase,gate_key=(gate or {}).get("gate_key"))
         elif plan.action=="restore_wait":
             requirement_event=next((event for event in reversed(events) if event.get("kind")=="requirement" and (event.get("payload") or {}).get("kind")=="external_input"),{})
             requirement=(requirement_event.get("payload") or {})

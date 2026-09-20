@@ -27,6 +27,10 @@ def plan_recovery(task:dict, latest_event:dict|None=None, *, has_session:bool=Fa
         requirement_id=requirement_event.get("id",0)
         resolved=any(event.get("kind")=="baseline" and event.get("id",0)>requirement_id and (event.get("payload") or {}).get("resolved") for event in events)
         if not resolved:return RecoveryPlan("restore_wait",requirement_event.get("phase_key"),reason="durable external input requirement")
+    active_phase=task.get("active_phase")
+    if active_phase and states.get(active_phase)=="awaiting_approval":
+        gate=next((gate for gate in task.get("gates",[]) if gate.get("after_phase")==active_phase),None)
+        if gate and gate.get("state")!="decided":return RecoveryPlan("restore_gate",active_phase,reason="generated phase is awaiting founder approval")
     for definition in reversed(PHASE_DEFINITIONS):
         target=successor(definition.key)
         if target and states.get(definition.key) in ("approved","done") and states.get(target.key) in ("pending","running"):
