@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 import re
 import signal
@@ -13,6 +15,10 @@ from .store import PHASES, Storage
 from .observability import event as activity
 
 _MISSING_MODULE = re.compile(r"ModuleNotFoundError: No module named [\'\"]([^\'\"]+)[\'\"]")
+
+def decision_fingerprint(decision: dict) -> str:
+    """Stable identity for one exact typed decision occurrence across restart."""
+    return hashlib.sha256(json.dumps(decision,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
 _PROGRESS = re.compile(r"(?:stage '([^']+)' call|([0-9]+)s elapsed|([0-9]+)/([0-9]+))", re.I)
 _PHASE_HINTS = {
     "conops": "conops", "concept option": "conops", "operational scenario": "conops",
@@ -39,7 +45,8 @@ class ProcessRunner:
         return next((phase for word, phase in sorted(_PHASE_HINTS.items(), key=lambda item: -len(item[0])) if word in lower), fallback)
 
     async def run(self, task_id: str, command: list[str], *, cwd: Path, phase: str = "intent",
-                  env: dict[str, str] | None = None, completion_phases: tuple[str, ...] = (), infer_phase: bool = True) -> int:
+                  env: dict[str, str] | None = None, completion_phases: tuple[str, ...] = (), infer_phase: bool = True,
+                  replay_decisions: dict[str, dict[str, str]] | None = None) -> int:
         if task_id in self.processes:
             raise RuntimeError("task already has a live process")
         launched_phase=phase
@@ -57,6 +64,8 @@ class ProcessRunner:
         prompt_lines: list[str] = []
         structured_buffer = ""
         continuation_phase: str | None = None
+        replay_decisions=dict(replay_decisions or {})
+        replaying_prompt=False
 
         # The child pipeline owns progress and LLM heartbeats. Its lines name
         # the in-flight stage and elapsed time. A second generic heartbeat here
@@ -87,8 +96,17 @@ class ProcessRunner:
                             break
                         if candidate.get("type")=="founder_decision" and isinstance(candidate.get("options"),list):
                             structured_decision=candidate
-                            self.pending_decisions[task_id]=candidate
-                    waiting_input = structured_decision is not None or line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line
+                            replay=replay_decisions.pop(str(candidate.get("decision_id") or ""),None)
+                            if replay and replay.get("fingerprint")==decision_fingerprint(candidate):
+                                assert proc.stdin
+                                proc.stdin.write((replay["answer"]+"\n").encode());await proc.stdin.drain()
+                                replaying_prompt=True
+                                self.store.add_event(task_id,"decision_replayed","Recovered founder decision; engine resumed",phase_key=phase,payload={"decision_id":candidate.get("decision_id"),"fingerprint":replay["fingerprint"],"recovery":True})
+                                activity("engine.decision.replay","Replayed exact durable founder decision after restart",task_id=task_id,phase=phase,decision_id=candidate.get("decision_id"),fingerprint=replay["fingerprint"])
+                                structured_decision=None
+                            else:self.pending_decisions[task_id]=candidate
+                    waiting_input = (not replaying_prompt) and (structured_decision is not None or line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line)
+                    if replaying_prompt and structured_decision is None and not (line.endswith(("You:", "[y/N]", "[y/N] ")) or "Approve this intent model?" in line):replaying_prompt=False
                     if waiting_input:
                         # Keep protocol envelopes out of founder-visible question
                         # reconstruction. A later bare ``You:`` prompt must reuse
@@ -204,7 +222,10 @@ class ProcessRunner:
                 "process_live":proc is not None and proc.returncode is None,
                 "decision":self.pending_decisions.get(task_id)}
 
-    async def send_input(self, task_id: str, text: str) -> None:
+    async def send_input(self, task_id: str, text: str, decision_id: str | None = None) -> None:
+        pending=self.pending_decisions.get(task_id)
+        if decision_id is not None and (not pending or pending.get("decision_id") != decision_id):
+            raise RuntimeError("submitted decision does not match the live typed decision")
         if task_id in self.decisions:
             self.pending_decisions.pop(task_id,None);self.waiting.discard(task_id)
             self.decisions[task_id].set_result(text);return

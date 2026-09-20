@@ -126,6 +126,23 @@ async def _resume_orphaned_handoffs()->None:
         asyncio.create_task(recover())
 
 
+def _replayable_decisions(task_id:str)->dict[str,dict[str,str]]:
+    """Exact typed answers accepted before a restart, keyed by contract identity."""
+    from .runner import decision_fingerprint
+    decisions:dict[str,tuple[int,dict]]={};result={}
+    for event in store.events(task_id):
+        decision=(event.get("payload") or {}).get("decision")
+        if event.get("kind")=="founder_decision" and isinstance(decision,dict) and decision.get("decision_id"):
+            decision_id=str(decision["decision_id"]);decisions[decision_id]=(event["id"],decision);result.pop(decision_id,None)
+        elif event.get("kind")=="answer":
+            decision_id=str((event.get("payload") or {}).get("decision_id") or "")
+            prior=decisions.get(decision_id)
+            if prior and prior[0] < event["id"]:
+                answer=(event.get("payload") or {}).get("answer") or event.get("message","").removeprefix("You: ")
+                result[decision_id]={"answer":answer,"fingerprint":decision_fingerprint(prior[1])}
+    return result
+
+
 async def _resume_interrupted_interviews()->None:
     """Reattach persisted interview checkpoints after a rebuild/restart."""
     for task in store.list_tasks():
@@ -148,7 +165,7 @@ async def _resume_interrupted_interviews()->None:
             continue
         async def resume(task_id=task["task_id"],session=session,runtime=runtime,engine_dir=engine_dir,built=built):
             activity("engine.resume","Resuming interrupted or gate-parked interview from checkpoint",task_id=task_id,session=session,prior_state=(store.task(task_id) or {}).get("state"))
-            await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"))
+            await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"),replay_decisions=_replayable_decisions(task_id))
         asyncio.create_task(resume())
 
 
@@ -439,7 +456,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
     task_before=store.task(task_id) or {};input_before=runner.input_state(task_id)
     recent_answers=[{"event_id":event["id"],"phase_key":event.get("phase_key"),"decision_id":event.get("payload",{}).get("decision_id")} for event in store.events(task_id) if event.get("kind")=="answer"][-10:]
     activity("api.answer.attempt","Founder answer submission received",endpoint=f"/api/tasks/{task_id}/answer",task_id=task_id,task_state=task_before.get("state"),active_phase=task_before.get("active_phase"),submitted_decision_id=body.decision_id,open_decision_id=(input_before.get("decision") or {}).get("decision_id"),process_live=input_before["process_live"],waiting=input_before["waiting"],recent_answer_events=json.dumps(recent_answers,separators=(",",":")))
-    try:await runner.send_input(task_id,body.answer)
+    try:await runner.send_input(task_id,body.answer,body.decision_id)
     except RuntimeError as e:
         task=store.task(task_id) or {};state=runner.input_state(task_id);decision=state.get("decision") or {}
         cause=(f"The task is {task.get('state','unknown')} in phase {task.get('active_phase','unknown')}; "
@@ -452,7 +469,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
         activity("api.answer.stale",message,task_id=task_id,phase=task.get("active_phase"),**payload)
         raise HTTPException(409,{"error":message+".","cause":cause,"next":next_step,"stale":True,"current_state":task.get("state"),"active_phase":task.get("active_phase")})
     active_phase=(store.task(task_id) or {}).get("active_phase") or "intent"
-    store.add_event(task_id,"answer",f"You: {body.answer}",phase_key=active_phase,payload={"actor":a.label,"character_count":len(body.answer),"transcript":True,"decision_id":body.decision_id})
+    store.add_event(task_id,"answer",f"You: {body.answer}",phase_key=active_phase,payload={"actor":a.label,"character_count":len(body.answer),"transcript":True,"decision_id":body.decision_id,"answer":body.answer})
     activity("engine.answer","Founder answer submitted",task_id=task_id,phase=active_phase,actor=a.label,character_count=len(body.answer))
     return {"status":"accepted"}
 

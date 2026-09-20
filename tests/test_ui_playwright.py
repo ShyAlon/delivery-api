@@ -634,3 +634,11 @@ def test_detail_uses_one_large_v_process_without_duplicate_path_map(page,ui):
     page.goto(ui+'/tasks/live/view');phases=page.locator('.phase-list-primary .phase');phases.first.wait_for()
     assert phases.count()==7 and page.locator('.detail-layout .v-map').count()==0 and page.locator('.detail-layout .gate-legend').count()==0
     first=phases.first.bounding_box();assert first['height']>=70
+
+def test_server_accepted_decision_event_closes_founder_box(page,ui):
+    page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
+    live['input_state']={'waiting':True,'process_live':True,'decision':decision};page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.goto(ui+'/tasks/live/view');page.locator('.decision-dialog').wait_for()
+    page.evaluate("liveSource.emit({kind:'answer',message:'You: y',phase_key:'intent',payload:{decision_id:'intent-approval',answer:'y'},ts:1720000400})")
+    page.locator('.decision-dialog').wait_for(state='detached');assert page.locator('#opendecision').count()==0
