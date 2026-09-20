@@ -827,3 +827,9 @@ def test_greenfield_confirmation_is_single_flight(page,ui):
     page.goto(ui+'/tasks/live/view');page.locator('.requirement-dialog').wait_for();page.get_by_role('button',name='I chose Existing by mistake').click();confirm=page.get_by_role('button',name='Switch & continue');confirm.dblclick()
     page.wait_for_timeout(250)
     assert len(calls)==1
+
+def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'A very long progress update that must remain on precisely one line while the full wording stays available on hover','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');feed=page.locator('#progressfeed .progress-item');feed.wait_for();span=feed.locator('span');assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
+    phase=page.locator('.phase-list-primary .phase').filter(has_text='Requirements');phase.hover();tip=phase.get_by_role('tooltip');tip.wait_for();assert tip.get_by_text('srs.json',exact=False).is_visible();assert tip.get_by_text('missing acceptance criterion',exact=False).is_visible()
+    page.screenshot(path='/downloads/progress-phase-tooltips.png',full_page=True)
