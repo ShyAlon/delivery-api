@@ -153,6 +153,15 @@ class SQLiteStore:
             self._db.execute("ALTER TABLE tasks ADD COLUMN owner_id TEXT")
         if "owner_id" not in run_cols:
             self._db.execute("ALTER TABLE runs ADD COLUMN owner_id TEXT")
+        # Every generated phase, including final verification, has a founder
+        # approval boundary. Older databases omitted the final gate and could
+        # strand a completed tests process with no ActiveWork owner.
+        tasks=self._db.execute("SELECT task_id FROM tasks").fetchall()
+        for task in tasks:
+            existing={row[0] for row in self._db.execute("SELECT after_phase FROM gates WHERE task_id=?",(task["task_id"],))}
+            for position,(key,label) in enumerate(PHASES):
+                if key not in existing:
+                    self._db.execute("INSERT INTO gates(task_id,gate_key,after_phase,label,position,is_open,state,options) VALUES (?,?,?,?,?,0,'idle',?)",(task["task_id"],f"gate-{key}",key,f"{label} gate",position,json.dumps([f"Approve {label}","Choose another option"])))
         # Older databases may contain duplicate labels. Preserve every task and
         # make collisions explicit before installing the uniqueness invariant.
         duplicates=self._db.execute("SELECT lower(title) k FROM tasks GROUP BY lower(title) HAVING count(*)>1").fetchall()
@@ -236,7 +245,7 @@ class SQLiteStore:
                 "INSERT INTO gates(task_id,gate_key,after_phase,label,position,is_open,state,options) VALUES (?,?,?,?,?,0,'idle',?)",
                 [(task_id, f"gate-{key}", key, f"{label} gate", i,
                   json.dumps([f"Approve {label}", "Choose another option"]))
-                 for i, (key, label) in enumerate(PHASES[:-1])],
+                 for i, (key, label) in enumerate(PHASES)],
             )
             self.audit("local user", "task.created", task_id, {"title": title})
             self._commit()
@@ -339,7 +348,8 @@ class SQLiteStore:
                 detail="Founder approved edited artifact" if action=="edit" else "Founder approved"
                 self._db.execute("UPDATE phases SET state='approved',detail=?,completed_at=? WHERE task_id=? AND phase_key=?",(detail,now,task_id,phase))
             self.audit(actor, f"gate.{action}", task_id, {"gate":gate_key,"phase":phase,"selected_option":selected_option,"edited_text":edited_text,"steer":steer,"approved_at":now if action != "redo" else None,"provenance":"interactive V gate"})
-            self._db.execute("UPDATE tasks SET state='running',active_phase=?,updated_at=? WHERE task_id=?",(phase,now,task_id)); self._commit()
+            task_state="done" if action!="redo" and phase==PHASES[-1][0] else "running"
+            self._db.execute("UPDATE tasks SET state=?,active_phase=?,updated_at=? WHERE task_id=?",(task_state,phase,now,task_id)); self._commit()
             return self._gate_record(self._db.execute("SELECT * FROM gates WHERE task_id=? AND gate_key=?",(task_id,gate_key)).fetchone())
 
     def update_phase(self, task_id: str, phase_key: str, state: str, *, detail: str = "",
@@ -469,7 +479,7 @@ class SQLiteStore:
                             (reason, task_id, *downstream))
             self._db.execute(f"UPDATE phases SET state='pending',detail='',completed=0,total=NULL,gate_basis_changed=1,started_at=NULL,completed_at=NULL "
                             f"WHERE task_id=? AND phase_key IN ({marks})", (task_id, *downstream))
-            gate_phases = [k for k in downstream if k != PHASES[-1][0]]
+            gate_phases = downstream
             if gate_phases:
                 gate_marks = ",".join("?" for _ in gate_phases)
                 self._db.execute(f"UPDATE gates SET is_open=0,state='idle',selected_option=NULL,edited_text=NULL,steer=NULL "

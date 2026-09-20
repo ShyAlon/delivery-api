@@ -169,7 +169,7 @@ def test_simulation_import_pause_decide_and_complete_without_process(tmp_path):
     (source/'tests.json').write_text('[]')
     isolated=SQLiteStore(str(tmp_path/'sim.db')); sim=Simulation(isolated)
     task=sim.import_run(source)
-    assert task['simulated'] and task['state']=='not_started' and len(task['gates'])==6
+    assert task['simulated'] and task['state']=='not_started' and len(task['gates'])==7
     isolated.set_gate_open(task['task_id'],'gate-conops',True)
     async def go():
       job=asyncio.create_task(sim.replay(task['task_id'],None))
@@ -1236,3 +1236,23 @@ def test_requirement_resolution_restores_owner_from_same_durable_snapshot(monkey
     result=asyncio.run(app_module.resolve_architecture_requirement(tid,app_module.RequirementResolution(action='greenfield'),Actor('shy','shy')))
     assert result=={'status':'resolved','action':'greenfield'}
     assert observed==[('requirement','architecture',requirement,'greenfield')]
+
+
+def test_final_verification_waits_for_approval_and_finishes_task(tmp_path):
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'final-gate.db'));tid=store.create_task('Final approval')['task_id']
+    store.update_phase(tid,'tests','awaiting_approval',detail='Generated; waiting for founder approval')
+    gate=store.wait_at_gate(tid,'tests')
+    assert gate and gate['gate_key']=='gate-tests'
+    assert store.task(tid)['state']=='waiting_gate'
+    store.decide_gate(tid,'gate-tests','approve',selected_option='Approve Verification')
+    task=store.task(tid)
+    assert task['state']=='done' and next(p for p in task['phases'] if p['phase_key']=='tests')['state']=='approved'
+
+
+def test_existing_database_migrates_missing_final_verification_gate(tmp_path):
+    from delivery_api.store import SQLiteStore
+    path=tmp_path/'legacy-final-gate.db';store=SQLiteStore(str(path));tid=store.create_task('Legacy')['task_id']
+    store._db.execute("DELETE FROM gates WHERE task_id=? AND after_phase='tests'",(tid,));store._db.commit();store._db.close()
+    migrated=SQLiteStore(str(path));task=migrated.task(tid)
+    assert any(g['after_phase']=='tests' and g['gate_key']=='gate-tests' for g in task['gates'])
