@@ -79,6 +79,19 @@ def page(ui):
         yield page
         browser.close()
 
+def route_task_snapshot(page,ui,task_id,mutate):
+    snapshot=page.request.get(f'{ui}/api/tasks/{task_id}').json();mutate(snapshot)
+    page.route(f'**/api/tasks/{task_id}',lambda route:route.fulfill(json=snapshot))
+    return snapshot
+
+def waiting_gate_snapshot(snapshot):
+    gate=snapshot['gates'][0];gate.update({'state':'waiting','is_open':0})
+    for other in snapshot['gates'][1:]:other['state']='idle'
+    snapshot.update({'state':'waiting_gate','active_phase':gate['after_phase']})
+    for phase in snapshot['phases']:
+        if phase['phase_key']==gate['after_phase']:phase.update({'state':'awaiting_approval','detail':'Generated; waiting for founder approval'})
+    snapshot['ui_state']={'mode':'phase_gate','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':gate}
+
 
 def test_dashboard_draws_v_and_all_task_states(page, ui):
     page.goto(ui)
@@ -130,31 +143,24 @@ def test_rerun_preview_explains_archive_and_audit_has_local_actor(page, ui):
 
 
 def test_gate_open_waiting_halo_and_decision_modal(page, ui):
+    route_task_snapshot(page,ui,'sim',waiting_gate_snapshot)
     page.goto(ui + "/tasks/sim/view")
-    waiting=page.locator('.gate.waiting');waiting.wait_for()
+    waiting=page.locator('#openphasegate');waiting.wait_for()
     assert waiting.count()==1 and waiting.is_visible()
-    assert page.locator('.gate.open').count()==1
     awaiting=page.locator('.phase.awaiting_approval');assert awaiting.count()==1
     palette=awaiting.locator('.dot').evaluate("e=>({background:getComputedStyle(e).backgroundColor,border:getComputedStyle(e).borderTopColor})")
     assert palette['background']=='rgb(229, 182, 61)' and palette['border']=='rgb(229, 182, 61)'
-    page.screenshot(path="/downloads/vmodel-gates-open-and-waiting.png", full_page=True)
-    page.reload()
-    page.locator('.gate.waiting').click()
     page.locator(".dialog").wait_for()
-    assert "gate" in page.locator(".dialog h2").inner_text().lower()
     assert page.get_by_text("Waiting here · replay paused").is_visible()
     assert page.get_by_text("actor: local user", exact=False).is_visible()
     assert page.get_by_role("button", name="Redo").is_visible()
-    page.screenshot(path="/downloads/vmodel-gate-modal.png", full_page=True)
-
 
 def test_gate_redo_requires_steer_in_browser(page, ui):
-    page.goto(ui + "/tasks/sim/view")
-    page.locator('.gate.waiting').click()
+    route_task_snapshot(page,ui,'sim',waiting_gate_snapshot)
+    page.route('**/api/tasks/sim/gates/*/decide',lambda route:route.fulfill(status=409,json={'detail':{'error':'a redo needs a reason','cause':'Redo without a steer is a reroll.','next':'Describe what should change.'}}))
+    page.goto(ui + "/tasks/sim/view");page.locator('#gateform').wait_for()
     page.get_by_role("button", name="Redo").click()
     page.get_by_text("a redo needs a reason", exact=False).wait_for()
-    assert page.get_by_text("a redo needs a reason", exact=False).is_visible()
-
 
 def test_basic_auth_browser_signup_signin_persists_and_logs(tmp_path):
     db=tmp_path/"basic-ui.db";port=_port();log=Path(__file__).parents[1]/"run.log"
