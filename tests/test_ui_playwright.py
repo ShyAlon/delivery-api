@@ -833,3 +833,10 @@ def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_t
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');feed=page.locator('#progressfeed .progress-item');feed.wait_for();span=feed.locator('span');assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
     phase=page.locator('.phase-list-primary .phase').filter(has_text='Requirements');phase.hover();tip=phase.get_by_role('tooltip');tip.wait_for();assert tip.get_by_text('srs.json',exact=False).is_visible();assert tip.get_by_text('missing acceptance criterion',exact=False).is_visible()
     page.screenshot(path='/downloads/progress-phase-tooltips.png',full_page=True)
+
+
+def test_dashboard_renders_existing_task_with_final_verification_gate(page,ui):
+    base=page.request.get(ui+'/api/tasks/live').json();base['task_id']='daily';base['title']='Daily Habit';base['state']='waiting_gate';base['active_phase']='tests';base['phases'][-1]['state']='awaiting_approval';base['gates']=[g for g in base['gates'] if g.get('after_phase')!='tests'];base['gates'].append({'task_id':'daily','gate_key':'gate-tests','after_phase':'tests','label':'Verification gate','position':6,'is_open':0,'state':'waiting','options':['Approve Verification','Choose another option']})
+    page.route('**/api/tasks',lambda route:route.fulfill(json={'tasks':[base]}))
+    page.route('**/api/sessions',lambda route:route.fulfill(json={'sessions':[]}))
+    page.goto(ui+'/');card=page.locator('.task',has_text='Daily Habit');card.wait_for();assert card.is_visible();assert card.locator('[data-gate="gate-tests"]').count()==1;assert page.get_by_text('Cannot read properties').count()==0
