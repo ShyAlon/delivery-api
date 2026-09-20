@@ -1146,3 +1146,29 @@ def test_recovery_migrates_legacy_baseline_pause_to_requirement_owner(monkeypatc
     asyncio.run(go())
     migrated=[event for event in store.events(tid) if event['kind']=='requirement']
     assert len(migrated)==1
+
+
+def test_snapshot_events_keep_newest_durable_facts_and_recovery_sees_requirement(monkeypatch,tmp_path):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'long-history.db'));tid=store.create_task('Long history')['task_id']
+    for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
+    store.update_phase(tid,'architecture','awaiting_approval',detail='Baseline required')
+    for index in range(510):store.add_event(tid,'output',f'old line {index}',phase_key='srs')
+    requirement={'kind':'external_input','title':'Existing baseline','path':'/tmp/system-baseline.json','format':'SystemBaseline JSON'}
+    requirement_id=store.add_event(tid,'requirement','Architecture paused',phase_key='architecture',payload=requirement)
+    events=store.events(tid)
+    assert len(events)==500 and events[-1]['id']==requirement_id and events[0]['id']>1
+    runner=ProcessRunner(store);monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module,'runner',runner)
+    asyncio.run(app_module._recover_tasks());work=runner.work_state(tid)
+    assert work and work.owner=='requirement' and work.requirement==requirement
+
+
+def test_orphaned_running_ui_state_explains_missing_owner():
+    from delivery_api.app import _task_ui_state
+    task={'state':'running','active_phase':'architecture','gates':[]}
+    state=_task_ui_state(task,{'waiting':False,'process_live':False,'decision':None,'requirement':None})
+    assert state['mode']=='error'
+    assert state['diagnostic']=={'reason':'task has no live ActiveWork owner','task_state':'running','active_phase':'architecture'}

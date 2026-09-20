@@ -573,9 +573,12 @@ def _task_ui_state(task:dict,input_state:dict)->dict:
     elif process_live:mode="executing"
     else:mode="error"
     if mode not in UI_MODES:raise RuntimeError(f"unsupported UI mode: {mode}")
+    diagnostic=None
+    if mode=="error":
+        diagnostic={"reason":"task has no live ActiveWork owner","task_state":task.get("state"),"active_phase":task.get("active_phase")}
     return {"mode":mode,"active_phase":task.get("active_phase"),"process_live":process_live,
             "decision":live_decision if mode=="engine_decision" else None,
-            "gate":waiting_gate if mode=="phase_gate" else None}
+            "gate":waiting_gate if mode=="phase_gate" else None,"diagnostic":diagnostic}
 
 
 @app.get("/api/tasks/{task_id}")

@@ -395,8 +395,16 @@ class SQLiteStore:
             return cur.lastrowid
 
     def events(self, task_id: str, after: int = 0, limit: int = 500) -> list[dict]:
-        rows = self._db.execute("SELECT * FROM events WHERE task_id=? AND id>? ORDER BY id LIMIT ?",
-                               (task_id, after, limit)).fetchall()
+        # Snapshot reads need the newest durable facts. The old ascending LIMIT
+        # silently hid requirements on long-running tasks once they crossed 500
+        # events. Incremental stream reads keep ascending order from `after`.
+        if after:
+            rows = self._db.execute("SELECT * FROM events WHERE task_id=? AND id>? ORDER BY id LIMIT ?",
+                                   (task_id, after, limit)).fetchall()
+        else:
+            rows = list(reversed(self._db.execute(
+                "SELECT * FROM events WHERE task_id=? ORDER BY id DESC LIMIT ?",(task_id,limit)
+            ).fetchall()))
         result = []
         for row in rows:
             item = dict(row); item["payload"] = json.loads(item["payload"]); result.append(item)
