@@ -666,7 +666,7 @@ def test_managed_task_state_reducer_is_exhaustive_and_atomic(page,ui):
 
 
 def test_runtime_build_identity_is_visible(page,ui):
-    page.goto(ui+'/');badge=page.locator('#identity .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD develop'
+    page.goto(ui+'/');page.locator('#accountbutton').click();badge=page.locator('#identity .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD develop'
 
 
 def test_sse_snapshot_refresh_is_filtered_and_coalesced(page,ui):
@@ -685,7 +685,7 @@ def test_sse_snapshot_refresh_is_filtered_and_coalesced(page,ui):
 def test_runtime_badge_survives_identity_render(page,ui):
     page.route('**/health',lambda route:route.fulfill(json={'ok':True,'runtime_id':'7d6647f123456','repositories':{}}))
     page.route('**/api/auth',lambda route:(page.wait_for_timeout(150),route.fulfill(json={'mode':'basic','authenticated':True,'actor':'shy@example.com','admin':True,'providers':[]})))
-    page.goto(ui+'/');badge=page.locator('#identity .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD 7d6647f'
+    page.goto(ui+'/');page.locator('#accountbutton').click();badge=page.locator('#identity .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD 7d6647f'
     page.locator('#identity').get_by_text('shy@example.com',exact=True).wait_for();assert page.locator('#identity .runtime-id').inner_text()=='BUILD 7d6647f'
 
 
@@ -754,3 +754,14 @@ def test_mutation_flows_refresh_in_place_without_document_navigation(page,ui):
         nonlocal calls;calls+=1;route.fulfill(json=live if calls==1 else decided)
     page.route('**/api/tasks/sim',task);page.route('**/api/tasks/sim/gates/*/decide',lambda route:route.fulfill(json={**gate,'state':'decided'}))
     page.goto(ui+'/tasks/sim/view');page.locator('#gateform').wait_for();before=len(nav);page.get_by_role('button',name='Choose & continue').click();page.get_by_text('Engine is not running.',exact=True).wait_for();assert len(nav)==before
+
+def test_live_progress_scope_and_account_menu_desktop_and_phone(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json();phase=next(p for p in live['phases'] if p['phase_key']==live['active_phase']);phase.update({'completed':8,'total':20,'started_at':time.time()-12*60})
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/health',lambda route:route.fulfill(json={'ok':True,'runtime_id':'abcdef123456','repositories':{}}))
+    page.route('**/api/auth',lambda route:route.fulfill(json={'mode':'basic','authenticated':True,'actor':'shy@example.com','admin':True,'providers':[]}))
+    page.set_viewport_size({'width':1365,'height':800});page.goto(ui+'/tasks/live/view')
+    scope=page.locator('.progress-scope');scope.wait_for();assert scope.locator('b').all_inner_texts()==['8','20','12'];assert 'out of' in scope.inner_text() and 'minutes so far' in scope.inner_text()
+    page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for();assert menu.get_by_text('shy@example.com',exact=True).is_visible();assert menu.get_by_text('BUILD abcdef1',exact=True).is_visible();assert menu.get_by_role('menuitem',name='Sign out').is_visible()
+    page.screenshot(path='/downloads/live-scope-account-desktop.png',full_page=True);page.keyboard.press('Escape');assert menu.is_hidden()
+    page.set_viewport_size({'width':390,'height':844});page.reload();scope.wait_for();page.locator('#accountbutton').click();menu.wait_for();page.screenshot(path='/downloads/live-scope-account-phone.png',full_page=True)
