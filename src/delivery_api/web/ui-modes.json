@@ -1,0 +1,9 @@
+{
+  "not_started": ["start"],
+  "executing": ["progress"],
+  "engine_decision": ["progress", "decision"],
+  "engine_question": ["progress", "question", "answer"],
+  "phase_gate": ["gate"],
+  "complete": ["artifacts"],
+  "error": ["console"]
+}

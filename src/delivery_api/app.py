@@ -52,6 +52,8 @@ def _runtime_version() -> dict:
 RUNTIME_VERSION=_runtime_version()
 
 WEB_DIR = Path(__file__).parent / "web"
+UI_MODE_SCHEMA=json.loads((WEB_DIR / "ui-modes.json").read_text())
+UI_MODES=frozenset(UI_MODE_SCHEMA)
 store = (__import__('delivery_api.store',fromlist=['TursoReplicaStore']).TursoReplicaStore(str(config.local_database_path()),config.TURSO_DATABASE_URL,config.TURSO_AUTH_TOKEN,config.TURSO_SYNC_INTERVAL) if config.TURSO_DATABASE_URL else create_store(config.DATABASE_URL))
 jobs = JobQueue(store)
 runner = ProcessRunner(store)
@@ -482,6 +484,7 @@ def _task_ui_state(task:dict,input_state:dict)->dict:
     elif process_live and input_state.get("waiting"):mode="engine_question"
     elif process_live:mode="executing"
     else:mode="error"
+    if mode not in UI_MODES:raise RuntimeError(f"unsupported UI mode: {mode}")
     return {"mode":mode,"active_phase":task.get("active_phase"),"process_live":process_live,
             "decision":live_decision if mode=="engine_decision" else None,
             "gate":waiting_gate if mode=="phase_gate" else None}

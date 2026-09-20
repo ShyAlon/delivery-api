@@ -11,11 +11,9 @@ window.addEventListener('click',e=>{let target=e.target.closest('a,button,[role=
 window.addEventListener('popstate',()=>clientLog('navigation','Browser history navigation',{url:location.href}));
 clientLog('navigation','Page loaded',{url:location.href});
 let runtimeVersion=null,runtimeWatch=null,runtimeIdentity=null;
-const TASK_UI_MODES=new Set(['not_started','executing','engine_decision','engine_question','phase_gate','complete','error']);
-const TASK_UI_ACTIONS={
- not_started:{start:true},executing:{progress:true},engine_decision:{progress:true,decision:true},
- engine_question:{progress:true,question:true,answer:true},phase_gate:{gate:true},complete:{artifacts:true},error:{diagnostics:true}
-};
+const UI_MODE_SCHEMA=await fetch('/assets/ui-modes.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error(`UI mode schema unavailable (${r.status})`);return r.json()});
+const TASK_UI_MODES=new Set(Object.keys(UI_MODE_SCHEMA));
+const TASK_UI_ACTIONS=Object.fromEntries(Object.entries(UI_MODE_SCHEMA).map(([mode,actions])=>[mode,Object.fromEntries(actions.map(action=>[action,true]))]));
 function reduceTaskSnapshot(task){
  const source=task?.ui_state||{},mode=TASK_UI_MODES.has(source.mode)?source.mode:'error',allowed=TASK_UI_ACTIONS[mode];
  const decision=allowed.decision&&source.decision?.options?.length?source.decision:null;
