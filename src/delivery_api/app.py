@@ -82,6 +82,9 @@ def _recorded_engine_session(task_id:str)->str|None:
     for event in reversed(store.events(task_id)):
         match=__import__('re').search(r"(?:^|\s)session:\s*([A-Za-z0-9._-]+)",event.get("message", ""))
         if match:return match.group(1)
+        path=str((event.get("payload") or {}).get("path") or "")
+        match=__import__('re').search(r"(?:^|[/\\])artifacts[/\\]([A-Za-z0-9._-]+)(?:[/\\]|$)",path)
+        if match:return match.group(1)
     return None
 
 
@@ -615,16 +618,23 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
     root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session
     from .phases import PHASE_DEFINITIONS
     records=[]
+    validators={
+        "intent_model.json":("vmodel_contracts.interview","IntentModel"),"conops.json":("vmodel_contracts.conops","ConOpsDocument"),
+        "needs.json":("vmodel_contracts.needs","StakeholderNeedsSet"),"srs.json":("vmodel_contracts.srs","SRSDocument"),
+        "architecture.json":("vmodel_contracts.architecture","ArchitectureOverview"),"items.json":("vmodel_contracts.spec","SpecBundle"),
+        "spec_items.json":("vmodel_contracts.spec","SpecBundle"),"tests.json":("vmodel_contracts.verification","VerificationReport"),
+        "test_specifications.json":("vmodel_contracts.verification","VerificationReport")}
     for phase in PHASE_DEFINITIONS:
         folder=root/("interview" if phase.key in ("intent","conops") else "spec")
         for filename in phase.artifacts:
             path=folder/filename
             if not path.is_file():continue
-            valid=True;error=None
-            try:
-                if path.suffix==".json":json.loads(path.read_text())
-            except Exception as exc:valid=False;error=f"{type(exc).__name__}: {exc}"
-            records.append({"phase_key":phase.key,"name":filename,"ref":str(path),"mime_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","stale":False,"generation":task["generation"],"present":True,"valid":valid,"validation_error":error})
+            valid=None;errors=[];validator=validators.get(filename)
+            if validator:
+                try:
+                    model=getattr(__import__(validator[0],fromlist=[validator[1]]),validator[1]);model.model_validate_json(path.read_text());valid=True
+                except Exception as exc:valid=False;errors=[f"{type(exc).__name__}: {str(exc)[:600]}"]
+            records.append({"phase_key":phase.key,"name":filename,"ref":str(path),"mime_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","stale":False,"generation":task["generation"],"present":True,"valid":valid,"validator":validator[1] if validator else None,"validation_errors":errors,"validation_error":errors[0] if errors else None})
     return records or store.task_artifacts(task_id)
 
 def _task_artifact(task_id:str,phase:str,name:str)->Path:
@@ -666,7 +676,8 @@ def get_task(task_id: str):
     if not task: raise HTTPException(404, "task not found")
     input_state=runner.input_state(task_id);work=runner.work_state(task_id)
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
-    return {**task, "events": store.events(task_id), "artifacts": _task_artifact_snapshot(task_id), "input_state":input_state,"active_work":work_state,"ui_state":_task_ui_state(task,input_state)}
+    artifacts=_task_artifact_snapshot(task_id);session=_recorded_engine_session(task_id)
+    return {**task, "events": store.events(task_id), "artifacts":artifacts,"artifact_projection":{"session":session,"root":str((__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"ui_state":_task_ui_state(task,input_state)}
 
 @app.get("/api/tasks/{task_id}/events")
 def task_events(task_id: str, after: int = Query(default=0, ge=0)):
