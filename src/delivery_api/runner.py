@@ -187,7 +187,7 @@ class ProcessRunner:
                     payload={"completed":completed,"total":total}
                     if waiting_input:
                         payload["waiting_input"]=True
-                        payload["question"]=(structured_decision or {}).get("prompt") or "\n".join(prompt_lines).removesuffix("\nYou:").removesuffix("You:").strip()
+                        payload["question"]=(structured_decision or {}).get("prompt") or re.sub(r"^Interviewer:\s*","","\n".join(prompt_lines).removesuffix("\nYou:").removesuffix("You:").strip()).strip()
                         if structured_decision:payload["decision"]=structured_decision
                     # The machine envelope belongs in structured payload only,
                     # never in the founder-facing raw log.

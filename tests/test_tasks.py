@@ -1397,3 +1397,13 @@ def test_runner_emits_incremental_interview_price_before_process_exit(monkeypatc
         assert priced and priced[-1]['payload']['tokens']==5 and priced[-1]['payload']['price']==10
         return await work
     assert asyncio.run(scenario())==0
+
+def test_runner_strips_interviewer_prefix_from_founder_question(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'prefix.db'));tid=store.create_task('Prefix')['task_id']
+    script="print('Interviewer: What change matters?\\nYou:',end='',flush=True)"
+    asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))
+    event=[e for e in store.events(tid) if e['kind']=='waiting_input'][-1]
+    assert event['payload']['question']=='What change matters?'
