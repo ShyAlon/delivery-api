@@ -361,20 +361,20 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json()
     live['active_phase']='intent'
+    live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None}
     live['events']=[{'id':i,'kind':'progress','message':f'Output line {i}','phase_key':'intent','payload':{},'ts':1720000000+i} for i in range(120)]
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
     page.set_viewport_size({'width':1365,'height':800})
     page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
     dimensions=console.evaluate('e=>({h:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,max:getComputedStyle(e).maxHeight,scroll:e.scrollHeight>e.clientHeight})')
-    assert dimensions['h']>=220 and dimensions['min']=='220px' and dimensions['max']=='420px' and dimensions['scroll'] is True
+    assert dimensions['h']>=360 and dimensions['min']=='360px' and dimensions['max']=='640px' and dimensions['scroll'] is True
     composer=page.locator('#answerform');assert composer.is_visible()
     indicator=page.locator('.live-status-row .live-indicator');question=page.locator('#currentquestion');console_heading=page.locator('.console-heading')
     assert page.evaluate("([a,b,c,d])=>a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING&&b.compareDocumentPosition(c)&Node.DOCUMENT_POSITION_FOLLOWING&&c.compareDocumentPosition(d)&Node.DOCUMENT_POSITION_FOLLOWING",[indicator.element_handle(),question.element_handle(),composer.element_handle(),console_heading.element_handle()])
     assert console.bounding_box()['height']>=180
-    indicator=page.locator('.live-indicator.working');assert indicator.get_by_text('Working · Start').is_visible()
-    assert indicator.locator('i').evaluate("e=>getComputedStyle(e).animationName")=='live-halo'
+    indicator=page.locator('.live-indicator.waiting');assert indicator.get_by_text('Waiting for your answer').is_visible()
     progress=page.locator('#progressfeed');assert progress.locator('.progress-item').count()==1
-    first_stamp=progress.locator('.progress-item time').first.inner_text();assert '2024' in first_stamp and any(zone in first_stamp for zone in ('GMT','UTC','IDT','IST'))
+    assert progress.locator('.progress-item time').count()==0 and console.locator('.line time').count()==0
     page.screenshot(path='/downloads/requi-re-live-output.png',full_page=True)
 
     console.evaluate('e=>e.scrollTop=60');page.wait_for_timeout(50);before=console.evaluate('e=>e.scrollTop')
@@ -733,3 +733,18 @@ def test_decision_dialog_rationale_help_is_real_and_keyboard_accessible(page,ui)
     live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'concept','title':'Choose one','prompt':'Which concept?','rationale_required':True,'options':[{'value':'1','label':'Native'},{'value':'2','label':'PWA'}]};live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None}
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for();button=dialog.get_by_role('button',name='Why a rationale is requested');button.focus();expect(dialog.get_by_role('tooltip')).to_be_visible()
     expect(dialog.get_by_role('tooltip').get_by_text('stored with the selected option',exact=False)).to_be_visible()
+
+def test_live_log_is_prominent_without_duplicate_timestamps_desktop_and_phone(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent';live['ui_state']={'mode':'executing','active_phase':'intent','process_live':True,'decision':None,'gate':None}
+    live['events']=[{'id':i,'kind':'progress','message':f'[17:01:{i%60:02d}] Building requirement {i}','phase_key':'intent','payload':{},'ts':1720000000+i} for i in range(80)]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.set_viewport_size({'width':1365,'height':800});page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
+    assert page.get_by_text('REAL PROGRESS · ALL STAGES',exact=True).count()==0
+    assert page.locator('#progressfeed time').count()==0 and console.locator('.line time').count()==0
+    dimensions=console.evaluate('e=>({height:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,max:getComputedStyle(e).maxHeight,scroll:e.scrollHeight>e.clientHeight})')
+    assert dimensions['height']>=360 and dimensions['min']=='360px' and dimensions['max']=='640px' and dimensions['scroll'] is True
+    page.screenshot(path='/downloads/live-log-prominent-desktop.png',full_page=True)
+    page.set_viewport_size({'width':390,'height':844});page.reload();console=page.locator('#console');console.wait_for()
+    assert console.bounding_box()['height']>=360 and page.get_by_text('REAL PROGRESS · ALL STAGES',exact=True).count()==0
+    page.screenshot(path='/downloads/live-log-prominent-phone.png',full_page=True)
