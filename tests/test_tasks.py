@@ -1297,3 +1297,18 @@ def test_legacy_artifact_projection_recovers_session_from_requirement_path(monke
     monkeypatch.setattr(app_module,'store',store)
     assert app_module._recorded_engine_session(tid)==session
     records=app_module._task_artifact_snapshot(tid);assert len(records)==1 and records[0]['name']=='architecture.json' and records[0]['validator']=='ArchitectureOverview'
+
+def test_orchestrator_phase_override_reaches_engine_and_is_durable(monkeypatch,tmp_path):
+    import asyncio,json
+    from delivery_api.orchestrator import PhaseOrchestrator,ExecutionMode
+    from delivery_api.store import SQLiteStore
+    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
+    store=SQLiteStore(str(tmp_path/'route.db'));tid=store.create_task('Routed')['task_id'];store.set_model_route(tid,'ollama');store.add_event(tid,'progress','session: routed',phase_key='intent')
+    interview=tmp_path/'artifacts'/'routed'/'interview';interview.mkdir(parents=True);(interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}));(interview/'conops.json').write_text('{}')
+    class Runner:
+        calls=[]
+        async def run(self,*a,**kw):self.calls.append(kw);return 0
+    r=Runner();asyncio.run(PhaseOrchestrator(store,r).execute_phase(tid,'needs',mode=ExecutionMode.REDO,model_route='deepseek'))
+    assert r.calls[0]['env']['SPEC_GENERATOR_MODEL_NEEDS']=='deepseek:deepseek-chat'
+    event=[e for e in store.events(tid) if e['kind']=='model_route'][-1]
+    assert event['payload']=={'route':'deepseek','provider':'deepseek','model':'deepseek-chat','mode':'redo'}

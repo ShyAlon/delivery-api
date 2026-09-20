@@ -163,3 +163,35 @@ def test_engine_python_settings_show_candidates_and_persist(monkeypatch,tmp_path
     assert result['count']==1 and result['candidates']==[str(good)]
     response=client.post('/api/settings/engine-python',json={'path':str(good)})
     assert response.status_code==200 and response.json()['path']==str(good)
+
+def test_model_route_preflight_only_exposes_availability(monkeypatch):
+    from delivery_api.app import app
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv('DEEPSEEK_API_KEY','super-secret')
+    body=TestClient(app).get('/api/model-routes').json()
+    assert body=={'routes':[{'id':'ollama','available':True},{'id':'deepseek','available':True}]}
+    assert 'super-secret' not in str(body)
+
+def test_start_task_persists_and_routes_deepseek(monkeypatch,tmp_path):
+    from delivery_api.app import app,store
+    from delivery_api import auth
+    auth.limiter._hits.clear()
+    from delivery_api.engine_runtime import EngineRuntime
+    from fastapi.testclient import TestClient
+    from pathlib import Path
+    tid='deepseek-start-test'
+    if store.task(tid):store.delete_task(tid)
+    store.create_task('DeepSeek start','An idea',task_id=tid)
+    calls=[]
+    async def fake_run(*a,**kw):calls.append(kw);return 0
+    async def fake_resolve(_):return EngineRuntime(Path(__import__('sys').executable),())
+    monkeypatch.setattr('delivery_api.app.runner.run',fake_run);monkeypatch.setattr('delivery_api.app.resolve_engine_runtime',fake_resolve)
+    monkeypatch.setenv('INTERVIEW_ENGINE_DIR',str(tmp_path));monkeypatch.setenv('DEEPSEEK_API_KEY','secret');tmp_path.mkdir(exist_ok=True)
+    assert TestClient(app).post(f'/api/tasks/{tid}/start',json={'model_route':'deepseek'}).status_code==200
+    import time
+    for _ in range(20):
+        if calls:break
+        time.sleep(.01)
+    assert store.task(tid)['model_route']=='deepseek'
+    assert calls[0]['env']['INTERVIEW_ENGINE_MODEL_PROBING']=='deepseek:deepseek-chat'
+    assert 'secret' not in str(store.events(tid))

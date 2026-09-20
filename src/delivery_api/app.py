@@ -127,6 +127,11 @@ async def _resume_orphaned_handoffs()->None:
         asyncio.create_task(recover())
 
 
+def _interview_route_env(task_id:str)->dict[str,str]:
+    route=(store.task(task_id) or {}).get("model_route") or "ollama"
+    value="ollama:qwen2.5-coder:14b" if route=="ollama" else "deepseek:deepseek-chat"
+    return {f"INTERVIEW_ENGINE_MODEL_{stage}":value for stage in ("PROBING","DISTILLATION","PHRASING","SCOPE_TIEBREAK","EXPERT_OPINION")}
+
 def _replayable_decisions(task_id:str)->dict[str,dict[str,str]]:
     """Exact typed answers accepted before a restart, keyed by contract identity."""
     from .runner import decision_fingerprint
@@ -172,7 +177,7 @@ async def _resume_interrupted_interviews()->None:
             continue
         async def resume(task_id=task["task_id"],session=session,runtime=runtime,engine_dir=engine_dir,built=built):
             activity("engine.resume","Resuming interrupted or gate-parked interview from checkpoint",task_id=task_id,session=session,prior_state=(store.task(task_id) or {}).get("state"))
-            await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"),replay_decisions=_replayable_decisions(task_id))
+            await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**_interview_route_env(task_id),**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"),replay_decisions=_replayable_decisions(task_id))
         asyncio.create_task(resume())
 
 def _legacy_external_requirement(task:dict,events:list[dict])->dict|None:
@@ -228,7 +233,7 @@ async def _resume_one_interview(task_id:str,session:str)->None:
     except Exception as e:activity("engine.resume.failed","Interrupted interview could not resume",task_id=task_id,session=session,error=f"{type(e).__name__}: {str(e)[:180]}");return
     async def resume():
         activity("engine.resume","Resuming interrupted interview from checkpoint",task_id=task_id,session=session,prior_state=(store.task(task_id) or {}).get("state"))
-        await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"),replay_decisions=_replayable_decisions(task_id))
+        await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**_interview_route_env(task_id),**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"),replay_decisions=_replayable_decisions(task_id))
     asyncio.create_task(resume())
 
 
@@ -501,8 +506,11 @@ def delete_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     except ValueError as e:raise HTTPException(409,{"error":str(e),"cause":"Active work must stop before its data is removed.","next":"Wait for the replay to finish, then delete the task."})
     return {"status":"deleted","task_id":task_id,"source_artifacts_deleted":False}
 
+class TaskStartRequest(BaseModel):model_route:Literal["ollama","deepseek"]="ollama"
+@app.get("/api/model-routes")
+def model_routes():return {"routes":[{"id":"ollama","available":True},{"id":"deepseek","available":bool(os.environ.get("DEEPSEEK_API_KEY"))}]}
 @app.post("/api/tasks/{task_id}/start")
-async def start_task_engine(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest(),a:auth.Actor=Depends(auth.require_actor)):
     task=store.task(task_id)
     if not task:raise HTTPException(404,{"error":"Task not found.","cause":"It may have been deleted.","next":"Return to Home and choose another task."})
     if task["state"]!="not_started":raise HTTPException(409,{"error":"This task already started.","cause":f"Its current state is {task['state']}.","next":"Open its live progress instead of starting it again."})
@@ -517,12 +525,17 @@ async def start_task_engine(task_id:str,a:auth.Actor=Depends(auth.require_actor)
         command=f'python -m pip install -e "{engine_dir}"'
         raise HTTPException(503,{"error":f"Interview engine cannot start because Python module '{e.module}' is missing.","cause":"None of the available engine Python environments contains the interview runtime dependencies.","next":f"Activate the environment that runs interview-engine, then run: {command}. To select it explicitly, set INTERVIEW_ENGINE_PYTHON=/path/to/python before starting Requi.re."})
     engine_python=runtime.python
+    if body.model_route=="deepseek" and not os.environ.get("DEEPSEEK_API_KEY"):raise HTTPException(422,{"error":"DeepSeek is not configured.","cause":"DEEPSEEK_API_KEY is absent.","next":"Add the key to the server environment or choose Ollama."})
+    store.set_model_route(task_id,body.model_route);store.add_event(task_id,"model_route",f"Task default uses {body.model_route}",phase_key="intent",payload={"route":body.model_route,"scope":"task_default"})
     store.update_phase(task_id,"intent","running",detail="Launching adaptive interview")
     store.audit(a.label,"interview.started",task_id,{"engine_dir":str(engine_dir),"python":str(engine_python)})
     activity("engine.preflight.ok","Interview engine runtime resolved",task_id=task_id,actor=a.label,python=str(engine_python),checked="; ".join(f"{path}={'ok' if ok else 'missing'}" for path,ok in runtime.attempts))
     activity("engine.start","Interview engine launch requested",task_id=task_id,actor=a.label,python=str(engine_python))
     async def execute():
-        try:await runner.run(task_id,[str(engine_python),"-m","interview_engine.cli",idea],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built_runtime else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"))
+        try:
+            route_value="ollama:qwen2.5-coder:14b" if body.model_route=="ollama" else "deepseek:deepseek-chat"
+            route_env={f"INTERVIEW_ENGINE_MODEL_{stage}":route_value for stage in ("PROBING","DISTILLATION","PHRASING","SCOPE_TIEBREAK","EXPERT_OPINION")}
+            await runner.run(task_id,[str(engine_python),"-m","interview_engine.cli",idea],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**route_env,**({} if built_runtime else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"))
         except Exception as e:
             store.update_phase(task_id,"intent","failed",detail=f"Interview engine could not start: {type(e).__name__}: {str(e)[:180]}")
             store.add_event(task_id,"error","Interview engine could not start",phase_key="intent",payload={"cause":str(e)[:300],"next":"Check run.log and the interview-engine installation, then retry."})
@@ -774,12 +787,17 @@ class GateDecision(BaseModel):
     selected_option: str|None=None
     edited_text: str|None=None
     steer: str|None=None
+    model_route:Literal["ollama","deepseek"]|None=None
 @app.post("/api/tasks/{task_id}/gates/{gate_key}/decide")
 async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,a:auth.Actor=Depends(auth.require_actor)):
     try:
+        if req.model_route=="deepseek" and not os.environ.get("DEEPSEEK_API_KEY"):raise ValueError("DeepSeek is not configured")
         gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label)
         phase=gate["after_phase"]
-        if req.action=="redo":asyncio.create_task(orchestrator.execute_phase(task_id,phase,mode=__import__('delivery_api.orchestrator',fromlist=['ExecutionMode']).ExecutionMode.REDO))
+        if req.model_route:
+            target=phase if req.action=="redo" else (__import__('delivery_api.phases',fromlist=['successor']).successor(phase).key if __import__('delivery_api.phases',fromlist=['successor']).successor(phase) else phase)
+            store.add_event(task_id,"model_route",f"{target} override uses {req.model_route}",phase_key=target,payload={"route":req.model_route,"scope":"phase_override","actor":a.label})
+        if req.action=="redo":asyncio.create_task(orchestrator.execute_phase(task_id,phase,mode=__import__('delivery_api.orchestrator',fromlist=['ExecutionMode']).ExecutionMode.REDO,model_route=req.model_route))
         else:asyncio.create_task(orchestrator.continue_after(task_id,phase))
         return gate
     except KeyError:raise HTTPException(404,"gate not found")
