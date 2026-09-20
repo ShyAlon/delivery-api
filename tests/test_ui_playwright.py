@@ -373,7 +373,7 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     page.set_viewport_size({'width':1365,'height':800})
     page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
     dimensions=console.evaluate('e=>({h:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,max:getComputedStyle(e).maxHeight,scroll:e.scrollHeight>e.clientHeight})')
-    assert dimensions['h']>=360 and dimensions['min']=='360px' and dimensions['max']=='640px' and dimensions['scroll'] is True
+    assert dimensions['h']>=260 and dimensions['min']=='260px' and dimensions['max']=='420px' and dimensions['scroll'] is True
     composer=page.locator('#answerform');assert composer.is_visible()
     indicator=page.locator('.live-status-row .live-indicator');question=page.locator('#currentquestion');console_heading=page.locator('.console-heading')
     assert page.evaluate("([a,b,c,d])=>a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING&&b.compareDocumentPosition(c)&Node.DOCUMENT_POSITION_FOLLOWING&&c.compareDocumentPosition(d)&Node.DOCUMENT_POSITION_FOLLOWING",[indicator.element_handle(),question.element_handle(),composer.element_handle(),console_heading.element_handle()])
@@ -731,10 +731,10 @@ def test_live_log_is_prominent_without_duplicate_timestamps_desktop_and_phone(pa
     assert page.get_by_text('REAL PROGRESS · ALL STAGES',exact=True).count()==0
     assert page.locator('#progressfeed time').count()==0 and console.locator('.line time').count()==0
     dimensions=console.evaluate('e=>({height:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,max:getComputedStyle(e).maxHeight,scroll:e.scrollHeight>e.clientHeight})')
-    assert dimensions['height']>=360 and dimensions['min']=='360px' and dimensions['max']=='640px' and dimensions['scroll'] is True
+    assert dimensions['height']>=260 and dimensions['min']=='260px' and dimensions['max']=='420px' and dimensions['scroll'] is True
     page.screenshot(path='/downloads/live-log-prominent-desktop.png',full_page=True)
     page.set_viewport_size({'width':390,'height':844});page.reload();console=page.locator('#console');console.wait_for()
-    assert console.bounding_box()['height']>=360 and page.get_by_text('REAL PROGRESS · ALL STAGES',exact=True).count()==0
+    assert 280<=console.bounding_box()['height']<=380 and page.get_by_text('REAL PROGRESS · ALL STAGES',exact=True).count()==0
     page.screenshot(path='/downloads/live-log-prominent-phone.png',full_page=True)
 
 def test_mutation_flows_refresh_in_place_without_document_navigation(page,ui):
