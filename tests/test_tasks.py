@@ -1050,3 +1050,15 @@ def test_active_work_is_one_standard_projection_for_subprocess_and_decision(tmp_
         assert runner.input_state(tid)==work.input_state()
         await runner.send_input(tid,'y','choice');assert await pending=='y';assert runner.work_state(tid) is None
     asyncio.run(go())
+
+def test_recovery_planner_assigns_exactly_one_action_per_task():
+    from delivery_api.recovery import plan_recovery
+    phases=[{'phase_key':k,'state':'pending'} for k in ('intent','conops','needs','srs','architecture','specs','tests')]
+    phases[0]['state']='approved';phases[1]['state']='approved';phases[2]['state']='approved'
+    task={'state':'running','phases':phases}
+    plan=plan_recovery(task,has_session=True)
+    assert (plan.action,plan.phase,plan.target)==('launch_successor','needs','srs')
+    phases[0]['state']='running'
+    assert plan_recovery(task,has_session=True).action=='reconcile'
+    for p in phases:p['state']='pending'
+    assert plan_recovery(task,has_session=True).action=='resume'

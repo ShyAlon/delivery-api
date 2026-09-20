@@ -170,6 +170,40 @@ async def _resume_interrupted_interviews()->None:
         asyncio.create_task(resume())
 
 
+async def _recover_tasks()->None:
+    """Apply one pure recovery plan per task; never assign competing owners."""
+    from .recovery import plan_recovery
+    _reconcile_approved_prefixes()
+    for task in store.list_tasks():
+        task_id=task["task_id"]
+        if runner.work_state(task_id) is not None:continue
+        events=store.events(task_id);session=_recorded_engine_session(task_id)
+        plan=plan_recovery(task,events[-1] if events else None,has_session=bool(session))
+        if plan.action=="reconcile":
+            _reconcile_approved_prefixes();task=store.task(task_id);events=store.events(task_id)
+            plan=plan_recovery(task,events[-1] if events else None,has_session=bool(session))
+        if plan.action=="launch_successor":
+            async def launch(task_id=task_id,phase=plan.phase):
+                try:
+                    activity("orchestrator.recover","Retrying orphaned completed handoff",task_id=task_id,completed_phase=phase,next_phase=plan.target)
+                    await orchestrator.continue_after(task_id,phase)
+                except Exception as exc:
+                    message=f"Error: completed {phase} could not launch {plan.target}. Likely cause: {type(exc).__name__}: {exc}. Next: fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved."
+                    store.add_event(task_id,"error",message,phase_key=plan.target,payload={"cause":f"{type(exc).__name__}: {exc}","next":"Fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved.","completed_phase":phase,"next_phase":plan.target})
+            asyncio.create_task(launch())
+        elif plan.action=="resume" and session:
+            await _resume_one_interview(task_id,session)
+
+async def _resume_one_interview(task_id:str,session:str)->None:
+    built=os.environ.get("REQUI_RE_DIST")=="1";engine_dir=(Path.cwd() if built else Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve())
+    try:runtime=(__import__('delivery_api.engine_runtime',fromlist=['EngineRuntime']).EngineRuntime(Path(sys.executable),(),((Path(sys.executable),True),)) if built else await resolve_engine_runtime(engine_dir))
+    except Exception as e:activity("engine.resume.failed","Interrupted interview could not resume",task_id=task_id,session=session,error=f"{type(e).__name__}: {str(e)[:180]}");return
+    async def resume():
+        activity("engine.resume","Resuming interrupted interview from checkpoint",task_id=task_id,session=session,prior_state=(store.task(task_id) or {}).get("state"))
+        await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"),replay_decisions=_replayable_decisions(task_id))
+    asyncio.create_task(resume())
+
+
 @asynccontextmanager
 async def lifespan(application:FastAPI):
     global _previous_sigint
@@ -177,7 +211,7 @@ async def lifespan(application:FastAPI):
     from .observability import LOG_PATH,stage_log_paths
     print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
-    await jobs.start();await _resume_orphaned_handoffs();await asyncio.sleep(0);await _resume_interrupted_interviews()
+    await jobs.start();await _recover_tasks()
     if threading.current_thread() is threading.main_thread() and signal.getsignal(signal.SIGINT) is not _shutdown_signal:
         _previous_sigint=signal.getsignal(signal.SIGINT);signal.signal(signal.SIGINT,_shutdown_signal)
     try:yield
