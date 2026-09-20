@@ -28,6 +28,8 @@ class PhaseOrchestrator:
     async def continue_after(self,task_id:str,phase:str)->None:
         nxt=NEXT.get(phase)
         if not nxt:return
+        from .observability import event as activity
+        activity("orchestrator.continue","Launching next V-model phase",task_id=task_id,completed_phase=phase,next_phase=nxt)
         if nxt=="architecture" and not self._baseline_exists(task_id):
             await self._choose_baseline(task_id);return
         await self.launch(task_id,nxt)
@@ -58,6 +60,8 @@ class PhaseOrchestrator:
             self.store.add_event(task_id,"gate","Architecture paused for an existing SystemBaseline file",phase_key="architecture",payload={"cause":"Existing-system architecture needs repository facts.","next":"Import or place system-baseline.json in the session spec folder, then continue architecture."})
 
     async def launch(self,task_id:str,phase:str,*,redo:bool=False)->None:
+        from .observability import event as activity
+        activity("orchestrator.launch","Preparing phase subprocess",task_id=task_id,phase=phase,redo=redo)
         sid,_,interview,spec=self._paths(task_id);spec.mkdir(parents=True,exist_ok=True)
         baseline=spec/"system-baseline.json"
         if not baseline.exists():
@@ -70,4 +74,5 @@ class PhaseOrchestrator:
         cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",TO_STAGE[phase]]
         if redo:cmd.extend(["--from",TO_STAGE[phase]])
         env={"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(repo/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})}
-        await self.runner.run(task_id,cmd,cwd=repo,phase=phase,env=env,infer_phase=False)
+        code=await self.runner.run(task_id,cmd,cwd=repo,phase=phase,env=env,infer_phase=False)
+        activity("orchestrator.exit","Phase subprocess exited",task_id=task_id,phase=phase,exit_code=code)

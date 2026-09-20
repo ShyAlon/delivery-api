@@ -161,7 +161,15 @@ class ProcessRunner:
             # The finished process must release its task slot before the next
             # executable starts. This is the shared process boundary.
             if continuation_phase is not None and self.on_complete is not None:
-                await self.on_complete(task_id, continuation_phase)
+                try:
+                    await self.on_complete(task_id, continuation_phase)
+                except Exception as exc:
+                    error=(f"Error: the next V-model phase did not start. Likely cause: "
+                           f"{type(exc).__name__}: {exc}. Next: restart Requi.re; startup recovery will retry the durable handoff.")
+                    self.store.add_event(task_id,"error",error,phase_key=continuation_phase,
+                                         payload={"cause":f"{type(exc).__name__}: {exc}","next":"Restart Requi.re; startup recovery will retry the durable handoff.","completed_phase":continuation_phase})
+                    activity("orchestrator.failure","Next phase launch failed",task_id=task_id,phase=continuation_phase,error=f"{type(exc).__name__}: {exc}")
+                    raise
 
     async def shutdown(self, grace_seconds: float = 3.0) -> None:
         active=list(self.processes.items())

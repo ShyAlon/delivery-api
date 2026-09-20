@@ -802,3 +802,48 @@ def test_health_exposes_runtime_revision(monkeypatch):
     monkeypatch.setattr(app_module,'RUNTIME_VERSION',{'runtime_id':'delivery-sha','repositories':{'delivery-api':'delivery-sha','interview-engine':'engine-sha'},'manifest':'/dist/MANIFEST.txt'})
     result=app_module.health()
     assert result['runtime_id']=='delivery-sha' and result['repositories']['interview-engine']=='engine-sha'
+
+def test_startup_recovers_approved_interview_handoff_to_needs(monkeypatch,tmp_path):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'handoff-recovery.db'));tid=store.create_task('Approved but stuck')['task_id']
+    store.update_phase(tid,'intent','approved');store.update_phase(tid,'conops','approved')
+    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
+    calls=[]
+    async def continue_after(task_id,phase):calls.append((task_id,phase))
+    monkeypatch.setattr(app_module.orchestrator,'continue_after',continue_after)
+    async def go():
+        await app_module._resume_orphaned_handoffs();await asyncio.sleep(.01)
+    asyncio.run(go())
+    assert calls==[(tid,'conops')]
+
+
+def test_next_phase_launch_failure_is_visible_and_preserves_completed_boundary(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'handoff-fail.db'));tid=store.create_task('Visible handoff failure')['task_id'];runner=ProcessRunner(store)
+    async def fail(task_id,phase):raise RuntimeError('missing intent_model.json')
+    runner.on_complete=fail
+    try:asyncio.run(runner.run(tid,[sys.executable,'-c','print("session: s")'],cwd=tmp_path,completion_phases=('intent','conops')))
+    except RuntimeError:pass
+    event=store.events(tid)[-1]
+    assert event['kind']=='error' and 'missing intent_model.json' in event['message']
+    states={p['phase_key']:p['state'] for p in store.task(tid)['phases']}
+    assert states['intent']=='approved' and states['conops']=='approved'
+
+
+def test_startup_handoff_recovery_is_shared_across_phase_boundaries(monkeypatch,tmp_path):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'shared-handoff.db'));tid=store.create_task('Shared recovery')['task_id']
+    for phase in ('intent','conops','needs'):store.update_phase(tid,phase,'approved')
+    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
+    calls=[]
+    async def continue_after(task_id,phase):calls.append((task_id,phase))
+    monkeypatch.setattr(app_module.orchestrator,'continue_after',continue_after)
+    async def go():await app_module._resume_orphaned_handoffs();await asyncio.sleep(.01)
+    asyncio.run(go())
+    assert calls==[(tid,'needs')]

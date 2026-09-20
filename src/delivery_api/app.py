@@ -103,6 +103,29 @@ def _recorded_engine_session(task_id:str)->str|None:
     return None
 
 
+async def _resume_orphaned_handoffs()->None:
+    """Repair a durable completed boundary whose next subprocess never started."""
+    from .orchestrator import NEXT
+    for task in store.list_tasks():
+        task_id=task["task_id"]
+        if task_id in runner.processes:continue
+        states={phase["phase_key"]:phase["state"] for phase in task["phases"]}
+        phase_order={phase["phase_key"]:index for index,phase in enumerate(task["phases"])}
+        candidates=[(source,target) for source,target in NEXT.items()
+                    if states.get(source) in ("approved","done") and states.get(target) in ("pending","running")]
+        if not candidates:continue
+        source,target=max(candidates,key=lambda item:phase_order[item[0]])
+        async def recover(task_id=task_id,source=source,target=target):
+            try:
+                activity("orchestrator.recover","Retrying orphaned completed handoff",task_id=task_id,completed_phase=source,next_phase=target)
+                await orchestrator.continue_after(task_id,source)
+            except Exception as exc:
+                message=f"Error: completed {source} could not launch {target}. Likely cause: {type(exc).__name__}: {exc}. Next: fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved."
+                store.add_event(task_id,"error",message,phase_key=target,payload={"cause":f"{type(exc).__name__}: {exc}","next":"Fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved.","completed_phase":source,"next_phase":target})
+                activity("orchestrator.recover.failed","Orphaned completed handoff still blocked",task_id=task_id,completed_phase=source,next_phase=target,error=f"{type(exc).__name__}: {exc}")
+        asyncio.create_task(recover())
+
+
 async def _resume_interrupted_interviews()->None:
     """Reattach persisted interview checkpoints after a rebuild/restart."""
     for task in store.list_tasks():
@@ -137,6 +160,8 @@ async def _start():
     print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
     await jobs.start()
+    await _resume_orphaned_handoffs()
+    await asyncio.sleep(0)
     await _resume_interrupted_interviews()
     # Uvicorn waits for open HTTP connections before lifespan shutdown. Close
     # SSE at signal time, then delegate to uvicorn's handler; a second SIGINT

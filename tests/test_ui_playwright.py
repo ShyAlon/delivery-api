@@ -628,3 +628,9 @@ def test_browser_logs_runtime_version_and_reloads_when_server_changes(page,ui):
     # The watcher contract compares the server runtime and reloads on mismatch.
     source=(Path(__file__).parents[1]/'src/delivery_api/web/app.js').read_text()
     assert "live.runtime_id!==runtimeVersion" in source and 'location.reload()' in source
+
+def test_detail_uses_one_large_v_process_without_duplicate_path_map(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    page.goto(ui+'/tasks/live/view');phases=page.locator('.phase-list-primary .phase');phases.first.wait_for()
+    assert phases.count()==7 and page.locator('.detail-layout .v-map').count()==0 and page.locator('.detail-layout .gate-legend').count()==0
+    first=phases.first.bounding_box();assert first['height']>=70
