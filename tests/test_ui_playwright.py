@@ -735,3 +735,21 @@ def test_live_log_is_prominent_without_duplicate_timestamps_desktop_and_phone(pa
     page.set_viewport_size({'width':390,'height':844});page.reload();console=page.locator('#console');console.wait_for()
     assert console.bounding_box()['height']>=360 and page.get_by_text('REAL PROGRESS · ALL STAGES',exact=True).count()==0
     page.screenshot(path='/downloads/live-log-prominent-phone.png',full_page=True)
+
+def test_mutation_flows_refresh_in_place_without_document_navigation(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}close(){}}window.EventSource=FakeEventSource""")
+    base=page.request.get(ui+'/api/tasks/live').json();base.update({'task_id':'mutation-test','title':'Mutation test','state':'not_started','active_phase':None,'ui_state':{'mode':'not_started','active_phase':None,'process_live':False,'decision':None,'gate':None}});renamed={**base,'title':'Renamed in place'};reads=0
+    def mutation_task(route):
+        nonlocal reads
+        if route.request.method=='PATCH':route.fulfill(json={'status':'renamed'})
+        else:reads+=1;route.fulfill(json=base if reads==1 else renamed)
+    page.route('**/api/tasks/mutation-test',mutation_task);page.goto(ui+'/tasks/mutation-test/view');page.get_by_role('button',name='Rename').click();page.locator('#renameform input').fill('Renamed in place')
+    nav=[];page.on('framenavigated',lambda frame:nav.append(frame.url) if frame==page.main_frame else None);before=len(nav)
+    page.locator('#renameform').get_by_role('button',name='Save name').click();page.get_by_role('heading',name='Renamed in place').wait_for();assert len(nav)==before
+
+    live=page.request.get(ui+'/api/tasks/sim').json();gate=live['gates'][0];gate.update({'state':'waiting','is_open':0});live.update({'state':'waiting_gate','active_phase':gate['after_phase'],'ui_state':{'mode':'phase_gate','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':gate}})
+    decided={**live,'state':'running','ui_state':{'mode':'error','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':None}};calls=0
+    def task(route):
+        nonlocal calls;calls+=1;route.fulfill(json=live if calls==1 else decided)
+    page.route('**/api/tasks/sim',task);page.route('**/api/tasks/sim/gates/*/decide',lambda route:route.fulfill(json={**gate,'state':'decided'}))
+    page.goto(ui+'/tasks/sim/view');page.locator('#gateform').wait_for();before=len(nav);page.get_by_role('button',name='Choose & continue').click();page.get_by_text('Engine is not running.',exact=True).wait_for();assert len(nav)==before
