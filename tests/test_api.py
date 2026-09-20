@@ -203,3 +203,11 @@ def test_task_audit_accumulates_tokens_and_price(client):
     store.add_event(tid,'price','Price 50 units',phase_key='needs',payload={'tokens':20,'price':50})
     body=client.get(f'/api/tasks/{tid}/audit').json()
     assert body['totals']=={'tokens':30,'price':75.0,'phases_priced':2}
+
+def test_task_audit_uses_latest_cumulative_price_per_phase(client):
+    from delivery_api.app import store
+    tid=store.create_task('Incremental price totals')['task_id']
+    store.add_event(tid,'price','Price 10',phase_key='intent',payload={'tokens':5,'price':10,'incremental':True})
+    store.add_event(tid,'price','Price 30',phase_key='intent',payload={'tokens':15,'price':30,'incremental':True})
+    body=client.get(f'/api/tasks/{tid}/audit').json()
+    assert body['totals']=={'tokens':15,'price':30.0,'phases_priced':1}

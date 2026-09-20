@@ -1377,3 +1377,23 @@ def test_artifact_snapshot_exposes_content_owned_titles(monkeypatch,tmp_path):
     monkeypatch.setattr(app_module,'store',store)
     rows={r['name']:r['title'] for r in app_module._task_artifact_snapshot(tid)}
     assert rows=={'intent_model.json':'Needs and Scope','conops.json':'Concept of Operations'}
+
+def test_runner_emits_incremental_interview_price_before_process_exit(monkeypatch,tmp_path):
+    import asyncio,json,sys,time
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    from delivery_api import pricing
+    monkeypatch.setattr(pricing,'PRICE_PER_TOKEN',2.0);monkeypatch.setattr(pricing,'PRICE_PER_10MS',0.0);monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
+    session='live-price';folder=tmp_path/'artifacts'/session/'interview';folder.mkdir(parents=True)
+    script="import json,pathlib,time; p=pathlib.Path(%r); print('session: %s',flush=True); time.sleep(.05); (p/'usage.jsonl').write_text(json.dumps({'stage':'probing','prompt_tokens':3,'completion_tokens':2})+'\\n'); print('Question?\\nYou:',end='',flush=True); input(); print('done',flush=True)"%(str(folder),session)
+    store=SQLiteStore(str(tmp_path/'live-price.db'));tid=store.create_task('Live price')['task_id'];runner=ProcessRunner(store)
+    async def scenario():
+        work=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path,phase='intent'))
+        for _ in range(100):
+            if tid in runner.waiting:break
+            await asyncio.sleep(.01)
+        await runner.send_input(tid,'answer')
+        priced=[e for e in store.events(tid) if e['kind']=='price']
+        assert priced and priced[-1]['payload']['tokens']==5 and priced[-1]['payload']['price']==10
+        return await work
+    assert asyncio.run(scenario())==0

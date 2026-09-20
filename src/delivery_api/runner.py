@@ -55,6 +55,11 @@ class ProcessRunner:
     active_work: dict[str, ActiveWork] = field(default_factory=dict)
     pricing_wait_started: dict[str,float] = field(default_factory=dict)
     pricing_wait_seconds: dict[str,float] = field(default_factory=dict)
+    pricing_usage_cursor: dict[str,int] = field(default_factory=dict)
+    pricing_llm_cursor: dict[str,int] = field(default_factory=dict)
+    pricing_wall_cursor: dict[str,float] = field(default_factory=dict)
+    pricing_totals: dict[str,dict] = field(default_factory=dict)
+    pricing_paths: dict[str,tuple[Path,Path]] = field(default_factory=dict)
     on_complete: object | None = None
 
     def _phase(self, text: str, fallback: str) -> str:
@@ -118,6 +123,7 @@ class ProcessRunner:
                             artifact_dir=artifacts_root((env or {}).get("VMODEL_ARTIFACTS_DIR") or os.environ.get("VMODEL_ARTIFACTS_DIR"))/session_match.group(1)/"interview"
                             usage_path=artifact_dir/"usage.jsonl";llm_path=artifact_dir/"llm-calls.jsonl"
                             usage_start=line_count(usage_path);llm_start=line_count(llm_path)
+                            self.pricing_paths[task_id]=(usage_path,llm_path);self.pricing_usage_cursor[task_id]=usage_start;self.pricing_llm_cursor[task_id]=llm_start;self.pricing_wall_cursor[task_id]=time.perf_counter()
                     structured_decision=None
                     if line.startswith("REQUIRE_EVENT "):
                         import json
@@ -191,7 +197,9 @@ class ProcessRunner:
             code = await proc.wait()
             if code==0 and artifact_dir:
                 from .pricing import price_execution
-                for quote in price_execution(usage_path,llm_path,max(0,(time.perf_counter()-run_started-self.pricing_wait_seconds.get(task_id,0))*1000),usage_start,llm_start):
+                final_usage_start=self.pricing_usage_cursor.get(task_id,usage_start);final_llm_start=self.pricing_llm_cursor.get(task_id,llm_start)
+                final_wall_ms=max(0,(time.perf_counter()-self.pricing_wall_cursor.get(task_id,run_started))*1000) if task_id in self.pricing_totals else max(0,(time.perf_counter()-run_started-self.pricing_wait_seconds.get(task_id,0))*1000)
+                for quote in price_execution(usage_path,llm_path,final_wall_ms,final_usage_start,final_llm_start):
                     priced_phase=quote.pop("phase")
                     self.store.add_event(task_id,"price",f"Price {quote['price']:,.2f} units",phase_key=priced_phase,payload=quote)
                     self.store.audit("pricing","phase.priced",task_id,{"phase":priced_phase,**quote})
@@ -247,7 +255,7 @@ class ProcessRunner:
             activity("engine.stream.failure","Engine stream handling failed visibly",task_id=task_id,phase=phase,error=f"{type(exc).__name__}: {exc}")
             raise
         finally:
-            self.processes.pop(task_id, None);self.waiting.discard(task_id);self.pending_decisions.pop(task_id,None);self.active_work.pop(task_id,None);self.interrupted_for_shutdown.discard(task_id);self.pricing_wait_started.pop(task_id,None);self.pricing_wait_seconds.pop(task_id,None)
+            self.processes.pop(task_id, None);self.waiting.discard(task_id);self.pending_decisions.pop(task_id,None);self.active_work.pop(task_id,None);self.interrupted_for_shutdown.discard(task_id);self.pricing_wait_started.pop(task_id,None);self.pricing_wait_seconds.pop(task_id,None);self.pricing_usage_cursor.pop(task_id,None);self.pricing_llm_cursor.pop(task_id,None);self.pricing_wall_cursor.pop(task_id,None);self.pricing_totals.pop(task_id,None);self.pricing_paths.pop(task_id,None)
             # The finished process must release its task slot before the next
             # executable starts. This is the shared process boundary.
             if continuation_phase is not None and self.on_complete is not None:
@@ -299,6 +307,19 @@ class ProcessRunner:
         work=self.work_state(task_id)
         return work.input_state() if work else {"waiting":False,"process_live":False,"decision":None,"requirement":None}
 
+    def _emit_incremental_price(self,task_id:str)->None:
+        paths=self.pricing_paths.get(task_id)
+        if not paths:return
+        from .pricing import line_count,price_execution
+        usage_path,llm_path=paths;now=time.perf_counter();prior=self.pricing_totals.get(task_id,{})
+        quotes=price_execution(usage_path,llm_path,max(0,(now-self.pricing_wall_cursor.get(task_id,now))*1000),self.pricing_usage_cursor.get(task_id,0),self.pricing_llm_cursor.get(task_id,0))
+        for quote in quotes:
+            phase=quote.pop("phase");total=prior.setdefault(phase,{"input_tokens":0,"output_tokens":0,"tokens":0,"deterministic_ms":0.0,"token_price":0.0,"infra_price":0.0,"price":0.0})
+            for key in total:total[key]=round(total[key]+quote[key],3)
+            payload={**total,"rates":quote["rates"],"incremental":True}
+            self.store.add_event(task_id,"price",f"Price {payload['price']:,.2f} units",phase_key=phase,payload=payload)
+        self.pricing_usage_cursor[task_id]=line_count(usage_path);self.pricing_llm_cursor[task_id]=line_count(llm_path);self.pricing_wall_cursor[task_id]=now
+
     async def send_input(self, task_id: str, text: str, decision_id: str | None = None) -> None:
         pending=self.pending_decisions.get(task_id)
         if decision_id is not None and (not pending or pending.get("decision_id") != decision_id):
@@ -310,7 +331,10 @@ class ProcessRunner:
         if not proc or not proc.stdin: raise RuntimeError("task is not waiting for input")
         proc.stdin.write((text + "\n").encode()); await proc.stdin.drain()
         wait_started=self.pricing_wait_started.pop(task_id,None)
-        if wait_started is not None:self.pricing_wait_seconds[task_id]=self.pricing_wait_seconds.get(task_id,0)+(time.perf_counter()-wait_started)
+        if wait_started is not None:
+            self.pricing_wait_seconds[task_id]=self.pricing_wait_seconds.get(task_id,0)+(time.perf_counter()-wait_started)
+            self.pricing_wall_cursor[task_id]=self.pricing_wall_cursor.get(task_id,time.perf_counter())+(time.perf_counter()-wait_started)
+        self._emit_incremental_price(task_id)
         self.pending_decisions.pop(task_id,None)
         current=self.active_work.get(task_id)
         if current:self.active_work[task_id]=ActiveWork(current.owner,current.phase,"running",current.started_at,None,current.durable_ref)

@@ -798,7 +798,10 @@ def rerun(task_id: str, req: RerunRequest, request: Request, a: auth.Actor = Dep
 @app.get("/api/tasks/{task_id}/audit")
 def task_audit(task_id: str, request: Request):
     if not store.task(task_id): raise HTTPException(404, "task not found")
-    priced=[event for event in store.events(task_id) if event.get("kind")=="price"]
+    priced_by_phase={}
+    for event in store.events(task_id):
+        if event.get("kind")=="price":priced_by_phase[event.get("phase_key")]=event
+    priced=list(priced_by_phase.values())
     totals={"tokens":sum(int((event.get("payload") or {}).get("tokens") or 0) for event in priced),"price":round(sum(float((event.get("payload") or {}).get("price") or 0) for event in priced),3),"phases_priced":len(priced)}
     return {"actor_mode": auth.actor(request).label, "entries": store.audit_entries(task_id),"totals":totals}
 
