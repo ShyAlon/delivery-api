@@ -619,3 +619,12 @@ def test_intent_approval_shows_selected_concept_and_founder_reason(page,ui):
     context=page.locator('.decision-context');context.wait_for();assert context.get_by_text('PWA',exact=True).is_visible()
     assert context.get_by_text('You stated you chose this concept because one deployment fits our team',exact=True).is_visible()
     page.screenshot(path='/downloads/intent-approval-with-concept-reason.png',full_page=True)
+
+def test_browser_logs_runtime_version_and_reloads_when_server_changes(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    console=[];page.on('console',lambda msg:console.append(msg.text))
+    page.goto(ui+'/');page.wait_for_timeout(300)
+    assert any('runtime version' in line and 'development' in line for line in console)
+    # The watcher contract compares the server runtime and reloads on mismatch.
+    source=(Path(__file__).parents[1]/'src/delivery_api/web/app.js').read_text()
+    assert "live.runtime_id!==runtimeVersion" in source and 'location.reload()' in source

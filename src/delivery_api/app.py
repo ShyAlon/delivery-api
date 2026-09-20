@@ -32,6 +32,24 @@ from .simulation import Simulation, ImportValidationError
 from . import bundles
 from .observability import event as activity
 
+def _runtime_version() -> dict:
+    root=Path(__file__).resolve()
+    for parent in root.parents:
+        manifest=parent/"MANIFEST.txt"
+        if manifest.is_file():
+            repos={}
+            in_repos=False
+            for line in manifest.read_text(errors="replace").splitlines():
+                if line=="Repositories:":in_repos=True;continue
+                if line=="Installed packages:":break
+                if in_repos and line.strip():
+                    parts=line.split()
+                    if len(parts)>=2:repos[parts[0]]=parts[1].split(":",1)[0]
+            return {"runtime_id":repos.get("delivery-api","unknown"),"repositories":repos,"manifest":str(manifest)}
+    return {"runtime_id":"development","repositories":{},"manifest":None}
+
+RUNTIME_VERSION=_runtime_version()
+
 WEB_DIR = Path(__file__).parent / "web"
 app = FastAPI(title="Requi.re API", version="0.2.0")
 store = (__import__('delivery_api.store',fromlist=['TursoReplicaStore']).TursoReplicaStore(str(config.local_database_path()),config.TURSO_DATABASE_URL,config.TURSO_AUTH_TOKEN,config.TURSO_SYNC_INTERVAL) if config.TURSO_DATABASE_URL else create_store(config.DATABASE_URL))
@@ -536,4 +554,4 @@ def set_quota(user_id:str, req:QuotaUpdate, request:Request, a:auth.Actor=Depend
     except KeyError:raise HTTPException(404,"user not found")
 
 @app.get("/health")
-def health(): return {"ok": True, "total_spend_usd": store.total_spend(), "tasks": len(store.list_tasks())}
+def health(): return {"ok": True, "total_spend_usd": store.total_spend(), "tasks": len(store.list_tasks()), **RUNTIME_VERSION}

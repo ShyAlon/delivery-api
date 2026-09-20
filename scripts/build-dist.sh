@@ -91,6 +91,37 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; PYTHON="$ROOT/runtime/bin/
 "$PYTHON" -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core, libsql' >/dev/null 2>&1 || { echo "Error: Requi.re runtime validation failed."; echo "Likely cause: the built folder is incomplete or incompatible."; echo "Next: rebuild on this operating system with scripts/build-dist.sh --clean."; exit 1; }
 export REQUI_RE_DIST=1 INTERVIEW_ENGINE_PYTHON="$PYTHON" DELIVERY_BASIC_AUTH_ENABLED="${DELIVERY_BASIC_AUTH_ENABLED:-1}" DELIVERY_COOKIE_SECURE="${DELIVERY_COOKIE_SECURE:-0}" OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/requi-re"; mkdir -p "$DATA_HOME"; export DELIVERY_DATABASE_URL="${DELIVERY_DATABASE_URL:-${DELIVERY_DB_PATH:-sqlite:///$DATA_HOME/delivery.db}}"
+PID_FILE="$DATA_HOME/server.pid"
+# Upgrade path for servers launched before PID ownership existed: discover the
+# listener once, validate it is delivery_api, and adopt the same replacement flow.
+if [ ! -f "$PID_FILE" ] && command -v lsof >/dev/null 2>&1; then
+  listener_pid=$(lsof -tiTCP:"${PORT:-8000}" -sTCP:LISTEN 2>/dev/null | head -1 || true)
+  if [ -n "$listener_pid" ]; then
+    listener_cmd=$(ps -p "$listener_pid" -o command= 2>/dev/null || true)
+    if [[ "$listener_cmd" == *"delivery_api"* ]]; then echo "$listener_pid" > "$PID_FILE"
+    else
+      echo "Error: port ${PORT:-8000} is already used by PID $listener_pid."
+      echo "Likely cause: another service is listening where Requi.re starts."
+      echo "Next: stop that service or set PORT to another port, then retry."; exit 1
+    fi
+  fi
+fi
+if [ -f "$PID_FILE" ]; then
+  old_pid=$(cat "$PID_FILE" 2>/dev/null || true)
+  if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+    old_cmd=$(ps -p "$old_pid" -o command= 2>/dev/null || true)
+    if [[ "$old_cmd" == *"delivery_api"* ]]; then
+      echo "Replacing running Requi.re process $old_pid..."; kill -TERM "$old_pid"
+      for _ in $(seq 1 100); do kill -0 "$old_pid" 2>/dev/null || break; sleep .1; done
+      kill -0 "$old_pid" 2>/dev/null && { echo "Error: running Requi.re process $old_pid did not stop."; echo "Likely cause: it ignored the graceful shutdown signal."; echo "Next: stop PID $old_pid manually, then rerun this launcher."; exit 1; }
+    else
+      echo "Error: saved Requi.re PID $old_pid belongs to a different process."
+      echo "Likely cause: the old PID file outlived its process and the OS reused that PID."
+      echo "Next: remove $PID_FILE after checking PID $old_pid, then retry."; exit 1
+    fi
+  fi
+fi
+echo $$ > "$PID_FILE"; trap 'rm -f "$PID_FILE"' EXIT INT TERM
 echo "Data: $DELIVERY_DATABASE_URL"
 echo "Installed Requi.re source revisions:"
 sed -n '/^Repositories:$/,/^Installed packages:$/p' "$ROOT/MANIFEST.txt" 2>/dev/null | sed '1d;$d' || true

@@ -796,3 +796,9 @@ def test_restart_recovery_resumes_gate_parked_interview(monkeypatch,tmp_path):
     asyncio.run(go())
     assert captured and captured[0][0][1][-1]=='orphaned-session'
     assert captured[0][1]['completion_phases']==('intent','conops')
+
+def test_health_exposes_runtime_revision(monkeypatch):
+    from delivery_api import app as app_module
+    monkeypatch.setattr(app_module,'RUNTIME_VERSION',{'runtime_id':'delivery-sha','repositories':{'delivery-api':'delivery-sha','interview-engine':'engine-sha'},'manifest':'/dist/MANIFEST.txt'})
+    result=app_module.health()
+    assert result['runtime_id']=='delivery-sha' and result['repositories']['interview-engine']=='engine-sha'

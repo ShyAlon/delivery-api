@@ -36,3 +36,11 @@ def test_libsql_source_build_preflight_and_friendly_failure_contract():
     assert 'Likely cause:' in build and 'Raw build output:' in build
     # Native installation occurs in staging, before atomic promotion.
     assert build.index('install_dependencies(){') < build.index('Atomic promotion')
+
+def test_launcher_replaces_existing_owned_server_and_rejects_stale_pid_reuse():
+    build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()
+    launcher=build.split("cat > \"$STAGE/run-require.sh\" <<'EOF'",1)[1].split('\nEOF',1)[0]
+    assert 'PID_FILE="$DATA_HOME/server.pid"' in launcher
+    assert 'lsof -tiTCP:' in launcher and 'port ${PORT:-8000} is already used' in launcher
+    assert 'Replacing running Requi.re process' in launcher and 'kill -TERM "$old_pid"' in launcher
+    assert 'belongs to a different process' in launcher
