@@ -760,7 +760,7 @@ def test_stale_answer_reports_actual_runtime_state_and_records_error(monkeypatch
     task_id=app_module.store.create_task('Stale decision truth')['task_id']
     async def stale(task,text,decision_id=None):raise RuntimeError('task is not waiting for input')
     monkeypatch.setattr(app_module.runner,'send_input',stale)
-    monkeypatch.setattr(app_module.runner,'input_state',lambda task:{'waiting':False,'process_live':False,'decision':None})
+    monkeypatch.setattr(app_module.runner,'input_state',lambda task:{'waiting':False,'process_live':False,'decision':None,'requirement':None})
     try:asyncio.run(app_module.answer_interview(task_id,InterviewAnswer(answer='n'),Actor('test','Tester')))
     except HTTPException as exc:
         assert exc.status_code==409 and exc.detail['stale'] is True
@@ -775,9 +775,9 @@ def test_stale_answer_reports_actual_runtime_state_and_records_error(monkeypatch
 def test_task_projection_exposes_live_input_truth(monkeypatch):
     from delivery_api import app as app_module
     tid=app_module.store.create_task('Input truth projection')['task_id']
-    monkeypatch.setattr(app_module.runner,'input_state',lambda task:{'waiting':False,'process_live':False,'decision':None})
+    monkeypatch.setattr(app_module.runner,'input_state',lambda task:{'waiting':False,'process_live':False,'decision':None,'requirement':None})
     result=app_module.get_task(tid)
-    assert result['input_state']=={'waiting':False,'process_live':False,'decision':None}
+    assert result['input_state']=={'waiting':False,'process_live':False,'decision':None,'requirement':None}
 
 
 def test_restart_recovery_resumes_gate_parked_interview(monkeypatch,tmp_path):
@@ -926,7 +926,7 @@ def test_ui_state_doctrine_phase_gate_supersedes_stale_engine_prompt(tmp_path):
     from delivery_api.store import SQLiteStore
     store=SQLiteStore(str(tmp_path/'ui-state.db'));tid=store.create_task('Needs gate')['task_id']
     store.update_phase(tid,'intent','approved');store.update_phase(tid,'conops','approved');store.update_phase(tid,'needs','awaiting_approval');store.wait_at_gate(tid,'needs')
-    task=store.task(tid);state=_task_ui_state(task,{'waiting':False,'process_live':False,'decision':None})
+    task=store.task(tid);state=_task_ui_state(task,{'waiting':False,'process_live':False,'decision':None,'requirement':None})
     assert state['mode']=='phase_gate' and state['gate']['after_phase']=='needs'
     assert state['mode']=='phase_gate' and state['gate'] is not None and state['decision'] is None
 
@@ -935,7 +935,7 @@ def test_ui_state_doctrine_only_live_input_can_show_engine_decision():
     from delivery_api.app import _task_ui_state
     decision={'type':'founder_decision','decision_id':'live','options':[{'value':'y','label':'Yes'}]}
     task={'state':'running','active_phase':'intent','gates':[]}
-    live=_task_ui_state(task,{'waiting':True,'process_live':True,'decision':decision})
+    live=_task_ui_state(task,{'waiting':True,'process_live':True,'decision':decision,'requirement':None})
     stale=_task_ui_state(task,{'waiting':False,'process_live':False,'decision':decision})
     assert live['mode']=='engine_decision' and live['decision']==decision
     assert stale['mode']=='error' and stale['decision'] is None and stale['gate'] is None
@@ -1021,7 +1021,7 @@ def test_orchestrator_owned_decision_is_live_without_subprocess(tmp_path):
     async def go():
         job=asyncio.create_task(runner.request_decision(tid,'architecture',decision))
         await asyncio.sleep(0);state=runner.input_state(tid)
-        assert state=={'waiting':True,'process_live':True,'decision':decision}
+        assert state=={'waiting':True,'process_live':True,'decision':decision,'requirement':None}
         await runner.send_input(tid,'greenfield','system-baseline');assert await job=='greenfield'
     asyncio.run(go())
 
@@ -1080,3 +1080,27 @@ def test_configured_phase_executor_rejects_wrong_owner_and_maps_redo(monkeypatch
     try:asyncio.run(orchestrator.execute_phase(tid,'intent'))
     except ValueError as error:assert 'owned by interview' in str(error)
     else:assert False
+
+def test_external_requirement_is_standard_live_work_with_actionable_input(tmp_path):
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'requirement.db'));tid=store.create_task('Existing system')['task_id'];runner=ProcessRunner(store)
+    requirement={'kind':'external_input','title':'Baseline required','path':'/tmp/system-baseline.json','format':'SystemBaseline JSON'}
+    runner.pause_for_requirement(tid,'architecture',requirement);work=runner.work_state(tid)
+    assert work.owner=='requirement' and work.status=='waiting' and work.requirement==requirement
+    assert runner.input_state(tid)=={'waiting':True,'process_live':True,'decision':None,'requirement':requirement}
+
+def test_recovery_restores_durable_external_input_wait(monkeypatch,tmp_path):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.store import SQLiteStore
+    from delivery_api.runner import ProcessRunner
+    store=SQLiteStore(str(tmp_path/'restore-input.db'));tid=store.create_task('Existing')['task_id']
+    for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
+    store.update_phase(tid,'architecture','awaiting_approval',detail='Baseline required')
+    requirement={'kind':'external_input','title':'Existing baseline','path':'/tmp/system-baseline.json','format':'SystemBaseline JSON'}
+    store.add_event(tid,'requirement','Architecture paused',phase_key='architecture',payload=requirement)
+    runner=ProcessRunner(store);monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module,'runner',runner)
+    async def go():await app_module._recover_tasks();await asyncio.sleep(.01)
+    asyncio.run(go());work=runner.work_state(tid)
+    assert work and work.owner=='requirement' and work.phase=='architecture' and work.requirement==requirement

@@ -60,8 +60,11 @@ class PhaseOrchestrator:
             self.store.add_event(task_id,"baseline","Greenfield architecture baseline confirmed",phase_key="architecture",payload={"mode":"greenfield","path":str(p)})
             await self.execute_phase(task_id,"architecture")
         else:
-            self.store.update_phase(task_id,"architecture","awaiting_approval",detail="Existing-system baseline required before architecture")
-            self.store.add_event(task_id,"gate","Architecture paused for an existing SystemBaseline file",phase_key="architecture",payload={"cause":"Existing-system architecture needs repository facts.","next":"Import or place system-baseline.json in the session spec folder, then continue architecture."})
+            path=self._baseline_path(task_id);path.parent.mkdir(parents=True,exist_ok=True)
+            requirement={"kind":"external_input","title":"Existing-system baseline required","summary":"Architecture is paused until the real system facts are supplied.","path":str(path),"format":"SystemBaseline JSON","required_fields":["baseline_id","system_name","mode: existing","repositories (at least one)"],"next":"Save a valid system-baseline.json at this path, then restart Requi.re; recovery will launch Architecture."}
+            self.store.update_phase(task_id,"architecture","awaiting_approval",detail=f"SystemBaseline JSON required at {path}")
+            self.runner.pause_for_requirement(task_id,"architecture",requirement)
+            self.store.add_event(task_id,"requirement","Architecture paused for an existing SystemBaseline file",phase_key="architecture",payload=requirement)
 
     async def execute_phase(self,task_id:str,phase:str,*,mode:ExecutionMode=ExecutionMode.START)->None:
         """Execute any configured generator phase through one lifecycle."""

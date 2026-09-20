@@ -191,6 +191,9 @@ async def _recover_tasks()->None:
                     message=f"Error: completed {phase} could not launch {plan.target}. Likely cause: {type(exc).__name__}: {exc}. Next: fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved."
                     store.add_event(task_id,"error",message,phase_key=plan.target,payload={"cause":f"{type(exc).__name__}: {exc}","next":"Fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved.","completed_phase":phase,"next_phase":plan.target})
             asyncio.create_task(launch())
+        elif plan.action=="restore_wait":
+            requirement=(events[-1].get("payload") or {}) if events else {}
+            runner.pause_for_requirement(task_id,plan.phase or task.get("active_phase") or "architecture",requirement)
         elif plan.action=="resume" and session:
             await _resume_one_interview(task_id,session)
 
@@ -551,7 +554,7 @@ def get_task(task_id: str):
     task = store.task(task_id)
     if not task: raise HTTPException(404, "task not found")
     input_state=runner.input_state(task_id);work=runner.work_state(task_id)
-    work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref} if work else None)
+    work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
     return {**task, "events": store.events(task_id), "artifacts": store.task_artifacts(task_id), "input_state":input_state,"active_work":work_state,"ui_state":_task_ui_state(task,input_state)}
 
 @app.get("/api/tasks/{task_id}/events")

@@ -23,8 +23,11 @@ def plan_recovery(task:dict, latest_event:dict|None=None, *, has_session:bool=Fa
         target=successor(definition.key)
         if target and states.get(definition.key) in ("approved","done") and states.get(target.key) in ("pending","running"):
             return RecoveryPlan("launch_successor",definition.key,target.key,"completed boundary has no owner")
+    latest_event=latest_event or {}
+    if latest_event.get("kind")=="requirement" and (latest_event.get("payload") or {}).get("kind")=="external_input":
+        return RecoveryPlan("restore_wait",latest_event.get("phase_key"),reason="durable external input requirement")
     interview_complete=all(states.get(key) in ("approved","done") for key in ("intent","conops"))
-    latest_event=latest_event or {};legacy=task.get("state")=="failed" and latest_event.get("kind")=="error" and latest_event.get("payload",{}).get("exit_code") in (-15,143)
+    legacy=task.get("state")=="failed" and latest_event.get("kind")=="error" and latest_event.get("payload",{}).get("exit_code") in (-15,143)
     if has_session and not interview_complete and (task.get("state") in ("running","waiting_gate") or legacy):
         return RecoveryPlan("resume","intent",reason="interview checkpoint is current")
     return IDLE

@@ -38,9 +38,10 @@ class ActiveWork:
     started_at: float
     decision: dict | None = None
     durable_ref: str | None = None
+    requirement: dict | None = None
 
     def input_state(self) -> dict:
-        return {"waiting":self.status=="waiting", "process_live":self.status in ("running","waiting"), "decision":self.decision}
+        return {"waiting":self.status=="waiting", "process_live":self.status in ("running","waiting"), "decision":self.decision, "requirement":self.requirement}
 
 
 @dataclass
@@ -264,12 +265,15 @@ class ProcessRunner:
         try:return await future
         finally:self.decisions.pop(task_id,None);self.pending_decisions.pop(task_id,None);self.waiting.discard(task_id);self.active_work.pop(task_id,None)
 
+    def pause_for_requirement(self, task_id: str, phase: str, requirement: dict) -> None:
+        self.active_work[task_id]=ActiveWork("requirement",phase,"waiting",time.time(),durable_ref=requirement.get("path"),requirement=requirement)
+
     def work_state(self, task_id: str) -> ActiveWork | None:
         return self.active_work.get(task_id)
 
     def input_state(self, task_id: str) -> dict:
         work=self.work_state(task_id)
-        return work.input_state() if work else {"waiting":False,"process_live":False,"decision":None}
+        return work.input_state() if work else {"waiting":False,"process_live":False,"decision":None,"requirement":None}
 
     async def send_input(self, task_id: str, text: str, decision_id: str | None = None) -> None:
         pending=self.pending_decisions.get(task_id)

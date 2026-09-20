@@ -795,3 +795,9 @@ def test_orchestrator_baseline_decision_renders_without_engine_process(page,ui):
 def test_account_menu_is_plain_list_with_single_button(page,ui):
     page.goto(ui+'/');page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for()
     assert menu.locator(':scope > li').count()==3;assert menu.locator('button').count()==1;assert menu.locator('button').inner_text()=='Sign out'
+
+def test_existing_system_requirement_names_file_format_path_and_next_step(page,ui):
+    requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture is paused until real system facts are supplied.','path':'/artifacts/session/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':['baseline_id','system_name','mode: existing','repositories (at least one)'],'next':'Save the file, then restart Requi.re; recovery will launch Architecture.'}
+    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');card=page.locator('.input-requirement');card.wait_for()
+    assert card.get_by_text('SystemBaseline JSON',exact=False).is_visible();assert card.get_by_text(requirement['path'],exact=True).is_visible();assert card.get_by_text('repositories (at least one)',exact=True).is_visible();assert page.locator('.task-error-state').count()==0
