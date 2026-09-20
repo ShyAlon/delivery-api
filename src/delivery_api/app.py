@@ -169,6 +169,16 @@ async def _resume_interrupted_interviews()->None:
             await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"),replay_decisions=_replayable_decisions(task_id))
         asyncio.create_task(resume())
 
+def _legacy_external_requirement(task:dict,events:list[dict])->dict|None:
+    """Migrate pre-ActiveWork architecture pauses from durable phase/event facts."""
+    architecture=next((phase for phase in task.get("phases",[]) if phase.get("phase_key")=="architecture"),{})
+    paused=architecture.get("state")=="awaiting_approval" and "baseline required" in architecture.get("detail","").lower()
+    legacy_event=next((event for event in reversed(events) if event.get("phase_key")=="architecture" and "SystemBaseline file" in event.get("message","")),None)
+    if not (paused or legacy_event):return None
+    try:path=str(orchestrator._baseline_path(task["task_id"]))
+    except Exception:return None
+    return {"kind":"external_input","title":"Existing-system baseline required","summary":"Architecture is paused until the real system facts are supplied.","path":path,"format":"SystemBaseline JSON","required_fields":["baseline_id","system_name","mode: existing","repositories (at least one)"],"next":"Save a valid system-baseline.json at this path, or correct the earlier choice to Greenfield."}
+
 
 async def _recover_tasks()->None:
     """Apply one pure recovery plan per task; never assign competing owners."""
@@ -178,6 +188,10 @@ async def _recover_tasks()->None:
         task_id=task["task_id"]
         if runner.work_state(task_id) is not None:continue
         events=store.events(task_id);session=_recorded_engine_session(task_id)
+        legacy_requirement=_legacy_external_requirement(task,events)
+        if legacy_requirement:
+            store.add_event(task_id,"requirement","Architecture paused for an existing SystemBaseline file",phase_key="architecture",payload=legacy_requirement)
+            events=store.events(task_id)
         plan=plan_recovery({**task,"events":events},events[-1] if events else None,has_session=bool(session))
         if plan.action=="reconcile":
             _reconcile_approved_prefixes();task=store.task(task_id);events=store.events(task_id)

@@ -1125,3 +1125,21 @@ def test_recovery_requirement_owns_task_despite_later_obsolete_process_noise(mon
     asyncio.run(go());work=runner.work_state(tid)
     assert work and work.owner=='requirement' and work.requirement==requirement
     assert launched==[] and tid not in runner.processes
+
+def test_recovery_migrates_legacy_baseline_pause_to_requirement_owner(monkeypatch,tmp_path):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'legacy-requirement.db'));tid=store.create_task('Legacy existing')['task_id']
+    for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
+    store.update_phase(tid,'architecture','awaiting_approval',detail='Existing-system baseline required before architecture')
+    store.add_event(tid,'gate','Architecture paused for an existing SystemBaseline file',phase_key='architecture',payload={'cause':'old bespoke pause'})
+    runner=ProcessRunner(store);monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module,'runner',runner)
+    monkeypatch.setattr(app_module.orchestrator,'_baseline_path',lambda task_id:tmp_path/'session'/'spec'/'system-baseline.json')
+    async def go():await app_module._recover_tasks();await asyncio.sleep(.01)
+    asyncio.run(go());work=runner.work_state(tid)
+    assert work and work.owner=='requirement' and work.phase=='architecture'
+    assert work.requirement['format']=='SystemBaseline JSON' and work.requirement['path'].endswith('system-baseline.json')
+    migrated=[event for event in store.events(tid) if event['kind']=='requirement']
+    assert len(migrated)==1 and migrated[0]['payload']['kind']=='external_input'
