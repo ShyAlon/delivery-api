@@ -488,11 +488,7 @@ def _task_ui_state(task:dict,input_state:dict)->dict:
     else:mode="error"
     return {"mode":mode,"active_phase":task.get("active_phase"),"process_live":process_live,
             "decision":live_decision if mode=="engine_decision" else None,
-            "gate":waiting_gate if mode=="phase_gate" else None,
-            "show_start":mode=="not_started","show_progress":mode in {"executing","engine_decision","engine_question"},
-            "show_engine_decision":mode=="engine_decision","show_question":mode=="engine_question",
-            "show_answer_composer":mode=="engine_question","show_phase_gate":mode=="phase_gate",
-            "show_artifacts":mode=="complete","show_console":mode not in {"not_started","complete"}}
+            "gate":waiting_gate if mode=="phase_gate" else None}
 
 
 @app.get("/api/tasks/{task_id}")

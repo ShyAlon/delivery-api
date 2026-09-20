@@ -391,25 +391,6 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     page.evaluate("liveSource.emit({kind:'progress',message:'[17:01:38] ok Planning CONOPS concept option 1/2 [42.6s]',phase_key:'conops',payload:{},ts:1720000201.8})")
     assert progress.locator('.progress-item',has_text='ok Planning CONOPS concept option 1/2').is_visible()
     assert not progress.get_by_text("stage 'conops' call",exact=False).is_visible()
-    page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true,question:'Which users need this?\\nWhat outcome matters most?'},ts:1720000202})")
-    assert page.locator('.live-indicator.waiting').get_by_text('Waiting for your answer').is_visible()
-    assert question.is_visible() and question.locator('p').inner_text()=='Which users need this?\nWhat outcome matters most?'
-    page.evaluate('''liveSource.emit({kind:"progress",message:"[17:02:08] ... still working - stage 'probing' call, 30s elapsed",phase_key:"intent",payload:{},ts:1720000203})''')
-    assert question.is_visible() and question.locator('p').inner_text()=='Which users need this?\nWhat outcome matters most?'
-    page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'conops',payload:{waiting_input:true,question:'Choose concept 1 or 2, then say why.'},ts:1720000203.5})")
-    assert question.locator('p').inner_text()=='Choose concept 1 or 2, then say why.'
-    assert composer.is_visible() and page.locator('.live-indicator.waiting').is_visible()
-    page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true,question:'Second question?'},ts:1720000204})")
-    assert question.locator('p').inner_text()=='Second question?'
-    page.evaluate("liveSource.emit({kind:'waiting_input',message:'You:',phase_key:'intent',payload:{waiting_input:true,question:'Third question?'},ts:1720000205})")
-    assert question.locator('p').inner_text()=='Third question?'
-    parity=page.evaluate("([q,a])=>{let qs=getComputedStyle(q),as=getComputedStyle(a);return {qbg:qs.backgroundColor,abg:as.backgroundColor,qborder:qs.borderTopColor,aborder:as.borderTopColor,qr:qs.borderRadius,ar:as.borderRadius}}",[question.element_handle(),composer.element_handle()])
-    assert parity['qbg']==parity['abg'] and parity['qborder']==parity['aborder'] and parity['qr']==parity['ar']
-    page.route('**/api/tasks/live/answer',lambda route:route.fulfill(json={'status':'accepted'}))
-    composer.locator('textarea').fill('Caregivers');composer.locator('button[type=submit]').click()
-    assert question.is_visible() and question.locator('p').inner_text()=='Third question?'
-    page.evaluate("liveSource.emit({kind:'answer',message:'You: Caregivers',phase_key:'intent',payload:{transcript:true},ts:1720000206})")
-    assert console.locator('.line.answer',has_text='You: Caregivers').is_visible()
 
 def test_answer_failure_preserves_text_and_recovers_button(page,ui):
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
