@@ -189,7 +189,8 @@ async def _recover_tasks()->None:
         if runner.work_state(task_id) is not None:continue
         events=store.events(task_id);session=_recorded_engine_session(task_id)
         legacy_requirement=_legacy_external_requirement(task,events)
-        if legacy_requirement:
+        existing_requirement=next((event for event in reversed(events) if event.get("kind")=="requirement" and (event.get("payload") or {}).get("kind")=="external_input"),None)
+        if legacy_requirement and not existing_requirement:
             store.add_event(task_id,"requirement","Architecture paused for an existing SystemBaseline file",phase_key="architecture",payload=legacy_requirement)
             events=store.events(task_id)
         plan=plan_recovery({**task,"events":events},events[-1] if events else None,has_session=bool(session))

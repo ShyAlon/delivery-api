@@ -1143,3 +1143,6 @@ def test_recovery_migrates_legacy_baseline_pause_to_requirement_owner(monkeypatc
     assert work.requirement['format']=='SystemBaseline JSON' and work.requirement['path'].endswith('system-baseline.json')
     migrated=[event for event in store.events(tid) if event['kind']=='requirement']
     assert len(migrated)==1 and migrated[0]['payload']['kind']=='external_input'
+    asyncio.run(go())
+    migrated=[event for event in store.events(tid) if event['kind']=='requirement']
+    assert len(migrated)==1
