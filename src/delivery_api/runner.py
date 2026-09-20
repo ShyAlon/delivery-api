@@ -107,7 +107,7 @@ class ProcessRunner:
                                 activity("engine.decision.replay","Replayed exact durable founder decision after restart",task_id=task_id,phase=phase,decision_id=candidate.get("decision_id"),fingerprint=replay["fingerprint"])
                                 structured_decision=None
                             else:self.pending_decisions[task_id]=candidate
-                    blocking_prompt=line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line or bool(re.search(r"\[[A-Za-z]/[A-Za-z](?:/[A-Za-z])*\]",line))
+                    blocking_prompt=structured_decision is None and (line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line or bool(re.search(r"\[[A-Za-z]/[A-Za-z](?:/[A-Za-z])*\]",line)))
                     # Open interview questions remain free-text. Every bounded
                     # choice prompt (yes/no or enumerated console command) must
                     # be preceded by the shared typed decision event.
@@ -184,6 +184,23 @@ class ProcessRunner:
                 self.store.update_phase(task_id,phase,"failed",detail=error)
                 self.store.add_event(task_id,"error",error,phase_key=phase,payload={"exit_code":code,"module":missing_module,"cause":cause,"next":next_step})
             return code
+        except Exception as exc:
+            # Parser/protocol failures used to escape without closing the child or
+            # changing durable state, leaving a task marked running with no process.
+            if proc.returncode is None:
+                try:
+                    os.killpg(proc.pid,signal.SIGTERM) if os.name == "posix" else proc.terminate()
+                except ProcessLookupError:pass
+                try:await asyncio.wait_for(proc.wait(),1)
+                except asyncio.TimeoutError:
+                    try:os.killpg(proc.pid,signal.SIGKILL) if os.name == "posix" else proc.kill()
+                    except ProcessLookupError:pass
+                    await proc.wait()
+            error=f"Error: engine stream handling stopped. Likely cause: {type(exc).__name__}: {exc}. Next: restart Requi.re to resume the saved interview checkpoint; rerun Start only if recovery cannot resume it."
+            self.store.update_phase(task_id,phase,"failed",detail=error)
+            self.store.add_event(task_id,"error",error,phase_key=phase,payload={"cause":f"{type(exc).__name__}: {exc}","next":"Restart Requi.re to resume the saved interview checkpoint; rerun Start only if recovery cannot resume it."})
+            activity("engine.stream.failure","Engine stream handling failed visibly",task_id=task_id,phase=phase,error=f"{type(exc).__name__}: {exc}")
+            raise
         finally:
             self.processes.pop(task_id, None);self.waiting.discard(task_id);self.pending_decisions.pop(task_id,None);self.interrupted_for_shutdown.discard(task_id)
             # The finished process must release its task slot before the next

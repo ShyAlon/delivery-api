@@ -699,3 +699,10 @@ def test_runtime_badge_survives_identity_render(page,ui):
     page.route('**/api/auth',lambda route:(page.wait_for_timeout(150),route.fulfill(json={'mode':'basic','authenticated':True,'actor':'shy@example.com','admin':True,'providers':[]})))
     page.goto(ui+'/');badge=page.locator('#identity .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD 7d6647f'
     page.locator('#identity').get_by_text('shy@example.com',exact=True).wait_for();assert page.locator('#identity .runtime-id').inner_text()=='BUILD 7d6647f'
+
+
+def test_orphaned_running_task_renders_visible_recovery_error(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='intent';live['input_state']={'waiting':False,'process_live':False,'decision':None};live['ui_state']={'mode':'error','active_phase':'intent','process_live':False,'decision':None,'gate':None};live['events'].append({'id':999,'kind':'error','message':'Error: engine stream handling stopped. Likely cause: protocol failure. Next: restart Requi.re.','phase_key':'intent','payload':{},'ts':1720003000})
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view')
+    notice=page.locator('.task-error-state');notice.wait_for();assert notice.get_by_text('Engine is not running.',exact=True).is_visible()
+    assert page.locator('.live-indicator').get_by_text('Engine stopped',exact=True).is_visible()

@@ -948,3 +948,34 @@ def test_untyped_blocking_console_prompt_fails_visibly(tmp_path):
     try:asyncio.run(runner.run(tid,[sys.executable,'-c','print("Continue? [y/N]",flush=True);input()'],cwd=tmp_path))
     except RuntimeError as error:assert 'untyped blocking choice prompt' in str(error)
     else:assert False,'an untyped blocking prompt was allowed to wait invisibly'
+
+def test_bounded_prompt_after_typed_envelope_chunk_uses_pending_decision(tmp_path):
+    import asyncio,json,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve this intent model?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
+    # Flush and pause force the envelope and console prompt into separate reads.
+    script=f'''import json,time\nprint("REQUIRE_EVENT "+json.dumps({decision!r}),flush=True)\ntime.sleep(.15)\nprint("Approve this intent model? [y/N] ",end="",flush=True)\nprint(input(),flush=True)'''
+    store=SQLiteStore(str(tmp_path/'split-envelope.db'));tid=store.create_task('Split envelope')['task_id'];runner=ProcessRunner(store)
+    async def go():
+        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path))
+        for _ in range(200):
+            if runner.input_state(tid)['decision']:break
+            await asyncio.sleep(.01)
+        state=runner.input_state(tid);assert state['waiting'] and state['decision']['decision_id']=='intent-approval'
+        await runner.send_input(tid,'y','intent-approval');assert await job==0
+    asyncio.run(go())
+    assert not any(e['kind']=='error' for e in store.events(tid))
+
+
+def test_stream_parser_exception_fails_task_visibly_and_stops_child(monkeypatch,tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'parser-fail.db'));tid=store.create_task('Parser fail')['task_id'];runner=ProcessRunner(store)
+    # Untyped bounded prompt is still forbidden, but must not leave running/no-process.
+    try:asyncio.run(runner.run(tid,[sys.executable,'-c','import time;print("Approve this? [y/N]",flush=True);time.sleep(30)'],cwd=tmp_path))
+    except RuntimeError as exc:assert 'untyped blocking choice prompt' in str(exc)
+    else:raise AssertionError('protocol failure was hidden')
+    task=store.task(tid);assert task['state']=='failed' and tid not in runner.processes
+    event=store.events(tid)[-1];assert event['kind']=='error' and 'engine stream handling stopped' in event['message']
