@@ -527,7 +527,21 @@ class RequirementResolution(BaseModel):
 @app.post("/api/tasks/{task_id}/requirements/architecture/resolve")
 async def resolve_architecture_requirement(task_id:str,body:RequirementResolution,a:auth.Actor=Depends(auth.require_actor)):
     work=runner.work_state(task_id)
-    if not work or work.owner!="requirement" or work.phase!="architecture":raise HTTPException(409,"architecture is not waiting for an external requirement")
+    if not work or work.owner!="requirement" or work.phase!="architecture":
+        # ActiveWork is an in-memory projection. Recover it from the same
+        # durable requirement used by startup before rejecting a valid action.
+        events=store.events(task_id)
+        requirement_event=next((event for event in reversed(events) if event.get("kind")=="requirement" and event.get("phase_key")=="architecture" and (event.get("payload") or {}).get("kind")=="external_input"),None)
+        if requirement_event:
+            requirement_id=requirement_event.get("id",0)
+            resolved=any(event.get("kind")=="baseline" and event.get("id",0)>requirement_id and (event.get("payload") or {}).get("resolved") for event in events)
+            current=runner.work_state(task_id)
+            if not resolved and current is None:
+                runner.pause_for_requirement(task_id,"architecture",requirement_event.get("payload") or {})
+                work=runner.work_state(task_id)
+                activity("requirement.owner.restored","Restored requirement owner before resolution",task_id=task_id,action=body.action,requirement_event=requirement_id)
+        if not work or work.owner!="requirement" or work.phase!="architecture":
+            raise HTTPException(409,{"error":"Architecture is not waiting for an external requirement.","cause":f"Current ActiveWork owner is {getattr(work,'owner',None) or 'none'}.","next":"Reload the task. If Architecture is already running, let it finish; otherwise copy debug info."})
     try:await orchestrator.resolve_baseline_requirement(task_id,body.action)
     except (ValueError,FileNotFoundError) as exc:
         raise HTTPException(422,{"error":"The architecture baseline is not ready.","cause":str(exc),"next":"Fix the SystemBaseline JSON at the shown path, or switch this product to Greenfield."})

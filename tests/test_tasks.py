@@ -1215,3 +1215,24 @@ def test_requirement_resolution_logs_and_returns_actionable_unexpected_failure(m
     else:assert False
     assert 'architecture requirement resolution failed task=daily action=greenfield' in caplog.text
     assert 'RuntimeError: generator launch exploded' in caplog.text
+
+
+def test_requirement_resolution_restores_owner_from_same_durable_snapshot(monkeypatch,tmp_path):
+    import asyncio
+    from delivery_api import app as app_module
+    from delivery_api.auth import Actor
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'resolve-migrated.db'));tid=store.create_task('Migrated')['task_id']
+    for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
+    store.update_phase(tid,'architecture','awaiting_approval',detail='Existing-system baseline required before architecture')
+    requirement={'kind':'external_input','title':'Baseline required','path':str(tmp_path/'artifacts'/'session-x'/'spec'/'system-baseline.json'),'format':'SystemBaseline JSON'}
+    store.add_event(tid,'requirement','Architecture paused',phase_key='architecture',payload=requirement)
+    runner=ProcessRunner(store);monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module,'runner',runner)
+    observed=[]
+    async def resolve(task_id,action):
+        work=runner.work_state(task_id);observed.append((work.owner,work.phase,work.requirement,action))
+    monkeypatch.setattr(app_module.orchestrator,'resolve_baseline_requirement',resolve)
+    result=asyncio.run(app_module.resolve_architecture_requirement(tid,app_module.RequirementResolution(action='greenfield'),Actor('shy','shy')))
+    assert result=={'status':'resolved','action':'greenfield'}
+    assert observed==[('requirement','architecture',requirement,'greenfield')]

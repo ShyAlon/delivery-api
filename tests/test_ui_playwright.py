@@ -815,3 +815,15 @@ def test_copy_debug_info_includes_runtime_snapshot_and_resource_decision(page,ui
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');page.locator('.requirement-dialog').wait_for();page.keyboard.press('Escape');page.locator('#accountbutton').click();button=page.get_by_role('menuitem',name='Copy debug info');button.click();page.wait_for_function("window.__copied.length>0")
     copied=page.evaluate('window.__copied');assert copied.startswith('Requi.re debug report');assert '"owner": "requirement"' in copied and '"detected": true' in copied and '"task_id": "live"' in copied
+
+def test_greenfield_confirmation_is_single_flight(page,ui):
+    requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture needs facts.','path':'/artifacts/session/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':[]}
+    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
+    calls=[]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    def resolve(route):
+        calls.append(route.request.post_data);time.sleep(.15);route.fulfill(json={'status':'resolved','action':'greenfield'})
+    page.route('**/api/tasks/live/requirements/architecture/resolve',resolve)
+    page.goto(ui+'/tasks/live/view');page.locator('.requirement-dialog').wait_for();page.get_by_role('button',name='I chose Existing by mistake').click();confirm=page.get_by_role('button',name='Switch & continue');confirm.dblclick()
+    page.wait_for_timeout(250)
+    assert len(calls)==1
