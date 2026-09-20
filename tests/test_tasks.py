@@ -1326,3 +1326,32 @@ def test_intent_artifact_view_has_content_title_and_interview_transcript(monkeyp
     assert body['title']=='Needs and Scope' and body['format']=='markdown'
     assert '**Problem:** Build habits' in body['content']
     assert '## Interview questions and answers' in body['content'] and 'Who needs this?' in body['content'] and '**Answer:** Busy adults' in body['content']
+
+def test_price_execution_subtracts_llm_time_and_uses_configured_rates(monkeypatch,tmp_path):
+    import json,importlib
+    monkeypatch.setenv('PRICE_PER_TOKEN','2');monkeypatch.setenv('PRICE_PER_10MS','1')
+    from delivery_api import pricing
+    importlib.reload(pricing)
+    usage=tmp_path/'usage.jsonl';llm=tmp_path/'llm-calls.jsonl'
+    usage.write_text(json.dumps({'stage':'needs','prompt_tokens':100,'completion_tokens':50})+'\n')
+    llm.write_text(json.dumps({'event':'llm_call_end','latency_s':0.8})+'\n')
+    row=pricing.price_execution(usage,llm,1000)[0]
+    assert row['tokens']==150 and row['deterministic_ms']==200
+    assert row['token_price']==300 and row['infra_price']==20 and row['price']==320
+    assert row['rates']=={'price_per_token':2.0,'price_per_10ms':1.0}
+
+def test_runner_emits_durable_phase_price(monkeypatch,tmp_path):
+    import asyncio,json,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    monkeypatch.setenv('PRICE_PER_TOKEN','2');monkeypatch.setenv('PRICE_PER_10MS','0')
+    from delivery_api import pricing
+    monkeypatch.setattr(pricing,'PRICE_PER_TOKEN',2.0);monkeypatch.setattr(pricing,'PRICE_PER_10MS',0.0)
+    out=tmp_path/'spec';out.mkdir();script="import json,sys,pathlib;p=pathlib.Path(sys.argv[1]);(p/'usage.jsonl').write_text(json.dumps({'stage':'needs','prompt_tokens':3,'completion_tokens':2})+'\\n')"
+    store=SQLiteStore(str(tmp_path/'priced.db'));tid=store.create_task('Priced')['task_id']
+    code=asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script,str(out),'--out',str(out)],cwd=tmp_path,phase='needs',infer_phase=False))
+    assert code==0
+    event=[e for e in store.events(tid) if e['kind']=='price'][-1]
+    assert event['phase_key']=='needs' and event['payload']['tokens']==5 and event['payload']['price']==10
+    audit=[e for e in store.audit_entries(tid) if e['action']=='phase.priced'][-1]
+    assert audit['detail']['phase']=='needs' and audit['detail']['price']==10

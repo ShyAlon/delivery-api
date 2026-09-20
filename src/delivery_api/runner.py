@@ -53,6 +53,8 @@ class ProcessRunner:
     decisions: dict[str, asyncio.Future] = field(default_factory=dict)
     pending_decisions: dict[str, dict] = field(default_factory=dict)
     active_work: dict[str, ActiveWork] = field(default_factory=dict)
+    pricing_wait_started: dict[str,float] = field(default_factory=dict)
+    pricing_wait_seconds: dict[str,float] = field(default_factory=dict)
     on_complete: object | None = None
 
     def _phase(self, text: str, fallback: str) -> str:
@@ -65,6 +67,13 @@ class ProcessRunner:
         if task_id in self.processes:
             raise RuntimeError("task already has a live process")
         launched_phase=phase
+        run_started=time.perf_counter()
+        out_index=command.index("--out")+1 if "--out" in command else None
+        artifact_dir=Path(command[out_index]) if out_index else None
+        usage_path=artifact_dir/"usage.jsonl" if artifact_dir else None
+        llm_path=artifact_dir/"llm-calls.jsonl" if artifact_dir else None
+        from .pricing import line_count
+        usage_start=line_count(usage_path) if usage_path else 0;llm_start=line_count(llm_path) if llm_path else 0
         self.store.update_phase(task_id, phase, "running", detail="Starting engine")
         self.store.add_event(task_id, "command", "Engine process started", phase_key=phase,
                              payload={"argv": command, "cwd": str(cwd)})
@@ -83,6 +92,7 @@ class ProcessRunner:
         replay_decisions=dict(replay_decisions or {})
         replaying_prompt=False
         typed_prompt_pending=False
+        self.pricing_wait_seconds[task_id]=0.0
 
         # The child pipeline owns progress and LLM heartbeats. Its lines name
         # the in-flight stage and elapsed time. A second generic heartbeat here
@@ -101,6 +111,13 @@ class ProcessRunner:
                 for index,part in enumerate(parts):
                     line=part.strip()
                     if not line:continue
+                    if artifact_dir is None:
+                        session_match=re.search(r"(?:^|\s)session:\s*([A-Za-z0-9._-]+)",line)
+                        if session_match:
+                            from vmodel_contracts.runtime import artifacts_root
+                            artifact_dir=artifacts_root((env or {}).get("VMODEL_ARTIFACTS_DIR") or os.environ.get("VMODEL_ARTIFACTS_DIR"))/session_match.group(1)/"interview"
+                            usage_path=artifact_dir/"usage.jsonl";llm_path=artifact_dir/"llm-calls.jsonl"
+                            usage_start=line_count(usage_path);llm_start=line_count(llm_path)
                     structured_decision=None
                     if line.startswith("REQUIRE_EVENT "):
                         import json
@@ -145,6 +162,7 @@ class ProcessRunner:
                         prompt_lines.append(structured_decision["prompt"] if structured_decision else line)
                         if task_id not in self.waiting:
                             self.waiting.add(task_id)
+                            self.pricing_wait_started[task_id]=time.perf_counter()
                             activity("engine.waiting_input","Engine is waiting for an answer",task_id=task_id,phase=phase,question=" ".join(prompt_lines)[:240])
                     elif line and not _PROGRESS.search(line):
                         prompt_lines=[line]
@@ -171,6 +189,12 @@ class ProcessRunner:
                         self.store.add_event(task_id,"founder_decision",structured_decision["prompt"],phase_key=phase,payload=payload)
                     else:self.store.add_event(task_id,"waiting_input" if waiting_input else "progress",line,phase_key=phase,payload=payload)
             code = await proc.wait()
+            if code==0 and artifact_dir:
+                from .pricing import price_execution
+                for quote in price_execution(usage_path,llm_path,max(0,(time.perf_counter()-run_started-self.pricing_wait_seconds.get(task_id,0))*1000),usage_start,llm_start):
+                    priced_phase=quote.pop("phase")
+                    self.store.add_event(task_id,"price",f"Price {quote['price']:,.2f} units",phase_key=priced_phase,payload=quote)
+                    self.store.audit("pricing","phase.priced",task_id,{"phase":priced_phase,**quote})
             if task_id in self.interrupted_for_shutdown:
                 # Keep the durable task phase running: startup will recover it
                 # from the latest interview session checkpoint.
@@ -223,7 +247,7 @@ class ProcessRunner:
             activity("engine.stream.failure","Engine stream handling failed visibly",task_id=task_id,phase=phase,error=f"{type(exc).__name__}: {exc}")
             raise
         finally:
-            self.processes.pop(task_id, None);self.waiting.discard(task_id);self.pending_decisions.pop(task_id,None);self.active_work.pop(task_id,None);self.interrupted_for_shutdown.discard(task_id)
+            self.processes.pop(task_id, None);self.waiting.discard(task_id);self.pending_decisions.pop(task_id,None);self.active_work.pop(task_id,None);self.interrupted_for_shutdown.discard(task_id);self.pricing_wait_started.pop(task_id,None);self.pricing_wait_seconds.pop(task_id,None)
             # The finished process must release its task slot before the next
             # executable starts. This is the shared process boundary.
             if continuation_phase is not None and self.on_complete is not None:
@@ -285,6 +309,8 @@ class ProcessRunner:
         proc = self.processes.get(task_id)
         if not proc or not proc.stdin: raise RuntimeError("task is not waiting for input")
         proc.stdin.write((text + "\n").encode()); await proc.stdin.drain()
+        wait_started=self.pricing_wait_started.pop(task_id,None)
+        if wait_started is not None:self.pricing_wait_seconds[task_id]=self.pricing_wait_seconds.get(task_id,0)+(time.perf_counter()-wait_started)
         self.pending_decisions.pop(task_id,None)
         current=self.active_work.get(task_id)
         if current:self.active_work[task_id]=ActiveWork(current.owner,current.phase,"running",current.started_at,None,current.durable_ref)
