@@ -105,8 +105,9 @@ class PhaseOrchestrator:
         if not python.exists():python=Path(sys.executable)
         cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",definition.generator_stage]
         if mode is ExecutionMode.REDO:cmd.extend(["--from",definition.generator_stage])
-        route=model_route or next(((event.get("payload") or {}).get("route") for event in reversed(self.store.events(task_id)) if event.get("kind")=="model_route" and event.get("phase_key")==phase),None) or (self.store.task(task_id) or {}).get("model_route") or "ollama"
-        if route not in ("ollama","deepseek"):raise ValueError(f"unsupported model route {route!r}")
+        stored=model_route or next(((event.get("payload") or {}).get("route") for event in reversed(self.store.events(task_id)) if event.get("kind")=="model_route" and event.get("phase_key")==phase),None) or (self.store.task(task_id) or {}).get("model_route") or "ollama"
+        route="deepseek" if stored.startswith("deepseek") else "ollama" if stored.startswith("ollama") else stored
+        if route not in ("ollama","deepseek"):raise ValueError(f"unsupported model route {stored!r}")
         route_value="ollama:qwen2.5-coder:14b" if route=="ollama" else "deepseek:deepseek-chat"
         env={"PYTHONUNBUFFERED":"1",f"SPEC_GENERATOR_MODEL_{definition.generator_stage.upper()}":route_value,**({} if built else {"PYTHONPATH":str(repo/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})}
         self.store.add_event(task_id,"model_route",f"{phase} uses {route}",phase_key=phase,payload={"route":route,"provider":route,"model":route_value.split(":",1)[1],"mode":mode.value})

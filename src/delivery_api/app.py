@@ -128,7 +128,8 @@ async def _resume_orphaned_handoffs()->None:
 
 
 def _interview_route_env(task_id:str)->dict[str,str]:
-    route=(store.task(task_id) or {}).get("model_route") or "ollama"
+    stored=(store.task(task_id) or {}).get("model_route") or "ollama"
+    route="deepseek" if stored.startswith("deepseek") else "ollama"
     value="ollama:qwen2.5-coder:14b" if route=="ollama" else "deepseek:deepseek-chat"
     return {f"INTERVIEW_ENGINE_MODEL_{stage}":value for stage in ("PROBING","DISTILLATION","PHRASING","SCOPE_TIEBREAK","EXPERT_OPINION")}
 
