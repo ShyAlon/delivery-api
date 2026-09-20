@@ -505,6 +505,19 @@ async def start_task_engine(task_id:str,a:auth.Actor=Depends(auth.require_actor)
     asyncio.create_task(execute())
     return {"status":"started","task_id":task_id,"next":f"/tasks/{task_id}/view"}
 
+class RequirementResolution(BaseModel):
+    action:str=Field(pattern="^(validate_file|greenfield)$")
+
+@app.post("/api/tasks/{task_id}/requirements/architecture/resolve")
+async def resolve_architecture_requirement(task_id:str,body:RequirementResolution,a:auth.Actor=Depends(auth.require_actor)):
+    work=runner.work_state(task_id)
+    if not work or work.owner!="requirement" or work.phase!="architecture":raise HTTPException(409,"architecture is not waiting for an external requirement")
+    try:await orchestrator.resolve_baseline_requirement(task_id,body.action)
+    except (ValueError,FileNotFoundError) as exc:
+        raise HTTPException(422,{"error":"The architecture baseline is not ready.","cause":str(exc),"next":"Fix the SystemBaseline JSON at the shown path, or switch this product to Greenfield."})
+    store.audit(a.label,"requirement.resolved",task_id,{"phase":"architecture","action":body.action})
+    return {"status":"resolved","action":body.action}
+
 class InterviewAnswer(BaseModel):
     answer:str=Field(min_length=1,max_length=8000)
     decision_id:str|None=Field(default=None,max_length=160)

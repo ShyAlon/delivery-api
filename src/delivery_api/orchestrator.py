@@ -66,6 +66,22 @@ class PhaseOrchestrator:
             self.runner.pause_for_requirement(task_id,"architecture",requirement)
             self.store.add_event(task_id,"requirement","Architecture paused for an existing SystemBaseline file",phase_key="architecture",payload=requirement)
 
+    async def resolve_baseline_requirement(self,task_id:str,action:str)->None:
+        """Resolve the configured baseline prerequisite, then continue uniformly."""
+        from vmodel_contracts.baseline import SystemBaseline
+        path=self._baseline_path(task_id);path.parent.mkdir(parents=True,exist_ok=True)
+        if action=="greenfield":
+            task=self.store.task(task_id);_,_,interview,_=self._paths(task_id);intent=json.loads((interview/"intent_model.json").read_text())
+            body={"contract_version":intent["contract_version"],"baseline_version":"1.0","baseline_id":f"{self._session(task_id)}-greenfield-v1","system_name":task["title"],"mode":"greenfield","repositories":[],"immutable_decisions":[]}
+            path.write_text(json.dumps(body,indent=2)+"\n")
+        elif action=="validate_file":
+            if not path.is_file():raise ValueError(f"SystemBaseline file was not found at {path}")
+            SystemBaseline.model_validate_json(path.read_text())
+        else:raise ValueError("unknown baseline requirement action")
+        self.runner.active_work.pop(task_id,None)
+        self.store.add_event(task_id,"baseline","Architecture baseline requirement resolved",phase_key="architecture",payload={"mode":action,"path":str(path)})
+        await self.execute_phase(task_id,"architecture")
+
     async def execute_phase(self,task_id:str,phase:str,*,mode:ExecutionMode=ExecutionMode.START)->None:
         """Execute any configured generator phase through one lifecycle."""
         from .observability import event as activity
