@@ -1,27 +1,13 @@
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const time = ts => ts ? new Date(ts*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
-const fullTime = ts => ts ? new Intl.DateTimeFormat([], {year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'short'}).format(new Date(ts*1000)) : '—';
+import {api,clientLog,esc,fullTime,time} from './client-core.js';
 const isProgressEvent = e => ['progress','heartbeat'].includes(e?.kind);
 const progressLine = e => `<div class="progress-item ${esc(e.kind)}"><span>${esc(e.message)}</span>${e.phase_key?`<small>${esc(humanLabel(e.phase_key))}</small>`:''}</div>`;
-async function api(url, opts={}) { const method=(opts.method||'GET').toUpperCase(),timeout=opts.timeout===undefined?(method==='GET'?60000:null):opts.timeout,controller=timeout?new AbortController():null;let timedOut=false,timer=timeout?setTimeout(()=>{timedOut=true;controller.abort()},timeout):null,r;try{r=await fetch(url,{headers:{'content-type':'application/json'},...opts,signal:opts.signal||(controller&&controller.signal)})}catch(e){if(e.name==='AbortError'&&timedOut)throw new Error('Error: The request timed out.\nLikely cause: the server did not answer a read request within 60 seconds.\nNext: check the server log and retry the page load.');if(e.name==='AbortError')throw e;throw new Error(`Error: The server could not be reached.\nLikely cause: ${e.message||'The connection failed.'}\nNext: your text is preserved. Check the server is running, then retry.`)}finally{if(timer)clearTimeout(timer)}; if(!r.ok){let raw=await r.text(), detail;try{detail=JSON.parse(raw).detail}catch{};let info=typeof detail==='object'?detail:{error:typeof detail==='string'?detail:raw},message=`Error: ${info.error||'The request failed.'}\nLikely cause: ${info.cause||'The server could not complete this action.'}\nNext: ${info.next||'Retry once. If it fails again, open the task audit and server log.'}`,error=new Error(message);error.status=r.status;error.info=info;error.endpoint=url;clientLog('api.error',message,{endpoint:url,http_status:r.status,task_state:info.current_state,active_phase:info.active_phase,decision_id:opts.decisionId});throw error} return r.json(); }
-function clientLog(kind,message,detail={}){let entry={ts:new Date().toISOString(),kind,message,path:location.pathname,...detail};(kind.includes('error')||kind.includes('failure')?console.error:console.info)(`[Requi.re ${entry.ts}] ${kind}: ${message}`,detail);fetch('/api/client-log',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind,message,path:location.pathname,detail}),keepalive:true}).catch(()=>{})}
 window.addEventListener('click',e=>{let target=e.target.closest('a,button,[role="button"]');if(target)clientLog('click',target.getAttribute('aria-label')||target.textContent.trim().replace(/\s+/g,' ').slice(0,120),{tag:target.tagName.toLowerCase()})},true);
 window.addEventListener('popstate',()=>clientLog('navigation','Browser history navigation',{url:location.href}));
 clientLog('navigation','Page loaded',{url:location.href});
 let runtimeVersion=null,runtimeWatch=null,runtimeIdentity=null;
-const UI_MODE_SCHEMA=await fetch('/assets/ui-modes.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error(`UI mode schema unavailable (${r.status})`);return r.json()});
-const TASK_UI_MODES=new Set(Object.keys(UI_MODE_SCHEMA));
-const TASK_UI_ACTIONS=Object.fromEntries(Object.entries(UI_MODE_SCHEMA).map(([mode,actions])=>[mode,Object.fromEntries(actions.map(action=>[action,true]))]));
-function reduceTaskSnapshot(task){
- const source=task?.ui_state||{},mode=TASK_UI_MODES.has(source.mode)?source.mode:'error',allowed=TASK_UI_ACTIONS[mode];
- const decision=allowed.decision&&source.decision?.options?.length?source.decision:null;
- const gate=allowed.gate&&source.gate?source.gate:null;
- return Object.freeze({mode,active_phase:source.active_phase||task?.active_phase||null,process_live:Boolean(source.process_live),decision,gate,
-  show_start:Boolean(allowed.start),show_progress:Boolean(allowed.progress),show_engine_decision:Boolean(decision),show_question:Boolean(allowed.question),
-  show_answer_composer:Boolean(allowed.answer),show_phase_gate:Boolean(gate),show_artifacts:Boolean(allowed.artifacts),show_console:mode!=='not_started'&&mode!=='complete'});
-}
+import {reduceTaskSnapshot} from './ui-state.js';
 function showRuntimeIdentity(live){runtimeIdentity=live;let host=document.querySelector('#identity');if(!host)return;let badge=host.querySelector('.runtime-id');if(!badge){badge=document.createElement('small');badge.className='runtime-id';host.append(badge)}badge.textContent=`BUILD ${String(live.runtime_id||'unknown').slice(0,7)}`;host.title=`Running delivery-api ${live.runtime_id||'unknown'}`}
 async function watchRuntime(){try{let r=await fetch('/health',{cache:'no-store'}),live=await r.json();showRuntimeIdentity(live);if(runtimeVersion===null){runtimeVersion=live.runtime_id;console.info(`[Requi.re] runtime version ${runtimeVersion}`,live.repositories||{});clientLog('runtime.version',`Runtime version ${runtimeVersion}`,{runtime_id:runtimeVersion,repositories:live.repositories||{}})}else if(live.runtime_id!==runtimeVersion){console.warn(`[Requi.re] server replaced: ${runtimeVersion} -> ${live.runtime_id}; reloading`);clearInterval(runtimeWatch);location.reload()}}catch(e){console.info('[Requi.re] runtime version check unavailable',e.message)}}
 watchRuntime();runtimeWatch=setInterval(watchRuntime,5000);

@@ -459,6 +459,7 @@ def test_structured_founder_decision_opens_large_card_dialog_and_formats_answer(
     page.goto(ui+'/tasks/live/view');page.locator('#console').wait_for()
     decision={'type':'founder_decision','decision_id':'concept','title':'Choose the operating concept','prompt':'Which concept should the architecture execute?','rationale_required':True,'rationale_label':'Why is this right?','answer_format':'<value> - <rationale>','options':[{'value':'1','label':'Native app','summary':'Installed experience','advantages':['Fast offline'],'disadvantages':['App stores']},{'value':'2','label':'PWA','summary':'Browser first','advantages':['One deploy'],'disadvantages':['Limited APIs']}]}
     live['input_state']={'waiting':True,'process_live':True,'decision':decision}
+    live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None}
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"conops",payload:{waiting_input:true,question:decision.prompt,decision},ts:1720000300})',decision)
     dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.is_visible()
     assert dialog.get_by_text('Native app',exact=True).is_visible() and dialog.get_by_text('PWA',exact=True).is_visible()
@@ -660,8 +661,8 @@ def test_managed_task_state_reducer_is_exhaustive_and_atomic(page,ui):
     dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.get_by_text('Approve',exact=True).is_visible()
     assert page.locator('#answerform').is_hidden() and page.locator('#opendecision').is_visible()
     page.screenshot(path='/downloads/managed-state-intent-decision.png',full_page=True)
-    source=(Path(__file__).parents[1]/'src/delivery_api/web/app.js').read_text()
-    assert 'TASK_UI_ACTIONS' in source and 'reduceTaskSnapshot' in source and 'next.mode!==view.mode' in source
+    app_source=(Path(__file__).parents[1]/'src/delivery_api/web/app.js').read_text();state_source=(Path(__file__).parents[1]/'src/delivery_api/web/ui-state.js').read_text()
+    assert 'reduceTaskSnapshot' in app_source and 'next.mode!==view.mode' in app_source and 'TASK_UI_ACTIONS' in state_source
 
 
 def test_runtime_build_identity_is_visible(page,ui):

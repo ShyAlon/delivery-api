@@ -196,7 +196,7 @@ async def request_log(request, call_next):
     activity("http.request","Request completed",method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
     if response.status_code >= 400:
         activity("http.error","API request returned an error",endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
-    if request.url.path in {"/", "/assets/app.js"} or request.url.path.startswith("/tasks/"):
+    if request.url.path == "/" or request.url.path.startswith("/assets/") or request.url.path.startswith("/tasks/"):
         response.headers["Cache-Control"]="no-store, max-age=0"
     if response.status_code in (401,403):activity("access.blocked","Unauthorized or forbidden request",method=request.method,path=request.url.path,status=response.status_code,actor=who)
     return response
