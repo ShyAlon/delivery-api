@@ -1173,3 +1173,26 @@ def test_orphaned_running_ui_state_explains_missing_owner():
     state=_task_ui_state(task,{'waiting':False,'process_live':False,'decision':None,'requirement':None})
     assert state['mode']=='error'
     assert state['diagnostic']=={'reason':'task has no live ActiveWork owner','task_state':'running','active_phase':'architecture'}
+
+
+def test_greenfield_correction_recovers_session_from_recent_requirement_path(monkeypatch,tmp_path):
+    import asyncio,json
+    from delivery_api.orchestrator import PhaseOrchestrator
+    from delivery_api.store import SQLiteStore
+    artifacts=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
+    store=SQLiteStore(str(tmp_path/'greenfield-correction.db'));tid=store.create_task('Daily Habit')['task_id']
+    session='20260919-163614-adc4';interview=artifacts/session/'interview';interview.mkdir(parents=True)
+    (interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}));(interview/'conops.json').write_text('{}')
+    store.add_event(tid,'progress',f'session: {session}',phase_key='intent')
+    for index in range(510):store.add_event(tid,'output',f'line {index}',phase_key='srs')
+    path=artifacts/session/'spec'/'system-baseline.json'
+    requirement={'kind':'external_input','title':'Baseline required','path':str(path),'format':'SystemBaseline JSON'}
+    store.add_event(tid,'requirement','Architecture paused',phase_key='architecture',payload=requirement)
+    class Runner:
+        active_work={tid:object()};calls=[]
+        async def run(self,*args,**kwargs):self.calls.append((args,kwargs));return 0
+    runner=Runner();orch=PhaseOrchestrator(store,runner)
+    asyncio.run(orch.resolve_baseline_requirement(tid,'greenfield'))
+    baseline=json.loads(path.read_text())
+    assert baseline['mode']=='greenfield' and baseline['baseline_id']==session+'-greenfield-v1'
+    assert runner.calls and runner.calls[0][1]['phase']=='architecture'

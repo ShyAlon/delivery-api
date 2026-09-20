@@ -22,7 +22,13 @@ class PhaseOrchestrator:
         for event in reversed(self.store.events(task_id)):
             m=re.search(r"(?:^|\s)session:\s*([A-Za-z0-9._-]+)",event.get("message",""))
             if m:return m.group(1)
-        raise RuntimeError("completed interview did not report its durable session")
+            # Long-lived tasks may have rotated the original session event out
+            # of the bounded snapshot. Requirements carry the canonical
+            # artifacts path, which is durable evidence of the same session.
+            path=str((event.get("payload") or {}).get("path") or "")
+            m=re.search(r"(?:^|[/\\])artifacts[/\\]([A-Za-z0-9._-]+)(?:[/\\]|$)",path)
+            if m:return m.group(1)
+        raise RuntimeError("completed interview did not report its durable session or artifacts path")
 
     def _paths(self,task_id:str):
         sid=self._session(task_id);root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")) / sid
