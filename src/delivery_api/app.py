@@ -652,12 +652,13 @@ def task_artifact_download(task_id:str,phase:str,name:str):
 def task_artifact_view(task_id:str,phase:str,name:str):
     path=_task_artifact(task_id,phase,name)
     if path.stat().st_size>2_000_000:raise HTTPException(413,"artifact is too large for inline viewing")
-    text=path.read_text(errors="replace")
+    text=path.read_text(errors="replace");raw=text;display_path=path
     if path.suffix==".json":
-        try:content=json.dumps(json.loads(text),indent=2)
-        except Exception:content=text
-        return {"name":name,"phase":phase,"format":"json","content":content}
-    return {"name":name,"phase":phase,"format":"markdown" if path.suffix==".md" else "text","content":text}
+        sibling=path.with_suffix(".md")
+        if sibling.is_file():display_path=sibling;text=sibling.read_text(errors="replace")
+        try:raw=json.dumps(json.loads(raw),indent=2)
+        except Exception:pass
+    return {"name":name,"phase":phase,"format":"markdown" if display_path.suffix==".md" else ("json" if path.suffix==".json" else "text"),"content":text,"raw_format":"json" if path.suffix==".json" else "text","raw_content":raw,"display_name":display_path.name}
 
 @app.get("/api/tasks/{task_id}/artifacts.zip")
 def task_artifacts_zip(task_id:str):
