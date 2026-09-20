@@ -618,3 +618,4 @@ def test_intent_approval_shows_selected_concept_and_founder_reason(page,ui):
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view')
     context=page.locator('.decision-context');context.wait_for();assert context.get_by_text('PWA',exact=True).is_visible()
     assert context.get_by_text('You stated you chose this concept because one deployment fits our team',exact=True).is_visible()
+    page.screenshot(path='/downloads/intent-approval-with-concept-reason.png',full_page=True)
