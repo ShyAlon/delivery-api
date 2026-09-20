@@ -730,11 +730,11 @@ def test_live_log_is_prominent_without_duplicate_timestamps_desktop_and_phone(pa
     page.set_viewport_size({'width':1365,'height':800});page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
     assert page.get_by_text('REAL PROGRESS · ALL STAGES',exact=True).count()==0
     assert page.locator('#progressfeed time').count()==0 and console.locator('.line time').count()==0
-    dimensions=console.evaluate('e=>({height:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,max:getComputedStyle(e).maxHeight,scroll:e.scrollHeight>e.clientHeight})')
-    assert dimensions['height']>=260 and dimensions['min']=='260px' and dimensions['max']=='420px' and dimensions['scroll'] is True
+    dimensions=console.evaluate("e=>{let s=getComputedStyle(e);return {height:e.getBoundingClientRect().height,min:s.minHeight,max:s.maxHeight,fluid:s.getPropertyValue('--console-fluid').trim(),scroll:e.scrollHeight>e.clientHeight}}")
+    assert dimensions['height']>=260 and dimensions['min']=='260px' and dimensions['max']=='420px' and dimensions['fluid']=='36vh' and dimensions['scroll'] is True
     page.screenshot(path='/downloads/live-log-prominent-desktop.png',full_page=True)
     page.set_viewport_size({'width':390,'height':844});page.reload();console=page.locator('#console');console.wait_for()
-    assert 280<=console.bounding_box()['height']<=380 and page.get_by_text('REAL PROGRESS · ALL STAGES',exact=True).count()==0
+    assert 280<=console.bounding_box()['height']<=380 and console.evaluate("e=>getComputedStyle(e).getPropertyValue('--console-fluid').trim()")=='40vh' and page.get_by_text('REAL PROGRESS · ALL STAGES',exact=True).count()==0
     page.screenshot(path='/downloads/live-log-prominent-phone.png',full_page=True)
 
 def test_mutation_flows_refresh_in_place_without_document_navigation(page,ui):
