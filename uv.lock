@@ -67,7 +67,6 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
-    { name = "libsql" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
@@ -78,8 +77,12 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "httpx" },
+    { name = "libsql" },
     { name = "playwright" },
     { name = "pytest" },
+]
+turso = [
+    { name = "libsql" },
 ]
 
 [package.metadata]
@@ -87,16 +90,17 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
-    { name = "libsql", specifier = ">=0.1.11,<0.2" },
+    { name = "libsql", marker = "extra == 'dev'", specifier = ">=0.1.11,<0.2" },
+    { name = "libsql", marker = "extra == 'turso'", specifier = ">=0.1.11,<0.2" },
     { name = "playwright", marker = "extra == 'dev'", specifier = ">=1.48" },
     { name = "pydantic", specifier = ">=2.6,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "python-dotenv", specifier = ">=1,<2" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "uvicorn", specifier = ">=0.29" },
-    { name = "vmodel-contracts", git = "https://github.com/ShyAlon/vmodel-contracts.git?rev=d03c0d4d3754516e84478262074954a010e3ddd4" },
+    { name = "vmodel-contracts", git = "https://github.com/ShyAlon/vmodel-contracts.git?rev=2698e61" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "turso"]
 
 [[package]]
 name = "exceptiongroup"
@@ -623,8 +627,9 @@ wheels = [
 
 [[package]]
 name = "vmodel-contracts"
-version = "0.14.3"
-source = { git = "https://github.com/ShyAlon/vmodel-contracts.git?rev=d03c0d4d3754516e84478262074954a010e3ddd4#d03c0d4d3754516e84478262074954a010e3ddd4" }
+version = "0.18.0"
+source = { git = "https://github.com/ShyAlon/vmodel-contracts.git?rev=2698e61#2698e6124ec1631520e0277434ea8cca73a855e9" }
 dependencies = [
+    { name = "httpx" },
     { name = "pydantic" },
 ]
