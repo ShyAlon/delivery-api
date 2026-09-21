@@ -78,3 +78,12 @@ def test_smoke_state_survives_rotating_diagnostic_folder():
     assert 'REQUI_RE_SMOKE_STATE_DIR' in smoke and 'checkpoint.json' in smoke
     assert 'VMODEL_ARTIFACTS_DIR="$REQUI_RE_SMOKE_STATE_DIR/artifacts"' in smoke
     assert '--fresh' in smoke and 'interview.resume' in smoke
+
+
+def test_deepseek_smoke_loads_and_validates_shared_config_without_printing_key():
+    smoke=(Path(__file__).parents[1]/'scripts/smoke-packaged-real-model.sh').read_text()
+    assert 'SHARED_ENV="$REQUI_RE_REPOS_ROOT/.env"' in smoke
+    assert '. "$SHARED_ENV"' in smoke
+    assert 'DEEPSEEK_API_KEY' in smoke and 'INTERVIEW_ENGINE_MODEL_PROBING' in smoke and 'INTERVIEW_ENGINE_MODEL_DISTILLATION' in smoke
+    assert 'secret not printed' in smoke
+    assert 'switch-model.sh deepseek' in smoke

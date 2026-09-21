@@ -14,6 +14,20 @@ for arg in "$@"; do
 done
 progress(){ printf '%s | %-22s | %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" "$2"; }
 export REQUI_RE_REPOS_ROOT="${REQUI_RE_REPOS_ROOT:-$(cd "$ROOT/.." && pwd)}"
+SHARED_ENV="$REQUI_RE_REPOS_ROOT/.env"
+if [ -f "$SHARED_ENV" ]; then
+  set -a
+  # shellcheck disable=SC1090 - this is the user's local untracked Requi.re config.
+  . "$SHARED_ENV"
+  set +a
+  progress config.loaded "Loaded shared model configuration from $SHARED_ENV"
+fi
+if [ "$MODEL_ROUTE" = deepseek ]; then
+  [ -n "${DEEPSEEK_API_KEY:-}" ] || { echo "Error: DeepSeek smoke needs DEEPSEEK_API_KEY in $SHARED_ENV." >&2; echo "Likely cause: the shared model config has not been switched to DeepSeek." >&2; echo "Next: run ./vmodel-spec-app/scripts/switch-model.sh deepseek, then retry." >&2; exit 1; }
+  [ "${INTERVIEW_ENGINE_MODEL_PROBING:-}" = deepseek:* ] || { echo "Error: interview probing is not routed to DeepSeek in $SHARED_ENV." >&2; echo "Likely cause: only the API key is present; the shared model routes still name another provider." >&2; echo "Next: run ./vmodel-spec-app/scripts/switch-model.sh deepseek, then retry." >&2; exit 1; }
+  [ "${INTERVIEW_ENGINE_MODEL_DISTILLATION:-}" = deepseek:* ] || { echo "Error: interview distillation is not routed to DeepSeek in $SHARED_ENV." >&2; echo "Likely cause: the shared model switch is incomplete; ConOps follows distillation." >&2; echo "Next: run ./vmodel-spec-app/scripts/switch-model.sh deepseek, then retry." >&2; exit 1; }
+  progress config.route "DeepSeek key and interview routes are configured (secret not printed)"
+fi
 export REQUI_RE_DIST_DIR="${REQUI_RE_DIST_DIR:-$ROOT/dist/requi-re-smoke}"
 export REQUI_RE_SMOKE_STATE_DIR="${REQUI_RE_SMOKE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/requi-re-smoke}"
 if [ "$FRESH" = 1 ]; then progress state.reset "Removing only the saved smoke run before a clean full cycle"; rm -rf "$REQUI_RE_SMOKE_STATE_DIR"; fi
