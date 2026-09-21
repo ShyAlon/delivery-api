@@ -41,7 +41,7 @@ export DELIVERY_BASIC_AUTH_ENABLED=0 DELIVERY_COOKIE_SECURE=0
 export INTERVIEW_ENGINE_TOKEN="${INTERVIEW_ENGINE_TOKEN:-requi-re-packaged-smoke-token}"
 progress launcher.start "Starting packaged delivery and authenticated interview service"
 "$REQUI_RE_DIST_DIR/run-require.sh" >"$TMP/launcher.log" 2>&1 & LAUNCHER_PID=$!
-python3 - "$PORT" "$INTERVIEW_ENGINE_PORT" "$INTERVIEW_ENGINE_TOKEN" "$MODE" "$MODEL_ROUTE" <<'PY'
+"$REQUI_RE_DIST_DIR/runtime/bin/python" - "$PORT" "$INTERVIEW_ENGINE_PORT" "$INTERVIEW_ENGINE_TOKEN" "$MODE" "$MODEL_ROUTE" <<'PY'
 import datetime,json,sys,time,urllib.error,urllib.request
 from delivery_api.smoke import typed_smoke_answer
 port,engine_port,token,mode,route=sys.argv[1:]

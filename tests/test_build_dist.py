@@ -60,3 +60,9 @@ def test_launcher_streams_engine_progress_and_preserves_log():
     build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()
     launcher=build.split("cat > \"$STAGE/run-require.sh\" <<'EOF'",1)[1].split('\nEOF',1)[0]
     assert '> >(tee "$DATA_HOME/interview-engine.log") 2>&1 & ENGINE_PID=$!' in launcher
+
+
+def test_smoke_driver_runs_from_built_runtime_not_calling_shell_python():
+    smoke=(Path(__file__).parents[1]/'scripts/smoke-packaged-real-model.sh').read_text()
+    assert '"$REQUI_RE_DIST_DIR/runtime/bin/python" - "$PORT"' in smoke
+    assert '\npython3 - "$PORT"' not in smoke
