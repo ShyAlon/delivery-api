@@ -550,17 +550,18 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
         typed_value=next((option.value for option in pending.options if str(option.value)==raw_value),body.answer)
         submitted=engine_client.submit(session_id,InputResponse(input_id=pending.input_id,value=typed_value,actor_id=a.label))
         store.add_event(task_id,"engine_protocol","Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
+    except EngineClientError as e:
+        task=store.task(task_id) or {}
+        payload={"endpoint":f"/api/tasks/{task_id}/answer","http_status":e.http_status,"task_state":task.get("state"),"active_phase":task.get("active_phase"),"decision_id":body.decision_id,"protocol_error":e.error.model_dump(mode="json")}
+        store.add_event(task_id,"error",f"Error: interview engine rejected the input. Likely cause: {e.error.detail} Next: retry this typed input if the protocol marks it retryable; otherwise refresh the live question.",phase_key=task.get("active_phase"),payload=payload)
+        activity("engine.answer.rejected","Interview engine rejected founder input",task_id=task_id,phase=task.get("active_phase"),**payload)
+        raise HTTPException(e.http_status,e.error.model_dump(mode="json"))
     except RuntimeError as e:
-        task=store.task(task_id) or {};state=runner.input_state(task_id);decision=state.get("decision") or {}
-        cause=(f"The task is {task.get('state','unknown')} in phase {task.get('active_phase','unknown')}; "
-               f"process_live={state['process_live']}, waiting={state['waiting']}. The submitted decision is no longer open.")
-        next_step=("The current engine question changed. Refreshing the task will show the live state; answer only the current prompt."
-                   if state["process_live"] else "The engine process has ended or restarted. Refresh the task; resume/restart the active phase instead of submitting this stale dialog.")
-        message="Stale founder decision was not submitted"
-        payload={"endpoint":f"/api/tasks/{task_id}/answer","http_status":409,"task_state":task.get("state"),"active_phase":task.get("active_phase"),"decision_id":body.decision_id or decision.get("decision_id"),"open_decision_id":decision.get("decision_id"),"recent_answer_events":recent_answers,"process_live":state["process_live"],"waiting":state["waiting"],"reason":str(e),"cause":cause,"next":next_step}
-        store.add_event(task_id,"error",f"Error: {message}. Likely cause: {cause} Next: {next_step}",phase_key=task.get("active_phase"),payload=payload)
-        activity("api.answer.stale",message,task_id=task_id,phase=task.get("active_phase"),**payload)
-        raise HTTPException(409,{"error":message+".","cause":cause,"next":next_step,"stale":True,"current_state":task.get("state"),"active_phase":task.get("active_phase")})
+        task=store.task(task_id) or {};cause=str(e);next_step="Refresh the task and answer only the current typed input."
+        payload={"endpoint":f"/api/tasks/{task_id}/answer","http_status":409,"task_state":task.get("state"),"active_phase":task.get("active_phase"),"decision_id":body.decision_id,"recent_answer_events":recent_answers,"reason":cause,"next":next_step}
+        store.add_event(task_id,"error",f"Error: stale founder decision was not submitted. Likely cause: {cause} Next: {next_step}",phase_key=task.get("active_phase"),payload=payload)
+        activity("api.answer.stale","Stale founder decision was not submitted",task_id=task_id,phase=task.get("active_phase"),**payload)
+        raise HTTPException(409,{"error":"Stale founder decision was not submitted.","cause":cause,"next":next_step,"stale":True,"current_state":task.get("state"),"active_phase":task.get("active_phase")})
     active_phase=(store.task(task_id) or {}).get("active_phase") or "intent"
     store.add_event(task_id,"answer",f"You: {body.answer}",phase_key=active_phase,payload={"actor":a.label,"character_count":len(body.answer),"transcript":True,"decision_id":body.decision_id,"answer":body.answer})
     activity("engine.answer","Founder answer submitted",task_id=task_id,phase=active_phase,actor=a.label,character_count=len(body.answer))

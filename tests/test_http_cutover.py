@@ -40,3 +40,17 @@ def test_http_engine_session_survives_delivery_restart(tmp_path,monkeypatch):
  assert body['input_state']['waiting'] is True
  client.post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1'}).raise_for_status()
  assert engine.submitted[-1].value==1
+
+
+class FailingEngine(FakeEngine):
+ def submit(self,sid,response):
+  from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
+  from delivery_api.engine_client import EngineClientError
+  raise EngineClientError(503,ProtocolError(code=ProtocolErrorCode.INTERNAL_ERROR,detail='model failed',retryable=True))
+
+def test_engine_failure_is_not_misreported_as_dead_subprocess(tmp_path,monkeypatch):
+ store=SQLiteStore(str(tmp_path/'failure.db'));task=store.create_task('Failure truth','brief');engine=FailingEngine();store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ response=TestClient(module.app).post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1','decision_id':str(engine.pending.input_id)})
+ assert response.status_code==503 and response.json()['detail']['retryable'] is True
+ assert 'process_live' not in response.text and 'subprocess' not in response.text
