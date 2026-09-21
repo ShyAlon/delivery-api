@@ -17,7 +17,7 @@ for repo in $PACKAGES vmodel-spec-app; do
       behind=$(git -C "$REPOS_ROOT/$repo" rev-list --count "HEAD..$upstream" 2>/dev/null || echo 0)
       if [ "$behind" -gt 0 ]; then
         echo "WARNING: $repo is $behind commit(s) behind $upstream. This build would mix repository versions."
-        echo "Next: git -C '$REPOS_ROOT/$repo' pull --ff-only, then rerun this build."
+        echo "Next: $SCRIPT_DIR/pull-all.sh, then rerun this build."
         stale_repos="${stale_repos:-} $repo"
       fi
     fi
@@ -26,7 +26,7 @@ done
 if [ -n "${stale_repos:-}" ]; then
   echo "Error: Requi.re source checkouts are not all current."
   echo "Likely cause: only one sibling repository was pulled:${stale_repos}."
-  echo "Next: pull every listed checkout, then rerun scripts/build-dist.sh."
+  echo "Next: $SCRIPT_DIR/pull-all.sh, then rerun scripts/build-dist.sh."
   exit 1
 fi
 command -v "$BOOTSTRAP_PYTHON" >/dev/null || { echo "Error: build Python '$BOOTSTRAP_PYTHON' was not found."; echo "Likely cause: Python 3.10+ is not on PATH."; echo "Next: set REQUI_RE_BUILD_PYTHON=/path/to/python and retry."; exit 1; }

@@ -114,3 +114,12 @@ def test_smoke_automatically_aggregates_shadow_report_without_user_paths():
     assert 'REQUI_RE_REPOS_ROOT/categorization-shadow.md' in smoke
     assert 'if files:' in smoke and 'shadow.report' in smoke
     assert 'tmp.replace(aggregate)' in smoke and 'tmp.replace(report)' in smoke
+
+
+def test_pull_all_updates_exactly_six_siblings_ff_only():
+    script=(Path(__file__).parents[1]/'scripts/pull-all.sh').read_text()
+    assert 'delivery-api interview-engine spec-generator vmodel-contracts verification-loop vmodel-spec-app' in script
+    assert 'git -C "$REPOS_ROOT/$repo" pull --ff-only' in script
+    assert 'REQUI_RE_REPOS_ROOT' in script
+    build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()
+    assert build.count('$SCRIPT_DIR/pull-all.sh') >= 2
