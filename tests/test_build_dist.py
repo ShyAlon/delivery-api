@@ -87,6 +87,9 @@ def test_deepseek_smoke_loads_and_validates_shared_config_without_printing_key()
     assert 'DEEPSEEK_API_KEY' in smoke and 'INTERVIEW_ENGINE_MODEL_PROBING' in smoke and 'INTERVIEW_ENGINE_MODEL_DISTILLATION' in smoke
     assert 'secret not printed' in smoke
     assert 'switch-model.sh deepseek' in smoke
+    assert 'case "${INTERVIEW_ENGINE_MODEL_PROBING:-}" in deepseek:*)' in smoke
+    assert 'case "${INTERVIEW_ENGINE_MODEL_DISTILLATION:-}" in deepseek:*)' in smoke
+    assert '[ "${INTERVIEW_ENGINE_MODEL_PROBING:-}" = deepseek:* ]' not in smoke
 
 
 def test_completed_smoke_checkpoint_reuses_verified_task_before_kpi():

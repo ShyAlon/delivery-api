@@ -24,8 +24,8 @@ if [ -f "$SHARED_ENV" ]; then
 fi
 if [ "$MODEL_ROUTE" = deepseek ]; then
   [ -n "${DEEPSEEK_API_KEY:-}" ] || { echo "Error: DeepSeek smoke needs DEEPSEEK_API_KEY in $SHARED_ENV." >&2; echo "Likely cause: the shared model config has not been switched to DeepSeek." >&2; echo "Next: run ./vmodel-spec-app/scripts/switch-model.sh deepseek, then retry." >&2; exit 1; }
-  [ "${INTERVIEW_ENGINE_MODEL_PROBING:-}" = deepseek:* ] || { echo "Error: interview probing is not routed to DeepSeek in $SHARED_ENV." >&2; echo "Likely cause: only the API key is present; the shared model routes still name another provider." >&2; echo "Next: run ./vmodel-spec-app/scripts/switch-model.sh deepseek, then retry." >&2; exit 1; }
-  [ "${INTERVIEW_ENGINE_MODEL_DISTILLATION:-}" = deepseek:* ] || { echo "Error: interview distillation is not routed to DeepSeek in $SHARED_ENV." >&2; echo "Likely cause: the shared model switch is incomplete; ConOps follows distillation." >&2; echo "Next: run ./vmodel-spec-app/scripts/switch-model.sh deepseek, then retry." >&2; exit 1; }
+  case "${INTERVIEW_ENGINE_MODEL_PROBING:-}" in deepseek:*) ;; *) echo "Error: interview probing is not routed to DeepSeek in $SHARED_ENV." >&2; echo "Likely cause: only the API key is present; the shared model routes still name another provider." >&2; echo "Next: run ./vmodel-spec-app/scripts/switch-model.sh deepseek, then retry." >&2; exit 1;; esac
+  case "${INTERVIEW_ENGINE_MODEL_DISTILLATION:-}" in deepseek:*) ;; *) echo "Error: interview distillation is not routed to DeepSeek in $SHARED_ENV." >&2; echo "Likely cause: the shared model switch is incomplete; ConOps follows distillation." >&2; echo "Next: run ./vmodel-spec-app/scripts/switch-model.sh deepseek, then retry." >&2; exit 1;; esac
   progress config.route "DeepSeek key and interview routes are configured (secret not printed)"
 fi
 export REQUI_RE_DIST_DIR="${REQUI_RE_DIST_DIR:-$ROOT/dist/requi-re-smoke}"
