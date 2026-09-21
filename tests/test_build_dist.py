@@ -66,3 +66,8 @@ def test_smoke_driver_runs_from_built_runtime_not_calling_shell_python():
     smoke=(Path(__file__).parents[1]/'scripts/smoke-packaged-real-model.sh').read_text()
     assert '"$REQUI_RE_DIST_DIR/runtime/bin/python" - "$PORT"' in smoke
     assert '\npython3 - "$PORT"' not in smoke
+
+
+def test_smoke_failure_reports_request_and_response():
+    smoke=(Path(__file__).parents[1]/'scripts/smoke-packaged-real-model.sh').read_text()
+    assert 'request={request_body!r}; response={body!r}' in smoke

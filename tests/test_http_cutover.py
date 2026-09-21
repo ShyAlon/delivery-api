@@ -69,3 +69,21 @@ def test_smoke_answers_key_off_numeric_input_kind():
  from delivery_api.smoke import typed_smoke_answer
  assert typed_smoke_answer({'kind':3,'rationale_required':False,'options':[{'value':1,'label':'Approve'}]})=='1'
  assert typed_smoke_answer({'kind':1,'options':[]}).startswith('Two adults')
+
+
+def test_rationale_is_preserved_as_typed_field(tmp_path,monkeypatch):
+ store=SQLiteStore(str(tmp_path/'rationale.db'));task=store.create_task('Rationale typed','brief');engine=FakeEngine()
+ engine.pending=InputRequest(input_id=uuid4(),kind=InputKind.CHOICE,prompt='Choose',options=[InputOption(value='1',label='One')],rationale_required=True)
+ store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ response=TestClient(module.app).post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1 - because it fits','decision_id':str(engine.pending.input_id)})
+ assert response.status_code==200
+ assert engine.submitted[-1].value=='1' and engine.submitted[-1].rationale=='because it fits'
+
+def test_required_rationale_cannot_be_dropped(tmp_path,monkeypatch):
+ store=SQLiteStore(str(tmp_path/'missing-rationale.db'));task=store.create_task('Rationale required','brief');engine=FakeEngine()
+ engine.pending=InputRequest(input_id=uuid4(),kind=InputKind.CHOICE,prompt='Choose',options=[InputOption(value='1',label='One')],rationale_required=True)
+ store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ response=TestClient(module.app).post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1','decision_id':str(engine.pending.input_id)})
+ assert response.status_code==409 and not engine.submitted

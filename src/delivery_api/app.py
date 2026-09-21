@@ -546,9 +546,12 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
         state=engine_client.snapshot(session_id);pending=state.open_input
         if pending is None:raise RuntimeError("task is not waiting for input")
         if body.decision_id and str(pending.input_id)!=body.decision_id:raise RuntimeError("submitted decision does not match live input")
-        raw_value=body.answer.split(" - ",1)[0].strip()
+        raw_value,separator,rationale=body.answer.partition(" - ")
+        raw_value=raw_value.strip();rationale=rationale.strip() if separator else ""
         typed_value=next((option.value for option in pending.options if str(option.value)==raw_value),body.answer)
-        submitted=engine_client.submit(session_id,InputResponse(input_id=pending.input_id,value=typed_value,actor_id=a.label))
+        if pending.rationale_required and not rationale:raise RuntimeError("typed input requires a rationale")
+        submitted=engine_client.submit(session_id,InputResponse(input_id=pending.input_id,value=typed_value,
+            rationale=rationale or None,actor_id=a.label))
         store.add_event(task_id,"engine_protocol","Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
     except EngineClientError as e:
         task=store.task(task_id) or {}

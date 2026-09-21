@@ -56,8 +56,12 @@ def call(method,url,payload=None,headers=None,expected=None):
  text=raw.decode('utf-8','replace')
  try:body=json.loads(text) if text else {}
  except json.JSONDecodeError:body=text
- if expected is not None and status!=expected:raise RuntimeError(f'{method} {url}: expected HTTP {expected}, got HTTP {status}; body={body!r}')
- if not isinstance(body,(dict,list)):raise RuntimeError(f'{method} {url}: HTTP {status} returned non-JSON body={body!r}')
+ if expected is not None and status!=expected:
+  request_body=payload if payload is not None else None
+  raise RuntimeError(f'{method} {url}: expected HTTP {expected}, got HTTP {status}; request={request_body!r}; response={body!r}')
+ if not isinstance(body,(dict,list)):
+  request_body=payload if payload is not None else None
+  raise RuntimeError(f'{method} {url}: HTTP {status} returned non-JSON; request={request_body!r}; response={body!r}')
  return status,body
 for _ in range(120):
  try:
