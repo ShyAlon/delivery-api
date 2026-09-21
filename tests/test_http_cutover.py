@@ -54,3 +54,18 @@ def test_engine_failure_is_not_misreported_as_dead_subprocess(tmp_path,monkeypat
  response=TestClient(module.app).post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1','decision_id':str(engine.pending.input_id)})
  assert response.status_code==503 and response.json()['detail']['retryable'] is True
  assert 'process_live' not in response.text and 'subprocess' not in response.text
+
+
+def test_smoke_choice_answer_satisfies_required_rationale():
+ from delivery_api.smoke import typed_smoke_answer
+ from interview_engine.conops_stage import decision_reply
+ decision={'kind':2,'rationale_required':True,'options':[{'value':'1','label':'Native app','summary':'x','advantages':['a'],'disadvantages':['d']},{'value':'2','label':'PWA','summary':'y','advantages':['b'],'disadvantages':['e']}]}
+ answer=typed_smoke_answer(decision)
+ options=[{'concept_id':'concept:native-app','name':'Native app','summary':'x','advantages':['a'],'disadvantages':['d']},{'concept_id':'concept:pwa','name':'PWA','summary':'y','advantages':['b'],'disadvantages':['e']}]
+ selected,rationale=decision_reply(answer,options)
+ assert selected.name=='Native app' and rationale
+
+def test_smoke_answers_key_off_numeric_input_kind():
+ from delivery_api.smoke import typed_smoke_answer
+ assert typed_smoke_answer({'kind':3,'rationale_required':False,'options':[{'value':1,'label':'Approve'}]})=='1'
+ assert typed_smoke_answer({'kind':1,'options':[]}).startswith('Two adults')

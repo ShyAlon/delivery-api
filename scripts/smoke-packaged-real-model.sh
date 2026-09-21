@@ -43,6 +43,7 @@ progress launcher.start "Starting packaged delivery and authenticated interview 
 "$REQUI_RE_DIST_DIR/run-require.sh" >"$TMP/launcher.log" 2>&1 & LAUNCHER_PID=$!
 python3 - "$PORT" "$INTERVIEW_ENGINE_PORT" "$INTERVIEW_ENGINE_TOKEN" "$MODE" "$MODEL_ROUTE" <<'PY'
 import datetime,json,sys,time,urllib.error,urllib.request
+from delivery_api.smoke import typed_smoke_answer
 port,engine_port,token,mode,route=sys.argv[1:]
 base=f'http://127.0.0.1:{port}';engine=f'http://127.0.0.1:{engine_port}'
 def progress(step,message):print(f"{datetime.datetime.now().astimezone().isoformat(timespec='seconds')} | {step:<22} | {message}",flush=True)
@@ -79,12 +80,9 @@ answers=0
 for _ in range(80):
  _,state=call('GET',base+f"/api/tasks/{task['task_id']}",expected=200);inp=state['input_state'];decision=inp.get('decision')
  if decision:
-  kind=decision['kind'];options=decision.get('options') or []
-  if kind=='approval':value=next((o['value'] for o in options if o['value']==1),options[0]['value'])
-  elif options:value=options[0]['value']
-  else:value='Two adults use it weekly at home. Success means every chore has one owner and due date, and both people can see completion history.'
-  progress('interview.answer',f"Submitting typed input {answers+1} ({kind})")
-  call('POST',base+f"/api/tasks/{task['task_id']}/answer",{'answer':str(value),'decision_id':decision['input_id']},expected=200);answers+=1
+  kind=decision['kind'];value=typed_smoke_answer(decision)
+  progress('interview.answer',f"Submitting typed input {answers+1} (kind={kind}, rationale_required={bool(decision.get('rationale_required'))})")
+  call('POST',base+f"/api/tasks/{task['task_id']}/answer",{'answer':value,'decision_id':decision['input_id']},expected=200);answers+=1
   progress('interview.advanced',f"Typed input {answers} accepted");continue
  if answers and not inp.get('process_live'):
   session=state['engine_session_id'];artifact_root=state['artifact_projection']['root']
