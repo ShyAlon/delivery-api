@@ -156,35 +156,14 @@ def _replayable_decisions(task_id:str)->dict[str,dict[str,str]]:
 
 
 async def _resume_interrupted_interviews()->None:
-    """Reattach persisted interview checkpoints after a rebuild/restart."""
+    """Pre-HTTP interview sessions cannot be text-replayed safely."""
     for task in store.list_tasks():
-        if task["task_id"] in runner.processes:continue
-        events=store.events(task["task_id"])
-        latest=events[-1] if events else {}
-        # Older builds classified their own SIGTERM during replacement as a
-        # failed engine run. Accept that one precise legacy state too, so an
-        # in-progress interview survives the first upgrade to this version.
-        legacy_restart=(task["state"]=="failed" and latest.get("kind")=="error" and latest.get("payload",{}).get("exit_code") in (-15,143))
-        gate_parked=task["state"]=="waiting_gate"
-        phase_states={phase["phase_key"]:phase["state"] for phase in task.get("phases",[])}
-        interview_complete=all(phase_states.get(phase) in ("approved","done") for phase in ("intent","conops"))
-        # Once the interview outputs are durably approved, their checkpoint is
-        # historical. Downstream recovery owns the task and must not race a
-        # second interview process that re-asks already accepted decisions.
-        if interview_complete:continue
-        if task["state"]!="running" and not legacy_restart and not gate_parked:continue
-        session=_recorded_engine_session(task["task_id"])
-        if not session:continue
-        built=os.environ.get("REQUI_RE_DIST")=="1"
-        engine_dir=(Path.cwd() if built else Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve())
-        try:runtime=(__import__('delivery_api.engine_runtime',fromlist=['EngineRuntime']).EngineRuntime(Path(sys.executable),(),((Path(sys.executable),True),)) if built else await resolve_engine_runtime(engine_dir))
-        except Exception as e:
-            activity("engine.resume.failed","Interrupted interview could not resume",task_id=task["task_id"],session=session,error=f"{type(e).__name__}: {str(e)[:180]}")
-            continue
-        async def resume(task_id=task["task_id"],session=session,runtime=runtime,engine_dir=engine_dir,built=built):
-            activity("engine.resume","Resuming interrupted or gate-parked interview from checkpoint",task_id=task_id,session=session,prior_state=(store.task(task_id) or {}).get("state"))
-            await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**_interview_route_env(task_id),**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"),replay_decisions=_replayable_decisions(task_id))
-        asyncio.create_task(resume())
+        if task.get("state") not in ("running","waiting_gate"):continue
+        phases={p["phase_key"]:p["state"] for p in task.get("phases",[])}
+        if all(phases.get(p) in ("approved","done") for p in ("intent","conops")):continue
+        if _recorded_engine_session(task["task_id"]):
+            store.add_event(task["task_id"],"incompatible","Pre-HTTP interview requires restart",phase_key="intent",payload={"process_status":int(ProcessStatus.INCOMPATIBLE),"next_step":60})
+
 
 def _legacy_external_requirement(task:dict,events:list[dict])->dict|None:
     """Migrate pre-ActiveWork architecture pauses from durable phase/event facts."""
@@ -234,13 +213,7 @@ async def _recover_tasks()->None:
             await _resume_one_interview(task_id,session)
 
 async def _resume_one_interview(task_id:str,session:str)->None:
-    built=os.environ.get("REQUI_RE_DIST")=="1";engine_dir=(Path.cwd() if built else Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve())
-    try:runtime=(__import__('delivery_api.engine_runtime',fromlist=['EngineRuntime']).EngineRuntime(Path(sys.executable),(),((Path(sys.executable),True),)) if built else await resolve_engine_runtime(engine_dir))
-    except Exception as e:activity("engine.resume.failed","Interrupted interview could not resume",task_id=task_id,session=session,error=f"{type(e).__name__}: {str(e)[:180]}");return
-    async def resume():
-        activity("engine.resume","Resuming interrupted interview from checkpoint",task_id=task_id,session=session,prior_state=(store.task(task_id) or {}).get("state"))
-        await runner.run(task_id,[str(runtime.python),"-m","interview_engine.cli","--session",session],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**_interview_route_env(task_id),**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"),replay_decisions=_replayable_decisions(task_id))
-    asyncio.create_task(resume())
+    store.add_event(task_id,"incompatible","Pre-HTTP interview requires restart",phase_key="intent",payload={"process_status":int(ProcessStatus.INCOMPATIBLE),"next_step":60,"legacy_session":session})
 
 
 @asynccontextmanager

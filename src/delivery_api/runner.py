@@ -124,76 +124,20 @@ class ProcessRunner:
                             usage_path=artifact_dir/"usage.jsonl";llm_path=artifact_dir/"llm-calls.jsonl"
                             usage_start=line_count(usage_path);llm_start=line_count(llm_path)
                             self.pricing_paths[task_id]=(usage_path,llm_path);self.pricing_usage_cursor[task_id]=usage_start;self.pricing_llm_cursor[task_id]=llm_start;self.pricing_wall_cursor[task_id]=time.perf_counter()
-                    structured_decision=None
-                    if line.startswith("REQUIRE_EVENT "):
-                        import json
-                        try:candidate=json.loads(line.removeprefix("REQUIRE_EVENT "))
-                        except json.JSONDecodeError:
-                            # StreamReader chunks do not respect line boundaries.
-                            # A structured option envelope commonly exceeds 512
-                            # bytes, so retain it until the producer's newline.
-                            structured_buffer="\n".join(parts[index:])
-                            break
-                        if candidate.get("type")=="founder_decision" and isinstance(candidate.get("options"),list):
-                            structured_decision=candidate
-                            typed_prompt_pending=True
-                            replay=replay_decisions.pop(str(candidate.get("decision_id") or ""),None)
-                            if replay and replay.get("fingerprint")==decision_fingerprint(candidate):
-                                assert proc.stdin
-                                proc.stdin.write((replay["answer"]+"\n").encode());await proc.stdin.drain()
-                                replaying_prompt=True
-                                self.store.add_event(task_id,"decision_replayed","Recovered founder decision; engine resumed",phase_key=phase,payload={"decision_id":candidate.get("decision_id"),"fingerprint":replay["fingerprint"],"recovery":True})
-                                activity("engine.decision.replay","Replayed exact durable founder decision after restart",task_id=task_id,phase=phase,decision_id=candidate.get("decision_id"),fingerprint=replay["fingerprint"])
-                                structured_decision=None
-                            else:
-                                self.pending_decisions[task_id]=candidate
-                                current=self.active_work[task_id]
-                                self.active_work[task_id]=ActiveWork(current.owner,phase,"waiting",current.started_at,candidate,current.durable_ref)
-                    blocking_prompt=structured_decision is None and (line.endswith(("You:", "[y/N]", "[y/N] ")) or "Describe your product idea:" in line or "Approve this intent model?" in line or bool(re.search(r"\[[A-Za-z]/[A-Za-z](?:/[A-Za-z])*\]",line)))
-                    # Open interview questions remain free-text. Every bounded
-                    # choice prompt (yes/no or enumerated console command) must
-                    # be preceded by the shared typed decision event.
-                    bounded_prompt=("[y/N]" in line) or bool(re.search(r"\[[A-Za-z]/[A-Za-z](?:/[A-Za-z])+\]",line))
-                    if bounded_prompt and structured_decision is None and not typed_prompt_pending and not replaying_prompt:
-                        raise RuntimeError(f"untyped blocking choice prompt from engine: {line}")
-                    waiting_input = (not replaying_prompt) and (structured_decision is not None or blocking_prompt)
-                    if blocking_prompt:typed_prompt_pending=False
-                    if replaying_prompt and structured_decision is None and not blocking_prompt:replaying_prompt=False
-                    if waiting_input:
-                        current=self.active_work.get(task_id)
-                        if current:self.active_work[task_id]=ActiveWork(current.owner,phase,"waiting",current.started_at,structured_decision or current.decision,current.durable_ref)
-                        # Keep protocol envelopes out of founder-visible question
-                        # reconstruction. A later bare ``You:`` prompt must reuse
-                        # only the event's human prompt.
-                        prompt_lines.append(structured_decision["prompt"] if structured_decision else line)
-                        if task_id not in self.waiting:
-                            self.waiting.add(task_id)
-                            self.pricing_wait_started[task_id]=time.perf_counter()
-                            activity("engine.waiting_input","Engine is waiting for an answer",task_id=task_id,phase=phase,question=" ".join(prompt_lines)[:240])
-                    elif line and not _PROGRESS.search(line):
-                        prompt_lines=[line]
-                    if structured_decision is None:
-                        activity("engine.output","Engine raw output",task_id=task_id,phase=phase,stream="combined",line=line)
-                    if line.startswith("Traceback (most recent call last):"): traceback_started=True
-                    missing = _MISSING_MODULE.search(line)
-                    if missing: missing_module=missing.group(1);traceback_started=True
+                    # Subprocesses are non-interactive executors. Interview control moved to
+                    # the typed HTTP service; stdout/stderr are diagnostics only.
+                    activity("engine.output","Engine diagnostic output",task_id=task_id,phase=phase,stream="combined",line=line)
+                    if line.startswith("Traceback (most recent call last):"):traceback_started=True
+                    missing=_MISSING_MODULE.search(line)
+                    if missing:missing_module=missing.group(1);traceback_started=True
                     if traceback_started: continue
                     if infer_phase: phase = self._phase(line, phase)
                     match = _PROGRESS.search(line)
                     completed = int(match.group(3)) if match and match.group(3) else 0
                     total = int(match.group(4)) if match and match.group(4) else None
-                    detail=("Waiting for founder decision" if structured_decision else "Waiting for founder answer" if waiting_input else line)
-                    self.store.update_phase(task_id, phase, "running", detail=detail, completed=completed, total=total)
+                    self.store.update_phase(task_id,phase,"running",detail=line,completed=completed,total=total)
                     payload={"completed":completed,"total":total}
-                    if waiting_input:
-                        payload["waiting_input"]=True
-                        payload["question"]=(structured_decision or {}).get("prompt") or re.sub(r"^Interviewer:\s*","","\n".join(prompt_lines).removesuffix("\nYou:").removesuffix("You:").strip()).strip()
-                        if structured_decision:payload["decision"]=structured_decision
-                    # The machine envelope belongs in structured payload only,
-                    # never in the founder-facing raw log.
-                    if structured_decision:
-                        self.store.add_event(task_id,"founder_decision",structured_decision["prompt"],phase_key=phase,payload=payload)
-                    else:self.store.add_event(task_id,"waiting_input" if waiting_input else "progress",line,phase_key=phase,payload=payload)
+                    self.store.add_event(task_id,"progress",line,phase_key=phase,payload=payload)
             code = await proc.wait()
             if code==0 and artifact_dir:
                 from .pricing import price_execution
