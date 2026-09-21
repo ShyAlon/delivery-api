@@ -98,3 +98,11 @@ def test_completed_smoke_checkpoint_reuses_verified_task_before_kpi():
     assert 'completed smoke checkpoint disagrees with live task' in smoke
     assert "'resumed':True" in smoke
     assert 'Reusing completed task' in smoke
+
+
+def test_smoke_retries_same_request_after_server_directed_429():
+    smoke=(Path(__file__).parents[1]/'scripts/smoke-packaged-real-model.sh').read_text()
+    assert "if status!=429 or retry==2:break" in smoke
+    assert "response_headers.get('Retry-After')" in smoke
+    assert "retrying the same request" in smoke
+    assert "time.sleep(wait_s)" in smoke

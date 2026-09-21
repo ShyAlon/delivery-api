@@ -395,7 +395,7 @@ def create_link(req: LinkRequest):
     return {"url": f"/runs/start?token={link['token']}", **link}
 
 @app.post("/runs")
-def start_run(req: StartRequest, request: Request, a: auth.Actor = Depends(auth.require_actor)):
+def start_run(req: StartRequest, request: Request, a: auth.Actor = Depends(auth.require_run_start)):
     link = store.link(req.token)
     if not link: raise HTTPException(403, "unknown or spent link")
     run = store.run(link["run_id"])
@@ -488,7 +488,7 @@ class TaskStartRequest(BaseModel):model_route:Literal["ollama","deepseek"]="olla
 @app.get("/api/model-routes")
 def model_routes():return {"routes":[{"id":"ollama","available":True},{"id":"deepseek","available":bool(os.environ.get("DEEPSEEK_API_KEY"))}]}
 @app.post("/api/tasks/{task_id}/start")
-async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest(),a:auth.Actor=Depends(auth.require_actor)):
+async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest(),a:auth.Actor=Depends(auth.require_run_start)):
     task=store.task(task_id)
     if not task:raise HTTPException(404,"task not found")
     if task["state"]!="not_started":raise HTTPException(409,"task already started")
@@ -756,7 +756,7 @@ class RerunRequest(BaseModel):
     confirm: bool = False
 
 @app.post("/api/tasks/{task_id}/rerun")
-def rerun(task_id: str, req: RerunRequest, request: Request, a: auth.Actor = Depends(auth.require_actor)):
+def rerun(task_id: str, req: RerunRequest, request: Request, a: auth.Actor = Depends(auth.require_run_start)):
     task=store.task(task_id)
     if not task: raise HTTPException(404, "task not found")
     try:missing=store.rerun_prerequisite(task_id,req.from_phase)

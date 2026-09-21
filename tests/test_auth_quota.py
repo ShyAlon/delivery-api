@@ -186,3 +186,29 @@ def test_concurrent_authenticated_posts_never_miss_valid_session(monkeypatch,tmp
     assert statuses==[200]*24
     # Do not leave the process-global limiter full for later API tests.
     auth.limiter=auth.RateLimiter()
+
+def test_run_start_limiter_does_not_rate_limit_interview_answers(monkeypatch,tmp_path):
+    store,c=_oauth(monkeypatch,tmp_path)
+    user=store.upsert_user("google","answer-rate","u@example.com","u",100,False)
+    store.create_session("answer-rate-sid",user["user_id"],time.time()+1000);c.cookies.set(config.SESSION_COOKIE,"answer-rate-sid")
+    monkeypatch.setattr(config,"RUN_START_RATE_LIMIT",1)
+    # Authentication for ordinary mutations must not consume the run-start bucket.
+    task=store.create_task("Answer rate scope")["task_id"]
+    from delivery_api import app as app_module
+    monkeypatch.setattr(app_module.runner,"input_state",lambda _:{"decision":None,"process_live":False,"waiting":False})
+    # A stale answer reaches its domain conflict repeatedly, never 429.
+    for _ in range(3):
+        r=c.post(f"/api/tasks/{task}/answer",json={"answer":"same"},headers={"origin":"http://testserver"})
+        assert r.status_code==409
+
+
+def test_run_start_dependency_rate_limits_actual_starts(monkeypatch,tmp_path):
+    store,c=_oauth(monkeypatch,tmp_path)
+    user=store.upsert_user("google","start-rate","u@example.com","u",100,False)
+    store.create_session("start-rate-sid",user["user_id"],time.time()+1000);c.cookies.set(config.SESSION_COOKIE,"start-rate-sid")
+    monkeypatch.setattr(config,"RUN_START_RATE_LIMIT",1)
+    # Invalid task ids are enough to prove that only the start endpoint owns this bucket.
+    first=c.post("/api/tasks/missing/start",json={"model_route":"ollama"},headers={"origin":"http://testserver"})
+    second=c.post("/api/tasks/missing/start",json={"model_route":"ollama"},headers={"origin":"http://testserver"})
+    assert first.status_code==404
+    assert second.status_code==429 and "run-start" in second.text

@@ -68,12 +68,20 @@ def progress(step,message):print(f"{datetime.datetime.now().astimezone().isoform
 def call(method,url,payload=None,headers=None,expected=None):
  data=None if payload is None else json.dumps(payload).encode()
  req=urllib.request.Request(url,data=data,method=method,headers={'Content-Type':'application/json',**(headers or {})})
- try:
-  with urllib.request.urlopen(req,timeout=1800) as r: status=r.status;raw=r.read()
- except urllib.error.HTTPError as e: status=e.code;raw=e.read()
- text=raw.decode('utf-8','replace')
- try:body=json.loads(text) if text else {}
- except json.JSONDecodeError:body=text
+ for retry in range(3):
+  try:
+   with urllib.request.urlopen(req,timeout=1800) as r: status=r.status;raw=r.read();response_headers=r.headers
+  except urllib.error.HTTPError as e: status=e.code;raw=e.read();response_headers=e.headers
+  text=raw.decode('utf-8','replace')
+  try:body=json.loads(text) if text else {}
+  except json.JSONDecodeError:body=text
+  if status!=429 or retry==2:break
+  detail=body.get('detail',body) if isinstance(body,dict) else {}
+  guidance=str(detail.get('next','')) if isinstance(detail,dict) else ''
+  match=__import__('re').search(r'Wait (\d+) seconds',guidance,re.I)
+  wait_s=int(response_headers.get('Retry-After') or (match.group(1) if match else 60))
+  progress('http.retry',f'HTTP 429 for {method} {url}; retrying the same request after {wait_s}s ({retry+1}/2)')
+  time.sleep(wait_s)
  if expected is not None and status!=expected:
   request_body=payload if payload is not None else None
   raise RuntimeError(f'{method} {url}: expected HTTP {expected}, got HTTP {status}; request={request_body!r}; response={body!r}')

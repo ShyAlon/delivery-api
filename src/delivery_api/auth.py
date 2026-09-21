@@ -41,7 +41,7 @@ class RateLimiter:
         with self._lock:
             hits = [t for t in self._hits.get((bucket, key), []) if t > now - window]
             if len(hits) >= limit:
-                raise HTTPException(429, {"error": "Too many requests.", "cause": f"The {bucket} rate limit was reached.", "next": f"Wait {window} seconds, then try again."})
+                raise HTTPException(429, {"error": "Too many requests.", "cause": f"The {bucket} rate limit was reached.", "next": f"Wait {window} seconds, then try again."}, headers={"Retry-After": str(window)})
             hits.append(now); self._hits[(bucket, key)] = hits
 
 
@@ -109,8 +109,15 @@ def actor(request: Request, *, required: bool = False) -> Actor:
 
 
 def require_actor(request: Request) -> Actor:
-    limiter.check("run-start", _client_ip(request), config.RUN_START_RATE_LIMIT)
+    """Authenticate an actor without charging an unrelated action bucket."""
     return actor(request, required=True)
+
+
+def require_run_start(request: Request) -> Actor:
+    """Authenticate and rate-limit only operations that start model work."""
+    a = actor(request, required=True)
+    limiter.check("run-start", _client_ip(request), config.RUN_START_RATE_LIMIT)
+    return a
 
 
 def require_admin(request: Request) -> Actor:
