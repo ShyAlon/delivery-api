@@ -16,3 +16,19 @@ def typed_smoke_answer(decision:dict)->str:
     if decision.get("rationale_required"):
         return f"{value} - This option best fits the stated users, operating setting, and measurable success outcome."
     return str(value)
+
+
+def load_smoke_checkpoint(path):
+    import json
+    from pathlib import Path
+    checkpoint=Path(path)
+    if not checkpoint.exists():return None
+    data=json.loads(checkpoint.read_text())
+    required={'task_id','model_route','answers','status'}
+    return data if required <= data.keys() else None
+
+def save_smoke_checkpoint(path,data):
+    import json
+    from pathlib import Path
+    checkpoint=Path(path);checkpoint.parent.mkdir(parents=True,exist_ok=True)
+    temporary=checkpoint.with_suffix('.tmp');temporary.write_text(json.dumps(data,sort_keys=True));temporary.replace(checkpoint)

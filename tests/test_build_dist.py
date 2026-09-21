@@ -71,3 +71,10 @@ def test_smoke_driver_runs_from_built_runtime_not_calling_shell_python():
 def test_smoke_failure_reports_request_and_response():
     smoke=(Path(__file__).parents[1]/'scripts/smoke-packaged-real-model.sh').read_text()
     assert 'request={request_body!r}; response={body!r}' in smoke
+
+
+def test_smoke_state_survives_rotating_diagnostic_folder():
+    smoke=(Path(__file__).parents[1]/'scripts/smoke-packaged-real-model.sh').read_text()
+    assert 'REQUI_RE_SMOKE_STATE_DIR' in smoke and 'checkpoint.json' in smoke
+    assert 'VMODEL_ARTIFACTS_DIR="$REQUI_RE_SMOKE_STATE_DIR/artifacts"' in smoke
+    assert '--fresh' in smoke and 'interview.resume' in smoke

@@ -87,3 +87,12 @@ def test_required_rationale_cannot_be_dropped(tmp_path,monkeypatch):
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  response=TestClient(module.app).post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1','decision_id':str(engine.pending.input_id)})
  assert response.status_code==409 and not engine.submitted
+
+
+def test_smoke_checkpoint_resumes_after_mid_interview_interruption(tmp_path):
+ from delivery_api.smoke import load_smoke_checkpoint,save_smoke_checkpoint
+ path=tmp_path/'checkpoint.json';expected={'task_id':'task-1','model_route':'ollama','answers':6,'last_input_id':'input-6','status':'active'}
+ save_smoke_checkpoint(path,expected)
+ assert load_smoke_checkpoint(path)==expected
+ save_smoke_checkpoint(path,{**expected,'answers':7,'last_input_id':'input-7'})
+ assert load_smoke_checkpoint(path)['answers']==7
