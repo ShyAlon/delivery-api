@@ -80,3 +80,4 @@ def validate_auth_config() -> None:
         raise RuntimeError("OAuth client id/secret pairs must be configured together.")
 
 INTERVIEW_ENGINE_URL = os.environ.get("INTERVIEW_ENGINE_URL", "http://127.0.0.1:8010").rstrip("/")
+INTERVIEW_ENGINE_TOKEN = os.environ.get("INTERVIEW_ENGINE_TOKEN", "local-interview-engine-token")

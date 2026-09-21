@@ -66,7 +66,7 @@ runner = ProcessRunner(store)
 orchestrator = PhaseOrchestrator(store,runner)
 runner.on_complete = orchestrator.continue_after
 simulation = Simulation(store)
-engine_client = HttpEngineClient(config.INTERVIEW_ENGINE_URL)
+engine_client = HttpEngineClient(config.INTERVIEW_ENGINE_URL,token=config.INTERVIEW_ENGINE_TOKEN)
 log = logging.getLogger("delivery_api.http")
 
 

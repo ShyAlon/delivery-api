@@ -31,3 +31,11 @@ def test_projection_uses_enums_not_prompt_text():
     a=snapshot(ProcessStatus.WAITING_INPUT,NextStep.WAIT_INPUT,pending)
     b=a.model_copy(update={'open_input':pending.model_copy(update={'prompt':'completely different'})})
     assert project(a)==project(b)==UiMode.APPROVAL_INPUT
+
+
+def test_client_sends_service_token_header():
+ seen=[]
+ body=StartSessionResponse(snapshot=snapshot(),accepted_event=event()).model_dump(mode='json')
+ client=HttpEngineClient('http://engine',token='shared-secret',transport=httpx.MockTransport(lambda r:(seen.append(r.headers['X-Interview-Engine-Token']) or httpx.Response(201,json=body))))
+ client.start(StartSessionRequest(task_id='t',idea='idea',model_route='m'))
+ assert seen==['shared-secret']
