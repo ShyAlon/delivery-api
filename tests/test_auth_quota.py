@@ -175,9 +175,15 @@ def test_concurrent_authenticated_posts_never_miss_valid_session(monkeypatch,tmp
     store=TursoReplicaStore(str(tmp_path/'auth-replica.db'),'libsql://unused','token',connection=Replica(tmp_path/'auth-replica.db'))
     app.state.store=store;monkeypatch.setattr('delivery_api.app.store',store);monkeypatch.setattr(config,'BASIC_AUTH_ENABLED',True);monkeypatch.setattr(config,'COOKIE_SECURE',False);monkeypatch.setattr(config,'RUN_START_RATE_LIMIT',1000);auth.limiter=auth.RateLimiter()
     user=store.upsert_user('google','concurrent','shy.alon@gmail.com','shy.alon@gmail.com',1000,False);store.create_session('stable-session',user['user_id'],time.time()+1000)
-    task=store.create_task('Concurrent answers')['task_id']
-    async def accepted(task_id,text):pass
-    monkeypatch.setattr('delivery_api.app.runner.send_input',accepted)
+    task=store.create_task('Concurrent answers')['task_id'];store.set_engine_session(task,'concurrent-engine-session')
+    from uuid import uuid4
+    from vmodel_contracts.interactive import EngineSnapshot,InputKind,InputRequest,NextStep,ProcessStatus,SubmitInputResponse,InteractiveEvent,EventType
+    pending=InputRequest(input_id=uuid4(),kind=InputKind.TEXT,prompt='Answer')
+    class ConcurrentEngine:
+        def snapshot(self,_):return EngineSnapshot(session_id='concurrent-engine-session',task_id=task,sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=pending)
+        def submit(self,_,response):
+            return SubmitInputResponse(accepted_event=InteractiveEvent(event_id=uuid4(),session_id='concurrent-engine-session',task_id=task,phase_id=1,sequence=3,event_type=EventType.INPUT_ACCEPTED,process_status=ProcessStatus.RUNNING,next_step=NextStep.RUN),snapshot=EngineSnapshot(session_id='concurrent-engine-session',task_id=task,sequence=3,process_status=ProcessStatus.RUNNING,next_step=NextStep.RUN))
+    monkeypatch.setattr('delivery_api.app.engine_client',ConcurrentEngine())
     def post(i):
         c=TestClient(app);c.cookies.set(config.SESSION_COOKIE,'stable-session')
         return c.post(f'/api/tasks/{task}/answer',json={'answer':f'answer {i}'},headers={'origin':'http://testserver'}).status_code
