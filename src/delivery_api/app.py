@@ -32,6 +32,8 @@ from .jobs import JobQueue
 from .runner import ProcessRunner
 from .orchestrator import PhaseOrchestrator
 from .engine_runtime import EngineRuntimeError, resolve_engine_runtime, discover_engine_runtimes, save_python, saved_python
+from .engine_client import HttpEngineClient,EngineClientError
+from vmodel_contracts.interactive import InputResponse,ProcessStatus,StartSessionRequest
 from .store import create_store
 from .simulation import Simulation, ImportValidationError
 from . import bundles
@@ -64,6 +66,8 @@ runner = ProcessRunner(store)
 orchestrator = PhaseOrchestrator(store,runner)
 runner.on_complete = orchestrator.continue_after
 simulation = Simulation(store)
+engine_client = HttpEngineClient(config.INTERVIEW_ENGINE_URL)
+_http_sessions:dict[str,str]={}
 log = logging.getLogger("delivery_api.http")
 
 
@@ -514,36 +518,16 @@ def model_routes():return {"routes":[{"id":"ollama","available":True},{"id":"dee
 @app.post("/api/tasks/{task_id}/start")
 async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest(),a:auth.Actor=Depends(auth.require_actor)):
     task=store.task(task_id)
-    if not task:raise HTTPException(404,{"error":"Task not found.","cause":"It may have been deleted.","next":"Return to Home and choose another task."})
-    if task["state"]!="not_started":raise HTTPException(409,{"error":"This task already started.","cause":f"Its current state is {task['state']}.","next":"Open its live progress instead of starting it again."})
+    if not task:raise HTTPException(404,"task not found")
+    if task["state"]!="not_started":raise HTTPException(409,"task already started")
     idea=(task.get("brief") or task.get("title") or "").strip()
-    if not idea:raise HTTPException(400,{"error":"The interview needs a starting idea.","cause":"This task has no brief.","next":"Add a sentence describing the product, then start again."})
-    built_runtime=os.environ.get("REQUI_RE_DIST")=="1"
-    engine_dir=(Path.cwd() if built_runtime else Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve())
-    if not built_runtime and not engine_dir.is_dir():raise HTTPException(503,{"error":"Interview engine is not available.","cause":f"Expected it at {engine_dir}.","next":"Run scripts/pull-all.sh, then restart the UI."})
-    try:runtime=(__import__('delivery_api.engine_runtime',fromlist=['EngineRuntime']).EngineRuntime(Path(sys.executable),(),((Path(sys.executable),True),)) if built_runtime else await resolve_engine_runtime(engine_dir))
-    except EngineRuntimeError as e:
-        activity("engine.preflight.failed","Interview engine dependency preflight failed",task_id=task_id,actor=a.label,module=e.module,checked="; ".join(f"{path}={'ok' if ok else 'missing'}" for path,ok in e.attempts))
-        command=f'python -m pip install -e "{engine_dir}"'
-        raise HTTPException(503,{"error":f"Interview engine cannot start because Python module '{e.module}' is missing.","cause":"None of the available engine Python environments contains the interview runtime dependencies.","next":f"Activate the environment that runs interview-engine, then run: {command}. To select it explicitly, set INTERVIEW_ENGINE_PYTHON=/path/to/python before starting Requi.re."})
-    engine_python=runtime.python
-    if body.model_route=="deepseek" and not os.environ.get("DEEPSEEK_API_KEY"):raise HTTPException(422,{"error":"DeepSeek is not configured.","cause":"DEEPSEEK_API_KEY is absent.","next":"Add the key to the server environment or choose Ollama."})
-    store.set_model_route(task_id,body.model_route);store.add_event(task_id,"model_route",f"Task default uses {body.model_route}",phase_key="intent",payload={"route":body.model_route,"scope":"task_default"})
-    store.update_phase(task_id,"intent","running",detail="Launching adaptive interview")
-    store.audit(a.label,"interview.started",task_id,{"engine_dir":str(engine_dir),"python":str(engine_python)})
-    activity("engine.preflight.ok","Interview engine runtime resolved",task_id=task_id,actor=a.label,python=str(engine_python),checked="; ".join(f"{path}={'ok' if ok else 'missing'}" for path,ok in runtime.attempts))
-    activity("engine.start","Interview engine launch requested",task_id=task_id,actor=a.label,python=str(engine_python))
-    async def execute():
-        try:
-            route_value="ollama:qwen2.5-coder:14b" if body.model_route=="ollama" else "deepseek:deepseek-chat"
-            route_env={f"INTERVIEW_ENGINE_MODEL_{stage}":route_value for stage in ("PROBING","DISTILLATION","PHRASING","SCOPE_TIEBREAK","EXPERT_OPINION")}
-            await runner.run(task_id,[str(engine_python),"-m","interview_engine.cli",idea],cwd=engine_dir,phase="intent",env={"OLLAMA_NUM_PARALLEL":os.environ.get("OLLAMA_NUM_PARALLEL","1"),"PYTHONUNBUFFERED":"1",**route_env,**({} if built_runtime else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})},completion_phases=("intent","conops"))
-        except Exception as e:
-            store.update_phase(task_id,"intent","failed",detail=f"Interview engine could not start: {type(e).__name__}: {str(e)[:180]}")
-            store.add_event(task_id,"error","Interview engine could not start",phase_key="intent",payload={"cause":str(e)[:300],"next":"Check run.log and the interview-engine installation, then retry."})
-            activity("engine.failure","Interview engine failed",task_id=task_id,error=f"{type(e).__name__}: {e}")
-    asyncio.create_task(execute())
-    return {"status":"started","task_id":task_id,"next":f"/tasks/{task_id}/view"}
+    try:started=engine_client.start(StartSessionRequest(task_id=task_id,idea=idea,model_route=body.model_route))
+    except EngineClientError as exc:raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
+    _http_sessions[task_id]=started.snapshot.session_id;store.set_model_route(task_id,body.model_route)
+    detail="Waiting for founder input" if started.snapshot.process_status==ProcessStatus.WAITING_INPUT else "Interview engine running"
+    store.update_phase(task_id,"intent","running",detail=detail)
+    store.add_event(task_id,"engine_protocol","HTTP interview session started",phase_key="intent",payload=started.model_dump(mode="json"))
+    return {"status":"started","task_id":task_id,"session_id":started.snapshot.session_id,"next":f"/tasks/{task_id}/view"}
 
 class RequirementResolution(BaseModel):
     action:str=Field(pattern="^(validate_file|greenfield)$")
@@ -584,7 +568,14 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
     task_before=store.task(task_id) or {};input_before=runner.input_state(task_id)
     recent_answers=[{"event_id":event["id"],"phase_key":event.get("phase_key"),"decision_id":event.get("payload",{}).get("decision_id")} for event in store.events(task_id) if event.get("kind")=="answer"][-10:]
     activity("api.answer.attempt","Founder answer submission received",endpoint=f"/api/tasks/{task_id}/answer",task_id=task_id,task_state=task_before.get("state"),active_phase=task_before.get("active_phase"),submitted_decision_id=body.decision_id,open_decision_id=(input_before.get("decision") or {}).get("decision_id"),process_live=input_before["process_live"],waiting=input_before["waiting"],recent_answer_events=json.dumps(recent_answers,separators=(",",":")))
-    try:await runner.send_input(task_id,body.answer,body.decision_id)
+    try:
+        session_id=_http_sessions.get(task_id)
+        if not session_id:raise RuntimeError("task has no HTTP engine session")
+        state=engine_client.snapshot(session_id);pending=state.open_input
+        if pending is None:raise RuntimeError("task is not waiting for input")
+        if body.decision_id and str(pending.input_id)!=body.decision_id:raise RuntimeError("submitted decision does not match live input")
+        submitted=engine_client.submit(session_id,InputResponse(input_id=pending.input_id,value=body.answer,actor_id=a.label))
+        store.add_event(task_id,"engine_protocol","Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
     except RuntimeError as e:
         task=store.task(task_id) or {};state=runner.input_state(task_id);decision=state.get("decision") or {}
         cause=(f"The task is {task.get('state','unknown')} in phase {task.get('active_phase','unknown')}; "

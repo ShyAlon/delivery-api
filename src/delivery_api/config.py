@@ -78,3 +78,5 @@ def validate_auth_config() -> None:
         raise RuntimeError("OAuth is partially configured: set a 32+ character DELIVERY_SESSION_SECRET and a complete Google or GitHub client id/secret pair; remove all OAuth variables for local mode.")
     if bool(GOOGLE_CLIENT_ID) != bool(GOOGLE_CLIENT_SECRET) or bool(GITHUB_CLIENT_ID) != bool(GITHUB_CLIENT_SECRET):
         raise RuntimeError("OAuth client id/secret pairs must be configured together.")
+
+INTERVIEW_ENGINE_URL = os.environ.get("INTERVIEW_ENGINE_URL", "http://127.0.0.1:8010").rstrip("/")
