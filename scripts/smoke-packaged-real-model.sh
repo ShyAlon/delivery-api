@@ -94,13 +94,21 @@ call('GET',engine+'/v1/sessions/not-a-session',headers={'X-Interview-Engine-Toke
 progress('service.authenticated','Interview HTTP service rejects missing auth and accepts the shared token')
 if mode=='launcher':sys.exit(0)
 checkpoint=load_smoke_checkpoint(checkpoint_path)
-if checkpoint and checkpoint['status']=='active' and checkpoint['model_route']==route:
+if checkpoint and checkpoint['model_route']==route:
  task={'task_id':checkpoint['task_id']};answers=int(checkpoint['answers'])
  status,state=call('GET',base+f"/api/tasks/{task['task_id']}")
- if status==200:
+ if status!=200:checkpoint=None
+ elif checkpoint['status']=='complete':
+  inp=state['input_state']
+  if inp.get('process_live') or inp.get('decision'):
+   raise RuntimeError(f"completed smoke checkpoint disagrees with live task {task['task_id']}")
+  session=state['engine_session_id'];artifact_root=state['artifact_projection']['root']
+  progress('interview.resume',f"Reusing completed task {task['task_id']} with {answers} accepted typed inputs")
+  print(json.dumps({'result':'PASS','task_id':task['task_id'],'session_id':session,'answers':answers,'artifact_root':artifact_root,'transport':'HTTP','model_route':route,'resumed':True}))
+  sys.exit(0)
+ else:
   progress('interview.resume',f"Resuming task {task['task_id']} after {answers} accepted typed inputs")
- else:checkpoint=None
-if not checkpoint or checkpoint.get('status')!='active' or checkpoint.get('model_route')!=route:
+if not checkpoint or checkpoint.get('model_route')!=route:
  progress('interview.create','Creating smoke task through delivery HTTP API')
  _,task=call('POST',base+'/api/tasks',{'title':f'Packaged real-model smoke {int(time.time())}','brief':'A calm shared household task board that helps two adults assign chores, see due dates, and confirm completion.'},expected=201)
  progress('interview.start',f"Starting real {route} interview for task {task['task_id']}")

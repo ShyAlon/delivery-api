@@ -87,3 +87,11 @@ def test_deepseek_smoke_loads_and_validates_shared_config_without_printing_key()
     assert 'DEEPSEEK_API_KEY' in smoke and 'INTERVIEW_ENGINE_MODEL_PROBING' in smoke and 'INTERVIEW_ENGINE_MODEL_DISTILLATION' in smoke
     assert 'secret not printed' in smoke
     assert 'switch-model.sh deepseek' in smoke
+
+
+def test_completed_smoke_checkpoint_reuses_verified_task_before_kpi():
+    smoke=(Path(__file__).parents[1]/'scripts/smoke-packaged-real-model.sh').read_text()
+    assert "checkpoint['status']=='complete'" in smoke
+    assert 'completed smoke checkpoint disagrees with live task' in smoke
+    assert "'resumed':True" in smoke
+    assert 'Reusing completed task' in smoke
