@@ -36,7 +36,7 @@ if [ "$CLEAN" != 1 ] && [ -x "$OUTPUT/runtime/bin/python" ]; then cp -a "$OUTPUT
 STATE="$STAGE/.build-state"; OLD_STATE="$OUTPUT/.build-state"
 state_get(){ [ -f "$OLD_STATE" ] && awk -F= -v key="$1" '$1==key{print substr($0,index($0,"=")+1);exit}' "$OLD_STATE" || true; }
 repo_fingerprint(){ local repo=$1 status diffhash; status=$(git -C "$REPOS_ROOT/$repo" status --porcelain); diffhash=clean; [ -n "$status" ] && diffhash=$(git -C "$REPOS_ROOT/$repo" diff --binary HEAD | shasum -a 256 | awk '{print $1}'); printf '%s:%s' "$(git -C "$REPOS_ROOT/$repo" rev-parse HEAD)" "$diffhash"; }
-DEPS='fastapi uvicorn pydantic httpx python-multipart langgraph langgraph-checkpoint-sqlite langchain-core langchain-openai langchain-ollama python-dotenv'
+DEPS='fastapi uvicorn pydantic httpx python-multipart langgraph langgraph-checkpoint-sqlite langchain-core langchain-openai langchain-ollama python-dotenv typesafe-sdk==0.7.0'
 WITH_TURSO=${REQUI_RE_WITH_TURSO:-0}; [ "$WITH_TURSO" = 1 ] && DEPS="$DEPS libsql"
 DEP_INPUT="$DEPS|$($BOOTSTRAP_PYTHON --version 2>&1)"
 for repo in $PACKAGES; do DEP_INPUT="$DEP_INPUT|$(shasum -a 256 "$REPOS_ROOT/$repo/pyproject.toml" | awk '{print $1}')"; done
