@@ -932,6 +932,19 @@ def test_ui_state_doctrine_phase_gate_supersedes_stale_engine_prompt(tmp_path):
     assert state['mode']=='phase_gate' and state['gate'] is not None and state['decision'] is None
 
 
+def test_ui_state_doctrine_live_decision_owns_input_over_waiting_delivery_gate(tmp_path):
+    from delivery_api.app import _task_ui_state
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'live-decision-owner.db'));tid=store.create_task('Overlapping input owners')['task_id']
+    store.update_phase(tid,'intent','awaiting_approval');store.wait_at_gate(tid,'intent')
+    task=store.task(tid)
+    decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve this intent model?','options':[{'value':'y','label':'Yes'}]}
+    state=_task_ui_state(task,{'waiting':True,'process_live':True,'decision':decision,'requirement':None})
+    assert state['mode']=='engine_decision'
+    assert state['decision']==decision
+    assert state['gate'] is None
+
+
 def test_ui_state_doctrine_only_live_input_can_show_engine_decision():
     from delivery_api.app import _task_ui_state
     decision={'type':'founder_decision','decision_id':'live','options':[{'value':'y','label':'Yes'}]}

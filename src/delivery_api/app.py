@@ -609,9 +609,12 @@ def _task_ui_state(task:dict,input_state:dict)->dict:
     if task.get("state")=="not_started":mode="not_started"
     elif task.get("state")=="done":mode="complete"
     elif task.get("state")=="failed":mode="error"
-    elif waiting_gate:mode="phase_gate"
+    # A live subprocess blocked on stdin owns the next action. A durable
+    # delivery gate may already be waiting for the same phase, but exposing it
+    # here would send the founder's answer to the store instead of stdin.
     elif process_live and live_decision:mode="engine_decision"
     elif process_live and input_state.get("waiting"):mode="engine_question"
+    elif waiting_gate:mode="phase_gate"
     elif process_live:mode="executing"
     else:mode="error"
     if mode not in UI_MODES:raise RuntimeError(f"unsupported UI mode: {mode}")
