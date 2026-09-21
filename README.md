@@ -37,7 +37,7 @@ docker run --rm -p 8000:8000 -v "$PWD/.data:/data" \
   -e DELIVERY_DB_PATH=/data/delivery.db vmodel
 ```
 
-Ollama is never in the image. Local deployments route to host Ollama; cloud deployments use API providers through the engines' shared model-routing environment. Source development starts the sibling `interview-engine` CLI, streams live output and heartbeats, and sends browser answers over stdin. Set `INTERVIEW_ENGINE_DIR` when that repository is not a sibling. The single-runtime distribution described below installs the engine into its own runtime and needs no sibling checkout at launch.
+Ollama is never in the image. Local deployments route to host Ollama; cloud deployments use API providers through the engines' shared model-routing environment. Source development and built distributions run the interview engine as a private authenticated HTTP service. Founder inputs cross the typed HTTP protocol; the interview path does not use a CLI subprocess or stdin. The single-runtime distribution installs the engine into its own runtime and needs no sibling checkout at launch.
 
 ## Hetzner production deployment
 
@@ -145,6 +145,17 @@ scripts/build-dist.sh
 `build-dist.sh` treats `delivery-api` as the build project. It expects the five Python package repositories and `vmodel-spec-app` beside it under the same `require/` folder, creates `dist/requi-re/runtime`, installs every executable package into that single environment, copies the shell support scripts, and writes `MANIFEST.txt` with every repository SHA, dirty-state marker, installed package version, build Python, and platform. Override the checkout root with `REQUI_RE_REPOS_ROOT`, the output with `REQUI_RE_DIST_DIR`, or build Python with `REQUI_RE_BUILD_PYTHON`.
 
 The built launcher sets distribution mode and always starts Requi.re and its interview subprocess with `runtime/bin/python`. It does no interpreter discovery. Copy the complete `dist/requi-re` folder to a machine with the same operating system and architecture, then run `run-require.sh`. The launcher refuses an incomplete or incompatible copy with Error / Likely cause / Next guidance.
+
+
+### Packaged real-model smoke
+
+From `delivery-api`, build the real distribution, launch it through `run-require.sh`, drive a complete typed HTTP interview against local Ollama, and rerun the no-subprocess/stdin KPI:
+
+```bash
+scripts/smoke-packaged-real-model.sh --model-route=ollama
+```
+
+Use `--model-route=deepseek` when `DEEPSEEK_API_KEY` is available. CI or environments without a model can run `--launcher-only` to prove the built launcher, authenticated engine boundary, and static transport KPI without claiming a model result.
 
 ## Optional Turso embedded replica
 

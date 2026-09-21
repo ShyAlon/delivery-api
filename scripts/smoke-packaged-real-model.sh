@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Build the real distribution, launch it, and drive one HTTP-only interview.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MODE=full; MODEL_ROUTE=ollama
+for arg in "$@"; do
+  case "$arg" in
+    --launcher-only) MODE=launcher ;;
+    --model-route=ollama) MODEL_ROUTE=ollama ;;
+    --model-route=deepseek) MODEL_ROUTE=deepseek ;;
+    *) echo "Usage: $0 [--launcher-only] [--model-route=ollama|--model-route=deepseek]" >&2; exit 2 ;;
+  esac
+done
+export REQUI_RE_REPOS_ROOT="${REQUI_RE_REPOS_ROOT:-$(cd "$ROOT/.." && pwd)}"
+export REQUI_RE_DIST_DIR="${REQUI_RE_DIST_DIR:-$ROOT/dist/requi-re-smoke}"
+"$ROOT/scripts/build-dist.sh" --clean
+TMP="$(mktemp -d)"; trap 'kill "${LAUNCHER_PID:-}" 2>/dev/null || true; wait "${LAUNCHER_PID:-}" 2>/dev/null || true; rm -rf "$TMP"' EXIT
+export XDG_DATA_HOME="$TMP/data" PORT="${REQUI_RE_SMOKE_PORT:-18080}" INTERVIEW_ENGINE_PORT="${REQUI_RE_SMOKE_ENGINE_PORT:-18010}"
+export DELIVERY_BASIC_AUTH_ENABLED=0 DELIVERY_COOKIE_SECURE=0
+export INTERVIEW_ENGINE_TOKEN="${INTERVIEW_ENGINE_TOKEN:-requi-re-packaged-smoke-token}"
+"$REQUI_RE_DIST_DIR/run-require.sh" >"$TMP/launcher.log" 2>&1 & LAUNCHER_PID=$!
+python3 - "$PORT" "$INTERVIEW_ENGINE_PORT" "$INTERVIEW_ENGINE_TOKEN" "$MODE" "$MODEL_ROUTE" <<'PY'
+import json,sys,time,urllib.error,urllib.request
+port,engine_port,token,mode,route=sys.argv[1:]
+base=f'http://127.0.0.1:{port}';engine=f'http://127.0.0.1:{engine_port}'
+def call(method,url,payload=None,headers=None,expected=None):
+ data=None if payload is None else json.dumps(payload).encode()
+ req=urllib.request.Request(url,data=data,method=method,headers={'Content-Type':'application/json',**(headers or {})})
+ try:
+  with urllib.request.urlopen(req,timeout=120) as r: status=r.status;body=json.loads(r.read() or b'{}')
+ except urllib.error.HTTPError as e: status=e.code;body=json.loads(e.read() or b'{}')
+ if expected is not None and status!=expected:raise RuntimeError(f'{method} {url}: expected {expected}, got {status}: {body}')
+ return status,body
+for _ in range(120):
+ try:
+  if call('GET',base+'/health')[0]==200:break
+ except Exception:pass
+ time.sleep(.25)
+else:raise RuntimeError('packaged launcher did not become healthy')
+# Prove the service boundary itself is authenticated.
+call('GET',engine+'/v1/sessions/not-a-session',expected=401)
+call('GET',engine+'/v1/sessions/not-a-session',headers={'X-Interview-Engine-Token':token},expected=404)
+print('packaged launcher and authenticated interview HTTP service: PASS',flush=True)
+if mode=='launcher':sys.exit(0)
+_,task=call('POST',base+'/api/tasks',{'title':f'Packaged real-model smoke {int(time.time())}','brief':'A calm shared household task board that helps two adults assign chores, see due dates, and confirm completion.'},expected=201)
+call('POST',base+f"/api/tasks/{task['task_id']}/start",{'model_route':route},expected=200)
+answers=0
+for _ in range(80):
+ _,state=call('GET',base+f"/api/tasks/{task['task_id']}",expected=200);inp=state['input_state'];decision=inp.get('decision')
+ if decision:
+  kind=decision['kind'];options=decision.get('options') or []
+  if kind=='approval':value=next((o['value'] for o in options if o['value']==1),options[0]['value'])
+  elif options:value=options[0]['value']
+  else:value='Two adults use it weekly at home. Success means every chore has one owner and due date, and both people can see completion history.'
+  call('POST',base+f"/api/tasks/{task['task_id']}/answer",{'answer':str(value),'decision_id':decision['input_id']},expected=200);answers+=1;continue
+ if answers and not inp.get('process_live'):
+  session=state['engine_session_id'];artifact_root=state['artifact_projection']['root']
+  print(json.dumps({'result':'PASS','task_id':task['task_id'],'session_id':session,'answers':answers,'artifact_root':artifact_root,'transport':'HTTP','model_route':route}))
+  sys.exit(0)
+ time.sleep(.5)
+raise RuntimeError('real-model interview did not reach typed completion')
+PY
+# Static proof applies to the exact source installed into the distribution.
+"${REQUI_RE_BUILD_PYTHON:-python3}" -m pytest -q "$ROOT/tests/test_process_control_kpi.py"

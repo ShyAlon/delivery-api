@@ -46,3 +46,11 @@ def test_launcher_replaces_existing_owned_server_and_rejects_stale_pid_reuse():
     assert 'lsof -tiTCP:' in launcher and 'port ${PORT:-8000} is already used' in launcher
     assert 'Replacing running Requi.re process' in launcher and 'kill -TERM "$old_pid"' in launcher
     assert 'belongs to a different process' in launcher
+
+
+def test_packaged_real_model_smoke_uses_launcher_and_http_only():
+    smoke=(Path(__file__).parents[1]/'scripts/smoke-packaged-real-model.sh').read_text()
+    assert 'scripts/build-dist.sh' in smoke and 'run-require.sh' in smoke
+    assert '/api/tasks' in smoke and '/answer' in smoke and '/v1/sessions/not-a-session' in smoke
+    assert 'subprocess' not in smoke and 'stdin' not in smoke
+    assert 'test_process_control_kpi.py' in smoke
