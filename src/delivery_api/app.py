@@ -736,7 +736,14 @@ def task_artifacts_zip(task_id:str):
 def get_task(task_id: str):
     task = store.task(task_id)
     if not task: raise HTTPException(404, "task not found")
-    input_state=runner.input_state(task_id);work=runner.work_state(task_id)
+    session_id=_http_sessions.get(task_id)
+    if session_id:
+        try:
+            engine_state=engine_client.snapshot(session_id);pending=engine_state.open_input
+            input_state={"waiting":engine_state.process_status==ProcessStatus.WAITING_INPUT,"process_live":engine_state.process_status in (ProcessStatus.RUNNING,ProcessStatus.WAITING_INPUT),"decision":pending.model_dump(mode="json") if pending else None,"requirement":None}
+        except EngineClientError:input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None}
+    else:input_state=runner.input_state(task_id)
+    work=runner.work_state(task_id)
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
     artifacts=_task_artifact_snapshot(task_id);session=_recorded_engine_session(task_id)
     return {**task, "events": store.events(task_id), "artifacts":artifacts,"artifact_projection":{"session":session,"root":str((__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"ui_state":_task_ui_state(task,input_state)}

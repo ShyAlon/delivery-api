@@ -128,7 +128,10 @@ echo $$ > "$PID_FILE"; trap 'rm -f "$PID_FILE"' EXIT INT TERM
 echo "Data: $DELIVERY_DATABASE_URL"
 echo "Installed Requi.re source revisions:"
 sed -n '/^Repositories:$/,/^Installed packages:$/p' "$ROOT/MANIFEST.txt" 2>/dev/null | sed '1d;$d' || true
-cd "$ROOT"; exec "$PYTHON" -m delivery_api
+ENGINE_PORT="${INTERVIEW_ENGINE_PORT:-8010}"; export INTERVIEW_ENGINE_URL="${INTERVIEW_ENGINE_URL:-http://127.0.0.1:$ENGINE_PORT}"
+"$PYTHON" -m uvicorn interview_engine.http_service:app --host 127.0.0.1 --port "$ENGINE_PORT" >"$DATA_HOME/interview-engine.log" 2>&1 & ENGINE_PID=$!
+cleanup_all(){ kill "$ENGINE_PID" 2>/dev/null || true; rm -f "$PID_FILE"; }; trap cleanup_all EXIT INT TERM
+cd "$ROOT"; "$PYTHON" -m delivery_api
 EOF
 chmod +x "$STAGE/run-require.sh"
 "$PYTHON" -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core'

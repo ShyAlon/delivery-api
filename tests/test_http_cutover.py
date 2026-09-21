@@ -19,3 +19,11 @@ def test_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch):
  client=TestClient(module.app);client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'}).raise_for_status()
  client.post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'players'}).raise_for_status()
  assert engine.submitted[0].input_id==engine.pending.input_id
+
+def test_task_snapshot_projects_http_open_input(tmp_path,monkeypatch):
+ store=SQLiteStore(str(tmp_path/'snap.db'));task=store.create_task('Dungeon master','brief');engine=FakeEngine()
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine);module._http_sessions.clear();module._http_sessions[task['task_id']]='s'
+ store.update_phase(task['task_id'],'intent','running')
+ body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
+ assert body['input_state']['waiting'] is True
+ assert body['input_state']['decision']['input_id']==str(engine.pending.input_id)
