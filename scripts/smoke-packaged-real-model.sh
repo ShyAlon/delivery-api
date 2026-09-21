@@ -140,18 +140,25 @@ for _ in range(80):
  time.sleep(.5)
 raise RuntimeError('real-model interview did not reach typed completion')
 PY
-SHADOW_REPORT="$REQUI_RE_SMOKE_STATE_DIR/categorization-shadow.md"
-"$REQUI_RE_DIST_DIR/runtime/bin/python" - "$REQUI_RE_SMOKE_STATE_DIR/artifacts" "$SHADOW_REPORT" <<'PYREPORT'
+SHADOW_JSONL="$REQUI_RE_REPOS_ROOT/categorization-shadow.jsonl"
+SHADOW_REPORT="$REQUI_RE_REPOS_ROOT/categorization-shadow.md"
+"$REQUI_RE_DIST_DIR/runtime/bin/python" - "$REQUI_RE_SMOKE_STATE_DIR/artifacts" "$SHADOW_JSONL" "$SHADOW_REPORT" <<'PYREPORT'
 import sys
 from pathlib import Path
 from interview_engine.categorization_shadow import render_report
-root,output=map(Path,sys.argv[1:])
+root,aggregate,report=map(Path,sys.argv[1:])
 files=sorted(root.rglob("categorization-shadow.jsonl"))
 if files:
-    output.write_text(render_report(files)+"\n")
-    print(output)
+    # Rebuild deterministically from per-run sources: no duplicates on reruns.
+    records=[]
+    for path in files:
+        records.extend(line for line in path.read_text().splitlines() if line.strip())
+    tmp=aggregate.with_suffix(aggregate.suffix+".tmp")
+    tmp.write_text("\n".join(records)+"\n");tmp.replace(aggregate)
+    tmp=report.with_suffix(report.suffix+".tmp")
+    tmp.write_text(render_report([aggregate])+"\n");tmp.replace(report)
 PYREPORT
-if [ -f "$SHADOW_REPORT" ]; then progress shadow.report "Jev comparison report: $SHADOW_REPORT"; fi
+if [ -f "$SHADOW_REPORT" ]; then progress shadow.report "Jev comparison data: $SHADOW_JSONL | report: $SHADOW_REPORT"; fi
 progress kpi.start "Running packaged-path process-control KPI"
 # Static proof applies to the exact source installed into the distribution.
 "${REQUI_RE_BUILD_PYTHON:-python3}" -m pytest -q "$ROOT/tests/test_process_control_kpi.py"

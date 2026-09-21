@@ -110,5 +110,7 @@ def test_smoke_retries_same_request_after_server_directed_429():
 def test_smoke_automatically_aggregates_shadow_report_without_user_paths():
     smoke=(Path(__file__).parents[1]/'scripts/smoke-packaged-real-model.sh').read_text()
     assert 'root.rglob("categorization-shadow.jsonl")' in smoke
-    assert 'REQUI_RE_SMOKE_STATE_DIR/categorization-shadow.md' in smoke
+    assert 'REQUI_RE_REPOS_ROOT/categorization-shadow.jsonl' in smoke
+    assert 'REQUI_RE_REPOS_ROOT/categorization-shadow.md' in smoke
     assert 'if files:' in smoke and 'shadow.report' in smoke
+    assert 'tmp.replace(aggregate)' in smoke and 'tmp.replace(report)' in smoke
