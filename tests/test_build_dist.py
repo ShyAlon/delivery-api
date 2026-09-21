@@ -54,3 +54,9 @@ def test_packaged_real_model_smoke_uses_launcher_and_http_only():
     assert '/api/tasks' in smoke and '/answer' in smoke and '/v1/sessions/not-a-session' in smoke
     assert 'subprocess' not in smoke and 'stdin' not in smoke
     assert 'test_process_control_kpi.py' in smoke
+
+
+def test_launcher_streams_engine_progress_and_preserves_log():
+    build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()
+    launcher=build.split("cat > \"$STAGE/run-require.sh\" <<'EOF'",1)[1].split('\nEOF',1)[0]
+    assert '> >(tee "$DATA_HOME/interview-engine.log") 2>&1 & ENGINE_PID=$!' in launcher
