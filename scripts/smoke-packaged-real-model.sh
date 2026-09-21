@@ -14,7 +14,18 @@ done
 export REQUI_RE_REPOS_ROOT="${REQUI_RE_REPOS_ROOT:-$(cd "$ROOT/.." && pwd)}"
 export REQUI_RE_DIST_DIR="${REQUI_RE_DIST_DIR:-$ROOT/dist/requi-re-smoke}"
 "$ROOT/scripts/build-dist.sh" --clean
-TMP="$(mktemp -d)"; trap 'kill "${LAUNCHER_PID:-}" 2>/dev/null || true; wait "${LAUNCHER_PID:-}" 2>/dev/null || true; rm -rf "$TMP"' EXIT
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/requi-re-smoke.XXXXXX")"
+cleanup(){
+  status=$?
+  kill "${LAUNCHER_PID:-}" 2>/dev/null || true; wait "${LAUNCHER_PID:-}" 2>/dev/null || true
+  if [ "$status" -ne 0 ]; then
+    echo "Smoke failed. Delivery launcher log:" >&2; tail -80 "$TMP/launcher.log" >&2 || true
+    echo "Interview engine log:" >&2; tail -80 "$TMP/data/requi-re/interview-engine.log" >&2 || true
+    echo "Full smoke logs preserved at: $TMP" >&2
+  else rm -rf "$TMP"; fi
+  exit "$status"
+}
+trap cleanup EXIT
 export XDG_DATA_HOME="$TMP/data" PORT="${REQUI_RE_SMOKE_PORT:-18080}" INTERVIEW_ENGINE_PORT="${REQUI_RE_SMOKE_ENGINE_PORT:-18010}"
 export DELIVERY_BASIC_AUTH_ENABLED=0 DELIVERY_COOKIE_SECURE=0
 export INTERVIEW_ENGINE_TOKEN="${INTERVIEW_ENGINE_TOKEN:-requi-re-packaged-smoke-token}"
@@ -27,9 +38,13 @@ def call(method,url,payload=None,headers=None,expected=None):
  data=None if payload is None else json.dumps(payload).encode()
  req=urllib.request.Request(url,data=data,method=method,headers={'Content-Type':'application/json',**(headers or {})})
  try:
-  with urllib.request.urlopen(req,timeout=120) as r: status=r.status;body=json.loads(r.read() or b'{}')
- except urllib.error.HTTPError as e: status=e.code;body=json.loads(e.read() or b'{}')
- if expected is not None and status!=expected:raise RuntimeError(f'{method} {url}: expected {expected}, got {status}: {body}')
+  with urllib.request.urlopen(req,timeout=1800) as r: status=r.status;raw=r.read()
+ except urllib.error.HTTPError as e: status=e.code;raw=e.read()
+ text=raw.decode('utf-8','replace')
+ try:body=json.loads(text) if text else {}
+ except json.JSONDecodeError:body=text
+ if expected is not None and status!=expected:raise RuntimeError(f'{method} {url}: expected HTTP {expected}, got HTTP {status}; body={body!r}')
+ if not isinstance(body,(dict,list)):raise RuntimeError(f'{method} {url}: HTTP {status} returned non-JSON body={body!r}')
  return status,body
 for _ in range(120):
  try:

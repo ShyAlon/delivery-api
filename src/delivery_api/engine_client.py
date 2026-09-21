@@ -24,7 +24,7 @@ class EngineClient(ABC):
 
 
 class HttpEngineClient(EngineClient):
-    def __init__(self,base_url:str,*,token:str="local-interview-engine-token",timeout:float=30,transport:httpx.BaseTransport|None=None):
+    def __init__(self,base_url:str,*,token:str="local-interview-engine-token",timeout:float|None=None,transport:httpx.BaseTransport|None=None):
         if not token:raise ValueError("interview engine service token must not be empty")
         self._http=httpx.Client(base_url=base_url.rstrip('/'),headers={"X-Interview-Engine-Token":token},timeout=timeout,transport=transport)
 

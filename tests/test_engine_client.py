@@ -39,3 +39,8 @@ def test_client_sends_service_token_header():
  client=HttpEngineClient('http://engine',token='shared-secret',transport=httpx.MockTransport(lambda r:(seen.append(r.headers['X-Interview-Engine-Token']) or httpx.Response(201,json=body))))
  client.start(StartSessionRequest(task_id='t',idea='idea',model_route='m'))
  assert seen==['shared-secret']
+
+
+def test_client_does_not_preempt_long_running_model_request():
+ client=HttpEngineClient('http://engine')
+ assert client._http.timeout.read is None
