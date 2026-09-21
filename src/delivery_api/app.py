@@ -67,7 +67,6 @@ orchestrator = PhaseOrchestrator(store,runner)
 runner.on_complete = orchestrator.continue_after
 simulation = Simulation(store)
 engine_client = HttpEngineClient(config.INTERVIEW_ENGINE_URL)
-_http_sessions:dict[str,str]={}
 log = logging.getLogger("delivery_api.http")
 
 
@@ -496,7 +495,7 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
     idea=(task.get("brief") or task.get("title") or "").strip()
     try:started=engine_client.start(StartSessionRequest(task_id=task_id,idea=idea,model_route=body.model_route))
     except EngineClientError as exc:raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
-    _http_sessions[task_id]=started.snapshot.session_id;store.set_model_route(task_id,body.model_route)
+    store.set_engine_session(task_id,started.snapshot.session_id);store.set_model_route(task_id,body.model_route)
     detail="Waiting for founder input" if started.snapshot.process_status==ProcessStatus.WAITING_INPUT else "Interview engine running"
     store.update_phase(task_id,"intent","running",detail=detail)
     store.add_event(task_id,"engine_protocol","HTTP interview session started",phase_key="intent",payload=started.model_dump(mode="json"))
@@ -542,7 +541,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
     recent_answers=[{"event_id":event["id"],"phase_key":event.get("phase_key"),"decision_id":event.get("payload",{}).get("decision_id")} for event in store.events(task_id) if event.get("kind")=="answer"][-10:]
     activity("api.answer.attempt","Founder answer submission received",endpoint=f"/api/tasks/{task_id}/answer",task_id=task_id,task_state=task_before.get("state"),active_phase=task_before.get("active_phase"),submitted_decision_id=body.decision_id,open_decision_id=(input_before.get("decision") or {}).get("decision_id"),process_live=input_before["process_live"],waiting=input_before["waiting"],recent_answer_events=json.dumps(recent_answers,separators=(",",":")))
     try:
-        session_id=_http_sessions.get(task_id)
+        session_id=store.engine_session(task_id)
         if not session_id:raise RuntimeError("task has no HTTP engine session")
         state=engine_client.snapshot(session_id);pending=state.open_input
         if pending is None:raise RuntimeError("task is not waiting for input")
@@ -711,7 +710,7 @@ def task_artifacts_zip(task_id:str):
 def get_task(task_id: str):
     task = store.task(task_id)
     if not task: raise HTTPException(404, "task not found")
-    session_id=_http_sessions.get(task_id)
+    session_id=store.engine_session(task_id)
     if session_id:
         try:
             engine_state=engine_client.snapshot(session_id);pending=engine_state.open_input

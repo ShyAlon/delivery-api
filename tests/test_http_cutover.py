@@ -15,7 +15,7 @@ class FakeEngine:
 
 def test_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch):
  store=SQLiteStore(str(tmp_path/'x.db'));task=store.create_task('Dungeon master','A virtual dungeon master');engine=FakeEngine()
- monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine);module._http_sessions.clear()
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  client=TestClient(module.app);client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'}).raise_for_status()
  client.post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1'}).raise_for_status()
  assert engine.submitted[0].input_id==engine.pending.input_id
@@ -23,8 +23,20 @@ def test_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch):
 
 def test_task_snapshot_projects_http_open_input(tmp_path,monkeypatch):
  store=SQLiteStore(str(tmp_path/'snap.db'));task=store.create_task('Dungeon master','brief');engine=FakeEngine()
- monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine);module._http_sessions.clear();module._http_sessions[task['task_id']]='s'
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine);store.set_engine_session(task['task_id'],'s')
  store.update_phase(task['task_id'],'intent','running')
  body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
  assert body['input_state']['waiting'] is True
  assert body['input_state']['decision']['input_id']==str(engine.pending.input_id)
+
+
+def test_http_engine_session_survives_delivery_restart(tmp_path,monkeypatch):
+ path=tmp_path/'restart.db';first=SQLiteStore(str(path));task=first.create_task('Restart safe','brief');engine=FakeEngine()
+ monkeypatch.setattr(module,'store',first);monkeypatch.setattr(module,'engine_client',engine)
+ client=TestClient(module.app);client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'}).raise_for_status()
+ assert first.engine_session(task['task_id'])=='s'
+ reopened=SQLiteStore(str(path));monkeypatch.setattr(module,'store',reopened)
+ body=client.get(f"/api/tasks/{task['task_id']}").json()
+ assert body['input_state']['waiting'] is True
+ client.post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1'}).raise_for_status()
+ assert engine.submitted[-1].value==1

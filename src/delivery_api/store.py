@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE TABLE IF NOT EXISTS tasks (
   task_id TEXT PRIMARY KEY, title TEXT NOT NULL, brief TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL, active_phase TEXT, model_route TEXT, generation INTEGER NOT NULL DEFAULT 1,
-  created_at REAL NOT NULL, updated_at REAL NOT NULL, simulated INTEGER NOT NULL DEFAULT 0, source_dir TEXT, owner_id TEXT
+  created_at REAL NOT NULL, updated_at REAL NOT NULL, simulated INTEGER NOT NULL DEFAULT 0, source_dir TEXT, owner_id TEXT,
+  engine_session_id TEXT
 );
 CREATE TABLE IF NOT EXISTS phases (
   task_id TEXT NOT NULL, phase_key TEXT NOT NULL, label TEXT NOT NULL, position INTEGER NOT NULL,
@@ -107,6 +108,8 @@ class Storage(Protocol):
     def delete_task(self, task_id: str, actor: str = "local user") -> None: ...
     def update_phase(self, task_id: str, phase_key: str, state: str, **progress) -> None: ...
     def set_model_route(self, task_id: str, model_route: str) -> None: ...
+    def set_engine_session(self, task_id: str, session_id: str) -> None: ...
+    def engine_session(self, task_id: str) -> str | None: ...
     def add_event(self, task_id: str, kind: str, message: str, **context) -> int: ...
     def events(self, task_id: str, after: int = 0, limit: int = 500) -> list[dict]: ...
     def audit(self, actor: str, action: str, task_id: str | None = None, detail: dict | None = None) -> int: ...
@@ -151,6 +154,8 @@ class SQLiteStore:
             self._db.execute("ALTER TABLE tasks ADD COLUMN source_dir TEXT")
         if "owner_id" not in task_cols:
             self._db.execute("ALTER TABLE tasks ADD COLUMN owner_id TEXT")
+        if "engine_session_id" not in task_cols:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN engine_session_id TEXT")
         if "owner_id" not in run_cols:
             self._db.execute("ALTER TABLE runs ADD COLUMN owner_id TEXT")
         # Every generated phase, including final verification, has a founder
@@ -395,6 +400,15 @@ class SQLiteStore:
         with self._lock:
             self._db.execute("UPDATE tasks SET model_route=?,updated_at=? WHERE task_id=?",
                             (model_route, time.time(), task_id)); self._commit()
+
+    def set_engine_session(self, task_id: str, session_id: str) -> None:
+        with self._lock:
+            self._db.execute("UPDATE tasks SET engine_session_id=?,updated_at=? WHERE task_id=?",(session_id,time.time(),task_id))
+            self._commit()
+
+    def engine_session(self, task_id: str) -> str | None:
+        row=self._db.execute("SELECT engine_session_id FROM tasks WHERE task_id=?",(task_id,)).fetchone()
+        return row["engine_session_id"] if row else None
 
     def add_event(self, task_id: str, kind: str, message: str, *, phase_key: str | None = None,
                   payload: dict | None = None) -> int:
