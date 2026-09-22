@@ -123,3 +123,17 @@ def test_pull_all_updates_exactly_six_siblings_ff_only():
     assert 'REQUI_RE_REPOS_ROOT' in script
     build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()
     assert build.count('$SCRIPT_DIR/pull-all.sh') >= 2
+
+def test_launcher_terminates_and_reaps_delivery_and_engine_children():
+    build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()
+    launcher=build.split("cat > \"$STAGE/run-require.sh\" <<'EOF'",1)[1].split('\nEOF',1)[0]
+    assert 'DELIVERY_PID=$!' in launcher
+    assert 'kill -TERM "$DELIVERY_PID" "$ENGINE_PID"' in launcher
+    assert 'wait "$DELIVERY_PID"' in launcher and 'wait "$ENGINE_PID"' in launcher
+    assert 'trap terminate INT TERM' in launcher
+    assert 'interview_engine.http_service' in launcher and 'Replacing orphaned interview engine' in launcher
+
+def test_artifact_projection_prefers_typed_engine_session_binding():
+    source=(Path(__file__).parents[1]/'src/delivery_api/app.py').read_text()
+    block=source.split('def _recorded_engine_session',1)[1].split('\n\ndef ',1)[0]
+    assert block.index('store.engine_session(task_id)') < block.index('store.events(task_id)')

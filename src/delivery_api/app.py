@@ -83,6 +83,10 @@ _previous_sigint=None
 _streams_closed_on_signal=0
 
 def _recorded_engine_session(task_id:str)->str|None:
+    # The typed HTTP cutover stores this binding at session creation. It is
+    # authoritative; event/path scanning is legacy recovery only.
+    recorded=store.engine_session(task_id)
+    if recorded:return recorded
     for event in reversed(store.events(task_id)):
         match=__import__('re').search(r"(?:^|\s)session:\s*([A-Za-z0-9._-]+)",event.get("message", ""))
         if match:return match.group(1)

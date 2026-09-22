@@ -129,9 +129,38 @@ echo "Data: $DELIVERY_DATABASE_URL"
 echo "Installed Requi.re source revisions:"
 sed -n '/^Repositories:$/,/^Installed packages:$/p' "$ROOT/MANIFEST.txt" 2>/dev/null | sed '1d;$d' || true
 ENGINE_PORT="${INTERVIEW_ENGINE_PORT:-8010}"; export INTERVIEW_ENGINE_URL="${INTERVIEW_ENGINE_URL:-http://127.0.0.1:$ENGINE_PORT}" INTERVIEW_ENGINE_TOKEN="${INTERVIEW_ENGINE_TOKEN:-local-interview-engine-token}"
+if command -v lsof >/dev/null 2>&1; then
+  engine_listener=$(lsof -tiTCP:"$ENGINE_PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)
+  if [ -n "$engine_listener" ]; then
+    engine_cmd=$(ps -p "$engine_listener" -o command= 2>/dev/null || true)
+    if [[ "$engine_cmd" == *"interview_engine.http_service"* ]]; then
+      echo "Replacing orphaned interview engine $engine_listener..."; kill -TERM "$engine_listener"
+      for _ in $(seq 1 50); do kill -0 "$engine_listener" 2>/dev/null || break; sleep .1; done
+      kill -0 "$engine_listener" 2>/dev/null && kill -KILL "$engine_listener" 2>/dev/null || true
+    else
+      echo "Error: interview engine port $ENGINE_PORT is already used by PID $engine_listener."; exit 1
+    fi
+  fi
+fi
 "$PYTHON" -m uvicorn interview_engine.http_service:app --host 127.0.0.1 --port "$ENGINE_PORT" > >(tee "$DATA_HOME/interview-engine.log") 2>&1 & ENGINE_PID=$!
-cleanup_all(){ kill "$ENGINE_PID" 2>/dev/null || true; rm -f "$PID_FILE"; }; trap cleanup_all EXIT INT TERM
-cd "$ROOT"; "$PYTHON" -m delivery_api
+cd "$ROOT"; "$PYTHON" -m delivery_api & DELIVERY_PID=$!
+cleanup_all(){
+  trap - EXIT INT TERM
+  kill -TERM "$DELIVERY_PID" "$ENGINE_PID" 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    kill -0 "$DELIVERY_PID" 2>/dev/null || delivery_done=1
+    kill -0 "$ENGINE_PID" 2>/dev/null || engine_done=1
+    [ "${delivery_done:-0}" = 1 ] && [ "${engine_done:-0}" = 1 ] && break
+    sleep .1
+  done
+  kill -KILL "$DELIVERY_PID" "$ENGINE_PID" 2>/dev/null || true
+  wait "$DELIVERY_PID" 2>/dev/null || true; wait "$ENGINE_PID" 2>/dev/null || true
+  rm -f "$PID_FILE"
+}
+terminate(){ cleanup_all; exit 0; }
+trap cleanup_all EXIT
+trap terminate INT TERM
+wait "$DELIVERY_PID"
 EOF
 chmod +x "$STAGE/run-require.sh"
 "$PYTHON" -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core'

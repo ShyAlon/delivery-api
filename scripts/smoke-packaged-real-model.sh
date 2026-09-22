@@ -38,7 +38,12 @@ progress build.complete "Distribution built at $REQUI_RE_DIST_DIR"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/requi-re-smoke.XXXXXX")"
 cleanup(){
   status=$?
-  kill "${LAUNCHER_PID:-}" 2>/dev/null || true; wait "${LAUNCHER_PID:-}" 2>/dev/null || true
+  if [ -n "${LAUNCHER_PID:-}" ]; then
+    kill -TERM "$LAUNCHER_PID" 2>/dev/null || true
+    for _ in $(seq 1 50); do kill -0 "$LAUNCHER_PID" 2>/dev/null || break; sleep .1; done
+    kill -0 "$LAUNCHER_PID" 2>/dev/null && kill -KILL "$LAUNCHER_PID" 2>/dev/null || true
+    wait "$LAUNCHER_PID" 2>/dev/null || true
+  fi
   if [ "$status" -ne 0 ]; then
     progress smoke.failed "Smoke stopped with exit $status; diagnostic deviations follow" >&2
     echo "=== INTERVIEW ENGINE (last 200 lines) ===" >&2; tail -200 "$REQUI_RE_SMOKE_STATE_DIR/data/requi-re/interview-engine.log" >&2 || true
