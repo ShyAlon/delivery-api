@@ -137,3 +137,10 @@ def test_artifact_projection_prefers_typed_engine_session_binding():
     source=(Path(__file__).parents[1]/'src/delivery_api/app.py').read_text()
     block=source.split('def _recorded_engine_session',1)[1].split('\n\ndef ',1)[0]
     assert block.index('store.engine_session(task_id)') < block.index('store.events(task_id)')
+
+
+def test_launcher_freezes_artifact_root_before_changing_cwd():
+    build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()
+    launcher=build.split("cat > \"$STAGE/run-require.sh\" <<'EOF'",1)[1].split('\nEOF',1)[0]
+    assert 'export VMODEL_ARTIFACTS_DIR="${VMODEL_ARTIFACTS_DIR:-$PWD/artifacts}"' in launcher
+    assert launcher.index('export VMODEL_ARTIFACTS_DIR=') < launcher.index('uvicorn interview_engine.http_service:app')
