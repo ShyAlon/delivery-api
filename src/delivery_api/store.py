@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   task_id TEXT PRIMARY KEY, title TEXT NOT NULL, brief TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL, active_phase TEXT, model_route TEXT, generation INTEGER NOT NULL DEFAULT 1,
   created_at REAL NOT NULL, updated_at REAL NOT NULL, simulated INTEGER NOT NULL DEFAULT 0, source_dir TEXT, owner_id TEXT,
-  engine_session_id TEXT
+  engine_session_id TEXT,
+  interview_schema_id TEXT, interview_schema_version TEXT
 );
 CREATE TABLE IF NOT EXISTS phases (
   task_id TEXT NOT NULL, phase_key TEXT NOT NULL, label TEXT NOT NULL, position INTEGER NOT NULL,
@@ -110,6 +111,8 @@ class Storage(Protocol):
     def set_model_route(self, task_id: str, model_route: str) -> None: ...
     def set_engine_session(self, task_id: str, session_id: str) -> None: ...
     def engine_session(self, task_id: str) -> str | None: ...
+    def bind_interview_schema(self, task_id: str, schema_id: str, schema_version: str) -> dict: ...
+    def interview_schema_binding(self, task_id: str) -> dict | None: ...
     def add_event(self, task_id: str, kind: str, message: str, **context) -> int: ...
     def events(self, task_id: str, after: int = 0, limit: int = 500) -> list[dict]: ...
     def audit(self, actor: str, action: str, task_id: str | None = None, detail: dict | None = None) -> int: ...
@@ -156,6 +159,10 @@ class SQLiteStore:
             self._db.execute("ALTER TABLE tasks ADD COLUMN owner_id TEXT")
         if "engine_session_id" not in task_cols:
             self._db.execute("ALTER TABLE tasks ADD COLUMN engine_session_id TEXT")
+        if "interview_schema_id" not in task_cols:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN interview_schema_id TEXT")
+        if "interview_schema_version" not in task_cols:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN interview_schema_version TEXT")
         if "owner_id" not in run_cols:
             self._db.execute("ALTER TABLE runs ADD COLUMN owner_id TEXT")
         # Every generated phase, including final verification, has a founder
@@ -409,6 +416,22 @@ class SQLiteStore:
     def engine_session(self, task_id: str) -> str | None:
         row=self._db.execute("SELECT engine_session_id FROM tasks WHERE task_id=?",(task_id,)).fetchone()
         return row["engine_session_id"] if row else None
+
+    def bind_interview_schema(self,task_id:str,schema_id:str,schema_version:str)->dict:
+        with self._lock:
+            row=self._db.execute("SELECT interview_schema_id,interview_schema_version FROM tasks WHERE task_id=?",(task_id,)).fetchone()
+            if row is None:raise KeyError(task_id)
+            existing=(row["interview_schema_id"],row["interview_schema_version"])
+            requested=(schema_id,schema_version)
+            if existing!=(None,None) and existing!=requested:raise ValueError("interview schema binding is immutable for a task generation")
+            self._db.execute("UPDATE tasks SET interview_schema_id=?,interview_schema_version=?,updated_at=? WHERE task_id=?",(schema_id,schema_version,time.time(),task_id));self._commit()
+            return {"task_id":task_id,"schema_id":schema_id,"schema_version":schema_version}
+
+    def interview_schema_binding(self,task_id:str)->dict|None:
+        row=self._db.execute("SELECT interview_schema_id,interview_schema_version FROM tasks WHERE task_id=?",(task_id,)).fetchone()
+        if row is None:raise KeyError(task_id)
+        if row["interview_schema_id"] is None:return None
+        return {"task_id":task_id,"schema_id":row["interview_schema_id"],"schema_version":row["interview_schema_version"]}
 
     def add_event(self, task_id: str, kind: str, message: str, *, phase_key: str | None = None,
                   payload: dict | None = None) -> int:
