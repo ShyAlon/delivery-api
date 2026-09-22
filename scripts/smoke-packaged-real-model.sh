@@ -59,7 +59,7 @@ cleanup(){
   exit "$status"
 }
 trap cleanup EXIT
-export XDG_DATA_HOME="$REQUI_RE_SMOKE_STATE_DIR/data" VMODEL_ARTIFACTS_DIR="$REQUI_RE_SMOKE_STATE_DIR/artifacts" PORT="${REQUI_RE_SMOKE_PORT:-18080}" INTERVIEW_ENGINE_PORT="${REQUI_RE_SMOKE_ENGINE_PORT:-18010}"
+export XDG_DATA_HOME="$REQUI_RE_SMOKE_STATE_DIR/data" VMODEL_ARTIFACTS_DIR="${VMODEL_ARTIFACTS_DIR:-$REQUI_RE_SMOKE_STATE_DIR/artifacts}" PORT="${REQUI_RE_SMOKE_PORT:-18080}" INTERVIEW_ENGINE_PORT="${REQUI_RE_SMOKE_ENGINE_PORT:-18010}"
 export DELIVERY_BASIC_AUTH_ENABLED=0 DELIVERY_COOKIE_SECURE=0
 export INTERVIEW_ENGINE_TOKEN="${INTERVIEW_ENGINE_TOKEN:-requi-re-packaged-smoke-token}"
 progress launcher.start "Starting packaged delivery and authenticated interview service"
@@ -147,7 +147,7 @@ raise RuntimeError('real-model interview did not reach typed completion')
 PY
 SHADOW_JSONL="$REQUI_RE_REPOS_ROOT/categorization-shadow.jsonl"
 SHADOW_REPORT="$REQUI_RE_REPOS_ROOT/categorization-shadow.md"
-"$REQUI_RE_DIST_DIR/runtime/bin/python" - "$REQUI_RE_SMOKE_STATE_DIR/artifacts" "$SHADOW_JSONL" "$SHADOW_REPORT" <<'PYREPORT'
+"$REQUI_RE_DIST_DIR/runtime/bin/python" - "$VMODEL_ARTIFACTS_DIR" "$SHADOW_JSONL" "$SHADOW_REPORT" <<'PYREPORT'
 import sys
 from pathlib import Path
 from interview_engine.categorization_shadow import render_report
