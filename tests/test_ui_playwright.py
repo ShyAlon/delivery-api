@@ -124,6 +124,10 @@ def test_not_started_running_and_done_pages(page, ui):
     start=page.get_by_role("button",name="Start interview");assert start.is_visible() and start.is_enabled()
     assert page.get_by_text("Start engine · wiring next").count()==0
     page.goto(ui + "/tasks/live/view")
+    page.locator(".live-indicator").wait_for()
+    assert page.get_by_text("Live engine output").count() == 0
+    assert page.locator("#console").count() == 0 and page.locator("#progressfeed").count() == 0
+    page.locator(".avatar").click();page.locator("#debugtoggle").click()
     page.get_by_text("Live engine output").wait_for();assert page.get_by_text("Live engine output").is_visible()
     assert page.locator("#console").get_by_text("Generating CONOPS option 2/3").count() == 1
     assert page.locator("#progressfeed").get_by_text("Generating CONOPS option 2/3").count() == 1
@@ -873,3 +877,38 @@ def test_artifact_viewer_renders_content_title_bold_and_transcript(page,ui):
     assert viewer.locator('strong').filter(has_text='Problem:').count()==1 and viewer.locator('strong').filter(has_text='Answer:').count()==1
     assert viewer.get_by_text('Who needs this?').is_visible() and viewer.get_by_text('Busy adults').is_visible()
     page.screenshot(path='/downloads/intent-viewer-transcript.png',full_page=True)
+
+
+def interview_history_snapshot(snapshot):
+    snapshot["events"] = snapshot["events"] + [
+        {"id": 90001, "kind": "waiting_input", "phase_key": "conops", "ts": 1,
+         "message": "What should the family see first?",
+         "payload": {"waiting_input": True, "question": "What should the family see first?"}},
+        {"id": 90002, "kind": "answer", "phase_key": "conops", "ts": 2,
+         "message": "You: A calm shared view", "payload": {"answer": "A calm shared view"}},
+        {"id": 90003, "kind": "waiting_input", "phase_key": "conops", "ts": 3,
+         "message": "Who else should weigh in?",
+         "payload": {"waiting_input": True, "question": "Who else should weigh in?"}},
+        {"id": 90004, "kind": "answer", "phase_key": "conops", "ts": 4,
+         "message": "You: My co-founder, next week", "payload": {"answer": "My co-founder, next week"}},
+    ]
+
+
+def test_interview_history_cards_and_debug_toggle_persist(page, ui):
+    route_task_snapshot(page, ui, "live", interview_history_snapshot)
+    page.goto(ui + "/tasks/live/view")
+    page.get_by_text("Interview so far").wait_for()
+    assert page.locator(".qa-item").count() == 2
+    assert page.locator(".qa-item").nth(0).locator(".qa-question p").inner_text() == "What should the family see first?"
+    assert page.locator(".qa-item").nth(0).locator(".qa-answer p").inner_text() == "A calm shared view"
+    assert page.locator(".qa-item").nth(1).locator(".qa-question p").inner_text() == "Who else should weigh in?"
+    assert page.locator(".qa-tag", has_text="Q1").count() == 1
+    assert page.locator("#console").count() == 0
+    page.locator(".avatar").click();page.locator("#debugtoggle").click()
+    page.get_by_text("Live engine output").wait_for()
+    assert page.locator("#console").is_visible()
+    page.reload();page.get_by_text("Live engine output").wait_for()
+    assert page.locator("#console").is_visible() and page.locator(".qa-item").count() == 2
+    page.locator(".avatar").click();page.locator("#debugtoggle").click()
+    page.get_by_text("Interview so far").wait_for()
+    assert page.locator("#console").count() == 0
