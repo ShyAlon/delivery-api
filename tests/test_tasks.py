@@ -1,5 +1,6 @@
 import json
 import os
+import pytest
 os.environ["DELIVERY_DB_PATH"] = ":memory:"
 
 from fastapi.testclient import TestClient
@@ -108,7 +109,7 @@ def test_process_runner_uses_child_stage_aware_heartbeat_without_generic_noise(t
     assert not any(e['message']=='Engine is still working' for e in events)
 
 
-def test_process_runner_marks_input_prompts_distinct_from_work(tmp_path):
+def test_subprocess_prompt_lines_are_diagnostics_not_input_waits(tmp_path):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     from delivery_api.store import SQLiteStore
@@ -116,11 +117,10 @@ def test_process_runner_marks_input_prompts_distinct_from_work(tmp_path):
     script="print('Generating interview question',flush=True);print('What matters?\\nYou:',end='',flush=True)"
     assert asyncio.run(ProcessRunner(store).run(task_id,[sys.executable,'-c',script],cwd=tmp_path))==0
     events=store.events(task_id)
-    assert any(e['kind']=='progress' and not e['payload'].get('waiting_input') for e in events)
-    waiting=next(e for e in events if e['kind']=='waiting_input')
-    assert waiting['payload']['waiting_input'] is True and waiting['message'].endswith('You:')
-    assert waiting['payload']['question']=='What matters?'
-
+    assert any(e['kind']=='progress' for e in events)
+    # Subprocesses are non-interactive executors: prompt text on stdout is
+    # diagnostic output, never an input wait (protocol retired in 8bfda8d).
+    assert not any(e['kind']=='waiting_input' for e in events)
 
 def test_answer_endpoint_appends_visible_transcript_line(monkeypatch):
     import asyncio
@@ -459,28 +459,17 @@ def test_sse_stream_reads_events_from_turso_tuple_backend(monkeypatch,tmp_path):
         assert data['message']=='libSQL event' and data['payload']=={'completed':1}
     asyncio.run(read())
 
-def test_process_runner_emits_every_question_after_each_answer(tmp_path):
+def test_process_runner_emits_every_question_line_as_progress(tmp_path):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'questions.db'));task_id=store.create_task('Three questions')['task_id'];runner=ProcessRunner(store)
-    script="""questions=['First question?','Second question?','Third question?']
-for question in questions:
- print(question,flush=True);input('You: ')
-"""
-    async def go():
-        run=asyncio.create_task(runner.run(task_id,[sys.executable,'-c',script],cwd=tmp_path))
-        answered=0
-        while not run.done():
-            waiting=[e for e in store.events(task_id) if e['kind']=='waiting_input']
-            if len(waiting)>answered:
-                assert waiting[-1]['payload']['question']==['First question?','Second question?','Third question?'][answered]
-                await runner.send_input(task_id,f'answer {answered+1}');answered+=1
-            await asyncio.sleep(.01)
-        assert await run==0 and answered==3
-    asyncio.run(asyncio.wait_for(go(),5))
-    questions=[e['payload']['question'] for e in store.events(task_id) if e['kind']=='waiting_input']
-    assert questions==['First question?','Second question?','Third question?']
+    store=SQLiteStore(str(tmp_path/'questions.db'));task_id=store.create_task('Three questions')['task_id']
+    questions=['First question?','Second question?','Third question?']
+    script="".join(f"print({q!r},flush=True)\n" for q in questions)
+    assert asyncio.run(ProcessRunner(store).run(task_id,[sys.executable,'-c',script],cwd=tmp_path))==0
+    lines=[e['message'] for e in store.events(task_id) if e['kind']=='progress']
+    assert [q for q in lines if q in questions]==questions
+    assert not any(e['kind']=='waiting_input' for e in store.events(task_id))
 
 def test_generated_phase_waits_yellow_until_founder_approval(tmp_path):
     from delivery_api.store import SQLiteStore
@@ -579,24 +568,21 @@ def test_startup_resume_recovers_legacy_sigterm_failure(monkeypatch,tmp_path):
     assert captured and captured[0][0][1][-1]=='legacy-checkpoint'
 
 def test_runner_preserves_structured_founder_decision_options(tmp_path):
-    import asyncio,json,sys
+    import asyncio
     from delivery_api.runner import ProcessRunner
     from delivery_api.store import SQLiteStore
     payload={"type":"founder_decision","decision_id":"concept","title":"Choose one","prompt":"Which concept?","options":[{"value":"1","label":"Native","summary":"Installed","advantages":["Fast"],"disadvantages":["Stores"]},{"value":"2","label":"PWA","summary":"Browser","advantages":["Deploy"],"disadvantages":["APIs"]}],"rationale_required":True,"rationale_label":"Why?","answer_format":"<value> - <rationale>"}
-    script=f'import json;print("REQUIRE_EVENT "+json.dumps({payload!r}),flush=True);print("You: ",end="",flush=True);input()'
     store=SQLiteStore(str(tmp_path/'decision.db'));tid=store.create_task('Decision')['task_id'];runner=ProcessRunner(store)
     async def go():
-        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path))
-        for _ in range(100):
-            if tid in runner.waiting:break
-            await asyncio.sleep(.01)
-        await runner.send_input(tid,'2 - easier deployment');await job
-    asyncio.run(go())
+        job=asyncio.create_task(runner.request_decision(tid,'intent',payload))
+        await asyncio.sleep(0)
+        await runner.send_input(tid,'2 - easier deployment','concept')
+        return await job
+    assert asyncio.run(go())=='2 - easier deployment'
     event=next(e for e in store.events(tid) if e['kind']=='founder_decision')
     assert event['payload']['decision']['options'][1]['label']=='PWA'
-    assert 'REQUIRE_EVENT' not in event['message']
 
-def test_fragmented_large_founder_decision_is_reassembled(tmp_path):
+def test_fragmented_envelope_bytes_never_become_a_decision(tmp_path):
     import asyncio,json,sys
     from delivery_api.runner import ProcessRunner
     from delivery_api.store import SQLiteStore
@@ -605,18 +591,12 @@ def test_fragmented_large_founder_decision_is_reassembled(tmp_path):
     encoded="REQUIRE_EVENT "+json.dumps(payload,separators=(',',':'))
     assert len(encoded)>512
     # Deliberately split inside JSON independently of stdout chunk behavior.
-    script=f'import sys,time;data={encoded!r};sys.stdout.write(data[:300]);sys.stdout.flush();time.sleep(.05);sys.stdout.write(data[300:]+"\\nYou: ");sys.stdout.flush();input()'
-    store=SQLiteStore(str(tmp_path/'fragment.db'));tid=store.create_task('Large decision')['task_id'];runner=ProcessRunner(store)
-    async def go():
-        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path))
-        for _ in range(100):
-            if tid in runner.waiting:break
-            await asyncio.sleep(.01)
-        await runner.send_input(tid,'3 - reason');await job
-    asyncio.run(go())
-    decisions=[e for e in store.events(tid) if e['kind']=='founder_decision']
-    assert len(decisions)==1 and len(decisions[0]['payload']['decision']['options'])==4
-    assert all('REQUIRE_EVENT' not in e['message'] for e in store.events(tid))
+    script=f'import sys,time;data={encoded!r};sys.stdout.write(data[:300]);sys.stdout.flush();time.sleep(.05);sys.stdout.write(data[300:]+"\\nYou: ");sys.stdout.flush()'
+    store=SQLiteStore(str(tmp_path/'fragment.db'));tid=store.create_task('Large decision')['task_id']
+    assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))==0
+    events=store.events(tid)
+    # Envelope bytes on stdout are diagnostics; they can never assemble into a question.
+    assert not any(e['kind'] in ('founder_decision','waiting_input') for e in events)
 
 def test_activity_mirrors_phase_events_to_data_stage_log(monkeypatch,tmp_path):
     from delivery_api import observability
@@ -632,7 +612,7 @@ def test_every_phase_has_a_stable_data_log_path():
     assert list(STAGE_LOG_PATHS)==[key for key,_ in PHASES]
     assert all(str(path).endswith(f'/logs/stages/{phase}.log') for phase,path in STAGE_LOG_PATHS.items())
 
-def test_only_active_phase_pulses_blue_and_waiting_prompt_does_not_store_you(tmp_path):
+def test_only_active_phase_pulses_blue(tmp_path):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     from delivery_api.store import SQLiteStore
@@ -642,17 +622,8 @@ def test_only_active_phase_pulses_blue_and_waiting_prompt_does_not_store_you(tmp
     task=store.task(tid)
     assert next(p for p in task['phases'] if p['phase_key']=='intent')['state']=='awaiting_approval'
     assert [p['phase_key'] for p in task['phases'] if p['state']=='running']==['conops']
-    script='print("Building CONOPS",flush=True);print("You: ",end="",flush=True);input()'
-    runner=ProcessRunner(store)
-    async def go():
-        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path,phase='conops'))
-        for _ in range(100):
-            if tid in runner.waiting:break
-            await asyncio.sleep(.01)
-        await runner.send_input(tid,'answer');await job
-    asyncio.run(go())
-    conops=next(p for p in store.task(tid)['phases'] if p['phase_key']=='conops')
-    assert conops['detail']!='You:'
+    script='print("Building CONOPS",flush=True)'
+    assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path,phase='conops'))==0
 
 def test_active_upstream_phase_resets_false_downstream_waiting_state(tmp_path):
     from delivery_api.store import SQLiteStore
@@ -668,18 +639,11 @@ def test_protocol_envelope_never_reappears_in_following_you_question(tmp_path):
     from delivery_api.runner import ProcessRunner
     from delivery_api.store import SQLiteStore
     payload={"type":"founder_decision","decision_id":"safe","title":"Safe","prompt":"Approve the clean intent?","options":[{"value":"y","label":"Yes"},{"value":"n","label":"No"}]}
-    script=f'import json;print("REQUIRE_EVENT "+json.dumps({payload!r}),flush=True);print("You: ",end="",flush=True);input()'
-    store=SQLiteStore(str(tmp_path/'clean.db'));tid=store.create_task('Clean protocol')['task_id'];runner=ProcessRunner(store)
-    async def go():
-        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path))
-        for _ in range(100):
-            if tid in runner.waiting:break
-            await asyncio.sleep(.01)
-        await runner.send_input(tid,'y');await job
-    asyncio.run(go())
-    visible=' '.join(e['payload'].get('question','') for e in store.events(tid))
-    assert 'REQUIRE_EVENT' not in visible and 'founder_decision' not in visible
-
+    script=f'import json;print("REQUIRE_EVENT "+json.dumps({payload!r}),flush=True);print("You: ",end="",flush=True)'
+    store=SQLiteStore(str(tmp_path/'clean.db'));tid=store.create_task('Clean protocol')['task_id']
+    assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))==0
+    # Subprocess output is diagnostics only: protocol bytes can never become a question.
+    assert not any(e['kind'] in ('founder_decision','waiting_input') for e in store.events(tid))
 
 def test_runner_can_close_engine_approved_phases(tmp_path):
     import asyncio,sys
@@ -849,6 +813,7 @@ def test_startup_handoff_recovery_is_shared_across_phase_boundaries(monkeypatch,
     asyncio.run(go())
     assert calls==[(tid,'needs')]
 
+@pytest.mark.skip(reason="runner envelope/stdin replay retired in 8bfda8d; interview control moved to the typed HTTP service; app-level replay is covered by _replayable_decisions tests")
 def test_restart_replays_exact_accepted_typed_decision_into_engine(tmp_path):
     import asyncio,json,sys
     from delivery_api.runner import ProcessRunner,decision_fingerprint
@@ -863,6 +828,7 @@ def test_restart_replays_exact_accepted_typed_decision_into_engine(tmp_path):
     assert event['payload']['decision_id']=='intent-approval' and event['payload']['recovery'] is True
 
 
+@pytest.mark.skip(reason="runner envelope/stdin replay retired in 8bfda8d; interview control moved to the typed HTTP service; app-level replay is covered by _replayable_decisions tests")
 def test_restart_does_not_replay_same_id_when_typed_contract_changed(tmp_path):
     import asyncio,json,sys
     from delivery_api.runner import ProcessRunner,decision_fingerprint
@@ -905,22 +871,19 @@ def test_new_occurrence_of_same_decision_id_invalidates_old_replay(monkeypatch,t
     assert app_module._replayable_decisions(tid)=={}
 
 def test_typed_answer_requires_current_matching_decision(tmp_path):
-    import asyncio,sys,json
+    import asyncio
     from delivery_api.runner import ProcessRunner
     from delivery_api.store import SQLiteStore
     decision={'type':'founder_decision','decision_id':'live-choice','title':'Choose','prompt':'Choose?','options':[{'value':'y','label':'Yes'}]}
-    script=f'''import json,sys\nprint("REQUIRE_EVENT "+json.dumps({decision!r}),flush=True);print("You: ",end="",flush=True);print(input(),flush=True)'''
     store=SQLiteStore(str(tmp_path/'match.db'));tid=store.create_task('Match decision')['task_id'];runner=ProcessRunner(store)
     async def go():
-        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path))
-        for _ in range(100):
-            if runner.input_state(tid)['waiting']:break
-            await asyncio.sleep(.01)
+        job=asyncio.create_task(runner.request_decision(tid,'intent',decision))
+        await asyncio.sleep(0)
         try:await runner.send_input(tid,'y','different-choice')
         except RuntimeError as error:assert 'does not match' in str(error)
         else:assert False,'mismatched typed decision was accepted'
         await runner.send_input(tid,'y','live-choice');return await job
-    assert asyncio.run(go())==0
+    assert asyncio.run(go())=='y'
 
 def test_ui_state_doctrine_phase_gate_supersedes_stale_engine_prompt(tmp_path):
     from delivery_api.app import _task_ui_state
@@ -959,28 +922,25 @@ def test_untyped_blocking_console_prompt_fails_visibly(tmp_path):
     from delivery_api.runner import ProcessRunner
     from delivery_api.store import SQLiteStore
     store=SQLiteStore(str(tmp_path/'untyped.db'));tid=store.create_task('Untyped prompt')['task_id'];runner=ProcessRunner(store)
-    try:asyncio.run(runner.run(tid,[sys.executable,'-c','print("Continue? [y/N]",flush=True);input()'],cwd=tmp_path))
-    except RuntimeError as error:assert 'untyped blocking choice prompt' in str(error)
-    else:assert False,'an untyped blocking prompt was allowed to wait invisibly'
+    # An untyped child blocking on stdin must not wait invisibly: the stall
+    # bound stops it and fails the phase with a named cause.
+    code=asyncio.run(runner.run(tid,[sys.executable,'-c','print("Continue? [y/N]",flush=True);input()'],cwd=tmp_path,stall_timeout=0.5))
+    assert code!=0
+    phase=next(p for p in store.task(tid)['phases'] if p['phase_key']=='intent')
+    assert phase['state']=='failed'
+    assert any(e['kind']=='error' and 'no output' in e['message'] for e in store.events(tid))
 
-def test_bounded_prompt_after_typed_envelope_chunk_uses_pending_decision(tmp_path):
+def test_split_envelope_chunks_stay_diagnostics(tmp_path):
     import asyncio,json,sys
     from delivery_api.runner import ProcessRunner
     from delivery_api.store import SQLiteStore
     decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve this intent model?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
     # Flush and pause force the envelope and console prompt into separate reads.
-    script=f'''import json,time\nprint("REQUIRE_EVENT "+json.dumps({decision!r}),flush=True)\ntime.sleep(.15)\nprint("Approve this intent model? [y/N] ",end="",flush=True)\nprint(input(),flush=True)'''
-    store=SQLiteStore(str(tmp_path/'split-envelope.db'));tid=store.create_task('Split envelope')['task_id'];runner=ProcessRunner(store)
-    async def go():
-        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path))
-        for _ in range(200):
-            if runner.input_state(tid)['decision']:break
-            await asyncio.sleep(.01)
-        state=runner.input_state(tid);assert state['waiting'] and state['decision']['decision_id']=='intent-approval'
-        await runner.send_input(tid,'y','intent-approval');assert await job==0
-    asyncio.run(go())
-    assert not any(e['kind']=='error' for e in store.events(tid))
-
+    script=f'''import json,time\nprint("REQUIRE_EVENT "+json.dumps({decision!r}),flush=True)\ntime.sleep(.15)\nprint("Approve this intent model? [y/N] ",end="",flush=True)'''
+    store=SQLiteStore(str(tmp_path/'split-envelope.db'));tid=store.create_task('Split envelope')['task_id']
+    assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))==0
+    events=store.events(tid)
+    assert not any(e['kind'] in ('founder_decision','waiting_input','error') for e in events)
 
 def test_stream_parser_exception_fails_task_visibly_and_stops_child(monkeypatch,tmp_path):
     import asyncio,sys
@@ -1411,16 +1371,14 @@ def test_runner_emits_incremental_interview_price_before_process_exit(monkeypatc
         return await work
     assert asyncio.run(scenario())==0
 
-def test_runner_strips_interviewer_prefix_from_founder_question(tmp_path):
+def test_interviewer_prefix_lines_are_diagnostics_not_questions(tmp_path):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     from delivery_api.store import SQLiteStore
     store=SQLiteStore(str(tmp_path/'prefix.db'));tid=store.create_task('Prefix')['task_id']
     script="print('Interviewer: What change matters?\\nYou:',end='',flush=True)"
-    asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))
-    event=[e for e in store.events(tid) if e['kind']=='waiting_input'][-1]
-    assert event['payload']['question']=='What change matters?'
-
+    assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))==0
+    assert not any(e['kind']=='waiting_input' for e in store.events(tid))
 
 def test_answer_feedback_crud_and_audit():
     with TestClient(app) as client:
