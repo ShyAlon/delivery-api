@@ -124,6 +124,10 @@ def test_not_started_running_and_done_pages(page, ui):
     start=page.get_by_role("button",name="Start interview");assert start.is_visible() and start.is_enabled()
     assert page.get_by_text("Start engine · wiring next").count()==0
     page.goto(ui + "/tasks/live/view")
+    page.locator(".live-indicator").wait_for()
+    assert page.get_by_text("Live engine output").count() == 0
+    assert page.locator("#console").count() == 0 and page.locator("#progressfeed").count() == 0
+    page.locator(".avatar").click();page.locator("#debugtoggle").click()
     page.get_by_text("Live engine output").wait_for();assert page.get_by_text("Live engine output").is_visible()
     assert page.locator("#console").get_by_text("Generating CONOPS option 2/3").count() == 1
     assert page.locator("#progressfeed").get_by_text("Generating CONOPS option 2/3").count() == 1
@@ -451,6 +455,7 @@ def test_answer_enter_sends_and_control_enter_inserts_newline(page,ui):
     assert sent==[{'answer':'Line one\nLine two'}]
 
 def test_structured_founder_decision_opens_large_card_dialog_and_formats_answer(page,ui):
+    page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();live['events']=[];live['active_phase']='conops'
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
@@ -563,6 +568,7 @@ def test_decision_ready_bar_is_first_and_sticky_during_page_scroll(page,ui):
     page.screenshot(path='/downloads/decision-ready-sticky.png',full_page=False)
 
 def test_answered_decision_clears_and_binary_approval_uses_same_dialog(page,ui):
+    page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();concept={'type':'founder_decision','title':'Old concept decision','prompt':'Choose','options':[{'value':'1','label':'A'},{'value':'2','label':'B'}]}
     live['events']=[{'id':10,'kind':'founder_decision','message':'Choose','phase_key':'conops','payload':{'waiting_input':True,'decision':concept},'ts':1720000000},{'id':11,'kind':'answer','message':'You: 1 - reason','phase_key':'conops','payload':{'transcript':True},'ts':1720000001}]
@@ -579,6 +585,7 @@ def test_answered_decision_clears_and_binary_approval_uses_same_dialog(page,ui):
 
 
 def test_stale_structured_decision_is_not_actionable_on_load(page,ui):
+    page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'old-intent','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
     live['events']=[{'id':91,'kind':'founder_decision','message':'Approve?','phase_key':'intent','payload':{'waiting_input':True,'decision':decision},'ts':1720000300}]
@@ -646,6 +653,7 @@ def test_needs_gate_state_hides_stale_intent_prompt_and_opens_needs_gate(page,ui
 
 
 def test_managed_task_state_reducer_is_exhaustive_and_atomic(page,ui):
+    page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}close(){this.closed=true}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json()
     decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve the intent model','prompt':'Approve this intent model?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
@@ -670,6 +678,7 @@ def test_runtime_build_identity_is_visible(page,ui):
 
 
 def test_sse_snapshot_refresh_is_filtered_and_coalesced(page,ui):
+    page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}close(){this.closed=true}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();calls={'n':0}
     def route(request):calls.__setitem__('n',calls['n']+1);request.fulfill(json=live)
@@ -723,6 +732,7 @@ def test_decision_dialog_rationale_help_is_real_and_keyboard_accessible(page,ui)
     expect(dialog.get_by_role('tooltip').get_by_text('stored with the selected option',exact=False)).to_be_visible()
 
 def test_live_log_is_prominent_without_duplicate_timestamps_desktop_and_phone(page,ui):
+    page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent';live['ui_state']={'mode':'executing','active_phase':'intent','process_live':True,'decision':None,'gate':None}
     live['events']=[{'id':i,'kind':'progress','message':f'[17:01:{i%60:02d}] Building requirement {i}','phase_key':'intent','payload':{},'ts':1720000000+i} for i in range(80)]
@@ -767,6 +777,7 @@ def test_live_progress_scope_and_account_menu_desktop_and_phone(page,ui):
     page.set_viewport_size({'width':390,'height':844});page.reload();scope.wait_for();page.locator('#accountbutton').click();menu.wait_for();page.screenshot(path='/downloads/live-scope-account-phone.png',full_page=True)
 
 def test_recovered_run_hides_stale_sigterm_error_from_live_console(page,ui):
+    page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='intent';live['ui_state']={'mode':'executing','active_phase':'intent','process_live':True,'decision':None,'gate':None}
     live['events']=[
@@ -794,7 +805,7 @@ def test_orchestrator_baseline_decision_renders_without_engine_process(page,ui):
 
 def test_account_menu_is_plain_list_with_explicit_actions(page,ui):
     page.goto(ui+'/');page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for()
-    assert menu.locator(':scope > li').count()==4;assert menu.locator('button').all_inner_texts()==['Copy debug info','Sign out']
+    assert menu.locator(':scope > li').count()==5;assert menu.locator('button').all_inner_texts()==['Debug mode · off','Copy debug info','Sign out']
 
 def test_existing_system_requirement_names_file_format_path_and_next_step(page,ui):
     requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture is paused until real system facts are supplied.','path':'/artifacts/session/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':['baseline_id','system_name','mode: existing','repositories (at least one)'],'next':'Save the file, then restart Requi.re; recovery will launch Architecture.'}
@@ -829,6 +840,7 @@ def test_greenfield_confirmation_is_single_flight(page,ui):
     assert len(calls)==1
 
 def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips(page,ui):
+    page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'A very long progress update that must remain on precisely one line while the full wording stays available on hover','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');feed=page.locator('#progressfeed .progress-item');feed.wait_for();span=feed.locator('span');assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
     phase=page.locator('.phase-list-primary .phase').filter(has_text='Requirements');phase.hover();tip=phase.get_by_role('tooltip');tip.wait_for();assert tip.get_by_text('Artifacts: srs.json',exact=True).is_visible();assert tip.get_by_text('missing acceptance criterion',exact=False).is_visible()
@@ -873,3 +885,41 @@ def test_artifact_viewer_renders_content_title_bold_and_transcript(page,ui):
     assert viewer.locator('strong').filter(has_text='Problem:').count()==1 and viewer.locator('strong').filter(has_text='Answer:').count()==1
     assert viewer.get_by_text('Who needs this?').is_visible() and viewer.get_by_text('Busy adults').is_visible()
     page.screenshot(path='/downloads/intent-viewer-transcript.png',full_page=True)
+
+
+def interview_history_snapshot(snapshot):
+    # Replace, not extend: the module-scoped server accumulates answer events
+    # from earlier tests, so the base snapshot is polluted by suite order.
+    snapshot["events"] = [
+        {"id": 90001, "kind": "waiting_input", "phase_key": "conops", "ts": 1,
+         "message": "What should the family see first?",
+         "payload": {"waiting_input": True, "question": "What should the family see first?"}},
+        {"id": 90002, "kind": "answer", "phase_key": "conops", "ts": 2,
+         "message": "You: A calm shared view", "payload": {"answer": "A calm shared view"}},
+        {"id": 90003, "kind": "waiting_input", "phase_key": "conops", "ts": 3,
+         "message": "Who else should weigh in?",
+         "payload": {"waiting_input": True, "question": "Who else should weigh in?"}},
+        {"id": 90004, "kind": "answer", "phase_key": "conops", "ts": 4,
+         "message": "You: My co-founder, next week", "payload": {"answer": "My co-founder, next week"}},
+    ]
+
+
+def test_interview_history_cards_and_debug_toggle_persist(page, ui):
+    route_task_snapshot(page, ui, "live", interview_history_snapshot)
+    page.goto(ui + "/tasks/live/view")
+    page.get_by_text("Interview so far").wait_for()
+    assert page.locator(".qa-item").count() == 2
+    assert page.locator(".qa-item").nth(0).locator(".qa-question p").inner_text() == "What should the family see first?"
+    assert page.locator(".qa-item").nth(0).locator(".qa-answer p").inner_text() == "A calm shared view"
+    assert page.locator(".qa-item").nth(1).locator(".qa-question p").inner_text() == "Who else should weigh in?"
+    assert page.locator(".qa-tag", has_text="Q1").count() == 1
+    assert page.locator("#console").count() == 0
+    page.locator(".avatar").click();page.locator("#debugtoggle").click()
+    page.get_by_text("Live engine output").wait_for()
+    assert page.locator("#console").is_visible()
+    page.reload();page.get_by_text("Live engine output").wait_for()
+    assert page.locator("#console").is_visible() and page.locator(".qa-item").count() == 2
+    page.locator(".avatar").click();page.locator("#debugtoggle").click()
+    page.locator("#console").wait_for(state="detached")
+    assert page.locator("#console").count() == 0
+    assert page.get_by_text("Interview so far").is_visible()
