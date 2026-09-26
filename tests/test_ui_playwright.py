@@ -923,3 +923,38 @@ def test_interview_history_cards_and_debug_toggle_persist(page, ui):
     page.locator("#console").wait_for(state="detached")
     assert page.locator("#console").count() == 0
     assert page.get_by_text("Interview so far").is_visible()
+
+
+def test_feedback_thumbs_comment_persist_and_delete(page, ui):
+    route_task_snapshot(page, ui, "live", interview_history_snapshot)
+    page.goto(ui + "/tasks/live/view")
+    page.get_by_text("Interview so far").wait_for()
+    first_q = page.locator(".qa-item").nth(0).locator(".qa-question .qa-actions")
+    first_q.locator('[data-thumb="-1"]').click()
+    page.locator(".qa-question .qa-thumb.active").first.wait_for()
+    assert page.locator(".qa-question .qa-thumb.active").first.get_attribute("data-thumb") == "-1"
+
+    first_q.locator(".qa-comment-btn").click()
+    dialog = page.get_by_role("dialog", name="Comment on this question")
+    dialog.wait_for()
+    assert dialog.get_by_text("ANNOTATION ONLY").is_visible()
+    dialog.locator("#feedbacktext").fill("Too abstract for a first question")
+    dialog.get_by_role("button", name="Save comment").click()
+    note = page.locator(".qa-note", has_text="Too abstract for a first question")
+    note.wait_for()
+
+    page.reload()
+    page.get_by_text("Interview so far").wait_for()
+    assert page.locator(".qa-question .qa-thumb.active").first.get_attribute("data-thumb") == "-1"
+    page.locator(".qa-note", has_text="Too abstract").wait_for()
+
+    page.locator(".qa-note").first.click()
+    dialog = page.get_by_role("dialog", name="Comment on this question")
+    dialog.wait_for()
+    delete = dialog.get_by_role("button", name="Delete feedback")
+    delete.click()
+    assert dialog.get_by_role("button", name="Confirm delete?").is_visible()
+    dialog.get_by_role("button", name="Confirm delete?").click()
+    page.get_by_role("dialog", name="Comment on this question").wait_for(state="detached")
+    assert page.locator(".qa-note").count() == 0
+    assert page.locator(".qa-question .qa-thumb.active").count() == 0

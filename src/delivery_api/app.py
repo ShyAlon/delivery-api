@@ -845,6 +845,52 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
     except KeyError:raise HTTPException(404,"gate not found")
     except ValueError as e:raise HTTPException(400,{"error":str(e),"cause":"The gate decision is incomplete.","next":"Choose, edit, or explain what the redo should change."})
 
+class FeedbackWrite(BaseModel):
+    input_ref: str = Field(min_length=1, max_length=64)
+    target: Literal["question", "answer"]
+    content: str = Field(default="", max_length=8000)
+    thumb: Literal[1, -1] | None = None
+    comment: str | None = Field(default=None, max_length=4000)
+
+class FeedbackPatch(BaseModel):
+    thumb: Literal[1, -1] | None = None
+    comment: str | None = Field(default=None, max_length=4000)
+
+@app.get("/api/tasks/{task_id}/feedback")
+def list_feedback(task_id:str, a:auth.Actor=Depends(auth.require_actor)):
+    if not store.task(task_id): raise HTTPException(404,"task not found")
+    return {"feedback": store.list_feedback(task_id)}
+
+@app.post("/api/tasks/{task_id}/feedback")
+def create_feedback(task_id:str, req:FeedbackWrite, a:auth.Actor=Depends(auth.require_actor)):
+    if not req.thumb and not (req.comment or "").strip():
+        raise HTTPException(400,{"error":"Empty feedback.","cause":"Neither a thumb nor a comment was supplied.","next":"Add a thumb or a comment before saving."})
+    try:
+        return store.upsert_feedback(task_id,req.input_ref,req.target,req.content,req.thumb,(req.comment or "").strip() or None,a.label)
+    except ValueError as e:
+        raise HTTPException(400,str(e))
+
+@app.patch("/api/tasks/{task_id}/feedback/{feedback_id}")
+def patch_feedback(task_id:str, feedback_id:int, req:FeedbackPatch, a:auth.Actor=Depends(auth.require_actor)):
+    try:
+        return store.update_feedback(task_id,feedback_id,a.label,thumb=req.thumb,comment=(req.comment or "").strip() or None,admin=a.admin)
+    except KeyError:
+        raise HTTPException(404,"feedback not found")
+    except PermissionError:
+        raise HTTPException(403,"feedback belongs to another actor")
+    except ValueError as e:
+        raise HTTPException(400,str(e))
+
+@app.delete("/api/tasks/{task_id}/feedback/{feedback_id}")
+def remove_feedback(task_id:str, feedback_id:int, a:auth.Actor=Depends(auth.require_actor)):
+    try:
+        store.delete_feedback(task_id,feedback_id,a.label,admin=a.admin)
+        return {"status":"deleted"}
+    except KeyError:
+        raise HTTPException(404,"feedback not found")
+    except PermissionError:
+        raise HTTPException(403,"feedback belongs to another actor")
+
 class QuotaUpdate(BaseModel): token_quota: int = Field(ge=0)
 @app.get("/api/admin/users/{user_id}/quota")
 def get_quota(user_id:str, request:Request, a:auth.Actor=Depends(auth.require_admin)):

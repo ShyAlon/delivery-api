@@ -1420,3 +1420,43 @@ def test_runner_strips_interviewer_prefix_from_founder_question(tmp_path):
     asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))
     event=[e for e in store.events(tid) if e['kind']=='waiting_input'][-1]
     assert event['payload']['question']=='What change matters?'
+
+
+def test_answer_feedback_crud_and_audit():
+    with TestClient(app) as client:
+        task_id = client.post("/api/tasks", json={"title": "Feedback flow"}).json()["task_id"]
+
+        empty = client.post(f"/api/tasks/{task_id}/feedback", json={"input_ref": "abc123", "target": "question"})
+        assert empty.status_code == 400
+
+        made = client.post(f"/api/tasks/{task_id}/feedback", json={
+            "input_ref": "abc123", "target": "question",
+            "content": "What should the family see first?", "thumb": -1, "comment": "Too vague"})
+        assert made.status_code == 200
+        row = made.json()
+        assert row["thumb"] == -1 and row["comment"] == "Too vague" and row["actor"]
+        fid = row["id"]
+
+        upsert = client.post(f"/api/tasks/{task_id}/feedback", json={
+            "input_ref": "abc123", "target": "question", "content": "What should the family see first?", "thumb": 1})
+        assert upsert.json()["id"] == fid and upsert.json()["thumb"] == 1 and upsert.json()["comment"] is None
+
+        other_target = client.post(f"/api/tasks/{task_id}/feedback", json={
+            "input_ref": "abc123", "target": "answer", "thumb": -1})
+        assert other_target.json()["id"] != fid
+
+        listing = client.get(f"/api/tasks/{task_id}/feedback").json()["feedback"]
+        assert len(listing) == 2
+
+        patched = client.patch(f"/api/tasks/{task_id}/feedback/{fid}", json={"thumb": None, "comment": "kept note"})
+        assert patched.json()["thumb"] is None and patched.json()["comment"] == "kept note"
+
+        missing = client.patch(f"/api/tasks/{task_id}/feedback/99999", json={"thumb": 1})
+        assert missing.status_code == 404
+
+        deleted = client.delete(f"/api/tasks/{task_id}/feedback/{fid}")
+        assert deleted.status_code == 200
+        assert len(client.get(f"/api/tasks/{task_id}/feedback").json()["feedback"]) == 1
+
+        actions = [e["action"] for e in client.get(f"/api/tasks/{task_id}/audit").json()["entries"]]
+        assert "feedback.upsert" in actions and "feedback.update" in actions and "feedback.delete" in actions
