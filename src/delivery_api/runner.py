@@ -68,7 +68,7 @@ class ProcessRunner:
 
     async def run(self, task_id: str, command: list[str], *, cwd: Path, phase: str = "intent",
                   env: dict[str, str] | None = None, completion_phases: tuple[str, ...] = (), infer_phase: bool = True,
-                  replay_decisions: dict[str, dict[str, str]] | None = None) -> int:
+                  replay_decisions: dict[str, dict[str, str]] | None = None, stall_timeout: float | None = None) -> int:
         if task_id in self.processes:
             raise RuntimeError("task already has a live process")
         launched_phase=phase
@@ -98,6 +98,10 @@ class ProcessRunner:
         replaying_prompt=False
         typed_prompt_pending=False
         self.pricing_wait_seconds[task_id]=0.0
+        if stall_timeout is None:
+            try: stall_timeout=float(os.environ.get("REQUI_RE_RUN_STALL_TIMEOUT","") or 600)
+            except ValueError: stall_timeout=600
+        stalled=False
 
         # The child pipeline owns progress and LLM heartbeats. Its lines name
         # the in-flight stage and elapsed time. A second generic heartbeat here
@@ -108,7 +112,22 @@ class ProcessRunner:
             # Chunk reads expose the question immediately instead of making the browser
             # look frozen while the engine waits for stdin.
             while True:
-                raw = await proc.stdout.read(512)
+                # A child that stops producing output and never exits used to
+                # block this loop forever, freezing the task (and the test
+                # suite) with no visible error. Bound the silence: kill a
+                # stalled child and fail the phase loudly instead.
+                try: raw = await asyncio.wait_for(proc.stdout.read(512), stall_timeout)
+                except asyncio.TimeoutError:
+                    stalled=True
+                    activity("engine.stalled","Engine produced no output; stopping the stalled run",task_id=task_id,phase=phase,silent_seconds=stall_timeout)
+                    try:os.killpg(proc.pid,signal.SIGTERM) if os.name == "posix" else proc.terminate()
+                    except ProcessLookupError:pass
+                    try:await asyncio.wait_for(proc.wait(),2)
+                    except asyncio.TimeoutError:
+                        try:os.killpg(proc.pid,signal.SIGKILL) if os.name == "posix" else proc.kill()
+                        except ProcessLookupError:pass
+                        await proc.wait()
+                    break
                 if not raw: break
                 text=structured_buffer+raw.decode(errors="replace")
                 structured_buffer=""
@@ -170,7 +189,13 @@ class ProcessRunner:
                 if completion_phases and self.on_complete is not None:
                     continuation_phase = completion_phases[-1]
             else:
-                if missing_module:
+                if stalled:
+                    error=(f"Error: the engine produced no output for {stall_timeout:g} seconds, so the run was stopped. Likely cause: "
+                           f"the process blocked silently - waiting on input that will never arrive, or a hung call with no heartbeat. "
+                           f"Next: check run.log for the last reported stage, fix the cause, then retry.")
+                    cause="The engine went silent and was stopped as stalled."
+                    next_step="Check run.log for the last reported stage, fix the cause, then retry."
+                elif missing_module:
                     error=f"Error: engine dependency '{missing_module}' is missing. Likely cause: the selected Python environment is incomplete. Next: install interview-engine into that environment, restart Requi.re, and retry. Exit code: {code}."
                     cause=f"Python could not import {missing_module}."
                     next_step="Install the interview-engine dependencies in the resolved Python environment, then retry. The raw traceback is in run.log."
