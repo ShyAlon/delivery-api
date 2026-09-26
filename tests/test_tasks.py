@@ -1492,3 +1492,27 @@ def test_task_classifications_join_shadow_to_answers(tmp_path):
 
         no_session = client.post("/api/tasks", json={"title": "No session"}).json()["task_id"]
         assert client.get(f"/api/tasks/{no_session}/classifications").json()["answers"] == {}
+
+def test_silent_engine_run_is_stopped_and_marked_failed(tmp_path):
+    import asyncio, sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store = SQLiteStore(str(tmp_path / 'stall.db')); tid = store.create_task('Silent engine')['task_id']
+    code = asyncio.run(ProcessRunner(store).run(
+        tid, [sys.executable, '-c', 'import time;print("starting",flush=True);time.sleep(30)'],
+        cwd=tmp_path, stall_timeout=0.5))
+    assert code != 0
+    phase = next(p for p in store.task(tid)['phases'] if p['phase_key'] == 'intent')
+    assert phase['state'] == 'failed'
+    errors = [e for e in store.events(tid) if e['kind'] == 'error']
+    assert errors and 'no output' in errors[-1]['message'] and 'stopped' in errors[-1]['message']
+
+
+def test_engine_heartbeats_reset_the_stall_window(tmp_path):
+    import asyncio, sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store = SQLiteStore(str(tmp_path / 'chatty.db')); tid = store.create_task('Chatty engine')['task_id']
+    script = 'import time\nfor i in range(4):\n print("tick", i, flush=True)\n time.sleep(0.3)'
+    code = asyncio.run(ProcessRunner(store).run(tid, [sys.executable, '-c', script], cwd=tmp_path, stall_timeout=1))
+    assert code == 0
