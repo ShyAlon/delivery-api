@@ -33,6 +33,14 @@ All routes, background jobs and the subprocess runner depend on the `Storage` pr
 
 ```bash
 docker build -t vmodel .
+
+# The image pip-installs the private vmodel-contracts dependency. The clone
+# authenticates through a gitconfig passed as a BuildKit secret (CI sources it
+# from the VMODEL_CONTRACTS_PAT repo secret). For a local build, point docker
+# at a gitconfig that can clone ShyAlon/vmodel-contracts:
+#   docker build --secret id=gitconfig,src="$HOME/.gitconfig" -t vmodel .
+# Without the secret the build still runs, but the pip install fails with a
+# git authentication error.
 docker run --rm -p 8000:8000 -v "$PWD/.data:/data" \
   -e DELIVERY_DB_PATH=/data/delivery.db vmodel
 ```
