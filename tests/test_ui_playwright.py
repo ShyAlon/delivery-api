@@ -888,7 +888,9 @@ def test_artifact_viewer_renders_content_title_bold_and_transcript(page,ui):
 
 
 def interview_history_snapshot(snapshot):
-    snapshot["events"] = snapshot["events"] + [
+    # Replace, not extend: the module-scoped server accumulates answer events
+    # from earlier tests, so the base snapshot is polluted by suite order.
+    snapshot["events"] = [
         {"id": 90001, "kind": "waiting_input", "phase_key": "conops", "ts": 1,
          "message": "What should the family see first?",
          "payload": {"waiting_input": True, "question": "What should the family see first?"}},
