@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 import json
 import signal
@@ -844,6 +845,103 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
         return gate
     except KeyError:raise HTTPException(404,"gate not found")
     except ValueError as e:raise HTTPException(400,{"error":str(e),"cause":"The gate decision is incomplete.","next":"Choose, edit, or explain what the redo should change."})
+
+class FeedbackWrite(BaseModel):
+    input_ref: str = Field(min_length=1, max_length=64)
+    target: Literal["question", "answer"]
+    content: str = Field(default="", max_length=8000)
+    thumb: Literal[1, -1] | None = None
+    comment: str | None = Field(default=None, max_length=4000)
+
+class FeedbackPatch(BaseModel):
+    thumb: Literal[1, -1] | None = None
+    comment: str | None = Field(default=None, max_length=4000)
+
+@app.get("/api/tasks/{task_id}/feedback")
+def list_feedback(task_id:str, a:auth.Actor=Depends(auth.require_actor)):
+    if not store.task(task_id): raise HTTPException(404,"task not found")
+    return {"feedback": store.list_feedback(task_id)}
+
+@app.post("/api/tasks/{task_id}/feedback")
+def create_feedback(task_id:str, req:FeedbackWrite, a:auth.Actor=Depends(auth.require_actor)):
+    if not req.thumb and not (req.comment or "").strip():
+        raise HTTPException(400,{"error":"Empty feedback.","cause":"Neither a thumb nor a comment was supplied.","next":"Add a thumb or a comment before saving."})
+    try:
+        return store.upsert_feedback(task_id,req.input_ref,req.target,req.content,req.thumb,(req.comment or "").strip() or None,a.label)
+    except ValueError as e:
+        raise HTTPException(400,str(e))
+
+@app.patch("/api/tasks/{task_id}/feedback/{feedback_id}")
+def patch_feedback(task_id:str, feedback_id:int, req:FeedbackPatch, a:auth.Actor=Depends(auth.require_actor)):
+    try:
+        return store.update_feedback(task_id,feedback_id,a.label,thumb=req.thumb,comment=(req.comment or "").strip() or None,admin=a.admin)
+    except KeyError:
+        raise HTTPException(404,"feedback not found")
+    except PermissionError:
+        raise HTTPException(403,"feedback belongs to another actor")
+    except ValueError as e:
+        raise HTTPException(400,str(e))
+
+@app.delete("/api/tasks/{task_id}/feedback/{feedback_id}")
+def remove_feedback(task_id:str, feedback_id:int, a:auth.Actor=Depends(auth.require_actor)):
+    try:
+        store.delete_feedback(task_id,feedback_id,a.label,admin=a.admin)
+        return {"status":"deleted"}
+    except KeyError:
+        raise HTTPException(404,"feedback not found")
+    except PermissionError:
+        raise HTTPException(403,"feedback belongs to another actor")
+
+def _qa_turns(events):
+    """Pair interview questions with their answers, mirroring the web client's qaTurns."""
+    turns=[]
+    for e in events:
+        if e.get("phase_key") not in ("intent","conops"): continue
+        p=e.get("payload") or {}
+        if e.get("kind") in ("waiting_input","founder_decision") or p.get("waiting_input"):
+            q=str(p.get("question") or e.get("message") or "").strip()
+            if q and not (turns and turns[-1]["a"] is None and turns[-1]["q"]==q):
+                turns.append({"q":q,"a":None})
+        elif e.get("kind")=="answer":
+            m=str(e.get("message") or "");a=str(p.get("answer") or (m[5:] if m.startswith("You: ") else "")).strip()
+            if a and turns and turns[-1]["a"] is None:
+                turns[-1]["a"]=a
+    return [t for t in turns if t["q"] and t["a"]]
+
+def _content_ref(text):
+    return hashlib.sha256(text.strip().encode()).hexdigest()[:16]
+
+@app.get("/api/tasks/{task_id}/classifications")
+def task_classifications(task_id:str, a:auth.Actor=Depends(auth.require_actor)):
+    """Per-answer shadow categorization (Jev vs baseline) for debug-mode chips."""
+    if not store.task(task_id): raise HTTPException(404,"task not found")
+    session=store.engine_session(task_id)
+    out={"session":session,"answers":{}}
+    if not session: return out
+    from vmodel_contracts.runtime import artifacts_root
+    root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"/"categorization-shadow.jsonl"
+    if not root.is_file():
+        out["reason"]="no shadow file";return out
+    turns=_qa_turns(store.events(task_id,limit=10000))
+    try:
+        records=[json.loads(line) for line in root.read_text().splitlines() if line.strip()]
+    except Exception as e:
+        out["reason"]=f"shadow file unreadable: {e}";return out
+    for rec in records:
+        slot=rec.get("slot")
+        if slot not in ("intent","coverage"): continue
+        state=str((rec.get("input") or {}).get("state") or "")
+        if not state: continue
+        for t in turns:
+            if t["q"] in state and t["a"] in state:
+                aref=_content_ref(t["q"]+"\n"+t["a"])
+                entry=out["answers"].setdefault(aref,{})
+                base,jev=rec.get("baseline") or {},rec.get("jev") or {}
+                differed=(base.get("status")=="ok" and jev.get("status")=="ok" and base.get("verdict")!=jev.get("verdict"))
+                entry[slot]={"jev":jev.get("verdict") or {},"baseline":base.get("verdict") or {},
+                             "jev_status":jev.get("status"),"differed":differed,
+                             "ts":rec.get("timestamp")}
+    return out
 
 class QuotaUpdate(BaseModel): token_quota: int = Field(ge=0)
 @app.get("/api/admin/users/{user_id}/quota")

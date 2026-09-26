@@ -1420,3 +1420,75 @@ def test_runner_strips_interviewer_prefix_from_founder_question(tmp_path):
     asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))
     event=[e for e in store.events(tid) if e['kind']=='waiting_input'][-1]
     assert event['payload']['question']=='What change matters?'
+
+
+def test_answer_feedback_crud_and_audit():
+    with TestClient(app) as client:
+        task_id = client.post("/api/tasks", json={"title": "Feedback flow"}).json()["task_id"]
+
+        empty = client.post(f"/api/tasks/{task_id}/feedback", json={"input_ref": "abc123", "target": "question"})
+        assert empty.status_code == 400
+
+        made = client.post(f"/api/tasks/{task_id}/feedback", json={
+            "input_ref": "abc123", "target": "question",
+            "content": "What should the family see first?", "thumb": -1, "comment": "Too vague"})
+        assert made.status_code == 200
+        row = made.json()
+        assert row["thumb"] == -1 and row["comment"] == "Too vague" and row["actor"]
+        fid = row["id"]
+
+        upsert = client.post(f"/api/tasks/{task_id}/feedback", json={
+            "input_ref": "abc123", "target": "question", "content": "What should the family see first?", "thumb": 1})
+        assert upsert.json()["id"] == fid and upsert.json()["thumb"] == 1 and upsert.json()["comment"] is None
+
+        other_target = client.post(f"/api/tasks/{task_id}/feedback", json={
+            "input_ref": "abc123", "target": "answer", "thumb": -1})
+        assert other_target.json()["id"] != fid
+
+        listing = client.get(f"/api/tasks/{task_id}/feedback").json()["feedback"]
+        assert len(listing) == 2
+
+        patched = client.patch(f"/api/tasks/{task_id}/feedback/{fid}", json={"thumb": None, "comment": "kept note"})
+        assert patched.json()["thumb"] is None and patched.json()["comment"] == "kept note"
+
+        missing = client.patch(f"/api/tasks/{task_id}/feedback/99999", json={"thumb": 1})
+        assert missing.status_code == 404
+
+        deleted = client.delete(f"/api/tasks/{task_id}/feedback/{fid}")
+        assert deleted.status_code == 200
+        assert len(client.get(f"/api/tasks/{task_id}/feedback").json()["feedback"]) == 1
+
+        actions = [e["action"] for e in client.get(f"/api/tasks/{task_id}/audit").json()["entries"]]
+        assert "feedback.upsert" in actions and "feedback.update" in actions and "feedback.delete" in actions
+
+
+def test_task_classifications_join_shadow_to_answers(tmp_path):
+    import json as _json
+    from delivery_api.app import store as app_store
+    session = "chip-session"
+    root = tmp_path / session / "interview"
+    root.mkdir(parents=True)
+    os.environ["VMODEL_ARTIFACTS_DIR"] = str(tmp_path)
+    with TestClient(app) as client:
+        task_id = client.post("/api/tasks", json={"title": "Chip join"}).json()["task_id"]
+        app_store.set_engine_session(task_id, session)
+        q, a = "What should the family see first?", "A calm shared view"
+        app_store.add_event(task_id, "waiting_input", q, phase_key="conops", payload={"waiting_input": True, "question": q})
+        app_store.add_event(task_id, "answer", f"You: {a}", phase_key="conops", payload={"answer": a})
+        rec = {"slot": "coverage", "timestamp": "t", "input": {"state": f"Question: {q}\nAnswer: {a}"},
+               "baseline": {"status": "ok", "verdict": {"relevance": "relevant"}},
+               "jev": {"status": "ok", "verdict": {"relevance": "thin"}}}
+        rec2 = {"slot": "intent", "timestamp": "t", "input": {"state": f"Question: {q}\nFounder answer: {a}"},
+                "baseline": {"status": "ok", "verdict": {"intent": "answer"}},
+                "jev": {"status": "ok", "verdict": {"intent": "answer"}}}
+        (root / "categorization-shadow.jsonl").write_text(_json.dumps(rec) + "\n" + _json.dumps(rec2) + "\n")
+
+        data = client.get(f"/api/tasks/{task_id}/classifications").json()
+        assert data["session"] == session and len(data["answers"]) == 1
+        entry = next(iter(data["answers"].values()))
+        assert entry["coverage"]["differed"] is True
+        assert entry["coverage"]["jev"]["relevance"] == "thin" and entry["coverage"]["baseline"]["relevance"] == "relevant"
+        assert entry["intent"]["differed"] is False
+
+        no_session = client.post("/api/tasks", json={"title": "No session"}).json()["task_id"]
+        assert client.get(f"/api/tasks/{no_session}/classifications").json()["answers"] == {}

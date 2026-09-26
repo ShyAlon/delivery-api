@@ -71,6 +71,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
   task_id TEXT, detail TEXT NOT NULL DEFAULT '{}', ts REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_task ON audit_log(task_id, id);
+CREATE TABLE IF NOT EXISTS answer_feedback (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, session_id TEXT,
+  input_ref TEXT NOT NULL, target TEXT NOT NULL, content TEXT NOT NULL DEFAULT '',
+  thumb INTEGER, comment TEXT, actor TEXT NOT NULL,
+  created_at REAL NOT NULL, updated_at REAL NOT NULL,
+  UNIQUE(task_id, input_ref, target, actor)
+);
 CREATE TABLE IF NOT EXISTS task_artifacts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, generation INTEGER NOT NULL,
   phase_key TEXT NOT NULL, name TEXT NOT NULL, ref TEXT NOT NULL, mime_type TEXT NOT NULL DEFAULT 'application/json',
@@ -118,6 +125,10 @@ class Storage(Protocol):
     def audit(self, actor: str, action: str, task_id: str | None = None, detail: dict | None = None) -> int: ...
     def audit_entries(self, task_id: str | None = None, limit: int = 500) -> list[dict]: ...
     def add_task_artifact(self, task_id: str, phase_key: str, name: str, ref: str, mime_type: str = "application/json") -> None: ...
+    def list_feedback(self, task_id: str) -> list[dict]: ...
+    def upsert_feedback(self, task_id: str, input_ref: str, target: str, content: str, thumb: int | None, comment: str | None, actor: str) -> dict: ...
+    def update_feedback(self, task_id: str, feedback_id: int, actor: str, *, thumb: int | None = None, comment: str | None = None, admin: bool = False) -> dict: ...
+    def delete_feedback(self, task_id: str, feedback_id: int, actor: str, *, admin: bool = False) -> None: ...
     def task_artifacts(self, task_id: str, *, include_stale: bool = True) -> list[dict]: ...
     def rerun_prerequisite(self, task_id: str, from_phase: str) -> dict | None: ...
     def prepare_rerun(self, task_id: str, from_phase: str, policy: str = "archive", actor: str = "local user") -> int: ...
@@ -482,6 +493,61 @@ class SQLiteStore:
                 "INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,mime_type,created_at) VALUES (?,?,?,?,?,?,?)",
                 (task_id, task["generation"], phase_key, name, ref, mime_type, time.time()),
             ); self._commit()
+
+    def list_feedback(self, task_id: str) -> list[dict]:
+        return [dict(r) for r in self._db.execute(
+            "SELECT * FROM answer_feedback WHERE task_id=? ORDER BY id", (task_id,))]
+
+    def upsert_feedback(self, task_id: str, input_ref: str, target: str, content: str,
+                        thumb: int | None, comment: str | None, actor: str) -> dict:
+        if target not in ("question", "answer"):
+            raise ValueError("target must be question or answer")
+        if thumb not in (None, 1, -1):
+            raise ValueError("thumb must be 1, -1, or null")
+        session = self.engine_session(task_id)
+        now = time.time()
+        with self._lock:
+            self._db.execute(
+                """INSERT INTO answer_feedback(task_id,session_id,input_ref,target,content,thumb,comment,actor,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(task_id,input_ref,target,actor)
+                   DO UPDATE SET session_id=excluded.session_id, content=excluded.content,
+                                 thumb=excluded.thumb, comment=excluded.comment, updated_at=excluded.updated_at""",
+                (task_id, session, input_ref, target, content, thumb, comment, actor, now, now))
+            row = self._db.execute(
+                "SELECT * FROM answer_feedback WHERE task_id=? AND input_ref=? AND target=? AND actor=?",
+                (task_id, input_ref, target, actor)).fetchone()
+            self.audit(actor, "feedback.upsert", task_id, {"feedback_id": row["id"], "target": target, "thumb": thumb, "has_comment": bool(comment)})
+            self._commit()
+        return dict(row)
+
+    def _feedback_row(self, task_id: str, feedback_id: int, actor: str, admin: bool) -> dict:
+        row = self._db.execute("SELECT * FROM answer_feedback WHERE id=? AND task_id=?", (feedback_id, task_id)).fetchone()
+        if row is None:
+            raise KeyError("feedback not found")
+        if row["actor"] != actor and not admin:
+            raise PermissionError("feedback belongs to another actor")
+        return row
+
+    def update_feedback(self, task_id: str, feedback_id: int, actor: str, *,
+                        thumb: int | None = None, comment: str | None = None, admin: bool = False) -> dict:
+        if thumb not in (None, 1, -1):
+            raise ValueError("thumb must be 1, -1, or null")
+        with self._lock:
+            self._feedback_row(task_id, feedback_id, actor, admin)
+            self._db.execute("UPDATE answer_feedback SET thumb=?, comment=?, updated_at=? WHERE id=?",
+                             (thumb, comment, time.time(), feedback_id))
+            row = self._db.execute("SELECT * FROM answer_feedback WHERE id=?", (feedback_id,)).fetchone()
+            self.audit(actor, "feedback.update", task_id, {"feedback_id": feedback_id, "target": row["target"], "thumb": thumb, "has_comment": bool(comment)})
+            self._commit()
+        return dict(row)
+
+    def delete_feedback(self, task_id: str, feedback_id: int, actor: str, *, admin: bool = False) -> None:
+        with self._lock:
+            row = self._feedback_row(task_id, feedback_id, actor, admin)
+            self._db.execute("DELETE FROM answer_feedback WHERE id=?", (feedback_id,))
+            self.audit(actor, "feedback.delete", task_id, {"feedback_id": feedback_id, "target": row["target"]})
+            self._commit()
 
     def task_artifacts(self, task_id: str, *, include_stale: bool = True) -> list[dict]:
         where = "task_id=?" if include_stale else "task_id=? AND stale=0"

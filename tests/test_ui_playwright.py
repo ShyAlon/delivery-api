@@ -923,3 +923,70 @@ def test_interview_history_cards_and_debug_toggle_persist(page, ui):
     page.locator("#console").wait_for(state="detached")
     assert page.locator("#console").count() == 0
     assert page.get_by_text("Interview so far").is_visible()
+
+
+def test_feedback_thumbs_comment_persist_and_delete(page, ui):
+    route_task_snapshot(page, ui, "live", interview_history_snapshot)
+    page.goto(ui + "/tasks/live/view")
+    page.get_by_text("Interview so far").wait_for()
+    first_q = page.locator(".qa-item").nth(0).locator(".qa-question .qa-actions")
+    first_q.locator('[data-thumb="-1"]').click()
+    page.locator(".qa-question .qa-thumb.active").first.wait_for()
+    assert page.locator(".qa-question .qa-thumb.active").first.get_attribute("data-thumb") == "-1"
+
+    first_q.locator(".qa-comment-btn").click()
+    dialog = page.get_by_role("dialog", name="Comment on this question")
+    dialog.wait_for()
+    assert dialog.get_by_text("ANNOTATION ONLY").is_visible()
+    dialog.locator("#feedbacktext").fill("Too abstract for a first question")
+    dialog.get_by_role("button", name="Save comment").click()
+    note = page.locator(".qa-note", has_text="Too abstract for a first question")
+    note.wait_for()
+
+    page.reload()
+    page.get_by_text("Interview so far").wait_for()
+    assert page.locator(".qa-question .qa-thumb.active").first.get_attribute("data-thumb") == "-1"
+    page.locator(".qa-note", has_text="Too abstract").wait_for()
+
+    page.locator(".qa-note").first.click()
+    dialog = page.get_by_role("dialog", name="Comment on this question")
+    dialog.wait_for()
+    delete = dialog.get_by_role("button", name="Delete feedback")
+    delete.click()
+    assert dialog.get_by_role("button", name="Confirm delete?").is_visible()
+    dialog.get_by_role("button", name="Confirm delete?").click()
+    page.get_by_role("dialog", name="Comment on this question").wait_for(state="detached")
+    assert page.locator(".qa-note").count() == 0
+    assert page.locator(".qa-question .qa-thumb.active").count() == 0
+
+
+def test_debug_chips_show_intent_relevance_and_differed_tooltip(page, ui):
+    route_task_snapshot(page, ui, "live", interview_history_snapshot)
+    classifications = {"session": "s", "answers": {}}
+    def classify(route):
+        snapshot = page.request.get(ui + "/api/tasks/live").json()
+        interview_history_snapshot(snapshot)
+        turns = [(e["payload"]["question"], None) for e in snapshot["events"] if e["kind"] == "waiting_input"]
+        answers = {e["payload"]["answer"] for e in snapshot["events"] if e["kind"] == "answer"}
+        import hashlib as h
+        for (q, _), a in zip(turns, sorted(answers)):
+            ref = h.sha256((q + "\n" + a).strip().encode()).hexdigest()[:16]
+            classifications["answers"][ref] = {
+                "intent": {"jev": {"intent": "answer"}, "baseline": {"intent": "answer"}, "jev_status": "ok", "differed": False, "ts": "t"},
+                "coverage": {"jev": {"relevance": "thin"}, "baseline": {"relevance": "relevant"}, "jev_status": "ok", "differed": True, "ts": "t"}}
+        route.fulfill(json=classifications)
+    page.route("**/api/tasks/live/classifications", classify)
+    page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
+    page.goto(ui + "/tasks/live/view")
+    page.get_by_text("Interview so far").wait_for()
+    chips = page.locator(".qa-chips").first
+    chips.wait_for()
+    assert chips.get_by_text("intent · answer", exact=True).is_visible()
+    assert chips.get_by_text("relevance · thin", exact=True).is_visible()
+    marker = chips.locator(".qa-chip.differed")
+    assert marker.get_by_text("engine differed", exact=True).is_visible()
+    assert "Jev read: thin" in marker.get_attribute("title") and "engine used: relevant" in marker.get_attribute("title")
+
+    page.locator(".avatar").click(); page.locator("#debugtoggle").click()
+    page.locator(".qa-chips").first.wait_for(state="detached")
+    assert page.locator(".qa-chips").count() == 0
