@@ -26,6 +26,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Authenticate private vmodel-contracts clone
+        env:
+          VMODEL_CONTRACTS_PAT: ${{ secrets.VMODEL_CONTRACTS_PAT }}
+        run: |
+          test -n "$VMODEL_CONTRACTS_PAT" || { echo 'Error: VMODEL_CONTRACTS_PAT repo secret is unset. Create a fine-grained PAT with read-only contents on ShyAlon/vmodel-contracts, then: gh secret set VMODEL_CONTRACTS_PAT'; exit 1; }
+          git config --global url."https://x-access-token:${VMODEL_CONTRACTS_PAT}@github.com/ShyAlon/vmodel-contracts.git".insteadOf "https://github.com/ShyAlon/vmodel-contracts.git"
       - run: pip install -e '.[dev]'
       - run: python -m playwright install --with-deps chromium
       - run: pytest -q
