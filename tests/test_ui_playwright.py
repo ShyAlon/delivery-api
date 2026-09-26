@@ -958,3 +958,35 @@ def test_feedback_thumbs_comment_persist_and_delete(page, ui):
     page.get_by_role("dialog", name="Comment on this question").wait_for(state="detached")
     assert page.locator(".qa-note").count() == 0
     assert page.locator(".qa-question .qa-thumb.active").count() == 0
+
+
+def test_debug_chips_show_intent_relevance_and_differed_tooltip(page, ui):
+    route_task_snapshot(page, ui, "live", interview_history_snapshot)
+    classifications = {"session": "s", "answers": {}}
+    def classify(route):
+        snapshot = page.request.get(ui + "/api/tasks/live").json()
+        interview_history_snapshot(snapshot)
+        turns = [(e["payload"]["question"], None) for e in snapshot["events"] if e["kind"] == "waiting_input"]
+        answers = {e["payload"]["answer"] for e in snapshot["events"] if e["kind"] == "answer"}
+        import hashlib as h
+        for (q, _), a in zip(turns, sorted(answers)):
+            ref = h.sha256((q + "\n" + a).strip().encode()).hexdigest()[:16]
+            classifications["answers"][ref] = {
+                "intent": {"jev": {"intent": "answer"}, "baseline": {"intent": "answer"}, "jev_status": "ok", "differed": False, "ts": "t"},
+                "coverage": {"jev": {"relevance": "thin"}, "baseline": {"relevance": "relevant"}, "jev_status": "ok", "differed": True, "ts": "t"}}
+        route.fulfill(json=classifications)
+    page.route("**/api/tasks/live/classifications", classify)
+    page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
+    page.goto(ui + "/tasks/live/view")
+    page.get_by_text("Interview so far").wait_for()
+    chips = page.locator(".qa-chips").first
+    chips.wait_for()
+    assert chips.get_by_text("intent · answer", exact=True).is_visible()
+    assert chips.get_by_text("relevance · thin", exact=True).is_visible()
+    marker = chips.locator(".qa-chip.differed")
+    assert marker.get_by_text("engine differed", exact=True).is_visible()
+    assert "Jev read: thin" in marker.get_attribute("title") and "engine used: relevant" in marker.get_attribute("title")
+
+    page.locator(".avatar").click(); page.locator("#debugtoggle").click()
+    page.locator(".qa-chips").first.wait_for(state="detached")
+    assert page.locator(".qa-chips").count() == 0
