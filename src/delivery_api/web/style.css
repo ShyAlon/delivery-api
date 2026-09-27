@@ -137,3 +137,10 @@ button.danger{color:#a33}
 .model-route-trace,.execution-data{margin:0 0 16px;border-radius:14px;min-width:0}.model-route-trace .panel-title,.execution-data .panel-title{margin-bottom:8px}.model-route-trace p,.execution-data p{margin:6px 0;font:12px/1.5 "DM Mono",monospace;overflow-wrap:anywhere}.model-route-trace .model_preflight{color:#a33}.execution-data details{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.execution-data summary{cursor:pointer;font-size:12px;font-weight:600}.execution-data .json-view{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;background:#15201c;color:#cbd6cf;border-radius:10px;padding:14px;font:11px/1.5 "DM Mono",monospace}
 .not-started #startengine:disabled{opacity:.55;cursor:not-allowed;box-shadow:none;transform:none}
 .not-started #startstatus{max-width:520px;overflow-wrap:anywhere;font:12px/1.5 Manrope,system-ui,sans-serif;color:#805229}
+
+/* Keep the answer intact and make a slow send visible without hiding Cancel. */
+.answer-spinner{display:inline-flex;align-items:center;gap:8px;margin:0 10px;color:var(--green);font:11px DM Mono}
+.answer-spinner i{display:inline-block;width:16px;height:16px;border:2px solid #c9d8c6;border-top-color:var(--green);border-radius:50%;animation:answer-spin .8s linear infinite}
+@keyframes answer-spin{to{transform:rotate(360deg)}}
+.interview-answer textarea:disabled{opacity:.72;background:#f1f4ed;cursor:progress}
+@media(prefers-reduced-motion:reduce){.answer-spinner i{animation:none;border-top-color:var(--ink)}}
