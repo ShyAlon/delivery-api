@@ -2,8 +2,10 @@ name: CI and deploy
 
 on:
   pull_request:
-  push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
 
 permissions:
@@ -11,8 +13,8 @@ permissions:
   packages: write
 
 concurrency:
-  group: delivery-api-${{ github.ref }}
-  cancel-in-progress: false
+  group: delivery-api-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   IMAGE: ghcr.io/shyalon/delivery-api
@@ -26,18 +28,19 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
       - name: Authenticate private vmodel-contracts clone
         env:
           VMODEL_CONTRACTS_PAT: ${{ secrets.VMODEL_CONTRACTS_PAT }}
         run: |
           test -n "$VMODEL_CONTRACTS_PAT" || { echo 'Error: VMODEL_CONTRACTS_PAT repo secret is unset. Create a fine-grained PAT with read-only contents on ShyAlon/vmodel-contracts, then: gh secret set VMODEL_CONTRACTS_PAT'; exit 1; }
           git config --global url."https://x-access-token:${VMODEL_CONTRACTS_PAT}@github.com/ShyAlon/vmodel-contracts.git".insteadOf "https://github.com/ShyAlon/vmodel-contracts.git"
-      - run: pip install -e '.[dev]'
-      - run: python -m playwright install --with-deps chromium
-      - run: pytest -q
+      - run: ./scripts/test-local.sh
 
   image:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
     outputs:
@@ -77,7 +80,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
-    if: github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
+    if: github.event_name == 'workflow_dispatch' && vars.DEPLOY_ENABLED == 'true'
     needs: image
     runs-on: ubuntu-latest
     environment: production
