@@ -436,12 +436,14 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
 def test_answer_failure_preserves_text_and_recovers_button(page,ui):
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
+    live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None,'question':'What matters most?'}
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
     page.route('**/api/tasks/live/answer',lambda route:route.fulfill(status=503,json={'detail':{'error':'Answer could not be sent.','cause':'Engine input is unavailable.','next':'Retry when the engine is waiting.'}}))
     page.goto(ui+'/tasks/live/view');answer=page.locator('#answerform textarea');button=page.locator('#answerform button[type=submit]')
     answer.fill('Do not lose this answer');button.click()
     page.get_by_text('Answer could not be sent.',exact=False).wait_for()
-    assert answer.input_value()=='Do not lose this answer' and button.is_enabled() and button.inner_text()=='Send answer'
+    assert answer.input_value()=='Do not lose this answer' and answer.is_enabled() and button.is_enabled() and button.inner_text()=='Send answer'
+    assert page.locator('#answerspinner').is_hidden()
 
 def test_rerun_review_opens_top_dialog_and_escape_restores_flow(page,ui):
     page.goto(ui+'/tasks/done/view');page.get_by_role('button',name='Rerun stage').click()
@@ -460,6 +462,7 @@ def test_rerun_review_opens_top_dialog_and_escape_restores_flow(page,ui):
 def test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled(page,ui):
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
+    live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None,'question':'What matters most?'}
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
     pending=[]
     def hold(route):pending.append(route)
@@ -467,15 +470,21 @@ def test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled(page,ui):
     page.goto(ui+'/tasks/live/view');answer=page.locator('#answerform textarea');send=page.locator('#answerform button[type=submit]');cancel=page.get_by_role('button',name='Cancel send')
     answer.fill('A careful answer still in flight');send.click();cancel.wait_for()
     page.wait_for_timeout(16000)
-    assert send.inner_text()=='Sending…' and send.is_disabled() and cancel.is_visible()
+    spinner=page.locator('#answerspinner')
+    assert send.inner_text()=='Sending…' and send.is_disabled() and answer.is_disabled() and cancel.is_visible()
+    assert spinner.is_visible() and spinner.get_attribute('role')=='status'
+    assert spinner.locator('i').evaluate('e=>getComputedStyle(e).animationName')=='answer-spin'
+    page.screenshot(path='/downloads/interview-answer-sending.png',full_page=False)
     assert answer.input_value()=='A careful answer still in flight' and page.get_by_text('request timed out',exact=False).count()==0
     cancel.click();page.get_by_text('Send cancelled. Your answer is still here.').wait_for()
-    assert send.is_enabled() and answer.input_value()=='A careful answer still in flight'
+    assert send.is_enabled() and answer.is_enabled() and answer.input_value()=='A careful answer still in flight'
+    assert spinner.is_hidden()
     if pending:pending[0].abort()
 
 def test_answer_enter_sends_and_control_enter_inserts_newline(page,ui):
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
+    live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None,'question':'What matters most?'}
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
     sent=[]
     page.route('**/api/tasks/live/answer',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
