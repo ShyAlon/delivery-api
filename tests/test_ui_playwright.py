@@ -77,7 +77,7 @@ s.wait_at_gate("sim", "intent")
 @pytest.fixture()
 def page(ui):
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, executable_path=os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE"))
+        browser = p.chromium.launch(headless=True, executable_path=os.environ["PLAYWRIGHT_CHROMIUM_EXECUTABLE"] if os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE") else None)
         page = browser.new_page(viewport={"width": 1365, "height": 900})
         yield page
         browser.close()
@@ -136,13 +136,14 @@ def test_not_started_panel_layout(page,ui):
     assert label.inner_text().startswith('DEFAULT MODEL ROUTE')
     control=route.bounding_box();action=start.bounding_box();assert control['x']+control['width']+12<action['x']
     assert control['y']>=label.bounding_box()['y']+12
-    assert start.is_visible() and start.is_enabled()
+    assert start.is_visible() and not start.is_enabled()
+    assert "not configured" in panel.locator("#startstatus").inner_text()
 
 
 def test_not_started_running_and_done_pages(page, ui):
     page.goto(ui + "/tasks/empty/view")
     page.get_by_text("This task hasn't started.").wait_for();assert page.get_by_text("This task hasn't started.").is_visible()
-    start=page.get_by_role("button",name="Start interview");assert start.is_visible() and start.is_enabled()
+    start=page.get_by_role("button",name="Start interview");assert start.is_visible() and not start.is_enabled()
     assert page.get_by_text("Start engine · wiring next").count()==0
     page.goto(ui + "/tasks/live/view")
     page.locator(".live-indicator").wait_for()
@@ -899,7 +900,7 @@ def test_model_route_default_and_phase_override_controls(page,ui):
     page.goto(ui+'/tasks/empty/view')
     picker=page.locator('#defaultroute');picker.wait_for()
     assert picker.locator('option').count()==2
-    assert picker.input_value()=='ollama'
+    assert picker.input_value()=='deepseek'
     deepseek=picker.locator('option[value="deepseek"]')
     assert 'DeepSeek' in deepseek.inner_text()
     page.goto(ui+'/tasks/sim/view')

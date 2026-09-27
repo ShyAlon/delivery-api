@@ -133,6 +133,7 @@ button.danger{color:#a33}
 .not-started #startstatus{width:min(100%,520px);text-align:left}
 .not-started #startstatus:empty{display:none}
 @media(max-width:650px){.not-started{min-height:0;padding:38px 20px}.not-started .big-v{width:76px;height:76px;font-size:60px;margin-bottom:22px}.not-started p{font-size:14px}.not-started .start-controls{grid-template-columns:1fr;gap:16px;padding:16px}.not-started #startengine{width:100%}}
-/* Tasks are the Home content; filter and create controls sit directly above the cards. */
-.task-tools{justify-content:flex-start;margin:0 0 20px;flex-wrap:wrap}.task-tools .primary{margin-left:auto}.task-empty{grid-column:1/-1;color:var(--muted);font-size:14px;padding:32px 4px}.dialog button:disabled{opacity:.65;cursor:wait;transform:none}
-@media(max-width:640px){.task-tools{align-items:stretch}.task-tools label{flex:1 1 150px}.task-tools input,.task-tools select{width:100%;min-width:0}.task-tools .primary{margin-left:0;width:100%}}
+
+.model-route-trace,.execution-data{margin:0 0 16px;border-radius:14px;min-width:0}.model-route-trace .panel-title,.execution-data .panel-title{margin-bottom:8px}.model-route-trace p,.execution-data p{margin:6px 0;font:12px/1.5 "DM Mono",monospace;overflow-wrap:anywhere}.model-route-trace .model_preflight{color:#a33}.execution-data details{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.execution-data summary{cursor:pointer;font-size:12px;font-weight:600}.execution-data .json-view{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;background:#15201c;color:#cbd6cf;border-radius:10px;padding:14px;font:11px/1.5 "DM Mono",monospace}
+.not-started #startengine:disabled{opacity:.55;cursor:not-allowed;box-shadow:none;transform:none}
+.not-started #startstatus{max-width:520px;overflow-wrap:anywhere;font:12px/1.5 Manrope,system-ui,sans-serif;color:#805229}
