@@ -51,7 +51,7 @@ Ollama is never in the image. Local deployments route to host Ollama; cloud depl
 
 Production is one multi-architecture Docker image on a small Ubuntu VM. Pure SQLite can be mounted from `/data`; optional Turso mode uses the same local file as an embedded replica. The container binds port 8000 to localhost only; put a TLS reverse proxy on ports 80/443 before public launch. Ollama is not deployed.
 
-`CI and deploy` runs on every push to `main`: pytest plus Playwright, an amd64/arm64 image build, GHCR push, then optional SSH deployment. Deployment is off until the repository variable `DEPLOY_ENABLED=true` exists, so CI stays green before a server is provisioned. Images are immutable `sha-<commit>` tags. The remote deploy keeps the previous image name and prints an exact rollback command if `/health` fails.
+`CI and deploy` runs tests on pull requests to `main` (except docs-only changes) and builds/pushes an amd64/arm64 image only when manually started with Actions > CI and deploy > Run workflow; optional SSH deployment follows. Deployment is off until the repository variable `DEPLOY_ENABLED=true` exists, so CI stays green before a server is provisioned. Images are immutable `sha-<commit>` tags. The remote deploy keeps the previous image name and prints an exact rollback command if `/health` fails.
 
 ### Provision once
 
@@ -197,3 +197,9 @@ brew install cmake rust
 ```
 
 The build checks this before dependency installation and stops with Error / Likely cause / Next instead of exposing Cargo/CMake output. Raw native-build output is saved to `dist/requi-re-build.log`. Because all work happens in staging, this failure leaves the last successful `dist/requi-re` launcher and runtime unchanged.
+
+### Local CI test
+
+Run `./scripts/test-local.sh` from any directory. It creates a reusable `.venv`, installs the development dependencies and runs the same tests as the PR workflow using Python 3.12. Install Python 3.12 first, and make sure your Git authentication can read private `ShyAlon/vmodel-contracts` where it is a dependency.
+
+For the local packaged app build, run `./scripts/build-dist.sh` from `delivery-api` with the sibling repositories checked out as described above. This builds the desktop distribution; it does not publish an image or deploy production. For a local container build, use the Docker command and private dependency instructions in the Docker section above.
