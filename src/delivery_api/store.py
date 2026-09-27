@@ -257,7 +257,7 @@ class SQLiteStore:
             if not title: raise ValueError("task name cannot be empty")
             try:
                 self._db.execute("INSERT INTO tasks(task_id,title,brief,state,active_phase,model_route,generation,created_at,updated_at,simulated,source_dir) VALUES (?,?,?,?,?,?,?,?,?,0,NULL)",
-                                (task_id, title, brief, "not_started", None, None, 1, now, now))
+                                (task_id, title, brief, "not_started", None, "deepseek", 1, now, now))
             except sqlite3.IntegrityError as e:
                 raise ValueError(f"a task named {title!r} already exists") from e
             self._db.executemany(

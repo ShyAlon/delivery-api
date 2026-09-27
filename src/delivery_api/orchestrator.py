@@ -106,7 +106,7 @@ class PhaseOrchestrator:
         if not python.exists():python=Path(sys.executable)
         cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",definition.generator_stage]
         if mode is ExecutionMode.REDO:cmd.extend(["--from",definition.generator_stage])
-        stored=model_route or next(((event.get("payload") or {}).get("route") for event in reversed(self.store.events(task_id)) if event.get("kind")=="model_route" and event.get("phase_key")==phase),None) or (self.store.task(task_id) or {}).get("model_route") or "ollama"
+        stored=model_route or next(((event.get("payload") or {}).get("route") for event in reversed(self.store.events(task_id)) if event.get("kind")=="model_route" and event.get("phase_key")==phase),None) or (self.store.task(task_id) or {}).get("model_route") or "deepseek"
         route="deepseek" if stored.startswith("deepseek") else "ollama" if stored.startswith("ollama") else stored
         if route not in ("ollama","deepseek"):raise ValueError(f"unsupported model route {stored!r}")
         route_value=model_routes.route_value(route)
