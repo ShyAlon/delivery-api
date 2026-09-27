@@ -133,3 +133,6 @@ button.danger{color:#a33}
 .not-started #startstatus{width:min(100%,520px);text-align:left}
 .not-started #startstatus:empty{display:none}
 @media(max-width:650px){.not-started{min-height:0;padding:38px 20px}.not-started .big-v{width:76px;height:76px;font-size:60px;margin-bottom:22px}.not-started p{font-size:14px}.not-started .start-controls{grid-template-columns:1fr;gap:16px;padding:16px}.not-started #startengine{width:100%}}
+/* Tasks are the Home content; filter and create controls sit directly above the cards. */
+.task-tools{justify-content:flex-start;margin:0 0 20px;flex-wrap:wrap}.task-tools .primary{margin-left:auto}.task-empty{grid-column:1/-1;color:var(--muted);font-size:14px;padding:32px 4px}.dialog button:disabled{opacity:.65;cursor:wait;transform:none}
+@media(max-width:640px){.task-tools{align-items:stretch}.task-tools label{flex:1 1 150px}.task-tools input,.task-tools select{width:100%;min-width:0}.task-tools .primary{margin-left:0;width:100%}}
