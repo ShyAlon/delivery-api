@@ -149,3 +149,54 @@ def test_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch)
  body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
  assert body['ui_state']['mode']=='executing'
  assert body['input_state']['waiting'] is False
+
+
+def test_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch):
+ import asyncio,threading
+ import httpx
+ store=SQLiteStore(str(tmp_path/'concurrent-start.db'));task=store.create_task('Slow engine','brief')
+ entered=threading.Event();release=threading.Event();engine=FakeEngine()
+ def slow_start(request):
+  entered.set()
+  assert release.wait(5), 'test engine start was never released'
+  return FakeEngine.start(engine,request)
+ engine.start=slow_start
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ async def exercise():
+  transport=httpx.ASGITransport(app=module.app)
+  async with httpx.AsyncClient(transport=transport,base_url='http://test') as client:
+   pending=asyncio.create_task(client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'}))
+   try:
+    await asyncio.wait_for(asyncio.to_thread(entered.wait,2),timeout=3)
+    assert entered.is_set()
+    health=await asyncio.wait_for(client.get('/health'),timeout=1)
+    assert health.status_code==200
+   finally:release.set()
+   assert (await asyncio.wait_for(pending,timeout=3)).status_code==200
+ asyncio.run(exercise())
+
+
+def test_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch):
+ import asyncio,threading
+ import httpx
+ store=SQLiteStore(str(tmp_path/'concurrent-answer.db'));task=store.create_task('Slow answer','brief')
+ store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ entered=threading.Event();release=threading.Event();engine=FakeEngine()
+ def slow_submit(sid,response):
+  entered.set()
+  assert release.wait(5), 'test engine submit was never released'
+  return FakeEngine.submit(engine,sid,response)
+ engine.submit=slow_submit
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ async def exercise():
+  transport=httpx.ASGITransport(app=module.app)
+  async with httpx.AsyncClient(transport=transport,base_url='http://test') as client:
+   pending=asyncio.create_task(client.post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1'}))
+   try:
+    await asyncio.wait_for(asyncio.to_thread(entered.wait,2),timeout=3)
+    assert entered.is_set()
+    health=await asyncio.wait_for(client.get('/health'),timeout=1)
+    assert health.status_code==200
+   finally:release.set()
+   assert (await asyncio.wait_for(pending,timeout=3)).status_code==200
+ asyncio.run(exercise())

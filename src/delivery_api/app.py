@@ -21,6 +21,7 @@ from typing import Literal
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from fastapi.responses import JSONResponse
 
@@ -507,7 +508,7 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
     if not task:raise HTTPException(404,"task not found")
     if task["state"]!="not_started":raise HTTPException(409,"task already started")
     idea=(task.get("brief") or task.get("title") or "").strip()
-    try:started=engine_client.start(StartSessionRequest(task_id=task_id,idea=idea,model_route=body.model_route))
+    try:started=await run_in_threadpool(engine_client.start,StartSessionRequest(task_id=task_id,idea=idea,model_route=body.model_route))
     except EngineUnreachableError as exc:
         activity("engine.unreachable","Interview engine unreachable at task start",task_id=task_id,base_url=exc.base_url,cause=str(exc.cause))
         store.add_event(task_id,"error",f"Error: the interview engine is not reachable. Likely cause: nothing accepted the connection at {exc.base_url} - the engine service is not running. Next: restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Then retry.",phase_key="intent",payload=_engine_unreachable_payload(exc))
@@ -563,14 +564,14 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
     try:
         session_id=store.engine_session(task_id)
         if not session_id:raise RuntimeError("task has no HTTP engine session")
-        state=engine_client.snapshot(session_id);pending=state.open_input
+        state=await run_in_threadpool(engine_client.snapshot,session_id);pending=state.open_input
         if pending is None:raise RuntimeError("task is not waiting for input")
         if body.decision_id and str(pending.input_id)!=body.decision_id:raise RuntimeError("submitted decision does not match live input")
         raw_value,separator,rationale=body.answer.partition(" - ")
         raw_value=raw_value.strip();rationale=rationale.strip() if separator else ""
         typed_value=next((option.value for option in pending.options if str(option.value)==raw_value),body.answer)
         if pending.rationale_required and not rationale:raise RuntimeError("typed input requires a rationale")
-        submitted=engine_client.submit(session_id,InputResponse(input_id=pending.input_id,value=typed_value,
+        submitted=await run_in_threadpool(engine_client.submit,session_id,InputResponse(input_id=pending.input_id,value=typed_value,
             rationale=rationale or None,actor_id=a.label))
         store.add_event(task_id,"engine_protocol","Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
     except EngineUnreachableError as e:
