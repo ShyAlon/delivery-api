@@ -13,7 +13,7 @@ cd ~/development/require/delivery-api
 scripts/run-ui.sh
 ```
 
-Open http://127.0.0.1:8000. API docs are at http://127.0.0.1:8000/docs. The local model route intentionally uses `ollama/phi4`; `OLLAMA_NUM_PARALLEL=1` prevents overlapping local requests. Existing completed sessions load from the artifacts folder configured in the UI, not from a file picker.
+Open http://127.0.0.1:8000. API docs are at http://127.0.0.1:8000/docs. The local model route defaults to `ollama:qwen2.5-coder:14b` (the standing interview-engine default); set `DELIVERY_OLLAMA_MODEL=phi4` before `scripts/run-ui.sh` to run the local route on another Ollama model. `OLLAMA_NUM_PARALLEL=1` prevents overlapping local requests. Existing completed sessions load from the artifacts folder configured in the UI, not from a file picker.
 
 The UI has a V-shaped process map per task and distinct not-started, running, waiting-for-answer, and completed views. Live events use SSE. Live output has a compact adaptive scrolling viewport so the answer composer remains visible. Visible bundle pages are human-readable; use the item actions to inspect source JSON on demand.
 

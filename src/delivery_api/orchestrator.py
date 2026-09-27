@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from vmodel_contracts.runtime import artifacts_root
+from . import model_routes
 from .phases import PHASE_BY_KEY, successor
 
 class ExecutionMode(str,Enum):
@@ -108,7 +109,7 @@ class PhaseOrchestrator:
         stored=model_route or next(((event.get("payload") or {}).get("route") for event in reversed(self.store.events(task_id)) if event.get("kind")=="model_route" and event.get("phase_key")==phase),None) or (self.store.task(task_id) or {}).get("model_route") or "ollama"
         route="deepseek" if stored.startswith("deepseek") else "ollama" if stored.startswith("ollama") else stored
         if route not in ("ollama","deepseek"):raise ValueError(f"unsupported model route {stored!r}")
-        route_value="ollama:qwen2.5-coder:14b" if route=="ollama" else "deepseek:deepseek-chat"
+        route_value=model_routes.route_value(route)
         env={"PYTHONUNBUFFERED":"1",f"SPEC_GENERATOR_MODEL_{definition.generator_stage.upper()}":route_value,**({} if built else {"PYTHONPATH":str(repo/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})}
         self.store.add_event(task_id,"model_route",f"{phase} uses {route}",phase_key=phase,payload={"route":route,"provider":route,"model":route_value.split(":",1)[1],"mode":mode.value})
         code=await self.runner.run(task_id,cmd,cwd=repo,phase=phase,env=env,infer_phase=False)
