@@ -34,7 +34,7 @@ from .runner import ProcessRunner
 from .orchestrator import PhaseOrchestrator
 from .engine_runtime import EngineRuntimeError, resolve_engine_runtime, discover_engine_runtimes, save_python, saved_python
 from .engine_client import HttpEngineClient,EngineClientError,EngineUnreachableError
-from vmodel_contracts.interactive import InputResponse,ProcessStatus,StartSessionRequest
+from vmodel_contracts.interactive import InputKind,InputRequest,InputResponse,ProcessStatus,StartSessionRequest,EngineSnapshot
 from .store import create_store
 from .simulation import Simulation, ImportValidationError
 from . import bundles
@@ -618,6 +618,8 @@ def _task_ui_state(task:dict,input_state:dict)->dict:
         diagnostic={"reason":"task has no live ActiveWork owner","task_state":task.get("state"),"active_phase":task.get("active_phase")}
     return {"mode":mode,"active_phase":task.get("active_phase"),"process_live":process_live,
             "decision":live_decision if mode=="engine_decision" else None,
+            "question":input_state.get("question") if mode=="engine_question" else None,
+            "input_id":input_state.get("input_id") if mode in ("engine_question","engine_decision") else None,
             "gate":waiting_gate if mode=="phase_gate" else None,"diagnostic":diagnostic}
 
 
@@ -762,6 +764,38 @@ def task_artifacts_zip(task_id:str):
     title=(store.task(task_id) or {}).get("title","task").replace(" ","-").lower()
     return Response(data.getvalue(),media_type="application/zip",headers={"Content-Disposition":f'attachment; filename="{title}-artifacts.zip"'})
 
+_STRUCTURED_INPUT_KINDS=(InputKind.CHOICE,InputKind.APPROVAL)
+
+def _sync_waiting_input_event(task_id:str,pending:InputRequest)->None:
+    """Record each distinct engine input request once, so the question panel,
+    the interview transcript and SSE state refreshes have durable evidence in
+    HTTP mode (the subprocess runner used to emit these itself)."""
+    input_id=str(pending.input_id)
+    if any(event.get("kind")=="waiting_input" and str(event.get("payload",{}).get("input_id"))==input_id for event in store.events(task_id)):
+        return
+    phase=((store.task(task_id) or {}).get("active_phase")) or "intent"
+    store.add_event(task_id,"waiting_input",pending.prompt,phase_key=phase,
+        payload={"waiting_input":True,"question":pending.prompt,"input_id":input_id,"kind":int(pending.kind)})
+
+def _http_input_state(task_id:str,engine_state:EngineSnapshot)->dict:
+    """Project a live HTTP engine snapshot into the task input contract.
+
+    Only structured inputs (choice/approval) may surface as decisions; a text
+    question must fall through to the free-text answer composer. Mapping every
+    open input to a decision leaves the view in engine_decision mode with no
+    options, which renders no input control at all."""
+    pending=engine_state.open_input
+    waiting=engine_state.process_status==ProcessStatus.WAITING_INPUT and pending is not None
+    decision=None;question=None;input_id=None
+    if waiting:
+        input_id=str(pending.input_id)
+        if pending.kind in _STRUCTURED_INPUT_KINDS:decision=pending.model_dump(mode="json")
+        else:question=pending.prompt
+        _sync_waiting_input_event(task_id,pending)
+    return {"waiting":waiting,
+            "process_live":engine_state.process_status in (ProcessStatus.RUNNING,ProcessStatus.WAITING_INPUT),
+            "decision":decision,"requirement":None,"question":question,"input_id":input_id}
+
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str):
     task = store.task(task_id)
@@ -769,9 +803,8 @@ def get_task(task_id: str):
     session_id=store.engine_session(task_id)
     if session_id:
         try:
-            engine_state=engine_client.snapshot(session_id);pending=engine_state.open_input
-            input_state={"waiting":engine_state.process_status==ProcessStatus.WAITING_INPUT,"process_live":engine_state.process_status in (ProcessStatus.RUNNING,ProcessStatus.WAITING_INPUT),"decision":pending.model_dump(mode="json") if pending else None,"requirement":None}
-        except (EngineClientError,EngineUnreachableError):input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None}
+            input_state=_http_input_state(task_id,engine_client.snapshot(session_id))
+        except (EngineClientError,EngineUnreachableError):input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None}
     else:input_state=runner.input_state(task_id)
     work=runner.work_state(task_id)
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
