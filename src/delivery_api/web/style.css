@@ -125,3 +125,5 @@ button.danger{color:#a33}
 .not-started .start-route select{width:100%;min-height:46px;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:#fff;font:13px Manrope,system-ui,sans-serif;color:var(--ink)}
 .not-started #startengine{min-width:180px}.not-started #startengine:disabled{opacity:.55;cursor:not-allowed;box-shadow:none;transform:none}
 .not-started #startstatus{max-width:400px;font:12px/1.5 Manrope,system-ui,sans-serif;color:#805229}
+
+.not-started .start-controls{width:100%!important;max-width:430px!important;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;gap:14px!important;margin:28px auto 0!important}.not-started .start-route{width:min(360px,90%)!important;display:flex!important;flex-direction:column!important;gap:7px!important}.not-started .start-route select{width:100%!important;min-width:0!important}.not-started #startstatus{display:block!important;width:min(360px,90%)!important;margin:0!important;text-align:center!important}
