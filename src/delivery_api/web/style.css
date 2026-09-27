@@ -92,7 +92,11 @@ nav{display:flex;gap:18px}.about-page{min-height:calc(100vh - 220px);display:gri
 .qa-question .qa-tag{background:#dce5db;color:#47614f}
 .qa-answer .qa-tag{background:var(--ink);color:var(--lime)}
 .qa-answer p{color:#33413a}
-.qa-row p{flex:1}
+.qa-row p{flex:1;min-width:0}
+.qa-question .qa-main{display:flex;align-items:flex-start;gap:8px;min-width:0;flex:var(--question-parts) 1 0}
+.qa-question .qa-notes{flex:var(--note-parts) 1 0;min-width:0;margin:0}
+.qa-question .qa-note{width:100%;max-width:100%;overflow-wrap:anywhere}
+@media(max-width:700px){.qa-question{display:grid;grid-template-columns:auto minmax(0,1fr)}.qa-question .qa-main{min-width:0}.qa-question .qa-notes{grid-column:2;min-width:0}}
 .qa-actions{flex:0 0 auto;display:inline-flex;gap:4px;margin-left:auto}
 .qa-thumb,.qa-comment-btn{background:none;border:1px solid transparent;border-radius:999px;padding:2px 7px;font-size:13px;cursor:pointer;opacity:.45;transition:opacity .15s,border-color .15s,background .15s}
 .qa-thumb:hover,.qa-comment-btn:hover{opacity:1;border-color:var(--line)}
