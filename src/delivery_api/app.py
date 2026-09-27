@@ -33,7 +33,7 @@ from .jobs import JobQueue
 from .runner import ProcessRunner
 from .orchestrator import PhaseOrchestrator
 from .engine_runtime import EngineRuntimeError, resolve_engine_runtime, discover_engine_runtimes, save_python, saved_python
-from .engine_client import HttpEngineClient,EngineClientError
+from .engine_client import HttpEngineClient,EngineClientError,EngineUnreachableError
 from vmodel_contracts.interactive import InputResponse,ProcessStatus,StartSessionRequest
 from .store import create_store
 from .simulation import Simulation, ImportValidationError
@@ -68,6 +68,14 @@ orchestrator = PhaseOrchestrator(store,runner)
 runner.on_complete = orchestrator.continue_after
 simulation = Simulation(store)
 engine_client = HttpEngineClient(config.INTERVIEW_ENGINE_URL,token=config.INTERVIEW_ENGINE_TOKEN)
+
+ENGINE_START_HINT="cd ../interview-engine && .venv/bin/python -m uvicorn interview_engine.http_service:app --host 127.0.0.1 --port 8010"
+def _engine_unreachable_payload(exc:EngineUnreachableError)->dict:
+    return {"error":"The interview engine is not reachable.",
+        "cause":f"Nothing accepted the connection at {exc.base_url} - the engine service is not running (crashed, never started, or a stale port).",
+        "next":f"Restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Then retry."}
+def _engine_unreachable(exc:EngineUnreachableError)->HTTPException:
+    return HTTPException(503,_engine_unreachable_payload(exc))
 log = logging.getLogger("delivery_api.http")
 
 
@@ -499,6 +507,10 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
     if task["state"]!="not_started":raise HTTPException(409,"task already started")
     idea=(task.get("brief") or task.get("title") or "").strip()
     try:started=engine_client.start(StartSessionRequest(task_id=task_id,idea=idea,model_route=body.model_route))
+    except EngineUnreachableError as exc:
+        activity("engine.unreachable","Interview engine unreachable at task start",task_id=task_id,base_url=exc.base_url,cause=str(exc.cause))
+        store.add_event(task_id,"error",f"Error: the interview engine is not reachable. Likely cause: nothing accepted the connection at {exc.base_url} - the engine service is not running. Next: restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Then retry.",phase_key="intent",payload=_engine_unreachable_payload(exc))
+        raise _engine_unreachable(exc)
     except EngineClientError as exc:raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
     store.set_engine_session(task_id,started.snapshot.session_id);store.set_model_route(task_id,body.model_route)
     detail="Waiting for founder input" if started.snapshot.process_status==ProcessStatus.WAITING_INPUT else "Interview engine running"
@@ -558,6 +570,12 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
         submitted=engine_client.submit(session_id,InputResponse(input_id=pending.input_id,value=typed_value,
             rationale=rationale or None,actor_id=a.label))
         store.add_event(task_id,"engine_protocol","Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
+    except EngineUnreachableError as e:
+        task=store.task(task_id) or {}
+        payload={"endpoint":f"/api/tasks/{task_id}/answer",**_engine_unreachable_payload(e)}
+        store.add_event(task_id,"error",f"Error: the interview engine is not reachable. Likely cause: nothing accepted the connection at {e.base_url} - the engine service stopped mid-interview. Next: restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Your previous answers are checkpointed; the interview resumes from them. Then retry.",phase_key=task.get("active_phase"),payload=payload)
+        activity("engine.unreachable","Interview engine unreachable while answering",task_id=task_id,phase=task.get("active_phase"),base_url=e.base_url,cause=str(e.cause))
+        raise _engine_unreachable(e)
     except EngineClientError as e:
         task=store.task(task_id) or {}
         payload={"endpoint":f"/api/tasks/{task_id}/answer","http_status":e.http_status,"task_state":task.get("state"),"active_phase":task.get("active_phase"),"decision_id":body.decision_id,"protocol_error":e.error.model_dump(mode="json")}
@@ -724,7 +742,7 @@ def get_task(task_id: str):
         try:
             engine_state=engine_client.snapshot(session_id);pending=engine_state.open_input
             input_state={"waiting":engine_state.process_status==ProcessStatus.WAITING_INPUT,"process_live":engine_state.process_status in (ProcessStatus.RUNNING,ProcessStatus.WAITING_INPUT),"decision":pending.model_dump(mode="json") if pending else None,"requirement":None}
-        except EngineClientError:input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None}
+        except (EngineClientError,EngineUnreachableError):input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None}
     else:input_state=runner.input_state(task_id)
     work=runner.work_state(task_id)
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
