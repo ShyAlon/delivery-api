@@ -837,7 +837,15 @@ def task_execution(task_id:str,debug:bool=False,a:auth.Actor=Depends(auth.requir
     route=(store.task(task_id) or {}).get("model_route")
     usage=lines(root/"usage.jsonl")
     calls=lines(root/"llm-calls.jsonl")
-    summary=[{key:entry.get(key) for key in ("ts","event","stage","provider","model","attempt","latency_s","usage","error") if key in entry} for entry in calls]
+    summary=[]
+    for entry in calls:
+        item={key:entry.get(key) for key in ("ts","event","stage","provider","model","attempt","latency_s","usage") if key in entry}
+        error=entry.get("error")
+        if isinstance(error,dict):
+            # The provider error envelope may contain a raw response. The
+            # normal task view only needs its kind/status; full detail is debug.
+            item["error"]=error if debug else {key:error[key] for key in ("kind","class","http_status","request_id") if key in error}
+        summary.append(item)
     raw=[]
     if debug:
         raw.extend(lines(root/"debug-http.jsonl",100))

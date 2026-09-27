@@ -116,7 +116,7 @@ def test_execution_payload_requires_debug_and_uses_pinned_state(monkeypatch,tmp_
     root=tmp_path/'s-debug'/'interview';root.mkdir(parents=True)
     (root/'http-session.json').write_text(json.dumps({'model_map':{'probing':['deepseek','deepseek-chat']}}))
     (root/'usage.jsonl').write_text(json.dumps({'stage':'probing','provider':'deepseek','model':'deepseek-chat'})+'\n')
-    (root/'llm-calls.jsonl').write_text(json.dumps({'event':'llm_call_end','model':'deepseek-chat'})+'\n')
+    (root/'llm-calls.jsonl').write_text(json.dumps({'event':'llm_call_error','model':'deepseek-chat','error':{'kind':'empty_response','raw_payload':'sensitive response'}})+'\n')
     (root/'debug').mkdir();(root/'debug'/'probing-answer.raw.txt').write_text('private raw response')
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path))
     try:
@@ -124,6 +124,8 @@ def test_execution_payload_requires_debug_and_uses_pinned_state(monkeypatch,tmp_
         assert normal['effective_models']['probing']==['deepseek','deepseek-chat']
         assert normal['calls'][0]['model']=='deepseek-chat'
         assert normal['raw']==[]
+        assert 'raw_payload' not in str(normal['calls'])
         debug=module.task_execution(task_id,debug=True,a=None)
         assert debug['raw'][0]['content']=='private raw response'
+        assert debug['calls'][0]['error']['raw_payload']=='sensitive response'
     finally:module.store.delete_task(task_id)
