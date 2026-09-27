@@ -34,10 +34,11 @@ from .runner import ProcessRunner
 from .orchestrator import PhaseOrchestrator
 from .engine_runtime import EngineRuntimeError, resolve_engine_runtime, discover_engine_runtimes, save_python, saved_python
 from .engine_client import HttpEngineClient,EngineClientError,EngineUnreachableError
-from vmodel_contracts.interactive import InputResponse,ProcessStatus,StartSessionRequest
+from vmodel_contracts.interactive import InputKind,InputRequest,InputResponse,ProcessStatus,StartSessionRequest,EngineSnapshot
 from .store import create_store
 from .simulation import Simulation, ImportValidationError
 from . import bundles
+from . import model_routes as model_route_lib
 from .observability import event as activity
 
 def _runtime_version() -> dict:
@@ -147,7 +148,7 @@ async def _resume_orphaned_handoffs()->None:
 def _interview_route_env(task_id:str)->dict[str,str]:
     stored=(store.task(task_id) or {}).get("model_route") or "ollama"
     route="deepseek" if stored.startswith("deepseek") else "ollama"
-    value="ollama:qwen2.5-coder:14b" if route=="ollama" else "deepseek:deepseek-chat"
+    value=model_route_lib.route_value(route)
     return {f"INTERVIEW_ENGINE_MODEL_{stage}":value for stage in ("PROBING","DISTILLATION","PHRASING","SCOPE_TIEBREAK","EXPERT_OPINION")}
 
 def _replayable_decisions(task_id:str)->dict[str,dict[str,str]]:
@@ -513,6 +514,8 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         raise _engine_unreachable(exc)
     except EngineClientError as exc:raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
     store.set_engine_session(task_id,started.snapshot.session_id);store.set_model_route(task_id,body.model_route)
+    resolved=model_route_lib.route_value(body.model_route)
+    store.add_event(task_id,"model_route",f"interview uses {resolved}",phase_key="intent",payload={"route":body.model_route,"resolved":resolved,"model":resolved.split(":",1)[1],"scope":"start","actor":a.label})
     detail="Waiting for founder input" if started.snapshot.process_status==ProcessStatus.WAITING_INPUT else "Interview engine running"
     store.update_phase(task_id,"intent","running",detail=detail)
     store.add_event(task_id,"engine_protocol","HTTP interview session started",phase_key="intent",payload=started.model_dump(mode="json"))
@@ -615,6 +618,8 @@ def _task_ui_state(task:dict,input_state:dict)->dict:
         diagnostic={"reason":"task has no live ActiveWork owner","task_state":task.get("state"),"active_phase":task.get("active_phase")}
     return {"mode":mode,"active_phase":task.get("active_phase"),"process_live":process_live,
             "decision":live_decision if mode=="engine_decision" else None,
+            "question":input_state.get("question") if mode=="engine_question" else None,
+            "input_id":input_state.get("input_id") if mode in ("engine_question","engine_decision") else None,
             "gate":waiting_gate if mode=="phase_gate" else None,"diagnostic":diagnostic}
 
 
@@ -683,6 +688,32 @@ def _checkpoint_interview_turns(task_id:str)->list[tuple[str,str]]:
         return turns
     except Exception:return []
 
+def _interview_model_provenance(task_id:str)->list[str]:
+    """Resolved provider:model per stage for the transcript header. The run's own
+    usage.jsonl is exact per-call truth; the start-time store event is the
+    fallback when artifacts are missing (pre-telemetry imports)."""
+    session=_recorded_engine_session(task_id)
+    if session:
+        try:
+            from vmodel_contracts.runtime import artifacts_root
+            usage=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"/"usage.jsonl"
+            stage_models:dict[str,str]={}
+            if usage.is_file():
+                for line in usage.read_text().splitlines():
+                    try:rec=json.loads(line)
+                    except ValueError:continue
+                    stage,provider,model=rec.get("stage"),rec.get("provider"),rec.get("model")
+                    if stage and provider and model:stage_models.setdefault(str(stage),f"{provider}:{model}")
+                if stage_models:
+                    distinct=sorted(set(stage_models.values()))
+                    if len(distinct)==1:return [f"Model: {distinct[0]} (stages: {', '.join(sorted(stage_models))})"]
+                    return [f"Model: {stage} = {model}" for stage,model in sorted(stage_models.items())]
+        except Exception:pass
+    resolved=next(((event.get("payload") or {}).get("resolved") for event in reversed(store.events(task_id)) if event.get("kind")=="model_route" and (event.get("payload") or {}).get("resolved")),None)
+    if resolved:return [f"Model: {resolved}"]
+    stored=(store.task(task_id) or {}).get("model_route")
+    return [f"Model route: {stored}"] if stored else []
+
 def _interview_transcript_markdown(task_id:str)->str:
     turns=[]
     for event in store.events(task_id):
@@ -699,7 +730,7 @@ def _interview_transcript_markdown(task_id:str)->str:
     checkpoint_turns=_checkpoint_interview_turns(task_id)
     if checkpoint_turns:complete=checkpoint_turns
     if not complete:return ""
-    lines=["## Interview questions and answers"]
+    lines=_interview_model_provenance(task_id)+["","## Interview questions and answers"]
     for index,(question,answer) in enumerate(complete,1):
         lines.extend(["",f"### Question {index}",question,"",f"**Answer:** {answer}"])
     return "\n".join(lines)
@@ -733,6 +764,38 @@ def task_artifacts_zip(task_id:str):
     title=(store.task(task_id) or {}).get("title","task").replace(" ","-").lower()
     return Response(data.getvalue(),media_type="application/zip",headers={"Content-Disposition":f'attachment; filename="{title}-artifacts.zip"'})
 
+_STRUCTURED_INPUT_KINDS=(InputKind.CHOICE,InputKind.APPROVAL)
+
+def _sync_waiting_input_event(task_id:str,pending:InputRequest)->None:
+    """Record each distinct engine input request once, so the question panel,
+    the interview transcript and SSE state refreshes have durable evidence in
+    HTTP mode (the subprocess runner used to emit these itself)."""
+    input_id=str(pending.input_id)
+    if any(event.get("kind")=="waiting_input" and str(event.get("payload",{}).get("input_id"))==input_id for event in store.events(task_id)):
+        return
+    phase=((store.task(task_id) or {}).get("active_phase")) or "intent"
+    store.add_event(task_id,"waiting_input",pending.prompt,phase_key=phase,
+        payload={"waiting_input":True,"question":pending.prompt,"input_id":input_id,"kind":int(pending.kind)})
+
+def _http_input_state(task_id:str,engine_state:EngineSnapshot)->dict:
+    """Project a live HTTP engine snapshot into the task input contract.
+
+    Only structured inputs (choice/approval) may surface as decisions; a text
+    question must fall through to the free-text answer composer. Mapping every
+    open input to a decision leaves the view in engine_decision mode with no
+    options, which renders no input control at all."""
+    pending=engine_state.open_input
+    waiting=engine_state.process_status==ProcessStatus.WAITING_INPUT and pending is not None
+    decision=None;question=None;input_id=None
+    if waiting:
+        input_id=str(pending.input_id)
+        if pending.kind in _STRUCTURED_INPUT_KINDS:decision=pending.model_dump(mode="json")
+        else:question=pending.prompt
+        _sync_waiting_input_event(task_id,pending)
+    return {"waiting":waiting,
+            "process_live":engine_state.process_status in (ProcessStatus.RUNNING,ProcessStatus.WAITING_INPUT),
+            "decision":decision,"requirement":None,"question":question,"input_id":input_id}
+
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str):
     task = store.task(task_id)
@@ -740,9 +803,8 @@ def get_task(task_id: str):
     session_id=store.engine_session(task_id)
     if session_id:
         try:
-            engine_state=engine_client.snapshot(session_id);pending=engine_state.open_input
-            input_state={"waiting":engine_state.process_status==ProcessStatus.WAITING_INPUT,"process_live":engine_state.process_status in (ProcessStatus.RUNNING,ProcessStatus.WAITING_INPUT),"decision":pending.model_dump(mode="json") if pending else None,"requirement":None}
-        except (EngineClientError,EngineUnreachableError):input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None}
+            input_state=_http_input_state(task_id,engine_client.snapshot(session_id))
+        except (EngineClientError,EngineUnreachableError):input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None}
     else:input_state=runner.input_state(task_id)
     work=runner.work_state(task_id)
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)

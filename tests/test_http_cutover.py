@@ -96,3 +96,56 @@ def test_smoke_checkpoint_resumes_after_mid_interview_interruption(tmp_path):
  assert load_smoke_checkpoint(path)==expected
  save_smoke_checkpoint(path,{**expected,'answers':7,'last_input_id':'input-7'})
  assert load_smoke_checkpoint(path)['answers']==7
+
+
+class TextEngine(FakeEngine):
+ def __init__(self,prompt='What is the goal and core value?'):
+  super().__init__()
+  self.pending=InputRequest(input_id=uuid4(),kind=InputKind.TEXT,prompt=prompt)
+
+def test_text_question_yields_answer_composer_mode_not_an_empty_decision(tmp_path,monkeypatch):
+ store=SQLiteStore(str(tmp_path/'text.db'));task=store.create_task('Text question','brief');engine=TextEngine()
+ store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
+ assert body['ui_state']['mode']=='engine_question'
+ assert body['ui_state']['decision'] is None
+ assert body['ui_state']['question']=='What is the goal and core value?'
+ assert body['ui_state']['input_id']==str(engine.pending.input_id)
+
+def test_choice_input_still_projects_a_structured_decision(tmp_path,monkeypatch):
+ store=SQLiteStore(str(tmp_path/'choice.db'));task=store.create_task('Choice question','brief');engine=FakeEngine()
+ engine.pending=InputRequest(input_id=uuid4(),kind=InputKind.CHOICE,prompt='Pick one',options=[InputOption(value='1',label='One'),InputOption(value='2',label='Two')])
+ store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
+ assert body['ui_state']['mode']=='engine_decision'
+ assert body['ui_state']['decision']['input_id']==str(engine.pending.input_id)
+ assert len(body['ui_state']['decision']['options'])==2
+
+def test_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch):
+ store=SQLiteStore(str(tmp_path/'sync.db'));task=store.create_task('Sync','brief');engine=TextEngine()
+ store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ client=TestClient(module.app)
+ first=client.get(f"/api/tasks/{task['task_id']}").json()
+ waiting=[e for e in first['events'] if e['kind']=='waiting_input']
+ assert len(waiting)==1 and waiting[0]['payload']['question']=='What is the goal and core value?'
+ assert waiting[0]['payload']['input_id']==str(engine.pending.input_id)
+ second=client.get(f"/api/tasks/{task['task_id']}").json()
+ assert len([e for e in second['events'] if e['kind']=='waiting_input'])==1
+ engine.pending=InputRequest(input_id=uuid4(),kind=InputKind.TEXT,prompt='Second question')
+ third=client.get(f"/api/tasks/{task['task_id']}").json()
+ synced=[e for e in third['events'] if e['kind']=='waiting_input']
+ assert len(synced)==2 and synced[-1]['payload']['question']=='Second question'
+ assert third['ui_state']['question']=='Second question'
+ assert third['ui_state']['input_id']!=first['ui_state']['input_id']
+
+def test_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch):
+ store=SQLiteStore(str(tmp_path/'noinput.db'));task=store.create_task('No input','brief');engine=TextEngine()
+ store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ engine.snapshot=lambda sid:EngineSnapshot(session_id='s',task_id='t',sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=None)
+ body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
+ assert body['ui_state']['mode']=='executing'
+ assert body['input_state']['waiting'] is False
