@@ -998,6 +998,61 @@ def test_feedback_save_disables_while_pending_and_closes_only_on_success(page, u
     page.locator(".qa-note", has_text="Misread as a refusal").wait_for()
 
 
+def test_question_comment_columns_follow_character_ratio(page, ui):
+    long_question = "What strategies will you implement to ensure data caching prevents downtime during peak usage?"
+    def snapshot(data):
+        interview_history_snapshot(data)
+        data["events"][0]["message"] = long_question
+        data["events"][0]["payload"]["question"] = long_question
+    route_task_snapshot(page, ui, "live", snapshot)
+    page.goto(ui + "/tasks/live/view")
+    row = page.locator(".qa-question").first
+    row.wait_for()
+    assert row.locator(".qa-notes").count() == 0
+    assert row.evaluate("row => getComputedStyle(row).getPropertyValue('--question-parts').trim()") == "12"
+    before = row.locator(".qa-main").bounding_box()["width"]
+    row.locator(".qa-comment-btn").click()
+    dialog = page.get_by_role("dialog", name="Comment on this question")
+    comment = "Even a technical founder would struggle with this question"
+    dialog.locator("#feedbacktext").fill(comment)
+    dialog.get_by_role("button", name="Save comment").click()
+    dialog.wait_for(state="detached")
+    note = row.locator(".qa-note")
+    note.wait_for()
+    parts = int(row.evaluate("row => getComputedStyle(row).getPropertyValue('--question-parts')"))
+    expected = max(5, min(9, round(12 * len(long_question) / (len(long_question) + len(comment)))))
+    assert parts == expected
+    assert int(row.evaluate("row => getComputedStyle(row).getPropertyValue('--note-parts')")) == 12 - parts
+    question_box = row.locator(".qa-main").bounding_box()
+    note_box = row.locator(".qa-notes").bounding_box()
+    assert question_box["width"] < before
+    assert question_box["width"] > note_box["width"]
+    assert question_box["x"] + question_box["width"] <= note_box["x"]
+    assert note_box["x"] + note_box["width"] <= row.bounding_box()["x"] + row.bounding_box()["width"]
+    assert note.is_visible()
+    row.screenshot(path="/downloads/qa-column-balance-desktop-row.png")
+    page.set_viewport_size({"width": 600, "height": 850})
+    assert row.locator(".qa-main").bounding_box()["width"] > 220
+    assert row.locator(".qa-notes").bounding_box()["y"] >= row.locator(".qa-main").bounding_box()["y"]
+    row.screenshot(path="/downloads/qa-column-balance-mobile-row.png")
+    # A short question still gets five twelfths instead of collapsing to a word-wide strip.
+    second = page.locator(".qa-question").nth(1)
+    second.locator(".qa-comment-btn").click()
+    second_dialog = page.get_by_role("dialog", name="Comment on this question")
+    second_dialog.locator("#feedbacktext").fill("This is a long note about a brief question, with plenty of additional context to test the lower bound.")
+    second_dialog.get_by_role("button", name="Save comment").click()
+    second_dialog.wait_for(state="detached")
+    assert int(second.evaluate("row => getComputedStyle(row).getPropertyValue('--question-parts')")) == 5
+    # Removing the annotation returns the question to the full available width.
+    row.locator(".qa-note").click()
+    dialog = page.get_by_role("dialog", name="Comment on this question")
+    dialog.get_by_role("button", name="Delete feedback").click()
+    dialog.get_by_role("button", name="Confirm delete?").click()
+    dialog.wait_for(state="detached")
+    assert row.locator(".qa-notes").count() == 0
+    assert int(row.evaluate("row => getComputedStyle(row).getPropertyValue('--question-parts')")) == 12
+
+
 def test_debug_chips_show_intent_relevance_and_differed_tooltip(page, ui):
     route_task_snapshot(page, ui, "live", interview_history_snapshot)
     classifications = {"session": "s", "answers": {}}
