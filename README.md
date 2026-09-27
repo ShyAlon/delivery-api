@@ -203,3 +203,5 @@ The build checks this before dependency installation and stops with Error / Like
 Run `./scripts/test-local.sh` from any directory. It creates a reusable `.venv`, installs the development dependencies and runs the same tests as the PR workflow using Python 3.12. Install Python 3.12 first, and make sure your Git authentication can read private `ShyAlon/vmodel-contracts` where it is a dependency.
 
 For the local packaged app build, run `./scripts/build-dist.sh` from `delivery-api` with the sibling repositories checked out as described above. This builds the desktop distribution; it does not publish an image or deploy production. For a local container build, use the Docker command and private dependency instructions in the Docker section above.
+
+For a standalone wheel build of this repository, run `./scripts/build-local.sh` (requires Python 3.12 and pip). This writes to `dist/` and does not publish or deploy anything.
