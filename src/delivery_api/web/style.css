@@ -117,3 +117,5 @@ button.danger{color:#a33}
 .qa-chip.differed{background:#fdf3e3;color:#8a5a19;border-color:#e3c98f;cursor:help}
 
 .session-card h2 a{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+
+.model-route-trace,.execution-data{margin:0 0 16px;border-radius:14px;min-width:0}.model-route-trace .panel-title,.execution-data .panel-title{margin-bottom:8px}.model-route-trace p,.execution-data p{margin:6px 0;font:12px/1.5 "DM Mono",monospace;overflow-wrap:anywhere}.model-route-trace .model_preflight{color:#a33}.execution-data details{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.execution-data summary{cursor:pointer;font-size:12px;font-weight:600}.execution-data .json-view{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;background:#15201c;color:#cbd6cf;border-radius:10px;padding:14px;font:11px/1.5 "DM Mono",monospace}
