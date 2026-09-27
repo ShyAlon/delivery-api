@@ -74,15 +74,16 @@ function openFeedbackDialog(target,ref,content){
  const key=fbKey(target,ref),existing=feedbackState.get(key),q=target==='question';
  const dialog=openDialog(`<div class="dialog feedback-dialog" role="dialog" aria-label="${q?'Comment on this question':'Comment on this answer'}"><button class="dialog-x" aria-label="Close comment">×</button><div class="eyebrow">${q?'QUESTION FEEDBACK':'ANSWER FEEDBACK'} · ANNOTATION ONLY</div><h3>${q?'What should we learn from this question?':'What did the engine misread?'}</h3><p class="feedback-context">${esc(content||'')}</p><textarea id="feedbacktext" rows="4" maxlength="4000" placeholder="A note for the team - it does not steer the interview">${esc(existing?.comment||'')}</textarea><div class="dialog-actions"><button class="primary" id="savefeedback">Save comment</button>${existing?'<button class="secondary danger" id="deletefeedback">Delete feedback</button>':''}</div><div id="feedbackstatus" aria-live="polite"></div></div>`);
  if(!dialog)return;
- const text=dialog.querySelector('#feedbacktext'),status=dialog.querySelector('#feedbackstatus');
- dialog.querySelector('#savefeedback').onclick=async()=>{
+ const text=dialog.querySelector('#feedbacktext'),status=dialog.querySelector('#feedbackstatus'),save=dialog.querySelector('#savefeedback');
+ save.onclick=async()=>{
   const comment=text.value.trim();
   if(!comment&&!existing?.thumb){status.textContent='Add a comment or a thumb first.';return}
+  save.disabled=true;save.textContent='Saving…';
   try{
    const row=await api(`/api/tasks/${qaContext.taskId}/feedback`,{method:'POST',body:JSON.stringify({input_ref:ref,target,content:content||'',thumb:existing?.thumb||null,comment:comment||null})});
    feedbackState.set(key,row);closeModal();
    const el=document.querySelector(`.qa-actions[data-target="${target}"][data-ref="${ref}"]`);if(el)refreshQaRow(el);
-  }catch(e){status.textContent=e.message}
+  }catch(e){status.textContent=e.message;save.disabled=false;save.textContent='Save comment'}
  };
  if(existing)dialog.querySelector('#deletefeedback').onclick=async e=>{
   const b=e.target;
