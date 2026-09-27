@@ -14,6 +14,13 @@ class EngineClientError(RuntimeError):
         super().__init__(error.detail);self.http_status,self.error=http_status,error
 
 
+class EngineUnreachableError(RuntimeError):
+    """The engine service did not accept the connection at all (down, wrong port, crashed)."""
+    def __init__(self,base_url:str,cause:httpx.TransportError):
+        self.base_url,self.cause=str(base_url).rstrip('/'),cause
+        super().__init__(f"interview engine is not reachable at {self.base_url}: {cause}")
+
+
 class EngineClient(ABC):
     @abstractmethod
     def start(self,request:StartSessionRequest)->StartSessionResponse:...
@@ -28,16 +35,23 @@ class HttpEngineClient(EngineClient):
         if not token:raise ValueError("interview engine service token must not be empty")
         self._http=httpx.Client(base_url=base_url.rstrip('/'),headers={"X-Interview-Engine-Token":token},timeout=timeout,transport=transport)
 
+    def _send(self,method:str,path:str,**kwargs)->httpx.Response:
+        # Transport failures (connection refused, timeouts) mean the engine
+        # process is not there at all - translate them at this boundary so
+        # callers never see a raw httpx traceback.
+        try:return self._http.request(method,path,**kwargs)
+        except httpx.TransportError as exc:raise EngineUnreachableError(self._http.base_url,exc) from exc
+
     def start(self,request:StartSessionRequest)->StartSessionResponse:
-        response=self._http.post('/v1/sessions',json=request.model_dump(mode='json'))
+        response=self._send('POST','/v1/sessions',json=request.model_dump(mode='json'))
         return self._validated(response,StartSessionResponse,201)
 
     def snapshot(self,session_id:str)->EngineSnapshot:
-        response=self._http.get(f'/v1/sessions/{session_id}')
+        response=self._send('GET',f'/v1/sessions/{session_id}')
         return self._validated(response,EngineSnapshot,200)
 
     def submit(self,session_id:str,response:InputResponse)->SubmitInputResponse:
-        reply=self._http.post(f'/v1/sessions/{session_id}/inputs/{response.input_id}',json=response.model_dump(mode='json'))
+        reply=self._send('POST',f'/v1/sessions/{session_id}/inputs/{response.input_id}',json=response.model_dump(mode='json'))
         return self._validated(reply,SubmitInputResponse,200)
 
     @staticmethod
