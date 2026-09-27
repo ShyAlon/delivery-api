@@ -27,6 +27,9 @@ def ui(tmp_path_factory):
     (session/"interview/intent_model.json").write_text(json.dumps({"problem_statement":"Family task evidence"}))
     partial=artifacts/"partial-interview";(partial/"interview").mkdir(parents=True)
     (partial/"interview/intent_model.json").write_text(json.dumps({"problem_statement":"Partial discovery evidence"}))
+    live=artifacts/"live-interview";(live/"interview").mkdir(parents=True)
+    (live/"interview/usage.jsonl").write_text('{}\n')
+    (live/"interview/http-session.json").write_text(json.dumps({"status":30,"request":{"idea":"A founder brief for a live interview"}}))
     (session/"interview/audit.jsonl").write_text("\n".join([json.dumps({"event":"gate.auto_decision","gate":"concept","action":"select"}),json.dumps({"event":"interviewee.answer","answer":{"text":"Caregivers need a calm shared view","confidence":"high"}})])+"\n")
     (session/"spec/hands-free-run.json").write_text(json.dumps({"completed_at":"2026-09-19T08:00:00Z"}))
     (session/"spec/bundle-integrity.json").write_text(json.dumps({"files_checked":14,"diagnostics":[],"hashes":{"needs.json":"abc"}}))
@@ -239,6 +242,15 @@ def test_task_filter_sort_rename_and_delete(page,ui):
     page.get_by_role('button',name='Delete task').click()
     page.locator('#app').get_by_text('Renamed empty definition',exact=True).wait_for(state='detached')
     assert page.get_by_text('Renamed empty definition',exact=True).count()==0
+
+
+def test_session_card_shows_live_brief_and_progress(page,ui):
+    page.goto(ui+"/sessions")
+    page.get_by_role('link',name='A founder brief for a live interview').wait_for()
+    card=page.locator('.session-card',has=page.get_by_role('link',name='A founder brief for a live interview'))
+    assert card.is_visible()
+    assert card.locator('.status-in_progress').count()==1
+    assert page.get_by_text('The workspace is ready. Starting opens an interview with the connected engine and saves your progress here.').count()==0
 
 
 def test_session_discovery_bundle_and_trace_diagram(page,ui):

@@ -211,3 +211,54 @@ def test_task_audit_uses_latest_cumulative_price_per_phase(client):
     store.add_event(tid,'price','Price 30',phase_key='intent',payload={'tokens':15,'price':30,'incremental':True})
     body=client.get(f'/api/tasks/{tid}/audit').json()
     assert body['totals']=={'tokens':15,'price':30.0,'phases_priced':1}
+
+
+def test_sessions_sort_title_and_interview_status_from_live_artifacts(tmp_path):
+ import json,os
+ from datetime import datetime,timezone
+ from delivery_api import bundles
+ root=tmp_path/'artifacts';root.mkdir()
+ old=root/'old';(old/'interview').mkdir(parents=True)
+ (old/'interview/intent_model.json').write_text(json.dumps({'problem_statement':'Approved intent'}))
+ (old/'spec').mkdir()
+ (old/'spec/hands-free-run.json').write_text(json.dumps({'completed_at':'2026-09-19T00:00:00Z'}))
+ live=root/'live';(live/'interview').mkdir(parents=True)
+ (live/'interview/usage.jsonl').write_text('{}\n')
+ (live/'interview/http-session.json').write_text(json.dumps({'status':30,'request':{'idea':'  A founder brief  '},'open_input':{'prompt':'Question?'}}))
+ stamp=datetime(2026,9,27,tzinfo=timezone.utc).timestamp()
+ for path in (live/'interview/usage.jsonl',live/'interview/http-session.json'):os.utime(path,(stamp,stamp))
+ rows=bundles._discover(root)
+ assert [row['session_id'] for row in rows]==['live','old']
+ assert rows[0]['title']=='A founder brief'
+ assert rows[0]['phase_status']['interview']=='in_progress'
+ assert rows[0]['updated_at'].startswith('2026-09-27T00:00:00')
+ assert rows[1]['phase_status']['interview']=='done'
+ assert rows[1]['title']=='Approved intent'
+ assert rows[1]['completed_at']=='2026-09-19T00:00:00Z'
+ # Usage alone is a trace of activity, never proof of an approved result.
+ (live/'interview/http-session.json').unlink()
+ assert bundles._discover(root)[0]['phase_status']['interview']=='in_progress'
+ # A malformed/empty persisted request still cannot blank a card.
+ (live/'interview/http-session.json').write_text(json.dumps({'status':40,'request':{'idea':''}}))
+ assert bundles._discover(root)[0]['title']=='live'
+ assert bundles._discover(root)[0]['phase_status']['interview']=='warning'
+ # Card and bundle detail use the same interview status semantics.
+ original=bundles.root
+ try:
+  bundles.root=lambda:root
+  assert bundles.bundle('live')['phase_status']['interview']=='warning'
+ finally:bundles.root=original
+
+
+def test_sessions_spec_completion_and_http_error(tmp_path):
+ import json
+ from delivery_api import bundles
+ root=tmp_path/'artifacts';session=root/'s';(session/'interview').mkdir(parents=True);(session/'spec').mkdir()
+ (session/'interview/usage.jsonl').write_text('{}\n')
+ (session/'interview/http-session.json').write_text(json.dumps({'status':50}))
+ (session/'spec/bundle-integrity.json').write_text(json.dumps({'files_checked':14,'diagnostics':[]}))
+ (session/'spec/hands-free-run.json').write_text(json.dumps({'completed_at':'2026-09-19T00:00:00Z'}))
+ row=bundles._discover(root)[0]
+ assert row['phase_status']['interview']=='error'
+ assert row['phase_status']['oracle']=='done'
+ assert row['oracle_passed'] and row['files_checked']==14
