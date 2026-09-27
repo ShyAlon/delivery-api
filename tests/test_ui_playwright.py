@@ -101,10 +101,15 @@ def test_dashboard_draws_v_and_all_task_states(page, ui):
     page.locator(".task").first.wait_for()
     assert page.locator(".task").count() == 4
     assert page.locator(".v-map svg").count() == 4
-    assert page.get_by_text("Partial discovery evidence",exact=True).is_visible()
+    # Home is task-only. Session bundles retain their own /sessions route.
+    assert page.locator('.hero,.home-sessions,.session-card').count()==0
+    page.get_by_role('link',name='All sessions').click()
     partial=page.locator('.session-card',has_text='Partial discovery evidence')
+    partial.wait_for()
     assert partial.locator('.session-v .status-done').count()==1
     assert partial.locator('.session-v .status-not_started').count()==7
+    page.goto(ui)
+    page.locator('.task').first.wait_for()
     assert page.get_by_text("In progress").count() == 1
     assert page.get_by_text("Complete").count() == 1
 
