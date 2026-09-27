@@ -119,3 +119,9 @@ button.danger{color:#a33}
 .session-card h2 a{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 
 .model-route-trace,.execution-data{margin:0 0 16px;border-radius:14px;min-width:0}.model-route-trace .panel-title,.execution-data .panel-title{margin-bottom:8px}.model-route-trace p,.execution-data p{margin:6px 0;font:12px/1.5 "DM Mono",monospace;overflow-wrap:anywhere}.model-route-trace .model_preflight{color:#a33}.execution-data details{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.execution-data summary{cursor:pointer;font-size:12px;font-weight:600}.execution-data .json-view{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;background:#15201c;color:#cbd6cf;border-radius:10px;padding:14px;font:11px/1.5 "DM Mono",monospace}
+/* JEV-D4 controls remain readable on the current main task layout. */
+.not-started .start-controls{display:flex;flex-direction:column;align-items:center;gap:14px;margin:24px auto 0;max-width:430px}
+.not-started .start-route{display:flex;flex-direction:column;align-items:stretch;gap:8px;width:min(360px,80vw);text-align:left}
+.not-started .start-route select{width:100%;min-height:46px;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:#fff;font:13px Manrope,system-ui,sans-serif;color:var(--ink)}
+.not-started #startengine{min-width:180px}.not-started #startengine:disabled{opacity:.55;cursor:not-allowed;box-shadow:none;transform:none}
+.not-started #startstatus{max-width:400px;font:12px/1.5 Manrope,system-ui,sans-serif;color:#805229}
