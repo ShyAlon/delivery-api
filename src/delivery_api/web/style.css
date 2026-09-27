@@ -115,3 +115,5 @@ button.danger{color:#a33}
 .qa-chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0 44px}
 .qa-chip{font:10px DM Mono;letter-spacing:.06em;text-transform:uppercase;padding:4px 9px;border-radius:999px;background:#e8efe4;color:#47614f;border:1px solid var(--line)}
 .qa-chip.differed{background:#fdf3e3;color:#8a5a19;border-color:#e3c98f;cursor:help}
+
+.session-card h2 a{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}

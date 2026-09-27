@@ -1,6 +1,7 @@
 """Read-only discovery and projection of completed on-disk V-model bundles."""
 from __future__ import annotations
 import json,os,re
+from datetime import datetime,timezone
 from pathlib import Path
 from . import config
 
@@ -26,6 +27,27 @@ def save_root(candidate:str)->dict:
 def _json(path:Path,default=None):
  try:return json.loads(path.read_text())
  except (OSError,json.JSONDecodeError):return default
+def _interview_status(interview:Path)->str:
+ # The intent model is the accepted result; usage means work happened, not that
+ # the founder approved it. The HTTP state survives a server restart.
+ if (interview/"intent_model.json").is_file():return "done"
+ http=_json(interview/"http-session.json",{}) or {}
+ status=http.get("status") if isinstance(http,dict) else None
+ if status in (50,60):return "error"
+ if status==40:return "warning"  # claimed completion, but no accepted result
+ if status in (10,20,30) or (interview/"usage.jsonl").is_file() or (interview/"conops.json").is_file():return "in_progress"
+ return "not_started"
+
+def _updated_at(interview:Path,spec:Path,run:dict)->float:
+ completed=run.get("completed_at") if isinstance(run,dict) else None
+ if isinstance(completed,str):
+  try:
+   parsed=datetime.fromisoformat(completed.replace("Z","+00:00"))
+   return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).timestamp()
+  except ValueError:pass
+ files=(p for area in (interview,spec) if area.is_dir() for p in area.iterdir() if p.is_file())
+ return max((p.stat().st_mtime for p in files),default=0.0)
+
 def _discover(where:Path)->list[dict]:
  out=[]
  if not where.is_dir():return out
@@ -36,11 +58,17 @@ def _discover(where:Path)->list[dict]:
   has_spec=spec.is_dir() and any((spec/n).is_file() for n in ("needs.json","srs.json","architecture.json","bundle-integrity.json","usage.jsonl"))
   if not has_interview and not has_spec:continue
   run=_json(spec/"hands-free-run.json",{}) or {};integrity=_json(spec/"bundle-integrity.json",{}) or {};intent=_json(interview/"intent_model.json",{}) or {}
+  http=_json(interview/"http-session.json",{}) or {}
+  request=http.get("request") if isinstance(http,dict) else None
+  brief=request.get("idea") if isinstance(request,dict) else None
+  title=(intent.get("problem_statement") or intent.get("core_value_proposition") if isinstance(intent,dict) else None) or (brief.strip() if isinstance(brief,str) else None) or d.name
   phases=[x for x,present in (("interview",has_interview),("spec",has_spec)) if present]
   diagnostics=integrity.get("diagnostics") if isinstance(integrity,dict) else None
-  out.append({"session_id":d.name,"title":intent.get("problem_statement") or intent.get("core_value_proposition") or d.name,
-   "completed_at":run.get("completed_at"),"oracle_passed":bool(integrity) and not bool(diagnostics),"files_checked":integrity.get("files_checked",0),"phases":phases,"phase_status":_phase_status(interview,spec,run,integrity),"path":str(d)})
- return sorted(out,key=lambda x:(x["completed_at"] or "",x["session_id"]),reverse=True)
+  updated=_updated_at(interview,spec,run)
+  out.append({"session_id":d.name,"title":title,
+   "completed_at":run.get("completed_at"),"updated_at":datetime.fromtimestamp(updated,timezone.utc).isoformat() if updated else None,
+   "oracle_passed":bool(integrity) and not bool(diagnostics),"files_checked":integrity.get("files_checked",0),"phases":phases,"phase_status":_phase_status(interview,spec,run,integrity),"path":str(d)})
+ return sorted(out,key=lambda x:(x["updated_at"] or "",x["session_id"]),reverse=True)
 def _phase_status(interview:Path,spec:Path,run:dict,integrity:dict)->dict:
  values={"interview":(interview/"intent_model.json").is_file(),"needs":(spec/"needs.json").is_file(),"srs":(spec/"srs.json").is_file(),"architecture":(spec/"architecture.json").is_file(),"specs":(spec/"items.json").is_file() or (spec/"spec_items.json").is_file(),"tests":(spec/"tests.json").is_file() or (spec/"test_specifications.json").is_file(),"reviews":(interview/"audit.jsonl").is_file() or (spec/"audit.jsonl").is_file(),"oracle":bool(integrity)}
  explicit=run.get("phases",{}) if isinstance(run,dict) else {};diagnostics=integrity.get("diagnostics",[]) if isinstance(integrity,dict) else []
@@ -49,7 +77,7 @@ def _phase_status(interview:Path,spec:Path,run:dict,integrity:dict)->dict:
   state=explicit.get(key) if isinstance(explicit,dict) else None;state=state.get("status") or state.get("state") if isinstance(state,dict) else state
   related=[x for x in diagnostics if isinstance(x,dict) and x.get("phase") in (None,key)]
   levels={str(x.get("severity",x.get("level","error"))).lower() for x in related}
-  out[key]="in_progress" if state in ("running","in_progress") else "error" if state in ("error","failed") or "error" in levels else "warning" if state in ("warning","warn") or levels & {"warning","warn"} else "done" if present else "not_started"
+  out[key]="in_progress" if state in ("running","in_progress") else "error" if state in ("error","failed") or "error" in levels else "warning" if state in ("warning","warn") or levels & {"warning","warn"} else (_interview_status(interview) if key=="interview" else "done" if present else "not_started")
  return out
 
 def discover()->list[dict]:return _discover(root())
@@ -112,4 +140,5 @@ def bundle(session:str)->dict:
   elif value:state="done"
   else:state="not_started"
   phase_status[key]=state
+ phase_status["interview"]=_phase_status(interview,spec,run,integrity)["interview"]
  return {"session":next((x for x in discover() if x["session_id"]==session),{"session_id":session}),"phase_status":phase_status,"intent":intent,"conops":conops,"coverage":coverage,"needs":_rows(needs,"needs"),"srs":srs,"requirements":reqs,"architecture":arch,"items":items,"tests":tests,"audits":audits,"integrity":integrity,"run":run,"graph":{"nodes":nodes,"edges":edges}}
