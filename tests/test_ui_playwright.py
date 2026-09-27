@@ -942,6 +942,7 @@ def test_feedback_thumbs_comment_persist_and_delete(page, ui):
     dialog.get_by_role("button", name="Save comment").click()
     note = page.locator(".qa-note", has_text="Too abstract for a first question")
     note.wait_for()
+    dialog.wait_for(state="detached")
 
     page.reload()
     page.get_by_text("Interview so far").wait_for()
@@ -958,6 +959,43 @@ def test_feedback_thumbs_comment_persist_and_delete(page, ui):
     page.get_by_role("dialog", name="Comment on this question").wait_for(state="detached")
     assert page.locator(".qa-note").count() == 0
     assert page.locator(".qa-question .qa-thumb.active").count() == 0
+
+
+def test_feedback_save_disables_while_pending_and_closes_only_on_success(page, ui):
+    route_task_snapshot(page, ui, "live", interview_history_snapshot)
+    page.goto(ui + "/tasks/live/view")
+    page.get_by_text("Interview so far").wait_for()
+    page.locator(".qa-answer .qa-comment-btn").first.click()
+    dialog = page.get_by_role("dialog", name="Comment on this answer")
+    dialog.locator("#feedbacktext").fill("Misread as a refusal")
+    save = dialog.get_by_role("button", name="Save comment")
+    page.evaluate("""() => {
+      window.__feedbackFetch = window.fetch;
+      window.__feedbackRequests = 0;
+      window.fetch = (url, options) => {
+        if (String(url).endsWith('/feedback') && options?.method === 'POST') {
+          window.__feedbackRequests++;
+          return new Promise(resolve => { window.__failFeedback = () =>
+            resolve(new Response(JSON.stringify({detail: 'Try again'}),
+              {status: 500, headers: {'Content-Type': 'application/json'}})); });
+        }
+        return window.__feedbackFetch(url, options);
+      };
+    }""")
+    save.click()
+    expect(dialog.locator("#savefeedback")).to_be_disabled()
+    assert dialog.is_visible()
+    assert page.evaluate("window.__feedbackRequests") == 1
+    dialog.locator("#savefeedback").evaluate("button => button.click()")
+    assert page.evaluate("window.__feedbackRequests") == 1
+    page.evaluate("window.__failFeedback()")
+    expect(dialog.locator("#savefeedback")).to_be_enabled()
+    assert dialog.is_visible()
+    assert dialog.locator("#feedbacktext").input_value() == "Misread as a refusal"
+    page.evaluate("window.fetch = window.__feedbackFetch")
+    save.click()
+    dialog.wait_for(state="detached")
+    page.locator(".qa-note", has_text="Misread as a refusal").wait_for()
 
 
 def test_debug_chips_show_intent_relevance_and_differed_tooltip(page, ui):
