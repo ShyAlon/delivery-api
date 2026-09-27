@@ -15,4 +15,6 @@ def ollama_model()->str:
     return os.environ.get("DELIVERY_OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL
 
 def route_value(route:str)->str:
-    return f"ollama:{ollama_model()}" if route=="ollama" else f"deepseek:{DEEPSEEK_MODEL}"
+    if route=="ollama":return f"ollama:{ollama_model()}"
+    if route=="deepseek":return f"deepseek:{DEEPSEEK_MODEL}"
+    raise ValueError(f"unsupported model route: {route!r}")

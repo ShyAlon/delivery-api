@@ -147,7 +147,7 @@ async def _resume_orphaned_handoffs()->None:
 
 
 def _interview_route_env(task_id:str)->dict[str,str]:
-    stored=(store.task(task_id) or {}).get("model_route") or "ollama"
+    stored=(store.task(task_id) or {}).get("model_route") or "deepseek"
     route="deepseek" if stored.startswith("deepseek") else "ollama"
     value=model_route_lib.route_value(route)
     return {f"INTERVIEW_ENGINE_MODEL_{stage}":value for stage in ("PROBING","DISTILLATION","PHRASING","SCOPE_TIEBREAK","EXPERT_OPINION")}
@@ -499,7 +499,7 @@ def delete_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     except ValueError as e:raise HTTPException(409,{"error":str(e),"cause":"Active work must stop before its data is removed.","next":"Wait for the replay to finish, then delete the task."})
     return {"status":"deleted","task_id":task_id,"source_artifacts_deleted":False}
 
-class TaskStartRequest(BaseModel):model_route:Literal["ollama","deepseek"]="ollama"
+class TaskStartRequest(BaseModel):model_route:Literal["ollama","deepseek"]="deepseek"
 @app.get("/api/model-routes")
 def model_routes():return {"routes":[{"id":"ollama","available":True},{"id":"deepseek","available":bool(os.environ.get("DEEPSEEK_API_KEY"))}]}
 @app.post("/api/tasks/{task_id}/start")
@@ -513,10 +513,15 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         activity("engine.unreachable","Interview engine unreachable at task start",task_id=task_id,base_url=exc.base_url,cause=str(exc.cause))
         store.add_event(task_id,"error",f"Error: the interview engine is not reachable. Likely cause: nothing accepted the connection at {exc.base_url} - the engine service is not running. Next: restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Then retry.",phase_key="intent",payload=_engine_unreachable_payload(exc))
         raise _engine_unreachable(exc)
-    except EngineClientError as exc:raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
+    except EngineClientError as exc:
+        payload={"route":body.model_route,"http_status":exc.http_status,"protocol_error":exc.error.model_dump(mode="json"),"stage":"preflight"}
+        activity("model.route.preflight.rejected","Interview route rejected by engine",task_id=task_id,**payload)
+        store.add_event(task_id,"model_preflight",f"Interview route {body.model_route} rejected: {exc.error.detail}",phase_key="intent",payload=payload)
+        raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
     store.set_engine_session(task_id,started.snapshot.session_id);store.set_model_route(task_id,body.model_route)
     resolved=model_route_lib.route_value(body.model_route)
-    store.add_event(task_id,"model_route",f"interview uses {resolved}",phase_key="intent",payload={"route":body.model_route,"resolved":resolved,"model":resolved.split(":",1)[1],"scope":"start","actor":a.label})
+    store.add_event(task_id,"model_route",f"interview uses {resolved}",phase_key="intent",payload={"route":body.model_route,"resolved":resolved,"provider":resolved.split(":",1)[0],"model":resolved.split(":",1)[1],"effective_stages":["probing","distillation","phrasing","scope_tiebreak","expert_opinion","conops"],"scope":"start","actor":a.label})
+    activity("model.route.resolved","Interview route accepted",task_id=task_id,session_id=started.snapshot.session_id,selected=body.model_route,effective=resolved)
     detail="Waiting for founder input" if started.snapshot.process_status==ProcessStatus.WAITING_INPUT else "Interview engine running"
     store.update_phase(task_id,"intent","running",detail=detail)
     store.add_event(task_id,"engine_protocol","HTTP interview session started",phase_key="intent",payload=started.model_dump(mode="json"))
@@ -811,6 +816,49 @@ def get_task(task_id: str):
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
     artifacts=_task_artifact_snapshot(task_id);session=_recorded_engine_session(task_id)
     return {**task, "events": store.events(task_id), "artifacts":artifacts,"artifact_projection":{"session":session,"root":str((__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"ui_state":_task_ui_state(task,input_state)}
+
+@app.get("/api/tasks/{task_id}/execution")
+def task_execution(task_id:str,debug:bool=False,a:auth.Actor=Depends(auth.require_actor)):
+    """Per-session routing, usage and call diagnostics; raw payloads require debug mode."""
+    if not store.task(task_id):raise HTTPException(404,"task not found")
+    session=_recorded_engine_session(task_id)
+    if not session:return {"session_id":None,"route":None,"usage":[],"calls":[],"raw":[]}
+    from vmodel_contracts.runtime import artifacts_root
+    root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"
+    def lines(path:Path,limit:int=300):
+        if not path.is_file():return []
+        with path.open(errors="replace") as stream:
+            return [value for row in stream if (value:=_execution_json(row)) is not None][-limit:]
+    pinned=None
+    state=root/"http-session.json"
+    if state.is_file():
+        try:pinned=json.loads(state.read_text()).get("model_map")
+        except (ValueError,OSError):pass
+    route=(store.task(task_id) or {}).get("model_route")
+    usage=lines(root/"usage.jsonl")
+    calls=lines(root/"llm-calls.jsonl")
+    summary=[]
+    for entry in calls:
+        item={key:entry.get(key) for key in ("ts","event","stage","provider","model","attempt","latency_s","usage") if key in entry}
+        error=entry.get("error")
+        if isinstance(error,dict):
+            # The provider error envelope may contain a raw response. The
+            # normal task view only needs its kind/status; full detail is debug.
+            item["error"]=error if debug else {key:error[key] for key in ("kind","class","http_status","request_id") if key in error}
+        summary.append(item)
+    raw=[]
+    if debug:
+        raw.extend(lines(root/"debug-http.jsonl",100))
+        debug_dir=root/"debug"
+        if debug_dir.is_dir():
+            for file in sorted(debug_dir.glob("*.txt"))[-30:]:
+                if file.is_file() and file.stat().st_size<=1_000_000:
+                    raw.append({"file":file.name,"content":file.read_text(errors="replace")})
+    return {"session_id":session,"route":route,"effective_models":pinned,"usage":usage,"calls":summary,"raw":raw}
+
+def _execution_json(row:str):
+    try:return json.loads(row)
+    except ValueError:return None
 
 @app.get("/api/tasks/{task_id}/events")
 def task_events(task_id: str, after: int = Query(default=0, ge=0)):
