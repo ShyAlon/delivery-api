@@ -121,6 +121,19 @@ def test_require_brand_is_consistent(page, ui):
     assert page.locator('body').inner_text().lower().find('vector') == -1
 
 
+def test_not_started_panel_layout(page,ui):
+    page.goto(ui+'/tasks/empty/view')
+    page.locator('#defaultroute').wait_for()
+    start=page.get_by_role('button',name='Start interview')
+    panel=page.locator('.not-started');route=panel.locator('#defaultroute');label=panel.locator('.start-route');
+    assert panel.evaluate("e=>getComputedStyle(e).borderRadius")=='28px'
+    assert panel.locator('.start-controls').count()==1
+    assert label.inner_text().startswith('DEFAULT MODEL ROUTE')
+    control=route.bounding_box();action=start.bounding_box();assert control['x']+control['width']+12<action['x']
+    assert control['y']>=label.bounding_box()['y']+12
+    assert start.is_visible() and start.is_enabled()
+
+
 def test_not_started_running_and_done_pages(page, ui):
     page.goto(ui + "/tasks/empty/view")
     page.get_by_text("This task hasn't started.").wait_for();assert page.get_by_text("This task hasn't started.").is_visible()
