@@ -38,6 +38,7 @@ from vmodel_contracts.interactive import InputResponse,ProcessStatus,StartSessio
 from .store import create_store
 from .simulation import Simulation, ImportValidationError
 from . import bundles
+from . import model_routes as model_route_lib
 from .observability import event as activity
 
 def _runtime_version() -> dict:
@@ -139,7 +140,7 @@ async def _resume_orphaned_handoffs()->None:
 def _interview_route_env(task_id:str)->dict[str,str]:
     stored=(store.task(task_id) or {}).get("model_route") or "ollama"
     route="deepseek" if stored.startswith("deepseek") else "ollama"
-    value="ollama:qwen2.5-coder:14b" if route=="ollama" else "deepseek:deepseek-chat"
+    value=model_route_lib.route_value(route)
     return {f"INTERVIEW_ENGINE_MODEL_{stage}":value for stage in ("PROBING","DISTILLATION","PHRASING","SCOPE_TIEBREAK","EXPERT_OPINION")}
 
 def _replayable_decisions(task_id:str)->dict[str,dict[str,str]]:
@@ -501,6 +502,8 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
     try:started=engine_client.start(StartSessionRequest(task_id=task_id,idea=idea,model_route=body.model_route))
     except EngineClientError as exc:raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
     store.set_engine_session(task_id,started.snapshot.session_id);store.set_model_route(task_id,body.model_route)
+    resolved=model_route_lib.route_value(body.model_route)
+    store.add_event(task_id,"model_route",f"interview uses {resolved}",phase_key="intent",payload={"route":body.model_route,"resolved":resolved,"model":resolved.split(":",1)[1],"scope":"start","actor":a.label})
     detail="Waiting for founder input" if started.snapshot.process_status==ProcessStatus.WAITING_INPUT else "Interview engine running"
     store.update_phase(task_id,"intent","running",detail=detail)
     store.add_event(task_id,"engine_protocol","HTTP interview session started",phase_key="intent",payload=started.model_dump(mode="json"))
@@ -665,6 +668,32 @@ def _checkpoint_interview_turns(task_id:str)->list[tuple[str,str]]:
         return turns
     except Exception:return []
 
+def _interview_model_provenance(task_id:str)->list[str]:
+    """Resolved provider:model per stage for the transcript header. The run's own
+    usage.jsonl is exact per-call truth; the start-time store event is the
+    fallback when artifacts are missing (pre-telemetry imports)."""
+    session=_recorded_engine_session(task_id)
+    if session:
+        try:
+            from vmodel_contracts.runtime import artifacts_root
+            usage=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"/"usage.jsonl"
+            stage_models:dict[str,str]={}
+            if usage.is_file():
+                for line in usage.read_text().splitlines():
+                    try:rec=json.loads(line)
+                    except ValueError:continue
+                    stage,provider,model=rec.get("stage"),rec.get("provider"),rec.get("model")
+                    if stage and provider and model:stage_models.setdefault(str(stage),f"{provider}:{model}")
+                if stage_models:
+                    distinct=sorted(set(stage_models.values()))
+                    if len(distinct)==1:return [f"Model: {distinct[0]} (stages: {', '.join(sorted(stage_models))})"]
+                    return [f"Model: {stage} = {model}" for stage,model in sorted(stage_models.items())]
+        except Exception:pass
+    resolved=next(((event.get("payload") or {}).get("resolved") for event in reversed(store.events(task_id)) if event.get("kind")=="model_route" and (event.get("payload") or {}).get("resolved")),None)
+    if resolved:return [f"Model: {resolved}"]
+    stored=(store.task(task_id) or {}).get("model_route")
+    return [f"Model route: {stored}"] if stored else []
+
 def _interview_transcript_markdown(task_id:str)->str:
     turns=[]
     for event in store.events(task_id):
@@ -681,7 +710,7 @@ def _interview_transcript_markdown(task_id:str)->str:
     checkpoint_turns=_checkpoint_interview_turns(task_id)
     if checkpoint_turns:complete=checkpoint_turns
     if not complete:return ""
-    lines=["## Interview questions and answers"]
+    lines=_interview_model_provenance(task_id)+["","## Interview questions and answers"]
     for index,(question,answer) in enumerate(complete,1):
         lines.extend(["",f"### Question {index}",question,"",f"**Answer:** {answer}"])
     return "\n".join(lines)
