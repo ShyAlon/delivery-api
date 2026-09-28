@@ -723,3 +723,33 @@ def test_architecture_baseline_rejects_stale_decision_without_http_fallback(monk
  asyncio.run(go())
  assert engine.calls==0
  assert not any(e['kind']=='answer' for e in store.events(tid))
+
+def test_completed_http_recovery_restores_orphaned_architecture_choice(tmp_path,monkeypatch):
+ import asyncio
+ from delivery_api.runner import ProcessRunner
+ from delivery_api.orchestrator import PhaseOrchestrator
+ from delivery_api.auth import Actor
+ session='architecture-recovery';store=SQLiteStore(str(tmp_path/'architecture-recovery.db'))
+ tid=store.create_task('Architecture recovery','brief')['task_id'];store.set_engine_session(tid,session)
+ for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
+ store.update_phase(tid,'architecture','running',detail='Waiting for architecture baseline')
+ store.add_event(tid,'founder_decision','Choose architecture baseline',phase_key='architecture',payload={'waiting_input':True,'decision':{'decision_id':'system-baseline','prompt':'Choose architecture baseline','options':[{'value':'greenfield','label':'Greenfield'}]}})
+ monkeypatch.setattr(module,'store',store)
+ runner=ProcessRunner(store);monkeypatch.setattr(module,'runner',runner)
+ orchestrator=PhaseOrchestrator(store,runner);monkeypatch.setattr(module,'orchestrator',orchestrator)
+ class Complete:
+  def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE,open_input=None)
+ monkeypatch.setattr(module,'engine_client',Complete())
+ async def recover():
+  await module._recover_tasks();await asyncio.sleep(.01)
+  assert runner.input_state(tid)['waiting'] and runner.work_state(tid).owner=='decision'
+  assert module._task_ui_state(store.task(tid),runner.input_state(tid))['mode']=='engine_decision'
+  await module._recover_tasks();await asyncio.sleep(.01)
+  assert len([e for e in store.events(tid) if e['kind']=='founder_decision' and e['phase_key']=='architecture'])==2
+  pending=asyncio.current_task()
+  for child in asyncio.all_tasks():
+   if child is not pending and child.get_coro().__qualname__.endswith('_choose_baseline'):
+    child.cancel()
+    try:await child
+    except asyncio.CancelledError:pass
+ asyncio.run(recover())

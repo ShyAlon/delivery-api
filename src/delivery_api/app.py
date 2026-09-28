@@ -251,6 +251,19 @@ async def _recover_tasks()->None:
                 # leaves the same orphaned handoff as a normal subprocess exit.
                 if repaired:
                     activity("engine.recovery.reconciled","Restored completed interview boundary; queuing Stakeholder needs",task_id=task_id,session_id=session,sequence=state.sequence,intent=phases["intent"],conops=phases["conops"],next_phase="needs")
+                # The architecture baseline choice is a local future, not an HTTP
+                # input. Restore that owner after restart without replaying an
+                # interview or launching a generator. A written baseline means
+                # the old decision must not be reopened.
+                if (current["state"]=="running" and current["active_phase"]=="architecture"
+                    and phases.get("architecture")=="running" and phases.get("srs") in ("approved","done")
+                    and not orchestrator._baseline_exists(task_id)):
+                    latest_choice=next((event for event in reversed(events) if event.get("phase_key")=="architecture"
+                                        and event.get("kind") in ("founder_decision","answer","baseline","requirement","command")),None)
+                    if latest_choice and latest_choice["kind"]=="founder_decision" and (latest_choice.get("payload") or {}).get("decision",{}).get("decision_id")=="system-baseline":
+                        activity("architecture.recovery.decision","Restoring interrupted architecture baseline choice",task_id=task_id,session_id=session)
+                        asyncio.create_task(orchestrator._choose_baseline(task_id))
+                        continue
                 if repaired or (phases["conops"] in ("approved","done") and phases["needs"] in ("pending","running")
                                 and current["active_phase"]=="conops"
                                 and any(event["kind"]=="progress" and (event.get("payload") or {}).get("source")=="terminal_engine_snapshot"
