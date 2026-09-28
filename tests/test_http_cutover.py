@@ -432,6 +432,8 @@ def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path
  from delivery_api.orchestrator import PhaseOrchestrator
  session='bound-session';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
+ generator=tmp_path/'spec-generator';(generator/'.venv/bin').mkdir(parents=True);(generator/'.venv/bin/python').write_text('')
+ monkeypatch.setenv('SPEC_GENERATOR_DIR',str(generator))
  store=SQLiteStore(str(tmp_path/'handoff.db'));tid=store.create_task('Bound recovery','brief')['task_id']
  store.set_engine_session(tid,session);store.update_phase(tid,'intent','running',detail='Waiting for founder input')
  monkeypatch.setattr(module,'store',store)
@@ -453,6 +455,7 @@ def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path
  assert str(artifacts/session/'interview'/'intent_model.json') in command
  assert str(artifacts/session/'interview'/'conops.json') in command
  assert options['phase']=='needs' and store.task(tid)['active_phase']=='needs'
+ assert command[0]==str(generator/'.venv/bin/python')
 
 
 def test_final_typed_answer_reconciles_without_resubmission(tmp_path,monkeypatch):

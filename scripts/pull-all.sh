@@ -24,12 +24,14 @@ for repo in $REPOS; do
   printf 'syncing %-15s ' "$repo"
   if command -v uv >/dev/null 2>&1 && [ -f "$path/uv.lock" ]; then
     (cd "$path" && uv sync --locked --quiet) || { echo "Error: $repo environment sync failed. Check its lockfile and dependencies." >&2; exit 1; }
+  elif command -v uv >/dev/null 2>&1; then
+    (cd "$path" && uv sync --quiet) || { echo "Error: $repo environment sync failed." >&2; exit 1; }
   elif [ -x "$path/.venv/bin/python" ]; then
     "$path/.venv/bin/python" -m pip install -e "$path" || { echo "Error: $repo environment install failed." >&2; exit 1; }
     "$path/.venv/bin/python" -m pip check || { echo "Error: $repo environment has unsatisfied package dependencies." >&2; exit 1; }
   else
-    echo "Error: $repo has no .venv and no locked uv environment to sync." >&2
-    echo "Next: install uv and create $repo/.venv, then rerun pull-all.sh." >&2
+    echo "Error: $repo has no .venv and uv is unavailable." >&2
+    echo "Next: install uv or create $repo/.venv with python3 -m venv, then rerun pull-all.sh." >&2
     exit 1
   fi
   echo 'ok'

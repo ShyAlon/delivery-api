@@ -92,6 +92,7 @@ class ProcessRunner:
         self.active_work[task_id]=ActiveWork("subprocess",phase,"running",time.time(),durable_ref=str(proc.pid))
         traceback_started = False
         missing_module: str | None = None
+        cli_error: str | None = None
         prompt_lines: list[str] = []
         line_buffer = ""
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -153,6 +154,7 @@ class ProcessRunner:
                     # Subprocesses are non-interactive executors. Interview control moved to
                     # the typed HTTP service; stdout/stderr are diagnostics only.
                     activity("engine.output","Engine diagnostic output",task_id=task_id,phase=phase,stream="combined",line=line)
+                    if line.startswith("Error:") and cli_error is None:cli_error=line
                     if line.startswith("Traceback (most recent call last):"):traceback_started=True
                     missing=_MISSING_MODULE.search(line)
                     if missing:missing_module=missing.group(1);traceback_started=True
@@ -171,6 +173,7 @@ class ProcessRunner:
                 activity("engine.output","Engine diagnostic output",task_id=task_id,phase=phase,stream="combined",line=final_line)
                 missing=_MISSING_MODULE.search(final_line)
                 if missing:missing_module=missing.group(1)
+                if final_line.startswith("Error:") and cli_error is None:cli_error=final_line
             code = await proc.wait()
             if code==0 and artifact_dir:
                 from .pricing import price_execution
@@ -210,13 +213,13 @@ class ProcessRunner:
                     cause="The engine went silent and was stopped as stalled."
                     next_step="Check run.log for the last reported stage, fix the cause, then retry."
                 elif missing_module:
-                    error=f"Error: engine dependency '{missing_module}' is missing. Likely cause: the selected Python environment is incomplete. Next: install interview-engine into that environment, restart Requi.re, and retry. Exit code: {code}."
+                    error=f"Error: {phase} subprocess dependency '{missing_module}' is missing. Likely cause: the selected Python environment is incomplete. Next: install the {phase} executor and its dependencies into the selected environment, restart Requi.re, and retry. Exit code: {code}."
                     cause=f"Python could not import {missing_module}."
-                    next_step="Install the interview-engine dependencies in the resolved Python environment, then retry. The raw traceback is in run.log."
+                    next_step=f"Install the {phase} executor dependencies in the selected Python environment, then retry. The raw traceback is in run.log."
                 else:
-                    error=f"Error: interview engine stopped with exit code {code}. Likely cause: the CLI reported a runtime failure. Next: check run.log for the raw diagnostic, fix the named cause, then retry."
-                    cause="The CLI exited before the interview completed."
-                    next_step="Check run.log for the raw diagnostic, fix the named cause, then retry."
+                    cause=cli_error or f"The {phase} CLI exited before completing."
+                    next_step="Check run.log for the full diagnostic, fix the named cause, then retry."
+                    error=f"Error: {phase} subprocess stopped with exit code {code}. Likely cause: {cause} Next: {next_step}"
                 self.store.update_phase(task_id,phase,"failed",detail=error)
                 self.store.add_event(task_id,"error",error,phase_key=phase,payload={"exit_code":code,"module":missing_module,"cause":cause,"next":next_step})
             return code
