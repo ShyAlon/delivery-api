@@ -12,4 +12,22 @@ done
 for repo in $REPOS; do
   printf '%-20s ' "$repo"
   git -C "$REPOS_ROOT/$repo" pull --ff-only
- done
+done
+
+# Cross-repo contracts are pinned in each consumer's project metadata. The
+# source pull alone leaves previously installed wheels stale and can make both
+# HTTP services fail to import. Sync only the two services pulled above.
+for repo in interview-engine delivery-api; do
+  path="$REPOS_ROOT/$repo"
+  if [ -x "$path/.venv/bin/python" ]; then
+    printf 'syncing %-15s ' "$repo"
+    if command -v uv >/dev/null 2>&1; then
+      (cd "$path" && uv sync --quiet) || { echo 'failed' >&2; exit 1; }
+    else
+      "$path/.venv/bin/python" -m pip install -e "$path" || { echo 'failed' >&2; exit 1; }
+    fi
+    echo 'ok'
+  else
+    echo "Notice: $repo has no .venv; scripts/run-ui.sh will report missing dependencies."
+  fi
+done

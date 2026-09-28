@@ -1151,3 +1151,32 @@ def test_protocol_422_is_not_mislabeled_engine_down(page,ui):
     assert 'structured interview-turn contract' in notice.inner_text()
     assert 'Engine is not running' not in notice.inner_text()
     page.screenshot(path='/downloads/protocol-error-state.png',full_page=True)
+
+@pytest.mark.parametrize("failed",[False,True])
+def test_legacy_ollama_model_switch_dialog(page,ui,failed):
+    live=page.request.get(ui+'/api/tasks/live').json()
+    live.update({'state':'failed' if failed else 'running','active_phase':'intent','model_route':'ollama/qwen2.5-coder:14b',
+        'simulated':False,'input_state':{'waiting':True,'input_id':'legacy-input','process_live':True},
+        'ui_state':{'mode':'error' if failed else 'engine_question','active_phase':'intent','question':'Continue?','process_live':True}})
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live/execution*',lambda route:route.fulfill(json={
+        'session_id':'legacy','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[],
+        'effective_models':{'probing':['ollama','qwen2.5-coder:14b']}}))
+    page.route('**/api/model-routes',lambda route:route.fulfill(json={'routes':[
+        {'id':'ollama','available':True,'model':'ollama:qwen2.5-coder:14b','models':['qwen2.5-coder:14b','phi4']},
+        {'id':'deepseek','available':False,'error':'no key'}]}))
+    page.goto(ui+'/tasks/live/view')
+    execution=page.locator('.execution-data')
+    expect(execution).to_be_visible()
+    assert not execution.evaluate('(el)=>el.open')
+    execution.locator(':scope > summary').click()
+    assert execution.evaluate('(el)=>el.open')
+    execution.locator(':scope > summary').click()
+    if failed:expect(page.locator('.task-error-state #switchmodel')).to_be_visible()
+    page.locator('#switchmodel').click()
+    dialog=page.locator('.route-switch-dialog')
+    expect(dialog).to_be_visible()
+    expect(page.locator('#route-switch-target')).to_have_value('ollama:phi4')
+    expect(page.locator('#confirm-switch')).to_be_enabled()
+    page.keyboard.press('Escape')
+    expect(dialog).to_have_count(0)

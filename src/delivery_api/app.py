@@ -512,9 +512,20 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
             if len(pairs)!=1:raise ValueError("engine preview returned divergent stage models")
             provider,model=next(iter(pairs))
             if provider!=route:raise ValueError(f"engine preview returned {provider} for selected {route}")
-            routes.append({"id":route,"available":True,"model":f"{provider}:{model}","model_map":models})
+            options=[model]
+            if route=="ollama":
+                try:options=engine_client.local_models()
+                except (EngineClientError,EngineUnreachableError,AttributeError):pass
+            routes.append({"id":route,"available":True,"model":f"{provider}:{model}","model_map":models,"models":options})
         except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
             reason=exc.error.detail if isinstance(exc,EngineClientError) else str(exc)
+            if route=="ollama":
+                try:
+                    installed=engine_client.local_models()
+                    if installed:
+                        routes.append({"id":route,"available":True,"model":None,"models":installed,"error":f"default unavailable: {reason}"})
+                        continue
+                except (EngineClientError,EngineUnreachableError,AttributeError):pass
             routes.append({"id":route,"available":False,"error":reason})
     return {"routes":routes,"default_route":default}
 @app.post("/api/tasks/{task_id}/start")
@@ -621,6 +632,7 @@ async def interview_engine_snapshot(task_id:str,a:auth.Actor=Depends(auth.requir
 
 class TaskRouteSwitchRequest(BaseModel):
     model_route:Literal["ollama","deepseek"]
+    model:str=Field(min_length=1,max_length=160)
     expected_sequence:int=Field(ge=0)
     expected_input_id:UUID
     idempotency_key:UUID
@@ -635,7 +647,7 @@ async def switch_interview_model(task_id:str,body:TaskRouteSwitchRequest,a:auth.
     try:
         state=await run_in_threadpool(engine_client.snapshot,session)
         if state.task_id != task_id:raise HTTPException(409,"session belongs to another task")
-        request=ModelRouteSwitchRequest(model_route=body.model_route,expected_sequence=body.expected_sequence,
+        request=ModelRouteSwitchRequest(model_route=body.model_route,model=body.model,expected_sequence=body.expected_sequence,
             expected_input_id=body.expected_input_id,idempotency_key=body.idempotency_key,actor_id=a.label)
         changed=await run_in_threadpool(engine_client.switch_route,session,request)
     except EngineUnreachableError as exc:raise _engine_unreachable(exc)
