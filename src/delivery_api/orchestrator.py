@@ -19,6 +19,8 @@ class PhaseOrchestrator:
     runner: object
 
     def _session(self,task_id:str)->str:
+        bound=self.store.engine_session(task_id)
+        if bound:return bound
         import re
         for event in reversed(self.store.events(task_id)):
             m=re.search(r"(?:^|\s)session:\s*([A-Za-z0-9._-]+)",event.get("message",""))

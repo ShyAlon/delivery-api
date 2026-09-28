@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile, File, Form
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -170,6 +170,7 @@ async def _resume_interrupted_interviews()->None:
         if task.get("state") not in ("running","waiting_gate"):continue
         phases={p["phase_key"]:p["state"] for p in task.get("phases",[])}
         if all(phases.get(p) in ("approved","done") for p in ("intent","conops")):continue
+        if store.engine_session(task["task_id"]):continue
         if _recorded_engine_session(task["task_id"]):
             store.add_event(task["task_id"],"incompatible","Pre-HTTP interview requires restart",phase_key="intent",payload={"process_status":int(ProcessStatus.INCOMPATIBLE),"next_step":60})
 
@@ -185,6 +186,36 @@ def _legacy_external_requirement(task:dict,events:list[dict])->dict|None:
     return {"kind":"external_input","title":"Existing-system baseline required","summary":"Architecture is paused until the real system facts are supplied.","path":path,"format":"SystemBaseline JSON","required_fields":["baseline_id","system_name","mode: existing","repositories (at least one)"],"next":"Save a valid system-baseline.json at this path, or correct the earlier choice to Greenfield."}
 
 
+def _reconcile_terminal_http_interview(task_id:str,state:EngineSnapshot)->bool:
+    """Repair a lost delivery handoff only with a bound terminal session and valid files."""
+    if state.process_status!=ProcessStatus.COMPLETED or state.task_id!=task_id:return False
+    if store.engine_session(task_id)!=state.session_id:return False
+    task=store.task(task_id)
+    if not task or task["state"] not in ("running","failed") or task["active_phase"] not in ("intent","conops"):
+        return False
+    if next((phase["state"] for phase in task["phases"] if phase["phase_key"]=="conops"),None) in ("approved","done"):
+        return False
+    from vmodel_contracts.runtime import artifacts_root
+    from vmodel_contracts.interview import IntentModel
+    from vmodel_contracts.conops import ConOpsDocument
+    interview=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/state.session_id/"interview"
+    try:
+        intent=IntentModel.model_validate_json((interview/"intent_model.json").read_text())
+        conops=ConOpsDocument.model_validate_json((interview/"conops.json").read_text())
+        if intent.session_id!=state.session_id or conops.session_id!=state.session_id:
+            raise ValueError("interview artifacts belong to a different session")
+    except (OSError,ValueError) as exc:
+        activity("engine.recovery.artifacts_invalid","Completed interview cannot be handed off without verified artifacts",task_id=task_id,session_id=state.session_id,error=str(exc)[:350])
+        return False
+    return store.reconcile_completed_interview(task_id,state.session_id,state.sequence)
+
+async def _continue_reconciled_interview(task_id:str)->None:
+    try:await orchestrator.continue_after(task_id,"conops")
+    except Exception as exc:
+        store.add_event(task_id,"error","Completed interview reconciled but the next phase could not start; restart delivery to retry.",phase_key="needs",
+            payload={"completed_phase":"conops","next_phase":"needs","cause":f"{type(exc).__name__}: {exc}"})
+        activity("orchestrator.recover.failed","Reconciled interview handoff failed",task_id=task_id,error=str(exc)[:350])
+
 async def _recover_tasks()->None:
     """Apply one pure recovery plan per task; never assign competing owners."""
     from .recovery import plan_recovery
@@ -193,20 +224,28 @@ async def _recover_tasks()->None:
         task_id=task["task_id"]
         if runner.work_state(task_id) is not None:continue
         events=store.events(task_id);session=_recorded_engine_session(task_id)
-        # HTTP session state is authoritative. A completed interview must not
-        # be treated as an orphaned legacy interview merely because delivery's
-        # phase rows still look in progress after restart.
+        # The linked HTTP session owns interview state. Reconcile its verified
+        # terminal boundary; never replay its answers through the legacy runner.
         if store.engine_session(task_id):
             try:
                 state=await run_in_threadpool(engine_client.snapshot,session)
             except (EngineClientError,EngineUnreachableError) as exc:
                 activity("engine.recovery.snapshot_unavailable","Could not classify linked interview during recovery",task_id=task_id,session_id=session,error=type(exc).__name__)
                 continue
-            if state.task_id!=task_id:
-                activity("engine.recovery.session_mismatch","Linked interview belongs to another task",task_id=task_id,session_id=session)
+            if state.task_id!=task_id or state.session_id!=session:
+                activity("engine.recovery.session_mismatch","Linked interview belongs to another task or session",task_id=task_id,session_id=session)
                 continue
             if state.process_status==ProcessStatus.COMPLETED:
-                activity("engine.recovery.completed","Completed HTTP interview is terminal",task_id=task_id,session_id=session)
+                repaired=_reconcile_terminal_http_interview(task_id,state)
+                current=store.task(task_id)
+                phases={phase["phase_key"]:phase["state"] for phase in current["phases"]}
+                # A crash after the durable reconciliation but before launch
+                # leaves the same orphaned handoff as a normal subprocess exit.
+                if repaired or (phases["conops"] in ("approved","done") and phases["needs"] in ("pending","running")
+                                and current["active_phase"] in ("conops","needs")):
+                    asyncio.create_task(_continue_reconciled_interview(task_id))
+                else:
+                    activity("engine.recovery.completed","Completed HTTP interview is terminal",task_id=task_id,session_id=session)
                 continue
             if state.process_status==ProcessStatus.WAITING_INPUT and state.open_input is not None:
                 continue
@@ -730,6 +769,8 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
     active_phase=(store.task(task_id) or {}).get("active_phase") or "intent"
     store.add_event(task_id,"answer",f"You: {body.answer}",phase_key=active_phase,payload={"actor":a.label,"character_count":len(body.answer),"transcript":True,"decision_id":body.decision_id,"answer":body.answer})
     activity("engine.answer","Founder answer submitted",task_id=task_id,phase=active_phase,actor=a.label,character_count=len(body.answer))
+    if _reconcile_terminal_http_interview(task_id,submitted.snapshot):
+        asyncio.create_task(_continue_reconciled_interview(task_id))
     return {"status":"accepted"}
 
 def _task_ui_state(task:dict,input_state:dict)->dict:
@@ -965,13 +1006,18 @@ def _http_input_state(task_id:str,engine_state:EngineSnapshot)->dict:
             "decision":decision,"requirement":None,"question":question,"input_id":input_id}
 
 @app.get("/api/tasks/{task_id}")
-def get_task(task_id: str):
+def get_task(task_id: str, background_tasks: BackgroundTasks = None):
     task = store.task(task_id)
     if not task: raise HTTPException(404, "task not found")
     session_id=store.engine_session(task_id)
     if session_id:
         try:
-            input_state=_http_input_state(task_id,engine_client.snapshot(session_id))
+            snapshot=engine_client.snapshot(session_id)
+            if _reconcile_terminal_http_interview(task_id,snapshot):
+                if background_tasks is not None:background_tasks.add_task(_continue_reconciled_interview,task_id)
+                task=store.task(task_id)
+            input_state=(_http_input_state(task_id,snapshot) if task.get("active_phase") in ("intent","conops")
+                         else {**runner.input_state(task_id),"engine_process_status":int(snapshot.process_status)})
         except EngineClientError as exc:
             input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None,
                          "engine_error":{"http_status":exc.http_status,"code":int(exc.error.code),"detail":exc.error.detail}}
