@@ -1180,3 +1180,22 @@ def test_legacy_ollama_model_switch_dialog(page,ui,failed):
     expect(page.locator('#confirm-switch')).to_be_enabled()
     page.keyboard.press('Escape')
     expect(dialog).to_have_count(0)
+
+def test_completed_engine_session_in_error_view_does_not_offer_switch(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json()
+    live.update({'state':'failed','active_phase':'intent','simulated':False,
+        'input_state':{'waiting':False,'input_id':None,'process_live':False,'engine_process_status':40},
+        'ui_state':{'mode':'error','active_phase':'intent','process_live':False}})
+    live['events'].append({'id':9999,'kind':'error','message':'old template literal failure','phase_key':'intent','payload':{},'ts':1720004001})
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live/execution*',lambda route:route.fulfill(json={
+        'session_id':'completed','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[],
+        'effective_models':{'probing':['ollama','qwen2.5-coder:14b']}}))
+    page.route('**/api/model-routes',lambda route:route.fulfill(json={'routes':[]}))
+    page.goto(ui+'/tasks/live/view')
+    expect(page.locator('.task-error-state')).to_be_visible()
+    expect(page.locator('.task-error-state')).to_contain_text('Any earlier model error is historical')
+    expect(page.locator('.task-error-state')).not_to_contain_text('template literal')
+    expect(page.locator('#switchmodel')).to_have_count(0)
+    expect(page.locator('#rerun')).to_have_count(0)
+    expect(page.get_by_text('The linked interview session has no open input and is complete.',exact=False)).to_be_visible()
