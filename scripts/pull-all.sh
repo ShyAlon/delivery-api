@@ -14,20 +14,23 @@ for repo in $REPOS; do
   git -C "$REPOS_ROOT/$repo" pull --ff-only
 done
 
-# Cross-repo contracts are pinned in each consumer's project metadata. The
-# source pull alone leaves previously installed wheels stale and can make both
-# HTTP services fail to import. Sync only the two services pulled above.
-for repo in interview-engine delivery-api; do
+# Sync every Python checkout, not just the two HTTP services. A source pull
+# can leave an existing venv with old pinned contracts or missing transitive
+# imports (for example spec-generator's langgraph). `--locked` refuses to
+# rewrite a lockfile on the user's machine; a failure names the exact repo.
+for repo in $REPOS; do
   path="$REPOS_ROOT/$repo"
-  if [ -x "$path/.venv/bin/python" ]; then
-    printf 'syncing %-15s ' "$repo"
-    if command -v uv >/dev/null 2>&1; then
-      (cd "$path" && uv sync --quiet) || { echo 'failed' >&2; exit 1; }
-    else
-      "$path/.venv/bin/python" -m pip install -e "$path" || { echo 'failed' >&2; exit 1; }
-    fi
-    echo 'ok'
+  [ -f "$path/pyproject.toml" ] || { echo "Notice: $repo has no Python project metadata; skipping environment sync."; continue; }
+  printf 'syncing %-15s ' "$repo"
+  if command -v uv >/dev/null 2>&1 && [ -f "$path/uv.lock" ]; then
+    (cd "$path" && uv sync --locked --quiet) || { echo "Error: $repo environment sync failed. Check its lockfile and dependencies." >&2; exit 1; }
+  elif [ -x "$path/.venv/bin/python" ]; then
+    "$path/.venv/bin/python" -m pip install -e "$path" || { echo "Error: $repo environment install failed." >&2; exit 1; }
+    "$path/.venv/bin/python" -m pip check || { echo "Error: $repo environment has unsatisfied package dependencies." >&2; exit 1; }
   else
-    echo "Notice: $repo has no .venv; scripts/run-ui.sh will report missing dependencies."
+    echo "Error: $repo has no .venv and no locked uv environment to sync." >&2
+    echo "Next: install uv and create $repo/.venv, then rerun pull-all.sh." >&2
+    exit 1
   fi
+  echo 'ok'
 done

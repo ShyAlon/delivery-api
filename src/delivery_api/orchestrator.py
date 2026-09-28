@@ -105,7 +105,8 @@ class PhaseOrchestrator:
         built=os.environ.get("REQUI_RE_DIST")=="1"
         repo=(Path.cwd() if built else Path(os.environ.get("SPEC_GENERATOR_DIR",str(Path(__file__).resolve().parents[3]/"spec-generator"))).resolve())
         python=Path(sys.executable) if built else (repo/".venv/bin/python")
-        if not python.exists():python=Path(sys.executable)
+        if not python.is_file() and not built:
+            raise RuntimeError(f"spec-generator environment is missing at {python}. Run scripts/pull-all.sh before retrying the phase.")
         cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",definition.generator_stage]
         if mode is ExecutionMode.REDO:cmd.extend(["--from",definition.generator_stage])
         stored=model_route or next(((event.get("payload") or {}).get("route") for event in reversed(self.store.events(task_id)) if event.get("kind")=="model_route" and event.get("phase_key")==phase),None) or (self.store.task(task_id) or {}).get("model_route") or "deepseek"

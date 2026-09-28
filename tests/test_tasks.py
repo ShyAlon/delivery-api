@@ -1474,3 +1474,24 @@ def test_engine_heartbeats_reset_the_stall_window(tmp_path):
     script = 'import time\nfor i in range(4):\n print("tick", i, flush=True)\n time.sleep(0.3)'
     code = asyncio.run(ProcessRunner(store).run(tid, [sys.executable, '-c', script], cwd=tmp_path, stall_timeout=1))
     assert code == 0
+
+
+def test_runner_preserves_module_name_when_subprocess_read_splits_mid_word(tmp_path,monkeypatch):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'framing.db'));tid=store.create_task('Framing')['task_id']
+    logs=[];monkeypatch.setattr('delivery_api.runner.activity',lambda kind,message,**fields:logs.append((kind,fields)))
+    # The first write is larger than the runner's read window and deliberately
+    # ends in an unfinished exception line. Both fragments must be one record.
+    script='''import sys,time
+sys.stdout.write("x"*470+"\\nModuleNotFoundError: No module named \'langgr")
+sys.stdout.flush();time.sleep(.08)
+sys.stdout.write("aph\'\\n");sys.stdout.flush();sys.exit(1)'''
+    code=asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))
+    assert code==1
+    output=[fields['line'] for kind,fields in logs if kind=='engine.output']
+    assert "ModuleNotFoundError: No module named 'langgraph'" in output
+    assert not any(line=="aph'" or line.endswith("'langgr") for line in output)
+    error=[event for event in store.events(tid) if event['kind']=='error'][-1]
+    assert error['payload']['module']=='langgraph'

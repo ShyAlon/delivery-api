@@ -50,6 +50,24 @@ mkdir -p "$DEFAULT_DATA_HOME"
 export DELIVERY_DATABASE_URL="${DELIVERY_DATABASE_URL:-${DELIVERY_DB_PATH:-sqlite:///$DEFAULT_DATA_HOME/delivery.db}}"
 echo "Data: $DELIVERY_DATABASE_URL"
 
+# Do not launch a task UI that can start a downstream generator in a broken
+# sibling environment. pull-all.sh repairs all six checkouts; this preflight
+# only inspects and names the stale one, before the server accepts work.
+SPEC_DIR="${SPEC_GENERATOR_DIR:-$(cd "$ROOT/.." && pwd)/spec-generator}"
+SPEC_PYTHON="$SPEC_DIR/.venv/bin/python"
+if [ ! -x "$SPEC_PYTHON" ]; then
+  echo "Error: spec-generator environment is missing at $SPEC_PYTHON."
+  echo "Likely cause: the downstream generator checkout has not been installed."
+  echo "Next: run scripts/pull-all.sh, then restart scripts/run-ui.sh."
+  exit 1
+fi
+if ! "$SPEC_PYTHON" -c 'import spec_generator.cli, langgraph' >/dev/null 2>&1; then
+  echo "Error: spec-generator environment is missing a required runtime dependency."
+  echo "Likely cause: installed packages drifted from the generator checkout (including langgraph)."
+  echo "Next: run scripts/pull-all.sh, then restart scripts/run-ui.sh."
+  exit 1
+fi
+
 # Interview engine child - development parity with the packaged launcher.
 # The interview flow talks to the engine over HTTP and nothing else starts it
 # in development, so run-ui.sh owns it exactly like run-require.sh does.

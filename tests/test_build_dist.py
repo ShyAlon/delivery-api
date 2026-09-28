@@ -144,3 +144,49 @@ def test_launcher_freezes_artifact_root_before_changing_cwd():
     launcher=build.split("cat > \"$STAGE/run-require.sh\" <<'EOF'",1)[1].split('\nEOF',1)[0]
     assert 'export VMODEL_ARTIFACTS_DIR="${VMODEL_ARTIFACTS_DIR:-$PWD/artifacts}"' in launcher
     assert launcher.index('export VMODEL_ARTIFACTS_DIR=') < launcher.index('uvicorn interview_engine.http_service:app')
+
+
+def test_pull_all_checks_every_python_sibling_and_names_stale_repo():
+    script=(Path(__file__).parents[1]/'scripts/pull-all.sh').read_text()
+    assert 'for repo in $REPOS; do' in script
+    assert 'uv sync --locked --quiet' in script
+    assert '"$path/.venv/bin/python" -m pip check' in script
+    assert 'Error: $repo environment' in script
+
+
+def test_local_launcher_preflights_downstream_generator_before_serving():
+    script=(Path(__file__).parents[1]/'scripts/run-ui.sh').read_text()
+    assert 'import spec_generator.cli, langgraph' in script
+    assert script.index('SPEC_PYTHON=') < script.index('"$PYTHON" -m delivery_api &')
+    assert 'Error: spec-generator environment is missing a required runtime dependency.' in script
+
+
+def test_pull_all_syncs_all_six_locked_python_repos(tmp_path):
+    import os, subprocess
+    script=Path(__file__).parents[1]/'scripts/pull-all.sh'
+    repos='delivery-api interview-engine spec-generator vmodel-contracts verification-loop vmodel-spec-app'.split()
+    root=tmp_path/'checkouts';root.mkdir()
+    for repo in repos:
+        folder=root/repo;folder.mkdir();(folder/'.git').mkdir()
+        (folder/'pyproject.toml').write_text('[project]\nname="fixture"\nversion="0.1"\n')
+        (folder/'uv.lock').write_text('')
+    bin_dir=tmp_path/'bin';bin_dir.mkdir();log=tmp_path/'calls'
+    for name in ('git','uv'):
+        executable=bin_dir/name
+        executable.write_text(f'#!/bin/sh\necho "{name} $* $(pwd)" >> "$CALL_LOG"\n'
+                              + ('mkdir -p .venv/bin; printf "#!/bin/sh\\nexit 0\\n" > .venv/bin/python; chmod +x .venv/bin/python\n' if name=='uv' else ''))
+        executable.chmod(0o755)
+    env={**os.environ,'REQUI_RE_REPOS_ROOT':str(root),'PATH':str(bin_dir)+os.pathsep+os.environ['PATH'],'CALL_LOG':str(log)}
+    result=subprocess.run(['bash',str(script)],env=env,capture_output=True,text=True)
+    assert result.returncode==0,result.stderr
+    calls=log.read_text().splitlines()
+    assert len([x for x in calls if x.startswith('git ')])==6
+    assert len([x for x in calls if x.startswith('uv sync --locked --quiet ')])==6
+    assert all(any(f'/checkouts/{repo}' in x for x in calls) for repo in repos)
+
+
+def test_generator_never_falls_back_to_delivery_python_when_sibling_venv_missing():
+    source=(Path(__file__).parents[1]/'src/delivery_api/orchestrator.py').read_text()
+    assert 'if not python.is_file() and not built:' in source
+    assert 'spec-generator environment is missing at {python}' in source
+    assert 'if not python.exists():python=Path(sys.executable)' not in source

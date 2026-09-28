@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import codecs
 import json
 import os
 import re
@@ -92,7 +93,8 @@ class ProcessRunner:
         traceback_started = False
         missing_module: str | None = None
         prompt_lines: list[str] = []
-        structured_buffer = ""
+        line_buffer = ""
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
         continuation_phase: str | None = None
         replay_decisions=dict(replay_decisions or {})
         replaying_prompt=False
@@ -129,10 +131,15 @@ class ProcessRunner:
                         await proc.wait()
                     break
                 if not raw: break
-                text=structured_buffer+raw.decode(errors="replace")
-                structured_buffer=""
-                parts=text.splitlines()
-                for index,part in enumerate(parts):
+                # A read can end in the middle of a line or UTF-8 character.
+                # Emit only complete lines; carry the unfinished tail to the
+                # next read so module names and structured diagnostics survive.
+                text=line_buffer+decoder.decode(raw)
+                # CR-only progress lines are complete too; CRLF just leaves an
+                # empty part, which the normal blank-line filter ignores.
+                parts=text.replace("\r", "\n").split("\n")
+                line_buffer=parts.pop()
+                for part in parts:
                     line=part.strip()
                     if not line:continue
                     if artifact_dir is None:
@@ -157,6 +164,13 @@ class ProcessRunner:
                     self.store.update_phase(task_id,phase,"running",detail=line,completed=completed,total=total)
                     payload={"completed":completed,"total":total}
                     self.store.add_event(task_id,"progress",line,phase_key=phase,payload=payload)
+            # The final diagnostic may not end with a newline. Log it as one
+            # intact line instead of dropping it or splitting it by read size.
+            final_line=(line_buffer+decoder.decode(b"",final=True)).strip()
+            if final_line:
+                activity("engine.output","Engine diagnostic output",task_id=task_id,phase=phase,stream="combined",line=final_line)
+                missing=_MISSING_MODULE.search(final_line)
+                if missing:missing_module=missing.group(1)
             code = await proc.wait()
             if code==0 and artifact_dir:
                 from .pricing import price_execution
