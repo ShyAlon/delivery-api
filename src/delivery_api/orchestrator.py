@@ -109,12 +109,12 @@ class PhaseOrchestrator:
             raise RuntimeError(f"spec-generator environment is missing at {python}. Run scripts/pull-all.sh before retrying the phase.")
         cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",definition.generator_stage]
         if mode is ExecutionMode.REDO:cmd.extend(["--from",definition.generator_stage])
-        stored=model_route or next(((event.get("payload") or {}).get("route") for event in reversed(self.store.events(task_id)) if event.get("kind")=="model_route" and event.get("phase_key")==phase),None) or (self.store.task(task_id) or {}).get("model_route") or "deepseek"
-        route="deepseek" if stored.startswith("deepseek") else "ollama" if stored.startswith("ollama") else stored
+        stored=model_route or next(((event.get("payload") or {}).get("resolved") or (event.get("payload") or {}).get("route") for event in reversed(self.store.events(task_id)) if event.get("kind")=="model_route" and event.get("phase_key")==phase),None) or (model_routes.needs_initial_model() if phase=="needs" else (self.store.task(task_id) or {}).get("model_route") or "deepseek")
+        route,sep,model=stored.partition(":")
         if route not in ("ollama","deepseek"):raise ValueError(f"unsupported model route {stored!r}")
-        route_value=model_routes.route_value(route)
+        route_value=model_routes.route_value(route,model if sep else None)
         env={"PYTHONUNBUFFERED":"1",f"SPEC_GENERATOR_MODEL_{definition.generator_stage.upper()}":route_value,**({} if built else {"PYTHONPATH":str(repo/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})}
-        self.store.add_event(task_id,"model_route",f"{phase} uses {route}",phase_key=phase,payload={"route":route,"provider":route,"model":route_value.split(":",1)[1],"mode":mode.value})
+        self.store.add_event(task_id,"model_route",f"{phase} uses {route}",phase_key=phase,payload={"route":route,"resolved":route_value,"provider":route,"model":route_value.split(":",1)[1],"mode":mode.value})
         code=await self.runner.run(task_id,cmd,cwd=repo,phase=phase,env=env,infer_phase=False)
         activity("orchestrator.exit","Phase subprocess exited",task_id=task_id,phase=phase,exit_code=code)
 

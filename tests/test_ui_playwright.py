@@ -1224,3 +1224,46 @@ def test_failed_needs_has_retry_not_generation_rerun(page,ui):
     dialog.get_by_role('button',name='Cancel').click()
     expect(dialog).to_have_count(0)
     page.screenshot(path='/downloads/failed-needs-retry.png',full_page=True)
+
+
+def test_audit_dialog_scrolls_on_short_viewport(page,ui):
+    page.set_viewport_size({'width':900,'height':460})
+    live=page.request.get(ui+'/api/tasks/live').json()
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    entries=[{'ts':1720000000+i,'actor':'Founder','action':f'event.{i}','detail':{'index':i,'note':'long audit detail '*8}} for i in range(75)]
+    page.route('**/api/tasks/live/audit',lambda route:route.fulfill(json={'actor_mode':'local','entries':entries,'totals':{'tokens':2300,'price':0,'interview_calls':14,'interview_cost_usd':0.0037,'interview_unpriced_calls':0}}))
+    page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='Audit').click()
+    dialog=page.get_by_role('dialog',name='Task audit');dialog.wait_for()
+    assert 'auto' in dialog.evaluate('(e)=>getComputedStyle(e).overflowY')
+    assert dialog.evaluate('(e)=>e.scrollHeight>e.clientHeight')
+    dialog.evaluate('(e)=>e.scrollTop=e.scrollHeight')
+    assert dialog.evaluate('(e)=>e.scrollTop>0')
+    table=dialog.locator('.audit-table-wrap')
+    table.evaluate('(e)=>e.scrollTop=e.scrollHeight')
+    assert table.evaluate('(e)=>e.scrollTop>0')
+    assert dialog.get_by_text('2,300').count()==1
+    assert dialog.get_by_text('$0.0037 USD').count()==1
+    page.screenshot(path='/downloads/audit-scroll-verified.png',full_page=True)
+
+
+def test_failed_needs_retry_selects_env_default_model_not_interview_model(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json()
+    live['state']='failed';live['active_phase']='needs';live['model_route']='ollama:qwen2.5-coder:14b'
+    for phase in live['phases']:
+        if phase['phase_key'] in ('intent','conops'):phase['state']='approved'
+        elif phase['phase_key']=='needs':phase.update({'state':'failed','detail':'Old generator failure'})
+    live['input_state']={'waiting':False,'process_live':False,'engine_process_status':40}
+    live['ui_state']={'mode':'error','active_phase':'needs','process_live':False}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live/retry-needs',lambda route:route.fulfill(json={
+        'status':'preview','phase':'needs','session_id':'complete-session','default_model':'ollama:phi4',
+        'checkpoint':False,'last_failure':'Old generator failure','message':'Retry only Needs'}))
+    page.route('**/api/model-routes',lambda route:route.fulfill(json={'routes':[
+        {'id':'ollama','available':True,'models':['qwen2.5-coder:14b','phi4']},
+        {'id':'deepseek','available':True,'models':['deepseek-chat']}],'default_route':{'route':'ollama','model':'phi4'}}))
+    page.goto(ui+'/tasks/live/view');page.locator('#retryneeds').click()
+    dialog=page.get_by_role('dialog',name='Retry Stakeholder needs');dialog.wait_for()
+    assert dialog.locator('#retrymodel').input_value()=='ollama:phi4'
+    assert dialog.get_by_text('No generator checkpoint exists; Needs starts fresh.',exact=False).is_visible()
+    assert 'qwen' not in dialog.locator('p').all_inner_texts()[0]
+    page.screenshot(path='/downloads/needs-retry-model-selector.png',full_page=True)
