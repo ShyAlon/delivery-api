@@ -21,18 +21,24 @@ def route_value(route:str, model:str|None=None)->str:
     return f"{route}:{value}"
 
 
-def needs_initial_model()->str:
+def phase_initial_model(stage:str)->str:
     """Current generator configuration, independent of the interview session.
 
     The subprocess reads shared <require-root>/.env and then repo-local .env,
-    while a real environment variable wins. Mirror only the NEEDS setting.
+    while a real environment variable wins. Mirror the configured setting for this generator stage.
     """
     from pathlib import Path
     repo=Path(os.environ.get("SPEC_GENERATOR_DIR") or Path(__file__).resolve().parents[3]/"spec-generator")
+    key=f"SPEC_GENERATOR_MODEL_{stage.upper()}"
     config={}
     for path in (repo.parent/".env",repo/".env"):
         if path.is_file():
             for line in path.read_text().splitlines():
-                key,sep,value=line.strip().partition("=")
-                if sep and key=="SPEC_GENERATOR_MODEL_NEEDS":config[key]=value.strip().strip('"').strip("'")
-    return os.environ.get("SPEC_GENERATOR_MODEL_NEEDS") or config.get("SPEC_GENERATOR_MODEL_NEEDS") or f"ollama:{DEFAULT_OLLAMA_MODEL}"
+                name,sep,value=line.strip().partition("=")
+                if sep and name==key:config[key]=value.strip().strip('"').strip("'")
+    # Match spec_generator.model_config._STAGE_DEFAULTS when no stage override exists.
+    return os.environ.get(key) or config.get(key) or "ollama:qwen2.5-coder:14b"
+
+
+def needs_initial_model()->str:
+    return phase_initial_model("needs")

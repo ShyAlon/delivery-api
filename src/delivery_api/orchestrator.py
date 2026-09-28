@@ -37,15 +37,17 @@ class PhaseOrchestrator:
         sid=self._session(task_id);root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")) / sid
         return sid,root,root/"interview",root/"spec"
 
-    async def continue_after(self,task_id:str,phase:str)->None:
+    async def continue_after(self,task_id:str,phase:str,*,model_route:str|None=None)->None:
         next_definition=successor(phase)
         if next_definition is None:return
         nxt=next_definition.key
         from .observability import event as activity
         activity("orchestrator.continue","Launching next V-model phase",task_id=task_id,completed_phase=phase,next_phase=nxt)
         if next_definition.prerequisite=="system-baseline" and not self._baseline_exists(task_id):
+            if model_route:
+                self.store.add_event(task_id,"model_route",f"{nxt} override saved for baseline handoff: {model_route}",phase_key=nxt,payload={"resolved":model_route,"scope":"phase_override"})
             await self._choose_baseline(task_id);return
-        await self.execute_phase(task_id,nxt)
+        await self.execute_phase(task_id,nxt,model_route=model_route)
 
     def _baseline_path(self,task_id:str)->Path:
         sid,_,interview,spec=self._paths(task_id);return spec/"system-baseline.json"
@@ -109,7 +111,7 @@ class PhaseOrchestrator:
             raise RuntimeError(f"spec-generator environment is missing at {python}. Run scripts/pull-all.sh before retrying the phase.")
         cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",definition.generator_stage]
         if mode is ExecutionMode.REDO:cmd.extend(["--from",definition.generator_stage])
-        stored=model_route or next(((event.get("payload") or {}).get("resolved") or (event.get("payload") or {}).get("route") for event in reversed(self.store.events(task_id)) if event.get("kind")=="model_route" and event.get("phase_key")==phase),None) or (model_routes.needs_initial_model() if phase=="needs" else (self.store.task(task_id) or {}).get("model_route") or "deepseek")
+        stored=model_route or next(((event.get("payload") or {}).get("resolved") or (event.get("payload") or {}).get("route") for event in reversed(self.store.events(task_id)) if event.get("kind")=="model_route" and event.get("phase_key")==phase),None) or model_routes.phase_initial_model(definition.generator_stage)
         route,sep,model=stored.partition(":")
         if route not in ("ollama","deepseek"):raise ValueError(f"unsupported model route {stored!r}")
         route_value=model_routes.route_value(route,model if sep else None)

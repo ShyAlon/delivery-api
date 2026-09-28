@@ -182,7 +182,7 @@ def test_rerun_preview_explains_archive_and_audit_has_local_actor(page, ui):
     assert "local user" in page.locator(".dialog").inner_text()
 
 
-def test_gate_open_waiting_halo_and_decision_modal(page, ui):
+def test_gate_open_waiting_halo_and_full_page(page, ui):
     route_task_snapshot(page,ui,'sim',waiting_gate_snapshot)
     page.goto(ui + "/tasks/sim/view")
     waiting=page.locator('#openphasegate');waiting.wait_for()
@@ -190,15 +190,16 @@ def test_gate_open_waiting_halo_and_decision_modal(page, ui):
     awaiting=page.locator('.phase.awaiting_approval');assert awaiting.count()==1
     palette=awaiting.locator('.dot').evaluate("e=>({background:getComputedStyle(e).backgroundColor,border:getComputedStyle(e).borderTopColor})")
     assert palette['background']=='rgb(229, 182, 61)' and palette['border']=='rgb(229, 182, 61)'
-    page.locator(".dialog").wait_for()
-    assert page.get_by_text("Waiting here · replay paused").is_visible()
+    waiting.click();page.locator("#gateform").wait_for()
+    assert "/tasks/sim/gates/" in page.url
+    assert page.get_by_text("Waiting here · approval paused").is_visible()
     assert page.get_by_text("actor: local user", exact=False).is_visible()
     assert page.get_by_role("button", name="Redo").is_visible()
 
 def test_gate_redo_requires_steer_in_browser(page, ui):
     route_task_snapshot(page,ui,'sim',waiting_gate_snapshot)
     page.route('**/api/tasks/sim/gates/*/decide',lambda route:route.fulfill(status=409,json={'detail':{'error':'a redo needs a reason','cause':'Redo without a steer is a reroll.','next':'Describe what should change.'}}))
-    page.goto(ui + "/tasks/sim/view");page.locator('#gateform').wait_for()
+    page.goto(ui + "/tasks/sim/gates/gate-intent");page.locator('#gateform').wait_for()
     page.get_by_role("button", name="Redo").click()
     page.get_by_text("a redo needs a reason", exact=False).wait_for()
 
@@ -701,9 +702,10 @@ def test_needs_gate_state_hides_stale_intent_prompt_and_opens_needs_gate(page,ui
                  'ui_state':{'mode':'phase_gate','active_phase':'needs','process_live':False,'decision':None,'gate':gate,'show_start':False,'show_progress':False,'show_engine_decision':False,'show_question':False,'show_answer_composer':False,'show_phase_gate':True,'show_artifacts':False,'show_console':True}})
     live['events']=[{'id':1,'kind':'waiting_input','message':'Approve this intent model? [y/N]','phase_key':'intent','payload':{'waiting_input':True,'question':'Approve this intent model? [y/N]'},'ts':1720000000}]
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view')
-    page.locator('#gateform').wait_for();assert page.locator('.current-question').is_hidden() and page.locator('#answerform').is_hidden()
+    page.locator('#openphasegate').wait_for();assert page.locator('.current-question').is_hidden() and page.locator('#answerform').is_hidden()
+    page.locator('#openphasegate').click();page.locator('#gateform').wait_for()
     assert page.locator('.decision-dialog').count()==0 and page.locator('#opendecision').count()==0
-    assert page.locator('#gateform').get_by_text('Stakeholder needs gate',exact=True).is_visible()
+    assert page.get_by_role('heading',name='Stakeholder needs gate').is_visible()
 
 
 def test_managed_task_state_reducer_is_exhaustive_and_atomic(page,ui):
@@ -763,19 +765,46 @@ def test_gate_checkbox_updates_in_place_without_navigation(page,ui):
     page.route('**/api/tasks/sim',lambda route:route.fulfill(json=live))
     page.route('**/api/tasks/sim/gates/*/toggle',lambda route:(calls.append(route.request.post_data_json),route.fulfill(json={**gate,'is_open':route.request.post_data_json['is_open']})))
     navigations=[];page.on('framenavigated',lambda frame:navigations.append(frame.url) if frame==page.main_frame else None)
-    page.goto(ui+'/tasks/sim/view');page.locator('#gateform').wait_for();before=len(navigations);box=page.locator('#gateopen');box.check()
+    page.goto(ui+'/tasks/sim/gates/gate-intent');page.locator('#gateform').wait_for();before=len(navigations);box=page.locator('#gateopen');box.check()
     page.get_by_text('Gate opened.',exact=True).wait_for();assert box.is_checked() and calls==[{'is_open':True}]
     assert len(navigations)==before and page.locator('#gateform').is_visible()
 
-def test_gate_dialog_explains_controls_and_tooltips_desktop_and_phone(page,ui):
+def test_gate_page_shows_requirements_evidence_and_full_content(page,ui):
+    task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate.update({'state':'waiting','is_open':0})
+    task['artifacts']=[{'phase_key':'srs','name':'srs.json','title':'Requirements','stale':False,'present':True,'generation':1}]
+    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=task))
+    page.route('**/api/tasks/sim/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Requirements\n\n## Visible status\n\nThe system shall show status.'}))
+    page.goto(ui+'/tasks/sim/gates/gate-srs')
+    evidence=page.locator('.gate-evidence');evidence.locator('.gate-artifact-summary').wait_for()
+    assert evidence.locator('.gate-artifact-summary').inner_text()=='The system shall show status.'
+    evidence.get_by_text('Read full Requirements').click()
+    assert evidence.locator('.artifact-readable h2').inner_text()=='Visible status'
+    assert page.locator('#gateform').get_by_role('button',name='Choose & continue').is_enabled()
+    page.screenshot(path='/downloads/full-gate-requirements-desktop.png',full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    assert evidence.locator('.gate-artifact-summary').is_visible()
+    page.screenshot(path='/downloads/full-gate-requirements-phone.png',full_page=True)
+
+
+def test_gate_page_missing_artifact_blocks_approval(page,ui):
+    task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate['state']='waiting'
+    task['artifacts']=[]
+    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=task))
+    page.goto(ui+'/tasks/sim/gates/gate-srs')
+    page.locator('#gateform').wait_for()
+    assert page.locator('#gate-artifacts').get_by_text('No current artifact is available',exact=False).is_visible()
+    assert not page.locator('#gateform').get_by_role('button',name='Choose & continue').is_enabled()
+
+
+def test_gate_page_explains_controls_and_tooltips_desktop_and_phone(page,ui):
     live=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in live['gates'] if g['state']=='waiting');live['ui_state']={'mode':'phase_gate','active_phase':live['active_phase'],'process_live':False,'decision':None,'gate':gate}
-    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/sim/view');dialog=page.locator('#gateform');dialog.wait_for()
-    for text in ['This checkpoint decides','Approve the selected option','Approve your rewritten decision','Regenerate from this checkpoint']:
+    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/sim/gates/gate-intent');dialog=page.locator('#gateform');dialog.wait_for()
+    for text in ['Choose approves this artifact','Save edit records your wording','Redo regenerates this phase']:
         assert dialog.get_by_text(text,exact=False).is_visible()
-    help_button=dialog.get_by_role('button',name='What does opening a gate do?');help_button.focus();tip=dialog.get_by_role('tooltip').filter(has_text='auto-approves this checkpoint');expect(tip).to_be_visible()
+    help_button=dialog.get_by_role('button',name='What does opening a gate do?');help_button.focus();tip=dialog.get_by_role('tooltip').filter(has_text='auto-approves when the phase arrives');expect(tip).to_be_visible()
     page.screenshot(path='/downloads/gate-help-desktop.png',full_page=True)
-    page.set_viewport_size({'width':390,'height':844});page.goto(ui+'/tasks/sim/view');dialog=page.locator('#gateform');dialog.wait_for();dialog.get_by_role('button',name='Regenerate this phase').focus()
-    tip=dialog.get_by_role('tooltip').filter(has_text='keeps earlier generations');expect(tip).to_be_visible();box=tip.bounding_box();assert box['x']>=0 and box['x']+box['width']<=390
+    page.set_viewport_size({'width':390,'height':844});page.goto(ui+'/tasks/sim/gates/gate-intent');dialog=page.locator('#gateform');dialog.wait_for();dialog.get_by_role('button',name='What does opening a gate do?').focus()
+    tip=dialog.get_by_role('tooltip').filter(has_text='auto-approves when the phase arrives');expect(tip).to_be_visible();box=tip.bounding_box();assert box['x']>=0 and box['x']+box['width']<=390
     page.screenshot(path='/downloads/gate-help-phone.png',full_page=True)
 
 
@@ -817,7 +846,10 @@ def test_mutation_flows_refresh_in_place_without_document_navigation(page,ui):
     def task(route):
         nonlocal calls;calls+=1;route.fulfill(json=live if calls==1 else decided)
     page.route('**/api/tasks/sim',task);page.route('**/api/tasks/sim/gates/*/decide',lambda route:route.fulfill(json={**gate,'state':'decided'}))
-    page.goto(ui+'/tasks/sim/view');page.locator('#gateform').wait_for();before=len(nav);page.get_by_role('button',name='Choose & continue').click();page.get_by_text('Engine is not running.',exact=True).wait_for();assert len(nav)==before
+    page.goto(ui+'/tasks/sim/view');page.locator('#openphasegate').click();page.locator('#gateform').wait_for()
+    assert '/tasks/sim/gates/gate-intent' in page.url
+    assert not page.get_by_role('button',name='Choose & continue').is_enabled()
+    assert page.get_by_text('No current artifact is available',exact=False).is_visible()
 
 def test_live_progress_scope_and_account_menu_desktop_and_phone(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();phase=next(p for p in live['phases'] if p['phase_key']==live['active_phase']);phase.update({'completed':8,'total':20,'started_at':time.time()-12*60})
@@ -926,10 +958,10 @@ def test_model_route_default_and_phase_override_controls(page,ui):
     assert picker.input_value()=='deepseek'
     deepseek=picker.locator('option[value="deepseek"]')
     assert 'DeepSeek' in deepseek.inner_text()
-    page.goto(ui+'/tasks/sim/view')
-    override=page.locator('select[name="model_route"]');override.wait_for()
-    assert override.locator('option').count()==3
-    assert 'Task default' in override.locator('option').first.inner_text()
+    page.goto(ui+'/tasks/sim/gates/gate-conops')
+    override=page.locator('select[name="next_model"]');override.wait_for()
+    assert override.locator('option').first.inner_text()=='Use current generator default'
+    assert 'ollama:qwen2.5-coder:14b' in page.locator('[data-model-for=next_model]').inner_text()
 
 def test_artifact_viewer_renders_content_title_bold_and_transcript(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='done';live['artifacts']=[{'phase_key':'intent','name':'intent_model.json','stale':False,'generation':1,'present':True,'valid':True,'validator':'IntentModel','validation_errors':[]}];live['ui_state']={'mode':'complete','active_phase':'tests','process_live':False,'decision':None,'gate':None}
