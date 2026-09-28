@@ -1495,3 +1495,29 @@ sys.stdout.write("aph\'\\n");sys.stdout.flush();sys.exit(1)'''
     assert not any(line=="aph'" or line.endswith("'langgr") for line in output)
     error=[event for event in store.events(tid) if event['kind']=='error'][-1]
     assert error['payload']['module']=='langgraph'
+
+
+def test_generator_failure_names_needs_not_interview_engine(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'generator-error.db'))
+    tid=store.create_task('Generator error label')['task_id']
+    command=[sys.executable,'-c','print("Error: incompatible contract",flush=True);raise SystemExit(1)']
+    assert asyncio.run(ProcessRunner(store).run(tid,command,cwd=tmp_path,phase='needs',infer_phase=False))==1
+    error=next(e for e in reversed(store.events(tid)) if e['kind']=='error')
+    assert 'needs subprocess stopped with exit code 1' in error['message']
+    assert 'interview engine' not in error['message'].lower()
+
+
+def test_generator_failure_preserves_reported_contract_error(tmp_path):
+    import asyncio,sys
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'contract-error.db'))
+    tid=store.create_task('Contract error')['task_id']
+    script='print("Error: intent contract 0.19.0 cannot be read by generator contract 0.16.x",flush=True);raise SystemExit(1)'
+    assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path,phase='needs',infer_phase=False))==1
+    error=next(e for e in reversed(store.events(tid)) if e['kind']=='error')
+    assert 'intent contract 0.19.0 cannot be read' in error['message']
+    assert error['payload']['cause']=='Error: intent contract 0.19.0 cannot be read by generator contract 0.16.x'
