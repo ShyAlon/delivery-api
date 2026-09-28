@@ -210,7 +210,9 @@ def _reconcile_terminal_http_interview(task_id:str,state:EngineSnapshot)->bool:
     return store.reconcile_completed_interview(task_id,state.session_id,state.sequence)
 
 async def _continue_reconciled_interview(task_id:str)->None:
-    try:await orchestrator.continue_after(task_id,"conops")
+    try:
+        await orchestrator.continue_after(task_id,"conops")
+        activity("engine.recovery.handoff","Interview handoff to Stakeholder needs returned",task_id=task_id,next_phase="needs",task_state=(store.task(task_id) or {}).get("state"),active_phase=(store.task(task_id) or {}).get("active_phase"))
     except Exception as exc:
         store.add_event(task_id,"error","Completed interview reconciled but the next phase could not start; restart delivery to retry.",phase_key="needs",
             payload={"completed_phase":"conops","next_phase":"needs","cause":f"{type(exc).__name__}: {exc}"})
@@ -229,7 +231,13 @@ async def _recover_tasks()->None:
         if store.engine_session(task_id):
             try:
                 state=await run_in_threadpool(engine_client.snapshot,session)
-            except (EngineClientError,EngineUnreachableError) as exc:
+            except EngineClientError as exc:
+                if exc.http_status==422 and "legacy session has no pinned model route" in exc.error.detail.lower():
+                    activity("engine.recovery.legacy_unpinned","Historical interview cannot be restored under session-owned routing; preserving it",task_id=task_id,session_id=session,status=exc.http_status)
+                else:
+                    activity("engine.recovery.snapshot_unavailable","Could not classify linked interview during recovery",task_id=task_id,session_id=session,status=exc.http_status,error=type(exc).__name__)
+                continue
+            except EngineUnreachableError as exc:
                 activity("engine.recovery.snapshot_unavailable","Could not classify linked interview during recovery",task_id=task_id,session_id=session,error=type(exc).__name__)
                 continue
             if state.task_id!=task_id or state.session_id!=session:
@@ -241,13 +249,28 @@ async def _recover_tasks()->None:
                 phases={phase["phase_key"]:phase["state"] for phase in current["phases"]}
                 # A crash after the durable reconciliation but before launch
                 # leaves the same orphaned handoff as a normal subprocess exit.
+                if repaired:
+                    activity("engine.recovery.reconciled","Restored completed interview boundary; queuing Stakeholder needs",task_id=task_id,session_id=session,sequence=state.sequence,intent=phases["intent"],conops=phases["conops"],next_phase="needs")
                 if repaired or (phases["conops"] in ("approved","done") and phases["needs"] in ("pending","running")
-                                and current["active_phase"] in ("conops","needs")
+                                and current["active_phase"]=="conops"
                                 and any(event["kind"]=="progress" and (event.get("payload") or {}).get("source")=="terminal_engine_snapshot"
                                         and (event.get("payload") or {}).get("session_id")==session for event in events)):
+                    if not repaired:activity("engine.recovery.handoff_retry","Retrying reconciled interview handoff",task_id=task_id,session_id=session,next_phase="needs")
                     asyncio.create_task(_continue_reconciled_interview(task_id))
                 else:
-                    activity("engine.recovery.completed","Completed HTTP interview is terminal",task_id=task_id,session_id=session)
+                    now=store.task(task_id)
+                    phase_states={phase["phase_key"]:phase["state"] for phase in now["phases"]}
+                    path=__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"
+                    if now["active_phase"] not in ("intent","conops"):
+                        reason="downstream_already_active"
+                    elif phase_states["conops"] in ("approved","done"):
+                        reason="conops_already_approved"
+                    elif now["state"] not in ("running","failed"):
+                        reason="task_state_not_reconcilable"
+                    elif not (path/"intent_model.json").is_file() or not (path/"conops.json").is_file():
+                        reason="canonical_artifacts_missing"
+                    else:reason="artifact_validation_or_store_guard"
+                    activity("engine.recovery.completed","Completed HTTP interview classified; no handoff required or available",task_id=task_id,session_id=session,reason=reason,task_state=now["state"],active_phase=now["active_phase"],intent=phase_states["intent"],conops=phase_states["conops"],needs=phase_states["needs"])
                 continue
             if state.process_status==ProcessStatus.WAITING_INPUT and state.open_input is not None:
                 continue
