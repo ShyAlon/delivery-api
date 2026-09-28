@@ -1199,3 +1199,28 @@ def test_completed_engine_session_in_error_view_does_not_offer_switch(page,ui):
     expect(page.locator('#switchmodel')).to_have_count(0)
     expect(page.locator('#rerun')).to_have_count(0)
     expect(page.get_by_text('The linked interview session has no open input and is complete.',exact=False)).to_be_visible()
+
+
+def test_failed_needs_has_retry_not_generation_rerun(page,ui):
+    from playwright.sync_api import expect
+    live=page.request.get(ui+'/api/tasks/live').json()
+    for phase in live['phases']:
+        if phase['phase_key'] in ('intent','conops'):phase['state']='approved'
+        elif phase['phase_key']=='needs':phase.update({'state':'failed','detail':'Generator failed before producing needs'})
+        else:phase['state']='pending'
+    live.update({'state':'failed','active_phase':'needs','input_state':{'waiting':False,'process_live':False,'engine_process_status':40},
+        'ui_state':{'mode':'error','active_phase':'needs','process_live':False}})
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/model-routes',lambda route:route.fulfill(json={'routes':[]}))
+    page.route('**/api/tasks/live/execution*',lambda route:route.fulfill(json={'session_id':'complete-session','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[]}))
+    page.route('**/api/tasks/live/retry-needs',lambda route:route.fulfill(json={'status':'preview','phase':'needs','session_id':'complete-session','retains':['intent','conops'],'message':'Retry Stakeholder needs from the approved interview. This may make new model calls and incur cost.'}))
+    page.goto(ui+'/tasks/live/view')
+    expect(page.locator('#retryneeds')).to_be_visible()
+    expect(page.locator('#rerun')).to_have_count(0)
+    expect(page.locator('.phase-list-primary .phase').nth(2)).to_contain_text('Generator failed')
+    page.locator('#retryneeds').click()
+    dialog=page.get_by_role('dialog',name='Retry Stakeholder needs');expect(dialog).to_be_visible()
+    expect(dialog).to_contain_text('may make new model calls and incur cost')
+    dialog.get_by_role('button',name='Cancel').click()
+    expect(dialog).to_have_count(0)
+    page.screenshot(path='/downloads/failed-needs-retry.png',full_page=True)

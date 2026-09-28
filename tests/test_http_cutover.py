@@ -523,3 +523,74 @@ def test_unpinned_legacy_snapshot_is_classified_once_without_handoff(tmp_path,mo
  asyncio.run(module._recover_tasks())
  assert [kind for kind,_ in notes if kind.startswith('engine.recovery.')]==['engine.recovery.legacy_unpinned']
  assert not launched and store.task(tid)['phases'][0]['state']=='running'
+
+
+def _failed_needs_task(tmp_path,monkeypatch):
+ session='completed-for-needs';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
+ store=SQLiteStore(str(tmp_path/'failed-needs.db'));tid=store.create_task('Retry needs','brief')['task_id']
+ store.set_engine_session(tid,session)
+ store.update_phase(tid,'intent','approved');store.update_phase(tid,'conops','approved')
+ store.update_phase(tid,'needs','failed',detail='Prior engine error')
+ store.add_event(tid,'error','Prior engine error',phase_key='needs',payload={'exit_code':1})
+ monkeypatch.setattr(module,'store',store)
+ return store,tid,session
+
+
+def test_failed_needs_retry_preserves_interview_and_starts_only_needs(tmp_path,monkeypatch):
+ import asyncio
+ from delivery_api.auth import Actor
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ calls=[]
+ async def run(task_id,phase,*,mode):calls.append((task_id,phase,mode.value));store.update_phase(task_id,'needs','running',detail='Building needs')
+ monkeypatch.setattr(module.orchestrator,'execute_phase',run)
+ async def exercise():
+  preview=await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(),Actor('test','Founder'))
+  assert preview['status']=='preview' and preview['session_id']==session and not calls
+  assert store.task(tid)['state']=='failed'
+  started=await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder'))
+  assert started['status']=='started'
+  await asyncio.sleep(.01)
+ asyncio.run(exercise())
+ task=store.task(tid);states={p['phase_key']:p['state'] for p in task['phases']}
+ assert states['intent']==states['conops']=='approved' and states['needs']=='running'
+ assert task['state']=='running' and task['active_phase']=='needs' and store.engine_session(tid)==session
+ assert calls==[(tid,'needs','redo')]
+ assert any(e['message']=='Prior engine error' for e in store.events(tid))
+ assert len([e for e in store.events(tid) if e['kind']=='retry'])==1
+
+
+def test_failed_needs_retry_is_not_automatic_and_duplicate_confirm_is_rejected(tmp_path,monkeypatch):
+ import asyncio
+ from fastapi import HTTPException
+ from delivery_api.auth import Actor
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ class Complete:
+  def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
+ monkeypatch.setattr(module,'engine_client',Complete())
+ called=[]
+ async def execute(task_id,phase,*,mode):called.append(phase)
+ monkeypatch.setattr(module.orchestrator,'execute_phase',execute)
+ asyncio.run(module._recover_tasks())
+ assert not called and store.task(tid)['state']=='failed'
+ async def exercise():
+  await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder'))
+  await asyncio.sleep(.01)
+  try:await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder'))
+  except HTTPException as exc:assert exc.status_code==409
+  else:raise AssertionError('duplicate retry accepted')
+ asyncio.run(exercise())
+ assert called==['needs']
+
+
+def test_retry_needs_keeps_generation_and_rejects_missing_artifact(tmp_path,monkeypatch):
+ import asyncio
+ from fastapi import HTTPException
+ from delivery_api.auth import Actor
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ start=store.task(tid)['generation']
+ (tmp_path/'artifacts'/session/'interview'/'conops.json').unlink()
+ try:asyncio.run(module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder')))
+ except HTTPException as exc:assert exc.status_code==409
+ else:raise AssertionError('missing conops accepted')
+ assert store.task(tid)['generation']==start and store.task(tid)['state']=='failed'
