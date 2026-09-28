@@ -33,7 +33,7 @@ from .budget import BudgetExceeded, check_global_budget, check_run_budget
 from . import auth
 from .jobs import JobQueue
 from .runner import ProcessRunner
-from .orchestrator import PhaseOrchestrator
+from .orchestrator import PhaseOrchestrator,ExecutionMode
 from .engine_runtime import EngineRuntimeError, resolve_engine_runtime, discover_engine_runtimes, save_python, saved_python
 from .engine_client import HttpEngineClient,EngineClientError,EngineUnreachableError
 from vmodel_contracts.interactive import InputKind,InputRequest,InputResponse,ProcessStatus,StartSessionRequest,EngineSnapshot,ModelRouteSwitchRequest
@@ -1123,6 +1123,55 @@ async def task_stream(task_id: str, request: Request):
             _stream_shutdown_events.discard(stop)
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
+class FailedNeedsRetryRequest(BaseModel):
+    confirm: bool = False
+
+@app.post("/api/tasks/{task_id}/retry-needs")
+async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Actor=Depends(auth.require_run_start)):
+    task=store.task(task_id)
+    if not task:raise HTTPException(404,"task not found")
+    phases={phase["phase_key"]:phase["state"] for phase in task["phases"]}
+    session=store.engine_session(task_id)
+    eligible=(task["state"]=="failed" and task["active_phase"]=="needs" and phases["needs"]=="failed"
+              and all(phases[key] in ("approved","done") for key in ("intent","conops"))
+              and all(phases[key]=="pending" for key in ("srs","architecture","specs","tests"))
+              and session and runner.work_state(task_id) is None and task_id not in runner.processes)
+    if not eligible:raise HTTPException(409,"Only a failed Stakeholder needs phase with approved interview inputs and no live work can be retried")
+    from vmodel_contracts.runtime import artifacts_root
+    from vmodel_contracts.interview import IntentModel
+    from vmodel_contracts.conops import ConOpsDocument
+    interview=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"
+    try:
+        intent=IntentModel.model_validate_json((interview/"intent_model.json").read_text())
+        conops=ConOpsDocument.model_validate_json((interview/"conops.json").read_text())
+        if intent.session_id!=session or conops.session_id!=session:raise ValueError("interview artifact session IDs do not match")
+    except (OSError,ValueError) as exc:
+        raise HTTPException(409,f"The linked interview artifacts are missing or invalid: {exc}")
+    from . import model_routes as downstream_routes
+    prior_route=next(((event.get("payload") or {}).get("route") for event in reversed(store.events(task_id))
+                      if event.get("kind")=="model_route" and event.get("phase_key")=="needs"),None)
+    stored=prior_route or task.get("model_route") or "deepseek"
+    route="deepseek" if stored.startswith("deepseek") else "ollama" if stored.startswith("ollama") else stored
+    try:effective=downstream_routes.route_value(route)
+    except ValueError:raise HTTPException(409,"The saved downstream model route is unsupported; fix it before retrying")
+    latest_failure=next((event for event in reversed(store.events(task_id)) if event["phase_key"]=="needs" and event["kind"]=="error"),None)
+    if not body.confirm:
+        return {"status":"preview","phase":"needs","session_id":session,"retains":["intent","conops"],"model_route":effective,
+                "last_failure":latest_failure["message"] if latest_failure else next(phase["detail"] for phase in task["phases"] if phase["phase_key"]=="needs"),
+                "message":f"Retry Stakeholder needs from the approved interview using {effective}. This may make new model calls and incur cost. Prior failure and artifacts remain in the audit; the interview is not reopened."}
+    if not store.claim_failed_needs_retry(task_id,a.label):raise HTTPException(409,"The task changed before the retry was confirmed; refresh and review it again")
+    activity("phase.retry","Founder confirmed retry of Stakeholder needs",task_id=task_id,session_id=session,actor=a.label,model_route=effective)
+    asyncio.create_task(_run_failed_needs_retry(task_id))
+    return {"status":"started","phase":"needs","session_id":session}
+
+async def _run_failed_needs_retry(task_id:str)->None:
+    try:await orchestrator.execute_phase(task_id,"needs",mode=ExecutionMode.REDO)
+    except Exception as exc:
+        message=f"Stakeholder needs retry stopped: {type(exc).__name__}: {exc}"
+        store.update_phase(task_id,"needs","failed",detail=message)
+        store.add_event(task_id,"error",message,phase_key="needs",payload={"cause":str(exc),"retry":True})
+        activity("phase.retry.failed","Stakeholder needs retry did not launch",task_id=task_id,error=message)
+
 class RerunRequest(BaseModel):
     from_phase: str
     confirm: bool = False
@@ -1207,7 +1256,7 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
         if req.model_route:
             target=phase if req.action=="redo" else (__import__('delivery_api.phases',fromlist=['successor']).successor(phase).key if __import__('delivery_api.phases',fromlist=['successor']).successor(phase) else phase)
             store.add_event(task_id,"model_route",f"{target} override uses {req.model_route}",phase_key=target,payload={"route":req.model_route,"scope":"phase_override","actor":a.label})
-        if req.action=="redo":asyncio.create_task(orchestrator.execute_phase(task_id,phase,mode=__import__('delivery_api.orchestrator',fromlist=['ExecutionMode']).ExecutionMode.REDO,model_route=req.model_route))
+        if req.action=="redo":asyncio.create_task(orchestrator.execute_phase(task_id,phase,mode=ExecutionMode.REDO,model_route=req.model_route))
         else:asyncio.create_task(orchestrator.continue_after(task_id,phase))
         return gate
     except KeyError:raise HTTPException(404,"gate not found")

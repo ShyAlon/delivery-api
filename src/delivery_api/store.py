@@ -436,6 +436,22 @@ class SQLiteStore:
             self._commit()
             return True
 
+    def claim_failed_needs_retry(self, task_id: str, actor: str) -> bool:
+        """Atomically claim only a failed Needs run with approved interview inputs."""
+        with self._lock:
+            row=self._db.execute("SELECT state,active_phase,engine_session_id FROM tasks WHERE task_id=?",(task_id,)).fetchone()
+            if not row or row["state"]!="failed" or row["active_phase"]!="needs" or not row["engine_session_id"]:return False
+            states={p["phase_key"]:p["state"] for p in self._db.execute("SELECT phase_key,state FROM phases WHERE task_id=?",(task_id,))}
+            if any(states.get(phase) not in ("approved","done") for phase in ("intent","conops")) or states.get("needs")!="failed":return False
+            if any(states.get(phase) not in ("pending","failed") for phase in ("srs","architecture","specs","tests")):return False
+            now=time.time()
+            self._db.execute("UPDATE phases SET state='running',detail='Retrying failed Stakeholder needs',completed=0,total=NULL,started_at=?,completed_at=NULL WHERE task_id=? AND phase_key='needs'",(now,task_id))
+            self._db.execute("UPDATE tasks SET state='running',active_phase='needs',updated_at=? WHERE task_id=?",(now,task_id))
+            self._db.execute("INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (?,?,?,?,?,?)",
+                             (task_id,"needs","retry","Founder confirmed retry of failed Stakeholder needs",json.dumps({"actor":actor,"session_id":row["engine_session_id"]}),now))
+            self.audit(actor,"phase.retry",task_id,{"phase":"needs","session_id":row["engine_session_id"]})
+            self._commit();return True
+
     def set_model_route(self, task_id: str, model_route: str) -> None:
         with self._lock:
             self._db.execute("UPDATE tasks SET model_route=?,updated_at=? WHERE task_id=?",
