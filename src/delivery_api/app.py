@@ -764,18 +764,29 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
     recent_answers=[{"event_id":event["id"],"phase_key":event.get("phase_key"),"decision_id":event.get("payload",{}).get("decision_id")} for event in store.events(task_id) if event.get("kind")=="answer"][-10:]
     activity("api.answer.attempt","Founder answer submission received",endpoint=f"/api/tasks/{task_id}/answer",task_id=task_id,task_state=task_before.get("state"),active_phase=task_before.get("active_phase"),submitted_decision_id=body.decision_id,open_decision_id=(input_before.get("decision") or {}).get("decision_id"),process_live=input_before["process_live"],waiting=input_before["waiting"],recent_answer_events=json.dumps(recent_answers,separators=(",",":")))
     try:
-        session_id=store.engine_session(task_id)
-        if not session_id:raise RuntimeError("task has no HTTP engine session")
-        state=await run_in_threadpool(engine_client.snapshot,session_id);pending=state.open_input
-        if pending is None:raise RuntimeError("task is not waiting for input")
-        if body.decision_id and str(pending.input_id)!=body.decision_id:raise RuntimeError("submitted decision does not match live input")
-        raw_value,separator,rationale=body.answer.partition(" - ")
-        raw_value=raw_value.strip();rationale=rationale.strip() if separator else ""
-        typed_value=next((option.value for option in pending.options if str(option.value)==raw_value),body.answer)
-        if pending.rationale_required and not rationale:raise RuntimeError("typed input requires a rationale")
-        submitted=await run_in_threadpool(engine_client.submit,session_id,InputResponse(input_id=pending.input_id,value=typed_value,
-            rationale=rationale or None,actor_id=a.label))
-        store.add_event(task_id,"engine_protocol","Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
+        work=runner.work_state(task_id)
+        if work and work.owner=="decision" and work.phase==task_before.get("active_phase"):
+            if not work.input_state()["waiting"]:raise RuntimeError("local decision is no longer waiting for input")
+            await runner.send_input(task_id,body.answer,body.decision_id)
+            source="local_decision"
+        else:
+            if work and work.owner in ("decision","requirement"):
+                raise RuntimeError("the local decision or requirement has changed; refresh the task")
+            if task_before.get("active_phase") not in ("intent","conops"):
+                raise RuntimeError("this phase has no interview input; refresh the task")
+            session_id=store.engine_session(task_id)
+            if not session_id:raise RuntimeError("task has no HTTP engine session")
+            state=await run_in_threadpool(engine_client.snapshot,session_id);pending=state.open_input
+            if pending is None:raise RuntimeError("task is not waiting for input")
+            if body.decision_id and str(pending.input_id)!=body.decision_id:raise RuntimeError("submitted decision does not match live input")
+            raw_value,separator,rationale=body.answer.partition(" - ")
+            raw_value=raw_value.strip();rationale=rationale.strip() if separator else ""
+            typed_value=next((option.value for option in pending.options if str(option.value)==raw_value),body.answer)
+            if pending.rationale_required and not rationale:raise RuntimeError("typed input requires a rationale")
+            submitted=await run_in_threadpool(engine_client.submit,session_id,InputResponse(input_id=pending.input_id,value=typed_value,
+                rationale=rationale or None,actor_id=a.label))
+            store.add_event(task_id,"engine_protocol","Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
+            source="http_interview"
     except EngineUnreachableError as e:
         task=store.task(task_id) or {}
         payload={"endpoint":f"/api/tasks/{task_id}/answer",**_engine_unreachable_payload(e)}
@@ -797,7 +808,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
     active_phase=(store.task(task_id) or {}).get("active_phase") or "intent"
     store.add_event(task_id,"answer",f"You: {body.answer}",phase_key=active_phase,payload={"actor":a.label,"character_count":len(body.answer),"transcript":True,"decision_id":body.decision_id,"answer":body.answer})
     activity("engine.answer","Founder answer submitted",task_id=task_id,phase=active_phase,actor=a.label,character_count=len(body.answer))
-    if _reconcile_terminal_http_interview(task_id,submitted.snapshot):
+    if source=="http_interview" and _reconcile_terminal_http_interview(task_id,submitted.snapshot):
         asyncio.create_task(_continue_reconciled_interview(task_id))
     return {"status":"accepted"}
 
