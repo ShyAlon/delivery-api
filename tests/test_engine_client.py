@@ -44,3 +44,13 @@ def test_client_sends_service_token_header():
 def test_client_does_not_preempt_long_running_model_request():
  client=HttpEngineClient('http://engine')
  assert client._http.timeout.read is None
+
+
+def test_route_preview_passes_engine_model_map_and_preserves_conflict():
+ map={'probing':['ollama','phi4']}
+ client=HttpEngineClient('http://engine',transport=httpx.MockTransport(lambda r:httpx.Response(200,json={'route':'ollama','model_map':map})))
+ assert client.preview_route('ollama')['model_map']==map
+ error=ProtocolError(code=ProtocolErrorCode.INVALID_RESPONSE,detail="selected route conflicts with INTERVIEW_ENGINE_MODEL_PROBING=ollama:phi4").model_dump(mode='json')
+ client=HttpEngineClient('http://engine',transport=httpx.MockTransport(lambda r:httpx.Response(422,json={'detail':error})))
+ with pytest.raises(EngineClientError,match='INTERVIEW_ENGINE_MODEL_PROBING'):
+  client.preview_route('deepseek')

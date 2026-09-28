@@ -5,6 +5,9 @@ import delivery_api.app as module
 from delivery_api.store import SQLiteStore
 
 class FakeEngine:
+ def preview_route(self,route):
+  model='deepseek-flash' if route=='deepseek' else 'qwen2.5-coder:14b'
+  return {'route':route,'model_map':{stage:[route,model] for stage in ('probing','distillation','phrasing','scope_tiebreak','expert_opinion','conops')}}
  def __init__(self):self.pending=InputRequest(input_id=uuid4(),kind=InputKind.APPROVAL,prompt='Approve?',options=[InputOption(value=1,label='Approve'),InputOption(value=0,label='Reject')]);self.submitted=[]
  def start(self,request):
   state=EngineSnapshot(session_id='s',task_id=request.task_id,sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending)
@@ -219,3 +222,34 @@ def test_start_records_interview_flash_not_downstream_chat(tmp_path, monkeypatch
  route=[e for e in store.events(task['task_id']) if e['kind']=='model_route' and e['payload'].get('scope')=='start'][0]
  assert route['payload']['resolved']=='deepseek:deepseek-flash'
  assert route['payload']['model']=='deepseek-flash'
+
+
+def test_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path, monkeypatch):
+ store=SQLiteStore(str(tmp_path/'phi4-provenance.db'))
+ task=store.create_task('Phi4 provenance', 'An idea')
+ class Phi4Engine(FakeEngine):
+  def preview_route(self,route):
+   assert route=='ollama'
+   return {'route':route,'model_map':{stage:['ollama','phi4'] for stage in ('probing','distillation','phrasing','scope_tiebreak','expert_opinion','conops')}}
+ engine=Phi4Engine()
+ monkeypatch.setattr(module,'store',store)
+ monkeypatch.setattr(module,'engine_client',engine)
+ TestClient(module.app).post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'}).raise_for_status()
+ route=[e for e in store.events(task['task_id']) if e['kind']=='model_route' and e['payload'].get('scope')=='start'][0]
+ assert route['payload']['resolved']=='ollama:phi4'
+ assert route['payload']['model']=='phi4'
+
+
+def test_route_preview_shows_conflict_without_switching(monkeypatch):
+ from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
+ class ConflictEngine(FakeEngine):
+  def preview_route(self,route):
+   if route=='deepseek':
+    from delivery_api.engine_client import EngineClientError
+    raise EngineClientError(422,ProtocolError(code=ProtocolErrorCode.INVALID_RESPONSE,detail="selected route 'deepseek' conflicts with INTERVIEW_ENGINE_MODEL_PROBING='ollama:phi4'"))
+   return {'route':'ollama','model_map':{stage:['ollama','phi4'] for stage in ('probing','distillation','phrasing','scope_tiebreak','expert_opinion','conops')}}
+ monkeypatch.setattr(module,'engine_client',ConflictEngine())
+ routes=module.model_routes(a=None)['routes']
+ assert routes[0]['available'] and routes[0]['model']=='ollama:phi4'
+ assert routes[1]['available'] is False
+ assert 'INTERVIEW_ENGINE_MODEL_PROBING' in routes[1]['error']

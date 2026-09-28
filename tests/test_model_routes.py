@@ -13,12 +13,6 @@ def test_route_value_default_and_env_override(monkeypatch):
     assert model_routes.route_value("ollama") == "ollama:phi4"
 
 
-def test_interview_route_display_matches_pinned_flash_and_keeps_spec_route():
-    from delivery_api import model_routes
-    assert model_routes.interview_route_value("deepseek") == "deepseek:deepseek-flash"
-    assert model_routes.route_value("deepseek") == "deepseek:deepseek-chat"
-    assert model_routes.interview_route_value("ollama") == model_routes.route_value("ollama")
-
 
 def test_interview_route_env_uses_override(monkeypatch):
     from delivery_api import app as module
