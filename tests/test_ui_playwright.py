@@ -1299,3 +1299,26 @@ def test_failed_needs_retry_selects_env_default_model_not_interview_model(page,u
     assert dialog.get_by_text('No generator checkpoint exists; Needs starts fresh.',exact=False).is_visible()
     assert 'qwen' not in dialog.locator('p').all_inner_texts()[0]
     page.screenshot(path='/downloads/needs-retry-model-selector.png',full_page=True)
+
+def test_phase_tooltip_does_not_present_old_errors_as_current_issues(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json()
+    live['state']='running';live['active_phase']='architecture'
+    for phase in live['phases']:
+        if phase['phase_key']=='needs':phase['state']='approved'
+        if phase['phase_key']=='architecture':phase.update({'state':'running','detail':'Waiting for architecture baseline'})
+    live['events'].extend([
+        {'id':980,'kind':'error','message':'old Needs checkpoint error','phase_key':'needs','payload':{},'ts':1720004000},
+        {'id':981,'kind':'command','message':'Engine process started','phase_key':'needs','payload':{},'ts':1720004001},
+        {'id':982,'kind':'error','message':'old architecture answer conflict','phase_key':'architecture','payload':{},'ts':1720004002},
+        {'id':983,'kind':'founder_decision','message':'Choose architecture baseline','phase_key':'architecture','payload':{},'ts':1720004003},
+    ])
+    live['ui_state']={'mode':'error','active_phase':'architecture','process_live':False}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.goto(ui+'/tasks/live/view')
+    needs=page.locator('.phase-list-primary .phase').filter(has_text='Stakeholder needs');needs.hover()
+    expect(needs.get_by_role('tooltip')).to_contain_text('No issues recorded.')
+    architecture=page.locator('.phase-list-primary .phase').filter(has_text='Architecture');architecture.hover()
+    expect(architecture.get_by_role('tooltip')).to_contain_text('No issues recorded.')
+    expect(architecture.get_by_role('tooltip')).not_to_contain_text('old architecture answer conflict')
+    expect(page.locator('.task-error-state')).not_to_contain_text('old architecture answer conflict')
+    page.screenshot(path='/downloads/architecture-stale-issues-fixed.png',full_page=True)
