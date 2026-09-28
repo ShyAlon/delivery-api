@@ -253,3 +253,28 @@ def test_route_preview_shows_conflict_without_switching(monkeypatch):
  assert routes[0]['available'] and routes[0]['model']=='ollama:phi4'
  assert routes[1]['available'] is False
  assert 'INTERVIEW_ENGINE_MODEL_PROBING' in routes[1]['error']
+
+
+def test_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path,monkeypatch):
+ from delivery_api.engine_client import EngineClientError,EngineUnreachableError
+ from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
+ import httpx
+ store=SQLiteStore(str(tmp_path/'snapshot-error.db'))
+ task=store.create_task('Snapshot errors','A brief')
+ store.set_engine_session(task['task_id'],'s-protocol')
+ store.update_phase(task['task_id'],'intent','running')
+ class Rejected(FakeEngine):
+  def snapshot(self,sid):
+   raise EngineClientError(422,ProtocolError(code=ProtocolErrorCode.INVALID_RESPONSE,detail='stage model contract failed',retryable=False))
+ monkeypatch.setattr(module,'store',store)
+ monkeypatch.setattr(module,'engine_client',Rejected())
+ body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
+ assert body['ui_state']['diagnostic']['http_status']==422
+ assert body['ui_state']['diagnostic']['detail']=='stage model contract failed'
+ assert body['ui_state']['diagnostic']['reason']=='engine protocol rejected the snapshot'
+ class Down(Rejected):
+  def snapshot(self,sid):raise EngineUnreachableError('http://engine',httpx.ConnectError('refused'))
+ monkeypatch.setattr(module,'engine_client',Down())
+ body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
+ assert body['ui_state']['diagnostic']['reason']=='engine transport unavailable'
+ assert 'http_status' not in body['ui_state']['diagnostic']

@@ -650,7 +650,9 @@ def _task_ui_state(task:dict,input_state:dict)->dict:
     if mode not in UI_MODES:raise RuntimeError(f"unsupported UI mode: {mode}")
     diagnostic=None
     if mode=="error":
-        diagnostic={"reason":"task has no live ActiveWork owner","task_state":task.get("state"),"active_phase":task.get("active_phase")}
+        cause=input_state.get("engine_error")
+        diagnostic=({"reason":"engine protocol rejected the snapshot","http_status":cause["http_status"],"code":cause["code"],"detail":cause["detail"],"task_state":task.get("state"),"active_phase":task.get("active_phase")}
+                    if cause else {"reason":"engine transport unavailable" if input_state.get("engine_unreachable") else "task has no live ActiveWork owner","task_state":task.get("state"),"active_phase":task.get("active_phase")})
     return {"mode":mode,"active_phase":task.get("active_phase"),"process_live":process_live,
             "decision":live_decision if mode=="engine_decision" else None,
             "question":input_state.get("question") if mode=="engine_question" else None,
@@ -839,7 +841,11 @@ def get_task(task_id: str):
     if session_id:
         try:
             input_state=_http_input_state(task_id,engine_client.snapshot(session_id))
-        except (EngineClientError,EngineUnreachableError):input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None}
+        except EngineClientError as exc:
+            input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None,
+                         "engine_error":{"http_status":exc.http_status,"code":int(exc.error.code),"detail":exc.error.detail}}
+        except EngineUnreachableError:
+            input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None,"engine_unreachable":True}
     else:input_state=runner.input_state(task_id)
     work=runner.work_state(task_id)
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
