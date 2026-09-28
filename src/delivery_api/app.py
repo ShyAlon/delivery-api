@@ -170,6 +170,7 @@ async def _resume_interrupted_interviews()->None:
         if task.get("state") not in ("running","waiting_gate"):continue
         phases={p["phase_key"]:p["state"] for p in task.get("phases",[])}
         if all(phases.get(p) in ("approved","done") for p in ("intent","conops")):continue
+        if store.engine_session(task["task_id"]):continue
         if _recorded_engine_session(task["task_id"]):
             store.add_event(task["task_id"],"incompatible","Pre-HTTP interview requires restart",phase_key="intent",payload={"process_status":int(ProcessStatus.INCOMPATIBLE),"next_step":60})
 
