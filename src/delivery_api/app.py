@@ -501,13 +501,42 @@ def delete_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 
 class TaskStartRequest(BaseModel):model_route:Literal["ollama","deepseek"]="deepseek"
 @app.get("/api/model-routes")
-def model_routes():return {"routes":[{"id":"ollama","available":True},{"id":"deepseek","available":bool(os.environ.get("DEEPSEEK_API_KEY"))}]}
+def model_routes(a:auth.Actor=Depends(auth.require_actor)):
+    """Display the engine's own resolved, preflighted provider+model map."""
+    routes=[]
+    for route in ("ollama","deepseek"):
+        try:
+            result=engine_client.preview_route(route)
+            models=result["model_map"]
+            pairs={tuple(pair) for pair in models.values()}
+            if len(pairs)!=1:raise ValueError("engine preview returned divergent stage models")
+            provider,model=next(iter(pairs))
+            if provider!=route:raise ValueError(f"engine preview returned {provider} for selected {route}")
+            routes.append({"id":route,"available":True,"model":f"{provider}:{model}","model_map":models})
+        except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
+            reason=exc.error.detail if isinstance(exc,EngineClientError) else str(exc)
+            routes.append({"id":route,"available":False,"error":reason})
+    return {"routes":routes}
 @app.post("/api/tasks/{task_id}/start")
 async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest(),a:auth.Actor=Depends(auth.require_run_start)):
     task=store.task(task_id)
     if not task:raise HTTPException(404,"task not found")
     if task["state"]!="not_started":raise HTTPException(409,"task already started")
     idea=(task.get("brief") or task.get("title") or "").strip()
+    # Same engine resolver as the Start screen; never infer a model from the
+    # route name or a second copy of the .env in delivery.
+    try:
+        preview=await run_in_threadpool(engine_client.preview_route,body.model_route)
+        effective_models=preview["model_map"]
+        pairs={tuple(pair) for pair in effective_models.values()}
+        if len(pairs)!=1:raise ValueError("engine route preview returned divergent stage models")
+        provider,model=next(iter(pairs))
+        if provider!=body.model_route:raise ValueError(f"engine preview returned {provider} for selected {body.model_route}")
+    except EngineClientError as exc:
+        store.add_event(task_id,"model_preflight",f"Interview route {body.model_route} rejected: {exc.error.detail}",phase_key="intent",payload={"route":body.model_route,"protocol_error":exc.error.model_dump(mode="json")})
+        raise HTTPException(exc.http_status,{"error":"Interview route rejected.","cause":exc.error.detail,"next":"Correct the named model settings and reload before starting."})
+    except EngineUnreachableError as exc:raise _engine_unreachable(exc)
+    except (KeyError,TypeError,ValueError) as exc:raise HTTPException(502,{"error":"Engine model preview was invalid.","cause":str(exc),"next":"Check the engine version and retry."})
     try:started=await run_in_threadpool(engine_client.start,StartSessionRequest(task_id=task_id,idea=idea,model_route=body.model_route))
     except EngineUnreachableError as exc:
         activity("engine.unreachable","Interview engine unreachable at task start",task_id=task_id,base_url=exc.base_url,cause=str(exc.cause))
@@ -519,8 +548,8 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         store.add_event(task_id,"model_preflight",f"Interview route {body.model_route} rejected: {exc.error.detail}",phase_key="intent",payload=payload)
         raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
     store.set_engine_session(task_id,started.snapshot.session_id);store.set_model_route(task_id,body.model_route)
-    resolved=model_route_lib.interview_route_value(body.model_route)
-    store.add_event(task_id,"model_route",f"interview uses {resolved}",phase_key="intent",payload={"route":body.model_route,"resolved":resolved,"provider":resolved.split(":",1)[0],"model":resolved.split(":",1)[1],"effective_stages":["probing","distillation","phrasing","scope_tiebreak","expert_opinion","conops"],"scope":"start","actor":a.label})
+    resolved=f"{provider}:{model}"
+    store.add_event(task_id,"model_route",f"interview uses {resolved}",phase_key="intent",payload={"route":body.model_route,"resolved":resolved,"provider":provider,"model":model,"effective_stages":list(effective_models),"scope":"start","actor":a.label})
     activity("model.route.resolved","Interview route accepted",task_id=task_id,session_id=started.snapshot.session_id,selected=body.model_route,effective=resolved)
     detail="Waiting for founder input" if started.snapshot.process_status==ProcessStatus.WAITING_INPUT else "Interview engine running"
     store.update_phase(task_id,"intent","running",detail=detail)

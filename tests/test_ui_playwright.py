@@ -137,7 +137,21 @@ def test_not_started_panel_layout(page,ui):
     control=route.bounding_box();action=start.bounding_box();assert control['x']+control['width']+12<action['x']
     assert control['y']>=label.bounding_box()['y']+12
     assert start.is_visible() and not start.is_enabled()
-    assert "not configured" in panel.locator("#startstatus").inner_text()
+    assert 'cannot start:' in panel.locator('#startstatus').inner_text()
+
+
+def test_start_screen_displays_engine_resolved_model_and_conflict(page, ui):
+    routes={'routes':[{'id':'ollama','available':True,'model':'ollama:phi4'},
+                      {'id':'deepseek','available':False,'error':"selected route 'deepseek' conflicts with INTERVIEW_ENGINE_MODEL_PROBING='ollama:phi4'"}]}
+    page.route('**/api/model-routes',lambda route:route.fulfill(json=routes))
+    page.goto(ui+'/tasks/empty/view')
+    selector=page.locator('#defaultroute');selector.wait_for()
+    assert 'ollama:phi4' in selector.locator('option[value=ollama]').inner_text()
+    assert not page.get_by_role('button',name='Start interview').is_enabled()
+    assert 'INTERVIEW_ENGINE_MODEL_PROBING' in page.locator('#startstatus').inner_text()
+    selector.select_option('ollama')
+    assert page.get_by_role('button',name='Start interview').is_enabled()
+    page.screenshot(path="/downloads/interview-model-preview.png",full_page=True)
 
 
 def test_not_started_running_and_done_pages(page, ui):

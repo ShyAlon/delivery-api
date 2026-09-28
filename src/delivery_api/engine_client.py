@@ -42,6 +42,10 @@ class HttpEngineClient(EngineClient):
         try:return self._http.request(method,path,**kwargs)
         except httpx.TransportError as exc:raise EngineUnreachableError(self._http.base_url,exc) from exc
 
+    def preview_route(self,route:str)->dict:
+        response=self._send('GET',f'/v1/model-routes/{route}')
+        return self._validated(response,dict,200)
+
     def start(self,request:StartSessionRequest)->StartSessionResponse:
         response=self._send('POST','/v1/sessions',json=request.model_dump(mode='json'))
         return self._validated(response,StartSessionResponse,201)
@@ -63,4 +67,4 @@ class HttpEngineClient(EngineClient):
                 error=ProtocolError(code=ProtocolErrorCode.INTERNAL_ERROR,
                     detail=f'engine returned HTTP {response.status_code} without a valid protocol error')
             raise EngineClientError(response.status_code,error)
-        return model.model_validate(response.json())
+        return response.json() if model is dict else model.model_validate(response.json())
