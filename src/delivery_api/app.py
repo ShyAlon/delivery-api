@@ -242,7 +242,7 @@ async def _recover_tasks()->None:
                 # leaves the same orphaned handoff as a normal subprocess exit.
                 if repaired or (phases["conops"] in ("approved","done") and phases["needs"] in ("pending","running")
                                 and current["active_phase"] in ("conops","needs")):
-                    await _continue_reconciled_interview(task_id)
+                    asyncio.create_task(_continue_reconciled_interview(task_id))
                 else:
                     activity("engine.recovery.completed","Completed HTTP interview is terminal",task_id=task_id,session_id=session)
                 continue

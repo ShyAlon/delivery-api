@@ -373,7 +373,9 @@ def test_restored_terminal_session_reconciles_phase_handoff_once(tmp_path,monkey
  async def continue_after(task_id,phase):
   launched.append((task_id,phase));restored.update_phase(task_id,'needs','running',detail='Building stakeholder needs')
  monkeypatch.setattr(module.orchestrator,'continue_after',continue_after)
- asyncio.run(module._recover_tasks())
+ async def recover():
+  await module._recover_tasks();await asyncio.sleep(.01)
+ asyncio.run(recover())
  task=restored.task(tid);states={p['phase_key']:p['state'] for p in task['phases']}
  assert states['intent']=='approved' and states['conops']=='approved' and states['needs']=='running'
  assert task['active_phase']=='needs' and task['state']=='running'
@@ -443,7 +445,9 @@ def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path
    self.calls.append((cmd,kwargs));store.update_phase(task_id,'needs','running',detail='Building stakeholder needs');return 0
  runner=Runner();monkeypatch.setattr(module,'runner',runner)
  monkeypatch.setattr(module,'orchestrator',PhaseOrchestrator(store,runner))
- asyncio.run(module._recover_tasks())
+ async def recover():
+  await module._recover_tasks();await asyncio.sleep(.01)
+ asyncio.run(recover())
  assert len(runner.calls)==1
  command,options=runner.calls[0]
  assert str(artifacts/session/'interview'/'intent_model.json') in command
