@@ -1172,6 +1172,7 @@ def test_legacy_ollama_model_switch_dialog(page,ui,failed):
     execution.locator(':scope > summary').click()
     assert execution.evaluate('(el)=>el.open')
     execution.locator(':scope > summary').click()
+    if failed:assert page.locator('.task-error-state #switchmodel').is_visible()
     page.locator('#switchmodel').click()
     dialog=page.locator('.route-switch-dialog')
     expect(dialog).to_be_visible()
