@@ -499,11 +499,14 @@ class TaskStartRequest(BaseModel):
     initial_model:str|None=None
 @app.get("/api/model-routes")
 def model_routes(a:auth.Actor=Depends(auth.require_actor)):
-    """Display the engine's own resolved, preflighted provider+model map."""
+    """The engine resolves routes; legacy env keys only seed the initial choice."""
     routes=[]
+    try:default=engine_client.default_route()
+    except (EngineClientError,EngineUnreachableError,AttributeError):default=None
     for route in ("ollama","deepseek"):
         try:
-            result=engine_client.preview_route(route)
+            initial_model=(default or {}).get("model") if route==(default or {}).get("route") else None
+            result=engine_client.preview_route(route,initial_model=initial_model) if initial_model else engine_client.preview_route(route)
             models=result["model_map"]
             pairs={tuple(pair) for pair in models.values()}
             if len(pairs)!=1:raise ValueError("engine preview returned divergent stage models")
@@ -513,11 +516,6 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
         except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
             reason=exc.error.detail if isinstance(exc,EngineClientError) else str(exc)
             routes.append({"id":route,"available":False,"error":reason})
-    # The engine alone interprets console-era stage model keys as a new-session default.
-    try:
-        default=engine_client.default_route()
-    except (EngineClientError,EngineUnreachableError,AttributeError):
-        default=None
     return {"routes":routes,"default_route":default}
 @app.post("/api/tasks/{task_id}/start")
 async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest(),a:auth.Actor=Depends(auth.require_run_start)):
