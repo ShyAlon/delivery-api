@@ -242,7 +242,9 @@ async def _recover_tasks()->None:
                 # A crash after the durable reconciliation but before launch
                 # leaves the same orphaned handoff as a normal subprocess exit.
                 if repaired or (phases["conops"] in ("approved","done") and phases["needs"] in ("pending","running")
-                                and current["active_phase"] in ("conops","needs")):
+                                and current["active_phase"] in ("conops","needs")
+                                and any(event["kind"]=="progress" and (event.get("payload") or {}).get("source")=="terminal_engine_snapshot"
+                                        and (event.get("payload") or {}).get("session_id")==session for event in events)):
                     asyncio.create_task(_continue_reconciled_interview(task_id))
                 else:
                     activity("engine.recovery.completed","Completed HTTP interview is terminal",task_id=task_id,session_id=session)
