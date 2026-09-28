@@ -1125,6 +1125,8 @@ async def task_stream(task_id: str, request: Request):
 
 class FailedNeedsRetryRequest(BaseModel):
     confirm: bool = False
+    model_route: Literal["ollama","deepseek"]|None = None
+    model: str|None = Field(default=None,min_length=1,max_length=160)
 
 @app.post("/api/tasks/{task_id}/retry-needs")
 async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Actor=Depends(auth.require_run_start)):
@@ -1136,7 +1138,14 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
               and all(phases[key] in ("approved","done") for key in ("intent","conops"))
               and all(phases[key]=="pending" for key in ("srs","architecture","specs","tests"))
               and session and runner.work_state(task_id) is None and task_id not in runner.processes)
-    if not eligible:raise HTTPException(409,"Only a failed Stakeholder needs phase with approved interview inputs and no live work can be retried")
+    def reject(reason: str, next_step: str) -> None:
+        if body.confirm:
+            store.audit(a.label,"phase.retry_rejected",task_id,{"phase":"needs","reason":reason,"next":next_step})
+            store.add_event(task_id,"retry_rejected",f"Stakeholder needs retry was not started: {reason}",phase_key="needs",
+                            payload={"reason":reason,"next":next_step})
+        activity("phase.retry.rejected","Stakeholder needs retry blocked",task_id=task_id,reason=reason,confirmed=body.confirm)
+        raise HTTPException(409,{"error":"Stakeholder needs retry was not started.","cause":reason,"next":next_step})
+    if not eligible:reject("The task is no longer an eligible failed Needs phase, or work is already live.","Refresh the task and review its current phase before trying again.")
     from vmodel_contracts.runtime import artifacts_root
     from vmodel_contracts.interview import IntentModel
     from vmodel_contracts.conops import ConOpsDocument
@@ -1146,26 +1155,35 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
         conops=ConOpsDocument.model_validate_json((interview/"conops.json").read_text())
         if intent.session_id!=session or conops.session_id!=session:raise ValueError("interview artifact session IDs do not match")
     except (OSError,ValueError) as exc:
-        raise HTTPException(409,f"The linked interview artifacts are missing or invalid: {exc}")
+        reject(f"The linked interview artifacts are missing or invalid: {exc}","Restore the named session artifacts before retrying Needs.")
     from . import model_routes as downstream_routes
-    prior_route=next(((event.get("payload") or {}).get("route") for event in reversed(store.events(task_id))
-                      if event.get("kind")=="model_route" and event.get("phase_key")=="needs"),None)
-    stored=prior_route or task.get("model_route") or "deepseek"
-    route="deepseek" if stored.startswith("deepseek") else "ollama" if stored.startswith("ollama") else stored
-    try:effective=downstream_routes.route_value(route)
-    except ValueError:raise HTTPException(409,"The saved downstream model route is unsupported; fix it before retrying")
+    default=downstream_routes.needs_initial_model()
+    default_route,_,default_model=default.partition(":")
+    route=body.model_route or default_route
+    model=body.model or (default_model if route==default_route else None)
+    if body.confirm and (not body.model_route or not body.model):
+        reject("The retry model was not explicitly confirmed.","Choose a provider and model in the retry dialog.")
+    try:effective=downstream_routes.route_value(route,model)
+    except ValueError:reject("The selected downstream model is unsupported.","Choose a supported provider and model before retrying.")
+    spec=interview.parent/"spec"
+    # A first Needs attempt can die on import before LangGraph writes a
+    # checkpoint. --from needs rejects that state. An existing checkpoint
+    # should be resumed by a normal launch, preserving completed work.
+    checkpoint=(spec/"checkpoints.sqlite").is_file() and (spec/"checkpoints.sqlite").stat().st_size>0
     latest_failure=next((event for event in reversed(store.events(task_id)) if event["phase_key"]=="needs" and event["kind"]=="error"),None)
     if not body.confirm:
-        return {"status":"preview","phase":"needs","session_id":session,"retains":["intent","conops"],"model_route":effective,
+        return {"status":"preview","phase":"needs","session_id":session,"retains":["intent","conops"],"model_route":effective,"default_model":default,"checkpoint":checkpoint,"mode":"resume" if checkpoint else "start",
                 "last_failure":latest_failure["message"] if latest_failure else next(phase["detail"] for phase in task["phases"] if phase["phase_key"]=="needs"),
-                "message":f"Retry Stakeholder needs from the approved interview using {effective}. This may make new model calls and incur cost. Prior failure and artifacts remain in the audit; the interview is not reopened."}
-    if not store.claim_failed_needs_retry(task_id,a.label):raise HTTPException(409,"The task changed before the retry was confirmed; refresh and review it again")
-    activity("phase.retry","Founder confirmed retry of Stakeholder needs",task_id=task_id,session_id=session,actor=a.label,model_route=effective)
-    asyncio.create_task(_run_failed_needs_retry(task_id))
+                "message":f"Retry Stakeholder needs from the approved interview. Choose the downstream model; this may make new model calls and incur cost. The interview is not reopened."}
+    if not store.claim_failed_needs_retry(task_id,a.label):reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
+    store.add_event(task_id,"model_route",f"Needs retry model selected: {effective}",phase_key="needs",payload={"route":route,"resolved":effective,"source":"explicit_retry_choice"})
+    store.audit(a.label,"phase.retry_model",task_id,{"phase":"needs","model":effective,"checkpoint":checkpoint})
+    activity("phase.retry","Founder confirmed retry of Stakeholder needs",task_id=task_id,session_id=session,actor=a.label,model_route=effective,checkpoint=checkpoint)
+    asyncio.create_task(_run_failed_needs_retry(task_id,effective,checkpoint))
     return {"status":"started","phase":"needs","session_id":session}
 
-async def _run_failed_needs_retry(task_id:str)->None:
-    try:await orchestrator.execute_phase(task_id,"needs",mode=ExecutionMode.REDO)
+async def _run_failed_needs_retry(task_id:str,model_route:str,checkpoint:bool)->None:
+    try:await orchestrator.execute_phase(task_id,"needs",mode=ExecutionMode.RESUME if checkpoint else ExecutionMode.START,model_route=model_route)
     except Exception as exc:
         message=f"Stakeholder needs retry stopped: {type(exc).__name__}: {exc}"
         store.update_phase(task_id,"needs","failed",detail=message)
@@ -1202,7 +1220,28 @@ def task_audit(task_id: str, request: Request):
     for event in store.events(task_id):
         if event.get("kind")=="price":priced_by_phase[event.get("phase_key")]=event
     priced=list(priced_by_phase.values())
-    totals={"tokens":sum(int((event.get("payload") or {}).get("tokens") or 0) for event in priced),"price":round(sum(float((event.get("payload") or {}).get("price") or 0) for event in priced),3),"phases_priced":len(priced)}
+    session=_recorded_engine_session(task_id)
+    interview_usage=[]
+    if session:
+        from vmodel_contracts.runtime import artifacts_root
+        path=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"/"usage.jsonl"
+        if path.is_file():
+            from .pricing import _rows
+            interview_usage=_rows(path)
+    # The HTTP interview does not run through ProcessRunner, so it has no
+    # phase-price event. Read its per-call records, but do not double-count
+    # historical subprocess prices if both forms exist for an older task.
+    priced_tokens=sum(int((event.get("payload") or {}).get("tokens") or 0) for event in priced
+                      if not (interview_usage and event.get("phase_key") in ("intent","conops")))
+    segments=_model_usage_segments(interview_usage)
+    interview_tokens=sum(int(row.get("prompt_tokens") or 0)+int(row.get("completion_tokens") or 0)
+                         for row in interview_usage if isinstance(row,dict))
+    totals={"tokens":priced_tokens+interview_tokens,
+            "price":round(sum(float((event.get("payload") or {}).get("price") or 0) for event in priced
+                              if not (interview_usage and event.get("phase_key") in ("intent","conops"))),3),
+            "phases_priced":len(priced),"interview_calls":sum(x["calls"] for x in segments),
+            "interview_cost_usd":round(sum(x["cost_usd"] for x in segments),6),
+            "interview_unpriced_calls":sum(x["unpriced_calls"] for x in segments)}
     return {"actor_mode": auth.actor(request).label, "entries": store.audit_entries(task_id),"totals":totals}
 
 @app.post("/api/simulations", status_code=201)

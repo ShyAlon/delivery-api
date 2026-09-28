@@ -7,7 +7,7 @@ import json
 def test_route_value_default_and_env_override(monkeypatch):
     from delivery_api import model_routes
     monkeypatch.delenv("DELIVERY_OLLAMA_MODEL", raising=False)
-    assert model_routes.route_value("ollama") == "ollama:qwen2.5-coder:14b"
+    assert model_routes.route_value("ollama") == "ollama:phi4"
     assert model_routes.route_value("deepseek") == "deepseek:deepseek-chat"
     monkeypatch.setenv("DELIVERY_OLLAMA_MODEL", "phi4")
     assert model_routes.route_value("ollama") == "ollama:phi4"
@@ -116,3 +116,16 @@ def test_execution_payload_requires_debug_and_uses_pinned_state(monkeypatch,tmp_
         assert debug['raw'][0]['content']=='private raw response'
         assert debug['calls'][0]['error']['raw_payload']=='sensitive response'
     finally:module.store.delete_task(task_id)
+
+
+def test_needs_default_comes_from_generator_config_not_delivery_ollama_override(monkeypatch,tmp_path):
+ from delivery_api import model_routes
+ generator=tmp_path/'spec-generator';generator.mkdir()
+ (tmp_path/'.env').write_text('SPEC_GENERATOR_MODEL_NEEDS=ollama:phi4\n')
+ (generator/'.env').write_text('SPEC_GENERATOR_MODEL_NEEDS=ollama:gemma3\n')
+ monkeypatch.setenv('SPEC_GENERATOR_DIR',str(generator))
+ monkeypatch.setenv('DELIVERY_OLLAMA_MODEL','qwen2.5-coder:14b')
+ monkeypatch.delenv('SPEC_GENERATOR_MODEL_NEEDS',raising=False)
+ assert model_routes.needs_initial_model()=='ollama:gemma3'
+ monkeypatch.setenv('SPEC_GENERATOR_MODEL_NEEDS','ollama:phi4')
+ assert model_routes.needs_initial_model()=='ollama:phi4'

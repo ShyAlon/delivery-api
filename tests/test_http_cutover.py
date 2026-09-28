@@ -545,20 +545,20 @@ def test_failed_needs_retry_preserves_interview_and_starts_only_needs(tmp_path,m
  from delivery_api.auth import Actor
  store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
  calls=[]
- async def run(task_id,phase,*,mode):calls.append((task_id,phase,mode.value));store.update_phase(task_id,'needs','running',detail='Building needs')
+ async def run(task_id,phase,*,mode,model_route):calls.append((task_id,phase,mode.value,model_route));store.update_phase(task_id,'needs','running',detail='Building needs')
  monkeypatch.setattr(module.orchestrator,'execute_phase',run)
  async def exercise():
   preview=await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(),Actor('test','Founder'))
   assert preview['status']=='preview' and preview['session_id']==session and not calls
   assert store.task(tid)['state']=='failed'
-  started=await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder'))
+  started=await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True,model_route='ollama',model='phi4'),Actor('test','Founder'))
   assert started['status']=='started'
   await asyncio.sleep(.01)
  asyncio.run(exercise())
  task=store.task(tid);states={p['phase_key']:p['state'] for p in task['phases']}
  assert states['intent']==states['conops']=='approved' and states['needs']=='running'
  assert task['state']=='running' and task['active_phase']=='needs' and store.engine_session(tid)==session
- assert calls==[(tid,'needs','redo')]
+ assert calls==[(tid,'needs','start','ollama:phi4')]
  assert any(e['message']=='Prior engine error' for e in store.events(tid))
  assert len([e for e in store.events(tid) if e['kind']=='retry'])==1
 
@@ -572,14 +572,14 @@ def test_failed_needs_retry_is_not_automatic_and_duplicate_confirm_is_rejected(t
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
  monkeypatch.setattr(module,'engine_client',Complete())
  called=[]
- async def execute(task_id,phase,*,mode):called.append(phase)
+ async def execute(task_id,phase,*,mode,model_route):called.append(phase)
  monkeypatch.setattr(module.orchestrator,'execute_phase',execute)
  asyncio.run(module._recover_tasks())
  assert not called and store.task(tid)['state']=='failed'
  async def exercise():
-  await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder'))
+  await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True,model_route='ollama',model='phi4'),Actor('test','Founder'))
   await asyncio.sleep(.01)
-  try:await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder'))
+  try:await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True,model_route='ollama',model='phi4'),Actor('test','Founder'))
   except HTTPException as exc:assert exc.status_code==409
   else:raise AssertionError('duplicate retry accepted')
  asyncio.run(exercise())
@@ -597,3 +597,79 @@ def test_retry_needs_keeps_generation_and_rejects_missing_artifact(tmp_path,monk
  except HTTPException as exc:assert exc.status_code==409
  else:raise AssertionError('missing conops accepted')
  assert store.task(tid)['generation']==start and store.task(tid)['state']=='failed'
+
+
+def test_rejected_confirmed_needs_retry_is_audited_and_keeps_old_failure(tmp_path,monkeypatch):
+ import asyncio
+ from fastapi import HTTPException
+ from delivery_api.auth import Actor
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ (tmp_path/'artifacts'/session/'interview'/'conops.json').unlink()
+ try:asyncio.run(module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder')))
+ except HTTPException as exc:
+  assert exc.status_code==409 and 'artifacts' in exc.detail['cause']
+ else:raise AssertionError('missing artifact accepted')
+ assert store.task(tid)['state']=='failed'
+ assert any(e['kind']=='error' and e['message']=='Prior engine error' for e in store.events(tid))
+ assert any(e['kind']=='retry_rejected' and 'artifacts' in e['payload']['reason'] for e in store.events(tid))
+ assert any(e['action']=='phase.retry_rejected' for e in store.audit_entries(tid))
+
+
+def test_audit_rolls_up_http_interview_usage_without_double_counting(tmp_path,monkeypatch):
+ import json
+ from fastapi.testclient import TestClient
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ usage=tmp_path/'artifacts'/session/'interview'/'usage.jsonl'
+ usage.write_text('\n'.join(json.dumps(x) for x in [
+  {'stage':'probing','provider':'deepseek','model':'deepseek-chat','prompt_tokens':110,'completion_tokens':20,'price_per_mtok_prompt_usd':1,'price_per_mtok_completion_usd':2},
+  {'stage':'distillation','provider':'deepseek','model':'deepseek-chat','prompt_tokens':60,'completion_tokens':10,'price_per_mtok_prompt_usd':1,'price_per_mtok_completion_usd':2},
+  {'stage':'conops','provider':'ollama','model':'phi4','prompt_tokens':30,'completion_tokens':10,'price_per_mtok_prompt_usd':None,'price_per_mtok_completion_usd':None}])+'\n')
+ store.add_event(tid,'price','Old interview subprocess price',phase_key='intent',payload={'tokens':999,'price':999})
+ store.add_event(tid,'price','Downstream price',phase_key='needs',payload={'tokens':50,'price':100})
+ from fastapi import Request
+ request=Request({'type':'http','headers':[]})
+ result=module.task_audit(tid,request)
+ totals=result['totals']
+ assert totals['tokens']==290 and totals['price']==100
+ assert totals['interview_calls']==3 and totals['interview_unpriced_calls']==1
+ assert round(totals['interview_cost_usd'],6)==0.00023
+
+
+def test_retry_uses_generator_env_default_not_interview_pin_and_fresh_start(tmp_path,monkeypatch):
+ import asyncio
+ from delivery_api.auth import Actor
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ store.set_model_route(tid,'ollama:qwen2.5-coder:14b')
+ store.add_event(tid,'model_route','Old Needs route',phase_key='needs',payload={'route':'ollama','model':'qwen2.5-coder:14b'})
+ shared=tmp_path/'.env';shared.write_text('SPEC_GENERATOR_MODEL_NEEDS=ollama:phi4\n')
+ generator=tmp_path/'spec-generator';generator.mkdir();monkeypatch.setenv('SPEC_GENERATOR_DIR',str(generator))
+ monkeypatch.delenv('SPEC_GENERATOR_MODEL_NEEDS',raising=False)
+ calls=[]
+ async def execute(task_id,phase,*,mode,model_route):calls.append((phase,mode.value,model_route))
+ monkeypatch.setattr(module.orchestrator,'execute_phase',execute)
+ async def exercise():
+  preview=await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(),Actor('test','Founder'))
+  assert preview['default_model']=='ollama:phi4' and preview['mode']=='start'
+  assert preview['last_failure']=='Prior engine error'
+  await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True,model_route='ollama',model='phi4'),Actor('test','Founder'))
+  await asyncio.sleep(.01)
+ asyncio.run(exercise())
+ assert calls==[('needs','start','ollama:phi4')]
+ assert any(e['kind']=='model_route' and e['payload'].get('resolved')=='ollama:phi4' for e in store.events(tid))
+
+
+def test_retry_with_generator_checkpoint_resumes_without_from(tmp_path,monkeypatch):
+ import asyncio
+ from delivery_api.auth import Actor
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ spec=tmp_path/'artifacts'/session/'spec';spec.mkdir();(spec/'checkpoints.sqlite').write_bytes(b'checkpoint-placeholder')
+ calls=[]
+ async def execute(task_id,phase,*,mode,model_route):calls.append((mode.value,model_route))
+ monkeypatch.setattr(module.orchestrator,'execute_phase',execute)
+ async def exercise():
+  preview=await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(),Actor('test','Founder'))
+  assert preview['checkpoint'] and preview['mode']=='resume'
+  await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True,model_route='ollama',model='phi4'),Actor('test','Founder'))
+  await asyncio.sleep(.01)
+ asyncio.run(exercise())
+ assert calls==[('resume','ollama:phi4')]
