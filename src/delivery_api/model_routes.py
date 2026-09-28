@@ -10,6 +10,7 @@ import os
 
 DEFAULT_OLLAMA_MODEL="qwen2.5-coder:14b"
 DEEPSEEK_MODEL="deepseek-chat"
+INTERVIEW_DEEPSEEK_MODEL="deepseek-flash"
 
 def ollama_model()->str:
     return os.environ.get("DELIVERY_OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL
@@ -18,3 +19,9 @@ def route_value(route:str)->str:
     if route=="ollama":return f"ollama:{ollama_model()}"
     if route=="deepseek":return f"deepseek:{DEEPSEEK_MODEL}"
     raise ValueError(f"unsupported model route: {route!r}")
+
+
+def interview_route_value(route:str)->str:
+    """The HTTP interview uses Flash; spec generation has a separate route."""
+    if route=="deepseek":return f"deepseek:{INTERVIEW_DEEPSEEK_MODEL}"
+    return route_value(route)
