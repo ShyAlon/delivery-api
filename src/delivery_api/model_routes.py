@@ -1,7 +1,7 @@
 """Downstream spec-generator route defaults (not HTTP interview resolution).
 
-The interview engine owns its stage env and pins the effective HTTP model at
-Start; delivery fetches that map from its route-preview endpoint. This module
+The interview engine pins an explicit HTTP session map, seeded by legacy stage
+keys only for new sessions without an explicit selection. This module
 still maps task route labels to downstream spec-generator model values.
 """
 from __future__ import annotations

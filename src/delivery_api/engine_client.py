@@ -5,7 +5,7 @@ from uuid import UUID
 import httpx
 from vmodel_contracts.interactive import (
     EngineSnapshot,InputResponse,ProtocolError,ProtocolErrorCode,StartSessionRequest,
-    StartSessionResponse,SubmitInputResponse,
+    StartSessionResponse,SubmitInputResponse,ModelRouteSwitchRequest,ModelRouteSwitchResponse,
 )
 
 
@@ -27,6 +27,10 @@ class EngineClient(ABC):
     @abstractmethod
     def snapshot(self,session_id:str)->EngineSnapshot:...
     @abstractmethod
+    def switch_route(self,session_id:str,request:ModelRouteSwitchRequest)->ModelRouteSwitchResponse:
+        reply=self._send('POST',f'/v1/sessions/{session_id}/model-route',json=request.model_dump(mode='json'))
+        return self._validated(reply,ModelRouteSwitchResponse,200)
+
     def submit(self,session_id:str,response:InputResponse)->SubmitInputResponse:...
 
 
@@ -42,8 +46,12 @@ class HttpEngineClient(EngineClient):
         try:return self._http.request(method,path,**kwargs)
         except httpx.TransportError as exc:raise EngineUnreachableError(self._http.base_url,exc) from exc
 
-    def preview_route(self,route:str)->dict:
-        response=self._send('GET',f'/v1/model-routes/{route}')
+    def default_route(self)->dict:
+        response=self._send('GET','/v1/model-routes/default')
+        return self._validated(response,dict,200)
+
+    def preview_route(self,route:str,initial_model:str|None=None)->dict:
+        response=self._send('GET',f'/v1/model-routes/{route}',params={"initial_model":initial_model} if initial_model else None)
         return self._validated(response,dict,200)
 
     def start(self,request:StartSessionRequest)->StartSessionResponse:
@@ -53,6 +61,10 @@ class HttpEngineClient(EngineClient):
     def snapshot(self,session_id:str)->EngineSnapshot:
         response=self._send('GET',f'/v1/sessions/{session_id}')
         return self._validated(response,EngineSnapshot,200)
+
+    def switch_route(self,session_id:str,request:ModelRouteSwitchRequest)->ModelRouteSwitchResponse:
+        reply=self._send('POST',f'/v1/sessions/{session_id}/model-route',json=request.model_dump(mode='json'))
+        return self._validated(reply,ModelRouteSwitchResponse,200)
 
     def submit(self,session_id:str,response:InputResponse)->SubmitInputResponse:
         reply=self._send('POST',f'/v1/sessions/{session_id}/inputs/{response.input_id}',json=response.model_dump(mode='json'))

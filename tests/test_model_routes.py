@@ -14,24 +14,10 @@ def test_route_value_default_and_env_override(monkeypatch):
 
 
 
-def test_interview_route_env_uses_override(monkeypatch):
-    from delivery_api import app as module
-    monkeypatch.setenv("DELIVERY_OLLAMA_MODEL", "phi4")
-    task_id="route-override-test"
-    module.store.create_task("Route override test",task_id=task_id)
-    module.store.set_model_route(task_id,"ollama")
-    env = module._interview_route_env(task_id)
-    module.store.delete_task(task_id)
-    assert set(env) == {"INTERVIEW_ENGINE_MODEL_PROBING", "INTERVIEW_ENGINE_MODEL_DISTILLATION",
-                        "INTERVIEW_ENGINE_MODEL_PHRASING", "INTERVIEW_ENGINE_MODEL_SCOPE_TIEBREAK",
-                        "INTERVIEW_ENGINE_MODEL_EXPERT_OPINION"}
-    assert set(env.values()) == {"ollama:phi4"}
-
-
 def _seed_task(module, store, task_id):
     if store.task(task_id):
         store.delete_task(task_id)
-    store.create_task("Provenance", "An idea", task_id=task_id)
+    store.create_task("Provenance " + task_id, "An idea", task_id=task_id)
     store.add_event(task_id, "waiting_input", "Interviewer: Q1?", phase_key="intent",
                     payload={"question": "Q1?"})
     store.add_event(task_id, "answer", "You: A1", phase_key="intent",
@@ -55,8 +41,8 @@ def test_transcript_header_from_usage_jsonl(monkeypatch, tmp_path):
     usage.write_text("".join(json.dumps(r) + "\n" for r in records))
     monkeypatch.setenv("VMODEL_ARTIFACTS_DIR", str(tmp_path))
     text = module._interview_transcript_markdown(task_id)
-    assert text.splitlines()[0].startswith("Model: ollama:phi4")
-    assert "probing" in text.splitlines()[0] and "distillation" in text.splitlines()[0]
+    assert text.splitlines()[0].startswith("Model segment unassigned: ollama:phi4")
+    assert "2 calls" in text.splitlines()[0]
     assert "## Interview questions and answers" in text
     store.delete_task(task_id)
 
@@ -78,8 +64,8 @@ def test_transcript_header_mixed_models_lists_stages(monkeypatch, tmp_path):
     usage.write_text("".join(json.dumps(r) + "\n" for r in records))
     monkeypatch.setenv("VMODEL_ARTIFACTS_DIR", str(tmp_path))
     lines = module._interview_transcript_markdown(task_id).splitlines()
-    assert "Model: distillation = ollama:qwen2.5-coder:14b" in lines
-    assert "Model: probing = ollama:phi4" in lines
+    assert any(line.startswith("Model segment unassigned: ollama:qwen2.5-coder:14b") for line in lines)
+    assert any(line.startswith("Model segment unassigned: ollama:phi4") for line in lines)
     store.delete_task(task_id)
 
 
