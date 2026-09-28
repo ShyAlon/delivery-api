@@ -1039,6 +1039,7 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
         try:
             snapshot=engine_client.snapshot(session_id)
             if _reconcile_terminal_http_interview(task_id,snapshot):
+                activity("engine.recovery.reconciled","Restored completed interview boundary from task read; queuing Stakeholder needs",task_id=task_id,session_id=session_id,sequence=snapshot.sequence,next_phase="needs")
                 if background_tasks is not None:background_tasks.add_task(_continue_reconciled_interview,task_id)
                 task=store.task(task_id)
             input_state=(_http_input_state(task_id,snapshot) if task.get("active_phase") in ("intent","conops")
