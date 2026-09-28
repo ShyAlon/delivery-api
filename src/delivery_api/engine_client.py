@@ -46,6 +46,10 @@ class HttpEngineClient(EngineClient):
         try:return self._http.request(method,path,**kwargs)
         except httpx.TransportError as exc:raise EngineUnreachableError(self._http.base_url,exc) from exc
 
+    def local_models(self)->list[str]:
+        response=self._send('GET','/v1/model-routes/ollama/models')
+        return self._validated(response,dict,200)['models']
+
     def default_route(self)->dict:
         response=self._send('GET','/v1/model-routes/default')
         return self._validated(response,dict,200)

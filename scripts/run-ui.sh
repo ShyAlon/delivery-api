@@ -82,12 +82,12 @@ if [ -z "$engine_blocked" ]; then
   ENGINE_PYTHON=""
   for candidate in "${INTERVIEW_ENGINE_PYTHON:-}" "$ENGINE_DIR/.venv/bin/python"; do
     [ -n "$candidate" ] && [ -x "$candidate" ] || continue
-    if "$candidate" -c 'import interview_engine,uvicorn,langchain_core' >/dev/null 2>&1; then ENGINE_PYTHON="$candidate"; break; fi
+    if "$candidate" -c 'import interview_engine,uvicorn,langchain_core; from vmodel_contracts.interactive import ModelRouteSwitchRequest' >/dev/null 2>&1; then ENGINE_PYTHON="$candidate"; break; fi
   done
   if [ -z "$ENGINE_PYTHON" ]; then
     echo "Warning: no Python environment with interview-engine, uvicorn and langchain_core was found."
     echo "Likely cause: interview-engine dependencies are not installed, or scripts/pull-all.sh updated the engine without syncing its environment."
-    echo "Next: cd $ENGINE_DIR && .venv/bin/pip install -e . then rerun scripts/run-ui.sh. Interviews cannot start until the engine is running."
+    echo "Next: run scripts/pull-all.sh to sync the pinned contract dependency, or install the pinned project dependencies in $ENGINE_DIR/.venv, then rerun scripts/run-ui.sh."
   else
     echo "Interview engine: http://127.0.0.1:$ENGINE_PORT (log: $DEFAULT_DATA_HOME/interview-engine.log)"
     ( cd "$ENGINE_DIR" && exec "$ENGINE_PYTHON" -m uvicorn interview_engine.http_service:app --host 127.0.0.1 --port "$ENGINE_PORT" ) > >(tee "$DEFAULT_DATA_HOME/interview-engine.log") 2>&1 &

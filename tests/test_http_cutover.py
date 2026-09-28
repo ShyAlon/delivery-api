@@ -297,7 +297,7 @@ def test_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch):
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  client=TestClient(module.app);snapshot=client.get(f"/api/tasks/{task['task_id']}/engine-snapshot").json()
  assert snapshot['open_input']['input_id']==str(engine.pending.input_id)
- body={'model_route':'deepseek','expected_sequence':snapshot['sequence'],'expected_input_id':snapshot['open_input']['input_id'],'idempotency_key':str(uuid4())}
+ body={'model_route':'deepseek','model':'deepseek-flash','expected_sequence':snapshot['sequence'],'expected_input_id':snapshot['open_input']['input_id'],'idempotency_key':str(uuid4())}
  first=client.post(f"/api/tasks/{task['task_id']}/model-route",json=body)
  assert first.status_code==200,first.text
  again=client.post(f"/api/tasks/{task['task_id']}/model-route",json=body)
