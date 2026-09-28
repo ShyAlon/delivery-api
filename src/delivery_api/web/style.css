@@ -144,3 +144,5 @@ button.danger{color:#a33}
 @keyframes answer-spin{to{transform:rotate(360deg)}}
 .interview-answer textarea:disabled{opacity:.72;background:#f1f4ed;cursor:progress}
 @media(prefers-reduced-motion:reduce){.answer-spinner i{animation:none;border-top-color:var(--ink)}}
+
+.route-switch-dialog{width:min(540px,94vw);max-height:88vh;overflow:auto;padding:32px 34px}.route-switch-dialog h2{margin-top:8px}.route-switch-dialog .dialog-x{right:14px;top:12px}.route-switch-dialog label{display:block;margin:18px 0}.route-switch-dialog select{width:100%;margin-top:8px}.route-switch-price{padding:12px 14px;border-radius:12px;background:#e5f2d7;color:#234b30;font:11px/1.6 "DM Mono",monospace}.switch-route-trigger{margin-top:8px;border-radius:999px;box-shadow:0 0 0 2px #baf44c54,0 0 24px #baf44c31}.qa-route-marker{margin:12px 0;padding:10px 14px;border-left:3px solid var(--lime);background:#e9f4d8;border-radius:0 10px 10px 0;font:11px/1.5 "DM Mono",monospace}

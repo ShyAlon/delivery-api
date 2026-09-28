@@ -253,3 +253,63 @@ def test_route_preview_shows_conflict_without_switching(monkeypatch):
  assert routes[0]['available'] and routes[0]['model']=='ollama:phi4'
  assert routes[1]['available'] is False
  assert 'INTERVIEW_ENGINE_MODEL_PROBING' in routes[1]['error']
+
+
+def test_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path,monkeypatch):
+ from delivery_api.engine_client import EngineClientError,EngineUnreachableError
+ from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
+ import httpx
+ store=SQLiteStore(str(tmp_path/'snapshot-error.db'))
+ task=store.create_task('Snapshot errors','A brief')
+ store.set_engine_session(task['task_id'],'s-protocol')
+ store.update_phase(task['task_id'],'intent','running')
+ class Rejected(FakeEngine):
+  def snapshot(self,sid):
+   raise EngineClientError(422,ProtocolError(code=ProtocolErrorCode.INVALID_RESPONSE,detail='stage model contract failed',retryable=False))
+ monkeypatch.setattr(module,'store',store)
+ monkeypatch.setattr(module,'engine_client',Rejected())
+ body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
+ assert body['ui_state']['diagnostic']['http_status']==422
+ assert body['ui_state']['diagnostic']['detail']=='stage model contract failed'
+ assert body['ui_state']['diagnostic']['reason']=='engine protocol rejected the snapshot'
+ class Down(Rejected):
+  def snapshot(self,sid):raise EngineUnreachableError('http://engine',httpx.ConnectError('refused'))
+ monkeypatch.setattr(module,'engine_client',Down())
+ body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
+ assert body['ui_state']['diagnostic']['reason']=='engine transport unavailable'
+ assert 'http_status' not in body['ui_state']['diagnostic']
+
+class SwitchEngine(FakeEngine):
+ def __init__(self):super().__init__();self.switches=[]
+ def snapshot(self,sid):return EngineSnapshot(session_id='s',task_id=self.task_id,sequence=2+len(self.switches),process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending,model_route='deepseek' if self.switches else 'ollama')
+ def switch_route(self,sid,request):
+  self.switches.append(request)
+  payload=RouteChangePayload(actor_id=request.actor_id,from_route='ollama',to_route='deepseek',
+   from_model_map={'probing':('ollama','phi4')},to_model_map={'probing':('deepseek','deepseek-flash')},
+   route_version=1,session_sequence=3,idempotency_key=request.idempotency_key)
+  event=InteractiveEvent(event_id=uuid4(),session_id='s',task_id=self.task_id,phase_id=1,sequence=3,
+   event_type=EventType.ROUTE_CHANGED,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,route_change=payload)
+  return ModelRouteSwitchResponse(accepted_event=event,snapshot=self.snapshot(sid))
+
+def test_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch):
+ store=SQLiteStore(str(tmp_path/'switch.db'));task=store.create_task('Switch task','brief');engine=SwitchEngine();engine.task_id=task['task_id']
+ store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ client=TestClient(module.app);snapshot=client.get(f"/api/tasks/{task['task_id']}/engine-snapshot").json()
+ assert snapshot['open_input']['input_id']==str(engine.pending.input_id)
+ body={'model_route':'deepseek','expected_sequence':snapshot['sequence'],'expected_input_id':snapshot['open_input']['input_id'],'idempotency_key':str(uuid4())}
+ first=client.post(f"/api/tasks/{task['task_id']}/model-route",json=body)
+ assert first.status_code==200,first.text
+ again=client.post(f"/api/tasks/{task['task_id']}/model-route",json=body)
+ assert again.status_code==200,again.text
+ route_events=[e for e in store.events(task['task_id']) if e['kind']=='model_route']
+ assert len(route_events)==1 and route_events[0]['payload']['route_version']==1
+ assert store.task(task['task_id'])['model_route']=='deepseek'
+
+def test_cost_segments_preserve_consecutive_route_versions():
+ rows=[{'route_version':0,'provider':'ollama','model':'phi4','prompt_tokens':10,'completion_tokens':5,'price_per_mtok_prompt_usd':0,'price_per_mtok_completion_usd':0},
+       {'route_version':1,'provider':'deepseek','model':'deepseek-flash','prompt_tokens':100,'completion_tokens':20,'price_per_mtok_prompt_usd':.30,'price_per_mtok_completion_usd':1.20},
+       {'route_version':2,'provider':'ollama','model':'phi4','prompt_tokens':4,'completion_tokens':2,'price_per_mtok_prompt_usd':0,'price_per_mtok_completion_usd':0}]
+ segments=module._model_usage_segments(rows)
+ assert [s['route_version'] for s in segments]==[0,1,2]
+ assert abs(segments[1]['cost_usd']-(100*.30+20*1.20)/1_000_000)<1e-12

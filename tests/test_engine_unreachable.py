@@ -15,6 +15,7 @@ def test_transport_failure_becomes_unreachable_error():
  assert caught.value.base_url=='http://engine'
 
 class DownEngine:
+ def preview_route(self,route):raise EngineUnreachableError('http://127.0.0.1:8010',httpx.ConnectError('refused'))
  def start(self,request):raise EngineUnreachableError('http://127.0.0.1:8010',httpx.ConnectError('refused'))
  def snapshot(self,sid):raise EngineUnreachableError('http://127.0.0.1:8010',httpx.ConnectError('refused'))
  def submit(self,sid,response):raise EngineUnreachableError('http://127.0.0.1:8010',httpx.ConnectError('refused'))
@@ -29,7 +30,7 @@ def test_start_with_engine_down_is_actionable_503(tmp_path,monkeypatch):
  assert '8010' in detail['cause']
  assert 'uvicorn interview_engine.http_service:app' in detail['next']
  events=store.events(task['task_id'])
- assert any(e.get('kind')=='error' and 'not reachable' in e.get('message','') for e in events)
+ assert not events  # Route preview fails before a session is created.
 
 def test_answer_with_engine_down_is_actionable_503(tmp_path,monkeypatch):
  store=SQLiteStore(str(tmp_path/'y.db'));task=store.create_task('Dungeon master','brief')

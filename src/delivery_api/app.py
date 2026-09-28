@@ -17,6 +17,7 @@ import zipfile
 import io
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
@@ -35,7 +36,7 @@ from .runner import ProcessRunner
 from .orchestrator import PhaseOrchestrator
 from .engine_runtime import EngineRuntimeError, resolve_engine_runtime, discover_engine_runtimes, save_python, saved_python
 from .engine_client import HttpEngineClient,EngineClientError,EngineUnreachableError
-from vmodel_contracts.interactive import InputKind,InputRequest,InputResponse,ProcessStatus,StartSessionRequest,EngineSnapshot
+from vmodel_contracts.interactive import InputKind,InputRequest,InputResponse,ProcessStatus,StartSessionRequest,EngineSnapshot,ModelRouteSwitchRequest
 from .store import create_store
 from .simulation import Simulation, ImportValidationError
 from . import bundles
@@ -145,12 +146,6 @@ async def _resume_orphaned_handoffs()->None:
                 activity("orchestrator.recover.failed","Orphaned completed handoff still blocked",task_id=task_id,completed_phase=source,next_phase=target,error=f"{type(exc).__name__}: {exc}")
         asyncio.create_task(recover())
 
-
-def _interview_route_env(task_id:str)->dict[str,str]:
-    stored=(store.task(task_id) or {}).get("model_route") or "deepseek"
-    route="deepseek" if stored.startswith("deepseek") else "ollama"
-    value=model_route_lib.route_value(route)
-    return {f"INTERVIEW_ENGINE_MODEL_{stage}":value for stage in ("PROBING","DISTILLATION","PHRASING","SCOPE_TIEBREAK","EXPERT_OPINION")}
 
 def _replayable_decisions(task_id:str)->dict[str,dict[str,str]]:
     """Exact typed answers accepted before a restart, keyed by contract identity."""
@@ -499,14 +494,19 @@ def delete_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     except ValueError as e:raise HTTPException(409,{"error":str(e),"cause":"Active work must stop before its data is removed.","next":"Wait for the replay to finish, then delete the task."})
     return {"status":"deleted","task_id":task_id,"source_artifacts_deleted":False}
 
-class TaskStartRequest(BaseModel):model_route:Literal["ollama","deepseek"]="deepseek"
+class TaskStartRequest(BaseModel):
+    model_route:Literal["ollama","deepseek"]|None=None
+    initial_model:str|None=None
 @app.get("/api/model-routes")
 def model_routes(a:auth.Actor=Depends(auth.require_actor)):
-    """Display the engine's own resolved, preflighted provider+model map."""
+    """The engine resolves routes; legacy env keys only seed the initial choice."""
     routes=[]
+    try:default=engine_client.default_route()
+    except (EngineClientError,EngineUnreachableError,AttributeError):default=None
     for route in ("ollama","deepseek"):
         try:
-            result=engine_client.preview_route(route)
+            initial_model=(default or {}).get("model") if route==(default or {}).get("route") else None
+            result=engine_client.preview_route(route,initial_model=initial_model) if initial_model else engine_client.preview_route(route)
             models=result["model_map"]
             pairs={tuple(pair) for pair in models.values()}
             if len(pairs)!=1:raise ValueError("engine preview returned divergent stage models")
@@ -516,41 +516,63 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
         except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
             reason=exc.error.detail if isinstance(exc,EngineClientError) else str(exc)
             routes.append({"id":route,"available":False,"error":reason})
-    return {"routes":routes}
+    return {"routes":routes,"default_route":default}
 @app.post("/api/tasks/{task_id}/start")
 async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest(),a:auth.Actor=Depends(auth.require_run_start)):
     task=store.task(task_id)
     if not task:raise HTTPException(404,"task not found")
     if task["state"]!="not_started":raise HTTPException(409,"task already started")
     idea=(task.get("brief") or task.get("title") or "").strip()
+    # A missing UI choice uses the historical initial default, once, at creation.
+    selected_route=body.model_route
+    initial_model=None
+    if selected_route is None:
+        try:
+            initial=await run_in_threadpool(engine_client.default_route)
+            selected_route,initial_model=initial['route'],initial.get('model')
+        except EngineClientError as exc:raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
+        except EngineUnreachableError as exc:raise _engine_unreachable(exc)
+    elif body.initial_model:
+        try:initial=await run_in_threadpool(engine_client.default_route)
+        except EngineClientError as exc:raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
+        except EngineUnreachableError as exc:raise _engine_unreachable(exc)
+        if selected_route!=initial.get("route") or body.initial_model!=initial.get("model"):
+            raise HTTPException(422,"initial model must match the engine's current new-session default")
+        initial_model=body.initial_model
     # Same engine resolver as the Start screen; never infer a model from the
     # route name or a second copy of the .env in delivery.
     try:
-        preview=await run_in_threadpool(engine_client.preview_route,body.model_route)
-        effective_models=preview["model_map"]
+        # Legacy initial model is preflighted by the engine during Start, not
+        # guessed from a separate catalog preview that could name a missing model.
+        preview=await run_in_threadpool(engine_client.preview_route,selected_route) if not initial_model else None
+        effective_models=preview["model_map"] if preview else {stage:[selected_route,initial_model] for stage in ("probing","distillation","phrasing","scope_tiebreak","expert_opinion","conops")}
         pairs={tuple(pair) for pair in effective_models.values()}
         if len(pairs)!=1:raise ValueError("engine route preview returned divergent stage models")
         provider,model=next(iter(pairs))
-        if provider!=body.model_route:raise ValueError(f"engine preview returned {provider} for selected {body.model_route}")
+        if provider!=selected_route:raise ValueError(f"engine preview returned {provider} for selected {selected_route}")
     except EngineClientError as exc:
-        store.add_event(task_id,"model_preflight",f"Interview route {body.model_route} rejected: {exc.error.detail}",phase_key="intent",payload={"route":body.model_route,"protocol_error":exc.error.model_dump(mode="json")})
+        store.add_event(task_id,"model_preflight",f"Interview route {selected_route} rejected: {exc.error.detail}",phase_key="intent",payload={"route":selected_route,"protocol_error":exc.error.model_dump(mode="json")})
         raise HTTPException(exc.http_status,{"error":"Interview route rejected.","cause":exc.error.detail,"next":"Correct the named model settings and reload before starting."})
     except EngineUnreachableError as exc:raise _engine_unreachable(exc)
     except (KeyError,TypeError,ValueError) as exc:raise HTTPException(502,{"error":"Engine model preview was invalid.","cause":str(exc),"next":"Check the engine version and retry."})
-    try:started=await run_in_threadpool(engine_client.start,StartSessionRequest(task_id=task_id,idea=idea,model_route=body.model_route))
+    try:started=await run_in_threadpool(engine_client.start,StartSessionRequest(task_id=task_id,idea=idea,model_route=selected_route,initial_model=initial_model))
     except EngineUnreachableError as exc:
         activity("engine.unreachable","Interview engine unreachable at task start",task_id=task_id,base_url=exc.base_url,cause=str(exc.cause))
         store.add_event(task_id,"error",f"Error: the interview engine is not reachable. Likely cause: nothing accepted the connection at {exc.base_url} - the engine service is not running. Next: restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Then retry.",phase_key="intent",payload=_engine_unreachable_payload(exc))
         raise _engine_unreachable(exc)
     except EngineClientError as exc:
-        payload={"route":body.model_route,"http_status":exc.http_status,"protocol_error":exc.error.model_dump(mode="json"),"stage":"preflight"}
+        payload={"route":selected_route,"http_status":exc.http_status,"protocol_error":exc.error.model_dump(mode="json"),"stage":"preflight"}
         activity("model.route.preflight.rejected","Interview route rejected by engine",task_id=task_id,**payload)
-        store.add_event(task_id,"model_preflight",f"Interview route {body.model_route} rejected: {exc.error.detail}",phase_key="intent",payload=payload)
+        store.add_event(task_id,"model_preflight",f"Interview route {selected_route} rejected: {exc.error.detail}",phase_key="intent",payload=payload)
         raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
-    store.set_engine_session(task_id,started.snapshot.session_id);store.set_model_route(task_id,body.model_route)
+    store.set_engine_session(task_id,started.snapshot.session_id);store.set_model_route(task_id,selected_route)
+    effective_models=started.snapshot.model_map or effective_models
+    pairs={tuple(pair) for pair in effective_models.values()}
+    if len(pairs)!=1:raise HTTPException(502,"engine returned inconsistent session model map")
+    provider,model=next(iter(pairs))
     resolved=f"{provider}:{model}"
-    store.add_event(task_id,"model_route",f"interview uses {resolved}",phase_key="intent",payload={"route":body.model_route,"resolved":resolved,"provider":provider,"model":model,"effective_stages":list(effective_models),"scope":"start","actor":a.label})
-    activity("model.route.resolved","Interview route accepted",task_id=task_id,session_id=started.snapshot.session_id,selected=body.model_route,effective=resolved)
+    store.add_event(task_id,"model_route",f"interview uses {resolved}",phase_key="intent",payload={"route":selected_route,"resolved":resolved,"provider":provider,"model":model,"effective_stages":list(effective_models),"scope":"start","actor":a.label})
+    activity("model.route.resolved","Interview route accepted",task_id=task_id,session_id=started.snapshot.session_id,selected=selected_route,effective=resolved)
     detail="Waiting for founder input" if started.snapshot.process_status==ProcessStatus.WAITING_INPUT else "Interview engine running"
     store.update_phase(task_id,"intent","running",detail=detail)
     store.add_event(task_id,"engine_protocol","HTTP interview session started",phase_key="intent",payload=started.model_dump(mode="json"))
@@ -586,6 +608,52 @@ async def resolve_architecture_requirement(task_id:str,body:RequirementResolutio
         raise HTTPException(500,{"error":"The architecture baseline could not be resolved.","cause":f"{type(exc).__name__}: {str(exc)[:300]}","next":"Copy debug info and check run.log; the requirement remains recoverable after restart."})
     store.audit(a.label,"requirement.resolved",task_id,{"phase":"architecture","action":body.action})
     return {"status":"resolved","action":body.action}
+
+@app.get("/api/tasks/{task_id}/engine-snapshot")
+async def interview_engine_snapshot(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    session=store.engine_session(task_id)
+    if not session:raise HTTPException(404,"task has no interview session")
+    try:state=await run_in_threadpool(engine_client.snapshot,session)
+    except EngineUnreachableError as exc:raise _engine_unreachable(exc)
+    except EngineClientError as exc:raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
+    if state.task_id != task_id:raise HTTPException(409,"session belongs to another task")
+    return state.model_dump(mode="json")
+
+class TaskRouteSwitchRequest(BaseModel):
+    model_route:Literal["ollama","deepseek"]
+    expected_sequence:int=Field(ge=0)
+    expected_input_id:UUID
+    idempotency_key:UUID
+
+@app.post("/api/tasks/{task_id}/model-route")
+async def switch_interview_model(task_id:str,body:TaskRouteSwitchRequest,a:auth.Actor=Depends(auth.require_actor)):
+    task=store.task(task_id)
+    if not task:raise HTTPException(404,"task not found")
+    session=store.engine_session(task_id)
+    if not session or task.get("simulated") or task.get("active_phase") not in ("intent","conops"):
+        raise HTTPException(409,"only a live interview session can switch models")
+    try:
+        state=await run_in_threadpool(engine_client.snapshot,session)
+        if state.task_id != task_id:raise HTTPException(409,"session belongs to another task")
+        request=ModelRouteSwitchRequest(model_route=body.model_route,expected_sequence=body.expected_sequence,
+            expected_input_id=body.expected_input_id,idempotency_key=body.idempotency_key,actor_id=a.label)
+        changed=await run_in_threadpool(engine_client.switch_route,session,request)
+    except EngineUnreachableError as exc:raise _engine_unreachable(exc)
+    except EngineClientError as exc:raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
+    event=changed.accepted_event.route_change
+    if event is None:raise HTTPException(502,"engine omitted route-change event")
+    # A retried response must not duplicate the durable transcript event.
+    existing=any(e.get("kind")=="model_route" and (e.get("payload") or {}).get("idempotency_key")==str(event.idempotency_key) for e in store.events(task_id))
+    if not existing:
+        old=f"{next(iter(event.from_model_map.values()))[0]}:{next(iter(event.from_model_map.values()))[1]}"
+        new=f"{next(iter(event.to_model_map.values()))[0]}:{next(iter(event.to_model_map.values()))[1]}"
+        store.add_event(task_id,"model_route",f"Model switched: {old} → {new}",phase_key=task.get("active_phase") or "intent",
+            payload={"route":event.to_route,"resolved":new,"scope":"switch","actor":event.actor_id,
+                "idempotency_key":str(event.idempotency_key),"route_version":event.route_version,
+                "timestamp":event.timestamp.isoformat(),"from_model_map":event.from_model_map,"to_model_map":event.to_model_map,
+                "sequence":event.session_sequence,"transcript":True})
+    store.set_model_route(task_id,changed.snapshot.model_route or event.to_route)
+    return changed.model_dump(mode="json")
 
 class InterviewAnswer(BaseModel):
     answer:str=Field(min_length=1,max_length=8000)
@@ -650,7 +718,9 @@ def _task_ui_state(task:dict,input_state:dict)->dict:
     if mode not in UI_MODES:raise RuntimeError(f"unsupported UI mode: {mode}")
     diagnostic=None
     if mode=="error":
-        diagnostic={"reason":"task has no live ActiveWork owner","task_state":task.get("state"),"active_phase":task.get("active_phase")}
+        cause=input_state.get("engine_error")
+        diagnostic=({"reason":"engine protocol rejected the snapshot","http_status":cause["http_status"],"code":cause["code"],"detail":cause["detail"],"task_state":task.get("state"),"active_phase":task.get("active_phase")}
+                    if cause else {"reason":"engine transport unavailable" if input_state.get("engine_unreachable") else "task has no live ActiveWork owner","task_state":task.get("state"),"active_phase":task.get("active_phase")})
     return {"mode":mode,"active_phase":task.get("active_phase"),"process_live":process_live,
             "decision":live_decision if mode=="engine_decision" else None,
             "question":input_state.get("question") if mode=="engine_question" else None,
@@ -724,30 +794,37 @@ def _checkpoint_interview_turns(task_id:str)->list[tuple[str,str]]:
     except Exception:return []
 
 def _interview_model_provenance(task_id:str)->list[str]:
-    """Resolved provider:model per stage for the transcript header. The run's own
-    usage.jsonl is exact per-call truth; the start-time store event is the
-    fallback when artifacts are missing (pre-telemetry imports)."""
+    """Usage is per-call truth; never collapse a switched stage to its first model."""
     session=_recorded_engine_session(task_id)
+    rows=[]
     if session:
         try:
             from vmodel_contracts.runtime import artifacts_root
             usage=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"/"usage.jsonl"
-            stage_models:dict[str,str]={}
             if usage.is_file():
-                for line in usage.read_text().splitlines():
-                    try:rec=json.loads(line)
-                    except ValueError:continue
-                    stage,provider,model=rec.get("stage"),rec.get("provider"),rec.get("model")
-                    if stage and provider and model:stage_models.setdefault(str(stage),f"{provider}:{model}")
-                if stage_models:
-                    distinct=sorted(set(stage_models.values()))
-                    if len(distinct)==1:return [f"Model: {distinct[0]} (stages: {', '.join(sorted(stage_models))})"]
-                    return [f"Model: {stage} = {model}" for stage,model in sorted(stage_models.items())]
-        except Exception:pass
+                rows=[json.loads(line) for line in usage.read_text().splitlines() if line.strip()]
+        except (ValueError,OSError):pass
+    segments=_model_usage_segments(rows)
+    if segments:
+        return [f"Model segment {x['route_version'] if x['route_version'] is not None else 'unassigned'}: {x['provider']}:{x['model']} ({x['calls']} calls)" for x in segments]
     resolved=next(((event.get("payload") or {}).get("resolved") for event in reversed(store.events(task_id)) if event.get("kind")=="model_route" and (event.get("payload") or {}).get("resolved")),None)
-    if resolved:return [f"Model: {resolved}"]
-    stored=(store.task(task_id) or {}).get("model_route")
-    return [f"Model route: {stored}"] if stored else []
+    return [f"Model: {resolved}"] if resolved else []
+
+def _model_usage_segments(rows:list[dict])->list[dict]:
+    segments=[]
+    for row in rows:
+        if not isinstance(row,dict) or not row.get("provider") or not row.get("model"):continue
+        key=(row.get("route_version"),row["provider"],row["model"])
+        if not segments or (segments[-1]["route_version"],segments[-1]["provider"],segments[-1]["model"])!=key:
+            segments.append({"route_version":key[0],"provider":key[1],"model":key[2],
+                "calls":0,"prompt_tokens":0,"completion_tokens":0,"cost_usd":0.0,"unpriced_calls":0})
+        segment=segments[-1];segment["calls"]+=1
+        prompt=int(row.get("prompt_tokens") or 0);completion=int(row.get("completion_tokens") or 0)
+        segment["prompt_tokens"]+=prompt;segment["completion_tokens"]+=completion
+        pin=row.get("price_per_mtok_prompt_usd");pout=row.get("price_per_mtok_completion_usd")
+        if pin is None or pout is None:segment["unpriced_calls"]+=1
+        else:segment["cost_usd"]+=(prompt*float(pin)+completion*float(pout))/1_000_000
+    return segments
 
 def _interview_transcript_markdown(task_id:str)->str:
     turns=[]
@@ -764,10 +841,33 @@ def _interview_transcript_markdown(task_id:str)->str:
     complete=[tuple(turn) for turn in turns if turn[1]]
     checkpoint_turns=_checkpoint_interview_turns(task_id)
     if checkpoint_turns:complete=checkpoint_turns
-    if not complete:return ""
+    route_changes=[e for e in store.events(task_id) if e.get("kind")=="model_route" and (e.get("payload") or {}).get("scope")=="switch"]
+    if not complete and not route_changes:return ""
     lines=_interview_model_provenance(task_id)+["","## Interview questions and answers"]
-    for index,(question,answer) in enumerate(complete,1):
-        lines.extend(["",f"### Question {index}",question,"",f"**Answer:** {answer}"])
+    # Keep switch markers in event order, between the questions and answers
+    # they actually separate. Checkpoint-only legacy transcripts fall back to
+    # the reconstructed complete turns.
+    numbered=0
+    if not checkpoint_turns:
+        for event in store.events(task_id):
+            if event.get("phase_key") not in ("intent","conops"):continue
+            payload=event.get("payload") or {}
+            if event.get("kind")=="model_route" and payload.get("scope")=="switch":
+                lines.extend(["",f"**{event.get('message','Model switched')}** · {payload.get('timestamp','unknown time')} · segment {payload.get('route_version','?')} · actor {payload.get('actor','unknown')}"])
+            elif event.get("kind") in ("waiting_input","founder_decision"):
+                question=str(payload.get("question") or event.get("message") or "").strip()
+                if question:
+                    numbered+=1;lines.extend(["",f"### Question {numbered}",question])
+            elif event.get("kind")=="answer":
+                message=event.get("message","")
+                answer=str(payload.get("answer") or (message.removeprefix("You: ") if message.startswith("You: ") else "")).strip()
+                if answer:lines.extend(["",f"**Answer:** {answer}"])
+    else:
+        for index,(question,answer) in enumerate(complete,1):
+            lines.extend(["",f"### Question {index}",question,"",f"**Answer:** {answer}"])
+        for event in route_changes:
+            payload=event.get("payload") or {}
+            lines.extend(["",f"**{event.get('message','Model switched')}** · {payload.get('timestamp','unknown time')} · segment {payload.get('route_version','?')}"])
     return "\n".join(lines)
 
 
@@ -839,7 +939,11 @@ def get_task(task_id: str):
     if session_id:
         try:
             input_state=_http_input_state(task_id,engine_client.snapshot(session_id))
-        except (EngineClientError,EngineUnreachableError):input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None}
+        except EngineClientError as exc:
+            input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None,
+                         "engine_error":{"http_status":exc.http_status,"code":int(exc.error.code),"detail":exc.error.detail}}
+        except EngineUnreachableError:
+            input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None,"engine_unreachable":True}
     else:input_state=runner.input_state(task_id)
     work=runner.work_state(task_id)
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
@@ -883,7 +987,7 @@ def task_execution(task_id:str,debug:bool=False,a:auth.Actor=Depends(auth.requir
             for file in sorted(debug_dir.glob("*.txt"))[-30:]:
                 if file.is_file() and file.stat().st_size<=1_000_000:
                     raw.append({"file":file.name,"content":file.read_text(errors="replace")})
-    return {"session_id":session,"route":route,"effective_models":pinned,"usage":usage,"calls":summary,"raw":raw}
+    return {"session_id":session,"route":route,"effective_models":pinned,"usage":usage,"usage_segments":_model_usage_segments(usage),"route_history":[(e.get("payload") or {}) for e in store.events(task_id) if e.get("kind")=="model_route" and (e.get("payload") or {}).get("scope")=="switch"],"calls":summary,"raw":raw}
 
 def _execution_json(row:str):
     try:return json.loads(row)

@@ -755,8 +755,8 @@ def test_runtime_badge_survives_identity_render(page,ui):
 def test_orphaned_running_task_renders_visible_recovery_error(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='intent';live['input_state']={'waiting':False,'process_live':False,'decision':None};live['ui_state']={'mode':'error','active_phase':'intent','process_live':False,'decision':None,'gate':None};live['events'].append({'id':999,'kind':'error','message':'Error: engine stream handling stopped. Likely cause: protocol failure. Next: restart Requi.re.','phase_key':'intent','payload':{},'ts':1720003000})
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view')
-    notice=page.locator('.task-error-state');notice.wait_for();assert notice.get_by_text('Engine is not running.',exact=True).is_visible()
-    assert page.locator('.live-indicator').get_by_text('Engine stopped',exact=True).is_visible()
+    notice=page.locator('.task-error-state');notice.wait_for();assert notice.get_by_text('Task needs attention',exact=True).is_visible()
+    assert page.locator('.live-indicator').get_by_text('Task needs attention',exact=True).is_visible()
 
 def test_gate_checkbox_updates_in_place_without_navigation(page,ui):
     live=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in live['gates'] if g['state']=='waiting');live['ui_state']={'mode':'phase_gate','active_phase':live['active_phase'],'process_live':False,'decision':None,'gate':gate};calls=[]
@@ -1137,3 +1137,17 @@ def test_debug_chips_show_intent_relevance_and_differed_tooltip(page, ui):
     page.locator(".avatar").click(); page.locator("#debugtoggle").click()
     page.locator(".qa-chips").first.wait_for(state="detached")
     assert page.locator(".qa-chips").count() == 0
+
+
+def test_protocol_422_is_not_mislabeled_engine_down(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json()
+    detail="Error: stage 'probing': model ignored the structured interview-turn contract twice."
+    live['state']='running';live['active_phase']='intent'
+    live['ui_state']={'mode':'error','active_phase':'intent','process_live':False,'diagnostic':{'reason':'engine protocol rejected the snapshot','http_status':422,'code':130,'detail':detail}}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.goto(ui+'/tasks/live/view')
+    notice=page.locator('.task-error-state');notice.wait_for()
+    assert notice.get_by_text('Engine returned an error',exact=True).is_visible()
+    assert 'structured interview-turn contract' in notice.inner_text()
+    assert 'Engine is not running' not in notice.inner_text()
+    page.screenshot(path='/downloads/protocol-error-state.png',full_page=True)

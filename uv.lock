@@ -80,6 +80,7 @@ dev = [
     { name = "libsql" },
     { name = "playwright" },
     { name = "pytest" },
+    { name = "pytest-timeout" },
 ]
 turso = [
     { name = "libsql" },
@@ -95,10 +96,11 @@ requires-dist = [
     { name = "playwright", marker = "extra == 'dev'", specifier = ">=1.48" },
     { name = "pydantic", specifier = ">=2.6,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3" },
     { name = "python-dotenv", specifier = ">=1,<2" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "uvicorn", specifier = ">=0.29" },
-    { name = "vmodel-contracts", git = "https://github.com/ShyAlon/vmodel-contracts.git?rev=84028d90ecc62de5fe808a36b343240dbe59283b" },
+    { name = "vmodel-contracts", git = "https://github.com/ShyAlon/vmodel-contracts.git?rev=e479e5b4908e1a5d2beb49801309b8eb156822f4" },
 ]
 provides-extras = ["dev", "turso"]
 
@@ -506,6 +508,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pytest-timeout"
+version = "2.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ac/82/4c9ecabab13363e72d880f2fb504c5f750433b2b6f16e99f4ec21ada284c/pytest_timeout-2.4.0.tar.gz", hash = "sha256:7e68e90b01f9eff71332b25001f85c75495fc4e3a836701876183c4bcfd0540a", size = 17973, upload-time = "2025-05-05T19:44:34.99Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/b6/3127540ecdf1464a00e5a01ee60a1b09175f6913f0644ac748494d9c4b21/pytest_timeout-2.4.0-py3-none-any.whl", hash = "sha256:c42667e5cdadb151aeb5b26d114aff6bdf5a907f176a007a30b940d3d865b5c2", size = 14382, upload-time = "2025-05-05T19:44:33.502Z" },
+]
+
+[[package]]
 name = "python-dotenv"
 version = "1.2.3"
 source = { registry = "https://pypi.org/simple" }
@@ -628,7 +642,7 @@ wheels = [
 [[package]]
 name = "vmodel-contracts"
 version = "0.19.0"
-source = { git = "https://github.com/ShyAlon/vmodel-contracts.git?rev=84028d90ecc62de5fe808a36b343240dbe59283b#84028d90ecc62de5fe808a36b343240dbe59283b" }
+source = { git = "https://github.com/ShyAlon/vmodel-contracts.git?rev=e479e5b4908e1a5d2beb49801309b8eb156822f4#e479e5b4908e1a5d2beb49801309b8eb156822f4" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
