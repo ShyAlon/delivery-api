@@ -433,6 +433,9 @@ def about_page():return FileResponse(WEB_DIR / "index.html")
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon(): return FileResponse(WEB_DIR / "favicon.ico", media_type="image/x-icon")
 
+@app.get("/tasks/{task_id}/gates/{gate_key}", include_in_schema=False)
+def gate_page(task_id: str, gate_key: str): return FileResponse(WEB_DIR / "index.html")
+
 @app.get("/tasks/{task_id}/view", include_in_schema=False)
 def task_view(task_id: str): return FileResponse(WEB_DIR / "index.html")
 
@@ -1275,6 +1278,14 @@ async def replay_simulation(task_id: str, req: ReplayRequest):
     return {"status":"started","simulated":True,"speed":"instant" if req.speed in (None,0) else req.speed}
 
 class GateToggle(BaseModel): is_open: bool
+@app.get("/api/tasks/{task_id}/generator-default/{phase}")
+def generator_default(task_id:str,phase:str,a:auth.Actor=Depends(auth.require_actor)):
+    from .phases import PHASE_BY_KEY
+    if not store.task(task_id):raise HTTPException(404,"task not found")
+    definition=PHASE_BY_KEY.get(phase)
+    if not definition or definition.executor!="generator":raise HTTPException(404,"generator phase not found")
+    return {"phase":phase,"model":model_route_lib.phase_initial_model(definition.generator_stage)}
+
 @app.post("/api/tasks/{task_id}/gates/{gate_key}/toggle")
 def toggle_gate(task_id:str,gate_key:str,req:GateToggle,request:Request,a:auth.Actor=Depends(auth.require_actor)):
     try:return store.set_gate_open(task_id,gate_key,req.is_open,a.label)
@@ -1286,17 +1297,29 @@ class GateDecision(BaseModel):
     edited_text: str|None=None
     steer: str|None=None
     model_route:Literal["ollama","deepseek"]|None=None
+    model:str|None=None
 @app.post("/api/tasks/{task_id}/gates/{gate_key}/decide")
 async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,a:auth.Actor=Depends(auth.require_actor)):
     try:
         if req.model_route=="deepseek" and not os.environ.get("DEEPSEEK_API_KEY"):raise ValueError("DeepSeek is not configured")
+        before=store.task(task_id)
+        pending=next((g for g in before["gates"] if g["gate_key"]==gate_key),None) if before else None
+        if not pending:raise KeyError(gate_key)
+        if pending["state"]=="waiting" and req.action in ("approve","edit"):
+            evidence=[a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==pending["after_phase"] and not a.get("stale") and a.get("present",True)]
+            if not evidence or not any(Path(a["ref"]).is_file() for a in evidence):
+                raise ValueError("No current artifact is available to review at this gate")
+        from .phases import PHASE_BY_KEY, successor
+        target=pending["after_phase"] if req.action=="redo" else (successor(pending["after_phase"]).key if successor(pending["after_phase"]) else pending["after_phase"])
+        if req.model_route and PHASE_BY_KEY[target].executor!="generator":
+            raise ValueError("This gate has no generator phase for a model override")
+        selected=model_route_lib.route_value(req.model_route,req.model) if req.model_route else None
         gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label)
         phase=gate["after_phase"]
-        if req.model_route:
-            target=phase if req.action=="redo" else (__import__('delivery_api.phases',fromlist=['successor']).successor(phase).key if __import__('delivery_api.phases',fromlist=['successor']).successor(phase) else phase)
-            store.add_event(task_id,"model_route",f"{target} override uses {req.model_route}",phase_key=target,payload={"route":req.model_route,"scope":"phase_override","actor":a.label})
-        if req.action=="redo":asyncio.create_task(orchestrator.execute_phase(task_id,phase,mode=ExecutionMode.REDO,model_route=req.model_route))
-        else:asyncio.create_task(orchestrator.continue_after(task_id,phase))
+        if selected:
+            store.add_event(task_id,"model_route",f"{target} override uses {selected}",phase_key=target,payload={"route":req.model_route,"resolved":selected,"scope":"phase_override","actor":a.label})
+        if req.action=="redo":asyncio.create_task(orchestrator.execute_phase(task_id,phase,mode=ExecutionMode.REDO,model_route=selected))
+        else:asyncio.create_task(orchestrator.continue_after(task_id,phase,model_route=selected))
         return gate
     except KeyError:raise HTTPException(404,"gate not found")
     except ValueError as e:raise HTTPException(400,{"error":str(e),"cause":"The gate decision is incomplete.","next":"Choose, edit, or explain what the redo should change."})

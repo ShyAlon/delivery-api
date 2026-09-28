@@ -129,3 +129,15 @@ def test_needs_default_comes_from_generator_config_not_delivery_ollama_override(
  assert model_routes.needs_initial_model()=='ollama:gemma3'
  monkeypatch.setenv('SPEC_GENERATOR_MODEL_NEEDS','ollama:phi4')
  assert model_routes.needs_initial_model()=='ollama:phi4'
+
+
+def test_generator_phase_default_ignores_interview_route(monkeypatch,tmp_path):
+    from delivery_api import model_routes
+    repo=tmp_path/'spec-generator';repo.mkdir()
+    (repo/'.env').write_text('SPEC_GENERATOR_MODEL_SRS=ollama:phi4\nSPEC_GENERATOR_MODEL_NEEDS=ollama:qwen\n')
+    monkeypatch.setenv('SPEC_GENERATOR_DIR',str(repo))
+    monkeypatch.delenv('SPEC_GENERATOR_MODEL_SRS',raising=False)
+    assert model_routes.phase_initial_model('srs')=='ollama:phi4'
+    assert model_routes.phase_initial_model('architecture')=='ollama:qwen2.5-coder:14b'
+    monkeypatch.setenv('SPEC_GENERATOR_MODEL_SRS','deepseek:deepseek-chat')
+    assert model_routes.phase_initial_model('srs')=='deepseek:deepseek-chat'
