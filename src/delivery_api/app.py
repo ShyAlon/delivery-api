@@ -193,6 +193,27 @@ async def _recover_tasks()->None:
         task_id=task["task_id"]
         if runner.work_state(task_id) is not None:continue
         events=store.events(task_id);session=_recorded_engine_session(task_id)
+        # HTTP session state is authoritative. A completed interview must not
+        # be treated as an orphaned legacy interview merely because delivery's
+        # phase rows still look in progress after restart.
+        if store.engine_session(task_id):
+            try:
+                state=await run_in_threadpool(engine_client.snapshot,session)
+            except (EngineClientError,EngineUnreachableError) as exc:
+                activity("engine.recovery.snapshot_unavailable","Could not classify linked interview during recovery",task_id=task_id,session_id=session,error=type(exc).__name__)
+                continue
+            if state.task_id!=task_id:
+                activity("engine.recovery.session_mismatch","Linked interview belongs to another task",task_id=task_id,session_id=session)
+                continue
+            if state.process_status==ProcessStatus.COMPLETED:
+                activity("engine.recovery.completed","Completed HTTP interview is terminal",task_id=task_id,session_id=session)
+                continue
+            if state.process_status==ProcessStatus.WAITING_INPUT and state.open_input is not None:
+                continue
+            # A linked HTTP session is never the legacy subprocess recovery
+            # target. The engine owns its live checkpoint and typed inputs.
+            activity("engine.recovery.linked","Linked HTTP interview remains engine-owned",task_id=task_id,session_id=session,status=int(state.process_status))
+            continue
         legacy_requirement=_legacy_external_requirement(task,events)
         existing_requirement=next((event for event in reversed(events) if event.get("kind")=="requirement" and (event.get("payload") or {}).get("kind")=="external_input"),None)
         if legacy_requirement and not existing_requirement:
@@ -732,7 +753,7 @@ def _task_ui_state(task:dict,input_state:dict)->dict:
     if mode=="error":
         cause=input_state.get("engine_error")
         diagnostic=({"reason":"engine protocol rejected the snapshot","http_status":cause["http_status"],"code":cause["code"],"detail":cause["detail"],"task_state":task.get("state"),"active_phase":task.get("active_phase")}
-                    if cause else {"reason":"engine transport unavailable" if input_state.get("engine_unreachable") else "task has no live ActiveWork owner","task_state":task.get("state"),"active_phase":task.get("active_phase")})
+                    if cause else {"reason":"engine session completed" if input_state.get("engine_process_status")==int(ProcessStatus.COMPLETED) else "engine transport unavailable" if input_state.get("engine_unreachable") else "task has no live ActiveWork owner","task_state":task.get("state"),"active_phase":task.get("active_phase")})
     return {"mode":mode,"active_phase":task.get("active_phase"),"process_live":process_live,
             "decision":live_decision if mode=="engine_decision" else None,
             "question":input_state.get("question") if mode=="engine_question" else None,
@@ -939,7 +960,7 @@ def _http_input_state(task_id:str,engine_state:EngineSnapshot)->dict:
         if pending.kind in _STRUCTURED_INPUT_KINDS:decision=pending.model_dump(mode="json")
         else:question=pending.prompt
         _sync_waiting_input_event(task_id,pending)
-    return {"waiting":waiting,
+    return {"waiting":waiting,"engine_process_status":int(engine_state.process_status),
             "process_live":engine_state.process_status in (ProcessStatus.RUNNING,ProcessStatus.WAITING_INPUT),
             "decision":decision,"requirement":None,"question":question,"input_id":input_id}
 

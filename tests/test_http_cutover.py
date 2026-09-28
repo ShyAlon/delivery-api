@@ -325,3 +325,19 @@ def test_retired_ollama_default_still_lists_installed_switch_targets(monkeypatch
  monkeypatch.setattr(module,'engine_client',Engine())
  routes=module.model_routes(a=None)['routes']
  assert routes[0]['id']=='ollama' and routes[0]['available'] and routes[0]['models']==['phi4']
+
+def test_recovery_does_not_reexecute_completed_http_interview(tmp_path,monkeypatch):
+ import asyncio
+ store=SQLiteStore(str(tmp_path/'completed.db'));task=store.create_task('Already complete','brief');tid=task['task_id']
+ store.set_engine_session(tid,'complete-session');store.update_phase(tid,'intent','running')
+ monkeypatch.setattr(module,'store',store)
+ class Complete:
+  def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE,open_input=None)
+ monkeypatch.setattr(module,'engine_client',Complete())
+ calls=[]
+ async def unexpected(*args,**kwargs):calls.append(args)
+ monkeypatch.setattr(module,'_resume_one_interview',unexpected)
+ asyncio.run(module._recover_tasks())
+ assert not calls
+ assert store.engine_session(tid)=='complete-session'
+ assert store.task(tid)['state']=='running'
