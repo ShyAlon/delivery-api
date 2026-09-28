@@ -673,3 +673,53 @@ def test_retry_with_generator_checkpoint_resumes_without_from(tmp_path,monkeypat
   await asyncio.sleep(.01)
  asyncio.run(exercise())
  assert calls==[('resume','ollama:phi4')]
+
+def test_architecture_baseline_decision_routes_to_local_owner_not_completed_http(monkeypatch,tmp_path):
+ import asyncio
+ from delivery_api.runner import ProcessRunner
+ from delivery_api.auth import Actor
+ store=SQLiteStore(str(tmp_path/'architecture-decision.db'));task=store.create_task('Architecture choice','brief');tid=task['task_id']
+ store.set_engine_session(tid,'completed-interview');store.update_phase(tid,'architecture','running')
+ runner=ProcessRunner(store)
+ class CompletedEngine:
+  calls=0
+  def snapshot(self,sid):
+   self.calls+=1
+   return EngineSnapshot(session_id=sid,task_id=tid,sequence=40,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE,open_input=None)
+ engine=CompletedEngine()
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'runner',runner);monkeypatch.setattr(module,'engine_client',engine)
+ async def go():
+  decision={'decision_id':'system-baseline','prompt':'Choose baseline','options':[{'value':'greenfield','label':'Greenfield'}]}
+  pending=asyncio.create_task(runner.request_decision(tid,'architecture',decision));await asyncio.sleep(0)
+  result=await module.answer_interview(tid,module.InterviewAnswer(answer='greenfield',decision_id='system-baseline'),Actor('test','Founder'))
+  return result,await pending
+ result,choice=asyncio.run(go())
+ assert result=={'status':'accepted'} and choice=='greenfield' and engine.calls==0
+ assert any(e['kind']=='answer' and e['phase_key']=='architecture' and e['payload']['decision_id']=='system-baseline' for e in store.events(tid))
+
+
+def test_architecture_baseline_rejects_stale_decision_without_http_fallback(monkeypatch,tmp_path):
+ import asyncio
+ from delivery_api.runner import ProcessRunner
+ from delivery_api.auth import Actor
+ from fastapi import HTTPException
+ store=SQLiteStore(str(tmp_path/'stale-architecture.db'));task=store.create_task('Architecture choice','brief');tid=task['task_id']
+ store.set_engine_session(tid,'completed-interview');store.update_phase(tid,'architecture','running')
+ runner=ProcessRunner(store)
+ class Engine:
+  calls=0
+  def snapshot(self,sid):self.calls+=1;raise AssertionError('completed HTTP session must not receive this decision')
+ engine=Engine();monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'runner',runner);monkeypatch.setattr(module,'engine_client',engine)
+ async def go():
+  pending=asyncio.create_task(runner.request_decision(tid,'architecture',{'decision_id':'system-baseline','prompt':'Choose baseline'}));await asyncio.sleep(0)
+  try:await module.answer_interview(tid,module.InterviewAnswer(answer='greenfield',decision_id='wrong-id'),Actor('test','Founder'))
+  except HTTPException as exc:assert exc.status_code==409
+  else:assert False,'stale decision was accepted'
+  assert not pending.done()
+  assert runner.input_state(tid)['waiting'] is True
+  pending.cancel()
+  try:await pending
+  except asyncio.CancelledError:pass
+ asyncio.run(go())
+ assert engine.calls==0
+ assert not any(e['kind']=='answer' for e in store.events(tid))
