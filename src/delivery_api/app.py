@@ -519,7 +519,7 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         store.add_event(task_id,"model_preflight",f"Interview route {body.model_route} rejected: {exc.error.detail}",phase_key="intent",payload=payload)
         raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
     store.set_engine_session(task_id,started.snapshot.session_id);store.set_model_route(task_id,body.model_route)
-    resolved=model_route_lib.route_value(body.model_route)
+    resolved=model_route_lib.interview_route_value(body.model_route)
     store.add_event(task_id,"model_route",f"interview uses {resolved}",phase_key="intent",payload={"route":body.model_route,"resolved":resolved,"provider":resolved.split(":",1)[0],"model":resolved.split(":",1)[1],"effective_stages":["probing","distillation","phrasing","scope_tiebreak","expert_opinion","conops"],"scope":"start","actor":a.label})
     activity("model.route.resolved","Interview route accepted",task_id=task_id,session_id=started.snapshot.session_id,selected=body.model_route,effective=resolved)
     detail="Waiting for founder input" if started.snapshot.process_status==ProcessStatus.WAITING_INPUT else "Interview engine running"

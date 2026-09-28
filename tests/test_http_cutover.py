@@ -200,3 +200,22 @@ def test_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch):
    finally:release.set()
    assert (await asyncio.wait_for(pending,timeout=3)).status_code==200
  asyncio.run(exercise())
+
+
+def test_start_records_interview_flash_not_downstream_chat(tmp_path, monkeypatch):
+ store=SQLiteStore(str(tmp_path/'flash-provenance.db'))
+ task=store.create_task('Flash provenance', 'An idea')
+ engine=FakeEngine()
+ requests=[]
+ start=engine.start
+ def record_start(request):
+  requests.append(request)
+  return start(request)
+ engine.start=record_start
+ monkeypatch.setattr(module,'store',store)
+ monkeypatch.setattr(module,'engine_client',engine)
+ TestClient(module.app).post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'deepseek'}).raise_for_status()
+ assert requests[0].model_route=='deepseek'
+ route=[e for e in store.events(task['task_id']) if e['kind']=='model_route' and e['payload'].get('scope')=='start'][0]
+ assert route['payload']['resolved']=='deepseek:deepseek-flash'
+ assert route['payload']['model']=='deepseek-flash'
