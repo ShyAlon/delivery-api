@@ -385,8 +385,8 @@ def test_restored_terminal_session_reconciles_phase_handoff_once(tmp_path,monkey
  assert any(e['kind']=='error' and e['message']=='Old model failure' for e in restored.events(tid))
  assert module.get_task(tid)['active_phase']=='needs'
  asyncio.run(module._recover_tasks())
- # A restart with a running Needs row but no live runner retries that handoff.
- assert launched==[(tid,'conops'),(tid,'conops')]
+ # Once Needs has become active, interview recovery must not relaunch it.
+ assert launched==[(tid,'conops')]
  assert len([e for e in restored.events(tid) if e['kind']=='progress'])==1
 
 
@@ -482,3 +482,44 @@ def test_final_typed_answer_reconciles_without_resubmission(tmp_path,monkeypatch
  assert engine.calls==1 and launched==['conops']
  assert {p['phase_key']:p['state'] for p in store.task(tid)['phases']}['conops']=='approved'
  assert len([e for e in store.events(tid) if e['kind']=='answer'])==1
+
+
+def test_terminal_recovery_logs_exact_phase_disposition(tmp_path,monkeypatch):
+ import asyncio
+ session='diagnostic-session';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
+ store=SQLiteStore(str(tmp_path/'diagnostic.db'));tid=store.create_task('Terminal','brief')['task_id']
+ store.set_engine_session(tid,session);store.update_phase(tid,'intent','running')
+ monkeypatch.setattr(module,'store',store)
+ class Complete:
+  def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
+ monkeypatch.setattr(module,'engine_client',Complete())
+ notes=[];monkeypatch.setattr(module,'activity',lambda kind,message,**fields:notes.append((kind,fields)))
+ async def continue_after(task_id,phase):store.update_phase(task_id,'needs','running')
+ monkeypatch.setattr(module.orchestrator,'continue_after',continue_after)
+ async def recover():
+  await module._recover_tasks();await asyncio.sleep(.01)
+ asyncio.run(recover())
+ assert next(fields for kind,fields in notes if kind=='engine.recovery.reconciled')['next_phase']=='needs'
+ assert next(fields for kind,fields in notes if kind=='engine.recovery.handoff')['active_phase']=='needs'
+ assert not any(kind=='engine.recovery.completed' for kind,_ in notes)
+ asyncio.run(recover())
+ assert next(fields for kind,fields in reversed(notes) if kind=='engine.recovery.completed')['reason']=='downstream_already_active'
+
+
+def test_unpinned_legacy_snapshot_is_classified_once_without_handoff(tmp_path,monkeypatch):
+ import asyncio
+ from delivery_api.engine_client import EngineClientError
+ store=SQLiteStore(str(tmp_path/'legacy.db'));tid=store.create_task('Old route','brief')['task_id']
+ store.set_engine_session(tid,'old-session');store.update_phase(tid,'intent','running')
+ monkeypatch.setattr(module,'store',store)
+ class Old:
+  def snapshot(self,sid):raise EngineClientError(422,ProtocolError(code=ProtocolErrorCode.INVALID_RESPONSE,detail='legacy session has no pinned model route. It predates per-session routing.'))
+ monkeypatch.setattr(module,'engine_client',Old())
+ notes=[];monkeypatch.setattr(module,'activity',lambda kind,message,**fields:notes.append((kind,fields)))
+ launched=[]
+ async def continue_after(*args):launched.append(args)
+ monkeypatch.setattr(module.orchestrator,'continue_after',continue_after)
+ asyncio.run(module._recover_tasks())
+ assert [kind for kind,_ in notes if kind.startswith('engine.recovery.')]==['engine.recovery.legacy_unpinned']
+ assert not launched and store.task(tid)['phases'][0]['state']=='running'
