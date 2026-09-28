@@ -519,6 +519,13 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
             routes.append({"id":route,"available":True,"model":f"{provider}:{model}","model_map":models,"models":options})
         except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
             reason=exc.error.detail if isinstance(exc,EngineClientError) else str(exc)
+            if route=="ollama":
+                try:
+                    installed=engine_client.local_models()
+                    if installed:
+                        routes.append({"id":route,"available":True,"model":None,"models":installed,"error":f"default unavailable: {reason}"})
+                        continue
+                except (EngineClientError,EngineUnreachableError,AttributeError):pass
             routes.append({"id":route,"available":False,"error":reason})
     return {"routes":routes,"default_route":default}
 @app.post("/api/tasks/{task_id}/start")

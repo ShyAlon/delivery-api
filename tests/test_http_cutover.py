@@ -313,3 +313,15 @@ def test_cost_segments_preserve_consecutive_route_versions():
  segments=module._model_usage_segments(rows)
  assert [s['route_version'] for s in segments]==[0,1,2]
  assert abs(segments[1]['cost_usd']-(100*.30+20*1.20)/1_000_000)<1e-12
+
+def test_retired_ollama_default_still_lists_installed_switch_targets(monkeypatch):
+ from delivery_api.engine_client import EngineClientError
+ class Engine:
+  def default_route(self):return {'route':'ollama','model':'qwen2.5-coder:14b'}
+  def preview_route(self,route,initial_model=None):
+   if route=='ollama':raise EngineClientError(422,ProtocolError(code=ProtocolErrorCode.INVALID_RESPONSE,detail='qwen not installed'))
+   return {'model_map':{'probing':['deepseek','deepseek-flash']}}
+  def local_models(self):return ['phi4']
+ monkeypatch.setattr(module,'engine_client',Engine())
+ routes=module.model_routes(a=None)['routes']
+ assert routes[0]['id']=='ollama' and routes[0]['available'] and routes[0]['models']==['phi4']
