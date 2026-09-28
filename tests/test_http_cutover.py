@@ -753,3 +753,14 @@ def test_completed_http_recovery_restores_orphaned_architecture_choice(tmp_path,
     try:await child
     except asyncio.CancelledError:pass
  asyncio.run(recover())
+
+def test_task_snapshot_exposes_one_shared_phase_configuration(tmp_path,monkeypatch):
+ from delivery_api.phases import PHASE_DEFINITIONS
+ store=SQLiteStore(str(tmp_path/'phase-config.db'));tid=store.create_task('All phases','brief')['task_id']
+ monkeypatch.setattr(module,'store',store)
+ result=module.get_task(tid)
+ assert list(result['phase_config'])==[phase.key for phase in PHASE_DEFINITIONS]
+ for phase in PHASE_DEFINITIONS:
+  config=result['phase_config'][phase.key]
+  assert config=={'executor':phase.executor,'generator_stage':phase.generator_stage,
+                  'prerequisite':phase.prerequisite,'artifacts':list(phase.artifacts)}

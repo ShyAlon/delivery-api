@@ -1322,3 +1322,39 @@ def test_phase_tooltip_does_not_present_old_errors_as_current_issues(page,ui):
     expect(architecture.get_by_role('tooltip')).not_to_contain_text('old architecture answer conflict')
     expect(page.locator('.task-error-state')).not_to_contain_text('old architecture answer conflict')
     page.screenshot(path='/downloads/architecture-stale-issues-fixed.png',full_page=True)
+
+
+def test_normal_mode_shows_live_architecture_stage_and_stall_heartbeat(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json()
+    live['state']='running';live['active_phase']='architecture';live['phases'][4].update({'state':'running','started_at':1720004000,'detail':'Drafting architecture overview'})
+    live['events'].append({'id':990,'kind':'command','message':'Engine process started','phase_key':'architecture','payload':{},'ts':1720004000})
+    live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.goto(ui+'/tasks/live/view')
+    expect(page.locator('#stageprogress')).to_contain_text('Waiting for stage progress')
+    assert page.locator('#progressfeed').count()==0
+    progress={'id':991,'kind':'progress','message':'Drafting architecture overview (stage 3/6)','phase_key':'architecture','payload':{'completed':3,'total':6},'ts':1720004001}
+    page.route('**/api/tasks/live/stream',lambda route:route.fulfill(status=200,headers={'Content-Type':'text/event-stream'},body='event: progress\ndata: '+__import__('json').dumps(progress)+'\n\n'+'event: progress\ndata: '+__import__('json').dumps({'id':992,'kind':'progress','message':"still working - stage 'architecture' call, 30s elapsed",'phase_key':'architecture','payload':{'completed':0,'total':None},'ts':1720004002})+'\n\n'))
+    page.reload()
+    expect(page.locator('#stageprogress')).to_contain_text('still working')
+    expect(page.locator('.progress-scope')).to_contain_text('3 out of 6')
+    page.screenshot(path='/downloads/architecture-progress-normal.png',full_page=True)
+
+
+def test_every_generator_gate_uses_same_page_and_configured_model_picker(page,ui):
+    from delivery_api.phases import PHASE_DEFINITIONS
+    live=page.request.get(ui+'/api/tasks/sim').json()
+    expected=[phase.key for phase in PHASE_DEFINITIONS if phase.executor=='generator']
+    assert [key for key,value in live['phase_config'].items() if value['executor']=='generator']==expected
+    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=live))
+    for phase in expected:
+        page.goto(f'{ui}/tasks/sim/gates/gate-{phase}')
+        expect(page.locator('.gate-page')).to_be_visible()
+        expect(page.locator('#gate-artifacts')).to_be_visible()
+        expect(page.locator('#gateform')).to_be_visible()
+        expect(page.locator('select[name="redo_model"]')).to_be_visible()
+    for phase in ('intent','conops'):
+        page.goto(f'{ui}/tasks/sim/gates/gate-{phase}')
+        expect(page.locator('.gate-page')).to_be_visible()
+        expect(page.locator('#gateform')).to_be_visible()
+        expect(page.locator('select[name="redo_model"]')).to_have_count(0)
