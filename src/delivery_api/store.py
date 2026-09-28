@@ -414,6 +414,28 @@ class SQLiteStore:
                 self._db.execute("UPDATE tasks SET updated_at=? WHERE task_id=?", (now, task_id))
             self._commit()
 
+    def reconcile_completed_interview(self, task_id: str, session_id: str, sequence: int) -> bool:
+        """Commit the missing HTTP interview boundary once; preserve downstream work."""
+        with self._lock:
+            row=self._db.execute("SELECT engine_session_id,state,active_phase FROM tasks WHERE task_id=?",(task_id,)).fetchone()
+            if not row or row["engine_session_id"] != session_id:return False
+            phases=self._db.execute("SELECT phase_key,state FROM phases WHERE task_id=? AND phase_key IN ('intent','conops')",(task_id,)).fetchall()
+            states={phase["phase_key"]:phase["state"] for phase in phases}
+            if states.keys() != {"intent","conops"}:return False
+            if row["active_phase"] not in ("intent","conops") or row["state"] not in ("running","failed"):return False
+            if states["conops"] in ("approved","done"):return False
+            if any(value not in ("pending","running","failed","awaiting_approval") for value in states.values()):return False
+            now=time.time()
+            for phase in ("intent","conops"):
+                self._db.execute("UPDATE phases SET state='approved',detail='Founder approved in the completed interview',started_at=COALESCE(started_at,?),completed_at=? WHERE task_id=? AND phase_key=?",
+                                 (now,now,task_id,phase))
+            self._db.execute("UPDATE tasks SET state='running',active_phase='conops',updated_at=? WHERE task_id=?",(now,task_id))
+            self._db.execute("INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (?,?,?,?,?,?)",
+                             (task_id,"conops","progress","Completed HTTP interview reconciled with V-process",json.dumps({"session_id":session_id,"sequence":sequence,"source":"terminal_engine_snapshot","handoff":"needs"}),now))
+            self.audit("engine", "interview.reconciled", task_id, {"session_id":session_id,"sequence":sequence,"next_phase":"needs"})
+            self._commit()
+            return True
+
     def set_model_route(self, task_id: str, model_route: str) -> None:
         with self._lock:
             self._db.execute("UPDATE tasks SET model_route=?,updated_at=? WHERE task_id=?",

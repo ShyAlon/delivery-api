@@ -341,3 +341,140 @@ def test_recovery_does_not_reexecute_completed_http_interview(tmp_path,monkeypat
  assert not calls
  assert store.engine_session(tid)=='complete-session'
  assert store.task(tid)['state']=='running'
+
+
+def _completed_files(root, session):
+ from vmodel_contracts import IntentModel, ConOpsDocument
+ interview=root/session/'interview';interview.mkdir(parents=True)
+ intent=IntentModel(session_id=session,problem_statement='p',target_users=['u'],core_value_proposition='v',in_scope=['a'],out_of_scope=['b'],
+   stakeholder_needs=[{'need_id':'SN-1','statement':'s','kind':'functional','source_turns':[0]}],
+   assumption_items=[{'statement':'a','source_turns':[0]}],scope_exclusions=[{'item':'x','source_turns':[1],'explicit':True}],source_turns={'problem_statement':[0]})
+ conops=ConOpsDocument(session_id=session,stakeholder_context=[{'stakeholder':'u','role':'r','goals':['g'],'operating_environment':'e','source_turns':[1]}],
+   operational_scenarios=[{'scenario_id':'OS-1','name':'n','trigger':'t','actors':['u'],'operational_flow':['x'],'success_outcome':'y','source_turns':[1]}],
+   concept_options=[{'name':'PWA','summary':'s','advantages':['a'],'disadvantages':['d']},{'name':'Native app','summary':'s','advantages':['a'],'disadvantages':['d']}],
+   decision={'selected_concept':'PWA','rationale':'r','founder_confirmed':True,'source_turns':[1]})
+ (interview/'intent_model.json').write_text(intent.model_dump_json())
+ (interview/'conops.json').write_text(conops.model_dump_json())
+ return interview
+
+
+def test_restored_terminal_session_reconciles_phase_handoff_once(tmp_path,monkeypatch):
+ import asyncio
+ session='restored-session';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
+ path=tmp_path/'restored.db';first=SQLiteStore(str(path));tid=first.create_task('Terminal restore','brief')['task_id']
+ first.set_engine_session(tid,session);first.update_phase(tid,'intent','running',detail='Waiting for founder input')
+ first.add_event(tid,'error','Old model failure',phase_key='intent')
+ restored=SQLiteStore(str(path));monkeypatch.setattr(module,'store',restored)
+ class Complete:
+  def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
+ monkeypatch.setattr(module,'engine_client',Complete())
+ launched=[]
+ async def continue_after(task_id,phase):
+  launched.append((task_id,phase));restored.update_phase(task_id,'needs','running',detail='Building stakeholder needs')
+ monkeypatch.setattr(module.orchestrator,'continue_after',continue_after)
+ asyncio.run(module._recover_tasks())
+ task=restored.task(tid);states={p['phase_key']:p['state'] for p in task['phases']}
+ assert states['intent']=='approved' and states['conops']=='approved' and states['needs']=='running'
+ assert task['active_phase']=='needs' and task['state']=='running'
+ assert launched==[(tid,'conops')]
+ progress=[e for e in restored.events(tid) if e['kind']=='progress']
+ assert len(progress)==1 and progress[0]['payload']['session_id']==session
+ assert any(e['kind']=='error' and e['message']=='Old model failure' for e in restored.events(tid))
+ assert module.get_task(tid)['active_phase']=='needs'
+ asyncio.run(module._recover_tasks())
+ # A restart with a running Needs row but no live runner retries that handoff.
+ assert launched==[(tid,'conops'),(tid,'conops')]
+ assert len([e for e in restored.events(tid) if e['kind']=='progress'])==1
+
+
+def test_terminal_reconcile_refuses_missing_or_mismatched_artifacts(tmp_path,monkeypatch):
+ import asyncio
+ session='other-session';artifacts=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
+ store=SQLiteStore(str(tmp_path/'missing.db'));tid=store.create_task('Incomplete','brief')['task_id']
+ store.set_engine_session(tid,session);store.update_phase(tid,'intent','running')
+ monkeypatch.setattr(module,'store',store)
+ class Complete:
+  def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
+ monkeypatch.setattr(module,'engine_client',Complete())
+ launched=[]
+ async def continue_after(*args):launched.append(args)
+ monkeypatch.setattr(module.orchestrator,'continue_after',continue_after)
+ asyncio.run(module._recover_tasks());assert store.task(tid)['phases'][0]['state']=='running' and not launched
+ interview=_completed_files(artifacts,session)
+ body=(interview/'conops.json').read_text().replace(session,'wrong-session');(interview/'conops.json').write_text(body)
+ asyncio.run(module._recover_tasks());assert store.task(tid)['phases'][0]['state']=='running' and not launched
+
+
+def test_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,monkeypatch):
+ session='read-recovery';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
+ store=SQLiteStore(str(tmp_path/'read.db'));tid=store.create_task('Read repair','brief')['task_id']
+ store.set_engine_session(tid,session);store.update_phase(tid,'intent','running',detail='Waiting for founder input')
+ monkeypatch.setattr(module,'store',store)
+ class Complete:
+  def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
+ monkeypatch.setattr(module,'engine_client',Complete())
+ async def continue_after(task_id,phase):store.update_phase(task_id,'needs','running',detail='Building stakeholder needs')
+ monkeypatch.setattr(module.orchestrator,'continue_after',continue_after)
+ response=TestClient(module.app).get(f'/api/tasks/{tid}')
+ assert response.status_code==200,response.text
+ task=response.json();states={p['phase_key']:p['state'] for p in task['phases']}
+ assert states['intent']==states['conops']=='approved' and task['active_phase']=='conops'
+ assert store.task(tid)['active_phase']=='needs'
+ assert len([e for e in store.events(tid) if e['kind']=='progress'])==1
+
+
+def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path,monkeypatch):
+ import asyncio
+ from delivery_api.orchestrator import PhaseOrchestrator
+ session='bound-session';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
+ store=SQLiteStore(str(tmp_path/'handoff.db'));tid=store.create_task('Bound recovery','brief')['task_id']
+ store.set_engine_session(tid,session);store.update_phase(tid,'intent','running',detail='Waiting for founder input')
+ monkeypatch.setattr(module,'store',store)
+ class Complete:
+  def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
+ monkeypatch.setattr(module,'engine_client',Complete())
+ class Runner:
+  active_work={};calls=[]
+  def work_state(self,task_id):return None
+  async def run(self,task_id,cmd,**kwargs):
+   self.calls.append((cmd,kwargs));store.update_phase(task_id,'needs','running',detail='Building stakeholder needs');return 0
+ runner=Runner();monkeypatch.setattr(module,'runner',runner)
+ monkeypatch.setattr(module,'orchestrator',PhaseOrchestrator(store,runner))
+ asyncio.run(module._recover_tasks())
+ assert len(runner.calls)==1
+ command,options=runner.calls[0]
+ assert str(artifacts/session/'interview'/'intent_model.json') in command
+ assert str(artifacts/session/'interview'/'conops.json') in command
+ assert options['phase']=='needs' and store.task(tid)['active_phase']=='needs'
+
+
+def test_final_typed_answer_reconciles_without_resubmission(tmp_path,monkeypatch):
+ import asyncio
+ from delivery_api.auth import Actor
+ session='final-answer';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
+ store=SQLiteStore(str(tmp_path/'answer.db'));tid=store.create_task('Final answer','brief')['task_id']
+ store.set_engine_session(tid,session);store.update_phase(tid,'intent','running',detail='Waiting for founder input')
+ monkeypatch.setattr(module,'store',store)
+ pending=InputRequest(input_id=uuid4(),kind=InputKind.APPROVAL,prompt='Approve?',options=[InputOption(value=1,label='Approve')])
+ class Final:
+  calls=0
+  def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=29,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=pending)
+  def submit(self,sid,response):
+   self.calls+=1
+   event=InteractiveEvent(event_id=uuid4(),session_id=session,task_id=tid,phase_id=5,sequence=30,event_type=EventType.INPUT_ACCEPTED,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
+   return SubmitInputResponse(accepted_event=event,snapshot=EngineSnapshot(session_id=session,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE))
+ engine=Final();monkeypatch.setattr(module,'engine_client',engine)
+ launched=[]
+ async def continue_after(task_id,phase):launched.append(phase)
+ monkeypatch.setattr(module.orchestrator,'continue_after',continue_after)
+ async def go():
+  assert await module.answer_interview(tid,module.InterviewAnswer(answer='1',decision_id=str(pending.input_id)),Actor('test','Founder'))=={'status':'accepted'}
+  await asyncio.sleep(.01)
+ asyncio.run(go())
+ assert engine.calls==1 and launched==['conops']
+ assert {p['phase_key']:p['state'] for p in store.task(tid)['phases']}['conops']=='approved'
+ assert len([e for e in store.events(tid) if e['kind']=='answer'])==1
