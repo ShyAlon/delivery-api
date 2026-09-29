@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS phases (
 );
 CREATE TABLE IF NOT EXISTS gates (
   task_id TEXT NOT NULL, gate_key TEXT NOT NULL, after_phase TEXT NOT NULL, label TEXT NOT NULL,
-  position INTEGER NOT NULL, is_open INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'idle',
+  position INTEGER NOT NULL, is_open INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'idle', revision INTEGER NOT NULL DEFAULT 0,
   options TEXT NOT NULL DEFAULT '[]', selected_option TEXT, edited_text TEXT, steer TEXT,
   PRIMARY KEY(task_id, gate_key)
 );
@@ -66,6 +66,14 @@ CREATE TABLE IF NOT EXISTS events (
   kind TEXT NOT NULL, message TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', ts REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, id);
+CREATE TABLE IF NOT EXISTS progress_ingest (
+ task_id TEXT NOT NULL, source TEXT NOT NULL, session_id TEXT NOT NULL,
+ cursor INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(task_id,source,session_id)
+);
+CREATE TABLE IF NOT EXISTS progress_seen (
+ task_id TEXT NOT NULL, source TEXT NOT NULL, event_id TEXT NOT NULL,
+ PRIMARY KEY(task_id,source,event_id)
+);
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, action TEXT NOT NULL,
   task_id TEXT, detail TEXT NOT NULL DEFAULT '{}', ts REAL NOT NULL
@@ -122,6 +130,8 @@ class Storage(Protocol):
     def interview_schema_binding(self, task_id: str) -> dict | None: ...
     def add_event(self, task_id: str, kind: str, message: str, **context) -> int: ...
     def events(self, task_id: str, after: int = 0, limit: int = 500) -> list[dict]: ...
+    def progress_cursor(self, task_id: str, source: str, session_id: str) -> int: ...
+    def ingest_progress(self, signal, source: str) -> bool: ...
     def audit(self, actor: str, action: str, task_id: str | None = None, detail: dict | None = None) -> int: ...
     def audit_entries(self, task_id: str | None = None, limit: int = 500) -> list[dict]: ...
     def add_task_artifact(self, task_id: str, phase_key: str, name: str, ref: str, mime_type: str = "application/json") -> None: ...
@@ -150,6 +160,9 @@ class SQLiteStore:
 
     def _migrate_schema(self) -> None:
         """Small additive migrations keep local task history readable."""
+        gate_cols = {r[1] for r in self._db.execute("PRAGMA table_info(gates)")}
+        if "revision" not in gate_cols:
+            self._db.execute("ALTER TABLE gates ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
         phase_cols = {r[1] for r in self._db.execute("PRAGMA table_info(phases)")}
         artifact_cols = {r[1] for r in self._db.execute("PRAGMA table_info(task_artifacts)")}
         task_cols = {r[1] for r in self._db.execute("PRAGMA table_info(tasks)")}
@@ -302,7 +315,7 @@ class SQLiteStore:
                 raise ValueError("a running or paused replay cannot be deleted")
             # Delete all UI-owned task data. Source artifacts are references and
             # remain untouched on disk. Keep a tombstone audit entry.
-            for table in ("phases","gates","events","task_artifacts"):
+            for table in ("phases","gates","events","progress_ingest","progress_seen","task_artifacts"):
                 self._db.execute(f"DELETE FROM {table} WHERE task_id=?",(task_id,))
             self._db.execute("DELETE FROM tasks WHERE task_id=?",(task_id,))
             self.audit(actor,"task.deleted",task_id,{"title":row["title"],"source_artifacts_deleted":False});self._commit()
@@ -328,7 +341,7 @@ class SQLiteStore:
 
     def set_gate_open(self, task_id: str, gate_key: str, is_open: bool, actor: str = "local user") -> dict:
         with self._lock:
-            self._db.execute("UPDATE gates SET is_open=? WHERE task_id=? AND gate_key=?", (int(is_open), task_id, gate_key))
+            self._db.execute("UPDATE gates SET is_open=?,revision=revision+1 WHERE task_id=? AND gate_key=?", (int(is_open), task_id, gate_key))
             self.audit(actor, "gate.toggled", task_id, {"gate": gate_key, "open": is_open, "provenance": "interactive V gate"})
             self._commit()
             row=self._db.execute("SELECT * FROM gates WHERE task_id=? AND gate_key=?",(task_id,gate_key)).fetchone()
@@ -341,26 +354,30 @@ class SQLiteStore:
             if not row: return None
             now=time.time()
             if row["is_open"]:
-                self._db.execute("UPDATE gates SET state='bypassed' WHERE task_id=? AND gate_key=?",(task_id,row["gate_key"]))
+                self._db.execute("UPDATE gates SET state='bypassed',revision=revision+1 WHERE task_id=? AND gate_key=?",(task_id,row["gate_key"]))
                 self._db.execute("UPDATE phases SET state='approved',detail='Approved by explicit open-gate policy',completed_at=? WHERE task_id=? AND phase_key=?",(now,task_id,after_phase))
                 self.audit("policy", "gate.bypassed", task_id, {"gate":row["gate_key"],"after_phase":after_phase,"approved_at":now,"provenance":"explicit open-gate policy"})
                 self._commit();return None
             self._db.execute("UPDATE phases SET state='awaiting_approval',detail='Generated; waiting for founder approval' WHERE task_id=? AND phase_key=?",(task_id,after_phase))
-            self._db.execute("UPDATE gates SET state='waiting' WHERE task_id=? AND gate_key=?",(task_id,row["gate_key"]))
+            self._db.execute("UPDATE gates SET state='waiting',revision=revision+1 WHERE task_id=? AND gate_key=?",(task_id,row["gate_key"]))
             self._db.execute("UPDATE tasks SET state='waiting_gate',active_phase=?,updated_at=? WHERE task_id=?",(after_phase,now,task_id))
             self._commit(); return self._gate_record(self._db.execute("SELECT * FROM gates WHERE task_id=? AND gate_key=?",(task_id,row["gate_key"])).fetchone())
 
     def decide_gate(self, task_id: str, gate_key: str, action: str, *, selected_option: str | None = None,
-                    edited_text: str | None = None, steer: str | None = None, actor: str = "local user") -> dict:
+                    edited_text: str | None = None, steer: str | None = None, actor: str = "local user",
+                    expected_revision: int | None = None) -> dict:
         if action not in {"approve", "edit", "redo"}: raise ValueError("action must be approve, edit, or redo")
         with self._lock:
             row=self._db.execute("SELECT * FROM gates WHERE task_id=? AND gate_key=?",(task_id,gate_key)).fetchone()
             if not row: raise KeyError(gate_key)
+            if expected_revision is not None and row["revision"]!=expected_revision:
+                raise ValueError("gate changed; refresh before deciding")
+            if row["state"]!="waiting":raise ValueError("gate is not waiting for a decision")
             if action == "approve" and not selected_option: raise ValueError("choose an option to approve")
             if action == "edit" and not edited_text: raise ValueError("edited option text is required")
             if action == "redo" and not steer: raise ValueError("a redo needs a reason so it is a steer, not a reroll")
             state = "redo" if action == "redo" else "decided";now=time.time();phase=row["after_phase"]
-            self._db.execute("UPDATE gates SET state=?,selected_option=?,edited_text=?,steer=? WHERE task_id=? AND gate_key=?",
+            self._db.execute("UPDATE gates SET state=?,selected_option=?,edited_text=?,steer=?,revision=revision+1 WHERE task_id=? AND gate_key=?",
                              (state,selected_option,edited_text,steer,task_id,gate_key))
             if action == "redo":
                 self._db.execute("UPDATE phases SET state='running',detail=?,completed_at=NULL WHERE task_id=? AND phase_key=?",(f"Redo requested: {steer}",task_id,phase))
@@ -489,6 +506,45 @@ class SQLiteStore:
                                   (task_id, phase_key, kind, message, json.dumps(payload or {}), time.time()))
             self._db.execute("UPDATE tasks SET updated_at=? WHERE task_id=?", (time.time(), task_id)); self._commit()
             return cur.lastrowid
+
+    def progress_cursor(self, task_id: str, source: str, session_id: str) -> int:
+        row=self._db.execute("SELECT cursor FROM progress_ingest WHERE task_id=? AND source=? AND session_id=?",
+                             (task_id,source,session_id)).fetchone()
+        return int(row[0]) if row else 0
+
+    def ingest_progress(self, signal, source: str) -> bool:
+        """Deduplicate and commit task event + source cursor as one transaction."""
+        from vmodel_contracts.progress_signal import ProgressSignal
+        signal=ProgressSignal.model_validate(signal)
+        with self._lock:
+            row=self._db.execute("SELECT cursor FROM progress_ingest WHERE task_id=? AND source=? AND session_id=?",
+                                 (signal.task_id,source,signal.session_id)).fetchone()
+            cursor=int(row[0]) if row else 0
+            # Engine cursor is monotonic across the session; a generator
+            # subprocess may restart at 1, so its event_id is the dedupe key.
+            if source=="interview" and signal.cursor<=cursor:return False
+            if source=="interview" and signal.cursor!=cursor+1:
+                raise ValueError("interview progress cursor gap")
+            if self._db.execute("SELECT 1 FROM progress_seen WHERE task_id=? AND source=? AND event_id=?",
+                                (signal.task_id,source,signal.event_id)).fetchone():return False
+            message=signal.detail or signal.label
+            payload={**signal.model_dump(mode="json"),"source":source}
+            try:
+                self._db.execute("INSERT INTO progress_seen VALUES (?,?,?)",(signal.task_id,source,signal.event_id))
+                self._db.execute("INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (?,?,?,?,?,?)",
+                                 (signal.task_id,signal.phase_key,"progress",message,json.dumps(payload),time.time()))
+                self._db.execute("INSERT INTO progress_ingest(task_id,source,session_id,cursor) VALUES (?,?,?,?) "
+                                 "ON CONFLICT(task_id,source,session_id) DO UPDATE SET cursor=max(cursor,excluded.cursor)",
+                                 (signal.task_id,source,signal.session_id,signal.cursor))
+                self._db.execute("UPDATE phases SET detail=?,completed=COALESCE(?,completed),total=COALESCE(?,total) "
+                                 "WHERE task_id=? AND phase_key=? AND state='running'",
+                                 (message,signal.completed,signal.total,signal.task_id,signal.phase_key))
+                self._db.execute("UPDATE tasks SET updated_at=? WHERE task_id=?",(time.time(),signal.task_id))
+                self._commit()
+            except Exception:
+                self._db.rollback()
+                raise
+            return True
 
     def events(self, task_id: str, after: int = 0, limit: int = 500) -> list[dict]:
         # Snapshot reads need the newest durable facts. The old ascending LIMIT
@@ -623,7 +679,7 @@ class SQLiteStore:
             gate_phases = downstream
             if gate_phases:
                 gate_marks = ",".join("?" for _ in gate_phases)
-                self._db.execute(f"UPDATE gates SET is_open=0,state='idle',selected_option=NULL,edited_text=NULL,steer=NULL "
+                self._db.execute(f"UPDATE gates SET is_open=0,state='idle',selected_option=NULL,edited_text=NULL,steer=NULL,revision=revision+1 "
                                  f"WHERE task_id=? AND after_phase IN ({gate_marks})", (task_id, *gate_phases))
             self._db.execute("UPDATE tasks SET generation=generation+1,state='not_started',active_phase=NULL,updated_at=? WHERE task_id=?",
                             (time.time(), task_id))

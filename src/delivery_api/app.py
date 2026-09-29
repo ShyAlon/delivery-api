@@ -17,7 +17,7 @@ import zipfile
 import io
 from pathlib import Path
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
@@ -163,6 +163,31 @@ def _replayable_decisions(task_id:str)->dict[str,dict[str,str]]:
                 result[decision_id]={"answer":answer,"fingerprint":decision_fingerprint(prior[1])}
     return result
 
+
+async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=False)->None:
+    """Read all committed journal pages; independent of the engine control lock."""
+    from .progress_adapter import ingest_interview_page
+    while True:
+        cursor=store.progress_cursor(task_id,"interview",session_id)
+        try:page=await run_in_threadpool(engine_client.progress,session_id,cursor)
+        except EngineClientError as exc:
+            if allow_absent and exc.http_status==404:return
+            raise
+        ingest_interview_page(store,task_id,session_id,page)
+        if not page.events:return
+        if page.next_cursor<=cursor:raise RuntimeError("engine progress page made no cursor advance")
+
+async def _watch_engine_advance(task_id:str,session_id:str,stop:asyncio.Event)->None:
+    """Fetch progress during a blocking Start/Submit and drain after it returns."""
+    while not stop.is_set():
+        try:await _drain_engine_progress(task_id,session_id,allow_absent=True)
+        except (EngineClientError,EngineUnreachableError,ValueError,RuntimeError,AttributeError) as exc:
+            activity("progress.ingest.failed","Engine progress read failed without affecting control",task_id=task_id,session_id=session_id,error=str(exc)[:300])
+        try:await asyncio.wait_for(stop.wait(),1)
+        except asyncio.TimeoutError:pass
+    try:await _drain_engine_progress(task_id,session_id,allow_absent=True)
+    except (EngineClientError,EngineUnreachableError,ValueError,RuntimeError,AttributeError) as exc:
+        activity("progress.drain.failed","Final engine progress drain failed",task_id=task_id,session_id=session_id,error=str(exc)[:300])
 
 async def _resume_interrupted_interviews()->None:
     """Pre-HTTP interview sessions cannot be text-replayed safely."""
@@ -319,6 +344,15 @@ async def _recover_tasks()->None:
         elif plan.action=="resume" and session:
             await _resume_one_interview(task_id,session)
 
+async def _catch_up_interview_progress()->None:
+    """Resume journal ingestion for linked sessions after delivery restarts."""
+    for task in store.list_tasks():
+        session=store.engine_session(task["task_id"])
+        if not session:continue
+        try:await _drain_engine_progress(task["task_id"],session,allow_absent=True)
+        except (EngineClientError,EngineUnreachableError,ValueError,RuntimeError,AttributeError) as exc:
+            activity("progress.recovery.failed","Could not catch up interview progress",task_id=task["task_id"],session_id=session,error=str(exc)[:250])
+
 async def _resume_one_interview(task_id:str,session:str)->None:
     store.add_event(task_id,"incompatible","Pre-HTTP interview requires restart",phase_key="intent",payload={"process_status":int(ProcessStatus.INCOMPATIBLE),"next_step":60,"legacy_session":session})
 
@@ -330,7 +364,7 @@ async def lifespan(application:FastAPI):
     from .observability import LOG_PATH,stage_log_paths
     print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
-    await jobs.start();await _recover_tasks()
+    await jobs.start();await _recover_tasks();await _catch_up_interview_progress()
     if threading.current_thread() is threading.main_thread() and signal.getsignal(signal.SIGINT) is not _shutdown_signal:
         _previous_sigint=signal.getsignal(signal.SIGINT);signal.signal(signal.SIGINT,_shutdown_signal)
     try:yield
@@ -667,7 +701,9 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         raise HTTPException(exc.http_status,{"error":"Interview route rejected.","cause":exc.error.detail,"next":"Correct the named model settings and reload before starting."})
     except EngineUnreachableError as exc:raise _engine_unreachable(exc)
     except (KeyError,TypeError,ValueError) as exc:raise HTTPException(502,{"error":"Engine model preview was invalid.","cause":str(exc),"next":"Check the engine version and retry."})
-    try:started=await run_in_threadpool(engine_client.start,StartSessionRequest(task_id=task_id,idea=idea,model_route=selected_route,initial_model=initial_model))
+    proposed_session=str(uuid4());progress_stop=asyncio.Event()
+    progress_watch=asyncio.create_task(_watch_engine_advance(task_id,proposed_session,progress_stop))
+    try:started=await run_in_threadpool(engine_client.start,StartSessionRequest(task_id=task_id,session_id=UUID(proposed_session),idea=idea,model_route=selected_route,initial_model=initial_model))
     except EngineUnreachableError as exc:
         activity("engine.unreachable","Interview engine unreachable at task start",task_id=task_id,base_url=exc.base_url,cause=str(exc.cause))
         store.add_event(task_id,"error",f"Error: the interview engine is not reachable. Likely cause: nothing accepted the connection at {exc.base_url} - the engine service is not running. Next: restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Then retry.",phase_key="intent",payload=_engine_unreachable_payload(exc))
@@ -677,6 +713,10 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         activity("model.route.preflight.rejected","Interview route rejected by engine",task_id=task_id,**payload)
         store.add_event(task_id,"model_preflight",f"Interview route {selected_route} rejected: {exc.error.detail}",phase_key="intent",payload=payload)
         raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
+    finally:
+        progress_stop.set();await progress_watch
+    if started.snapshot.session_id!=proposed_session and isinstance(engine_client,HttpEngineClient):
+        raise HTTPException(502,"engine returned the wrong session ID")
     store.set_engine_session(task_id,started.snapshot.session_id);store.set_model_route(task_id,selected_route)
     effective_models=started.snapshot.model_map or effective_models
     pairs={tuple(pair) for pair in effective_models.values()}
@@ -770,6 +810,7 @@ async def switch_interview_model(task_id:str,body:TaskRouteSwitchRequest,a:auth.
 
 class InterviewAnswer(BaseModel):
     answer:str=Field(min_length=1,max_length=8000)
+    expected_sequence:int|None=Field(default=None,ge=0)
     decision_id:str|None=Field(default=None,max_length=160)
 @app.post("/api/tasks/{task_id}/answer")
 async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends(auth.require_actor)):
@@ -792,12 +833,19 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
             state=await run_in_threadpool(engine_client.snapshot,session_id);pending=state.open_input
             if pending is None:raise RuntimeError("task is not waiting for input")
             if body.decision_id and str(pending.input_id)!=body.decision_id:raise RuntimeError("submitted decision does not match live input")
+            if body.expected_sequence is not None and state.sequence!=body.expected_sequence:
+                raise RuntimeError("session sequence changed; refresh the open input")
             raw_value,separator,rationale=body.answer.partition(" - ")
             raw_value=raw_value.strip();rationale=rationale.strip() if separator else ""
             typed_value=next((option.value for option in pending.options if str(option.value)==raw_value),body.answer)
             if pending.rationale_required and not rationale:raise RuntimeError("typed input requires a rationale")
-            submitted=await run_in_threadpool(engine_client.submit,session_id,InputResponse(input_id=pending.input_id,value=typed_value,
-                rationale=rationale or None,actor_id=a.label))
+            progress_stop=asyncio.Event()
+            progress_watch=asyncio.create_task(_watch_engine_advance(task_id,session_id,progress_stop))
+            try:
+                submitted=await run_in_threadpool(engine_client.submit,session_id,InputResponse(input_id=pending.input_id,expected_sequence=body.expected_sequence,value=typed_value,
+                    rationale=rationale or None,actor_id=a.label))
+            finally:
+                progress_stop.set();await progress_watch
             store.add_event(task_id,"engine_protocol","Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
             source="http_interview"
     except EngineUnreachableError as e:
@@ -868,8 +916,8 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
         "intent_model.json":("vmodel_contracts.interview","IntentModel"),"conops.json":("vmodel_contracts.conops","ConOpsDocument"),
         "needs.json":("vmodel_contracts.needs","StakeholderNeedsSet"),"srs.json":("vmodel_contracts.srs","SRSDocument"),
         "architecture.json":("vmodel_contracts.architecture","ArchitectureOverview"),"items.json":("vmodel_contracts.spec","SpecBundle"),
-        "spec_items.json":("vmodel_contracts.spec","SpecBundle"),"tests.json":("vmodel_contracts.verification","VerificationReport"),
-        "test_specifications.json":("vmodel_contracts.verification","VerificationReport")}
+        "spec_items.json":("vmodel_contracts.spec","SpecBundle"),"tests.json":("vmodel_contracts.verification","AcceptanceTest[]"),
+        "test_specifications.json":("vmodel_contracts.verification","AcceptanceTest[]")}
     for phase in PHASE_DEFINITIONS:
         folder=root/("interview" if phase.key in ("intent","conops") else "spec")
         for filename in phase.artifacts:
@@ -878,7 +926,13 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
             valid=None;errors=[];validator=validators.get(filename)
             if validator:
                 try:
-                    model=getattr(__import__(validator[0],fromlist=[validator[1]]),validator[1]);model.model_validate_json(path.read_text());valid=True
+                    if validator[1]=="AcceptanceTest[]":
+                        from pydantic import TypeAdapter
+                        from vmodel_contracts.verification import AcceptanceTest
+                        TypeAdapter(list[AcceptanceTest]).validate_json(path.read_text())
+                    else:
+                        model=getattr(__import__(validator[0],fromlist=[validator[1]]),validator[1]);model.model_validate_json(path.read_text())
+                    valid=True
                 except Exception as exc:valid=False;errors=[f"{type(exc).__name__}: {str(exc)[:600]}"]
             records.append({"phase_key":phase.key,"name":filename,"title":_ARTIFACT_TITLES.get(filename,Path(filename).stem.replace("_"," ").title()),"ref":str(path),"mime_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","stale":False,"generation":task["generation"],"present":True,"valid":valid,"validator":validator[1] if validator else None,"validation_errors":errors,"validation_error":errors[0] if errors else None})
     return records or store.task_artifacts(task_id)
@@ -1062,6 +1116,7 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
     task = store.task(task_id)
     if not task: raise HTTPException(404, "task not found")
     session_id=store.engine_session(task_id)
+    snapshot=None
     if session_id:
         try:
             snapshot=engine_client.snapshot(session_id)
@@ -1080,7 +1135,12 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
     work=runner.work_state(task_id)
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
     artifacts=_task_artifact_snapshot(task_id);session=_recorded_engine_session(task_id)
-    return {**task, "events": store.events(task_id), "artifacts":artifacts,"artifact_projection":{"session":session,"root":str((__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"ui_state":_task_ui_state(task,input_state)}
+    from .phases import PHASE_DEFINITIONS
+    phase_config={phase.key:{"executor":phase.executor,"generator_stage":phase.generator_stage,
+                             "prerequisite":phase.prerequisite,"artifacts":list(phase.artifacts)} for phase in PHASE_DEFINITIONS}
+    from .control_snapshot import project as project_control
+    control=project_control(task,input_state,snapshot,work,artifacts)
+    return {**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": store.events(task_id), "artifacts":artifacts,"artifact_projection":{"session":session,"root":str((__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"ui_state":_task_ui_state(task,input_state)}
 
 @app.get("/api/tasks/{task_id}/execution")
 def task_execution(task_id:str,debug:bool=False,a:auth.Actor=Depends(auth.require_actor)):
@@ -1320,6 +1380,7 @@ class GateDecision(BaseModel):
     selected_option: str|None=None
     edited_text: str|None=None
     steer: str|None=None
+    expected_revision:int|None=Field(default=None,ge=0)
     model_route:Literal["ollama","deepseek"]|None=None
     model:str|None=None
 @app.post("/api/tasks/{task_id}/gates/{gate_key}/decide")
@@ -1331,14 +1392,14 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
         if not pending:raise KeyError(gate_key)
         if pending["state"]=="waiting" and req.action in ("approve","edit"):
             evidence=[a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==pending["after_phase"] and not a.get("stale") and a.get("present",True)]
-            if not evidence or not any(Path(a["ref"]).is_file() for a in evidence):
-                raise ValueError("No current artifact is available to review at this gate")
+            if not evidence or not any(Path(a["ref"]).is_file() and a.get("valid") is not False for a in evidence):
+                raise ValueError("No current valid artifact is available to review at this gate")
         from .phases import PHASE_BY_KEY, successor
         target=pending["after_phase"] if req.action=="redo" else (successor(pending["after_phase"]).key if successor(pending["after_phase"]) else pending["after_phase"])
         if req.model_route and PHASE_BY_KEY[target].executor!="generator":
             raise ValueError("This gate has no generator phase for a model override")
         selected=model_route_lib.route_value(req.model_route,req.model) if req.model_route else None
-        gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label)
+        gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label,expected_revision=req.expected_revision)
         phase=gate["after_phase"]
         if selected:
             store.add_event(task_id,"model_route",f"{target} override uses {selected}",phase_key=target,payload={"route":req.model_route,"resolved":selected,"scope":"phase_override","actor":a.label})

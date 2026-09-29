@@ -22,9 +22,14 @@ def test_sigint_closes_sse_and_terminates_engine_process(tmp_path):
     launcher.write_text(f'''import asyncio,sys,uvicorn
 from delivery_api.app import app,store,runner
 TASK=store.create_task("Shutdown test","live child",task_id="shutdown-live")["task_id"]
-@app.on_event("startup")
-async def engine():
-    asyncio.create_task(runner.run(TASK,[sys.executable,{str(engine)!r},{str(pidfile)!r}],cwd={str(tmp_path)!r}))
+from contextlib import asynccontextmanager
+from delivery_api.app import lifespan as original_lifespan
+@asynccontextmanager
+async def test_lifespan(application):
+    async with original_lifespan(application):
+        job=asyncio.create_task(runner.run(TASK,[sys.executable,{str(engine)!r},{str(pidfile)!r}],cwd={str(tmp_path)!r}))
+        yield
+app.router.lifespan_context=test_lifespan
 uvicorn.run(app,host="127.0.0.1",port={port},log_level="warning")
 ''')
     env={**os.environ,'PYTHONPATH':str(root/'src'),'DELIVERY_DB_PATH':str(tmp_path/'shutdown.db')}

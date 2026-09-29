@@ -115,7 +115,7 @@ class PhaseOrchestrator:
         route,sep,model=stored.partition(":")
         if route not in ("ollama","deepseek"):raise ValueError(f"unsupported model route {stored!r}")
         route_value=model_routes.route_value(route,model if sep else None)
-        env={"PYTHONUNBUFFERED":"1",f"SPEC_GENERATOR_MODEL_{definition.generator_stage.upper()}":route_value,**({} if built else {"PYTHONPATH":str(repo/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})}
+        env={"PYTHONUNBUFFERED":"1","VMODEL_PROGRESS_TASK_ID":task_id,"VMODEL_PROGRESS_SESSION_ID":sid,f"SPEC_GENERATOR_MODEL_{definition.generator_stage.upper()}":route_value,**({} if built else {"PYTHONPATH":str(repo/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})}
         self.store.add_event(task_id,"model_route",f"{phase} uses {route}",phase_key=phase,payload={"route":route,"resolved":route_value,"provider":route,"model":route_value.split(":",1)[1],"mode":mode.value})
         code=await self.runner.run(task_id,cmd,cwd=repo,phase=phase,env=env,infer_phase=False)
         activity("orchestrator.exit","Phase subprocess exited",task_id=task_id,phase=phase,exit_code=code)

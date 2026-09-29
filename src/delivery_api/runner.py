@@ -105,6 +105,7 @@ class ProcessRunner:
             try: stall_timeout=float(os.environ.get("REQUI_RE_RUN_STALL_TIMEOUT","") or 600)
             except ValueError: stall_timeout=600
         stalled=False
+        structured_progress_seen=False
 
         # The child pipeline owns progress and LLM heartbeats. Its lines name
         # the in-flight stage and elapsed time. A second generic heartbeat here
@@ -153,13 +154,21 @@ class ProcessRunner:
                             self.pricing_paths[task_id]=(usage_path,llm_path);self.pricing_usage_cursor[task_id]=usage_start;self.pricing_llm_cursor[task_id]=llm_start;self.pricing_wall_cursor[task_id]=time.perf_counter()
                     # Subprocesses are non-interactive executors. Interview control moved to
                     # the typed HTTP service; stdout/stderr are diagnostics only.
-                    activity("engine.output","Engine diagnostic output",task_id=task_id,phase=phase,stream="combined",line=line)
+                    from .progress_adapter import ingest_generator_line
+                    structured=ingest_generator_line(self.store,task_id,line,launched_phase,(env or {}).get("VMODEL_PROGRESS_SESSION_ID"))
+                    if not structured:
+                        activity("engine.output","Engine diagnostic output",task_id=task_id,phase=phase,stream="combined",line=line)
+                    if structured:
+                        structured_progress_seen=True
+                        continue
                     if line.startswith("Error:") and cli_error is None:cli_error=line
                     if line.startswith("Traceback (most recent call last):"):traceback_started=True
                     missing=_MISSING_MODULE.search(line)
                     if missing:missing_module=missing.group(1);traceback_started=True
                     if traceback_started: continue
                     if infer_phase: phase = self._phase(line, phase)
+                    # Legacy console parsing is a migration fallback only.
+                    if structured_progress_seen:continue
                     match = _PROGRESS.search(line)
                     completed = int(match.group(3)) if match and match.group(3) else 0
                     total = int(match.group(4)) if match and match.group(4) else None
@@ -194,7 +203,30 @@ class ProcessRunner:
                     self.store.update_phase(task_id, completed_phase, "approved", detail="Founder approved in the engine")
                 current=self.store.task(task_id)
                 phase_row=next(p for p in current["phases"] if p["phase_key"]==phase)
-                if phase_row["state"] != "approved":
+                from .phases import PHASE_BY_KEY
+                if phase_row["state"] != "approved" and PHASE_BY_KEY[launched_phase].executor=="generator":
+                    # Exit 0 is not a generated artifact. Never park the user
+                    # at a gate with nothing to review.
+                    from vmodel_contracts.runtime import artifacts_root
+                    source=artifact_dir or (artifacts_root((env or {}).get("VMODEL_ARTIFACTS_DIR") or os.environ.get("VMODEL_ARTIFACTS_DIR")) / (env or {}).get("VMODEL_PROGRESS_SESSION_ID", "") / "spec")
+                    expected=PHASE_BY_KEY[phase].artifacts
+                    available=[source/name for name in expected if (source/name).is_file()]
+                    if available:
+                        from pydantic import TypeAdapter
+                        from vmodel_contracts.verification import AcceptanceTest
+                        try:
+                            if phase=="tests":TypeAdapter(list[AcceptanceTest]).validate_json(available[0].read_text())
+                            elif available[0].suffix==".json":json.loads(available[0].read_text())
+                        except (ValueError,OSError) as exc:
+                            error=f"Error: {phase} exited successfully but its artifact is unreadable or invalid ({type(exc).__name__}: {str(exc)[:240]}). No approval gate was opened."
+                            self.store.update_phase(task_id,phase,"failed",detail=error)
+                            self.store.add_event(task_id,"error",error,phase_key=phase,payload={"artifact":str(available[0]),"exit_code":0})
+                            return 1
+                    if not available:
+                        error=f"Error: {phase} exited successfully but no configured artifact was written ({', '.join(expected)}). Check the generator checkpoint and run.log; no approval gate was opened."
+                        self.store.update_phase(task_id,phase,"failed",detail=error)
+                        self.store.add_event(task_id,"error",error,phase_key=phase,payload={"missing_artifacts":list(expected),"source_dir":str(source),"exit_code":0})
+                        return 1
                     self.store.update_phase(task_id, phase, "awaiting_approval", detail="Generated; waiting for founder approval")
                     gate=self.store.wait_at_gate(task_id,phase)
                     self.store.add_event(task_id,"gate","Generated artifact is waiting for founder approval",phase_key=phase,payload={"gate_key":gate["gate_key"] if gate else None})
