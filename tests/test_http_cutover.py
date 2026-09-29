@@ -121,10 +121,10 @@ def test_text_question_yields_answer_composer_mode_not_an_empty_decision(tmp_pat
  store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
- assert body['ui_state']['mode']=='engine_question'
- assert body['ui_state']['decision'] is None
- assert body['ui_state']['question']=='What is the goal and core value?'
- assert body['ui_state']['input_id']==str(engine.pending.input_id)
+ assert body['control_snapshot']['mode']=='waiting_input' and body['control_snapshot']['kind']=='text'
+ assert body['control_snapshot']['decision'] is None
+ assert body['control_snapshot']['prompt']=='What is the goal and core value?'
+ assert body['control_snapshot']['input_id']==str(engine.pending.input_id)
 
 def test_choice_input_still_projects_a_structured_decision(tmp_path,monkeypatch):
  store=SQLiteStore(str(tmp_path/'choice.db'));task=store.create_task('Choice question','brief');engine=FakeEngine()
@@ -132,9 +132,9 @@ def test_choice_input_still_projects_a_structured_decision(tmp_path,monkeypatch)
  store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
- assert body['ui_state']['mode']=='engine_decision'
- assert body['ui_state']['decision']['input_id']==str(engine.pending.input_id)
- assert len(body['ui_state']['decision']['options'])==2
+ assert body['control_snapshot']['mode']=='waiting_input' and body['control_snapshot']['kind']=='choice'
+ assert body['control_snapshot']['decision']['input_id']==str(engine.pending.input_id)
+ assert len(body['control_snapshot']['decision']['options'])==2
 
 def test_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch):
  store=SQLiteStore(str(tmp_path/'sync.db'));task=store.create_task('Sync','brief');engine=TextEngine()
@@ -151,8 +151,8 @@ def test_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch):
  third=client.get(f"/api/tasks/{task['task_id']}").json()
  synced=[e for e in third['events'] if e['kind']=='waiting_input']
  assert len(synced)==2 and synced[-1]['payload']['question']=='Second question'
- assert third['ui_state']['question']=='Second question'
- assert third['ui_state']['input_id']!=first['ui_state']['input_id']
+ assert third['control_snapshot']['prompt']=='Second question'
+ assert third['control_snapshot']['input_id']!=first['control_snapshot']['input_id']
 
 def test_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch):
  store=SQLiteStore(str(tmp_path/'noinput.db'));task=store.create_task('No input','brief');engine=TextEngine()
@@ -160,7 +160,7 @@ def test_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch)
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  engine.snapshot=lambda sid:EngineSnapshot(session_id='s',task_id='t',sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=None)
  body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
- assert body['ui_state']['mode']=='executing'
+ assert body['control_snapshot']['mode']=='working'
  assert body['input_state']['waiting'] is False
 
 
@@ -287,15 +287,15 @@ def test_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path
  monkeypatch.setattr(module,'store',store)
  monkeypatch.setattr(module,'engine_client',Rejected())
  body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
- assert body['ui_state']['diagnostic']['http_status']==422
- assert body['ui_state']['diagnostic']['detail']=='stage model contract failed'
- assert body['ui_state']['diagnostic']['reason']=='engine protocol rejected the snapshot'
+ assert body['control_snapshot']['diagnostic']['http_status']==422
+ assert body['control_snapshot']['diagnostic']['detail']=='stage model contract failed'
+ assert body['control_snapshot']['diagnostic']['reason']=='engine protocol rejected the snapshot'
  class Down(Rejected):
   def snapshot(self,sid):raise EngineUnreachableError('http://engine',httpx.ConnectError('refused'))
  monkeypatch.setattr(module,'engine_client',Down())
  body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
- assert body['ui_state']['diagnostic']['reason']=='engine transport unavailable'
- assert 'http_status' not in body['ui_state']['diagnostic']
+ assert body['control_snapshot']['diagnostic']['reason']=='engine transport unavailable'
+ assert 'http_status' not in body['control_snapshot']['diagnostic']
 
 class SwitchEngine(FakeEngine):
  def __init__(self):super().__init__();self.switches=[]
@@ -761,7 +761,7 @@ def test_completed_http_recovery_restores_orphaned_architecture_choice(tmp_path,
  async def recover():
   await module._recover_tasks();await asyncio.sleep(.01)
   assert runner.input_state(tid)['waiting'] and runner.work_state(tid).owner=='decision'
-  assert module._task_ui_state(store.task(tid),runner.input_state(tid))['mode']=='engine_decision'
+  assert __import__('delivery_api.control_snapshot',fromlist=['project']).project(store.task(tid),runner.input_state(tid),work=runner.work_state(tid)).mode=='waiting_input'
   await module._recover_tasks();await asyncio.sleep(.01)
   assert len([e for e in store.events(tid) if e['kind']=='founder_decision' and e['phase_key']=='architecture'])==2
   pending=asyncio.current_task()

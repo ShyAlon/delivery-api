@@ -169,3 +169,12 @@ button.danger{color:#a33}
 
 .gate-page-actions button:disabled{opacity:.45;box-shadow:none;transform:none;cursor:not-allowed;filter:grayscale(.5)}
 .gate-evidence-error{white-space:pre-wrap;overflow-wrap:anywhere}
+/* Current-phase output, with prior-phase evidence named rather than implied. */
+.phase-output{margin:1rem 0;padding:1rem;border:1px solid var(--line, #d3d9df);border-radius:10px}
+.phase-output h3{margin:0 0 .4rem}.phase-output-note{font-size:.9rem;opacity:.8}
+.phase-output-item{border-top:1px solid var(--line, #d3d9df);padding:.7rem 0;overflow-wrap:anywhere}
+.phase-output-item p{white-space:pre-wrap;margin:.25rem 0 0}
+.qa-history summary{cursor:pointer;padding:.5rem 0}
+.decision-provenance{padding:.9rem;margin:.7rem 0;border:1px solid var(--line,#d3d9df);border-radius:8px}
+.decision-provenance h4{margin:0 0 .5rem}.decision-source{border-top:1px solid var(--line,#d3d9df);padding:.6rem 0;display:grid;gap:.2rem}
+.decision-source span{font-weight:700}.decision-source small{opacity:.82}

@@ -924,35 +924,6 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
         asyncio.create_task(_continue_reconciled_interview(task_id))
     return {"status":"accepted"}
 
-def _task_ui_state(task:dict,input_state:dict)->dict:
-    """Single state doctrine for task-detail visibility and actionable input."""
-    waiting_gate=next((gate for gate in task.get("gates",[]) if gate.get("state")=="waiting" and gate.get("after_phase")==task.get("active_phase")),None)
-    live_decision=input_state.get("decision") if input_state.get("waiting") else None
-    process_live=bool(input_state.get("process_live"))
-    if task.get("state")=="not_started":mode="not_started"
-    elif task.get("state")=="done":mode="complete"
-    elif task.get("state")=="failed":mode="error"
-    # A live subprocess blocked on stdin owns the next action. A durable
-    # delivery gate may already be waiting for the same phase, but exposing it
-    # here would send the founder's answer to the store instead of stdin.
-    elif process_live and live_decision:mode="engine_decision"
-    elif process_live and input_state.get("waiting"):mode="engine_question"
-    elif waiting_gate:mode="phase_gate"
-    elif process_live:mode="executing"
-    else:mode="error"
-    if mode not in UI_MODES:raise RuntimeError(f"unsupported UI mode: {mode}")
-    diagnostic=None
-    if mode=="error":
-        cause=input_state.get("engine_error")
-        diagnostic=({"reason":"engine protocol rejected the snapshot","http_status":cause["http_status"],"code":cause["code"],"detail":cause["detail"],"task_state":task.get("state"),"active_phase":task.get("active_phase")}
-                    if cause else {"reason":"engine session completed" if input_state.get("engine_process_status")==int(ProcessStatus.COMPLETED) else "engine transport unavailable" if input_state.get("engine_unreachable") else "task has no live ActiveWork owner","task_state":task.get("state"),"active_phase":task.get("active_phase")})
-    return {"mode":mode,"active_phase":task.get("active_phase"),"process_live":process_live,
-            "decision":live_decision if mode=="engine_decision" else None,
-            "question":input_state.get("question") if mode=="engine_question" else None,
-            "input_id":input_state.get("input_id") if mode in ("engine_question","engine_decision") else None,
-            "gate":waiting_gate if mode=="phase_gate" else None,"diagnostic":diagnostic}
-
-
 def _task_artifact_snapshot(task_id:str)->list[dict]:
     """Project real session files into task artifacts; filesystem is source evidence."""
     task=store.task(task_id)
@@ -999,6 +970,133 @@ def _task_artifact(task_id:str,phase:str,name:str)->Path:
     path=Path(artifact["ref"]).resolve()
     if not path.is_file():raise HTTPException(404,"artifact file not found")
     return path
+
+_OUTPUT_PARTIALS={"srs":"srs_fills.partial.json","architecture":"architecture.partial.json",
+                  "specs":"items.partial.json","tests":"tests_fills.partial.json"}
+
+@app.get("/api/tasks/{task_id}/phase-output")
+def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    """Current phase output only. Partial checkpoints are atomic producer writes, not control."""
+    task=store.task(task_id)
+    if not task:raise HTTPException(404,"task not found")
+    phase=task.get("active_phase");generation=task.get("generation");session=_recorded_engine_session(task_id)
+    if not session or not phase:return {"phase_key":phase,"generation":generation,"status":"waiting","items":[]}
+    from vmodel_contracts.runtime import artifacts_root
+    root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session
+    folder=root/("interview" if phase in ("intent","conops") else "spec")
+    # Reads are constrained to the recorded session and exact known filenames.
+    from .phases import PHASE_BY_KEY
+    names=PHASE_BY_KEY[phase].artifacts
+    # The task read projects filesystem records with the task's *current* generation.
+    # A file left on disk after a rerun must not thereby acquire that generation.
+    def fresh(record, key):
+        row=next((p for p in task.get("phases",[]) if p.get("phase_key")==key),{})
+        if row.get("state") not in ("running","awaiting_approval","approved","done"):
+            return False
+        try:
+            path=Path(record["ref"])
+            started=float(row.get("started_at") or 0)
+            return path.is_file() and (not started or path.stat().st_mtime >= started)
+        except (OSError,TypeError,ValueError):
+            return False
+    records=_task_artifact_snapshot(task_id)
+    current=[x for x in records if x["phase_key"]==phase and not x.get("stale")
+             and x.get("generation")==generation and x.get("present") and x.get("valid") is True
+             and x["name"] in names and fresh(x,phase)]
+    final=next(iter(current),None)
+    invalid_current=any(x["phase_key"]==phase and x["name"] in names and x.get("valid") is False
+                        and x.get("generation")==generation and fresh(x,phase) for x in records)
+    source=Path(final["ref"]) if final else folder/_OUTPUT_PARTIALS.get(phase,"__no_partial__")
+    display_phase=phase
+    active_row=next((x for x in task.get("phases",[]) if x.get("phase_key")==phase),{})
+    # Partial files do not carry a generation field; reject an older file after rerun.
+    if not final and source.is_file() and source.stat().st_mtime < float(active_row.get("started_at") or 0):
+        source=folder/"__stale_partial__"
+    if not final and source.is_file():
+        try:
+            partial=json.loads(source.read_text())
+            if ((phase=="architecture" and isinstance(partial,dict)
+                 and not any(partial.get(k) for k in ("stack_entries","component_bodies","adr_bodies")))
+                or (phase in ("srs","tests") and isinstance(partial,dict) and not partial)
+                or (phase=="specs" and isinstance(partial,list) and not partial)):
+                source=folder/"__empty_partial__"
+        except (OSError,ValueError):
+            pass  # A malformed checkpoint is shown as unavailable, not silently replaced.
+    if not source.is_file():
+        if invalid_current:
+            return {"phase_key":phase,"generation":generation,"status":"unavailable","items":[]}
+        from .phases import PHASE_DEFINITIONS, PHASE_POSITIONS
+        position=PHASE_POSITIONS[phase]
+        if position:
+            previous=PHASE_DEFINITIONS[position-1]
+            prior=[x for x in records if x["phase_key"]==previous.key
+                   and x.get("generation")==generation and not x.get("stale") and x.get("present")
+                   and x.get("valid") is True and x["name"] in previous.artifacts and fresh(x,previous.key)]
+            if not prior:
+                # The producer may have written the canonical file without a legacy
+                # task_artifacts row. Use the same contract validator as the task read.
+                from .phases import PHASE_BY_KEY
+                from pydantic import TypeAdapter
+                validators={"intent_model.json":("vmodel_contracts.interview","IntentModel"),
+                            "conops.json":("vmodel_contracts.conops","ConOpsDocument"),
+                            "needs.json":("vmodel_contracts.needs","StakeholderNeedsSet"),
+                            "srs.json":("vmodel_contracts.srs","SRSDocument"),
+                            "architecture.json":("vmodel_contracts.architecture","ArchitectureOverview")}
+                for name in PHASE_BY_KEY[previous.key].artifacts:
+                    candidate=root/("interview" if previous.key in ("intent","conops") else "spec")/name
+                    if not candidate.is_file() or not fresh({"ref":str(candidate)},previous.key):continue
+                    try:
+                        if name in validators:
+                            namespace,model=validators[name]
+                            getattr(__import__(namespace,fromlist=[model]),model).model_validate_json(candidate.read_text())
+                        elif name in ("items.json","tests.json","test_specifications.json"):
+                            namespace,model=("vmodel_contracts.spec","ItemSpec") if name=="items.json" else ("vmodel_contracts.verification","AcceptanceTest")
+                            TypeAdapter(list[getattr(__import__(namespace,fromlist=[model]),model)]).validate_json(candidate.read_text())
+                        elif name=="spec_items.json":
+                            from vmodel_contracts.spec import SpecBundle
+                            SpecBundle.model_validate_json(candidate.read_text())
+                        else:continue
+                        prior=[{"ref":str(candidate),"name":name,"valid":True}]
+                        break
+                    except (OSError,ValueError):continue
+            if prior and not prior[0].get("valid"):
+                prior=[]
+            if prior:
+                source=Path(prior[0]["ref"])
+                display_phase=previous.key
+                final=prior[0]
+                folder=root/("interview" if display_phase in ("intent","conops") else "spec")
+        if not source.is_file():return {"phase_key":phase,"generation":generation,"status":"waiting","items":[]}
+    # No traversal and no outside-session file can be used as a phase output.
+    if source.resolve().parent!=folder.resolve():raise HTTPException(409,"phase output source outside session")
+    try:data=json.loads(source.read_text())
+    except (OSError,ValueError):return {"phase_key":phase,"generation":generation,"status":"unavailable","items":[]}
+    if final:
+        if display_phase=="srs":rows=[*data.get("functional",[]),*data.get("non_functional",[])] if isinstance(data,dict) else []
+        elif display_phase=="needs":rows=data.get("needs",[]) if isinstance(data,dict) else []
+        elif display_phase=="architecture":rows=[*data.get("decisions",[]),*data.get("components",[])] if isinstance(data,dict) else []
+        elif display_phase in ("specs","tests"):rows=data if isinstance(data,list) else data.get("items",[]) if isinstance(data,dict) else []
+        elif display_phase=="conops":rows=[*data.get("operational_scenarios",[]),*data.get("concept_options",[])] if isinstance(data,dict) else []
+        else:rows=[data] if isinstance(data,dict) else []
+    elif phase=="architecture" and isinstance(data,dict):
+        rows=[]
+        for key in ("stack_entries","component_bodies","adr_bodies"):
+            values=data.get(key) or {}
+            if isinstance(values,dict):
+                rows.extend({"id":str(identity),**value} for identity,value in values.items() if isinstance(value,dict))
+    elif phase=="specs" and isinstance(data,list):rows=data
+    elif phase in ("srs","tests") and isinstance(data,dict):
+        rows=[{"id":key,**value} for key,value in data.items() if isinstance(value,dict)]
+    else:rows=[]
+    if not isinstance(rows,list):rows=[]
+    if not final and not rows and display_phase==phase:
+        return {"phase_key":phase,"generation":generation,"status":"waiting","items":[]}
+    # Persisted generator output is data, not trusted markup. Bound its size and
+    # shape before the browser interpolates it into the phase panel.
+    rows=[x for x in rows if isinstance(x,dict)][:500]
+    return {"phase_key":phase,"display_phase":display_phase,"generation":generation,
+            "status":"previous_phase" if display_phase!=phase else "complete" if final else "in_progress",
+            "source":source.name,"items":rows[:500]}
 
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}")
 def task_artifact_download(task_id:str,phase:str,name:str):
@@ -1107,6 +1205,40 @@ def _interview_transcript_markdown(task_id:str)->str:
     return "\n".join(lines)
 
 
+def _decision_provenance(task_id:str,architecture:dict)->list[dict]:
+    """Derived, conservative provenance. Empty baseline refs do not prove founder intent."""
+    session=_recorded_engine_session(task_id)
+    from vmodel_contracts.runtime import artifacts_root
+    root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview" if session else None
+    preferences=[]
+    if root:
+        path=root/"intent_model.json"
+        if path.is_file():
+            try:
+                from vmodel_contracts.interview import IntentModel
+                intent=IntentModel.model_validate_json(path.read_text())
+                preferences=[{"area":p.area.value,"preference":p.preference,"strength":p.strength.value,
+                              "source_turns":p.source_turns} for p in intent.tech_preferences]
+            except (OSError,ValueError):pass
+    result=[]
+    for decision in architecture.get("decisions",[]):
+        if not isinstance(decision,dict):continue
+        refs=[str(x) for x in decision.get("baseline_refs") or []]
+        # Canonical baseline references identify inherited system facts, not founder speech.
+        supported=[]
+        for selection in decision.get("technology_selections") or []:
+            if not isinstance(selection,dict):continue
+            name=str(selection.get("display_name") or "").strip().casefold()
+            slot=str(selection.get("slot_id") or "").removeprefix("slot:")
+            for pref in preferences:
+                if pref["source_turns"] and pref["area"]==slot and pref["preference"].strip().casefold()==name:
+                    supported.append({"preference":pref["preference"],"area":pref["area"],
+                                      "source_turns":pref["source_turns"],"strength":pref["strength"]})
+        label="Founder-sourced preference" if supported else "Model-proposed decision"
+        result.append({"decision_id":decision.get("decision_id"),"title":decision.get("title"),
+                       "label":label,"founder_evidence":supported,"baseline_refs":refs})
+    return result
+
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}/view")
 def task_artifact_view(task_id:str,phase:str,name:str):
     path=_task_artifact(task_id,phase,name)
@@ -1122,7 +1254,8 @@ def task_artifact_view(task_id:str,phase:str,name:str):
     if transcript:
         if display_format!="markdown":text=f"# {_ARTIFACT_TITLES[name]}\n\n"+text;display_format="markdown"
         text=text.rstrip()+"\n\n"+transcript+"\n"
-    return {"name":name,"title":_ARTIFACT_TITLES.get(name,Path(name).stem.replace("_"," ").title()),"phase":phase,"format":display_format,"content":text,"raw_format":"json" if path.suffix==".json" else "text","raw_content":raw,"display_name":display_path.name}
+    provenance=_decision_provenance(task_id,json.loads(raw)) if name=="architecture.json" else None
+    return {"name":name,"title":_ARTIFACT_TITLES.get(name,Path(name).stem.replace("_"," ").title()),"phase":phase,"format":display_format,"content":text,"raw_format":"json" if path.suffix==".json" else "text","raw_content":raw,"display_name":display_path.name,"decision_provenance":provenance}
 
 @app.get("/api/tasks/{task_id}/artifacts.zip")
 def task_artifacts_zip(task_id:str):
@@ -1204,7 +1337,7 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
                              "prerequisite":phase.prerequisite,"artifacts":list(phase.artifacts)} for phase in PHASE_DEFINITIONS}
     from .control_snapshot import project as project_control
     control=project_control(task,input_state,snapshot,work,artifacts)
-    return {**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": store.events(task_id), "artifacts":artifacts,"artifact_projection":{"session":session,"root":str((__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"ui_state":_task_ui_state(task,input_state)}
+    return {**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": store.events(task_id), "artifacts":artifacts,"artifact_projection":{"session":session,"root":str((__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state}
 
 @app.get("/api/tasks/{task_id}/execution")
 def task_execution(task_id:str,debug:bool=False,a:auth.Actor=Depends(auth.require_actor)):
