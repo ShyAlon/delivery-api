@@ -1273,10 +1273,10 @@ def test_orchestrator_phase_override_reaches_engine_and_is_durable(monkeypatch,t
     class Runner:
         calls=[]
         async def run(self,*a,**kw):self.calls.append(kw);return 0
-    r=Runner();asyncio.run(PhaseOrchestrator(store,r).execute_phase(tid,'needs',mode=ExecutionMode.REDO,model_route='deepseek'))
-    assert r.calls[0]['env']['SPEC_GENERATOR_MODEL_NEEDS']=='deepseek:deepseek-chat'
+    r=Runner();asyncio.run(PhaseOrchestrator(store,r).execute_phase(tid,'needs',mode=ExecutionMode.REDO,model_route='deepseek:deepseek-flash'))
+    assert r.calls[0]['env']['SPEC_GENERATOR_MODEL_NEEDS']=='deepseek:deepseek-flash'
     event=[e for e in store.events(tid) if e['kind']=='model_route'][-1]
-    assert event['payload']=={'route':'deepseek','resolved':'deepseek:deepseek-chat','provider':'deepseek','model':'deepseek-chat','mode':'redo'}
+    assert event['payload']=={'route':'deepseek','resolved':'deepseek:deepseek-flash','provider':'deepseek','model':'deepseek-flash','mode':'redo','source':'phase selection'}
 
 def test_intent_artifact_view_has_content_title_and_interview_transcript(monkeypatch,tmp_path):
     import json
@@ -1540,3 +1540,32 @@ def test_item_stage_list_artifact_validates_for_parked_gate(monkeypatch,tmp_path
     artifact.write_text(json.dumps([{'spec_id':'BROKEN','kind':'ui_flow','title':'Status screen'}]))
     invalid=next(a for a in app_module._task_artifact_snapshot(task_id) if a['name']=='items.json')
     assert invalid['valid'] is False and invalid['validation_errors']
+
+
+def test_orchestrator_sticky_exact_model_across_phases_and_switch(monkeypatch,tmp_path):
+    import asyncio,json
+    from delivery_api.orchestrator import PhaseOrchestrator
+    from delivery_api.store import SQLiteStore
+    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
+    monkeypatch.setenv('REQUI_RE_DIST','1')
+    monkeypatch.setenv('SPEC_GENERATOR_MODEL_NEEDS','ollama:phi4')
+    monkeypatch.setenv('SPEC_GENERATOR_MODEL_SRS','ollama:qwen')
+    store=SQLiteStore(str(tmp_path/'route.db'));tid=store.create_task('Sticky')['task_id']
+    store.set_engine_session(tid,'session-sticky')
+    interview=tmp_path/'artifacts'/'session-sticky'/'interview';interview.mkdir(parents=True)
+    (interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}))
+    store.set_model_default(tid,'deepseek:deepseek-flash')
+    class Runner:
+        def __init__(self):self.calls=[]
+        async def run(self,*a,**kw):self.calls.append(kw);return 0
+    r=Runner();o=PhaseOrchestrator(store,r)
+    asyncio.run(o.execute_phase(tid,'needs'))
+    asyncio.run(o.execute_phase(tid,'srs'))
+    assert r.calls[0]['env']['SPEC_GENERATOR_MODEL_NEEDS']=='deepseek:deepseek-flash'
+    assert r.calls[1]['env']['SPEC_GENERATOR_MODEL_SRS']=='deepseek:deepseek-flash'
+    assert 'deepseek:deepseek-flash' in [e for e in store.events(tid) if e['kind']=='model_route'][-1]['message']
+    store.set_model_default(tid,'ollama:phi4')  # a confirmed phase-start selection
+    asyncio.run(o.execute_phase(tid,'architecture',model_route='ollama:phi4'))
+    asyncio.run(o.execute_phase(tid,'specs'))
+    assert r.calls[2]['env']['SPEC_GENERATOR_MODEL_ARCHITECTURE']=='ollama:phi4'
+    assert r.calls[3]['env']['SPEC_GENERATOR_MODEL_ITEMS']=='ollama:phi4'

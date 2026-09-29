@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 CREATE TABLE IF NOT EXISTS tasks (
   task_id TEXT PRIMARY KEY, title TEXT NOT NULL, brief TEXT NOT NULL DEFAULT '',
-  state TEXT NOT NULL, active_phase TEXT, model_route TEXT, generation INTEGER NOT NULL DEFAULT 1,
+  state TEXT NOT NULL, active_phase TEXT, model_route TEXT, model_default TEXT, generation INTEGER NOT NULL DEFAULT 1,
   created_at REAL NOT NULL, updated_at REAL NOT NULL, simulated INTEGER NOT NULL DEFAULT 0, source_dir TEXT, owner_id TEXT,
   engine_session_id TEXT,
   interview_schema_id TEXT, interview_schema_version TEXT
@@ -124,6 +124,7 @@ class Storage(Protocol):
     def delete_task(self, task_id: str, actor: str = "local user") -> None: ...
     def update_phase(self, task_id: str, phase_key: str, state: str, **progress) -> None: ...
     def set_model_route(self, task_id: str, model_route: str) -> None: ...
+    def set_model_default(self, task_id: str, model: str) -> None: ...
     def set_engine_session(self, task_id: str, session_id: str) -> None: ...
     def engine_session(self, task_id: str) -> str | None: ...
     def bind_interview_schema(self, task_id: str, schema_id: str, schema_version: str) -> dict: ...
@@ -187,6 +188,8 @@ class SQLiteStore:
             self._db.execute("ALTER TABLE tasks ADD COLUMN interview_schema_id TEXT")
         if "interview_schema_version" not in task_cols:
             self._db.execute("ALTER TABLE tasks ADD COLUMN interview_schema_version TEXT")
+        if "model_default" not in task_cols:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN model_default TEXT")
         if "owner_id" not in run_cols:
             self._db.execute("ALTER TABLE runs ADD COLUMN owner_id TEXT")
         # Every generated phase, including final verification, has a founder
@@ -473,6 +476,12 @@ class SQLiteStore:
         with self._lock:
             self._db.execute("UPDATE tasks SET model_route=?,updated_at=? WHERE task_id=?",
                             (model_route, time.time(), task_id)); self._commit()
+
+    def set_model_default(self, task_id: str, model: str) -> None:
+        """Persist the exact model selected by the founder for subsequent phases."""
+        with self._lock:
+            self._db.execute("UPDATE tasks SET model_default=?,updated_at=? WHERE task_id=?",
+                             (model,time.time(),task_id)); self._commit()
 
     def set_engine_session(self, task_id: str, session_id: str) -> None:
         with self._lock:

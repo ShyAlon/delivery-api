@@ -42,3 +42,30 @@ def phase_initial_model(stage:str)->str:
 
 def needs_initial_model()->str:
     return phase_initial_model("needs")
+
+
+def task_default_model(store, task_id: str, stage: str) -> tuple[str, str]:
+    """The exact sticky selection, with an explicit legacy fallback source.
+
+    Old task databases may predate model_default. Use only founder selections,
+    never a later generator execution event which could have used an old per-stage
+    environment default. No valid selection means a labeled configured fallback.
+    """
+    task = store.task(task_id)
+    if not task: raise ValueError("task not found")
+    if task.get("model_default"):
+        return task["model_default"], "selected"
+    # New Starts persist an exact value. This bounded scan is migration-only
+    # for older tasks; if their selection has fallen out of the snapshot,
+    # require an explicit choice instead of silently using an env default.
+    events=store.events(task_id)
+    for event in reversed(events):
+        if event.get("kind") != "model_route": continue
+        payload = event.get("payload") or {}
+        if payload.get("scope") in ("start", "switch", "phase_override") or payload.get("source") == "explicit_retry_choice":
+            resolved = payload.get("resolved")
+            if resolved and ":" in resolved:
+                return resolved, "previous selection"
+    if task.get("engine_session_id"):
+        raise ValueError("exact model selection is not recorded for this session; choose a model before continuing")
+    return phase_initial_model(stage), "legacy generator configuration (no recorded exact selection)"

@@ -1061,7 +1061,7 @@ def test_model_route_default_and_phase_override_controls(page,ui):
     assert 'DeepSeek' in deepseek.inner_text()
     page.goto(ui+'/tasks/sim/gates/gate-conops')
     override=page.locator('select[name="next_model"]');override.wait_for()
-    assert override.locator('option').first.inner_text()=='Use current generator default'
+    assert override.locator('option').first.inner_text()=='Use current task default'
     assert 'ollama:qwen2.5-coder:14b' in page.locator('[data-model-for=next_model]').inner_text()
 
 def test_artifact_viewer_renders_content_title_bold_and_transcript(page,ui):
@@ -1531,6 +1531,7 @@ def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(page,ui):
     assert not choose.is_enabled()
     assert float(choose.evaluate('(b)=>getComputedStyle(b).opacity')) < 1
 
+
 def test_accepted_answer_disarms_old_question_until_new_control_arrives(page,ui):
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
@@ -1549,3 +1550,12 @@ def test_accepted_answer_disarms_old_question_until_new_control_arrives(page,ui)
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'new-input','precondition':{'session_sequence':9},'prompt':'New question?'}
     page.reload();page.locator('#currentquestion').get_by_text('New question?').wait_for()
     assert page.locator('#answerform textarea').is_enabled() and page.locator('#answerform button[type=submit]').is_enabled()
+
+
+def test_gate_model_picker_shows_exact_sticky_default(page,ui):
+    page.route('**/api/tasks/sim/generator-default/needs',lambda route:route.fulfill(json={'phase':'needs','model':'deepseek:deepseek-flash','source':'selected'}))
+    page.goto(ui+'/tasks/sim/gates/gate-conops')
+    picker=page.locator('select[name="next_model"]');picker.wait_for()
+    expect(page.locator('[data-model-for="next_model"]')).to_contain_text('Current task default: deepseek:deepseek-flash')
+    assert picker.locator('option').first.inner_text()=='Use current task default'
+    page.screenshot(path='/downloads/sticky-model-gate.png',full_page=True)

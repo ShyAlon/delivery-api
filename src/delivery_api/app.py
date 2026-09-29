@@ -774,6 +774,10 @@ async def _complete_interview_start(task_id:str,proposed_session:str,selected_ro
         return
     provider,model=next(iter(pairs))
     resolved=f"{provider}:{model}"
+    # A route switch can arrive while Start is completing; do not roll the
+    # founder's newer choice back to the initial engine preview.
+    if not (store.task(task_id) or {}).get("model_default"):
+        store.set_model_default(task_id,resolved)
     store.add_event(task_id,"model_route",f"interview uses {resolved}",phase_key="intent",payload={"route":selected_route,"resolved":resolved,"provider":provider,"model":model,"effective_stages":list(effective_models),"scope":"start","actor":actor_label})
     activity("model.route.resolved","Interview route accepted",task_id=task_id,session_id=started.snapshot.session_id,selected=selected_route,effective=resolved)
     detail="Waiting for founder input" if started.snapshot.process_status==ProcessStatus.WAITING_INPUT else "Interview engine running"
@@ -857,6 +861,8 @@ async def switch_interview_model(task_id:str,body:TaskRouteSwitchRequest,a:auth.
                 "timestamp":event.timestamp.isoformat(),"from_model_map":event.from_model_map,"to_model_map":event.to_model_map,
                 "sequence":event.session_sequence,"transcript":True})
     store.set_model_route(task_id,changed.snapshot.model_route or event.to_route)
+    if not existing:
+        store.set_model_default(task_id,new)
     return changed.model_dump(mode="json")
 
 class InterviewAnswer(BaseModel):
@@ -1441,14 +1447,19 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
     except (OSError,ValueError) as exc:
         reject(f"The linked interview artifacts are missing or invalid: {exc}","Restore the named session artifacts before retrying Needs.")
     from . import model_routes as downstream_routes
-    default=downstream_routes.needs_initial_model()
-    default_route,_,default_model=default.partition(":")
+    try: default,default_source=downstream_routes.task_default_model(store,task_id,"needs")
+    except ValueError: default,default_source=None,"selection required"
+    default_route,_,default_model=(default or "").partition(":")
     route=body.model_route or default_route
     model=body.model or (default_model if route==default_route else None)
+    if not route or not model:
+        if body.confirm:reject("An exact model selection is required for this session.","Choose a provider and model in the retry dialog.")
+        effective=None
+    else:
+        try:effective=downstream_routes.route_value(route,model)
+        except ValueError:reject("The selected downstream model is unsupported.","Choose a supported provider and model before retrying.")
     if body.confirm and (not body.model_route or not body.model):
         reject("The retry model was not explicitly confirmed.","Choose a provider and model in the retry dialog.")
-    try:effective=downstream_routes.route_value(route,model)
-    except ValueError:reject("The selected downstream model is unsupported.","Choose a supported provider and model before retrying.")
     spec=interview.parent/"spec"
     # A first Needs attempt can die on import before LangGraph writes a
     # checkpoint. --from needs rejects that state. An existing checkpoint
@@ -1456,10 +1467,11 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
     checkpoint=(spec/"checkpoints.sqlite").is_file() and (spec/"checkpoints.sqlite").stat().st_size>0
     latest_failure=next((event for event in reversed(store.events(task_id)) if event["phase_key"]=="needs" and event["kind"]=="error"),None)
     if not body.confirm:
-        return {"status":"preview","phase":"needs","session_id":session,"retains":["intent","conops"],"model_route":effective,"default_model":default,"checkpoint":checkpoint,"mode":"resume" if checkpoint else "start",
+        return {"status":"preview","phase":"needs","session_id":session,"retains":["intent","conops"],"model_route":effective,"default_model":default,"default_source":default_source,"checkpoint":checkpoint,"mode":"resume" if checkpoint else "start",
                 "last_failure":latest_failure["message"] if latest_failure else next(phase["detail"] for phase in task["phases"] if phase["phase_key"]=="needs"),
                 "message":f"Retry Stakeholder needs from the approved interview. Choose the downstream model; this may make new model calls and incur cost. The interview is not reopened."}
     if not store.claim_failed_needs_retry(task_id,a.label):reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
+    store.set_model_default(task_id,effective)
     store.add_event(task_id,"model_route",f"Needs retry model selected: {effective}",phase_key="needs",payload={"route":route,"resolved":effective,"source":"explicit_retry_choice"})
     store.audit(a.label,"phase.retry_model",task_id,{"phase":"needs","model":effective,"checkpoint":checkpoint})
     activity("phase.retry","Founder confirmed retry of Stakeholder needs",task_id=task_id,session_id=session,actor=a.label,model_route=effective,checkpoint=checkpoint)
@@ -1565,7 +1577,9 @@ def generator_default(task_id:str,phase:str,a:auth.Actor=Depends(auth.require_ac
     if not store.task(task_id):raise HTTPException(404,"task not found")
     definition=PHASE_BY_KEY.get(phase)
     if not definition or definition.executor!="generator":raise HTTPException(404,"generator phase not found")
-    return {"phase":phase,"model":model_route_lib.phase_initial_model(definition.generator_stage)}
+    try: model,source=model_route_lib.task_default_model(store,task_id,definition.generator_stage)
+    except ValueError as exc:return {"phase":phase,"model":None,"source":"selection required","reason":str(exc)}
+    return {"phase":phase,"model":model,"source":source}
 
 @app.post("/api/tasks/{task_id}/gates/{gate_key}/toggle")
 def toggle_gate(task_id:str,gate_key:str,req:GateToggle,request:Request,a:auth.Actor=Depends(auth.require_actor)):
@@ -1596,9 +1610,12 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
         if req.model_route and PHASE_BY_KEY[target].executor!="generator":
             raise ValueError("This gate has no generator phase for a model override")
         selected=model_route_lib.route_value(req.model_route,req.model) if req.model_route else None
+        if PHASE_BY_KEY[target].executor=="generator" and not selected:
+            model_route_lib.task_default_model(store,task_id,PHASE_BY_KEY[target].generator_stage)
         gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label,expected_revision=req.expected_revision)
         phase=gate["after_phase"]
         if selected:
+            store.set_model_default(task_id,selected)
             store.add_event(task_id,"model_route",f"{target} override uses {selected}",phase_key=target,payload={"route":req.model_route,"resolved":selected,"scope":"phase_override","actor":a.label})
         if req.action=="redo":asyncio.create_task(orchestrator.execute_phase(task_id,phase,mode=ExecutionMode.REDO,model_route=selected))
         else:asyncio.create_task(orchestrator.continue_after(task_id,phase,model_route=selected))
