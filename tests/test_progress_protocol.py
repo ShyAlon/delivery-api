@@ -81,3 +81,41 @@ def test_http_client_and_delivery_ingest_read_during_engine_start(tmp_path):
         assert store.progress_cursor(task['task_id'],'interview',session)==1
         assert store.events(task['task_id'])[-1]['payload']['stage']=='probe'
         release.set();assert reply.result(timeout=3).status_code==201
+
+
+def test_every_generator_phase_uses_one_progress_and_gate_boundary(tmp_path):
+    """Installed-style subprocess path: framed signal and real artifact precede each gate."""
+    import asyncio
+    import sys
+    from delivery_api.phases import PHASE_DEFINITIONS
+    from delivery_api.runner import ProcessRunner
+
+    for definition in PHASE_DEFINITIONS:
+        if definition.executor != "generator":
+            continue
+        db = tmp_path / f"{definition.key}.db"
+        out = tmp_path / definition.key
+        out.mkdir()
+        store = SQLiteStore(str(db))
+        task_id = store.create_task(f"Progress {definition.key}")["task_id"]
+        sid = str(uuid4())
+        progress = signal(task_id, sid, definition.key).model_dump_json()
+        artifact = definition.artifacts[0]
+        script = ("from pathlib import Path; import sys; "
+                  "out=Path(sys.argv[sys.argv.index('--out')+1]); "
+                  f"(out/{artifact!r}).write_text('[]' if {definition.key!r}=='tests' else '{{}}'); "
+                  f"print({(PREFIX + progress)!r},flush=True)")
+        runner = ProcessRunner(store)
+        result = asyncio.run(runner.run(task_id, [sys.executable, "-c", script, "--out", str(out)],
+                                        cwd=tmp_path, phase=definition.key,
+                                        env={"VMODEL_PROGRESS_TASK_ID": task_id,
+                                             "VMODEL_PROGRESS_SESSION_ID": sid}, infer_phase=False))
+        assert result == 0, definition.key
+        current = store.task(task_id)
+        assert current["active_phase"] == definition.key
+        assert current["state"] == "waiting_gate"
+        assert next(g for g in current["gates"] if g["after_phase"] == definition.key)["state"] == "waiting"
+        assert len([e for e in store.events(task_id) if e["kind"] == "progress"
+                    and e["phase_key"] == definition.key and e["payload"]["source"] == "generator"]) == 1
+        assert project(current, {"process_live": False}, artifacts=[{"phase_key": definition.key,
+                       "ref": str(out / artifact), "present": True, "valid": True}]).mode == "waiting_gate"
