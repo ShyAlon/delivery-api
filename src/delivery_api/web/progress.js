@@ -1,0 +1,7 @@
+import {esc} from './client-core.js';
+import {humanLabel} from './format.js';
+export const isProgressEvent = e => ['progress','heartbeat'].includes(e?.kind);
+export const progressLine = e => `<div class="progress-item ${esc(e.kind)}"><span title="${esc(e.message)}">${esc(e.message)}</span></div>`;
+export function elapsedLabel(startedAt){if(!startedAt)return '';let seconds=Math.max(0,Math.floor(Date.now()/1000-startedAt));if(seconds<60)return '<b>&lt;1</b> minute so far';let minutes=Math.floor(seconds/60);if(minutes<60)return `<b>${minutes}</b> ${minutes===1?'minute':'minutes'} so far`;let hours=Math.floor(minutes/60),remainder=minutes%60;return `<b>${hours}</b> ${hours===1?'hour':'hours'}${remainder?` <b>${remainder}</b> minutes`:''} so far`}
+export function progressScope(phase,runStartedAt=null){let startedAt=Math.max(Number(phase?.started_at||0),Number(runStartedAt||0));if(!startedAt)return '';let count=phase.total?`<span>${esc(humanLabel(phase.phase_key))} <b>${Number(phase.completed||0)}</b> out of <b>${Number(phase.total)}</b></span>`:'';return `<div class="progress-scope" data-started-at="${startedAt}">${count}${count?'<i>·</i>':''}<span>${elapsedLabel(phase.started_at)}</span></div>`}
+export function updateElapsedScopes(){document.querySelectorAll('.progress-scope[data-started-at]').forEach(scope=>{let spans=scope.querySelectorAll('span'),target=spans[spans.length-1];if(target)target.innerHTML=elapsedLabel(Number(scope.dataset.startedAt))})}

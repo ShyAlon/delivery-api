@@ -380,7 +380,7 @@ class SQLiteStore:
             self._db.execute("UPDATE gates SET state=?,selected_option=?,edited_text=?,steer=?,revision=revision+1 WHERE task_id=? AND gate_key=?",
                              (state,selected_option,edited_text,steer,task_id,gate_key))
             if action == "redo":
-                self._db.execute("UPDATE phases SET state='running',detail=?,completed_at=NULL WHERE task_id=? AND phase_key=?",(f"Redo requested: {steer}",task_id,phase))
+                self._db.execute("UPDATE phases SET state='running',detail=?,completed=0,total=NULL,started_at=?,completed_at=NULL WHERE task_id=? AND phase_key=?",(f"Redo requested: {steer}",now,task_id,phase))
                 downstream=[definition.key for definition in followers(phase)]
                 if downstream:
                     marks=','.join('?' for _ in downstream);self._db.execute(f"UPDATE phases SET state='pending',detail='',completed=0,total=NULL,started_at=NULL,completed_at=NULL WHERE task_id=? AND phase_key IN ({marks})",(task_id,*downstream))

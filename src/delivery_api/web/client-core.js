@@ -26,7 +26,14 @@ function waitLabel(url){
   if(/\/model-route$/.test(url))return 'Switching interview model';
   if(/\/gates\//.test(url))return 'Saving gate decision';
   if(/\/feedback/.test(url))return 'Saving feedback';
+  if(/\/requirements\//.test(url))return 'Checking required input';
+  if(/\/audit$/.test(url))return 'Reading audit';
   if(/\/rerun/.test(url))return 'Preparing rerun';
+  if(/\/retry-needs/.test(url))return 'Retrying stakeholder needs';
+  if(/\/artifacts\//.test(url))return 'Reading artifact';
+  if(/\/api\/sessions/.test(url))return 'Loading session';
+  if(/\/phase-output$/.test(url))return 'Reading phase results';
+  if(/\/tasks\/[^/]+$/.test(url))return 'Loading task';
   return 'Waiting for the server';
 }
 function beginWait(url){
@@ -48,7 +55,8 @@ function beginWait(url){
 export async function api(url,opts={}){
   if(url!=='/auth/refresh' && url!=='/api/auth' && !url.startsWith('/auth/sign') && !url.startsWith('/auth/email-availability'))await renewSessionIfDue();
   const method=(opts.method||'GET').toUpperCase(),timeout=opts.timeout===undefined?(method==='GET'?60000:null):opts.timeout,controller=timeout?new AbortController():null;
-  const endWait=method==='GET'||url==='/api/client-log'||url==='/auth/refresh'||url.startsWith('/auth/')?()=>{}:beginWait(url);
+  const foregroundRead=method==='GET'&&(/\/api\/tasks\/[^/]+$/.test(url)||/\/api\/tasks\/[^/]+\/artifacts\//.test(url)||/\/api\/sessions/.test(url)||/\/api\/tasks\/[^/]+\/audit$/.test(url));
+  const endWait=(method==='GET'&&!foregroundRead)||url==='/api/client-log'||url==='/auth/refresh'||url.startsWith('/auth/')?()=>{}:beginWait(url);
   let timedOut=false,timer=timeout?setTimeout(()=>{timedOut=true;controller.abort()},timeout):null,response;
   try{response=await fetch(url,{headers:{'content-type':'application/json'},...opts,signal:opts.signal||(controller&&controller.signal)})}
   catch(error){

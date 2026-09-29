@@ -82,9 +82,27 @@ def page(ui):
         yield page
         browser.close()
 
+def _promote_control(snapshot):
+    legacy=snapshot.get('ui_state') or {}
+    c=snapshot.setdefault('control_snapshot',{})
+    mode={'engine_question':'waiting_input','engine_decision':'waiting_input','phase_gate':'waiting_gate','executing':'working','complete':'completed','error':'failed','not_started':'not_started'}
+    c['version']=2
+    if legacy.get('mode'):c['mode']=mode[legacy['mode']]
+    c['phase_key']=snapshot.get('active_phase')
+    if 'process_live' in legacy:c['process_live']=legacy['process_live']
+    c.setdefault('kind','text' if legacy.get('mode')=='engine_question' else 'choice' if legacy.get('mode')=='engine_decision' else None)
+    if 'decision' in legacy:c['decision']=legacy['decision']
+    if 'gate' in legacy:c['gate']=legacy['gate']
+    if 'question' in legacy:c['prompt']=legacy['question']
+    if 'input_id' in legacy:c['input_id']=legacy['input_id']
+    if 'diagnostic' in legacy:c['diagnostic']=legacy['diagnostic']
+    snapshot.pop('ui_state',None)
+    return snapshot
+
 def route_task_snapshot(page,ui,task_id,mutate):
     snapshot=page.request.get(f'{ui}/api/tasks/{task_id}').json();mutate(snapshot)
-    page.route(f'**/api/tasks/{task_id}',lambda route:route.fulfill(json=snapshot))
+    _promote_control(snapshot)
+    page.route(f'**/api/tasks/{task_id}',lambda route:route.fulfill(json=_promote_control(snapshot)))
     return snapshot
 
 def waiting_gate_snapshot(snapshot):
@@ -93,7 +111,7 @@ def waiting_gate_snapshot(snapshot):
     snapshot.update({'state':'waiting_gate','active_phase':gate['after_phase']})
     for phase in snapshot['phases']:
         if phase['phase_key']==gate['after_phase']:phase.update({'state':'awaiting_approval','detail':'Generated; waiting for founder approval'})
-    snapshot['control_snapshot']={'mode':'waiting_gate','wait_id':gate['gate_key']}
+    snapshot['control_snapshot']={'version':2,'mode':'waiting_gate','owner':'delivery','wait_id':gate['gate_key'],'gate':gate,'phase_key':gate['after_phase'],'process_live':False}
     snapshot['ui_state']={'mode':'phase_gate','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':gate}
 
 
@@ -421,7 +439,7 @@ def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'test-input','precondition':{'session_sequence':1}}
     live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None}
     live['events']=[{'id':i,'kind':'progress','message':f'Output line {i}','phase_key':'intent','payload':{},'ts':1720000000+i} for i in range(120)]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.set_viewport_size({'width':1365,'height':800})
     page.goto(ui+'/tasks/live/view');page.locator('.avatar').click();page.locator('#debugtoggle').click()
     console=page.locator('#console');console.wait_for()
@@ -456,7 +474,7 @@ def test_answer_failure_preserves_text_and_recovers_button(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'test-input','precondition':{'session_sequence':1}}
     live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None,'question':'What matters most?'}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.route('**/api/tasks/live/answer',lambda route:route.fulfill(status=503,json={'detail':{'error':'Answer could not be sent.','cause':'Engine input is unavailable.','next':'Retry when the engine is waiting.'}}))
     page.goto(ui+'/tasks/live/view');answer=page.locator('#answerform textarea');button=page.locator('#answerform button[type=submit]')
     answer.fill('Do not lose this answer');button.click()
@@ -483,7 +501,7 @@ def test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'test-input','precondition':{'session_sequence':1}}
     live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None,'question':'What matters most?'}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     pending=[]
     def hold(route):pending.append(route)
     page.route('**/api/tasks/live/answer',hold)
@@ -506,7 +524,7 @@ def test_answer_enter_sends_and_control_enter_inserts_newline(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'test-input','precondition':{'session_sequence':1}}
     live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None,'question':'What matters most?'}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     sent=[]
     page.route('**/api/tasks/live/answer',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
     page.goto(ui+'/tasks/live/view');answer=page.locator('#answerform textarea')
@@ -519,7 +537,7 @@ def test_structured_founder_decision_opens_large_card_dialog_and_formats_answer(
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();live['events']=[];live['active_phase']='conops'
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     submitted=[]
     page.route('**/api/tasks/live/answer',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
     page.goto(ui+'/tasks/live/view');page.locator('#console').wait_for()
@@ -541,7 +559,7 @@ def test_structured_founder_decision_opens_large_card_dialog_and_formats_answer(
 def test_structured_founder_decision_escape_closes_without_answer(page,ui):
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();live['events']=[]
-    live['control_snapshot']={'mode':'working'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
+    live['control_snapshot']={'mode':'working'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
     decision={'type':'founder_decision','title':'Choose','prompt':'Pick','options':[{'value':'1','label':'A','summary':'First'},{'value':'2','label':'B','summary':'Second'}]}
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None}
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:"Pick",phase_key:"conops",payload:{waiting_input:true,decision},ts:1720000300})',decision)
@@ -554,7 +572,7 @@ def test_stored_pending_decision_reopens_on_page_load_and_panels_align(page,ui):
     decision={'type':'founder_decision','decision_id':'concept','title':'Choose after restart','prompt':'Which concept?','options':[{'value':'1','label':'Native','summary':'Installed'},{'value':'2','label':'PWA','summary':'Browser'}]}
     live['events']=[{'id':900,'kind':'founder_decision','message':'Which concept?','phase_key':'conops','payload':{'waiting_input':True,'question':'Which concept?','decision':decision},'ts':1720000300},{'id':901,'kind':'waiting_input','message':'You:','phase_key':'conops','payload':{'waiting_input':True,'question':'Which concept?'},'ts':1720000301}]
     live['ui_state']={'mode':'engine_decision','active_phase':live['active_phase'],'process_live':True,'decision':decision,'gate':None}
-    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.set_viewport_size({'width':1365,'height':900});page.goto(ui+'/tasks/live/view')
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.set_viewport_size({'width':1365,'height':900});page.goto(ui+'/tasks/live/view')
     page.locator('.decision-dialog').wait_for();assert page.get_by_role('heading',name='Choose after restart').is_visible()
     page.keyboard.press('Escape');assert page.locator('#opendecision').is_visible()
     panels=page.locator('.detail-layout>.panel, .detail-layout>div>.panel');assert panels.count()==2
@@ -573,7 +591,7 @@ def test_detail_layout_never_crushes_or_overlaps_at_user_viewport(page,ui):
     states=['approved','awaiting_approval','running','pending','pending','pending','pending']
     for phase,state in zip(live['phases'],states):phase['state']=state;phase['detail']='Waiting for founder approval' if state=='awaiting_approval' else ''
     live['ui_state']={'mode':'engine_decision','active_phase':live['active_phase'],'process_live':True,'decision':decision,'gate':None}
-    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.set_viewport_size({'width':1390,'height':827});page.goto(ui+'/tasks/live/view');page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape')
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.set_viewport_size({'width':1390,'height':827});page.goto(ui+'/tasks/live/view');page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape')
     left=page.locator('.detail-layout>.panel');right=page.locator('.detail-layout>div>.panel')
     lb,rb=left.bounding_box(),right.bounding_box();assert abs((lb['y']+lb['height'])-(rb['y']+rb['height']))<2
     indicator=page.locator('.live-indicator');assert indicator.evaluate('e=>e.scrollWidth<=e.clientWidth')
@@ -588,7 +606,7 @@ def test_detail_layout_never_crushes_or_overlaps_at_user_viewport(page,ui):
 def test_founder_dialog_fixed_controls_and_vertical_four_options(page,ui):
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();live['events']=[]
-    live['control_snapshot']={'mode':'working'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.route('**/api/tasks/live/answer',lambda route:route.fulfill(json={'status':'accepted'}))
+    live['control_snapshot']={'mode':'working'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.route('**/api/tasks/live/answer',lambda route:route.fulfill(json={'status':'accepted'}))
     page.set_viewport_size({'width':1390,'height':827});page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
     options=[{'value':str(i),'label':name,'summary':'A deliberately detailed option summary.','advantages':['Clear advantage'],'disadvantages':['Known tradeoff']} for i,name in enumerate(['Native mobile','Progressive web app','Responsive web','Hybrid shell'],1)]
     decision={'type':'founder_decision','title':'Choose the operating concept','prompt':'Which concept should the architecture execute?','rationale_label':'Why is this the right concept?','options':options}
@@ -610,7 +628,7 @@ def test_founder_dialog_fixed_controls_and_vertical_four_options(page,ui):
 def test_founder_decision_outside_click_dismisses_and_persistent_bar_reopens(page,ui):
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();live['events']=[]
-    live['control_snapshot']={'mode':'working'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
+    live['control_snapshot']={'mode':'working'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
     decision={'type':'founder_decision','title':'Choose one','prompt':'Choose to continue','options':[{'value':'1','label':'A','summary':'First'},{'value':'2','label':'B','summary':'Second'}]}
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None}
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"conops",payload:{waiting_input:true,decision},ts:1720000300})',decision)
@@ -626,7 +644,7 @@ def test_decision_ready_bar_is_first_and_sticky_during_page_scroll(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','title':'Choose the operating concept','prompt':'Choose','options':[{'value':'1','label':'A'},{'value':'2','label':'B'}]}
     live['events']=[{'id':1,'kind':'founder_decision','message':'Choose','phase_key':'conops','payload':{'waiting_input':True,'question':'Choose','decision':decision},'ts':1720000300}]
     live['ui_state']={'mode':'engine_decision','active_phase':live['active_phase'],'process_live':True,'decision':decision,'gate':None}
-    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.set_viewport_size({'width':1390,'height':620});page.goto(ui+'/tasks/live/view');page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape')
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.set_viewport_size({'width':1390,'height':620});page.goto(ui+'/tasks/live/view');page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape')
     launch=page.locator('#opendecision');panel=page.locator('.detail-layout>div>.panel');assert launch.is_visible()
     assert panel.evaluate("e=>e.firstElementChild.nextElementSibling?.id==='opendecision'")
     assert launch.evaluate("e=>getComputedStyle(e).position")=='sticky'
@@ -641,11 +659,11 @@ def test_answered_decision_clears_and_binary_approval_uses_same_dialog(page,ui):
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();concept={'type':'founder_decision','title':'Old concept decision','prompt':'Choose','options':[{'value':'1','label':'A'},{'value':'2','label':'B'}]}
     live['events']=[{'id':10,'kind':'founder_decision','message':'Choose','phase_key':'conops','payload':{'waiting_input':True,'decision':concept},'ts':1720000000},{'id':11,'kind':'answer','message':'You: 1 - reason','phase_key':'conops','payload':{'transcript':True},'ts':1720000001}]
-    submitted=[];page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.route('**/api/tasks/live/answer',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
+    submitted=[];page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.route('**/api/tasks/live/answer',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
     page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for();assert page.locator('#opendecision').count()==0 and page.locator('.decision-dialog').count()==0
     approval={'type':'founder_decision','decision_id':'intent-approval','title':'Approve the intent model','prompt':'Approve this intent model?','rationale_required':False,'answer_format':'<value>','options':[{'value':'y','label':'Approve','summary':'Continue'},{'value':'n','label':'Reject','summary':'Stop'}]}
     live['input_state']={'waiting':True,'process_live':True,'decision':approval};live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':approval,'gate':None}
-    page.unroute('**/api/tasks/live');page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.unroute('**/api/tasks/live');page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"intent",payload:{waiting_input:true,decision},ts:1720000300})',approval)
     dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.get_by_text('Approve',exact=True).is_visible() and dialog.get_by_text('Reject',exact=True).is_visible();assert dialog.locator('.decision-why').is_hidden()
     page.screenshot(path='/downloads/typed-intent-approval.png',full_page=True)
@@ -659,7 +677,7 @@ def test_stale_structured_decision_is_not_actionable_on_load(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'old-intent','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
     live['events']=[{'id':91,'kind':'founder_decision','message':'Approve?','phase_key':'intent','payload':{'waiting_input':True,'decision':decision},'ts':1720000300}]
     live['input_state']={'waiting':False,'process_live':False,'decision':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
     assert page.locator('#opendecision').count()==0 and page.locator('.decision-dialog').count()==0
 
 
@@ -670,7 +688,7 @@ def test_stale_decision_conflict_closes_and_refreshes_dialog(page,ui):
     def task(route):
         calls['get']+=1
         if calls['get']>1:live['input_state']={'waiting':False,'process_live':False,'decision':None};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'needs','process_live':True,'decision':None,'gate':None}
-        route.fulfill(json=live)
+        route.fulfill(json=_promote_control(live))
     page.route('**/api/tasks/live',task)
     page.route('**/api/tasks/live/answer',lambda route:route.fulfill(status=409,json={'detail':{'error':'Stale founder decision was not submitted.','cause':'The submitted decision is no longer open.','next':'Refresh shows the current state.','stale':True,'current_state':'running','active_phase':'needs'}}))
     page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for();dialog.get_by_text('Reject',exact=True).click()
@@ -682,7 +700,7 @@ def test_intent_approval_shows_selected_concept_and_founder_reason(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve the intent model','prompt':'Approve this intent model?','rationale_required':False,'context':{'label':'Selected concept','value':'PWA','reason':'You stated you chose this concept because one deployment fits our team'},'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
     live['events']=[{'id':91,'kind':'founder_decision','message':'Approve?','phase_key':'intent','payload':{'waiting_input':True,'decision':decision},'ts':1720000300}];live['input_state']={'waiting':True,'process_live':True,'decision':decision}
     live['ui_state']={'mode':'engine_decision','active_phase':live['active_phase'],'process_live':True,'decision':decision,'gate':None}
-    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view')
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view')
     context=page.locator('.decision-context');context.wait_for();assert context.get_by_text('PWA',exact=True).is_visible()
     assert context.get_by_text('You stated you chose this concept because one deployment fits our team',exact=True).is_visible()
     page.screenshot(path='/downloads/intent-approval-with-concept-reason.png',full_page=True)
@@ -693,7 +711,7 @@ def test_browser_logs_runtime_version_and_reloads_when_server_changes(page,ui):
     page.goto(ui+'/');page.wait_for_timeout(300)
     assert any('runtime version' in line and 'development' in line for line in console)
     # The watcher contract compares the server runtime and reloads on mismatch.
-    source=(Path(__file__).parents[1]/'src/delivery_api/web/app.js').read_text()
+    source=(Path(__file__).parents[1]/'src/delivery_api/web/identity.js').read_text()
     assert "live.runtime_id!==runtimeVersion" in source and 'location.reload()' in source
 
 def test_detail_uses_one_large_v_process_without_duplicate_path_map(page,ui):
@@ -708,7 +726,7 @@ def test_server_accepted_decision_event_closes_founder_box(page,ui):
     live['input_state']={'waiting':True,'process_live':True,'decision':decision};live['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':decision,'gate':None,'show_start':False,'show_progress':True,'show_engine_decision':True,'show_question':False,'show_answer_composer':False,'show_phase_gate':False,'show_artifacts':False,'show_console':True};live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};calls={'n':0}
     def snapshot(route):
         calls['n']+=1
-        route.fulfill(json=live)
+        route.fulfill(json=_promote_control(live))
     page.route('**/api/tasks/live',snapshot)
     page.goto(ui+'/tasks/live/view');page.locator('.decision-dialog').wait_for()
     live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'intent','process_live':True,'decision':None,'gate':None}
@@ -721,7 +739,7 @@ def test_needs_gate_state_hides_stale_intent_prompt_and_opens_needs_gate(page,ui
     live['control_snapshot']={'mode':'waiting_gate','wait_id':gate['gate_key']};live.update({'state':'waiting_gate','active_phase':'needs','input_state':{'waiting':False,'process_live':False,'decision':None},
                  'ui_state':{'mode':'phase_gate','active_phase':'needs','process_live':False,'decision':None,'gate':gate,'show_start':False,'show_progress':False,'show_engine_decision':False,'show_question':False,'show_answer_composer':False,'show_phase_gate':True,'show_artifacts':False,'show_console':True}})
     live['events']=[{'id':1,'kind':'waiting_input','message':'Approve this intent model? [y/N]','phase_key':'intent','payload':{'waiting_input':True,'question':'Approve this intent model? [y/N]'},'ts':1720000000}]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view')
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view')
     page.locator('#openphasegate').wait_for();assert page.locator('.current-question').is_hidden() and page.locator('#answerform').is_hidden()
     page.locator('#openphasegate').click();page.locator('#gateform').wait_for()
     assert page.locator('.decision-dialog').count()==0 and page.locator('#opendecision').count()==0
@@ -739,13 +757,13 @@ def test_managed_task_state_reducer_is_exhaustive_and_atomic(page,ui):
         if calls['n']>1:
             live['input_state']={'waiting':True,'process_live':True,'decision':decision};live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'}
             live['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':decision,'gate':None}
-        request.fulfill(json=live)
+        request.fulfill(json=_promote_control(live))
     page.route('**/api/tasks/live',route);page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"intent",payload:{waiting_input:true,decision},ts:1720000500})',decision)
     dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.get_by_text('Approve',exact=True).is_visible()
     assert page.locator('#answerform').is_hidden() and page.locator('#opendecision').is_visible()
     page.screenshot(path='/downloads/managed-state-intent-decision.png',full_page=True)
-    app_source=(Path(__file__).parents[1]/'src/delivery_api/web/app.js').read_text();state_source=(Path(__file__).parents[1]/'src/delivery_api/web/ui-state.js').read_text()
+    app_source=(Path(__file__).parents[1]/'src/delivery_api/web/task.js').read_text();state_source=(Path(__file__).parents[1]/'src/delivery_api/web/ui-state.js').read_text()
     assert 'reduceTaskSnapshot' in app_source and 'next.mode!==view.mode' in app_source and 'TASK_UI_ACTIONS' in state_source
 
 
@@ -757,13 +775,13 @@ def test_sse_snapshot_refresh_is_filtered_and_coalesced(page,ui):
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}close(){this.closed=true}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();calls={'n':0}
-    def route(request):calls.__setitem__('n',calls['n']+1);request.fulfill(json=live)
+    def route(request):calls.__setitem__('n',calls['n']+1);request.fulfill(json=_promote_control(live))
     page.route('**/api/tasks/live',route);page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for();baseline=calls['n']
     page.evaluate("""for(let i=0;i<100;i++)liveSource.emit({kind:'progress',message:'line '+i,phase_key:'intent',payload:{},ts:1720001000+i})""")
     page.wait_for_timeout(200);assert calls['n']==baseline
     page.evaluate("""for(let i=0;i<50;i++)liveSource.emit({kind:'founder_decision',message:'decision '+i,phase_key:'intent',payload:{waiting_input:true},ts:1720002000+i})""")
     page.wait_for_timeout(250);assert calls['n']==baseline+1
-    source=(Path(__file__).parents[1]/'src/delivery_api/web/app.js').read_text()
+    source=(Path(__file__).parents[1]/'src/delivery_api/web/task.js').read_text()
     assert "stateEvents=new Set" in source and 'snapshotPending' in source and 'setTimeout(snapshotRefresh,75)' in source
 
 
@@ -776,13 +794,13 @@ def test_runtime_badge_survives_identity_render(page,ui):
 
 def test_orphaned_running_task_renders_visible_recovery_error(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='intent';live['input_state']={'waiting':False,'process_live':False,'decision':None};live['ui_state']={'mode':'error','active_phase':'intent','process_live':False,'decision':None,'gate':None};live['events'].append({'id':999,'kind':'error','message':'Error: engine stream handling stopped. Likely cause: protocol failure. Next: restart Requi.re.','phase_key':'intent','payload':{},'ts':1720003000})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view')
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view')
     notice=page.locator('.task-error-state');notice.wait_for();assert notice.get_by_text('Task needs attention',exact=True).is_visible()
     assert page.locator('.live-indicator').get_by_text('Task needs attention',exact=True).is_visible()
 
 def test_gate_checkbox_updates_in_place_without_navigation(page,ui):
     live=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in live['gates'] if g['state']=='waiting');live['ui_state']={'mode':'phase_gate','active_phase':live['active_phase'],'process_live':False,'decision':None,'gate':gate};calls=[]
-    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=_promote_control(live)))
     page.route('**/api/tasks/sim/gates/*/toggle',lambda route:(calls.append(route.request.post_data_json),route.fulfill(json={**gate,'is_open':route.request.post_data_json['is_open']})))
     navigations=[];page.on('framenavigated',lambda frame:navigations.append(frame.url) if frame==page.main_frame else None)
     page.goto(ui+'/tasks/sim/gates/gate-intent');page.locator('#gateform').wait_for();before=len(navigations);box=page.locator('#gateopen');box.check()
@@ -805,6 +823,47 @@ def test_gate_page_shows_requirements_evidence_and_full_content(page,ui):
     assert evidence.locator('.gate-artifact-summary').is_visible()
     page.screenshot(path='/downloads/full-gate-requirements-phone.png',full_page=True)
 
+
+def test_gate_transition_reconciles_delayed_next_phase(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}close(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/sim').json();gate=live['gates'][0]
+    gate.update({'state':'waiting','is_open':0})
+    live.update({'state':'waiting_gate','active_phase':gate['after_phase'],
+                 'control_snapshot':{'version':2,'mode':'waiting_gate','owner':'delivery','wait_id':gate['gate_key'],'gate':gate,'phase_key':gate['after_phase']}})
+    live['artifacts']=[{'phase_key':gate['after_phase'],'name':'intent_model.json','title':'Needs and Scope','stale':False,'present':True,'valid':True,'generation':1}]
+    progressed={**live,'state':'running','active_phase':'conops','control_snapshot':{'version':2,'mode':'working','owner':'delivery','phase_key':'conops'},
+                'phases':[{**p,'state':'running'} if p['phase_key']=='conops' else p for p in live['phases']]}
+    reads={'count':0}
+    def task(route):
+        reads['count']+=1
+        route.fulfill(json=_promote_control(progressed if reads['count']>3 else live))
+    page.route('**/api/tasks/sim',task)
+    page.route('**/api/tasks/sim/artifacts/intent/intent_model.json/view',lambda route:route.fulfill(json={'title':'Needs and Scope','format':'json','content':'{}'}))
+    page.route('**/api/tasks/sim/gates/*/decide',lambda route:route.fulfill(json={**gate,'state':'decided'}))
+    page.goto(ui+'/tasks/sim/gates/gate-intent')
+    page.get_by_role('button',name='Choose & continue').click()
+    notice=page.locator('#phase-transition-status')
+    notice.wait_for()
+    assert 'Starting Concept of operations' in notice.inner_text()
+    page.screenshot(path='/downloads/jev-d7-phase-transition-desktop.png',full_page=True)
+    expect(notice).to_have_count(0,timeout=12000)
+    assert reads['count']>3
+
+def test_architecture_gate_identifies_model_proposed_decision(page,ui):
+    task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='architecture');gate['state']='waiting'
+    task['artifacts']=[{'phase_key':'architecture','name':'architecture.json','title':'Architecture','stale':False,'present':True,'valid':True,'generation':1}]
+    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=_promote_control(task)))
+    page.route('**/api/tasks/sim/artifacts/architecture/architecture.json/view',lambda route:route.fulfill(json={
+        'name':'architecture.json','title':'Architecture','phase':'architecture','format':'json','content':'{"decisions":[]}',
+        'decision_provenance':[{'decision_id':'ADR-4','title':'SQLite storage','label':'Model-proposed decision',
+                                'founder_evidence':[],'baseline_refs':[]}]}))
+    page.goto(ui+'/tasks/sim/gates/gate-architecture')
+    panel=page.locator('.decision-provenance');panel.wait_for()
+    assert panel.get_by_text('ADR-4').is_visible()
+    assert panel.get_by_text('Model-proposed decision').is_visible()
+    page.screenshot(path='/downloads/jev-d7-architecture-provenance-desktop.png',full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    page.screenshot(path='/downloads/jev-d7-architecture-provenance-phone.png',full_page=True)
 
 def test_gate_page_missing_artifact_blocks_approval(page,ui):
     task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate['state']='waiting'
@@ -840,7 +899,7 @@ def test_gate_page_refreshes_arriving_artifact_without_losing_form_input(page,ui
 
 def test_gate_page_explains_controls_and_tooltips_desktop_and_phone(page,ui):
     live=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in live['gates'] if g['state']=='waiting');live['ui_state']={'mode':'phase_gate','active_phase':live['active_phase'],'process_live':False,'decision':None,'gate':gate}
-    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/sim/gates/gate-intent');dialog=page.locator('#gateform');dialog.wait_for()
+    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/sim/gates/gate-intent');dialog=page.locator('#gateform');dialog.wait_for()
     for text in ['Choose approves this artifact','Save edit records your wording','Redo regenerates this phase']:
         assert dialog.get_by_text(text,exact=False).is_visible()
     help_button=dialog.get_by_role('button',name='What does opening a gate do?');help_button.focus();tip=dialog.get_by_role('tooltip').filter(has_text='auto-approves when the phase arrives');expect(tip).to_be_visible()
@@ -853,7 +912,7 @@ def test_gate_page_explains_controls_and_tooltips_desktop_and_phone(page,ui):
 def test_decision_dialog_rationale_help_is_real_and_keyboard_accessible(page,ui):
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'concept','title':'Choose one','prompt':'Which concept?','rationale_required':True,'options':[{'value':'1','label':'Native'},{'value':'2','label':'PWA'}]};live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None};live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for();button=dialog.get_by_role('button',name='Why a rationale is requested');button.focus();expect(dialog.get_by_role('tooltip')).to_be_visible()
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for();button=dialog.get_by_role('button',name='Why a rationale is requested');button.focus();expect(dialog.get_by_role('tooltip')).to_be_visible()
     expect(dialog.get_by_role('tooltip').get_by_text('stored with the selected option',exact=False)).to_be_visible()
 
 def test_live_log_is_prominent_without_duplicate_timestamps_desktop_and_phone(page,ui):
@@ -861,7 +920,7 @@ def test_live_log_is_prominent_without_duplicate_timestamps_desktop_and_phone(pa
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent';live['ui_state']={'mode':'executing','active_phase':'intent','process_live':True,'decision':None,'gate':None}
     live['events']=[{'id':i,'kind':'progress','message':f'[17:01:{i%60:02d}] Building requirement {i}','phase_key':'intent','payload':{},'ts':1720000000+i} for i in range(80)]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.set_viewport_size({'width':1365,'height':800});page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
     assert page.get_by_text('REAL PROGRESS · ALL STAGES',exact=True).count()==0
     assert page.locator('#progressfeed time').count()==0 and console.locator('.line time').count()==0
@@ -878,7 +937,7 @@ def test_mutation_flows_refresh_in_place_without_document_navigation(page,ui):
     def mutation_task(route):
         nonlocal reads
         if route.request.method=='PATCH':route.fulfill(json={'status':'renamed'})
-        else:reads+=1;route.fulfill(json=base if reads==1 else renamed)
+        else:reads+=1;route.fulfill(json=_promote_control(base if reads==1 else renamed))
     page.route('**/api/tasks/mutation-test',mutation_task);page.goto(ui+'/tasks/mutation-test/view');page.get_by_role('button',name='Rename').click();page.locator('#renameform input').fill('Renamed in place')
     nav=[];page.on('framenavigated',lambda frame:nav.append(frame.url) if frame==page.main_frame else None);before=len(nav)
     page.locator('#renameform').get_by_role('button',name='Save name').click();page.get_by_role('heading',name='Renamed in place').wait_for();assert len(nav)==before
@@ -886,7 +945,7 @@ def test_mutation_flows_refresh_in_place_without_document_navigation(page,ui):
     live=page.request.get(ui+'/api/tasks/sim').json();gate=live['gates'][0];gate.update({'state':'waiting','is_open':0});live.update({'state':'waiting_gate','active_phase':gate['after_phase'],'ui_state':{'mode':'phase_gate','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':gate},'control_snapshot':{'mode':'waiting_gate','owner':'delivery','wait_id':gate['gate_key']}})
     decided={**live,'state':'running','ui_state':{'mode':'error','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':None}};calls=0
     def task(route):
-        nonlocal calls;calls+=1;route.fulfill(json=live if calls==1 else decided)
+        nonlocal calls;calls+=1;route.fulfill(json=_promote_control(live if calls==1 else decided))
     page.route('**/api/tasks/sim',task);page.route('**/api/tasks/sim/gates/*/decide',lambda route:route.fulfill(json={**gate,'state':'decided'}))
     page.goto(ui+'/tasks/sim/view');page.locator('#openphasegate').click();page.locator('#gateform').wait_for()
     assert '/tasks/sim/gates/gate-intent' in page.url
@@ -895,7 +954,7 @@ def test_mutation_flows_refresh_in_place_without_document_navigation(page,ui):
 
 def test_live_progress_scope_and_account_menu_desktop_and_phone(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();phase=next(p for p in live['phases'] if p['phase_key']==live['active_phase']);phase.update({'completed':8,'total':20,'started_at':time.time()-12*60})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.route('**/health',lambda route:route.fulfill(json={'ok':True,'runtime_id':'abcdef123456','repositories':{}}))
     page.route('**/api/auth',lambda route:route.fulfill(json={'mode':'basic','authenticated':True,'actor':'shy@example.com','admin':True,'providers':[]}))
     page.set_viewport_size({'width':1365,'height':800});page.goto(ui+'/tasks/live/view')
@@ -913,13 +972,13 @@ def test_recovered_run_hides_stale_sigterm_error_from_live_console(page,ui):
       {'id':2,'kind':'command','message':'Engine process started','phase_key':'intent','payload':{},'ts':1720000100},
       {'id':3,'kind':'progress','message':'Recovered checkpoint is running','phase_key':'intent','payload':{},'ts':1720000101},
     ]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
     assert 'Recovered checkpoint is running' in console.inner_text();assert 'exit code -15' not in console.inner_text();assert page.locator('.task-error-state').count()==0
 
 def test_live_elapsed_uses_latest_phase_command_not_parked_phase_start(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();phase=next(p for p in live['phases'] if p['phase_key']==live['active_phase']);phase.update({'started_at':time.time()-22*3600,'completed':None,'total':None})
     live['events'].append({'id':999,'kind':'command','message':'Engine process started','phase_key':live['active_phase'],'payload':{},'ts':time.time()-12*60})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');scope=page.locator('.progress-scope');scope.wait_for()
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');scope=page.locator('.progress-scope');scope.wait_for()
     assert '12 minutes so far' in scope.inner_text();assert '22 hours' not in scope.inner_text()
 
 def test_avatar_menu_does_not_emit_native_runtime_tooltip(page,ui):
@@ -928,7 +987,7 @@ def test_avatar_menu_does_not_emit_native_runtime_tooltip(page,ui):
 def test_orchestrator_baseline_decision_renders_without_engine_process(page,ui):
     decision={'type':'founder_decision','decision_id':'system-baseline','title':'Choose the architecture baseline','prompt':'Greenfield or existing?','rationale_required':False,'options':[{'value':'greenfield','label':'Greenfield'},{'value':'existing','label':'Existing system'}]}
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['input_state']={'waiting':True,'process_live':True,'decision':decision};live['control_snapshot']={'mode':'waiting_input','owner':'orchestrator','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'architecture','process_live':True,'decision':decision,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for()
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for()
     assert dialog.get_by_text('Greenfield',exact=True).is_visible();assert page.locator('.task-error-state').count()==0
 
 def test_account_menu_is_plain_list_with_explicit_actions(page,ui):
@@ -938,13 +997,13 @@ def test_account_menu_is_plain_list_with_explicit_actions(page,ui):
 def test_existing_system_requirement_names_file_format_path_and_next_step(page,ui):
     requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture is paused until real system facts are supplied.','path':'/artifacts/session/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':['baseline_id','system_name','mode: existing','repositories (at least one)'],'next':'Save the file, then restart Requi.re; recovery will launch Architecture.'}
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');card=page.locator('.requirement-dialog');card.wait_for()
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');card=page.locator('.requirement-dialog');card.wait_for()
     assert card.get_by_text('SystemBaseline JSON',exact=True).is_visible();assert card.get_by_text(requirement['path'],exact=True).is_visible();assert card.get_by_text('repositories (at least one)',exact=True).is_visible();assert page.locator('.task-error-state').count()==0
 
 def test_missing_resource_dialog_has_recovery_paths_and_greenfield_confirmation(page,ui):
     requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture needs real system facts.','path':'/artifacts/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':['baseline_id','system_name','mode: existing','repositories (at least one)'],'next':'Save then continue.'}
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');dialog=page.locator('.requirement-dialog');dialog.wait_for()
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');dialog=page.locator('.requirement-dialog');dialog.wait_for()
     assert dialog.get_by_text(requirement['path'],exact=True).is_visible();assert dialog.get_by_role('button',name="I've added the file · check it").is_visible();assert dialog.get_by_role('button',name='Copy fact checklist').is_visible();dialog.get_by_role('button',name='I chose Existing by mistake').click();confirm=page.get_by_role('dialog',name='Confirm Greenfield correction');confirm.wait_for();assert confirm.get_by_role('button',name='Switch & continue').is_visible()
     page.screenshot(path='/downloads/missing-resource-recovery.png',full_page=True)
 
@@ -952,14 +1011,14 @@ def test_copy_debug_info_includes_runtime_snapshot_and_resource_decision(page,ui
     page.add_init_script("""window.__copied='';Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>window.__copied=text}})""")
     requirement={'kind':'external_input','title':'Baseline required','path':'/tmp/system-baseline.json','format':'SystemBaseline JSON'}
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');page.locator('.requirement-dialog').wait_for();page.keyboard.press('Escape');page.locator('#accountbutton').click();button=page.get_by_role('menuitem',name='Copy debug info');button.click();page.wait_for_function("window.__copied.length>0")
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.requirement-dialog').wait_for();page.keyboard.press('Escape');page.locator('#accountbutton').click();button=page.get_by_role('menuitem',name='Copy debug info');button.click();page.wait_for_function("window.__copied.length>0")
     copied=page.evaluate('window.__copied');assert copied.startswith('Requi.re debug report');assert '"owner": "requirement"' in copied and '"detected": true' in copied and '"task_id": "live"' in copied
 
 def test_greenfield_confirmation_is_single_flight(page,ui):
     requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture needs facts.','path':'/artifacts/session/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':[]}
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
     calls=[]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     def resolve(route):
         calls.append(route.request.post_data);time.sleep(.15);route.fulfill(json={'status':'resolved','action':'greenfield'})
     page.route('**/api/tasks/live/requirements/architecture/resolve',resolve)
@@ -970,7 +1029,7 @@ def test_greenfield_confirmation_is_single_flight(page,ui):
 def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips(page,ui):
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'A very long progress update that must remain on precisely one line while the full wording stays available on hover','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.goto(ui+'/tasks/live/view');feed=page.locator('#progressfeed .progress-item');feed.wait_for();span=feed.locator('span');assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');feed=page.locator('#progressfeed .progress-item');feed.wait_for();span=feed.locator('span');assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
     phase=page.locator('.phase-list-primary .phase').filter(has_text='Requirements');phase.hover();tip=phase.get_by_role('tooltip');tip.wait_for();assert tip.get_by_text('Artifacts: srs.json',exact=True).is_visible();assert tip.get_by_text('missing acceptance criterion',exact=False).is_visible()
     page.screenshot(path='/downloads/progress-phase-tooltips.png',full_page=True)
 
@@ -983,7 +1042,7 @@ def test_dashboard_renders_existing_task_with_final_verification_gate(page,ui):
 
 def test_completed_artifacts_have_singleton_tooltips_viewer_and_downloads(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='done';live['active_phase']='tests';live['phases'][-1]['state']='approved';live['artifacts']=[{'phase_key':'architecture','name':'architecture.json','ref':'/tmp/architecture.json','mime_type':'application/json','stale':False,'generation':4,'present':True,'valid':True,'validation_error':None}];live['ui_state']={'mode':'complete','active_phase':'tests','process_live':False,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.route('**/api/tasks/live/artifacts/architecture/architecture.json/view',lambda route:route.fulfill(json={'name':'architecture.json','phase':'architecture','format':'markdown','display_name':'architecture.md','content':'# Daily Habit Architecture\n\n- Progressive web app','raw_format':'json','raw_content':'{\n  "system": "Daily Habit"\n}'}));page.goto(ui+'/tasks/live/view');rows=page.locator('.phase-list-primary .phase');rows.nth(4).dispatch_event('mouseenter');assert rows.nth(4).locator('.phase-tooltip').is_visible();rows.nth(4).dispatch_event('mouseleave');rows.nth(5).dispatch_event('mouseenter');assert 'tip-open' not in (rows.nth(4).get_attribute('class') or '');assert 'tip-open' in (rows.nth(5).get_attribute('class') or '');assert page.locator('.download-all').is_visible();page.get_by_role('button',name='architecture.json').click();viewer=page.locator('.artifact-viewer');viewer.wait_for();assert viewer.get_by_role('heading',name='Daily Habit Architecture').is_visible();assert viewer.get_by_text('Progressive web app').is_visible();assert viewer.get_by_text('Show raw json').is_visible();assert viewer.get_by_role('link',name='Download').is_visible();page.screenshot(path='/downloads/completed-artifact-viewer.png',full_page=True)
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.route('**/api/tasks/live/artifacts/architecture/architecture.json/view',lambda route:route.fulfill(json={'name':'architecture.json','phase':'architecture','format':'markdown','display_name':'architecture.md','content':'# Daily Habit Architecture\n\n- Progressive web app','raw_format':'json','raw_content':'{\n  "system": "Daily Habit"\n}'}));page.goto(ui+'/tasks/live/view');rows=page.locator('.phase-list-primary .phase');rows.nth(4).dispatch_event('mouseenter');assert rows.nth(4).locator('.phase-tooltip').is_visible();rows.nth(4).dispatch_event('mouseleave');rows.nth(5).dispatch_event('mouseenter');assert 'tip-open' not in (rows.nth(4).get_attribute('class') or '');assert 'tip-open' in (rows.nth(5).get_attribute('class') or '');assert page.locator('.download-all').is_visible();page.get_by_role('button',name='architecture.json').click();viewer=page.locator('.artifact-viewer');viewer.wait_for();assert viewer.get_by_role('heading',name='Daily Habit Architecture').is_visible();assert viewer.get_by_text('Progressive web app').is_visible();assert viewer.get_by_text('Show raw json').is_visible();assert viewer.get_by_role('link',name='Download').is_visible();page.screenshot(path='/downloads/completed-artifact-viewer.png',full_page=True)
 
 def test_artifact_viewer_uses_shared_dialog_shell_and_local_close(page,ui):
     def mutate(live):live.update({'state':'done','artifacts':[{'phase_key':'intent','name':'intent_model.json','title':'Needs and Scope','stale':False,'generation':4,'present':True,'valid':True,'validator':'IntentModel','validation_errors':[]}],'ui_state':{'mode':'complete','active_phase':'tests','process_live':False,'decision':None,'gate':None}})
@@ -991,7 +1050,7 @@ def test_artifact_viewer_uses_shared_dialog_shell_and_local_close(page,ui):
     card.click();page.screenshot(path='/downloads/shared-artifact-dialog.png',full_page=True)
 
 def test_audit_uses_shared_dialog_sortable_filterable_sticky_table(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json();page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));entries=[{'ts':1720000200,'actor':'Shy','action':'gate.approve','detail':{'phase':'srs'}},{'ts':1720000100,'actor':'policy','action':'gate.bypassed','detail':{'phase':'needs'}}];page.route('**/api/tasks/live/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':entries,'totals':{'tokens':1234,'price':2501,'phases_priced':2}}));page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='Audit').click();dialog=page.get_by_role('dialog',name='Task audit');dialog.wait_for();assert dialog.get_by_text('1,234').is_visible() and dialog.get_by_text('2,501 units').is_visible();headers=dialog.locator('thead');assert headers.evaluate('(e)=>getComputedStyle(e).position')=='sticky';rows=dialog.locator('tbody tr');assert rows.count()==2;dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='Shy';dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='policy';dialog.get_by_label('Filter audit entries').fill('approve');assert rows.count()==1;assert rows.first.get_by_text('gate.approve').is_visible();close=dialog.get_by_role('button',name='Close task audit');vb=dialog.bounding_box();cb=close.bounding_box();assert cb['x']>=vb['x'] and cb['x']+cb['width']<=vb['x']+vb['width'];page.screenshot(path='/downloads/shared-audit-dialog.png',full_page=True);page.keyboard.press('Escape');assert dialog.count()==0
+    live=page.request.get(ui+'/api/tasks/live').json();page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));entries=[{'ts':1720000200,'actor':'Shy','action':'gate.approve','detail':{'phase':'srs'}},{'ts':1720000100,'actor':'policy','action':'gate.bypassed','detail':{'phase':'needs'}}];page.route('**/api/tasks/live/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':entries,'totals':{'tokens':1234,'price':2501,'phases_priced':2}}));page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='Audit').click();dialog=page.get_by_role('dialog',name='Task audit');dialog.wait_for();assert dialog.get_by_text('1,234').is_visible() and dialog.get_by_text('2,501 units').is_visible();headers=dialog.locator('thead');assert headers.evaluate('(e)=>getComputedStyle(e).position')=='sticky';rows=dialog.locator('tbody tr');assert rows.count()==2;dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='Shy';dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='policy';dialog.get_by_label('Filter audit entries').fill('approve');assert rows.count()==1;assert rows.first.get_by_text('gate.approve').is_visible();close=dialog.get_by_role('button',name='Close task audit');vb=dialog.bounding_box();cb=close.bounding_box();assert cb['x']>=vb['x'] and cb['x']+cb['width']<=vb['x']+vb['width'];page.screenshot(path='/downloads/shared-audit-dialog.png',full_page=True);page.keyboard.press('Escape');assert dialog.count()==0
 
 def test_model_route_default_and_phase_override_controls(page,ui):
     page.goto(ui+'/tasks/empty/view')
@@ -1008,7 +1067,7 @@ def test_model_route_default_and_phase_override_controls(page,ui):
 def test_artifact_viewer_renders_content_title_bold_and_transcript(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='done';live['artifacts']=[{'phase_key':'intent','name':'intent_model.json','stale':False,'generation':1,'present':True,'valid':True,'validator':'IntentModel','validation_errors':[]}];live['ui_state']={'mode':'complete','active_phase':'tests','process_live':False,'decision':None,'gate':None}
     payload={'name':'intent_model.json','title':'Needs and Scope','phase':'intent','format':'markdown','display_name':'intent_model.md','content':'# What we understood\n\n**Problem:** Build habits\n\n## Interview questions and answers\n\n### Question 1\nWho needs this?\n\n**Answer:** Busy adults','raw_format':'json','raw_content':'{}'}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live));page.route('**/api/tasks/live/artifacts/intent/intent_model.json/view',lambda route:route.fulfill(json=payload));page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='intent_model.json').click();viewer=page.locator('.artifact-viewer');viewer.wait_for()
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.route('**/api/tasks/live/artifacts/intent/intent_model.json/view',lambda route:route.fulfill(json=payload));page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='intent_model.json').click();viewer=page.locator('.artifact-viewer');viewer.wait_for()
     assert viewer.get_by_role('heading',name='Needs and Scope').is_visible()
     assert viewer.locator('strong').filter(has_text='Problem:').count()==1 and viewer.locator('strong').filter(has_text='Answer:').count()==1
     assert viewer.get_by_text('Who needs this?').is_visible() and viewer.get_by_text('Busy adults').is_visible()
@@ -1218,7 +1277,7 @@ def test_protocol_422_is_not_mislabeled_engine_down(page,ui):
     detail="Error: stage 'probing': model ignored the structured interview-turn contract twice."
     live['state']='running';live['active_phase']='intent'
     live['ui_state']={'mode':'error','active_phase':'intent','process_live':False,'diagnostic':{'reason':'engine protocol rejected the snapshot','http_status':422,'code':130,'detail':detail}}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.goto(ui+'/tasks/live/view')
     notice=page.locator('.task-error-state');notice.wait_for()
     assert notice.get_by_text('Engine returned an error',exact=True).is_visible()
@@ -1232,7 +1291,7 @@ def test_legacy_ollama_model_switch_dialog(page,ui,failed):
     live.update({'state':'failed' if failed else 'running','active_phase':'intent','model_route':'ollama/qwen2.5-coder:14b',
         'simulated':False,'input_state':{'waiting':True,'input_id':'legacy-input','process_live':True},
         'ui_state':{'mode':'error' if failed else 'engine_question','active_phase':'intent','question':'Continue?','process_live':True}})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.route('**/api/tasks/live/execution*',lambda route:route.fulfill(json={
         'session_id':'legacy','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[],
         'effective_models':{'probing':['ollama','qwen2.5-coder:14b']}}))
@@ -1261,7 +1320,7 @@ def test_completed_engine_session_in_error_view_does_not_offer_switch(page,ui):
         'input_state':{'waiting':False,'input_id':None,'process_live':False,'engine_process_status':40},
         'ui_state':{'mode':'error','active_phase':'intent','process_live':False}})
     live['events'].append({'id':9999,'kind':'error','message':'old template literal failure','phase_key':'intent','payload':{},'ts':1720004001})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.route('**/api/tasks/live/execution*',lambda route:route.fulfill(json={
         'session_id':'completed','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[],
         'effective_models':{'probing':['ollama','qwen2.5-coder:14b']}}))
@@ -1284,7 +1343,7 @@ def test_failed_needs_has_retry_not_generation_rerun(page,ui):
         else:phase['state']='pending'
     live.update({'state':'failed','active_phase':'needs','input_state':{'waiting':False,'process_live':False,'engine_process_status':40},
         'ui_state':{'mode':'error','active_phase':'needs','process_live':False}})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.route('**/api/model-routes',lambda route:route.fulfill(json={'routes':[]}))
     page.route('**/api/tasks/live/execution*',lambda route:route.fulfill(json={'session_id':'complete-session','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[]}))
     page.route('**/api/tasks/live/retry-needs',lambda route:route.fulfill(json={'status':'preview','phase':'needs','session_id':'complete-session','retains':['intent','conops'],'message':'Retry Stakeholder needs from the approved interview. This may make new model calls and incur cost.'}))
@@ -1303,7 +1362,7 @@ def test_failed_needs_has_retry_not_generation_rerun(page,ui):
 def test_audit_dialog_scrolls_on_short_viewport(page,ui):
     page.set_viewport_size({'width':900,'height':460})
     live=page.request.get(ui+'/api/tasks/live').json()
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     entries=[{'ts':1720000000+i,'actor':'Founder','action':f'event.{i}','detail':{'index':i,'note':'long audit detail '*8}} for i in range(75)]
     page.route('**/api/tasks/live/audit',lambda route:route.fulfill(json={'actor_mode':'local','entries':entries,'totals':{'tokens':2300,'price':0,'interview_calls':14,'interview_cost_usd':0.0037,'interview_unpriced_calls':0}}))
     page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='Audit').click()
@@ -1328,7 +1387,7 @@ def test_failed_needs_retry_selects_env_default_model_not_interview_model(page,u
         elif phase['phase_key']=='needs':phase.update({'state':'failed','detail':'Old generator failure'})
     live['input_state']={'waiting':False,'process_live':False,'engine_process_status':40}
     live['ui_state']={'mode':'error','active_phase':'needs','process_live':False}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.route('**/api/tasks/live/retry-needs',lambda route:route.fulfill(json={
         'status':'preview','phase':'needs','session_id':'complete-session','default_model':'ollama:phi4',
         'checkpoint':False,'last_failure':'Old generator failure','message':'Retry only Needs'}))
@@ -1355,7 +1414,7 @@ def test_phase_tooltip_does_not_present_old_errors_as_current_issues(page,ui):
         {'id':983,'kind':'founder_decision','message':'Choose architecture baseline','phase_key':'architecture','payload':{},'ts':1720004003},
     ])
     live['ui_state']={'mode':'error','active_phase':'architecture','process_live':False}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.goto(ui+'/tasks/live/view')
     needs=page.locator('.phase-list-primary .phase').filter(has_text='Stakeholder needs');needs.hover()
     expect(needs.get_by_role('tooltip')).to_contain_text('No issues recorded.')
@@ -1371,7 +1430,7 @@ def test_normal_mode_shows_live_architecture_stage_and_stall_heartbeat(page,ui):
     live['state']='running';live['active_phase']='architecture';live['phases'][4].update({'state':'running','started_at':1720004000,'detail':'Drafting architecture overview'})
     live['events'].append({'id':990,'kind':'command','message':'Engine process started','phase_key':'architecture','payload':{},'ts':1720004000})
     live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.goto(ui+'/tasks/live/view')
     expect(page.locator('#stageprogress')).to_contain_text('Waiting for stage progress')
     assert page.locator('#progressfeed').count()==0
@@ -1388,7 +1447,7 @@ def test_every_generator_gate_uses_same_page_and_configured_model_picker(page,ui
     live=page.request.get(ui+'/api/tasks/sim').json()
     expected=[phase.key for phase in PHASE_DEFINITIONS if phase.executor=='generator']
     assert [key for key,value in live['phase_config'].items() if value['executor']=='generator']==expected
-    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=live))
+    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=_promote_control(live)))
     for phase in expected:
         page.goto(f'{ui}/tasks/sim/gates/gate-{phase}')
         expect(page.locator('.gate-page')).to_be_visible()
