@@ -850,3 +850,46 @@ def test_interrupted_start_recovers_exact_session_without_second_start(tmp_path,
  ready=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
  assert ready['input_state']['waiting'] is True
  assert ready['control_snapshot']['precondition']['session_id']==sid
+
+def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tmp_path,monkeypatch):
+ from concurrent.futures import ThreadPoolExecutor
+ from threading import Event
+ from interview_engine.http_service import SessionRegistry
+ from interview_engine.progress_journal import ProgressJournal
+ entered=Event();release=Event()
+ class Program:
+  def __init__(self):
+   self.finished=False;self.pending=InputRequest(input_id=uuid4(),kind=InputKind.TEXT,prompt='First question?')
+  def advance(self,response=None):
+   if response is None:return self.pending
+   entered.set()
+   if not release.wait(5):raise RuntimeError('blocked test model timed out')
+   self.finished=True;return None
+ registry=SessionRegistry(lambda sid,request:Program(),state_dir=tmp_path)
+ # Bridge the real engine registry into delivery for an in-process concurrency test.
+ class Bridge:
+  def snapshot(self,sid):return registry.snapshot(sid)
+  def progress(self,sid,after=0):return registry.progress(sid,after)
+  def submit(self,sid,response):
+   event,state=registry.respond(sid,response)
+   return SubmitInputResponse(accepted_event=event,snapshot=state)
+ store=SQLiteStore(str(tmp_path/'concurrent.db'))
+ task=store.create_task('Slow model','brief');sid=str(uuid4())
+ session,_=registry.start(StartSessionRequest(task_id=task['task_id'],session_id=sid,idea='brief',model_route='deepseek'))
+ store.set_engine_session(task['task_id'],sid);store.update_phase(task['task_id'],'intent','running')
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',Bridge())
+ current=registry.snapshot(sid);response=InputResponse(input_id=current.open_input.input_id,expected_sequence=current.sequence,value='answer',actor_id='founder')
+ with ThreadPoolExecutor(max_workers=3) as pool:
+  work=pool.submit(registry.respond,sid,response)
+  try:
+   assert entered.wait(2)
+   def get_task():return TestClient(module.app).get(f"/api/tasks/{task['task_id']}")
+   reply=pool.submit(get_task).result(timeout=.75)
+   assert reply.status_code==200 and reply.json()['control_snapshot']['mode']=='working'
+   assert reply.json()['control_snapshot']['prompt'] is None
+   current=pool.submit(registry.snapshot,sid).result(timeout=.75)
+   assert current.process_status==ProcessStatus.RUNNING and current.open_input is None
+   ProgressJournal(tmp_path,sid,task['task_id']).append(phase_key='intent',stage='conops',label='Still building',status='heartbeat')
+   assert pool.submit(registry.progress,sid,0).result(timeout=.75).events
+  finally:release.set()
+  assert work.result(timeout=2)[1].process_status==ProcessStatus.COMPLETED

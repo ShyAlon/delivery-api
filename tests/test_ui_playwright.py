@@ -1530,3 +1530,22 @@ def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(page,ui):
     assert 'Next: Check the task artifact' in notice.inner_text()
     assert not choose.is_enabled()
     assert float(choose.evaluate('(b)=>getComputedStyle(b).opacity')) < 1
+
+def test_accepted_answer_disarms_old_question_until_new_control_arrives(page,ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'old-input','precondition':{'session_sequence':7},'prompt':'Old question?'}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    sent=[]
+    page.route('**/api/tasks/live/answer',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
+    page.goto(ui+'/tasks/live/view');form=page.locator('#answerform');box=form.locator('textarea');button=form.locator('button[type=submit]')
+    box.fill('The accepted answer');button.click()
+    page.get_by_text('Answer sent. Waiting for the next interview step',exact=False).wait_for()
+    assert box.is_disabled() and button.is_disabled() and page.locator('#currentquestion').is_hidden()
+    assert form.get_attribute('data-awaiting-next')=='true'
+    assert sent==[{'answer':'The accepted answer','decision_id':'old-input','expected_sequence':7}]
+    page.wait_for_timeout(200)
+    assert box.is_disabled() and button.is_disabled() and len(sent)==1
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'new-input','precondition':{'session_sequence':9},'prompt':'New question?'}
+    page.reload();page.locator('#currentquestion').get_by_text('New question?').wait_for()
+    assert page.locator('#answerform textarea').is_enabled() and page.locator('#answerform button[type=submit]').is_enabled()
