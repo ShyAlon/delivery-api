@@ -238,6 +238,7 @@ def test_start_records_interview_flash_not_downstream_chat(tmp_path, monkeypatch
  route=[e for e in store.events(task['task_id']) if e['kind']=='model_route' and e['payload'].get('scope')=='start'][0]
  assert route['payload']['resolved']=='deepseek:deepseek-flash'
  assert route['payload']['model']=='deepseek-flash'
+ assert store.task(task['task_id'])['model_default']=='deepseek:deepseek-flash'
 
 
 def test_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path, monkeypatch):
@@ -256,6 +257,7 @@ def test_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path, monkeypatch)
  route=[e for e in store.events(task['task_id']) if e['kind']=='model_route' and e['payload'].get('scope')=='start'][0]
  assert route['payload']['resolved']=='ollama:phi4'
  assert route['payload']['model']=='phi4'
+ assert store.task(task['task_id'])['model_default']=='ollama:phi4'
 
 
 def test_route_preview_shows_conflict_without_switching(monkeypatch):
@@ -323,6 +325,7 @@ def test_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch):
  route_events=[e for e in store.events(task['task_id']) if e['kind']=='model_route']
  assert len(route_events)==1 and route_events[0]['payload']['route_version']==1
  assert store.task(task['task_id'])['model_route']=='deepseek'
+ assert store.task(task['task_id'])['model_default']=='deepseek:deepseek-flash'
 
 def test_cost_segments_preserve_consecutive_route_versions():
  rows=[{'route_version':0,'provider':'ollama','model':'phi4','prompt_tokens':10,'completion_tokens':5,'price_per_mtok_prompt_usd':0,'price_per_mtok_completion_usd':0},
@@ -430,7 +433,7 @@ def test_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,m
  session='read-recovery';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
  store=SQLiteStore(str(tmp_path/'read.db'));tid=store.create_task('Read repair','brief')['task_id']
- store.set_engine_session(tid,session);store.update_phase(tid,'intent','running',detail='Waiting for founder input')
+ store.set_engine_session(tid,session);store.set_model_default(tid,'deepseek:deepseek-flash');store.update_phase(tid,'intent','running',detail='Waiting for founder input')
  monkeypatch.setattr(module,'store',store)
  class Complete:
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
@@ -453,7 +456,7 @@ def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path
  generator=tmp_path/'spec-generator';(generator/'.venv/bin').mkdir(parents=True);(generator/'.venv/bin/python').write_text('')
  monkeypatch.setenv('SPEC_GENERATOR_DIR',str(generator))
  store=SQLiteStore(str(tmp_path/'handoff.db'));tid=store.create_task('Bound recovery','brief')['task_id']
- store.set_engine_session(tid,session);store.update_phase(tid,'intent','running',detail='Waiting for founder input')
+ store.set_engine_session(tid,session);store.set_model_default(tid,'deepseek:deepseek-flash');store.update_phase(tid,'intent','running',detail='Waiting for founder input')
  monkeypatch.setattr(module,'store',store)
  class Complete:
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
@@ -473,6 +476,7 @@ def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path
  assert str(artifacts/session/'interview'/'intent_model.json') in command
  assert str(artifacts/session/'interview'/'conops.json') in command
  assert options['phase']=='needs' and store.task(tid)['active_phase']=='needs'
+ assert options['env']['SPEC_GENERATOR_MODEL_NEEDS']=='deepseek:deepseek-flash'
  assert command[0]==str(generator/'.venv/bin/python')
 
 
@@ -653,7 +657,7 @@ def test_audit_rolls_up_http_interview_usage_without_double_counting(tmp_path,mo
  assert round(totals['interview_cost_usd'],6)==0.00023
 
 
-def test_retry_uses_generator_env_default_not_interview_pin_and_fresh_start(tmp_path,monkeypatch):
+def test_retry_requires_exact_choice_if_no_recorded_selection_and_starts_fresh(tmp_path,monkeypatch):
  import asyncio
  from delivery_api.auth import Actor
  store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
@@ -667,7 +671,7 @@ def test_retry_uses_generator_env_default_not_interview_pin_and_fresh_start(tmp_
  monkeypatch.setattr(module.orchestrator,'execute_phase',execute)
  async def exercise():
   preview=await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(),Actor('test','Founder'))
-  assert preview['default_model']=='ollama:phi4' and preview['mode']=='start'
+  assert preview['default_model'] is None and preview['default_source']=='selection required' and preview['mode']=='start'
   assert preview['last_failure']=='Prior engine error'
   await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True,model_route='ollama',model='phi4'),Actor('test','Founder'))
   await asyncio.sleep(.01)
@@ -851,6 +855,7 @@ def test_interrupted_start_recovers_exact_session_without_second_start(tmp_path,
  assert ready['input_state']['waiting'] is True
  assert ready['control_snapshot']['precondition']['session_id']==sid
 
+
 def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tmp_path,monkeypatch):
  from concurrent.futures import ThreadPoolExecutor
  from threading import Event
@@ -893,3 +898,29 @@ def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tm
    assert pool.submit(registry.progress,sid,0).result(timeout=.75).events
   finally:release.set()
   assert work.result(timeout=2)[1].process_status==ProcessStatus.COMPLETED
+
+
+def test_generator_default_api_follows_exact_sticky_selection(tmp_path,monkeypatch):
+ store=SQLiteStore(str(tmp_path/'sticky-api.db'));task=store.create_task('Sticky preview','brief');tid=task['task_id']
+ monkeypatch.setattr(module,'store',store)
+ monkeypatch.setenv('SPEC_GENERATOR_MODEL_ARCHITECTURE','ollama:qwen2.5-coder:14b')
+ store.set_model_default(tid,'deepseek:deepseek-flash')
+ client=TestClient(module.app)
+ result=client.get(f'/api/tasks/{tid}/generator-default/architecture').json()
+ assert result=={'phase':'architecture','model':'deepseek:deepseek-flash','source':'selected'}
+ store.set_model_default(tid,'ollama:phi4')
+ assert client.get(f'/api/tasks/{tid}/generator-default/specs').json()['model']=='ollama:phi4'
+
+
+def test_failed_needs_without_exact_model_previews_selection_required(tmp_path,monkeypatch):
+ import asyncio
+ from delivery_api.auth import Actor
+ store,tid,_=_failed_needs_task(tmp_path,monkeypatch)
+ async def exercise():
+  preview=await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(),Actor('test','Founder'))
+  assert preview['default_model'] is None and preview['default_source']=='selection required'
+  assert preview['model_route'] is None
+  with __import__('pytest').raises(Exception,match='exact model selection'):
+   await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder'))
+ asyncio.run(exercise())
+ assert store.task(tid)['model_default'] is None

@@ -141,3 +141,40 @@ def test_generator_phase_default_ignores_interview_route(monkeypatch,tmp_path):
     assert model_routes.phase_initial_model('architecture')=='ollama:qwen2.5-coder:14b'
     monkeypatch.setenv('SPEC_GENERATOR_MODEL_SRS','deepseek:deepseek-chat')
     assert model_routes.phase_initial_model('srs')=='deepseek:deepseek-chat'
+
+
+def test_task_default_exact_selection_overrides_each_stage_environment(monkeypatch,tmp_path):
+    from delivery_api import model_routes
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'models.db'));tid=store.create_task('Exact route')['task_id']
+    monkeypatch.setenv('SPEC_GENERATOR_MODEL_NEEDS','ollama:phi4')
+    monkeypatch.setenv('SPEC_GENERATOR_MODEL_ARCHITECTURE','ollama:qwen2.5-coder:14b')
+    store.set_model_default(tid,'deepseek:deepseek-flash')
+    assert model_routes.task_default_model(store,tid,'needs')==('deepseek:deepseek-flash','selected')
+    assert model_routes.task_default_model(store,tid,'architecture')==('deepseek:deepseek-flash','selected')
+    reopened=SQLiteStore(str(tmp_path/'models.db'))
+    assert model_routes.task_default_model(reopened,tid,'srs')[0]=='deepseek:deepseek-flash'
+    reopened.set_model_default(tid,'ollama:phi4')
+    assert model_routes.task_default_model(reopened,tid,'architecture')[0]=='ollama:phi4'
+
+
+def test_legacy_default_uses_recorded_selection_but_not_phase_execution(monkeypatch,tmp_path):
+    from delivery_api import model_routes
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'legacy-model.db'));tid=store.create_task('Legacy route')['task_id']
+    monkeypatch.setenv('SPEC_GENERATOR_MODEL_SRS','ollama:qwen')
+    store.add_event(tid,'model_route','old generator ran',phase_key='needs',payload={'resolved':'ollama:phi4','mode':'start'})
+    assert model_routes.task_default_model(store,tid,'srs')==('ollama:qwen','legacy generator configuration (no recorded exact selection)')
+    store.add_event(tid,'model_route','interview selected',phase_key='intent',payload={'resolved':'deepseek:deepseek-flash','scope':'start'})
+    assert model_routes.task_default_model(store,tid,'srs')==('deepseek:deepseek-flash','previous selection')
+
+
+def test_bound_legacy_session_without_exact_selection_requires_a_choice(tmp_path):
+    import pytest
+    from delivery_api import model_routes
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'unbound.db'));tid=store.create_task('Old session')['task_id']
+    store.set_engine_session(tid,'old-session')
+    store.add_event(tid,'model_route','generator used legacy configured model',phase_key='needs',payload={'resolved':'ollama:qwen','mode':'start'})
+    with pytest.raises(ValueError,match='choose a model'):
+        model_routes.task_default_model(store,tid,'srs')
