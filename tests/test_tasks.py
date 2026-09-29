@@ -1513,3 +1513,30 @@ def test_generator_failure_preserves_reported_contract_error(tmp_path):
     error=next(e for e in reversed(store.events(tid)) if e['kind']=='error')
     assert 'intent contract 0.19.0 cannot be read' in error['message']
     assert error['payload']['cause']=='Error: intent contract 0.19.0 cannot be read by generator contract 0.16.x'
+
+
+
+def test_item_stage_list_artifact_validates_for_parked_gate(monkeypatch,tmp_path):
+    """The generator writes items.json as a list of ItemSpec, not SpecBundle."""
+    import json
+    from fastapi.testclient import TestClient
+    from delivery_api import app as app_module
+    from delivery_api.store import SQLiteStore
+    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root))
+    store=SQLiteStore(str(tmp_path/'items.db'));task_id=store.create_task('Item gate')['task_id']
+    store.set_engine_session(task_id,'session-items')
+    spec=root/'session-items'/'spec';spec.mkdir(parents=True)
+    artifact=spec/'items.json'
+    artifact.write_text(json.dumps([{'spec_id':'SPEC-1','kind':'ui_flow','title':'Status screen',
+                                     'body_markdown':'# Status screen\nShow task status.','requirement_ids':['R-1']}]))
+    monkeypatch.setattr(app_module,'store',store)
+    records=app_module._task_artifact_snapshot(task_id)
+    item=next(a for a in records if a['name']=='items.json')
+    assert item['phase_key']=='specs' and item['present'] is True
+    assert item['valid'] is True and item['validator']=='ItemSpec[]' and item['validation_errors']==[]
+    client=TestClient(app_module.app)
+    response=client.get(f'/api/tasks/{task_id}/artifacts/specs/items.json/view')
+    assert response.status_code==200 and json.loads(response.json()['content'])[0]['spec_id']=='SPEC-1'
+    artifact.write_text(json.dumps([{'spec_id':'BROKEN','kind':'ui_flow','title':'Status screen'}]))
+    invalid=next(a for a in app_module._task_artifact_snapshot(task_id) if a['name']=='items.json')
+    assert invalid['valid'] is False and invalid['validation_errors']

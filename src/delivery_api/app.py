@@ -966,7 +966,7 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
     validators={
         "intent_model.json":("vmodel_contracts.interview","IntentModel"),"conops.json":("vmodel_contracts.conops","ConOpsDocument"),
         "needs.json":("vmodel_contracts.needs","StakeholderNeedsSet"),"srs.json":("vmodel_contracts.srs","SRSDocument"),
-        "architecture.json":("vmodel_contracts.architecture","ArchitectureOverview"),"items.json":("vmodel_contracts.spec","SpecBundle"),
+        "architecture.json":("vmodel_contracts.architecture","ArchitectureOverview"),"items.json":("vmodel_contracts.spec","ItemSpec[]"),
         "spec_items.json":("vmodel_contracts.spec","SpecBundle"),"tests.json":("vmodel_contracts.verification","AcceptanceTest[]"),
         "test_specifications.json":("vmodel_contracts.verification","AcceptanceTest[]")}
     for phase in PHASE_DEFINITIONS:
@@ -977,10 +977,15 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
             valid=None;errors=[];validator=validators.get(filename)
             if validator:
                 try:
-                    if validator[1]=="AcceptanceTest[]":
+                    if validator[1] in ("AcceptanceTest[]", "ItemSpec[]"):
                         from pydantic import TypeAdapter
-                        from vmodel_contracts.verification import AcceptanceTest
-                        TypeAdapter(list[AcceptanceTest]).validate_json(path.read_text())
+                        if validator[1]=="AcceptanceTest[]":
+                            from vmodel_contracts.verification import AcceptanceTest
+                            item_type=AcceptanceTest
+                        else:
+                            from vmodel_contracts.spec import ItemSpec
+                            item_type=ItemSpec
+                        TypeAdapter(list[item_type]).validate_json(path.read_text())
                     else:
                         model=getattr(__import__(validator[0],fromlist=[validator[1]]),validator[1]);model.model_validate_json(path.read_text())
                     valid=True

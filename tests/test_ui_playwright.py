@@ -1435,3 +1435,39 @@ def test_browser_session_refresh_single_flight_before_expiry(page,ui):
       return true;
     }""")
     assert result and len(calls)==1
+
+
+
+def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(page,ui):
+    task=page.request.get(ui+'/api/tasks/sim').json()
+    gate=next(g for g in task['gates'] if g['after_phase']=='specs')
+    gate.update({'state':'waiting','is_open':0})
+    task['active_phase']='specs';task['state']='waiting_gate'
+    item={'phase_key':'specs','name':'items.json','title':'Item Specifications','stale':False,
+          'present':True,'valid':True,'validator':'ItemSpec[]','generation':1}
+    task['artifacts']=[item]
+    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=task))
+    page.route('**/api/tasks/sim/artifacts/specs/items.json/view',lambda route:route.fulfill(json={
+        'name':'items.json','title':'Item Specifications','phase':'specs','format':'json',
+        'content':'[{"spec_id":"SPEC-1","title":"Status screen"}]'}))
+    page.goto(ui+'/tasks/sim/gates/gate-specs')
+    page.locator('.gate-artifact-summary').wait_for()
+    assert page.locator('#gate-artifacts .gate-artifact-summary').inner_text()=='Status screen'
+    choose=page.get_by_role('button',name='Choose & continue')
+    assert choose.is_enabled()
+    page.screenshot(path='/downloads/specs-gate-ready.png',full_page=True)
+    sent=[]
+    page.route('**/api/tasks/sim/gates/gate-specs/decide',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'state':'decided'})))
+    choose.click()
+    page.wait_for_url('**/tasks/sim/view')
+    assert len(sent)==1 and sent[0]['action']=='approve' and sent[0]['expected_revision']==gate['revision']
+    # The same real artifact must not be silently hidden if it fails validation.
+    item['valid']=False;item['validation_errors']=['1 validation error for list[ItemSpec]: invalid item']
+    page.goto(ui+'/tasks/sim/gates/gate-specs')
+    notice=page.locator('.gate-evidence-error');notice.wait_for()
+    page.screenshot(path='/downloads/specs-gate-invalid.png',full_page=True)
+    assert 'Error: The current artifact failed validation.' in notice.inner_text()
+    assert 'Likely cause: items.json:' in notice.inner_text()
+    assert 'Next: Check the task artifact' in notice.inner_text()
+    assert not choose.is_enabled()
+    assert float(choose.evaluate('(b)=>getComputedStyle(b).opacity')) < 1
