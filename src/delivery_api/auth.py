@@ -90,6 +90,22 @@ def _new_session(request: Request,user: dict) -> str:
     sid=secrets.token_urlsafe(32);request.app.state.store.create_session(sid,user["user_id"],time.time()+config.SESSION_TTL_SECONDS);activity("auth.session.created","Server session created",user_id=user["user_id"],expires_in_seconds=config.SESSION_TTL_SECONDS);return sid
 
 
+def refresh_session(request: Request) -> tuple[str, float]:
+    """Explicit rolling renewal. No extension for expired or revoked cookies."""
+    if not enabled():
+        raise HTTPException(400, {"error": "No sign-in session in local mode."})
+    old_id = request.cookies.get(config.SESSION_COOKIE)
+    if not old_id:
+        raise HTTPException(401, {"error": "Sign in required.", "next": "Sign in, then retry."})
+    now = time.time()
+    new_id = secrets.token_urlsafe(32)
+    expires_at = now + config.SESSION_TTL_SECONDS
+    if not request.app.state.store.rotate_session(old_id, new_id, expires_at, now):
+        raise HTTPException(401, {"error": "Session expired or revoked.", "next": "Sign in again."})
+    activity("auth.session.refreshed", "Active session handle rotated", expires_in_seconds=config.SESSION_TTL_SECONDS)
+    return new_id, expires_at
+
+
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 

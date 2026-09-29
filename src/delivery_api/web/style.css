@@ -160,3 +160,8 @@ button.danger{color:#a33}
 @media(max-width:850px){.gate-page-grid{grid-template-columns:1fr}.gate-page{padding:0 8px 50px}.gate-page-head{position:relative;top:auto}}
 
 .gate-model-resolved{display:block;margin-top:6px;font:11px/1.5 "DM Mono",monospace;color:#31533f;overflow-wrap:anywhere}
+
+/* Shared delayed status for user-triggered writes. Reads and health remain quiet. */
+.server-wait{position:fixed;right:20px;bottom:20px;z-index:20;display:flex;align-items:center;gap:10px;max-width:calc(100vw - 40px);padding:12px 16px;background:var(--ink);color:white;box-shadow:0 10px 30px #15201c40;font:12px DM Mono}
+.server-wait i{flex:none;width:16px;height:16px;border:2px solid #94bca2;border-top-color:white;border-radius:50%;animation:answer-spin .8s linear infinite}
+@media(prefers-reduced-motion:reduce){.server-wait i{animation:none;border-top-color:#94bca2}}

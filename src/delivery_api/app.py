@@ -349,6 +349,22 @@ async def _catch_up_interview_progress()->None:
     for task in store.list_tasks():
         session=store.engine_session(task["task_id"])
         if not session:continue
+        if task.get("state")=="running" and task.get("active_phase")=="intent":
+            events=store.events(task["task_id"])
+            pending=any(e.get("kind")=="command" and e.get("message")=="Interview starting" and
+                        (e.get("payload") or {}).get("session_id")==session for e in events)
+            completed=any(e.get("kind")=="engine_protocol" and
+                          (e.get("payload") or {}).get("snapshot",{}).get("session_id")==session for e in events)
+            if pending and not completed:
+                try:
+                    state=await run_in_threadpool(engine_client.snapshot,session)
+                    if state.session_id!=session or state.task_id!=task["task_id"]:raise ValueError("session identity mismatch")
+                    store.add_event(task["task_id"],"engine_protocol","Recovered interview Start response",phase_key="intent",payload={"snapshot":state.model_dump(mode="json")})
+                    store.update_phase(task["task_id"],"intent","running",detail="Waiting for founder input" if state.open_input else "Interview engine running")
+                except Exception as exc:
+                    store.add_event(task["task_id"],"error","Interrupted interview Start needs review",phase_key="intent",payload={"session_id":session,"cause":f"{type(exc).__name__}: {str(exc)[:200]}","next":"Check the engine journal and checkpoint. Do not start another session until the old one is classified."})
+                    store.update_phase(task["task_id"],"intent","failed",detail="Interrupted interview Start needs review")
+                    continue
         try:await _drain_engine_progress(task["task_id"],session,allow_absent=True)
         except (EngineClientError,EngineUnreachableError,ValueError,RuntimeError,AttributeError) as exc:
             activity("progress.recovery.failed","Could not catch up interview progress",task_id=task["task_id"],session_id=session,error=str(exc)[:250])
@@ -364,7 +380,7 @@ async def lifespan(application:FastAPI):
     from .observability import LOG_PATH,stage_log_paths
     print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
-    await jobs.start();await _recover_tasks();await _catch_up_interview_progress()
+    simulation.reconcile_interrupted();await jobs.start();await _recover_tasks();await _catch_up_interview_progress()
     if threading.current_thread() is threading.main_thread() and signal.getsignal(signal.SIGINT) is not _shutdown_signal:
         _previous_sigint=signal.getsignal(signal.SIGINT);signal.signal(signal.SIGINT,_shutdown_signal)
     try:yield
@@ -417,8 +433,11 @@ def index(): return FileResponse(WEB_DIR / "index.html")
 def auth_status(request: Request):
     a = auth.actor(request)
     mode="basic" if config.BASIC_AUTH_ENABLED else ("oauth" if auth.enabled() else "local")
-    return {"mode":mode,"authenticated":a.id not in {"anonymous"},"actor":a.label,"admin":a.admin,
+    session=request.app.state.store.session(request.cookies[config.SESSION_COOKIE]) if auth.enabled() and request.cookies.get(config.SESSION_COOKIE) and a.id!="anonymous" else None
+    result={"mode":mode,"authenticated":a.id not in {"anonymous"},"actor":a.label,"admin":a.admin,
             "providers":[p for p,ident in (("google",config.GOOGLE_CLIENT_ID),("github",config.GITHUB_CLIENT_ID)) if ident],"workspace":"shared"}
+    if session:result["expires_at"]=session["expires_at"]
+    return result
 
 class ClientLog(BaseModel):
     kind:str=Field(max_length=80)
@@ -465,6 +484,15 @@ def oauth_start(request: Request, provider: str):
 def oauth_callback(request: Request, provider: str, code: str, state: str):
     try: return auth.oauth_callback(request, provider, code, state)
     except (ValueError, KeyError) as e: raise HTTPException(401, "OAuth profile was incomplete or invalid.") from e
+
+@app.post("/auth/refresh")
+def refresh_auth(request: Request):
+    sid,expires_at = auth.refresh_session(request)
+    response = JSONResponse({"status": "refreshed", "expires_at": expires_at})
+    response.set_cookie(config.SESSION_COOKIE, sid, max_age=config.SESSION_TTL_SECONDS,
+                        httponly=True, secure=config.COOKIE_SECURE, samesite="lax", path="/")
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 @app.post("/auth/logout")
 def logout(request: Request):
@@ -626,7 +654,7 @@ def rename_task(task_id:str,req:TaskRename,a:auth.Actor=Depends(auth.require_act
 def delete_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     try:store.delete_task(task_id,a.label)
     except KeyError:raise HTTPException(404,{"error":"Task not found.","cause":"It may already have been deleted.","next":"Return to the task list."})
-    except ValueError as e:raise HTTPException(409,{"error":str(e),"cause":"Active work must stop before its data is removed.","next":"Wait for the replay to finish, then delete the task."})
+    except ValueError as e:raise HTTPException(409,{"error":str(e),"cause":"This task still has active work or a founder gate.","next":"Stop or finish the active work before deleting this task. A replay interrupted by restart will be marked stopped on startup."})
     return {"status":"deleted","task_id":task_id,"source_artifacts_deleted":False}
 
 class TaskStartRequest(BaseModel):
@@ -701,34 +729,57 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         raise HTTPException(exc.http_status,{"error":"Interview route rejected.","cause":exc.error.detail,"next":"Correct the named model settings and reload before starting."})
     except EngineUnreachableError as exc:raise _engine_unreachable(exc)
     except (KeyError,TypeError,ValueError) as exc:raise HTTPException(502,{"error":"Engine model preview was invalid.","cause":str(exc),"next":"Check the engine version and retry."})
-    proposed_session=str(uuid4());progress_stop=asyncio.Event()
+    proposed_session=str(uuid4())
+    if not store.begin_interview_start(task_id,proposed_session,selected_route):
+        raise HTTPException(409,"task already started")
+    asyncio.create_task(_complete_interview_start(task_id,proposed_session,selected_route,initial_model,idea,effective_models,a.label))
+    return JSONResponse({"status":"starting","task_id":task_id,"session_id":proposed_session,
+                         "next":f"/tasks/{task_id}/view"},status_code=202)
+
+async def _complete_interview_start(task_id:str,proposed_session:str,selected_route:str,
+                                    initial_model:str|None,idea:str,effective_models:dict,actor_label:str):
+    progress_stop=asyncio.Event()
     progress_watch=asyncio.create_task(_watch_engine_advance(task_id,proposed_session,progress_stop))
     try:started=await run_in_threadpool(engine_client.start,StartSessionRequest(task_id=task_id,session_id=UUID(proposed_session),idea=idea,model_route=selected_route,initial_model=initial_model))
     except EngineUnreachableError as exc:
         activity("engine.unreachable","Interview engine unreachable at task start",task_id=task_id,base_url=exc.base_url,cause=str(exc.cause))
         store.add_event(task_id,"error",f"Error: the interview engine is not reachable. Likely cause: nothing accepted the connection at {exc.base_url} - the engine service is not running. Next: restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Then retry.",phase_key="intent",payload=_engine_unreachable_payload(exc))
-        raise _engine_unreachable(exc)
+        store.update_phase(task_id,"intent","failed",detail=str(exc)[:300])
+        return
     except EngineClientError as exc:
         payload={"route":selected_route,"http_status":exc.http_status,"protocol_error":exc.error.model_dump(mode="json"),"stage":"preflight"}
         activity("model.route.preflight.rejected","Interview route rejected by engine",task_id=task_id,**payload)
         store.add_event(task_id,"model_preflight",f"Interview route {selected_route} rejected: {exc.error.detail}",phase_key="intent",payload=payload)
-        raise HTTPException(exc.http_status,exc.error.model_dump(mode="json"))
+        store.add_event(task_id,"error",f"Interview start failed: {exc.error.detail}",phase_key="intent",payload=payload)
+        store.update_phase(task_id,"intent","failed",detail=exc.error.detail[:300])
+        return
+    except Exception as exc:
+        activity("engine.start.failed","Interview start failed unexpectedly",task_id=task_id,error=f"{type(exc).__name__}: {str(exc)[:200]}")
+        store.add_event(task_id,"error",f"Interview start failed: {type(exc).__name__}: {str(exc)[:200]}",phase_key="intent")
+        store.update_phase(task_id,"intent","failed",detail=f"{type(exc).__name__}: {str(exc)[:200]}")
+        return
     finally:
         progress_stop.set();await progress_watch
-    if started.snapshot.session_id!=proposed_session and isinstance(engine_client,HttpEngineClient):
-        raise HTTPException(502,"engine returned the wrong session ID")
-    store.set_engine_session(task_id,started.snapshot.session_id);store.set_model_route(task_id,selected_route)
+    if started.snapshot.session_id!=proposed_session or started.snapshot.task_id!=task_id:
+        store.add_event(task_id,"error","Interview engine returned a different task or session ID",phase_key="intent")
+        store.update_phase(task_id,"intent","failed",detail="Engine task or session ID mismatch")
+        return
+    # The session ID was bound before the long call; do not replace it here.
     effective_models=started.snapshot.model_map or effective_models
     pairs={tuple(pair) for pair in effective_models.values()}
-    if len(pairs)!=1:raise HTTPException(502,"engine returned inconsistent session model map")
+    if len(pairs)!=1:
+        store.add_event(task_id,"error","Interview engine returned an inconsistent session model map",phase_key="intent",
+                        payload={"session_id":proposed_session,"next":"Check the engine's pinned model route and journal; the session remains bound."})
+        store.update_phase(task_id,"intent","failed",detail="Engine returned inconsistent session model map")
+        return
     provider,model=next(iter(pairs))
     resolved=f"{provider}:{model}"
-    store.add_event(task_id,"model_route",f"interview uses {resolved}",phase_key="intent",payload={"route":selected_route,"resolved":resolved,"provider":provider,"model":model,"effective_stages":list(effective_models),"scope":"start","actor":a.label})
+    store.add_event(task_id,"model_route",f"interview uses {resolved}",phase_key="intent",payload={"route":selected_route,"resolved":resolved,"provider":provider,"model":model,"effective_stages":list(effective_models),"scope":"start","actor":actor_label})
     activity("model.route.resolved","Interview route accepted",task_id=task_id,session_id=started.snapshot.session_id,selected=selected_route,effective=resolved)
     detail="Waiting for founder input" if started.snapshot.process_status==ProcessStatus.WAITING_INPUT else "Interview engine running"
     store.update_phase(task_id,"intent","running",detail=detail)
     store.add_event(task_id,"engine_protocol","HTTP interview session started",phase_key="intent",payload=started.model_dump(mode="json"))
-    return {"status":"started","task_id":task_id,"session_id":started.snapshot.session_id,"next":f"/tasks/{task_id}/view"}
+    return
 
 class RequirementResolution(BaseModel):
     action:str=Field(pattern="^(validate_file|greenfield)$")
@@ -1117,7 +1168,15 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
     if not task: raise HTTPException(404, "task not found")
     session_id=store.engine_session(task_id)
     snapshot=None
-    if session_id:
+    starting=bool(session_id and task.get("active_phase")=="intent" and
+                  any(e.get("kind")=="command" and e.get("message")=="Interview starting" and
+                      (e.get("payload") or {}).get("session_id")==session_id for e in store.events(task_id)) and
+                  not any(e.get("kind")=="engine_protocol" and
+                          (e.get("payload") or {}).get("snapshot",{}).get("session_id")==session_id
+                          for e in store.events(task_id)))
+    if starting and task.get("state")=="running":
+        input_state={"waiting":False,"process_live":True,"decision":None,"requirement":None,"question":None,"input_id":None}
+    elif session_id:
         try:
             snapshot=engine_client.snapshot(session_id)
             if _reconcile_terminal_http_interview(task_id,snapshot):

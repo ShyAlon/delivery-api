@@ -99,7 +99,35 @@ class Simulation:
         source=Path(task["source_dir"])
         for phase,name in ARTIFACTS.items():
             if (source/name).exists():self.store.update_phase(task_id,phase,"done",detail="Imported recorded artifact");self.store.add_task_artifact(task_id,phase,name,str(source/name))
-        self.store.audit("local user","simulation.completed",task_id,{"speed":"instant" if speed is None else speed});self.store.add_event(task_id,"complete","Simulation replay complete - no process was spawned",phase_key=previous)
+        # A recording may end after any phase. Exhausting its rows ends the
+        # replay worker, even if the last V-process phase was not recorded.
+        # Do not leave that task marked running forever, or claim that its
+        # unfinished product definition is complete.
+        if self.store.task(task_id)["state"]=="running" and previous:
+            self.store.update_phase(task_id,previous,"failed",detail="Recording ended before the V-process was complete")
+            self.store.add_event(task_id,"interrupted","The recording ended before the V-process was complete; no replay is running.",phase_key=previous,
+                                 payload={"next":"Import a complete recording or delete this partial replay."})
+        if self.store.task(task_id)["state"]=="done":
+            self.store.audit("local user","simulation.completed",task_id,{"speed":"instant" if speed is None else speed})
+            self.store.add_event(task_id,"complete","Simulation replay complete - no process was spawned",phase_key=previous)
+        else:
+            self.store.audit("local user","simulation.partial",task_id,{"speed":"instant" if speed is None else speed})
+    def reconcile_interrupted(self):
+        """An in-memory replay cannot survive a server process restart."""
+        for task in self.store.list_tasks():
+            if not task.get("simulated") or task["state"] not in ("running", "waiting_gate"):
+                continue
+            active=self.running.get(task["task_id"])
+            if active is not None and not active.done():
+                continue
+            phase=task.get("active_phase")
+            if not phase:continue
+            self.store.add_event(task["task_id"],"interrupted",
+                                 "Recorded replay stopped when the server restarted. Its source recording is intact; start replay again if needed.",
+                                 phase_key=phase,payload={"cause":"replay worker is no longer running","next":"Start the replay again, or delete this stopped task."})
+            self.store.update_phase(task["task_id"],phase,"failed",detail="Recorded replay stopped on server restart")
+            self.store.audit("system","simulation.interrupted",task["task_id"],{"phase":phase,"source_artifacts_deleted":False})
+
     def start(self,task_id:str,speed:float|None):
         if task_id in self.running and not self.running[task_id].done():raise ValueError("simulation already running")
         self.running[task_id]=asyncio.create_task(self.replay(task_id,speed))

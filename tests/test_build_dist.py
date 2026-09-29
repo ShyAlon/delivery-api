@@ -161,7 +161,7 @@ def test_local_launcher_preflights_downstream_generator_before_serving():
     assert 'Error: spec-generator environment is missing a required runtime dependency.' in script
 
 
-def test_pull_all_syncs_all_six_locked_python_repos(tmp_path):
+def test_pull_all_syncs_dependent_locked_repos_and_skips_contracts_source(tmp_path):
     import os, subprocess
     script=Path(__file__).parents[1]/'scripts/pull-all.sh'
     repos='delivery-api interview-engine spec-generator vmodel-contracts verification-loop vmodel-spec-app'.split()
@@ -181,8 +181,10 @@ def test_pull_all_syncs_all_six_locked_python_repos(tmp_path):
     assert result.returncode==0,result.stderr
     calls=log.read_text().splitlines()
     assert len([x for x in calls if x.startswith('git ')])==6
-    assert len([x for x in calls if x.startswith('uv sync --locked --quiet ')])==6
-    assert all(any(f'/checkouts/{repo}' in x for x in calls) for repo in repos)
+    assert len([x for x in calls if x.startswith('uv sync --locked --quiet ')])==5
+    assert all(any(f'/checkouts/{repo}' in x for x in calls) for repo in repos if repo!='vmodel-contracts')
+    assert not any(x.startswith('uv ') and '/checkouts/vmodel-contracts' in x for x in calls)
+    assert 'Notice: vmodel-contracts is the source package' in result.stdout
 
 
 def test_generator_never_falls_back_to_delivery_python_when_sibling_venv_missing():
