@@ -291,12 +291,17 @@ class SQLiteStore:
             return self.task(task_id)
 
     def list_tasks(self) -> list[dict]:
-        rows = self._db.execute("SELECT * FROM tasks ORDER BY updated_at DESC").fetchall()
-        return [self._task_record(r) for r in rows]
+        # A single connection is shared by API worker threads and background jobs.
+        # Keep the lock through every query in the task projection, not just
+        # the initial fetch; _task_record performs more reads on this connection.
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM tasks ORDER BY updated_at DESC").fetchall()
+            return [self._task_record(r) for r in rows]
 
     def task(self, task_id: str) -> dict | None:
-        row = self._db.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
-        return self._task_record(row) if row else None
+        with self._lock:
+            row = self._db.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+            return self._task_record(row) if row else None
 
     def rename_task(self, task_id: str, title: str, actor: str = "local user") -> dict:
         title=title.strip()
