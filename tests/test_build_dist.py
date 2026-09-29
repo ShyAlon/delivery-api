@@ -76,7 +76,7 @@ def test_smoke_failure_reports_request_and_response():
 def test_smoke_state_survives_rotating_diagnostic_folder():
     smoke=(Path(__file__).parents[1]/'scripts/smoke-packaged-real-model.sh').read_text()
     assert 'REQUI_RE_SMOKE_STATE_DIR' in smoke and 'checkpoint.json' in smoke
-    assert 'VMODEL_ARTIFACTS_DIR="$REQUI_RE_SMOKE_STATE_DIR/artifacts"' in smoke
+    assert 'VMODEL_ARTIFACTS_DIR="${VMODEL_ARTIFACTS_DIR:-$REQUI_RE_SMOKE_STATE_DIR/artifacts}"' in smoke
     assert '--fresh' in smoke and 'interview.resume' in smoke
 
 

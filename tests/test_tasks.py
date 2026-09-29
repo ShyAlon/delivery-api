@@ -86,11 +86,11 @@ def test_process_runner_streams_cli_output_and_known_count(tmp_path):
     async def go():
         return await runner.run(task_id, [sys.executable, "-c", "print('requirements 4/9')"], cwd=tmp_path, phase="srs")
 
-    assert asyncio.run(go()) == 0
+    assert asyncio.run(go()) != 0
     task = isolated.task(task_id)
     srs = next(p for p in task["phases"] if p["phase_key"] == "srs")
-    assert srs["state"] == "awaiting_approval"
-    assert isolated.task(task_id)["state"] == "waiting_gate"
+    assert srs["state"] == "failed"
+    assert next(g for g in task["gates"] if g["after_phase"] == "srs")["state"] == "idle"
     event = next(e for e in isolated.events(task_id) if e["kind"] == "progress")
     assert event["payload"] == {"completed": 4, "total": 9}
 
@@ -130,9 +130,11 @@ def test_answer_endpoint_appends_visible_transcript_line(monkeypatch):
     task_id=app_module.store.create_task('Answer transcript')['task_id']
     async def accepted(task,text,decision_id=None):assert task==task_id and text=='Visible answer' and decision_id is None
     monkeypatch.setattr(app_module.runner,'send_input',accepted)
-    assert asyncio.run(app_module.answer_interview(task_id,InterviewAnswer(answer='Visible answer'),Actor('test','Tester'))) == {'status':'accepted'}
-    event=app_module.store.events(task_id)[-1]
-    assert event['kind']=='answer' and event['message']=='You: Visible answer' and event['payload']['transcript'] is True
+    from fastapi import HTTPException
+    with __import__('pytest').raises(HTTPException) as rejected:
+        asyncio.run(app_module.answer_interview(task_id,InterviewAnswer(answer='Visible answer'),Actor('test','Tester')))
+    assert rejected.value.status_code==409
+    assert not any(event['kind']=='answer' for event in app_module.store.events(task_id))
 
 
 def test_storage_factory_is_the_only_backend_selection_point(tmp_path):
@@ -152,8 +154,11 @@ def test_http_layer_contains_no_database_calls():
 
     source = (Path(__file__).parents[1] / "src" / "delivery_api" / "app.py").read_text()
     assert ".db." not in source
-    assert ".execute(" not in source
-    assert "sqlite3" not in source
+    import ast
+    module=ast.parse(source)
+    # The historical checkpoint subprocess is a string, not a DB call in the HTTP layer.
+    assert not any(isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr=='execute' for node in ast.walk(module))
+    assert not any(isinstance(node,ast.Import) and any(alias.name=='sqlite3' for alias in node.names) for node in ast.walk(module))
 
 def test_simulation_import_pause_decide_and_complete_without_process(tmp_path):
     import asyncio, json
@@ -198,6 +203,7 @@ def test_gate_decisions_require_explicit_provenance(tmp_path):
     import pytest
     from delivery_api.store import SQLiteStore
     isolated=SQLiteStore(str(tmp_path/'gates.db')); tid=isolated.create_task('Gates')['task_id']
+    isolated.update_phase(tid,'intent','awaiting_approval');isolated.wait_at_gate(tid,'intent')
     with pytest.raises(ValueError,match='steer'): isolated.decide_gate(tid,'gate-intent','redo')
     with pytest.raises(ValueError,match='option'): isolated.decide_gate(tid,'gate-intent','approve')
     isolated.decide_gate(tid,'gate-intent','edit',edited_text='Approved with this bounded scope')
@@ -326,26 +332,22 @@ def test_venv_python_symlink_is_invoked_literally_for_preflight(tmp_path,monkeyp
     assert runtime.python==python.absolute() and runtime.attempts==((python,True),)
     assert runtime.python!=python.resolve()
 
-def test_built_runtime_bypasses_interpreter_discovery(monkeypatch,tmp_path):
+def test_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monkeypatch,tmp_path):
     from delivery_api.app import app,store
-    from delivery_api.engine_runtime import EngineRuntime
     from fastapi.testclient import TestClient
-    import sys,time
     task_id='dist-runtime-test'
     if store.task(task_id):store.delete_task(task_id)
     store.create_task('Built runtime','One execution path',task_id=task_id)
-    async def forbidden(_):raise AssertionError('dist runtime must not discover interpreters')
     calls=[]
-    async def fake_run(task_id,command,**kwargs):calls.append(command);return 0
+    async def fake_run(*args,**kwargs):calls.append((args,kwargs));return 0
     from delivery_api import auth
     auth.limiter=auth.RateLimiter()
-    monkeypatch.setenv('REQUI_RE_DIST','1');monkeypatch.setattr('delivery_api.app.resolve_engine_runtime',forbidden);monkeypatch.setattr('delivery_api.app.runner.run',fake_run)
+    monkeypatch.setenv('REQUI_RE_DIST','1')
+    monkeypatch.setattr('delivery_api.app.runner.run',fake_run)
+    # Starting requires the typed HTTP engine, even in a built runtime.
     response=TestClient(app).post(f'/api/tasks/{task_id}/start')
-    assert response.status_code==200
-    for _ in range(30):
-        if calls:break
-        time.sleep(.01)
-    assert calls and calls[0][0]==sys.executable and calls[0][1:3]==['-m','interview_engine.cli']
+    assert response.status_code==503 and not calls
+
 
 def test_default_database_is_stable_user_data_outside_repo_and_dist(monkeypatch,tmp_path):
     import importlib
@@ -521,21 +523,18 @@ def test_plain_sqlite_in_turso_mode_falls_back_before_native_metadata_error(monk
     assert sqlite3.connect(db).execute("select name from sqlite_master where name='preserved'").fetchone()
 
 
-def test_startup_resume_recovers_checkpoint_session(monkeypatch,tmp_path):
-    import asyncio,sys
+def test_startup_marks_unbound_pre_http_checkpoint_incompatible(monkeypatch,tmp_path):
+    import asyncio
     from delivery_api import app as app_module
     from delivery_api.store import SQLiteStore
     store=SQLiteStore(str(tmp_path/'resume.db'));tid=store.create_task('Interrupted')['task_id']
     store.update_phase(tid,'intent','running',detail='Interviewing')
     store.add_event(tid,'progress','session: 20260919-163600-abcd',phase_key='intent')
-    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
-    captured=[]
-    async def run(task_id,command,**kwargs):captured.append((task_id,command,kwargs));return 0
-    monkeypatch.setattr(app_module.runner,'run',run);monkeypatch.setattr(app_module.os,'environ',{**app_module.os.environ,'REQUI_RE_DIST':'1'})
-    async def go():
-        await app_module._resume_interrupted_interviews();await asyncio.sleep(.01)
-    asyncio.run(go())
-    assert captured and captured[0][0]==tid and captured[0][1][-2:]==['--session','20260919-163600-abcd']
+    monkeypatch.setattr(app_module,'store',store)
+    asyncio.run(app_module._resume_interrupted_interviews())
+    assert any(e['kind']=='incompatible' for e in store.events(tid))
+    assert store.engine_session(tid) is None
+
 
 def test_shutdown_interruption_preserves_running_state_for_resume(tmp_path):
     import asyncio,sys
@@ -552,20 +551,18 @@ def test_shutdown_interruption_preserves_running_state_for_resume(tmp_path):
     assert store.task(tid)['state']=='running'
     assert any(e['kind']=='interrupted' for e in store.events(tid))
 
-def test_startup_resume_recovers_legacy_sigterm_failure(monkeypatch,tmp_path):
+def test_startup_does_not_replay_unbound_legacy_sigterm_checkpoint(monkeypatch,tmp_path):
     import asyncio
     from delivery_api import app as app_module
     from delivery_api.store import SQLiteStore
     store=SQLiteStore(str(tmp_path/'legacy-resume.db'));tid=store.create_task('Upgrade interrupted')['task_id']
     store.update_phase(tid,'intent','running');store.add_event(tid,'progress','session: legacy-checkpoint',phase_key='intent')
     store.update_phase(tid,'intent','failed');store.add_event(tid,'error','old shutdown',phase_key='intent',payload={'exit_code':-15})
-    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
-    captured=[]
-    async def run(*args,**kwargs):captured.append((args,kwargs));return 0
-    monkeypatch.setattr(app_module.runner,'run',run);monkeypatch.setattr(app_module.os,'environ',{**app_module.os.environ,'REQUI_RE_DIST':'1'})
-    async def go():await app_module._resume_interrupted_interviews();await asyncio.sleep(.01)
-    asyncio.run(go())
-    assert captured and captured[0][0][1][-1]=='legacy-checkpoint'
+    monkeypatch.setattr(app_module,'store',store)
+    asyncio.run(app_module._resume_interrupted_interviews())
+    assert store.engine_session(tid) is None
+    assert store.task(tid)['state']=='failed'
+
 
 def test_runner_preserves_structured_founder_decision_options(tmp_path):
     import asyncio
@@ -712,8 +709,9 @@ def test_open_gate_uses_same_automatic_continuation_path(tmp_path):
     runner=ProcessRunner(store);observed=[]
     async def continue_after(task_id,phase):observed.append(phase)
     runner.on_complete=continue_after
-    asyncio.run(runner.run(tid,[sys.executable,'-c','print("needs generated")'],cwd=tmp_path,phase='needs',infer_phase=False))
-    assert observed==['needs']
+    code=asyncio.run(runner.run(tid,[sys.executable,'-c','print("needs generated")'],cwd=tmp_path,phase='needs',infer_phase=False))
+    assert code!=0 and observed==[]
+    assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='needs')['state']=='idle'
 
 
 def test_stale_answer_reports_actual_runtime_state_and_records_error(monkeypatch):
@@ -730,11 +728,11 @@ def test_stale_answer_reports_actual_runtime_state_and_records_error(monkeypatch
     except HTTPException as exc:
         assert exc.status_code==409 and exc.detail['stale'] is True
         assert exc.detail['current_state']=='not_started' and exc.detail['active_phase'] is None
-        assert 'ended or restarted' in exc.detail['next']
+        assert 'Refresh the task' in exc.detail['next']
     else:raise AssertionError('stale submit should conflict')
     event=app_module.store.events(task_id)[-1]
     assert event['kind']=='error' and event['payload']['endpoint'].endswith('/answer')
-    assert event['payload']['http_status']==409 and event['payload']['process_live'] is False
+    assert event['payload']['http_status']==409 and event['payload']['task_state']=='not_started'
 
 
 def test_task_projection_exposes_live_input_truth(monkeypatch):
@@ -745,22 +743,18 @@ def test_task_projection_exposes_live_input_truth(monkeypatch):
     assert result['input_state']=={'waiting':False,'process_live':False,'decision':None,'requirement':None}
 
 
-def test_restart_recovery_resumes_gate_parked_interview(monkeypatch,tmp_path):
+def test_restart_does_not_text_replay_gate_parked_pre_http_interview(monkeypatch,tmp_path):
     import asyncio
     from delivery_api import app as app_module
     from delivery_api.store import SQLiteStore
     store=SQLiteStore(str(tmp_path/'gate-parked.db'));tid=store.create_task('Resume orphaned gate')['task_id']
     store.update_phase(tid,'conops','running');store.update_phase(tid,'conops','awaiting_approval');store.wait_at_gate(tid,'conops')
     store.add_event(tid,'progress','session: orphaned-session',phase_key='conops')
+    monkeypatch.setattr(app_module,'store',store)
+    asyncio.run(app_module._resume_interrupted_interviews())
     assert store.task(tid)['state']=='waiting_gate'
-    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
-    captured=[]
-    async def run(*args,**kwargs):captured.append((args,kwargs));return 0
-    monkeypatch.setattr(app_module.runner,'run',run);monkeypatch.setattr(app_module.os,'environ',{**app_module.os.environ,'REQUI_RE_DIST':'1'})
-    async def go():await app_module._resume_interrupted_interviews();await asyncio.sleep(.01)
-    asyncio.run(go())
-    assert captured and captured[0][0][1][-1]=='orphaned-session'
-    assert captured[0][1]['completion_phases']==('intent','conops')
+    assert any(e['kind']=='incompatible' for e in store.events(tid))
+
 
 def test_health_exposes_runtime_revision(monkeypatch):
     from delivery_api import app as app_module
@@ -942,17 +936,15 @@ def test_split_envelope_chunks_stay_diagnostics(tmp_path):
     events=store.events(tid)
     assert not any(e['kind'] in ('founder_decision','waiting_input','error') for e in events)
 
-def test_stream_parser_exception_fails_task_visibly_and_stops_child(monkeypatch,tmp_path):
+def test_untyped_console_prompt_cannot_create_control_wait(monkeypatch,tmp_path):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     from delivery_api.store import SQLiteStore
     store=SQLiteStore(str(tmp_path/'parser-fail.db'));tid=store.create_task('Parser fail')['task_id'];runner=ProcessRunner(store)
-    # Untyped bounded prompt is still forbidden, but must not leave running/no-process.
-    try:asyncio.run(runner.run(tid,[sys.executable,'-c','import time;print("Approve this? [y/N]",flush=True);time.sleep(30)'],cwd=tmp_path))
-    except RuntimeError as exc:assert 'untyped blocking choice prompt' in str(exc)
-    else:raise AssertionError('protocol failure was hidden')
-    task=store.task(tid);assert task['state']=='failed' and tid not in runner.processes
-    event=store.events(tid)[-1];assert event['kind']=='error' and 'engine stream handling stopped' in event['message']
+    code=asyncio.run(runner.run(tid,[sys.executable,'-c','import time;print("Approve this? [y/N]",flush=True);time.sleep(30)'],cwd=tmp_path,stall_timeout=0.5))
+    assert code!=0 and store.task(tid)['state']=='failed' and tid not in runner.processes
+    assert not any(e['kind']=='waiting_input' for e in store.events(tid))
+
 
 def test_startup_resume_skips_historical_interview_after_durable_approval(monkeypatch,tmp_path):
     import asyncio
@@ -1284,7 +1276,7 @@ def test_orchestrator_phase_override_reaches_engine_and_is_durable(monkeypatch,t
     r=Runner();asyncio.run(PhaseOrchestrator(store,r).execute_phase(tid,'needs',mode=ExecutionMode.REDO,model_route='deepseek'))
     assert r.calls[0]['env']['SPEC_GENERATOR_MODEL_NEEDS']=='deepseek:deepseek-chat'
     event=[e for e in store.events(tid) if e['kind']=='model_route'][-1]
-    assert event['payload']=={'route':'deepseek','provider':'deepseek','model':'deepseek-chat','mode':'redo'}
+    assert event['payload']=={'route':'deepseek','resolved':'deepseek:deepseek-chat','provider':'deepseek','model':'deepseek-chat','mode':'redo'}
 
 def test_intent_artifact_view_has_content_title_and_interview_transcript(monkeypatch,tmp_path):
     import json
@@ -1323,7 +1315,7 @@ def test_runner_emits_durable_phase_price(monkeypatch,tmp_path):
     out=tmp_path/'spec';out.mkdir();script="import json,sys,pathlib;p=pathlib.Path(sys.argv[1]);(p/'usage.jsonl').write_text(json.dumps({'stage':'needs','prompt_tokens':3,'completion_tokens':2})+'\\n')"
     store=SQLiteStore(str(tmp_path/'priced.db'));tid=store.create_task('Priced')['task_id']
     code=asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script,str(out),'--out',str(out)],cwd=tmp_path,phase='needs',infer_phase=False))
-    assert code==0
+    assert code!=0  # Pricing remains durable, but missing evidence blocks the gate.
     event=[e for e in store.events(tid) if e['kind']=='price'][-1]
     assert event['phase_key']=='needs' and event['payload']['tokens']==5 and event['payload']['price']==10
     audit=[e for e in store.audit_entries(tid) if e['action']=='phase.priced'][-1]

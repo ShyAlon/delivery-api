@@ -1,0 +1,65 @@
+"""One UI control shape, with source-owned preconditions kept opaque.
+
+This is a projection, not a second authority. Progress never changes it.
+"""
+from __future__ import annotations
+from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from vmodel_contracts.interactive import EngineSnapshot, InputKind, ProcessStatus, NextStep
+
+class TaskControlSnapshot(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    version:Literal[1]=1
+    task_id:str
+    phase_key:str|None
+    mode:Literal["not_started","working","waiting_input","waiting_gate","completed","failed"]
+    owner:Literal["engine","delivery","none"]
+    wait_id:str|None=None
+    kind:str|None=None
+    prompt:str|None=None
+    options:list[dict]=Field(default_factory=list)
+    artifact_ref:str|None=None
+    actions:list[str]=Field(default_factory=list)
+    precondition:dict=Field(default_factory=dict)
+    revision:str
+
+    @model_validator(mode="after")
+    def wait_has_owner(self):
+        if self.mode.startswith("waiting_") and (not self.wait_id or self.owner=="none"):
+            raise ValueError("a wait requires a source and stable ID")
+        return self
+
+
+def project(task:dict,input_state:dict,engine:EngineSnapshot|None=None,work=None,artifacts:list[dict]|None=None)->TaskControlSnapshot:
+    task_id=task["task_id"];phase=task.get("active_phase");state=task.get("state")
+    base=dict(task_id=task_id,phase_key=phase,mode="working",owner="delivery",revision=f"task:{task.get('updated_at',0)}")
+    if state=="not_started":return TaskControlSnapshot(**{**base,"mode":"not_started","owner":"none"})
+    if state=="done":return TaskControlSnapshot(**{**base,"mode":"completed","owner":"none"})
+    if state=="failed":return TaskControlSnapshot(**{**base,"mode":"failed","owner":"none"})
+    # Active subprocess decision wins over a stale stored gate for the same phase.
+    if work and work.owner=="decision" and work.phase==phase and work.status=="waiting" and work.decision:
+        decision=work.decision;key=str(decision.get("decision_id") or "")
+        if key:return TaskControlSnapshot(**{**base,"mode":"waiting_input","owner":"delivery","wait_id":key,
+            "kind":"decision","prompt":decision.get("prompt"),"options":decision.get("options") or [],
+            "actions":["answer"],"precondition":{"decision_id":key},"revision":f"decision:{key}"})
+    if engine and phase in ("intent","conops") and engine.task_id==task_id and engine.process_status==ProcessStatus.WAITING_INPUT and engine.next_step==NextStep.WAIT_INPUT and engine.open_input:
+        pending=engine.open_input;kind={InputKind.TEXT:"text",InputKind.CHOICE:"choice",InputKind.APPROVAL:"approval"}[pending.kind]
+        return TaskControlSnapshot(**{**base,"mode":"waiting_input","owner":"engine","wait_id":str(pending.input_id),
+            "kind":kind,"prompt":pending.prompt,"options":[option.model_dump(mode="json") for option in pending.options],
+            "actions":["answer","switch_model"],"precondition":{"session_id":engine.session_id,
+                "input_id":str(pending.input_id),"session_sequence":engine.sequence},
+            "revision":f"engine:{engine.session_id}:{engine.sequence}"})
+    gate=next((g for g in task.get("gates",[]) if g.get("state")=="waiting" and g.get("after_phase")==phase),None)
+    if gate:
+        key=gate["gate_key"]
+        evidence=next((artifact.get("ref") for artifact in (artifacts or [])
+                       if artifact.get("phase_key")==phase and not artifact.get("stale")
+                       and artifact.get("present",True) and artifact.get("valid") is not False),None)
+        return TaskControlSnapshot(**{**base,"mode":"waiting_gate","owner":"delivery","wait_id":key,
+            "artifact_ref":evidence,
+            "kind":"phase_gate","prompt":gate.get("label"),"options":[],"actions":["approve","edit","redo"],
+            "precondition":{"gate_key":key,"gate_revision":gate.get("revision",0)},
+            "revision":f"gate:{key}:{gate.get('revision',0)}"})
+    if input_state.get("engine_unreachable") or input_state.get("engine_error") or (not input_state.get("process_live") and not (work and work.status=="running")):
+        return TaskControlSnapshot(**{**base,"mode":"failed","owner":"none"})
+    return TaskControlSnapshot(**base)

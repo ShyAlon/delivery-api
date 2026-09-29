@@ -9,7 +9,14 @@ export const TASK_UI_ACTIONS=Object.fromEntries(
 );
 
 export function reduceTaskSnapshot(task){
-  const source=task?.ui_state||{},mode=TASK_UI_MODES.has(source.mode)?source.mode:'error',allowed=TASK_UI_ACTIONS[mode];
+  // Delivery's uniform control projection chooses the waiting/working mode.
+  // Legacy ui_state supplies the display payload during the additive rollout.
+  const source=task?.ui_state||{},control=task?.control_snapshot;
+  const mapped=control?.mode==='waiting_input'?(control.kind==='text'?'engine_question':'engine_decision'):
+    control?.mode==='waiting_gate'?'phase_gate':control?.mode==='working'?'executing':
+    control?.mode==='completed'?'complete':control?.mode==='failed'?'error':
+    control?.mode==='not_started'?'not_started':source.mode;
+  const mode=TASK_UI_MODES.has(mapped)?mapped:'error',allowed=TASK_UI_ACTIONS[mode];
   const decision=allowed.decision&&source.decision?.options?.length?source.decision:null;
   const gate=allowed.gate&&source.gate?source.gate:null;
   return Object.freeze({mode,active_phase:source.active_phase||task?.active_phase||null,process_live:Boolean(source.process_live),decision,gate,question:source.question||null,input_id:source.input_id||null,

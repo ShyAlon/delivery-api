@@ -112,45 +112,32 @@ def test_artifacts_root_accepts_interview_only_spec_only_and_combined(client,tmp
  r=client.post('/api/settings/artifacts-root',json={'path':str(tmp_path/'missing')})
  assert r.status_code==400 and set(r.json()['detail'])=={'error','cause','next'}
 
-def test_start_task_launches_interview_runner(monkeypatch,tmp_path):
+def test_start_task_requires_typed_http_engine_not_subprocess(monkeypatch,tmp_path):
     from delivery_api.app import app,store
     from fastapi.testclient import TestClient
-    import asyncio
     tid='start-engine-test'
     if store.task(tid):store.delete_task(tid)
     store.create_task('Start engine test','A calm family task app',task_id=tid)
     calls=[]
-    async def fake_run(task_id,command,**kwargs):calls.append((task_id,command,kwargs));return 0
+    async def fake_run(*args,**kwargs):calls.append((args,kwargs));return 0
     monkeypatch.setattr('delivery_api.app.runner.run',fake_run)
-    from delivery_api.engine_runtime import EngineRuntime
-    async def fake_resolve(engine_dir):return EngineRuntime(__import__('pathlib').Path(__import__('sys').executable),())
-    monkeypatch.setattr('delivery_api.app.resolve_engine_runtime',fake_resolve)
-    monkeypatch.setenv('INTERVIEW_ENGINE_DIR',str(tmp_path));tmp_path.mkdir(exist_ok=True)
-    r=TestClient(app).post(f'/api/tasks/{tid}/start')
-    assert r.status_code==200 and r.json()['status']=='started'
-    import time
-    for _ in range(20):
-        if calls:break
-        time.sleep(.01)
-    assert calls and calls[0][0]==tid and calls[0][1][1:3]==['-m','interview_engine.cli'] and calls[0][1][3]=='A calm family task app'
-    assert store.task(tid)['state']=='running'
+    response=TestClient(app).post(f'/api/tasks/{tid}/start')
+    assert response.status_code==503 and not calls
+    assert store.task(tid)['state']=='not_started'
 
 
-def test_start_task_missing_engine_dependency_is_human_readable(monkeypatch,tmp_path):
+def test_start_task_unreachable_http_engine_is_human_readable(monkeypatch,tmp_path):
     from delivery_api.app import app,store
-    from delivery_api.engine_runtime import EngineRuntimeError
     from fastapi.testclient import TestClient
     tid='preflight-failure-test'
     if store.task(tid):store.delete_task(tid)
     store.create_task('Preflight failure','A product idea',task_id=tid)
-    engine=tmp_path/'interview-engine';engine.mkdir();python=tmp_path/'python'
-    async def fail(_):raise EngineRuntimeError(module='langchain_core',checked=(python,),engine_dir=engine)
-    monkeypatch.setattr('delivery_api.app.resolve_engine_runtime',fail);monkeypatch.setenv('INTERVIEW_ENGINE_DIR',str(engine))
     r=TestClient(app).post(f'/api/tasks/{tid}/start')
     assert r.status_code==503 and set(r.json()['detail'])=={'error','cause','next'}
     text=' '.join(r.json()['detail'].values())
-    assert 'langchain_core' in text and 'pip install -e' in text and 'Traceback' not in text
+    assert 'interview engine is not reachable' in text and 'Traceback' not in text
     assert store.task(tid)['state']=='not_started'
+
 
 def test_engine_python_settings_show_candidates_and_persist(monkeypatch,tmp_path,client):
     from delivery_api import engine_runtime
@@ -164,37 +151,26 @@ def test_engine_python_settings_show_candidates_and_persist(monkeypatch,tmp_path
     response=client.post('/api/settings/engine-python',json={'path':str(good)})
     assert response.status_code==200 and response.json()['path']==str(good)
 
-def test_model_route_preflight_only_exposes_availability(monkeypatch):
+def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch):
     from delivery_api.app import app
     from fastapi.testclient import TestClient
     monkeypatch.setenv('DEEPSEEK_API_KEY','super-secret')
     body=TestClient(app).get('/api/model-routes').json()
-    assert body=={'routes':[{'id':'ollama','available':True},{'id':'deepseek','available':True}]}
+    assert all(route['available'] is False for route in body['routes'])
     assert 'super-secret' not in str(body)
 
-def test_start_task_persists_and_routes_deepseek(monkeypatch,tmp_path):
+
+def test_start_task_deepseek_requires_engine_preflight(monkeypatch,tmp_path):
     from delivery_api.app import app,store
-    from delivery_api import auth
-    auth.limiter._hits.clear()
-    from delivery_api.engine_runtime import EngineRuntime
     from fastapi.testclient import TestClient
-    from pathlib import Path
     tid='deepseek-start-test'
     if store.task(tid):store.delete_task(tid)
     store.create_task('DeepSeek start','An idea',task_id=tid)
-    calls=[]
-    async def fake_run(*a,**kw):calls.append(kw);return 0
-    async def fake_resolve(_):return EngineRuntime(Path(__import__('sys').executable),())
-    monkeypatch.setattr('delivery_api.app.runner.run',fake_run);monkeypatch.setattr('delivery_api.app.resolve_engine_runtime',fake_resolve)
-    monkeypatch.setenv('INTERVIEW_ENGINE_DIR',str(tmp_path));monkeypatch.setenv('DEEPSEEK_API_KEY','secret');tmp_path.mkdir(exist_ok=True)
-    assert TestClient(app).post(f'/api/tasks/{tid}/start',json={'model_route':'deepseek'}).status_code==200
-    import time
-    for _ in range(20):
-        if calls:break
-        time.sleep(.01)
-    assert store.task(tid)['model_route']=='deepseek'
-    assert calls[0]['env']['INTERVIEW_ENGINE_MODEL_PROBING']=='deepseek:deepseek-chat'
-    assert 'secret' not in str(store.events(tid))
+    monkeypatch.setenv('DEEPSEEK_API_KEY','secret')
+    response=TestClient(app).post(f'/api/tasks/{tid}/start',json={'model_route':'deepseek'})
+    assert response.status_code==503 and store.task(tid)['state']=='not_started'
+    assert 'secret' not in str(response.json())
+
 
 def test_task_audit_accumulates_tokens_and_price(client):
     from delivery_api.app import store
@@ -202,7 +178,8 @@ def test_task_audit_accumulates_tokens_and_price(client):
     store.add_event(tid,'price','Price 25 units',phase_key='intent',payload={'tokens':10,'price':25})
     store.add_event(tid,'price','Price 50 units',phase_key='needs',payload={'tokens':20,'price':50})
     body=client.get(f'/api/tasks/{tid}/audit').json()
-    assert body['totals']=={'tokens':30,'price':75.0,'phases_priced':2}
+    assert {k:body['totals'][k] for k in ('tokens','price','phases_priced')}=={'tokens':30,'price':75.0,'phases_priced':2}
+    assert body['totals']['interview_calls']==0
 
 def test_task_audit_uses_latest_cumulative_price_per_phase(client):
     from delivery_api.app import store
@@ -210,7 +187,8 @@ def test_task_audit_uses_latest_cumulative_price_per_phase(client):
     store.add_event(tid,'price','Price 10',phase_key='intent',payload={'tokens':5,'price':10,'incremental':True})
     store.add_event(tid,'price','Price 30',phase_key='intent',payload={'tokens':15,'price':30,'incremental':True})
     body=client.get(f'/api/tasks/{tid}/audit').json()
-    assert body['totals']=={'tokens':15,'price':30.0,'phases_priced':1}
+    assert {k:body['totals'][k] for k in ('tokens','price','phases_priced')}=={'tokens':15,'price':30.0,'phases_priced':1}
+    assert body['totals']['interview_calls']==0
 
 
 def test_sessions_sort_title_and_interview_status_from_live_artifacts(tmp_path):

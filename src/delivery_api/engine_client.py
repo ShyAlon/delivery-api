@@ -26,6 +26,7 @@ class EngineClient(ABC):
     def start(self,request:StartSessionRequest)->StartSessionResponse:...
     @abstractmethod
     def snapshot(self,session_id:str)->EngineSnapshot:...
+    def progress(self,session_id:str,after:int=0):...
     @abstractmethod
     def switch_route(self,session_id:str,request:ModelRouteSwitchRequest)->ModelRouteSwitchResponse:
         reply=self._send('POST',f'/v1/sessions/{session_id}/model-route',json=request.model_dump(mode='json'))
@@ -61,6 +62,11 @@ class HttpEngineClient(EngineClient):
     def start(self,request:StartSessionRequest)->StartSessionResponse:
         response=self._send('POST','/v1/sessions',json=request.model_dump(mode='json'))
         return self._validated(response,StartSessionResponse,201)
+
+    def progress(self,session_id:str,after:int=0):
+        from vmodel_contracts.progress_signal import ProgressPage
+        response=self._send('GET',f'/v1/sessions/{session_id}/progress',params={'after':after})
+        return self._validated(response,ProgressPage,200)
 
     def snapshot(self,session_id:str)->EngineSnapshot:
         response=self._send('GET',f'/v1/sessions/{session_id}')

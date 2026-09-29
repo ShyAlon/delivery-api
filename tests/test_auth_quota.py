@@ -175,7 +175,7 @@ def test_concurrent_authenticated_posts_never_miss_valid_session(monkeypatch,tmp
     store=TursoReplicaStore(str(tmp_path/'auth-replica.db'),'libsql://unused','token',connection=Replica(tmp_path/'auth-replica.db'))
     app.state.store=store;monkeypatch.setattr('delivery_api.app.store',store);monkeypatch.setattr(config,'BASIC_AUTH_ENABLED',True);monkeypatch.setattr(config,'COOKIE_SECURE',False);monkeypatch.setattr(config,'RUN_START_RATE_LIMIT',1000);auth.limiter=auth.RateLimiter()
     user=store.upsert_user('google','concurrent','shy.alon@gmail.com','shy.alon@gmail.com',1000,False);store.create_session('stable-session',user['user_id'],time.time()+1000)
-    task=store.create_task('Concurrent answers')['task_id'];store.set_engine_session(task,'concurrent-engine-session')
+    task=store.create_task('Concurrent answers')['task_id'];store.set_engine_session(task,'concurrent-engine-session');store.update_phase(task,'intent','running')
     from uuid import uuid4
     from vmodel_contracts.interactive import EngineSnapshot,InputKind,InputRequest,NextStep,ProcessStatus,SubmitInputResponse,InteractiveEvent,EventType
     pending=InputRequest(input_id=uuid4(),kind=InputKind.TEXT,prompt='Answer')
