@@ -4,16 +4,24 @@ from vmodel_contracts.interactive import *
 import delivery_api.app as module
 from delivery_api.store import SQLiteStore
 
+def wait_for_start_event(store,task_id):
+ import time
+ for _ in range(100):
+  if any(e['kind']=='engine_protocol' for e in store.events(task_id)):return True
+  time.sleep(.01)
+ return False
+
 class FakeEngine:
  def preview_route(self,route):
   model='deepseek-flash' if route=='deepseek' else 'qwen2.5-coder:14b'
   return {'route':route,'model_map':{stage:[route,model] for stage in ('probing','distillation','phrasing','scope_tiebreak','expert_opinion','conops')}}
- def __init__(self):self.pending=InputRequest(input_id=uuid4(),kind=InputKind.APPROVAL,prompt='Approve?',options=[InputOption(value=1,label='Approve'),InputOption(value=0,label='Reject')]);self.submitted=[]
+ def __init__(self):self.started_sid=None;self.started_task=None;self.pending=InputRequest(input_id=uuid4(),kind=InputKind.APPROVAL,prompt='Approve?',options=[InputOption(value=1,label='Approve'),InputOption(value=0,label='Reject')]);self.submitted=[]
  def start(self,request):
-  state=EngineSnapshot(session_id='s',task_id=request.task_id,sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending)
-  event=InteractiveEvent(event_id=uuid4(),session_id='s',task_id=request.task_id,phase_id=1,sequence=1,event_type=EventType.RUN_STARTED,process_status=ProcessStatus.RUNNING,next_step=NextStep.RUN)
+  self.started_sid=str(request.session_id or 's');self.started_task=request.task_id
+  state=EngineSnapshot(session_id=self.started_sid,task_id=request.task_id,sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending)
+  event=InteractiveEvent(event_id=uuid4(),session_id=self.started_sid,task_id=request.task_id,phase_id=1,sequence=1,event_type=EventType.RUN_STARTED,process_status=ProcessStatus.RUNNING,next_step=NextStep.RUN)
   return StartSessionResponse(snapshot=state,accepted_event=event)
- def snapshot(self,sid):return EngineSnapshot(session_id='s',task_id='t',sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending)
+ def snapshot(self,sid):return EngineSnapshot(session_id=self.started_sid or 's',task_id=self.started_task or 't',sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending)
  def submit(self,sid,response):self.submitted.append(response);return SubmitInputResponse(accepted_event=InteractiveEvent(event_id=uuid4(),session_id='s',task_id='t',phase_id=1,sequence=3,event_type=EventType.INPUT_ACCEPTED,process_status=ProcessStatus.RUNNING,next_step=NextStep.RUN),snapshot=EngineSnapshot(session_id='s',task_id='t',sequence=3,process_status=ProcessStatus.RUNNING,next_step=NextStep.RUN))
 
 def test_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch):
@@ -36,8 +44,10 @@ def test_task_snapshot_projects_http_open_input(tmp_path,monkeypatch):
 def test_http_engine_session_survives_delivery_restart(tmp_path,monkeypatch):
  path=tmp_path/'restart.db';first=SQLiteStore(str(path));task=first.create_task('Restart safe','brief');engine=FakeEngine()
  monkeypatch.setattr(module,'store',first);monkeypatch.setattr(module,'engine_client',engine)
- client=TestClient(module.app);client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'}).raise_for_status()
- assert first.engine_session(task['task_id'])=='s'
+ with TestClient(module.app) as client:
+  client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'}).raise_for_status()
+  assert wait_for_start_event(first,task['task_id'])
+ assert first.engine_session(task['task_id'])==engine.started_sid
  reopened=SQLiteStore(str(path));monkeypatch.setattr(module,'store',reopened)
  body=client.get(f"/api/tasks/{task['task_id']}").json()
  assert body['input_state']['waiting'] is True
@@ -175,7 +185,11 @@ def test_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch):
     health=await asyncio.wait_for(client.get('/health'),timeout=1)
     assert health.status_code==200
    finally:release.set()
-   assert (await asyncio.wait_for(pending,timeout=3)).status_code==200
+   assert (await asyncio.wait_for(pending,timeout=3)).status_code==202
+   for _ in range(100):
+    if any(e['kind']=='engine_protocol' for e in store.events(task['task_id'])):break
+    await asyncio.sleep(.01)
+   assert any(e['kind']=='engine_protocol' for e in store.events(task['task_id']))
  asyncio.run(exercise())
 
 
@@ -217,7 +231,9 @@ def test_start_records_interview_flash_not_downstream_chat(tmp_path, monkeypatch
  engine.start=record_start
  monkeypatch.setattr(module,'store',store)
  monkeypatch.setattr(module,'engine_client',engine)
- TestClient(module.app).post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'deepseek'}).raise_for_status()
+ with TestClient(module.app) as client:
+  client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'deepseek'}).raise_for_status()
+  assert wait_for_start_event(store,task['task_id'])
  assert requests[0].model_route=='deepseek'
  route=[e for e in store.events(task['task_id']) if e['kind']=='model_route' and e['payload'].get('scope')=='start'][0]
  assert route['payload']['resolved']=='deepseek:deepseek-flash'
@@ -234,7 +250,9 @@ def test_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path, monkeypatch)
  engine=Phi4Engine()
  monkeypatch.setattr(module,'store',store)
  monkeypatch.setattr(module,'engine_client',engine)
- TestClient(module.app).post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'}).raise_for_status()
+ with TestClient(module.app) as client:
+  client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'}).raise_for_status()
+  assert wait_for_start_event(store,task['task_id'])
  route=[e for e in store.events(task['task_id']) if e['kind']=='model_route' and e['payload'].get('scope')=='start'][0]
  assert route['payload']['resolved']=='ollama:phi4'
  assert route['payload']['model']=='phi4'
@@ -764,3 +782,71 @@ def test_task_snapshot_exposes_one_shared_phase_configuration(tmp_path,monkeypat
   config=result['phase_config'][phase.key]
   assert config=={'executor':phase.executor,'generator_stage':phase.generator_stage,
                   'prerequisite':phase.prerequisite,'artifacts':list(phase.artifacts)}
+
+
+def test_async_start_reserves_identity_shows_progress_and_rejects_duplicate(tmp_path,monkeypatch):
+ import asyncio,threading
+ import httpx
+ store=SQLiteStore(str(tmp_path/'async-start.db'));task=store.create_task('Async Start','brief')
+ entered=threading.Event();release=threading.Event();engine=FakeEngine()
+ def slow_start(request):
+  entered.set()
+  assert release.wait(5)
+  return FakeEngine.start(engine,request)
+ engine.start=slow_start
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ async def exercise():
+  transport=httpx.ASGITransport(app=module.app)
+  async with httpx.AsyncClient(transport=transport,base_url='http://test') as client:
+   first=await client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'})
+   assert first.status_code==202
+   sid=first.json()['session_id']
+   try:
+    assert await asyncio.to_thread(entered.wait,2)
+    assert store.engine_session(task['task_id'])==sid
+    pending=(await client.get(f"/api/tasks/{task['task_id']}")).json()
+    assert pending['input_state']['process_live'] is True
+    assert pending['input_state']['waiting'] is False
+    duplicate=await client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'})
+    assert duplicate.status_code==409
+   finally:release.set()
+   for _ in range(100):
+    if any(e['kind']=='engine_protocol' for e in store.events(task['task_id'])):break
+    await asyncio.sleep(.01)
+   assert engine.started_sid==sid
+   assert any(e['kind']=='engine_protocol' for e in store.events(task['task_id']))
+   ready=(await client.get(f"/api/tasks/{task['task_id']}")).json()
+   assert ready['input_state']['waiting'] is True
+ asyncio.run(exercise())
+
+
+def test_interrupted_start_is_classified_without_restarting_engine(tmp_path,monkeypatch):
+ import asyncio
+ store=SQLiteStore(str(tmp_path/'interrupted-start.db'));task=store.create_task('Interrupted Start','brief')
+ sid=str(uuid4());assert store.begin_interview_start(task['task_id'],sid,'ollama')
+ calls=[]
+ class MissingEngine(FakeEngine):
+  def snapshot(self,sid):calls.append(('snapshot',sid));raise RuntimeError('checkpoint unavailable')
+  def start(self,request):calls.append(('start',request));raise AssertionError('must not replay Start')
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',MissingEngine())
+ asyncio.run(module._catch_up_interview_progress())
+ assert calls==[('snapshot',sid)]
+ assert store.engine_session(task['task_id'])==sid
+ assert store.task(task['task_id'])['state']=='failed'
+ assert any(e['kind']=='error' and e['message']=='Interrupted interview Start needs review' for e in store.events(task['task_id']))
+
+
+def test_interrupted_start_recovers_exact_session_without_second_start(tmp_path,monkeypatch):
+ import asyncio
+ store=SQLiteStore(str(tmp_path/'recover-start.db'));task=store.create_task('Recover Start','brief')
+ sid=str(uuid4());assert store.begin_interview_start(task['task_id'],sid,'ollama')
+ calls=[];engine=FakeEngine();engine.started_sid=sid;engine.started_task=task['task_id']
+ def forbid_start(request):calls.append('start');raise AssertionError('must not replay Start')
+ engine.start=forbid_start
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ asyncio.run(module._catch_up_interview_progress())
+ assert not calls and store.engine_session(task['task_id'])==sid
+ assert any(e['kind']=='engine_protocol' and e['message']=='Recovered interview Start response' for e in store.events(task['task_id']))
+ ready=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
+ assert ready['input_state']['waiting'] is True
+ assert ready['control_snapshot']['precondition']['session_id']==sid

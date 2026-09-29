@@ -883,7 +883,7 @@ def test_mutation_flows_refresh_in_place_without_document_navigation(page,ui):
     nav=[];page.on('framenavigated',lambda frame:nav.append(frame.url) if frame==page.main_frame else None);before=len(nav)
     page.locator('#renameform').get_by_role('button',name='Save name').click();page.get_by_role('heading',name='Renamed in place').wait_for();assert len(nav)==before
 
-    live=page.request.get(ui+'/api/tasks/sim').json();gate=live['gates'][0];gate.update({'state':'waiting','is_open':0});live.update({'state':'waiting_gate','active_phase':gate['after_phase'],'ui_state':{'mode':'phase_gate','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':gate}})
+    live=page.request.get(ui+'/api/tasks/sim').json();gate=live['gates'][0];gate.update({'state':'waiting','is_open':0});live.update({'state':'waiting_gate','active_phase':gate['after_phase'],'ui_state':{'mode':'phase_gate','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':gate},'control_snapshot':{'mode':'waiting_gate','owner':'delivery','wait_id':gate['gate_key']}})
     decided={**live,'state':'running','ui_state':{'mode':'error','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':None}};calls=0
     def task(route):
         nonlocal calls;calls+=1;route.fulfill(json=live if calls==1 else decided)
@@ -1400,3 +1400,38 @@ def test_every_generator_gate_uses_same_page_and_configured_model_picker(page,ui
         expect(page.locator('.gate-page')).to_be_visible()
         expect(page.locator('#gateform')).to_be_visible()
         expect(page.locator('select[name="redo_model"]')).to_have_count(0)
+
+
+def test_cross_ui_waiting_banner_during_slow_write(page,ui):
+    page.goto(ui+'/tasks/empty/view')
+    page.locator('#defaultroute').wait_for()
+    page.evaluate("""() => {
+      const original=window.fetch;
+      window.fetch=(url,opts={})=>String(url).endsWith('/feedback')&&opts.method==='POST'
+        ? new Promise(resolve=>setTimeout(()=>resolve(new Response('{}',{status:200,headers:{'content-type':'application/json'}})),1000))
+        : original(url,opts);
+      import('/assets/client-core.js').then(m=>m.api('/api/tasks/empty/feedback',{method:'POST',body:'{}'}));
+    }""")
+    page.locator('#server-wait:not(.hidden)').wait_for(timeout=3000)
+    assert 'Saving feedback' in page.locator('#server-wait').inner_text()
+    page.screenshot(path='/downloads/fast-follow-waiting-banner.png',full_page=False)
+    page.locator('#server-wait').wait_for(state='hidden',timeout=3000)
+
+
+def test_browser_session_refresh_single_flight_before_expiry(page,ui):
+    import threading,time
+    page.goto(ui+'/tasks/empty/view')
+    page.locator('#defaultroute').wait_for()
+    calls=[]
+    def refresh(route):
+        calls.append(time.time())
+        route.fulfill(status=200,json={'status':'refreshed','expires_at':time.time()+43200})
+    page.route('**/auth/refresh',refresh)
+    result=page.evaluate("""async () => {
+      const m=await import('/assets/client-core.js');
+      m.setSessionExpiry(Date.now()/1000+9*60);
+      await Promise.all([m.renewSessionIfDue(),m.renewSessionIfDue()]);
+      await m.renewSessionIfDue();
+      return true;
+    }""")
+    assert result and len(calls)==1

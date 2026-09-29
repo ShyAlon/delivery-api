@@ -312,7 +312,7 @@ class SQLiteStore:
             row=self._db.execute("SELECT title,state FROM tasks WHERE task_id=?",(task_id,)).fetchone()
             if not row: raise KeyError(task_id)
             if row["state"] in ("running","waiting_gate"):
-                raise ValueError("a running or paused replay cannot be deleted")
+                raise ValueError("a running or paused task cannot be deleted")
             # Delete all UI-owned task data. Source artifacts are references and
             # remain untouched on disk. Keep a tombstone audit entry.
             for table in ("phases","gates","events","progress_ingest","progress_seen","task_artifacts"):
@@ -478,6 +478,21 @@ class SQLiteStore:
         with self._lock:
             self._db.execute("UPDATE tasks SET engine_session_id=?,updated_at=? WHERE task_id=?",(session_id,time.time(),task_id))
             self._commit()
+
+    def begin_interview_start(self, task_id: str, session_id: str, route: str) -> bool:
+        """Reserve one Start durably before the engine call; duplicate clicks cannot bill twice."""
+        with self._lock:
+            now=time.time()
+            result=self._db.execute("UPDATE tasks SET state='running',active_phase='intent',engine_session_id=?,model_route=?,updated_at=? WHERE task_id=? AND state='not_started' AND engine_session_id IS NULL",
+                                    (session_id,route,now,task_id))
+            if result.rowcount!=1:
+                self._db.rollback()
+                return False
+            self._db.execute("UPDATE phases SET state='running',detail='Starting interview',started_at=? WHERE task_id=? AND phase_key='intent'",(now,task_id))
+            self._db.execute("INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (?,?,?,?,?,?)",
+                             (task_id,'intent','command','Interview starting',json.dumps({'session_id':session_id,'route':route}),now))
+            self._commit()
+            return True
 
     def engine_session(self, task_id: str) -> str | None:
         row=self._db.execute("SELECT engine_session_id FROM tasks WHERE task_id=?",(task_id,)).fetchone()
@@ -733,6 +748,28 @@ class SQLiteStore:
             row=self._db.execute("SELECT s.*,u.label,u.email,u.is_admin FROM sessions s JOIN users u USING(user_id) WHERE session_id=?",(self._session_key(session_id),)).fetchone()
             return dict(row) if row else None
 
+    def rotate_session(self, old_id: str, new_id: str, expires_at: float, now: float) -> bool:
+        """Single-use refresh: revoke the old handle and insert its replacement atomically."""
+        with self._lock:
+            old_key, new_key = self._session_key(old_id), self._session_key(new_id)
+            try:
+                row = self._db.execute("SELECT user_id FROM sessions WHERE session_id=? AND expires_at>?",
+                                       (old_key, now)).fetchone()
+                if row is None:
+                    return False
+                self._db.execute("INSERT INTO sessions VALUES (?,?,?,?)",
+                                 (new_key, row["user_id"], expires_at, now))
+                removed = self._db.execute("DELETE FROM sessions WHERE session_id=? AND expires_at>?",
+                                           (old_key, now))
+                if removed.rowcount != 1:
+                    self._db.rollback()
+                    return False
+                self._commit()
+                return True
+            except Exception:
+                self._db.rollback()
+                raise
+
     def delete_session(self, session_id: str) -> None:
         with self._lock: self._db.execute("DELETE FROM sessions WHERE session_id=?",(self._session_key(session_id),)); self._commit()
 
@@ -789,6 +826,10 @@ class TursoReplicaStore(SQLiteStore):
         result=super().create_basic_user(*args,**kwargs);self._safe_sync("account create");return result
     def create_session(self,*args,**kwargs):
         result=super().create_session(*args,**kwargs);self._safe_sync("session create");return result
+    def rotate_session(self,*args,**kwargs):
+        result=super().rotate_session(*args,**kwargs)
+        if result:self._safe_sync("session refresh")
+        return result
     def delete_session(self,*args,**kwargs):
         result=super().delete_session(*args,**kwargs);self._safe_sync("session revoke");return result
 
