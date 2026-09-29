@@ -272,20 +272,29 @@ function gateSummary(value){const result=[];function walk(item){if(result.length
 async function gatePage(taskId,gateKey){
  const t=await api(`/api/tasks/${taskId}`),g=t.gates.find(g=>g.gate_key===gateKey);
  if(!g){app.innerHTML=`<a class="back" href="/tasks/${esc(taskId)}/view">← Back to task</a><div class="notice">Gate not found.</div>`;return}
- const {routes}=await api('/api/model-routes'),phase=g.after_phase,artifacts=(t.artifacts||[]).filter(a=>a.phase_key===phase&&!a.stale&&a.present!==false&&a.valid!==false);
+ const {routes}=await api('/api/model-routes'),phase=g.after_phase,phaseArtifacts=(t.artifacts||[]).filter(a=>a.phase_key===phase&&!a.stale),artifacts=phaseArtifacts.filter(a=>a.present!==false&&a.valid!==false);
  const nextPhase=t.phases.findIndex(p=>p.phase_key===phase)+1,next=t.phases[nextPhase],configured=t.phase_config||{};
  const target=next?.phase_key,defaultModel=target&&configured[target]?.executor==='generator'?(await api(`/api/tasks/${taskId}/generator-default/${target}`)).model:null,redoModel=configured[phase]?.executor==='generator'?(await api(`/api/tasks/${taskId}/generator-default/${phase}`)).model:null;
  const options=routes.flatMap(route=>(route.models||[route.model?.split(':').slice(1).join(':')]).filter(Boolean).map(model=>({value:`${route.id}:${model}`,available:route.available})));
  const modelPicker=(name,label,model)=>model?`<label>${label}<small class="gate-model-resolved" data-model-for="${name}">Current generator default: ${esc(model)}</small><select name="${name}"><option value="">Use current generator default</option>${options.map(o=>`<option value="${esc(o.value)}" ${o.available?'':'disabled'}>${esc(o.value)}${o.available?'':' · unavailable'}</option>`).join('')}</select></label>`:'';const modelSelect=modelPicker('next_model','Next phase model',defaultModel)+modelPicker('redo_model','Redo model',redoModel);
  app.innerHTML=`<div class="gate-page"><div class="gate-page-head page-head"><a class="back" href="/tasks/${esc(taskId)}/view">← Back to ${esc(t.title)}</a><div class="eyebrow">Interactive gate · actor: ${esc(authState.actor)}</div><h1>${esc(g.label)}</h1><p>Review the ${esc(t.phases.find(p=>p.phase_key===phase)?.label||phase)} result before deciding.</p></div><div class="gate-page-grid"><section class="gate-evidence"><div class="eyebrow">Evidence for approval</div><h2>${esc(t.phases.find(p=>p.phase_key===phase)?.label||phase)}</h2><div id="gate-artifacts" aria-live="polite">${artifacts.length?'Loading current artifacts…':'No current valid artifact is available for this gate. Approval is unavailable until the artifact appears.'}</div></section><form id="gateform" class="gate-controls"><h2>Decision</h2><div class="gate-status ${esc(g.state)}">${g.is_open?'Open · passes automatically':g.state==='waiting'?'Waiting here · approval paused':'Closed · will pause here'}</div><label class="switch"><input id="gateopen" type="checkbox" ${g.is_open?'checked':''}> Open future arrivals ${helpTip('What does opening a gate do?','An open gate auto-approves when the phase arrives. It does not approve the current waiting decision.')}</label><div id="gatestatus" class="field-status" aria-live="polite"></div><label>Choose an option<select name="selected_option">${g.options.map(x=>`<option>${esc(x)}</option>`).join('')}</select></label><label>Edit the decision<textarea name="edited_text" placeholder="Write the approved decision in your own words"></textarea></label>${modelSelect}<label>Redo with a steer<textarea name="steer" placeholder="What specifically should regeneration change?"></textarea></label><p class="dialog-intro">Choose approves this artifact. Save edit records your wording. Redo regenerates this phase and marks downstream results stale.</p><div class="gate-page-actions"><button type="button" class="secondary" data-action="redo">Redo</button><button type="button" class="secondary" data-action="edit" ${artifacts.length?'':'disabled'}>Save edit</button><button type="button" class="primary" data-action="approve" ${artifacts.length?'':'disabled'}>Choose & continue</button></div><div id="gate-decision-status" aria-live="polite"></div></form></div></div>`;
  const form=document.querySelector('#gateform');form.onsubmit=e=>e.preventDefault();const host=document.querySelector('#gate-artifacts');
- let currentArtifacts=artifacts,renderedArtifactKey=null;
+ let currentArtifacts=artifacts,currentPhaseArtifacts=phaseArtifacts,renderedArtifactKey=null;
+ function missingGateEvidence(){
+   const invalid=currentPhaseArtifacts.filter(a=>a.present!==false&&a.valid===false);
+   if(invalid.length){
+     const details=invalid.map(a=>`${a.name}: ${(a.validation_errors||[]).join('; ')||a.validation_error||'artifact failed validation'}`).join(' | ');
+     return `Error: The current artifact failed validation.\nLikely cause: ${details}\nNext: Check the task artifact and server log; do not approve or rerun until the cause is fixed.`;
+   }
+   const missing=currentPhaseArtifacts.filter(a=>a.present===false);
+   return `Error: No current valid artifact is available for this gate.\nLikely cause: ${missing.length?missing.map(a=>a.name).join(', ')+' is missing from the artifact folder.':'No current artifact was found for this phase.'}\nNext: Check the task artifact folder and server log; do not approve or rerun until the artifact is available.`;
+ }
  async function renderGateArtifacts(){
-   const key=currentArtifacts.map(a=>`${a.name}:${a.generation}:${a.ref||''}`).join('|');
+   const key=JSON.stringify(currentPhaseArtifacts.map(a=>[a.name,a.generation,a.ref,a.present,a.valid,a.validation_errors]));
    if(key===renderedArtifactKey)return;
    renderedArtifactKey=key;
    form.querySelectorAll('[data-action="approve"],[data-action="edit"]').forEach(b=>b.disabled=!currentArtifacts.length);
-   if(!currentArtifacts.length){host.textContent='No current valid artifact is available for this gate. Approval is unavailable until the artifact appears.';return}
+   if(!currentArtifacts.length){host.innerHTML=`<div class="notice gate-evidence-error">${esc(missingGateEvidence())}</div>`;return}
 if(currentArtifacts.length){host.innerHTML='';for(const a of currentArtifacts){let card=document.createElement('article');card.className='gate-artifact';host.append(card);try{let data=await api(`/api/tasks/${taskId}/artifacts/${encodeURIComponent(phase)}/${encodeURIComponent(a.name)}/view`),content=data.content||'',structured=data.format==='json'?JSON.parse(content):null,summary=structured?gateSummary(structured):content.split(/\n+/).map(x=>x.trim()).filter(x=>x&&!/^#/.test(x)).slice(0,4).join(' ').slice(0,750);card.innerHTML=`<h3>${esc(data.title||a.title||a.name)}</h3><p class="gate-artifact-summary">${esc(summary||'Open the document below to review its content.')}</p><details><summary>Read full ${esc(data.title||a.name)}</summary>${data.format==='markdown'?`<article class="artifact-readable">${markdownHtml(content)}</article>`:structured?`<article class="gate-structured">${gateStructured(structured)}</article>`:`<pre class="artifact-content">${esc(content)}</pre>`}</details><a class="button-link" download href="/api/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(phase)}/${encodeURIComponent(a.name)}">Download ${esc(a.name)}</a>`}catch(e){card.innerHTML=`<div class="notice">${esc(a.name)} could not be loaded: ${esc(e.message)}. Approval is unavailable.</div>`;document.querySelectorAll('[data-action="approve"],[data-action="edit"]').forEach(b=>b.disabled=true)}}}
  }
  await renderGateArtifacts();
@@ -306,7 +315,8 @@ if(currentArtifacts.length){host.innerHTML='';for(const a of currentArtifacts){l
        return;
      }
      g.revision=current.revision;
-     currentArtifacts=(live.artifacts||[]).filter(a=>a.phase_key===phase&&!a.stale&&a.present!==false&&a.valid!==false);
+     currentPhaseArtifacts=(live.artifacts||[]).filter(a=>a.phase_key===phase&&!a.stale);
+     currentArtifacts=currentPhaseArtifacts.filter(a=>a.present!==false&&a.valid!==false);
      await renderGateArtifacts();
    }catch(e){document.querySelector('#gate-decision-status').textContent=`Could not refresh gate evidence: ${e.message}`}
    finally{gateRefreshPending=false}
