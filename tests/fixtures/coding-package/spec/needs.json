@@ -1,0 +1,19 @@
+{
+  "contract_version": "0.20.0",
+  "session_id": "s",
+  "needs": [
+    {
+      "contract_version": "0.20.0",
+      "need_id": "N-1",
+      "stakeholder": "Founder",
+      "statement": "founders need specs",
+      "kind": "functional",
+      "intent_fields": [
+        "stakeholder_needs"
+      ],
+      "intent_need_ids": [
+        "SN-1"
+      ]
+    }
+  ]
+}

@@ -227,6 +227,14 @@ class ProcessRunner:
                         self.store.update_phase(task_id,phase,"failed",detail=error)
                         self.store.add_event(task_id,"error",error,phase_key=phase,payload={"missing_artifacts":list(expected),"source_dir":str(source),"exit_code":0})
                         return 1
+                    semantic_path=source/'srs.semantic-review.json' if phase=='srs' else None
+                    if semantic_path and semantic_path.is_file():
+                        from vmodel_contracts.semantic_review import SemanticReview
+                        semantic=SemanticReview.model_validate_json(semantic_path.read_text())
+                        decided={d.item_id for d in semantic.decisions}
+                        if any(f.item_id not in decided for f in semantic.findings):
+                            self.store.set_gate_open(task_id,'gate-srs',False,'semantic review policy')
+                            self.store.add_event(task_id,'semantic_review','Open-gate auto approval paused for unresolved item findings',phase_key=phase,payload={'revision':semantic.revision})
                     self.store.update_phase(task_id, phase, "awaiting_approval", detail="Generated; waiting for founder approval")
                     gate=self.store.wait_at_gate(task_id,phase)
                     self.store.add_event(task_id,"gate","Generated artifact is waiting for founder approval",phase_key=phase,payload={"gate_key":gate["gate_key"] if gate else None})

@@ -746,11 +746,10 @@ def test_architecture_baseline_rejects_stale_decision_without_http_fallback(monk
  assert engine.calls==0
  assert not any(e['kind']=='answer' for e in store.events(tid))
 
-def test_completed_http_recovery_restores_orphaned_architecture_choice(tmp_path,monkeypatch):
+def test_completed_http_recovery_continues_orphaned_architecture_as_greenfield(tmp_path,monkeypatch):
  import asyncio
  from delivery_api.runner import ProcessRunner
  from delivery_api.orchestrator import PhaseOrchestrator
- from delivery_api.auth import Actor
  session='architecture-recovery';store=SQLiteStore(str(tmp_path/'architecture-recovery.db'))
  tid=store.create_task('Architecture recovery','brief')['task_id'];store.set_engine_session(tid,session)
  for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
@@ -759,22 +758,19 @@ def test_completed_http_recovery_restores_orphaned_architecture_choice(tmp_path,
  monkeypatch.setattr(module,'store',store)
  runner=ProcessRunner(store);monkeypatch.setattr(module,'runner',runner)
  orchestrator=PhaseOrchestrator(store,runner);monkeypatch.setattr(module,'orchestrator',orchestrator)
+ launches=[]
+ async def execute(task_id,phase):launches.append((task_id,phase));store.update_phase(task_id,phase,'done')
+ monkeypatch.setattr(orchestrator,'execute_phase',execute)
  class Complete:
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE,open_input=None)
  monkeypatch.setattr(module,'engine_client',Complete())
  async def recover():
   await module._recover_tasks();await asyncio.sleep(.01)
-  assert runner.input_state(tid)['waiting'] and runner.work_state(tid).owner=='decision'
-  assert __import__('delivery_api.control_snapshot',fromlist=['project']).project(store.task(tid),runner.input_state(tid),work=runner.work_state(tid)).mode=='waiting_input'
-  await module._recover_tasks();await asyncio.sleep(.01)
-  assert len([e for e in store.events(tid) if e['kind']=='founder_decision' and e['phase_key']=='architecture'])==2
-  pending=asyncio.current_task()
-  for child in asyncio.all_tasks():
-   if child is not pending and child.get_coro().__qualname__.endswith('_choose_baseline'):
-    child.cancel()
-    try:await child
-    except asyncio.CancelledError:pass
+  assert launches==[(tid,'architecture')]
+  assert not runner.input_state(tid)['waiting']
+  assert len([e for e in store.events(tid) if e['kind']=='founder_decision'])==1
  asyncio.run(recover())
+
 
 def test_task_snapshot_exposes_one_shared_phase_configuration(tmp_path,monkeypatch):
  from delivery_api.phases import PHASE_DEFINITIONS

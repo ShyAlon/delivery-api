@@ -14,6 +14,19 @@ from vmodel_contracts import RunState
 from .observability import event as activity
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS review_comments (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, wait_id TEXT NOT NULL,
+ revision TEXT NOT NULL, actor TEXT NOT NULL, comment TEXT NOT NULL, created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS decision_reviews (
+ task_id TEXT NOT NULL, wait_id TEXT NOT NULL, revision TEXT NOT NULL, payload TEXT NOT NULL,
+ created_at REAL NOT NULL, PRIMARY KEY(task_id,wait_id,revision)
+);
+CREATE TABLE IF NOT EXISTS decision_drafts (
+ task_id TEXT NOT NULL, wait_id TEXT NOT NULL, revision TEXT NOT NULL, draft_id TEXT NOT NULL,
+ payload TEXT NOT NULL, created_at REAL NOT NULL, PRIMARY KEY(task_id,wait_id,revision,draft_id)
+);
+
 
 CREATE TABLE IF NOT EXISTS users (
   user_id TEXT PRIMARY KEY, provider TEXT NOT NULL, external_id TEXT NOT NULL, email TEXT,
@@ -535,6 +548,42 @@ class SQLiteStore:
                                   (task_id, phase_key, kind, message, json.dumps(payload or {}), time.time()))
             self._db.execute("UPDATE tasks SET updated_at=? WHERE task_id=?", (time.time(), task_id)); self._commit()
             return cur.lastrowid
+
+    def add_review_comment(self,task_id:str,wait_id:str,revision:str,actor:str,comment:str)->int:
+        with self._lock:
+            cursor=self._db.execute("INSERT INTO review_comments(task_id,wait_id,revision,actor,comment,created_at) VALUES (?,?,?,?,?,?)",
+                (task_id,wait_id,revision,actor,comment,time.time()));self._commit();return cursor.lastrowid
+
+    def review_comments(self,task_id:str,wait_id:str,revision:str)->list[dict]:
+        rows=self._db.execute("SELECT id,actor,comment,created_at FROM review_comments WHERE task_id=? AND wait_id=? AND revision=? ORDER BY id",
+            (task_id,wait_id,revision)).fetchall()
+        return [dict(row) for row in rows]
+
+    def retain_decision_review(self, task_id:str, wait_id:str, revision:str, payload:dict)->None:
+        with self._lock:
+            self._db.execute("INSERT OR IGNORE INTO decision_reviews VALUES (?,?,?,?,?)",
+                (task_id,wait_id,revision,json.dumps(payload),time.time()));self._commit()
+
+    def decision_review(self,task_id:str,wait_id:str,revision:str|None=None)->dict|None:
+        if revision:
+            row=self._db.execute("SELECT payload FROM decision_reviews WHERE task_id=? AND wait_id=? AND revision=?",
+                (task_id,wait_id,revision)).fetchone()
+        else:
+            row=self._db.execute("SELECT payload FROM decision_reviews WHERE task_id=? AND wait_id=? ORDER BY created_at DESC LIMIT 1",
+                (task_id,wait_id)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_decision_draft(self,task_id:str,wait_id:str,revision:str,payload:dict)->str:
+        draft_id=secrets.token_urlsafe(18)
+        with self._lock:
+            self._db.execute("INSERT INTO decision_drafts VALUES (?,?,?,?,?,?)",
+                (task_id,wait_id,revision,draft_id,json.dumps(payload),time.time()));self._commit()
+        return draft_id
+
+    def decision_draft(self,task_id:str,wait_id:str,revision:str,draft_id:str)->dict|None:
+        row=self._db.execute("SELECT payload FROM decision_drafts WHERE task_id=? AND wait_id=? AND revision=? AND draft_id=?",
+            (task_id,wait_id,revision,draft_id)).fetchone()
+        return json.loads(row[0]) if row else None
 
     def progress_cursor(self, task_id: str, source: str, session_id: str) -> int:
         row=self._db.execute("SELECT cursor FROM progress_ingest WHERE task_id=? AND source=? AND session_id=?",

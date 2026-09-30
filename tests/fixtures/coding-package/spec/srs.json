@@ -1,0 +1,44 @@
+{
+  "contract_version": "0.20.0",
+  "session_id": "s",
+  "intent_model_ref": "s",
+  "purpose": "p",
+  "scope_summary": "sc",
+  "definitions": {},
+  "functional": [
+    {
+      "contract_version": "0.20.0",
+      "requirement_id": "R-1",
+      "title": "Spec file",
+      "statement": "system shall emit a spec",
+      "priority": "must",
+      "acceptance": [
+        {
+          "contract_version": "0.20.0",
+          "criterion_id": "AC-1",
+          "statement": "spec exists",
+          "executable_hint": null
+        }
+      ],
+      "kind": "functional",
+      "need_ids": [
+        "N-1"
+      ],
+      "intent_fields": [
+        "stakeholder_needs"
+      ],
+      "source_turns": []
+    }
+  ],
+  "non_functional": [],
+  "constraints": [],
+  "design_constraints": [],
+  "assumptions": [],
+  "open_questions": [],
+  "founder_register": {
+    "version": 1,
+    "session_id": "s",
+    "items": [],
+    "advisories": []
+  }
+}

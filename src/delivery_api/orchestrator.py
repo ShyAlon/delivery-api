@@ -43,10 +43,6 @@ class PhaseOrchestrator:
         nxt=next_definition.key
         from .observability import event as activity
         activity("orchestrator.continue","Launching next V-model phase",task_id=task_id,completed_phase=phase,next_phase=nxt)
-        if next_definition.prerequisite=="system-baseline" and not self._baseline_exists(task_id):
-            if model_route:
-                self.store.add_event(task_id,"model_route",f"{nxt} selection saved for baseline handoff: {model_route}",phase_key=nxt,payload={"resolved":model_route,"scope":"phase_override"})
-            await self._choose_baseline(task_id);return
         await self.execute_phase(task_id,nxt,model_route=model_route)
 
     def _baseline_path(self,task_id:str)->Path:
@@ -57,25 +53,21 @@ class PhaseOrchestrator:
         try:return json.loads(p.read_text()).get("baseline_id") not in (None,"pending-founder-choice")
         except Exception:return False
 
-    async def _choose_baseline(self,task_id:str)->None:
-        decision={"type":"founder_decision","decision_id":"system-baseline","title":"Choose the architecture baseline","prompt":"Should architecture treat this as a greenfield product or use an existing-system baseline?","options":[{"value":"greenfield","label":"Greenfield","summary":"No existing repositories constrain the architecture."},{"value":"existing","label":"Existing system","summary":"Pause architecture until a SystemBaseline file is supplied."}],"rationale_required":False,"answer_format":"<value>"}
-        self.store.update_phase(task_id,"architecture","running",detail="Waiting for architecture baseline")
-        answer=await self.runner.request_decision(task_id,"architecture",decision)
-        value=answer.strip().split()[0].lower()
-        if value.startswith("greenfield"):
-            task=self.store.task(task_id);p=self._baseline_path(task_id);p.parent.mkdir(parents=True,exist_ok=True)
-            # Preserve the producing contract version from the intent artifact.
-            _,_,interview,_=self._paths(task_id);intent=json.loads((interview/"intent_model.json").read_text())
-            body={"contract_version":intent["contract_version"],"baseline_version":"1.0","baseline_id":f"{self._session(task_id)}-greenfield-v1","system_name":task["title"],"mode":"greenfield","repositories":[],"immutable_decisions":[]}
-            p.write_text(json.dumps(body,indent=2)+"\n")
-            self.store.add_event(task_id,"baseline","Greenfield architecture baseline confirmed",phase_key="architecture",payload={"mode":"greenfield","path":str(p)})
-            await self.execute_phase(task_id,"architecture")
-        else:
-            path=self._baseline_path(task_id);path.parent.mkdir(parents=True,exist_ok=True)
-            requirement={"kind":"external_input","title":"Existing-system baseline required","summary":"Architecture is paused until the real system facts are supplied.","path":str(path),"format":"SystemBaseline JSON","required_fields":["baseline_id","system_name","mode: existing","repositories (at least one)"],"next":"Save a valid system-baseline.json at this path, then restart Requi.re; recovery will launch Architecture."}
-            self.store.update_phase(task_id,"architecture","awaiting_approval",detail=f"SystemBaseline JSON required at {path}")
-            self.runner.pause_for_requirement(task_id,"architecture",requirement)
-            self.store.add_event(task_id,"requirement","Architecture paused for an existing SystemBaseline file",phase_key="architecture",payload=requirement)
+    def _ensure_greenfield(self,task_id:str)->Path:
+        path=self._baseline_path(task_id)
+        if path.exists():
+            existing=json.loads(path.read_text())
+            if existing.get('baseline_id')!='pending-founder-choice':
+                if existing.get('mode')!='greenfield':raise ValueError('Existing-system baseline is outside the current greenfield flow; it was not overwritten')
+                return path
+        task=self.store.task(task_id);_,_,interview,_=self._paths(task_id)
+        intent=json.loads((interview/'intent_model.json').read_text())
+        body={'contract_version':intent['contract_version'],'baseline_version':'1.0',
+              'baseline_id':f'{self._session(task_id)}-greenfield-v1','system_name':task['title'],
+              'mode':'greenfield','repositories':[],'immutable_decisions':[]}
+        path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(body,indent=2)+'\n')
+        self.store.add_event(task_id,'baseline','Greenfield assumed for the current product flow',phase_key='architecture',payload={'mode':'greenfield','path':str(path),'source':'current product policy'})
+        return path
 
     async def resolve_baseline_requirement(self,task_id:str,action:str)->None:
         """Resolve the configured baseline prerequisite, then continue uniformly."""
@@ -100,10 +92,7 @@ class PhaseOrchestrator:
         if definition.executor!="generator":raise ValueError(f"{phase} is owned by {definition.executor}, not generator")
         activity("orchestrator.launch","Preparing phase subprocess",task_id=task_id,phase=phase,mode=mode.value)
         sid,_,interview,spec=self._paths(task_id);spec.mkdir(parents=True,exist_ok=True)
-        baseline=spec/"system-baseline.json"
-        if not baseline.exists():
-            intent=json.loads((interview/"intent_model.json").read_text())
-            baseline.write_text(json.dumps({"contract_version":intent["contract_version"],"baseline_version":"1.0","baseline_id":"pending-founder-choice","system_name":"Pending architecture baseline choice","mode":"greenfield","repositories":[],"immutable_decisions":[]},indent=2)+"\n")
+        baseline=self._ensure_greenfield(task_id)
         built=os.environ.get("REQUI_RE_DIST")=="1"
         repo=(Path.cwd() if built else Path(os.environ.get("SPEC_GENERATOR_DIR",str(Path(__file__).resolve().parents[3]/"spec-generator"))).resolve())
         python=Path(sys.executable) if built else (repo/".venv/bin/python")

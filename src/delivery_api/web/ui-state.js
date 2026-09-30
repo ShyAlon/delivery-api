@@ -16,7 +16,7 @@ export function reduceTaskSnapshot(task){
     control.mode==='completed'?'complete':control.mode==='failed'?'error':
     control.mode==='not_started'?'not_started':null;
   const mode=TASK_UI_MODES.has(mapped)?mapped:'error',allowed=TASK_UI_ACTIONS[mode];
-  const decision=allowed.decision&&control.decision?.options?.length?control.decision:null;
+  const decision=allowed.decision&&control.decision&&(control.decision.options?.length||control.kind==='semantic_review')?control.decision:null;
   const gate=allowed.gate&&control.gate?control.gate:null;
   return Object.freeze({mode,active_phase:control.phase_key,process_live:control.process_live,decision,gate,
     question:control.prompt||null,input_id:control.input_id||control.wait_id||null,

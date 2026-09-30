@@ -8,6 +8,18 @@ export function clientLog(kind,message,detail={}){
   fetch('/api/client-log',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind,message,path:location.pathname,detail}),keepalive:true}).catch(()=>{});
 }
 
+const browserCapture={started_at:new Date().toISOString(),records:[]};
+function capture(kind,message){browserCapture.records.push({ts:new Date().toISOString(),kind,path:location.pathname,message:String(message).slice(0,2000)});if(browserCapture.records.length>300)browserCapture.records.shift()}
+for(const kind of ['log','info','warn','error']){const original=console[kind].bind(console);console[kind]=(...args)=>{try{capture(kind,args.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' '))}catch{}original(...args)}}
+window.addEventListener('error',e=>capture('error',e.message));window.addEventListener('unhandledrejection',e=>capture('unhandledrejection',e.reason?.message||e.reason));
+export function browserDiagnostics(){return {...browserCapture,ended_at:new Date().toISOString(),url:location.href,records:browserCapture.records.slice()}}
+export async function downloadDebug(taskId){
+ await renewSessionIfDue();
+ const response=await fetch(`/api/tasks/${encodeURIComponent(taskId)}/debug.zip`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(browserDiagnostics())});
+ if(!response.ok){let data=await response.json();throw new Error(data.detail?.error||data.detail||'Debug export failed')}
+ const blob=await response.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`${taskId}-debug.zip`;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
+}
+
 let refreshExpiresAt=0, refreshInFlight=null, lastActivity=Date.now();
 if(typeof document!=='undefined'){for(const name of ['pointerdown','keydown'])document.addEventListener(name,()=>{lastActivity=Date.now()},{passive:true})}
 export function setSessionExpiry(expiresAt){refreshExpiresAt=Number(expiresAt)||0}
@@ -64,6 +76,7 @@ export async function api(url,opts={}){
     if(error.name==='AbortError')throw error;
     throw new Error(`Error: The server could not be reached.\nLikely cause: ${error.message||'The connection failed.'}\nNext: your text is preserved. Check the server is running, then retry.`);
   }finally{if(timer)clearTimeout(timer);endWait()}
+  capture('network',`${method} ${url} -> ${response.status}`);
   if(!response.ok){
     const raw=await response.text();let detail;
     try{detail=JSON.parse(raw).detail}catch{}
