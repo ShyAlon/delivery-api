@@ -1,4 +1,5 @@
 """Browser-level contracts for the three task views and traceable rerun UX."""
+import json
 import os
 import socket
 import subprocess
@@ -105,6 +106,23 @@ def route_task_snapshot(page,ui,task_id,mutate):
     page.route(f'**/api/tasks/{task_id}',lambda route:route.fulfill(json=_promote_control(snapshot)))
     return snapshot
 
+def mock_gate_review(page,ui,task_id):
+    # Current contract snapshots artifact content together with the gate revision.
+    # Reuse test-owned task/artifact mocks rather than fall through to real files.
+    def review(route):
+        import urllib.parse
+        request=urllib.parse.urlparse(route.request.url)
+        gate_key=request.path.split('/')[-2]
+        task=page.evaluate("async url=>(await fetch(url)).json()",f'/api/tasks/{task_id}')
+        gate=next(g for g in task['gates'] if g['gate_key']==gate_key)
+        documents=[]
+        for a in task.get('artifacts',[]):
+            if a['phase_key']==gate['after_phase'] and not a.get('stale'):
+                view=page.evaluate("async url=>(await fetch(url)).json()",f"/api/tasks/{task_id}/artifacts/{a['phase_key']}/{a['name']}/view")
+                documents.append({'name':a['name'],'view':view})
+        route.fulfill(json={'review':{'revision':'gate:'+__import__('hashlib').sha256(json.dumps({'gate':gate,'artifacts':task.get('artifacts',[]),'documents':documents},sort_keys=True).encode()).hexdigest(),'task':task,'documents':documents},'actionable':gate['state']=='waiting','comments':[],'draft':None})
+    page.route(f'**/api/tasks/{task_id}/gates/*/review**',review)
+
 def waiting_gate_snapshot(snapshot):
     gate=snapshot['gates'][0];gate.update({'state':'waiting','is_open':0})
     for other in snapshot['gates'][1:]:other['state']='idle'
@@ -182,10 +200,9 @@ def test_not_started_running_and_done_pages(page, ui):
     page.locator(".live-indicator").wait_for()
     assert page.get_by_text("Live engine output").count() == 0
     assert page.locator("#console").count() == 0 and page.locator("#progressfeed").count() == 0
-    page.locator(".avatar").click();page.locator("#debugtoggle").click()
-    page.get_by_text("Live engine output").wait_for();assert page.get_by_text("Live engine output").is_visible()
-    assert page.locator("#console").get_by_text("Generating CONOPS option 2/3").count() == 1
-    assert page.locator("#progressfeed").get_by_text("Generating CONOPS option 2/3").count() == 1
+    page.locator(".avatar").click();page.locator("#opendebug").click()
+    page.locator(".debug-dialog").wait_for();assert page.locator("#console").count()==0
+    page.get_by_role("button",name="Close debug").click()
     page.goto(ui + "/tasks/done/view")
     page.get_by_text("Artifacts", exact=True).wait_for();assert page.get_by_text("Artifacts", exact=True).is_visible()
     assert page.get_by_role("button",name="Architecture overview").is_visible()
@@ -218,6 +235,7 @@ def test_gate_open_waiting_halo_and_full_page(page, ui):
 def test_gate_redo_requires_steer_in_browser(page, ui):
     route_task_snapshot(page,ui,'sim',waiting_gate_snapshot)
     page.route('**/api/tasks/sim/gates/*/decide',lambda route:route.fulfill(status=409,json={'detail':{'error':'a redo needs a reason','cause':'Redo without a steer is a reroll.','next':'Describe what should change.'}}))
+    mock_gate_review(page,ui,'sim')
     page.goto(ui + "/tasks/sim/gates/gate-intent");page.locator('#gateform').wait_for()
     page.get_by_role("button", name="Redo").click()
     page.get_by_text("a redo needs a reason", exact=False).wait_for()
@@ -430,44 +448,21 @@ def test_settings_creation_dialog_enter_and_escape(page,ui):
     path.fill('/definitely/missing/by-enter');path.press('Enter')
     page.get_by_text('Artifacts folder could not be loaded.',exact=False).wait_for();assert submitted==[{'path':'/definitely/missing/by-enter'}]
 
-def test_live_output_fixed_scroll_pinning_composer_and_state(page,ui):
-    # Own the stream in the browser so both pinned and deliberately unpinned
-    # behavior are deterministic without timing the server's polling loop.
-    page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json()
-    live['active_phase']='intent'
+def test_user_progress_and_composer_have_no_raw_console(page,ui):
+    page.add_init_script("class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource")
+    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'test-input','precondition':{'session_sequence':1}}
-    live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None}
-    live['events']=[{'id':i,'kind':'progress','message':f'Output line {i}','phase_key':'intent','payload':{},'ts':1720000000+i} for i in range(120)]
+    live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None,'question':'Who uses it?'}
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
-    page.set_viewport_size({'width':1365,'height':800})
-    page.goto(ui+'/tasks/live/view');page.locator('.avatar').click();page.locator('#debugtoggle').click()
-    console=page.locator('#console');console.wait_for()
-    dimensions=console.evaluate('e=>({h:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,max:getComputedStyle(e).maxHeight,scroll:e.scrollHeight>e.clientHeight})')
-    assert dimensions['h']>=260 and dimensions['min']=='260px' and dimensions['max']=='420px' and dimensions['scroll'] is True
-    composer=page.locator('#answerform');assert composer.is_visible()
-    indicator=page.locator('.live-status-row .live-indicator');question=page.locator('#currentquestion');console_heading=page.locator('.console-heading')
-    assert page.evaluate("([a,b,c,d])=>a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING&&b.compareDocumentPosition(c)&Node.DOCUMENT_POSITION_FOLLOWING&&c.compareDocumentPosition(d)&Node.DOCUMENT_POSITION_FOLLOWING",[indicator.element_handle(),question.element_handle(),composer.element_handle(),console_heading.element_handle()])
-    assert console.bounding_box()['height']>=180
-    indicator=page.locator('.live-indicator.waiting');assert indicator.get_by_text('Waiting for your answer').is_visible()
-    progress=page.locator('#progressfeed');assert progress.locator('.progress-item').count()==1
-    assert progress.locator('.progress-item time').count()==0 and console.locator('.line time').count()==0
-    page.screenshot(path='/downloads/requi-re-live-output.png',full_page=True)
+    page.goto(ui+'/tasks/live/view');page.locator('#answerform').wait_for()
+    assert page.locator('#console').count()==0 and page.locator('.execution-data').count()==0
+    page.locator('.avatar').click();page.locator('#opendebug').click();page.locator('.debug-dialog').wait_for()
+    assert page.locator('#console').count()==0
+    page.get_by_role('button',name='Close debug').click()
+    assert page.locator('#answerform').is_visible()
+    page.evaluate("liveSource.emit({kind:'progress',message:'Still working',phase_key:'intent',payload:{status:'heartbeat',stage:'intent'},ts:1720000200})")
+    assert page.locator('#stageprogress').get_by_text('Still working',exact=False).is_visible()
 
-    console.evaluate('e=>e.scrollTop=60');page.wait_for_timeout(50);before=console.evaluate('e=>e.scrollTop')
-    page.evaluate("liveSource.emit({kind:'progress',message:'new while reading',phase_key:'conops',payload:{},ts:1720000200})")
-    assert console.evaluate('e=>e.scrollTop')==before
-    console.evaluate('e=>e.scrollTop=e.scrollHeight');page.wait_for_timeout(50)
-    page.evaluate("liveSource.emit({kind:'progress',message:'new while pinned',phase_key:'conops',payload:{},ts:1720000201})")
-    assert console.evaluate('e=>Math.abs(e.scrollHeight-e.scrollTop-e.clientHeight)<2')
-    assert progress.locator('.progress-item',has_text='new while pinned').is_visible()
-    assert progress.locator('.progress-item').count()==1
-    page.evaluate('''liveSource.emit({kind:"progress",message:"[17:01:25] ... still working - stage 'conops' call, 30s elapsed",phase_key:"conops",payload:{},ts:1720000201.5})''')
-    inflight=progress.locator('.progress-item');assert inflight.get_by_text("stage 'conops' call",exact=False).is_visible()
-    assert inflight.get_by_text('30s elapsed',exact=False).is_visible()
-    page.evaluate("liveSource.emit({kind:'progress',message:'[17:01:38] ok Planning CONOPS concept option 1/2 [42.6s]',phase_key:'conops',payload:{},ts:1720000201.8})")
-    assert progress.locator('.progress-item',has_text='ok Planning CONOPS concept option 1/2').is_visible()
-    assert not progress.get_by_text("stage 'conops' call",exact=False).is_visible()
 
 def test_answer_failure_preserves_text_and_recovers_button(page,ui):
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
@@ -540,7 +535,7 @@ def test_structured_founder_decision_opens_large_card_dialog_and_formats_answer(
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     submitted=[]
     page.route('**/api/tasks/live/answer',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
-    page.goto(ui+'/tasks/live/view');page.locator('#console').wait_for()
+    page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
     decision={'type':'founder_decision','decision_id':'concept','title':'Choose the operating concept','prompt':'Which concept should the architecture execute?','rationale_required':True,'rationale_label':'Why is this right?','answer_format':'<value> - <rationale>','options':[{'value':'1','label':'Native app','summary':'Installed experience','advantages':['Fast offline'],'disadvantages':['App stores']},{'value':'2','label':'PWA','summary':'Browser first','advantages':['One deploy'],'disadvantages':['Limited APIs']}]}
     live['input_state']={'waiting':True,'process_live':True,'decision':decision}
     live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None}
@@ -600,7 +595,7 @@ def test_detail_layout_never_crushes_or_overlaps_at_user_viewport(page,ui):
     palette={s:page.locator(f'.phase.{s} .dot').first.evaluate('e=>getComputedStyle(e).backgroundColor') for s in states}
     assert palette['approved']=='rgb(22, 163, 106)' and palette['awaiting_approval']=='rgb(229, 182, 61)' and palette['running']=='rgb(78, 156, 247)' and palette['pending']=='rgb(242, 240, 233)'
     assert page.locator('.phase.running').count()==1
-    console=page.locator('.live-console');assert console.evaluate('e=>getComputedStyle(e).wordBreak')=='normal'
+    assert page.locator('.live-console').count()==0
     page.screenshot(path='/downloads/detail-layout-clean-1390x827.png',full_page=True)
 
 def test_founder_dialog_fixed_controls_and_vertical_four_options(page,ui):
@@ -768,7 +763,7 @@ def test_managed_task_state_reducer_is_exhaustive_and_atomic(page,ui):
 
 
 def test_runtime_build_identity_is_visible(page,ui):
-    page.goto(ui+'/');page.locator('#accountbutton').click();badge=page.locator('#identity .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD develop'
+    page.goto(ui+'/');page.locator('#accountbutton').click();page.locator('#opendebug').click();badge=page.locator('.debug-dialog .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD develop'
 
 
 def test_sse_snapshot_refresh_is_filtered_and_coalesced(page,ui):
@@ -788,8 +783,8 @@ def test_sse_snapshot_refresh_is_filtered_and_coalesced(page,ui):
 def test_runtime_badge_survives_identity_render(page,ui):
     page.route('**/health',lambda route:route.fulfill(json={'ok':True,'runtime_id':'7d6647f123456','repositories':{}}))
     page.route('**/api/auth',lambda route:(page.wait_for_timeout(150),route.fulfill(json={'mode':'basic','authenticated':True,'actor':'shy@example.com','admin':True,'providers':[]})))
-    page.goto(ui+'/');page.locator('#accountbutton').click();badge=page.locator('#identity .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD 7d6647f'
-    page.locator('#identity').get_by_text('shy@example.com',exact=True).wait_for();assert page.locator('#identity .runtime-id').inner_text()=='BUILD 7d6647f'
+    page.goto(ui+'/');page.locator('#accountbutton').click();page.locator('#opendebug').click();badge=page.locator('.debug-dialog .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD 7d6647f'
+    assert page.locator('#accountbutton').get_attribute('aria-label')=='Account menu for shy@example.com';assert page.locator('.debug-dialog .runtime-id').inner_text()=='BUILD 7d6647f'
 
 
 def test_orphaned_running_task_renders_visible_recovery_error(page,ui):
@@ -803,6 +798,7 @@ def test_gate_checkbox_updates_in_place_without_navigation(page,ui):
     page.route('**/api/tasks/sim',lambda route:route.fulfill(json=_promote_control(live)))
     page.route('**/api/tasks/sim/gates/*/toggle',lambda route:(calls.append(route.request.post_data_json),route.fulfill(json={**gate,'is_open':route.request.post_data_json['is_open']})))
     navigations=[];page.on('framenavigated',lambda frame:navigations.append(frame.url) if frame==page.main_frame else None)
+    mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-intent');page.locator('#gateform').wait_for();before=len(navigations);box=page.locator('#gateopen');box.check()
     page.get_by_text('Gate opened.',exact=True).wait_for();assert box.is_checked() and calls==[{'is_open':True}]
     assert len(navigations)==before and page.locator('#gateform').is_visible()
@@ -812,6 +808,7 @@ def test_gate_page_shows_requirements_evidence_and_full_content(page,ui):
     task['artifacts']=[{'phase_key':'srs','name':'srs.json','title':'Requirements','stale':False,'present':True,'generation':1}]
     page.route('**/api/tasks/sim',lambda route:route.fulfill(json=task))
     page.route('**/api/tasks/sim/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Requirements\n\n## Visible status\n\nThe system shall show status.'}))
+    mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-srs')
     evidence=page.locator('.gate-evidence');evidence.locator('.gate-artifact-summary').wait_for()
     assert evidence.locator('.gate-artifact-summary').inner_text()=='The system shall show status.'
@@ -840,6 +837,7 @@ def test_gate_transition_reconciles_delayed_next_phase(page,ui):
     page.route('**/api/tasks/sim',task)
     page.route('**/api/tasks/sim/artifacts/intent/intent_model.json/view',lambda route:route.fulfill(json={'title':'Needs and Scope','format':'json','content':'{}'}))
     page.route('**/api/tasks/sim/gates/*/decide',lambda route:route.fulfill(json={**gate,'state':'decided'}))
+    mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-intent')
     page.get_by_role('button',name='Choose & continue').click()
     notice=page.locator('#phase-transition-status')
@@ -857,6 +855,7 @@ def test_architecture_gate_identifies_model_proposed_decision(page,ui):
         'name':'architecture.json','title':'Architecture','phase':'architecture','format':'json','content':'{"decisions":[]}',
         'decision_provenance':[{'decision_id':'ADR-4','title':'SQLite storage','label':'Model-proposed decision',
                                 'founder_evidence':[],'baseline_refs':[]}]}))
+    mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-architecture')
     panel=page.locator('.decision-provenance');panel.wait_for()
     assert panel.get_by_text('ADR-4').is_visible()
@@ -869,6 +868,7 @@ def test_gate_page_missing_artifact_blocks_approval(page,ui):
     task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate['state']='waiting'
     task['artifacts']=[]
     page.route('**/api/tasks/sim',lambda route:route.fulfill(json=task))
+    mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-srs')
     page.locator('#gateform').wait_for()
     assert page.locator('#gate-artifacts').get_by_text('No current valid artifact is available',exact=False).is_visible()
@@ -886,24 +886,27 @@ def test_gate_page_refreshes_arriving_artifact_without_losing_form_input(page,ui
         route.fulfill(json=data)
     page.route('**/api/tasks/sim',snapshot)
     page.route('**/api/tasks/sim/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Requirements\n\nThe system works.'}))
+    mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-srs');page.locator('#gate-artifacts').get_by_text('No current valid artifact',exact=False).wait_for()
     page.locator('[name="edited_text"]').fill('Keep this review note')
     assert not page.get_by_role('button',name='Choose & continue').is_enabled()
     changed['ready']=True
     page.evaluate("gateSource.emit({kind:'artifact',phase_key:'srs',message:'artifact ready',payload:{}})")
-    expect(page.locator('#gate-artifacts')).to_contain_text('The system works.')
-    assert page.get_by_role('button',name='Choose & continue').is_enabled()
+    expect(page.locator('#gate-decision-status')).to_contain_text('Gate evidence changed')
+    assert not page.get_by_role('button',name='Choose & continue').is_enabled()
     assert page.locator('[name="edited_text"]').input_value()=='Keep this review note'
     page.screenshot(path='/downloads/jev-d6-live-gate-evidence.png',full_page=True)
 
 
 def test_gate_page_explains_controls_and_tooltips_desktop_and_phone(page,ui):
     live=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in live['gates'] if g['state']=='waiting');live['ui_state']={'mode':'phase_gate','active_phase':live['active_phase'],'process_live':False,'decision':None,'gate':gate}
+    mock_gate_review(page,ui,'sim')
     page.route('**/api/tasks/sim',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/sim/gates/gate-intent');dialog=page.locator('#gateform');dialog.wait_for()
     for text in ['Choose approves this artifact','Save edit records your wording','Redo regenerates this phase']:
         assert dialog.get_by_text(text,exact=False).is_visible()
     help_button=dialog.get_by_role('button',name='What does opening a gate do?');help_button.focus();tip=dialog.get_by_role('tooltip').filter(has_text='auto-approves when the phase arrives');expect(tip).to_be_visible()
     page.screenshot(path='/downloads/gate-help-desktop.png',full_page=True)
+    mock_gate_review(page,ui,'sim')
     page.set_viewport_size({'width':390,'height':844});page.goto(ui+'/tasks/sim/gates/gate-intent');dialog=page.locator('#gateform');dialog.wait_for();dialog.get_by_role('button',name='What does opening a gate do?').focus()
     tip=dialog.get_by_role('tooltip').filter(has_text='auto-approves when the phase arrives');expect(tip).to_be_visible();box=tip.bounding_box();assert box['x']>=0 and box['x']+box['width']<=390
     page.screenshot(path='/downloads/gate-help-phone.png',full_page=True)
@@ -915,21 +918,15 @@ def test_decision_dialog_rationale_help_is_real_and_keyboard_accessible(page,ui)
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for();button=dialog.get_by_role('button',name='Why a rationale is requested');button.focus();expect(dialog.get_by_role('tooltip')).to_be_visible()
     expect(dialog.get_by_role('tooltip').get_by_text('stored with the selected option',exact=False)).to_be_visible()
 
-def test_live_log_is_prominent_without_duplicate_timestamps_desktop_and_phone(page,ui):
-    page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
-    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent';live['ui_state']={'mode':'executing','active_phase':'intent','process_live':True,'decision':None,'gate':None}
-    live['events']=[{'id':i,'kind':'progress','message':f'[17:01:{i%60:02d}] Building requirement {i}','phase_key':'intent','payload':{},'ts':1720000000+i} for i in range(80)]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
-    page.set_viewport_size({'width':1365,'height':800});page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
-    assert page.get_by_text('REAL PROGRESS · ALL STAGES',exact=True).count()==0
-    assert page.locator('#progressfeed time').count()==0 and console.locator('.line time').count()==0
-    dimensions=console.evaluate("e=>{let s=getComputedStyle(e);return {height:e.getBoundingClientRect().height,min:s.minHeight,max:s.maxHeight,fluid:s.getPropertyValue('--console-fluid').trim(),scroll:e.scrollHeight>e.clientHeight}}")
-    assert dimensions['height']>=260 and dimensions['min']=='260px' and dimensions['max']=='420px' and dimensions['fluid']=='36vh' and dimensions['scroll'] is True
-    page.screenshot(path='/downloads/live-log-prominent-desktop.png',full_page=True)
-    page.set_viewport_size({'width':390,'height':844});page.reload();console=page.locator('#console');console.wait_for()
-    assert 280<=console.bounding_box()['height']<=380 and console.evaluate("e=>getComputedStyle(e).getPropertyValue('--console-fluid').trim()")=='40vh' and page.get_by_text('REAL PROGRESS · ALL STAGES',exact=True).count()==0
-    page.screenshot(path='/downloads/live-log-prominent-phone.png',full_page=True)
+def test_debug_dialog_contains_run_events_desktop_and_phone(page,ui):
+    page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
+    assert page.locator('#console').count()==0
+    page.locator('#accountbutton').click();page.locator('#opendebug').click();page.get_by_text('Run events',exact=True).click()
+    page.locator('#debugexecution').get_by_text('Generating CONOPS option 2/3',exact=False).wait_for()
+    page.set_viewport_size({'width':390,'height':844})
+    assert page.locator('.debug-dialog').is_visible()
+    assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
+
 
 def test_mutation_flows_refresh_in_place_without_document_navigation(page,ui):
     page.add_init_script("""class FakeEventSource{addEventListener(){}close(){}}window.EventSource=FakeEventSource""")
@@ -959,7 +956,7 @@ def test_live_progress_scope_and_account_menu_desktop_and_phone(page,ui):
     page.route('**/api/auth',lambda route:route.fulfill(json={'mode':'basic','authenticated':True,'actor':'shy@example.com','admin':True,'providers':[]}))
     page.set_viewport_size({'width':1365,'height':800});page.goto(ui+'/tasks/live/view')
     scope=page.locator('.progress-scope');scope.wait_for();assert scope.locator('b').all_inner_texts()==['8','20','12'];assert 'out of' in scope.inner_text() and 'minutes so far' in scope.inner_text()
-    page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for();assert menu.get_by_text('shy@example.com',exact=True).is_visible();assert menu.get_by_text('BUILD abcdef1',exact=True).is_visible();assert menu.get_by_role('menuitem',name='Sign out').is_visible()
+    page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for();assert menu.get_by_text('shy@example.com',exact=True).is_visible();assert menu.get_by_role('menuitem',name='Debug',exact=True).is_visible();assert menu.get_by_role('menuitem',name='Sign out').is_visible()
     page.screenshot(path='/downloads/live-scope-account-desktop.png',full_page=True);page.keyboard.press('Escape');assert menu.is_hidden()
     page.set_viewport_size({'width':390,'height':844});page.reload();scope.wait_for();page.locator('#accountbutton').click();menu.wait_for();page.screenshot(path='/downloads/live-scope-account-phone.png',full_page=True)
 
@@ -972,8 +969,8 @@ def test_recovered_run_hides_stale_sigterm_error_from_live_console(page,ui):
       {'id':2,'kind':'command','message':'Engine process started','phase_key':'intent','payload':{},'ts':1720000100},
       {'id':3,'kind':'progress','message':'Recovered checkpoint is running','phase_key':'intent','payload':{},'ts':1720000101},
     ]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');console=page.locator('#console');console.wait_for()
-    assert 'Recovered checkpoint is running' in console.inner_text();assert 'exit code -15' not in console.inner_text();assert page.locator('.task-error-state').count()==0
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.live-indicator').wait_for()
+    assert page.locator('#console').count()==0;assert page.locator('.task-error-state').count()==0
 
 def test_live_elapsed_uses_latest_phase_command_not_parked_phase_start(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();phase=next(p for p in live['phases'] if p['phase_key']==live['active_phase']);phase.update({'started_at':time.time()-22*3600,'completed':None,'total':None})
@@ -992,7 +989,7 @@ def test_orchestrator_baseline_decision_renders_without_engine_process(page,ui):
 
 def test_account_menu_is_plain_list_with_explicit_actions(page,ui):
     page.goto(ui+'/');page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for()
-    assert menu.locator(':scope > li').count()==5;assert menu.locator('button').all_inner_texts()==['Debug mode · off','Copy debug info','Sign out']
+    assert menu.locator(':scope > li').count()==3;assert menu.locator('button').all_inner_texts()==['Debug','Sign out']
 
 def test_existing_system_requirement_names_file_format_path_and_next_step(page,ui):
     requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture is paused until real system facts are supplied.','path':'/artifacts/session/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':['baseline_id','system_name','mode: existing','repositories (at least one)'],'next':'Save the file, then restart Requi.re; recovery will launch Architecture.'}
@@ -1011,8 +1008,8 @@ def test_copy_debug_info_includes_runtime_snapshot_and_resource_decision(page,ui
     page.add_init_script("""window.__copied='';Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>window.__copied=text}})""")
     requirement={'kind':'external_input','title':'Baseline required','path':'/tmp/system-baseline.json','format':'SystemBaseline JSON'}
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.requirement-dialog').wait_for();page.keyboard.press('Escape');page.locator('#accountbutton').click();button=page.get_by_role('menuitem',name='Copy debug info');button.click();page.wait_for_function("window.__copied.length>0")
-    copied=page.evaluate('window.__copied');assert copied.startswith('Requi.re debug report');assert '"owner": "requirement"' in copied and '"detected": true' in copied and '"task_id": "live"' in copied
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.requirement-dialog').wait_for();page.keyboard.press('Escape');page.locator('#accountbutton').click();page.get_by_role('menuitem',name='Debug',exact=True).click();button=page.get_by_role('button',name='Copy debug info');button.click();page.wait_for_function("window.__copied.length>0")
+    copied=page.evaluate('window.__copied');assert json.loads(copied)['task_id']=='live';assert '"owner": "requirement"' in copied and '"detected": true' in copied and '"task_id": "live"' in copied
 
 def test_greenfield_confirmation_is_single_flight(page,ui):
     requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture needs facts.','path':'/artifacts/session/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':[]}
@@ -1029,7 +1026,7 @@ def test_greenfield_confirmation_is_single_flight(page,ui):
 def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips(page,ui):
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'A very long progress update that must remain on precisely one line while the full wording stays available on hover','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');feed=page.locator('#progressfeed .progress-item');feed.wait_for();span=feed.locator('span');assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');feed=page.locator('#stageprogress .progress-item');feed.wait_for();span=feed.locator('span');assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
     phase=page.locator('.phase-list-primary .phase').filter(has_text='Requirements');phase.hover();tip=phase.get_by_role('tooltip');tip.wait_for();assert tip.get_by_text('Artifacts: srs.json',exact=True).is_visible();assert tip.get_by_text('missing acceptance criterion',exact=False).is_visible()
     page.screenshot(path='/downloads/progress-phase-tooltips.png',full_page=True)
 
@@ -1059,6 +1056,7 @@ def test_model_route_default_and_phase_override_controls(page,ui):
     assert picker.input_value()=='deepseek'
     deepseek=picker.locator('option[value="deepseek"]')
     assert 'DeepSeek' in deepseek.inner_text()
+    mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-conops')
     override=page.locator('select[name="next_model"]');override.wait_for()
     assert override.locator('option').first.inner_text()=='Use current task default'
@@ -1101,15 +1099,10 @@ def test_interview_history_cards_and_debug_toggle_persist(page, ui):
     assert page.locator(".qa-item").nth(1).locator(".qa-question p").inner_text() == "Who else should weigh in?"
     assert page.locator(".qa-tag", has_text="Q1").count() == 1
     assert page.locator("#console").count() == 0
-    page.locator(".avatar").click();page.locator("#debugtoggle").click()
-    page.get_by_text("Live engine output").wait_for()
-    assert page.locator("#console").is_visible()
-    page.reload();page.get_by_text("Live engine output").wait_for()
-    assert page.locator("#console").is_visible() and page.locator(".qa-item").count() == 2
-    page.locator(".avatar").click();page.locator("#debugtoggle").click()
-    page.locator("#console").wait_for(state="detached")
-    assert page.locator("#console").count() == 0
-    assert page.get_by_text("Interview so far").is_visible()
+    page.locator(".avatar").click();page.locator("#opendebug").click();page.locator('.debug-dialog').wait_for()
+    assert page.locator('#console').count()==0
+    page.get_by_role('button',name='Close debug').click();page.reload();page.get_by_text('Interview so far').wait_for()
+    assert page.locator('#console').count()==0 and page.locator('.qa-item').count()==2
 
 
 def test_feedback_thumbs_comment_persist_and_delete(page, ui):
@@ -1259,17 +1252,11 @@ def test_debug_chips_show_intent_relevance_and_differed_tooltip(page, ui):
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.goto(ui + "/tasks/live/view")
     page.get_by_text("Interview so far").wait_for()
-    chips = page.locator(".qa-chips").first
-    chips.wait_for()
-    assert chips.get_by_text("intent · answer", exact=True).is_visible()
-    assert chips.get_by_text("relevance · thin", exact=True).is_visible()
-    marker = chips.locator(".qa-chip.differed")
-    assert marker.get_by_text("engine differed", exact=True).is_visible()
-    assert "Jev read: thin" in marker.get_attribute("title") and "engine used: relevant" in marker.get_attribute("title")
+    assert page.locator('.qa-chips').count()==0
+    page.locator('.avatar').click();page.locator('#opendebug').click();page.get_by_text('Answer classifications',exact=True).click()
+    page.locator('#debugexecution').get_by_text('"differed": true',exact=False).wait_for()
 
-    page.locator(".avatar").click(); page.locator("#debugtoggle").click()
-    page.locator(".qa-chips").first.wait_for(state="detached")
-    assert page.locator(".qa-chips").count() == 0
+
 
 
 def test_protocol_422_is_not_mislabeled_engine_down(page,ui):
@@ -1299,12 +1286,7 @@ def test_legacy_ollama_model_switch_dialog(page,ui,failed):
         {'id':'ollama','available':True,'model':'ollama:qwen2.5-coder:14b','models':['qwen2.5-coder:14b','phi4']},
         {'id':'deepseek','available':False,'error':'no key'}]}))
     page.goto(ui+'/tasks/live/view')
-    execution=page.locator('.execution-data')
-    expect(execution).to_be_visible()
-    assert not execution.evaluate('(el)=>el.open')
-    execution.locator(':scope > summary').click()
-    assert execution.evaluate('(el)=>el.open')
-    execution.locator(':scope > summary').click()
+    assert page.locator('.execution-data').count()==0
     if failed:expect(page.locator('.task-error-state #switchmodel')).to_be_visible()
     page.locator('#switchmodel').click()
     dialog=page.locator('.route-switch-dialog')
@@ -1509,6 +1491,7 @@ def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(page,ui):
     page.route('**/api/tasks/sim/artifacts/specs/items.json/view',lambda route:route.fulfill(json={
         'name':'items.json','title':'Item Specifications','phase':'specs','format':'json',
         'content':'[{"spec_id":"SPEC-1","title":"Status screen"}]'}))
+    mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-specs')
     page.locator('.gate-artifact-summary').wait_for()
     assert page.locator('#gate-artifacts .gate-artifact-summary').inner_text()=='Status screen'
@@ -1522,6 +1505,7 @@ def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(page,ui):
     assert len(sent)==1 and sent[0]['action']=='approve' and sent[0]['expected_revision']==gate['revision']
     # The same real artifact must not be silently hidden if it fails validation.
     item['valid']=False;item['validation_errors']=['1 validation error for list[ItemSpec]: invalid item']
+    mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-specs')
     notice=page.locator('.gate-evidence-error');notice.wait_for()
     page.screenshot(path='/downloads/specs-gate-invalid.png',full_page=True)
@@ -1554,8 +1538,18 @@ def test_accepted_answer_disarms_old_question_until_new_control_arrives(page,ui)
 
 def test_gate_model_picker_shows_exact_sticky_default(page,ui):
     page.route('**/api/tasks/sim/generator-default/needs',lambda route:route.fulfill(json={'phase':'needs','model':'deepseek:deepseek-flash','source':'selected'}))
+    mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-conops')
     picker=page.locator('select[name="next_model"]');picker.wait_for()
     expect(page.locator('[data-model-for="next_model"]')).to_contain_text('Current task default: deepseek:deepseek-flash')
     assert picker.locator('option').first.inner_text()=='Use current task default'
     page.screenshot(path='/downloads/sticky-model-gate.png',full_page=True)
+
+def test_final_package_surface_is_separate_from_debug_and_has_recoverable_link(page,ui):
+ task=page.request.get(ui+'/api/tasks/done').json();page.route('**/api/tasks/done',lambda route:route.fulfill(json=_promote_control(task)))
+ page.route('**/api/tasks/done/packages',lambda route:route.fulfill(json={'status':'ready','generation':1,'package_id':'a'*64,'url':'/api/tasks/done/packages/'+'a'*64+'?generation=1','contents':['README.md','interview/intent_model.json','spec/AGENTS.md']}))
+ page.goto(ui+'/tasks/done/view');page.get_by_role('button',name='Prepare final package').click()
+ link=page.get_by_role('link',name='Download coding-agent package');expect(link).to_be_visible();assert '?generation=1' in link.get_attribute('href')
+ page.screenshot(path='/downloads/d8-final-package-desktop.png',full_page=True)
+ page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/downloads/d8-final-package-mobile.png',full_page=True)
+ assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')

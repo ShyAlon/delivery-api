@@ -286,8 +286,8 @@ async def _recover_tasks()->None:
                     latest_choice=next((event for event in reversed(events) if event.get("phase_key")=="architecture"
                                         and event.get("kind") in ("founder_decision","answer","baseline","requirement","command")),None)
                     if latest_choice and latest_choice["kind"]=="founder_decision" and (latest_choice.get("payload") or {}).get("decision",{}).get("decision_id")=="system-baseline":
-                        activity("architecture.recovery.decision","Restoring interrupted architecture baseline choice",task_id=task_id,session_id=session)
-                        asyncio.create_task(orchestrator._choose_baseline(task_id))
+                        activity("architecture.recovery.decision","Continuing interrupted baseline choice as greenfield",task_id=task_id,session_id=session)
+                        asyncio.create_task(orchestrator.execute_phase(task_id,"architecture"))
                         continue
                 if repaired or (phases["conops"] in ("approved","done") and phases["needs"] in ("pending","running")
                                 and current["active_phase"]=="conops"
@@ -510,6 +510,9 @@ def favicon(): return FileResponse(WEB_DIR / "favicon.ico", media_type="image/x-
 
 @app.get("/tasks/{task_id}/gates/{gate_key}", include_in_schema=False)
 def gate_page(task_id: str, gate_key: str): return FileResponse(WEB_DIR / "index.html")
+
+@app.get("/tasks/{task_id}/decisions/{wait_id}", include_in_schema=False)
+def decision_page(task_id:str,wait_id:str):return FileResponse(WEB_DIR / "index.html")
 
 @app.get("/tasks/{task_id}/view", include_in_schema=False)
 def task_view(task_id: str): return FileResponse(WEB_DIR / "index.html")
@@ -866,12 +869,21 @@ async def switch_interview_model(task_id:str,body:TaskRouteSwitchRequest,a:auth.
     return changed.model_dump(mode="json")
 
 class InterviewAnswer(BaseModel):
+    founder_inputs:list[dict]=Field(default_factory=list,max_length=1000)
+    comment:str=Field(default="",max_length=7000)
+    review_revision:str|None=Field(default=None,max_length=240)
     answer:str=Field(min_length=1,max_length=8000)
     expected_sequence:int|None=Field(default=None,ge=0)
     decision_id:str|None=Field(default=None,max_length=160)
 @app.post("/api/tasks/{task_id}/answer")
 async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends(auth.require_actor)):
     task_before=store.task(task_id) or {};input_before=runner.input_state(task_id)
+    if body.review_revision:
+        live=get_task(task_id)['control_snapshot']
+        if live.get('wait_id')!=body.decision_id or live.get('revision')!=body.review_revision or live.get('owner')!='engine' or live.get('mode')!='waiting_input':
+            raise HTTPException(409,{"error":"Review changed.","cause":"The decision revision is no longer current.","next":"Open the live review before continuing.","stale":True})
+        if not store.decision_review(task_id,body.decision_id,body.review_revision):raise HTTPException(409,'review evidence is unavailable')
+
     recent_answers=[{"event_id":event["id"],"phase_key":event.get("phase_key"),"decision_id":event.get("payload",{}).get("decision_id")} for event in store.events(task_id) if event.get("kind")=="answer"][-10:]
     activity("api.answer.attempt","Founder answer submission received",endpoint=f"/api/tasks/{task_id}/answer",task_id=task_id,task_state=task_before.get("state"),active_phase=task_before.get("active_phase"),submitted_decision_id=body.decision_id,open_decision_id=(input_before.get("decision") or {}).get("decision_id"),process_live=input_before["process_live"],waiting=input_before["waiting"],recent_answer_events=json.dumps(recent_answers,separators=(",",":")))
     try:
@@ -895,16 +907,28 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
             raw_value,separator,rationale=body.answer.partition(" - ")
             raw_value=raw_value.strip();rationale=rationale.strip() if separator else ""
             typed_value=next((option.value for option in pending.options if str(option.value)==raw_value),body.answer)
+            if pending.context.get('decision_purpose')=='semantic_review':
+                from vmodel_contracts.semantic_review import SemanticReview
+                review=SemanticReview.model_validate(pending.context['evidence']['semantic_review'])
+                proposal=json.loads(body.answer)
+                if proposal.get('revision')!=review.revision:raise RuntimeError('semantic review revision changed')
+                decisions=[{**d,'actor':a.label} for d in proposal.get('decisions',[])]
+                typed_value=json.dumps({'revision':review.revision,'decisions':decisions})
             if pending.rationale_required and not rationale:raise RuntimeError("typed input requires a rationale")
             progress_stop=asyncio.Event()
             progress_watch=asyncio.create_task(_watch_engine_advance(task_id,session_id,progress_stop))
             try:
                 submitted=await run_in_threadpool(engine_client.submit,session_id,InputResponse(input_id=pending.input_id,expected_sequence=body.expected_sequence,value=typed_value,
-                    rationale=rationale or None,actor_id=a.label))
+                    rationale=rationale or None,actor_id=a.label,founder_inputs=body.founder_inputs))
             finally:
                 progress_stop.set();await progress_watch
             store.add_event(task_id,"engine_protocol","Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
             source="http_interview"
+            if body.comment.strip():
+                store.add_review_comment(task_id,body.decision_id or str(pending.input_id),body.review_revision or f'engine:{state.session_id}:{state.sequence}',a.label,body.comment)
+                store.add_event(task_id,'artifact_comment',body.comment,phase_key=task_before.get('active_phase'),
+                    payload={'wait_id':body.decision_id,'revision':body.review_revision,'actor':a.label,'comment':body.comment})
+
     except EngineUnreachableError as e:
         task=store.task(task_id) or {}
         payload={"endpoint":f"/api/tasks/{task_id}/answer",**_engine_unreachable_payload(e)}
@@ -1299,7 +1323,7 @@ def _http_input_state(task_id:str,engine_state:EngineSnapshot)->dict:
     decision=None;question=None;input_id=None
     if waiting:
         input_id=str(pending.input_id)
-        if pending.kind in _STRUCTURED_INPUT_KINDS:decision=pending.model_dump(mode="json")
+        if pending.kind in _STRUCTURED_INPUT_KINDS or pending.context.get('decision_purpose')=='semantic_review':decision=pending.model_dump(mode="json")
         else:question=pending.prompt
         _sync_waiting_input_event(task_id,pending)
     return {"waiting":waiting,"engine_process_status":int(engine_state.process_status),
@@ -1343,7 +1367,109 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
                              "prerequisite":phase.prerequisite,"artifacts":list(phase.artifacts)} for phase in PHASE_DEFINITIONS}
     from .control_snapshot import project as project_control
     control=project_control(task,input_state,snapshot,work,artifacts)
+    _retain_decision_control(task_id,control.model_dump(mode="json"))
     return {**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": store.events(task_id), "artifacts":artifacts,"artifact_projection":{"session":session,"root":str((__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state}
+
+def _retain_decision_control(task_id:str,control:dict)->None:
+    decision=control.get('decision') or {};context=decision.get('context') or {}
+    if control.get('owner')!='engine' or control.get('mode')!='waiting_input':return
+    if context.get('decision_purpose') not in ('conops_concept','interview_approval','semantic_review'):return
+    if context.get('evidence_version')!=1 or not context.get('evidence') or not context.get('evidence_revision'):return
+    import hashlib
+    raw=json.dumps(context['evidence'],sort_keys=True,separators=(',',':'),ensure_ascii=False)
+    if len(raw.encode('utf-8'))>1_000_000:return
+    if hashlib.sha256(raw.encode('utf-8')).hexdigest()!=context['evidence_revision']:return
+    try:
+        from vmodel_contracts import IntentModel,ConOpsDocument
+        from pydantic import TypeAdapter
+        from vmodel_contracts import StakeholderContext,OperationalScenario,ConceptOption
+        evidence=context['evidence']
+        if context['decision_purpose']=='semantic_review':
+            from vmodel_contracts.semantic_review import SemanticReview
+            semantic=SemanticReview.model_validate(evidence['semantic_review'])
+            if semantic.session_id!=context['session_id']:return
+        elif context['decision_purpose']=='interview_approval':
+            IntentModel.model_validate(evidence['intent_model']);ConOpsDocument.model_validate(evidence['conops'])
+        else:
+            draft=evidence['conops_draft']
+            TypeAdapter(list[StakeholderContext]).validate_python(draft['stakeholder_context'])
+            TypeAdapter(list[OperationalScenario]).validate_python(draft['operational_scenarios'])
+            options=TypeAdapter(list[ConceptOption]).validate_python(draft['concept_options'])
+            if len(options)<2:return
+            published=control.get('options',[])
+            if len(published)!=len(options):return
+            if any(str(row.get('value'))!=str(i) or row.get('label')!=option.name
+                   for i,(row,option) in enumerate(zip(published,options),1)):return
+    except (ValueError,KeyError,TypeError):return
+
+    if context.get('session_id')!=control.get('precondition',{}).get('session_id'):return
+    store.retain_decision_review(task_id,control['wait_id'],control['revision'],control)
+
+@app.get("/api/tasks/{task_id}/decisions/{wait_id}")
+def get_decision_review(task_id:str,wait_id:str,revision:str|None=None,draft:str|None=None,a:auth.Actor=Depends(auth.require_actor)):
+    task=get_task(task_id);current=task['control_snapshot'];_retain_decision_control(task_id,current)
+    review=store.decision_review(task_id,wait_id,revision)
+    if review is None:raise HTTPException(404,{"error":"This decision view is unavailable.","cause":"The identified review evidence was not retained.","next":"Open the current task to find its live decision."})
+    live=current.get('owner')=='engine' and current.get('mode')=='waiting_input' and current.get('wait_id')==wait_id and current.get('revision')==review['revision']
+    saved=None
+    if draft:
+        saved=store.decision_draft(task_id,wait_id,review['revision'],draft)
+        if saved is None:raise HTTPException(404,{"error":"Saved draft is unavailable.","cause":"It does not belong to this decision revision.","next":"Use the original review link or open the current task."})
+    return {'task_id':task_id,'title':task['title'],'review':review,'current':current,'actionable':live,'draft':saved,
+            'comments':store.review_comments(task_id,wait_id,review['revision'])}
+
+class DecisionComment(BaseModel):
+    revision:str=Field(min_length=1,max_length=240)
+    comment:str=Field(min_length=1,max_length=7000)
+
+@app.post("/api/tasks/{task_id}/decisions/{wait_id}/comments")
+def comment_decision_review(task_id:str,wait_id:str,body:DecisionComment,a:auth.Actor=Depends(auth.require_actor)):
+    review=store.decision_review(task_id,wait_id,body.revision)
+    if review is None:raise HTTPException(404,'decision revision not found')
+    event=store.add_event(task_id,'artifact_comment',body.comment,phase_key=review.get('phase_key'),
+        payload={'wait_id':wait_id,'revision':body.revision,'actor':a.label,'comment':body.comment})
+    comment_id=store.add_review_comment(task_id,wait_id,body.revision,a.label,body.comment)
+    return {'comment_id':comment_id}
+
+class DecisionDraft(BaseModel):
+    semantic_decisions:list[dict]=Field(default_factory=list,max_length=1000)
+    founder_inputs:list[dict]=Field(default_factory=list,max_length=1000)
+    revision:str=Field(min_length=1,max_length=240)
+    choice:str|None=Field(default=None,max_length=200)
+    rationale:str=Field(default='',max_length=7000)
+    comment:str=Field(default='',max_length=7000)
+
+@app.post("/api/tasks/{task_id}/decisions/{wait_id}/drafts")
+def save_decision_review_draft(task_id:str,wait_id:str,body:DecisionDraft,a:auth.Actor=Depends(auth.require_actor)):
+    if not store.task(task_id):raise HTTPException(404,'task not found')
+    review=store.decision_review(task_id,wait_id,body.revision)
+    if review is None:raise HTTPException(404,'decision revision not found')
+    if body.choice is not None and body.choice not in [str(o['value']) for o in review.get('options',[])]:raise HTTPException(422,'unknown option')
+    draft=store.save_decision_draft(task_id,wait_id,body.revision,{**body.model_dump(),'actor':a.label})
+    return {'draft_id':draft,'revision':body.revision}
+
+class BrowserDiagnostics(BaseModel):
+    started_at:str|None=None
+    ended_at:str|None=None
+    url:str=Field(default='',max_length=2000)
+    records:list[dict]=Field(default_factory=list,max_length=500)
+
+@app.post("/api/tasks/{task_id}/debug.zip")
+def download_debug_zip(task_id:str,body:BrowserDiagnostics,a:auth.Actor=Depends(auth.require_actor)):
+    task=store.task(task_id)
+    if not task:raise HTTPException(404,'task not found')
+    session=_recorded_engine_session(task_id)
+    if not session:raise HTTPException(409,{"error":"No run is linked to this task.","cause":"A task/run-scoped diagnostic export needs a recorded session.","next":"Start a run or select a task with a run."})
+    if not __import__('re').fullmatch(r'[A-Za-z0-9._-]+',session) or session in ('.','..'):raise HTTPException(409,'invalid recorded session')
+    if len(json.dumps(body.model_dump()).encode())>1_000_000:raise HTTPException(413,'browser diagnostics exceed 1 MB')
+    from vmodel_contracts.runtime import artifacts_root
+    from .debug_export import diagnostic_zip
+    from .observability import LOG_PATH
+    root=artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session
+    control=get_task(task_id)['control_snapshot']
+    data=diagnostic_zip(root,task_id,session,task['generation'],body.model_dump(),control,store.events(task_id),LOG_PATH)
+    from fastapi.responses import Response
+    return Response(data,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{task_id}-debug.zip"'})
 
 @app.get("/api/tasks/{task_id}/execution")
 def task_execution(task_id:str,debug:bool=False,a:auth.Actor=Depends(auth.require_actor)):
@@ -1586,21 +1712,116 @@ def toggle_gate(task_id:str,gate_key:str,req:GateToggle,request:Request,a:auth.A
     try:return store.set_gate_open(task_id,gate_key,req.is_open,a.label)
     except KeyError:raise HTTPException(404,"gate not found")
 
+def _srs_semantic_path(task_id:str)->Path:
+    session=_recorded_engine_session(task_id)
+    if not session or not __import__('re').fullmatch(r'[A-Za-z0-9._-]+',session) or session in ('.','..'):
+        raise HTTPException(409,'task has no valid session')
+    from vmodel_contracts.runtime import artifacts_root
+    return artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session/'spec'/'srs.semantic-review.json'
+
+def _gate_review(task_id:str,gate_key:str)->dict:
+    task=get_task(task_id)
+    gate=next((g for g in task['gates'] if g['gate_key']==gate_key),None)
+    if not gate:raise HTTPException(404,'gate not found')
+    artifacts=[a for a in task.get('artifacts',[]) if a['phase_key']==gate['after_phase'] and not a.get('stale')]
+    documents=[]
+    for artifact in artifacts:
+        try:documents.append({'name':artifact['name'],'view':task_artifact_view(task_id,gate['after_phase'],artifact['name'])})
+        except HTTPException as exc:documents.append({'name':artifact['name'],'error':str(exc.detail)})
+    semantic=None
+    if gate['after_phase']=='srs' and _recorded_engine_session(task_id):
+        path=_srs_semantic_path(task_id)
+        if path.is_file():
+            from vmodel_contracts.semantic_review import SemanticReview
+            semantic=SemanticReview.model_validate_json(path.read_text()).model_dump(mode='json')
+            if semantic['session_id']!=_recorded_engine_session(task_id):raise HTTPException(409,'semantic review belongs to another session')
+    basis={'generation':task['generation'],'gate':gate,'artifacts':artifacts,'documents':documents,'semantic_review':semantic}
+    import hashlib
+    raw=json.dumps(basis,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+    if len(raw.encode())>6_000_000:raise HTTPException(413,'gate review exceeds snapshot limit')
+    revision='gate:'+hashlib.sha256(raw.encode()).hexdigest()
+    review={'revision':revision,'phase_key':gate['after_phase'],'task':task,'documents':documents,'semantic_review':semantic}
+    store.retain_decision_review(task_id,'gate:'+gate_key,revision,review)
+    return review
+
+@app.get('/api/tasks/{task_id}/gates/{gate_key}/review')
+def get_gate_review(task_id:str,gate_key:str,revision:str|None=None,draft:str|None=None,a:auth.Actor=Depends(auth.require_actor)):
+    current=_gate_review(task_id,gate_key)
+    review=store.decision_review(task_id,'gate:'+gate_key,revision) if revision else current
+    if review is None:raise HTTPException(404,'gate review revision not found')
+    gate=next(g for g in current['task']['gates'] if g['gate_key']==gate_key)
+    saved=store.decision_draft(task_id,'gate:'+gate_key,review['revision'],draft) if draft else None
+    if draft and saved is None:raise HTTPException(404,'gate draft not found')
+    return {'review':review,'actionable':review['revision']==current['revision'] and gate['state']=='waiting',
+            'draft':saved,'comments':store.review_comments(task_id,'gate:'+gate_key,review['revision'])}
+
+@app.post('/api/tasks/{task_id}/gates/{gate_key}/comments')
+def comment_gate(task_id:str,gate_key:str,body:DecisionComment,a:auth.Actor=Depends(auth.require_actor)):
+    return comment_decision_review(task_id,'gate:'+gate_key,body,a)
+
+@app.post('/api/tasks/{task_id}/gates/{gate_key}/drafts')
+def draft_gate(task_id:str,gate_key:str,body:DecisionDraft,a:auth.Actor=Depends(auth.require_actor)):
+    if store.decision_review(task_id,'gate:'+gate_key,body.revision) is None:raise HTTPException(404,'gate revision not found')
+    return {'draft_id':store.save_decision_draft(task_id,'gate:'+gate_key,body.revision,body.model_dump())}
+
+class SemanticDecisions(BaseModel):
+    revision:str=Field(pattern=r'^[a-f0-9]{64}$')
+    decisions:list[dict]=Field(max_length=1000)
+
+@app.post('/api/tasks/{task_id}/gates/{gate_key}/semantic-review')
+def decide_semantic_gate(task_id:str,gate_key:str,body:SemanticDecisions,a:auth.Actor=Depends(auth.require_actor)):
+    from vmodel_contracts.semantic_review import SemanticReview
+    from vmodel_contracts import SRSDocument
+    live=_gate_review(task_id,gate_key);semantic=live.get('semantic_review')
+    gate=next(g for g in live['task']['gates'] if g['gate_key']==gate_key)
+    if not semantic or semantic['revision']!=body.revision or gate['state']!='waiting':raise HTTPException(409,'semantic review changed')
+    try:
+        review=SemanticReview.model_validate({**semantic,'decisions':[{**d,'actor':a.label} for d in body.decisions]})
+        # Candidate is the producer body. The rendered SRS also includes
+        # deterministic intent-carried fields, which must survive review.
+        current=task_artifact_view(task_id,'srs','srs.json')
+        full=json.loads(current['raw_content'])
+        prior=SemanticReview.model_validate(semantic)
+        basis=prior.resolved_candidate(lambda c:None) if prior.decisions else prior.candidate
+        if any(full.get(k)!=v for k,v in basis.items()) and any(full.get(k)!=v for k,v in prior.candidate.items()):raise HTTPException(409,'SRS candidate changed outside its review')
+        resolved=review.resolved_candidate(lambda candidate:SRSDocument.model_validate({**full,**candidate}))
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    path=_srs_semantic_path(task_id);artifact=_task_artifact(task_id,'srs','srs.json')
+    # The revision record is consumed into the producer checkpoint on resume.
+    # Never create an artifact without the companion override record.
+    temporary=path.with_suffix('.tmp');temporary.write_text(review.model_dump_json(indent=2));temporary.replace(path)
+    full={**full,**resolved};temporary=artifact.with_suffix('.tmp');temporary.write_text(json.dumps(full,indent=2));temporary.replace(artifact)
+    # A stale readable companion must not mask the reviewed canonical JSON.
+    artifact.with_suffix('.md').unlink(missing_ok=True)
+    store.add_event(task_id,'semantic_review','Semantic candidate decisions recorded',phase_key='srs',payload={'revision':review.revision,'decisions':[d.model_dump() for d in review.decisions],'actor':a.label})
+    return {'status':'reviewed','revision':review.revision}
+
 class GateDecision(BaseModel):
     action: Literal["approve","edit","redo"]
     selected_option: str|None=None
     edited_text: str|None=None
     steer: str|None=None
     expected_revision:int|None=Field(default=None,ge=0)
+    review_revision:str|None=Field(default=None,max_length=240)
+    comment:str=Field(default="",max_length=7000)
     model_route:Literal["ollama","deepseek"]|None=None
     model:str|None=None
 @app.post("/api/tasks/{task_id}/gates/{gate_key}/decide")
 async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,a:auth.Actor=Depends(auth.require_actor)):
     try:
+        if req.review_revision and _gate_review(task_id,gate_key)['revision']!=req.review_revision:
+            raise HTTPException(409,'gate evidence changed; review the current artifact before deciding')
         if req.model_route=="deepseek" and not os.environ.get("DEEPSEEK_API_KEY"):raise ValueError("DeepSeek is not configured")
         before=store.task(task_id)
         pending=next((g for g in before["gates"] if g["gate_key"]==gate_key),None) if before else None
         if not pending:raise KeyError(gate_key)
+        if pending['after_phase']=='srs' and _recorded_engine_session(task_id) and _srs_semantic_path(task_id).is_file():
+            from vmodel_contracts.semantic_review import SemanticReview
+            semantic=SemanticReview.model_validate_json(_srs_semantic_path(task_id).read_text())
+            if req.action!='redo':
+                resolved=semantic.resolved_candidate(lambda candidate:None)
+                canonical=json.loads(task_artifact_view(task_id,'srs','srs.json')['raw_content'])
+                if any(canonical.get(k)!=v for k,v in resolved.items()):raise ValueError('Reviewed SRS write is incomplete; save the item decisions again before approving')
         if pending["state"]=="waiting" and req.action in ("approve","edit"):
             evidence=[a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==pending["after_phase"] and not a.get("stale") and a.get("present",True)]
             if not evidence or not any(Path(a["ref"]).is_file() and a.get("valid") is not False for a in evidence):
@@ -1614,6 +1835,8 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
             model_route_lib.task_default_model(store,task_id,PHASE_BY_KEY[target].generator_stage)
         gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label,expected_revision=req.expected_revision)
         phase=gate["after_phase"]
+        if req.comment.strip():
+            store.add_review_comment(task_id,'gate:'+gate_key,req.review_revision or str(req.expected_revision),a.label,req.comment)
         if selected:
             store.set_model_default(task_id,selected)
             store.add_event(task_id,"model_route",f"{target} override uses {selected}",phase_key=target,payload={"route":req.model_route,"resolved":selected,"scope":"phase_override","actor":a.label})
@@ -1733,3 +1956,34 @@ def set_quota(user_id:str, req:QuotaUpdate, request:Request, a:auth.Actor=Depend
 
 @app.get("/health")
 def health(): return {"ok": True, "total_spend_usd": store.total_spend(), "tasks": len(store.list_tasks()), **RUNTIME_VERSION}
+
+@app.post('/api/tasks/{task_id}/packages')
+def create_final_package(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    from .final_package import producer_handoff,package,PackageBlocked
+    task=store.task(task_id)
+    if not task:raise HTTPException(404,'task not found')
+    try:
+        session,root,interview,spec=orchestrator._paths(task_id)
+        if task['state']!='done':raise PackageBlocked('Final task approval is required')
+        for phase in task['phases']:
+            if phase['state'] not in ('approved','done'):raise PackageBlocked('Phase not approved: '+phase['phase_key'])
+            from .phases import PHASE_BY_KEY
+            canonical=[(interview if phase['phase_key'] in ('intent','conops') else spec)/name for name in PHASE_BY_KEY[phase['phase_key']].artifacts]
+            present=[path for path in canonical if path.is_file()]
+            if not present or phase['phase_key'] not in ('intent','conops') and any(path.stat().st_mtime<float(phase.get('started_at') or 0) for path in present):raise PackageBlocked('Missing or stale output: '+phase['phase_key'])
+        handoff=producer_handoff(interview,spec,spec/'system-baseline.json')
+        result=package(task,session,handoff,root.parent/'packages'/task_id/str(task['generation']))
+        url=f"/api/tasks/{task_id}/packages/{result['package_id']}?generation={task['generation']}"
+        store.add_event(task_id,'final_package','Coding-agent package created',payload={'package_id':result['package_id'],'generation':task['generation'],'url':url})
+        return {k:v for k,v in {**result,'url':url,'status':'ready'}.items() if k!='path'}
+    except (ValueError,OSError,__import__('subprocess').TimeoutExpired) as exc:raise HTTPException(409,{'error':'Final package is blocked','cause':str(exc),'next':'Review the affected phase or open founder inputs before exporting.'})
+
+@app.get('/api/tasks/{task_id}/packages/{package_id}')
+def download_final_package(task_id:str,package_id:str,generation:int,a:auth.Actor=Depends(auth.require_actor)):
+    if not __import__('re').fullmatch(r'[a-f0-9]{64}',package_id) or generation<1:raise HTTPException(404,'package not found')
+    task=store.task(task_id)
+    if not task:raise HTTPException(404,'task not found')
+    from vmodel_contracts.runtime import artifacts_root
+    path=artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/'packages'/task_id/str(generation)/(package_id+'.zip')
+    if not path.is_file() or path.is_symlink():raise HTTPException(404,'package not found')
+    return FileResponse(path,media_type='application/zip',filename=f"coding-agent-{task_id}-g{generation}.zip")

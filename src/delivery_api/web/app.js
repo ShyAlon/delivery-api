@@ -1,3 +1,4 @@
+import {createDecisions} from './decisions.js';
 import {createQa} from './qa.js';
 import {createIdentity} from './identity.js';
 import {createDialogs} from './dialogs.js';
@@ -7,14 +8,14 @@ import {createGate} from './gate.js';
 import {createTaskActions} from './taskactions.js';
 import {createSessions} from './sessions.js';
 import {clientLog,esc} from './client-core.js';
-const routeTrace = t => {const chosen=t.model_route||'deepseek';const routeEvents=(t.events||[]).filter(e=>e.kind==='model_route'||e.kind==='model_preflight');const interviewEvents=routeEvents.filter(e=>['intent','conops'].includes(e.phase_key));const effective=[...interviewEvents].reverse().find(e=>e.payload?.resolved)?.payload?.resolved;const sticky=t.model_default;return `<section class="panel model-route-trace"><div class="panel-title"><h3>Interview model</h3></div><p>Selected: <b>${esc(chosen)}</b> · Interview effective: <b>${esc(effective||'see model shown at Start')}</b>${sticky?` · Next-phase default: <b>${esc(sticky)}</b>`:''}</p><div id="switch-route-slot"></div>${routeEvents.slice(-4).map(e=>`<p class="${esc(e.kind)}">${esc(e.message)}</p>`).join('')}</section>`};
+
 window.addEventListener('click',e=>{let target=e.target.closest('a,button,[role="button"]');if(target)clientLog('click',target.getAttribute('aria-label')||target.textContent.trim().replace(/\s+/g,' ').slice(0,120),{tag:target.tagName.toLowerCase()})},true);
 window.addEventListener('error',e=>ctx.debugState.client_errors.push({ts:new Date().toISOString(),message:e.message,source:e.filename,line:e.lineno}));window.addEventListener('unhandledrejection',e=>ctx.debugState.client_errors.push({ts:new Date().toISOString(),message:String(e.reason?.message||e.reason)}));
 window.addEventListener('popstate',()=>clientLog('navigation','Browser history navigation',{url:location.href}));
 clientLog('navigation','Page loaded',{url:location.href});
 
-const ctx={routeTrace};
-for(const create of [createQa,createIdentity,createDialogs,createDashboard,createTask,createGate,createTaskActions,createSessions])Object.assign(ctx,create(ctx));
-const {loadIdentity,gatePage,bundleView,sessionsDashboard,aboutPage,detail,dashboard,showError}=ctx;
-loadIdentity().then(ok=>{if(!ok)return;const gateMatch=location.pathname.match(/^\/tasks\/([^/]+)\/gates\/([^/]+)$/),taskMatch=location.pathname.match(/^\/tasks\/([^/]+)\/view/),sessionMatch=location.pathname.match(/^\/sessions\/([^/]+)(?:\/(interview|needs|srs|architecture|specs|tests|reviews|oracle)|\/view)?$/);gateMatch?gatePage(decodeURIComponent(gateMatch[1]),decodeURIComponent(gateMatch[2])).catch(showError):sessionMatch?bundleView(sessionMatch[1],sessionMatch[2]||'interview').catch(showError):location.pathname==='/sessions'?sessionsDashboard().catch(showError):location.pathname==='/about'?aboutPage():taskMatch?detail(taskMatch[1]).catch(showError):dashboard().catch(showError)}).catch(showError);
+const ctx={};
+for(const create of [createQa,createIdentity,createDialogs,createDashboard,createTask,createGate,createDecisions,createTaskActions,createSessions])Object.assign(ctx,create(ctx));
+const {loadIdentity,decisionPage,gatePage,bundleView,sessionsDashboard,aboutPage,detail,dashboard,showError}=ctx;
+loadIdentity().then(ok=>{if(!ok)return;const decisionMatch=location.pathname.match(/^\/tasks\/([^/]+)\/decisions\/([^/]+)$/),gateMatch=location.pathname.match(/^\/tasks\/([^/]+)\/gates\/([^/]+)$/),taskMatch=location.pathname.match(/^\/tasks\/([^/]+)\/view/),sessionMatch=location.pathname.match(/^\/sessions\/([^/]+)(?:\/(interview|needs|srs|architecture|specs|tests|reviews|oracle)|\/view)?$/);decisionMatch?decisionPage(decodeURIComponent(decisionMatch[1]),decodeURIComponent(decisionMatch[2])).catch(showError):gateMatch?gatePage(decodeURIComponent(gateMatch[1]),decodeURIComponent(gateMatch[2])).catch(showError):sessionMatch?bundleView(sessionMatch[1],sessionMatch[2]||'interview').catch(showError):location.pathname==='/sessions'?sessionsDashboard().catch(showError):location.pathname==='/about'?aboutPage():taskMatch?detail(taskMatch[1]).catch(showError):dashboard().catch(showError)}).catch(showError);
 window.addEventListener('unhandledrejection',e=>showError(e.reason));

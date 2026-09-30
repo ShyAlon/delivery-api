@@ -1,0 +1,96 @@
+{
+  "contract_version": "0.20.0",
+  "session_id": "s",
+  "baseline_id": "test-baseline",
+  "stack_entries": [
+    {
+      "contract_version": "0.20.0",
+      "key": "language",
+      "value": "python",
+      "baseline_refs": [
+        "runtime:spec-generator:1"
+      ],
+      "decision_id": "ADR-1",
+      "technology_id": "tech:python",
+      "migration_adr_id": null
+    }
+  ],
+  "stack_entry_dispositions": [],
+  "components": [
+    {
+      "contract_version": "0.20.0",
+      "name": "api",
+      "responsibility": "serve",
+      "requirement_ids": [
+        "R-1"
+      ],
+      "baseline_refs": [
+        "repo:spec-generator"
+      ],
+      "migration": false,
+      "migration_adr_title": null
+    }
+  ],
+  "decisions": [
+    {
+      "contract_version": "0.20.0",
+      "decision_id": "ADR-1",
+      "title": "t",
+      "decision": "x",
+      "rationale": "y",
+      "driver": "simplicity",
+      "options_considered": [
+        {
+          "contract_version": "0.20.0",
+          "option": "z",
+          "reason": "heavier"
+        }
+      ],
+      "baseline_refs": [
+        "repo:spec-generator"
+      ],
+      "migration": false,
+      "evidence": [],
+      "affected_repositories": [],
+      "executes_concept_ids": [],
+      "technology_selections": [
+        {
+          "contract_version": "0.20.0",
+          "slot_id": "slot:language",
+          "technology_id": "tech:python",
+          "display_name": "python",
+          "baseline_refs": [
+            "runtime:spec-generator:1"
+          ],
+          "off_list_justification": null
+        }
+      ],
+      "rejected": []
+    },
+    {
+      "contract_version": "0.20.0",
+      "decision_id": "ADR-2",
+      "title": "t",
+      "decision": "x",
+      "rationale": "y",
+      "driver": "simplicity",
+      "options_considered": [
+        {
+          "contract_version": "0.20.0",
+          "option": "z",
+          "reason": "heavier"
+        }
+      ],
+      "baseline_refs": [
+        "repo:spec-generator"
+      ],
+      "migration": false,
+      "evidence": [],
+      "affected_repositories": [],
+      "executes_concept_ids": [],
+      "technology_selections": [],
+      "rejected": []
+    }
+  ],
+  "non_functionals": {}
+}

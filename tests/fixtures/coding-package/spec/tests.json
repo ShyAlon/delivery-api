@@ -1,0 +1,66 @@
+[
+  {
+    "contract_version": "0.20.0",
+    "test_id": "T-1",
+    "level": "acceptance",
+    "criterion_id": "AC-1",
+    "spec_id": null,
+    "description": "criterion holds",
+    "runner": "http",
+    "definition": {
+      "contract_version": "0.20.0",
+      "preconditions": [],
+      "steps": [
+        "GET /"
+      ],
+      "expected_outcomes": [
+        "HTTP 200"
+      ],
+      "cleanup": [],
+      "cases": [],
+      "execution": {
+        "contract_version": "0.20.0",
+        "url": null,
+        "method": null,
+        "body_json": null,
+        "expected_status": null,
+        "command": null,
+        "expected_exit": null,
+        "expected_stdout_contains": null,
+        "selector": null
+      }
+    }
+  },
+  {
+    "contract_version": "0.20.0",
+    "test_id": "T-2",
+    "level": "unit",
+    "criterion_id": null,
+    "spec_id": "SPEC-1",
+    "description": "spec renders",
+    "runner": "pytest",
+    "definition": {
+      "contract_version": "0.20.0",
+      "preconditions": [],
+      "steps": [
+        "Run x"
+      ],
+      "expected_outcomes": [
+        "passes"
+      ],
+      "cleanup": [],
+      "cases": [],
+      "execution": {
+        "contract_version": "0.20.0",
+        "url": null,
+        "method": null,
+        "body_json": null,
+        "expected_status": null,
+        "command": null,
+        "expected_exit": null,
+        "expected_stdout_contains": null,
+        "selector": null
+      }
+    }
+  }
+]

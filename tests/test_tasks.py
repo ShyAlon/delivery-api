@@ -672,7 +672,7 @@ def test_orchestrator_phase_plan_launches_next_bounded_process(monkeypatch,tmp_p
     assert str(interview/'intent_model.json') in cmd and str(interview/'conops.json') in cmd
 
 
-def test_orchestrator_architecture_baseline_is_typed_decision(monkeypatch,tmp_path):
+def test_orchestrator_architecture_is_greenfield_without_decision(monkeypatch,tmp_path):
     import asyncio,json
     from delivery_api.orchestrator import PhaseOrchestrator
     from delivery_api.store import SQLiteStore
@@ -682,7 +682,7 @@ def test_orchestrator_architecture_baseline_is_typed_decision(monkeypatch,tmp_pa
     class Runner:
         calls=[]
         async def request_decision(self,task_id,phase,decision):
-            assert phase=='architecture' and decision['decision_id']=='system-baseline';return 'greenfield'
+            raise AssertionError('No baseline decision belongs in the greenfield flow')
         async def run(self,*a,**kw):self.calls.append((a,kw));return 0
     runner=Runner();asyncio.run(PhaseOrchestrator(store,runner).continue_after(tid,'srs'))
     baseline=json.loads((tmp_path/'artifacts'/'s2'/'spec'/'system-baseline.json').read_text())

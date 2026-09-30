@@ -62,6 +62,7 @@ def project(task:dict,input_state:dict,engine:EngineSnapshot|None=None,work=None
             "actions":["answer"],"precondition":{"decision_id":key},"revision":f"decision:{key}"})
     if engine and phase in ("intent","conops") and engine.task_id==task_id and engine.process_status==ProcessStatus.WAITING_INPUT and engine.next_step==NextStep.WAIT_INPUT and engine.open_input:
         pending=engine.open_input;kind={InputKind.TEXT:"text",InputKind.CHOICE:"choice",InputKind.APPROVAL:"approval"}[pending.kind]
+        if pending.context.get('decision_purpose')=='semantic_review':kind='semantic_review'
         return TaskControlSnapshot(**{**base,"mode":"waiting_input","owner":"engine","wait_id":str(pending.input_id),
             "kind":kind,"prompt":pending.prompt,"options":[option.model_dump(mode="json") for option in pending.options],
             "decision":input_state.get("decision") if kind!="text" else None,"input_id":str(pending.input_id),

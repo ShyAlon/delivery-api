@@ -1,0 +1,14 @@
+[
+  {
+    "contract_version": "0.20.0",
+    "spec_id": "SPEC-1",
+    "slug": "api",
+    "kind": "api_surface",
+    "title": "API",
+    "body_markdown": "# API",
+    "requirement_ids": [
+      "R-1"
+    ],
+    "depends_on": []
+  }
+]
