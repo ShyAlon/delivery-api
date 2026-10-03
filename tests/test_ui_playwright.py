@@ -229,7 +229,7 @@ def test_gate_open_waiting_halo_and_full_page(page, ui):
     waiting.click();page.locator("#gateform").wait_for()
     assert "/tasks/sim/gates/" in page.url
     assert page.get_by_text("Waiting here · approval paused").is_visible()
-    assert page.get_by_text("actor: local user", exact=False).is_visible()
+    assert page.get_by_text("actor: local user", exact=False).count()==0  # actor line removed from gate header (debug data)
     assert page.get_by_role("button", name="Redo").is_visible()
 
 def test_gate_redo_requires_steer_in_browser(page, ui):
