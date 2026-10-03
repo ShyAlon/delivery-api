@@ -1553,3 +1553,38 @@ def test_final_package_surface_is_separate_from_debug_and_has_recoverable_link(p
  page.screenshot(path='/downloads/d8-final-package-desktop.png',full_page=True)
  page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/downloads/d8-final-package-mobile.png',full_page=True)
  assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
+
+
+def _answer_page(page, ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live = page.request.get(ui + '/api/tasks/live').json(); live['active_phase'] = 'intent'
+    live['control_snapshot'] = {'mode': 'waiting_input', 'owner': 'engine', 'kind': 'text', 'wait_id': 'test-input', 'precondition': {'session_sequence': 1}}
+    live['ui_state'] = {'mode': 'engine_question', 'active_phase': 'intent', 'process_live': True, 'decision': None, 'gate': None, 'question': 'What matters most?'}
+    page.route('**/api/tasks/live', lambda route: route.fulfill(json=_promote_control(live)))
+
+
+def test_submitted_answer_stays_visible_as_shadow_copy_while_processing(page, ui):
+    _answer_page(page, ui)
+    page.route('**/api/tasks/live/answer', lambda route: route.fulfill(json={'status': 'accepted'}))
+    page.goto(ui + '/tasks/live/view'); answer = page.locator('#answerform textarea')
+    answer.fill('Speed, then cost'); answer.press('Enter')
+    page.get_by_text('Processing your answer', exact=False).wait_for()
+    shadow = page.locator('#shadowcopy')
+    assert shadow.is_visible()
+    assert page.locator('#shadowq').inner_text() == 'What matters most?'
+    assert page.locator('#shadowa').inner_text() == 'Speed, then cost'
+    assert page.locator('#answerform textarea').is_hidden() and page.locator('#answerform button[type=submit]').is_hidden()
+    page.screenshot(path='/downloads/shadow-copy.png')
+    # a re-render while the server is still working keeps the shadow copy
+    page.reload(); page.locator('#shadowcopy').wait_for(state='visible')
+    assert page.locator('#shadowa').inner_text() == 'Speed, then cost' and page.locator('#answerform textarea').is_hidden()
+
+
+def test_shadow_copy_not_shown_when_send_fails(page, ui):
+    _answer_page(page, ui)
+    page.route('**/api/tasks/live/answer', lambda route: route.fulfill(status=503, json={'detail': {'error': 'Answer could not be sent.', 'cause': 'x', 'next': 'y'}}))
+    page.goto(ui + '/tasks/live/view'); answer = page.locator('#answerform textarea')
+    answer.fill('Keep me'); page.locator('#answerform button[type=submit]').click()
+    page.get_by_text('Answer could not be sent.', exact=False).wait_for()
+    assert page.locator('#shadowcopy').is_hidden() and page.locator('#answerform').is_visible()
+    assert answer.input_value() == 'Keep me' and page.locator('#currentquestion').is_visible()
