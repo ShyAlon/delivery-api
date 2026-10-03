@@ -222,3 +222,34 @@ def test_title_without_colon_uses_first_words():
  out=subprocess.run([node,'--input-type=module','-e',src+";console.log(findingTitle({path:['constraints',0],original:'Users must be able to export every report as PDF without signing in'}))"],capture_output=True,text=True,timeout=30)
  assert out.returncode==0,out.stderr
  assert out.stdout.strip()=='Constraint: Users must be able to export…'
+
+def _slow_flag_page(p,base,fail=False):
+ control=review();control['kind']='semantic_review';control['options']=[]
+ control['decision']={'options':[],'context':{'decision_purpose':'semantic_review','evidence':{'semantic_review':{'revision':'a'*64,'findings':[_f(0,'constraint:0',['constraints',0],'Deployment is mandated: build with GitHub Actions (turn 0)')]}}}}
+ held=[]
+ def route(r):
+  if r.request.method=='POST':held.append(r)
+  else:r.fulfill(json={'task_id':'concept','title':'Habit tracking','review':control,'current':control,'actionable':True,'draft':None})
+ p.route('**/api/tasks/concept**',route);p.goto(base+'/tasks/concept/decisions/wait-concept');return held
+
+def test_apply_shows_busy_then_success_feedback(page):
+ p,base,root=page;held=_slow_flag_page(p,base)
+ p.locator('input[name="action-0"][value="remove"]').check();btn=p.get_by_role('button',name='Apply decisions and continue');btn.click()
+ expect(p.locator('#semanticstatus')).to_contain_text('Applying your decisions');expect(p.locator('#semanticform button[type=submit]')).to_contain_text('Applying decisions');expect(p.locator('#semanticform button[type=submit]')).to_be_disabled();expect(p.locator('#semanticform .waiting-spinner')).to_be_visible()
+ p.screenshot(path=str(root/'semantic-applying.png'))
+ for _ in range(50):
+  if held:break
+  p.wait_for_timeout(100)
+ held[0].fulfill(json={'status':'accepted'})
+ expect(p.locator('#semanticstatus')).to_contain_text('The run is resuming');expect(p.locator('#semanticform button[type=submit]')).to_have_text('Decisions applied')
+ p.screenshot(path=str(root/'semantic-applied.png'))
+
+def test_apply_failure_is_visible_and_recoverable(page):
+ p,base,root=page;held=_slow_flag_page(p,base)
+ p.locator('input[name="action-0"][value="remove"]').check();p.get_by_role('button',name='Apply decisions and continue').click()
+ for _ in range(50):
+  if held:break
+  p.wait_for_timeout(100)
+ held[0].fulfill(status=500,json={'detail':'Engine unavailable'})
+ expect(p.locator('#semanticstatus')).to_contain_text('Could not apply your decisions');expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_enabled()
+ p.screenshot(path=str(root/'semantic-apply-error.png'))
