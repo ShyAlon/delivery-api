@@ -1553,3 +1553,83 @@ def test_final_package_surface_is_separate_from_debug_and_has_recoverable_link(p
  page.screenshot(path='/downloads/d8-final-package-desktop.png',full_page=True)
  page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/downloads/d8-final-package-mobile.png',full_page=True)
  assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
+
+
+def _answer_page(page, ui):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live = page.request.get(ui + '/api/tasks/live').json(); live['active_phase'] = 'intent'
+    live['control_snapshot'] = {'mode': 'waiting_input', 'owner': 'engine', 'kind': 'text', 'wait_id': 'test-input', 'precondition': {'session_sequence': 1}}
+    live['ui_state'] = {'mode': 'engine_question', 'active_phase': 'intent', 'process_live': True, 'decision': None, 'gate': None, 'question': 'What matters most?'}
+    page.route('**/api/tasks/live', lambda route: route.fulfill(json=_promote_control(live)))
+
+
+def test_submitted_answer_stays_visible_as_shadow_copy_while_processing(page, ui):
+    _answer_page(page, ui)
+    page.route('**/api/tasks/live/answer', lambda route: route.fulfill(json={'status': 'accepted'}))
+    page.goto(ui + '/tasks/live/view'); answer = page.locator('#answerform textarea')
+    answer.fill('Speed, then cost'); answer.press('Enter')
+    page.get_by_text('Processing your answer', exact=False).wait_for()
+    shadow = page.locator('#shadowcopy')
+    assert shadow.is_visible()
+    assert page.locator('#shadowq').inner_text() == 'What matters most?'
+    assert page.locator('#shadowa').inner_text() == 'Speed, then cost'
+    assert page.locator('#answerform textarea').is_hidden() and page.locator('#answerform button[type=submit]').is_hidden()
+    page.screenshot(path='/downloads/shadow-copy.png')
+    # a re-render while the server is still working keeps the shadow copy
+    page.reload(); page.locator('#shadowcopy').wait_for(state='visible')
+    assert page.locator('#shadowa').inner_text() == 'Speed, then cost' and page.locator('#answerform textarea').is_hidden()
+
+
+def test_shadow_copy_not_shown_when_send_fails(page, ui):
+    _answer_page(page, ui)
+    page.route('**/api/tasks/live/answer', lambda route: route.fulfill(status=503, json={'detail': {'error': 'Answer could not be sent.', 'cause': 'x', 'next': 'y'}}))
+    page.goto(ui + '/tasks/live/view'); answer = page.locator('#answerform textarea')
+    answer.fill('Keep me'); page.locator('#answerform button[type=submit]').click()
+    page.get_by_text('Answer could not be sent.', exact=False).wait_for()
+    assert page.locator('#shadowcopy').is_hidden() and page.locator('#answerform').is_visible()
+    assert answer.input_value() == 'Keep me' and page.locator('#currentquestion').is_visible()
+
+
+def _long_interview_page(page, ui, answered=True):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live = page.request.get(ui + '/api/tasks/live').json(); live['active_phase'] = 'intent'; live['state'] = 'running'
+    events = list(live.get('events') or [])
+    if answered:
+        for i in range(14):
+            events.append({'kind': 'waiting_input', 'phase_key': 'intent', 'message': f'Question {i}?', 'payload': {'question': f'Question {i}?'}})
+            events.append({'kind': 'answer', 'phase_key': 'intent', 'message': f'You: Answer {i} ' + 'long text ' * 20, 'payload': {'answer': f'Answer {i} ' + 'long text ' * 20}})
+    live['events'] = events
+    live['control_snapshot'] = {'mode': 'waiting_input', 'owner': 'engine', 'kind': 'text', 'wait_id': 'test-input', 'precondition': {'session_sequence': 1}}
+    live['ui_state'] = {'mode': 'engine_question', 'active_phase': 'intent', 'process_live': True, 'decision': None, 'gate': None, 'question': 'What next?'}
+    page.route('**/api/tasks/live', lambda route: route.fulfill(json=_promote_control(live)))
+    page.route('**/api/tasks/live/phase-output', lambda route: route.fulfill(json={'phase_key': 'intent', 'display_phase': 'intent', 'generation': live['generation'], 'status': 'waiting', 'items': [], 'source': 'intent'}))
+    page.set_viewport_size({'width': 1400, 'height': 800})
+    page.goto(ui + '/tasks/live/view')
+
+
+def test_start_outputs_box_hidden_once_first_answer_exists(page, ui):
+    _long_interview_page(page, ui, answered=True)
+    page.locator('#phase-output-slot').wait_for(state='attached')
+    page.wait_for_timeout(500)
+    assert page.get_by_text('Start outputs').count() == 0 or page.get_by_text('Start outputs').first.is_hidden()
+    assert page.locator('#phase-output-slot').get_attribute('data-hide-start') == '1'
+
+
+def test_start_outputs_box_shown_before_first_answer(page, ui):
+    _long_interview_page(page, ui, answered=False)
+    page.get_by_text('Start outputs').first.wait_for(state='visible')
+
+
+def test_interview_scrolls_inside_its_section_and_live_process_stays_visible(page, ui):
+    _long_interview_page(page, ui, answered=True)
+    left = page.locator('section.qa-history'); left.wait_for(); page.wait_for_timeout(500)
+    assert left.evaluate('e=>e.scrollHeight>e.clientHeight') and left.evaluate('e=>getComputedStyle(e).overflowY') == 'auto'
+    assert left.evaluate('e=>e.scrollTop>0')  # opens on the latest exchange
+    right = page.get_by_role('heading', name='Live process').locator('xpath=ancestor::div[contains(concat(" ",normalize-space(@class)," ")," panel ")][1]')
+    assert page.evaluate('document.documentElement.scrollHeight') < 1500  # 14 long exchanges must not stretch the page
+    page.evaluate('window.scrollTo(0, document.documentElement.scrollHeight)'); page.wait_for_timeout(300)
+    box = right.bounding_box()
+    heading = page.get_by_role('heading', name='Live process'); hb = heading.bounding_box()
+    assert 0 <= hb['y'] and hb['y'] + hb['height'] <= 800, hb  # Live process heading pinned in view after the page scrolled
+    assert heading.evaluate('e=>{const r=e.getBoundingClientRect();const t=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return e.contains(t)||t.contains(e)}')  # and not hidden behind the page header
+    page.screenshot(path='/downloads/live-process-sticky.png')
