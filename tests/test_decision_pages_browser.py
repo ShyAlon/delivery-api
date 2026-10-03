@@ -119,7 +119,7 @@ def test_approval_register_flags_missing_data_and_records_explicit_answer(page):
  register={'items':[{'item_id':'FD-style','data_class':'styling','status':'open','question':'What styling?','owner':'founder','blocks':['UI']}],'advisories':[]}
  state['current']['decision']['context']['evidence']['intent_model']['founder_register']=register
  p.goto(base+'/tasks/concept/decisions/wait-review');expect(p.get_by_text('Missing Data and Open Founder Inputs')).to_be_visible();expect(p.locator('body')).not_to_contain_text('FD-style');expect(p.locator('select')).to_have_count(0)
- p.locator('.founder-register details').first.evaluate('d=>d.open=true');p.locator('[data-founder-group] label.pill',has_text='Record My Decision').click();p.locator('[data-founder-answer]').fill('Blue and white');p.locator('[data-founder-reason]').fill('Calm')
+ p.locator('.founder-register details').first.evaluate('d=>d.open=true');p.locator('[data-founder-group] label.pill',has_text='Answer It').click();p.locator('[data-founder-answer]').fill('Blue and white');p.locator('[data-founder-reason]').fill('Calm')
  p.set_viewport_size({'width':1249,'height':920});assert p.evaluate("(()=>{const r=document.querySelector('.founder-register').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&document.documentElement.scrollWidth<=innerWidth})()");assert p.evaluate("document.querySelector('.page-head').getBoundingClientRect().height<150");p.mouse.wheel(0,400);p.wait_for_timeout(200);assert p.evaluate("document.querySelector('.page-head').getBoundingClientRect().top>=0");p.screenshot(path=str(root/'founder-register-desktop.png'),full_page=True)
  p.get_by_role('button',name='Continue',exact=True).click();expect(p.locator('#review-status')).to_contain_text('Decision saved')
  assert state['posts'][0]['founder_inputs'][0]['decision']=='Blue and white'
@@ -134,8 +134,8 @@ def test_continue_names_unfinished_inputs_and_boxes_do_not_repeat_their_title(pa
  adv=boxes.nth(2);adv.evaluate('d=>d.open=true');body=adv.locator('.context-body').inner_text()
  assert 'Confirm rights to third-party content.' not in body and 'How to verify: Written confirmation on file.' in body
  boxes.nth(1).evaluate('d=>d.open=true');assert 'word39' in boxes.nth(1).locator('.context-body').inner_text()
- expect(boxes.nth(0).locator('.state-badge')).to_have_text('Keep Flagged Open')
- boxes.nth(0).evaluate('d=>d.open=true');p.locator('[data-founder-group]').first.locator('label.pill').nth(2).click();expect(boxes.nth(0).locator('.state-badge')).to_have_text('Explicitly Defer')
+ expect(boxes.nth(0).locator('.state-badge')).to_have_text('Leave Open')
+ boxes.nth(0).evaluate('d=>d.open=true');p.locator('[data-founder-group]').first.locator('label.pill').nth(2).click();expect(boxes.nth(0).locator('.state-badge')).to_have_text('Decide Later')
  boxes.nth(0).evaluate('d=>d.open=false')
  p.get_by_role('button',name='Continue',exact=True).click()
  status=p.locator('#review-status');expect(status).to_contain_text('Finish 1 open input');expect(status).to_contain_text('What styling?');expect(status).to_contain_text('needs a reason')
@@ -143,6 +143,19 @@ def test_continue_names_unfinished_inputs_and_boxes_do_not_repeat_their_title(pa
  p.screenshot(path=str(root/'needs-input.png'));p.set_viewport_size({'width':460,'height':900});p.locator('#save-draft').scroll_into_view_if_needed();p.screenshot(path=str(root/'right-panel-narrow.png'));p.set_viewport_size({'width':1249,'height':920})
  p.locator('[data-founder-reason]').first.fill('Ask the designer');p.get_by_role('button',name='Continue',exact=True).click()
  expect(status).to_contain_text('Decision saved');assert state['posts'][0]['founder_inputs'][0]['status']=='deferred'
+
+def test_rework_sends_founder_answers_and_register_shows_history(page):
+ p,base,root=page;state=fake(p);state['current']=review('wait-review','interview_approval')
+ register={'items':[{'item_id':'FD-style','data_class':'styling','status':'decided','decision':'Blue','reason':'Calm','question':'What styling?','owner':'ann','blocks':['UI'],'history':[{'at':'2026-10-03T10:00:00+00:00','actor':'ann','status':'decided','decision':'Blue','reason':'Calm'}]}],'advisories':[]}
+ state['current']['decision']['context']['evidence']['intent_model']['founder_register']=register
+ p.goto(base+'/tasks/concept/decisions/wait-review')
+ p.locator('.founder-register details').first.evaluate('d=>d.open=true')
+ expect(p.locator('.founder-history')).to_contain_text('Answered by ann');expect(p.locator('.founder-history')).to_contain_text('Reason: Calm')
+ for name in ['Answer It','Decide Later','Leave Open']:expect(p.locator('[data-founder-group] label.pill',has_text=name)).to_have_count(1)
+ p.locator('[data-founder-group] label.pill',has_text='Decide Later').click();p.locator('[data-founder-reason]').fill('Ask the designer')
+ p.get_by_role('button',name='Request rework').click();p.locator('textarea[name=guidance]').fill('More scenarios');p.locator('#confirm-rework').click()
+ expect(p.locator('#review-status')).to_contain_text('Decision saved')
+ sent=state['posts'][0];assert sent['answer'].startswith('0');assert sent['founder_inputs']==[{'item_id':'FD-style','status':'deferred','decision':None,'reason':'Ask the designer'}]
 
 def test_semantic_draft_comment_item_links_and_historical_controls(page):
  p,base,root=page;control=review();control['kind']='semantic_review';control['options']=[]
