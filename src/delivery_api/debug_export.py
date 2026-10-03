@@ -43,6 +43,9 @@ def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:d
  for phase_dir in ('interview','spec'):
   for name in ('run.log','llm-calls.jsonl','debug-http.jsonl','usage.jsonl'):
    read(root/phase_dir/name,f'{phase_dir}/{name}')
+ # Per-turn question verification scores (interview-engine E5): written by the
+ # interview phase only, one JSON object per probing turn, for calibration.
+ read(root/'interview'/'verification.jsonl','interview/verification.jsonl')
  # Server run.log is global. Filter by exact task/session to avoid another
  # task's project data; export a truthful bounded tail with its capture scope.
  if log_path.is_file():
