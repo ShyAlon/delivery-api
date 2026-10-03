@@ -160,10 +160,12 @@ def _f(i,item,path,original,kind='semantic'):return {'finding_id':f'f{i}','item_
 
 def test_semantic_titles_are_meaningful_and_options_have_tooltips(page):
  p,base,root=page
- _flag_page(p,base,[_f(0,'constraint:0',['constraints',0],'Must work offline'),_f(1,'FR-9',['functional',3],{'requirement_id':'FR-9','statement':'The app shall sync nightly'})])
+ _flag_page(p,base,[_f(0,'constraint:0',['constraints',0],'Deployment is mandated: build with GitHub Actions and deploy on GitHub Pages (turn 0)'),_f(1,'FR-9',['functional',3],{'requirement_id':'FR-9','statement':'The app shall sync nightly'})])
  expect(p.locator('.semantic-item h2')).to_have_count(2);titles=p.locator('.semantic-item h2').all_inner_texts()
- assert titles==['Constraint: Must work offline','Functional requirement FR-9: The app shall sync nightly'],titles
+ assert titles==['Constraint: Deployment is mandated','Functional requirement FR-9: The app shall sync nightly'],titles
  assert 'constraint:0' not in p.locator('.semantic-page').inner_text()
+ expect(p.locator('.semantic-item h2 a')).to_have_count(0);p.locator('#semantic-0').screenshot(path=str(root/'semantic-title-card.png'))
+ expect(p.locator('.semantic-item blockquote').first).to_contain_text('build with GitHub Actions')
  for value,words in (('accept','Keep this exactly'),('remove','Delete this item'),('replace','Rewrite this item')):
   assert words in p.locator(f'input[name="action-0"][value="{value}"]').locator('xpath=..').get_attribute('title')
  p.locator('input[name="action-0"][value="remove"]').check();expect(p.locator('#caption-0')).to_contain_text('Delete this item');expect(p.locator('#semantic-count')).to_have_text('1 of 2 decided')
@@ -210,3 +212,13 @@ def test_phase_keys_have_human_labels():
  out=subprocess.run([node,'--input-type=module','-e',src+";console.log(JSON.stringify(['intent','conops','needs','srs','architecture','specs','tests'].map(humanLabel)))"],capture_output=True,text=True,timeout=30)
  assert out.returncode==0,out.stderr
  assert json.loads(out.stdout)==['Start','Concept of Operations','Stakeholder Needs','Requirements','Architecture','Specifications','Tests']
+
+def test_title_without_colon_uses_first_words():
+ import subprocess,shutil,pathlib
+ node=shutil.which('node')
+ if not node:__import__('pytest').skip('node not available')
+ web=pathlib.Path(__file__).resolve().parents[1]/'src/delivery_api/web/semantic-review-ui.js'
+ src=web.read_text().replace("import {esc} from './client-core.js';","const esc=s=>String(s);").replace("import {humanLabel} from './format.js';","const humanLabel=s=>String(s);")
+ out=subprocess.run([node,'--input-type=module','-e',src+";console.log(findingTitle({path:['constraints',0],original:'Users must be able to export every report as PDF without signing in'}))"],capture_output=True,text=True,timeout=30)
+ assert out.returncode==0,out.stderr
+ assert out.stdout.strip()=='Constraint: Users must be able to export…'
