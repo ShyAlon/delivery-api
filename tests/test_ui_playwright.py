@@ -813,6 +813,8 @@ def test_gate_page_shows_requirements_evidence_and_full_content(page,ui):
     evidence=page.locator('.gate-evidence');evidence.locator('.artifact-readable').wait_for()
     assert evidence.locator('.gate-artifact-summary').count()==0  # no raw duplicate above the formatted document
     assert evidence.locator('.artifact-readable h2').inner_text()=='Visible status'
+    assert evidence.locator('summary.chevron-only').count()==1  # box title repeats the heading, so only a chevron shows
+    assert evidence.locator('summary.chevron-only').inner_text().strip()==''
     assert page.locator('#gateform').get_by_role('button',name='Choose & continue').is_enabled()
     page.screenshot(path='/downloads/full-gate-requirements-desktop.png',full_page=True)
     page.set_viewport_size({'width':390,'height':844})

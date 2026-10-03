@@ -43,7 +43,7 @@ export function collapseCards(host){
  [...host.querySelectorAll(':scope > .gate-artifact')].forEach((card,i)=>{
   if(card.dataset.collapsed||card.id==='semantic-panel')return;const h=card.querySelector(':scope > h2, :scope > h3');if(!h)return;
   card.dataset.collapsed='1';const d=document.createElement('details');d.className='context-box';if(i===0)d.open=true;
-  const s=document.createElement('summary');s.textContent=h.textContent;h.remove();const b=document.createElement('div');b.className='context-body';while(card.firstChild)b.append(card.firstChild);d.append(s,b);card.append(d)});
+  const s=document.createElement('summary');const t=h.textContent.trim();const norm=x=>(x||'').trim().toLowerCase();const dup=norm(t)===norm(host.parentElement?.querySelector(':scope > h2')?.textContent)||norm(t)===norm(card.querySelector('.artifact-readable h1')?.textContent);s.textContent=dup?'':t;s.setAttribute('aria-label',t);if(dup)s.className='chevron-only';h.remove();const b=document.createElement('div');b.className='context-body';while(card.firstChild)b.append(card.firstChild);d.append(s,b);card.append(d)});
 }
 
 /* "What am I deciding?" block. Factual copy only. Shown at the top of every gate page. */
