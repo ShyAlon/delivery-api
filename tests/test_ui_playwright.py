@@ -1588,3 +1588,47 @@ def test_shadow_copy_not_shown_when_send_fails(page, ui):
     page.get_by_text('Answer could not be sent.', exact=False).wait_for()
     assert page.locator('#shadowcopy').is_hidden() and page.locator('#answerform').is_visible()
     assert answer.input_value() == 'Keep me' and page.locator('#currentquestion').is_visible()
+
+
+def _long_interview_page(page, ui, answered=True):
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live = page.request.get(ui + '/api/tasks/live').json(); live['active_phase'] = 'intent'; live['state'] = 'running'
+    events = list(live.get('events') or [])
+    if answered:
+        for i in range(14):
+            events.append({'kind': 'waiting_input', 'phase_key': 'intent', 'message': f'Question {i}?', 'payload': {'question': f'Question {i}?'}})
+            events.append({'kind': 'answer', 'phase_key': 'intent', 'message': f'You: Answer {i} ' + 'long text ' * 20, 'payload': {'answer': f'Answer {i} ' + 'long text ' * 20}})
+    live['events'] = events
+    live['control_snapshot'] = {'mode': 'waiting_input', 'owner': 'engine', 'kind': 'text', 'wait_id': 'test-input', 'precondition': {'session_sequence': 1}}
+    live['ui_state'] = {'mode': 'engine_question', 'active_phase': 'intent', 'process_live': True, 'decision': None, 'gate': None, 'question': 'What next?'}
+    page.route('**/api/tasks/live', lambda route: route.fulfill(json=_promote_control(live)))
+    page.route('**/api/tasks/live/phase-output', lambda route: route.fulfill(json={'phase_key': 'intent', 'display_phase': 'intent', 'generation': live['generation'], 'status': 'waiting', 'items': [], 'source': 'intent'}))
+    page.set_viewport_size({'width': 1400, 'height': 800})
+    page.goto(ui + '/tasks/live/view')
+
+
+def test_start_outputs_box_hidden_once_first_answer_exists(page, ui):
+    _long_interview_page(page, ui, answered=True)
+    page.locator('#phase-output-slot').wait_for(state='attached')
+    page.wait_for_timeout(500)
+    assert page.get_by_text('Start outputs').count() == 0 or page.get_by_text('Start outputs').first.is_hidden()
+    assert page.locator('#phase-output-slot').get_attribute('data-hide-start') == '1'
+
+
+def test_start_outputs_box_shown_before_first_answer(page, ui):
+    _long_interview_page(page, ui, answered=False)
+    page.get_by_text('Start outputs').first.wait_for(state='visible')
+
+
+def test_interview_history_scrolls_inside_its_section_and_live_process_stays_visible(page, ui):
+    _long_interview_page(page, ui, answered=True)
+    history = page.locator('section.qa-history'); history.wait_for()
+    assert history.evaluate('e=>e.scrollHeight>e.clientHeight && getComputedStyle(e).overflowY') in (True, 'auto')
+    assert history.evaluate('e=>getComputedStyle(e).overflowY') == 'auto'
+    assert history.evaluate('e=>e.scrollTop>0')  # opens on the latest exchange
+    page.mouse.wheel(0, 3000); page.wait_for_timeout(300)
+    live_panel = page.get_by_role('heading', name='Live process').locator('xpath=ancestor::div[contains(@class,"panel")][1]')
+    assert live_panel.evaluate('e=>getComputedStyle(e).position') == 'sticky'
+    box = live_panel.bounding_box()
+    assert box is not None and 0 <= box['y'] < 800 and box['y'] + min(box['height'], 100) <= 800
+    page.screenshot(path='/downloads/live-process-sticky.png')
