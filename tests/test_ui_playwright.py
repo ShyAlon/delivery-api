@@ -1713,3 +1713,27 @@ def test_interview_history_lists_newest_exchange_first_keeping_original_numbers(
     assert items.nth(1).locator(".qa-tag").first.inner_text() == "Q1"
     # each pair keeps its question above its answer
     assert items.nth(0).locator(".qa-answer p").inner_text() == "My co-founder, next week"
+
+
+def test_submitting_answer_is_prominent_and_pulses_unless_reduced_motion(page, ui):
+    _answer_page(page, ui)
+    def slow(route):
+        page.wait_for_timeout(1500); route.fulfill(json={'status': 'accepted'})
+    page.route('**/api/tasks/live/answer', slow)
+    page.goto(ui + '/tasks/live/view'); answer = page.locator('#answerform textarea')
+    answer.fill('Speed, then cost'); answer.press('Enter')
+    banner = page.locator('#server-wait')
+    page.wait_for_function("document.querySelector('#server-wait') && !document.querySelector('#server-wait').classList.contains('hidden')")
+    assert banner.inner_text().strip() == 'Submitting answer' and 'answering' in banner.get_attribute('class')
+    size = banner.evaluate('e=>parseFloat(getComputedStyle(e).fontSize)')
+    assert size >= 16 and banner.evaluate('e=>getComputedStyle(e).animationName') == 'answer-pulse'
+    assert banner.evaluate('e=>parseFloat(getComputedStyle(e).borderTopWidth)') >= 3
+    page.screenshot(path='/downloads/submitting-answer.png')
+    page.get_by_text('Processing your answer', exact=False).wait_for()
+    shadow = page.locator('#shadowcopy')
+    assert shadow.evaluate('e=>getComputedStyle(e).animationName') == 'answer-pulse'
+    assert shadow.evaluate('e=>parseFloat(getComputedStyle(e).borderTopWidth)') >= 3
+    page.screenshot(path='/downloads/processing-answer.png')
+    page.emulate_media(reduced_motion='reduce')
+    assert shadow.evaluate('e=>getComputedStyle(e).animationName') == 'none'
+    assert banner.evaluate('e=>getComputedStyle(e).animationName') == 'none'

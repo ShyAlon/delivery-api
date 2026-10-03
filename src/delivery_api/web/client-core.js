@@ -54,6 +54,7 @@ function beginWait(url){
   pendingWaits++;
   if(!waitTimer)waitTimer=setTimeout(()=>{
     banner.querySelector('span').textContent=waitLabel(url);
+    banner.classList.toggle('answering',/\/answer$/.test(url));
     banner.classList.remove('hidden');
   },350);
   let finished=false;
