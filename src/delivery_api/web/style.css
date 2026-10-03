@@ -196,3 +196,23 @@ section.qa-history{max-height:min(44vh,440px);overflow-y:auto;overscroll-behavio
 .qq-host{display:grid;gap:10px;margin-top:8px}.qq-note{margin:0;font:11px/1.5 DM Mono;color:#547064}.qq-section{border:1px solid #d8dbd4;border-radius:14px;padding:10px 14px;background:#f9faf6}.qq-section legend{font:11px DM Mono;letter-spacing:.06em;padding:0 6px}.qq-row{display:grid;grid-template-columns:minmax(150px,220px) 1fr;align-items:center;gap:10px;margin:6px 0;font:12px DM Mono}.qq-row input[type=text],.qq-row input[type=number]{width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid #cfd4cc;border-radius:9px;background:#fff;font:12px DM Mono}.qq-row input[type=checkbox]{justify-self:start;width:18px;height:18px}.qq-actions{display:flex;gap:8px;flex-wrap:wrap}#qqstatus{font:11px/1.5 DM Mono;min-height:16px}
 .debug-dialog{width:min(680px,92vw);max-height:86vh;overflow-y:auto;box-sizing:border-box}
 .dialog .qq-row input{margin:0}.qq-row{margin:4px 0}
+
+/* Answer submission is the moment the founder waits on: make it unmistakable. */
+@keyframes answer-pulse{0%,100%{box-shadow:0 0 0 0 #16a36a66,0 10px 30px #15201c40;border-color:#16a36a}50%{box-shadow:0 0 0 7px #16a36a00,0 10px 30px #15201c40;border-color:#7ad9a8}}
+.server-wait.answering{padding:18px 26px;gap:14px;font-size:17px;font-weight:600;border:3px solid #16a36a;border-radius:14px;animation:answer-pulse 1.4s ease-in-out infinite}
+.server-wait.answering i{width:24px;height:24px;border-width:3px}
+.shadow-copy:not(.hidden){padding:20px 22px;border:3px solid #16a36a;border-radius:14px;opacity:1;animation:answer-pulse 1.4s ease-in-out infinite}
+.shadow-copy:not(.hidden) .shadow-status{font-size:15px;font-weight:600;color:#147b4e;margin-bottom:14px}
+.waiting-spinner{flex:none;display:inline-block;width:16px;height:16px;border:2px solid #c9d8c6;border-top-color:#16a36a;border-radius:50%;animation:answer-spin .8s linear infinite}
+.shadow-copy:not(.hidden) .shadow-status .waiting-spinner{width:22px;height:22px;border-width:3px}
+@media(prefers-reduced-motion:reduce){.server-wait.answering,.shadow-copy:not(.hidden){animation:none;box-shadow:0 0 0 5px #16a36a33}.waiting-spinner{animation:none}}
+
+.phase-change-dialog{width:min(560px,92vw);padding:30px 32px;border:3px solid #16a36a;animation:answer-pulse 1.8s ease-in-out infinite}
+.phase-change-dialog h2{margin:6px 0 14px;font-size:26px;line-height:1.2}
+.phase-flow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 16px;font:12px DM Mono;letter-spacing:.04em}
+.phase-flow b{padding:7px 12px;border-radius:999px;background:#e7e9e4;font-weight:600}.phase-flow b.to{background:var(--ink);color:var(--lime)}.phase-flow i{font-style:normal;color:#16a36a;font-size:18px}
+.phase-explain{font-size:16px;line-height:1.55;margin:0 0 14px}
+.phase-live{display:flex;align-items:center;gap:10px;margin:0 0 14px;padding:12px 14px;background:#eef6ef;border-radius:12px;font:12px DM Mono}
+.phase-live .waiting-spinner{width:18px;height:18px;border-width:3px}.phase-live small{margin-left:auto;color:var(--muted,#667)}
+.phase-pause{margin:0 0 4px;color:var(--muted,#566);font-size:13px;line-height:1.5}
+@media(prefers-reduced-motion:reduce){.phase-change-dialog{animation:none;box-shadow:12px 12px 0 var(--lime),0 0 0 5px #16a36a33}}
