@@ -21,6 +21,10 @@ class EngineUnreachableError(RuntimeError):
         super().__init__(f"interview engine is not reachable at {self.base_url}: {cause}")
 
 
+class QualityConfigRejected(ValueError):
+    """The engine refused a question-quality config edit; the message names the setting."""
+
+
 class EngineClient(ABC):
     @abstractmethod
     def start(self,request:StartSessionRequest)->StartSessionResponse:...
@@ -57,6 +61,16 @@ class HttpEngineClient(EngineClient):
 
     def preview_route(self,route:str,initial_model:str|None=None)->dict:
         response=self._send('GET',f'/v1/model-routes/{route}',params={"initial_model":initial_model} if initial_model else None)
+        return self._validated(response,dict,200)
+
+    def question_quality_config(self)->dict:
+        return self._validated(self._send('GET','/v1/question-quality-config'),dict,200)
+
+    def save_question_quality_config(self,config:dict)->dict:
+        response=self._send('PUT','/v1/question-quality-config',json={"config":config})
+        if response.status_code==422:
+            detail=response.json().get('detail')
+            raise QualityConfigRejected(detail if isinstance(detail,str) else 'the engine rejected this configuration')
         return self._validated(response,dict,200)
 
     def start(self,request:StartSessionRequest)->StartSessionResponse:

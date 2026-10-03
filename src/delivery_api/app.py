@@ -35,7 +35,7 @@ from .jobs import JobQueue
 from .runner import ProcessRunner
 from .orchestrator import PhaseOrchestrator,ExecutionMode
 from .engine_runtime import EngineRuntimeError, resolve_engine_runtime, discover_engine_runtimes, save_python, saved_python
-from .engine_client import HttpEngineClient,EngineClientError,EngineUnreachableError
+from .engine_client import HttpEngineClient,EngineClientError,EngineUnreachableError,QualityConfigRejected
 from vmodel_contracts.interactive import InputKind,InputRequest,InputResponse,ProcessStatus,StartSessionRequest,EngineSnapshot,ModelRouteSwitchRequest
 from .store import create_store
 from .simulation import Simulation, ImportValidationError
@@ -659,6 +659,23 @@ def delete_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     except KeyError:raise HTTPException(404,{"error":"Task not found.","cause":"It may already have been deleted.","next":"Return to the task list."})
     except ValueError as e:raise HTTPException(409,{"error":str(e),"cause":"This task still has active work or a founder gate.","next":"Stop or finish the active work before deleting this task. A replay interrupted by restart will be marked stopped on startup."})
     return {"status":"deleted","task_id":task_id,"source_artifacts_deleted":False}
+
+class QualityConfigRequest(BaseModel):
+    config:dict
+def _quality_engine_down(exc):
+    return HTTPException(502,{"error":"The interview engine is not reachable.","cause":str(exc),"next":"Start the engine (scripts/run-ui.sh does it), then reload the Debug dialog."})
+@app.get("/api/question-quality-config")
+def get_question_quality_config(a:auth.Actor=Depends(auth.require_actor)):
+    """Global interview question-quality settings; the engine owns the schema and defaults."""
+    try:return engine_client.question_quality_config()
+    except EngineUnreachableError as exc:raise _quality_engine_down(exc)
+    except EngineClientError as exc:raise HTTPException(502,{"error":"The engine could not return the settings.","cause":exc.error.detail,"next":"Retry; if it repeats, check the engine log."})
+@app.put("/api/question-quality-config")
+def put_question_quality_config(req:QualityConfigRequest,a:auth.Actor=Depends(auth.require_actor)):
+    try:return engine_client.save_question_quality_config(req.config)
+    except QualityConfigRejected as exc:raise HTTPException(422,{"error":str(exc),"cause":"The engine validates every setting before saving.","next":"Fix that setting and save again. Nothing was changed."})
+    except EngineUnreachableError as exc:raise _quality_engine_down(exc)
+    except EngineClientError as exc:raise HTTPException(502,{"error":"The engine could not save the settings.","cause":exc.error.detail,"next":"Retry; if it repeats, check the engine log."})
 
 class TaskStartRequest(BaseModel):
     model_route:Literal["ollama","deepseek"]|None=None
