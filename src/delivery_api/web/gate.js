@@ -2,6 +2,7 @@ import {api,esc} from './client-core.js';
 import {explainerHtml,titleCase,titleCaseHeadings,pillifySelects,syncPills,collapseCards} from './gate-ui.js';
 import {markdownHtml} from './format.js';
 import {gateStructured,gateSummary} from './gate-presenters.js';
+import {replaceFieldsHtml,readReplacement,fillReplacement} from './semantic-review-ui.js';
 const app=document.querySelector('#app'),modal=document.querySelector('#modal');
 export function createGate(ctx){
 const refreshCurrent=(...args)=>ctx.refreshCurrent(...args);
@@ -48,15 +49,17 @@ if(currentArtifacts.length){host.innerHTML='';for(const a of currentArtifacts){l
  if(semantic?.findings?.length){
   const resolved=new Set((semantic.decisions||[]).map(d=>d.item_id)),items=[...new Map(semantic.findings.map(f=>[f.item_id,f])).values()];
   const panel=document.createElement('section');panel.className='gate-artifact';panel.id='semantic-panel';
-  panel.innerHTML=`<h2>Flagged Inputs</h2><p>Nothing was deleted or rewritten. Review every flagged item before approving. Accept overrides meaning, not contract structure.</p>${items.map((f,i)=>`<article><h3>${esc(flagTitle(semantic.findings.find(x=>x.item_id===f.item_id)?.reason))}</h3>${semantic.findings.filter(x=>x.item_id===f.item_id).filter(x=>String(x.reason||'').trim().split(/\s+/).length>32).map(x=>`<p>${esc(x.reason)}</p>`).join('')}<details class="context-box" open><summary>The Item As Written</summary><div class="context-body gate-structured">${gateStructured(f.original)}</div></details><label>Decision<select name="semantic-action-${i}" required><option value="">Choose</option><option value="remove">Remove</option><option value="replace">Replace</option>${semantic.findings.some(x=>x.item_id===f.item_id&&x.kind==='structural')?'':'<option value="accept">Accept override</option>'}</select></label><label>Replacement JSON<textarea name="semantic-replacement-${i}"></textarea></label></article>`).join('')}<button type="button" id="apply-semantic">Apply item decisions</button><div id="semantic-status" role="status"></div>`;
+  panel.innerHTML=`<h2>Flagged Inputs</h2><p>Nothing was deleted or rewritten. Review every flagged item before approving. Accept overrides meaning, not contract structure.</p>${items.map((f,i)=>`<article><h3>${esc(flagTitle(semantic.findings.find(x=>x.item_id===f.item_id)?.reason))}</h3>${semantic.findings.filter(x=>x.item_id===f.item_id).filter(x=>String(x.reason||'').trim().split(/\s+/).length>32).map(x=>`<p>${esc(x.reason)}</p>`).join('')}<details class="context-box" open><summary>The Item As Written</summary><div class="context-body gate-structured">${gateStructured(f.original)}</div></details><label>Decision<select name="semantic-action-${i}" required><option value="">Choose</option><option value="remove">Remove</option><option value="replace">Replace</option>${semantic.findings.some(x=>x.item_id===f.item_id&&x.kind==='structural')?'':'<option value="accept">Accept override</option>'}</select></label>${replaceFieldsHtml(i,f.original)}</article>`).join('')}<button type="button" id="apply-semantic">Apply item decisions</button><div id="semantic-status" role="status"></div>`;
   host.append(panel);
   if(query.get('item')&&!items.some(f=>f.item_id===query.get('item')))throw new Error('Unknown flagged item');
-  for(const d of data.draft?.semantic_decisions||semantic.decisions||[]){const i=items.findIndex(f=>f.item_id===d.item_id);if(i>=0){panel.querySelector(`[name="semantic-action-${i}"]`).value=d.action||'';panel.querySelector(`[name="semantic-replacement-${i}"]`).value=d.replacement_text??(d.replacement?JSON.stringify(d.replacement,null,2):'')}}
+  const syncReplace=()=>items.forEach((_,i)=>panel.querySelector(`.replace-fields[data-for="${i}"]`)?.classList.toggle('hidden',panel.querySelector(`[name="semantic-action-${i}"]`).value!=='replace'));panel.addEventListener('change',syncReplace);
+  for(const d of data.draft?.semantic_decisions||semantic.decisions||[]){const i=items.findIndex(f=>f.item_id===d.item_id);if(i>=0){panel.querySelector(`[name="semantic-action-${i}"]`).value=d.action||'';{let saved=d.replacement;if(saved===undefined&&d.replacement_text){try{saved=JSON.parse(d.replacement_text)}catch{saved=undefined}}if(saved!==undefined)fillReplacement(panel,i,saved)}}}
+  syncReplace();
   if(query.get('item'))panel.querySelectorAll('article')[items.findIndex(f=>f.item_id===query.get('item'))]?.scrollIntoView();
 
   if(items.some(f=>!resolved.has(f.item_id)))form.querySelectorAll('[data-action="approve"],[data-action="edit"]').forEach(b=>b.disabled=true);
   panel.querySelector('#apply-semantic').onclick=async()=>{const status=panel.querySelector('#semantic-status');try{
-    const decisions=items.map((f,i)=>{const action=panel.querySelector(`[name="semantic-action-${i}"]`).value;if(!action)throw new Error('Choose for every flagged item.');return {item_id:f.item_id,action,...(action==='replace'?{replacement:JSON.parse(panel.querySelector(`[name="semantic-replacement-${i}"]`).value)}:{})}});
+    const decisions=items.map((f,i)=>{const action=panel.querySelector(`[name="semantic-action-${i}"]`).value;if(!action)throw new Error('Choose for every flagged item.');return {item_id:f.item_id,action,...(action==='replace'?{replacement:readReplacement(panel,i,f.original)}:{})}});
     panel.querySelector('#apply-semantic').disabled=true;status.textContent='Validating item decisions…';
     await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/semantic-review`,{method:'POST',body:JSON.stringify({revision:semantic.revision,decisions})});
     status.innerHTML=`Decisions saved. <a href="${gateUrl(taskId,gateKey)}">Open reviewed gate</a>`;

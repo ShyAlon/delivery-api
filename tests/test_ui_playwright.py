@@ -1824,3 +1824,8 @@ def test_flagged_inputs_show_readable_item_and_no_circular_link(page,ui):
     assert '{' not in panel.locator('article details').inner_text()
     assert 'The app shall play a clip.' in panel.locator('article details').inner_text()
     assert 'A clip is played.' in panel.locator('article details').inner_text()
+    # Replace asks for readable fields, not JSON
+    assert page.locator('#semantic-panel textarea[name^="semantic-replacement"]').count()==0
+    assert page.locator('#semantic-panel .replace-fields').first.is_hidden()
+    panel.locator('select[name="semantic-action-0"]').select_option('replace',force=True) if panel.locator('select[name="semantic-action-0"]').is_visible() else panel.locator('label.pill',has_text='Replace').first.click()
+    assert page.locator('#semantic-panel .replace-fields input[value="Ear training"]').count()==1
