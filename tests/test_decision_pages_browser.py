@@ -254,16 +254,16 @@ def test_apply_failure_is_visible_and_recoverable(page):
  held[0].fulfill(status=500,json={'detail':'Engine unavailable'})
  expect(p.locator('#semanticstatus')).to_contain_text('Could not apply your decisions');expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_enabled()
  p.screenshot(path=str(root/'semantic-apply-error.png'))
-def _concept_page(p,base,long_options=False):
+def _concept_page(p,base,long_options=False,comments=None):
  control=review()
  if long_options:
   control['options']=[{'value':'1','label':'The Installed Practice Toy: A Standalone Home-Screen Music App','summary':'Under this operating concept the product is a single, self-contained music toy that the 7-year-old installs once onto the iPhone or iPad home screen and then owns entirely - no sign-in, no setup wizard, no adult in the loop (turn 4). '*4,'advantages':['Zero adult in the loop at any point: no sign-in, no setup wizard (turns 0, 6)'],'disadvantages':['Progress lives only in browser local storage (turns 12, 18)']},{'value':'2','label':'A shared family workspace','summary':'Short','advantages':[],'disadvantages':[]}]
- sc=[{'stakeholder':f'Stakeholder {i}','role':'Tracks habits and reviews weekly progress','goals':['Quick capture','Weekly summary','Share with a friend'],'operating_environment':'Phone, often offline, on a commuter train with poor signal','source_turns':[0,1,2]} for i in range(2)]
+ sc=[{'stakeholder':f'Stakeholder {i}','role':'Tracks habits and reviews weekly progress (turn 2)','goals':['Quick capture','Weekly summary','Share with a friend'],'operating_environment':'Phone, often offline, on a commuter train with poor signal','source_turns':[0,1,2]} for i in range(2)]
  os_=[{'scenario_id':f'OS-{i}','name':f'Scenario {i}','trigger':'Habit completed','actors':['Runner'],'operational_flow':['Open app','Record points','Sync later'],'success_outcome':'Points sync','exceptions':['Offline'],'source_turns':[0]} for i in range(3)]
  control['decision']['context']['evidence']['conops_draft']['stakeholder_context']=sc
  control['decision']['context']['evidence']['conops_draft']['operational_scenarios']=os_
  control['decision']['context']['evidence']['conops_draft']['contract_version']='1.2.3'
- p.route('**/api/tasks/concept**',lambda r:r.fulfill(json={'task_id':'concept','title':'Habit tracking','review':control,'current':control,'actionable':True,'draft':None,'comments':[]}))
+ p.route('**/api/tasks/concept**',lambda r:r.fulfill(json={'task_id':'concept','title':'Habit tracking','review':control,'current':control,'actionable':True,'draft':None,'comments':comments or []}))
  p.goto(base+'/tasks/concept/decisions/wait-concept')
 
 def test_concept_context_is_collapsed_without_debug_fields_and_does_not_overlap(page):
@@ -297,3 +297,14 @@ def test_selected_concept_card_stays_inside_its_column_with_long_text(page):
  assert p.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
  p.evaluate('document.querySelector(".decision-option.selected").scrollIntoView({block:"center"})');p.wait_for_timeout(200)
  p.screenshot(path=str(root/'concept-long-selected.png'))
+
+
+def test_saved_comments_render_and_placeholder_clears_and_turn_refs_are_hidden(page):
+ p,base,root=page;_concept_page(p,base,long_options=True,comments=[{'actor':'shy','comment':'First note'},{'actor':'shy','comment':'Second note'}])
+ panel=p.locator('#review-comments');expect(panel).to_contain_text('First note');expect(panel).to_contain_text('Second note');expect(panel.locator('.no-comments')).to_have_count(0)
+ body=p.locator('.gate-evidence').inner_text();assert '(turn' not in body and 'turn 4' not in body,body
+ expect(p.locator('.context-box summary').first).to_have_text('Stakeholder 0 · Tracks habits and reviews weekly progress')
+ _concept_page(p,base);expect(p.locator('#review-comments .no-comments')).to_have_text('No comments attached yet.')
+ p.locator('textarea[name=comment]').fill('Fresh note');p.get_by_role('button',name='Save comment only').click()
+ expect(p.locator('#review-comments')).to_contain_text('Fresh note');expect(p.locator('#review-comments .no-comments')).to_have_count(0)
+ p.screenshot(path=str(root/'concept-comments.png'))
