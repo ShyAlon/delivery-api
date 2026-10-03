@@ -810,14 +810,13 @@ def test_gate_page_shows_requirements_evidence_and_full_content(page,ui):
     page.route('**/api/tasks/sim/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Requirements\n\n## Visible status\n\nThe system shall show status.'}))
     mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-srs')
-    evidence=page.locator('.gate-evidence');evidence.locator('.gate-artifact-summary').wait_for()
-    assert evidence.locator('.gate-artifact-summary').inner_text()=='The system shall show status.'
-    evidence.get_by_text('Read full Requirements').click()
+    evidence=page.locator('.gate-evidence');evidence.locator('.artifact-readable').wait_for()
+    assert evidence.locator('.gate-artifact-summary').count()==0  # no raw duplicate above the formatted document
     assert evidence.locator('.artifact-readable h2').inner_text()=='Visible status'
     assert page.locator('#gateform').get_by_role('button',name='Choose & continue').is_enabled()
     page.screenshot(path='/downloads/full-gate-requirements-desktop.png',full_page=True)
     page.set_viewport_size({'width':390,'height':844})
-    assert evidence.locator('.gate-artifact-summary').is_visible()
+    assert evidence.locator('.artifact-readable').is_visible()
     page.screenshot(path='/downloads/full-gate-requirements-phone.png',full_page=True)
 
 
@@ -1528,8 +1527,9 @@ def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(page,ui):
         'content':'[{"spec_id":"SPEC-1","title":"Status screen"}]'}))
     mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-specs')
-    page.locator('.gate-artifact-summary').wait_for()
-    assert page.locator('#gate-artifacts .gate-artifact-summary').inner_text()=='Status screen'
+    page.locator('#gate-artifacts .gate-structured').wait_for()
+    assert page.locator('#gate-artifacts .gate-artifact-summary').count()==0
+    assert 'Status screen' in page.locator('#gate-artifacts .gate-structured').inner_text()
     choose=page.get_by_role('button',name='Choose & continue')
     assert choose.is_enabled()
     page.screenshot(path='/downloads/specs-gate-ready.png',full_page=True)
