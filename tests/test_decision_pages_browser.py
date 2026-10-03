@@ -49,7 +49,7 @@ def fake(page,actionable=True):
 
 def test_choose_save_reload_continue_and_historical_back(page):
  p,base,root=page;state=fake(p)
- p.goto(base+'/tasks/concept/decisions/wait-concept');expect(p.locator('h1')).to_have_text('Choose the operating concept')
+ p.goto(base+'/tasks/concept/decisions/wait-concept');expect(p.locator('h1')).to_have_text('Choose the Operating Concept')
  assert p.locator('input[name=choice]:checked').count()==0;assert p.locator('[role=dialog]').count()==0
  p.locator('input[value="2"]').check();p.locator('textarea[name=rationale]').fill('One deployment is enough');p.locator('textarea[name=comment]').fill('Check offline behavior')
  expect(p.locator('#draft-status')).to_contain_text('Unsaved')
@@ -57,7 +57,7 @@ def test_choose_save_reload_continue_and_historical_back(page):
  link=p.url;assert 'draft=saved-one' in link and 'item=2' in link
  p.reload();expect(p.locator('textarea[name=rationale]')).to_have_value('One deployment is enough');expect(p.locator('input[value="2"]')).to_be_checked()
  p.screenshot(path=str(root/'concept-desktop.png'),full_page=True)
- p.get_by_role('button',name='Choose and continue').click();expect(p.locator('h1')).to_have_text('Review before continuing');assert 'wait-review' in p.url; p.screenshot(path=str(root/'final-review.png'),full_page=True)
+ p.get_by_role('button',name='Choose and continue').click();expect(p.locator('h1')).to_have_text('Review Before Continuing');assert 'wait-review' in p.url; p.screenshot(path=str(root/'final-review.png'),full_page=True)
  assert state['posts'][0]['answer']=='2 - One deployment is enough';assert state['posts'][0]['comment']=='Check offline behavior'
  p.goto(link);expect(p.locator('.notice').first).to_contain_text('Historical review');expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled()
  assert len(state['posts'])==1
@@ -106,7 +106,7 @@ def test_semantic_findings_review_shows_choices_and_never_defaults(page):
   if r.request.method=='POST':posts.append(r.request.post_data_json);r.fulfill(json={'status':'accepted'})
   else:r.fulfill(json={'task_id':'concept','title':'Habit tracking','review':control,'current':control,'actionable':True,'draft':None})
  p.route('**/api/tasks/concept**',route)
- p.goto(base+'/tasks/concept/decisions/wait-concept');expect(p.locator('h1')).to_have_text('Review flagged inputs')
+ p.goto(base+'/tasks/concept/decisions/wait-concept');expect(p.locator('h1')).to_have_text('Review Flagged Inputs')
  assert p.locator('input[name="action-0"]:checked').count()==0;expect(p.locator('select')).to_have_count(0);expect(p.get_by_text('Repeats a need')).to_be_visible()
  p.screenshot(path=str(root/'semantic-review-desktop.png'),full_page=True);p.mouse.wheel(0,120);p.wait_for_timeout(300);p.screenshot(path=str(root/'semantic-review-sticky.png'));p.evaluate('window.scrollTo(0,0)')
  p.set_viewport_size({'width':390,'height':844});p.screenshot(path=str(root/'semantic-review-mobile.png'),full_page=True)
@@ -118,9 +118,9 @@ def test_approval_register_flags_missing_data_and_records_explicit_answer(page):
  p,base,root=page;state=fake(p);state['current']=review('wait-review','interview_approval')
  register={'items':[{'item_id':'FD-style','data_class':'styling','status':'open','question':'What styling?','owner':'founder','blocks':['UI']}],'advisories':[]}
  state['current']['decision']['context']['evidence']['intent_model']['founder_register']=register
- p.goto(base+'/tasks/concept/decisions/wait-review');expect(p.get_by_text('Missing data and open founder inputs')).to_be_visible()
- p.locator('[data-founder-status]').select_option('decided');p.locator('[data-founder-answer]').fill('Blue and white');p.locator('[data-founder-reason]').fill('Calm')
- p.screenshot(path=str(root/'founder-register-desktop.png'),full_page=True)
+ p.goto(base+'/tasks/concept/decisions/wait-review');expect(p.get_by_text('Missing Data and Open Founder Inputs')).to_be_visible();expect(p.locator('body')).not_to_contain_text('FD-style');expect(p.locator('select')).to_have_count(0)
+ p.locator('.founder-register details').first.evaluate('d=>d.open=true');p.locator('[data-founder-group] label.pill',has_text='Record My Decision').click();p.locator('[data-founder-answer]').fill('Blue and white');p.locator('[data-founder-reason]').fill('Calm')
+ p.set_viewport_size({'width':1249,'height':920});assert p.evaluate("(()=>{const r=document.querySelector('.founder-register').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&document.documentElement.scrollWidth<=innerWidth})()");assert p.evaluate("document.querySelector('.page-head').getBoundingClientRect().height<150");p.mouse.wheel(0,400);p.wait_for_timeout(200);assert p.evaluate("document.querySelector('.page-head').getBoundingClientRect().top>=0");p.screenshot(path=str(root/'founder-register-desktop.png'),full_page=True)
  p.get_by_role('button',name='Continue',exact=True).click();expect(p.locator('#review-status')).to_contain_text('Decision saved')
  assert state['posts'][0]['founder_inputs'][0]['decision']=='Blue and white'
 
