@@ -6,3 +6,5 @@ export function gateStructured(value,depth=0){
  return `<p>${esc(value==null?'':String(value))}</p>`;
 }
 export function gateSummary(value){const result=[];function walk(item){if(result.length>=5)return;if(Array.isArray(item)){item.forEach(walk);return}if(item&&typeof item==='object'){for(const [key,part] of Object.entries(item)){if(result.length>=5)break;if(['title','statement','description','summary','problem_statement','decision','rationale','name'].includes(key)&&typeof part==='string')result.push(part);else if(typeof part==='object')walk(part)}}}walk(value);return result.join(' · ').slice(0,750)}
+/* Founder views never show record IDs. The stored value is untouched; only the displayed copy drops them. */
+export const stripIds=v=>Array.isArray(v)?v.map(stripIds):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).filter(([k])=>!/(^|_)(id|ids|ref|refs)$/.test(k)).map(([k,x])=>[k,stripIds(x)])):v;
