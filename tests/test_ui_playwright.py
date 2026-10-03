@@ -1107,7 +1107,8 @@ def test_interview_history_truncates_questions_and_answers_after_32_words(page, 
     route_task_snapshot(page, ui, "live", long_history_snapshot)
     page.goto(ui + "/tasks/live/view")
     page.get_by_text("Interview so far").wait_for()
-    first, second = page.locator(".qa-item").nth(0), page.locator(".qa-item").nth(1)
+    # newest first: the 40-word/33-word pair is the older one, so it is listed second
+    first, second = page.locator(".qa-item").nth(1), page.locator(".qa-item").nth(0)
     q1 = first.locator(".qa-question p").inner_text()
     a1 = first.locator(".qa-answer p").inner_text()
     assert q1 == " ".join(f"q{i}" for i in range(1, 33)) + "\u2026"
@@ -1128,9 +1129,9 @@ def test_interview_history_cards_and_debug_toggle_persist(page, ui):
     page.goto(ui + "/tasks/live/view")
     page.get_by_text("Interview so far").wait_for()
     assert page.locator(".qa-item").count() == 2
-    assert page.locator(".qa-item").nth(0).locator(".qa-question p").inner_text() == "What should the family see first?"
-    assert page.locator(".qa-item").nth(0).locator(".qa-answer p").inner_text() == "A calm shared view"
-    assert page.locator(".qa-item").nth(1).locator(".qa-question p").inner_text() == "Who else should weigh in?"
+    assert page.locator(".qa-item").nth(1).locator(".qa-question p").inner_text() == "What should the family see first?"
+    assert page.locator(".qa-item").nth(1).locator(".qa-answer p").inner_text() == "A calm shared view"
+    assert page.locator(".qa-item").nth(0).locator(".qa-question p").inner_text() == "Who else should weigh in?"
     assert page.locator(".qa-tag", has_text="Q1").count() == 1
     assert page.locator("#console").count() == 0
     page.locator(".avatar").click();page.locator("#opendebug").click();page.locator('.debug-dialog').wait_for()
@@ -1220,7 +1221,7 @@ def test_question_comment_columns_follow_character_ratio(page, ui):
         data["events"][0]["payload"]["question"] = long_question
     route_task_snapshot(page, ui, "live", snapshot)
     page.goto(ui + "/tasks/live/view")
-    row = page.locator(".qa-question").first
+    row = page.locator(".qa-question").last   # Q1 (edited above) is the oldest, listed last now that newest is first
     row.wait_for()
     assert row.locator(".qa-notes").count() == 0
     assert row.evaluate("row => getComputedStyle(row).getPropertyValue('--question-parts').trim()") == "12"
@@ -1250,7 +1251,7 @@ def test_question_comment_columns_follow_character_ratio(page, ui):
     assert row.locator(".qa-notes").bounding_box()["y"] >= row.locator(".qa-main").bounding_box()["y"]
     row.screenshot(path="/downloads/qa-column-balance-mobile-row.png")
     # A short question still gets five twelfths instead of collapsing to a word-wide strip.
-    second = page.locator(".qa-question").nth(1)
+    second = page.locator(".qa-question").first
     second.locator(".qa-comment-btn").click()
     second_dialog = page.get_by_role("dialog", name="Comment on this question")
     second_dialog.locator("#feedbacktext").fill("This is a long note about a brief question, with plenty of additional context to test the lower bound.")
@@ -1658,7 +1659,8 @@ def test_interview_scrolls_inside_its_section_and_live_process_stays_visible(pag
     _long_interview_page(page, ui, answered=True)
     left = page.locator('section.qa-history'); left.wait_for(); page.wait_for_timeout(500)
     assert left.evaluate('e=>e.scrollHeight>e.clientHeight') and left.evaluate('e=>getComputedStyle(e).overflowY') == 'auto'
-    assert left.evaluate('e=>e.scrollTop>0')  # opens on the latest exchange
+    assert left.evaluate('e=>e.scrollTop')==0  # newest exchange is first, so it opens at the top
+    assert 'Question 13?' in left.locator('.qa-item').first.inner_text() and 'Question 0?' in left.locator('.qa-item').last.inner_text()
     right = page.get_by_role('heading', name='Live process').locator('xpath=ancestor::div[contains(concat(" ",normalize-space(@class)," ")," panel ")][1]')
     assert page.evaluate('document.documentElement.scrollHeight') < 1500  # 14 long exchanges must not stretch the page
     page.evaluate('window.scrollTo(0, document.documentElement.scrollHeight)'); page.wait_for_timeout(300)
@@ -1697,3 +1699,17 @@ def test_debug_dialog_edits_question_quality_settings(page, ui):
     page.locator("#qqreset").click();assert page.locator("#qq-retrieval-max_words").input_value()=="90"
     assert state["config"]["retrieval"]["max_words"]==60  # reset only fills the form; nothing is saved until Save
     page.get_by_role("button",name="Close debug").click()
+
+
+def test_interview_history_lists_newest_exchange_first_keeping_original_numbers(page, ui):
+    route_task_snapshot(page, ui, "live", interview_history_snapshot)
+    page.goto(ui + "/tasks/live/view")
+    page.get_by_text("Interview so far").wait_for()
+    items = page.locator(".qa-item")
+    assert items.count() == 2
+    assert items.nth(0).locator(".qa-question p").inner_text() == "Who else should weigh in?"
+    assert items.nth(0).locator(".qa-tag").first.inner_text() == "Q2"      # numbers stay chronological
+    assert items.nth(1).locator(".qa-question p").inner_text() == "What should the family see first?"
+    assert items.nth(1).locator(".qa-tag").first.inner_text() == "Q1"
+    # each pair keeps its question above its answer
+    assert items.nth(0).locator(".qa-answer p").inner_text() == "My co-founder, next week"
