@@ -187,8 +187,8 @@ def test_replace_shows_typed_fields_not_json_and_posts_object(page):
  expect(p.locator('.replace-fields')).to_be_visible();expect(p.locator('textarea[name="replacement-0"]')).to_have_count(0)
  expect(p.locator('[data-path=\'["requirement_id"]\']')).to_have_attribute('readonly','')
  p.locator('[data-path=\'["statement"]\']').fill('Sync every night');p.locator('[data-path=\'["priority"]\']').fill('5');p.locator('[data-path=\'["must"]\']').uncheck();p.locator('[data-path=\'["tags"]\']').fill('x\ny\nz')
- p.screenshot(path=str(root/'semantic-replace-desktop.png'),full_page=True)
- p.set_viewport_size({'width':390,'height':844});p.screenshot(path=str(root/'semantic-replace-mobile.png'),full_page=True)
+ p.mouse.wheel(0,250);p.wait_for_timeout(300);p.screenshot(path=str(root/'semantic-replace-desktop.png'))
+ p.set_viewport_size({'width':390,'height':844});p.mouse.wheel(0,500);p.wait_for_timeout(300);p.screenshot(path=str(root/'semantic-replace-mobile.png'))
  assert p.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
  p.get_by_role('button',name='Apply decisions and continue').click();expect(p.locator('#semanticstatus')).to_contain_text('Decisions recorded')
  rep=json.loads(posts[0]['answer'])['decisions'][0]['replacement']
