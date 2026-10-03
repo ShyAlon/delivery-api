@@ -237,6 +237,7 @@ def test_apply_shows_busy_then_success_feedback(page):
  p.locator('input[name="action-0"][value="remove"]').check();btn=p.get_by_role('button',name='Apply decisions and continue');btn.click()
  expect(p.locator('#semanticstatus')).to_contain_text('Applying your decisions');expect(p.locator('#semanticform button[type=submit]')).to_contain_text('Applying decisions');expect(p.locator('#semanticform button[type=submit]')).to_be_disabled();expect(p.locator('#semanticform .waiting-spinner')).to_be_visible()
  p.screenshot(path=str(root/'semantic-applying.png'))
+ expect(p.locator('#semanticstatus')).to_contain_text('1-2 minutes',timeout=9000)
  for _ in range(50):
   if held:break
   p.wait_for_timeout(100)
