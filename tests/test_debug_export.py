@@ -28,3 +28,26 @@ def test_outside_symlink_and_oversize_source_are_omitted(tmp_path):
 def test_secrets_in_nested_text_are_redacted():
  value=redact({'password':'abc','nested':[{'message':'Authorization: Bearer abc'}],'ordinary':'Keep project data'})
  assert value['password']=='[REDACTED]';assert 'abc' not in str(value);assert value['ordinary']=='Keep project data'
+
+def test_verification_scores_are_in_the_zip_for_calibration(tmp_path):
+ root=tmp_path/'session';(root/'interview').mkdir(parents=True)
+ rows=[{'ts':1.0,'turn':3,'target_area':'data','passed':False,'failed_checks':['grounding'],
+  'grounding':{'score':0,'span':None,'result':'no_overlap','passed':False},'implementation_hit':False,'founder_role_hit':False,
+  'retrieval_spans':[{'id':'t2','score':2}],'proposed_question':'Which payment currencies matter most?',
+  'final_question':'Which payment currencies matter most?','replaced':False,'non_answer':False,'retry_count':0,'fallback_used':False},
+  {'ts':2.0,'turn':4,'target_area':'flows','passed':True,'failed_checks':[],'retry_count':1,'fallback_used':True,'api_key':'super-secret'}]
+ (root/'interview'/'verification.jsonl').write_text('\n'.join(json.dumps(r) for r in rows)+'\nnot json\n')
+ raw=diagnostic_zip(root,'t','s',1,{}, {},[],tmp_path/'absent')
+ with zipfile.ZipFile(io.BytesIO(raw)) as z:
+  manifest=json.loads(z.read('manifest.json'));assert 'interview/verification.jsonl' in manifest['included']
+  got=json.loads(z.read('interview/verification.jsonl'))
+  assert [r.get('turn') for r in got]==[3,4,None] and got[0]['grounding']['result']=='no_overlap'
+  assert got[1]['fallback_used'] is True and got[2]=={'unparsed':'not json'}
+  assert b'super-secret' not in z.read('interview/verification.jsonl')
+  assert not any(x['source']=='spec/verification.jsonl' for x in manifest['omissions'])
+
+def test_missing_verification_scores_are_listed_not_hidden(tmp_path):
+ root=tmp_path/'session';(root/'interview').mkdir(parents=True)
+ raw=diagnostic_zip(root,'t','s',1,{}, {},[],tmp_path/'absent')
+ with zipfile.ZipFile(io.BytesIO(raw)) as z:
+  assert {'source':'interview/verification.jsonl','reason':'not recorded'} in json.loads(z.read('manifest.json'))['omissions']
