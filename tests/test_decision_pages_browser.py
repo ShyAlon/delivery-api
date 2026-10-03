@@ -173,6 +173,14 @@ def test_reason_is_optional_when_the_input_blocks_nothing(page):
  expect(status).to_contain_text('Decision saved')
  sent={x['item_id']:x for x in state['posts'][0]['founder_inputs']};assert sent['FD-free']['reason']=='' and sent['FD-free']['decision']=='Friendly' and 'reasonRequired' not in sent['FD-free']
 
+def test_review_gate_hands_off_to_task_view_after_saving(page):
+ p,base,root=page;state=fake(p);state['current']=review('wait-review','interview_approval')
+ p.goto(base+'/tasks/concept/decisions/wait-review')
+ p.get_by_role('button',name='Continue',exact=True).click()
+ status=p.locator('#review-status');expect(status).to_contain_text('Decision saved');expect(status.get_by_role('link',name='Open now')).to_have_attribute('href','/tasks/concept/view')
+ p.screenshot(path=str(root/'review-handoff.png'))
+ p.wait_for_url('**/tasks/concept/view',timeout=5000)
+
 def test_semantic_draft_comment_item_links_and_historical_controls(page):
  p,base,root=page;control=review();control['kind']='semantic_review';control['options']=[]
  control['decision']={'options':[],'context':{'decision_purpose':'semantic_review','evidence':{'semantic_review':{'revision':'a'*64,'findings':[{'finding_id':'f1','item_id':'FD-1','reason':'Needs owner decision','kind':'semantic','original':'Fast app'}]}}}}

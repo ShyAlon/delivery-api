@@ -78,7 +78,7 @@ export function createDecisions(ctx){
     accepted=true;status.textContent='Decision saved. Waiting for the next step…';
     const next=await api(`/api/tasks/${encodeURIComponent(taskId)}`),n=next.control_snapshot;
     if(decisionPurpose(n)&&n.wait_id!==waitId){history.replaceState({},'',decisionUrl(taskId,n));await decisionPage(taskId,n.wait_id)}
-    else{status.innerHTML=`Decision saved. <a href="/tasks/${encodeURIComponent(taskId)}/view">Follow phase progress</a>`;}
+    else{const view=`/tasks/${encodeURIComponent(taskId)}/view`;form.classList.add('applied');status.innerHTML=`Decision saved. Taking you to the task progress… <a href="${view}">Open now</a>`;setTimeout(()=>location.assign(view),1200)}
    }catch(e){status.textContent=accepted?'Decision was accepted, but the next view could not be loaded. Open the task to follow progress.':e.message;if(accepted)return;submitting=false;if(e.status===409||e.message.includes('review changed'))return;form.querySelectorAll('button,input,select,textarea').forEach(c=>c.disabled=false)}
   }
   form.onsubmit=e=>{e.preventDefault();submit(false)};
