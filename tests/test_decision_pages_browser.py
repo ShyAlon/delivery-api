@@ -140,6 +140,7 @@ def test_continue_names_unfinished_inputs_and_boxes_do_not_repeat_their_title(pa
  p.get_by_role('button',name='Continue',exact=True).click()
  status=p.locator('#review-status');expect(status).to_contain_text('Finish 1 open input');expect(status).to_contain_text('What styling?');expect(status).to_contain_text('needs a reason')
  assert boxes.nth(0).evaluate('d=>d.open&&d.classList.contains("needs-input")');assert not state['posts']
+ p.screenshot(path=str(root/'needs-input.png'));p.set_viewport_size({'width':460,'height':900});p.locator('#save-draft').scroll_into_view_if_needed();p.screenshot(path=str(root/'right-panel-narrow.png'));p.set_viewport_size({'width':1249,'height':920})
  p.locator('[data-founder-reason]').first.fill('Ask the designer');p.get_by_role('button',name='Continue',exact=True).click()
  expect(status).to_contain_text('Decision saved');assert state['posts'][0]['founder_inputs'][0]['status']=='deferred'
 
