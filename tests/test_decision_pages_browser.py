@@ -107,10 +107,10 @@ def test_semantic_findings_review_shows_choices_and_never_defaults(page):
   else:r.fulfill(json={'task_id':'concept','title':'Habit tracking','review':control,'current':control,'actionable':True,'draft':None})
  p.route('**/api/tasks/concept**',route)
  p.goto(base+'/tasks/concept/decisions/wait-concept');expect(p.locator('h1')).to_have_text('Review flagged inputs')
- assert p.locator('select').input_value()=='';expect(p.get_by_text('Repeats a need')).to_be_visible()
+ assert p.locator('input[name="action-0"]:checked').count()==0;expect(p.locator('select')).to_have_count(0);expect(p.get_by_text('Repeats a need')).to_be_visible()
  p.screenshot(path=str(root/'semantic-review-desktop.png'),full_page=True)
  p.set_viewport_size({'width':390,'height':844});p.screenshot(path=str(root/'semantic-review-mobile.png'),full_page=True)
- p.locator('select').select_option('accept');p.get_by_role('button',name='Apply decisions and continue').click();expect(p.locator('#semanticstatus')).to_contain_text('Decisions recorded')
+ p.locator('input[name="action-0"][value="accept"]').check();p.get_by_role('button',name='Apply decisions and continue').click();expect(p.locator('#semanticstatus')).to_contain_text('Decisions recorded')
  assert json.loads(posts[0]['answer'])['decisions'][0]['action']=='accept'
  assert p.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
 
@@ -138,10 +138,75 @@ def test_semantic_draft_comment_item_links_and_historical_controls(page):
   r.fulfill(json={'task_id':'concept','title':'Habit tracking','review':control,'current':control,'actionable':state['actionable'],'draft':state['draft'],'comments':state['comments']})
  p.route('**/api/tasks/concept**',route)
  p.goto(base+'/tasks/concept/decisions/wait-concept?step=findings&item=FD-1')
- p.locator('select').select_option('replace');p.locator('[name="replacement-0"]').fill('"Recorded status"');p.locator('[name="rationale-0"]').fill('Founder wording')
+ p.locator('input[name="action-0"][value="replace"]').check();p.locator('.replace-fields input[type=text]').fill('Recorded status');p.locator('[name="rationale-0"]').fill('Founder wording')
  p.get_by_role('button',name='Save draft',exact=True).click();expect(p.locator('#semanticstatus')).to_contain_text('Draft saved');link=p.url
  assert 'item=FD-1' in link and 'draft=semantic-draft' in link
- p.reload();expect(p.locator('select')).to_have_value('replace');expect(p.locator('[name="replacement-0"]')).to_have_value('"Recorded status"')
+ p.reload();expect(p.locator('input[name="action-0"][value="replace"]')).to_be_checked();expect(p.locator('.replace-fields input[type=text]')).to_have_value('Recorded status')
  p.locator('[name="comment"]').fill('Keep this note');p.get_by_role('button',name='Save comment only').click();expect(p.locator('#semantic-comments')).to_contain_text('Keep this note');assert not state['answers']
  p.set_viewport_size({'width':390,'height':844});p.evaluate('window.scrollTo(0,0)');p.screenshot(path=str(root/'semantic-draft-mobile.png'),full_page=True)
- state['actionable']=False;p.reload();expect(p.locator('select')).to_be_disabled();expect(p.get_by_role('button',name='Save draft',exact=True)).to_be_disabled()
+ state['actionable']=False;p.reload();expect(p.locator('input[name="action-0"][value="replace"]')).to_be_disabled();expect(p.get_by_role('button',name='Save draft',exact=True)).to_be_disabled()
+
+
+def _flag_page(p,base,findings):
+ control=review();control['kind']='semantic_review';control['options']=[]
+ control['decision']={'options':[],'context':{'decision_purpose':'semantic_review','evidence':{'semantic_review':{'revision':'a'*64,'findings':findings}}}}
+ posts=[]
+ def route(r):
+  if r.request.method=='POST':posts.append(r.request.post_data_json);r.fulfill(json={'status':'accepted'})
+  else:r.fulfill(json={'task_id':'concept','title':'Habit tracking','review':control,'current':control,'actionable':True,'draft':None})
+ p.route('**/api/tasks/concept**',route);p.goto(base+'/tasks/concept/decisions/wait-concept');return posts
+
+def _f(i,item,path,original,kind='semantic'):return {'finding_id':f'f{i}','item_id':item,'path':path,'reason':f'Reason {i}','kind':kind,'original':original}
+
+def test_semantic_titles_are_meaningful_and_options_have_tooltips(page):
+ p,base,root=page
+ _flag_page(p,base,[_f(0,'constraint:0',['constraints',0],'Must work offline'),_f(1,'FR-9',['functional',3],{'requirement_id':'FR-9','statement':'The app shall sync nightly'})])
+ expect(p.locator('.semantic-item h2')).to_have_count(2);titles=p.locator('.semantic-item h2').all_inner_texts()
+ assert titles==['Constraint: Must work offline','Functional requirement FR-9: The app shall sync nightly'],titles
+ assert 'constraint:0' not in p.locator('.semantic-page').inner_text()
+ for value,words in (('accept','Keep this exactly'),('remove','Delete this item'),('replace','Rewrite this item')):
+  assert words in p.locator(f'input[name="action-0"][value="{value}"]').locator('xpath=..').get_attribute('title')
+ p.locator('input[name="action-0"][value="remove"]').check();expect(p.locator('#caption-0')).to_contain_text('Delete this item');expect(p.locator('#semantic-count')).to_have_text('1 of 2 decided')
+
+def test_semantic_header_and_footer_stay_visible_and_structural_cannot_be_kept(page):
+ p,base,root=page
+ _flag_page(p,base,[_f(i,f'constraint:{i}',['constraints',i],'Item number %d '%i+'words '*30,'structural' if i==0 else 'semantic') for i in range(12)])
+ expect(p.locator('input[name="action-0"][value="accept"]')).to_be_disabled();expect(p.locator('input[name="action-1"][value="accept"]')).to_be_enabled()
+ p.mouse.wheel(0,2500);p.wait_for_timeout(300)
+ vh=p.viewport_size['height']
+ head=p.locator('.semantic-head').bounding_box();foot=p.locator('.semantic-footer').bounding_box()
+ assert 0<=head['y']<200 and head['y']+head['height']>0
+ assert foot['y']+foot['height']<=vh+1 and foot['y']>=0
+ expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_in_viewport()
+
+def test_replace_shows_typed_fields_not_json_and_posts_object(page):
+ p,base,root=page
+ orig={'requirement_id':'FR-2','statement':'Sync nightly','priority':2,'must':True,'tags':['a','b']}
+ posts=_flag_page(p,base,[_f(0,'FR-2',['functional',0],orig)])
+ expect(p.locator('.replace-fields')).to_be_hidden();p.locator('input[name="action-0"][value="replace"]').check()
+ expect(p.locator('.replace-fields')).to_be_visible();expect(p.locator('textarea[name="replacement-0"]')).to_have_count(0)
+ expect(p.locator('[data-path=\'["requirement_id"]\']')).to_have_attribute('readonly','')
+ p.locator('[data-path=\'["statement"]\']').fill('Sync every night');p.locator('[data-path=\'["priority"]\']').fill('5');p.locator('[data-path=\'["must"]\']').uncheck();p.locator('[data-path=\'["tags"]\']').fill('x\ny\nz')
+ p.screenshot(path=str(root/'semantic-replace-desktop.png'),full_page=True)
+ p.set_viewport_size({'width':390,'height':844});p.screenshot(path=str(root/'semantic-replace-mobile.png'),full_page=True)
+ assert p.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
+ p.get_by_role('button',name='Apply decisions and continue').click();expect(p.locator('#semanticstatus')).to_contain_text('Decisions recorded')
+ rep=json.loads(posts[0]['answer'])['decisions'][0]['replacement']
+ assert rep=={'requirement_id':'FR-2','statement':'Sync every night','priority':5,'must':False,'tags':['x','y','z']},rep
+ p.set_viewport_size({'width':1280,'height':800})
+
+def test_replace_rejects_bad_number(page):
+ p,base,root=page
+ posts=_flag_page(p,base,[_f(0,'FR-2',['functional',0],{'priority':2})])
+ p.locator('input[name="action-0"][value="replace"]').check();p.locator('[data-path=\'["priority"]\']').fill('');p.get_by_role('button',name='Apply decisions and continue').click()
+ expect(p.locator('#semanticstatus')).to_contain_text('must be a number');assert not posts
+
+def test_phase_keys_have_human_labels():
+ import subprocess,shutil,pathlib
+ node=shutil.which('node')
+ if not node:__import__('pytest').skip('node not available')
+ web=pathlib.Path(__file__).resolve().parents[1]/'src/delivery_api/web/format.js'
+ src=web.read_text().replace("import {esc} from './client-core.js';","const esc=s=>String(s);")
+ out=subprocess.run([node,'--input-type=module','-e',src+";console.log(JSON.stringify(['intent','conops','needs','srs','architecture','specs','tests'].map(humanLabel)))"],capture_output=True,text=True,timeout=30)
+ assert out.returncode==0,out.stderr
+ assert json.loads(out.stdout)==['Start','Concept of Operations','Stakeholder Needs','Requirements','Architecture','Specifications','Tests']
