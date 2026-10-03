@@ -57,7 +57,7 @@ def test_choose_save_reload_continue_and_historical_back(page):
  link=p.url;assert 'draft=saved-one' in link and 'item=2' in link
  p.reload();expect(p.locator('textarea[name=rationale]')).to_have_value('One deployment is enough');expect(p.locator('input[value="2"]')).to_be_checked()
  p.screenshot(path=str(root/'concept-desktop.png'),full_page=True)
- p.get_by_role('button',name='Choose and continue').click();expect(p.locator('h1')).to_have_text('Review Before Continuing');assert 'wait-review' in p.url; p.screenshot(path=str(root/'final-review.png'),full_page=True)
+ p.get_by_role('button',name='Choose and continue').click();expect(p.locator('h1')).to_have_text('Review Before Continuing');assert 'wait-review' in p.url; expect(p.locator('.context-box .gate-structured').first).to_be_attached();expect(p.locator('.review-fact')).to_have_count(0); p.screenshot(path=str(root/'final-review.png'),full_page=True)
  assert state['posts'][0]['answer']=='2 - One deployment is enough';assert state['posts'][0]['comment']=='Check offline behavior'
  p.goto(link);expect(p.locator('.notice').first).to_contain_text('Historical review');expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled()
  assert len(state['posts'])==1
