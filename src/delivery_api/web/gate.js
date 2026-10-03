@@ -44,7 +44,7 @@ if(currentArtifacts.length){host.innerHTML='';for(const a of currentArtifacts){l
  }
  await renderGateArtifacts();
  const semantic=review.semantic_review;
- const flagTitle=t=>{const x=String(t||'').replace(/\s+/g,' ').trim();return x.length>90?x.slice(0,x.lastIndexOf(' ',90))+'…':(x||'Flagged item')};
+ const flagTitle=t=>{const w=String(t||'').trim().split(/\s+/).filter(Boolean);return w.length>32?w.slice(0,32).join(' ')+'…':(w.join(' ')||'Flagged Item')};
  if(semantic?.findings?.length){
   const resolved=new Set((semantic.decisions||[]).map(d=>d.item_id)),items=[...new Map(semantic.findings.map(f=>[f.item_id,f])).values()];
   const panel=document.createElement('section');panel.className='gate-artifact';panel.id='semantic-panel';

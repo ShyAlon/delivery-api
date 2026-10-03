@@ -82,7 +82,7 @@ export function createDecisions(ctx){
   }
   form.onsubmit=e=>{e.preventDefault();submit(false)};
  }
- function shortTitle(t){const x=String(t||'').replace(/\s+/g,' ').trim();const cut=x.length>90?x.slice(0,x.lastIndexOf(' ',90))+'…':x;return cut||'Open question'}
+ function shortTitle(t){const w=String(t||'').trim().split(/\s+/).filter(Boolean);return w.length>32?w.slice(0,32).join(' ')+'…':(w.join(' ')||'Open Question')}
  function registerHtml(register){if(!register)return'';const opts=[{value:'',label:'Keep Flagged Open',tip:'Leave this gap flagged. Approving the phase does not answer it.'},{value:'decided',label:'Record My Decision',tip:'Answer the gap yourself. Write the decision below.'},{value:'deferred',label:'Explicitly Defer',tip:'Decide later, on the record. Add a reason.'}];return `<section class="founder-register"><h2>Missing Data and Open Founder Inputs</h2><p>These gaps are flagged, not silently filled. Approving the phase does not answer them.</p><div class="context-boxes">${register.items.map(x=>boxHtml(shortTitle(x.question),`<p>${esc(x.question)}</p><small>Owner: ${esc(titleCase(x.owner))}. Blocks: ${esc(x.blocks.map(titleCase).join(', '))}</small>${pillGroup({name:'fs-'+x.item_id,legend:'Founder Response',options:opts,checked:'',attrs:`data-founder-group="${esc(x.item_id)}"`})}<label>Decision (only for Record My Decision)<textarea data-founder-answer="${esc(x.item_id)}"></textarea></label><label>Reason<textarea data-founder-reason="${esc(x.item_id)}"></textarea></label>`)).join('')}${register.advisories.map(x=>boxHtml(shortTitle(x.statement),`<p>${esc(x.statement)}</p>`)).join('')}</div></section>`}
  async function semanticPage(taskId,waitId,data,query){
   const r=data.review,review=r.decision.context.evidence.semantic_review;
