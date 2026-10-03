@@ -229,3 +229,7 @@ section.qa-history{max-height:min(44vh,440px);overflow-y:auto;overscroll-behavio
 .semantic-page .semantic-head{position:sticky;top:84px;background:rgb(242,240,233);height:auto}@media(max-width:850px){.semantic-page .semantic-head{position:sticky;top:80px}}
 .semantic-item h2{margin:0 0 6px}
 #semanticform.applying .semantic-footer,#semanticform.applied .semantic-footer{border-color:#16a36a;box-shadow:0 0 0 3px #16a36a33}#semanticform.applying .semantic-footer #semanticstatus,#semanticform.applied .semantic-footer #semanticstatus{font-weight:600;color:var(--ink)}#semanticform.applying button.primary{display:inline-flex;gap:8px;align-items:center;opacity:1}.semantic-footer #semanticstatus.error{color:#a12b2b;font-weight:600}
+
+.decision-page:not(.semantic-page) .page-head{position:static}.decision-page:not(.semantic-page) .gate-controls{top:100px;max-height:calc(100vh - 116px);overflow:auto}
+.context-boxes{display:grid;gap:10px}.context-box{border:1px solid var(--line);border-radius:14px;background:#fff}.context-box summary{cursor:pointer;padding:12px 16px;font-weight:600;list-style:none}.context-box summary::-webkit-details-marker{display:none}.context-box summary::before{content:'▸';display:inline-block;margin-right:8px;transition:transform .15s}.context-box[open] summary::before{transform:rotate(90deg)}.context-box .context-body{padding:0 16px 14px;overflow-wrap:anywhere}.context-box .review-fact h3{font-size:13px;margin:12px 0 4px}
+@media(max-width:760px){.decision-page:not(.semantic-page) .gate-controls{max-height:none;overflow:visible}}

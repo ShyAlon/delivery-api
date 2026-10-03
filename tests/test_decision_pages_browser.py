@@ -254,3 +254,31 @@ def test_apply_failure_is_visible_and_recoverable(page):
  held[0].fulfill(status=500,json={'detail':'Engine unavailable'})
  expect(p.locator('#semanticstatus')).to_contain_text('Could not apply your decisions');expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_enabled()
  p.screenshot(path=str(root/'semantic-apply-error.png'))
+def _concept_page(p,base):
+ control=review()
+ sc=[{'stakeholder':f'Stakeholder {i}','role':'Tracks habits and reviews weekly progress','goals':['Quick capture','Weekly summary','Share with a friend'],'operating_environment':'Phone, often offline, on a commuter train with poor signal','source_turns':[0,1,2]} for i in range(2)]
+ os_=[{'scenario_id':f'OS-{i}','name':f'Scenario {i}','trigger':'Habit completed','actors':['Runner'],'operational_flow':['Open app','Record points','Sync later'],'success_outcome':'Points sync','exceptions':['Offline'],'source_turns':[0]} for i in range(3)]
+ control['decision']['context']['evidence']['conops_draft']['stakeholder_context']=sc
+ control['decision']['context']['evidence']['conops_draft']['operational_scenarios']=os_
+ control['decision']['context']['evidence']['conops_draft']['contract_version']='1.2.3'
+ p.route('**/api/tasks/concept**',lambda r:r.fulfill(json={'task_id':'concept','title':'Habit tracking','review':control,'current':control,'actionable':True,'draft':None,'comments':[]}))
+ p.goto(base+'/tasks/concept/decisions/wait-concept')
+
+def test_concept_context_is_collapsed_without_debug_fields_and_does_not_overlap(page):
+ p,base,root=page;_concept_page(p,base)
+ text=p.locator('.gate-evidence').inner_text()
+ assert 'source turns' not in text.lower() and 'contract version' not in text.lower() and '1.2.3' not in text
+ boxes=p.locator('.context-box');assert boxes.count()==5
+ assert p.locator('.context-box[open]').count()==0
+ expect(p.locator('.context-box summary').first).to_have_text('Stakeholder 0 · Tracks habits and reviews weekly progress')
+ expect(p.get_by_text('Quick capture').first).to_be_hidden()
+ p.locator('.context-box summary').first.click();expect(p.get_by_text('Quick capture').first).to_be_visible()
+ p.locator('input[name="choice"][value="2"]').check();p.locator('textarea[name=rationale]').fill('One deployment');p.locator('textarea[name=comment]').fill('A note')
+ p.screenshot(path=str(root/'concept-collapsed.png'))
+ for y in (0,500,1200):
+  p.evaluate(f'window.scrollTo(0,{y})');p.wait_for_timeout(150)
+  ev=p.locator('.gate-evidence').bounding_box();ct=p.locator('.gate-controls').bounding_box();head=p.locator('.page-head').bounding_box()
+  assert head['y']+head['height']<=ev['y']+ev['height'] and (y>0 or head['y']>=0)
+  if y>0:assert ct['y']>=83,(y,ct)
+  assert ev['x']+ev['width']<=ct['x']+1,(y,ev,ct)
+ p.evaluate('window.scrollTo(0,300)');p.wait_for_timeout(150);p.screenshot(path=str(root/'concept-accepted-scrolled.png'))
