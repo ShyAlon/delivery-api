@@ -1737,3 +1737,71 @@ def test_submitting_answer_is_prominent_and_pulses_unless_reduced_motion(page, u
     page.emulate_media(reduced_motion='reduce')
     assert shadow.evaluate('e=>getComputedStyle(e).animationName') == 'none'
     assert banner.evaluate('e=>getComputedStyle(e).animationName') == 'none'
+
+
+def _phase_snapshots(page, ui, task_id="live"):
+    base = page.request.get(f"{ui}/api/tasks/{task_id}").json()
+    def snap(phase, mode):
+        s = json.loads(json.dumps(base))
+        s["state"] = "running"; s["active_phase"] = phase
+        s["ui_state"] = {"mode": mode, "active_phase": phase, "process_live": True, "decision": None, "gate": None,
+                         "question": "What next?" if mode == "engine_question" else None}
+        if mode == "engine_question":
+            s["control_snapshot"] = {"mode": "waiting_input", "owner": "engine", "kind": "text", "wait_id": "w1", "precondition": {"session_sequence": 1}}
+        else:
+            s["control_snapshot"] = {"mode": "working"}
+        s["events"] = []
+        return _promote_control(s)
+    return snap
+
+
+FAKE_SSE = """class FakeEventSource{constructor(){window.__es=this;this.h={}}addEventListener(n,f){this.h[n]=f}close(){}}
+window.EventSource=FakeEventSource;window.__emit=e=>window.__es.h.progress({data:JSON.stringify(e)})"""
+
+
+def test_phase_change_dialog_explains_pauses_input_and_keeps_progress_underneath(page, ui):
+    import json as _j
+    page.add_init_script(FAKE_SSE)
+    snap = _phase_snapshots(page, ui)
+    cur = {"s": snap("conops", "executing")}
+    page.route("**/api/tasks/live", lambda route: route.fulfill(json=cur["s"]))
+    page.set_viewport_size({"width": 1320, "height": 870})
+    page.goto(ui + "/tasks/live/view")
+    page.get_by_text("Live process").first.wait_for()
+    assert page.locator(".phase-change-dialog").count() == 0          # first look at a phase is not a change
+    cur["s"] = snap("needs", "executing")                              # the engine moves to the next phase
+    dialog = page.locator(".phase-change-dialog")
+    dialog.wait_for(timeout=12000)
+    text = dialog.inner_text()
+    assert "Moving from Concept of operations to Stakeholder needs" in text
+    assert "PHASE 3 OF 7" in text and "INPUT PAUSED" in text.upper()
+    assert "Organizing your answers into stakeholder needs." in text
+    assert "Your input is paused" in text
+    page.evaluate("window.__emit({kind:'progress',phase_key:'needs',message:'Drafting need 2 of 6'})")
+    assert "Latest: Drafting need 2 of 6" in page.locator("#transitionprogress").inner_text()
+    # the page underneath keeps receiving the same progress signals
+    assert "Drafting need 2 of 6" in page.locator("#stageprogress").inner_text()
+    assert dialog.evaluate("e=>getComputedStyle(e).animationName") == "answer-pulse"
+    page.screenshot(path="/downloads/phase-change-dialog.png")
+    page.emulate_media(reduced_motion="reduce")
+    assert dialog.evaluate("e=>getComputedStyle(e).animationName") == "none"
+    page.get_by_role("button", name="Keep watching in the background").click()
+    assert page.locator(".phase-change-dialog").count() == 0
+    assert "Drafting need 2 of 6" in page.locator("#stageprogress").inner_text()
+
+
+def test_phase_change_dialog_closes_when_the_founder_can_act_again_and_never_shows_for_a_question(page, ui):
+    page.add_init_script(FAKE_SSE)
+    snap = _phase_snapshots(page, ui)
+    cur = {"s": snap("conops", "executing")}
+    page.route("**/api/tasks/live", lambda route: route.fulfill(json=cur["s"]))
+    page.goto(ui + "/tasks/live/view")
+    page.get_by_text("Live process").first.wait_for()
+    cur["s"] = snap("needs", "executing")
+    page.locator(".phase-change-dialog").wait_for(timeout=12000)
+    cur["s"] = snap("needs", "engine_question")                        # input is possible again
+    page.wait_for_function("!document.querySelector('.phase-change-dialog')", timeout=12000)
+    # a phase change that arrives together with a question is not a paused state: no dialog
+    cur["s"] = snap("srs", "engine_question")
+    page.wait_for_timeout(6500)
+    assert page.locator(".phase-change-dialog").count() == 0
