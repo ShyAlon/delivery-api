@@ -242,6 +242,7 @@ def test_replace_shows_typed_fields_not_json_and_posts_object(page):
  p,base,root=page
  orig={'requirement_id':'FR-2','statement':'Sync nightly','priority':2,'must':True,'tags':['a','b']}
  posts=_flag_page(p,base,[_f(0,'FR-2',['functional',0],orig)])
+ expect(p.locator('.flag-original')).to_contain_text('Sync nightly');expect(p.locator('.flag-original')).not_to_contain_text('FR-2')  # record IDs are not shown to founders
  expect(p.locator('.replace-fields')).to_be_hidden();p.locator('input[name="action-0"][value="replace"]').check()
  expect(p.locator('.replace-fields')).to_be_visible();expect(p.locator('textarea[name="replacement-0"]')).to_have_count(0)
  expect(p.locator('[data-path=\'["requirement_id"]\']')).to_have_attribute('readonly','')
