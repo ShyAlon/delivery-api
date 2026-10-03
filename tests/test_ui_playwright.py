@@ -1829,3 +1829,5 @@ def test_flagged_inputs_show_readable_item_and_no_circular_link(page,ui):
     assert page.locator('#semantic-panel .replace-fields').first.is_hidden()
     panel.locator('select[name="semantic-action-0"]').select_option('replace',force=True) if panel.locator('select[name="semantic-action-0"]').is_visible() else panel.locator('label.pill',has_text='Replace').first.click()
     assert page.locator('#semantic-panel .replace-fields input[value="Ear training"]').count()==1
+    assert 'R-11' not in panel.locator('article').inner_text() and 'AC-54' not in panel.locator('article').inner_text()  # IDs hidden from founders
+    assert page.locator('#semantic-panel .replace-fields input[readonly]').count()==0

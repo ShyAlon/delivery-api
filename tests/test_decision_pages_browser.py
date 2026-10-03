@@ -244,7 +244,7 @@ def test_replace_shows_typed_fields_not_json_and_posts_object(page):
  posts=_flag_page(p,base,[_f(0,'FR-2',['functional',0],orig)])
  expect(p.locator('.replace-fields')).to_be_hidden();p.locator('input[name="action-0"][value="replace"]').check()
  expect(p.locator('.replace-fields')).to_be_visible();expect(p.locator('textarea[name="replacement-0"]')).to_have_count(0)
- expect(p.locator('[data-path=\'["requirement_id"]\']')).to_have_attribute('readonly','')
+ expect(p.locator('[data-path=\'["requirement_id"]\']')).to_have_count(0)  # IDs are hidden from founders; the posted object below still carries it
  p.locator('[data-path=\'["statement"]\']').fill('Sync every night');p.locator('[data-path=\'["priority"]\']').fill('5');p.locator('[data-path=\'["must"]\']').uncheck();p.locator('[data-path=\'["tags"]\']').fill('x\ny\nz')
  p.mouse.wheel(0,250);p.wait_for_timeout(300);p.screenshot(path=str(root/'semantic-replace-desktop.png'))
  p.set_viewport_size({'width':390,'height':844});p.mouse.wheel(0,500);p.wait_for_timeout(300);p.screenshot(path=str(root/'semantic-replace-mobile.png'))

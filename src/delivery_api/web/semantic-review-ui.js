@@ -45,6 +45,7 @@ const FIXED=/(^|_)(id|ids|ref|refs)$/;
 const input=(path,type,value,key,extra='')=>`data-path='${esc(JSON.stringify(path))}' data-type="${type}" ${extra}`;
 function fieldHtml(path,value,key,fixed){
  const label=humanLabel(String(key??'Value')),lock=fixed||FIXED.test(String(key));
+ if(lock)return '';/* IDs stay in the stored value but are not shown to founders */
  const attr=(type,extra='')=>`data-path='${esc(JSON.stringify(path))}' data-type="${type}" ${lock?'readonly':''} ${extra}`;
  if(Array.isArray(value)){
   if(value.every(v=>v===null||typeof v!=='object'))return `<label class="rf"><span>${esc(label)} <small>one per line${lock?' · fixed':''}</small></span><textarea rows="${Math.min(6,Math.max(2,value.length))}" ${attr('list')} data-num="${value.length&&value.every(v=>typeof v==='number')?1:0}">${esc(value.join('\n'))}</textarea></label>`;
