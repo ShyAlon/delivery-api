@@ -1089,6 +1089,40 @@ def interview_history_snapshot(snapshot):
     ]
 
 
+def long_history_snapshot(snapshot):
+    words = lambda n, p: " ".join(f"{p}{i}" for i in range(1, n + 1))
+    snapshot["events"] = [
+        {"id": 91001, "kind": "waiting_input", "phase_key": "conops", "ts": 1,
+         "message": words(40, "q"), "payload": {"waiting_input": True, "question": words(40, "q")}},
+        {"id": 91002, "kind": "answer", "phase_key": "conops", "ts": 2,
+         "message": "You: " + words(33, "a"), "payload": {"answer": words(33, "a")}},
+        {"id": 91003, "kind": "waiting_input", "phase_key": "conops", "ts": 3,
+         "message": words(32, "r"), "payload": {"waiting_input": True, "question": words(32, "r")}},
+        {"id": 91004, "kind": "answer", "phase_key": "conops", "ts": 4,
+         "message": "You: " + words(32, "b"), "payload": {"answer": words(32, "b")}},
+    ]
+
+
+def test_interview_history_truncates_questions_and_answers_after_32_words(page, ui):
+    route_task_snapshot(page, ui, "live", long_history_snapshot)
+    page.goto(ui + "/tasks/live/view")
+    page.get_by_text("Interview so far").wait_for()
+    first, second = page.locator(".qa-item").nth(0), page.locator(".qa-item").nth(1)
+    q1 = first.locator(".qa-question p").inner_text()
+    a1 = first.locator(".qa-answer p").inner_text()
+    assert q1 == " ".join(f"q{i}" for i in range(1, 33)) + "\u2026"
+    assert a1 == " ".join(f"a{i}" for i in range(1, 33)) + "\u2026"
+    # the full text stays reachable on hover
+    assert first.locator(".qa-question p").get_attribute("title") == " ".join(f"q{i}" for i in range(1, 41))
+    # exactly 32 words is shown whole, no ellipsis
+    assert "\u2026" not in second.locator(".qa-question p").inner_text()
+    assert "\u2026" not in second.locator(".qa-answer p").inner_text()
+    assert len(second.locator(".qa-answer p").inner_text().split()) == 32
+    # the comment dialog still shows the full question
+    first.locator(".qa-question .qa-comment-btn").click()
+    assert "q40" in page.locator(".feedback-context").inner_text()
+
+
 def test_interview_history_cards_and_debug_toggle_persist(page, ui):
     route_task_snapshot(page, ui, "live", interview_history_snapshot)
     page.goto(ui + "/tasks/live/view")
