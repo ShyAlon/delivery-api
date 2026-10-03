@@ -1620,15 +1620,16 @@ def test_start_outputs_box_shown_before_first_answer(page, ui):
     page.get_by_text('Start outputs').first.wait_for(state='visible')
 
 
-def test_interview_history_scrolls_inside_its_section_and_live_process_stays_visible(page, ui):
+def test_interview_scrolls_inside_its_section_and_live_process_stays_visible(page, ui):
     _long_interview_page(page, ui, answered=True)
-    history = page.locator('section.qa-history'); history.wait_for()
-    assert history.evaluate('e=>e.scrollHeight>e.clientHeight && getComputedStyle(e).overflowY') in (True, 'auto')
-    assert history.evaluate('e=>getComputedStyle(e).overflowY') == 'auto'
-    assert history.evaluate('e=>e.scrollTop>0')  # opens on the latest exchange
-    page.mouse.wheel(0, 3000); page.wait_for_timeout(300)
-    live_panel = page.get_by_role('heading', name='Live process').locator('xpath=ancestor::div[contains(@class,"panel")][1]')
-    assert live_panel.evaluate('e=>getComputedStyle(e).position') == 'sticky'
-    box = live_panel.bounding_box()
-    assert box is not None and 0 <= box['y'] < 800 and box['y'] + min(box['height'], 100) <= 800
+    left = page.locator('section.qa-history'); left.wait_for(); page.wait_for_timeout(500)
+    assert left.evaluate('e=>e.scrollHeight>e.clientHeight') and left.evaluate('e=>getComputedStyle(e).overflowY') == 'auto'
+    assert left.evaluate('e=>e.scrollTop>0')  # opens on the latest exchange
+    right = page.get_by_role('heading', name='Live process').locator('xpath=ancestor::div[contains(concat(" ",normalize-space(@class)," ")," panel ")][1]')
+    assert page.evaluate('document.documentElement.scrollHeight') < 1500  # 14 long exchanges must not stretch the page
+    page.evaluate('window.scrollTo(0, document.documentElement.scrollHeight)'); page.wait_for_timeout(300)
+    box = right.bounding_box()
+    heading = page.get_by_role('heading', name='Live process'); hb = heading.bounding_box()
+    assert 0 <= hb['y'] and hb['y'] + hb['height'] <= 800, hb  # Live process heading pinned in view after the page scrolled
+    assert heading.evaluate('e=>{const r=e.getBoundingClientRect();const t=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return e.contains(t)||t.contains(e)}')  # and not hidden behind the page header
     page.screenshot(path='/downloads/live-process-sticky.png')

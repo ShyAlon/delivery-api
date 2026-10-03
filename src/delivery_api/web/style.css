@@ -190,5 +190,5 @@ a.primary.button-link{color:#fff!important;display:inline-block;padding:14px 20p
 .shadow-copy{margin:10px 0;padding:14px 16px;border:1px dashed var(--line);background:rgba(255,255,255,.65);opacity:.9}.shadow-copy.hidden{display:none}.shadow-status{display:flex;align-items:center;gap:8px;margin-bottom:10px;font:11px DM Mono;letter-spacing:.08em;text-transform:uppercase}.shadow-block+.shadow-block{margin-top:10px}.shadow-block span{display:block;font:10px DM Mono;letter-spacing:.12em;text-transform:uppercase;color:var(--muted,#777)}.shadow-block p{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
 .interview-answer.shadowed>label,.interview-answer.shadowed>.composer-hint,.interview-answer.shadowed>button,.interview-answer.shadowed>#answerspinner{display:none}
 #phase-output-slot[data-hide-start="1"] .phase-output[data-display-phase="intent"]{display:none}
-@media(min-width:1101px){.detail-layout{align-items:start}.detail-layout>div:last-child>.panel{position:sticky;top:210px;height:auto;max-height:calc(100vh - 230px);overflow-y:auto;overscroll-behavior:contain}}
-.detail-layout .qa-history .qa-scroll,.detail-layout section.qa-history{max-height:min(48vh,520px);overflow-y:auto;overscroll-behavior:contain}
+section.qa-history{max-height:min(44vh,440px);overflow-y:auto;overscroll-behavior:contain}
+@media(min-width:1101px){.detail-layout>div:last-child>.panel>.panel-title:first-child{position:sticky;top:256px;z-index:2;background:rgb(242,240,233);margin-top:-8px;padding:8px 0}}
