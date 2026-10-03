@@ -157,6 +157,22 @@ def test_rework_sends_founder_answers_and_register_shows_history(page):
  expect(p.locator('#review-status')).to_contain_text('Decision saved')
  sent=state['posts'][0];assert sent['answer'].startswith('0');assert sent['founder_inputs']==[{'item_id':'FD-style','status':'deferred','decision':None,'reason':'Ask the designer'}]
 
+def test_reason_is_optional_when_the_input_blocks_nothing(page):
+ p,base,root=page;state=fake(p);state['current']=review('wait-review','interview_approval')
+ register={'items':[{'item_id':'FD-free','data_class':'content','status':'open','question':'What tone?','owner':'founder','blocks':[]},{'item_id':'FD-blk','data_class':'flows','status':'open','question':'What flow?','owner':'founder','blocks':['UI']}],'advisories':[]}
+ state['current']['decision']['context']['evidence']['intent_model']['founder_register']=register
+ p.goto(base+'/tasks/concept/decisions/wait-review')
+ boxes=p.locator('.founder-register details');boxes.nth(0).evaluate('d=>d.open=true');boxes.nth(1).evaluate('d=>d.open=true')
+ expect(boxes.nth(0)).to_contain_text('Reason (optional)');expect(boxes.nth(1)).to_contain_text('Reason (required - this blocks later work)')
+ g=p.locator('[data-founder-group]')
+ g.nth(0).locator('label.pill').nth(1).click();boxes.nth(0).locator('[data-founder-answer]').fill('Friendly')
+ g.nth(1).locator('label.pill').nth(2).click()
+ p.get_by_role('button',name='Continue',exact=True).click()
+ status=p.locator('#review-status');expect(status).to_contain_text('Finish 1 open input');expect(status).to_contain_text('What flow?');expect(status).not_to_contain_text('What tone?');assert not state['posts']
+ boxes.nth(1).locator('[data-founder-reason]').fill('Ask designer');p.get_by_role('button',name='Continue',exact=True).click()
+ expect(status).to_contain_text('Decision saved')
+ sent={x['item_id']:x for x in state['posts'][0]['founder_inputs']};assert sent['FD-free']['reason']=='' and sent['FD-free']['decision']=='Friendly' and 'reasonRequired' not in sent['FD-free']
+
 def test_semantic_draft_comment_item_links_and_historical_controls(page):
  p,base,root=page;control=review();control['kind']='semantic_review';control['options']=[]
  control['decision']={'options':[],'context':{'decision_purpose':'semantic_review','evidence':{'semantic_review':{'revision':'a'*64,'findings':[{'finding_id':'f1','item_id':'FD-1','reason':'Needs owner decision','kind':'semantic','original':'Fast app'}]}}}}
