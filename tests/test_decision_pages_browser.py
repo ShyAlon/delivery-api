@@ -124,6 +124,25 @@ def test_approval_register_flags_missing_data_and_records_explicit_answer(page):
  p.get_by_role('button',name='Continue',exact=True).click();expect(p.locator('#review-status')).to_contain_text('Decision saved')
  assert state['posts'][0]['founder_inputs'][0]['decision']=='Blue and white'
 
+def test_continue_names_unfinished_inputs_and_boxes_do_not_repeat_their_title(page):
+ p,base,root=page;state=fake(p);state['current']=review('wait-review','interview_approval')
+ long_q='Which '+' '.join(['word%d'%i for i in range(40)])+'?'
+ register={'items':[{'item_id':'FD-a','data_class':'styling','status':'open','question':'What styling?','owner':'founder','blocks':['UI']},{'item_id':'FD-b','data_class':'flows','status':'open','question':long_q,'owner':'founder','blocks':[]}],'advisories':[{'advisory_id':'ADV-1','advisory_class':'rights','statement':'Confirm rights to third-party content.','owner':'founder','status':'open','source':'x','affected_ids':[],'validation_expectation':'Written confirmation on file.'}]}
+ state['current']['decision']['context']['evidence']['intent_model']['founder_register']=register
+ p.set_viewport_size({'width':1249,'height':920});p.goto(base+'/tasks/concept/decisions/wait-review')
+ boxes=p.locator('.founder-register details');expect(boxes).to_have_count(3)
+ adv=boxes.nth(2);adv.evaluate('d=>d.open=true');body=adv.locator('.context-body').inner_text()
+ assert 'Confirm rights to third-party content.' not in body and 'How to verify: Written confirmation on file.' in body
+ boxes.nth(1).evaluate('d=>d.open=true');assert 'word39' in boxes.nth(1).locator('.context-body').inner_text()
+ expect(boxes.nth(0).locator('.state-badge')).to_have_text('Keep Flagged Open')
+ boxes.nth(0).evaluate('d=>d.open=true');p.locator('[data-founder-group]').first.locator('label.pill').nth(2).click();expect(boxes.nth(0).locator('.state-badge')).to_have_text('Explicitly Defer')
+ boxes.nth(0).evaluate('d=>d.open=false')
+ p.get_by_role('button',name='Continue',exact=True).click()
+ status=p.locator('#review-status');expect(status).to_contain_text('Finish 1 open input');expect(status).to_contain_text('What styling?');expect(status).to_contain_text('needs a reason')
+ assert boxes.nth(0).evaluate('d=>d.open&&d.classList.contains("needs-input")');assert not state['posts']
+ p.locator('[data-founder-reason]').first.fill('Ask the designer');p.get_by_role('button',name='Continue',exact=True).click()
+ expect(status).to_contain_text('Decision saved');assert state['posts'][0]['founder_inputs'][0]['status']=='deferred'
+
 def test_semantic_draft_comment_item_links_and_historical_controls(page):
  p,base,root=page;control=review();control['kind']='semantic_review';control['options']=[]
  control['decision']={'options':[],'context':{'decision_purpose':'semantic_review','evidence':{'semantic_review':{'revision':'a'*64,'findings':[{'finding_id':'f1','item_id':'FD-1','reason':'Needs owner decision','kind':'semantic','original':'Fast app'}]}}}}
