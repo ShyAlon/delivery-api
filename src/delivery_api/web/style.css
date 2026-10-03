@@ -227,3 +227,4 @@ section.qa-history{max-height:min(44vh,440px);overflow-y:auto;overscroll-behavio
 @media(max-width:850px){.semantic-page .semantic-head{top:80px}.semantic-footer button{flex:1 1 auto}}
 .semantic-page .semantic-head{display:block}.semantic-page .semantic-head h1{font-size:26px}.semantic-item h2 a{color:inherit;text-decoration:none;border-bottom:1px dotted var(--muted)}
 .semantic-page .semantic-head{position:sticky;top:84px;background:rgb(242,240,233);height:auto}@media(max-width:850px){.semantic-page .semantic-head{position:sticky;top:80px}}
+.semantic-item h2{margin:0 0 6px}

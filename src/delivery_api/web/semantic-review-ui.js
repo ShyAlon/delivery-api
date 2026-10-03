@@ -9,6 +9,9 @@ const SECTION={constraints:'Constraint',assumptions:'Assumption',functional:'Fun
 const TEXT_KEYS=['statement','title','name','description','text','summary','requirement','rationale','label'];
 const ID_KEYS=['requirement_id','need_id','constraint_id','id'];
 const words=(s,n)=>{const w=String(s).trim().split(/\s+/);return w.length>n?w.slice(0,n).join(' ')+'…':w.join(' ')};
+/* Short form for a title: the clause before the first colon ("Deployment is mandated: build with..."
+   -> "Deployment is mandated"). With no colon, the first six words; the full text is shown below the title. */
+const shortText=t=>{const s=String(t).trim(),i=s.indexOf(':');return i>0?s.slice(0,i).trim():words(s,6)};
 
 export function findingText(original){
  if(typeof original==='string')return original;
@@ -23,7 +26,7 @@ export function findingTitle(f){
  const kind=SECTION[head]||(head?humanLabel(head):'Item');
  const o=f.original,id=o&&typeof o==='object'?ID_KEYS.map(k=>o[k]).find(v=>typeof v==='string'&&v):'';
  const text=findingText(o);
- return `${kind}${id?' '+id:''}${text?': '+words(text,14):(index!==undefined?` (number ${index+1})`:'')}`;
+ return `${kind}${id?' '+id:''}${text?': '+shortText(text):(index!==undefined?` (number ${index+1})`:'')}`;
 }
 
 export const OPTIONS=[
