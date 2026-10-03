@@ -106,7 +106,7 @@ def route_task_snapshot(page,ui,task_id,mutate):
     page.route(f'**/api/tasks/{task_id}',lambda route:route.fulfill(json=_promote_control(snapshot)))
     return snapshot
 
-def mock_gate_review(page,ui,task_id):
+def mock_gate_review(page,ui,task_id,semantic=None):
     # Current contract snapshots artifact content together with the gate revision.
     # Reuse test-owned task/artifact mocks rather than fall through to real files.
     def review(route):
@@ -120,7 +120,7 @@ def mock_gate_review(page,ui,task_id):
             if a['phase_key']==gate['after_phase'] and not a.get('stale'):
                 view=page.evaluate("async url=>(await fetch(url)).json()",f"/api/tasks/{task_id}/artifacts/{a['phase_key']}/{a['name']}/view")
                 documents.append({'name':a['name'],'view':view})
-        route.fulfill(json={'review':{'revision':'gate:'+__import__('hashlib').sha256(json.dumps({'gate':gate,'artifacts':task.get('artifacts',[]),'documents':documents},sort_keys=True).encode()).hexdigest(),'task':task,'documents':documents},'actionable':gate['state']=='waiting','comments':[],'draft':None})
+        route.fulfill(json={'review':{**({'semantic_review':semantic} if semantic else {}),'revision':'gate:'+__import__('hashlib').sha256(json.dumps({'gate':gate,'artifacts':task.get('artifacts',[]),'documents':documents},sort_keys=True).encode()).hexdigest(),'task':task,'documents':documents},'actionable':gate['state']=='waiting','comments':[],'draft':None})
     page.route(f'**/api/tasks/{task_id}/gates/*/review**',review)
 
 def waiting_gate_snapshot(snapshot):
@@ -1807,3 +1807,20 @@ def test_phase_change_dialog_closes_when_the_founder_can_act_again_and_never_sho
     cur["s"] = snap("srs", "engine_question")
     page.wait_for_timeout(6500)
     assert page.locator(".phase-change-dialog").count() == 0
+
+
+def test_flagged_inputs_show_readable_item_and_no_circular_link(page,ui):
+    task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate.update({'state':'waiting','is_open':0})
+    task['artifacts']=[{'phase_key':'srs','name':'srs.json','title':'Requirements','stale':False,'present':True,'generation':1}]
+    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=task))
+    page.route('**/api/tasks/sim/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Requirements\n\nText.'}))
+    orig={'requirement_id':'R-11','title':'Ear training','statement':'The app shall play a clip.','priority':'must','acceptance':[{'criterion_id':'AC-54','statement':'A clip is played.'}]}
+    sem={'findings':[{'item_id':'R-11','kind':'semantic','reason':'Found: Ear-training, a name the interview never used.','original':orig}],'decisions':[],'items':[{'item_id':'R-11','original':orig}]}
+    mock_gate_review(page,ui,'sim',semantic=sem)
+    page.goto(ui+'/tasks/sim/gates/gate-srs')
+    panel=page.locator('#semantic-panel');panel.locator('article').wait_for()
+    assert panel.locator('article h3 a').count()==0
+    assert panel.locator('article pre').count()==0
+    assert '{' not in panel.locator('article details').inner_text()
+    assert 'The app shall play a clip.' in panel.locator('article details').inner_text()
+    assert 'A clip is played.' in panel.locator('article details').inner_text()
