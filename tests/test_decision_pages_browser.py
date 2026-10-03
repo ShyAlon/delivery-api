@@ -108,7 +108,7 @@ def test_semantic_findings_review_shows_choices_and_never_defaults(page):
  p.route('**/api/tasks/concept**',route)
  p.goto(base+'/tasks/concept/decisions/wait-concept');expect(p.locator('h1')).to_have_text('Review flagged inputs')
  assert p.locator('input[name="action-0"]:checked').count()==0;expect(p.locator('select')).to_have_count(0);expect(p.get_by_text('Repeats a need')).to_be_visible()
- p.screenshot(path=str(root/'semantic-review-desktop.png'),full_page=True)
+ p.screenshot(path=str(root/'semantic-review-desktop.png'),full_page=True);p.mouse.wheel(0,120);p.wait_for_timeout(300);p.screenshot(path=str(root/'semantic-review-sticky.png'));p.evaluate('window.scrollTo(0,0)')
  p.set_viewport_size({'width':390,'height':844});p.screenshot(path=str(root/'semantic-review-mobile.png'),full_page=True)
  p.locator('input[name="action-0"][value="accept"]').check();p.get_by_role('button',name='Apply decisions and continue').click();expect(p.locator('#semanticstatus')).to_contain_text('Decisions recorded')
  assert json.loads(posts[0]['answer'])['decisions'][0]['action']=='accept'
