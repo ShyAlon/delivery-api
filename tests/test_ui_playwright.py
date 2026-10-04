@@ -1032,6 +1032,18 @@ def test_greenfield_confirmation_is_single_flight(page,ui):
     page.wait_for_timeout(250)
     assert len(calls)==1
 
+def test_phase_rows_link_to_their_gate_page_once_the_gate_has_opened(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json()
+    for n,gate in enumerate(live['gates']):gate['state']='approved' if n==0 else 'idle'
+    first=live['gates'][0]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.goto(ui+'/tasks/live/view')
+    links=page.locator('.phase-list-primary .phase-gate-link')
+    links.first.wait_for()
+    assert links.count()==1
+    assert links.first.get_attribute('href')=='/tasks/live/gates/'+first['gate_key']
+    assert links.first.inner_text()=='Gate'
+
 def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips(page,ui):
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'A very long progress update that must remain on precisely one line while the full wording stays available on hover','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
