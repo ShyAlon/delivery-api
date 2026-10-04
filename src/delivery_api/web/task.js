@@ -72,8 +72,10 @@ async function detail(id){
   lastPhaseByTask.set(id,t.active_phase)}
  const outputSlot=document.querySelector('#phase-output-slot');
  if(t.state==='done'){
-  const panel=document.createElement('section');panel.className='panel';panel.id='final-package';panel.innerHTML='<h2>Final coding-agent package</h2><p>Phase outputs and validated handoff only. Diagnostics stay in avatar Debug.</p><button id="prepare-package" class="primary">Prepare final package</button><div id="package-status" role="status"></div>';
-  app.append(panel);panel.querySelector('#prepare-package').onclick=async()=>{const button=panel.querySelector('button'),status=panel.querySelector('#package-status');button.disabled=true;status.textContent='Checking outputs, decisions and traceability…';try{const result=await api(`/api/tasks/${encodeURIComponent(id)}/packages`,{method:'POST',body:'{}',timeout:null});status.innerHTML=`<p>Generation ${result.generation} · ready</p><a class="primary button-link" download href="${esc(result.url)}">Download coding-agent package</a><details><summary>Package contents</summary><ul>${result.contents.map(name=>`<li>${esc(name)}</li>`).join('')}</ul></details>`}catch(error){status.textContent=error.message;button.disabled=false}};
+  let shown=false;try{shown=Boolean(sessionStorage.getItem(`complete-shown:${id}`));sessionStorage.setItem(`complete-shown:${id}`,'1')}catch{}
+  if(!shown){location.replace(`/tasks/${encodeURIComponent(id)}/complete`);return}
+  const panel=document.createElement('section');panel.className='panel';panel.id='final-package';panel.innerHTML=`<h2>Project complete</h2><a class="primary button-link" href="/tasks/${esc(encodeURIComponent(id))}/complete">Open summary and downloads</a>`;
+  app.append(panel)
  }
  if(outputSlot)loadPhaseOutput(id,t.active_phase,t.generation,outputSlot).catch(error=>{if(outputSlot.isConnected)outputSlot.innerHTML=`<div class="notice">Could not load phase results: ${esc(error.message)}</div>`});
  if(document.querySelector('#retryneeds'))document.querySelector('.task-error-state')?.insertAdjacentHTML('afterend','<div class="notice">The interview is complete. Stakeholder needs failed separately; review its error in Audit before retrying that phase.</div>');
