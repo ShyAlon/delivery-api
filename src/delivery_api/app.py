@@ -1762,6 +1762,9 @@ def task_audit(task_id: str, request: Request):
             "phases_priced":len(priced),"legacy_priced_phases":sum(1 for event in priced if not _is_credit_event(event)),"interview_calls":sum(x["calls"] for x in segments),
             "interview_cost_usd":round(sum(x["cost_usd"] for x in segments),6),
             "interview_unpriced_calls":sum(x["unpriced_calls"] for x in segments)}
+    counted=[event for event in priced if _is_credit_event(event) and not (interview_usage and event.get("phase_key") in ("intent","conops"))]
+    totals["cost_usd"]=round(sum(float((event.get("payload") or {}).get("cost_usd") or 0) for event in counted)+totals["interview_cost_usd"],6)
+    totals["unpriced_calls"]=sum(int((event.get("payload") or {}).get("unpriced_calls") or 0) for event in counted)+totals["interview_unpriced_calls"]
     return {"actor_mode": auth.actor(request).label, "entries": store.audit_entries(task_id),"totals":totals}
 
 @app.post("/api/simulations", status_code=201)

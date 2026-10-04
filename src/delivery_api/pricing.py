@@ -1,4 +1,4 @@
-"""Transparent credit pricing from measured engine usage and process time. A credit is the customer-facing price unit (about $1), covering model cost and overhead."""
+"""Credit pricing from measured engine usage and process time, with model cost in USD from the per-call rates the engine records."""
 from __future__ import annotations
 import json,os
 from pathlib import Path
@@ -28,12 +28,15 @@ def price_execution(usage_path:Path,llm_path:Path,wall_ms:float,usage_start:int=
     for row in usage:
         phase=_STAGE_PHASE.get(str(row.get("stage")))
         if not phase:continue
-        item=buckets.setdefault(phase,{"input_tokens":0,"output_tokens":0,"calls":0})
+        item=buckets.setdefault(phase,{"input_tokens":0,"output_tokens":0,"calls":0,"cost_usd":0.0,"unpriced_calls":0})
         item["input_tokens"]+=int(row.get("prompt_tokens") or 0);item["output_tokens"]+=int(row.get("completion_tokens") or 0);item["calls"]+=1
+        pin=row.get("price_per_mtok_prompt_usd");pout=row.get("price_per_mtok_completion_usd")
+        if pin is None or pout is None:item["unpriced_calls"]+=1
+        else:item["cost_usd"]+=(int(row.get("prompt_tokens") or 0)*float(pin)+int(row.get("completion_tokens") or 0)*float(pout))/1_000_000
     total_calls=sum(x["calls"] for x in buckets.values()) or 1
     result=[]
     for phase,item in buckets.items():
         share=deterministic_ms*item["calls"]/total_calls;tokens=item["input_tokens"]+item["output_tokens"]
         token_price=tokens*PRICE_PER_TOKEN;infra_price=(share/10)*PRICE_PER_10MS
-        result.append({"phase":phase,**item,"tokens":tokens,"deterministic_ms":round(share,3),"token_price":round(token_price,6),"infra_price":round(infra_price,6),"price":round(token_price+infra_price,6),"rates":{"price_per_token":PRICE_PER_TOKEN,"price_per_10ms":PRICE_PER_10MS,"scale":"credits"}})
+        result.append({"phase":phase,**item,"tokens":tokens,"deterministic_ms":round(share,3),"token_price":round(token_price,6),"infra_price":round(infra_price,6),"price":round(token_price+infra_price,6),"cost_usd":round(item["cost_usd"],8),"unpriced_calls":item["unpriced_calls"],"rates":{"price_per_token":PRICE_PER_TOKEN,"price_per_10ms":PRICE_PER_10MS,"scale":"credits"}})
     return result
