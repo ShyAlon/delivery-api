@@ -1927,3 +1927,10 @@ def test_failed_architecture_has_a_retry_that_resumes_the_phase(page,ui):
     page.wait_for_function('()=>true')
     assert sent[0]=={'phase':'architecture','confirm':False}
     assert sent[1]=={'phase':'architecture','confirm':True,'model_route':'deepseek','model':'deepseek-flash'}
+
+
+def test_debug_dialog_explains_credits(page, ui):
+    page.goto(ui+"/");page.locator("#accountbutton").click();page.locator("#opendebug").click();page.locator(".debug-dialog").wait_for()
+    page.get_by_text("About credits",exact=True).click()
+    text=page.locator("#creditswrap").inner_text()
+    assert "not an invoice" in text and "full run is about 5 credits" in text and "local Ollama" in text

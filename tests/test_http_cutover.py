@@ -647,7 +647,7 @@ def test_audit_rolls_up_http_interview_usage_without_double_counting(tmp_path,mo
   {'stage':'distillation','provider':'deepseek','model':'deepseek-chat','prompt_tokens':60,'completion_tokens':10,'price_per_mtok_prompt_usd':1,'price_per_mtok_completion_usd':2},
   {'stage':'conops','provider':'ollama','model':'phi4','prompt_tokens':30,'completion_tokens':10,'price_per_mtok_prompt_usd':None,'price_per_mtok_completion_usd':None}])+'\n')
  store.add_event(tid,'price','Old interview subprocess price',phase_key='intent',payload={'tokens':999,'price':999})
- store.add_event(tid,'price','Downstream price',phase_key='needs',payload={'tokens':50,'price':100})
+ store.add_event(tid,'price','Downstream price',phase_key='needs',payload={'tokens':50,'price':100,'rates':{'scale':'credits'}})
  from fastapi import Request
  request=Request({'type':'http','headers':[]})
  result=module.task_audit(tid,request)

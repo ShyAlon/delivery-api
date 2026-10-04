@@ -119,6 +119,10 @@ curl -X PUT https://vmodel.example.com/api/admin/users/google:PROVIDER_ID/quota 
 
 Prefer the admin API from the authenticated web origin rather than copying cookies into a shell. `GET /api/admin/users/{user_id}/quota` reports the configured limit and consumed total. Only identities whose normalized email is in `DELIVERY_ADMIN_EMAILS` can use these endpoints.
 
+## Credits
+
+Price events and the audit report usage in **credits**: `tokens * PRICE_PER_TOKEN + deterministic ms / 10 * PRICE_PER_10MS`. A credit is a usage unit, not an invoice. Defaults (`PRICE_PER_TOKEN=0.0000125`, `PRICE_PER_10MS=0.0000005`) put a full run (~400k tokens) near 5 credits; one credit is ~80,000 tokens. Real model cost per credit depends on the model (about $0.04 on deepseek-flash, $0 on local Ollama); the avatar Debug dialog explains this. Set both variables in `.env`; an old `PRICE_PER_TOKEN=2` overrides the defaults. Events written before the rescale have no `rates.scale == "credits"` marker; the UI shows them as "legacy scale" and the audit totals exclude their price.
+
 ## UI conventions
 
 - Every view-level page header remains visible while its page scrolls. Use the shared `page-head` class, which sticks below the global navigation and preserves the current translucent surface treatment.

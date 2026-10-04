@@ -190,7 +190,7 @@ class ProcessRunner:
                 final_wall_ms=max(0,(time.perf_counter()-self.pricing_wall_cursor.get(task_id,run_started))*1000) if task_id in self.pricing_totals else max(0,(time.perf_counter()-run_started-self.pricing_wait_seconds.get(task_id,0))*1000)
                 for quote in price_execution(usage_path,llm_path,final_wall_ms,final_usage_start,final_llm_start):
                     priced_phase=quote.pop("phase")
-                    self.store.add_event(task_id,"price",f"Price {quote['price']:,.2f} units",phase_key=priced_phase,payload=quote)
+                    self.store.add_event(task_id,"price",f"Price {quote['price']:,.2f} credits",phase_key=priced_phase,payload=quote)
                     self.store.audit("pricing","phase.priced",task_id,{"phase":priced_phase,**quote})
             if task_id in self.interrupted_for_shutdown:
                 # Keep the durable task phase running: startup will recover it
@@ -341,9 +341,9 @@ class ProcessRunner:
         quotes=price_execution(usage_path,llm_path,max(0,(now-self.pricing_wall_cursor.get(task_id,now))*1000),self.pricing_usage_cursor.get(task_id,0),self.pricing_llm_cursor.get(task_id,0))
         for quote in quotes:
             phase=quote.pop("phase");total=prior.setdefault(phase,{"input_tokens":0,"output_tokens":0,"tokens":0,"deterministic_ms":0.0,"token_price":0.0,"infra_price":0.0,"price":0.0})
-            for key in total:total[key]=round(total[key]+quote[key],3)
+            for key in total:total[key]=round(total[key]+quote[key],6)
             payload={**total,"rates":quote["rates"],"incremental":True}
-            self.store.add_event(task_id,"price",f"Price {payload['price']:,.2f} units",phase_key=phase,payload=payload)
+            self.store.add_event(task_id,"price",f"Price {payload['price']:,.2f} credits",phase_key=phase,payload=payload)
         self.pricing_usage_cursor[task_id]=line_count(usage_path);self.pricing_llm_cursor[task_id]=line_count(llm_path);self.pricing_wall_cursor[task_id]=now
 
     async def send_input(self, task_id: str, text: str, decision_id: str | None = None) -> None:
