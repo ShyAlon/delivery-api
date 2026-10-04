@@ -1027,6 +1027,15 @@ def test_greenfield_confirmation_is_single_flight(page,ui):
     page.wait_for_timeout(250)
     assert len(calls)==1
 
+def test_progress_slot_keys_render_as_title_case(page,ui):
+    page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
+    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'stack:pwa_offline_runtime · 12 tok','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');feed=page.locator('#stageprogress .progress-item');feed.wait_for()
+    assert feed.locator('span').all_inner_texts()==['Stack: PWA Offline Runtime · 12 tok']
+    assert feed.locator('span').get_attribute('title')=='Stack: PWA Offline Runtime · 12 tok'
+    got=page.evaluate("""async()=>{const m=await import('/assets/format.js');return ['stack:ui_framework','stack:build_tooling','stack:client_persistence','component:audio_engine','plan: stack slots','R-12 statement'].map(m.humanizeSlotLabels)}""")
+    assert got==['Stack: UI Framework','Stack: Build Tooling','Stack: Client Persistence','Component: Audio Engine','plan: stack slots','R-12 statement']
+
 def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips(page,ui):
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'A very long progress update that must remain on precisely one line while the full wording stays available on hover','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}

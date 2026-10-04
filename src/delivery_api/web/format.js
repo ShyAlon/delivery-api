@@ -6,3 +6,8 @@ export function markdownHtml(text){let lines=String(text||'').split('\n'),html=[
 
 export const QA_MAX_WORDS=32;
 export function truncateWords(text,max=QA_MAX_WORDS){const t=String(text??'').trim(),w=t.split(/\s+/);return w.length>max?w.slice(0,max).join(' ')+'…':t}
+
+const SLOT_ACRONYMS=new Set(['ui','ux','pwa','api','db','sql','css','html','json','url','id','sdk','ci','cd','os','pdf','http','https','tts','midi','ml','llm','ai','cli','gui','io','jwt','oauth','sso','cdn','dns','tls','ssl','spa','ssr','orm']);
+export function humanSlotKey(key){return String(key).split(/[_-]+/).filter(Boolean).map(w=>SLOT_ACRONYMS.has(w.toLowerCase())?w.toUpperCase():w.charAt(0).toUpperCase()+w.slice(1)).join(' ')}
+// Engine progress lines carry raw slot keys ("stack:ui_framework", "component:audio_engine"); show them as titles.
+export function humanizeSlotLabels(text){return String(text??'').replace(/\b(stack|component|non-functional):([a-z][a-z0-9]*(?:[_-][a-z0-9]+)*)/g,(_,kind,key)=>`${humanLabel(kind)}: ${humanSlotKey(key)}`)}
