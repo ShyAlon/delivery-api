@@ -1,4 +1,5 @@
 import {api,esc} from './client-core.js';
+import {humanizeSnakeCase} from './format.js';
 
 const LABELS={intent:'Start',conops:'Concept of operations',needs:'Stakeholder needs',srs:'Requirements',architecture:'Architecture',specs:'Item specifications',tests:'Verification'};
 function itemTitle(item,index){return item.requirement_id||item.need_id||item.decision_id||item.spec_id||item.test_id||item.id||item.name||item.title||item.statement||`Result ${index+1}`}
@@ -13,7 +14,7 @@ export function phaseOutputHtml(output){
     output.status==='waiting'?`Waiting for the first persisted ${phase} output.`:
     output.status==='unavailable'?`A ${phase} output exists but could not be read.`:
     `${output.items.length} persisted result${output.items.length===1?'':'s'} from ${output.source||phase}.`;
-  return `<section class="phase-output" aria-live="polite" data-display-phase="${esc(output.display_phase||output.phase_key||'')}" data-status="${esc(output.status)}"><h3>${esc(title)}</h3><p class="phase-output-note">${esc(note)}</p>${(output.items||[]).map((item,index)=>`<article class="phase-output-item"><b>${esc(itemTitle(item,index))}</b><p>${esc(String(itemDetail(item)).slice(0,420))}</p></article>`).join('')}</section>`;
+  return `<section class="phase-output" aria-live="polite" data-display-phase="${esc(output.display_phase||output.phase_key||'')}" data-status="${esc(output.status)}"><h3>${esc(title)}</h3><p class="phase-output-note">${esc(note)}</p>${(output.items||[]).map((item,index)=>`<article class="phase-output-item"><b>${esc(humanizeSnakeCase(itemTitle(item,index)))}</b><p>${esc(String(itemDetail(item)).slice(0,420))}</p></article>`).join('')}</section>`;
 }
 export async function loadPhaseOutput(taskId,expectedPhase,generation,container){
   const result=await api(`/api/tasks/${encodeURIComponent(taskId)}/phase-output`);

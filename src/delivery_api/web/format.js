@@ -9,5 +9,5 @@ export function truncateWords(text,max=QA_MAX_WORDS){const t=String(text??'').tr
 
 const SLOT_ACRONYMS=new Set(['ui','ux','pwa','api','db','sql','css','html','json','url','id','sdk','ci','cd','os','pdf','http','https','tts','midi','ml','llm','ai','cli','gui','io','jwt','oauth','sso','cdn','dns','tls','ssl','spa','ssr','orm']);
 export function humanSlotKey(key){return String(key).split(/[_-]+/).filter(Boolean).map(w=>SLOT_ACRONYMS.has(w.toLowerCase())?w.toUpperCase():w.charAt(0).toUpperCase()+w.slice(1)).join(' ')}
-// Engine progress lines carry raw slot keys ("stack:ui_framework", "component:audio_engine"); show them as titles.
-export function humanizeSlotLabels(text){return String(text??'').replace(/\b(stack|component|non-functional):([a-z][a-z0-9]*(?:[_-][a-z0-9]+)*)/g,(_,kind,key)=>`${humanLabel(kind)}: ${humanSlotKey(key)}`)}
+// Display-level title casing: any snake_case token in a rendered title or progress line becomes Title Case ("stack:ui_framework" -> "stack:UI Framework"). Text without such tokens is untouched.
+export function humanizeSnakeCase(text){return String(text??'').replace(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g,humanSlotKey)}
