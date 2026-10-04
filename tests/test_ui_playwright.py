@@ -1100,7 +1100,7 @@ def test_artifact_viewer_shows_json_artifacts_readably(page,ui):
     card.click();dlg=page.locator('.artifact-viewer');dlg.wait_for();assert dlg.locator('pre.artifact-content').count()==0;assert 'The app shall play a clip.' in dlg.inner_text() and '{' not in dlg.locator('.gate-structured').inner_text()
 
 def test_audit_uses_shared_dialog_sortable_filterable_sticky_table(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json();page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));entries=[{'ts':1720000200,'actor':'Shy','action':'gate.approve','detail':{'phase':'srs'}},{'ts':1720000100,'actor':'policy','action':'gate.bypassed','detail':{'phase':'needs'}}];page.route('**/api/tasks/live/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':entries,'totals':{'tokens':1234,'price':2501,'phases_priced':2}}));page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='Audit').click();dialog=page.get_by_role('dialog',name='Task audit');dialog.wait_for();assert dialog.get_by_text('1,234').is_visible() and dialog.get_by_text('2,501 units').is_visible();headers=dialog.locator('thead');assert headers.evaluate('(e)=>getComputedStyle(e).position')=='sticky';rows=dialog.locator('tbody tr');assert rows.count()==2;dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='Shy';dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='policy';dialog.get_by_label('Filter audit entries').fill('approve');assert rows.count()==1;assert rows.first.get_by_text('gate.approve').is_visible();close=dialog.get_by_role('button',name='Close task audit');vb=dialog.bounding_box();cb=close.bounding_box();assert cb['x']>=vb['x'] and cb['x']+cb['width']<=vb['x']+vb['width'];page.screenshot(path='/downloads/shared-audit-dialog.png',full_page=True);page.keyboard.press('Escape');assert dialog.count()==0
+    live=page.request.get(ui+'/api/tasks/live').json();page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));entries=[{'ts':1720000200,'actor':'Shy','action':'gate.approve','detail':{'phase':'srs'}},{'ts':1720000100,'actor':'policy','action':'gate.bypassed','detail':{'phase':'needs'}}];page.route('**/api/tasks/live/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':entries,'totals':{'tokens':1234,'price':2.5,'price_usd':2.5,'phases_priced':2}}));page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='Audit').click();dialog=page.get_by_role('dialog',name='Task audit');dialog.wait_for();assert dialog.get_by_text('1,234').count()==0 and dialog.get_by_text('2.50 credits · $2.50').is_visible();headers=dialog.locator('thead');assert headers.evaluate('(e)=>getComputedStyle(e).position')=='sticky';rows=dialog.locator('tbody tr');assert rows.count()==2;dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='Shy';dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='policy';dialog.get_by_label('Filter audit entries').fill('approve');assert rows.count()==1;assert rows.first.get_by_text('gate.approve').is_visible();close=dialog.get_by_role('button',name='Close task audit');vb=dialog.bounding_box();cb=close.bounding_box();assert cb['x']>=vb['x'] and cb['x']+cb['width']<=vb['x']+vb['width'];page.screenshot(path='/downloads/shared-audit-dialog.png',full_page=True);page.keyboard.press('Escape');assert dialog.count()==0
 
 def test_model_route_default_and_phase_override_controls(page,ui):
     page.goto(ui+'/tasks/empty/view')
@@ -1445,7 +1445,7 @@ def test_audit_dialog_scrolls_on_short_viewport(page,ui):
     table=dialog.locator('.audit-table-wrap')
     table.evaluate('(e)=>e.scrollTop=e.scrollHeight')
     assert table.evaluate('(e)=>e.scrollTop>0')
-    assert dialog.get_by_text('2,300').count()==1
+    assert dialog.get_by_text('0.00 credits · $0.00').count()==1
     assert dialog.get_by_text('$0.0037 USD').count()==1
     page.screenshot(path='/downloads/audit-scroll-verified.png',full_page=True)
 
@@ -1927,3 +1927,4 @@ def test_failed_architecture_has_a_retry_that_resumes_the_phase(page,ui):
     page.wait_for_function('()=>true')
     assert sent[0]=={'phase':'architecture','confirm':False}
     assert sent[1]=={'phase':'architecture','confirm':True,'model_route':'deepseek','model':'deepseek-flash'}
+

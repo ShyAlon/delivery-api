@@ -1303,7 +1303,28 @@ def test_price_execution_subtracts_llm_time_and_uses_configured_rates(monkeypatc
     row=pricing.price_execution(usage,llm,1000)[0]
     assert row['tokens']==150 and row['deterministic_ms']==200
     assert row['token_price']==300 and row['infra_price']==20 and row['price']==320
-    assert row['rates']=={'price_per_token':2.0,'price_per_10ms':1.0}
+    assert row['rates']=={'price_per_token':2.0,'price_per_10ms':1.0,'usd_per_credit':1.0,'scale':'credits'} and row['price_usd']==320
+    assert row['cost_usd']==0 and row['unpriced_calls']==1  # row had no recorded rates
+
+def test_price_execution_computes_usd_from_recorded_rates(tmp_path):
+    import json
+    from delivery_api import pricing
+    usage=tmp_path/'u.jsonl';llm=tmp_path/'l.jsonl';llm.write_text('')
+    rows=[{'stage':'needs','prompt_tokens':1000000,'completion_tokens':500000,'price_per_mtok_prompt_usd':0.3,'price_per_mtok_completion_usd':1.2},
+          {'stage':'needs','prompt_tokens':900,'completion_tokens':100,'price_per_mtok_prompt_usd':0.0,'price_per_mtok_completion_usd':0.0}]
+    usage.write_text('\n'.join(json.dumps(r) for r in rows)+'\n')
+    row=pricing.price_execution(usage,llm,0)[0]
+    assert row['cost_usd']==0.9 and row['unpriced_calls']==0
+
+def test_default_rates_put_a_full_run_near_five_credits(monkeypatch,tmp_path):
+    import json,importlib
+    monkeypatch.delenv('PRICE_PER_TOKEN',raising=False);monkeypatch.delenv('PRICE_PER_10MS',raising=False)
+    from delivery_api import pricing
+    importlib.reload(pricing)
+    usage=tmp_path/'usage.jsonl';llm=tmp_path/'llm.jsonl'
+    usage.write_text(json.dumps({'stage':'needs','prompt_tokens':320000,'completion_tokens':80000})+'\n');llm.write_text('')
+    row=pricing.price_execution(usage,llm,0)[0]
+    assert row['token_price']==5.0 and row['price']==5.0 and row['price_usd']==5.0
 
 def test_runner_emits_durable_phase_price(monkeypatch,tmp_path):
     import asyncio,json,sys

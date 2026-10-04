@@ -1729,6 +1729,10 @@ def rerun(task_id: str, req: RerunRequest, request: Request, a: auth.Actor = Dep
     store.add_event(task_id, "rerun", f"Prepared generation {generation} from {req.from_phase}", phase_key=req.from_phase)
     return {"status": "prepared", "generation": generation, "policy": "archive"}
 
+def _is_credit_event(event:dict)->bool:
+    # Events written before the credit rescale carry no scale marker and sit on the old unit scale.
+    return ((event.get("payload") or {}).get("rates") or {}).get("scale")=="credits"
+
 @app.get("/api/tasks/{task_id}/audit")
 def task_audit(task_id: str, request: Request):
     if not store.task(task_id): raise HTTPException(404, "task not found")
@@ -1754,10 +1758,14 @@ def task_audit(task_id: str, request: Request):
                          for row in interview_usage if isinstance(row,dict))
     totals={"tokens":priced_tokens+interview_tokens,
             "price":round(sum(float((event.get("payload") or {}).get("price") or 0) for event in priced
-                              if not (interview_usage and event.get("phase_key") in ("intent","conops"))),3),
-            "phases_priced":len(priced),"interview_calls":sum(x["calls"] for x in segments),
+                              if _is_credit_event(event) and not (interview_usage and event.get("phase_key") in ("intent","conops"))),6),
+            "phases_priced":len(priced),"legacy_priced_phases":sum(1 for event in priced if not _is_credit_event(event)),"interview_calls":sum(x["calls"] for x in segments),
             "interview_cost_usd":round(sum(x["cost_usd"] for x in segments),6),
             "interview_unpriced_calls":sum(x["unpriced_calls"] for x in segments)}
+    counted=[event for event in priced if _is_credit_event(event) and not (interview_usage and event.get("phase_key") in ("intent","conops"))]
+    totals["price_usd"]=round(sum(float((event.get("payload") or {}).get("price_usd") or 0) for event in counted),6)
+    totals["cost_usd"]=round(sum(float((event.get("payload") or {}).get("cost_usd") or 0) for event in counted)+totals["interview_cost_usd"],6)
+    totals["unpriced_calls"]=sum(int((event.get("payload") or {}).get("unpriced_calls") or 0) for event in counted)+totals["interview_unpriced_calls"]
     return {"actor_mode": auth.actor(request).label, "entries": store.audit_entries(task_id),"totals":totals}
 
 @app.post("/api/simulations", status_code=201)
