@@ -80,6 +80,8 @@ def page(ui):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, executable_path=os.environ["PLAYWRIGHT_CHROMIUM_EXECUTABLE"] if os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE") else None)
         page = browser.new_page(viewport={"width": 1365, "height": 900})
+        # Done tasks auto-open the completion screen once per session; other tests inspect the task page.
+        page.add_init_script("if(!localStorage.getItem('allow-complete-redirect')){for(const id of ['done','live','sim'])sessionStorage.setItem('complete-shown:'+id,'1')}")
         yield page
         browser.close()
 
@@ -1643,14 +1645,45 @@ def test_gate_model_picker_shows_exact_sticky_default(page,ui):
     assert picker.locator('option').first.inner_text()=='Use current task default'
     page.screenshot(path='/downloads/sticky-model-gate.png',full_page=True)
 
-def test_final_package_surface_is_separate_from_debug_and_has_recoverable_link(page,ui):
- task=page.request.get(ui+'/api/tasks/done').json();page.route('**/api/tasks/done',lambda route:route.fulfill(json=_promote_control(task)))
- page.route('**/api/tasks/done/packages',lambda route:route.fulfill(json={'status':'ready','generation':1,'package_id':'a'*64,'url':'/api/tasks/done/packages/'+'a'*64+'?generation=1','contents':['README.md','interview/intent_model.json','spec/AGENTS.md']}))
- page.goto(ui+'/tasks/done/view');page.get_by_role('button',name='Prepare final package').click()
- link=page.get_by_role('link',name='Download coding-agent package');expect(link).to_be_visible();assert '?generation=1' in link.get_attribute('href')
- page.screenshot(path='/downloads/d8-final-package-desktop.png',full_page=True)
- page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/downloads/d8-final-package-mobile.png',full_page=True)
- assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
+def _done_task(page,ui):
+    task=page.request.get(ui+'/api/tasks/done').json();task=_promote_control(task)
+    base=1791127000.0
+    for i,p in enumerate(task['phases']):p['started_at']=base+i*60;p['completed_at']=base+i*60+50
+    task['artifacts']=[{'phase_key':'srs','name':'srs.json','present':True,'stale':0},{'phase_key':'specs','name':'items.json','present':True,'stale':0}]
+    task['events']=[{'kind':'price','phase_key':'needs','payload':{'price':0.625,'price_usd':0.63,'tokens':50000,'rates':{'scale':'credits'}}},{'kind':'price','phase_key':'srs','payload':{'price':900000,'tokens':450000,'rates':{'price_per_token':2.0}}}]
+    page.route('**/api/tasks/done',lambda route:route.fulfill(json=task))
+    page.route('**/api/tasks/done/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':[],'totals':{'tokens':50000,'price':0.625,'price_usd':0.63,'legacy_priced_phases':1}}))
+    page.route('**/api/tasks/done/artifacts/srs/srs.json',lambda route:route.fulfill(json={'functional':[{'requirement_id':'R1'},{'requirement_id':'R2'}],'non_functional':[{'requirement_id':'N1'}]}))
+    page.route('**/api/tasks/done/artifacts/specs/items.json',lambda route:route.fulfill(json=[{'spec_id':'S1'}]))
+    return task
+
+
+def test_done_task_redirects_once_to_completion_screen(page,ui):
+    _done_task(page,ui)
+    page.goto(ui+'/about');page.evaluate("localStorage.setItem('allow-complete-redirect','1');sessionStorage.clear()")
+    page.goto(ui+'/tasks/done/view');page.wait_for_url('**/tasks/done/complete')
+    page.get_by_role('link',name='Back to task').click();page.wait_for_url('**/tasks/done/view')
+    page.get_by_role('heading',name='Project complete').wait_for()
+    assert page.url.endswith('/tasks/done/view')
+
+
+def test_completion_screen_summary_download_and_package(page,ui):
+    _done_task(page,ui)
+    page.route('**/api/tasks/done/packages',lambda route:route.fulfill(json={'status':'ready','generation':1,'package_id':'a'*64,'url':'/api/tasks/done/packages/'+'a'*64+'?generation=1','contents':['README.md','spec/AGENTS.md']}))
+    page.goto(ui+'/tasks/done/complete')
+    page.get_by_role('heading',name='Congratulations',exact=False).wait_for()
+    assert page.locator('.confetti i').count()==60
+    body=page.locator('.complete-page').inner_text()
+    assert '0.63 credits · $0.63' in body and 'legacy scale' in body and 'tokens' not in body.lower()
+    counts=page.locator('.complete-counts')
+    assert counts.locator('div').nth(0).inner_text().replace('\n',' ').lower()=='requirements 3' and counts.locator('div').nth(1).inner_text().replace('\n',' ').lower()=='specs 1' and counts.locator('div').nth(2).inner_text().replace('\n',' ').lower()=='tests -'
+    assert counts.get_by_role('link',name='3').get_attribute('href')=='/tasks/done/gates/gate-srs'
+    assert page.get_by_role('link',name='Download artifacts').get_attribute('href')=='/api/tasks/done/artifacts.zip'
+    page.get_by_role('button',name='Prepare final package').click()
+    link=page.get_by_role('link',name='Download coding-agent package');expect(link).to_be_visible();assert '?generation=1' in link.get_attribute('href')
+    page.screenshot(path='/downloads/completion-desktop.png',full_page=True)
+    page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/downloads/completion-mobile.png',full_page=True)
+    assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
 
 
 def _answer_page(page, ui):

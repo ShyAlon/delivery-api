@@ -511,6 +511,9 @@ def favicon(): return FileResponse(WEB_DIR / "favicon.ico", media_type="image/x-
 @app.get("/tasks/{task_id}/gates/{gate_key}", include_in_schema=False)
 def gate_page(task_id: str, gate_key: str): return FileResponse(WEB_DIR / "index.html")
 
+@app.get("/tasks/{task_id}/complete", include_in_schema=False)
+def complete_page(task_id: str): return FileResponse(WEB_DIR / "index.html")
+
 @app.get("/tasks/{task_id}/decisions/{wait_id}", include_in_schema=False)
 def decision_page(task_id:str,wait_id:str):return FileResponse(WEB_DIR / "index.html")
 
