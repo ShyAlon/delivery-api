@@ -1055,6 +1055,22 @@ def test_phase_rows_link_to_their_gate_page_once_the_gate_has_opened(page,ui):
     assert links.first.get_attribute('href')=='/tasks/live/gates/'+first['gate_key']
     assert links.first.inner_text()=='Gate'
 
+def test_spec_items_render_as_closed_collapsible_panels_with_formatted_markdown(page,ui):
+    page.goto(ui+'/tasks/empty/view')
+    body='# SPEC-1 - Course Content Model\n\nKind: data_model. Covers R-1.\n\n## 1. Scope and boundaries\nIn scope:\n- The authored content document shape\n- Identifiers and ordering\n\n## 2. Interface\n1. load()\n2. validate()\n\n| Name | Type |\n|---|---|\n| id | string |\n\nUse `loadCourse` here.'
+    html=page.evaluate("""async(body)=>{const m=await import('/assets/gate-presenters.js');const host=document.createElement('div');host.id='spec-host';host.className='gate-structured';host.innerHTML=m.gateStructured({items:[{spec_id:'SPEC-1',kind:'data_model',body_markdown:body},{spec_id:'SPEC-2',title:'Second Spec',body_markdown:'No heading here.'}]});document.body.prepend(host);return host.innerHTML}""",body)
+    panels=page.locator('#spec-host details.spec-item')
+    assert panels.count()==2
+    assert panels.nth(0).locator('summary').inner_text()=='SPEC-1 - Course Content Model'
+    assert panels.nth(1).locator('summary').inner_text()=='Second Spec'
+    assert panels.nth(0).get_attribute('open') is None  # closed by default
+    panels.nth(0).evaluate('d=>{d.open=true}')  # a leftover page modal can intercept real clicks here
+    first=panels.nth(0)
+    assert first.locator('.spec-body h2').count()==2
+    assert first.locator('.spec-body ul li').count()==2 and first.locator('.spec-body ol li').count()==2
+    assert first.locator('.spec-body table td').count()==2 and first.locator('.spec-body code').inner_text()=='loadCourse'
+    assert '# SPEC-1' not in first.inner_text() and '## 1.' not in first.inner_text()
+
 def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips(page,ui):
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'A very long progress update that must remain on precisely one line while the full wording stays available on hover','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
