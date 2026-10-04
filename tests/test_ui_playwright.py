@@ -807,14 +807,17 @@ def test_gate_page_shows_requirements_evidence_and_full_content(page,ui):
     task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate.update({'state':'waiting','is_open':0})
     task['artifacts']=[{'phase_key':'srs','name':'srs.json','title':'Requirements','stale':False,'present':True,'generation':1}]
     page.route('**/api/tasks/sim',lambda route:route.fulfill(json=task))
-    page.route('**/api/tasks/sim/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Requirements\n\n## Visible status\n\nThe system shall show status.'}))
+    page.route('**/api/tasks/sim/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Software Requirements Specification - 2b045c5f-9df1-4bc0-afb9-32ac915185b4\n\n## Visible status\n\nThe system shall show status.'}))
     mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-srs')
     evidence=page.locator('.gate-evidence');evidence.locator('.artifact-readable').wait_for()
     assert evidence.locator('.gate-artifact-summary').count()==0  # no raw duplicate above the formatted document
     assert evidence.locator('.artifact-readable h2').inner_text()=='Visible status'
-    assert evidence.locator('summary.chevron-only').count()==1  # box title repeats the heading, so only a chevron shows
-    assert evidence.locator('summary.chevron-only').inner_text().strip()==''
+    head=evidence.locator('.gate-artifact summary')  # the document title sits in the chevron row; no empty row, no repeated H1
+    assert head.inner_text().strip()=='Software Requirements Specification'
+    assert head.get_attribute('title')=='2b045c5f-9df1-4bc0-afb9-32ac915185b4'  # the UUID is only a tooltip
+    assert '2b045c5f' not in evidence.inner_text()
+    assert evidence.locator('.artifact-readable h1').count()==0
     assert page.locator('#gateform').get_by_role('button',name='Choose & continue').is_enabled()
     page.screenshot(path='/downloads/full-gate-requirements-desktop.png',full_page=True)
     page.set_viewport_size({'width':390,'height':844})
