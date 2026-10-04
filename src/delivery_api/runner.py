@@ -340,7 +340,7 @@ class ProcessRunner:
         usage_path,llm_path=paths;now=time.perf_counter();prior=self.pricing_totals.get(task_id,{})
         quotes=price_execution(usage_path,llm_path,max(0,(now-self.pricing_wall_cursor.get(task_id,now))*1000),self.pricing_usage_cursor.get(task_id,0),self.pricing_llm_cursor.get(task_id,0))
         for quote in quotes:
-            phase=quote.pop("phase");total=prior.setdefault(phase,{"input_tokens":0,"output_tokens":0,"tokens":0,"deterministic_ms":0.0,"token_price":0.0,"infra_price":0.0,"price":0.0,"cost_usd":0.0,"unpriced_calls":0})
+            phase=quote.pop("phase");total=prior.setdefault(phase,{"input_tokens":0,"output_tokens":0,"tokens":0,"deterministic_ms":0.0,"token_price":0.0,"infra_price":0.0,"price":0.0,"price_usd":0.0,"cost_usd":0.0,"unpriced_calls":0})
             for key in total:total[key]=round(total[key]+quote[key],8)
             payload={**total,"rates":quote["rates"],"incremental":True}
             self.store.add_event(task_id,"price",f"Price {payload['price']:,.2f} credits",phase_key=phase,payload=payload)

@@ -1,10 +1,11 @@
-"""Credit pricing from measured engine usage and process time, with model cost in USD from the per-call rates the engine records."""
+"""Credit pricing from measured engine usage and process time, with the customer USD price (credits x USD_PER_CREDIT). Raw model cost_usd is kept in the payload but not displayed."""
 from __future__ import annotations
 import json,os
 from pathlib import Path
 
 PRICE_PER_TOKEN=float(os.environ.get("PRICE_PER_TOKEN","0.0000125"))
 PRICE_PER_10MS=float(os.environ.get("PRICE_PER_10MS","0.0000005"))
+USD_PER_CREDIT=float(os.environ.get("USD_PER_CREDIT","1.00"))
 _STAGE_PHASE={"probing":"intent","distillation":"intent","phrasing":"intent","scope_tiebreak":"intent","expert_opinion":"intent","conops":"conops","needs":"needs","srs":"srs","architecture":"architecture","items":"specs","tests":"tests","review":"tests"}
 
 def _rows(path:Path,start:int=0)->list[dict]:
@@ -38,5 +39,5 @@ def price_execution(usage_path:Path,llm_path:Path,wall_ms:float,usage_start:int=
     for phase,item in buckets.items():
         share=deterministic_ms*item["calls"]/total_calls;tokens=item["input_tokens"]+item["output_tokens"]
         token_price=tokens*PRICE_PER_TOKEN;infra_price=(share/10)*PRICE_PER_10MS
-        result.append({"phase":phase,**item,"tokens":tokens,"deterministic_ms":round(share,3),"token_price":round(token_price,6),"infra_price":round(infra_price,6),"price":round(token_price+infra_price,6),"cost_usd":round(item["cost_usd"],8),"unpriced_calls":item["unpriced_calls"],"rates":{"price_per_token":PRICE_PER_TOKEN,"price_per_10ms":PRICE_PER_10MS,"scale":"credits"}})
+        result.append({"phase":phase,**item,"tokens":tokens,"deterministic_ms":round(share,3),"token_price":round(token_price,6),"infra_price":round(infra_price,6),"price":round(token_price+infra_price,6),"price_usd":round((token_price+infra_price)*USD_PER_CREDIT,6),"cost_usd":round(item["cost_usd"],8),"unpriced_calls":item["unpriced_calls"],"rates":{"price_per_token":PRICE_PER_TOKEN,"price_per_10ms":PRICE_PER_10MS,"usd_per_credit":USD_PER_CREDIT,"scale":"credits"}})
     return result

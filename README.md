@@ -121,7 +121,7 @@ Prefer the admin API from the authenticated web origin rather than copying cooki
 
 ## Credits
 
-Price events and the audit report usage in **credits** (`tokens * PRICE_PER_TOKEN + deterministic ms / 10 * PRICE_PER_10MS`) next to model cost in USD (per-call rates recorded by the engine, $0 for local Ollama). Set both PRICE_ variables in `.env`; an old value overrides the defaults. Events written before the rescale have no `rates.scale == "credits"` marker; the UI shows them as "legacy scale" and the audit totals exclude them.
+Price events and the audit report usage in **credits** (`tokens * PRICE_PER_TOKEN + deterministic ms / 10 * PRICE_PER_10MS`) and the customer USD price (`credits * USD_PER_CREDIT`, default 1.00). Set these in `.env`; an old PRICE_ value overrides the defaults. Events written before the rescale have no `rates.scale == "credits"` marker; the UI shows them as "legacy scale" and the audit totals exclude them.
 
 ## UI conventions
 

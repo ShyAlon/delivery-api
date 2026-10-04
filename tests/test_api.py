@@ -176,10 +176,10 @@ def test_task_audit_accumulates_tokens_and_price(client):
     from delivery_api.app import store
     task=store.create_task('Priced audit totals');tid=task['task_id']
     store.add_event(tid,'price','Price 25 units',phase_key='intent',payload={'tokens':10,'price':25,'rates':{'scale':'credits'}})
-    store.add_event(tid,'price','Price 50 units',phase_key='needs',payload={'tokens':20,'price':50,'cost_usd':0.25,'rates':{'scale':'credits'}})
+    store.add_event(tid,'price','Price 50 units',phase_key='needs',payload={'tokens':20,'price':50,'price_usd':50.0,'rates':{'scale':'credits'}})
     body=client.get(f'/api/tasks/{tid}/audit').json()
     assert {k:body['totals'][k] for k in ('tokens','price','phases_priced')}=={'tokens':30,'price':75.0,'phases_priced':2}
-    assert body['totals']['interview_calls']==0 and body['totals']['cost_usd']==0.25
+    assert body['totals']['interview_calls']==0 and body['totals']['price_usd']==50.0
 
 def test_task_audit_excludes_legacy_scale_price_but_counts_tokens(client):
     from delivery_api.app import store
