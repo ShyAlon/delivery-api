@@ -1933,4 +1933,4 @@ def test_debug_dialog_explains_credits(page, ui):
     page.goto(ui+"/");page.locator("#accountbutton").click();page.locator("#opendebug").click();page.locator(".debug-dialog").wait_for()
     page.get_by_text("About credits",exact=True).click()
     text=page.locator("#creditswrap").inner_text()
-    assert "not an invoice" in text and "full run is about 5 credits" in text and "local Ollama" in text
+    assert "what the customer is charged" in text and "about 5 credits, about $5" in text and "not price" in text and "local Ollama" in text

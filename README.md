@@ -121,7 +121,7 @@ Prefer the admin API from the authenticated web origin rather than copying cooki
 
 ## Credits
 
-Price events and the audit report usage in **credits**: `tokens * PRICE_PER_TOKEN + deterministic ms / 10 * PRICE_PER_10MS`. A credit is a usage unit, not an invoice. Defaults (`PRICE_PER_TOKEN=0.0000125`, `PRICE_PER_10MS=0.0000005`) put a full run (~400k tokens) near 5 credits; one credit is ~80,000 tokens. Real model cost per credit depends on the model (about $0.04 on deepseek-flash, $0 on local Ollama); the avatar Debug dialog explains this. Set both variables in `.env`; an old `PRICE_PER_TOKEN=2` overrides the defaults. Events written before the rescale have no `rates.scale == "credits"` marker; the UI shows them as "legacy scale" and the audit totals exclude their price.
+Price events and the audit report usage in **credits**: `tokens * PRICE_PER_TOKEN + deterministic ms / 10 * PRICE_PER_10MS`. A credit is the customer-facing price unit (about $1 at the intended calibration); it deliberately covers model cost, hosting and business overhead, not just raw cost. Defaults (`PRICE_PER_TOKEN=0.0000125`, `PRICE_PER_10MS=0.0000005`) put a full run (~400k tokens) near 5 credits; one credit is ~80,000 tokens. Raw model cost per credit depends on the model (about $0.04 on deepseek-flash, $0 on local Ollama) and is shown as margin context in the avatar Debug dialog. Set both variables in `.env`; an old `PRICE_PER_TOKEN=2` overrides the defaults. Events written before the rescale have no `rates.scale == "credits"` marker; the UI shows them as "legacy scale" and the audit totals exclude their price.
 
 ## UI conventions
 

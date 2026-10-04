@@ -1,4 +1,4 @@
-"""Transparent credit pricing from measured engine usage and process time. A credit is the product usage unit, not an invoice."""
+"""Transparent credit pricing from measured engine usage and process time. A credit is the customer-facing price unit (about $1), covering model cost and overhead."""
 from __future__ import annotations
 import json,os
 from pathlib import Path
