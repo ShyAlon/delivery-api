@@ -920,3 +920,72 @@ def test_failed_needs_without_exact_model_previews_selection_required(tmp_path,m
    await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder'))
  asyncio.run(exercise())
  assert store.task(tid)['model_default'] is None
+
+
+def _failed_architecture_task(tmp_path,monkeypatch):
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ store.update_phase(tid,'needs','approved');store.update_phase(tid,'srs','approved')
+ store.update_phase(tid,'architecture','failed',detail='SRS candidate review is not ready.')
+ store.add_event(tid,'error','architecture subprocess stopped with exit code 1',phase_key='architecture',payload={'exit_code':1})
+ store._db.execute("UPDATE tasks SET state='failed',active_phase='architecture' WHERE task_id=?",(tid,));store._db.commit()
+ return store,tid,session
+
+
+def test_failed_architecture_retry_resumes_only_that_phase(tmp_path,monkeypatch):
+ import asyncio
+ from delivery_api.auth import Actor
+ store,tid,session=_failed_architecture_task(tmp_path,monkeypatch)
+ calls=[]
+ async def run(task_id,phase,*,mode,model_route):calls.append((task_id,phase,mode.value,model_route))
+ monkeypatch.setattr(module.orchestrator,'execute_phase',run)
+ async def exercise():
+  preview=await module.retry_failed_phase(tid,module.FailedPhaseRetryRequest(phase='architecture'),Actor('test','Founder'))
+  assert preview['status']=='preview' and preview['label']=='Architecture' and preview['retains']==['intent','conops','needs','srs'] and not calls
+  assert 'exit code 1' in preview['last_failure'] and store.task(tid)['state']=='failed'
+  started=await module.retry_failed_phase(tid,module.FailedPhaseRetryRequest(phase='architecture',confirm=True,model_route='deepseek',model='deepseek-flash'),Actor('test','Founder'))
+  assert started['status']=='started'
+  await asyncio.sleep(.01)
+ asyncio.run(exercise())
+ task=store.task(tid);states={p['phase_key']:p['state'] for p in task['phases']}
+ assert states['srs']=='approved' and states['needs']=='approved' and states['architecture']=='running'
+ assert task['state']=='running' and task['active_phase']=='architecture' and task['generation']==1
+ assert calls==[(tid,'architecture','start','deepseek:deepseek-flash')]
+ assert len([e for e in store.events(tid) if e['kind']=='retry'])==1
+
+
+def test_failed_phase_retry_rejects_ineligible_and_duplicate_requests(tmp_path,monkeypatch):
+ import asyncio
+ from fastapi import HTTPException
+ from delivery_api.auth import Actor
+ store,tid,session=_failed_architecture_task(tmp_path,monkeypatch)
+ calls=[]
+ async def run(task_id,phase,*,mode,model_route):calls.append(phase)
+ monkeypatch.setattr(module.orchestrator,'execute_phase',run)
+ who=Actor('test','Founder')
+ def refused(**kw):
+  try:asyncio.run(module.retry_failed_phase(tid,module.FailedPhaseRetryRequest(**kw),who))
+  except HTTPException as exc:return exc.status_code
+ assert refused(phase='needs')==409          # Needs keeps its own retry
+ assert refused(phase='intent')==409         # not a generator phase
+ assert refused(phase='srs')==409            # not the failed phase
+ assert refused(phase='architecture',confirm=True)==409   # model not explicitly confirmed
+ store.update_phase(tid,'specs','approved')
+ assert refused(phase='architecture',confirm=True,model_route='ollama',model='phi4')==409   # later work exists: never overwritten
+ store.update_phase(tid,'specs','pending')
+ asyncio.run(module.retry_failed_phase(tid,module.FailedPhaseRetryRequest(phase='architecture',confirm=True,model_route='ollama',model='phi4'),who))
+ assert refused(phase='architecture',confirm=True,model_route='ollama',model='phi4')==409   # second confirm: already running
+ assert calls==['architecture']
+
+
+def test_failed_phase_retry_that_cannot_launch_marks_the_phase_failed_again(tmp_path,monkeypatch):
+ import asyncio
+ from delivery_api.auth import Actor
+ store,tid,session=_failed_architecture_task(tmp_path,monkeypatch)
+ async def run(*args,**kw):raise RuntimeError('spec-generator environment is missing')
+ monkeypatch.setattr(module.orchestrator,'execute_phase',run)
+ async def exercise():
+  await module.retry_failed_phase(tid,module.FailedPhaseRetryRequest(phase='architecture',confirm=True,model_route='ollama',model='phi4'),Actor('test','Founder'))
+  await asyncio.sleep(.01)
+ asyncio.run(exercise())
+ phase=next(p for p in store.task(tid)['phases'] if p['phase_key']=='architecture')
+ assert phase['state']=='failed' and 'environment is missing' in phase['detail']
