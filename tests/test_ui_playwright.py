@@ -1836,3 +1836,34 @@ def test_flagged_inputs_show_readable_item_and_no_circular_link(page,ui):
     assert page.locator('#semantic-panel .replace-fields input[value="Ear training"]').count()==1
     assert 'R-11' not in panel.locator('article').inner_text() and 'AC-54' not in panel.locator('article').inner_text()  # IDs hidden from founders
     assert page.locator('#semantic-panel .replace-fields input[readonly]').count()==0
+
+
+def test_failed_architecture_has_a_retry_that_resumes_the_phase(page,ui):
+    from playwright.sync_api import expect
+    live=page.request.get(ui+'/api/tasks/live').json()
+    for phase in live['phases']:
+        if phase['phase_key'] in ('intent','conops','needs','srs'):phase['state']='approved'
+        elif phase['phase_key']=='architecture':phase.update({'state':'failed','detail':'SRS candidate review is not ready.'})
+        else:phase['state']='pending'
+    live.update({'state':'failed','active_phase':'architecture','input_state':{'waiting':False,'process_live':False,'engine_process_status':40},
+        'ui_state':{'mode':'error','active_phase':'architecture','process_live':False}})
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route('**/api/model-routes',lambda route:route.fulfill(json={'routes':[{'id':'deepseek','models':['deepseek-flash'],'available':True}]}))
+    page.route('**/api/tasks/live/execution*',lambda route:route.fulfill(json={'session_id':'complete-session','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[]}))
+    sent=[]
+    def retry(route):
+        body=route.request.post_data_json;sent.append(body)
+        route.fulfill(json={'status':'preview','phase':'architecture','label':'Architecture','session_id':'complete-session','retains':['intent','conops','needs','srs'],'default_model':'deepseek:deepseek-flash','default_source':'selected','checkpoint':True,'last_failure':'SRS candidate review is not ready.','message':'Retry Architecture from the approved earlier phases. This may make new model calls and incur cost.'} if not body['confirm'] else {'status':'started','phase':'architecture','session_id':'complete-session'})
+    page.route('**/api/tasks/live/retry-phase',retry)
+    page.goto(ui+'/tasks/live/view')
+    expect(page.locator('#retryphase')).to_have_text('Retry Architecture')
+    expect(page.locator('#retryneeds')).to_have_count(0)
+    page.locator('#retryphase').click()
+    dialog=page.get_by_role('dialog',name='Retry Architecture');expect(dialog).to_be_visible()
+    expect(dialog).to_contain_text('SRS candidate review is not ready.')
+    expect(dialog).to_contain_text('Existing generator checkpoint will resume')
+    page.screenshot(path='/downloads/failed-architecture-retry.png',full_page=True)
+    dialog.get_by_role('button',name='Retry phase').click()
+    page.wait_for_function('()=>true')
+    assert sent[0]=={'phase':'architecture','confirm':False}
+    assert sent[1]=={'phase':'architecture','confirm':True,'model_route':'deepseek','model':'deepseek-flash'}

@@ -490,6 +490,29 @@ class SQLiteStore:
             self.audit(actor,"phase.retry",task_id,{"phase":"needs","session_id":row["engine_session_id"]})
             self._commit();return True
 
+    def claim_failed_phase_retry(self, task_id: str, phase: str, actor: str) -> bool:
+        """Atomically claim a failed generator phase whose upstream phases are approved.
+
+        Later phases may only be pending or failed, so a retry never overwrites finished work."""
+        from .phases import PHASE_KEYS, PHASE_BY_KEY
+        if phase not in PHASE_BY_KEY or PHASE_BY_KEY[phase].executor!="generator":return False
+        with self._lock:
+            row=self._db.execute("SELECT state,active_phase,engine_session_id FROM tasks WHERE task_id=?",(task_id,)).fetchone()
+            if not row or row["state"]!="failed" or row["active_phase"]!=phase or not row["engine_session_id"]:return False
+            states={p["phase_key"]:p["state"] for p in self._db.execute("SELECT phase_key,state FROM phases WHERE task_id=?",(task_id,))}
+            index=PHASE_KEYS.index(phase)
+            if states.get(phase)!="failed":return False
+            if any(states.get(key) not in ("approved","done") for key in PHASE_KEYS[:index]):return False
+            if any(states.get(key) not in ("pending","failed") for key in PHASE_KEYS[index+1:]):return False
+            now=time.time()
+            self._db.execute("UPDATE phases SET state='running',detail=?,completed=0,total=NULL,started_at=?,completed_at=NULL WHERE task_id=? AND phase_key=?",
+                             (f"Retrying failed {PHASE_BY_KEY[phase].label}",now,task_id,phase))
+            self._db.execute("UPDATE tasks SET state='running',active_phase=?,updated_at=? WHERE task_id=?",(phase,now,task_id))
+            self._db.execute("INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (?,?,?,?,?,?)",
+                             (task_id,phase,"retry",f"Founder confirmed retry of failed {PHASE_BY_KEY[phase].label}",json.dumps({"actor":actor,"session_id":row["engine_session_id"]}),now))
+            self.audit(actor,"phase.retry",task_id,{"phase":phase,"session_id":row["engine_session_id"]})
+            self._commit();return True
+
     def set_model_route(self, task_id: str, model_route: str) -> None:
         with self._lock:
             self._db.execute("UPDATE tasks SET model_route=?,updated_at=? WHERE task_id=?",

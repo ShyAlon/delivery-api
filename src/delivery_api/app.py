@@ -1629,6 +1629,83 @@ async def _run_failed_needs_retry(task_id:str,model_route:str,checkpoint:bool)->
         store.add_event(task_id,"error",message,phase_key="needs",payload={"cause":str(exc),"retry":True})
         activity("phase.retry.failed","Stakeholder needs retry did not launch",task_id=task_id,error=message)
 
+class FailedPhaseRetryRequest(BaseModel):
+    phase: str
+    confirm: bool = False
+    model_route: Literal["ollama","deepseek"]|None = None
+    model: str|None = Field(default=None,min_length=1,max_length=160)
+
+@app.post("/api/tasks/{task_id}/retry-phase")
+async def retry_failed_phase(task_id:str,body:FailedPhaseRetryRequest,a:auth.Actor=Depends(auth.require_run_start)):
+    """Resume a failed generator phase after Stakeholder needs from its checkpoint.
+    Stakeholder needs keeps its own retry endpoint. Nothing upstream or downstream is reset."""
+    from .phases import PHASE_BY_KEY, PHASE_KEYS
+    task=store.task(task_id)
+    if not task:raise HTTPException(404,"task not found")
+    definition=PHASE_BY_KEY.get(body.phase)
+    if not definition or definition.executor!="generator" or body.phase=="needs":
+        raise HTTPException(409,{"error":"That phase cannot be retried this way.","cause":f"'{body.phase}' is not a failed generator phase after Stakeholder needs.","next":"Use the phase's own retry, or Rerun stage."})
+    label=definition.label
+    phases={phase["phase_key"]:phase["state"] for phase in task["phases"]}
+    index=PHASE_KEYS.index(body.phase);session=store.engine_session(task_id)
+    eligible=(task["state"]=="failed" and task["active_phase"]==body.phase and phases.get(body.phase)=="failed"
+              and all(phases.get(key) in ("approved","done") for key in PHASE_KEYS[:index])
+              and all(phases.get(key) in ("pending","failed") for key in PHASE_KEYS[index+1:])
+              and session and runner.work_state(task_id) is None and task_id not in runner.processes)
+    def reject(reason: str, next_step: str) -> None:
+        if body.confirm:
+            store.audit(a.label,"phase.retry_rejected",task_id,{"phase":body.phase,"reason":reason,"next":next_step})
+            store.add_event(task_id,"retry_rejected",f"{label} retry was not started: {reason}",phase_key=body.phase,payload={"reason":reason,"next":next_step})
+        activity("phase.retry.rejected",f"{label} retry blocked",task_id=task_id,reason=reason,confirmed=body.confirm)
+        raise HTTPException(409,{"error":f"{label} retry was not started.","cause":reason,"next":next_step})
+    if not eligible:reject(f"The task is no longer an eligible failed {label} phase, or work is already live.","Refresh the task and review its current phase before trying again.")
+    from vmodel_contracts.runtime import artifacts_root
+    from vmodel_contracts.interview import IntentModel
+    from vmodel_contracts.conops import ConOpsDocument
+    interview=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"
+    try:
+        intent=IntentModel.model_validate_json((interview/"intent_model.json").read_text())
+        conops=ConOpsDocument.model_validate_json((interview/"conops.json").read_text())
+        if intent.session_id!=session or conops.session_id!=session:raise ValueError("interview artifact session IDs do not match")
+    except (OSError,ValueError) as exc:
+        reject(f"The linked interview artifacts are missing or invalid: {exc}","Restore the named session artifacts before retrying.")
+    from . import model_routes as downstream_routes
+    try: default,default_source=downstream_routes.task_default_model(store,task_id,definition.generator_stage)
+    except ValueError: default,default_source=None,"selection required"
+    default_route,_,default_model=(default or "").partition(":")
+    route=body.model_route or default_route
+    model=body.model or (default_model if route==default_route else None)
+    if not route or not model:
+        if body.confirm:reject("An exact model selection is required for this session.","Choose a provider and model in the retry dialog.")
+        effective=None
+    else:
+        try:effective=downstream_routes.route_value(route,model)
+        except ValueError:reject("The selected downstream model is unsupported.","Choose a supported provider and model before retrying.")
+    if body.confirm and (not body.model_route or not body.model):
+        reject("The retry model was not explicitly confirmed.","Choose a provider and model in the retry dialog.")
+    spec=interview.parent/"spec"
+    checkpoint=(spec/"checkpoints.sqlite").is_file() and (spec/"checkpoints.sqlite").stat().st_size>0
+    latest_failure=next((event for event in reversed(store.events(task_id)) if event["phase_key"]==body.phase and event["kind"]=="error"),None)
+    if not body.confirm:
+        return {"status":"preview","phase":body.phase,"label":label,"session_id":session,"retains":list(PHASE_KEYS[:index]),"model_route":effective,"default_model":default,"default_source":default_source,"checkpoint":checkpoint,"mode":"resume" if checkpoint else "start",
+                "last_failure":latest_failure["message"] if latest_failure else next(phase["detail"] for phase in task["phases"] if phase["phase_key"]==body.phase),
+                "message":f"Retry {label} from the approved earlier phases. Choose the downstream model; this may make new model calls and incur cost. Nothing earlier is reopened."}
+    if not store.claim_failed_phase_retry(task_id,body.phase,a.label):reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
+    store.set_model_default(task_id,effective)
+    store.add_event(task_id,"model_route",f"{label} retry model selected: {effective}",phase_key=body.phase,payload={"route":route,"resolved":effective,"source":"explicit_retry_choice"})
+    store.audit(a.label,"phase.retry_model",task_id,{"phase":body.phase,"model":effective,"checkpoint":checkpoint})
+    activity("phase.retry",f"Founder confirmed retry of {label}",task_id=task_id,session_id=session,actor=a.label,model_route=effective,checkpoint=checkpoint)
+    asyncio.create_task(_run_failed_phase_retry(task_id,body.phase,label,effective,checkpoint))
+    return {"status":"started","phase":body.phase,"session_id":session}
+
+async def _run_failed_phase_retry(task_id:str,phase:str,label:str,model_route:str,checkpoint:bool)->None:
+    try:await orchestrator.execute_phase(task_id,phase,mode=ExecutionMode.RESUME if checkpoint else ExecutionMode.START,model_route=model_route)
+    except Exception as exc:
+        message=f"{label} retry stopped: {type(exc).__name__}: {exc}"
+        store.update_phase(task_id,phase,"failed",detail=message)
+        store.add_event(task_id,"error",message,phase_key=phase,payload={"cause":str(exc),"retry":True})
+        activity("phase.retry.failed",f"{label} retry did not launch",task_id=task_id,error=message)
+
 class RerunRequest(BaseModel):
     from_phase: str
     confirm: bool = False
