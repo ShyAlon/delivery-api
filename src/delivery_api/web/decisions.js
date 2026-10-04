@@ -1,6 +1,6 @@
 import {api,esc,clientLog} from './client-core.js';
 import {titleCase,titleCaseHeadings,pillGroup,boxHtml,explainerHtml} from './gate-ui.js';
-import {stripIds} from './gate-presenters.js';
+import {stripIds,gateStructured} from './gate-presenters.js';
 import {findingTitle,pillsHtml,replaceFieldsHtml,readReplacement,fillReplacement,OPTIONS} from './semantic-review-ui.js';
 const app=document.querySelector('#app');
 const PURPOSES=new Set(['conops_concept','interview_approval','semantic_review']);
@@ -21,12 +21,8 @@ function collapsibleHtml(items,titleOf,hideKeys){
  if(!Array.isArray(items)||!items.length)return evidenceHtml(items);
  return `<div class="context-boxes">${items.map((it,i)=>{const body=Object.fromEntries(Object.entries(it||{}).filter(([k])=>!hideKeys.includes(k)));return `<details class="context-box"><summary>${esc(titleOf(it)||`Item ${i+1}`)}</summary><div class="context-body">${evidenceHtml(body)}</div></details>`}).join('')}</div>`;
 }
-function evidenceHtml(value){
- if(value===null||value===undefined)return '';
- if(Array.isArray(value))return `<ul>${value.map(v=>`<li>${evidenceHtml(v)}</li>`).join('')}</ul>`;
- if(typeof value==='object')return Object.entries(value).filter(([k])=>!DEBUG_KEYS.has(k)).map(([k,v])=>`<section class="review-fact"><h3>${esc(titleCase(k))}</h3>${evidenceHtml(v)}</section>`).join('');
- return `<p>${esc(value)}</p>`;
-}
+// One body renderer for every evidence view: the gate pages' shared structured renderer, with founder labels and debug keys hidden.
+function evidenceHtml(value){if(value===null||value===undefined)return '';return `<div class="gate-structured">${gateStructured(value,0,{hide:DEBUG_KEYS,label:titleCase,skipEmpty:true})}</div>`}
 export function createDecisions(ctx){
  let generation=0;
  async function decisionPage(taskId,waitId){
