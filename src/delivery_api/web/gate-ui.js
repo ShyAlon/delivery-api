@@ -43,7 +43,10 @@ export function collapseCards(host){
  [...host.querySelectorAll(':scope > .gate-artifact')].forEach((card,i)=>{
   if(card.dataset.collapsed||card.id==='semantic-panel')return;const h=card.querySelector(':scope > h2, :scope > h3');if(!h)return;
   card.dataset.collapsed='1';const d=document.createElement('details');d.className='context-box';if(i===0)d.open=true;
-  const s=document.createElement('summary');const t=h.textContent.trim();const norm=x=>(x||'').trim().toLowerCase();const dup=norm(t)===norm(host.parentElement?.querySelector(':scope > h2')?.textContent)||norm(t)===norm(card.querySelector('.artifact-readable h1')?.textContent);s.textContent=dup?'':t;s.setAttribute('aria-label',t);if(dup)s.className='chevron-only';h.remove();const b=document.createElement('div');b.className='context-body';while(card.firstChild)b.append(card.firstChild);d.append(s,b);card.append(d)});
+  /* The document's own title goes in the header row next to the chevron (no empty row, no repeated heading). A trailing record UUID is kept as a tooltip only. */
+  const s=document.createElement('summary');const doc=card.querySelector('.artifact-readable h1');const raw=(doc?doc.textContent:h.textContent).trim();
+  const m=raw.match(/^(.*?)\s*[-\u2013\u2014:]\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+  const t=m?m[1].trim():raw;s.textContent=t;if(m)s.title=m[2];s.setAttribute('aria-label',t);if(doc)doc.remove();h.remove();const b=document.createElement('div');b.className='context-body';while(card.firstChild)b.append(card.firstChild);d.append(s,b);card.append(d)});
 }
 
 /* "What am I deciding?" block. Factual copy only. Shown at the top of every gate page. */
