@@ -28,7 +28,7 @@ _PHASE_HINTS = {
     # Only these explicit labels belong to later executables. Interview-engine
     # preview prose must never paint downstream SRS/spec/test phases.
     "stage 'srs'": "srs", "stage 'architecture'": "architecture",
-    "stage 'items'": "specs", "stage 'tests'": "tests", "stage 'verification'": "tests",
+    "stage 'items'": "specs", "stage 'tests'": "tests", "stage 'verification'": "tests", "stage 'validation'": "validation",
 }
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +216,9 @@ class ProcessRunner:
                         from vmodel_contracts.verification import AcceptanceTest
                         try:
                             if phase=="tests":TypeAdapter(list[AcceptanceTest]).validate_json(available[0].read_text())
+                            elif phase=="validation":
+                                from vmodel_contracts.verification import ValidationPlan
+                                ValidationPlan.model_validate_json(available[0].read_text())
                             elif available[0].suffix==".json":json.loads(available[0].read_text())
                         except (ValueError,OSError) as exc:
                             error=f"Error: {phase} exited successfully but its artifact is unreadable or invalid ({type(exc).__name__}: {str(exc)[:240]}). No approval gate was opened."

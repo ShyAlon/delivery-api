@@ -6,8 +6,9 @@ from pathlib import Path
 from .store import PHASES,Storage
 from vmodel_contracts import CANONICAL_STAGE_IDS
 
-ARTIFACTS={"needs":"needs.json","srs":"srs.json","architecture":"architecture.json","specs":"items.json","tests":"tests.json"}
-_ALLOWED_STAGES=CANONICAL_STAGE_IDS
+ARTIFACTS={"needs":"needs.json","srs":"srs.json","architecture":"architecture.json","specs":"items.json","tests":"tests.json","validation":"validation.json"}
+# The validation stage logs its own LLM calls under 'validation'; the contracts stage list predates it.
+_ALLOWED_STAGES=CANONICAL_STAGE_IDS|{"validation"}
 
 class ImportValidationError(ValueError):
     def __init__(self,error,cause,next_action):super().__init__(error);self.cause=cause;self.next_action=next_action
@@ -97,6 +98,9 @@ class Simulation:
             self.store.update_phase(task_id,phase,"running",detail=f"Recorded {row['provider']}/{row['model']} call {i+1}/{len(rows)}",completed=i+1,total=len(rows));self.store.add_event(task_id,"progress",f"[{phase}] {row.get('prompt_tokens',0)} input + {row.get('completion_tokens',0)} output tokens",phase_key=phase,payload={"simulated":True,"recorded_ts":row["ts"]});previous=phase
         if previous:self.store.update_phase(task_id,previous,"done",detail="Replay complete")
         source=Path(task["source_dir"])
+        # Recordings made before the Validation phase end at Verification. They stay complete.
+        if previous=="tests" and not (source/"validation.json").exists():
+            self.store.update_phase(task_id,"validation","done",detail="Not part of this recording")
         for phase,name in ARTIFACTS.items():
             if (source/name).exists():self.store.update_phase(task_id,phase,"done",detail="Imported recorded artifact");self.store.add_task_artifact(task_id,phase,name,str(source/name))
         # A recording may end after any phase. Exhausting its rows ends the

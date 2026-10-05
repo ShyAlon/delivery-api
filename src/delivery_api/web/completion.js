@@ -5,7 +5,8 @@ const rows=(value,...keys)=>{if(Array.isArray(value))return value;if(value&&type
 const COUNTS=[
  {key:'requirements',label:'Requirements',phase:'srs',names:['srs.json'],count:v=>rows(v,'functional','requirements').length+rows(v?.non_functional).length},
  {key:'specs',label:'Specs',phase:'specs',names:['items.json','spec_items.json'],count:v=>rows(v,'items','specs').length},
- {key:'tests',label:'Tests',phase:'tests',names:['tests.json','test_specifications.json'],count:v=>rows(v,'tests').length}
+ {key:'tests',label:'Tests',phase:'tests',names:['tests.json','test_specifications.json'],count:v=>rows(v,'tests').length},
+ {key:'validation',label:'Validation Items',phase:'validation',names:['validation.json'],count:v=>rows(v,'items').length}
 ];
 const credits=n=>Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const usd=n=>'$'+Number(n||0).toFixed(2);

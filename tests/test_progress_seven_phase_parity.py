@@ -18,7 +18,7 @@ def test_all_seven_phases_share_progress_and_gate_boundary(tmp_path):
     cursor = 0
     runner = ProcessRunner(store)
     for phase in PHASE_DEFINITIONS:
-        assert len(store.task(task_id)["phases"]) == 7
+        assert len(store.task(task_id)["phases"]) == 8
         if phase.executor == "interview":
             store.update_phase(task_id, phase.key, "running")
             cursor += 1
@@ -42,7 +42,7 @@ def test_all_seven_phases_share_progress_and_gate_boundary(tmp_path):
                 stage="configured-step", label=f"Working on {phase.label}", status="started")
             script = ("from pathlib import Path;import sys;"
                 "out=Path(sys.argv[sys.argv.index('--out')+1]);"
-                f"(out/{artifact!r}).write_text({('[]' if phase.key == 'tests' else '{}')!r});"
+                f"(out/{artifact!r}).write_text({('[]' if phase.key == 'tests' else '{"session_id":"s","items":[]}' if phase.key == 'validation' else '{}')!r});"
                 f"print({(PREFIX + progress.model_dump_json())!r},flush=True)")
             assert asyncio.run(runner.run(task_id,
                 [sys.executable, "-c", script, "--out", str(out)],

@@ -1,7 +1,7 @@
 import {api,esc} from './client-core.js';
 import {humanizeSnakeCase} from './format.js';
 
-const LABELS={intent:'Start',conops:'Concept of operations',needs:'Stakeholder needs',srs:'Requirements',architecture:'Architecture',specs:'Item specifications',tests:'Verification'};
+const LABELS={intent:'Start',conops:'Concept of operations',needs:'Stakeholder needs',srs:'Requirements',architecture:'Architecture',specs:'Item specifications',tests:'Verification',validation:'Validation'};
 function itemTitle(item,index){return item.requirement_id||item.need_id||item.decision_id||item.spec_id||item.test_id||item.id||item.name||item.title||item.statement||`Result ${index+1}`}
 function itemDetail(item){return item.statement||item.title||item.responsibility||item.description||item.summary||item.decision||item.value||item.body_markdown||''}
 export function phaseOutputHtml(output){

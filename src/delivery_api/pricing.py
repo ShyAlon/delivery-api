@@ -6,7 +6,7 @@ from pathlib import Path
 PRICE_PER_TOKEN=float(os.environ.get("PRICE_PER_TOKEN","0.0000125"))
 PRICE_PER_10MS=float(os.environ.get("PRICE_PER_10MS","0.0000005"))
 USD_PER_CREDIT=float(os.environ.get("USD_PER_CREDIT","1.00"))
-_STAGE_PHASE={"probing":"intent","distillation":"intent","phrasing":"intent","scope_tiebreak":"intent","expert_opinion":"intent","conops":"conops","needs":"needs","srs":"srs","architecture":"architecture","items":"specs","tests":"tests","review":"tests"}
+_STAGE_PHASE={"probing":"intent","distillation":"intent","phrasing":"intent","scope_tiebreak":"intent","expert_opinion":"intent","conops":"conops","needs":"needs","srs":"srs","architecture":"architecture","items":"specs","tests":"tests","validation":"validation","review":"tests"}
 
 def _rows(path:Path,start:int=0)->list[dict]:
     if not path.is_file():return []

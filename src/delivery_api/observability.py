@@ -7,7 +7,7 @@ from .config import default_data_dir
 
 LOG_PATH=Path(__file__).resolve().parents[2]/"run.log"
 STAGE_LOG_DIR=default_data_dir()/"logs"/"stages"
-STAGE_KEYS=("intent","conops","needs","srs","architecture","specs","tests")
+STAGE_KEYS=("intent","conops","needs","srs","architecture","specs","tests","validation")
 STAGE_LOG_PATHS={phase:STAGE_LOG_DIR/f"{phase}.log" for phase in STAGE_KEYS}
 logger=logging.getLogger("delivery_api.activity")
 if not logger.handlers:

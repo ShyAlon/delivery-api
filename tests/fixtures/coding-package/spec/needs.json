@@ -1,9 +1,9 @@
 {
-  "contract_version": "0.20.0",
+  "contract_version": "0.22.0",
   "session_id": "s",
   "needs": [
     {
-      "contract_version": "0.20.0",
+      "contract_version": "0.22.0",
       "need_id": "N-1",
       "stakeholder": "Founder",
       "statement": "founders need specs",

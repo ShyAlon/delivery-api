@@ -1,10 +1,10 @@
 {
-  "contract_version": "0.20.0",
+  "contract_version": "0.22.0",
   "session_id": "s",
   "baseline_id": "test-baseline",
   "stack_entries": [
     {
-      "contract_version": "0.20.0",
+      "contract_version": "0.22.0",
       "key": "language",
       "value": "python",
       "baseline_refs": [
@@ -18,7 +18,7 @@
   "stack_entry_dispositions": [],
   "components": [
     {
-      "contract_version": "0.20.0",
+      "contract_version": "0.22.0",
       "name": "api",
       "responsibility": "serve",
       "requirement_ids": [
@@ -33,7 +33,7 @@
   ],
   "decisions": [
     {
-      "contract_version": "0.20.0",
+      "contract_version": "0.22.0",
       "decision_id": "ADR-1",
       "title": "t",
       "decision": "x",
@@ -41,7 +41,7 @@
       "driver": "simplicity",
       "options_considered": [
         {
-          "contract_version": "0.20.0",
+          "contract_version": "0.22.0",
           "option": "z",
           "reason": "heavier"
         }
@@ -55,7 +55,7 @@
       "executes_concept_ids": [],
       "technology_selections": [
         {
-          "contract_version": "0.20.0",
+          "contract_version": "0.22.0",
           "slot_id": "slot:language",
           "technology_id": "tech:python",
           "display_name": "python",
@@ -68,7 +68,7 @@
       "rejected": []
     },
     {
-      "contract_version": "0.20.0",
+      "contract_version": "0.22.0",
       "decision_id": "ADR-2",
       "title": "t",
       "decision": "x",
@@ -76,7 +76,7 @@
       "driver": "simplicity",
       "options_considered": [
         {
-          "contract_version": "0.20.0",
+          "contract_version": "0.22.0",
           "option": "z",
           "reason": "heavier"
         }

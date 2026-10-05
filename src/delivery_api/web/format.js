@@ -1,5 +1,5 @@
 import {esc} from './client-core.js';
-export const HUMAN_LABELS={"interviewee.answer":"Interviewee Answer","gate.auto_decision":"Gate Auto Decision","gate.simulated_expert_opinion":"Gate Simulated Expert Opinion","not_started":"Not Started","in_progress":"In Progress","intent":"Start","intent_model":"Start","conops":"Concept of Operations","needs":"Stakeholder Needs","srs":"Requirements","architecture":"Architecture","specs":"Specifications","tests":"Tests"};
+export const HUMAN_LABELS={"interviewee.answer":"Interviewee Answer","gate.auto_decision":"Gate Auto Decision","gate.simulated_expert_opinion":"Gate Simulated Expert Opinion","not_started":"Not Started","in_progress":"In Progress","intent":"Start","intent_model":"Start","conops":"Concept of Operations","needs":"Stakeholder Needs","srs":"Requirements","architecture":"Architecture","specs":"Specifications","tests":"Tests","validation":"Validation"};
 export function humanLabel(value){if(value==null)return '';let key=String(value);if(HUMAN_LABELS[key])return HUMAN_LABELS[key];return key.replace(/[._-]+/g,' ').replace(/([a-z0-9])([A-Z])/g,'$1 $2').replace(/\b\w/g,c=>c.toUpperCase())}
 export function markdownInline(text){return esc(text).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')}
 export function markdownHtml(text){
