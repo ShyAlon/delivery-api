@@ -366,3 +366,41 @@ def test_saved_comments_render_and_placeholder_clears_and_turn_refs_are_hidden(p
  p.locator('textarea[name=comment]').fill('Fresh note');p.get_by_role('button',name='Save comment only').click()
  expect(p.locator('#review-comments')).to_contain_text('Fresh note');expect(p.locator('#review-comments .no-comments')).to_have_count(0)
  p.screenshot(path=str(root/'concept-comments.png'))
+
+
+def _stack_review(decided=()):
+ slots=[{'key':'database_engine','brief':'Which store fits the data?','options':['SQLite','PostgreSQL'],'founder_decision':({'text':'SQLite','reason':'One user','actor':'x','at':'t'} if 'database_engine' in decided else None),'prefill':None},
+        {'key':'queue','brief':'How are jobs queued?','options':[],'founder_decision':None,'prefill':{'text':'In process','reason':'Small','actor':'x','at':'t'}}]
+ gate={'gate_key':'gate-architecture','label':'architecture','after_phase':'architecture','state':'waiting','is_open':False,'options':['Proceed']}
+ art={'phase_key':'architecture','name':'architecture.json','ref':'/x/architecture.json','present':True,'valid':True,'stale':False,'generation':1}
+ task={'task_id':'t1','title':'Habit tracking','gates':[gate],'phases':[{'phase_key':'architecture','label':'Architecture'},{'phase_key':'specs','label':'Item specifications'}],'artifacts':[art],'phase_config':{},'generation':1}
+ return {'review':{'revision':'gate:r','phase_key':'architecture','task':task,'documents':[{'name':'architecture.json','view':{'content':'{"components":[]}','format':'json'}}],'semantic_review':None,'stack_decisions':{'revision':'a'*64,'slots':slots}},'actionable':True,'draft':None,'comments':[]}
+
+def test_architecture_gate_decisions_panel_is_decide_only_and_gates_approval(page):
+ p,base,root=page;posts=[];state={'decided':[]}
+ def route(r):
+  path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
+  if path.endswith('/stack-decisions'):
+   posts.append(r.request.post_data_json);state['decided']=['database_engine'];r.fulfill(json={'status':'saved'});return
+  if path.endswith('/review'):r.fulfill(json=_stack_review(state['decided']));return
+  if path=='/api/model-routes':r.fulfill(json={'routes':[]});return
+  if path=='/api/tasks/t1':r.fulfill(json=_stack_review()['review']['task']);return
+  r.continue_()
+ p.route('**/api/**',route)
+ p.goto(base+'/tasks/t1/gates/gate-architecture')
+ panel=p.locator('#stack-panel');expect(panel).to_be_attached()
+ expect(panel.locator('#stack-count')).to_have_text('0 Of 2 Decided')
+ text=panel.inner_text().lower();assert 'defer' not in text and 'skip' not in text
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ expect(panel.locator('summary')).to_have_text('Decisions Needed · 0 Of 2 Decided');assert panel.locator('details').get_attribute('open') is None
+ panel.locator('summary').click()
+ expect(panel.locator('article h3').first).to_have_text('Database Engine')
+ panel.get_by_role('button',name='SQLite').click()
+ expect(panel.locator('[name=stack-text-0]')).to_have_value('SQLite')
+ expect(panel.locator('[name=stack-text-1]')).to_have_value('In process')
+ panel.get_by_role('button',name='Save Decisions').click()
+ expect(panel.locator('#stack-status')).to_contain_text('needs both a decision and a reason')
+ assert posts==[]
+ panel.locator('[name=stack-reason-0]').fill('One user');panel.locator('[name=stack-text-1]').fill('');panel.locator('[name=stack-reason-1]').fill('');
+ panel.get_by_role('button',name='Save Decisions').click()
+ expect(panel.locator('#stack-status')).to_contain_text('Decisions saved');assert posts==[{'revision':'a'*64,'decisions':[{'key':'database_engine','text':'SQLite','reason':'One user'}]}]
