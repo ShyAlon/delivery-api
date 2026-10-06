@@ -51,6 +51,13 @@ for repo in $REPOS; do
     add_row "$repo" "not set up" - - - - "run $repo/scripts/test-local.sh once"
     FINDINGS+=("$repo: no .venv, so nothing ran. Set up once with $repo/scripts/test-local.sh (needs network)"); BAD=1; continue
   fi
+  # A .venv that cannot import pytest would otherwise show up as an unexplained NO RESULT.
+  probe=$("$py" -c 'import pytest' 2>&1) || {
+    reason="pytest not installed: run $repo/scripts/test-local.sh"
+    if ! printf '%s' "$probe" | grep -q 'No module named'; then reason="$repo's .venv python does not run: $(printf '%s' "$probe" | tail -1 | cut -c1-120)"; fi
+    add_row "$repo" "not ready" - - - - "$reason"
+    FINDINGS+=("$repo: $reason (nothing ran)"); BAD=1; continue
+  }
   args=(-q -rf -p no:cacheprovider)
   if [ "$FAST" = 1 ]; then args+=(--ignore-glob='*browser*' --ignore-glob='*playwright*'); fi
   log="$LOGDIR/$repo.log"
@@ -68,7 +75,9 @@ for repo in $REPOS; do
   p=$(count passed); f=$(( $(count failed) + $(count error) )); s=$(count skipped)
   if [ -z "$summary" ]; then
     add_row "$repo" "NO RESULT" - - - "${secs}s" "pytest produced no summary; see $log"
-    FINDINGS+=("$repo: pytest produced no result summary (exit $code); see $log"); BAD=1; continue
+    FINDINGS+=("$repo: pytest produced no result summary (exit $code); see $log")
+    while IFS= read -r line; do FINDINGS+=("    | $(printf '%s' "$line" | cut -c1-160)"); done < <(tail -n 5 "$log")
+    BAD=1; continue
   fi
   state="ok"; [ "$f" -gt 0 ] && state="FAILING"
   add_row "$repo" "$state" "$p" "$f" "$s" "${secs}s" "network: $NETWORK"
