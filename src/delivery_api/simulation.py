@@ -7,8 +7,7 @@ from .store import PHASES,Storage
 from vmodel_contracts import CANONICAL_STAGE_IDS
 
 ARTIFACTS={"needs":"needs.json","srs":"srs.json","architecture":"architecture.json","specs":"items.json","tests":"tests.json","validation":"validation.json"}
-# The validation stage logs its own LLM calls under 'validation'; the contracts stage list predates it.
-_ALLOWED_STAGES=CANONICAL_STAGE_IDS|{"validation"}
+_ALLOWED_STAGES=CANONICAL_STAGE_IDS
 
 class ImportValidationError(ValueError):
     def __init__(self,error,cause,next_action):super().__init__(error);self.cause=cause;self.next_action=next_action
