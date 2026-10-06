@@ -172,11 +172,23 @@ class SQLiteStore:
         self._db.executescript(SCHEMA)
         self._migrate_schema()
 
+    def _add_column(self, ddl: str) -> None:
+        """ALTER TABLE ... ADD COLUMN that tolerates the column already existing.
+
+        The PRAGMA check above each call can read a stale local replica while the
+        ALTER runs on the remote primary, which may already have the column.
+        """
+        try:
+            self._db.execute(ddl)
+        except Exception as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+
     def _migrate_schema(self) -> None:
         """Small additive migrations keep local task history readable."""
         gate_cols = {r[1] for r in self._db.execute("PRAGMA table_info(gates)")}
         if "revision" not in gate_cols:
-            self._db.execute("ALTER TABLE gates ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+            self._add_column("ALTER TABLE gates ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
         phase_cols = {r[1] for r in self._db.execute("PRAGMA table_info(phases)")}
         artifact_cols = {r[1] for r in self._db.execute("PRAGMA table_info(task_artifacts)")}
         task_cols = {r[1] for r in self._db.execute("PRAGMA table_info(tasks)")}
@@ -184,27 +196,27 @@ class SQLiteStore:
         usage_cols = {r[1] for r in self._db.execute("PRAGMA table_info(usage)")}
         user_cols = {r[1] for r in self._db.execute("PRAGMA table_info(users)")}
         if "password_hash" not in user_cols:
-            self._db.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+            self._add_column("ALTER TABLE users ADD COLUMN password_hash TEXT")
         if "gate_basis_changed" not in phase_cols:
-            self._db.execute("ALTER TABLE phases ADD COLUMN gate_basis_changed INTEGER NOT NULL DEFAULT 0")
+            self._add_column("ALTER TABLE phases ADD COLUMN gate_basis_changed INTEGER NOT NULL DEFAULT 0")
         if "stale_reason" not in artifact_cols:
-            self._db.execute("ALTER TABLE task_artifacts ADD COLUMN stale_reason TEXT")
+            self._add_column("ALTER TABLE task_artifacts ADD COLUMN stale_reason TEXT")
         if "simulated" not in task_cols:
-            self._db.execute("ALTER TABLE tasks ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0")
+            self._add_column("ALTER TABLE tasks ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0")
         if "source_dir" not in task_cols:
-            self._db.execute("ALTER TABLE tasks ADD COLUMN source_dir TEXT")
+            self._add_column("ALTER TABLE tasks ADD COLUMN source_dir TEXT")
         if "owner_id" not in task_cols:
-            self._db.execute("ALTER TABLE tasks ADD COLUMN owner_id TEXT")
+            self._add_column("ALTER TABLE tasks ADD COLUMN owner_id TEXT")
         if "engine_session_id" not in task_cols:
-            self._db.execute("ALTER TABLE tasks ADD COLUMN engine_session_id TEXT")
+            self._add_column("ALTER TABLE tasks ADD COLUMN engine_session_id TEXT")
         if "interview_schema_id" not in task_cols:
-            self._db.execute("ALTER TABLE tasks ADD COLUMN interview_schema_id TEXT")
+            self._add_column("ALTER TABLE tasks ADD COLUMN interview_schema_id TEXT")
         if "interview_schema_version" not in task_cols:
-            self._db.execute("ALTER TABLE tasks ADD COLUMN interview_schema_version TEXT")
+            self._add_column("ALTER TABLE tasks ADD COLUMN interview_schema_version TEXT")
         if "model_default" not in task_cols:
-            self._db.execute("ALTER TABLE tasks ADD COLUMN model_default TEXT")
+            self._add_column("ALTER TABLE tasks ADD COLUMN model_default TEXT")
         if "owner_id" not in run_cols:
-            self._db.execute("ALTER TABLE runs ADD COLUMN owner_id TEXT")
+            self._add_column("ALTER TABLE runs ADD COLUMN owner_id TEXT")
         # Every generated phase, including final verification, has a founder
         # approval boundary. Older databases omitted the final gate and could
         # strand a completed tests process with no ActiveWork owner.
@@ -230,7 +242,7 @@ class SQLiteStore:
                 self._db.execute("UPDATE tasks SET title=? WHERE task_id=?",(f"{row['title']} ({i})",row["task_id"]))
         self._db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_title_nocase ON tasks(title COLLATE NOCASE)")
         for col, ddl in (("user_id", "TEXT"), ("input_tokens", "INTEGER NOT NULL DEFAULT 0"), ("output_tokens", "INTEGER NOT NULL DEFAULT 0")):
-            if col not in usage_cols: self._db.execute(f"ALTER TABLE usage ADD COLUMN {col} {ddl}")
+            if col not in usage_cols: self._add_column(f"ALTER TABLE usage ADD COLUMN {col} {ddl}")
         self._db.commit()
 
     def _commit(self):

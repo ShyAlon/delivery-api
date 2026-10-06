@@ -27,7 +27,7 @@ if [ -n "$ONLY" ] && ! printf '%s\n' $REPOS | grep -qx "$ONLY"; then
 fi
 
 LOGDIR="$PROJECT/.test-all-logs/$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$LOGDIR"
+RAN=0  # the log directory is created only when a suite actually runs
 
 # Can this machine run a command with the network switched off?
 if unshare -rn true >/dev/null 2>&1; then NETWORK="blocked"; else NETWORK="not enforced"; fi
@@ -60,6 +60,7 @@ for repo in $REPOS; do
   }
   args=(-q -rf -p no:cacheprovider)
   if [ "$FAST" = 1 ]; then args+=(--ignore-glob='*browser*' --ignore-glob='*playwright*'); fi
+  mkdir -p "$LOGDIR"; RAN=1
   log="$LOGDIR/$repo.log"
   start=$(date +%s)
   if [ "$NETWORK" = "blocked" ]; then
@@ -93,7 +94,8 @@ if [ ${#FINDINGS[@]} -gt 0 ]; then
   printf '\nFindings:\n'
   for line in "${FINDINGS[@]}"; do echo "  - $line"; done
 fi
-printf '\nNetwork during tests: %s\nLogs: %s\n' "$NETWORK" "$LOGDIR"
+printf '\nNetwork during tests: %s\n' "$NETWORK"
+if [ "$RAN" = 1 ]; then printf 'Logs: %s\n' "$LOGDIR"; else echo "Logs: none (no suite ran)"; fi
 if [ "$FAILED_REPOS" -eq 0 ] && [ "$BAD" -eq 0 ]; then
   echo "VERDICT: ALL GREEN"; exit 0
 fi
