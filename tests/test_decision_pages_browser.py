@@ -389,7 +389,6 @@ def test_architecture_gate_decisions_panel_is_decide_only_and_gates_approval(pag
  p.route('**/api/**',route)
  p.goto(base+'/tasks/t1/gates/gate-architecture')
  panel=p.locator('#stack-panel');expect(panel).to_be_attached()
- expect(panel.locator('#stack-count')).to_have_text('0 Of 2 Decided')
  text=panel.inner_text().lower();assert 'defer' not in text and 'skip' not in text
  expect(p.locator('[data-action=approve]')).to_be_disabled()
  expect(panel.locator('summary')).to_have_text('Decisions Needed · 0 Of 2 Decided');assert panel.locator('details').get_attribute('open') is None
