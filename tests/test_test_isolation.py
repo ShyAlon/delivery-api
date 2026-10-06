@@ -6,8 +6,8 @@ from pathlib import Path
 from delivery_api.store import SQLiteStore
 
 
-def test_conftest_clears_turso_env_before_tests_import_the_app():
-    env = {**os.environ, "TURSO_DATABASE_URL": "libsql://real.example", "TURSO_AUTH_TOKEN": "secret"}
+def test_conftest_turns_off_turso_and_real_database_before_tests_import_the_app():
+    env = {**os.environ, "TURSO_DATABASE_URL": "libsql://real.example", "TURSO_AUTH_TOKEN": "secret", "DELIVERY_DATABASE_URL": "sqlite:////home/real/delivery.db"}
     probe = Path(__file__).with_name("_env_isolation_probe.py")
     done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(probe)],
                           env=env, capture_output=True, text=True)
