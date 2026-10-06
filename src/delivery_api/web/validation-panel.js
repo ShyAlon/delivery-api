@@ -6,7 +6,6 @@ const row=(label,value)=>value?`<div class="validation-row"><b>${esc(label)}</b>
 
 function itemHtml(item){
   const parts=[
-    row('What You Do',item.what_you_do),
     row('What To Look For',item.what_to_look_for),
     row('Pass When',item.pass_when),
     row('Where',item.where),
