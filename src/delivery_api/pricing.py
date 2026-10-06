@@ -41,3 +41,28 @@ def price_execution(usage_path:Path,llm_path:Path,wall_ms:float,usage_start:int=
         token_price=tokens*PRICE_PER_TOKEN;infra_price=(share/10)*PRICE_PER_10MS
         result.append({"phase":phase,**item,"tokens":tokens,"deterministic_ms":round(share,3),"token_price":round(token_price,6),"infra_price":round(infra_price,6),"price":round(token_price+infra_price,6),"price_usd":round((token_price+infra_price)*USD_PER_CREDIT,6),"cost_usd":round(item["cost_usd"],8),"unpriced_calls":item["unpriced_calls"],"rates":{"price_per_token":PRICE_PER_TOKEN,"price_per_10ms":PRICE_PER_10MS,"usd_per_credit":USD_PER_CREDIT,"scale":"credits"}})
     return result
+
+
+def usage_tokens(path:Path)->int:
+    """Prompt plus completion tokens recorded in one usage.jsonl."""
+    return sum(int(r.get("prompt_tokens") or 0)+int(r.get("completion_tokens") or 0) for r in _rows(path))
+
+def token_credits(tokens:int|float)->float:
+    return tokens*PRICE_PER_TOKEN
+
+def credits_to_usd(credits:float)->float:
+    return credits*USD_PER_CREDIT
+
+def write_cost_json(session_root:Path)->dict|None:
+    """Internal per-session cost rollup (contracts cost_rollup over the interview and
+    downstream usage files). It sits beside the phase folders, is not a phase
+    artifact, and is never listed, zipped or handed off. Estimate: tokens x the
+    versioned price table, an upper bound (no cache-hit or off-peak pricing)."""
+    from vmodel_contracts import cost_rollup
+    rows=[]
+    for area in ("interview","spec"):rows+=_rows(session_root/area/"usage.jsonl")
+    if not rows:return None
+    report=cost_rollup(rows)
+    target=session_root/"cost.json";tmp=session_root/".cost.json.tmp"
+    tmp.write_text(json.dumps(report,indent=1,sort_keys=True));tmp.replace(target)
+    return report

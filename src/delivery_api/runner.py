@@ -192,6 +192,10 @@ class ProcessRunner:
                     priced_phase=quote.pop("phase")
                     self.store.add_event(task_id,"price",f"Price {quote['price']:,.2f} credits",phase_key=priced_phase,payload=quote)
                     self.store.audit("pricing","phase.priced",task_id,{"phase":priced_phase,**quote})
+                try:
+                    from .pricing import write_cost_json
+                    write_cost_json(usage_path.parent.parent)
+                except OSError:pass
             if task_id in self.interrupted_for_shutdown:
                 # Keep the durable task phase running: startup will recover it
                 # from the latest interview session checkpoint.
