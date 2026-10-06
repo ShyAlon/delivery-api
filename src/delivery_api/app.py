@@ -989,7 +989,8 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
         "needs.json":("vmodel_contracts.needs","StakeholderNeedsSet"),"srs.json":("vmodel_contracts.srs","SRSDocument"),
         "architecture.json":("vmodel_contracts.architecture","ArchitectureOverview"),"items.json":("vmodel_contracts.spec","ItemSpec[]"),
         "spec_items.json":("vmodel_contracts.spec","SpecBundle"),"tests.json":("vmodel_contracts.verification","AcceptanceTest[]"),
-        "test_specifications.json":("vmodel_contracts.verification","AcceptanceTest[]")}
+        "test_specifications.json":("vmodel_contracts.verification","AcceptanceTest[]"),
+        "validation.json":("vmodel_contracts.verification","ValidationPlan")}
     for phase in PHASE_DEFINITIONS:
         folder=root/("interview" if phase.key in ("intent","conops") else "spec")
         for filename in phase.artifacts:
@@ -1022,7 +1023,8 @@ def _task_artifact(task_id:str,phase:str,name:str)->Path:
     return path
 
 _OUTPUT_PARTIALS={"srs":"srs_fills.partial.json","architecture":"architecture.partial.json",
-                  "specs":"items.partial.json","tests":"tests_fills.partial.json"}
+                  "specs":"items.partial.json","tests":"tests_fills.partial.json",
+                  "validation":"validation_fills.partial.json"}
 
 @app.get("/api/tasks/{task_id}/phase-output")
 def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
@@ -1067,7 +1069,7 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
             partial=json.loads(source.read_text())
             if ((phase=="architecture" and isinstance(partial,dict)
                  and not any(partial.get(k) for k in ("stack_entries","component_bodies","adr_bodies")))
-                or (phase in ("srs","tests") and isinstance(partial,dict) and not partial)
+                or (phase in ("srs","tests","validation") and isinstance(partial,dict) and not partial)
                 or (phase=="specs" and isinstance(partial,list) and not partial)):
                 source=folder/"__empty_partial__"
         except (OSError,ValueError):
@@ -1125,7 +1127,7 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
         if display_phase=="srs":rows=[*data.get("functional",[]),*data.get("non_functional",[])] if isinstance(data,dict) else []
         elif display_phase=="needs":rows=data.get("needs",[]) if isinstance(data,dict) else []
         elif display_phase=="architecture":rows=[*data.get("decisions",[]),*data.get("components",[])] if isinstance(data,dict) else []
-        elif display_phase in ("specs","tests"):rows=data if isinstance(data,list) else data.get("items",[]) if isinstance(data,dict) else []
+        elif display_phase in ("specs","tests","validation"):rows=data if isinstance(data,list) else data.get("items",[]) if isinstance(data,dict) else []
         elif display_phase=="conops":rows=[*data.get("operational_scenarios",[]),*data.get("concept_options",[])] if isinstance(data,dict) else []
         else:rows=[data] if isinstance(data,dict) else []
     elif phase=="architecture" and isinstance(data,dict):
@@ -1135,6 +1137,8 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
             if isinstance(values,dict):
                 rows.extend({"id":str(identity),**value} for identity,value in values.items() if isinstance(value,dict))
     elif phase=="specs" and isinstance(data,list):rows=data
+    elif phase=="validation" and isinstance(data,dict):
+        rows=[item for value in data.values() if isinstance(value,dict) for item in value.get("items") or [] if isinstance(item,dict)]
     elif phase in ("srs","tests") and isinstance(data,dict):
         rows=[{"id":key,**value} for key,value in data.items() if isinstance(value,dict)]
     else:rows=[]
@@ -1152,7 +1156,7 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 def task_artifact_download(task_id:str,phase:str,name:str):
     return FileResponse(_task_artifact(task_id,phase,name),filename=name)
 
-_ARTIFACT_TITLES={"intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification"}
+_ARTIFACT_TITLES={"intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification","validation.json":"Validation"}
 
 def _checkpoint_interview_turns(task_id:str)->list[tuple[str,str]]:
     """Recover historical turns when old API events stored only answer lengths."""
@@ -1289,6 +1293,22 @@ def _decision_provenance(task_id:str,architecture:dict)->list[dict]:
                        "label":label,"founder_evidence":supported,"baseline_refs":refs})
     return result
 
+def _validation_panel_for(task_id:str,raw:str)->dict|None:
+    """Validation items grouped by need, built from the session's own artifacts."""
+    from .validation_panel import validation_panel
+    def load(phase,name):
+        try:return json.loads(_task_artifact(task_id,phase,name).read_text())
+        except (HTTPException,OSError,ValueError):return None
+    try:validation=json.loads(raw)
+    except ValueError:return None
+    ledger=None
+    session=_recorded_engine_session(task_id)
+    if session:
+        from vmodel_contracts.runtime import artifacts_root
+        try:ledger=json.loads((artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"spec"/"findings-ledger.json").read_text())
+        except (OSError,ValueError):ledger=None
+    return validation_panel(validation,load("needs","needs.json"),load("tests","tests.json"),ledger)
+
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}/view")
 def task_artifact_view(task_id:str,phase:str,name:str):
     path=_task_artifact(task_id,phase,name)
@@ -1305,7 +1325,8 @@ def task_artifact_view(task_id:str,phase:str,name:str):
         if display_format!="markdown":text=f"# {_ARTIFACT_TITLES[name]}\n\n"+text;display_format="markdown"
         text=text.rstrip()+"\n\n"+transcript+"\n"
     provenance=_decision_provenance(task_id,json.loads(raw)) if name=="architecture.json" else None
-    return {"name":name,"title":_ARTIFACT_TITLES.get(name,Path(name).stem.replace("_"," ").title()),"phase":phase,"format":display_format,"content":text,"raw_format":"json" if path.suffix==".json" else "text","raw_content":raw,"display_name":display_path.name,"decision_provenance":provenance}
+    panel=_validation_panel_for(task_id,raw) if name=="validation.json" else None
+    return {"name":name,"title":_ARTIFACT_TITLES.get(name,Path(name).stem.replace("_"," ").title()),"phase":phase,"format":display_format,"content":text,"raw_format":"json" if path.suffix==".json" else "text","raw_content":raw,"display_name":display_path.name,"decision_provenance":provenance,"validation_panel":panel}
 
 @app.get("/api/tasks/{task_id}/artifacts.zip")
 def task_artifacts_zip(task_id:str):
@@ -1572,7 +1593,7 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
     session=store.engine_session(task_id)
     eligible=(task["state"]=="failed" and task["active_phase"]=="needs" and phases["needs"]=="failed"
               and all(phases[key] in ("approved","done") for key in ("intent","conops"))
-              and all(phases[key]=="pending" for key in ("srs","architecture","specs","tests"))
+              and all(phases[key]=="pending" for key in ("srs","architecture","specs","tests","validation"))
               and session and runner.work_state(task_id) is None and task_id not in runner.processes)
     def reject(reason: str, next_step: str) -> None:
         if body.confirm:

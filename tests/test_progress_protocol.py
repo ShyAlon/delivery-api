@@ -101,9 +101,10 @@ def test_every_generator_phase_uses_one_progress_and_gate_boundary(tmp_path):
         sid = str(uuid4())
         progress = signal(task_id, sid, definition.key).model_dump_json()
         artifact = definition.artifacts[0]
+        payload = '[]' if definition.key == 'tests' else '{"session_id":"s","items":[]}' if definition.key == 'validation' else '{}'
         script = ("from pathlib import Path; import sys; "
                   "out=Path(sys.argv[sys.argv.index('--out')+1]); "
-                  f"(out/{artifact!r}).write_text('[]' if {definition.key!r}=='tests' else '{{}}'); "
+                  f"(out/{artifact!r}).write_text({payload!r}); "
                   f"print({(PREFIX + progress)!r},flush=True)")
         runner = ProcessRunner(store)
         result = asyncio.run(runner.run(task_id, [sys.executable, "-c", script, "--out", str(out)],

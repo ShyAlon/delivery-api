@@ -214,6 +214,13 @@ class SQLiteStore:
             for position,(key,label) in enumerate(PHASES):
                 if key not in existing:
                     self._db.execute("INSERT INTO gates(task_id,gate_key,after_phase,label,position,is_open,state,options) VALUES (?,?,?,?,?,0,'idle',?)",(task["task_id"],f"gate-{key}",key,f"{label} gate",position,json.dumps([f"Approve {label}","Choose another option"])))
+        # A phase added after a task was created gets a pending row, so every
+        # task lists the same phases. Finished tasks stay finished.
+        for task in tasks:
+            have={row[0] for row in self._db.execute("SELECT phase_key FROM phases WHERE task_id=?",(task["task_id"],))}
+            for position,(key,label) in enumerate(PHASES):
+                if key not in have:
+                    self._db.execute("INSERT INTO phases(task_id,phase_key,label,position,state) VALUES (?,?,?,?, 'pending')",(task["task_id"],key,label,position))
         # Older databases may contain duplicate labels. Preserve every task and
         # make collisions explicit before installing the uniqueness invariant.
         duplicates=self._db.execute("SELECT lower(title) k FROM tasks GROUP BY lower(title) HAVING count(*)>1").fetchall()
@@ -481,7 +488,7 @@ class SQLiteStore:
             if not row or row["state"]!="failed" or row["active_phase"]!="needs" or not row["engine_session_id"]:return False
             states={p["phase_key"]:p["state"] for p in self._db.execute("SELECT phase_key,state FROM phases WHERE task_id=?",(task_id,))}
             if any(states.get(phase) not in ("approved","done") for phase in ("intent","conops")) or states.get("needs")!="failed":return False
-            if any(states.get(phase) not in ("pending","failed") for phase in ("srs","architecture","specs","tests")):return False
+            if any(states.get(phase) not in ("pending","failed") for phase in ("srs","architecture","specs","tests","validation")):return False
             now=time.time()
             self._db.execute("UPDATE phases SET state='running',detail='Retrying failed Stakeholder needs',completed=0,total=NULL,started_at=?,completed_at=NULL WHERE task_id=? AND phase_key='needs'",(now,task_id))
             self._db.execute("UPDATE tasks SET state='running',active_phase='needs',updated_at=? WHERE task_id=?",(now,task_id))

@@ -146,7 +146,7 @@ def test_dashboard_draws_v_and_all_task_states(page, ui):
     partial=page.locator('.session-card',has_text='Partial discovery evidence')
     partial.wait_for()
     assert partial.locator('.session-v .status-done').count()==1
-    assert partial.locator('.session-v .status-not_started').count()==7
+    assert partial.locator('.session-v .status-not_started').count()==8
     page.goto(ui)
     page.locator('.task').first.wait_for()
     assert page.get_by_text("In progress").count() == 1
@@ -714,7 +714,7 @@ def test_browser_logs_runtime_version_and_reloads_when_server_changes(page,ui):
 def test_detail_uses_one_large_v_process_without_duplicate_path_map(page,ui):
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
     page.goto(ui+'/tasks/live/view');phases=page.locator('.phase-list-primary .phase');phases.first.wait_for()
-    assert phases.count()==7 and page.locator('.detail-layout .v-map').count()==0 and page.locator('.detail-layout .gate-legend').count()==0
+    assert phases.count()==8 and page.locator('.detail-layout .v-map').count()==0 and page.locator('.detail-layout .gate-legend').count()==0
     first=phases.first.bounding_box();assert first['height']>=70
 
 def test_server_accepted_decision_event_closes_founder_box(page,ui):
@@ -1870,7 +1870,7 @@ def test_phase_change_dialog_explains_pauses_input_and_keeps_progress_underneath
     dialog.wait_for(timeout=12000)
     text = dialog.inner_text()
     assert "Moving from Concept of operations to Stakeholder needs" in text
-    assert "PHASE 3 OF 7" in text and "INPUT PAUSED" in text.upper()
+    assert "PHASE 3 OF 8" in text and "INPUT PAUSED" in text.upper()
     assert "Organizing your answers into stakeholder needs." in text
     assert "Your input is paused" in text
     page.evaluate("window.__emit({kind:'progress',phase_key:'needs',message:'Drafting need 2 of 6'})")

@@ -26,7 +26,7 @@ def package(task,session,handoff,folder:Path):
     files=handoff['files']
     required={'README.md','founder-decisions.json','founder-decisions.md','decisions.json','interview/intent_model.json','interview/conops.json','spec/needs.json','spec/srs.json','spec/architecture.json','spec/items.json','spec/tests.json','spec/AGENTS.md','spec/manifest.json','spec/traceability.json'}
     if not required.issubset(files):raise PackageBlocked('Missing export outputs: '+', '.join(sorted(required-set(files))))
-    expected={'README.md','founder-decisions.json','founder-decisions.md','decisions.json','interview/intent_model.json','interview/conops.json','spec/needs.json','spec/srs.json','spec/architecture.json','spec/items.json','spec/tests.json','spec/AGENTS.md','spec/manifest.json','spec/traceability.json','spec/system-baseline.json'}
+    expected={'README.md','founder-decisions.json','founder-decisions.md','decisions.json','interview/intent_model.json','interview/conops.json','spec/needs.json','spec/srs.json','spec/architecture.json','spec/items.json','spec/tests.json','spec/validation.json','spec/AGENTS.md','spec/manifest.json','spec/traceability.json','spec/system-baseline.json'}
     expected|={'interview/semantic-review.json','spec/srs.semantic-review.json'}
     companions={n[:-5]+'.md' for n in expected if n.endswith('.json') and n.startswith(('interview/','spec/'))}
     for name,text in files.items():

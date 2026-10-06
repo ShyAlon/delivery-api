@@ -13,7 +13,7 @@ def test_task_three_states_and_phase_progress():
         assert made.status_code == 201
         task_id = made.json()["task_id"]
         empty = client.get(f"/api/tasks/{task_id}").json()
-        assert empty["state"] == "not_started" and len(empty["phases"]) == 7 and not empty["artifacts"]
+        assert empty["state"] == "not_started" and len(empty["phases"]) == 8 and not empty["artifacts"]
 
         store.set_model_route(task_id, "distillation=ollama/phi4")
         store.update_phase(task_id, "intent", "running", detail="coverage 3/11", completed=3, total=11)
@@ -22,7 +22,7 @@ def test_task_three_states_and_phase_progress():
         assert running["state"] == "running" and running["phases"][0]["total"] == 11
         assert running["events"][0]["payload"]["completed"] == 3
 
-        for key in ("intent", "conops", "needs", "srs", "architecture", "specs", "tests"):
+        for key in ("intent", "conops", "needs", "srs", "architecture", "specs", "tests", "validation"):
             store.update_phase(task_id, key, "done")
         store.add_task_artifact(task_id, "tests", "Verification report", "/artifacts/report.json")
         done = client.get(f"/api/tasks/{task_id}").json()
@@ -174,7 +174,7 @@ def test_simulation_import_pause_decide_and_complete_without_process(tmp_path):
     (source/'tests.json').write_text('[]')
     isolated=SQLiteStore(str(tmp_path/'sim.db')); sim=Simulation(isolated)
     task=sim.import_run(source)
-    assert task['simulated'] and task['state']=='not_started' and len(task['gates'])==7
+    assert task['simulated'] and task['state']=='not_started' and len(task['gates'])==8
     isolated.set_gate_open(task['task_id'],'gate-conops',True)
     async def go():
       job=asyncio.create_task(sim.replay(task['task_id'],None))
@@ -657,7 +657,7 @@ def test_orchestrator_phase_plan_launches_next_bounded_process(monkeypatch,tmp_p
     from delivery_api.orchestrator import PhaseOrchestrator
     from delivery_api.phases import PHASE_DEFINITIONS
     from delivery_api.store import SQLiteStore
-    assert tuple((phase.key,phase.generator_stage) for phase in PHASE_DEFINITIONS if phase.executor=="generator")==(("needs","needs"),("srs","srs"),("architecture","architecture"),("specs","items"),("tests","tests"))
+    assert tuple((phase.key,phase.generator_stage) for phase in PHASE_DEFINITIONS if phase.executor=="generator")==(("needs","needs"),("srs","srs"),("architecture","architecture"),("specs","items"),("tests","tests"),("validation","validation"))
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
     store=SQLiteStore(str(tmp_path/'plan.db'));tid=store.create_task('Planned product')['task_id'];store.add_event(tid,'progress','session: session-1',phase_key='intent')
     interview=tmp_path/'artifacts'/'session-1'/'interview';interview.mkdir(parents=True)
@@ -995,10 +995,10 @@ def test_phase_configuration_is_canonical_and_complete():
     from delivery_api.phases import PHASE_DEFINITIONS,PHASE_BY_KEY,successor
     from delivery_api.store import PHASES
     assert tuple((p.key,p.label) for p in PHASE_DEFINITIONS)==PHASES
-    assert [p.key for p in PHASE_DEFINITIONS]==['intent','conops','needs','srs','architecture','specs','tests']
-    assert [p.generator_stage for p in PHASE_DEFINITIONS[2:]]==['needs','srs','architecture','items','tests']
+    assert [p.key for p in PHASE_DEFINITIONS]==['intent','conops','needs','srs','architecture','specs','tests','validation']
+    assert [p.generator_stage for p in PHASE_DEFINITIONS[2:]]==['needs','srs','architecture','items','tests','validation']
     assert PHASE_BY_KEY['architecture'].prerequisite=='system-baseline'
-    assert [successor(p.key).key if successor(p.key) else None for p in PHASE_DEFINITIONS]==['conops','needs','srs','architecture','specs','tests',None]
+    assert [successor(p.key).key if successor(p.key) else None for p in PHASE_DEFINITIONS]==['conops','needs','srs','architecture','specs','tests','validation',None]
 
 def test_active_work_is_one_standard_projection_for_subprocess_and_decision(tmp_path):
     import asyncio,sys
@@ -1206,13 +1206,13 @@ def test_requirement_resolution_restores_owner_from_same_durable_snapshot(monkey
 def test_final_verification_waits_for_approval_and_finishes_task(tmp_path):
     from delivery_api.store import SQLiteStore
     store=SQLiteStore(str(tmp_path/'final-gate.db'));tid=store.create_task('Final approval')['task_id']
-    store.update_phase(tid,'tests','awaiting_approval',detail='Generated; waiting for founder approval')
-    gate=store.wait_at_gate(tid,'tests')
-    assert gate and gate['gate_key']=='gate-tests'
+    store.update_phase(tid,'validation','awaiting_approval',detail='Generated; waiting for founder approval')
+    gate=store.wait_at_gate(tid,'validation')
+    assert gate and gate['gate_key']=='gate-validation'
     assert store.task(tid)['state']=='waiting_gate'
-    store.decide_gate(tid,'gate-tests','approve',selected_option='Approve Verification')
+    store.decide_gate(tid,'gate-validation','approve',selected_option='Approve Validation')
     task=store.task(tid)
-    assert task['state']=='done' and next(p for p in task['phases'] if p['phase_key']=='tests')['state']=='approved'
+    assert task['state']=='done' and next(p for p in task['phases'] if p['phase_key']=='validation')['state']=='approved'
 
 
 def test_existing_database_migrates_missing_final_verification_gate(tmp_path):

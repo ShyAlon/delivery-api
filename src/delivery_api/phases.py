@@ -19,6 +19,7 @@ PHASE_DEFINITIONS = (
     PhaseDefinition("architecture", "Architecture", "generator", "architecture", "system-baseline", ("architecture.json",)),
     PhaseDefinition("specs", "Item specifications", "generator", "items", artifacts=("items.json", "spec_items.json")),
     PhaseDefinition("tests", "Verification", "generator", "tests", artifacts=("tests.json", "test_specifications.json")),
+    PhaseDefinition("validation", "Validation", "generator", "validation", artifacts=("validation.json",)),
 )
 PHASE_BY_KEY = {phase.key: phase for phase in PHASE_DEFINITIONS}
 PHASE_KEYS = tuple(phase.key for phase in PHASE_DEFINITIONS)

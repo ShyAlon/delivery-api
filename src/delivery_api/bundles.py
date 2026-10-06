@@ -70,7 +70,7 @@ def _discover(where:Path)->list[dict]:
    "oracle_passed":bool(integrity) and not bool(diagnostics),"files_checked":integrity.get("files_checked",0),"phases":phases,"phase_status":_phase_status(interview,spec,run,integrity),"path":str(d)})
  return sorted(out,key=lambda x:(x["updated_at"] or "",x["session_id"]),reverse=True)
 def _phase_status(interview:Path,spec:Path,run:dict,integrity:dict)->dict:
- values={"interview":(interview/"intent_model.json").is_file(),"needs":(spec/"needs.json").is_file(),"srs":(spec/"srs.json").is_file(),"architecture":(spec/"architecture.json").is_file(),"specs":(spec/"items.json").is_file() or (spec/"spec_items.json").is_file(),"tests":(spec/"tests.json").is_file() or (spec/"test_specifications.json").is_file(),"reviews":(interview/"audit.jsonl").is_file() or (spec/"audit.jsonl").is_file(),"oracle":bool(integrity)}
+ values={"interview":(interview/"intent_model.json").is_file(),"needs":(spec/"needs.json").is_file(),"srs":(spec/"srs.json").is_file(),"architecture":(spec/"architecture.json").is_file(),"specs":(spec/"items.json").is_file() or (spec/"spec_items.json").is_file(),"tests":(spec/"tests.json").is_file() or (spec/"test_specifications.json").is_file(),"validation":(spec/"validation.json").is_file(),"reviews":(interview/"audit.jsonl").is_file() or (spec/"audit.jsonl").is_file(),"oracle":bool(integrity)}
  explicit=run.get("phases",{}) if isinstance(run,dict) else {};diagnostics=integrity.get("diagnostics",[]) if isinstance(integrity,dict) else []
  out={}
  for key,present in values.items():
@@ -100,6 +100,7 @@ def bundle(session:str)->dict:
  needs=_first(spec,"needs.json",default={}) or {};srs=_first(spec,"srs.json",default={}) or {};arch=_first(spec,"architecture.json",default={}) or {}
  items=_rows(_first(spec,"items.json","spec_items.json",default=[]),"items","specs")
  tests=_rows(_first(spec,"tests.json","test_specifications.json",default=[]),"tests")
+ validation=_rows(_first(spec,"validation.json",default={}),"items")
  integrity=_json(spec/"bundle-integrity.json",{}) or {};run=_json(spec/"hands-free-run.json",{}) or {}
  audits=[]
  for area in (interview,spec):
@@ -126,7 +127,7 @@ def bundle(session:str)->dict:
  coverage=_json(interview/"coverage.json",{}) or {}
  # Status is derived from this session's artifacts, run state and diagnostics - never a UI constant.
  diagnostic_rows=integrity.get("diagnostics",[]) if isinstance(integrity,dict) else []
- phase_values={"interview":intent or conops,"needs":_rows(needs,"needs"),"srs":reqs,"architecture":arch,"specs":items,"tests":tests,"reviews":audits,"oracle":integrity}
+ phase_values={"interview":intent or conops,"needs":_rows(needs,"needs"),"srs":reqs,"architecture":arch,"specs":items,"tests":tests,"validation":validation,"reviews":audits,"oracle":integrity}
  phase_status={}
  run_phases=run.get("phases",{}) if isinstance(run,dict) else {}
  for key,value in phase_values.items():
@@ -141,4 +142,4 @@ def bundle(session:str)->dict:
   else:state="not_started"
   phase_status[key]=state
  phase_status["interview"]=_phase_status(interview,spec,run,integrity)["interview"]
- return {"session":next((x for x in discover() if x["session_id"]==session),{"session_id":session}),"phase_status":phase_status,"intent":intent,"conops":conops,"coverage":coverage,"needs":_rows(needs,"needs"),"srs":srs,"requirements":reqs,"architecture":arch,"items":items,"tests":tests,"audits":audits,"integrity":integrity,"run":run,"graph":{"nodes":nodes,"edges":edges}}
+ return {"session":next((x for x in discover() if x["session_id"]==session),{"session_id":session}),"phase_status":phase_status,"intent":intent,"conops":conops,"coverage":coverage,"needs":_rows(needs,"needs"),"srs":srs,"requirements":reqs,"architecture":arch,"items":items,"tests":tests,"validation":validation,"audits":audits,"integrity":integrity,"run":run,"graph":{"nodes":nodes,"edges":edges}}
