@@ -1845,6 +1845,23 @@ def _srs_semantic_path(task_id:str)->Path:
     from vmodel_contracts.runtime import artifacts_root
     return artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session/'spec'/'srs.semantic-review.json'
 
+def _stack_decisions_path(task_id:str)->Path:
+    return _srs_semantic_path(task_id).with_name('architecture.decisions.json')
+
+def _read_stack_decisions(task_id:str):
+    """The architecture gate's open research_required slots (written by spec-generator), or None."""
+    if not _recorded_engine_session(task_id):return None
+    path=_stack_decisions_path(task_id)
+    if not path.is_file() or path.is_symlink():return None
+    try:data=json.loads(path.read_text())
+    except ValueError:raise HTTPException(409,'architecture decisions file is unreadable')
+    if not isinstance(data,dict) or not isinstance(data.get('slots'),list) or not isinstance(data.get('revision'),str):
+        raise HTTPException(409,'architecture decisions file is malformed')
+    return data
+
+def _open_stack_slots(data)->list[str]:
+    return [s['key'] for s in (data or {}).get('slots',[]) if not s.get('founder_decision')]
+
 def _gate_review(task_id:str,gate_key:str)->dict:
     task=get_task(task_id)
     gate=next((g for g in task['gates'] if g['gate_key']==gate_key),None)
@@ -1861,12 +1878,13 @@ def _gate_review(task_id:str,gate_key:str)->dict:
             from vmodel_contracts.semantic_review import SemanticReview
             semantic=SemanticReview.model_validate_json(path.read_text()).model_dump(mode='json')
             if semantic['session_id']!=_recorded_engine_session(task_id):raise HTTPException(409,'semantic review belongs to another session')
-    basis={'generation':task['generation'],'gate':gate,'artifacts':artifacts,'documents':documents,'semantic_review':semantic}
+    stack_decisions=_read_stack_decisions(task_id) if gate['after_phase']=='architecture' else None
+    basis={'generation':task['generation'],'gate':gate,'artifacts':artifacts,'documents':documents,'semantic_review':semantic,'stack_decisions':stack_decisions}
     import hashlib
     raw=json.dumps(basis,sort_keys=True,separators=(',',':'),ensure_ascii=False)
     if len(raw.encode())>6_000_000:raise HTTPException(413,'gate review exceeds snapshot limit')
     revision='gate:'+hashlib.sha256(raw.encode()).hexdigest()
-    review={'revision':revision,'phase_key':gate['after_phase'],'task':task,'documents':documents,'semantic_review':semantic}
+    review={'revision':revision,'phase_key':gate['after_phase'],'task':task,'documents':documents,'semantic_review':semantic,'stack_decisions':stack_decisions}
     store.retain_decision_review(task_id,'gate:'+gate_key,revision,review)
     return review
 
@@ -1922,6 +1940,41 @@ def decide_semantic_gate(task_id:str,gate_key:str,body:SemanticDecisions,a:auth.
     store.add_event(task_id,'semantic_review','Semantic candidate decisions recorded',phase_key='srs',payload={'revision':review.revision,'decisions':[d.model_dump() for d in review.decisions],'actor':a.label})
     return {'status':'reviewed','revision':review.revision}
 
+class StackDecision(BaseModel):
+    key:str=Field(min_length=1,max_length=200)
+    text:str=Field(max_length=2000)
+    reason:str=Field(max_length=1000)
+
+class StackDecisions(BaseModel):
+    revision:str=Field(pattern=r'^[a-f0-9]{64}$')
+    decisions:list[StackDecision]=Field(min_length=1,max_length=200)
+
+@app.post('/api/tasks/{task_id}/gates/{gate_key}/stack-decisions')
+def decide_stack_gate(task_id:str,gate_key:str,body:StackDecisions,a:auth.Actor=Depends(auth.require_actor)):
+    """Decide-only: each open research_required slot gets the founder's decision and reason. No defer."""
+    live=_gate_review(task_id,gate_key);data=live.get('stack_decisions')
+    gate=next(g for g in live['task']['gates'] if g['gate_key']==gate_key)
+    if not data or data['revision']!=body.revision or gate['state']!='waiting':raise HTTPException(409,'architecture decisions changed')
+    keys={s['key'] for s in data['slots']}
+    for d in body.decisions:
+        if d.key not in keys:raise HTTPException(422,f'unknown slot {d.key}')
+        if not d.text.strip() or not d.reason.strip():raise HTTPException(422,'both a decision and a reason are required')
+    from datetime import datetime,timezone
+    at=datetime.now(timezone.utc).isoformat()
+    made={d.key:{'text':d.text.strip(),'reason':d.reason.strip(),'actor':a.label,'at':at} for d in body.decisions}
+    artifact=_task_artifact(task_id,'architecture','architecture.json')
+    full=json.loads(artifact.read_text())
+    for entry in full.get('stack_entry_dispositions') or []:
+        if entry.get('key') in made:entry['founder_decision']=made[entry['key']]
+    companion={**data,'slots':[{**s,'founder_decision':made.get(s['key'],s.get('founder_decision')),
+                               'prefill':None if s['key'] in made else s.get('prefill')} for s in data['slots']]}
+    # Companion first: spec-generator consumes it on resume; the artifact shows the same decisions.
+    path=_stack_decisions_path(task_id);temporary=path.with_suffix('.tmp');temporary.write_text(json.dumps(companion,indent=2));temporary.replace(path)
+    temporary=artifact.with_suffix('.tmp');temporary.write_text(json.dumps(full,indent=2));temporary.replace(artifact)
+    artifact.with_suffix('.md').unlink(missing_ok=True)
+    store.add_event(task_id,'stack_decisions','Architecture stack decisions recorded',phase_key='architecture',payload={'decided':sorted(made),'open':_open_stack_slots(companion),'actor':a.label})
+    return {'status':'saved','revision':data['revision'],'open':_open_stack_slots(companion)}
+
 class GateDecision(BaseModel):
     action: Literal["approve","edit","redo"]
     selected_option: str|None=None
@@ -1948,6 +2001,9 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
                 resolved=semantic.resolved_candidate(lambda candidate:None)
                 canonical=json.loads(task_artifact_view(task_id,'srs','srs.json')['raw_content'])
                 if any(canonical.get(k)!=v for k,v in resolved.items()):raise ValueError('Reviewed SRS write is incomplete; save the item decisions again before approving')
+        if pending['after_phase']=='architecture' and req.action!='redo':
+            still_open=_open_stack_slots(_read_stack_decisions(task_id))
+            if still_open:raise ValueError(f'{len(still_open)} architecture decision(s) still open; decide each one before approving')
         if pending["state"]=="waiting" and req.action in ("approve","edit"):
             evidence=[a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==pending["after_phase"] and not a.get("stale") and a.get("present",True)]
             if not evidence or not any(Path(a["ref"]).is_file() and a.get("valid") is not False for a in evidence):

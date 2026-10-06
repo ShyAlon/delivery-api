@@ -100,6 +100,8 @@ class PhaseOrchestrator:
             raise RuntimeError(f"spec-generator environment is missing at {python}. Run scripts/pull-all.sh before retrying the phase.")
         cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",definition.generator_stage]
         if mode is ExecutionMode.REDO:cmd.extend(["--from",definition.generator_stage])
+        # Attended run: items may not start while an architecture slot lacks a founder decision.
+        if definition.generator_stage=="items":cmd.append("--require-decisions")
         stored,source=(model_route,"phase selection") if model_route else model_routes.task_default_model(self.store,task_id,definition.generator_stage)
         route,sep,model=stored.partition(":")
         if source != "legacy generator configuration (no recorded exact selection)" and not sep:
