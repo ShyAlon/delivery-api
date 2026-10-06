@@ -1757,6 +1757,38 @@ def _is_credit_event(event:dict)->bool:
     # Events written before the credit rescale carry no scale marker and sit on the old unit scale.
     return ((event.get("payload") or {}).get("rates") or {}).get("scale")=="credits"
 
+def _task_cost(task_id:str)->dict:
+    """Running customer price: credits and USD only. Priced phases come from their
+    price events; model tokens recorded in the usage files but not yet covered by an
+    event (the phase is still running) and all interview tokens are added at the token
+    rate, so the total grows as calls land. Interview calls carry no process-time part."""
+    from .pricing import usage_tokens,token_credits,credits_to_usd
+    latest={}
+    for event in store.events(task_id):
+        if event.get("kind")=="price":latest[event.get("phase_key")]=event
+    session=_recorded_engine_session(task_id);interview_tokens=spec_tokens=0
+    if session:
+        from vmodel_contracts.runtime import artifacts_root
+        root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session
+        interview_tokens=usage_tokens(root/"interview"/"usage.jsonl");spec_tokens=usage_tokens(root/"spec"/"usage.jsonl")
+    counted=[e for e in latest.values() if _is_credit_event(e) and not (interview_tokens and e.get("phase_key") in ("intent","conops"))]
+    event_price=sum(float((e.get("payload") or {}).get("price") or 0) for e in counted)
+    event_tokens=sum(int((e.get("payload") or {}).get("tokens") or 0) for e in counted if e.get("phase_key") not in ("intent","conops"))
+    price=event_price+token_credits(interview_tokens)+token_credits(max(0,spec_tokens-event_tokens))
+    return {"price":round(price,6),"price_usd":round(credits_to_usd(price),6)}
+
+@app.get("/api/tasks/{task_id}/cost")
+def task_cost(task_id:str,request:Request):
+    if not store.task(task_id):raise HTTPException(404,"task not found")
+    session=_recorded_engine_session(task_id)
+    if session:
+        try:
+            from vmodel_contracts.runtime import artifacts_root
+            from .pricing import write_cost_json
+            write_cost_json(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session)
+        except (OSError,ValueError):pass
+    return _task_cost(task_id)
+
 @app.get("/api/tasks/{task_id}/audit")
 def task_audit(task_id: str, request: Request):
     if not store.task(task_id): raise HTTPException(404, "task not found")
@@ -1789,6 +1821,7 @@ def task_audit(task_id: str, request: Request):
     counted=[event for event in priced if _is_credit_event(event) and not (interview_usage and event.get("phase_key") in ("intent","conops"))]
     totals["price_usd"]=round(sum(float((event.get("payload") or {}).get("price_usd") or 0) for event in counted),6)
     totals["cost_usd"]=round(sum(float((event.get("payload") or {}).get("cost_usd") or 0) for event in counted)+totals["interview_cost_usd"],6)
+    live=_task_cost(task_id);totals["price"]=live["price"];totals["price_usd"]=live["price_usd"]
     totals["unpriced_calls"]=sum(int((event.get("payload") or {}).get("unpriced_calls") or 0) for event in counted)+totals["interview_unpriced_calls"]
     return {"actor_mode": auth.actor(request).label, "entries": store.audit_entries(task_id),"totals":totals}
 

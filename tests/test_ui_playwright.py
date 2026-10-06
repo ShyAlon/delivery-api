@@ -52,6 +52,7 @@ s.set_model_route("live", "ollama/phi4")
 s.update_phase("live", "intent", "done", detail="Approved")
 s.update_phase("live", "conops", "running", detail="Option 2/3", completed=2, total=3)
 s.add_event("live", "progress", "Generating CONOPS option 2/3", phase_key="conops")
+s.add_event("live", "price", "Price 1.25 credits", phase_key="intent", payload={"tokens":100000,"price":1.25,"price_usd":1.25,"rates":{"scale":"credits"}})
 s.create_task("Finished definition", "Artifacts ready", task_id="done")
 for key,_ in __import__("delivery_api.store", fromlist=["PHASES"]).PHASES: s.update_phase("done", key, "done")
 s.add_task_artifact("done", "architecture", "Architecture overview", "/architecture.json")
@@ -1961,3 +1962,18 @@ def test_failed_architecture_has_a_retry_that_resumes_the_phase(page,ui):
     assert sent[0]=={'phase':'architecture','confirm':False}
     assert sent[1]=={'phase':'architecture','confirm':True,'model_route':'deepseek','model':'deepseek-flash'}
 
+
+
+def test_running_cost_header_shows_credits_and_usd_and_grows_while_running(page,ui):
+    page.goto(ui+"/tasks/live/view")
+    header=page.locator("#costtotal")
+    header.wait_for(state="attached")
+    page.wait_for_function("document.querySelector('#costtotal').textContent.includes('credits')")
+    assert header.inner_text()=="1.25 credits · $1.25"
+    assert "token" not in page.locator(".detail-head").inner_text().lower()
+    page.screenshot(path="/downloads/running-cost-header.png",clip={"x":0,"y":0,"width":1365,"height":260})
+    totals=iter([{"price":2.5,"price_usd":2.5},{"price":3.75,"price_usd":3.75}])
+    last={"price":3.75,"price_usd":3.75}
+    page.route("**/api/tasks/live/cost",lambda route:route.fulfill(json=next(totals,last)))
+    page.wait_for_function("document.querySelector('#costtotal').textContent.startsWith('3.75')",timeout=20000)
+    assert header.inner_text()=="3.75 credits · $3.75"

@@ -652,9 +652,33 @@ def test_audit_rolls_up_http_interview_usage_without_double_counting(tmp_path,mo
  request=Request({'type':'http','headers':[]})
  result=module.task_audit(tid,request)
  totals=result['totals']
- assert totals['tokens']==290 and totals['price']==100
+ assert totals['tokens']==290 and totals['price']==round(100+240*0.0000125,6)
  assert totals['interview_calls']==3 and totals['interview_unpriced_calls']==1
  assert round(totals['interview_cost_usd'],6)==0.00023
+
+
+def test_running_cost_includes_interview_and_unpriced_downstream_tokens_and_writes_cost_json(tmp_path,monkeypatch):
+ import json
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ root=tmp_path/'artifacts'/session
+ row=lambda stage,p,c,pin=1,pout=2:{'stage':stage,'provider':'deepseek','model':'deepseek-flash','prompt_tokens':p,'completion_tokens':c,'price_per_mtok_prompt_usd':pin,'price_per_mtok_completion_usd':pout}
+ (root/'interview'/'usage.jsonl').write_text(json.dumps(row('probing',1000,0))+'\n')
+ assert module.task_cost(tid,None)['price']==round(1000*0.0000125,6)
+ # a running downstream phase: tokens recorded, no price event yet
+ (root/'spec').mkdir(exist_ok=True)
+ (root/'spec'/'usage.jsonl').write_text(json.dumps(row('needs',2000,0))+'\n')
+ live=module.task_cost(tid,None)
+ assert live['price']==round(3000*0.0000125,6) and live['price_usd']==live['price']
+ # once the phase is priced, its tokens are not counted twice
+ store.add_event(tid,'price','Downstream price',phase_key='needs',payload={'tokens':2000,'price':0.026,'rates':{'scale':'credits'}})
+ assert module.task_cost(tid,None)['price']==round(0.026+1000*0.0000125,6)
+ # a second call lands after the price event
+ (root/'spec'/'usage.jsonl').write_text((root/'spec'/'usage.jsonl').read_text()+json.dumps(row('needs',400,100))+'\n')
+ assert module.task_cost(tid,None)['price']==round(0.026+1000*0.0000125+500*0.0000125,6)
+ report=json.loads((root/'cost.json').read_text())
+ assert report['calls']==3 and report['unpriced_calls']==0 and 'by_stage' in report and 'upper bound' in report['basis']
+ # internal only: not a phase artifact, not in any artifact listing
+ assert not any('cost.json' in json.dumps(a) for a in store.task_artifacts(tid))
 
 
 def test_retry_requires_exact_choice_if_no_recorded_selection_and_starts_fresh(tmp_path,monkeypatch):
