@@ -21,6 +21,7 @@ env:
 
 jobs:
   test:
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 20 || 10 }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +38,9 @@ jobs:
         run: |
           test -n "$VMODEL_CONTRACTS_PAT" || { echo 'Error: VMODEL_CONTRACTS_PAT repo secret is unset. Create a fine-grained PAT with read-only contents on ShyAlon/vmodel-contracts, then: gh secret set VMODEL_CONTRACTS_PAT'; exit 1; }
           git config --global url."https://x-access-token:${VMODEL_CONTRACTS_PAT}@github.com/ShyAlon/vmodel-contracts.git".insteadOf "https://github.com/ShyAlon/vmodel-contracts.git"
-      - run: ./scripts/test-local.sh
+      - run: DELIVERY_TEST_SCOPE=pr ./scripts/test-local.sh
+        env:
+          DELIVERY_BROWSER_SCOPE: ${{ github.event_name == 'workflow_dispatch' && 'full' || 'smoke' }}
 
   image:
     if: github.event_name == 'workflow_dispatch'

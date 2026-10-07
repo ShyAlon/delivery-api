@@ -1,3 +1,4 @@
+import pytest
 from uuid import uuid4
 from vmodel_contracts.progress_signal import ProgressSignal,ProgressPage
 from vmodel_contracts.interactive import EngineSnapshot,InputRequest,InputKind,ProcessStatus,NextStep
@@ -56,6 +57,7 @@ def test_successful_subprocess_without_configured_artifact_fails_without_gate(tm
     assert next(g for g in current['gates'] if g['after_phase']=='tests')['state']=='idle'
 
 
+@pytest.mark.engine_integration
 def test_http_client_and_delivery_ingest_read_during_engine_start(tmp_path):
     import threading
     from interview_engine.http_service import SessionRegistry,create_app

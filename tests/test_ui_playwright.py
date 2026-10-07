@@ -40,7 +40,7 @@ def ui(tmp_path_factory):
     (session/"spec/items.json").write_text(json.dumps([{"spec_id":"SPEC-1","title":"Task status module","requirement_ids":["R-1"]}]))
     (session/"spec/tests.json").write_text(json.dumps([{"test_id":"T-1","title":"Status visible","criterion_ids":["AC-1"],"spec_ids":["SPEC-1"]}]))
     (session/"spec/audit.jsonl").write_text(json.dumps({"event":"gate.simulated_expert_opinion","gate":"architecture","action":"approve","upstream_advisories":[{"artifact":"srs"}]})+"\n")
-    env = {**os.environ, "DELIVERY_DB_PATH": str(db),"VMODEL_ARTIFACTS_DIR":str(artifacts),
+    env = {**os.environ, "DELIVERY_DB_PATH": str(db),"DELIVERY_DATABASE_URL": f"sqlite:///{db}","VMODEL_ARTIFACTS_DIR":str(artifacts),
            "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     seed = '''
 from delivery_api.store import SQLiteStore
@@ -245,7 +245,7 @@ def test_gate_redo_requires_steer_in_browser(page, ui):
 
 def test_basic_auth_browser_signup_signin_persists_and_logs(tmp_path):
     db=tmp_path/"basic-ui.db";port=_port();log=Path(__file__).parents[1]/"run.log"
-    env={**os.environ,"DELIVERY_DB_PATH":str(db),"DELIVERY_BASIC_AUTH_ENABLED":"1","DELIVERY_COOKIE_SECURE":"0","PYTHONPATH":str(Path(__file__).parents[1]/"src")}
+    env={**os.environ,"DELIVERY_DB_PATH":str(db),"DELIVERY_DATABASE_URL":f"sqlite:///{db}","DELIVERY_BASIC_AUTH_ENABLED":"1","DELIVERY_COOKIE_SECURE":"0","PYTHONPATH":str(Path(__file__).parents[1]/"src")}
     proc=subprocess.Popen([sys.executable,"-m","uvicorn","delivery_api.app:app","--host","127.0.0.1","--port",str(port)],env=env);base=f"http://127.0.0.1:{port}"
     try:
         for _ in range(50):
@@ -272,7 +272,7 @@ def test_basic_auth_browser_signup_signin_persists_and_logs(tmp_path):
 
 def test_oauth_identity_and_logout_in_browser(tmp_path):
     db=tmp_path/"oauth-ui.db";port=_port()
-    env={**os.environ,"DELIVERY_DB_PATH":str(db),"DELIVERY_SESSION_SECRET":"0123456789abcdef0123456789abcdef",
+    env={**os.environ,"DELIVERY_DB_PATH":str(db),"DELIVERY_DATABASE_URL":f"sqlite:///{db}","DELIVERY_SESSION_SECRET":"0123456789abcdef0123456789abcdef",
          "DELIVERY_GOOGLE_CLIENT_ID":"id","DELIVERY_GOOGLE_CLIENT_SECRET":"secret",
          "DELIVERY_COOKIE_SECURE":"0","PYTHONPATH":str(Path(__file__).parents[1]/"src")}
     seed='''from delivery_api.store import SQLiteStore\nimport os,time\ns=SQLiteStore(os.environ["DELIVERY_DB_PATH"])\nu=s.upsert_user("google","42","shy@example.com","shy@example.com",1000,True)\ns.create_session("browser-session",u["user_id"],time.time()+1000)'''
@@ -1074,12 +1074,14 @@ def test_spec_items_render_as_closed_collapsible_panels_with_formatted_markdown(
     assert first.locator('.spec-body table td').count()==2 and first.locator('.spec-body code').inner_text()=='loadCourse'
     assert '# SPEC-1' not in first.inner_text() and '## 1.' not in first.inner_text()
 
-def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips(page,ui):
+@pytest.mark.parametrize("viewport", [{"width":1365,"height":850},{"width":390,"height":844}])
+def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips(page,ui,viewport):
+    page.set_viewport_size(viewport)
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'A very long progress update that must remain on precisely one line while the full wording stays available on hover','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');feed=page.locator('#stageprogress .progress-item');feed.wait_for();span=feed.locator('span');assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');feed=page.locator('#stageprogress .progress-item');feed.wait_for();span=feed.locator('span');assert span.bounding_box()['width']>0;assert span.bounding_box()['x']+span.bounding_box()['width']<=page.viewport_size['width'];assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
     phase=page.locator('.phase-list-primary .phase').filter(has_text='Requirements');phase.hover();tip=phase.get_by_role('tooltip');tip.wait_for();assert tip.get_by_text('Artifacts: srs.json',exact=True).is_visible();assert tip.get_by_text('missing acceptance criterion',exact=False).is_visible()
-    page.screenshot(path='/downloads/progress-phase-tooltips.png',full_page=True)
+    page.screenshot(path=f'/downloads/progress-phase-tooltips-{viewport["width"]}.png',full_page=True)
 
 
 def test_dashboard_renders_existing_task_with_final_verification_gate(page,ui):

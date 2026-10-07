@@ -653,6 +653,8 @@ def test_runner_can_close_engine_approved_phases(tmp_path):
 
 
 def test_orchestrator_phase_plan_launches_next_bounded_process(monkeypatch,tmp_path):
+    generator=tmp_path/"generator";python=generator/".venv/bin/python";python.parent.mkdir(parents=True);python.touch()
+    monkeypatch.setenv("SPEC_GENERATOR_DIR",str(generator))
     import asyncio,json
     from delivery_api.orchestrator import PhaseOrchestrator
     from delivery_api.phases import PHASE_DEFINITIONS
@@ -673,6 +675,8 @@ def test_orchestrator_phase_plan_launches_next_bounded_process(monkeypatch,tmp_p
 
 
 def test_orchestrator_architecture_is_greenfield_without_decision(monkeypatch,tmp_path):
+    generator=tmp_path/"generator";python=generator/".venv/bin/python";python.parent.mkdir(parents=True);python.touch()
+    monkeypatch.setenv("SPEC_GENERATOR_DIR",str(generator))
     import asyncio,json
     from delivery_api.orchestrator import PhaseOrchestrator
     from delivery_api.store import SQLiteStore
@@ -1141,6 +1145,8 @@ def test_orphaned_running_ui_state_explains_missing_owner():
 
 
 def test_greenfield_correction_recovers_session_from_recent_requirement_path(monkeypatch,tmp_path):
+    generator=tmp_path/"generator";python=generator/".venv/bin/python";python.parent.mkdir(parents=True);python.touch()
+    monkeypatch.setenv("SPEC_GENERATOR_DIR",str(generator))
     import asyncio,json
     from delivery_api.orchestrator import PhaseOrchestrator
     from delivery_api.store import SQLiteStore
@@ -1264,6 +1270,8 @@ def test_legacy_artifact_projection_recovers_session_from_requirement_path(monke
     records=app_module._task_artifact_snapshot(tid);assert len(records)==1 and records[0]['name']=='architecture.json' and records[0]['validator']=='ArchitectureOverview'
 
 def test_orchestrator_phase_override_reaches_engine_and_is_durable(monkeypatch,tmp_path):
+    generator=tmp_path/"generator";python=generator/".venv/bin/python";python.parent.mkdir(parents=True);python.touch()
+    monkeypatch.setenv("SPEC_GENERATOR_DIR",str(generator))
     import asyncio,json
     from delivery_api.orchestrator import PhaseOrchestrator,ExecutionMode
     from delivery_api.store import SQLiteStore

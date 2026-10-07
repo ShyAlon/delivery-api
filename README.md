@@ -204,8 +204,29 @@ The build checks this before dependency installation and stops with Error / Like
 
 ### Local CI test
 
-Run `./scripts/test-local.sh` from any directory. It creates a reusable `.venv`, installs the development dependencies and runs the same tests as the PR workflow using Python 3.12. Install Python 3.12 first, and make sure your Git authentication can read private `ShyAlon/vmodel-contracts` where it is a dependency.
+Run `./scripts/test-local.sh` from any directory. It creates a reusable `.venv`, installs the development dependencies and runs the full local suite using Python 3.12. Set DELIVERY_TEST_SCOPE=pr for the bounded PR suite. Install Python 3.12 first, and make sure your Git authentication can read private `ShyAlon/vmodel-contracts` where it is a dependency.
 
 For the local packaged app build, run `./scripts/build-dist.sh` from `delivery-api` with the sibling repositories checked out as described above. This builds the desktop distribution; it does not publish an image or deploy production. For a local container build, use the Docker command and private dependency instructions in the Docker section above.
 
 For a standalone wheel build of this repository, run `./scripts/build-local.sh` (requires Python 3.12 and pip). This writes to `dist/` and does not publish or deploy anything.
+
+### Bounded pull-request checks
+
+CI runs every delivery-api core test plus a small browser set covering the
+workspace, task states, account/gate navigation, live progress, cost and review
+feed. It stops on the first browser failure instead of spending a timeout on
+every dependent assertion. The job has a ten-minute outer limit. This is not
+a full release check. Manual image-build/deploy runs use all browser tests
+with a twenty-minute outer limit; PRs use only the browser smoke set.
+
+Three tests marked `engine_integration` exercise the real interview-engine
+boundary. They require interview-engine installed in the same environment;
+the delivery-only PR check explicitly excludes them. The real package-export
+test is marked `producer_integration` and requires a configured spec-generator
+environment; it is also excluded explicitly, rather than silently skipped.
+Before release, install the approved sibling engine and configure
+SPEC_GENERATOR_DIR with its export environment and run the full local suite, including every
+browser test, with `./scripts/test-local.sh`. No live model is required. The
+four command-planning tests use a test-owned generator path and fake runners,
+not a sibling generator environment. Nothing is quarantined as an unexplained
+CI-only layout difference.
