@@ -86,6 +86,11 @@ def page(ui):
         yield page
         browser.close()
 
+@pytest.fixture(scope="module", autouse=True)
+def screenshot_directory(tmp_path_factory):
+    global _screenshots_dir
+    _screenshots_dir = tmp_path_factory.mktemp("ui-screenshots")
+
 def _promote_control(snapshot):
     legacy=snapshot.get('ui_state') or {}
     c=snapshot.setdefault('control_snapshot',{})
@@ -191,7 +196,7 @@ def test_start_screen_displays_engine_resolved_model_and_conflict(page, ui):
     assert 'INTERVIEW_ENGINE_MODEL_PROBING' in page.locator('#startstatus').inner_text()
     selector.select_option('ollama')
     assert page.get_by_role('button',name='Start interview').is_enabled()
-    page.screenshot(path="/downloads/interview-model-preview.png",full_page=True)
+    page.screenshot(path=str(_screenshots_dir / "interview-model-preview.png"),full_page=True)
 
 
 def test_not_started_running_and_done_pages(page, ui):
@@ -391,11 +396,11 @@ def test_session_discovery_bundle_and_trace_diagram(page,ui):
     assert head.evaluate("e=>e.parentElement.classList.contains('bundle-workspace')")
     assert head.bounding_box()["height"] < 150
     assert panel.bounding_box()["y"] >= head.bounding_box()["y"]+head.bounding_box()["height"]
-    page.screenshot(path="/downloads/vmodel-phase-page-v-nav.png",full_page=True)
+    page.screenshot(path=str(_screenshots_dir / "vmodel-phase-page-v-nav.png"),full_page=True)
 
 def test_artifacts_folder_setting_validates_and_reports_sessions(page,ui):
     page.goto(ui+"/sessions");page.get_by_role("button",name="Artifacts folder").click()
-    page.screenshot(path="/downloads/vmodel-artifacts-folder-setting.png",full_page=True)
+    page.screenshot(path=str(_screenshots_dir / "vmodel-artifacts-folder-setting.png"),full_page=True)
     page.locator('input[name="path"]').fill('/definitely/missing/artifacts')
     page.get_by_role("button",name="Validate & load sessions").click()
     page.get_by_text("Artifacts folder could not be loaded.").wait_for()
@@ -510,7 +515,7 @@ def test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled(page,ui):
     assert send.inner_text()=='Sending…' and send.is_disabled() and answer.is_disabled() and cancel.is_visible()
     assert spinner.is_visible() and spinner.get_attribute('role')=='status'
     assert spinner.locator('i').evaluate('e=>getComputedStyle(e).animationName')=='answer-spin'
-    page.screenshot(path='/downloads/interview-answer-sending.png',full_page=False)
+    page.screenshot(path=str(_screenshots_dir / 'interview-answer-sending.png'),full_page=False)
     assert answer.input_value()=='A careful answer still in flight' and page.get_by_text('request timed out',exact=False).count()==0
     cancel.click();page.get_by_text('Send cancelled. Your answer is still here.').wait_for()
     assert send.is_enabled() and answer.is_enabled() and answer.input_value()=='A careful answer still in flight'
@@ -549,7 +554,7 @@ def test_structured_founder_decision_opens_large_card_dialog_and_formats_answer(
     assert dialog.get_by_text('Fast offline',exact=False).is_visible() and dialog.get_by_text('Limited APIs',exact=False).is_visible()
     box=dialog.bounding_box();assert box['width']>900
     dialog.get_by_text('PWA',exact=True).click();dialog.locator('textarea').fill('One deployment fits our team')
-    page.screenshot(path='/downloads/structured-founder-decision.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'structured-founder-decision.png'),full_page=True)
     dialog.locator('textarea').press('Enter')
     assert submitted==[{'answer':'2 - One deployment fits our team','decision_id':'concept','expected_sequence':1}]
 
@@ -577,7 +582,7 @@ def test_stored_pending_decision_reopens_on_page_load_and_panels_align(page,ui):
     boxes=[panels.nth(i).bounding_box() for i in range(2)]
     assert abs((boxes[0]['y']+boxes[0]['height'])-(boxes[1]['y']+boxes[1]['height']))<2
     assert page.locator('.live-status-row').is_visible()
-    page.screenshot(path='/downloads/restart-decision-aligned-panels.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'restart-decision-aligned-panels.png'),full_page=True)
 
 def test_detail_layout_never_crushes_or_overlaps_at_user_viewport(page,ui):
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
@@ -599,7 +604,7 @@ def test_detail_layout_never_crushes_or_overlaps_at_user_viewport(page,ui):
     assert palette['approved']=='rgb(22, 163, 106)' and palette['awaiting_approval']=='rgb(229, 182, 61)' and palette['running']=='rgb(78, 156, 247)' and palette['pending']=='rgb(242, 240, 233)'
     assert page.locator('.phase.running').count()==1
     assert page.locator('.live-console').count()==0
-    page.screenshot(path='/downloads/detail-layout-clean-1390x827.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'detail-layout-clean-1390x827.png'),full_page=True)
 
 def test_founder_dialog_fixed_controls_and_vertical_four_options(page,ui):
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
@@ -621,7 +626,7 @@ def test_founder_dialog_fixed_controls_and_vertical_four_options(page,ui):
     cards.nth(2).click();selected=cards.nth(2);assert selected.evaluate("e=>e.classList.contains('selected')")
     style=selected.locator('.option-copy b').evaluate("e=>({weight:getComputedStyle(e).fontWeight,bg:getComputedStyle(e).backgroundColor})")
     assert int(style['weight'])>=700 and style['bg']!='rgba(0, 0, 0, 0)'
-    page.screenshot(path='/downloads/founder-dialog-vertical-four-options.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'founder-dialog-vertical-four-options.png'),full_page=True)
 
 def test_founder_decision_outside_click_dismisses_and_persistent_bar_reopens(page,ui):
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
@@ -650,7 +655,7 @@ def test_decision_ready_bar_is_first_and_sticky_during_page_scroll(page,ui):
     box=launch.bounding_box();assert box and box['y']>=80 and box['y']<160
     assert launch.get_by_text('Required to continue',exact=False).is_visible()
     launch.click();assert page.locator('.decision-dialog').is_visible()
-    page.screenshot(path='/downloads/decision-ready-sticky.png',full_page=False)
+    page.screenshot(path=str(_screenshots_dir / 'decision-ready-sticky.png'),full_page=False)
 
 def test_answered_decision_clears_and_binary_approval_uses_same_dialog(page,ui):
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
@@ -664,7 +669,7 @@ def test_answered_decision_clears_and_binary_approval_uses_same_dialog(page,ui):
     page.unroute('**/api/tasks/live');page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"intent",payload:{waiting_input:true,decision},ts:1720000300})',approval)
     dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.get_by_text('Approve',exact=True).is_visible() and dialog.get_by_text('Reject',exact=True).is_visible();assert dialog.locator('.decision-why').is_hidden()
-    page.screenshot(path='/downloads/typed-intent-approval.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'typed-intent-approval.png'),full_page=True)
     assert dialog.locator('.decision-submit').is_hidden();dialog.get_by_text('Approve',exact=True).click();page.locator('.decision-dialog').wait_for(state='detached');assert submitted==[{'answer':'y','decision_id':'intent-approval','expected_sequence':None}]
     assert page.locator('#opendecision').count()==0 and page.locator('.live-indicator').get_by_text('Decision received',exact=False).is_visible()
 
@@ -701,7 +706,7 @@ def test_intent_approval_shows_selected_concept_and_founder_reason(page,ui):
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view')
     context=page.locator('.decision-context');context.wait_for();assert context.get_by_text('PWA',exact=True).is_visible()
     assert context.get_by_text('You stated you chose this concept because one deployment fits our team',exact=True).is_visible()
-    page.screenshot(path='/downloads/intent-approval-with-concept-reason.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'intent-approval-with-concept-reason.png'),full_page=True)
 
 def test_browser_logs_runtime_version_and_reloads_when_server_changes(page,ui):
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
@@ -760,7 +765,7 @@ def test_managed_task_state_reducer_is_exhaustive_and_atomic(page,ui):
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"intent",payload:{waiting_input:true,decision},ts:1720000500})',decision)
     dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.get_by_text('Approve',exact=True).is_visible()
     assert page.locator('#answerform').is_hidden() and page.locator('#opendecision').is_visible()
-    page.screenshot(path='/downloads/managed-state-intent-decision.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'managed-state-intent-decision.png'),full_page=True)
     app_source=(Path(__file__).parents[1]/'src/delivery_api/web/task.js').read_text();state_source=(Path(__file__).parents[1]/'src/delivery_api/web/ui-state.js').read_text()
     assert 'reduceTaskSnapshot' in app_source and 'next.mode!==view.mode' in app_source and 'TASK_UI_ACTIONS' in state_source
 
@@ -822,10 +827,10 @@ def test_gate_page_shows_requirements_evidence_and_full_content(page,ui):
     assert '2b045c5f' not in evidence.inner_text()
     assert evidence.locator('.artifact-readable h1').count()==0
     assert page.locator('#gateform').locator('[data-action="approve"]').is_enabled()
-    page.screenshot(path='/downloads/full-gate-requirements-desktop.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'full-gate-requirements-desktop.png'),full_page=True)
     page.set_viewport_size({'width':390,'height':844})
     assert evidence.locator('.artifact-readable').is_visible()
-    page.screenshot(path='/downloads/full-gate-requirements-phone.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'full-gate-requirements-phone.png'),full_page=True)
 
 
 def test_gate_transition_reconciles_delayed_next_phase(page,ui):
@@ -850,7 +855,7 @@ def test_gate_transition_reconciles_delayed_next_phase(page,ui):
     notice=page.locator('#phase-transition-status')
     notice.wait_for()
     assert 'Starting Concept of operations' in notice.inner_text()
-    page.screenshot(path='/downloads/jev-d7-phase-transition-desktop.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'jev-d7-phase-transition-desktop.png'),full_page=True)
     expect(notice).to_have_count(0,timeout=12000)
     assert reads['count']>3
 
@@ -867,9 +872,9 @@ def test_architecture_gate_identifies_model_proposed_decision(page,ui):
     panel=page.locator('.decision-provenance');panel.wait_for()
     assert panel.get_by_text('ADR-4').is_visible()
     assert panel.get_by_text('Model-proposed decision').is_visible()
-    page.screenshot(path='/downloads/jev-d7-architecture-provenance-desktop.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'jev-d7-architecture-provenance-desktop.png'),full_page=True)
     page.set_viewport_size({'width':390,'height':844})
-    page.screenshot(path='/downloads/jev-d7-architecture-provenance-phone.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'jev-d7-architecture-provenance-phone.png'),full_page=True)
 
 def test_gate_page_missing_artifact_blocks_approval(page,ui):
     task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate['state']='waiting'
@@ -883,7 +888,7 @@ def test_gate_page_missing_artifact_blocks_approval(page,ui):
     # a disabled primary always says why, next to the buttons
     expect(page.locator('#decision-checklist')).to_contain_text('no current artifact to approve')
     assert page.locator('[data-action="approve"]').inner_text().startswith('Approve ')
-    page.screenshot(path='/downloads/gate-blocked-checklist.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'gate-blocked-checklist.png'),full_page=True)
 
 
 def test_gate_page_refreshes_arriving_artifact_without_losing_form_input(page,ui):
@@ -906,7 +911,7 @@ def test_gate_page_refreshes_arriving_artifact_without_losing_form_input(page,ui
     expect(page.locator('#gate-decision-status')).to_contain_text('Gate evidence changed')
     assert not page.locator('[data-action="approve"]').is_enabled()
     assert page.locator('[name="edited_text"]').input_value()=='Keep this review note'
-    page.screenshot(path='/downloads/jev-d6-live-gate-evidence.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'jev-d6-live-gate-evidence.png'),full_page=True)
 
 
 def test_gate_page_explains_controls_and_tooltips_desktop_and_phone(page,ui):
@@ -917,11 +922,11 @@ def test_gate_page_explains_controls_and_tooltips_desktop_and_phone(page,ui):
         assert dialog.get_by_text(text,exact=False).is_visible()
     page.locator('.model-panel summary').click()
     help_button=dialog.get_by_role('button',name='What does opening a gate do?');help_button.focus();tip=dialog.get_by_role('tooltip').filter(has_text='auto-approves when the phase arrives');expect(tip).to_be_visible()
-    page.screenshot(path='/downloads/gate-help-desktop.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'gate-help-desktop.png'),full_page=True)
     mock_gate_review(page,ui,'sim')
     page.set_viewport_size({'width':390,'height':844});page.goto(ui+'/tasks/sim/gates/gate-intent');dialog=page.locator('#gateform');dialog.wait_for();page.locator('.model-panel summary').click();dialog.get_by_role('button',name='What does opening a gate do?').focus()
     tip=dialog.get_by_role('tooltip').filter(has_text='auto-approves when the phase arrives');expect(tip).to_be_visible();box=tip.bounding_box();assert box['x']>=0 and box['x']+box['width']<=390
-    page.screenshot(path='/downloads/gate-help-phone.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'gate-help-phone.png'),full_page=True)
 
 
 def test_decision_dialog_rationale_help_is_real_and_keyboard_accessible(page,ui):
@@ -969,8 +974,8 @@ def test_live_progress_scope_and_account_menu_desktop_and_phone(page,ui):
     page.set_viewport_size({'width':1365,'height':800});page.goto(ui+'/tasks/live/view')
     scope=page.locator('.progress-scope');scope.wait_for();assert scope.locator('b').all_inner_texts()==['8','20','12'];assert 'out of' in scope.inner_text() and 'minutes so far' in scope.inner_text()
     page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for();assert menu.get_by_text('shy@example.com',exact=True).is_visible();assert menu.get_by_role('menuitem',name='Debug',exact=True).is_visible();assert menu.get_by_role('menuitem',name='Sign out').is_visible()
-    page.screenshot(path='/downloads/live-scope-account-desktop.png',full_page=True);page.keyboard.press('Escape');assert menu.is_hidden()
-    page.set_viewport_size({'width':390,'height':844});page.reload();scope.wait_for();page.locator('#accountbutton').click();menu.wait_for();page.screenshot(path='/downloads/live-scope-account-phone.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'live-scope-account-desktop.png'),full_page=True);page.keyboard.press('Escape');assert menu.is_hidden()
+    page.set_viewport_size({'width':390,'height':844});page.reload();scope.wait_for();page.locator('#accountbutton').click();menu.wait_for();page.screenshot(path=str(_screenshots_dir / 'live-scope-account-phone.png'),full_page=True)
 
 def test_recovered_run_hides_stale_sigterm_error_from_live_console(page,ui):
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
@@ -1014,7 +1019,7 @@ def test_missing_resource_dialog_has_recovery_paths_and_greenfield_confirmation(
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');dialog=page.locator('.requirement-dialog');dialog.wait_for()
     assert dialog.get_by_text(requirement['path'],exact=True).is_visible();assert dialog.get_by_role('button',name="I've added the file · check it").is_visible();assert dialog.get_by_role('button',name='Copy fact checklist').is_visible();dialog.get_by_role('button',name='I chose Existing by mistake').click();confirm=page.get_by_role('dialog',name='Confirm Greenfield correction');confirm.wait_for();assert confirm.get_by_role('button',name='Switch & continue').is_visible()
-    page.screenshot(path='/downloads/missing-resource-recovery.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'missing-resource-recovery.png'),full_page=True)
 
 def test_copy_debug_info_includes_runtime_snapshot_and_resource_decision(page,ui):
     page.add_init_script("""window.__copied='';Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>window.__copied=text}})""")
@@ -1081,7 +1086,7 @@ def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_t
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'A very long progress update that must remain on precisely one line while the full wording stays available on hover','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');feed=page.locator('#stageprogress .progress-item');feed.wait_for();span=feed.locator('span');assert span.bounding_box()['width']>0;assert span.bounding_box()['x']+span.bounding_box()['width']<=page.viewport_size['width'];assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
     phase=page.locator('.phase-list-primary .phase').filter(has_text='Requirements');phase.hover();tip=phase.get_by_role('tooltip');tip.wait_for();assert tip.get_by_text('Artifacts: srs.json',exact=True).is_visible();assert tip.get_by_text('missing acceptance criterion',exact=False).is_visible()
-    page.screenshot(path=f'/downloads/progress-phase-tooltips-{viewport["width"]}.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / f'progress-phase-tooltips-{viewport["width"]}.png'),full_page=True)
 
 
 def test_dashboard_renders_existing_task_with_final_verification_gate(page,ui):
@@ -1092,12 +1097,12 @@ def test_dashboard_renders_existing_task_with_final_verification_gate(page,ui):
 
 def test_completed_artifacts_have_singleton_tooltips_viewer_and_downloads(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='done';live['active_phase']='tests';live['phases'][-1]['state']='approved';live['artifacts']=[{'phase_key':'architecture','name':'architecture.json','ref':'/tmp/architecture.json','mime_type':'application/json','stale':False,'generation':4,'present':True,'valid':True,'validation_error':None}];live['ui_state']={'mode':'complete','active_phase':'tests','process_live':False,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.route('**/api/tasks/live/artifacts/architecture/architecture.json/view',lambda route:route.fulfill(json={'name':'architecture.json','phase':'architecture','format':'markdown','display_name':'architecture.md','content':'# Daily Habit Architecture\n\n- Progressive web app','raw_format':'json','raw_content':'{\n  "system": "Daily Habit"\n}'}));page.goto(ui+'/tasks/live/view');rows=page.locator('.phase-list-primary .phase');rows.nth(4).dispatch_event('mouseenter');assert rows.nth(4).locator('.phase-tooltip').is_visible();rows.nth(4).dispatch_event('mouseleave');rows.nth(5).dispatch_event('mouseenter');assert 'tip-open' not in (rows.nth(4).get_attribute('class') or '');assert 'tip-open' in (rows.nth(5).get_attribute('class') or '');assert page.locator('.download-all').is_visible();page.get_by_role('button',name='architecture.json').click();viewer=page.locator('.artifact-viewer');viewer.wait_for();assert viewer.get_by_role('heading',name='Daily Habit Architecture').is_visible();assert viewer.get_by_text('Progressive web app').is_visible();assert viewer.get_by_text('Show raw json').is_visible();assert viewer.get_by_role('link',name='Download').is_visible();page.screenshot(path='/downloads/completed-artifact-viewer.png',full_page=True)
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.route('**/api/tasks/live/artifacts/architecture/architecture.json/view',lambda route:route.fulfill(json={'name':'architecture.json','phase':'architecture','format':'markdown','display_name':'architecture.md','content':'# Daily Habit Architecture\n\n- Progressive web app','raw_format':'json','raw_content':'{\n  "system": "Daily Habit"\n}'}));page.goto(ui+'/tasks/live/view');rows=page.locator('.phase-list-primary .phase');rows.nth(4).dispatch_event('mouseenter');assert rows.nth(4).locator('.phase-tooltip').is_visible();rows.nth(4).dispatch_event('mouseleave');rows.nth(5).dispatch_event('mouseenter');assert 'tip-open' not in (rows.nth(4).get_attribute('class') or '');assert 'tip-open' in (rows.nth(5).get_attribute('class') or '');assert page.locator('.download-all').is_visible();page.get_by_role('button',name='architecture.json').click();viewer=page.locator('.artifact-viewer');viewer.wait_for();assert viewer.get_by_role('heading',name='Daily Habit Architecture').is_visible();assert viewer.get_by_text('Progressive web app').is_visible();assert viewer.get_by_text('Show raw json').is_visible();assert viewer.get_by_role('link',name='Download').is_visible();page.screenshot(path=str(_screenshots_dir / 'completed-artifact-viewer.png'),full_page=True)
 
 def test_artifact_viewer_uses_shared_dialog_shell_and_local_close(page,ui):
     def mutate(live):live.update({'state':'done','artifacts':[{'phase_key':'intent','name':'intent_model.json','title':'Needs and Scope','stale':False,'generation':4,'present':True,'valid':True,'validator':'IntentModel','validation_errors':[]}],'ui_state':{'mode':'complete','active_phase':'tests','process_live':False,'decision':None,'gate':None}})
     page.route('**/api/tasks/live/artifacts/intent/intent_model.json/view',lambda route:route.fulfill(json={'name':'intent_model.json','title':'Needs and Scope','phase':'intent','format':'json','content':'{}'}));route_task_snapshot(page,ui,'live',mutate);page.goto(ui+'/tasks/live/view');card=page.locator('[data-view-artifact]').first;card.wait_for();assert card.get_by_text('Needs and Scope',exact=True).is_visible();card.click();shell=page.locator('.dialog-shell');viewer=page.get_by_role('dialog',name='Artifact viewer');viewer.wait_for();close=viewer.get_by_role('button',name='Close artifact viewer');assert close.is_visible();vb=viewer.bounding_box();cb=close.bounding_box();assert cb['x']>=vb['x'] and cb['x']+cb['width']<=vb['x']+vb['width'];assert cb['y']>=vb['y'] and cb['y']+cb['height']<=vb['y']+vb['height'];page.keyboard.press('Escape');assert shell.count()==0
-    card.click();page.screenshot(path='/downloads/shared-artifact-dialog.png',full_page=True)
+    card.click();page.screenshot(path=str(_screenshots_dir / 'shared-artifact-dialog.png'),full_page=True)
 
 def test_artifact_viewer_shows_json_artifacts_readably(page,ui):
     def mutate(live):live.update({'state':'done','artifacts':[{'phase_key':'intent','name':'intent_model.json','title':'Needs and Scope','stale':False,'generation':4,'present':True,'valid':True,'validator':'IntentModel','validation_errors':[]}],'ui_state':{'mode':'complete','active_phase':'tests','process_live':False,'decision':None,'gate':None}})
@@ -1105,7 +1110,7 @@ def test_artifact_viewer_shows_json_artifacts_readably(page,ui):
     card.click();dlg=page.locator('.artifact-viewer');dlg.wait_for();assert dlg.locator('pre.artifact-content').count()==0;assert 'The app shall play a clip.' in dlg.inner_text() and '{' not in dlg.locator('.gate-structured').inner_text()
 
 def test_audit_uses_shared_dialog_sortable_filterable_sticky_table(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json();page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));entries=[{'ts':1720000200,'actor':'Shy','action':'gate.approve','detail':{'phase':'srs'}},{'ts':1720000100,'actor':'policy','action':'gate.bypassed','detail':{'phase':'needs'}}];page.route('**/api/tasks/live/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':entries,'totals':{'tokens':1234,'price':2.5,'price_usd':2.5,'phases_priced':2}}));page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='Audit').click();dialog=page.get_by_role('dialog',name='Task audit');dialog.wait_for();assert dialog.get_by_text('1,234').count()==0 and dialog.get_by_text('2.50 credits · $2.50').is_visible();headers=dialog.locator('thead');assert headers.evaluate('(e)=>getComputedStyle(e).position')=='sticky';rows=dialog.locator('tbody tr');assert rows.count()==2;dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='Shy';dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='policy';dialog.get_by_label('Filter audit entries').fill('approve');assert rows.count()==1;assert rows.first.get_by_text('gate.approve').is_visible();close=dialog.get_by_role('button',name='Close task audit');vb=dialog.bounding_box();cb=close.bounding_box();assert cb['x']>=vb['x'] and cb['x']+cb['width']<=vb['x']+vb['width'];page.screenshot(path='/downloads/shared-audit-dialog.png',full_page=True);page.keyboard.press('Escape');assert dialog.count()==0
+    live=page.request.get(ui+'/api/tasks/live').json();page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));entries=[{'ts':1720000200,'actor':'Shy','action':'gate.approve','detail':{'phase':'srs'}},{'ts':1720000100,'actor':'policy','action':'gate.bypassed','detail':{'phase':'needs'}}];page.route('**/api/tasks/live/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':entries,'totals':{'tokens':1234,'price':2.5,'price_usd':2.5,'phases_priced':2}}));page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='Audit').click();dialog=page.get_by_role('dialog',name='Task audit');dialog.wait_for();assert dialog.get_by_text('1,234').count()==0 and dialog.get_by_text('2.50 credits · $2.50').is_visible();headers=dialog.locator('thead');assert headers.evaluate('(e)=>getComputedStyle(e).position')=='sticky';rows=dialog.locator('tbody tr');assert rows.count()==2;dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='Shy';dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='policy';dialog.get_by_label('Filter audit entries').fill('approve');assert rows.count()==1;assert rows.first.get_by_text('gate.approve').is_visible();close=dialog.get_by_role('button',name='Close task audit');vb=dialog.bounding_box();cb=close.bounding_box();assert cb['x']>=vb['x'] and cb['x']+cb['width']<=vb['x']+vb['width'];page.screenshot(path=str(_screenshots_dir / 'shared-audit-dialog.png'),full_page=True);page.keyboard.press('Escape');assert dialog.count()==0
 
 def test_model_route_default_and_phase_override_controls(page,ui):
     page.goto(ui+'/tasks/empty/view')
@@ -1128,7 +1133,7 @@ def test_artifact_viewer_renders_content_title_bold_and_transcript(page,ui):
     assert viewer.get_by_role('heading',name='Needs and Scope').is_visible()
     assert viewer.locator('strong').filter(has_text='Problem:').count()==1 and viewer.locator('strong').filter(has_text='Answer:').count()==1
     assert viewer.get_by_text('Who needs this?').is_visible() and viewer.get_by_text('Busy adults').is_visible()
-    page.screenshot(path='/downloads/intent-viewer-transcript.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'intent-viewer-transcript.png'),full_page=True)
 
 
 def interview_history_snapshot(snapshot):
@@ -1304,11 +1309,11 @@ def test_question_comment_columns_follow_character_ratio(page, ui):
     assert question_box["x"] + question_box["width"] <= note_box["x"]
     assert note_box["x"] + note_box["width"] <= row.bounding_box()["x"] + row.bounding_box()["width"]
     assert note.is_visible()
-    row.screenshot(path="/downloads/qa-column-balance-desktop-row.png")
+    row.screenshot(path=str(_screenshots_dir / "qa-column-balance-desktop-row.png"))
     page.set_viewport_size({"width": 600, "height": 850})
     assert row.locator(".qa-main").bounding_box()["width"] > 220
     assert row.locator(".qa-notes").bounding_box()["y"] >= row.locator(".qa-main").bounding_box()["y"]
-    row.screenshot(path="/downloads/qa-column-balance-mobile-row.png")
+    row.screenshot(path=str(_screenshots_dir / "qa-column-balance-mobile-row.png"))
     # A short question still gets five twelfths instead of collapsing to a word-wide strip.
     second = page.locator(".qa-question").first
     second.locator(".qa-comment-btn").click()
@@ -1364,7 +1369,7 @@ def test_protocol_422_is_not_mislabeled_engine_down(page,ui):
     assert notice.get_by_text('Engine returned an error',exact=True).is_visible()
     assert 'structured interview-turn contract' in notice.inner_text()
     assert 'Engine is not running' not in notice.inner_text()
-    page.screenshot(path='/downloads/protocol-error-state.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'protocol-error-state.png'),full_page=True)
 
 @pytest.mark.parametrize("failed",[False,True])
 def test_legacy_ollama_model_switch_dialog(page,ui,failed):
@@ -1432,7 +1437,7 @@ def test_failed_needs_has_retry_not_generation_rerun(page,ui):
     expect(dialog).to_contain_text('may make new model calls and incur cost')
     dialog.get_by_role('button',name='Cancel').click()
     expect(dialog).to_have_count(0)
-    page.screenshot(path='/downloads/failed-needs-retry.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'failed-needs-retry.png'),full_page=True)
 
 
 def test_audit_dialog_scrolls_on_short_viewport(page,ui):
@@ -1452,7 +1457,7 @@ def test_audit_dialog_scrolls_on_short_viewport(page,ui):
     assert table.evaluate('(e)=>e.scrollTop>0')
     assert dialog.get_by_text('0.00 credits · $0.00').count()==1
     assert dialog.get_by_text('$0.0037 USD').count()==1
-    page.screenshot(path='/downloads/audit-scroll-verified.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'audit-scroll-verified.png'),full_page=True)
 
 
 def test_failed_needs_retry_selects_env_default_model_not_interview_model(page,ui):
@@ -1475,7 +1480,7 @@ def test_failed_needs_retry_selects_env_default_model_not_interview_model(page,u
     assert dialog.locator('#retrymodel').input_value()=='ollama:phi4'
     assert dialog.get_by_text('No generator checkpoint exists; Needs starts fresh.',exact=False).is_visible()
     assert 'qwen' not in dialog.locator('p').all_inner_texts()[0]
-    page.screenshot(path='/downloads/needs-retry-model-selector.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'needs-retry-model-selector.png'),full_page=True)
 
 def test_phase_tooltip_does_not_present_old_errors_as_current_issues(page,ui):
     live=page.request.get(ui+'/api/tasks/live').json()
@@ -1498,7 +1503,7 @@ def test_phase_tooltip_does_not_present_old_errors_as_current_issues(page,ui):
     expect(architecture.get_by_role('tooltip')).to_contain_text('No issues recorded.')
     expect(architecture.get_by_role('tooltip')).not_to_contain_text('old architecture answer conflict')
     expect(page.locator('.task-error-state')).not_to_contain_text('old architecture answer conflict')
-    page.screenshot(path='/downloads/architecture-stale-issues-fixed.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'architecture-stale-issues-fixed.png'),full_page=True)
 
 
 def test_normal_mode_shows_live_architecture_stage_and_stall_heartbeat(page,ui):
@@ -1515,7 +1520,7 @@ def test_normal_mode_shows_live_architecture_stage_and_stall_heartbeat(page,ui):
     page.reload()
     expect(page.locator('#stageprogress')).to_contain_text('still working')
     expect(page.locator('.progress-scope')).to_contain_text('3 out of 6')
-    page.screenshot(path='/downloads/architecture-progress-normal.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'architecture-progress-normal.png'),full_page=True)
 
 
 def test_every_generator_gate_uses_same_page_and_configured_model_picker(page,ui):
@@ -1550,7 +1555,7 @@ def test_cross_ui_waiting_banner_during_slow_write(page,ui):
     }""")
     page.locator('#server-wait:not(.hidden)').wait_for(timeout=3000)
     assert 'Saving feedback' in page.locator('#server-wait').inner_text()
-    page.screenshot(path='/downloads/fast-follow-waiting-banner.png',full_page=False)
+    page.screenshot(path=str(_screenshots_dir / 'fast-follow-waiting-banner.png'),full_page=False)
     page.locator('#server-wait').wait_for(state='hidden',timeout=3000)
 
 
@@ -1597,9 +1602,9 @@ def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(page,ui):
     assert page.locator('.model-panel').get_attribute('open') is None  # Model panel starts closed
     assert page.locator('select[name="selected_option"]').count()==0  # 'Choose another option' recorded nothing, so the pills are gone
     assert page.locator('input[name="selected_option"]').input_value().startswith('Approve ')
-    page.set_viewport_size({'width':1249,'height':900});page.screenshot(path='/downloads/decision-panel-closed.png')
-    page.locator('.model-panel summary').click();page.locator('#gateform').screenshot(path='/downloads/decision-panel-model-open.png')
-    page.screenshot(path='/downloads/specs-gate-ready.png',full_page=True)
+    page.set_viewport_size({'width':1249,'height':900});page.screenshot(path=str(_screenshots_dir / 'decision-panel-closed.png'))
+    page.locator('.model-panel summary').click();page.locator('#gateform').screenshot(path=str(_screenshots_dir / 'decision-panel-model-open.png'))
+    page.screenshot(path=str(_screenshots_dir / 'specs-gate-ready.png'),full_page=True)
     sent=[]
     page.route('**/api/tasks/sim/gates/gate-specs/decide',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'state':'decided'})))
     choose.click()
@@ -1610,7 +1615,7 @@ def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(page,ui):
     mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-specs')
     notice=page.locator('.gate-evidence-error');notice.wait_for()
-    page.screenshot(path='/downloads/specs-gate-invalid.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'specs-gate-invalid.png'),full_page=True)
     assert 'Error: The current artifact failed validation.' in notice.inner_text()
     assert 'Likely cause: items.json:' in notice.inner_text()
     assert 'Next: Check the task artifact' in notice.inner_text()
@@ -1646,7 +1651,7 @@ def test_gate_model_picker_shows_exact_sticky_default(page,ui):
     picker=page.locator('select[name="next_model"]');picker.wait_for()
     expect(page.locator('[data-model-for="next_model"]')).to_contain_text('Current task default: deepseek:deepseek-flash')
     assert picker.locator('option').first.inner_text()=='Use current task default'
-    page.screenshot(path='/downloads/sticky-model-gate.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'sticky-model-gate.png'),full_page=True)
 
 def _done_task(page,ui):
     task=page.request.get(ui+'/api/tasks/done').json();task=_promote_control(task)
@@ -1684,8 +1689,8 @@ def test_completion_screen_summary_download_and_package(page,ui):
     assert page.get_by_role('link',name='Download artifacts').get_attribute('href')=='/api/tasks/done/artifacts.zip'
     page.get_by_role('button',name='Prepare final package').click()
     link=page.get_by_role('link',name='Download coding-agent package');expect(link).to_be_visible();assert '?generation=1' in link.get_attribute('href')
-    page.screenshot(path='/downloads/completion-desktop.png',full_page=True)
-    page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/downloads/completion-mobile.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'completion-desktop.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844});page.screenshot(path=str(_screenshots_dir / 'completion-mobile.png'),full_page=True)
     assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
 
 
@@ -1708,7 +1713,7 @@ def test_submitted_answer_stays_visible_as_shadow_copy_while_processing(page, ui
     assert page.locator('#shadowq').inner_text() == 'What matters most?'
     assert page.locator('#shadowa').inner_text() == 'Speed, then cost'
     assert page.locator('#answerform textarea').is_hidden() and page.locator('#answerform button[type=submit]').is_hidden()
-    page.screenshot(path='/downloads/shadow-copy.png')
+    page.screenshot(path=str(_screenshots_dir / 'shadow-copy.png'))
     # a re-render while the server is still working keeps the shadow copy
     page.reload(); page.locator('#shadowcopy').wait_for(state='visible')
     assert page.locator('#shadowa').inner_text() == 'Speed, then cost' and page.locator('#answerform textarea').is_hidden()
@@ -1767,7 +1772,7 @@ def test_interview_scrolls_inside_its_section_and_live_process_stays_visible(pag
     heading = page.get_by_role('heading', name='Live process'); hb = heading.bounding_box()
     assert 0 <= hb['y'] and hb['y'] + hb['height'] <= 800, hb  # Live process heading pinned in view after the page scrolled
     assert heading.evaluate('e=>{const r=e.getBoundingClientRect();const t=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return e.contains(t)||t.contains(e)}')  # and not hidden behind the page header
-    page.screenshot(path='/downloads/live-process-sticky.png')
+    page.screenshot(path=str(_screenshots_dir / 'live-process-sticky.png'))
 
 
 QQ_DEFAULTS={"retrieval":{"max_words":90,"max_chars":600,"top_k":4},"verification":{"retry_enabled":False,"grounding_overlap_min":1},
@@ -1827,12 +1832,12 @@ def test_submitting_answer_is_prominent_and_pulses_unless_reduced_motion(page, u
     size = banner.evaluate('e=>parseFloat(getComputedStyle(e).fontSize)')
     assert size >= 16 and banner.evaluate('e=>getComputedStyle(e).animationName') == 'answer-pulse'
     assert banner.evaluate('e=>parseFloat(getComputedStyle(e).borderTopWidth)') >= 3
-    page.screenshot(path='/downloads/submitting-answer.png')
+    page.screenshot(path=str(_screenshots_dir / 'submitting-answer.png'))
     page.get_by_text('Processing your answer', exact=False).wait_for()
     shadow = page.locator('#shadowcopy')
     assert shadow.evaluate('e=>getComputedStyle(e).animationName') == 'answer-pulse'
     assert shadow.evaluate('e=>parseFloat(getComputedStyle(e).borderTopWidth)') >= 3
-    page.screenshot(path='/downloads/processing-answer.png')
+    page.screenshot(path=str(_screenshots_dir / 'processing-answer.png'))
     page.emulate_media(reduced_motion='reduce')
     assert shadow.evaluate('e=>getComputedStyle(e).animationName') == 'none'
     assert banner.evaluate('e=>getComputedStyle(e).animationName') == 'none'
@@ -1881,7 +1886,7 @@ def test_phase_change_dialog_explains_pauses_input_and_keeps_progress_underneath
     # the page underneath keeps receiving the same progress signals
     assert "Drafting need 2 of 6" in page.locator("#stageprogress").inner_text()
     assert dialog.evaluate("e=>getComputedStyle(e).animationName") == "answer-pulse"
-    page.screenshot(path="/downloads/phase-change-dialog.png")
+    page.screenshot(path=str(_screenshots_dir / "phase-change-dialog.png"))
     page.emulate_media(reduced_motion="reduce")
     assert dialog.evaluate("e=>getComputedStyle(e).animationName") == "none"
     page.get_by_role("button", name="Keep watching in the background").click()
@@ -1920,7 +1925,7 @@ def test_flagged_inputs_show_readable_item_and_no_circular_link(page,ui):
     expect(page.locator('#decision-checklist')).to_contain_text('1 flagged input still needs a decision')
     assert not page.locator('[data-action="approve"]').is_enabled()
     page.locator('#decision-checklist [data-jump]').click()
-    page.screenshot(path='/downloads/gate-flagged-checklist.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'gate-flagged-checklist.png'),full_page=True)
     assert panel.locator('article pre').count()==0
     assert '{' not in panel.locator('article details').inner_text()
     assert 'The app shall play a clip.' in panel.locator('article details').inner_text()
@@ -1958,7 +1963,7 @@ def test_failed_architecture_has_a_retry_that_resumes_the_phase(page,ui):
     dialog=page.get_by_role('dialog',name='Retry Architecture');expect(dialog).to_be_visible()
     expect(dialog).to_contain_text('SRS candidate review is not ready.')
     expect(dialog).to_contain_text('Existing generator checkpoint will resume')
-    page.screenshot(path='/downloads/failed-architecture-retry.png',full_page=True)
+    page.screenshot(path=str(_screenshots_dir / 'failed-architecture-retry.png'),full_page=True)
     dialog.get_by_role('button',name='Retry phase').click()
     page.wait_for_function('()=>true')
     assert sent[0]=={'phase':'architecture','confirm':False}
@@ -1973,7 +1978,7 @@ def test_running_cost_header_shows_credits_and_usd_and_grows_while_running(page,
     page.wait_for_function("document.querySelector('#costtotal').textContent.includes('credits')")
     assert header.inner_text()=="1.25 credits · $1.25"
     assert "token" not in page.locator(".detail-head").inner_text().lower()
-    page.screenshot(path="/downloads/running-cost-header.png",clip={"x":0,"y":0,"width":1365,"height":260})
+    page.screenshot(path=str(_screenshots_dir / "running-cost-header.png"),clip={"x":0,"y":0,"width":1365,"height":260})
     totals=iter([{"price":2.5,"price_usd":2.5},{"price":3.75,"price_usd":3.75}])
     last={"price":3.75,"price_usd":3.75}
     page.route("**/api/tasks/live/cost",lambda route:route.fulfill(json=next(totals,last)))
@@ -1999,7 +2004,7 @@ def test_live_headline_names_latest_stage_and_stage_line_ignores_phase_tag(page,
     live['events'].append({'id':3,'kind':'heartbeat','message':'Model call still running, 340s elapsed','phase_key':'intent','payload':{'label':'Building CONOPS concept option 2/2','stage':'conops','status':'heartbeat'},'ts':time.time()-1})
     page.reload()
     expect(page.locator('.live-indicator')).to_contain_text('Working · Building CONOPS concept option 2/2')
-    page.screenshot(path='/downloads/live-stage-headline.png',clip={'x':0,'y':100,'width':1365,'height':560})
+    page.screenshot(path=str(_screenshots_dir / 'live-stage-headline.png'),clip={'x':0,'y':100,'width':1365,'height':560})
 def review_answer_snapshot(snapshot):
     raw = ('{"revision":"d5b1a909f522f0af0fbf7bd47f163993827bbf5d2dbfb32820","decisions":['
            '{"item_id":"constraint:0","action":"accept","rationale":""},'
@@ -2047,4 +2052,4 @@ def test_live_heartbeat_wraps_without_clipping(page, ui, width):
     assert line.evaluate("e => getComputedStyle(e).whiteSpace") == "normal"
     assert line.evaluate("e => e.scrollWidth <= e.clientWidth + 1")
     assert line.evaluate("e => e.scrollHeight <= e.clientHeight + 1")
-    page.locator(".live-status-row").screenshot(path=f"/downloads/heartbeat-wrap-{width}.png")
+    page.locator(".live-status-row").screenshot(path=str(_screenshots_dir / f"heartbeat-wrap-{width}.png"))
