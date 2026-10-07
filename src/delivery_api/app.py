@@ -1904,7 +1904,43 @@ def _read_stack_decisions(task_id:str):
     return data
 
 def _open_stack_slots(data)->list[str]:
-    return [s['key'] for s in (data or {}).get('slots',[]) if not s.get('founder_decision')]
+    return [s['key'] for s in (data or {}).get('slots',[]) if not s.get('founder_decision') and not s.get('technical_choice')]
+
+def _use_architecture_defaults(task_id: str):
+    """Persist only the defaults actually in the canonical reviewed artifact.
+
+    Companion first is the durable continuation record; failures stop approval.
+    An interrupted write is repaired from that same record on resume.
+    """
+    data = _read_stack_decisions(task_id)
+    if not data:
+        return
+    artifact = _task_artifact(task_id, 'architecture', 'architecture.json')
+    full = json.loads(artifact.read_text())
+    from vmodel_contracts.architecture import ArchitectureOverview
+    ArchitectureOverview.model_validate(full)
+    entries = {e['key']: e for e in full.get('stack_entry_dispositions') or []}
+    slots = []
+    for slot in data['slots']:
+        slot = dict(slot)
+        entry = entries.get(slot['key'])
+        if not entry:
+            raise ValueError('technical-choice companion does not match the architecture')
+        if slot.get('technical_choice') != entry.get('technical_choice') or slot.get('founder_decision') != entry.get('founder_decision'):
+            raise ValueError('technical-choice companion does not match the reviewed architecture')
+        framing = entry.get('technical_choice')
+        if framing and not entry.get('founder_decision'):
+            selection = {'value': framing['default_value'], 'source': 'architecture_default'}
+            entry['system_selection'] = selection
+            slot['system_selection'] = selection
+        slots.append(slot)
+    ArchitectureOverview.model_validate(full)
+    companion = {**data, 'slots': slots}
+    path = _stack_decisions_path(task_id)
+    temporary = path.with_suffix('.tmp'); temporary.write_text(json.dumps(companion, indent=2)); temporary.replace(path)
+    temporary = artifact.with_suffix('.tmp'); temporary.write_text(json.dumps(full, indent=2)); temporary.replace(artifact)
+    artifact.with_suffix('.md').unlink(missing_ok=True)
+
 
 def _gate_review(task_id:str,gate_key:str)->dict:
     task=get_task(task_id)
@@ -1987,7 +2023,7 @@ def decide_semantic_gate(task_id:str,gate_key:str,body:SemanticDecisions,a:auth.
 class StackDecision(BaseModel):
     key:str=Field(min_length=1,max_length=200)
     text:str=Field(max_length=2000)
-    reason:str=Field(max_length=1000)
+    reason:str=Field(default="",max_length=1000)
 
 class StackDecisions(BaseModel):
     revision:str=Field(pattern=r'^[a-f0-9]{64}$')
@@ -1995,14 +2031,14 @@ class StackDecisions(BaseModel):
 
 @app.post('/api/tasks/{task_id}/gates/{gate_key}/stack-decisions')
 def decide_stack_gate(task_id:str,gate_key:str,body:StackDecisions,a:auth.Actor=Depends(auth.require_actor)):
-    """Decide-only: each open research_required slot gets the founder's decision and reason. No defer."""
+    """Save a founder override. Reason is optional; system rationale stays separate."""
     live=_gate_review(task_id,gate_key);data=live.get('stack_decisions')
     gate=next(g for g in live['task']['gates'] if g['gate_key']==gate_key)
     if not data or data['revision']!=body.revision or gate['state']!='waiting':raise HTTPException(409,'architecture decisions changed')
     keys={s['key'] for s in data['slots']}
     for d in body.decisions:
         if d.key not in keys:raise HTTPException(422,f'unknown slot {d.key}')
-        if not d.text.strip() or not d.reason.strip():raise HTTPException(422,'both a decision and a reason are required')
+        if not d.text.strip():raise HTTPException(422,'a choice is required')
     from datetime import datetime,timezone
     at=datetime.now(timezone.utc).isoformat()
     made={d.key:{'text':d.text.strip(),'reason':d.reason.strip(),'actor':a.label,'at':at} for d in body.decisions}
@@ -2059,6 +2095,8 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
         selected=model_route_lib.route_value(req.model_route,req.model) if req.model_route else None
         if PHASE_BY_KEY[target].executor=="generator" and not selected:
             model_route_lib.task_default_model(store,task_id,PHASE_BY_KEY[target].generator_stage)
+        if pending['after_phase']=='architecture' and pending['state']=='waiting' and req.action=='approve':
+            _use_architecture_defaults(task_id)
         gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label,expected_revision=req.expected_revision)
         phase=gate["after_phase"]
         if req.comment.strip():

@@ -282,3 +282,10 @@ section.qa-history{max-height:min(44vh,440px);overflow-y:auto;overscroll-behavio
 /* Short viewports keep review evidence readable rather than under a tall toolbar. */
 @media(max-width:850px),(max-height:650px){.semantic-footer{position:static}.semantic-page .semantic-head{position:static}}
 .semantic-item{scroll-margin-top:240px}.cited-evidence blockquote{white-space:pre-wrap;overflow-wrap:anywhere}
+.stack-default {display:flex; flex-direction:column; gap:.3rem; padding:.75rem; border:1px solid var(--border,#ccc); border-radius:.5rem; margin:.5rem 0}
+.stack-default strong {font-size:1.05rem}
+.stack-technology,.stack-research {color:var(--muted,#666);font-size:.85rem}
+.stack-slot {padding:.75rem 0;overflow-wrap:anywhere}
+.stack-change>summary {cursor:pointer;padding:.5rem 0}
+.stack-options {display:flex;flex-direction:column;align-items:stretch;gap:.4rem}
+.stack-tradeoff {margin:.4rem 0}

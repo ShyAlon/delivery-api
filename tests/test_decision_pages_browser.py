@@ -376,34 +376,34 @@ def _stack_review(decided=()):
  task={'task_id':'t1','title':'Habit tracking','gates':[gate],'phases':[{'phase_key':'architecture','label':'Architecture'},{'phase_key':'specs','label':'Item specifications'}],'artifacts':[art],'phase_config':{},'generation':1}
  return {'review':{'revision':'gate:r','phase_key':'architecture','task':task,'documents':[{'name':'architecture.json','view':{'content':'{"components":[]}','format':'json'}}],'semantic_review':None,'stack_decisions':{'revision':'a'*64,'slots':slots}},'actionable':True,'draft':None,'comments':[]}
 
-def test_architecture_gate_decisions_panel_is_decide_only_and_gates_approval(page):
- p,base,root=page;posts=[];state={'decided':[]}
+def test_architecture_technical_default_is_readable_nonblocking_and_change_optional(page):
+ p,base,root=page;posts=[]
+ framing={"title": "Storing Your Data", "purpose": "Keeps the product's records between visits.", "default_value": "SQLite", "reason": "A single local user needs a small store.", "requirement_ids": ["R-1"], "options": [{"value": "SQLite", "label": "One Local Store", "implication": "Simple to run; a shared server may be needed later."}, {"value": "PostgreSQL", "label": "A Shared Store", "implication": "Supports shared access but adds a server to manage."}], "provenance": "design_proposal", "research_status": "pending"}
+ data=_stack_review();data['review']['stack_decisions']['slots']=data['review']['stack_decisions']['slots'][:1]
+ slot=data['review']['stack_decisions']['slots'][0];slot['technical_choice']=framing;slot['brief']='SECRET INTERNAL INVESTIGATION BLOB'
  def route(r):
   path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
-  if path.endswith('/stack-decisions'):
-   posts.append(r.request.post_data_json);state['decided']=['database_engine'];r.fulfill(json={'status':'saved'});return
-  if path.endswith('/review'):r.fulfill(json=_stack_review(state['decided']));return
+  if path.endswith('/stack-decisions'):posts.append(r.request.post_data_json);r.fulfill(json={'status':'saved'});return
+  if path.endswith('/review'):r.fulfill(json=data);return
   if path=='/api/model-routes':r.fulfill(json={'routes':[]});return
-  if path=='/api/tasks/t1':r.fulfill(json=_stack_review()['review']['task']);return
+  if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
   r.continue_()
- p.route('**/api/**',route)
- p.goto(base+'/tasks/t1/gates/gate-architecture')
+ p.route('**/api/**',route);p.goto(base+'/tasks/t1/gates/gate-architecture')
  panel=p.locator('#stack-panel');expect(panel).to_be_attached()
- text=panel.inner_text().lower();assert 'defer' not in text and 'skip' not in text
+ expect(p.locator('[data-action=approve]')).to_be_enabled()
+ expect(panel.locator('summary').first).to_have_text('Technical Choices')
+ panel.locator('summary').first.click()
+ expect(panel).to_contain_text('One Local Store');expect(panel).to_contain_text('Research Pending')
+ assert 'SECRET INTERNAL' not in panel.inner_text()
+ expect(panel.locator('.stack-change')).not_to_have_attribute('open','')
+ p.screenshot(path=str(root/'technical-default-desktop.png'),full_page=True)
+ p.set_viewport_size({'width':390,'height':844});assert p.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
+ p.screenshot(path=str(root/'technical-default-mobile.png'),full_page=True)
+ panel.locator('.stack-change summary').click();panel.get_by_role('button',name='A Shared Store',exact=True).click()
+ panel.get_by_role('button',name='Save Change',exact=True).click()
+ expect(panel.locator('#stack-status')).to_contain_text('Change Saved')
+ assert posts==[{'revision':'a'*64,'decisions':[{'key':'database_engine','text':'PostgreSQL','reason':''}]}]
  expect(p.locator('[data-action=approve]')).to_be_disabled()
- expect(panel.locator('summary')).to_have_text('Decisions Needed · 0 Of 2 Decided');assert panel.locator('details').get_attribute('open') is None
- panel.locator('summary').click()
- expect(panel.locator('article h3').first).to_have_text('Database Engine')
- panel.get_by_role('button',name='SQLite').click()
- expect(panel.locator('[name=stack-text-0]')).to_have_value('SQLite')
- expect(panel.locator('[name=stack-text-1]')).to_have_value('In process')
- panel.get_by_role('button',name='Save Decisions').click()
- expect(panel.locator('#stack-status')).to_contain_text('needs both a decision and a reason')
- assert posts==[]
- panel.locator('[name=stack-reason-0]').fill('One user');panel.locator('[name=stack-text-1]').fill('');panel.locator('[name=stack-reason-1]').fill('');
- panel.get_by_role('button',name='Save Decisions').click()
- expect(panel.locator('#stack-status')).to_contain_text('Decisions saved');assert posts==[{'revision':'a'*64,'decisions':[{'key':'database_engine','text':'SQLite','reason':'One user'}]}]
-
 
 def test_reference_review_shows_precise_reason_and_cited_quote(page):
  p,base,root=page

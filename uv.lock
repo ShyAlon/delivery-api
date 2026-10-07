@@ -100,7 +100,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1,<2" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "uvicorn", specifier = ">=0.29" },
-    { name = "vmodel-contracts", git = "https://github.com/ShyAlon/vmodel-contracts.git?rev=a649a4ea4bd80f930e5fe07ed94fe74886a42837" },
+    { name = "vmodel-contracts", git = "https://github.com/ShyAlon/vmodel-contracts.git?rev=6e320e31c03565af361288a18fec046c51e1a126" },
 ]
 provides-extras = ["dev", "turso"]
 
@@ -641,8 +641,8 @@ wheels = [
 
 [[package]]
 name = "vmodel-contracts"
-version = "0.27.2"
-source = { git = "https://github.com/ShyAlon/vmodel-contracts.git?rev=a649a4ea4bd80f930e5fe07ed94fe74886a42837#a649a4ea4bd80f930e5fe07ed94fe74886a42837" }
+version = "0.27.3"
+source = { git = "https://github.com/ShyAlon/vmodel-contracts.git?rev=6e320e31c03565af361288a18fec046c51e1a126#6e320e31c03565af361288a18fec046c51e1a126" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
