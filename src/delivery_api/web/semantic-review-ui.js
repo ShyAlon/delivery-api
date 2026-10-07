@@ -29,6 +29,12 @@ export function findingTitle(f){
  return `${kind}${id?' '+id:''}${text?': '+shortText(text):(index!==undefined?` (number ${index+1})`:'')}`;
 }
 
+/* Keep backend provenance quotes separate and escaped without changing evidence. */
+export function findingReasonHtml(reason){
+ const [summary,...quotes]=String(reason||'').split('\n');
+ return `<p class="flag-reason">${esc(summary)}</p>${quotes.length?`<details class="context-box cited-evidence"><summary>Cited Interview Words</summary><div class="context-body">${quotes.filter(Boolean).map(q=>`<blockquote>${esc(q)}</blockquote>`).join('')}</div></details>`:''}`;
+}
+
 export const OPTIONS=[
  {value:'accept',label:'Keep as written',tip:'Keep this exactly as written, even though it was flagged. You are overriding the flag.'},
  {value:'remove',label:'Remove',tip:'Delete this item. Nothing is added in its place.'},

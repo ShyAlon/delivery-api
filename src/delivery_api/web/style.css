@@ -278,3 +278,7 @@ section.qa-history{max-height:min(44vh,440px);overflow-y:auto;overscroll-behavio
 @media(max-width:1100px){.live-status-row .live-indicator{max-width:100%}}
 .detail-layout>*{min-width:0}
 @media(max-width:850px){.detail-layout{grid-template-columns:minmax(0,1fr)}}
+
+/* Short viewports keep review evidence readable rather than under a tall toolbar. */
+@media(max-width:850px),(max-height:650px){.semantic-footer{position:static}.semantic-page .semantic-head{position:static}}
+.semantic-item{scroll-margin-top:240px}.cited-evidence blockquote{white-space:pre-wrap;overflow-wrap:anywhere}
