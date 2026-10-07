@@ -178,75 +178,78 @@ class SQLiteStore:
         The PRAGMA check above each call can read a stale local replica while the
         ALTER runs on the remote primary, which may already have the column.
         """
-        try:
-            self._db.execute(ddl)
-        except Exception as exc:
-            if "duplicate column name" not in str(exc).lower():
-                raise
+        with self._lock:
+            try:
+                self._db.execute(ddl)
+            except Exception as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
     def _migrate_schema(self) -> None:
         """Small additive migrations keep local task history readable."""
-        gate_cols = {r[1] for r in self._db.execute("PRAGMA table_info(gates)")}
-        if "revision" not in gate_cols:
-            self._add_column("ALTER TABLE gates ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
-        phase_cols = {r[1] for r in self._db.execute("PRAGMA table_info(phases)")}
-        artifact_cols = {r[1] for r in self._db.execute("PRAGMA table_info(task_artifacts)")}
-        task_cols = {r[1] for r in self._db.execute("PRAGMA table_info(tasks)")}
-        run_cols = {r[1] for r in self._db.execute("PRAGMA table_info(runs)")}
-        usage_cols = {r[1] for r in self._db.execute("PRAGMA table_info(usage)")}
-        user_cols = {r[1] for r in self._db.execute("PRAGMA table_info(users)")}
-        if "password_hash" not in user_cols:
-            self._add_column("ALTER TABLE users ADD COLUMN password_hash TEXT")
-        if "gate_basis_changed" not in phase_cols:
-            self._add_column("ALTER TABLE phases ADD COLUMN gate_basis_changed INTEGER NOT NULL DEFAULT 0")
-        if "stale_reason" not in artifact_cols:
-            self._add_column("ALTER TABLE task_artifacts ADD COLUMN stale_reason TEXT")
-        if "simulated" not in task_cols:
-            self._add_column("ALTER TABLE tasks ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0")
-        if "source_dir" not in task_cols:
-            self._add_column("ALTER TABLE tasks ADD COLUMN source_dir TEXT")
-        if "owner_id" not in task_cols:
-            self._add_column("ALTER TABLE tasks ADD COLUMN owner_id TEXT")
-        if "engine_session_id" not in task_cols:
-            self._add_column("ALTER TABLE tasks ADD COLUMN engine_session_id TEXT")
-        if "interview_schema_id" not in task_cols:
-            self._add_column("ALTER TABLE tasks ADD COLUMN interview_schema_id TEXT")
-        if "interview_schema_version" not in task_cols:
-            self._add_column("ALTER TABLE tasks ADD COLUMN interview_schema_version TEXT")
-        if "model_default" not in task_cols:
-            self._add_column("ALTER TABLE tasks ADD COLUMN model_default TEXT")
-        if "owner_id" not in run_cols:
-            self._add_column("ALTER TABLE runs ADD COLUMN owner_id TEXT")
-        # Every generated phase, including final verification, has a founder
-        # approval boundary. Older databases omitted the final gate and could
-        # strand a completed tests process with no ActiveWork owner.
-        tasks=self._db.execute("SELECT task_id FROM tasks").fetchall()
-        for task in tasks:
-            existing={row[0] for row in self._db.execute("SELECT after_phase FROM gates WHERE task_id=?",(task["task_id"],))}
-            for position,(key,label) in enumerate(PHASES):
-                if key not in existing:
-                    self._db.execute("INSERT INTO gates(task_id,gate_key,after_phase,label,position,is_open,state,options) VALUES (?,?,?,?,?,0,'idle',?)",(task["task_id"],f"gate-{key}",key,f"{label} gate",position,json.dumps([f"Approve {label}","Choose another option"])))
-        # A phase added after a task was created gets a pending row, so every
-        # task lists the same phases. Finished tasks stay finished.
-        for task in tasks:
-            have={row[0] for row in self._db.execute("SELECT phase_key FROM phases WHERE task_id=?",(task["task_id"],))}
-            for position,(key,label) in enumerate(PHASES):
-                if key not in have:
-                    self._db.execute("INSERT INTO phases(task_id,phase_key,label,position,state) VALUES (?,?,?,?, 'pending')",(task["task_id"],key,label,position))
-        # Older databases may contain duplicate labels. Preserve every task and
-        # make collisions explicit before installing the uniqueness invariant.
-        duplicates=self._db.execute("SELECT lower(title) k FROM tasks GROUP BY lower(title) HAVING count(*)>1").fetchall()
-        for dup in duplicates:
-            rows=self._db.execute("SELECT task_id,title FROM tasks WHERE lower(title)=? ORDER BY created_at,task_id",(dup["k"],)).fetchall()
-            for i,row in enumerate(rows[1:],2):
-                self._db.execute("UPDATE tasks SET title=? WHERE task_id=?",(f"{row['title']} ({i})",row["task_id"]))
-        self._db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_title_nocase ON tasks(title COLLATE NOCASE)")
-        for col, ddl in (("user_id", "TEXT"), ("input_tokens", "INTEGER NOT NULL DEFAULT 0"), ("output_tokens", "INTEGER NOT NULL DEFAULT 0")):
-            if col not in usage_cols: self._add_column(f"ALTER TABLE usage ADD COLUMN {col} {ddl}")
-        self._db.commit()
+        with self._lock:
+            gate_cols = {r[1] for r in self._db.execute("PRAGMA table_info(gates)")}
+            if "revision" not in gate_cols:
+                self._add_column("ALTER TABLE gates ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+            phase_cols = {r[1] for r in self._db.execute("PRAGMA table_info(phases)")}
+            artifact_cols = {r[1] for r in self._db.execute("PRAGMA table_info(task_artifacts)")}
+            task_cols = {r[1] for r in self._db.execute("PRAGMA table_info(tasks)")}
+            run_cols = {r[1] for r in self._db.execute("PRAGMA table_info(runs)")}
+            usage_cols = {r[1] for r in self._db.execute("PRAGMA table_info(usage)")}
+            user_cols = {r[1] for r in self._db.execute("PRAGMA table_info(users)")}
+            if "password_hash" not in user_cols:
+                self._add_column("ALTER TABLE users ADD COLUMN password_hash TEXT")
+            if "gate_basis_changed" not in phase_cols:
+                self._add_column("ALTER TABLE phases ADD COLUMN gate_basis_changed INTEGER NOT NULL DEFAULT 0")
+            if "stale_reason" not in artifact_cols:
+                self._add_column("ALTER TABLE task_artifacts ADD COLUMN stale_reason TEXT")
+            if "simulated" not in task_cols:
+                self._add_column("ALTER TABLE tasks ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0")
+            if "source_dir" not in task_cols:
+                self._add_column("ALTER TABLE tasks ADD COLUMN source_dir TEXT")
+            if "owner_id" not in task_cols:
+                self._add_column("ALTER TABLE tasks ADD COLUMN owner_id TEXT")
+            if "engine_session_id" not in task_cols:
+                self._add_column("ALTER TABLE tasks ADD COLUMN engine_session_id TEXT")
+            if "interview_schema_id" not in task_cols:
+                self._add_column("ALTER TABLE tasks ADD COLUMN interview_schema_id TEXT")
+            if "interview_schema_version" not in task_cols:
+                self._add_column("ALTER TABLE tasks ADD COLUMN interview_schema_version TEXT")
+            if "model_default" not in task_cols:
+                self._add_column("ALTER TABLE tasks ADD COLUMN model_default TEXT")
+            if "owner_id" not in run_cols:
+                self._add_column("ALTER TABLE runs ADD COLUMN owner_id TEXT")
+            # Every generated phase, including final verification, has a founder
+            # approval boundary. Older databases omitted the final gate and could
+            # strand a completed tests process with no ActiveWork owner.
+            tasks=self._db.execute("SELECT task_id FROM tasks").fetchall()
+            for task in tasks:
+                existing={row[0] for row in self._db.execute("SELECT after_phase FROM gates WHERE task_id=?",(task["task_id"],))}
+                for position,(key,label) in enumerate(PHASES):
+                    if key not in existing:
+                        self._db.execute("INSERT INTO gates(task_id,gate_key,after_phase,label,position,is_open,state,options) VALUES (?,?,?,?,?,0,'idle',?)",(task["task_id"],f"gate-{key}",key,f"{label} gate",position,json.dumps([f"Approve {label}","Choose another option"])))
+            # A phase added after a task was created gets a pending row, so every
+            # task lists the same phases. Finished tasks stay finished.
+            for task in tasks:
+                have={row[0] for row in self._db.execute("SELECT phase_key FROM phases WHERE task_id=?",(task["task_id"],))}
+                for position,(key,label) in enumerate(PHASES):
+                    if key not in have:
+                        self._db.execute("INSERT INTO phases(task_id,phase_key,label,position,state) VALUES (?,?,?,?, 'pending')",(task["task_id"],key,label,position))
+            # Older databases may contain duplicate labels. Preserve every task and
+            # make collisions explicit before installing the uniqueness invariant.
+            duplicates=self._db.execute("SELECT lower(title) k FROM tasks GROUP BY lower(title) HAVING count(*)>1").fetchall()
+            for dup in duplicates:
+                rows=self._db.execute("SELECT task_id,title FROM tasks WHERE lower(title)=? ORDER BY created_at,task_id",(dup["k"],)).fetchall()
+                for i,row in enumerate(rows[1:],2):
+                    self._db.execute("UPDATE tasks SET title=? WHERE task_id=?",(f"{row['title']} ({i})",row["task_id"]))
+            self._db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_title_nocase ON tasks(title COLLATE NOCASE)")
+            for col, ddl in (("user_id", "TEXT"), ("input_tokens", "INTEGER NOT NULL DEFAULT 0"), ("output_tokens", "INTEGER NOT NULL DEFAULT 0")):
+                if col not in usage_cols: self._add_column(f"ALTER TABLE usage ADD COLUMN {col} {ddl}")
+            self._db.commit()
 
     def _commit(self):
-        self._db.commit()
+        with self._lock:
+            self._db.commit()
 
     # Legacy link/run API, kept while the task UI replaces the tester flow.
     def create_link(self, founder_label: str) -> dict:
@@ -259,8 +262,9 @@ class SQLiteStore:
             return {"token": token, "run_id": run_id}
 
     def link(self, token: str) -> dict | None:
-        row = self._db.execute("SELECT * FROM links WHERE token=? AND active=1", (token,)).fetchone()
-        return dict(row) if row else None
+        with self._lock:
+            row = self._db.execute("SELECT * FROM links WHERE token=? AND active=1", (token,)).fetchone()
+            return dict(row) if row else None
 
     def deactivate_link(self, token: str) -> None:
         with self._lock:
@@ -271,8 +275,9 @@ class SQLiteStore:
             self._db.execute("UPDATE runs SET state=?, updated_at=? WHERE run_id=?", (state.value, time.time(), run_id)); self._commit()
 
     def run(self, run_id: str) -> dict | None:
-        row = self._db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
-        return dict(row) if row else None
+        with self._lock:
+            row = self._db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+            return dict(row) if row else None
 
     def set_submission(self, run_id: str, submission: str) -> None:
         with self._lock:
@@ -288,14 +293,16 @@ class SQLiteStore:
             return self.run(run_id)["cost_usd"]
 
     def total_spend(self) -> float:
-        return self._db.execute("SELECT COALESCE(SUM(cost_usd),0) t FROM runs").fetchone()["t"]
+        with self._lock:
+            return self._db.execute("SELECT COALESCE(SUM(cost_usd),0) t FROM runs").fetchone()["t"]
 
     def add_artifact(self, run_id: str, kind: str, ref: str) -> None:
         with self._lock:
             self._db.execute("INSERT INTO artifacts VALUES (?,?,?,?)", (run_id, kind, ref, time.time())); self._commit()
 
     def artifacts(self, run_id: str) -> list[dict]:
-        return [dict(r) for r in self._db.execute("SELECT * FROM artifacts WHERE run_id=?", (run_id,))]
+        with self._lock:
+            return [dict(r) for r in self._db.execute("SELECT * FROM artifacts WHERE run_id=?", (run_id,))]
 
     # UI task model.
     def create_task(self, title: str, brief: str = "", *, task_id: str | None = None) -> dict:
@@ -361,15 +368,16 @@ class SQLiteStore:
             self.audit(actor,"task.deleted",task_id,{"title":row["title"],"source_artifacts_deleted":False});self._commit()
 
     def _task_record(self, row) -> dict:
-        item = dict(row)
-        item["phases"] = [dict(r) for r in self._db.execute(
-            "SELECT phase_key,label,position,state,detail,completed,total,gate_basis_changed,started_at,completed_at "
-            "FROM phases WHERE task_id=? ORDER BY position", (item["task_id"],))]
-        item["gates"] = [self._gate_record(r) for r in self._db.execute(
-            "SELECT * FROM gates WHERE task_id=? ORDER BY position", (item["task_id"],))]
-        item["artifact_count"] = self._db.execute(
-            "SELECT count(*) n FROM task_artifacts WHERE task_id=? AND stale=0", (item["task_id"],)).fetchone()["n"]
-        return item
+        with self._lock:
+            item = dict(row)
+            item["phases"] = [dict(r) for r in self._db.execute(
+                "SELECT phase_key,label,position,state,detail,completed,total,gate_basis_changed,started_at,completed_at "
+                "FROM phases WHERE task_id=? ORDER BY position", (item["task_id"],))]
+            item["gates"] = [self._gate_record(r) for r in self._db.execute(
+                "SELECT * FROM gates WHERE task_id=? ORDER BY position", (item["task_id"],))]
+            item["artifact_count"] = self._db.execute(
+                "SELECT count(*) n FROM task_artifacts WHERE task_id=? AND stale=0", (item["task_id"],)).fetchone()["n"]
+            return item
 
     def _gate_record(self, row) -> dict:
         item = dict(row); item["options"] = json.loads(item["options"]); return item
@@ -564,8 +572,9 @@ class SQLiteStore:
             return True
 
     def engine_session(self, task_id: str) -> str | None:
-        row=self._db.execute("SELECT engine_session_id FROM tasks WHERE task_id=?",(task_id,)).fetchone()
-        return row["engine_session_id"] if row else None
+        with self._lock:
+            row=self._db.execute("SELECT engine_session_id FROM tasks WHERE task_id=?",(task_id,)).fetchone()
+            return row["engine_session_id"] if row else None
 
     def bind_interview_schema(self,task_id:str,schema_id:str,schema_version:str)->dict:
         with self._lock:
@@ -578,10 +587,11 @@ class SQLiteStore:
             return {"task_id":task_id,"schema_id":schema_id,"schema_version":schema_version}
 
     def interview_schema_binding(self,task_id:str)->dict|None:
-        row=self._db.execute("SELECT interview_schema_id,interview_schema_version FROM tasks WHERE task_id=?",(task_id,)).fetchone()
-        if row is None:raise KeyError(task_id)
-        if row["interview_schema_id"] is None:return None
-        return {"task_id":task_id,"schema_id":row["interview_schema_id"],"schema_version":row["interview_schema_version"]}
+        with self._lock:
+            row=self._db.execute("SELECT interview_schema_id,interview_schema_version FROM tasks WHERE task_id=?",(task_id,)).fetchone()
+            if row is None:raise KeyError(task_id)
+            if row["interview_schema_id"] is None:return None
+            return {"task_id":task_id,"schema_id":row["interview_schema_id"],"schema_version":row["interview_schema_version"]}
 
     def add_event(self, task_id: str, kind: str, message: str, *, phase_key: str | None = None,
                   payload: dict | None = None) -> int:
@@ -597,9 +607,10 @@ class SQLiteStore:
                 (task_id,wait_id,revision,actor,comment,time.time()));self._commit();return cursor.lastrowid
 
     def review_comments(self,task_id:str,wait_id:str,revision:str)->list[dict]:
-        rows=self._db.execute("SELECT id,actor,comment,created_at FROM review_comments WHERE task_id=? AND wait_id=? AND revision=? ORDER BY id",
-            (task_id,wait_id,revision)).fetchall()
-        return [dict(row) for row in rows]
+        with self._lock:
+            rows=self._db.execute("SELECT id,actor,comment,created_at FROM review_comments WHERE task_id=? AND wait_id=? AND revision=? ORDER BY id",
+                (task_id,wait_id,revision)).fetchall()
+            return [dict(row) for row in rows]
 
     def retain_decision_review(self, task_id:str, wait_id:str, revision:str, payload:dict)->None:
         with self._lock:
@@ -607,13 +618,14 @@ class SQLiteStore:
                 (task_id,wait_id,revision,json.dumps(payload),time.time()));self._commit()
 
     def decision_review(self,task_id:str,wait_id:str,revision:str|None=None)->dict|None:
-        if revision:
-            row=self._db.execute("SELECT payload FROM decision_reviews WHERE task_id=? AND wait_id=? AND revision=?",
-                (task_id,wait_id,revision)).fetchone()
-        else:
-            row=self._db.execute("SELECT payload FROM decision_reviews WHERE task_id=? AND wait_id=? ORDER BY created_at DESC LIMIT 1",
-                (task_id,wait_id)).fetchone()
-        return json.loads(row[0]) if row else None
+        with self._lock:
+            if revision:
+                row=self._db.execute("SELECT payload FROM decision_reviews WHERE task_id=? AND wait_id=? AND revision=?",
+                    (task_id,wait_id,revision)).fetchone()
+            else:
+                row=self._db.execute("SELECT payload FROM decision_reviews WHERE task_id=? AND wait_id=? ORDER BY created_at DESC LIMIT 1",
+                    (task_id,wait_id)).fetchone()
+            return json.loads(row[0]) if row else None
 
     def save_decision_draft(self,task_id:str,wait_id:str,revision:str,payload:dict)->str:
         draft_id=secrets.token_urlsafe(18)
@@ -623,14 +635,16 @@ class SQLiteStore:
         return draft_id
 
     def decision_draft(self,task_id:str,wait_id:str,revision:str,draft_id:str)->dict|None:
-        row=self._db.execute("SELECT payload FROM decision_drafts WHERE task_id=? AND wait_id=? AND revision=? AND draft_id=?",
-            (task_id,wait_id,revision,draft_id)).fetchone()
-        return json.loads(row[0]) if row else None
+        with self._lock:
+            row=self._db.execute("SELECT payload FROM decision_drafts WHERE task_id=? AND wait_id=? AND revision=? AND draft_id=?",
+                (task_id,wait_id,revision,draft_id)).fetchone()
+            return json.loads(row[0]) if row else None
 
     def progress_cursor(self, task_id: str, source: str, session_id: str) -> int:
-        row=self._db.execute("SELECT cursor FROM progress_ingest WHERE task_id=? AND source=? AND session_id=?",
-                             (task_id,source,session_id)).fetchone()
-        return int(row[0]) if row else 0
+        with self._lock:
+            row=self._db.execute("SELECT cursor FROM progress_ingest WHERE task_id=? AND source=? AND session_id=?",
+                                 (task_id,source,session_id)).fetchone()
+            return int(row[0]) if row else 0
 
     def ingest_progress(self, signal, source: str) -> bool:
         """Deduplicate and commit task event + source cursor as one transaction."""
@@ -670,17 +684,18 @@ class SQLiteStore:
         # Snapshot reads need the newest durable facts. The old ascending LIMIT
         # silently hid requirements on long-running tasks once they crossed 500
         # events. Incremental stream reads keep ascending order from `after`.
-        if after:
-            rows = self._db.execute("SELECT * FROM events WHERE task_id=? AND id>? ORDER BY id LIMIT ?",
-                                   (task_id, after, limit)).fetchall()
-        else:
-            rows = list(reversed(self._db.execute(
-                "SELECT * FROM events WHERE task_id=? ORDER BY id DESC LIMIT ?",(task_id,limit)
-            ).fetchall()))
-        result = []
-        for row in rows:
-            item = dict(row); item["payload"] = json.loads(item["payload"]); result.append(item)
-        return result
+        with self._lock:
+            if after:
+                rows = self._db.execute("SELECT * FROM events WHERE task_id=? AND id>? ORDER BY id LIMIT ?",
+                                       (task_id, after, limit)).fetchall()
+            else:
+                rows = list(reversed(self._db.execute(
+                    "SELECT * FROM events WHERE task_id=? ORDER BY id DESC LIMIT ?",(task_id,limit)
+                ).fetchall()))
+            result = []
+            for row in rows:
+                item = dict(row); item["payload"] = json.loads(item["payload"]); result.append(item)
+            return result
 
     def audit(self, actor: str, action: str, task_id: str | None = None, detail: dict | None = None) -> int:
         with self._lock:
@@ -690,14 +705,15 @@ class SQLiteStore:
             return cur.lastrowid
 
     def audit_entries(self, task_id: str | None = None, limit: int = 500) -> list[dict]:
-        if task_id:
-            rows = self._db.execute("SELECT * FROM audit_log WHERE task_id=? ORDER BY id DESC LIMIT ?", (task_id, limit))
-        else:
-            rows = self._db.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,))
-        result=[]
-        for row in rows:
-            item=dict(row); item["detail"]=json.loads(item["detail"]); result.append(item)
-        return result
+        with self._lock:
+            if task_id:
+                rows = self._db.execute("SELECT * FROM audit_log WHERE task_id=? ORDER BY id DESC LIMIT ?", (task_id, limit))
+            else:
+                rows = self._db.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,))
+            result=[]
+            for row in rows:
+                item=dict(row); item["detail"]=json.loads(item["detail"]); result.append(item)
+            return result
 
     def add_task_artifact(self, task_id: str, phase_key: str, name: str, ref: str,
                           mime_type: str = "application/json") -> None:
@@ -709,8 +725,9 @@ class SQLiteStore:
             ); self._commit()
 
     def list_feedback(self, task_id: str) -> list[dict]:
-        return [dict(r) for r in self._db.execute(
-            "SELECT * FROM answer_feedback WHERE task_id=? ORDER BY id", (task_id,))]
+        with self._lock:
+            return [dict(r) for r in self._db.execute(
+                "SELECT * FROM answer_feedback WHERE task_id=? ORDER BY id", (task_id,))]
 
     def upsert_feedback(self, task_id: str, input_ref: str, target: str, content: str,
                         thumb: int | None, comment: str | None, actor: str) -> dict:
@@ -736,12 +753,13 @@ class SQLiteStore:
         return dict(row)
 
     def _feedback_row(self, task_id: str, feedback_id: int, actor: str, admin: bool) -> dict:
-        row = self._db.execute("SELECT * FROM answer_feedback WHERE id=? AND task_id=?", (feedback_id, task_id)).fetchone()
-        if row is None:
-            raise KeyError("feedback not found")
-        if row["actor"] != actor and not admin:
-            raise PermissionError("feedback belongs to another actor")
-        return row
+        with self._lock:
+            row = self._db.execute("SELECT * FROM answer_feedback WHERE id=? AND task_id=?", (feedback_id, task_id)).fetchone()
+            if row is None:
+                raise KeyError("feedback not found")
+            if row["actor"] != actor and not admin:
+                raise PermissionError("feedback belongs to another actor")
+            return row
 
     def update_feedback(self, task_id: str, feedback_id: int, actor: str, *,
                         thumb: int | None = None, comment: str | None = None, admin: bool = False) -> dict:
@@ -764,21 +782,23 @@ class SQLiteStore:
             self._commit()
 
     def task_artifacts(self, task_id: str, *, include_stale: bool = True) -> list[dict]:
-        where = "task_id=?" if include_stale else "task_id=? AND stale=0"
-        return [dict(r) for r in self._db.execute(
-            f"SELECT * FROM task_artifacts WHERE {where} ORDER BY generation DESC,id", (task_id,))]
+        with self._lock:
+            where = "task_id=?" if include_stale else "task_id=? AND stale=0"
+            return [dict(r) for r in self._db.execute(
+                f"SELECT * FROM task_artifacts WHERE {where} ORDER BY generation DESC,id", (task_id,))]
 
     def rerun_prerequisite(self, task_id: str, from_phase: str) -> dict | None:
         """Return the first unfulfilled upstream phase, or None when rerun is valid."""
-        positions = PHASE_POSITIONS
-        if from_phase not in positions: raise KeyError(from_phase)
-        phases = self._db.execute(
-            "SELECT phase_key,label,state FROM phases WHERE task_id=? ORDER BY position", (task_id,)
-        ).fetchall()
-        if not phases: raise KeyError(task_id)
-        for phase in phases[:positions[from_phase]]:
-            if phase["state"] not in ("approved","done"): return dict(phase)
-        return None
+        with self._lock:
+            positions = PHASE_POSITIONS
+            if from_phase not in positions: raise KeyError(from_phase)
+            phases = self._db.execute(
+                "SELECT phase_key,label,state FROM phases WHERE task_id=? ORDER BY position", (task_id,)
+            ).fetchall()
+            if not phases: raise KeyError(task_id)
+            for phase in phases[:positions[from_phase]]:
+                if phase["state"] not in ("approved","done"): return dict(phase)
+            return None
 
     def prepare_rerun(self, task_id: str, from_phase: str, policy: str = "archive", actor: str = "local user") -> int:
         """Policy B: stale now, retain by generation, require downstream re-approval."""
@@ -833,8 +853,9 @@ class SQLiteStore:
             return dict(self._db.execute("SELECT * FROM users WHERE user_id=?",(user_id,)).fetchone())
 
     def basic_user(self, username: str) -> dict | None:
-        row=self._db.execute("SELECT * FROM users WHERE provider='basic' AND external_id=?",(username.strip().lower(),)).fetchone()
-        return dict(row) if row else None
+        with self._lock:
+            row=self._db.execute("SELECT * FROM users WHERE provider='basic' AND external_id=?",(username.strip().lower(),)).fetchone()
+            return dict(row) if row else None
 
     @staticmethod
     def _session_key(session_id: str) -> str:
@@ -879,9 +900,10 @@ class SQLiteStore:
         with self._lock: self._db.execute("DELETE FROM sessions WHERE session_id=?",(self._session_key(session_id),)); self._commit()
 
     def user_quota(self, user_id: str) -> dict | None:
-        row=self._db.execute("SELECT user_id,label,email,token_quota,is_admin FROM users WHERE user_id=?",(user_id,)).fetchone()
-        if not row: return None
-        out=dict(row); out["tokens_used"]=self._db.execute("SELECT COALESCE(SUM(input_tokens+output_tokens),0) n FROM usage WHERE user_id=?",(user_id,)).fetchone()["n"]; return out
+        with self._lock:
+            row=self._db.execute("SELECT user_id,label,email,token_quota,is_admin FROM users WHERE user_id=?",(user_id,)).fetchone()
+            if not row: return None
+            out=dict(row); out["tokens_used"]=self._db.execute("SELECT COALESCE(SUM(input_tokens+output_tokens),0) n FROM usage WHERE user_id=?",(user_id,)).fetchone()["n"]; return out
 
     def set_user_quota(self, user_id: str, token_quota: int, actor: str) -> dict:
         with self._lock:
@@ -925,7 +947,9 @@ class TursoReplicaStore(SQLiteStore):
         if not self._replica_available:
             activity("database.sync.failed","Turso replica sync deferred; local data remains available",reason=reason,error="replica connection unavailable; retry occurs on restart")
             return
-        try:self._db.sync();activity("database.sync","Turso replica synchronized",reason=reason)
+        try:
+            with self._lock:self._db.sync()
+            activity("database.sync","Turso replica synchronized",reason=reason)
         except Exception as e:activity("database.sync.failed","Turso replica sync deferred; local data remains available",reason=reason,error=f"{type(e).__name__}: {str(e)[:180]}")
     def create_basic_user(self,*args,**kwargs):
         result=super().create_basic_user(*args,**kwargs);self._safe_sync("account create");return result
