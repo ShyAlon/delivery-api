@@ -1998,3 +1998,30 @@ def test_live_headline_names_latest_stage_and_stage_line_ignores_phase_tag(page,
     page.reload()
     expect(page.locator('.live-indicator')).to_contain_text('Working · Building CONOPS concept option 2/2')
     page.screenshot(path='/downloads/live-stage-headline.png',clip={'x':0,'y':100,'width':1365,'height':560})
+def review_answer_snapshot(snapshot):
+    raw = ('{"revision":"d5b1a909f522f0af0fbf7bd47f163993827bbf5d2dbfb32820","decisions":['
+           '{"item_id":"constraint:0","action":"accept","rationale":""},'
+           '{"item_id":"constraint:1","action":"remove","rationale":""}]}')
+    snapshot["events"] = [
+        {"id": 92001, "kind": "waiting_input", "phase_key": "intent", "ts": 1,
+         "message": "Review these interview findings before continuing.",
+         "payload": {"waiting_input": True, "question": "Review these interview findings before continuing."}},
+        {"id": 92002, "kind": "answer", "phase_key": "intent", "ts": 2,
+         "message": "You: " + raw, "payload": {"answer": raw}},
+        {"id": 92003, "kind": "waiting_input", "phase_key": "intent", "ts": 3,
+         "message": "Second question", "payload": {"waiting_input": True, "question": "Second question"}},
+        {"id": 92004, "kind": "answer", "phase_key": "intent", "ts": 4,
+         "message": "You: Reviewed 1 flagged item:\nRemoved - Constraint: Must be a web app",
+         "payload": {"answer": "{}", "answer_display": "Reviewed 1 flagged item:\nRemoved - Constraint: Must be a web app"}},
+    ]
+
+
+def test_interview_feed_shows_flagged_item_review_as_words_not_json(page, ui):
+    route_task_snapshot(page, ui, "live", review_answer_snapshot)
+    page.goto(ui + "/tasks/live/view")
+    page.get_by_text("Interview so far").wait_for()
+    joined = "\n".join(page.locator(".qa-answer").all_inner_texts())
+    page.locator(".qa-item").first.screenshot(path="/tmp/review-bubble.png")
+    assert "Reviewed 2 flagged items" in joined and "kept as written: Constraint 1" in joined and "removed: Constraint 2" in joined
+    assert "Removed - Constraint: Must be a web app" in joined
+    assert "revision" not in joined and "item_id" not in joined and "d5b1a909" not in joined and "{" not in joined

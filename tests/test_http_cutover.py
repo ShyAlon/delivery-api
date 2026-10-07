@@ -1013,3 +1013,14 @@ def test_failed_phase_retry_that_cannot_launch_marks_the_phase_failed_again(tmp_
  asyncio.run(exercise())
  phase=next(p for p in store.task(tid)['phases'] if p['phase_key']=='architecture')
  assert phase['state']=='failed' and 'environment is missing' in phase['detail']
+
+
+def test_semantic_answer_display_names_items_and_hides_ids():
+    from types import SimpleNamespace as N
+    from delivery_api.app import semantic_answer_display
+    review = N(findings=[N(item_id="constraint:0", path=["constraints", 0], original="Must be a web app"),
+                         N(item_id="constraint:1", path=["constraints", 1], original={"statement": "x" * 120})])
+    out = semantic_answer_display(review, [{"item_id": "constraint:0", "action": "accept"}, {"item_id": "constraint:1", "action": "remove"}])
+    assert out.splitlines()[0] == "Reviewed 2 flagged items:"
+    assert "Kept as written - Constraint: Must be a web app" in out and "Removed - Constraint: " + "x" * 87 + "..." in out
+    assert "constraint:0" not in out
