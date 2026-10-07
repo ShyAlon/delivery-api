@@ -1977,3 +1977,24 @@ def test_running_cost_header_shows_credits_and_usd_and_grows_while_running(page,
     page.route("**/api/tasks/live/cost",lambda route:route.fulfill(json=next(totals,last)))
     page.wait_for_function("document.querySelector('#costtotal').textContent.startsWith('3.75')",timeout=20000)
     assert header.inner_text()=="3.75 credits · $3.75"
+
+
+
+def test_live_headline_names_latest_stage_and_stage_line_ignores_phase_tag(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json()
+    live['state']='running';live['active_phase']='intent'
+    live['ui_state']={'mode':'executing','active_phase':'intent','process_live':True,'decision':None,'gate':None}
+    live['events']=[{'id':1,'kind':'command','message':'Engine process started','phase_key':'intent','payload':{},'ts':time.time()-60}]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.goto(ui+'/tasks/live/view')
+    expect(page.locator('.live-indicator')).to_contain_text('Working · Start')
+    expect(page.locator('#stageprogress')).to_contain_text('Waiting for stage progress')
+    live['events'].append({'id':2,'kind':'progress','message':'Building CONOPS concept option 2/2 field disadvantages','phase_key':'conops','payload':{'label':'Building CONOPS concept option 2/2','stage':'conops'},'ts':time.time()-5})
+    page.reload()
+    expect(page.locator('.live-indicator')).to_contain_text('Working · Building CONOPS concept option 2/2')
+    expect(page.locator('.live-indicator')).not_to_contain_text('Start')
+    expect(page.locator('#stageprogress')).to_contain_text('Building CONOPS concept option 2/2 field disadvantages')
+    live['events'].append({'id':3,'kind':'heartbeat','message':'Model call still running, 340s elapsed','phase_key':'intent','payload':{'label':'Building CONOPS concept option 2/2','stage':'conops','status':'heartbeat'},'ts':time.time()-1})
+    page.reload()
+    expect(page.locator('.live-indicator')).to_contain_text('Working · Building CONOPS concept option 2/2')
+    page.screenshot(path='/downloads/live-stage-headline.png',clip={'x':0,'y':100,'width':1365,'height':560})
