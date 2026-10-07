@@ -50,4 +50,8 @@ if [[ "$(uname -s)" == "Linux" ]]; then
 else
   "$PYTHON" -m playwright install chromium
 fi
-"$PYTHON" -m pytest -q
+case "${DELIVERY_TEST_SCOPE:-full}" in
+  pr) exec ./scripts/ci/test-pr.sh ;;
+  full) "$PYTHON" -m pytest -q ;;
+  *) echo "Error: unknown DELIVERY_TEST_SCOPE; expected pr or full." >&2; exit 1 ;;
+esac

@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from delivery_api.store import SQLiteStore
 import delivery_api.app as module
 
+@pytest.mark.producer_integration
 @pytest.mark.parametrize("reviewed", [False, True])
 def test_package_endpoint_calls_real_zero_model_export_and_downloads(tmp_path,monkeypatch,reviewed):
  import shutil,pytest

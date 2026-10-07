@@ -1,3 +1,4 @@
+import pytest
 from uuid import uuid4
 from fastapi.testclient import TestClient
 from vmodel_contracts.interactive import *
@@ -69,6 +70,7 @@ def test_engine_failure_is_not_misreported_as_dead_subprocess(tmp_path,monkeypat
  assert 'process_live' not in response.text and 'subprocess' not in response.text
 
 
+@pytest.mark.engine_integration
 def test_smoke_choice_answer_satisfies_required_rationale():
  from delivery_api.smoke import typed_smoke_answer
  from interview_engine.conops_stage import decision_reply
@@ -876,6 +878,7 @@ def test_interrupted_start_recovers_exact_session_without_second_start(tmp_path,
  assert ready['control_snapshot']['precondition']['session_id']==sid
 
 
+@pytest.mark.engine_integration
 def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tmp_path,monkeypatch):
  from concurrent.futures import ThreadPoolExecutor
  from threading import Event
