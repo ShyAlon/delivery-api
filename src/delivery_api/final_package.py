@@ -28,11 +28,13 @@ def package(task,session,handoff,folder:Path):
     if not required.issubset(files):raise PackageBlocked('Missing export outputs: '+', '.join(sorted(required-set(files))))
     expected={'README.md','founder-decisions.json','founder-decisions.md','decisions.json','interview/intent_model.json','interview/conops.json','spec/needs.json','spec/srs.json','spec/architecture.json','spec/items.json','spec/tests.json','spec/validation.json','spec/AGENTS.md','spec/manifest.json','spec/traceability.json','spec/system-baseline.json'}
     expected|={'interview/semantic-review.json','spec/srs.semantic-review.json'}
+    expected|={'docs/'+name+'.md' for name in ('README','intent','conops','needs','architecture','requirements','tests','validation','traceability','findings','changes','run')}
     companions={n[:-5]+'.md' for n in expected if n.endswith('.json') and n.startswith(('interview/','spec/'))}
     for name,text in files.items():
         path=Path(name)
         safe_spec=__import__('re').fullmatch(r'spec/specs/SPEC-\d+\.md',name)
-        if path.is_absolute() or '..' in path.parts or (name not in expected|companions and not safe_spec):raise PackageBlocked('Unexpected export file: '+name)
+        safe_doc=__import__('re').fullmatch(r'docs/(?:specs/SPEC-[1-9][0-9]*|tests/T-[1-9][0-9]*|review/round-[1-9][0-9]*)\.md',name)
+        if path.is_absolute() or '..' in path.parts or (name not in expected|companions and not safe_spec and not safe_doc):raise PackageBlocked('Unexpected export file: '+name)
         if len(text.encode())>2_000_000:raise PackageBlocked('Export file exceeds limit: '+name)
         if hashlib.sha256(text.encode()).hexdigest()!=handoff['sha256'].get(name):raise PackageBlocked('Export checksum mismatch: '+name)
     if sum(len(x.encode()) for x in files.values())>20_000_000:raise PackageBlocked('Export exceeds total limit')

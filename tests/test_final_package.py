@@ -18,13 +18,24 @@ def test_immutable_generation_packages_and_checksums(tmp_path):
   for name,value in manifest['sha256'].items():assert hashlib.sha256(z.read(name)).hexdigest()==value
 
 def test_blocked_or_bad_source_never_exports(tmp_path):
- for change in ('open','state','run','log','traversal','checksum'):
+ for change in ('open','state','run','log','traversal','checksum','unknown_doc','doc_traversal','doc_id'):
   t=task();h=handoff();session='s'
   if change=='open':h['blocked_reasons']=['FD-style']
   if change=='state':t['state']='waiting_gate'
   if change=='run':session='other'
   if change in ('log','traversal'):
    name='spec/run.log' if change=='log' else '../private';h['files'][name]='private';h['sha256'][name]=hashlib.sha256(b'private').hexdigest()
+  if change in ('unknown_doc','doc_traversal','doc_id'):
+   name={'unknown_doc':'docs/private.md','doc_traversal':'docs/review/../private.md','doc_id':'docs/tests/T-0.md'}[change];h['files'][name]='private';h['sha256'][name]=hashlib.sha256(b'private').hexdigest()
   if change=='checksum':h['files']['README.md']='changed'
   with pytest.raises(PackageBlocked):package(t,session,h,tmp_path)
  assert not list(tmp_path.glob('*.zip'))
+
+@pytest.mark.parametrize("name", ['docs/specs/SPEC-1.md','docs/tests/T-1.md','docs/review/round-1.md'])
+def test_known_document_paths_export_and_still_enforce_limits(tmp_path,name):
+ h=handoff();h['files'][name]='document';h['sha256'][name]=hashlib.sha256(b'document').hexdigest()
+ assert name in package(task(),'s',h,tmp_path)['contents']
+ h['files'][name]='changed'
+ with pytest.raises(PackageBlocked,match='checksum'):package(task(),'s',h,tmp_path)
+ h['files'][name]='x'*2_000_001;h['sha256'][name]=hashlib.sha256(h['files'][name].encode()).hexdigest()
+ with pytest.raises(PackageBlocked,match='exceeds limit'):package(task(),'s',h,tmp_path)
