@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import codecs
 import json
 import os
@@ -17,9 +16,6 @@ from .observability import event as activity
 
 _MISSING_MODULE = re.compile(r"ModuleNotFoundError: No module named [\'\"]([^\'\"]+)[\'\"]")
 
-def decision_fingerprint(decision: dict) -> str:
-    """Stable identity for one exact typed decision occurrence across restart."""
-    return hashlib.sha256(json.dumps(decision,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
 _PROGRESS = re.compile(r"(?:stage '([^']+)' call|([0-9]+)s elapsed|([0-9]+)/([0-9]+))", re.I)
 _PHASE_HINTS = {
     "conops": "conops", "concept option": "conops", "operational scenario": "conops",
@@ -69,7 +65,7 @@ class ProcessRunner:
 
     async def run(self, task_id: str, command: list[str], *, cwd: Path, phase: str = "intent",
                   env: dict[str, str] | None = None, completion_phases: tuple[str, ...] = (), infer_phase: bool = True,
-                  replay_decisions: dict[str, dict[str, str]] | None = None, stall_timeout: float | None = None) -> int:
+                  stall_timeout: float | None = None) -> int:
         if task_id in self.processes:
             raise RuntimeError("task already has a live process")
         launched_phase=phase
@@ -97,7 +93,6 @@ class ProcessRunner:
         line_buffer = ""
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
         continuation_phase: str | None = None
-        replay_decisions=dict(replay_decisions or {})
         replaying_prompt=False
         typed_prompt_pending=False
         self.pricing_wait_seconds[task_id]=0.0
