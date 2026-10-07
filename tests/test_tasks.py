@@ -1598,3 +1598,22 @@ def test_orchestrator_sticky_exact_model_across_phases_and_switch(monkeypatch,tm
     asyncio.run(o.execute_phase(tid,'specs'))
     assert r.calls[2]['env']['SPEC_GENERATOR_MODEL_ARCHITECTURE']=='ollama:phi4'
     assert r.calls[3]['env']['SPEC_GENERATOR_MODEL_ITEMS']=='ollama:phi4'
+
+
+def test_architecture_founder_refs_validate_in_delivery_snapshot_and_gate(monkeypatch,tmp_path):
+    import json
+    import delivery_api.app as app_module
+    from delivery_api.store import SQLiteStore
+    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root))
+    local=SQLiteStore(str(tmp_path/'refs.db'));tid=local.create_task('Founder source')['task_id']
+    local.set_engine_session(tid,'founder-ref-session');monkeypatch.setattr(app_module,'store',local)
+    folder=root/'founder-ref-session'/'spec';folder.mkdir(parents=True)
+    payload={'contract_version':'0.27.0','session_id':'founder-ref-session','baseline_id':'baseline:test','stack_entries':[],'components':[],
+             'decisions':[{'decision_id':'ADR-17','title':'Error surface','decision':'Display an error and reporting action','rationale':'Recorded founder decision','driver':'founder_constraint','options_considered':[],'founder_decision_refs':['FD-missing-error_states']}],'non_functionals':{}}
+    (folder/'architecture.json').write_text(json.dumps(payload))
+    artifact=next(a for a in app_module._task_artifact_snapshot(tid) if a['name']=='architecture.json')
+    assert artifact['valid'] is True and artifact['validation_errors']==[], artifact['validation_errors']
+    with TestClient(app_module.app) as client:
+        read=client.get(f'/api/tasks/{tid}/artifacts/architecture/architecture.json/view')
+    assert read.status_code==200
+    assert json.loads(read.json()['content'])['decisions'][0]['founder_decision_refs']==['FD-missing-error_states']
