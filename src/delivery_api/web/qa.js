@@ -101,6 +101,20 @@ function openFeedbackDialog(target,ref,content){
 async function contentRef(text){
  try{let buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(String(text).trim()));return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,16)}catch(e){let h=0;for(const c of String(text).trim())h=(h*31+c.charCodeAt(0))>>>0;return 'h'+h.toString(16)}
 }
+const REVIEW_KIND={constraint:'Constraint',assumption:'Assumption',legacy:'Assumption',functional:'Functional requirement',non_functional:'Non-functional requirement'};
+const REVIEW_VERB={accept:'kept as written',remove:'removed',replace:'replaced'};
+/* A flagged-input review used to be stored as the submitted JSON (revision hash, item ids). Show it as plain words;
+   entries recorded after the server started writing answer_display already arrive readable. */
+function readableAnswer(raw){
+ let a=String(raw||'').trim();
+ if(a[0]!=='{')return a;
+ let data;try{data=JSON.parse(a)}catch(e){return a}
+ if(!data||typeof data.revision!=='string'||!Array.isArray(data.decisions))return a;
+ let names=[];
+ for(let d of data.decisions){let m=/^([a-z_]+)[:-](\d+)$/.exec(String(d.item_id||''));names.push(`${REVIEW_VERB[d.action]||'reviewed'}: ${m?`${REVIEW_KIND[m[1]]||m[1].replace(/_/g,' ')} ${Number(m[2])+1}`:'item'}`)}
+ let n=data.decisions.length;
+ return `Reviewed ${n} flagged item${n===1?'':'s'}:\n`+names.join('\n');
+}
 function qaTurns(events){
  let turns=[];
  for(const e of events||[]){
@@ -110,7 +124,7 @@ function qaTurns(events){
    let q=String(p.question||e.message||'').trim();
    if(q&&!(turns.length&&turns[turns.length-1].a===null&&turns[turns.length-1].q===q))turns.push({q,a:null});
   }else if(e.kind==='answer'){
-   let m=String(e.message||''),a=String(p.answer||(m.startsWith('You: ')?m.slice(5):'')).trim();
+   let m=String(e.message||''),a=readableAnswer(p.answer_display||p.answer||(m.startsWith('You: ')?m.slice(5):''));
    if(a){if(turns.length&&turns[turns.length-1].a===null)turns[turns.length-1].a=a}
   }
  }

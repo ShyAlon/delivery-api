@@ -895,6 +895,31 @@ class InterviewAnswer(BaseModel):
     answer:str=Field(min_length=1,max_length=8000)
     expected_sequence:int|None=Field(default=None,ge=0)
     decision_id:str|None=Field(default=None,max_length=160)
+_REVIEW_SECTION={"constraints":"Constraint","assumptions":"Assumption","assumption_items":"Assumption","functional":"Functional requirement","non_functional":"Non-functional requirement","stakeholder_needs":"Stakeholder need","needs":"Stakeholder need","scenarios":"Scenario","risks":"Risk","glossary":"Glossary term"}
+_REVIEW_VERB={"accept":"Kept as written","remove":"Removed","replace":"Replaced"}
+
+def _review_item_label(finding)->str:
+    """Founder-readable name of one flagged item: its kind and the start of its wording."""
+    path=getattr(finding,"path",None) or []
+    head=next((p for p in path if isinstance(p,str)),"")
+    kind=_REVIEW_SECTION.get(head) or (head.replace("_"," ").capitalize() if head else "Item")
+    original=getattr(finding,"original",None)
+    text=original if isinstance(original,str) else next((original[k] for k in ("statement","title","name","description","text") if isinstance(original,dict) and isinstance(original.get(k),str) and original[k].strip()),"")
+    text=" ".join(str(text).split())
+    if len(text)>90:text=text[:87].rstrip()+"..."
+    return f"{kind}: {text}" if text else kind
+
+def semantic_answer_display(review,decisions:list[dict])->str:
+    """Founder-readable record of a flagged-input review (never ids or the revision hash)."""
+    by_id={f.item_id:f for f in review.findings}
+    lines=[]
+    for d in decisions:
+        finding=by_id.get(d.get("item_id"))
+        label=_review_item_label(finding) if finding else "Item"
+        lines.append(f"{_REVIEW_VERB.get(d.get('action'),'Reviewed')} - {label}")
+    n=len(lines)
+    return f"Reviewed {n} flagged item{'' if n==1 else 's'}:\n"+"\n".join(lines) if lines else "Reviewed the flagged items."
+
 @app.post("/api/tasks/{task_id}/answer")
 async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends(auth.require_actor)):
     task_before=store.task(task_id) or {};input_before=runner.input_state(task_id)
@@ -906,6 +931,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
 
     recent_answers=[{"event_id":event["id"],"phase_key":event.get("phase_key"),"decision_id":event.get("payload",{}).get("decision_id")} for event in store.events(task_id) if event.get("kind")=="answer"][-10:]
     activity("api.answer.attempt","Founder answer submission received",endpoint=f"/api/tasks/{task_id}/answer",task_id=task_id,task_state=task_before.get("state"),active_phase=task_before.get("active_phase"),submitted_decision_id=body.decision_id,open_decision_id=(input_before.get("decision") or {}).get("decision_id"),process_live=input_before["process_live"],waiting=input_before["waiting"],recent_answer_events=json.dumps(recent_answers,separators=(",",":")))
+    answer_display=None
     try:
         work=runner.work_state(task_id)
         if work and work.owner=="decision" and work.phase==task_before.get("active_phase"):
@@ -934,6 +960,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
                 if proposal.get('revision')!=review.revision:raise RuntimeError('semantic review revision changed')
                 decisions=[{**d,'actor':a.label} for d in proposal.get('decisions',[])]
                 typed_value=json.dumps({'revision':review.revision,'decisions':decisions})
+                answer_display=semantic_answer_display(review,decisions)
             if pending.rationale_required and not rationale:raise RuntimeError("typed input requires a rationale")
             progress_stop=asyncio.Event()
             progress_watch=asyncio.create_task(_watch_engine_advance(task_id,session_id,progress_stop))
@@ -968,7 +995,9 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
         activity("api.answer.stale","Stale founder decision was not submitted",task_id=task_id,phase=task.get("active_phase"),**payload)
         raise HTTPException(409,{"error":"Stale founder decision was not submitted.","cause":cause,"next":next_step,"stale":True,"current_state":task.get("state"),"active_phase":task.get("active_phase")})
     active_phase=(store.task(task_id) or {}).get("active_phase") or "intent"
-    store.add_event(task_id,"answer",f"You: {body.answer}",phase_key=active_phase,payload={"actor":a.label,"character_count":len(body.answer),"transcript":True,"decision_id":body.decision_id,"answer":body.answer})
+    answer_payload={"actor":a.label,"character_count":len(body.answer),"transcript":True,"decision_id":body.decision_id,"answer":body.answer}
+    if answer_display:answer_payload["answer_display"]=answer_display
+    store.add_event(task_id,"answer",f"You: {answer_display or body.answer}",phase_key=active_phase,payload=answer_payload)
     activity("engine.answer","Founder answer submitted",task_id=task_id,phase=active_phase,actor=a.label,character_count=len(body.answer))
     if source=="http_interview" and _reconcile_terminal_http_interview(task_id,submitted.snapshot):
         asyncio.create_task(_continue_reconciled_interview(task_id))
