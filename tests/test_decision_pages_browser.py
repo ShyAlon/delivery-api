@@ -403,3 +403,24 @@ def test_architecture_gate_decisions_panel_is_decide_only_and_gates_approval(pag
  panel.locator('[name=stack-reason-0]').fill('One user');panel.locator('[name=stack-text-1]').fill('');panel.locator('[name=stack-reason-1]').fill('');
  panel.get_by_role('button',name='Save Decisions').click()
  expect(panel.locator('#stack-status')).to_contain_text('Decisions saved');assert posts==[{'revision':'a'*64,'decisions':[{'key':'database_engine','text':'SQLite','reason':'One user'}]}]
+
+
+def test_reference_review_shows_precise_reason_and_cited_quote(page):
+ p,base,root=page
+ original={'name':'D&D Beyond','kind':'reference_product','source_turns':[7]}
+ finding=_f(0,'reference_name:0',['reference_names',0],original)
+ finding['reason']='A cited turn is the interviewer, not you. Interviewer examples are not founder evidence.\nTurn 7 (Interviewer): "Should it integrate with D&D Beyond?"'
+ _flag_page(p,base,[finding])
+ expect(p.locator('.flag-reason')).to_have_text('A cited turn is the interviewer, not you. Interviewer examples are not founder evidence.')
+ box=p.locator('.cited-evidence');expect(box).to_be_visible();assert not box.evaluate('e=>e.open')
+ box.locator('summary').click()
+ expect(box.locator('blockquote')).to_have_text('Turn 7 (Interviewer): "Should it integrate with D&D Beyond?"')
+ p.locator('.semantic-item').scroll_into_view_if_needed()
+ p.screenshot(path='/tmp/reference-review-desktop-viewport.png')
+ p.screenshot(path='/tmp/reference-review-desktop.png',full_page=True)
+ p.set_viewport_size({'width':390,'height':844})
+ assert p.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
+ assert p.locator('.semantic-footer').evaluate('e=>getComputedStyle(e).position') == 'static'
+ p.locator('.semantic-item').scroll_into_view_if_needed()
+ p.screenshot(path='/tmp/reference-review-mobile-viewport.png')
+ p.screenshot(path='/tmp/reference-review-mobile.png',full_page=True)
