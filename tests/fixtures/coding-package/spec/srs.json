@@ -1,5 +1,5 @@
 {
-  "contract_version": "0.22.0",
+  "contract_version": "0.27.0",
   "session_id": "s",
   "intent_model_ref": "s",
   "purpose": "p",
@@ -7,14 +7,14 @@
   "definitions": {},
   "functional": [
     {
-      "contract_version": "0.22.0",
+      "contract_version": "0.27.0",
       "requirement_id": "R-1",
       "title": "Spec file",
       "statement": "system shall emit a spec",
       "priority": "must",
       "acceptance": [
         {
-          "contract_version": "0.22.0",
+          "contract_version": "0.27.0",
           "criterion_id": "AC-1",
           "statement": "spec exists",
           "executable_hint": null
