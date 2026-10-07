@@ -424,3 +424,35 @@ def test_reference_review_shows_precise_reason_and_cited_quote(page):
  p.locator('.semantic-item').scroll_into_view_if_needed()
  p.screenshot(path='/tmp/reference-review-mobile-viewport.png')
  p.screenshot(path='/tmp/reference-review-mobile.png',full_page=True)
+
+@pytest.mark.parametrize('screen', ['concept','review','semantic'])
+def test_shared_session_cost_above_every_decision_screen(page,screen):
+ p,base,root=page;state=fake(p)
+ if screen=='review':state['current']=review('wait-review','interview_approval')
+ elif screen=='semantic':
+  state['current']=review();state['current']['kind']='semantic_review'
+  state['current']['decision']={'options':[],'context':{'decision_purpose':'semantic_review','evidence':{'semantic_review':{'revision':'a'*64,'findings':[_f(0,'x',['constraints',0],'Fast app')]}}}}
+ totals={'price':0.73,'price_usd':0.73}
+ p.route('**/api/tasks/concept/cost',lambda r:r.fulfill(json=totals))
+ p.goto(base+'/tasks/concept/decisions/'+state['current']['wait_id'])
+ cost=p.locator('header #sessioncost');expect(cost).to_have_text('0.73 credits · $0.73')
+ totals.update(price=0.9,price_usd=0.9)
+ expect(cost).to_have_text('0.90 credits · $0.90',timeout=12000)
+ assert p.locator('#sessioncost').count()==1
+ p.screenshot(path=f'/tmp/global-cost-{screen}-desktop.png')
+ p.set_viewport_size({'width':390,'height':844});p.evaluate('window.scrollTo(0,0)')
+ assert p.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
+ expect(cost).to_be_in_viewport();p.screenshot(path=f'/tmp/global-cost-{screen}-mobile.png')
+
+
+def test_header_cost_unavailable_last_known_and_recovery(page):
+ p,base,root=page;fake(p);state={'fail':True,'price':.73}
+ def cost(r):
+  if state['fail']:r.fulfill(status=503,json={'detail':'Unavailable'})
+  else:r.fulfill(json={'price':state['price'],'price_usd':state['price']})
+ p.route('**/api/tasks/concept/cost',cost)
+ p.goto(base+'/tasks/concept/decisions/wait-concept');host=p.locator('#sessioncost')
+ expect(host).to_have_text('Session Cost Unavailable')
+ state['fail']=False;expect(host).to_have_text('0.73 credits · $0.73',timeout=12000)
+ state['fail']=True;expect(host).to_have_text('0.73 credits · $0.73 · Last Known',timeout=12000)
+ state.update(fail=False,price=.9);expect(host).to_have_text('0.90 credits · $0.90',timeout=12000)

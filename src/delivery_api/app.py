@@ -1800,6 +1800,23 @@ def task_cost(task_id:str,request:Request):
         except (OSError,ValueError):pass
     return _task_cost(task_id)
 
+@app.get("/api/sessions/{session_id}/cost")
+def session_cost(session_id:str):
+    # Discovery validates the path and ties the read to an existing session.
+    try:bundles.bundle(session_id)
+    except (FileNotFoundError,ValueError):raise HTTPException(404,"session bundle not found")
+    linked=[task for task in store.list_tasks() if _recorded_engine_session(task["task_id"])==session_id]
+    if len(linked)>1:raise HTTPException(409,"session has multiple task bindings; cost cannot be selected safely")
+    if linked:return _task_cost(linked[0]["task_id"])
+    from .pricing import usage_tokens,token_credits,credits_to_usd,_rows
+    root=bundles.root()/session_id
+    paths=[root/area/"usage.jsonl" for area in ("interview","spec")]
+    if not any("prompt_tokens" in row and "completion_tokens" in row for row in _rows(paths[0])):raise HTTPException(404,"session usage unavailable")
+    if (root/"spec").is_dir() and any((root/"spec").iterdir()):raise HTTPException(404,"complete session cost unavailable without recorded task pricing")
+    price=token_credits(sum(usage_tokens(path) for path in paths))
+    return {"price":round(price,6),"price_usd":round(credits_to_usd(price),6)}
+
+
 @app.get("/api/tasks/{task_id}/audit")
 def task_audit(task_id: str, request: Request):
     if not store.task(task_id): raise HTTPException(404, "task not found")

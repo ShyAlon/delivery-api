@@ -289,3 +289,14 @@ section.qa-history{max-height:min(44vh,440px);overflow-y:auto;overscroll-behavio
 .stack-change>summary {cursor:pointer;padding:.5rem 0}
 .stack-options {display:flex;flex-direction:column;align-items:stretch;gap:.4rem}
 .stack-tradeoff {margin:.4rem 0}
+
+.session-cost{font:11px/1.4 Manrope;text-align:right;white-space:nowrap;margin-left:auto;padding:8px 12px;color:var(--ink)}
+.session-cost[data-state="stale"],.session-cost[data-state="unavailable"]{color:#94631c}
+@media(max-width:850px){header{flex-wrap:wrap;height:auto;min-height:84px;padding-top:10px;padding-bottom:10px;gap:8px}.session-cost{order:5;flex:1 1 100%;text-align:center;margin:0;padding:2px 0}.semantic-page .semantic-head,.page-head{top:110px}}
+
+/* Sticky content follows the measured shared header, including wrapped mobile rows. */
+header{z-index:6}
+.page-head,.bundle-workspace>.page-head,.gate-page-head,.decision-page:not(.semantic-page) .page-head,.semantic-page .semantic-head{top:var(--global-header-height,84px)}
+.decision-launch-sticky{top:calc(var(--global-header-height,84px) + 12px)}
+.decision-page:not(.semantic-page) .gate-controls{top:calc(var(--global-header-height,84px) + 16px);max-height:calc(100dvh - var(--global-header-height,84px) - 32px)}
+@media(max-width:760px){.decision-page:not(.semantic-page) .gate-controls{max-height:none}}
