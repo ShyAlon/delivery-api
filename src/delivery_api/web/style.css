@@ -269,3 +269,6 @@ section.qa-history{max-height:min(44vh,440px);overflow-y:auto;overscroll-behavio
 #stack-panel .stack-options{display:flex;flex-wrap:wrap;gap:8px}#stack-panel .stack-option{padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:#fff;cursor:pointer;font:inherit}#stack-panel .stack-option.selected{border-color:#73a89a;background:#eef6f3;font-weight:600}
 #stack-panel .stack-prefill{font-weight:600}#stack-panel #save-stack{justify-self:start;margin-top:8px}
 .cost-total{font:10px DM Mono;padding:7px 9px;background:#e8eadf;margin-right:6px}.cost-total:empty{display:none}
+
+/* Keep live heartbeat details readable instead of clipping them to one line. */
+.progress-item.heartbeat span{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
