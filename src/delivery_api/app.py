@@ -82,7 +82,6 @@ def _engine_unreachable(exc:EngineUnreachableError)->HTTPException:
 log = logging.getLogger("delivery_api.http")
 
 
-
 if config.ADMIN_TOKEN == "dev-admin-token":
     import logging
     logging.getLogger("delivery_api").warning(
@@ -145,23 +144,6 @@ async def _resume_orphaned_handoffs()->None:
                 store.add_event(task_id,"error",message,phase_key=target,payload={"cause":f"{type(exc).__name__}: {exc}","next":"Fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved.","completed_phase":source,"next_phase":target})
                 activity("orchestrator.recover.failed","Orphaned completed handoff still blocked",task_id=task_id,completed_phase=source,next_phase=target,error=f"{type(exc).__name__}: {exc}")
         asyncio.create_task(recover())
-
-
-def _replayable_decisions(task_id:str)->dict[str,dict[str,str]]:
-    """Exact typed answers accepted before a restart, keyed by contract identity."""
-    from .runner import decision_fingerprint
-    decisions:dict[str,tuple[int,dict]]={};result={}
-    for event in store.events(task_id):
-        decision=(event.get("payload") or {}).get("decision")
-        if event.get("kind")=="founder_decision" and isinstance(decision,dict) and decision.get("decision_id"):
-            decision_id=str(decision["decision_id"]);decisions[decision_id]=(event["id"],decision);result.pop(decision_id,None)
-        elif event.get("kind")=="answer":
-            decision_id=str((event.get("payload") or {}).get("decision_id") or "")
-            prior=decisions.get(decision_id)
-            if prior and prior[0] < event["id"]:
-                answer=(event.get("payload") or {}).get("answer") or event.get("message","").removeprefix("You: ")
-                result[decision_id]={"answer":answer,"fingerprint":decision_fingerprint(prior[1])}
-    return result
 
 
 async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=False)->None:

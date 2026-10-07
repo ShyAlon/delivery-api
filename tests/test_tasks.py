@@ -811,62 +811,6 @@ def test_startup_handoff_recovery_is_shared_across_phase_boundaries(monkeypatch,
     asyncio.run(go())
     assert calls==[(tid,'needs')]
 
-@pytest.mark.skip(reason="runner envelope/stdin replay retired in 8bfda8d; interview control moved to the typed HTTP service; app-level replay is covered by _replayable_decisions tests")
-def test_restart_replays_exact_accepted_typed_decision_into_engine(tmp_path):
-    import asyncio,json,sys
-    from delivery_api.runner import ProcessRunner,decision_fingerprint
-    from delivery_api.store import SQLiteStore
-    decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve this intent model?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
-    script=f'''import json,sys\nprint("REQUIRE_EVENT "+json.dumps({decision!r}),file=sys.stderr,flush=True)\nprint("Approve this intent model? [y/N] ",end="",flush=True)\nanswer=input().strip();print("accepted="+answer,flush=True);raise SystemExit(0 if answer=="y" else 9)'''
-    store=SQLiteStore(str(tmp_path/'replay.db'));tid=store.create_task('Replay approved decision')['task_id'];runner=ProcessRunner(store)
-    replay={'intent-approval':{'answer':'y','fingerprint':decision_fingerprint(decision)}}
-    code=asyncio.run(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path,replay_decisions=replay,completion_phases=('intent','conops')))
-    assert code==0 and not runner.input_state(tid)['waiting']
-    event=next(e for e in store.events(tid) if e['kind']=='decision_replayed')
-    assert event['payload']['decision_id']=='intent-approval' and event['payload']['recovery'] is True
-
-
-@pytest.mark.skip(reason="runner envelope/stdin replay retired in 8bfda8d; interview control moved to the typed HTTP service; app-level replay is covered by _replayable_decisions tests")
-def test_restart_does_not_replay_same_id_when_typed_contract_changed(tmp_path):
-    import asyncio,json,sys
-    from delivery_api.runner import ProcessRunner,decision_fingerprint
-    from delivery_api.store import SQLiteStore
-    old={'type':'founder_decision','decision_id':'intent-approval','title':'Approve old','prompt':'Approve old?','options':[{'value':'y','label':'Approve'}]}
-    changed={'type':'founder_decision','decision_id':'intent-approval','title':'Approve changed','prompt':'Approve changed?','options':[{'value':'y','label':'Approve'}]}
-    script=f'''import json,sys\nprint("REQUIRE_EVENT "+json.dumps({changed!r}),file=sys.stderr,flush=True)\nprint("Approve this intent model? [y/N] ",end="",flush=True)\nprint(input(),flush=True)'''
-    store=SQLiteStore(str(tmp_path/'no-replay.db'));tid=store.create_task('Changed decision')['task_id'];runner=ProcessRunner(store)
-    async def go():
-        job=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path,replay_decisions={'intent-approval':{'answer':'y','fingerprint':decision_fingerprint(old)}}))
-        for _ in range(100):
-            if runner.input_state(tid)['waiting']:break
-            await asyncio.sleep(.01)
-        assert runner.input_state(tid)['waiting']
-        await runner.send_input(tid,'n','intent-approval');return await job
-    assert asyncio.run(go())==0
-
-
-def test_replayable_decisions_uses_exact_typed_event_and_answer(monkeypatch,tmp_path):
-    from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'durable-answer.db'));tid=store.create_task('Durable answer')['task_id']
-    decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve','prompt':'Approve?','options':[{'value':'y','label':'Approve'}]}
-    store.add_event(tid,'founder_decision','Approve?',phase_key='intent',payload={'decision':decision,'waiting_input':True})
-    store.add_event(tid,'answer','You: y',phase_key='intent',payload={'decision_id':'intent-approval','answer':'y','transcript':True})
-    monkeypatch.setattr(app_module,'store',store)
-    recovered=app_module._replayable_decisions(tid)
-    assert recovered['intent-approval']['answer']=='y' and len(recovered['intent-approval']['fingerprint'])==64
-
-def test_new_occurrence_of_same_decision_id_invalidates_old_replay(monkeypatch,tmp_path):
-    from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'new-occurrence.db'));tid=store.create_task('Decision reopened')['task_id']
-    first={'type':'founder_decision','decision_id':'intent-approval','title':'Approve','prompt':'Approve v1?','options':[{'value':'y','label':'Approve'}]}
-    second={**first,'prompt':'Approve v2?'}
-    store.add_event(tid,'founder_decision','Approve v1?',phase_key='intent',payload={'decision':first})
-    store.add_event(tid,'answer','You: n',phase_key='intent',payload={'decision_id':'intent-approval','answer':'n'})
-    store.add_event(tid,'founder_decision','Approve v2?',phase_key='intent',payload={'decision':second})
-    monkeypatch.setattr(app_module,'store',store)
-    assert app_module._replayable_decisions(tid)=={}
 
 def test_typed_answer_requires_current_matching_decision(tmp_path):
     import asyncio
@@ -1542,7 +1486,6 @@ def test_generator_failure_preserves_reported_contract_error(tmp_path):
     error=next(e for e in reversed(store.events(tid)) if e['kind']=='error')
     assert 'intent contract 0.19.0 cannot be read' in error['message']
     assert error['payload']['cause']=='Error: intent contract 0.19.0 cannot be read by generator contract 0.16.x'
-
 
 
 def test_item_stage_list_artifact_validates_for_parked_gate(monkeypatch,tmp_path):
