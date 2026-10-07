@@ -2025,3 +2025,24 @@ def test_interview_feed_shows_flagged_item_review_as_words_not_json(page, ui):
     assert "Reviewed 2 flagged items" in joined and "kept as written: Constraint 1" in joined and "removed: Constraint 2" in joined
     assert "Removed - Constraint: Must be a web app" in joined
     assert "revision" not in joined and "item_id" not in joined and "d5b1a909" not in joined and "{" not in joined
+
+
+@pytest.mark.parametrize("width", [1365, 390])
+def test_live_heartbeat_wraps_without_clipping(page, ui, width):
+    page.set_viewport_size({"width": width, "height": 900})
+    live = page.request.get(ui + "/api/tasks/live").json()
+    live["state"] = "running"
+    live["active_phase"] = "intent"
+    live["ui_state"] = {"mode": "executing", "active_phase": "intent", "process_live": True,
+                        "decision": None, "gate": None}
+    text = "Model call still running, 340s elapsed. Waiting for the current response before continuing to the next stage."
+    live["events"] = [{"id": 1, "kind": "command", "phase_key": "intent", "message": "Started", "ts": time.time()-60, "payload": {}},
+                      {"id": 2, "kind": "heartbeat", "phase_key": "intent", "message": text, "ts": time.time(), "payload": {}}]
+    page.route("**/api/tasks/live", lambda route: route.fulfill(json=_promote_control(live)))
+    page.goto(ui + "/tasks/live/view")
+    line = page.locator("#stageprogress .heartbeat span")
+    expect(line).to_have_text(text)
+    assert line.evaluate("e => getComputedStyle(e).whiteSpace") == "normal"
+    assert line.evaluate("e => e.scrollWidth <= e.clientWidth + 1")
+    assert line.evaluate("e => e.scrollHeight <= e.clientHeight + 1")
+    page.locator(".live-status-row").screenshot(path=f"/downloads/heartbeat-wrap-{width}.png")
