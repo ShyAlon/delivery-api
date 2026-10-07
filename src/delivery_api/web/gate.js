@@ -84,17 +84,28 @@ if(currentArtifacts.length){host.innerHTML='';for(const a of currentArtifacts){l
   const slotTitle=k=>titleCase(String(k||'').replace(/[_-]+/g,' ').trim());
   const panel=document.createElement('section');panel.className='gate-artifact';panel.id='stack-panel';
   const decidedCount=()=>stack.slots.filter(s=>s.founder_decision).length;
-  panel.innerHTML=`<h2>Decisions Needed · ${decidedCount()} Of ${stack.slots.length} Decided</h2>${stack.slots.map((s,i)=>{const d=s.founder_decision||s.prefill||{},options=s.options||[];return `<article class="stack-slot" data-slot="${i}"><h3>${esc(slotTitle(s.key))}</h3><p>${esc(s.brief)}</p><small>Raised By Architecture Draft</small>${s.prefill&&!s.founder_decision?'<p class="stack-prefill">Earlier Answer. Confirm Or Change.</p>':''}${options.length?`<div class="stack-options" role="group">${options.map((o,j)=>`<button type="button" class="stack-option" data-slot="${i}" data-option="${j}">${esc(o)}</button>`).join('')}</div>`:''}<label>Decision<textarea name="stack-text-${i}" rows="2" maxlength="2000">${esc(d.text||'')}</textarea></label><label>Reason<input name="stack-reason-${i}" maxlength="1000" value="${esc(d.reason||'')}"></label></article>`}).join('')}<button type="button" id="save-stack">Save Decisions</button> <span id="stack-status"></span>`;
+  panel.innerHTML=`<h2>Technical Choices</h2>${stack.slots.map((s,i)=>{
+   const d=s.founder_decision||{},f=s.technical_choice,chosen=d.text||f?.default_value||'';
+   const options=f?.options||[],selected=options.find(o=>o.value===chosen);
+   return `<article class="stack-slot" data-slot="${i}"><h3>${esc(f?.title||slotTitle(s.key))}</h3>${f?`<p>${esc(f.purpose)}</p><div class="stack-default"><small>${d.text?'Your Choice':'Default'}</small><strong>${esc(selected?.label||chosen)}</strong><span class="stack-technology">${esc(chosen)}</span></div><p>${esc(d.reason||f.reason)}</p>${selected?`<p class="stack-tradeoff">${esc(selected.implication)}</p>`:''}<small class="stack-research">Research Pending</small>`:`<p class="stack-missing">${d.text?esc(d.text):'No Proposed Default Yet'}</p>`}<details class="stack-change"><summary>Change</summary>${s.prefill&&!s.founder_decision?'<p class="stack-prefill">Earlier Answer. Confirm Or Change.</p>':''}<div class="stack-options" role="group">${(options.length?options:(s.options||[]).map(o=>({value:o,label:o,implication:''}))).map((o,j)=>`<button type="button" class="stack-option" data-slot="${i}" data-value="${esc(o.value)}">${esc(o.label)}</button>${o.implication?`<small>${esc(o.implication)}</small>`:''}`).join('')}</div><label>Your Choice<textarea name="stack-text-${i}" rows="2" maxlength="2000">${esc(d.text||s.prefill?.text||'')}</textarea></label><label>Your Reason (Optional)<input name="stack-reason-${i}" maxlength="1000" value="${esc(d.reason||s.prefill?.reason||'')}"></label><button type="button" class="stack-save secondary" data-slot="${i}">Save Change</button></details></article>`;
+  }).join('')}<span id="stack-status" role="status"></span>`;
   host.append(panel);
-  const refreshCount=()=>{undecidedStack=stack.slots.length-decidedCount();updateDecision()};refreshCount();
-  panel.addEventListener('click',e=>{const b=e.target.closest('.stack-option');if(!b)return;const i=b.dataset.slot;panel.querySelector(`[name="stack-text-${i}"]`).value=stack.slots[i].options[b.dataset.option];panel.querySelectorAll(`.stack-option[data-slot="${i}"]`).forEach(x=>x.classList.toggle('selected',x===b))});
-  panel.querySelector('#save-stack').onclick=async()=>{const status=panel.querySelector('#stack-status');try{
-    const decisions=[];stack.slots.forEach((s,i)=>{const text=panel.querySelector(`[name="stack-text-${i}"]`).value.trim(),reason=panel.querySelector(`[name="stack-reason-${i}"]`).value.trim();if(!text&&!reason)return;if(!text||!reason)throw new Error(`${slotTitle(s.key)} needs both a decision and a reason.`);decisions.push({key:s.key,text,reason})});
-    if(!decisions.length)throw new Error('Decide at least one slot.');
-    panel.querySelector('#save-stack').disabled=true;status.textContent='Saving…';
-    await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/stack-decisions`,{method:'POST',body:JSON.stringify({revision:stack.revision,decisions})});
-    status.innerHTML=`Decisions saved. <a href="${gateUrl(taskId,gateKey)}">Open reviewed gate</a>`;
-  }catch(error){status.textContent=error.message;if(error.status!==409)panel.querySelector('#save-stack').disabled=false}};
+  const refreshCount=()=>{undecidedStack=stack.slots.filter(s=>!s.founder_decision&&!s.technical_choice).length;updateDecision()};refreshCount();
+  panel.addEventListener('click',async e=>{
+   const option=e.target.closest('.stack-option');
+   if(option){const i=option.dataset.slot;panel.querySelector(`[name="stack-text-${i}"]`).value=option.dataset.value;return}
+   const save=e.target.closest('.stack-save');if(!save)return;
+   const status=panel.querySelector('#stack-status'),i=save.dataset.slot;
+   try{
+    const text=panel.querySelector(`[name="stack-text-${i}"]`).value.trim(),reason=panel.querySelector(`[name="stack-reason-${i}"]`).value.trim();
+    if(!text)throw new Error('Your change needs a choice.');
+    save.disabled=true;status.textContent='Saving…';
+    await api(`/api/tasks/${taskId}/gates/${encodeURIComponent(gateKey)}/stack-decisions`,{method:'POST',body:JSON.stringify({revision:stack.revision,decisions:[{key:stack.slots[i].key,text,reason}]})});
+    status.innerHTML=`Change Saved. <a href="${gateUrl(taskId,gateKey)}">Open Reviewed Gate</a>`;
+    // Saved choice changed gate evidence. Review it rather than approve an old revision.
+    form.querySelectorAll('[data-action]').forEach(b=>b.disabled=true);
+   }catch(error){status.textContent=error.message;if(error.status!==409)save.disabled=false}
+  });
   if(!data.actionable)panel.querySelectorAll('textarea,input,button').forEach(c=>c.disabled=true);
  }
  const saved=data.draft||{};for(const [name,value] of Object.entries({selected_option:saved.choice,edited_text:saved.rationale,comment:saved.comment}))if(value&&form.elements[name])form.elements[name].value=value;

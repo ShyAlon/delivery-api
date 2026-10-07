@@ -48,8 +48,7 @@ def test_review_carries_open_slots_and_approve_is_refused_until_all_decided(tmp_
 def test_blank_unknown_and_stale_are_refused(tmp_path, monkeypatch):
     store, tid, c, spec, artifact = _arch_setup(tmp_path, monkeypatch, slots=1)
     url = f'/api/tasks/{tid}/gates/gate-architecture/stack-decisions'
-    for bad in ({'key': 'database', 'text': ' ', 'reason': 'r'}, {'key': 'database', 'text': 'x', 'reason': ''},
-                {'key': 'nope', 'text': 'x', 'reason': 'r'}):
+    for bad in ({'key': 'database', 'text': ' ', 'reason': 'r'}, {'key': 'nope', 'text': 'x', 'reason': 'r'}):
         assert c.post(url, json={'revision': REV, 'decisions': [bad]}).status_code == 422
     assert c.post(url, json={'revision': 'b' * 64, 'decisions': [{'key': 'database', 'text': 'x', 'reason': 'r'}]}).status_code == 409
     assert 'founder_decision' not in json.loads(artifact.read_text())['stack_entry_dispositions'][0]
@@ -62,3 +61,62 @@ def test_no_open_slot_file_means_no_panel_and_approval_unchanged(tmp_path, monke
     assert review['stack_decisions'] is None
     reply = c.post(f'/api/tasks/{tid}/gates/gate-architecture/decide', json={'action': 'approve', 'selected_option': 'Proceed'})
     assert 'architecture decision' not in json.dumps(reply.json())
+
+
+FRAMING = {"title": "Storing Your Data", "purpose": "Keeps the product's records between visits.", "default_value": "SQLite", "reason": "A single local user needs a small store.", "requirement_ids": ["R-1"], "options": [{"value": "SQLite", "label": "One Local Store", "implication": "Simple to run; a shared server may be needed later."}, {"value": "PostgreSQL", "label": "A Shared Store", "implication": "Supports shared access but adds a server to manage."}], "provenance": "design_proposal", "research_status": "pending"}
+
+def _with_defaults(spec, artifact):
+    from vmodel_contracts.architecture import ArchitectureOverview
+    full={"session_id":"session-one", "stack_entries":[], "stack_entry_dispositions":[{"key":"database", "status":"research_required", "research_brief":"INTERNAL INVESTIGATION DO NOT SHOW", "technical_choice":FRAMING}], "components":[], "decisions":[], "non_functionals":{}}
+    ArchitectureOverview.model_validate(full)
+    artifact.write_text(json.dumps(full))
+    (spec/'architecture.decisions.json').write_text(json.dumps({"revision":REV,"slots":[{"key":"database","brief":"internal", "technical_choice":FRAMING,"founder_decision":None}]}))
+
+
+def test_approval_uses_displayed_default_without_founder_answer(tmp_path,monkeypatch):
+    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,slots=1)
+    _with_defaults(spec,artifact)
+    store.set_model_default(tid,"deepseek:deepseek-flash")
+    async def no_continue(*args,**kwargs): pass
+    monkeypatch.setattr(__import__('delivery_api.app',fromlist=['orchestrator']).orchestrator,'continue_after',no_continue)
+    reply=c.post(f'/api/tasks/{tid}/gates/gate-architecture/decide',json={'action':'approve','selected_option':'Proceed'})
+    assert reply.status_code==200,reply.text
+    entry=json.loads(artifact.read_text())['stack_entry_dispositions'][0]
+    assert entry['system_selection']=={'value':'SQLite','source':'architecture_default'}
+    assert not entry.get('founder_decision')
+    assert json.loads((spec/'architecture.decisions.json').read_text())['slots'][0]['system_selection']==entry['system_selection']
+
+
+def test_override_reason_optional_and_not_replaced_by_design_reason(tmp_path,monkeypatch):
+    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,slots=1);_with_defaults(spec,artifact)
+    reply=c.post(f'/api/tasks/{tid}/gates/gate-architecture/stack-decisions',json={'revision':REV,'decisions':[{'key':'database','text':'Custom'}]})
+    assert reply.status_code==200,reply.text
+    entry=json.loads(artifact.read_text())['stack_entry_dispositions'][0]
+    assert entry['founder_decision']['reason']==''
+    from delivery_api.app import _use_architecture_defaults
+    _use_architecture_defaults(tid)
+    entry=json.loads(artifact.read_text())['stack_entry_dispositions'][0]
+    assert entry['founder_decision']['text']=='Custom' and not entry.get('system_selection')
+
+
+def test_invalid_artifact_or_mismatched_framing_is_not_approved(tmp_path,monkeypatch):
+    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,slots=1);_with_defaults(spec,artifact)
+    data=json.loads(artifact.read_text());data['stack_entry_dispositions'][0]['technical_choice']['default_value']='Redis';artifact.write_text(json.dumps(data))
+    reply=c.post(f'/api/tasks/{tid}/gates/gate-architecture/decide',json={'action':'approve','selected_option':'Proceed'})
+    assert reply.status_code==400
+
+
+def test_stale_review_refuses_before_default_write(tmp_path,monkeypatch):
+    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,slots=1);_with_defaults(spec,artifact)
+    before=artifact.read_bytes()
+    reply=c.post(f'/api/tasks/{tid}/gates/gate-architecture/decide',json={'action':'approve','review_revision':'stale'})
+    assert reply.status_code==409 and artifact.read_bytes()==before
+
+
+def test_companion_mismatch_cannot_supply_a_default(tmp_path,monkeypatch):
+    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,slots=1);_with_defaults(spec,artifact)
+    path=spec/'architecture.decisions.json';data=json.loads(path.read_text());data['slots'][0]['technical_choice']['reason']='different';path.write_text(json.dumps(data))
+    from delivery_api.app import _use_architecture_defaults
+    import pytest
+    with pytest.raises(ValueError,match='match'): _use_architecture_defaults(tid)
+    assert not json.loads(artifact.read_text())['stack_entry_dispositions'][0].get('system_selection')
