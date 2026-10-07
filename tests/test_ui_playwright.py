@@ -1973,16 +1973,16 @@ def test_failed_architecture_has_a_retry_that_resumes_the_phase(page,ui):
 
 def test_running_cost_header_shows_credits_and_usd_and_grows_while_running(page,ui):
     page.goto(ui+"/tasks/live/view")
-    header=page.locator("#costtotal")
+    header=page.locator("#sessioncost")
     header.wait_for(state="attached")
-    page.wait_for_function("document.querySelector('#costtotal').textContent.includes('credits')")
+    page.wait_for_function("document.querySelector('#sessioncost').textContent.includes('credits')")
     assert header.inner_text()=="1.25 credits · $1.25"
     assert "token" not in page.locator(".detail-head").inner_text().lower()
     page.screenshot(path=str(_screenshots_dir / "running-cost-header.png"),clip={"x":0,"y":0,"width":1365,"height":260})
     totals=iter([{"price":2.5,"price_usd":2.5},{"price":3.75,"price_usd":3.75}])
     last={"price":3.75,"price_usd":3.75}
     page.route("**/api/tasks/live/cost",lambda route:route.fulfill(json=next(totals,last)))
-    page.wait_for_function("document.querySelector('#costtotal').textContent.startsWith('3.75')",timeout=20000)
+    page.wait_for_function("document.querySelector('#sessioncost').textContent.startsWith('3.75')",timeout=20000)
     assert header.inner_text()=="3.75 credits · $3.75"
 
 
@@ -2053,3 +2053,25 @@ def test_live_heartbeat_wraps_without_clipping(page, ui, width):
     assert line.evaluate("e => e.scrollWidth <= e.clientWidth + 1")
     assert line.evaluate("e => e.scrollHeight <= e.clientHeight + 1")
     page.locator(".live-status-row").screenshot(path=str(_screenshots_dir / f"heartbeat-wrap-{width}.png"))
+
+
+@pytest.mark.parametrize('path', ['/tasks/live/view','/tasks/live/gates/gate-conops','/tasks/done/complete','/sessions/golden-1/needs','/','/sessions','/about'])
+def test_global_cost_header_on_all_route_families(page,ui,path):
+ base=ui
+ task=path.startswith('/tasks/');session=path.startswith('/sessions/')
+ page.route('**/api/tasks/*/cost',lambda r:r.fulfill(json={'price':.73,'price_usd':.73}))
+ page.route('**/api/sessions/*/cost',lambda r:r.fulfill(json={'price':.73,'price_usd':.73}))
+ page.goto(base+path)
+ host=page.locator('header #sessioncost')
+ expect(host).to_have_text('0.73 credits · $0.73' if task or session else 'No Session Selected')
+ assert page.locator('#sessioncost').count()==1
+ for width in (1365,390):
+  page.set_viewport_size({'width':width,'height':844});page.evaluate('window.scrollTo(0,0)');page.wait_for_timeout(200)
+  expect(host).to_be_in_viewport()
+  assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+  page.evaluate('window.scrollTo(0,700)');page.wait_for_timeout(200)
+  head=page.locator('header').bounding_box();assert head['y']==0
+  for box in page.locator('.page-head').all():
+   if box.evaluate('e=>getComputedStyle(e).position')=='sticky':assert box.bounding_box()['y']>=head['height']-1
+  name=path.strip('/').replace('/','-') or 'home'
+  page.screenshot(path=f'/tmp/cost-route-{name}-{width}.png')

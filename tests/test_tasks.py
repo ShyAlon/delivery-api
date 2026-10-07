@@ -1560,3 +1560,63 @@ def test_architecture_founder_refs_validate_in_delivery_snapshot_and_gate(monkey
         read=client.get(f'/api/tasks/{tid}/artifacts/architecture/architecture.json/view')
     assert read.status_code==200
     assert json.loads(read.json()['content'])['decisions'][0]['founder_decision_refs']==['FD-missing-error_states']
+
+def test_session_cost_uses_linked_task_retail_total(monkeypatch):
+    import delivery_api.app as app_module
+    monkeypatch.setattr(app_module.bundles, 'bundle', lambda session: {'session': {'session_id': session}})
+    task = store.create_task('Cost linked', 'Test cost binding', task_id='cost-linked')
+    store.set_engine_session('cost-linked', 'cost-session')
+    store.add_event('cost-linked','price','Retail',phase_key='srs',payload={'price':2.5,'tokens':0,'rates':{'scale':'credits'}})
+    with TestClient(app) as client:
+        got=client.get('/api/sessions/cost-session/cost')
+    assert got.status_code==200 and got.json()=={'price':2.5,'price_usd':2.5}
+
+
+def test_session_cost_unknown_or_missing_usage_is_not_fabricated_zero(monkeypatch,tmp_path):
+    import delivery_api.app as app_module
+    monkeypatch.setattr(app_module.bundles, 'bundle', lambda session: {'session': {'session_id': session}})
+    monkeypatch.setattr(app_module.bundles, 'root', lambda: tmp_path)
+    with TestClient(app) as client:
+        assert client.get('/api/sessions/no-usage/cost').status_code==404
+
+
+def test_session_cost_ambiguous_binding_rejected(monkeypatch):
+    import delivery_api.app as app_module
+    monkeypatch.setattr(app_module.bundles, 'bundle', lambda session: {'session': {'session_id': session}})
+    for task in ('duplicate-cost-a','duplicate-cost-b'):
+        store.create_task(task,'test',task_id=task);store.set_engine_session(task,'duplicate-cost')
+    with TestClient(app) as client:
+        assert client.get('/api/sessions/duplicate-cost/cost').status_code==409
+
+
+def test_unlinked_interview_cost_is_retail_and_downstream_incomplete_is_unavailable(monkeypatch,tmp_path):
+    import delivery_api.app as app_module
+    monkeypatch.setattr(app_module.bundles,'bundle',lambda session:{'session':{'session_id':session}})
+    monkeypatch.setattr(app_module.bundles,'root',lambda:tmp_path)
+    session=tmp_path/'archived-cost';(session/'interview').mkdir(parents=True)
+    (session/'interview'/'usage.jsonl').write_text('{"prompt_tokens":10000,"completion_tokens":10000}\n')
+    with TestClient(app) as client:
+        got=client.get('/api/sessions/archived-cost/cost')
+        assert got.status_code==200 and got.json()=={'price':0.25,'price_usd':0.25}
+        (session/'spec').mkdir();(session/'spec'/'usage.jsonl').write_text('{"prompt_tokens":1}\n')
+        assert client.get('/api/sessions/archived-cost/cost').status_code==404
+
+
+def test_unlinked_empty_usage_and_missing_downstream_usage_are_unavailable(monkeypatch,tmp_path):
+    import delivery_api.app as app_module
+    monkeypatch.setattr(app_module.bundles,'bundle',lambda session:{'session':{'session_id':session}})
+    monkeypatch.setattr(app_module.bundles,'root',lambda:tmp_path)
+    root=tmp_path/'empty-cost';(root/'interview').mkdir(parents=True)
+    usage=root/'interview'/'usage.jsonl';usage.write_text('{}\n')
+    with TestClient(app) as client:
+        assert client.get('/api/sessions/empty-cost/cost').status_code==404
+        usage.write_text('{"prompt_tokens":10,"completion_tokens":10}\n')
+        (root/'spec').mkdir();(root/'spec'/'needs.json').write_text('{"needs":[]}')
+        assert client.get('/api/sessions/empty-cost/cost').status_code==404
+
+
+def test_session_cost_rejects_nonexistent_session(monkeypatch,tmp_path):
+    import delivery_api.app as app_module
+    monkeypatch.setattr(app_module.bundles,'root',lambda:tmp_path)
+    with TestClient(app) as client:
+        assert client.get('/api/sessions/no-such-session/cost').status_code==404
