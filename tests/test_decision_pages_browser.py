@@ -456,3 +456,45 @@ def test_header_cost_unavailable_last_known_and_recovery(page):
  state['fail']=False;expect(host).to_have_text('0.73 credits · $0.73',timeout=12000)
  state['fail']=True;expect(host).to_have_text('0.73 credits · $0.73 · Last Known',timeout=12000)
  state.update(fail=False,price=.9);expect(host).to_have_text('0.90 credits · $0.90',timeout=12000)
+
+
+def test_gate_render_failure_stays_explained_after_checklist_refresh(page):
+ p,base,root=page;data=_stack_review()
+ data['review']['documents'][0]={'name':'architecture.json','error':'retained evidence unavailable'}
+ def route(r):
+  path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
+  if path.endswith('/review'):r.fulfill(json=data);return
+  if path=='/api/model-routes':r.fulfill(json={'routes':[]});return
+  if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
+  r.continue_()
+ p.route('**/api/**',route);p.goto(base+'/tasks/t1/gates/gate-architecture')
+ expect(p.locator('#stack-panel')).to_be_attached() # This calls updateDecision after failed render.
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ expect(p.locator('#decision-checklist')).to_contain_text('architecture.json could not be shown')
+ expect(p.locator('[data-action=approve]')).to_have_attribute('aria-describedby','decision-checklist')
+ p.locator('#decision-checklist button').first.click()
+ p.screenshot(path='/downloads/gate-evidence-blocker-desktop.png',full_page=True)
+ p.set_viewport_size({'width':390,'height':844})
+ assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ p.screenshot(path='/downloads/gate-evidence-blocker-mobile.png',full_page=True)
+
+
+def test_saved_stack_choice_checklist_explains_stale_evidence(page):
+ p,base,root=page;data=_stack_review();posts=[]
+ def route(r):
+  path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
+  if path.endswith('/stack-decisions'):posts.append(r.request.post_data_json);r.fulfill(json={'status':'saved'});return
+  if path.endswith('/review'):r.fulfill(json=data);return
+  if path=='/api/model-routes':r.fulfill(json={'routes':[]});return
+  if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
+  r.continue_()
+ p.route('**/api/**',route);p.goto(base+'/tasks/t1/gates/gate-architecture')
+ panel=p.locator('#stack-panel');panel.locator('summary').first.click()
+ panel.locator('.stack-change summary').first.click()
+ panel.locator('textarea[name=stack-text-0]').fill('SQLite')
+ panel.locator('.stack-save').first.click()
+ expect(panel.locator('#stack-status')).to_contain_text('Change Saved')
+ expect(p.locator('#decision-checklist')).to_contain_text('Your saved change updated the evidence')
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ assert len(posts)==1
