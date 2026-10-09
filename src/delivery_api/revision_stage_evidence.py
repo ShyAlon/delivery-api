@@ -1,0 +1,81 @@
+"""Pinned private staging manifest readback, not promotion or installation.
+
+Caller owns same-host source/destination writer exclusion. Manifest digest and
+lineage must come from the held control-plane plan, not client-supplied paths.
+"""
+import hashlib,json,os,re,stat
+from pathlib import Path
+from .producer_inputs import _open_directory,_identity,_content_stamp,MAX_DOCUMENT_BYTES
+from .tenancy import session_root,TenantAccessDenied
+
+
+def read_staged_revision_manifest(store,capability,*,artifacts_base,lineage,lineage_sha256,manifest_sha256):
+    capability.validate(store)
+    if not isinstance(lineage,dict) or hashlib.sha256(json.dumps(lineage,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=lineage_sha256:
+        raise ValueError('exact held lineage digest required')
+    if any(lineage.get(k)!=v for k,v in (('owner_id',capability.scope.owner_id),('task_id',capability.task_id),
+        ('parent_execution_session_id',capability.session_id),('parent_generation',capability.generation),('state','planned'),('installed',False),('dispatch_started',False))):
+        raise TenantAccessDenied('staging lineage differs from captured parent')
+    if (lineage.get('installed') is not False or lineage.get('dispatch_started') is not False
+        or type(lineage.get('generation')) is not int or lineage['generation']!=capability.generation+1):
+        raise ValueError('exact uninstalled next generation required')
+    pid=lineage.get('proposal_id');sid=lineage.get('execution_session_id');phase=lineage.get('phase')
+    if not isinstance(pid,str) or not re.fullmatch('[a-f0-9]{32}',pid) or not isinstance(sid,str) or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_-]{0,127}',sid):
+        raise ValueError('canonical private staging identities required')
+    if phase not in ('srs','architecture') or sid==capability.session_id or sid==lineage.get('semantic_session_id'):
+        raise ValueError('fresh implemented execution staging required')
+    if not isinstance(manifest_sha256,str) or not re.fullmatch('[a-f0-9]{64}',manifest_sha256):raise ValueError('exact reviewed staged manifest digest required')
+    root=session_root(Path(artifacts_base),capability.scope,capability.session_id)/'spec'/'revision-proposals'/pid/'staged'/sid
+    parent=_open_directory(root);records=[]
+    try:
+        def read(relative,limit):
+            parts=relative.split('/');directory=os.dup(parent)
+            try:
+                for part in parts[:-1]:
+                    child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=directory);os.close(directory);directory=child
+                fd=os.open(parts[-1],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+                try:
+                    before=os.fstat(fd)
+                    if not stat.S_ISREG(before.st_mode) or before.st_size>limit:raise ValueError('bounded regular staged file required')
+                    with os.fdopen(fd,'rb',closefd=False) as stream:raw=stream.read(limit+1)
+                    if len(raw)>limit or _content_stamp(os.fstat(fd))!=_content_stamp(before) or _content_stamp(os.stat(parts[-1],dir_fd=directory,follow_symlinks=False))!=_content_stamp(before):
+                        raise TenantAccessDenied('staged content changed during read')
+                    records.append((relative,_content_stamp(before)));return raw
+                finally:os.close(fd)
+            finally:os.close(directory)
+        raw=read('manifest.json',MAX_DOCUMENT_BYTES)
+        if hashlib.sha256(raw).hexdigest()!=manifest_sha256:raise ValueError('staged manifest differs from reviewed digest')
+        manifest=json.loads(raw)
+        if not isinstance(manifest,dict) or set(manifest)!={'kind','lineage_sha256','checkpoint_id','files'} or manifest['kind']!='closed_revision_staged_manifest' or manifest['lineage_sha256']!=lineage_sha256:
+            raise ValueError('exact lineage staging manifest required')
+        if not isinstance(manifest['checkpoint_id'],str) or not 1<=len(manifest['checkpoint_id'])<=200:raise ValueError('exact staged checkpoint identity required')
+        files=manifest['files'];required={'interview/intent_model.json','interview/conops.json','spec/needs.json','spec/system-baseline.json','spec/checkpoints.sqlite','spec/'+phase+'.json'}
+        if phase=='architecture':required.add('spec/srs.json')
+        if not isinstance(files,dict) or set(files)!=required:raise ValueError('exact upstream and edited-phase staging inventory required')
+        for name,digest in files.items():
+            if not isinstance(digest,str) or not re.fullmatch('[a-f0-9]{64}',digest):raise ValueError('exact staged file digest required')
+            limit=64*1024*1024 if name.endswith('.sqlite') else MAX_DOCUMENT_BYTES
+            if hashlib.sha256(read(name,limit)).hexdigest()!=digest:raise ValueError('staged file digest mismatch')
+        spec=os.open('spec',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+        try:
+            for name in ('checkpoints.sqlite-wal','checkpoints.sqlite-shm','checkpoints.sqlite-journal'):
+                try:os.stat(name,dir_fd=spec,follow_symlinks=False)
+                except FileNotFoundError:continue
+                raise ValueError('staged checkpoint requires closed sidecar-free snapshot')
+        finally:os.close(spec)
+        # Re-open all contained paths after the whole inventory, to detect early
+        # file/parent swaps. These comparisons do not replace writer exclusion.
+        current=_open_directory(root)
+        try:
+            if _identity(current)!=_identity(parent):raise TenantAccessDenied('staged root namespace changed')
+            for name,stamp in records:
+                directory=os.dup(current);parts=name.split('/')
+                try:
+                    for part in parts[:-1]:
+                        child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=directory);os.close(directory);directory=child
+                    if _content_stamp(os.stat(parts[-1],dir_fd=directory,follow_symlinks=False))!=stamp:raise TenantAccessDenied('staged inventory changed across readback')
+                finally:os.close(directory)
+        finally:os.close(current)
+        capability.validate(store)
+        return {'manifest_sha256':manifest_sha256,'checkpoint_id':manifest['checkpoint_id']}
+    finally:os.close(parent)
