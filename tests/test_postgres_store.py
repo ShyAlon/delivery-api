@@ -590,3 +590,46 @@ def test_lineage_proposal_mismatch_leaves_no_plan_or_task_change(store):
         assert store.task(tid)==before
         with store._postgres.transaction() as conn:
             assert not conn.execute('SELECT 1 FROM closed_revision_lineage_plans WHERE intent_id=%s',(args['intent_id'],)).fetchone()
+
+
+def test_preparation_journal_is_append_only_cas_and_never_promotes(store):
+    with tenant_context(A):
+        tid,args=_held_lineage_fixture(store);before=store.task(tid)
+        plan=store.retain_closed_revision_lineage_plan(tid,**args);lid=plan['lineage_id']
+        first=store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=None,
+            state='prepared',evidence={'intent_id':args['intent_id'],'lineage_id':lid})
+        evidence={'manifest_sha256':'f'*64,'checkpoint_id':'staged-checkpoint'}
+        staged=store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],
+            state='staged',evidence=evidence,read_staged_receipt=lambda:evidence)
+        assert staged['event']['sequence']==1 and not staged['event']['dispatch_started'] and store.task(tid)==before
+        with pytest.raises(ValueError,match='compare-and-swap'):
+            store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],state='held_for_review',evidence={'reason':'interrupted'})
+        with pytest.raises(ValueError,match='unavailable'):
+            store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=staged['event_sha256'],state='promotion_pending',evidence={'manifest_sha256':'f'*64})
+        with pytest.raises(Exception):
+            with store._postgres.transaction() as conn:
+                conn.execute('UPDATE closed_revision_promotion_events SET payload=payload WHERE lineage_id=%s',(lid,))
+        with pytest.raises(Exception):
+            with store._postgres.transaction() as conn:
+                conn.execute('SET LOCAL ROLE authenticated');conn.execute('SELECT * FROM closed_revision_promotion_events').fetchall()
+    with tenant_context(B):
+        with pytest.raises((KeyError,TenantAccessDenied)):
+            store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=None,state='prepared',evidence={})
+        with store._postgres.transaction() as conn:
+            assert conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchone() is None
+
+
+def test_staged_journal_receipt_drift_leaves_no_partial_event(store):
+    with tenant_context(A):
+        tid,args=_held_lineage_fixture(store);lid=store.retain_closed_revision_lineage_plan(tid,**args)['lineage_id']
+        first=store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=None,
+            state='prepared',evidence={'intent_id':args['intent_id'],'lineage_id':lid})
+        evidence={'manifest_sha256':'f'*64,'checkpoint_id':'staged-checkpoint'};reads=[]
+        def receipt():
+            reads.append(1);return evidence if len(reads)==1 else evidence|{'checkpoint_id':'changed'}
+        with pytest.raises(ValueError,match='receipt evidence changed'):
+            store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],
+                state='staged',evidence=evidence,read_staged_receipt=receipt)
+        with store._postgres.transaction() as conn:
+            rows=conn.execute('SELECT state FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall()
+            assert len(rows)==1 and rows[0]['state']=='prepared'

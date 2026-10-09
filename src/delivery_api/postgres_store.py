@@ -359,6 +359,44 @@ class PostgresStore(SQLiteStore):
             self.audit(scope.owner_id,'gate.revision_lineage_planned',task_id,{'intent_id':intent_id,'lineage_id':lineage_id})
             return {'lineage_id':lineage_id,'state':'planned','replayed':False,'installed':False}
 
+    def append_closed_revision_preparation_event(self,task_id,*,lineage_id,expected_previous_sha256,
+                                               state,evidence,read_staged_receipt=None):
+        """Append preparation-only journal. No promotion/install/dispatch states.
+
+        Staged receipts are loaded from trusted source reads, not request flags.
+        These file/DB checks are not a filesystem transaction or install grant.
+        """
+        from .revision_journal import journal_event
+        if state not in ('prepared','staged','held_for_review'):
+            raise ValueError('publication and installation journal transitions unavailable')
+        with self._task_operation_guard('task.rerun'):
+            if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():
+                raise KeyError(task_id)
+            lineage=self._db.execute('SELECT * FROM closed_revision_lineage_plans WHERE lineage_id=? AND task_id=?',
+                (lineage_id,task_id)).fetchone()
+            if not lineage:raise KeyError(lineage_id)
+            task=self.task(task_id)
+            if task['generation']!=lineage['parent_generation'] or task['engine_session_id']!=lineage['parent_execution_session_id']:
+                raise ValueError('journal parent generation/session changed')
+            latest=self._db.execute('SELECT * FROM closed_revision_promotion_events WHERE lineage_id=? ORDER BY sequence DESC LIMIT 1',
+                (lineage_id,)).fetchone()
+            previous={'event':json.loads(latest['payload']),'event_sha256':latest['event_sha256']} if latest else None
+            if (latest['event_sha256'] if latest else None)!=expected_previous_sha256:
+                raise ValueError('journal compare-and-swap changed')
+            if state=='prepared' and evidence!={'intent_id':lineage['intent_id'],'lineage_id':lineage_id}:
+                raise ValueError('prepared journal identity mismatch')
+            event=journal_event(lineage_sha256=lineage['fingerprint'],previous=previous,state=state,evidence=evidence)
+            if state=='staged':
+                if not callable(read_staged_receipt):raise ValueError('trusted staged receipt reader required')
+                for _ in range(2):
+                    receipt=read_staged_receipt()
+                    if receipt!=evidence:raise ValueError('staged receipt evidence changed')
+            scope=current_scope();body=event['event']
+            self._db.execute('INSERT INTO closed_revision_promotion_events(lineage_id,owner_id,auth_session_id,sequence,state,event_sha256,previous_sha256,payload,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+                (lineage_id,scope.owner_id,scope.session_id,body['sequence'],state,event['event_sha256'],body['previous_sha256'],json.dumps(body,sort_keys=True),time.time()))
+            self.audit(scope.owner_id,'gate.revision_preparation_journal',task_id,{'lineage_id':lineage_id,'state':state,'event_sha256':event['event_sha256']})
+            return event
+
     def prepare_rerun(self,task_id,from_phase,policy='archive',actor='local user'):
         # Legacy generation reset leaves the immutable session binding stale.
         # Block internal callers too until a reviewed new-session copy exists.
