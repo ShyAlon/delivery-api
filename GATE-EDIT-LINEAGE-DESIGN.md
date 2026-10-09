@@ -32,3 +32,11 @@ Only reviewed installation may create the fresh immutable engine-session binding
 Separate semantic validation from execution checkpoint configuration in generator adapters. Validate every source contract against the bound semantic id, every execution job against its execution id and generation. Owner/task lineage must be stored and validated at the capability and engine boundaries without optional fallbacks. New execution sessions must not expose new interview mutations against preserved source contracts. No general cloud rerun opening as a side effect.
 
 Typed artifact validation, founder-driver checks, proposal review, extra-cost acknowledgement, per-call admission and draft-only Save remain required. Other phase adapters remain unsupported until their own input/trace semantics are implemented. No public or live execution is enabled by this document.
+
+## Execution-generation anchor
+
+Both current StopFence implementations treat an absent marker as generation1 and refresh only requested=true markers. Do not write a requested=false Stop marker to initialize a later generation, copy a source marker, or assign the in-memory generation as the production path.
+
+Reviewed installation must create an immutable execution-generation anchor in the fresh namespace. It binds owner, task, execution id, semantic id, parent lineage digest and generation. Both engine and generator must load this authenticated binding before constructing their control fence. Stop remains a separate one-way requested marker: its generation must follow the installed anchor, and a stale/lower marker or conflicting anchor fails closed. Initial legacy-generation1 behavior must remain unchanged for existing non-lineage sessions. A later-generation job must never fall back to1 because the anchor is missing.
+
+Anchor initialization is still unimplemented. The proposed anchor is not permission to install it; only the reviewed installation transaction/journal can provide that authority. Tests that directly set an in-memory fence generation simulate the bound runtime and do not establish a production initialization method.
