@@ -20,7 +20,7 @@ def test_plan_binds_expected_parent_and_anchor_without_accepting():
     assert anchor['semantic_session_id']=='semantic' and anchor['execution_session_id']=='execution2' and anchor['generation']==2
     assert plan['expected_parent']['execution_session_id']=='s' and plan['expected_parent']['generation']==1
     assert not plan['accepted'] and not plan['installed'] and not plan['dispatch_started'] and not plan['copy_stop_marker']
-    assert plan['edited_gate']=={'phase':'srs','state':'waiting','approval_reset':True}
+    assert plan['edited_gate']=={'phase':'srs','state':'decided','approval_reset':False,'approved_by_exact_acceptance':True}
 
 
 @pytest.mark.parametrize('change',[{'accepted':True},{'installation_available':True},{'copy_stop_marker':True,'preserve_previous_generation':False},

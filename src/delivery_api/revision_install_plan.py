@@ -37,7 +37,7 @@ def prepare_installation_plan(*,review,review_sha256,installation_id):
         'expected_parent':{'owner_id':review['owner_id'],'task_id':review['task_id'],
             'execution_session_id':review['parent_execution_session_id'],'generation':review['parent_generation']},
         'destination_anchor':anchor.document(),'staged_receipt':deepcopy(receipt),'staged_event_sha256':review['staged_event_sha256'],
-        'edited_gate':{'phase':phase,'state':'waiting','approval_reset':True},
+        'edited_gate':{'phase':phase,'state':'decided','approval_reset':False,'approved_by_exact_acceptance':True},
         'downstream':{'phases':[p.key for p in followers(phase)],'approval_reset':True,'state':'pending'},
         'preserve_previous_generation':True,'source_deletion_allowed':False,'copy_stop_marker':False,
         'state':'planned','accepted':False,'installed':False,'dispatch_started':False,'automatic_replay_allowed':False,

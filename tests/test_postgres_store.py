@@ -896,6 +896,10 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             later=WorkerCapability.capture(store,tid);later.validate(store)
             assert result['installed'] and not result['dispatch_started'] and later.execution_anchor.semantic_session_id=='s'
             assert store.task(tid)['generation']==2 and store.session_binding(cap.session_id)['generation']==1
+            task=store.task(tid)
+            assert next(g for g in task['gates'] if g['after_phase']=='srs')['state']=='decided'
+            assert next(p for p in task['phases'] if p['phase_key']=='srs')['state']=='approved'
+            assert task['active_phase']=='architecture' and result['continuation_prepared'] and not result['dispatch_started']
             reconciled=store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
             assert reconciled['state']=='installed_verified_no_dispatch' and not reconciled['automatic_retry'] and not reconciled['unverified']
             from delivery_api.tenancy import session_root
@@ -983,8 +987,11 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             installed=store.activate_private_revision_installation(tid,installation_id=intent_kw['installation_id'],expected_previous_sha256=ready['event_sha256'],validate_acceptance=test_acceptance,artifacts_base=tmp_path)
         task=store.task(tid)
         assert installed['installed'] and not installed['dispatch_started'] and task['generation']==2
-        assert task['engine_session_id']==args['lineage']['execution_session_id'] and task['state']=='waiting_gate'
-        assert next(g for g in task['gates'] if g['after_phase']=='srs')['state']=='waiting'
+        assert task['engine_session_id']==args['lineage']['execution_session_id'] and task['state']=='pending'
+        assert next(g for g in task['gates'] if g['after_phase']=='srs')['state']=='decided'
+        assert next(p for p in task['phases'] if p['phase_key']=='srs')['state']=='approved'
+        assert task['active_phase']=='architecture' and installed['continuation_prepared'] and installed['approved_phase']=='srs'
+        assert all(p['state']=='pending' for p in task['phases'] if p['phase_key'] in ('architecture','specs','tests','validation'))
         assert store.session_binding(cap.session_id)['generation']==1
         later=WorkerCapability.capture(store,tid);later.validate(store)
         assert later.execution_anchor.semantic_session_id=='s' and later.execution_anchor.generation==2

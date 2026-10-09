@@ -559,12 +559,12 @@ class PostgresStore(SQLiteStore):
             self._db.execute('INSERT INTO engine_sessions VALUES (?,?,?,?,?)',(anchor.execution_session_id,scope.owner_id,task_id,anchor.generation,now))
             self._db.execute('INSERT INTO installed_execution_bindings(session_id,owner_id,auth_session_id,task_id,generation,semantic_session_id,installation_id,lineage_sha256,anchor_sha256,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
                 (anchor.execution_session_id,scope.owner_id,scope.session_id,task_id,anchor.generation,anchor.semantic_session_id,installation_id,anchor.lineage_sha256,evidence['anchor_sha256'],now))
-            changed=self._db.execute("UPDATE tasks SET engine_session_id=?,generation=?,state='waiting_gate',active_phase=?,updated_at=? WHERE task_id=? AND generation=? AND engine_session_id=?",
-                (anchor.execution_session_id,anchor.generation,review['phase'],now,task_id,parent['generation'],parent['execution_session_id']))
+            changed=self._db.execute("UPDATE tasks SET engine_session_id=?,generation=?,state='pending',active_phase=?,updated_at=? WHERE task_id=? AND generation=? AND engine_session_id=?",
+                (anchor.execution_session_id,anchor.generation,next(iter(followers(review['phase']))).key,now,task_id,parent['generation'],parent['execution_session_id']))
             if changed.rowcount!=1:raise ValueError('installation parent CAS failed')
             phase=review['phase'];later=[p.key for p in followers(phase)]
-            self._db.execute("UPDATE phases SET state='complete',completed_at=?,gate_basis_changed=1 WHERE task_id=? AND phase_key=?",(now,task_id,phase))
-            self._db.execute("UPDATE gates SET state='waiting',is_open=0,selected_option=NULL,edited_text=NULL,steer=NULL,revision=revision+1 WHERE task_id=? AND after_phase=?",(task_id,phase))
+            self._db.execute("UPDATE phases SET state='approved',detail='Approved Exact Regenerated Result',completed_at=?,gate_basis_changed=1 WHERE task_id=? AND phase_key=?",(now,task_id,phase))
+            self._db.execute("UPDATE gates SET state='decided',is_open=0,selected_option='approve',edited_text=NULL,steer=NULL,revision=revision+1 WHERE task_id=? AND after_phase=?",(task_id,phase))
             for key in later:
                 self._db.execute("UPDATE phases SET state='pending',detail='',completed=0,total=NULL,started_at=NULL,completed_at=NULL,gate_basis_changed=1 WHERE task_id=? AND phase_key=?",(task_id,key))
                 self._db.execute("UPDATE gates SET state='idle',is_open=0,selected_option=NULL,edited_text=NULL,steer=NULL,revision=revision+1 WHERE task_id=? AND after_phase=?",(task_id,key))
@@ -575,8 +575,10 @@ class PostgresStore(SQLiteStore):
             body=event['event']
             self._db.execute('INSERT INTO closed_revision_install_events(installation_id,owner_id,auth_session_id,sequence,state,event_sha256,previous_sha256,payload,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
                 (installation_id,scope.owner_id,scope.session_id,body['sequence'],body['state'],event['event_sha256'],body['previous_sha256'],json.dumps(body,sort_keys=True),now))
-            self.audit(scope.owner_id,'gate.private_revision_installed',task_id,{'installation_id':installation_id,'generation':anchor.generation,'dispatch_started':False})
-            return {'installation_id':installation_id,'event_sha256':event['event_sha256'],'installed':True,'dispatch_started':False}
+            self.audit(scope.owner_id,'gate.private_revision_installed',task_id,{'installation_id':installation_id,'generation':anchor.generation,'approved_phase':phase,'review_sha256':intent['review_sha256'],
+                'acceptance_reference':intent['acceptance_reference'],'next_phase':later[0] if later else None,'dispatch_started':False})
+            return {'installation_id':installation_id,'event_sha256':event['event_sha256'],'installed':True,'dispatch_started':False,
+                'approved_phase':phase,'next_phase':later[0] if later else None,'continuation_prepared':True}
 
     def record_private_revision_acceptance(self,task_id,*,lineage_id,expected_staged_event_sha256,review_sha256,decision,extra_cost_acknowledged,artifacts_base):
         """Private future authenticated submission seam, not wired to any route.

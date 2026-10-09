@@ -15,6 +15,9 @@ def _validate_plan(plan,plan_sha256):
         or plan.get('kind')!='closed_revision_installation_effect_plan' or plan.get('state')!='planned'
         or any(plan.get(k) is not False for k in ('accepted','installed','dispatch_started','automatic_replay_allowed','source_deletion_allowed','copy_stop_marker'))):
         raise ValueError('exact held non-effectful installation plan required')
+    edited=plan.get('edited_gate')
+    if not isinstance(edited,dict) or edited!={'phase':edited.get('phase'),'state':'decided','approval_reset':False,'approved_by_exact_acceptance':True}:
+        raise ValueError('exact accepted phase approval plan required')
     document=plan['destination_anchor']
     if document.get('kind')!='installed_execution_generation_anchor' or document.get('version')!=1:raise ValueError('exact prospective anchor required')
     anchor=ExecutionAnchor(**{k:v for k,v in document.items() if k not in ('kind','version')})
