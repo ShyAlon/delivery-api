@@ -787,12 +787,12 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             evidence={'artifacts':options['artifact_evidence'],'checkpoint_id':options['source_checkpoint_id'],'proposal_sha256':digest}
             held=store.retain_closed_revision_restart_intent(tid,request_key=uuid.uuid4().hex,options=options,proposal=proposal,
                 approval_reference='constructed-test-review-not-founder-approval',read_current_evidence=lambda:evidence)
-            planned=store.retain_closed_revision_lineage_plan(tid,intent_id=held['intent_id'],semantic_session_id='s',
+            planned=store.retain_closed_revision_lineage_plan(tid,intent_id=held['intent_id'],semantic_session_id=cap.session_id,
                 new_execution_session_id='next-'+uuid.uuid4().hex,retained_proposal={'proposal':proposal,'document_sha256':hashlib.sha256(json.dumps(proposal,sort_keys=True,indent=2).encode()).hexdigest()})
             saved.update(intent_id=held['intent_id'],lineage_id=planned['lineage_id'],proposal=proposal)
             with store._postgres.transaction() as conn:
                 return json.loads(conn.execute('SELECT payload FROM closed_revision_lineage_plans WHERE lineage_id=%s',(planned['lineage_id'],)).fetchone()['payload'])
-        built=build_real_stage_fixture(tmp_path,cap=cap,options_override=o,lineage_factory=lineage_factory)
+        built=build_real_stage_fixture(tmp_path,cap=cap,options_override=o,lineage_factory=lineage_factory,semantic_session_id=cap.session_id)
         args,root,dest,documents,files,manifest,md,*_=built
         lid=saved['lineage_id']
         review=store.retain_revision_source_review(tid,lineage_id=lid,artifacts_base=tmp_path)
@@ -872,6 +872,67 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             assert adapter.queue_submitted_changes(changed['submission_id'])==queued
             assert store.worker_job(queued)['execution_options']==changed['options']
             assert store.worker_job(queued)['state']=='pending' and store.task(tid)==before
+            preserved={path:path.read_bytes() for directory in (root,dest) for path in directory.rglob('*') if path.is_file() and 'revision-proposals' not in path.relative_to(directory).parts}
+            import asyncio
+            from delivery_api.same_host_producer import SameHostProducerWorker
+            from delivery_api.closed_revision_job import execute_closed_revision_proposal
+            from delivery_api.revision_evidence import read_revision_artifacts
+            from spec_generator.revision_worker import run_revision_proposal
+            from spec_generator.worker_runtime import JobRuntime
+            from spec_generator.model_config import StageModel
+            from langgraph.graph import StateGraph,END
+            from typing import TypedDict
+            from copy import deepcopy
+            class FakeState(TypedDict,total=False):
+                intent_model:dict
+                conops:dict
+                needs:dict
+                system_baseline:dict
+                srs:dict
+                gate_feedback:dict
+            def fake_graph(log,checkpointer,**kwargs):
+                graph=StateGraph(FakeState);graph.add_node('needs',lambda st:{})
+                def regenerate(st):
+                    assert st['gate_feedback']['srs']==changed['options']['change_request']
+                    artifact=deepcopy(documents['spec/srs.json'])
+                    artifact['purpose']='Same Phase Regenerated With Submitted Offline Guidance'
+                    return {'srs':artifact,'gate_feedback':{}}
+                graph.add_node('srs',regenerate);graph.set_entry_point('needs');graph.add_edge('needs','srs');graph.add_edge('srs',END)
+                return graph.compile(checkpointer=checkpointer)
+            from types import SimpleNamespace
+            def runtime(capability,owned):
+                return JobRuntime({'srs':StageModel('fake','fake')},str(owned/'calls.jsonl'),lambda text:None)
+            worker=SameHostProducerWorker(store,tmp_path,gateway_factory=lambda c,j:SimpleNamespace(store=store,job_id=j),
+                usage_log_factory=lambda *a:None,runtime_factory=runtime)
+            execution=asyncio.run(execute_closed_revision_proposal(store,worker,queued,
+                read_artifact_evidence=lambda c,r,phase:read_revision_artifacts(store,c,r,phase,artifacts_base=tmp_path),
+                log_factory=lambda *a:None,prepare=lambda **kwargs:run_revision_proposal(**kwargs,graph_factory=fake_graph)))
+            assert execution['started'] and len(execution['proposals'])==1 and store.worker_job(queued)['state']=='done'
+            assert store.task(tid)==before and not execution['restart_dispatched']
+            new_proposal=execution['proposals'][0]
+            evidence={'artifacts':changed['options']['artifact_evidence'],'checkpoint_id':changed['options']['source_checkpoint_id'],'proposal_sha256':new_proposal['artifact_sha256']}
+            held=store.retain_closed_revision_restart_intent(tid,request_key=uuid.uuid4().hex,options=changed['options'],proposal=new_proposal,
+                approval_reference=changed['submission_id'],read_current_evidence=lambda:evidence)
+            proposal_path=root/'spec/revision-proposals'/new_proposal['proposal_id']/'proposal.json'
+            planned=store.retain_closed_revision_lineage_plan(tid,intent_id=held['intent_id'],semantic_session_id=cap.session_id,new_execution_session_id='revised-'+uuid.uuid4().hex,
+                retained_proposal={'proposal':new_proposal,'document_sha256':hashlib.sha256(proposal_path.read_bytes()).hexdigest()})
+            fresh_lid=planned['lineage_id']
+            store.retain_revision_source_review(tid,lineage_id=fresh_lid,artifacts_base=tmp_path)
+            fresh_prepared=store.append_closed_revision_preparation_event(tid,lineage_id=fresh_lid,expected_previous_sha256=None,state='prepared',
+                evidence={'intent_id':held['intent_id'],'lineage_id':fresh_lid})
+            with cli_execution(StopFence(root/'interview/stop-request.json'),None):
+                fresh_staged=store.prepare_revision_staging(tid,lineage_id=fresh_lid,expected_previous_sha256=fresh_prepared['event_sha256'],artifacts_base=tmp_path)
+            fresh_review=store.retain_revision_installation_review(tid,lineage_id=fresh_lid,expected_staged_event_sha256=fresh_staged['event_sha256'],artifacts_base=tmp_path)
+            assert fresh_review['review']['phase']=='srs' and fresh_review['review_sha256']!=installation_review['review_sha256']
+            from delivery_api.revision_acceptance_view import revision_acceptance_view
+            shown=revision_acceptance_view(**fresh_review,artifact=new_proposal['artifact'],spent_credits=0)
+            assert shown['view']['phase_title']=='Requirements' and shown['binding']['review_sha256']==fresh_review['review_sha256']
+            assert new_proposal['artifact']['purpose']=='Same Phase Regenerated With Submitted Offline Guidance'
+            assert preserved=={path:path.read_bytes() for path in preserved}
+            from test_revision_acceptance_browser import assert_same_phase_refresh
+            old_shown=revision_acceptance_view(**installation_review,artifact=saved['proposal']['artifact'],spent_credits=0)
+            assert_same_phase_refresh(old_shown,shown,adapter_result)
+            assert store.task(tid)==before
             with pytest.raises(ValueError,match='superseded'):store.record_private_revision_acceptance(tid,**acceptance_kw)
             with pytest.raises(TenantAccessDenied,match='revoked'):
                 store.verify_private_revision_acceptance(installation_review['review'],installation_review['review_sha256'],receipt['acceptance_reference'])
@@ -932,7 +993,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                 result=apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],
                     expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
             later=WorkerCapability.capture(store,tid);later.validate(store)
-            assert result['installed'] and not result['dispatch_started'] and later.execution_anchor.semantic_session_id=='s'
+            assert result['installed'] and not result['dispatch_started'] and later.execution_anchor.semantic_session_id==cap.session_id
             assert store.task(tid)['generation']==2 and store.session_binding(cap.session_id)['generation']==1
             task=store.task(tid)
             assert next(g for g in task['gates'] if g['after_phase']=='srs')['state']=='decided'
@@ -1060,7 +1121,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         assert all(p['state']=='pending' for p in task['phases'] if p['phase_key'] in ('architecture','specs','tests','validation'))
         assert store.session_binding(cap.session_id)['generation']==1
         later=WorkerCapability.capture(store,tid);later.validate(store)
-        assert later.execution_anchor.semantic_session_id=='s' and later.execution_anchor.generation==2
+        assert later.execution_anchor.semantic_session_id==cap.session_id and later.execution_anchor.generation==2
         with pytest.raises(TenantAccessDenied):cap.validate(store)
         from vmodel_contracts.execution_anchor import read_execution_anchor
         from delivery_api.tenancy import session_root

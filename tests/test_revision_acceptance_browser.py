@@ -74,3 +74,32 @@ def test_pending_private_backend_receipt_keeps_guidance_without_false_advance(pe
         assert page.locator('.submitted-current').inner_text()=='Keep Pending Guidance'
         assert page.locator('#continue').is_disabled()
         browser.close()
+
+
+def assert_same_phase_refresh(old_review,fresh_review,pending_result):
+    """Used by real Postgres lifecycle: renderer receives the actual new review."""
+    html=Path(__file__).parents[1]/'scripts/private-ui/revision-acceptance.html'
+    with sync_playwright() as p:
+        browser=p.chromium.launch(headless=True)
+        page=browser.new_page(viewport={'width':1100,'height':1050});page.goto(html.as_uri())
+        page.evaluate("""data=>{window.receipts=data;window.samePhase=window.createRevisionAcceptance({root:document.querySelector('#page'),review:data.old_review,adapter:{async saveDraft(){},async submit(input){window.receivedInput=input;return data.pending_result}}})}""",
+            dict(old_review=old_review,pending_result=pending_result))
+        page.locator('[value=edit]').check();page.locator('#change').fill('Keep New Verbatim Guidance')
+        page.locator('#ack').check();page.locator('#continue').click()
+        page.wait_for_function("document.querySelector('#status').textContent.includes('Waiting For')")
+        assert page.locator('#continue').is_disabled()
+        assert page.evaluate('window.receivedInput.review_sha256')==old_review['binding']['review_sha256']
+        page.evaluate('review=>window.samePhase.refresh(review)',fresh_review)
+        assert page.locator('h1').inner_text()=='Review Regenerated Requirements'
+        assert page.locator('.submitted-current').inner_text()=='Keep New Verbatim Guidance'
+        assert 'Same Phase Regenerated With Submitted Offline Guidance' in page.locator('#page').inner_text()
+        assert page.locator('[value=approve]').is_checked() and not page.locator('#ack').is_checked()
+        assert page.locator('#continue').is_enabled()
+        page.locator('#ack').check();page.locator('#continue').click()
+        page.wait_for_function("document.querySelector('#status').textContent.includes('Review Changed')")
+        assert page.evaluate('window.receivedInput.review_sha256')==fresh_review['binding']['review_sha256']
+        page.screenshot(path='/tmp/revision-same-phase-desktop.png',full_page=True)
+        page.set_viewport_size({'width':390,'height':844})
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        page.screenshot(path='/tmp/revision-same-phase-mobile.png',full_page=True)
+        browser.close()
