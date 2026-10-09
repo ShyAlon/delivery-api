@@ -429,3 +429,18 @@ def test_task_policy_state_owner_read_only_and_evidence_private(store):
                         with pytest.raises(psycopg.errors.InsufficientPrivilege):c.execute('SELECT * FROM user_task_policy')
     finally:
         with psycopg.connect(DSN) as c:c.execute('DELETE FROM user_task_policy WHERE owner_id=%s',(A.owner_id,))
+
+
+def test_cloud_store_rerun_cannot_bypass_missing_generation_lifecycle(store):
+    with tenant_context(A):
+        tid=store.create_task('rerun-lifecycle-'+uuid.uuid4().hex)['task_id']
+        session='rerun-session-'+uuid.uuid4().hex;store.set_engine_session(tid,session)
+        before=store.task(tid);binding=store.session_binding(session);audit=store.audit_entries(tid)
+        for phase in ('intent','needs','srs'):
+            with pytest.raises(TenantAccessDenied,match='generation/session'):
+                store.prepare_rerun(tid,phase)
+            assert store.task(tid)==before and store.session_binding(session)==binding
+            assert store.audit_entries(tid)==audit
+    with tenant_context(B):
+        with pytest.raises(TenantAccessDenied):store.prepare_rerun(tid,'needs')
+    with tenant_context(A):store.delete_task(tid)
