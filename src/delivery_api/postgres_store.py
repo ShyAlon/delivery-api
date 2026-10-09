@@ -417,10 +417,25 @@ class PostgresStore(SQLiteStore):
                 (row['intent_id'],task_id)).fetchone()
             if not intent:raise KeyError(row['intent_id'])
             lineage=json.loads(row['payload']);held=json.loads(intent['payload'])
+            from .revision_source_review import read_source_review_snapshot,source_review_payload
+            review=self._db.execute('SELECT * FROM closed_revision_source_reviews WHERE lineage_id=?',(lineage_id,)).fetchone()
+            if not review:raise ValueError('retained upstream review snapshot required before staging')
+            saved=json.loads(review['payload'])
+            expected=source_review_payload(lineage_sha256=row['fingerprint'],checkpoint_id=lineage['source_checkpoint_id'],
+                semantic_session_id=lineage['semantic_session_id'],phase=lineage['phase'],upstream_sha256=saved['upstream_sha256'])
+            if saved!=expected['snapshot'] or review['fingerprint']!=expected['snapshot_sha256']:
+                raise ValueError('retained upstream snapshot identity/digest changed')
+            def compare_source():
+                live=read_source_review_snapshot(self,capability,artifacts_base=artifacts_base,
+                    lineage=lineage,lineage_sha256=row['fingerprint'])
+                if live!=expected:raise ValueError('upstream source differs from retained review snapshot')
             def current():
-                return read_validated_staged_receipt(self,capability,artifacts_base=artifacts_base,
+                compare_source()
+                receipt=read_validated_staged_receipt(self,capability,artifacts_base=artifacts_base,
                     lineage=lineage,lineage_sha256=row['fingerprint'],manifest_sha256=manifest_sha256,
                     options=held['options'])
+                compare_source()
+                return receipt
             evidence=current()
             return self.append_closed_revision_preparation_event(task_id,lineage_id=lineage_id,
                 expected_previous_sha256=expected_previous_sha256,state='staged',evidence=evidence,

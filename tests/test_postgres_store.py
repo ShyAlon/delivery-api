@@ -635,11 +635,23 @@ def test_staged_journal_receipt_drift_leaves_no_partial_event(store):
             assert len(rows)==1 and rows[0]['state']=='prepared'
 
 
+def _retain_fake_source_review(store,tid,lid,tmp_path,monkeypatch):
+    from delivery_api import revision_source_review
+    from test_revision_source_review import args as snapshot_args
+    def current(*a,**kw):
+        return revision_source_review.source_review_payload(**(snapshot_args()|{'lineage_sha256':kw['lineage_sha256'],
+            'checkpoint_id':kw['lineage']['source_checkpoint_id'],'semantic_session_id':kw['lineage']['semantic_session_id']}))
+    monkeypatch.setattr(revision_source_review,'read_source_review_snapshot',current)
+    store.retain_revision_source_review(tid,lineage_id=lid,artifacts_base=tmp_path)
+    return current
+
+
 def test_concrete_staging_recorder_loads_held_lineage_and_options_before_journal(store,tmp_path,monkeypatch):
     from delivery_api import revision_stage_evidence
     with tenant_context(A):
         tid,args=_held_lineage_fixture(store);before=store.task(tid)
         lid=store.retain_closed_revision_lineage_plan(tid,**args)['lineage_id']
+        _retain_fake_source_review(store,tid,lid,tmp_path,monkeypatch)
         first=store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=None,
             state='prepared',evidence={'intent_id':args['intent_id'],'lineage_id':lid})
         reads=[]
@@ -663,6 +675,7 @@ def test_concrete_staging_validation_failure_records_no_event(store,tmp_path,mon
     from delivery_api import revision_stage_evidence
     with tenant_context(A):
         tid,args=_held_lineage_fixture(store);lid=store.retain_closed_revision_lineage_plan(tid,**args)['lineage_id']
+        _retain_fake_source_review(store,tid,lid,tmp_path,monkeypatch)
         first=store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=None,
             state='prepared',evidence={'intent_id':args['intent_id'],'lineage_id':lid})
         def invalid(*a,**kwargs):raise ValueError('typed stage changed')
@@ -703,3 +716,53 @@ def test_upstream_review_snapshot_is_immutable_replay_safe_not_acceptance(store,
         with pytest.raises((KeyError,TenantAccessDenied)):store.retain_revision_source_review(tid,lineage_id=lid,artifacts_base=tmp_path)
         with store._postgres.transaction() as conn:
             assert conn.execute('SELECT 1 FROM closed_revision_source_reviews WHERE review_id=%s',(first['review_id'],)).fetchone() is None
+
+
+def test_staging_requires_retained_source_snapshot_and_rejects_postreview_byte_change(store,tmp_path,monkeypatch):
+    from delivery_api import revision_source_review,revision_stage_evidence
+    with tenant_context(A):
+        tid,args=_held_lineage_fixture(store);before=store.task(tid)
+        lid=store.retain_closed_revision_lineage_plan(tid,**args)['lineage_id']
+        first=store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=None,
+            state='prepared',evidence={'intent_id':args['intent_id'],'lineage_id':lid})
+        kw=dict(lineage_id=lid,expected_previous_sha256=first['event_sha256'],manifest_sha256='e'*64,artifacts_base=tmp_path)
+        with pytest.raises(ValueError,match='retained upstream review snapshot required'):
+            store.record_validated_revision_staging(tid,**kw)
+        current=_retain_fake_source_review(store,tid,lid,tmp_path,monkeypatch)
+        def changed(*a,**kwargs):
+            original=current(*a,**kwargs);body=original['snapshot']
+            return revision_source_review.source_review_payload(lineage_sha256=body['lineage_sha256'],
+                checkpoint_id=body['source_checkpoint_id'],semantic_session_id=body['semantic_session_id'],phase=body['phase'],
+                upstream_sha256=body['upstream_sha256']|{'spec/needs.json':'c'*64})
+        monkeypatch.setattr(revision_source_review,'read_source_review_snapshot',changed)
+        with pytest.raises(ValueError,match='differs from retained review snapshot'):store.record_validated_revision_staging(tid,**kw)
+        assert store.task(tid)==before
+        with store._postgres.transaction() as conn:
+            assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
+
+
+def test_source_change_during_concrete_stage_validation_leaves_only_prepared_event(store,tmp_path,monkeypatch):
+    from delivery_api import revision_source_review,revision_stage_evidence
+    with tenant_context(A):
+        tid,args=_held_lineage_fixture(store);lid=store.retain_closed_revision_lineage_plan(tid,**args)['lineage_id']
+        current=_retain_fake_source_review(store,tid,lid,tmp_path,monkeypatch)
+        first=store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=None,
+            state='prepared',evidence={'intent_id':args['intent_id'],'lineage_id':lid})
+        changed=[False]
+        def source(*a,**kwargs):
+            original=current(*a,**kwargs)
+            if not changed[0]:return original
+            body=original['snapshot']
+            return revision_source_review.source_review_payload(lineage_sha256=body['lineage_sha256'],
+                checkpoint_id=body['source_checkpoint_id'],semantic_session_id=body['semantic_session_id'],phase=body['phase'],
+                upstream_sha256=body['upstream_sha256']|{'spec/needs.json':'c'*64})
+        def stage(*a,**kwargs):
+            changed[0]=True
+            return {'manifest_sha256':'e'*64,'checkpoint_id':'staged'}
+        monkeypatch.setattr(revision_source_review,'read_source_review_snapshot',source)
+        monkeypatch.setattr(revision_stage_evidence,'read_validated_staged_receipt',stage)
+        with pytest.raises(ValueError,match='differs from retained review snapshot'):
+            store.record_validated_revision_staging(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],
+                manifest_sha256='e'*64,artifacts_base=tmp_path)
+        with store._postgres.transaction() as conn:
+            assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
