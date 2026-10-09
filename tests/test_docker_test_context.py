@@ -44,7 +44,11 @@ def test_image_checks_exact_wheel_hashes_and_does_not_infer_cloud_gate_from_fake
 def test_ui_image_exercises_actual_listeners_and_browser_not_only_stop():
     docker=(ROOT/'scripts/docker/Dockerfile.ui-test').read_text()
     assert 'playwright==1.62.0' in docker and 'install --with-deps chromium' in docker
-    assert 'CMD ["python", "/app/ui-smoke.py"]' in docker
+    assert 'CMD ["sh", "-c", "python /app/ui-smoke.py && python /app/acceptance-smoke.py"]' in docker
+    assert "COPY private-ui/ /app/private-ui/" in docker
+    acceptance=(ROOT/"scripts/docker/acceptance-smoke.py").read_text()
+    assert "revision_acceptance_view" in acceptance and "site-packages" in acceptance
+    assert "Review Changed" in acceptance and "window.sent.review_sha256" in acceptance
     smoke=(ROOT/'scripts/docker/ui-smoke.py').read_text()
     assert 'TenantMiddleware' in smoke and 'uvicorn.Server' in smoke
     assert 'expect_download' in smoke and "active[0]=False" in smoke
