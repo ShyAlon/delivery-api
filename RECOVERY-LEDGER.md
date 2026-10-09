@@ -65,3 +65,24 @@ Recovered missing initial scoped engine-client test, Stop client tests, reviewed
 
 ## Read-only config test source and withdrawn request-body test reconciliation
 Recovered exact Oct9 11:45:27 initial config-readonly tests: config imports deny mkdir for default/SQLite/cloud choices; only selected store parent is created. Config/context13 tests pass. Two archived middleware 1MB cap tests were explicitly removed by Oct8 18:54:56 source edit when cap installation was held for unresolved input semantics. They are not missing units and must not be reinstated as if the cap were installed. Current recovery makes no request-body cap policy change. Source trace records the withdrawal; parent owns any future input policy decision.
+
+## Recovery closeout validation matrix (October9,14:35 IDT)
+
+| Check | Actual completed result | Limits |
+|---|---|---|
+| Contracts full suite |169 passed | Local source |
+| Engine expanded full suite |647 passed,2 existing warnings | Fake/hermetic only; runtime grouping hypothesis disproved, no production edit |
+| Generator expanded full suite |830 passed | Strict main architecture retained; explicit fake SRS fixture required |
+| Delivery wide non-long-browser |579 passed,171 skipped,1 existing warning | Optional PG/source-path and browser cases separate; not whole-suite equivalence |
+| Delivery tenant PG chain |246 passed,0 skipped,1 existing warning | Fresh UTF8 disposable local PG14,19 migrations, explicit engine/spec sources |
+| Delivery UI Playwright |123 passed across bounded subsets |122 baseline plus recovered closed-gate revision test; earlier timeouts excluded |
+| Delivery other browser modules |46 passed in111.99s | Completed final output verified after enclosing call timed out |
+| Config/context checks |13 passed | Explicit read-only import tests |
+| Offline four-wheel context build |Passed | Fresh final-current source manifest attached in recovery-evidence |
+| Clean installed-wheel verifier |Passed | Fresh isolated venv/pip check, actual HTTP listeners+Chromium, lists/details/JSON/tokens/credits/revocation; explicit Chromium cache |
+
+Final-current wheel manifest records deliveryb6058a6, engine4c9769f, generatorfb425c4, contracts5bdc1a0. Subsequent ledger-only changes do not alter package bytes. Final desktop/mobile back-office and web pixels inspected; cards/tables/controls readable, incomplete usage and unverified quiescence plainly disclosed. All package hashes match the prior rebuilt-current context, since latest changes were test/documentation only.
+
+Audit: inspected exact initial/append source writes across recovered asset, later-unit, Stop and provider archive sets; no absent source/test paths remain in those sets. Missing functions recovered except explicitly withdrawn1MB middleware tests. Old architecture-question-panel test is superseded by main's technical-default panel; global cost browser coverage resides in UI Playwright. Main-first diff reviewed for generator graph/CLI/model config, contracts complete source delta, engine graph/application/model config and HTTP lifecycle, delivery config/runner/store/UI reducers and cloud route scoping. No implicit legacy architecture healing introduced, no tests deleted in this closeout. Untracked generator rejected-output diagnostics retained privately.
+
+This closes the reconstruction pass, not release certification. Original lost Git objects are not restored; all changes are new additive commits on preserved remote history. Docker/container/Mac bridge, actual production RLS, live providers/SQL/SMTP, deployment and founder merge remain outside this validated local chain. No cloud execution gate lifted. Further original transcript material not included in the inspected archive sets could still add work; ledger does not claim omniscient original-suite equivalence.
