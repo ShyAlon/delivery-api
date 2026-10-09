@@ -416,6 +416,75 @@ class PostgresStore(SQLiteStore):
             self.audit(scope.owner_id,'gate.revision_preparation_journal',task_id,{'lineage_id':lineage_id,'state':state,'event_sha256':event['event_sha256']})
             return event
 
+    def reconcile_private_revision_installation(self,task_id,*,installation_id,artifacts_base):
+        """Concrete read-only current files/DB classification, never resumes."""
+        from .revision_install_recovery import classify_installation_recovery
+        from .revision_install_files import _validate_plan
+        from .revision_stage_evidence import read_validated_staged_receipt
+        from .tenancy import session_root
+        from .producer_inputs import _open_directory
+        from vmodel_contracts.execution_anchor import read_execution_anchor
+        from pathlib import Path
+        from types import SimpleNamespace
+        import os
+        with self._task_operation_guard('task.rerun'):
+            if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():raise KeyError(task_id)
+            intent=self._db.execute('SELECT * FROM closed_revision_installations WHERE installation_id=? AND task_id=?',(installation_id,task_id)).fetchone()
+            if not intent:raise KeyError(installation_id)
+            plan=json.loads(intent['payload']);anchor=_validate_plan(plan,intent['plan_sha256'])
+            event=self._db.execute('SELECT * FROM closed_revision_install_events WHERE installation_id=? ORDER BY sequence DESC LIMIT 1',(installation_id,)).fetchone()
+            if not event:raise ValueError('installation journal missing')
+            import hashlib
+            journal=json.loads(event['payload'])
+            if (hashlib.sha256(json.dumps(journal,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=event['event_sha256']
+                or journal['plan_sha256']!=intent['plan_sha256']):raise ValueError('reconciliation journal digest changed')
+            row=self._db.execute('SELECT * FROM closed_revision_lineage_plans WHERE lineage_id=?',(intent['lineage_id'],)).fetchone()
+            held=self._db.execute('SELECT * FROM closed_revision_restart_intents WHERE intent_id=?',(row['intent_id'],)).fetchone()
+            lineage=json.loads(row['payload']);options=json.loads(held['payload'])['options'];scope=current_scope()
+            source=session_root(Path(artifacts_base),scope,lineage['parent_execution_session_id'])
+            stage=source/'spec'/'revision-proposals'/lineage['proposal_id']/'staged'/anchor.execution_session_id
+            destination=session_root(Path(artifacts_base),scope,anchor.execution_session_id)
+            def contained_present(path):
+                try:fd=_open_directory(path)
+                except FileNotFoundError:return False
+                else:os.close(fd);return True
+            errors=[]
+            try:stage_present=contained_present(stage)
+            except (OSError,ValueError):stage_present=False;errors.append('private_stage_namespace_unverified')
+            # Historical binding is read-only evidence, never active worker
+            # authority or a capability that can run models after installation.
+            def historical_check(store):
+                if current_scope()!=scope or not self.auth_session_active():raise TenantAccessDenied('reconciliation owner revoked')
+                binding=self.session_binding(lineage['parent_execution_session_id'])
+                if not binding or binding['task_id']!=task_id or binding['owner_id']!=scope.owner_id or binding['generation']!=lineage['parent_generation']:
+                    raise TenantAccessDenied('historical source binding changed')
+            historical=SimpleNamespace(scope=scope,task_id=task_id,session_id=lineage['parent_execution_session_id'],generation=lineage['parent_generation'],validate=historical_check)
+            files=False
+            try:
+                if contained_present(destination):
+                    from .revision_source_review import read_source_review_snapshot
+                    retained=self._db.execute('SELECT * FROM closed_revision_source_reviews WHERE lineage_id=?',(intent['lineage_id'],)).fetchone()
+                    snapshot=read_source_review_snapshot(self,historical,artifacts_base=artifacts_base,lineage=lineage,lineage_sha256=row['fingerprint'])
+                    if not retained or snapshot!={'snapshot':json.loads(retained['payload']),'snapshot_sha256':retained['fingerprint']}:
+                        raise ValueError('reconciliation source differs from retained review')
+                    proof=read_execution_anchor(destination,expected=anchor)
+                    receipt=read_validated_staged_receipt(self,historical,artifacts_base=artifacts_base,lineage=lineage,
+                        lineage_sha256=row['fingerprint'],manifest_sha256=plan['staged_receipt']['manifest_sha256'],options=options,promoted=True)
+                    if receipt!=plan['staged_receipt']:raise ValueError('reconciliation manifest differs')
+                    expected=json.loads(event['payload'])['evidence'].get('anchor_sha256')
+                    if expected!=proof['document_sha256']:raise ValueError('reconciliation anchor differs from journal')
+                    files=True
+            except (OSError,ValueError,KeyError):errors.append('promoted_file_evidence_unverified')
+            task=self.task(task_id);installed=False
+            if task['generation']==anchor.generation and task['engine_session_id']==anchor.execution_session_id:
+                try:
+                    installed=self.installed_execution_anchor(anchor.execution_session_id)=={'anchor':anchor,
+                        'anchor_sha256':json.loads(event['payload'])['evidence'].get('anchor_sha256')}
+                except (ValueError,KeyError):errors.append('installed_database_evidence_unverified')
+            result=classify_installation_recovery(journal_state=event['state'],private_stage_present=stage_present,
+                promoted_files_verified=files,database_installed=installed)
+            return result|{'unverified':errors}
+
     def read_promoted_installation_evidence(self,task_id,*,installation_id,artifacts_base):
         """Concrete original+promoted typed receipt, not DB installation."""
         from .worker_capability import WorkerCapability

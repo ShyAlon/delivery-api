@@ -845,6 +845,14 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             later=WorkerCapability.capture(store,tid);later.validate(store)
             assert result['installed'] and not result['dispatch_started'] and later.execution_anchor.semantic_session_id=='s'
             assert store.task(tid)['generation']==2 and store.session_binding(cap.session_id)['generation']==1
+            reconciled=store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+            assert reconciled['state']=='installed_verified_no_dispatch' and not reconciled['automatic_retry'] and not reconciled['unverified']
+            from delivery_api.tenancy import session_root
+            promoted_root=session_root(tmp_path,A,later.session_id)
+            (promoted_root/'spec'/'srs.json').write_text('{}')
+            broken=store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+            assert broken['state']=='database_installed_requires_review' and broken['unverified']==['promoted_file_evidence_unverified']
+
             with pytest.raises(ValueError,match='reconciliation'):
                 with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
                     apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
