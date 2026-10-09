@@ -768,7 +768,7 @@ def test_source_change_during_concrete_stage_validation_leaves_only_prepared_eve
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
 
 
-@pytest.mark.parametrize('coordinated',[False,True])
+@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion'])
 def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch,coordinated):
     source_path=os.getenv("DELIVERY_TEST_SPEC_SOURCE")
     if source_path:monkeypatch.syspath_prepend(source_path)
@@ -839,6 +839,35 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             auth=conn.execute('SELECT * FROM closed_revision_install_events WHERE installation_id=%s',(intent_kw['installation_id'],)).fetchone()
         if coordinated:
             from delivery_api.revision_install_coordinator import apply_private_installation
+            if isinstance(coordinated,str):
+                from delivery_api import revision_install_coordinator as coordinator
+                original=coordinator.promote_private_stage
+                def interrupted(**kwargs):
+                    if coordinated=='after_promotion':original(**kwargs)
+                    raise RuntimeError('constructed interruption')
+                monkeypatch.setattr(coordinator,'promote_private_stage',interrupted)
+                with pytest.raises(RuntimeError,match='constructed interruption'):
+                    with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+                        apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],
+                            expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
+                assert store.task(tid)==before and store.session_binding(args['lineage']['execution_session_id']) is None
+                reconciled=store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                expected='private_stage_requires_review' if coordinated=='before_promotion' else 'files_promoted_database_uninstalled_requires_review'
+                assert reconciled['state']==expected and not reconciled['automatic_retry'] and not reconciled['resume_available']
+                with pytest.raises(ValueError,match='reconciliation'):
+                    with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+                        apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
+                return
+            # Concurrent destination holder must block before anchor/journal effects.
+            import fcntl
+            # session namespace is original source root's parent, not path inference.
+            lock=root.parent/('.install-'+args['lineage']['execution_session_id']+'.lock')
+            with lock.open('a') as holder:
+                fcntl.flock(holder,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                with pytest.raises(BlockingIOError):
+                    with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+                        apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
+                assert not (dest/'execution-generation.json').exists() and store.task(tid)==before
             with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
                 result=apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],
                     expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
@@ -849,6 +878,15 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             assert reconciled['state']=='installed_verified_no_dispatch' and not reconciled['automatic_retry'] and not reconciled['unverified']
             from delivery_api.tenancy import session_root
             promoted_root=session_root(tmp_path,A,later.session_id)
+            engine_source=os.getenv('DELIVERY_TEST_ENGINE_SOURCE')
+            if engine_source:monkeypatch.syspath_prepend(engine_source)
+            from interview_engine.installed_execution import load_installed_execution_control
+            control=load_installed_execution_control(promoted_root,expected_anchor=later.execution_anchor,expected_anchor_sha256=later.anchor_sha256)
+            assert control.fence.generation==2 and control.validate()['document_sha256']==later.anchor_sha256
+            with pytest.raises(ValueError,match='new interview input'):
+                control.reject_interview_mutation()
+            with pytest.raises(ValueError,match='database digest'):
+                load_installed_execution_control(promoted_root,expected_anchor=later.execution_anchor,expected_anchor_sha256='f'*64)
             (promoted_root/'spec'/'srs.json').write_text('{}')
             broken=store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
             assert broken['state']=='database_installed_requires_review' and broken['unverified']==['promoted_file_evidence_unverified']
