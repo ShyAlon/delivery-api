@@ -74,9 +74,19 @@ def test_parallel_attempts_share_owner_concurrency_and_cancellation(ledger):
 
 @pytest.mark.parametrize('column,value', [('expense_limit',29),('retail_limit',69),('attempt_expense_max',29),('attempt_retail_max',69),('rate_max',1)])
 def test_reviewed_spend_and_rate_limits_are_enforced(ledger,column,value):
-    import psycopg
+    import psycopg,time
     s,tid,job=ledger
-    with psycopg.connect(DSN) as c:c.execute(f'UPDATE admission_limits SET {column}=%s WHERE owner_id=%s',(value,A.owner_id))
+    with psycopg.connect(DSN) as c:
+        if column=='rate_max':
+            # Earlier fault tests retain cancelled attempt history on purpose.
+            # Owner-wide rate protection includes it; allow exactly one more
+            # call instead of assuming the shared owner has an empty history.
+            now=time.time()
+            recent=c.execute('SELECT count(*) FROM provider_attempts WHERE owner_id=%s AND created_at>%s',
+                             (A.owner_id,now-86400)).fetchone()[0]
+            c.execute('UPDATE admission_limits SET rate_window_seconds=86400 WHERE owner_id=%s',(A.owner_id,))
+            value+=recent
+        c.execute(f'UPDATE admission_limits SET {column}=%s WHERE owner_id=%s',(value,A.owner_id))
     with tenant_context(A):
         if column=='rate_max':
             first=s.reserve_provider_attempt(job,uuid.uuid4().hex,Q,'one')
