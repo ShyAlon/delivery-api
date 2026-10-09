@@ -806,6 +806,17 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
             staged=store.prepare_revision_staging(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],artifacts_base=tmp_path)
         md=staged['event']['evidence']['manifest_sha256']
+        safety=store.inspect_revision_install_safety(tid,lineage_id=lid,artifacts_base=tmp_path)
+        assert safety['blockers']==['source_writer_exclusion_unverified'] and not safety['installation_available']
+        with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+            safety=store.inspect_revision_install_safety(tid,lineage_id=lid,artifacts_base=tmp_path)
+        assert safety['observed_work_quiescent'] and not safety['installation_available']
+        pending=store.enqueue_worker(tid,'phase:srs')
+        with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+            blocked=store.inspect_revision_install_safety(tid,lineage_id=lid,artifacts_base=tmp_path)
+        assert blocked['unresolved_job_ids']==[pending] and 'worker_jobs_unresolved' in blocked['blockers']
+        with store._postgres.transaction() as conn:conn.execute("UPDATE worker_jobs SET state='done' WHERE job_id=%s",(pending,))
+
         installation_review=store.retain_revision_installation_review(tid,lineage_id=lid,
             expected_staged_event_sha256=staged['event_sha256'],artifacts_base=tmp_path)
         assert not installation_review['review']['accepted'] and not installation_review['review']['installation_available']

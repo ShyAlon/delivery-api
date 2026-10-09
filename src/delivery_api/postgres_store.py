@@ -397,6 +397,35 @@ class PostgresStore(SQLiteStore):
             self.audit(scope.owner_id,'gate.revision_preparation_journal',task_id,{'lineage_id':lineage_id,'state':state,'event_sha256':event['event_sha256']})
             return event
 
+    def inspect_revision_install_safety(self,task_id,*,lineage_id,artifacts_base):
+        """Read current DB work and held source fence, never approve/install.
+
+        No scanning global owners or interpreting timeout as thread exit. Caller
+        must own the original cooperative writer scope; absent scope is reported
+        as unverified, not acquired or converted into an installation grant.
+        """
+        from .revision_install_safety import installation_safety_snapshot
+        from .tenancy import session_root
+        from pathlib import Path
+        from spec_generator.cooperative_run import cli_stop_binding
+        binding=cli_stop_binding()
+        with self._task_operation_guard('task.rerun'):
+            if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():raise KeyError(task_id)
+            row=self._db.execute('SELECT * FROM closed_revision_lineage_plans WHERE lineage_id=? AND task_id=?',(lineage_id,task_id)).fetchone()
+            if not row:raise KeyError(lineage_id)
+            task=self.task(task_id);scope=current_scope()
+            parent_current=(task['generation']==row['parent_generation'] and task['engine_session_id']==row['parent_execution_session_id'])
+            root=session_root(Path(artifacts_base),scope,row['parent_execution_session_id'])
+            writer=False
+            if (binding is not None and binding[1]==row['parent_generation']
+                and Path(binding[0].path)==root/'interview'/'stop-request.json'):
+                binding[0].check(binding[1])
+                writer=binding[0].active==1 and binding[0]._writer_file is not None
+            jobs=self._db.execute("SELECT job_id FROM worker_jobs WHERE task_id=? AND state IN ('pending','running','paused','failed') ORDER BY job_id",(task_id,)).fetchall()
+            attempts=self._db.execute("SELECT p.attempt_id FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=? AND p.state IN ('reserved','dispatched','uncertain') ORDER BY p.attempt_id",(task_id,)).fetchall()
+            return installation_safety_snapshot(parent_current=parent_current,source_writer_excluded=writer,
+                unresolved_jobs=[r['job_id'] for r in jobs],unresolved_attempts=[r['attempt_id'] for r in attempts])
+
     def retain_revision_installation_review(self,task_id,*,lineage_id,expected_staged_event_sha256,artifacts_base):
         """Retain exact current installation review basis, not acceptance.
 
