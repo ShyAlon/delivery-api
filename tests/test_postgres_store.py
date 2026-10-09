@@ -768,7 +768,7 @@ def test_source_change_during_concrete_stage_validation_leaves_only_prepared_eve
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
 
 
-@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure','continuation_consume','continuation_consume_revoked'])
+@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph'])
 def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch,coordinated):
     source_path=os.getenv("DELIVERY_TEST_SPEC_SOURCE")
     if source_path:monkeypatch.syspath_prepend(source_path)
@@ -960,7 +960,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                         apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=store.verify_private_revision_acceptance)
                 assert not (dest/'execution-generation.json').exists() and store.task(tid)==before
                 return
-            if isinstance(coordinated,str) and coordinated not in ('continuation_failure','continuation_consume','continuation_consume_revoked'):
+            if isinstance(coordinated,str) and coordinated not in ('continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph'):
                 from delivery_api import revision_install_coordinator as coordinator
                 original=coordinator.promote_private_stage
                 def interrupted(**kwargs):
@@ -1046,7 +1046,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
             observed=reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
             assert observed['state']=='continuation_prepared_verified_no_dispatch' and not observed['dispatch_available']
-            if coordinated in ('continuation_consume','continuation_consume_revoked'):
+            if coordinated in ('continuation_consume','continuation_consume_revoked','continuation_real_graph'):
                 import asyncio
                 from types import SimpleNamespace
                 from delivery_api.revision_continuation_worker import queue_private_approved_continuation,execute_private_approved_continuation
@@ -1089,7 +1089,34 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                     assert (promoted_root/'spec/approved-continuation/checkpoints.sqlite').read_bytes()==immutable
                     assert not asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))['started']
                     return
+                if coordinated=='continuation_real_graph':
+                    from spec_generator import graph as real_graph
+                    call_stages=[]
+                    def fake_call(stage,payload,log,progress,**kwargs):
+                        assert stage=='architecture';call_stages.append(stage)
+                        schema=kwargs.get('schema') or {};props=set(schema.get('properties',{}))
+                        if props=={'stack_keys'}:value={'stack_keys':['language']}
+                        elif props=={'technology','off_list_justification','baseline_refs'}:value={'technology':'python','off_list_justification':None,'baseline_refs':['runtime:spec-generator:1']}
+                        elif props=={'responsibility'}:value={'responsibility':'serve approved specification'}
+                        elif props=={'position'}:value={'position':'consistent'}
+                        elif 'driver' in props:value={'title':'Keep Existing Runtime','decision':'Use Python','rationale':'Preserve current runtime','driver':'simplicity','options_considered':[{'option':'Change runtime','reason':'Unnecessary migration'}],'baseline_refs':['repo:spec-generator'],'evidence':[],'affected_repositories':[],'executes_concept_ids':[]}
+                        elif schema.get('type')=='array':
+                            item=set(schema['items'].get('properties',{}))
+                            value=[{'slug':'runtime'}] if 'slug' in item else [{'name':'api','requirement_ids':['R-1'],'baseline_refs':['repo:spec-generator'],'migration':False}]
+                        else:raise AssertionError(schema)
+                        if 'driver' in props:
+                            slot_text=payload.split('THE ADR SLOT',1)[1].split('\n',1)[1]
+                            slot,_=json.JSONDecoder().raw_decode(slot_text.lstrip())
+                            if slot['slug'].startswith('execute-'):
+                                value['executes_concept_ids']=['concept:native-app']
+                                value.update(title='Execute Native Concept',decision='Execute the selected native operating concept',rationale='Carry confirmed operating behavior',driver='founder_constraint',options_considered=[{'option':'Remote browser-only operation','reason':'Conflicts with chosen native operating concept'}])
+                        validator=kwargs.get('validate')
+                        checked=validator(value) if validator else None
+                        return checked if checked is not None else value
+                    monkeypatch.setattr(real_graph,'_call_json',fake_call)
+                    fake_graph=None  # Production graph construction/node routing, no model invocation.
                 consumed=asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))
+                if coordinated=='continuation_real_graph':assert call_stages and set(call_stages)=={'architecture'}
                 assert consumed['started'] and len(consumed['outputs'])==1 and store.worker_job(queued)['state']=='done'
                 assert not consumed['downstream_dispatched'] and store.task(tid)['state']=='waiting_gate'
                 assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='architecture')['state']=='waiting'
