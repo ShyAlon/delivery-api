@@ -293,9 +293,9 @@ def _slow_flag_page(p,base,fail=False):
 def test_apply_shows_busy_then_success_feedback(page):
  p,base,root=page;held=_slow_flag_page(p,base)
  p.locator('input[name="action-0"][value="remove"]').check();btn=p.get_by_role('button',name='Apply decisions and continue');btn.click()
- expect(p.locator('#semanticstatus')).to_contain_text('Applying your decisions');expect(p.locator('#semanticform button[type=submit]')).to_contain_text('Applying decisions');expect(p.locator('#semanticform button[type=submit]')).to_be_disabled();expect(p.locator('#semanticform .waiting-spinner')).to_be_visible()
+ expect(p.locator('#semanticstatus')).to_contain_text('Recording decisions');expect(p.locator('#semanticform button[type=submit]')).to_contain_text('Applying decisions');expect(p.locator('#semanticform button[type=submit]')).to_be_disabled();expect(p.locator('#semanticform .waiting-spinner')).to_be_visible()
  p.screenshot(path=str(root/'semantic-applying.png'))
- expect(p.locator('#semanticstatus')).to_contain_text('1-2 minutes',timeout=9000)
+ expect(p.locator('#semanticstatus')).to_contain_text('Estimating');assert '1-2 minutes' not in p.locator('#semanticstatus').inner_text()
  for _ in range(50):
   if held:break
   p.wait_for_timeout(100)
@@ -606,3 +606,22 @@ def test_closed_phase_change_draft_explains_regeneration_cost_without_commit(pag
  p.set_viewport_size({'width':390,'height':844});panel.scroll_into_view_if_needed();p.wait_for_timeout(250)
  assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
  p.screenshot(path='/downloads/closed-regeneration-cost-mobile.png')
+
+
+def test_flagged_inputs_shared_checklist_explains_missing_choice_and_jump(page):
+ p,base,root=page;held=_slow_flag_page(p,base)
+ expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_disabled()
+ expect(p.locator('#decision-checklist')).to_contain_text('Choose what happens to Constraint')
+ p.locator('#decision-checklist [data-jump="#semantic-0"]').click()
+ expect(p.locator('input[name="action-0"]').first).to_be_focused()
+ p.locator('input[name="action-0"][value="remove"]').check()
+ expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_enabled()
+ expect(p.locator('#decision-checklist')).to_contain_text('Ready to continue')
+ assert not held
+ p.screenshot(path='/downloads/findings-checklist-desktop.png')
+ p.set_viewport_size({'width':390,'height':844})
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
+ p.wait_for_timeout(600)
+ expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_in_viewport()
+ p.screenshot(path='/downloads/findings-checklist-mobile.png')
