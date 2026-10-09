@@ -768,7 +768,8 @@ def test_source_change_during_concrete_stage_validation_leaves_only_prepared_eve
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
 
 
-def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch):
+@pytest.mark.parametrize('coordinated',[False,True])
+def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch,coordinated):
     source_path=os.getenv("DELIVERY_TEST_SPEC_SOURCE")
     if source_path:monkeypatch.syspath_prepend(source_path)
     import hashlib,json
@@ -836,6 +837,18 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         with pytest.raises(PermissionError):store.retain_private_installation_intent(tid,**(intent_kw|{'validate_acceptance':revoked}))
         with store._postgres.transaction() as conn:
             auth=conn.execute('SELECT * FROM closed_revision_install_events WHERE installation_id=%s',(intent_kw['installation_id'],)).fetchone()
+        if coordinated:
+            from delivery_api.revision_install_coordinator import apply_private_installation
+            with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+                result=apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],
+                    expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
+            later=WorkerCapability.capture(store,tid);later.validate(store)
+            assert result['installed'] and not result['dispatch_started'] and later.execution_anchor.semantic_session_id=='s'
+            assert store.task(tid)['generation']==2 and store.session_binding(cap.session_id)['generation']==1
+            with pytest.raises(ValueError,match='reconciliation'):
+                with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+                    apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
+            return
         from delivery_api.revision_install_files import prepare_execution_anchor,promote_private_stage
         def test_authority():test_acceptance(installation_review['review'],installation_review['review_sha256'],intent_kw['acceptance_reference'])
         anchor_receipt=prepare_execution_anchor(stage_root=dest,plan=install['plan'],plan_sha256=install['plan_sha256'],validate_authority=test_authority)
