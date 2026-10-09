@@ -583,7 +583,7 @@ class PostgresStore(SQLiteStore):
             return {'installation_id':installation_id,'event_sha256':event['event_sha256'],'installed':True,'dispatch_started':False,
                 'approved_phase':phase,'next_phase':later[0] if later else None,'continuation_prepared':True}
 
-    def private_approved_continuation_basis(self,task_id,*,installation_id,artifacts_base):
+    def private_approved_continuation_basis(self,task_id,*,installation_id,artifacts_base,expected_job_id=None):
         """Exact current DB approval and immutable installed files, no dispatch."""
         from .worker_capability import WorkerCapability
         from .revision_install_files import _validate_plan
@@ -600,8 +600,14 @@ class PostgresStore(SQLiteStore):
             status=next((p for p in task['phases'] if p['phase_key']==phase),None)
             if not gate or gate['state']!='decided' or not status or status['state']!='approved':
                 raise ValueError('exact installed edited phase approval required')
-            if (self._db.execute("SELECT 1 FROM worker_jobs WHERE task_id=? AND state IN ('pending','running','paused','failed') LIMIT 1",(task_id,)).fetchone()
-                or self._db.execute("SELECT 1 FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=? AND p.state IN ('reserved','dispatched','uncertain') LIMIT 1",(task_id,)).fetchone()):
+            if expected_job_id is not None:
+                job=self.worker_job(expected_job_id)
+                if (not job or job['task_id']!=task_id or job['session_id']!=cap.session_id
+                    or job['generation']!=cap.generation or job['kind']!='continuation:approved-revision'
+                    or job['state'] not in ('pending','running') or job['execution_options']!={}):
+                    raise ValueError('exact private continuation worker required')
+            if (self._db.execute("SELECT 1 FROM worker_jobs WHERE task_id=? AND state IN ('pending','running','paused','failed') AND job_id<>? LIMIT 1",(task_id,expected_job_id or '')).fetchone()
+                or self._db.execute("SELECT 1 FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=? AND p.state IN ('reserved','dispatched','uncertain') AND j.job_id<>? LIMIT 1",(task_id,expected_job_id or '')).fetchone()):
                 raise ValueError('continuation requires quiescent jobs and providers')
             reconciled=self.reconcile_private_revision_installation(task_id,installation_id=installation_id,artifacts_base=artifacts_base)
             if reconciled['state']!='installed_verified_no_dispatch' or reconciled['unverified']:

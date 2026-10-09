@@ -80,13 +80,13 @@ def prepare_private_approved_continuation(store,task_id,*,installation_id,artifa
         os.close(parent)
 
 
-def reconcile_private_approved_continuation(store,task_id,*,installation_id,artifacts_base):
+def reconcile_private_approved_continuation(store,task_id,*,installation_id,artifacts_base,expected_job_id=None):
     """Read-only private receipt/file/DB comparison. Never retries or dispatches."""
     import stat
     from spec_generator.graph import build_graph,checkpoint_serde
     from langgraph.checkpoint.sqlite import SqliteSaver
     with store._task_operation_guard('task.rerun'):
-        basis=store.private_approved_continuation_basis(task_id,installation_id=installation_id,artifacts_base=artifacts_base)
+        basis=store.private_approved_continuation_basis(task_id,installation_id=installation_id,artifacts_base=artifacts_base,expected_job_id=expected_job_id)
         marker='revision-continuation:'+installation_id
         pending=store.decision_review(task_id,marker,basis['review_sha256'])
         prepared=store.decision_review(task_id,marker+':prepared',basis['review_sha256'])

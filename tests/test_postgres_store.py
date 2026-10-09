@@ -768,7 +768,7 @@ def test_source_change_during_concrete_stage_validation_leaves_only_prepared_eve
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
 
 
-@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure'])
+@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure','continuation_consume','continuation_consume_revoked'])
 def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch,coordinated):
     source_path=os.getenv("DELIVERY_TEST_SPEC_SOURCE")
     if source_path:monkeypatch.syspath_prepend(source_path)
@@ -960,7 +960,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                         apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=store.verify_private_revision_acceptance)
                 assert not (dest/'execution-generation.json').exists() and store.task(tid)==before
                 return
-            if isinstance(coordinated,str) and coordinated!='continuation_failure':
+            if isinstance(coordinated,str) and coordinated not in ('continuation_failure','continuation_consume','continuation_consume_revoked'):
                 from delivery_api import revision_install_coordinator as coordinator
                 original=coordinator.promote_private_stage
                 def interrupted(**kwargs):
@@ -1046,6 +1046,58 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
             observed=reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
             assert observed['state']=='continuation_prepared_verified_no_dispatch' and not observed['dispatch_available']
+            if coordinated in ('continuation_consume','continuation_consume_revoked'):
+                import asyncio
+                from types import SimpleNamespace
+                from delivery_api.revision_continuation_worker import queue_private_approved_continuation,execute_private_approved_continuation
+                from delivery_api.same_host_producer import SameHostProducerWorker
+                from spec_generator.worker_runtime import JobRuntime
+                from spec_generator.model_config import StageModel
+                from langgraph.graph import StateGraph,END
+                from typing import TypedDict
+                from vmodel_contracts.architecture import ArchitectureOverview
+                class ContinuationState(TypedDict,total=False):
+                    intent_model:dict
+                    conops:dict
+                    needs:dict
+                    system_baseline:dict
+                    srs:dict
+                    architecture:dict
+                def fake_graph(log,checkpointer,**kwargs):
+                    graph=StateGraph(ContinuationState)
+                    graph.add_node('gate_srs',lambda st:{})
+                    def architecture(st):
+                        if coordinated=='continuation_consume_revoked':store.revoke_private_revision_acceptance(tid,acceptance_reference=receipt['acceptance_reference'])
+                        return {'architecture':ArchitectureOverview.model_validate({'session_id':cap.session_id,
+                            'baseline_id':st['system_baseline']['baseline_id'],'stack_entries':[],
+                            'components':[{'name':'Offline Review','responsibility':'Show approved result','requirement_ids':['R-1'],'baseline_refs':['repo:spec-generator']}],
+                            'decisions':[],'non_functionals':{}}).model_dump(mode='json')}
+                    graph.add_node('architecture',architecture);graph.set_entry_point('gate_srs')
+                    graph.add_edge('gate_srs','architecture');graph.add_edge('architecture',END)
+                    return graph.compile(checkpointer=checkpointer)
+                queued=queue_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                assert queue_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)==queued
+                immutable=(promoted_root/'spec/approved-continuation/checkpoints.sqlite').read_bytes()
+                def runtime(c,r):return JobRuntime({'architecture':StageModel('fake','fake')},str(r/'calls.jsonl'),lambda text:None)
+                worker=SameHostProducerWorker(store,tmp_path,gateway_factory=lambda c,j:SimpleNamespace(store=store,job_id=j),usage_log_factory=lambda *a:None,runtime_factory=runtime)
+                if coordinated=='continuation_consume_revoked':
+                    with pytest.raises(TenantAccessDenied,match='revoked'):
+                        asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))
+                    assert store.worker_job(queued)['state']=='failed'
+                    assert not (promoted_root/'spec/continuation-execution/receipt.json').exists()
+                    assert store.task(tid)['state']=='pending'
+                    assert (promoted_root/'spec/approved-continuation/checkpoints.sqlite').read_bytes()==immutable
+                    assert not asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))['started']
+                    return
+                consumed=asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))
+                assert consumed['started'] and len(consumed['outputs'])==1 and store.worker_job(queued)['state']=='done'
+                assert not consumed['downstream_dispatched'] and store.task(tid)['state']=='waiting_gate'
+                assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='architecture')['state']=='waiting'
+                assert next(p for p in store.task(tid)['phases'] if p['phase_key']=='srs')['state']=='approved'
+                assert (promoted_root/'spec/approved-continuation/checkpoints.sqlite').read_bytes()==immutable
+                assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
+                assert not asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))['started']
+                return
             (promoted_root/'spec/approved-continuation/receipt.json').write_text('{}')
             assert reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)['state']=='continuation_requires_review'
             assert store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)['state']=='installed_verified_no_dispatch'
