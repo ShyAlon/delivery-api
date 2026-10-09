@@ -883,6 +883,21 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             from interview_engine.installed_execution import load_installed_execution_control
             control=load_installed_execution_control(promoted_root,expected_anchor=later.execution_anchor,expected_anchor_sha256=later.anchor_sha256)
             assert control.fence.generation==2 and control.validate()['document_sha256']==later.anchor_sha256
+            from interview_engine.installed_execution import InstalledExecutionRegistry
+            from interview_engine.tenant_worker import _owner
+            def read_installed(owner,sid):
+                assert owner==A.owner_id
+                later.validate(store)
+                return store.installed_execution_anchor(sid)
+            registry=InstalledExecutionRegistry(tmp_path,read_binding=read_installed)
+            token=_owner.set(A.owner_id)
+            try:
+                registered=registry.get(later.session_id)
+                assert registered.anchor==later.execution_anchor and registered.fence.generation==2
+                with pytest.raises(ValueError,match='new interview input'):registry.respond(later.session_id,{})
+            finally:_owner.reset(token)
+            assert not (promoted_root/'interview'/'http-session.json').exists()
+
             with pytest.raises(ValueError,match='new interview input'):
                 control.reject_interview_mutation()
             with pytest.raises(ValueError,match='database digest'):

@@ -274,3 +274,6 @@ Extended real throwaway files/SQLite/PG coordinated fixture: held destination fl
 
 ## Acceptance/install public fence regression
 Real ASGI client verifies private HTML/JS and proposed acceptance/install paths GET/POST404 with cloud disabled; route table lacks install/acceptance registration and app import AST excludes private presenter/coordinator/file effect helpers. Private renderer remains outside web package.1 route regression pass. This confirms tested paths/import boundary, not proof against all future dynamic wiring.
+
+## Installed registry authentic DB fixture handoff
+Coordinated real temporary installation now feeds private engine InstalledExecutionRegistry357a8c4 through reader that validates current WorkerCapability then queries PG installed_execution_anchor. Exact owner/execution/gen2 matches; Respond rejects preserved interview mutation; no http-session.json created/graph restore. Fresh PG262/all24/no skips/1 warning. Default HTTP registry untouched, not public installation or real acceptance.
