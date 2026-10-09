@@ -206,3 +206,10 @@ Added pure installation-review payload binding held lineage, regenerated artifac
 Private store re-reads concrete source/proposal/stage/gate/draft evidence twice under owner/task lock and stores exact digest-keyed basis in existing immutable owner decision-review records. Requires current staged journal CAS and verifies its content digest. No new acceptance flag/table, install grant or route. Existing source/destination writer exclusion still caller responsibility. Real PG/files fixture proves replay-stable retained basis, stale journal rejection and changed source rejection. Pure5 pass; fresh PG259/all23/no skips/1 warning. Bounded result recorded below; diff clean. Initial unit-test import named a nonexistent fixture helper; corrected import before5-pass result. No founder design approval supplied or inferred, no promotion/install/public gate lifting.
 
 Review-basis bounded recheck: 679 passed, 182 skipped, 5 deselected, 1 warning in 33.50s
+
+## Pure installation effect plan, no acceptance or effects
+Added immutable digest-linked plan derived only from exact non-effectful installation review: expected owner/task/parent generation+execution CAS, typed prospective execution anchor, staged receipt/journal, edited gate awaiting fresh review and downstream pending/reapproval resets. Requires continuing cost review/admission, no source deletion/Stop copy/automatic replay. Lists authenticated acceptance, quiescence, writer exclusion, fsynced promotion, durable install journal and installed readback as unresolved requirements. It never writes anchor/files/DB or accepts a review. No client effect route.
+
+Targeted14 pass, bounded result below; diff clean. Invalid review flags/cost basis/generation/digests/invalidation rejected. Design now accurately distinguishes implemented private staging from still-unimplemented acceptance/promotion/activation chain. No migrations; latest actual PG259/all23 remains prior unit result, not rerun for pure plan. No owner design approval supplied or inferred, public gate lifting unchanged.
+
+Pure install-plan bounded recheck: 688 passed, 182 skipped, 5 deselected, 1 warning in 30.56s

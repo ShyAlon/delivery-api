@@ -44,3 +44,8 @@ Anchor initialization is still unimplemented. The proposed anchor is not permiss
 ## Cloud ConOps boundary
 
 Cloud Gate/Edit staging requires a current-version typed founder-confirmed ConOps document matching the immutable semantic source id. This preserves existing cloud producer preflight and handoff behavior. Generator CLI support for absent ConOps is not an optional-absence policy for cloud staging. Missing, null, stale-version, foreign-session or unconfirmed ConOps fails closed; no fabricated null file, restamping or implicit healing. Absent-ConOps cloud support remains a separate founder product decision, not implemented here.
+
+## Current private implementation status
+Immutable original-byte source review snapshots, pinned source/proposal/stage validation, exact byte-copy private staging under the original source fence, concrete staged journal CAS and immutable installation review basis are implemented on coordinated feature branches. The staging writer never invokes a graph or model and writes no next-generation Stop marker/anchor. Failure retains private partial evidence for explicit reconciliation, with no retry/cleanup.
+
+A pure effect plan now names expected parent generation/session, future anchor, edited-gate waiting state and downstream pending/reapproval reset. It remains unaccepted/uninstalled and does not perform promotion or DB activation. Actual authenticated owner acceptance, promotion/install journal, new session/anchor activation and installed engine/capability authority are still unimplemented. This does not change the public boundary or establish founder design approval.
