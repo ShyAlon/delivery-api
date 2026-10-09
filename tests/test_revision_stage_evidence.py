@@ -72,6 +72,7 @@ def test_validated_receipt_connects_pinned_checkpoint_and_source_evidence(tmp_pa
     source.read_closed_checkpoint=read
     checkpoint.validate_staged_lineage_state=lambda **kwargs:calls.append(kwargs)
     monkeypatch.setitem(sys.modules,'spec_generator.revision_source',source);monkeypatch.setitem(sys.modules,'spec_generator.revision_checkpoint',checkpoint)
+    monkeypatch.setattr(module,'read_approved_upstream_bytes',lambda *a,**kwargs:{})
     monkeypatch.setattr(module,'read_staged_revision_manifest',lambda **kwargs:{'manifest_sha256':args['manifest_sha256'],'checkpoint_id':'staged-checkpoint'})
     monkeypatch.setattr(revision_evidence,'read_revision_artifacts',lambda *a,**kwargs:o['artifact_evidence'])
     result=module.read_validated_staged_receipt(**args,options=o)
@@ -91,3 +92,23 @@ def test_valid_hashes_cannot_hide_document_checkpoint_mismatch(tmp_path):
     (root/'manifest.json').write_text(json.dumps(manifest));args['manifest_sha256']=hashlib.sha256((root/'manifest.json').read_bytes()).hexdigest()
     with pytest.raises(ValueError,match='validated checkpoint channel'):
         read_staged_revision_manifest(**args,expected_documents=expected)
+
+
+def test_approved_upstream_reader_retains_exact_bytes_and_rejects_checkpoint_drift(tmp_path):
+    from delivery_api.revision_stage_evidence import read_approved_upstream_bytes
+    (tmp_path/'interview').mkdir();path=tmp_path/'interview'/'intent_model.json'
+    path.write_text('{  "approved": true }\n');raw=path.read_bytes()
+    expected={'interview/intent_model.json':{'approved':True}}
+    assert read_approved_upstream_bytes(tmp_path,expected_documents=expected)=={'interview/intent_model.json':hashlib.sha256(raw).hexdigest()}
+    assert path.read_bytes()==raw
+    with pytest.raises(ValueError,match='checkpoint channel'):
+        read_approved_upstream_bytes(tmp_path,expected_documents={'interview/intent_model.json':{}})
+
+
+def test_equal_json_different_staged_bytes_are_rejected(tmp_path):
+    root,args=setup(tmp_path);path=root/'interview'/'intent_model.json';path.write_text('{"same":true}')
+    manifest=json.loads((root/'manifest.json').read_text());manifest['files']['interview/intent_model.json']=hashlib.sha256(path.read_bytes()).hexdigest()
+    (root/'manifest.json').write_text(json.dumps(manifest));args['manifest_sha256']=hashlib.sha256((root/'manifest.json').read_bytes()).hexdigest()
+    original=b'{ "same": true }\n'
+    with pytest.raises(ValueError,match='upstream bytes differ'):
+        read_staged_revision_manifest(**args,expected_upstream_sha256={'interview/intent_model.json':hashlib.sha256(original).hexdigest()})

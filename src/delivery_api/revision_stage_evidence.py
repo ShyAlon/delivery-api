@@ -9,7 +9,7 @@ from .producer_inputs import _open_directory,_identity,_content_stamp,MAX_DOCUME
 from .tenancy import session_root,TenantAccessDenied
 
 
-def read_staged_revision_manifest(store,capability,*,artifacts_base,lineage,lineage_sha256,manifest_sha256,expected_documents=None):
+def read_staged_revision_manifest(store,capability,*,artifacts_base,lineage,lineage_sha256,manifest_sha256,expected_documents=None,expected_upstream_sha256=None):
     capability.validate(store)
     if not isinstance(lineage,dict) or hashlib.sha256(json.dumps(lineage,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=lineage_sha256:
         raise ValueError('exact held lineage digest required')
@@ -54,8 +54,12 @@ def read_staged_revision_manifest(store,capability,*,artifacts_base,lineage,line
         if not isinstance(files,dict) or set(files)!=required:raise ValueError('exact upstream and edited-phase staging inventory required')
         if expected_documents is not None and set(expected_documents)!=required-{'spec/checkpoints.sqlite'}:
             raise ValueError('complete expected checkpoint documents required')
+        if expected_upstream_sha256 is not None and not set(expected_upstream_sha256)<=required:
+            raise ValueError('canonical upstream digest inventory required')
         for name,digest in files.items():
             if not isinstance(digest,str) or not re.fullmatch('[a-f0-9]{64}',digest):raise ValueError('exact staged file digest required')
+            if expected_upstream_sha256 is not None and name in expected_upstream_sha256 and digest!=expected_upstream_sha256[name]:
+                raise ValueError('staged upstream bytes differ from approved source files')
             limit=64*1024*1024 if name.endswith('.sqlite') else MAX_DOCUMENT_BYTES
             content=read(name,limit)
             if hashlib.sha256(content).hexdigest()!=digest:raise ValueError('staged file digest mismatch')
@@ -122,7 +126,55 @@ def read_validated_staged_receipt(store,capability,*,artifacts_base,lineage,line
         'spec/needs.json':source.get('needs'),'spec/system-baseline.json':source.get('system_baseline'),
         'spec/'+lineage['phase']+'.json':staged.get(lineage['phase'])}
     if lineage['phase']=='architecture':documents['spec/srs.json']=source.get('srs')
-    after=read_staged_revision_manifest(**arguments,expected_documents=documents)
+    upstream={name:value for name,value in documents.items() if name!='spec/'+lineage['phase']+'.json'}
+    upstream_digests=read_approved_upstream_bytes(root,expected_documents=upstream)
+    after=read_staged_revision_manifest(**arguments,expected_documents=documents,expected_upstream_sha256=upstream_digests)
+    if read_approved_upstream_bytes(root,expected_documents=upstream)!=upstream_digests:
+        raise ValueError('approved upstream files changed across staging readback')
     if after!=before:raise ValueError('staged receipt changed across typed readback')
     capability.validate(store)
     return after
+
+
+def read_approved_upstream_bytes(root,*,expected_documents):
+    """Read exact original bytes matching approved checkpoint values, no healing.
+
+    Caller supplies authorized canonical root and typed source checkpoint values.
+    Missing optional-looking documents fail closed; absence needs an explicit
+    reviewed inventory policy, never a fabricated null file.
+    """
+    allowed={'interview/intent_model.json','interview/conops.json','spec/needs.json','spec/system-baseline.json','spec/srs.json'}
+    if not isinstance(expected_documents,dict) or not expected_documents or not set(expected_documents)<=allowed:
+        raise ValueError('canonical approved upstream inventory required')
+    parent=_open_directory(root);records=[];digests={}
+    try:
+        for name,value in expected_documents.items():
+            directory,filename=name.split('/');dfd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+            try:
+                fd=os.open(filename,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=dfd)
+                try:
+                    before=os.fstat(fd)
+                    if not stat.S_ISREG(before.st_mode) or before.st_size>MAX_DOCUMENT_BYTES:
+                        raise ValueError('bounded regular approved upstream file required')
+                    with os.fdopen(fd,'rb',closefd=False) as stream:raw=stream.read(MAX_DOCUMENT_BYTES+1)
+                    if len(raw)>MAX_DOCUMENT_BYTES or _content_stamp(os.fstat(fd))!=_content_stamp(before):
+                        raise TenantAccessDenied('approved upstream bytes changed during read')
+                    if json.loads(raw)!=value:raise ValueError('approved source file differs from checkpoint channel')
+                    if _content_stamp(os.stat(filename,dir_fd=dfd,follow_symlinks=False))!=_content_stamp(before):
+                        raise TenantAccessDenied('approved upstream namespace changed')
+                    records.append((directory,filename,_identity(dfd),_content_stamp(before)))
+                    digests[name]=hashlib.sha256(raw).hexdigest()
+                finally:os.close(fd)
+            finally:os.close(dfd)
+        current=_open_directory(root)
+        try:
+            if _identity(current)!=_identity(parent):raise TenantAccessDenied('approved upstream root changed')
+            for directory,filename,identity,stamp in records:
+                dfd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=current)
+                try:
+                    if _identity(dfd)!=identity or _content_stamp(os.stat(filename,dir_fd=dfd,follow_symlinks=False))!=stamp:
+                        raise TenantAccessDenied('approved upstream inventory changed across readback')
+                finally:os.close(dfd)
+        finally:os.close(current)
+        return digests
+    finally:os.close(parent)

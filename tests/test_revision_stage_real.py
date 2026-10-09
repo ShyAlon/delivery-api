@@ -42,7 +42,11 @@ def test_real_staged_receipt_preserves_source_and_requires_fresh_gate(tmp_path):
     state=graph.get_state({'configurable':{'thread_id':'next'}}).values;conn.close()
     documents={'interview/intent_model.json':source['intent_model'],'interview/conops.json':source.get('conops'),
         'spec/needs.json':source['needs'],'spec/system-baseline.json':source['system_baseline'],'spec/srs.json':state['srs']}
-    for name,body in documents.items():(dest/name).write_text(json.dumps(body))
+    for name,body in documents.items():
+        (dest/name).write_text(json.dumps(body))
+        if name!='spec/srs.json':
+            (root/name).parent.mkdir(parents=True,exist_ok=True)
+            (root/name).write_bytes((dest/name).read_bytes())
     files={name:hashlib.sha256((dest/name).read_bytes()).hexdigest() for name in list(documents)+['spec/checkpoints.sqlite']}
     manifest={'kind':'closed_revision_staged_manifest','lineage_sha256':ld,'checkpoint_id':staged['destination_checkpoint']['configurable']['checkpoint_id'],'files':files}
     (dest/'manifest.json').write_text(json.dumps(manifest));md=hashlib.sha256((dest/'manifest.json').read_bytes()).hexdigest()
@@ -54,4 +58,4 @@ def test_real_staged_receipt_preserves_source_and_requires_fresh_gate(tmp_path):
     (dest/'interview'/'intent_model.json').write_text('{}')
     manifest['files']['interview/intent_model.json']=hashlib.sha256((dest/'interview'/'intent_model.json').read_bytes()).hexdigest()
     (dest/'manifest.json').write_text(json.dumps(manifest));args['manifest_sha256']=hashlib.sha256((dest/'manifest.json').read_bytes()).hexdigest()
-    with pytest.raises(ValueError,match='validated checkpoint channel'):read_validated_staged_receipt(**args)
+    with pytest.raises(ValueError,match='upstream bytes differ|validated checkpoint channel'):read_validated_staged_receipt(**args)
