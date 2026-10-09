@@ -138,3 +138,8 @@ Important limit: this proves byte inventory consistency, not typed contract vali
 
 ## Vendor lock hash correction
 Previous offline lock command reused the same-version local wheel's cached old hash even though the vendor bytes changed. Targeted uv lock --refresh-package vmodel-contracts updates the exact SHA to bc8cb30c63719e106451d514532b28a30d8e69fbcce8a771121eab2369f0391e; subsequent offline lock check passes. No blanket upgrades. Direct-wheel clean install/anchor tests were valid independently of this lock; prior successful offline check did not prove current wheel hash. Lock-only correction, diff clean.
+
+## Trusted composed staging receipt validation
+Private receipt wrapper now composes held-options/lineage match, pinned inventory read, exact original checkpoint read, staged SQLite identity/fresh edited-gate read and typed semantic/source-preservation validation, current original phase artifact evidence and repeated source/inventory readback. Mock dependency wiring targeted21 pass, bounded648 pass/176 skips/5 integration deselections/1 warning; diff clean. Generator real SQLite tests separately cover the underlying gate/typed readback. No new DB changes; prior PG253 not rerun for this pure integration.
+
+Limits: no end-to-end real-files delivery staging fixture yet. Manifest artifact JSON bytes still need comparison against validated staged/source checkpoint channels; hashes alone do not prove that equality. Staging writer, DB journal trusted-receipt integration, promotion/install and installed engine/capability authority remain open. No readiness/commit certification, public restart remains unavailable.

@@ -54,3 +54,28 @@ def test_directory_swap_during_read_is_rejected(tmp_path,monkeypatch):
         return fd
     monkeypatch.setattr(module.os,'open',opened)
     with pytest.raises((ValueError,PermissionError,OSError)):read_staged_revision_manifest(**args)
+
+
+def test_validated_receipt_connects_pinned_checkpoint_and_source_evidence(tmp_path,monkeypatch):
+    import sys
+    from types import ModuleType
+    from delivery_api import revision_stage_evidence as module,revision_evidence
+    from test_closed_revision_job import options
+    root,args=setup(tmp_path);o=options();l=args['lineage']
+    l.update(source_checkpoint_id=o['source_checkpoint_id'],review_digest=o['preflight_digest'],approved_source_artifact_evidence=o['artifact_evidence'])
+    args['lineage_sha256']=hashlib.sha256(json.dumps(l,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    calls=[];reads=[]
+    source=ModuleType('spec_generator.revision_source');checkpoint=ModuleType('spec_generator.revision_checkpoint')
+    def read(path,**kwargs):
+        reads.append(kwargs)
+        return {'state':'staged'} if kwargs.get('expected_review_phase') else {'state':'source'}
+    source.read_closed_checkpoint=read
+    checkpoint.validate_staged_lineage_state=lambda **kwargs:calls.append(kwargs)
+    monkeypatch.setitem(sys.modules,'spec_generator.revision_source',source);monkeypatch.setitem(sys.modules,'spec_generator.revision_checkpoint',checkpoint)
+    monkeypatch.setattr(module,'read_staged_revision_manifest',lambda **kwargs:{'manifest_sha256':args['manifest_sha256'],'checkpoint_id':'staged-checkpoint'})
+    monkeypatch.setattr(revision_evidence,'read_revision_artifacts',lambda *a,**kwargs:o['artifact_evidence'])
+    result=module.read_validated_staged_receipt(**args,options=o)
+    assert result['checkpoint_id']=='staged-checkpoint' and len(reads)==3 and calls[0]['change_request']==o['change_request']
+    assert reads[1]['expected_review_phase']=='srs' and reads[1]['session_id']=='next'
+    calls.clear();monkeypatch.setattr(revision_evidence,'read_revision_artifacts',lambda *a,**kwargs:[])
+    with pytest.raises(ValueError,match='source artifacts changed'):module.read_validated_staged_receipt(**args,options=o)

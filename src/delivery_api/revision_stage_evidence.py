@@ -79,3 +79,41 @@ def read_staged_revision_manifest(store,capability,*,artifacts_base,lineage,line
         capability.validate(store)
         return {'manifest_sha256':manifest_sha256,'checkpoint_id':manifest['checkpoint_id']}
     finally:os.close(parent)
+
+
+def read_validated_staged_receipt(store,capability,*,artifacts_base,lineage,lineage_sha256,manifest_sha256,options):
+    """Compose pinned bytes, exact SQLite gate and typed semantic readback.
+
+    Caller derives lineage/options from immutable held records and owns writer
+    exclusion. This validates staging only, not owner approval or installation.
+    """
+    from .closed_revision_job import _options
+    from spec_generator.revision_source import read_closed_checkpoint
+    from spec_generator.revision_checkpoint import validate_staged_lineage_state
+    options=_options(options)
+    if (options['phase']!=lineage.get('phase') or options['source_checkpoint_id']!=lineage.get('source_checkpoint_id')
+        or options['preflight_digest']!=lineage.get('review_digest')
+        or options['artifact_evidence']!=lineage.get('approved_source_artifact_evidence')):
+        raise ValueError('staged options differ from held lineage')
+    arguments=dict(store=store,capability=capability,artifacts_base=artifacts_base,lineage=lineage,
+        lineage_sha256=lineage_sha256,manifest_sha256=manifest_sha256)
+    before=read_staged_revision_manifest(**arguments)
+    root=session_root(Path(artifacts_base),capability.scope,capability.session_id)
+    source=read_closed_checkpoint(root/'spec'/'checkpoints.sqlite',session_id=capability.session_id,
+        expected_checkpoint_id=lineage['source_checkpoint_id'])
+    staged_path=root/'spec'/'revision-proposals'/lineage['proposal_id']/'staged'/lineage['execution_session_id']/'spec'/'checkpoints.sqlite'
+    staged=read_closed_checkpoint(staged_path,session_id=lineage['execution_session_id'],
+        expected_checkpoint_id=before['checkpoint_id'],expected_review_phase=lineage['phase'])
+    validate_staged_lineage_state(source=source,staged_state=staged,lineage=lineage,change_request=options['change_request'])
+    # Reject edits to original phase artifacts and the source checkpoint observed
+    # over validation. Same-host exclusion is still required for commit safety.
+    from .revision_evidence import read_revision_artifacts
+    evidence=read_revision_artifacts(store,capability,root,lineage['phase'],artifacts_base=artifacts_base)
+    if evidence!=options['artifact_evidence']:raise ValueError('reviewed source artifacts changed before staged readiness')
+    if read_closed_checkpoint(root/'spec'/'checkpoints.sqlite',session_id=capability.session_id,
+        expected_checkpoint_id=lineage['source_checkpoint_id'])!=source:
+        raise ValueError('source checkpoint changed across staged validation')
+    after=read_staged_revision_manifest(**arguments)
+    if after!=before:raise ValueError('staged receipt changed across typed readback')
+    capability.validate(store)
+    return after
