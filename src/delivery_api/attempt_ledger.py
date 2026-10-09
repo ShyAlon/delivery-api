@@ -16,13 +16,14 @@ def _integer(value):
 def _quote(quote):
     keys={'provider','model','price_version','bound_version','input_max','output_max',
           'expense_input','expense_output','retail_input','retail_output'}
-    optional={'retail_units_per_credit','expense_cache_hit','expense_cache_miss'}
+    optional={'retail_units_per_credit','expense_cache_hit','expense_cache_miss','expense_units_per_usd'}
     if bool('expense_cache_hit' in quote)!=bool('expense_cache_miss' in quote):raise AdmissionDenied('complete reviewed cache rates required')
     if any(not _integer(quote[k]) for k in ('expense_cache_hit','expense_cache_miss') if k in quote):raise AdmissionDenied('integer cache prices required')
     if set(quote)-optional!=keys or ('retail_units_per_credit' in quote and (not _integer(quote['retail_units_per_credit']) or not quote['retail_units_per_credit'])) or any(not isinstance(quote[k],str) or not quote[k] for k in keys if k.endswith('version') or k in ('provider','model')):
         raise AdmissionDenied('reviewed quote and exact request bound required')
     if any(not _integer(quote[k]) for k in keys if k not in ('provider','model','price_version','bound_version')):
         raise AdmissionDenied('quote amounts and token bounds must be nonnegative integers')
+    if 'expense_units_per_usd' in quote and (not _integer(quote['expense_units_per_usd']) or not quote['expense_units_per_usd']):raise AdmissionDenied('positive expense unit scale required')
     if not quote['output_max']:raise AdmissionDenied('positive output bound required')
     input_rate=max(quote.get('expense_cache_hit',quote['expense_input']),quote.get('expense_cache_miss',quote['expense_input']))
     return (quote['input_max']*input_rate+quote['output_max']*quote['expense_output'],
@@ -77,6 +78,9 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
 def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
     # Same lock order as admission: owner first, attempt/account rows second.
     from .prepaid import owner_lock
+    # Same global-first ordering as launch dispatch. Accepted settlements never
+    # consult admission limits and always finish, including after a tripwire.
+    store._db.execute('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
     owner_lock(store)
     row=store._db.execute('SELECT * FROM provider_attempts WHERE attempt_id=? FOR UPDATE',(attempt_id,)).fetchone()
     if not row:raise AdmissionDenied('owner attempt not found')
@@ -115,5 +119,9 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         from .prepaid import debit
         debit(store,dict(row),retail)
         store._db.execute("UPDATE provider_attempts SET state='settled',expense_actual=?,retail_actual=?,usage=?::jsonb,updated_at=?,settled_at=? WHERE attempt_id=?",(expense,retail,json.dumps(usage),time.time(),time.time(),attempt_id))
+        if 'expense_units_per_usd' in quote:
+            # Atomically retain breach evidence with confirmed settlement. A
+            # guard denial never rejects or undoes this accepted call's debit.
+            store.confirmed_expense_admission(row['job_id'],quote['expense_units_per_usd'])
     else:raise AdmissionDenied('unsupported attempt transition')
     return store.provider_attempt(attempt_id)

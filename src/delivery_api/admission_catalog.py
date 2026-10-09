@@ -21,6 +21,7 @@ class ReviewedModelPrice:
     retail_units_per_credit:int|None=None
     expense_cache_hit:int|None=None
     expense_cache_miss:int|None=None
+    expense_units_per_usd:int|None=None
 
 @dataclass(frozen=True)
 class RequestBound:
@@ -48,6 +49,7 @@ class ReviewedCatalog:
                 raise AdmissionDenied('cache prices need cache accounting categories')
             if price.retail_units_per_credit is not None and (not _integer(price.retail_units_per_credit) or not price.retail_units_per_credit):
                 raise AdmissionDenied('explicit positive retail unit scale required')
+            if price.expense_units_per_usd is not None and (not _integer(price.expense_units_per_usd) or not price.expense_units_per_usd):raise AdmissionDenied('positive expense unit scale required')
             self.prices[key]=price
 
     def resolve(self,*,stage,provider,model,messages,max_output_tokens):
@@ -61,6 +63,7 @@ class ReviewedCatalog:
         quote={k:getattr(price,k) for k in ('provider','model','price_version','expense_input','expense_output','retail_input','retail_output')}
         if price.expense_cache_hit is not None:quote.update(expense_cache_hit=price.expense_cache_hit,expense_cache_miss=price.expense_cache_miss)
         if price.retail_units_per_credit is not None:quote['retail_units_per_credit']=price.retail_units_per_credit
+        if price.expense_units_per_usd is not None:quote['expense_units_per_usd']=price.expense_units_per_usd
         quote.update(bound_version=bound.bound_version,input_max=bound.input_max,output_max=bound.output_max)
         digest=hashlib.sha256(bound.serialized_request).hexdigest()
         return quote,digest
@@ -102,7 +105,7 @@ def catalog_from_environment(environ, *, bounders=None):
         prices=[]
         required={'provider','model','price_version','source','expense_input','expense_output','retail_input','retail_output'}
         for row in rows:
-            allowed=required|{'retail_units_per_credit','usage_categories','expense_cache_hit','expense_cache_miss'}
+            allowed=required|{'expense_units_per_usd','retail_units_per_credit','usage_categories','expense_cache_hit','expense_cache_miss'}
             if not isinstance(row,dict) or not required<=set(row) or set(row)-allowed:raise ValueError()
             row=dict(row)
             if 'usage_categories' in row:

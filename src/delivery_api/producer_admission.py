@@ -7,7 +7,9 @@ Missing resolver/usage fails closed. No monetary configuration defaults exist.
 from .attempt_ledger import AdmissionDenied
 
 class WorkerAdmissionGateway:
-    def __init__(self,store,job_id,*,resolve_quote=None,measure_usage=None,require_prepaid=True,resolve_serialized=None,measure_raw_usage=None):
+    def __init__(self,store,job_id,*,resolve_quote=None,measure_usage=None,require_prepaid=True,resolve_serialized=None,measure_raw_usage=None,launch_guard=False):
+        if launch_guard and not require_prepaid:raise AdmissionDenied('launch guard requires prepaid accounting')
+        self.launch_guard=launch_guard
         self.store=store;self.job_id=job_id;self.require_prepaid=require_prepaid
         self.resolve_quote=resolve_quote;self.measure_usage=measure_usage
         self.resolve_serialized=resolve_serialized;self.measure_raw_usage=measure_raw_usage
@@ -52,7 +54,10 @@ class WorkerAdmissionGateway:
 
     def start(self,attempt):
         self._attempt(attempt)
-        self.store.transition_provider_attempt(attempt,'start',require_prepaid=self.require_prepaid)
+        if self.launch_guard:
+            result=self.store.start_launch_provider_attempt(attempt)
+            if not result['started']:raise AdmissionDenied('service temporarily unavailable: '+result['reason'])
+        else:self.store.transition_provider_attempt(attempt,'start',require_prepaid=self.require_prepaid)
 
     def settle(self,attempt,response):
         self._attempt(attempt)
