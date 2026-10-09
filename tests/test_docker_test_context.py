@@ -88,9 +88,10 @@ def test_clean_install_does_not_inherit_credentials_dev_sources_or_site_packages
 def test_clean_install_checks_exact_wheels_before_creating_environment(tmp_path):
     import hashlib,json,pytest
     module=_clean_verifier();(tmp_path/'wheels').mkdir();manifest={}
-    for name in ('delivery','engine','generator','contracts'):
-        wheel=tmp_path/'wheels'/f'{name}.whl';wheel.write_bytes(name.encode())
+    for name,role in (('delivery_api','delivery'),('interview_engine','engine'),('spec_generator','generator'),('vmodel_contracts','contracts')):
+        wheel=tmp_path/'wheels'/f'{name}-1.0-py3-none-any.whl';wheel.write_bytes(name.encode())
         manifest[wheel.name]={'sha256':hashlib.sha256(wheel.read_bytes()).hexdigest()}
+        (tmp_path/('wheel-sha256-'+role+'.txt')).write_text(manifest[wheel.name]['sha256']+'  /wheels/'+wheel.name+'\n')
     (tmp_path/'source-manifest.json').write_text(json.dumps(manifest))
     (tmp_path/'wheel-sha256.txt').write_text(''.join(value['sha256']+'  /wheels/'+name+'\n' for name,value in manifest.items()))
     (tmp_path/'constraints.txt').write_text('')
@@ -99,3 +100,51 @@ def test_clean_install_checks_exact_wheels_before_creating_environment(tmp_path)
     assert len(module.validate_context(tmp_path)[1])==4
     wheel.write_bytes(b'changed')
     with pytest.raises(ValueError,match='manifest'):module.validate_context(tmp_path)
+    wheel.write_bytes(name.encode())
+    (tmp_path/'wheel-sha256-contracts.txt').write_text('wrong')
+    with pytest.raises(ValueError,match='per-repo Docker hashes'):module.validate_context(tmp_path)
+
+
+def test_host_preview_content_tag_reuses_image_and_changes_on_content_not_mtime(tmp_path):
+    import os,json
+    context=tmp_path/'context';context.mkdir();(context/'host-preview.py').write_text('fake fixture')
+    commands=tmp_path/'commands';commands.mkdir();log=tmp_path/'docker.log';cache=tmp_path/'cache';cache.mkdir()
+    docker=commands/'docker'
+    docker.write_text('''#!/usr/bin/env python3
+import os,sys,json,pathlib
+args=sys.argv[1:]
+with open(os.environ['FAKE_DOCKER_LOG'],'a') as f:f.write(json.dumps(args)+'\\n')
+cache=pathlib.Path(os.environ['FAKE_DOCKER_CACHE'])
+if args[0]=='version':print('28.1.0')
+elif args[:2]==['image','inspect']:sys.exit(0 if (cache/args[2].replace(':','_')).exists() else 1)
+elif args[0]=='build':(cache/args[2].replace(':','_')).touch()
+''');docker.chmod(0o755)
+    curl=commands/'curl';curl.write_text('#!/bin/sh\nexit 0\n');curl.chmod(0o755)
+    env=os.environ|{'PATH':str(commands)+os.pathsep+os.environ['PATH'],'FAKE_DOCKER_LOG':str(log),'FAKE_DOCKER_CACHE':str(cache)}
+    runner=str(ROOT/'scripts/docker/run-host-preview.sh')
+    def run():
+        log.write_text('');subprocess.run(['bash',runner,str(context)],check=True,env=env,capture_output=True)
+        return [json.loads(line) for line in log.read_text().splitlines()]
+    first=run();build=next(c for c in first if c[0]=='build');tag=build[2]
+    assert len(tag.split(':')[1])==64
+    os.utime(context/'host-preview.py',None)
+    second=run();assert not any(c[0]=='build' for c in second)
+    assert ['image','inspect',tag] in second
+    assert any(c[0]=='run' and '--network' in c and 'none' in c for c in second)
+    assert any(c[:3]==['network','create','--internal'] for c in second)
+    (context/'host-preview.py').write_text('changed fake fixture')
+    third=run();assert next(c for c in third if c[0]=='build')[2]!=tag
+    (context/'bad-link').symlink_to(context/'host-preview.py')
+    assert subprocess.run(['bash',runner,str(context)],env=env,capture_output=True).returncode!=0
+
+
+def test_ui_layer_order_and_checksums_keep_unrelated_wheels_out_of_early_layers():
+    docker=(ROOT/'scripts/docker/Dockerfile.ui-test').read_text()
+    assert 'COPY wheels/ /wheels/' not in docker
+    packages=('vmodel_contracts','interview_engine','spec_generator','delivery_api')
+    positions=[docker.index('COPY wheels/'+p+'-*.whl') for p in packages]
+    assert positions==sorted(positions)
+    assert docker.index('install --with-deps chromium')<positions[0]
+    assert docker.index('COPY wheel-sha256.txt')>positions[-1]
+    for package,role in zip(packages,('contracts','engine','generator','delivery')):
+        assert 'sha256sum --check /app/wheel-sha256-'+role+'.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/'+package+'-*.whl' in docker

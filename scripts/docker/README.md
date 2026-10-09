@@ -137,3 +137,8 @@ An explicit --browser-path may reuse Chromium binaries only; otherwise it
 installs Chromium in temporary scratch. OS browser libraries must already exist.
 This is a dependency-completeness check, not Docker/arm64/read-only-root or
 host-browser bridge certification. Those checks remain separate.
+
+## Next-package build caching
+The host launcher derives a SHA256 image tag from sorted context file names and bytes (not modification times) and reuses that local image when present. The automated network-none/read-only browser gate still runs on every launch before the interactive fake preview. Symlink contexts are rejected. Removing that image forces a rebuild. This keys the supplied context, not mutable upstream image/index freshness.
+
+The UI Dockerfile installs pinned Playwright/Chromium first, then separately copies, verifies and installs contracts, engine, generator and delivery wheels in dependency order. Each repo has its own checksum file. Aggregate wheel-sha256.txt remains unchanged in shape and is checked again after all installs, followed by pip check. Constraints apply to every install. A changed repo wheel invalidates its layer and those below it; changing constraints or the base image invalidates earlier layers too. These are cache design guarantees, not a measured speedup. Actual Docker build timing still needs a host run.
