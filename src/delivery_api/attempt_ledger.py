@@ -43,6 +43,8 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
     # Shared owner lock serializes independent processes, not just one API worker.
     lock_key=int.from_bytes(hashlib.sha256(owner.encode()).digest()[:8],'big',signed=True)
     store._db.execute('SELECT pg_advisory_xact_lock(?)',(lock_key,)).fetchone()
+    from .suspension_policy import require_task_operation
+    require_task_operation(store,'provider.reserve')
     limits=store._db.execute('SELECT * FROM admission_limits WHERE owner_id=?',(owner,)).fetchone()
     if not limits:raise AdmissionDenied('reviewed owner admission configuration missing')
     fingerprint=hashlib.sha256(json.dumps({'job':job_id,'quote':quote,'request':request_digest},sort_keys=True).encode()).hexdigest()
@@ -76,6 +78,8 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
     row=store._db.execute('SELECT * FROM provider_attempts WHERE attempt_id=? FOR UPDATE',(attempt_id,)).fetchone()
     if not row:raise AdmissionDenied('owner attempt not found')
     if action=='start':
+        from .suspension_policy import require_task_operation
+        require_task_operation(store,'provider.dispatch')
         _job(store,row['job_id'])
         if row['state']!='reserved':raise AdmissionDenied('attempt already dispatched or closed')
         if require_prepaid:

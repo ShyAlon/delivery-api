@@ -46,3 +46,12 @@ def suspension_proposal(*,account,suspend,reason):
             'replay-safe request key','no call abortion or automatic restart']}
     proposal['review_digest']=hashlib.sha256(json.dumps(proposal,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     return proposal
+
+
+def require_task_operation(store,action):
+    """Call under the owner admission transaction lock, never during settlement."""
+    from .tenancy import current_scope,TenantAccessDenied
+    row=store._db.execute('SELECT suspended FROM user_task_policy WHERE owner_id=?',
+        (current_scope().owner_id,)).fetchone()
+    if not action_allowed(suspended=row['suspended'] if row else False,action=action):
+        raise TenantAccessDenied('Task operations suspended; sign-in, communication and read/export remain available')

@@ -80,7 +80,14 @@ def _transactional(method):
         with self._postgres.transaction() as connection:
             connection.execute('SAVEPOINT operation_start')
             token = self._connection.set(connection)
-            try: return method(self,*args,**kwargs)
+            try:
+                action=_TASK_ENTRY_OPERATIONS.get(method.__name__)
+                if action:
+                    from .prepaid import owner_lock
+                    from .suspension_policy import require_task_operation
+                    owner_lock(self)
+                    require_task_operation(self,action)
+                return method(self,*args,**kwargs)
             finally: self._connection.reset(token)
     return call
 
@@ -422,6 +429,21 @@ class PostgresStore(SQLiteStore):
     def _unsupported(self,*args,**kwargs):
         raise TenantAccessDenied('local authentication or quota provisioning unavailable on user connection')
 
+
+# User-entry mutations and new work claims only. Nested accepted-worker writes,
+# progress/usage evidence and completion remain available. Never gate settlement.
+_TASK_ENTRY_OPERATIONS={
+ 'create_task':'task.create','rename_task':'task.edit','delete_task':'task.delete',
+ 'tombstone_stopped_task':'task.delete','request_task_stop':'task.stop',
+ 'configure_simulation':'task.simulate','set_gate_open':'task.gate.decide',
+ 'decide_gate':'task.gate.decide','prepare_gate_dispatch':'task.gate.decide',
+ 'add_review_comment':'task.decision.comment','save_decision_draft':'task.decision.draft',
+ 'set_model_route':'task.model_route','set_model_default':'task.model_route',
+ 'begin_interview_start':'task.start','enqueue_worker':'task.start',
+ 'claim_worker':'worker.claim','reauthorize_worker':'worker.claim',
+ 'prepare_phase_retry':'task.retry','claim_failed_needs_retry':'task.retry',
+ 'claim_failed_phase_retry':'task.retry','prepare_rerun':'task.rerun',
+ 'upsert_feedback':'task.edit','update_feedback':'task.edit','delete_feedback':'task.edit'}
 
 # Only explicit public operations wrap, not helpers. A newly added inherited
 # method also gets a transaction by default; no unsafe unscoped SQL pathway.
