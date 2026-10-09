@@ -124,3 +124,6 @@ Targeted pure38 pass; fresh disposable UTF8 PG253/no skips/all22 migrations/1 wa
 
 ## Execution-generation initialization design gap
 Recorded immutable execution-generation anchor requirement in the lineage design. Existing Stop marker only supports requested=true; fresh later generations must not forge a false marker or mutate fence generation ad hoc. Shared engine/generator loader and reviewed initialization remain unimplemented, with public restart unavailable. Documentation-only unit, diff check clean; no new test result claimed.
+
+## Coordinated anchor contracts wheel refresh
+Rebuilt vendor contracts wheel from contracts95b41c1 with private execution-anchor module. SHA256 bc8cb30c63719e106451d514532b28a30d8e69fbcce8a771121eab2369f0391e, version0.28.0 unchanged. Offline uv lock regeneration/check and project wheel build passed, diff check clean. This records build/lock checks only; clean installed current four-wheel context verification is next, not claimed complete. Frozen v3 untouched, no deployment. Existing PR description correctly records pre-refresh packaged limitation at creation time.
