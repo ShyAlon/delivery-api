@@ -18,5 +18,6 @@ COPY wheel-sha256-delivery.txt /app/
 RUN sha256sum --check /app/wheel-sha256-delivery.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/delivery_api-*.whl
 COPY wheel-sha256.txt /app/
 RUN sha256sum --check /app/wheel-sha256.txt && pip check
-COPY source-manifest.json ui-smoke.py ui-fixtures.py host-preview.py /app/
-CMD ["python", "/app/ui-smoke.py"]
+COPY source-manifest.json ui-smoke.py ui-fixtures.py host-preview.py acceptance-smoke.py /app/
+COPY private-ui/ /app/private-ui/
+CMD ["sh", "-c", "python /app/ui-smoke.py && python /app/acceptance-smoke.py"]

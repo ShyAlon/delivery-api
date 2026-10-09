@@ -86,6 +86,8 @@ def verify(context, *, browser_path=None):
                 raise ValueError('explicit installed browser directory required')
             env['PLAYWRIGHT_BROWSERS_PATH'] = str(browser_path)
         subprocess.run([str(python), str(context / 'ui-smoke.py')], check=True, cwd=root, env=env)
+        if (context/'acceptance-smoke.py').is_file():
+            subprocess.run([str(python), str(context/'acceptance-smoke.py')],check=True,cwd=root,env=env)
     print(json.dumps({'clean_installed_wheel_ui_smoke': 'passed', 'docker_executed': False,
                       'system_site_packages': False, 'dev_extras': False}))
 

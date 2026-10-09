@@ -25,13 +25,16 @@ def revision_acceptance_view(*,review,review_sha256,artifact,spent_credits):
         document=SRSDocument.model_validate(artifact)
         if document.session_id!=review['semantic_session_id'] or document.intent_model_ref!=review['semantic_session_id']:
             raise ValueError('acceptance artifact semantic source differs')
-        rows=[{'title':r.title,'description':r.statement} for r in document.functional+document.non_functional]
+        rows=[{'title':'Purpose','description':document.purpose},{'title':'Scope','description':document.scope_summary}]+[{'title':r.title,'description':r.statement} for r in document.functional+document.non_functional]
+        rows += [{'title':'Constraint','description':c} for c in document.constraints]+[{'title':'Open Question','description':q} for q in document.open_questions]
         label='Requirements'
     elif phase=='architecture':
         from spec_generator.graph import validated_architecture
         document=validated_architecture(artifact)
         if document.session_id!=review['semantic_session_id']:raise ValueError('acceptance artifact semantic source differs')
         rows=[{'title':c.name,'description':c.responsibility} for c in document.components]
+        rows += [{'title':d.title,'description':d.decision+' '+d.rationale} for d in document.decisions]
+        rows += [{'title':key.replace('_',' ').title(),'description':value} for key,value in document.non_functionals.items()]
         label='Architecture'
     else:raise ValueError('implemented acceptance phase required')
     if not rows:raise ValueError('founder-readable regenerated result required')
@@ -43,5 +46,5 @@ def revision_acceptance_view(*,review,review_sha256,artifact,spent_credits):
         'choices':[{'value':'approve','title':'Approve','effect':'Accepts this result as shown and continues to the next phase.'},
             {'value':'edit','title':'Ask For Changes','effect':'Regenerates this phase using your note. Review the new result before moving on.'}],
         'default_choice':'approve','reapproval_titles':[PHASE_BY_KEY[key].label.title() for key in review['phases_requiring_reapproval']],
-        'spent_credits':spent_credits,'extra_cost_warning':review['cost_review']['warning'],
+        'spent_credits':spent_credits,'extra_cost_warning':'Asking For Changes Regenerates This Phase At Extra Cost. '+review['cost_review']['warning'],
         'requires_extra_cost_acknowledgement':True,'previous_generation_preserved':True,'installation_available':False}}

@@ -38,7 +38,10 @@ shutil.copyfile(a.constraints,out/'constraints.txt')
 here=pathlib.Path(__file__).resolve().parent
 shutil.copyfile(here/('Dockerfile.ui-test' if a.ui_test else 'Dockerfile.test'),out/'Dockerfile')
 if a.ui_test:
- for name in ('ui-smoke.py','ui-fixtures.py','host-preview.py','run-host-preview.sh'):shutil.copyfile(here/name,out/name)
+ for name in ('ui-smoke.py','ui-fixtures.py','host-preview.py','run-host-preview.sh','acceptance-smoke.py'):shutil.copyfile(here/name,out/name)
+if a.ui_test:
+ shutil.copytree(here.parent/'private-ui',out/'private-ui')
+ shutil.copyfile(repos['delivery']/'tests/fixtures/revision-source.json',out/'private-ui/revision-source.json')
 shutil.copyfile(here/'smoke.py',out/'smoke.py')
 shutil.copyfile(here/'run-test-image.sh',out/'run-test-image.sh')
 shutil.copyfile(here/'README.md',out/'README.md')

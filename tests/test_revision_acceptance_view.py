@@ -32,3 +32,19 @@ def test_foreign_or_different_artifact_cannot_be_shown_as_reviewed():
     artifact,review=basis()
     with pytest.raises(ValueError,match='differs from retained review'):
         revision_acceptance_view(**review,artifact=artifact|{'session_id':'foreign'},spent_credits=4.2)
+
+
+def test_architecture_view_has_typed_components_and_foreign_source_rejects():
+    from vmodel_contracts.architecture import ArchitectureOverview
+    artifact=ArchitectureOverview.model_validate({'session_id':'s','stack_entries':[],
+        'components':[{'name':'Review Panel','responsibility':'Show Current Result','requirement_ids':['R-1']}],
+        'decisions':[],'non_functionals':{'privacy':'Owner Only'}}).model_dump(mode='json')
+    _,review=basis();body=review['review']|{'phase':'architecture','regenerated_artifact_sha256':hashlib.sha256(json.dumps(artifact,sort_keys=True,separators=(',',':')).encode()).hexdigest()}
+    digest=hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    result=revision_acceptance_view(review=body,review_sha256=digest,artifact=artifact,spent_credits=0)
+    assert result['view']['phase_title']=='Architecture'
+    assert {'title':'Review Panel','description':'Show Current Result'} in result['view']['artifact_rows']
+    assert 'R-1' not in json.dumps(result['view'])
+    body['semantic_session_id']='foreign';digest=hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    with pytest.raises(ValueError,match='semantic source'):
+        revision_acceptance_view(review=body,review_sha256=digest,artifact=artifact,spent_credits=0)
