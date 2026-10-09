@@ -260,3 +260,6 @@ Added private review presenter requiring exact immutable review digest, typed re
 Pure6 pass, bounded result below; no DB changes, prior PG260/all24 is last actual result. Different artifact and invalid/boolean/nonfinite costs reject. SRS current typed fixture used; architecture presenter is implemented against existing typed graph model but still needs direct fixture coverage. No public gate lift/paid/session/deploy effects, owner-visible route still absent.
 
 Acceptance-view bounded recheck: 713 passed, 183 skipped, 5 deselected, 1 warning in 30.68s
+
+## Reusable hermetic acceptance renderer
+Extracted local renderer from fixture HTML, now takes explicit private view/binding and adapter seams. Real typed presenter fixture renders artifact rows/current spent value. Submit retains exact review basis and ack; rejects different basis, missing/unverified outcome or unchanged next-review basis. Pending draft/submit locks all inputs to prevent choice/guidance race. Draft and submitted storage scope to review digest; failure preserves text. No server adapter, public route/import or owner acceptance created. HTML fictional adapters only. Browser2 pass including typed presenter and stale-basis rejection, retained input/pending lock and mobile width; actual desktop/mobile pixels inspected and readable. No claim of production acceptance or completed chain.

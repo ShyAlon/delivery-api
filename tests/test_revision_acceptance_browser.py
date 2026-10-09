@@ -34,3 +34,28 @@ def test_private_acceptance_founder_inputs_and_mobile_pixels(tmp_path):
         assert page.locator('[value=approve]').is_checked() and not page.locator('#ack').is_checked()
         assert '4.20 Credits' in page.locator('#cost').inner_text()
         browser.close()
+
+
+def test_typed_current_review_binding_rejects_stale_outcome_and_locks_inputs():
+    from test_revision_acceptance_view import basis
+    from delivery_api.revision_acceptance_view import revision_acceptance_view
+    artifact,review=basis()
+    view=revision_acceptance_view(**review,artifact=artifact,spent_credits=7.5)
+    html=Path(__file__).parents[1]/'scripts/private-ui/revision-acceptance.html'
+    with sync_playwright() as p:
+        browser=p.chromium.launch(headless=True)
+        page=browser.new_page(viewport={'width':1100,'height':1050});page.goto(html.as_uri())
+        page.evaluate('''review=>{window.bound=window.createRevisionAcceptance({root:document.querySelector('#page'),review,adapter:{async saveDraft(){},submit(input){window.sent=input;return new Promise(resolve=>window.resolveSubmission=resolve)}}})}''',view)
+        assert artifact['functional'][0]['statement'] in page.locator('#page').inner_text()
+        assert '7.50 Credits' in page.locator('#cost').inner_text()
+        page.locator('[value=edit]').check();page.locator('#change').fill('Keep Bound Guidance');page.locator('#ack').check();page.locator('#continue').click()
+        assert page.locator('#change').is_disabled() and page.locator('#ack').is_disabled()
+        assert page.evaluate('window.sent.review_sha256')==review['review_sha256']
+        page.evaluate("window.resolveSubmission({review_sha256:'f'.repeat(64),complete:true})")
+        page.wait_for_function("document.querySelector('#status').textContent.includes('Review Changed')")
+        assert page.locator('#change').input_value()=='Keep Bound Guidance' and page.locator('#continue').is_enabled()
+        assert page.locator('h1').inner_text()=='Review Regenerated Requirements'
+        page.screenshot(path='/tmp/revision-acceptance-bound-desktop.png',full_page=True)
+        page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/tmp/revision-acceptance-bound-mobile.png',full_page=True)
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        browser.close()
