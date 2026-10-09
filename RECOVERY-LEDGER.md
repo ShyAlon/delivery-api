@@ -47,3 +47,6 @@ Recovered missing source-written tests and baseline back-office fixtures. Reconc
 
 ## Recovered browser checks
 Login-layout, validation-panel and recovered decision-page modules44 passed. Inspected latest final-approval checklist desktop1252x917 and mobile390x844 screenshots: readable required reason/checklist, continuation and rework controls, no clipped checklist text. Long UI/tenant-login modules and missing three earlier decision tests remain open.
+
+## Recovery dependency pin and lock
+Restored explicit contracts0.28.0 metadata/UV local-wheel source from archived Oct9 pin preparation semantics, but built a new wheel from current recovered contracts5bdc1a0, with fresh SHA provenance in vendor/RECOVERY-WHEEL.md. Old wheel records retained as history. Regenerated uv.lock without blanket upgrades; uv lock --check passed. Offline project wheel builds passed; all three metadata files require contracts==0.28.0. Frozen-v3 artifacts untouched. Fresh installed rebuilt-wheel UI verification remains the next check, not claimed done.

@@ -11,7 +11,7 @@ license = { text = "Proprietary" }
 authors = [{ name = "Shy Alon" }]
 dynamic = ["version"]
 dependencies = [
-  "vmodel-contracts @ git+https://github.com/ShyAlon/vmodel-contracts.git@6e320e31c03565af361288a18fec046c51e1a126",
+  "vmodel-contracts==0.28.0",
   "fastapi>=0.110",
   "uvicorn>=0.29",
   "pydantic>=2.6,<3",
@@ -44,3 +44,6 @@ vmodel-server = "delivery_api.__main__:main"
 # bounds silent engine subprocesses itself; this catches anything else.
 timeout = 300
 markers = ["engine_integration: requires an installed interview-engine; run explicitly in the full local integration check", "producer_integration: requires a configured spec-generator environment; run in the full local integration check"]
+
+[tool.uv.sources]
+vmodel-contracts = { path = "vendor/vmodel_contracts-0.28.0-py3-none-any.whl" }
