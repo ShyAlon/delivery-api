@@ -397,6 +397,45 @@ class PostgresStore(SQLiteStore):
             self.audit(scope.owner_id,'gate.revision_preparation_journal',task_id,{'lineage_id':lineage_id,'state':state,'event_sha256':event['event_sha256']})
             return event
 
+    def prepare_revision_staging(self,task_id,*,lineage_id,expected_previous_sha256,artifacts_base):
+        """Prepare private files and append staged receipt, never install.
+
+        Called only inside captured original-source cooperative writer scope.
+        Filesystem failure retains private partial evidence for explicit review;
+        DB event is atomic, not a cross-filesystem/database transaction.
+        """
+        from .worker_capability import WorkerCapability
+        from .revision_stage_writer import prepare_private_revision_stage
+        from .gate_revision import closed_revision_preflight
+        from .revision_evidence import read_revision_artifacts
+        from .tenancy import session_root
+        from pathlib import Path
+        with self._task_operation_guard('task.rerun'):
+            if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():raise KeyError(task_id)
+            cap=WorkerCapability.capture(self,task_id);cap.validate(self)
+            row=self._db.execute('SELECT * FROM closed_revision_lineage_plans WHERE lineage_id=? AND task_id=?',(lineage_id,task_id)).fetchone()
+            if not row:raise KeyError(lineage_id)
+            latest=self._db.execute('SELECT * FROM closed_revision_promotion_events WHERE lineage_id=? ORDER BY sequence DESC LIMIT 1',(lineage_id,)).fetchone()
+            if not latest or latest['state']!='prepared' or latest['event_sha256']!=expected_previous_sha256:
+                raise ValueError('exact prepared staging journal CAS required')
+            review=self._db.execute('SELECT * FROM closed_revision_source_reviews WHERE lineage_id=?',(lineage_id,)).fetchone()
+            if not review:raise ValueError('retained upstream review snapshot required before staging')
+            intent=self._db.execute('SELECT * FROM closed_revision_restart_intents WHERE intent_id=? AND task_id=?',(row['intent_id'],task_id)).fetchone()
+            if not intent:raise KeyError(row['intent_id'])
+            options=json.loads(intent['payload'])['options'];lineage=json.loads(row['payload'])
+            snapshot={'snapshot':json.loads(review['payload']),'snapshot_sha256':review['fingerprint']}
+            def current():
+                cap.validate(self)
+                evidence=read_revision_artifacts(self,cap,session_root(Path(artifacts_base),cap.scope,cap.session_id),lineage['phase'],artifacts_base=artifacts_base)
+                live=closed_revision_preflight(self,task_id,options['gate_key'],options['review_revision'],options['draft_id'],artifact_snapshot=evidence)
+                if live['review_digest']!=options['preflight_digest']:raise ValueError('reviewed staging gate/draft evidence changed')
+            current()
+            receipt=prepare_private_revision_stage(self,cap,artifacts_base=artifacts_base,lineage=lineage,
+                lineage_sha256=row['fingerprint'],options=options,review_snapshot=snapshot)
+            current()
+            return self.record_validated_revision_staging(task_id,lineage_id=lineage_id,expected_previous_sha256=expected_previous_sha256,
+                manifest_sha256=receipt['manifest_sha256'],artifacts_base=artifacts_base)
+
     def record_validated_revision_staging(self,task_id,*,lineage_id,expected_previous_sha256,
                                           manifest_sha256,artifacts_base):
         """Bind concrete pinned/typed staged receipt to held journal, no install.

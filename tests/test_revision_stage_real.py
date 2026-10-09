@@ -73,3 +73,87 @@ def test_real_staged_receipt_preserves_source_and_requires_fresh_gate(tmp_path):
     manifest['files']['interview/intent_model.json']=hashlib.sha256((dest/'interview'/'intent_model.json').read_bytes()).hexdigest()
     (dest/'manifest.json').write_text(json.dumps(manifest));args['manifest_sha256']=hashlib.sha256((dest/'manifest.json').read_bytes()).hexdigest()
     with pytest.raises(ValueError,match='upstream bytes differ|validated checkpoint channel'):read_validated_staged_receipt(**args)
+
+
+def private_writer_fixture(tmp_path):
+    import shutil
+    from delivery_api.revision_stage_writer import prepare_private_revision_stage
+    from delivery_api.revision_source_review import read_source_review_snapshot
+    from spec_generator.stop_fence import StopFence
+    from spec_generator.cooperative_run import cli_execution
+    from test_revision_intent import proposal as proposal_fixture
+    args,root,dest,documents,files,manifest,md,original,cap,lineage,ld=build_real_stage_fixture(tmp_path)
+    # Test fixture builder output is removed only here to exercise a genuinely
+    # fresh production writer destination, never runtime recovery behavior.
+    shutil.rmtree(dest)
+    proposal=proposal_fixture()|{'proposal_id':lineage['proposal_id'],'task_id':cap.task_id,'session_id':cap.session_id,
+        'source_checkpoint_id':lineage['source_checkpoint_id'],'artifact':documents['spec/srs.json'],
+        'artifact_sha256':lineage['regenerated_artifact_sha256']}
+    raw=json.dumps(proposal,sort_keys=True,indent=2).encode()
+    (dest.parent.parent/'proposal.json').write_bytes(raw)
+    lineage=lineage|{'proposal_document_sha256':hashlib.sha256(raw).hexdigest()}
+    ld=hashlib.sha256(json.dumps(lineage,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    snapshot=read_source_review_snapshot(None,cap,artifacts_base=tmp_path,lineage=lineage,lineage_sha256=ld)
+    before={name:(root/name).read_bytes() for name in list(documents)+['spec/checkpoints.sqlite']}
+    control=StopFence(root/'interview'/'stop-request.json')
+    kwargs=dict(artifacts_base=tmp_path,lineage=lineage,lineage_sha256=ld,options=args['options'],review_snapshot=snapshot)
+    return before,root,dest,control,cap,kwargs,args
+
+
+def test_private_stage_writer_preserves_exact_bytes_and_never_installs(tmp_path):
+    from delivery_api.revision_stage_writer import prepare_private_revision_stage
+    from spec_generator.cooperative_run import cli_execution
+    before,root,dest,control,cap,kwargs,args=private_writer_fixture(tmp_path)
+    snapshot=kwargs['review_snapshot'];lineage=kwargs['lineage'];ld=kwargs['lineage_sha256']
+    with cli_execution(control,None):
+        receipt=prepare_private_revision_stage(None,cap,**kwargs)
+    assert not receipt['installed'] and not receipt['dispatch_started'] and not receipt['source_mutated']
+    assert control.generation==1 and not (dest/'execution-generation.json').exists()
+    assert not (dest/'interview'/'stop-request.json').exists()
+    assert before=={name:(root/name).read_bytes() for name in before}
+    for name in snapshot['snapshot']['upstream_sha256']:assert (dest/name).read_bytes()==before[name]
+    args.update(lineage=lineage,lineage_sha256=ld,manifest_sha256=receipt['manifest_sha256'])
+    assert read_validated_staged_receipt(**args)=={k:receipt[k] for k in ('manifest_sha256','checkpoint_id')}
+    with cli_execution(control,None):
+        with pytest.raises(ValueError,match='stage already exists'):
+            prepare_private_revision_stage(None,cap,**kwargs)
+    assert before=={name:(root/name).read_bytes() for name in before}
+
+
+@pytest.mark.parametrize('change',['no_fence','foreign_fence','source_bytes','proposal_bytes','escape','symlink_stage'])
+def test_private_writer_rejects_bad_basis_before_destination_write(tmp_path,change):
+    from delivery_api.revision_stage_writer import prepare_private_revision_stage
+    from spec_generator.stop_fence import StopFence
+    from spec_generator.cooperative_run import cli_execution
+    before,root,dest,control,cap,kwargs,args=private_writer_fixture(tmp_path)
+    if change=='source_bytes':(root/'spec'/'needs.json').write_text(json.dumps(json.loads(before['spec/needs.json']),indent=2))
+    if change=='proposal_bytes':(dest.parent.parent/'proposal.json').write_text('{}')
+    if change=='escape':
+        kwargs['lineage']=kwargs['lineage']|{'execution_session_id':'../escape'}
+        kwargs['lineage_sha256']=hashlib.sha256(json.dumps(kwargs['lineage'],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        kwargs['review_snapshot']['snapshot']['lineage_sha256']=kwargs['lineage_sha256']
+        kwargs['review_snapshot']['snapshot_sha256']=hashlib.sha256(json.dumps(kwargs['review_snapshot']['snapshot'],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    if change=='symlink_stage':
+        dest.parent.rmdir();outside=tmp_path/'outside';outside.mkdir();dest.parent.symlink_to(outside,target_is_directory=True)
+    if change=='no_fence':
+        with pytest.raises(ValueError):prepare_private_revision_stage(None,cap,**kwargs)
+    else:
+        if change=='foreign_fence':control=StopFence(tmp_path/'foreign-stop.json')
+        with cli_execution(control,None):
+            with pytest.raises((ValueError,OSError,PermissionError)):prepare_private_revision_stage(None,cap,**kwargs)
+    assert not dest.exists()
+    assert (root/'spec'/'checkpoints.sqlite').read_bytes()==before['spec/checkpoints.sqlite']
+
+
+def test_private_writer_retains_partial_evidence_after_failure_no_auto_retry(tmp_path,monkeypatch):
+    from delivery_api.revision_stage_writer import prepare_private_revision_stage
+    from spec_generator.cooperative_run import cli_execution
+    from spec_generator import revision_checkpoint
+    before,root,dest,control,cap,kwargs,args=private_writer_fixture(tmp_path)
+    def fail(**kw):raise ValueError('simulated staged checkpoint failure')
+    monkeypatch.setattr(revision_checkpoint,'stage_private_lineage_checkpoint',fail)
+    with cli_execution(control,None):
+        with pytest.raises(ValueError,match='simulated'):prepare_private_revision_stage(None,cap,**kwargs)
+        assert dest.exists() and (dest/'spec'/'checkpoints.sqlite').exists() and not (dest/'manifest.json').exists()
+        with pytest.raises(ValueError,match='explicit reconciliation'):prepare_private_revision_stage(None,cap,**kwargs)
+    assert before=={name:(root/name).read_bytes() for name in before}

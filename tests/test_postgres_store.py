@@ -787,8 +787,8 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             held=store.retain_closed_revision_restart_intent(tid,request_key=uuid.uuid4().hex,options=options,proposal=proposal,
                 approval_reference='constructed-test-review-not-founder-approval',read_current_evidence=lambda:evidence)
             planned=store.retain_closed_revision_lineage_plan(tid,intent_id=held['intent_id'],semantic_session_id='s',
-                new_execution_session_id='next-'+uuid.uuid4().hex,retained_proposal={'proposal':proposal,'document_sha256':'d'*64})
-            saved.update(intent_id=held['intent_id'],lineage_id=planned['lineage_id'])
+                new_execution_session_id='next-'+uuid.uuid4().hex,retained_proposal={'proposal':proposal,'document_sha256':hashlib.sha256(json.dumps(proposal,sort_keys=True,indent=2).encode()).hexdigest()})
+            saved.update(intent_id=held['intent_id'],lineage_id=planned['lineage_id'],proposal=proposal)
             with store._postgres.transaction() as conn:
                 return json.loads(conn.execute('SELECT payload FROM closed_revision_lineage_plans WHERE lineage_id=%s',(planned['lineage_id'],)).fetchone()['payload'])
         built=build_real_stage_fixture(tmp_path,cap=cap,options_override=o,lineage_factory=lineage_factory)
@@ -798,8 +798,14 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         assert review['accepted'] is False
         first=store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=None,state='prepared',
             evidence={'intent_id':saved['intent_id'],'lineage_id':lid})
-        staged=store.record_validated_revision_staging(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],
-            manifest_sha256=md,artifacts_base=tmp_path)
+        import shutil
+        from spec_generator.stop_fence import StopFence
+        from spec_generator.cooperative_run import cli_execution
+        shutil.rmtree(dest)  # Only test-built data; runtime never deletes/retries partial stage.
+        (dest.parent.parent/'proposal.json').write_bytes(json.dumps(saved['proposal'],sort_keys=True,indent=2).encode())
+        with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+            staged=store.prepare_revision_staging(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],artifacts_base=tmp_path)
+        md=staged['event']['evidence']['manifest_sha256']
         assert staged['event']['state']=='staged' and store.task(tid)==before
         assert store.session_binding(args['lineage']['execution_session_id']) is None
         # Equal JSON with different raw bytes cannot pass retained review.
