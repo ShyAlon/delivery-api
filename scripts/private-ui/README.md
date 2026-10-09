@@ -1,0 +1,7 @@
+# Private Gate/Edit Acceptance Preview
+
+Hermetic fictional UI fixture only. Not loaded by the application, served by any route, packaged into a published preview or connected to installation/provider APIs. Open revision-acceptance.html locally for developer inspection. No work will run or credits be charged. Browser-local draft/submission storage uses private test keys, not real approval records.
+
+Full-page review, current phase/result/choice explanations, default Approve, change input only when Ask For Changes is chosen, closed disclosures, cost warning and explicit acknowledgement, missing input list with focus/scroll, saving/error/retry/success states, retained input and automatic next-review progression. Ask For Changes returns to the same phase's regenerated review, not downstream approval. Approve moves to the next fictional phase. Spent-so-far is a fictional fixture value, not an account balance. No raw contract JSON or identifiers.
+
+Browser test uses local file only. Desktop/mobile screenshots inspected for readable stacked layout and no horizontal overflow. Initial hidden disclosure text was not visibly retained after auto-advance; visible submitted-decision summary added and retested. No public route/live acceptance/installation authority is established by this page. Production binding must use exact current retained review digest and authenticated acceptance, not this fixture's local state.
