@@ -397,6 +397,58 @@ class PostgresStore(SQLiteStore):
             self.audit(scope.owner_id,'gate.revision_preparation_journal',task_id,{'lineage_id':lineage_id,'state':state,'event_sha256':event['event_sha256']})
             return event
 
+    def retain_revision_installation_review(self,task_id,*,lineage_id,expected_staged_event_sha256,artifacts_base):
+        """Retain exact current installation review basis, not acceptance.
+
+        Caller holds original source and private destination writer exclusion.
+        No action route, approval flag or install permission is created here.
+        """
+        from .worker_capability import WorkerCapability
+        from .revision_install_review import installation_review_payload
+        from .revision_source_review import read_source_review_snapshot
+        from .revision_proposal import read_retained_revision_proposal
+        from .revision_stage_evidence import read_validated_staged_receipt
+        from .revision_evidence import read_revision_artifacts
+        from .gate_revision import closed_revision_preflight
+        from .tenancy import session_root
+        from pathlib import Path
+        import hashlib
+        with self._task_operation_guard('task.rerun'):
+            if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():raise KeyError(task_id)
+            cap=WorkerCapability.capture(self,task_id);cap.validate(self)
+            row=self._db.execute('SELECT * FROM closed_revision_lineage_plans WHERE lineage_id=? AND task_id=?',(lineage_id,task_id)).fetchone()
+            if not row:raise KeyError(lineage_id)
+            event=self._db.execute('SELECT * FROM closed_revision_promotion_events WHERE lineage_id=? ORDER BY sequence DESC LIMIT 1',(lineage_id,)).fetchone()
+            if not event or event['state']!='staged' or event['event_sha256']!=expected_staged_event_sha256:
+                raise ValueError('exact current staged journal required for review')
+            payload=json.loads(event['payload'])
+            if hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=event['event_sha256']:
+                raise ValueError('staged event digest differs from payload')
+            source=self._db.execute('SELECT * FROM closed_revision_source_reviews WHERE lineage_id=?',(lineage_id,)).fetchone()
+            intent=self._db.execute('SELECT * FROM closed_revision_restart_intents WHERE intent_id=? AND task_id=?',(row['intent_id'],task_id)).fetchone()
+            if not source or not intent:raise ValueError('held source review and intent required')
+            lineage=json.loads(row['payload']);options=json.loads(intent['payload'])['options']
+            root=session_root(Path(artifacts_base),cap.scope,cap.session_id)
+            def current():
+                cap.validate(self)
+                snapshot=read_source_review_snapshot(self,cap,artifacts_base=artifacts_base,lineage=lineage,lineage_sha256=row['fingerprint'])
+                if snapshot!={'snapshot':json.loads(source['payload']),'snapshot_sha256':source['fingerprint']}:
+                    raise ValueError('installation review source differs from retained snapshot')
+                proposal=read_retained_revision_proposal(self,cap,root,lineage['proposal_id'],artifacts_base=artifacts_base,options=options)
+                receipt=read_validated_staged_receipt(self,cap,artifacts_base=artifacts_base,lineage=lineage,
+                    lineage_sha256=row['fingerprint'],manifest_sha256=payload['evidence']['manifest_sha256'],options=options)
+                if receipt!=payload['evidence']:raise ValueError('installation review receipt differs from staged journal')
+                evidence=read_revision_artifacts(self,cap,root,lineage['phase'],artifacts_base=artifacts_base)
+                preflight=closed_revision_preflight(self,task_id,options['gate_key'],options['review_revision'],options['draft_id'],artifact_snapshot=evidence)
+                if preflight['review_digest']!=options['preflight_digest']:raise ValueError('installation review gate/draft basis changed')
+                return installation_review_payload(lineage=lineage,lineage_sha256=row['fingerprint'],
+                    proposal_document_sha256=proposal['document_sha256'],source_snapshot_sha256=source['fingerprint'],
+                    staged_receipt=receipt,staged_event_sha256=event['event_sha256'])
+            review=current()
+            if current()!=review:raise ValueError('installation review evidence changed across retention')
+            self.retain_decision_review(task_id,'revision-install:'+lineage_id,review['review_sha256'],review['review'])
+            return review
+
     def prepare_revision_staging(self,task_id,*,lineage_id,expected_previous_sha256,artifacts_base):
         """Prepare private files and append staged receipt, never install.
 

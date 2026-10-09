@@ -806,10 +806,21 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
             staged=store.prepare_revision_staging(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],artifacts_base=tmp_path)
         md=staged['event']['evidence']['manifest_sha256']
+        installation_review=store.retain_revision_installation_review(tid,lineage_id=lid,
+            expected_staged_event_sha256=staged['event_sha256'],artifacts_base=tmp_path)
+        assert not installation_review['review']['accepted'] and not installation_review['review']['installation_available']
+        assert store.decision_review(tid,'revision-install:'+lid,installation_review['review_sha256'])==installation_review['review']
+        assert store.retain_revision_installation_review(tid,lineage_id=lid,
+            expected_staged_event_sha256=staged['event_sha256'],artifacts_base=tmp_path)==installation_review
+        with pytest.raises(ValueError,match='current staged journal'):
+            store.retain_revision_installation_review(tid,lineage_id=lid,expected_staged_event_sha256='f'*64,artifacts_base=tmp_path)
+
         assert staged['event']['state']=='staged' and store.task(tid)==before
         assert store.session_binding(args['lineage']['execution_session_id']) is None
         # Equal JSON with different raw bytes cannot pass retained review.
         (root/'spec'/'needs.json').write_text(json.dumps(documents['spec/needs.json'],indent=2))
+        with pytest.raises(ValueError,match='source differs'):
+            store.retain_revision_installation_review(tid,lineage_id=lid,expected_staged_event_sha256=staged['event_sha256'],artifacts_base=tmp_path)
         with pytest.raises(ValueError,match='differs from retained review snapshot'):
             store.record_validated_revision_staging(tid,lineage_id=lid,expected_previous_sha256=staged['event_sha256'],
                 manifest_sha256=md,artifacts_base=tmp_path)
