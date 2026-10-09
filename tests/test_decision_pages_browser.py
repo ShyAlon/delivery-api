@@ -137,9 +137,10 @@ def test_continue_names_unfinished_inputs_and_boxes_do_not_repeat_their_title(pa
  expect(boxes.nth(0).locator('.state-badge')).to_have_text('Leave Open')
  boxes.nth(0).evaluate('d=>d.open=true');p.locator('[data-founder-group]').first.locator('label.pill').nth(2).click();expect(boxes.nth(0).locator('.state-badge')).to_have_text('Decide Later')
  boxes.nth(0).evaluate('d=>d.open=false')
- p.get_by_role('button',name='Continue',exact=True).click()
- status=p.locator('#review-status');expect(status).to_contain_text('Finish 1 open input');expect(status).to_contain_text('What styling?');expect(status).to_contain_text('needs a reason')
- assert boxes.nth(0).evaluate('d=>d.open&&d.classList.contains("needs-input")');assert not state['posts']
+ expect(p.get_by_role('button',name='Continue',exact=True)).to_be_disabled()
+ status=p.locator('#review-status');checklist=p.locator('#decision-checklist');expect(checklist).to_contain_text('What styling?');expect(checklist).to_contain_text('needs a reason')
+ checklist.locator('[data-jump]').first.click()
+ assert boxes.nth(0).evaluate('d=>d.open');expect(p.locator('[data-founder-reason]').first).to_be_focused();assert not state['posts']
  p.screenshot(path=str(root/'needs-input.png'));p.set_viewport_size({'width':460,'height':900});p.locator('#save-draft').scroll_into_view_if_needed();p.screenshot(path=str(root/'right-panel-narrow.png'));p.set_viewport_size({'width':1249,'height':920})
  p.locator('[data-founder-reason]').first.fill('Ask the designer');p.get_by_role('button',name='Continue',exact=True).click()
  expect(status).to_contain_text('Decision saved');assert state['posts'][0]['founder_inputs'][0]['status']=='deferred'
@@ -167,8 +168,8 @@ def test_reason_is_optional_when_the_input_blocks_nothing(page):
  g=p.locator('[data-founder-group]')
  g.nth(0).locator('label.pill').nth(1).click();boxes.nth(0).locator('[data-founder-answer]').fill('Friendly')
  g.nth(1).locator('label.pill').nth(2).click()
- p.get_by_role('button',name='Continue',exact=True).click()
- status=p.locator('#review-status');expect(status).to_contain_text('Finish 1 open input');expect(status).to_contain_text('What flow?');expect(status).not_to_contain_text('What tone?');assert not state['posts']
+ expect(p.get_by_role('button',name='Continue',exact=True)).to_be_disabled()
+ status=p.locator('#review-status');checklist=p.locator('#decision-checklist');expect(checklist).to_contain_text('What flow?');expect(checklist).not_to_contain_text('What tone?');assert not state['posts']
  boxes.nth(1).locator('[data-founder-reason]').fill('Ask designer');p.get_by_role('button',name='Continue',exact=True).click()
  expect(status).to_contain_text('Decision saved')
  sent={x['item_id']:x for x in state['posts'][0]['founder_inputs']};assert sent['FD-free']['reason']=='' and sent['FD-free']['decision']=='Friendly' and 'reasonRequired' not in sent['FD-free']
@@ -625,3 +626,32 @@ def test_flagged_inputs_shared_checklist_explains_missing_choice_and_jump(page):
  p.wait_for_timeout(600)
  expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_in_viewport()
  p.screenshot(path='/downloads/findings-checklist-mobile.png')
+
+
+def test_final_approval_shared_checklist_answer_reason_draft_and_leave_open(page):
+ p,base,root=page;state=fake(p);state['current']=review('wait-review','interview_approval')
+ state['current']['decision']['context']['evidence']['intent_model']['founder_register']={'items':[{'item_id':'FD-style','data_class':'styling','status':'open','question':'What styling?','owner':'founder','blocks':['UI']}],'advisories':[]}
+ p.goto(base+'/tasks/concept/decisions/wait-review')
+ expect(p.get_by_role('button',name='Continue',exact=True)).to_be_enabled()
+ box=p.locator('.founder-register details').first;box.evaluate('d=>d.open=true')
+ p.locator('[data-founder-group] label.pill',has_text='Answer It').click()
+ expect(p.locator('#decision-checklist')).to_contain_text('needs an answer')
+ expect(p.locator('#decision-checklist')).to_contain_text('needs a reason')
+ expect(p.get_by_role('button',name='Continue',exact=True)).to_be_disabled()
+ expect(p.locator('#confirm-rework')).to_be_disabled()
+ p.get_by_role('button',name='Save draft',exact=True).click();expect(p.locator('#draft-status')).to_contain_text('Draft saved')
+ p.reload();expect(p.get_by_role('button',name='Continue',exact=True)).to_be_disabled()
+ expect(p.locator('.founder-register .state-badge').first).to_have_text('Answer It')
+ box=p.locator('.founder-register details').first;box.evaluate('d=>d.open=false')
+ p.locator('#decision-checklist [data-jump]').first.click();expect(p.locator('[data-founder-answer]')).to_be_focused()
+ assert box.evaluate('d=>d.open')
+ p.locator('[data-founder-answer]').fill('Calm palette')
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ expect(p.get_by_role('button',name='Continue',exact=True)).to_be_disabled()
+ p.screenshot(path='/downloads/final-approval-checklist-desktop.png')
+ p.set_viewport_size({'width':390,'height':844});p.locator('#decision-checklist').scroll_into_view_if_needed();p.wait_for_timeout(250)
+ assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
+ p.screenshot(path='/downloads/final-approval-checklist-mobile.png')
+ p.locator('[data-founder-group] label.pill',has_text='Leave Open').click()
+ expect(p.get_by_role('button',name='Continue',exact=True)).to_be_enabled()
+ assert not state['posts']
