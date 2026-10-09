@@ -498,3 +498,58 @@ def test_saved_stack_choice_checklist_explains_stale_evidence(page):
  expect(p.locator('#decision-checklist')).to_contain_text('Your saved change updated the evidence')
  expect(p.locator('[data-action=approve]')).to_be_disabled()
  assert len(posts)==1
+
+
+def test_required_next_model_has_checklist_blocker_and_jump(page):
+ p,base,root=page;data=_stack_review()
+ data['review']['stack_decisions']=None
+ data['review']['task']['phase_config']={'specs':{'executor':'generator'}}
+ def route(r):
+  path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
+  if path.endswith('/generator-default/specs'):r.fulfill(json={'model':None,'source':'selection required'});return
+  if path.endswith('/review'):r.fulfill(json=data);return
+  if path=='/api/model-routes':r.fulfill(json={'routes':[{'id':'fake','models':['reviewed-model'],'available':True}]});return
+  if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
+  r.continue_()
+ p.route('**/api/**',route);p.goto(base+'/tasks/t1/gates/gate-architecture')
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ expect(p.locator('#decision-checklist')).to_contain_text('Choose the next phase model')
+ expect(p.locator('.model-panel')).not_to_have_attribute('open','')
+ p.locator('#decision-checklist [data-jump=".model-panel"]').click()
+ expect(p.locator('.model-panel')).to_have_attribute('open','')
+ expect(p.locator('select[name=next_model]')).to_be_visible()
+ p.locator('select[name=next_model]').select_option('fake:reviewed-model')
+ expect(p.locator('[data-action=approve]')).to_be_enabled()
+ expect(p.locator('#decision-checklist')).to_contain_text('Ready to continue')
+ p.locator('select[name=next_model]').select_option('')
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ p.screenshot(path='/downloads/gate-required-model-desktop.png')
+ p.set_viewport_size({'width':390,'height':844})
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ p.screenshot(path='/downloads/gate-required-model-mobile.png')
+
+
+def test_gate_checklist_jump_reveals_collapsed_target_and_moves_focus(page):
+ p,base,root=page;data=_stack_review()
+ def route(r):
+  path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
+  if path.endswith('/review'):r.fulfill(json=data);return
+  if path=='/api/model-routes':r.fulfill(json={'routes':[]});return
+  if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
+  r.continue_()
+ p.route('**/api/**',route);p.goto(base+'/tasks/t1/gates/gate-architecture')
+ panel=p.locator('#stack-panel');expect(panel.locator(':scope > details')).not_to_have_attribute('open','')
+ p.locator('#decision-checklist [data-jump="#stack-panel"]').click()
+ expect(panel.locator(':scope > details')).to_have_attribute('open','')
+ assert p.evaluate('document.activeElement.closest("#stack-panel")!==null')
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ expect(panel.locator('textarea[name=stack-text-0]')).to_be_visible()
+ expect(panel.locator('textarea[name=stack-text-0]')).to_be_focused()
+ p.wait_for_timeout(500)
+ p.screenshot(path='/downloads/gate-checklist-jump-desktop.png')
+ p.set_viewport_size({'width':390,'height':844})
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ p.locator('#decision-checklist [data-jump="#stack-panel"]').click()
+ p.wait_for_timeout(500)
+ expect(panel.locator('textarea[name=stack-text-0]')).to_be_in_viewport()
+ p.screenshot(path='/downloads/gate-checklist-jump-mobile.png')
