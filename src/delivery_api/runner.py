@@ -64,14 +64,56 @@ class ProcessRunner:
         return next((phase for word, phase in sorted(_PHASE_HINTS.items(), key=lambda item: -len(item[0])) if word in lower), fallback)
 
     async def run(self, task_id: str, command: list[str], *, cwd: Path, phase: str = "intent",
+                  env: dict[str,str] | None = None, completion_phases: tuple[str,...] = (),
+                  infer_phase: bool = True, stall_timeout: float | None = None) -> int:
+        from . import config
+        options=dict(cwd=cwd,phase=phase,env=env,completion_phases=completion_phases,
+                     infer_phase=infer_phase,stall_timeout=stall_timeout)
+        if not config.CLOUD_TENANTS:return await self._run(task_id,command,**options)
+        # Only a trusted parent can install the job-bound gateway; no public
+        # environment variable enables it. Descriptor lifetime is the child run.
+        from .producer_admission import current_worker_gateway
+        from .admission_transport import worker_admission_channel
+        from .worker_capability import WorkerCapability
+        from .tenant_files import authorized_session
+        from vmodel_contracts.runtime import artifacts_root
+        capability=WorkerCapability.capture(self.store,task_id);capability.validate(self.store)
+        expected=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),capability.session_id,self.store)/'spec'
+        if '--out' not in command or Path(command[command.index('--out')+1]).resolve()!=expected:
+            raise PermissionError('cloud subprocess output must match authorized session')
+        if (env or {}).get('VMODEL_ARTIFACTS_DIR')!=str(expected.parent.parent):
+            raise PermissionError('cloud subprocess root must match tenant namespace')
+        gateway=current_worker_gateway(self.store,task_id)
+        with worker_admission_channel(gateway) as channel:
+            options['env']={**(env or {}),'VMODEL_ADMISSION_FD':str(channel.fileno())}
+            return await self._run(task_id,command,admission_fds=(channel.fileno(),),**options)
+
+    async def _run(self, task_id: str, command: list[str], *, cwd: Path, phase: str = "intent",
                   env: dict[str, str] | None = None, completion_phases: tuple[str, ...] = (), infer_phase: bool = True,
-                  stall_timeout: float | None = None) -> int:
+                  stall_timeout: float | None = None, admission_fds: tuple[int,...] = ()) -> int:
         if task_id in self.processes:
             raise RuntimeError("task already has a live process")
         launched_phase=phase
         run_started=time.perf_counter()
         out_index=command.index("--out")+1 if "--out" in command else None
         artifact_dir=Path(command[out_index]) if out_index else None
+        from . import config
+        if config.CLOUD_TENANTS:
+            from .worker_capability import WorkerCapability
+            from .tenant_files import authorized_session
+            from vmodel_contracts.runtime import artifacts_root
+            capability=WorkerCapability.capture(self.store,task_id)
+            capability.validate(self.store)
+            expected=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),
+                                        capability.session_id,self.store)/'spec'
+            if artifact_dir is None or artifact_dir.resolve()!=expected:
+                raise PermissionError('cloud subprocess output must match authorized session')
+            if (env or {}).get('VMODEL_ARTIFACTS_DIR')!=str(expected.parent.parent):
+                raise PermissionError('cloud subprocess root must match tenant namespace')
+        if config.CLOUD_TENANTS:
+            from .producer_admission import current_worker_gateway
+            # Guard before phase/event mutations and before child creation.
+            current_worker_gateway(self.store,task_id)
         usage_path=artifact_dir/"usage.jsonl" if artifact_dir else None
         llm_path=artifact_dir/"llm-calls.jsonl" if artifact_dir else None
         from .pricing import line_count
@@ -83,6 +125,7 @@ class ProcessRunner:
             *command, cwd=str(cwd), env={**os.environ, **(env or {})},
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
             start_new_session=(os.name == "posix"),
+            **({"pass_fds":admission_fds} if admission_fds else {}),
         )
         self.processes[task_id] = proc
         self.active_work[task_id]=ActiveWork("subprocess",phase,"running",time.time(),durable_ref=str(proc.pid))
@@ -286,7 +329,7 @@ class ProcessRunner:
             self.processes.pop(task_id, None);self.waiting.discard(task_id);self.pending_decisions.pop(task_id,None);self.active_work.pop(task_id,None);self.interrupted_for_shutdown.discard(task_id);self.pricing_wait_started.pop(task_id,None);self.pricing_wait_seconds.pop(task_id,None);self.pricing_usage_cursor.pop(task_id,None);self.pricing_llm_cursor.pop(task_id,None);self.pricing_wall_cursor.pop(task_id,None);self.pricing_totals.pop(task_id,None);self.pricing_paths.pop(task_id,None)
             # The finished process must release its task slot before the next
             # executable starts. This is the shared process boundary.
-            if continuation_phase is not None and self.on_complete is not None:
+            if not config.CLOUD_TENANTS and continuation_phase is not None and self.on_complete is not None:
                 try:
                     await self.on_complete(task_id, continuation_phase)
                 except Exception as exc:

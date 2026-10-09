@@ -12,7 +12,7 @@ class TaskControlSnapshot(BaseModel):
     version:Literal[2]=2
     task_id:str
     phase_key:str|None
-    mode:Literal["not_started","working","waiting_input","waiting_gate","completed","failed"]
+    mode:Literal["not_started","working","waiting_input","waiting_gate","completed","failed","stop_requested","stopped"]
     owner:Literal["engine","delivery","none"]
     wait_id:str|None=None
     kind:str|None=None
@@ -37,6 +37,17 @@ class TaskControlSnapshot(BaseModel):
 
 def project(task:dict,input_state:dict,engine:EngineSnapshot|None=None,work=None,artifacts:list[dict]|None=None)->TaskControlSnapshot:
     task_id=task["task_id"];phase=task.get("active_phase");state=task.get("state")
+    # Only durable delivery reconciliation can call the whole task stopped.
+    # Engine STOPPED says nothing about producer jobs or held provider usage.
+    engine_stop=bool(engine and engine.task_id==task_id and
+                     engine.process_status in (ProcessStatus.STOP_REQUESTED,ProcessStatus.STOPPED))
+    stopped=('stopped' if state=='stopped' and task.get('stopped_at') is not None
+             else 'stop_requested' if state in ('stop_requested','stopped') or engine_stop else None)
+    if stopped:
+        return TaskControlSnapshot(task_id=task_id,phase_key=phase,mode=stopped,owner="none",
+            revision=f"stop:{task.get('generation',0)}:{stopped}",process_live=False,
+            actions=["delete"] if stopped=="stopped" and task.get("stopped_at") is not None else [],
+            diagnostic={"reason":"accepted calls may still finish and bill; Delete waits for verified quiescence"} if stopped=="stop_requested" else None)
     process_live=bool(input_state.get("process_live"))
     diagnostic=None
     if state=="failed" or (state not in ("not_started","done") and

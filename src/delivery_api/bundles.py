@@ -91,10 +91,11 @@ def _rows(value,*keys):
   for k in keys:
    if isinstance(value.get(k),list):return value[k]
  return []
-def bundle(session:str)->dict:
+def bundle(session:str,*,base:Path|None=None)->dict:
  if not re.fullmatch(r"[A-Za-z0-9._-]+",session):raise ValueError("invalid session")
- base=(root()/session).resolve()
- if base.parent!=root() or not base.is_dir():raise FileNotFoundError(session)
+ supplied=base is not None
+ base=base.resolve() if supplied else (root()/session).resolve()
+ if (not supplied and base.parent!=root()) or not base.is_dir():raise FileNotFoundError(session)
  spec=base/"spec";interview=base/"interview"
  intent=_json(interview/"intent_model.json",{}) or {};conops=_json(interview/"conops.json",{}) or {}
  needs=_first(spec,"needs.json",default={}) or {};srs=_first(spec,"srs.json",default={}) or {};arch=_first(spec,"architecture.json",default={}) or {}

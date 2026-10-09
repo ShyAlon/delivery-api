@@ -69,7 +69,7 @@ export async function api(url,opts={}){
   if(url!=='/auth/refresh' && url!=='/api/auth' && !url.startsWith('/auth/sign') && !url.startsWith('/auth/email-availability'))await renewSessionIfDue();
   const method=(opts.method||'GET').toUpperCase(),timeout=opts.timeout===undefined?(method==='GET'?60000:null):opts.timeout,controller=timeout?new AbortController():null;
   const foregroundRead=method==='GET'&&(/\/api\/tasks\/[^/]+$/.test(url)||/\/api\/tasks\/[^/]+\/artifacts\//.test(url)||/\/api\/sessions/.test(url)||/\/api\/tasks\/[^/]+\/audit$/.test(url));
-  const endWait=(method==='GET'&&!foregroundRead)||url==='/api/client-log'||url==='/auth/refresh'||url.startsWith('/auth/')?()=>{}:beginWait(url);
+  const endWait=opts.inlineProgress||(method==='GET'&&!foregroundRead)||url==='/api/client-log'||url==='/auth/refresh'||url.startsWith('/auth/')?()=>{}:beginWait(url);
   let timedOut=false,timer=timeout?setTimeout(()=>{timedOut=true;controller.abort()},timeout):null,response;
   try{response=await fetch(url,{headers:{'content-type':'application/json'},...opts,signal:opts.signal||(controller&&controller.signal)})}
   catch(error){

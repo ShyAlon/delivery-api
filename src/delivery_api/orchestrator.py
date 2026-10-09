@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from vmodel_contracts.runtime import artifacts_root
-from . import model_routes
+from . import model_routes, config
+from .tenant_files import authorized_session
 from .phases import PHASE_BY_KEY, successor
 
 class ExecutionMode(str,Enum):
@@ -21,6 +22,7 @@ class PhaseOrchestrator:
     def _session(self,task_id:str)->str:
         bound=self.store.engine_session(task_id)
         if bound:return bound
+        if config.CLOUD_TENANTS:raise RuntimeError("authorized session binding required")
         import re
         for event in reversed(self.store.events(task_id)):
             m=re.search(r"(?:^|\s)session:\s*([A-Za-z0-9._-]+)",event.get("message",""))
@@ -34,7 +36,7 @@ class PhaseOrchestrator:
         raise RuntimeError("completed interview did not report its durable session or artifacts path")
 
     def _paths(self,task_id:str):
-        sid=self._session(task_id);root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")) / sid
+        sid=self._session(task_id);root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),sid,self.store)
         return sid,root,root/"interview",root/"spec"
 
     async def continue_after(self,task_id:str,phase:str,*,model_route:str|None=None)->None:
@@ -112,6 +114,15 @@ class PhaseOrchestrator:
         if model_route:
             self.store.set_model_default(task_id,route_value)
         self.store.add_event(task_id,"model_route",f"{phase} uses {route_value} ({source})",phase_key=phase,payload={"route":route,"resolved":route_value,"provider":route,"model":route_value.split(":",1)[1],"mode":mode.value,"source":source})
+        if config.CLOUD_TENANTS:
+            from .worker_capability import WorkerCapability
+            capability=WorkerCapability.capture(self.store,task_id)
+            capability.validate(self.store)
+            # Producer progress and auxiliary files must share the same private
+            # root as the canonical phase output, not the legacy shared root.
+            env['VMODEL_ARTIFACTS_DIR']=str(spec.parent.parent)
+            env['VMODEL_TENANT_OWNER']=capability.scope.owner_id
+            env['VMODEL_PROGRESS_GENERATION']=str(capability.generation)
         code=await self.runner.run(task_id,cmd,cwd=repo,phase=phase,env=env,infer_phase=False)
         activity("orchestrator.exit","Phase subprocess exited",task_id=task_id,phase=phase,exit_code=code)
 

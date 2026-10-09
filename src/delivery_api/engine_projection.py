@@ -11,10 +11,14 @@ class UiMode(IntEnum):
     COMPLETE=30
     ERROR=40
     RESTART_REQUIRED=50
+    STOP_REQUESTED=60
+    STOPPED=70
 
 _INPUT_MODES={InputKind.TEXT:UiMode.TEXT_INPUT,InputKind.CHOICE:UiMode.CHOICE_INPUT,InputKind.APPROVAL:UiMode.APPROVAL_INPUT}
 
 def project(snapshot:EngineSnapshot)->UiMode:
+    if snapshot.process_status==ProcessStatus.STOP_REQUESTED:return UiMode.STOP_REQUESTED
+    if snapshot.process_status==ProcessStatus.STOPPED:return UiMode.STOPPED
     if snapshot.next_step==NextStep.RESTART_REQUIRED:return UiMode.RESTART_REQUIRED
     if snapshot.process_status==ProcessStatus.FAILED:return UiMode.ERROR
     if snapshot.process_status==ProcessStatus.COMPLETED:return UiMode.COMPLETE

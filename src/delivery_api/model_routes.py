@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 
 DEFAULT_OLLAMA_MODEL="phi4"
-DEEPSEEK_MODEL="deepseek-chat"
+DEEPSEEK_MODEL="deepseek-flash"
 
 def ollama_model()->str:
     return os.environ.get("DELIVERY_OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL

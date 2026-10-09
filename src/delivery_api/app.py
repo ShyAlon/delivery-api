@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 from contextlib import asynccontextmanager
 import json
+import jwt
 import signal
 import subprocess
 import threading
@@ -98,6 +99,7 @@ def _recorded_engine_session(task_id:str)->str|None:
     # authoritative; event/path scanning is legacy recovery only.
     recorded=store.engine_session(task_id)
     if recorded:return recorded
+    if config.CLOUD_TENANTS:return None
     for event in reversed(store.events(task_id)):
         match=__import__('re').search(r"(?:^|\s)session:\s*([A-Za-z0-9._-]+)",event.get("message", ""))
         if match:return match.group(1)
@@ -205,7 +207,7 @@ def _reconcile_terminal_http_interview(task_id:str,state:EngineSnapshot)->bool:
     from vmodel_contracts.runtime import artifacts_root
     from vmodel_contracts.interview import IntentModel
     from vmodel_contracts.conops import ConOpsDocument
-    interview=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/state.session_id/"interview"
+    interview=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),state.session_id,store)/"interview"
     try:
         intent=IntentModel.model_validate_json((interview/"intent_model.json").read_text())
         conops=ConOpsDocument.model_validate_json((interview/"conops.json").read_text())
@@ -227,7 +229,7 @@ async def _continue_reconciled_interview(task_id:str)->None:
 
 async def _recover_tasks()->None:
     """Apply one pure recovery plan per task; never assign competing owners."""
-    from .recovery import plan_recovery
+    from .recovery import plan_recovery,flag_orphaned_running
     _reconcile_approved_prefixes()
     for task in store.list_tasks():
         task_id=task["task_id"]
@@ -239,6 +241,8 @@ async def _recover_tasks()->None:
             try:
                 state=await run_in_threadpool(engine_client.snapshot,session)
             except EngineClientError as exc:
+                if exc.http_status==404:
+                    flag_orphaned_running(store,task_id,evidence='engine_session_not_found')
                 if exc.http_status==422 and "legacy session has no pinned model route" in exc.error.detail.lower():
                     activity("engine.recovery.legacy_unpinned","Historical interview cannot be restored under session-owned routing; preserving it",task_id=task_id,session_id=session,status=exc.http_status)
                 else:
@@ -280,7 +284,7 @@ async def _recover_tasks()->None:
                 else:
                     now=store.task(task_id)
                     phase_states={phase["phase_key"]:phase["state"] for phase in now["phases"]}
-                    path=__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"
+                    path=authorized_session(__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"
                     if now["active_phase"] not in ("intent","conops"):
                         reason="downstream_already_active"
                     elif phase_states["conops"] in ("approved","done"):
@@ -325,6 +329,8 @@ async def _recover_tasks()->None:
             runner.pause_for_requirement(task_id,plan.phase or task.get("active_phase") or "architecture",requirement)
         elif plan.action=="resume" and session:
             await _resume_one_interview(task_id,session)
+        elif plan.action=='idle' and not session:
+            flag_orphaned_running(store,task_id,evidence='no_session_or_worker')
 
 async def _catch_up_interview_progress()->None:
     """Resume journal ingestion for linked sessions after delivery restarts."""
@@ -362,7 +368,8 @@ async def lifespan(application:FastAPI):
     from .observability import LOG_PATH,stage_log_paths
     print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
-    simulation.reconcile_interrupted();await jobs.start();await _recover_tasks();await _catch_up_interview_progress()
+    if not config.CLOUD_TENANTS:
+        simulation.reconcile_interrupted();await jobs.start();await _recover_tasks();await _catch_up_interview_progress()
     if threading.current_thread() is threading.main_thread() and signal.getsignal(signal.SIGINT) is not _shutdown_signal:
         _previous_sigint=signal.getsignal(signal.SIGINT);signal.signal(signal.SIGINT,_shutdown_signal)
     try:yield
@@ -383,14 +390,34 @@ def _shutdown_signal(signum,frame):
 
 app = FastAPI(title="Requi.re API", version="0.2.0", lifespan=lifespan)
 app.state.store = store
+if config.CLOUD_TENANTS:
+    from .supabase_auth import SupabaseIdentityVerifier
+    from .tenant_http import TenantMiddleware
+    app.add_middleware(TenantMiddleware,verifier=SupabaseIdentityVerifier(config.SUPABASE_URL),
+                       admin_subjects=config.SUPABASE_ADMIN_SUBJECTS,session_check=store.auth_session_active)
+from .tenant_files import authorized_session
+from .tenancy import TenantAccessDenied
+
+@app.exception_handler(TenantAccessDenied)
+async def tenant_access_denied(request,exc):
+    return JSONResponse({'detail':'Tenant resource not found'},status_code=404)
+
+
+def _session_bundle(session_id):
+    if config.CLOUD_TENANTS:
+        return bundles.bundle(session_id,base=authorized_session(bundles.root(),session_id,store))
+    return bundles.bundle(session_id)
+
+
 app.mount("/assets", StaticFiles(directory=WEB_DIR), name="assets")
 
 @app.middleware("http")
 async def request_log(request, call_next):
+    if request.url.path.startswith('/api/operator/') and not config.CLOUD_TENANTS:
+        return JSONResponse({'detail':'Operator resource not found'},status_code=404,headers={'Cache-Control':'no-store'})
     try:
         auth.csrf_guard(request)
     except HTTPException as e:
-        from fastapi.responses import JSONResponse
         return JSONResponse({"detail": e.detail}, status_code=e.status_code)
     started = time.monotonic()
     try:
@@ -403,6 +430,8 @@ async def request_log(request, call_next):
     activity("http.request","Request completed",method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
     if response.status_code >= 400:
         activity("http.error","API request returned an error",endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
+    if request.url.path.startswith("/api/operator/"):
+        response.headers["Cache-Control"]="no-store"
     if request.url.path == "/" or request.url.path.startswith("/assets/") or request.url.path.startswith("/tasks/"):
         response.headers["Cache-Control"]="no-store, max-age=0"
     if response.status_code in (401,403):activity("access.blocked","Unauthorized or forbidden request",method=request.method,path=request.url.path,status=response.status_code,actor=who)
@@ -414,10 +443,15 @@ def index(): return FileResponse(WEB_DIR / "index.html")
 @app.get("/api/auth")
 def auth_status(request: Request):
     a = auth.actor(request)
-    mode="basic" if config.BASIC_AUTH_ENABLED else ("oauth" if auth.enabled() else "local")
-    session=request.app.state.store.session(request.cookies[config.SESSION_COOKIE]) if auth.enabled() and request.cookies.get(config.SESSION_COOKIE) and a.id!="anonymous" else None
+    mode="supabase" if config.CLOUD_TENANTS else "basic" if config.BASIC_AUTH_ENABLED else ("oauth" if auth.enabled() else "local")
+    session=request.app.state.store.session(request.cookies[config.SESSION_COOKIE]) if not config.CLOUD_TENANTS and auth.enabled() and request.cookies.get(config.SESSION_COOKIE) and a.id!="anonymous" else None
     result={"mode":mode,"authenticated":a.id not in {"anonymous"},"actor":a.label,"admin":a.admin,
-            "providers":[p for p,ident in (("google",config.GOOGLE_CLIENT_ID),("github",config.GITHUB_CLIENT_ID)) if ident],"workspace":"shared"}
+            "providers":[p for p,ident in (("google",config.GOOGLE_CLIENT_ID),("github",config.GITHUB_CLIENT_ID)) if ident],"workspace":"private" if config.CLOUD_TENANTS else "shared"}
+    if config.CLOUD_TENANTS and a.id!='anonymous':
+        from .supabase_sessions import ACCESS_COOKIE
+        token=request.cookies.get(ACCESS_COOKIE)
+        if token:
+            result['expires_at']=jwt.decode(token,options={'verify_signature':False}).get('exp')
     if session:result["expires_at"]=session["expires_at"]
     return result
 
@@ -447,12 +481,18 @@ def email_availability(request:Request,email:str=Query(min_length=3,max_length=2
 
 @app.post("/auth/signup")
 def signup(request:Request,body:BasicCredentials):
+    if config.CLOUD_TENANTS:
+        from .supabase_sessions import signup as cloud_signup
+        return cloud_signup(body.username,body.password)
     activity("auth.signup.attempt","Signup attempted",username=body.username,client=request.client.host if request.client else "unknown")
     try:result=auth.basic_signup(request,body.username,body.password);activity("auth.signup.success","Account created",username=body.username);return _auth_response(result)
     except HTTPException as e:activity("auth.signup.failure","Signup rejected",username=body.username,status=e.status_code,reason=(e.detail.get("error") if isinstance(e.detail,dict) else e.detail));raise
 
 @app.post("/auth/signin")
 def signin(request:Request,body:BasicCredentials):
+    if config.CLOUD_TENANTS:
+        from .supabase_sessions import signin as cloud_signin
+        return cloud_signin(body.username,body.password)
     activity("auth.signin.attempt","Sign-in attempted",username=body.username,client=request.client.host if request.client else "unknown")
     try:result=auth.basic_signin(request,body.username,body.password);activity("auth.signin.success","Sign-in succeeded",username=body.username);return _auth_response(result)
     except HTTPException as e:activity("auth.signin.failure","Sign-in rejected",username=body.username,status=e.status_code,reason=(e.detail.get("error") if isinstance(e.detail,dict) else e.detail));raise
@@ -469,6 +509,9 @@ def oauth_callback(request: Request, provider: str, code: str, state: str):
 
 @app.post("/auth/refresh")
 def refresh_auth(request: Request):
+    if config.CLOUD_TENANTS:
+        from .supabase_sessions import refresh
+        return refresh(request)
     sid,expires_at = auth.refresh_session(request)
     response = JSONResponse({"status": "refreshed", "expires_at": expires_at})
     response.set_cookie(config.SESSION_COOKIE, sid, max_age=config.SESSION_TTL_SECONDS,
@@ -478,6 +521,9 @@ def refresh_auth(request: Request):
 
 @app.post("/auth/logout")
 def logout(request: Request):
+    if config.CLOUD_TENANTS:
+        from .supabase_sessions import logout as cloud_logout
+        return cloud_logout(request)
     current=auth.actor(request);activity("auth.signout","Sign-out requested",actor=current.label)
     sid=request.cookies.get(config.SESSION_COOKIE)
     if sid: store.delete_session(sid)
@@ -512,16 +558,25 @@ def session_view(session_id: str): return FileResponse(WEB_DIR / "index.html")
 def session_phase_view(session_id: str, phase: str): return FileResponse(WEB_DIR / "index.html")
 
 @app.get("/api/sessions")
-def sessions(): return {"sessions":bundles.discover(),"artifacts_root":str(bundles.root())}
+def sessions():
+    if config.CLOUD_TENANTS:
+        result=[]
+        for task in store.list_tasks():
+            session=store.engine_session(task['task_id'])
+            if session:
+                base=authorized_session(bundles.root(),session,store)
+                if base.is_dir():result.extend(row for row in bundles._discover(base.parent) if row['session_id']==session)
+        return {"sessions":list({row['session_id']:row for row in result}.values())}
+    return {"sessions":bundles.discover(),"artifacts_root":str(bundles.root())}
 
 @app.get("/api/settings/engine-python")
-async def engine_python_settings(a:auth.Actor=Depends(auth.require_actor)):
+async def engine_python_settings(a:auth.Actor=Depends(auth.require_admin)):
     engine_dir=Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve()
     candidates=await discover_engine_runtimes(engine_dir)
     return {"path":str(saved_python() or ""),"candidates":[str(x) for x in candidates],"count":len(candidates)}
 class EnginePythonRequest(BaseModel):path:str
 @app.post("/api/settings/engine-python")
-async def set_engine_python(req:EnginePythonRequest,a:auth.Actor=Depends(auth.require_actor)):
+async def set_engine_python(req:EnginePythonRequest,a:auth.Actor=Depends(auth.require_admin)):
     engine_dir=Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve()
     try:path=await save_python(req.path,engine_dir)
     except ValueError as e:raise HTTPException(400,{"error":"Engine Python could not be saved.","cause":str(e),"next":"Choose one of the detected Python environments that passes the dependency check."})
@@ -529,13 +584,13 @@ async def set_engine_python(req:EnginePythonRequest,a:auth.Actor=Depends(auth.re
 
 class ArtifactsRootRequest(BaseModel): path: str
 @app.post("/api/settings/artifacts-root")
-def set_artifacts_root(req: ArtifactsRootRequest, a: auth.Actor = Depends(auth.require_actor)):
+def set_artifacts_root(req: ArtifactsRootRequest, a: auth.Actor = Depends(auth.require_admin)):
     try:return bundles.save_root(req.path)
     except ValueError as e:raise HTTPException(400,{"error":"Artifacts folder could not be loaded.","cause":str(e),"next":"Choose the folder that directly contains your session directories, then validate again."})
 
 @app.get("/api/sessions/{session_id}")
 def session_bundle(session_id: str):
-    try:return bundles.bundle(session_id)
+    try:return _session_bundle(session_id)
     except (FileNotFoundError,ValueError):raise HTTPException(404,"session bundle not found")
 
 
@@ -620,7 +675,7 @@ class TaskCreate(BaseModel):
     brief: str = Field(default="", max_length=4000)
 
 @app.get("/api/tasks")
-def list_tasks(): return {"tasks": store.list_tasks()}
+def list_tasks(): return _customer_events({"tasks": store.list_tasks()})
 
 @app.post("/api/tasks", status_code=201)
 def create_task(req: TaskCreate, request: Request, a: auth.Actor = Depends(auth.require_actor)):
@@ -637,6 +692,35 @@ def rename_task(task_id:str,req:TaskRename,a:auth.Actor=Depends(auth.require_act
     try:return store.rename_task(task_id,req.title,a.label)
     except KeyError:raise HTTPException(404,{"error":"Task not found.","cause":"It may already have been deleted.","next":"Return to the task list."})
     except ValueError as e:raise HTTPException(409,{"error":str(e),"cause":"Task names must be unique (ignoring capitalization).","next":"Choose a different task name."})
+
+@app.post("/api/tasks/{task_id}/stop")
+def stop_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    # Local subprocess Stop isn't the approved cooperative protocol. Cloud gate
+    # remains closed until provider/lifecycle chain is fully installed.
+    if not config.CLOUD_TENANTS:raise HTTPException(404,"cooperative Stop unavailable")
+    if not store.task(task_id):raise HTTPException(404,"task not found")
+    if not cloud_execution_admitted():raise HTTPException(503,"Cloud admission and lifecycle validation pending")
+    from .cooperative_stop import request_stop
+    from .attempt_ledger import AdmissionDenied
+    try:return request_stop(store,engine_client,task_id)
+    except KeyError:raise HTTPException(404,"task not found")
+    except AdmissionDenied as exc:raise HTTPException(409,{"error":str(exc),"next":"Stop remains pending; verify worker completion and provider usage before Delete."})
+    except EngineUnreachableError as exc:raise _engine_unreachable(exc)
+    except EngineClientError as exc:raise HTTPException(502,{"error":"Engine Stop was not confirmed.","cause":exc.error.detail,"next":"The durable request remains pending. Retry Stop; do not Delete."})
+
+@app.post("/api/tasks/{task_id}/stop/reconcile")
+def reconcile_task_stop(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    if not config.CLOUD_TENANTS:raise HTTPException(404,"cooperative Stop unavailable")
+    task=store.task(task_id)
+    if not task:raise HTTPException(404,"task not found")
+    if not cloud_execution_admitted():raise HTTPException(503,"Cloud admission and lifecycle validation pending")
+    if task['state'] not in ('stop_requested','stopped'):raise HTTPException(409,"durable Stop request required")
+    from .cooperative_stop import request_stop
+    from .attempt_ledger import AdmissionDenied
+    try:return request_stop(store,engine_client,task_id,reconcile=True)
+    except AdmissionDenied as exc:raise HTTPException(409,{"error":str(exc),"next":"Worker completion and usage must be verified before Delete."})
+    except EngineUnreachableError as exc:raise _engine_unreachable(exc)
+    except EngineClientError as exc:raise HTTPException(502,{"error":"Engine quiescence not confirmed.","cause":exc.error.detail})
 
 @app.delete("/api/tasks/{task_id}")
 def delete_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
@@ -656,7 +740,7 @@ def get_question_quality_config(a:auth.Actor=Depends(auth.require_actor)):
     except EngineUnreachableError as exc:raise _quality_engine_down(exc)
     except EngineClientError as exc:raise HTTPException(502,{"error":"The engine could not return the settings.","cause":exc.error.detail,"next":"Retry; if it repeats, check the engine log."})
 @app.put("/api/question-quality-config")
-def put_question_quality_config(req:QualityConfigRequest,a:auth.Actor=Depends(auth.require_actor)):
+def put_question_quality_config(req:QualityConfigRequest,a:auth.Actor=Depends(auth.require_admin)):
     try:return engine_client.save_question_quality_config(req.config)
     except QualityConfigRejected as exc:raise HTTPException(422,{"error":str(exc),"cause":"The engine validates every setting before saving.","next":"Fix that setting and save again. Nothing was changed."})
     except EngineUnreachableError as exc:raise _quality_engine_down(exc)
@@ -668,6 +752,7 @@ class TaskStartRequest(BaseModel):
 @app.get("/api/model-routes")
 def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     """The engine resolves routes; legacy env keys only seed the initial choice."""
+    if config.CLOUD_TENANTS:raise HTTPException(404,"model configuration is internal")
     routes=[]
     try:default=engine_client.default_route()
     except (EngineClientError,EngineUnreachableError,AttributeError):default=None
@@ -992,7 +1077,7 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
     session=_recorded_engine_session(task_id)
     if not session:return store.task_artifacts(task_id)
     from vmodel_contracts.runtime import artifacts_root
-    root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session
+    root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
     from .phases import PHASE_DEFINITIONS
     records=[]
     validators={
@@ -1024,7 +1109,7 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
                     valid=True
                 except Exception as exc:valid=False;errors=[f"{type(exc).__name__}: {str(exc)[:600]}"]
             records.append({"phase_key":phase.key,"name":filename,"title":_ARTIFACT_TITLES.get(filename,Path(filename).stem.replace("_"," ").title()),"ref":str(path),"mime_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","stale":False,"generation":task["generation"],"present":True,"valid":valid,"validator":validator[1] if validator else None,"validation_errors":errors,"validation_error":errors[0] if errors else None})
-    return records or store.task_artifacts(task_id)
+    return records if config.CLOUD_TENANTS else records or store.task_artifacts(task_id)
 
 def _task_artifact(task_id:str,phase:str,name:str)->Path:
     artifact=next((a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==phase and a["name"]==name),None)
@@ -1045,7 +1130,7 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     phase=task.get("active_phase");generation=task.get("generation");session=_recorded_engine_session(task_id)
     if not session or not phase:return {"phase_key":phase,"generation":generation,"status":"waiting","items":[]}
     from vmodel_contracts.runtime import artifacts_root
-    root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session
+    root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
     folder=root/("interview" if phase in ("intent","conops") else "spec")
     # Reads are constrained to the recorded session and exact known filenames.
     from .phases import PHASE_BY_KEY
@@ -1174,7 +1259,7 @@ def _checkpoint_interview_turns(task_id:str)->list[tuple[str,str]]:
     session=_recorded_engine_session(task_id)
     if not session:return []
     from vmodel_contracts.runtime import artifacts_root
-    db=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"/"checkpoints.sqlite"
+    db=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"checkpoints.sqlite"
     if not db.is_file():return []
     built=os.environ.get("REQUI_RE_DIST")=="1"
     engine_dir=(Path.cwd() if built else Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve())
@@ -1194,12 +1279,13 @@ def _checkpoint_interview_turns(task_id:str)->list[tuple[str,str]]:
 
 def _interview_model_provenance(task_id:str)->list[str]:
     """Usage is per-call truth; never collapse a switched stage to its first model."""
+    if config.CLOUD_TENANTS:return []
     session=_recorded_engine_session(task_id)
     rows=[]
     if session:
         try:
             from vmodel_contracts.runtime import artifacts_root
-            usage=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"/"usage.jsonl"
+            usage=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"usage.jsonl"
             if usage.is_file():
                 rows=[json.loads(line) for line in usage.read_text().splitlines() if line.strip()]
         except (ValueError,OSError):pass
@@ -1274,7 +1360,7 @@ def _decision_provenance(task_id:str,architecture:dict)->list[dict]:
     """Derived, conservative provenance. Empty baseline refs do not prove founder intent."""
     session=_recorded_engine_session(task_id)
     from vmodel_contracts.runtime import artifacts_root
-    root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview" if session else None
+    root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview" if session else None
     preferences=[]
     if root:
         path=root/"intent_model.json"
@@ -1316,7 +1402,7 @@ def _validation_panel_for(task_id:str,raw:str)->dict|None:
     session=_recorded_engine_session(task_id)
     if session:
         from vmodel_contracts.runtime import artifacts_root
-        try:ledger=json.loads((artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"spec"/"findings-ledger.json").read_text())
+        try:ledger=json.loads((authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"spec"/"findings-ledger.json").read_text())
         except (OSError,ValueError):ledger=None
     return validation_panel(validation,load("needs","needs.json"),load("tests","tests.json"),ledger)
 
@@ -1396,6 +1482,9 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
                           for e in store.events(task_id)))
     if starting and task.get("state")=="running":
         input_state={"waiting":False,"process_live":True,"decision":None,"requirement":None,"question":None,"input_id":None}
+    elif session_id and config.CLOUD_TENANTS:
+        input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,
+                     "question":None,"input_id":None,"execution_blocked":"scoped engine protocol pending"}
     elif session_id:
         try:
             snapshot=engine_client.snapshot(session_id)
@@ -1420,7 +1509,7 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
     from .control_snapshot import project as project_control
     control=project_control(task,input_state,snapshot,work,artifacts)
     _retain_decision_control(task_id,control.model_dump(mode="json"))
-    return {**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": store.events(task_id), "artifacts":artifacts,"artifact_projection":{"session":session,"root":str((__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state}
+    return _customer_events({**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": _customer_events(store.events(task_id)), "artifacts":artifacts,"artifact_projection":{"session":session,"root":str((authorized_session(__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"stop_control":{"available":bool(config.CLOUD_TENANTS and cloud_execution_admitted() and session_id),"requested":task.get("state") in ("stop_requested","stopped")}})
 
 def _retain_decision_control(task_id:str,control:dict)->None:
     decision=control.get('decision') or {};context=decision.get('context') or {}
@@ -1510,6 +1599,7 @@ class BrowserDiagnostics(BaseModel):
 def download_debug_zip(task_id:str,body:BrowserDiagnostics,a:auth.Actor=Depends(auth.require_actor)):
     task=store.task(task_id)
     if not task:raise HTTPException(404,'task not found')
+    if config.CLOUD_TENANTS:raise HTTPException(503,'Provider audit diagnostics are internal-only in cloud mode')
     session=_recorded_engine_session(task_id)
     if not session:raise HTTPException(409,{"error":"No run is linked to this task.","cause":"A task/run-scoped diagnostic export needs a recorded session.","next":"Start a run or select a task with a run."})
     if not __import__('re').fullmatch(r'[A-Za-z0-9._-]+',session) or session in ('.','..'):raise HTTPException(409,'invalid recorded session')
@@ -1517,9 +1607,9 @@ def download_debug_zip(task_id:str,body:BrowserDiagnostics,a:auth.Actor=Depends(
     from vmodel_contracts.runtime import artifacts_root
     from .debug_export import diagnostic_zip
     from .observability import LOG_PATH
-    root=artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session
+    root=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)
     control=get_task(task_id)['control_snapshot']
-    data=diagnostic_zip(root,task_id,session,task['generation'],body.model_dump(),control,store.events(task_id),LOG_PATH)
+    data=diagnostic_zip(root,task_id,session,task['generation'],body.model_dump(),control,store.events(task_id),root/'server-run.log' if config.CLOUD_TENANTS else LOG_PATH)
     from fastapi.responses import Response
     return Response(data,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{task_id}-debug.zip"'})
 
@@ -1527,10 +1617,11 @@ def download_debug_zip(task_id:str,body:BrowserDiagnostics,a:auth.Actor=Depends(
 def task_execution(task_id:str,debug:bool=False,a:auth.Actor=Depends(auth.require_actor)):
     """Per-session routing, usage and call diagnostics; raw payloads require debug mode."""
     if not store.task(task_id):raise HTTPException(404,"task not found")
+    if config.CLOUD_TENANTS:raise HTTPException(404,"provider diagnostics are internal")
     session=_recorded_engine_session(task_id)
     if not session:return {"session_id":None,"route":None,"usage":[],"calls":[],"raw":[]}
     from vmodel_contracts.runtime import artifacts_root
-    root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"
+    root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"
     def lines(path:Path,limit:int=300):
         if not path.is_file():return []
         with path.open(errors="replace") as stream:
@@ -1541,11 +1632,14 @@ def task_execution(task_id:str,debug:bool=False,a:auth.Actor=Depends(auth.requir
         try:pinned=json.loads(state.read_text()).get("model_map")
         except (ValueError,OSError):pass
     route=(store.task(task_id) or {}).get("model_route")
-    usage=lines(root/"usage.jsonl")
+    # Preserve provider audit files privately; no debug flag bypass in cloud.
+    if config.CLOUD_TENANTS:debug=False
+    usage=[] if config.CLOUD_TENANTS else lines(root/"usage.jsonl")
     calls=lines(root/"llm-calls.jsonl")
     summary=[]
     for entry in calls:
         item={key:entry.get(key) for key in ("ts","event","stage","provider","model","attempt","latency_s","usage") if key in entry}
+        if config.CLOUD_TENANTS:item.pop("usage",None)
         error=entry.get("error")
         if isinstance(error,dict):
             # The provider error envelope may contain a raw response. The
@@ -1566,10 +1660,15 @@ def _execution_json(row:str):
     try:return json.loads(row)
     except ValueError:return None
 
+def _customer_events(events):
+    if not config.CLOUD_TENANTS:return events
+    from .customer_projection import without_provider_usage,without_model_pricing
+    return without_model_pricing(without_provider_usage(events))
+
 @app.get("/api/tasks/{task_id}/events")
 def task_events(task_id: str, after: int = Query(default=0, ge=0)):
     if not store.task(task_id): raise HTTPException(404, "task not found")
-    return {"events": store.events(task_id, after)}
+    return {"events": _customer_events(store.events(task_id, after))}
 
 @app.get("/api/tasks/{task_id}/stream")
 async def task_stream(task_id: str, request: Request):
@@ -1581,7 +1680,7 @@ async def task_stream(task_id: str, request: Request):
             cursor = existing[-1]["id"] if existing else 0
             while not stop.is_set() and not await request.is_disconnected():
                 events = store.events(task_id, cursor)
-                for event in events:
+                for event in _customer_events(events):
                     cursor = event["id"]
                     yield f"id: {cursor}\nevent: progress\ndata: {json.dumps(event)}\n\n"
                 yield f"event: heartbeat\ndata: {json.dumps({'task_id': task_id})}\n\n"
@@ -1600,6 +1699,8 @@ class FailedNeedsRetryRequest(BaseModel):
 async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Actor=Depends(auth.require_run_start)):
     task=store.task(task_id)
     if not task:raise HTTPException(404,"task not found")
+    if config.CLOUD_TENANTS and body.confirm and not cloud_execution_admitted():
+        raise HTTPException(503,"Cloud admission and lifecycle validation pending")
     phases={phase["phase_key"]:phase["state"] for phase in task["phases"]}
     session=store.engine_session(task_id)
     eligible=(task["state"]=="failed" and task["active_phase"]=="needs" and phases["needs"]=="failed"
@@ -1617,7 +1718,7 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
     from vmodel_contracts.runtime import artifacts_root
     from vmodel_contracts.interview import IntentModel
     from vmodel_contracts.conops import ConOpsDocument
-    interview=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"
+    interview=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"
     try:
         intent=IntentModel.model_validate_json((interview/"intent_model.json").read_text())
         conops=ConOpsDocument.model_validate_json((interview/"conops.json").read_text())
@@ -1648,6 +1749,11 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
         return {"status":"preview","phase":"needs","session_id":session,"retains":["intent","conops"],"model_route":effective,"default_model":default,"default_source":default_source,"checkpoint":checkpoint,"mode":"resume" if checkpoint else "start",
                 "last_failure":latest_failure["message"] if latest_failure else next(phase["detail"] for phase in task["phases"] if phase["phase_key"]=="needs"),
                 "message":f"Retry Stakeholder needs from the approved interview. Choose the downstream model; this may make new model calls and incur cost. The interview is not reopened."}
+    if config.CLOUD_TENANTS:
+        job_id=store.prepare_phase_retry(task_id,"needs",a.label,effective,checkpoint)
+        if not job_id:reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
+        await _run_failed_phase_retry(task_id,"needs","Stakeholder needs",effective,checkpoint,queued_job_id=job_id)
+        return {"status":"started","phase":"needs","session_id":session,"job_id":job_id}
     if not store.claim_failed_needs_retry(task_id,a.label):reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
     store.set_model_default(task_id,effective)
     store.add_event(task_id,"model_route",f"Needs retry model selected: {effective}",phase_key="needs",payload={"route":route,"resolved":effective,"source":"explicit_retry_choice"})
@@ -1656,8 +1762,15 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
     asyncio.create_task(_run_failed_needs_retry(task_id,effective,checkpoint))
     return {"status":"started","phase":"needs","session_id":session}
 
+async def _dispatch_failed_retry(task_id:str,phase:str,model_route:str,checkpoint:bool,*,queued_job_id=None)->None:
+    options={"mode":ExecutionMode.RESUME if checkpoint else ExecutionMode.START,"model_route":model_route}
+    if config.CLOUD_TENANTS:
+        from .tenant_jobs import dispatch_phase
+        await dispatch_phase(store,orchestrator,task_id,phase,queued_job_id=queued_job_id,**options)
+    else:await orchestrator.execute_phase(task_id,phase,**options)
+
 async def _run_failed_needs_retry(task_id:str,model_route:str,checkpoint:bool)->None:
-    try:await orchestrator.execute_phase(task_id,"needs",mode=ExecutionMode.RESUME if checkpoint else ExecutionMode.START,model_route=model_route)
+    try:await _dispatch_failed_retry(task_id,"needs",model_route,checkpoint)
     except Exception as exc:
         message=f"Stakeholder needs retry stopped: {type(exc).__name__}: {exc}"
         store.update_phase(task_id,"needs","failed",detail=message)
@@ -1677,6 +1790,8 @@ async def retry_failed_phase(task_id:str,body:FailedPhaseRetryRequest,a:auth.Act
     from .phases import PHASE_BY_KEY, PHASE_KEYS
     task=store.task(task_id)
     if not task:raise HTTPException(404,"task not found")
+    if config.CLOUD_TENANTS and body.confirm and not cloud_execution_admitted():
+        raise HTTPException(503,"Cloud admission and lifecycle validation pending")
     definition=PHASE_BY_KEY.get(body.phase)
     if not definition or definition.executor!="generator" or body.phase=="needs":
         raise HTTPException(409,{"error":"That phase cannot be retried this way.","cause":f"'{body.phase}' is not a failed generator phase after Stakeholder needs.","next":"Use the phase's own retry, or Rerun stage."})
@@ -1697,7 +1812,7 @@ async def retry_failed_phase(task_id:str,body:FailedPhaseRetryRequest,a:auth.Act
     from vmodel_contracts.runtime import artifacts_root
     from vmodel_contracts.interview import IntentModel
     from vmodel_contracts.conops import ConOpsDocument
-    interview=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"
+    interview=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"
     try:
         intent=IntentModel.model_validate_json((interview/"intent_model.json").read_text())
         conops=ConOpsDocument.model_validate_json((interview/"conops.json").read_text())
@@ -1725,6 +1840,11 @@ async def retry_failed_phase(task_id:str,body:FailedPhaseRetryRequest,a:auth.Act
         return {"status":"preview","phase":body.phase,"label":label,"session_id":session,"retains":list(PHASE_KEYS[:index]),"model_route":effective,"default_model":default,"default_source":default_source,"checkpoint":checkpoint,"mode":"resume" if checkpoint else "start",
                 "last_failure":latest_failure["message"] if latest_failure else next(phase["detail"] for phase in task["phases"] if phase["phase_key"]==body.phase),
                 "message":f"Retry {label} from the approved earlier phases. Choose the downstream model; this may make new model calls and incur cost. Nothing earlier is reopened."}
+    if config.CLOUD_TENANTS:
+        job_id=store.prepare_phase_retry(task_id,body.phase,a.label,effective,checkpoint)
+        if not job_id:reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
+        await _run_failed_phase_retry(task_id,body.phase,label,effective,checkpoint,queued_job_id=job_id)
+        return {"status":"started","phase":body.phase,"session_id":session,"job_id":job_id}
     if not store.claim_failed_phase_retry(task_id,body.phase,a.label):reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
     store.set_model_default(task_id,effective)
     store.add_event(task_id,"model_route",f"{label} retry model selected: {effective}",phase_key=body.phase,payload={"route":route,"resolved":effective,"source":"explicit_retry_choice"})
@@ -1733,8 +1853,8 @@ async def retry_failed_phase(task_id:str,body:FailedPhaseRetryRequest,a:auth.Act
     asyncio.create_task(_run_failed_phase_retry(task_id,body.phase,label,effective,checkpoint))
     return {"status":"started","phase":body.phase,"session_id":session}
 
-async def _run_failed_phase_retry(task_id:str,phase:str,label:str,model_route:str,checkpoint:bool)->None:
-    try:await orchestrator.execute_phase(task_id,phase,mode=ExecutionMode.RESUME if checkpoint else ExecutionMode.START,model_route=model_route)
+async def _run_failed_phase_retry(task_id:str,phase:str,label:str,model_route:str,checkpoint:bool,*,queued_job_id=None)->None:
+    try:await _dispatch_failed_retry(task_id,phase,model_route,checkpoint,queued_job_id=queued_job_id)
     except Exception as exc:
         message=f"{label} retry stopped: {type(exc).__name__}: {exc}"
         store.update_phase(task_id,phase,"failed",detail=message)
@@ -1757,6 +1877,9 @@ def rerun(task_id: str, req: RerunRequest, request: Request, a: auth.Actor = Dep
         downstream = [p["phase_key"] for p in task["phases"] if p["position"] >= next(p["position"] for p in task["phases"] if p["phase_key"] == req.from_phase)]
         return {"status": "preview", "from_phase": req.from_phase, "policy": "archive", "downstream": downstream,
                 "message": "Downstream artifacts will be marked stale and retained under their generation. Their gates will require re-approval."}
+    if config.CLOUD_TENANTS:
+        if not cloud_execution_admitted():raise HTTPException(503,'Cloud admission and lifecycle validation pending')
+        raise HTTPException(409,'Cloud rerun requires a new-generation session/checkpoint policy; no work changed')
     try: generation = store.prepare_rerun(task_id, req.from_phase, "archive", a.label)
     except (ValueError, KeyError) as e:
         raise HTTPException(409, {"error": str(e), "cause": "The selected phase is invalid.",
@@ -1780,7 +1903,7 @@ def _task_cost(task_id:str)->dict:
     session=_recorded_engine_session(task_id);interview_tokens=spec_tokens=0
     if session:
         from vmodel_contracts.runtime import artifacts_root
-        root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session
+        root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
         interview_tokens=usage_tokens(root/"interview"/"usage.jsonl");spec_tokens=usage_tokens(root/"spec"/"usage.jsonl")
     counted=[e for e in latest.values() if _is_credit_event(e) and not (interview_tokens and e.get("phase_key") in ("intent","conops"))]
     event_price=sum(float((e.get("payload") or {}).get("price") or 0) for e in counted)
@@ -1796,20 +1919,20 @@ def task_cost(task_id:str,request:Request):
         try:
             from vmodel_contracts.runtime import artifacts_root
             from .pricing import write_cost_json
-            write_cost_json(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session)
+            write_cost_json(authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store))
         except (OSError,ValueError):pass
     return _task_cost(task_id)
 
 @app.get("/api/sessions/{session_id}/cost")
 def session_cost(session_id:str):
     # Discovery validates the path and ties the read to an existing session.
-    try:bundles.bundle(session_id)
+    try:_session_bundle(session_id)
     except (FileNotFoundError,ValueError):raise HTTPException(404,"session bundle not found")
     linked=[task for task in store.list_tasks() if _recorded_engine_session(task["task_id"])==session_id]
     if len(linked)>1:raise HTTPException(409,"session has multiple task bindings; cost cannot be selected safely")
     if linked:return _task_cost(linked[0]["task_id"])
     from .pricing import usage_tokens,token_credits,credits_to_usd,_rows
-    root=bundles.root()/session_id
+    root=authorized_session(bundles.root(),session_id,store)
     paths=[root/area/"usage.jsonl" for area in ("interview","spec")]
     if not any("prompt_tokens" in row and "completion_tokens" in row for row in _rows(paths[0])):raise HTTPException(404,"session usage unavailable")
     if (root/"spec").is_dir() and any((root/"spec").iterdir()):raise HTTPException(404,"complete session cost unavailable without recorded task pricing")
@@ -1828,7 +1951,7 @@ def task_audit(task_id: str, request: Request):
     interview_usage=[]
     if session:
         from vmodel_contracts.runtime import artifacts_root
-        path=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"/"usage.jsonl"
+        path=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"usage.jsonl"
         if path.is_file():
             from .pricing import _rows
             interview_usage=_rows(path)
@@ -1851,7 +1974,12 @@ def task_audit(task_id: str, request: Request):
     totals["cost_usd"]=round(sum(float((event.get("payload") or {}).get("cost_usd") or 0) for event in counted)+totals["interview_cost_usd"],6)
     live=_task_cost(task_id);totals["price"]=live["price"];totals["price_usd"]=live["price_usd"]
     totals["unpriced_calls"]=sum(int((event.get("payload") or {}).get("unpriced_calls") or 0) for event in counted)+totals["interview_unpriced_calls"]
-    return {"actor_mode": auth.actor(request).label, "entries": store.audit_entries(task_id),"totals":totals}
+    entries=store.audit_entries(task_id)
+    if config.CLOUD_TENANTS:
+        from .customer_projection import without_provider_usage
+        entries=_customer_events(entries)
+        totals={key:totals[key] for key in ('price','price_usd')}
+    return {"actor_mode": auth.actor(request).label, "entries": entries,"totals":totals}
 
 @app.post("/api/simulations", status_code=201)
 async def import_simulation(usage_file: UploadFile = File(...), title: str | None = Form(default=None)):
@@ -1904,7 +2032,7 @@ def _srs_semantic_path(task_id:str)->Path:
     if not session or not __import__('re').fullmatch(r'[A-Za-z0-9._-]+',session) or session in ('.','..'):
         raise HTTPException(409,'task has no valid session')
     from vmodel_contracts.runtime import artifacts_root
-    return artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/session/'spec'/'srs.semantic-review.json'
+    return authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)/'spec'/'srs.semantic-review.json'
 
 def _stack_decisions_path(task_id:str)->Path:
     return _srs_semantic_path(task_id).with_name('architecture.decisions.json')
@@ -1985,6 +2113,12 @@ def _gate_review(task_id:str,gate_key:str)->dict:
     store.retain_decision_review(task_id,'gate:'+gate_key,revision,review)
     return review
 
+def _closed_revision_draft_available(task_id,gate_key,review):
+    from .gate_revision import closed_revision_preview
+    try:closed_revision_preview(store,task_id,gate_key,review['revision'],'preview eligibility')
+    except (ValueError,KeyError):return False
+    return True
+
 @app.get('/api/tasks/{task_id}/gates/{gate_key}/review')
 def get_gate_review(task_id:str,gate_key:str,revision:str|None=None,draft:str|None=None,a:auth.Actor=Depends(auth.require_actor)):
     current=_gate_review(task_id,gate_key)
@@ -1994,7 +2128,7 @@ def get_gate_review(task_id:str,gate_key:str,revision:str|None=None,draft:str|No
     saved=store.decision_draft(task_id,'gate:'+gate_key,review['revision'],draft) if draft else None
     if draft and saved is None:raise HTTPException(404,'gate draft not found')
     return {'review':review,'actionable':review['revision']==current['revision'] and gate['state']=='waiting',
-            'draft':saved,'comments':store.review_comments(task_id,'gate:'+gate_key,review['revision'])}
+            'draft':saved,'comments':store.review_comments(task_id,'gate:'+gate_key,review['revision']),'closed_revision_draft':_closed_revision_draft_available(task_id,gate_key,review)}
 
 @app.post('/api/tasks/{task_id}/gates/{gate_key}/comments')
 def comment_gate(task_id:str,gate_key:str,body:DecisionComment,a:auth.Actor=Depends(auth.require_actor)):
@@ -2004,6 +2138,18 @@ def comment_gate(task_id:str,gate_key:str,body:DecisionComment,a:auth.Actor=Depe
 def draft_gate(task_id:str,gate_key:str,body:DecisionDraft,a:auth.Actor=Depends(auth.require_actor)):
     if store.decision_review(task_id,'gate:'+gate_key,body.revision) is None:raise HTTPException(404,'gate revision not found')
     return {'draft_id':store.save_decision_draft(task_id,'gate:'+gate_key,body.revision,body.model_dump())}
+
+class ClosedGateRevisionDraft(BaseModel):
+    review_revision:str=Field(min_length=1,max_length=200)
+    edited_text:str=Field(min_length=1,max_length=20000)
+
+@app.post('/api/tasks/{task_id}/gates/{gate_key}/revision-drafts')
+def draft_closed_gate_revision(task_id:str,gate_key:str,body:ClosedGateRevisionDraft,a:auth.Actor=Depends(auth.require_actor)):
+    # Draft only: no artifact/checkpoint rewrite, invalidation or dispatch.
+    from .gate_revision import save_closed_revision
+    try:return save_closed_revision(store,task_id,gate_key,body.review_revision,body.edited_text)
+    except KeyError:raise HTTPException(404,'task or gate not found')
+    except ValueError as exc:raise HTTPException(409,str(exc))
 
 class SemanticDecisions(BaseModel):
     revision:str=Field(pattern=r'^[a-f0-9]{64}$')
@@ -2084,6 +2230,10 @@ class GateDecision(BaseModel):
     model:str|None=None
 @app.post("/api/tasks/{task_id}/gates/{gate_key}/decide")
 async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,a:auth.Actor=Depends(auth.require_actor)):
+    if config.CLOUD_TENANTS:
+        if not store.task(task_id):raise HTTPException(404,'task not found')
+        if not cloud_execution_admitted():raise HTTPException(503,'Cloud admission and lifecycle validation pending')
+
     try:
         if req.review_revision and _gate_review(task_id,gate_key)['revision']!=req.review_revision:
             raise HTTPException(409,'gate evidence changed; review the current artifact before deciding')
@@ -2114,6 +2264,15 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
             model_route_lib.task_default_model(store,task_id,PHASE_BY_KEY[target].generator_stage)
         if pending['after_phase']=='architecture' and pending['state']=='waiting' and req.action=='approve':
             _use_architecture_defaults(task_id)
+        if config.CLOUD_TENANTS:
+            gate,job_id,target_phase=store.prepare_gate_dispatch(task_id,gate_key,req.action,actor=a.label,
+                model=selected,comment=req.comment,review_revision=req.review_revision,
+                selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,
+                expected_revision=req.expected_revision)
+            if job_id:
+                from .tenant_jobs import dispatch_phase
+                await dispatch_phase(store,orchestrator,task_id,target_phase,queued_job_id=job_id)
+            return gate
         gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label,expected_revision=req.expected_revision)
         phase=gate["after_phase"]
         if req.comment.strip():
@@ -2200,7 +2359,7 @@ def task_classifications(task_id:str, a:auth.Actor=Depends(auth.require_actor)):
     out={"session":session,"answers":{}}
     if not session: return out
     from vmodel_contracts.runtime import artifacts_root
-    root=artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR"))/session/"interview"/"categorization-shadow.jsonl"
+    root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"categorization-shadow.jsonl"
     if not root.is_file():
         out["reason"]="no shadow file";return out
     turns=_qa_turns(store.events(task_id,limit=10000))
@@ -2236,13 +2395,16 @@ def set_quota(user_id:str, req:QuotaUpdate, request:Request, a:auth.Actor=Depend
     except KeyError:raise HTTPException(404,"user not found")
 
 @app.get("/health")
-def health(): return {"ok": True, "total_spend_usd": store.total_spend(), "tasks": len(store.list_tasks()), **RUNTIME_VERSION}
+def health():
+    if config.CLOUD_TENANTS:return {"ok":True}
+    return {"ok": True, "total_spend_usd": store.total_spend(), "tasks": len(store.list_tasks()), **RUNTIME_VERSION}
 
 @app.post('/api/tasks/{task_id}/packages')
 def create_final_package(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     from .final_package import producer_handoff,package,PackageBlocked
     task=store.task(task_id)
     if not task:raise HTTPException(404,'task not found')
+    if config.CLOUD_TENANTS:raise HTTPException(503,'Cloud package export pending customer-safe diagnostics contract')
     try:
         session,root,interview,spec=orchestrator._paths(task_id)
         if task['state']!='done':raise PackageBlocked('Final task approval is required')
@@ -2264,7 +2426,112 @@ def download_final_package(task_id:str,package_id:str,generation:int,a:auth.Acto
     if not __import__('re').fullmatch(r'[a-f0-9]{64}',package_id) or generation<1:raise HTTPException(404,'package not found')
     task=store.task(task_id)
     if not task:raise HTTPException(404,'task not found')
+    if config.CLOUD_TENANTS:raise HTTPException(503,'Cloud package export pending customer-safe diagnostics contract')
     from vmodel_contracts.runtime import artifacts_root
-    path=artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))/'packages'/task_id/str(generation)/(package_id+'.zip')
+    package_root=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),store.engine_session(task_id),store).parent if config.CLOUD_TENANTS else artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))
+    path=package_root/'packages'/task_id/str(generation)/(package_id+'.zip')
     if not path.is_file() or path.is_symlink():raise HTTPException(404,'package not found')
     return FileResponse(path,media_type='application/zip',filename=f"coding-agent-{task_id}-g{generation}.zip")
+
+
+@app.get('/api/worker-jobs/recovery')
+def recoverable_worker_jobs(a:auth.Actor=Depends(auth.require_actor)):
+    if not config.CLOUD_TENANTS:raise HTTPException(404,'cloud worker recovery unavailable')
+    return {'jobs':store.recoverable_worker_jobs(),'execution_enabled':False,
+            'reason':'Admission and full cloud lifecycle tests pending'}
+
+class WorkerResumeRequest(BaseModel):
+    job_id:str=Field(min_length=1,max_length=128)
+    phase:str=Field(min_length=1,max_length=64)
+
+@app.post('/api/tasks/{task_id}/worker-resume')
+async def resume_cloud_worker(task_id:str,body:WorkerResumeRequest,a:auth.Actor=Depends(auth.require_actor)):
+    if not config.CLOUD_TENANTS:raise HTTPException(404,'cloud worker recovery unavailable')
+    task=store.task(task_id)
+    job=store.worker_job(body.job_id)
+    if not task or not job or job['task_id']!=task_id:raise HTTPException(404,'worker job not found')
+    if job['kind']!='phase:'+body.phase:raise HTTPException(409,'worker job phase mismatch')
+    # Full admission chain must run before pause/reauthorize/dispatch mutations.
+    # Gate is closed by default; nothing mutates the durable job until it opens.
+    if not cloud_execution_admitted():raise HTTPException(503,'Cloud admission and lifecycle validation pending')
+    from .tenant_jobs import dispatch_phase
+    try:await dispatch_phase(store,orchestrator,task_id,body.phase,resume_job_id=body.job_id)
+    except (PermissionError,ValueError) as exc:raise HTTPException(409,str(exc))
+    return {'status':'resumed','job_id':body.job_id,'job':store.worker_job(body.job_id)}
+
+
+def cloud_execution_admitted()->bool:
+    """Closed until rate/spend admission and the full lifecycle chain pass."""
+    return False
+
+
+@app.get('/api/admin/operations/orphaned-tasks')
+def admin_orphaned_tasks(a:auth.Actor=Depends(auth.require_admin)):
+    from .recovery import orphan_review_items
+    return {'tasks':orphan_review_items(store),'scope':'current_authorized_workspace','auto_restart':False}
+
+
+@app.get('/api/admin/operations/workspace')
+def admin_operations_workspace(a:auth.Actor=Depends(auth.require_admin)):
+    if config.CLOUD_TENANTS:return store.operator_workspace_snapshot()
+    tasks=store.list_tasks()
+    return {'scope':'current_authorized_workspace','owner_id':a.id,'credits':None,
+        'sessions':[{'task_id':t['task_id'],'session_id':store.engine_session(t['task_id']),
+                     'state':t['state'],'generation':t.get('generation',1)} for t in tasks if store.engine_session(t['task_id'])],
+        'worker_jobs':[],'credit_adjustment_available':False,'global_operator_access':False,
+        'reason':'Local legacy quota is not a prepaid credit account.'}
+
+
+def _operator_reader():
+    reader=getattr(app.state,'operator_read_store',None)
+    if not config.CLOUD_TENANTS:raise HTTPException(404,'Operator resource not found')
+    if reader is None:
+        raise HTTPException(503,'Verified sole-operator read registry is not configured')
+    return reader
+
+
+@app.get('/api/operator/sessions')
+def operator_sessions(limit:int=100,before_created_at:float|None=None,before_session_id:str|None=None,
+                      a:auth.Actor=Depends(auth.require_actor)):
+    if (before_created_at is None)!=(before_session_id is None):raise HTTPException(422,'Complete session page cursor required')
+    before={'created_at':before_created_at,'session_id':before_session_id} if before_session_id is not None else None
+    try:return _operator_reader().sessions(store,limit=limit,before=before)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+
+@app.get('/api/operator/credits')
+def operator_credits(limit:int=100,after_owner:str|None=None,a:auth.Actor=Depends(auth.require_actor)):
+    try:return _operator_reader().credits(store,limit=limit,after_owner=after_owner)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+
+@app.get('/api/operator/expense-totals')
+def operator_expense_totals(a:auth.Actor=Depends(auth.require_actor)):
+    return _operator_reader().expense_totals(store)
+
+
+@app.get('/api/operator/task-debug')
+def operator_task_debug(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    try:return _operator_reader().task_debug(store,task_id)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    except KeyError:raise HTTPException(404,'Task metadata unavailable')
+
+
+@app.get('/api/operator/task-logs')
+def operator_task_logs(task_id:str,before_id:int|None=None,limit:int=100,a:auth.Actor=Depends(auth.require_actor)):
+    try:return _operator_reader().task_logs(store,task_id,before_id=before_id,limit=limit)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+
+@app.get('/api/operator/credit-account')
+def operator_credit_account(owner_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    try:return _operator_reader().credit_account(store,owner_id)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    except KeyError:raise HTTPException(404,'Credit account unavailable')
+
+
+@app.get('/api/operator/task-usage')
+def operator_task_usage(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    try:return _operator_reader().task_usage(store,task_id)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    except KeyError:raise HTTPException(404,'Task usage unavailable')

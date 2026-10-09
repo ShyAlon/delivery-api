@@ -968,6 +968,9 @@ def create_store(database_url: str) -> Storage:
     Local paths and sqlite:/// URLs use SQLite. A future postgres:// adapter is
     registered here; no route, runner or job code changes with that deployment.
     """
+    if database_url.startswith(("postgres://", "postgresql://")):
+        from .postgres_store import PostgresStore
+        return PostgresStore(database_url)
     if database_url == ":memory:":
         return SQLiteStore(database_url)
     if database_url.startswith("sqlite:///"):
