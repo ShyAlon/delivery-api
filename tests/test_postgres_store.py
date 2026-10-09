@@ -768,8 +768,10 @@ def test_source_change_during_concrete_stage_validation_leaves_only_prepared_eve
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
 
 
-@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph','architecture_continuation'])
+@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph','architecture_continuation','successor_revoked','successor_expired','successor_swap','successor_prepared_swap','successor_provider_hold'])
 def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch,coordinated):
+    fault=coordinated if isinstance(coordinated,str) and coordinated.startswith('successor_') else None
+    if fault:coordinated='continuation_real_graph'
     source_path=os.getenv("DELIVERY_TEST_SPEC_SOURCE")
     if source_path:monkeypatch.syspath_prepend(source_path)
     import hashlib,json
@@ -1171,10 +1173,36 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                             assert stage=='items'
                             schema=kwargs.get('schema') or {}
                             value=[{'slug':'api','kind':'api_surface','title':'API','requirement_ids':['R-1'],'depends_on':[]}] if schema.get('type')=='array' else {'body_markdown':'# Approved Spec\n\nThe API emits the complete approved specification.'}
+                            if fault:
+                                if fault=='successor_revoked':store.revoke_private_revision_acceptance(tid,acceptance_reference=receipt['acceptance_reference'])
+                                elif fault=='successor_provider_hold':
+                                    if not hasattr(fake_next_items,'held'):
+                                        import psycopg
+                                        from test_attempt_ledger import Q
+                                        with psycopg.connect(DSN) as admin:
+                                            admin.execute('INSERT INTO admission_limits VALUES (%s,%s,1000,300,700,300,700,60,100,2) ON CONFLICT(owner_id) DO NOTHING',(A.owner_id,'test-only'))
+                                        attempt=store.reserve_provider_attempt(next_job,uuid.uuid4().hex,Q,'constructed-test-hold')
+                                        fake_next_items.held=attempt['attempt_id']
+                                elif fault=='successor_expired':monkeypatch.setattr(store,'auth_session_active',lambda:False)
+                                else:
+                                    path=promoted_root/'spec/continuation-chain'/shown['review_sha256']/('execution' if fault=='successor_swap' else 'prepared')
+                                    if not path.with_name(path.name+'-detached').exists():
+                                        path.rename(path.with_name(path.name+'-detached'));path.mkdir()
                             checked=kwargs['validate'](value)
                             return checked if checked is not None else value
                         monkeypatch.setattr(real_graph,'_call_json',fake_next_items)
                         next_job=queue_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])
+                        if fault:
+                            with pytest.raises((ValueError,TenantAccessDenied)):
+                                asyncio.run(execute_private_successor(store,next_worker,next_job,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256']))
+                            assert store.worker_job(next_job)['state']==('running' if fault=='successor_expired' else 'failed')
+                            assert not (promoted_root/'spec/continuation-chain'/shown['review_sha256']/'execution/receipt.json').exists()
+                            assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='specs')['state']!='waiting'
+                            assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
+                            if fault=='successor_provider_hold':
+                                assert store.provider_attempt(fake_next_items.held)['state']=='reserved'
+                                store.transition_provider_attempt(fake_next_items.held,'cancel')
+                            return
                         next_consumed=asyncio.run(execute_private_successor(store,next_worker,next_job,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256']))
                         assert next_consumed['started'] and next_consumed['outputs'][0]['phase']=='specs'
                         assert queue_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])==next_job
