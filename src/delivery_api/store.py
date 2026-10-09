@@ -615,7 +615,12 @@ class SQLiteStore:
     def retain_decision_review(self, task_id:str, wait_id:str, revision:str, payload:dict)->None:
         with self._lock:
             self._db.execute("INSERT OR IGNORE INTO decision_reviews VALUES (?,?,?,?,?)",
-                (task_id,wait_id,revision,json.dumps(payload),time.time()));self._commit()
+                (task_id,wait_id,revision,json.dumps(payload),time.time()))
+            retained=self._db.execute('SELECT payload FROM decision_reviews WHERE task_id=? AND wait_id=? AND revision=?',
+                (task_id,wait_id,revision)).fetchone()
+            if retained is None or json.loads(retained[0])!=json.loads(json.dumps(payload)):
+                raise ValueError('conflicting retained decision review revision')
+            self._commit()
 
     def decision_review(self,task_id:str,wait_id:str,revision:str|None=None)->dict|None:
         with self._lock:

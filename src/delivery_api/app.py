@@ -2110,7 +2110,19 @@ def _gate_review(task_id:str,gate_key:str)->dict:
     if len(raw.encode())>6_000_000:raise HTTPException(413,'gate review exceeds snapshot limit')
     revision='gate:'+hashlib.sha256(raw.encode()).hexdigest()
     review={'revision':revision,'phase_key':gate['after_phase'],'task':task,'documents':documents,'semantic_review':semantic,'stack_decisions':stack_decisions}
-    store.retain_decision_review(task_id,'gate:'+gate_key,revision,review)
+    existing=store.decision_review(task_id,'gate:'+gate_key,revision)
+    if existing is not None:
+        # Task heartbeat/cost metadata is not review identity. Preserve the first
+        # snapshot, while rejecting any conflict in the actual hashed evidence.
+        old_task=existing.get('task',{})
+        old_gate=next((g for g in old_task.get('gates',[]) if g.get('gate_key')==gate_key),None)
+        old_artifacts=[a for a in old_task.get('artifacts',[]) if a['phase_key']==gate['after_phase'] and not a.get('stale')]
+        if (old_task.get('generation')!=task['generation'] or old_gate!=gate or old_artifacts!=artifacts
+            or any(existing.get(key)!=review.get(key) for key in ('phase_key','documents','semantic_review','stack_decisions'))):
+            raise HTTPException(409,'retained gate evidence conflicts with its revision')
+        return existing
+    try:store.retain_decision_review(task_id,'gate:'+gate_key,revision,review)
+    except ValueError as exc:raise HTTPException(409,'retained gate evidence conflicts with its revision') from exc
     return review
 
 def _closed_revision_draft_available(task_id,gate_key,review):
