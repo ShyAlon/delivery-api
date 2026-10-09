@@ -1,0 +1,9 @@
+# Installed-wheel browser/HTTP verification, not production deployment.
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 REQUI_RE_DIST=1 DELIVERY_DATABASE_URL=sqlite:////tmp/fake-ui.db PLAYWRIGHT_BROWSERS_PATH=/opt/browser
+WORKDIR /app
+COPY wheels/ /wheels/
+COPY constraints.txt wheel-sha256.txt /app/
+RUN sha256sum --check /app/wheel-sha256.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/*.whl playwright==1.62.0 && pip check && python -m playwright install --with-deps chromium
+COPY source-manifest.json ui-smoke.py ui-fixtures.py host-preview.py /app/
+CMD ["python", "/app/ui-smoke.py"]

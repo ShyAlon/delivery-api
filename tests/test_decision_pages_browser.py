@@ -137,9 +137,10 @@ def test_continue_names_unfinished_inputs_and_boxes_do_not_repeat_their_title(pa
  expect(boxes.nth(0).locator('.state-badge')).to_have_text('Leave Open')
  boxes.nth(0).evaluate('d=>d.open=true');p.locator('[data-founder-group]').first.locator('label.pill').nth(2).click();expect(boxes.nth(0).locator('.state-badge')).to_have_text('Decide Later')
  boxes.nth(0).evaluate('d=>d.open=false')
- p.get_by_role('button',name='Continue',exact=True).click()
- status=p.locator('#review-status');expect(status).to_contain_text('Finish 1 open input');expect(status).to_contain_text('What styling?');expect(status).to_contain_text('needs a reason')
- assert boxes.nth(0).evaluate('d=>d.open&&d.classList.contains("needs-input")');assert not state['posts']
+ expect(p.get_by_role('button',name='Continue',exact=True)).to_be_disabled()
+ status=p.locator('#review-status');checklist=p.locator('#decision-checklist');expect(checklist).to_contain_text('What styling?');expect(checklist).to_contain_text('needs a reason')
+ checklist.locator('[data-jump]').first.click()
+ assert boxes.nth(0).evaluate('d=>d.open');expect(p.locator('[data-founder-reason]').first).to_be_focused();assert not state['posts']
  p.screenshot(path=str(root/'needs-input.png'));p.set_viewport_size({'width':460,'height':900});p.locator('#save-draft').scroll_into_view_if_needed();p.screenshot(path=str(root/'right-panel-narrow.png'));p.set_viewport_size({'width':1249,'height':920})
  p.locator('[data-founder-reason]').first.fill('Ask the designer');p.get_by_role('button',name='Continue',exact=True).click()
  expect(status).to_contain_text('Decision saved');assert state['posts'][0]['founder_inputs'][0]['status']=='deferred'
@@ -167,8 +168,8 @@ def test_reason_is_optional_when_the_input_blocks_nothing(page):
  g=p.locator('[data-founder-group]')
  g.nth(0).locator('label.pill').nth(1).click();boxes.nth(0).locator('[data-founder-answer]').fill('Friendly')
  g.nth(1).locator('label.pill').nth(2).click()
- p.get_by_role('button',name='Continue',exact=True).click()
- status=p.locator('#review-status');expect(status).to_contain_text('Finish 1 open input');expect(status).to_contain_text('What flow?');expect(status).not_to_contain_text('What tone?');assert not state['posts']
+ expect(p.get_by_role('button',name='Continue',exact=True)).to_be_disabled()
+ status=p.locator('#review-status');checklist=p.locator('#decision-checklist');expect(checklist).to_contain_text('What flow?');expect(checklist).not_to_contain_text('What tone?');assert not state['posts']
  boxes.nth(1).locator('[data-founder-reason]').fill('Ask designer');p.get_by_role('button',name='Continue',exact=True).click()
  expect(status).to_contain_text('Decision saved')
  sent={x['item_id']:x for x in state['posts'][0]['founder_inputs']};assert sent['FD-free']['reason']=='' and sent['FD-free']['decision']=='Friendly' and 'reasonRequired' not in sent['FD-free']
@@ -293,9 +294,9 @@ def _slow_flag_page(p,base,fail=False):
 def test_apply_shows_busy_then_success_feedback(page):
  p,base,root=page;held=_slow_flag_page(p,base)
  p.locator('input[name="action-0"][value="remove"]').check();btn=p.get_by_role('button',name='Apply decisions and continue');btn.click()
- expect(p.locator('#semanticstatus')).to_contain_text('Applying your decisions');expect(p.locator('#semanticform button[type=submit]')).to_contain_text('Applying decisions');expect(p.locator('#semanticform button[type=submit]')).to_be_disabled();expect(p.locator('#semanticform .waiting-spinner')).to_be_visible()
+ expect(p.locator('#semanticstatus')).to_contain_text('Recording decisions');expect(p.locator('#semanticform button[type=submit]')).to_contain_text('Applying decisions');expect(p.locator('#semanticform button[type=submit]')).to_be_disabled();expect(p.locator('#semanticform .waiting-spinner')).to_be_visible()
  p.screenshot(path=str(root/'semantic-applying.png'))
- expect(p.locator('#semanticstatus')).to_contain_text('1-2 minutes',timeout=9000)
+ expect(p.locator('#semanticstatus')).to_contain_text('Estimating');assert '1-2 minutes' not in p.locator('#semanticstatus').inner_text()
  for _ in range(50):
   if held:break
   p.wait_for_timeout(100)
@@ -456,3 +457,201 @@ def test_header_cost_unavailable_last_known_and_recovery(page):
  state['fail']=False;expect(host).to_have_text('0.73 credits · $0.73',timeout=12000)
  state['fail']=True;expect(host).to_have_text('0.73 credits · $0.73 · Last Known',timeout=12000)
  state.update(fail=False,price=.9);expect(host).to_have_text('0.90 credits · $0.90',timeout=12000)
+
+
+def test_gate_render_failure_stays_explained_after_checklist_refresh(page):
+ p,base,root=page;data=_stack_review()
+ data['review']['documents'][0]={'name':'architecture.json','error':'retained evidence unavailable'}
+ def route(r):
+  path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
+  if path.endswith('/review'):r.fulfill(json=data);return
+  if path=='/api/model-routes':r.fulfill(json={'routes':[]});return
+  if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
+  r.continue_()
+ p.route('**/api/**',route);p.goto(base+'/tasks/t1/gates/gate-architecture')
+ expect(p.locator('#stack-panel')).to_be_attached() # This calls updateDecision after failed render.
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ expect(p.locator('#decision-checklist')).to_contain_text('architecture.json could not be shown')
+ expect(p.locator('[data-action=approve]')).to_have_attribute('aria-describedby','decision-checklist')
+ p.locator('#decision-checklist button').first.click()
+ p.screenshot(path='/downloads/gate-evidence-blocker-desktop.png',full_page=True)
+ p.set_viewport_size({'width':390,'height':844})
+ assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ p.screenshot(path='/downloads/gate-evidence-blocker-mobile.png',full_page=True)
+
+
+def test_saved_stack_choice_checklist_explains_stale_evidence(page):
+ p,base,root=page;data=_stack_review();posts=[]
+ def route(r):
+  path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
+  if path.endswith('/stack-decisions'):posts.append(r.request.post_data_json);r.fulfill(json={'status':'saved'});return
+  if path.endswith('/review'):r.fulfill(json=data);return
+  if path=='/api/model-routes':r.fulfill(json={'routes':[]});return
+  if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
+  r.continue_()
+ p.route('**/api/**',route);p.goto(base+'/tasks/t1/gates/gate-architecture')
+ panel=p.locator('#stack-panel');panel.locator('summary').first.click()
+ panel.locator('.stack-change summary').first.click()
+ panel.locator('textarea[name=stack-text-0]').fill('SQLite')
+ panel.locator('.stack-save').first.click()
+ expect(panel.locator('#stack-status')).to_contain_text('Change Saved')
+ expect(p.locator('#decision-checklist')).to_contain_text('Your saved change updated the evidence')
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ assert len(posts)==1
+
+
+def test_required_next_model_has_checklist_blocker_and_jump(page):
+ p,base,root=page;data=_stack_review()
+ data['review']['stack_decisions']=None
+ data['review']['task']['phase_config']={'specs':{'executor':'generator'}}
+ def route(r):
+  path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
+  if path.endswith('/generator-default/specs'):r.fulfill(json={'model':None,'source':'selection required'});return
+  if path.endswith('/review'):r.fulfill(json=data);return
+  if path=='/api/model-routes':r.fulfill(json={'routes':[{'id':'fake','models':['reviewed-model'],'available':True}]});return
+  if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
+  r.continue_()
+ p.route('**/api/**',route);p.goto(base+'/tasks/t1/gates/gate-architecture')
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ expect(p.locator('#decision-checklist')).to_contain_text('Choose the next phase model')
+ expect(p.locator('.model-panel')).not_to_have_attribute('open','')
+ p.locator('#decision-checklist [data-jump=".model-panel"]').click()
+ expect(p.locator('.model-panel')).to_have_attribute('open','')
+ expect(p.locator('select[name=next_model]')).to_be_visible()
+ p.locator('select[name=next_model]').select_option('fake:reviewed-model')
+ expect(p.locator('[data-action=approve]')).to_be_enabled()
+ expect(p.locator('#decision-checklist')).to_contain_text('Ready to continue')
+ p.locator('select[name=next_model]').select_option('')
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ p.screenshot(path='/downloads/gate-required-model-desktop.png')
+ p.set_viewport_size({'width':390,'height':844})
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ p.screenshot(path='/downloads/gate-required-model-mobile.png')
+
+
+def test_gate_checklist_jump_reveals_collapsed_target_and_moves_focus(page):
+ p,base,root=page;data=_stack_review()
+ def route(r):
+  path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
+  if path.endswith('/review'):r.fulfill(json=data);return
+  if path=='/api/model-routes':r.fulfill(json={'routes':[]});return
+  if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
+  r.continue_()
+ p.route('**/api/**',route);p.goto(base+'/tasks/t1/gates/gate-architecture')
+ panel=p.locator('#stack-panel');expect(panel.locator(':scope > details')).not_to_have_attribute('open','')
+ p.locator('#decision-checklist [data-jump="#stack-panel"]').click()
+ expect(panel.locator(':scope > details')).to_have_attribute('open','')
+ assert p.evaluate('document.activeElement.closest("#stack-panel")!==null')
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ expect(panel.locator('textarea[name=stack-text-0]')).to_be_visible()
+ expect(panel.locator('textarea[name=stack-text-0]')).to_be_focused()
+ p.wait_for_timeout(500)
+ p.screenshot(path='/downloads/gate-checklist-jump-desktop.png')
+ p.set_viewport_size({'width':390,'height':844})
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ p.locator('#decision-checklist [data-jump="#stack-panel"]').click()
+ p.wait_for_timeout(500)
+ expect(panel.locator('textarea[name=stack-text-0]')).to_be_in_viewport()
+ p.screenshot(path='/downloads/gate-checklist-jump-mobile.png')
+
+
+def test_concept_shared_checklist_missing_choice_reason_and_jump(page):
+ p,base,root=page;state=fake(p)
+ p.goto(base+'/tasks/concept/decisions/wait-concept')
+ expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled()
+ expect(p.locator('#decision-checklist')).to_contain_text('Choose an operating concept')
+ expect(p.locator('#decision-checklist')).to_contain_text('Explain why this concept fits')
+ p.locator('#decision-checklist [data-jump=".decision-options"]').click()
+ expect(p.locator('input[name=choice]').first).to_be_focused()
+ p.locator('input[value="2"]').check()
+ expect(p.locator('#decision-checklist')).not_to_contain_text('Choose an operating concept')
+ p.locator('textarea[name=rationale]').fill('One deployment')
+ expect(p.get_by_role('button',name='Choose and continue')).to_be_enabled()
+ p.locator('textarea[name=rationale]').fill('')
+ expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled()
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ p.screenshot(path='/downloads/concept-checklist-desktop.png')
+ p.set_viewport_size({'width':390,'height':844})
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
+ p.screenshot(path='/downloads/concept-checklist-mobile.png')
+ assert not state['posts']
+
+
+def test_closed_phase_change_draft_explains_regeneration_cost_without_commit(page):
+ p,base,root=page;data=_stack_review();posts=[];data['actionable']=False;data['closed_revision_draft']=True
+ data['review']['task']['gates'][0]['state']='decided'
+ def route(r):
+  path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
+  if path.endswith('/revision-drafts'):
+   body=r.request.post_data_json;posts.append({'path':path,'body':body})
+   data['draft']={'kind':'closed_gate_revision','edited_text':body['edited_text']}
+   r.fulfill(json={'draft_id':'closed-draft','committed':False,'dispatch_started':False});return
+  if path.endswith('/review'):r.fulfill(json=data);return
+  if path=='/api/model-routes':r.fulfill(json={'routes':[]});return
+  if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
+  r.continue_()
+ p.route('**/api/**',route);p.goto(base+'/tasks/t1/gates/gate-architecture')
+ panel=p.locator('.closed-revision-draft')
+ expect(panel).to_contain_text('regenerate this phase and affected downstream work')
+ expect(panel).to_contain_text('incur extra cost');expect(panel).to_contain_text('not available yet')
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ p.get_by_label('What should regeneration change?',exact=True).fill('Use offline-first storage throughout the document')
+ p.get_by_role('button',name='Save proposed revision',exact=True).click()
+ expect(p.locator('#closedrevisionstatus')).to_contain_text('approved result and downstream work are unchanged')
+ assert len(posts)==1 and posts[0]['path'].endswith('/revision-drafts')
+ assert posts[0]['body']['edited_text']=='Use offline-first storage throughout the document'
+ p.reload();expect(p.locator('#closedrevisiontext')).to_have_value(posts[0]['body']['edited_text'])
+ panel.scroll_into_view_if_needed();p.screenshot(path='/downloads/closed-regeneration-cost-desktop.png')
+ p.set_viewport_size({'width':390,'height':844});panel.scroll_into_view_if_needed();p.wait_for_timeout(250)
+ assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
+ p.screenshot(path='/downloads/closed-regeneration-cost-mobile.png')
+
+
+def test_flagged_inputs_shared_checklist_explains_missing_choice_and_jump(page):
+ p,base,root=page;held=_slow_flag_page(p,base)
+ expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_disabled()
+ expect(p.locator('#decision-checklist')).to_contain_text('Choose what happens to Constraint')
+ p.locator('#decision-checklist [data-jump="#semantic-0"]').click()
+ expect(p.locator('input[name="action-0"]').first).to_be_focused()
+ p.locator('input[name="action-0"][value="remove"]').check()
+ expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_enabled()
+ expect(p.locator('#decision-checklist')).to_contain_text('Ready to continue')
+ assert not held
+ p.screenshot(path='/downloads/findings-checklist-desktop.png')
+ p.set_viewport_size({'width':390,'height':844})
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
+ p.wait_for_timeout(600)
+ expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_in_viewport()
+ p.screenshot(path='/downloads/findings-checklist-mobile.png')
+
+
+def test_final_approval_shared_checklist_answer_reason_draft_and_leave_open(page):
+ p,base,root=page;state=fake(p);state['current']=review('wait-review','interview_approval')
+ state['current']['decision']['context']['evidence']['intent_model']['founder_register']={'items':[{'item_id':'FD-style','data_class':'styling','status':'open','question':'What styling?','owner':'founder','blocks':['UI']}],'advisories':[]}
+ p.goto(base+'/tasks/concept/decisions/wait-review')
+ expect(p.get_by_role('button',name='Continue',exact=True)).to_be_enabled()
+ box=p.locator('.founder-register details').first;box.evaluate('d=>d.open=true')
+ p.locator('[data-founder-group] label.pill',has_text='Answer It').click()
+ expect(p.locator('#decision-checklist')).to_contain_text('needs an answer')
+ expect(p.locator('#decision-checklist')).to_contain_text('needs a reason')
+ expect(p.get_by_role('button',name='Continue',exact=True)).to_be_disabled()
+ expect(p.locator('#confirm-rework')).to_be_disabled()
+ p.get_by_role('button',name='Save draft',exact=True).click();expect(p.locator('#draft-status')).to_contain_text('Draft saved')
+ p.reload();expect(p.get_by_role('button',name='Continue',exact=True)).to_be_disabled()
+ expect(p.locator('.founder-register .state-badge').first).to_have_text('Answer It')
+ box=p.locator('.founder-register details').first;box.evaluate('d=>d.open=false')
+ p.locator('#decision-checklist [data-jump]').first.click();expect(p.locator('[data-founder-answer]')).to_be_focused()
+ assert box.evaluate('d=>d.open')
+ p.locator('[data-founder-answer]').fill('Calm palette')
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ expect(p.get_by_role('button',name='Continue',exact=True)).to_be_disabled()
+ p.screenshot(path='/downloads/final-approval-checklist-desktop.png')
+ p.set_viewport_size({'width':390,'height':844});p.locator('#decision-checklist').scroll_into_view_if_needed();p.wait_for_timeout(250)
+ assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
+ p.screenshot(path='/downloads/final-approval-checklist-mobile.png')
+ p.locator('[data-founder-group] label.pill',has_text='Leave Open').click()
+ expect(p.get_by_role('button',name='Continue',exact=True)).to_be_enabled()
+ assert not state['posts']

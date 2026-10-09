@@ -468,7 +468,7 @@ def test_user_progress_and_composer_have_no_raw_console(page,ui):
     assert page.locator('#console').count()==0
     page.get_by_role('button',name='Close debug').click()
     assert page.locator('#answerform').is_visible()
-    page.evaluate("liveSource.emit({kind:'progress',message:'Still working',phase_key:'intent',payload:{status:'heartbeat',stage:'intent'},ts:1720000200})")
+    page.evaluate("liveSource.emit({id:999999,kind:'progress',message:'Still working',phase_key:'intent',payload:{status:'heartbeat',stage:'intent'},ts:1720000200})")
     assert page.locator('#stageprogress').get_by_text('Still working',exact=False).is_visible()
 
 
@@ -1881,7 +1881,7 @@ def test_phase_change_dialog_explains_pauses_input_and_keeps_progress_underneath
     assert "PHASE 3 OF 8" in text and "INPUT PAUSED" in text.upper()
     assert "Organizing your answers into stakeholder needs." in text
     assert "Your input is paused" in text
-    page.evaluate("window.__emit({kind:'progress',phase_key:'needs',message:'Drafting need 2 of 6'})")
+    page.evaluate("window.__emit({id:2147483647,kind:'progress',phase_key:'needs',message:'Drafting need 2 of 6'})")
     assert "Latest: Drafting need 2 of 6" in page.locator("#transitionprogress").inner_text()
     # the page underneath keeps receiving the same progress signals
     assert "Drafting need 2 of 6" in page.locator("#stageprogress").inner_text()
@@ -2075,3 +2075,16 @@ def test_global_cost_header_on_all_route_families(page,ui,path):
    if box.evaluate('e=>getComputedStyle(e).position')=='sticky':assert box.bounding_box()['y']>=head['height']-1
   name=path.strip('/').replace('/','-') or 'home'
   page.screenshot(path=f'/tmp/cost-route-{name}-{width}.png')
+
+
+def test_closed_gate_can_save_revision_proposal_without_restarting(page,ui):
+    task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['gate_key']=='gate-needs');gate['state']='decided'
+    data={'review':{'revision':'gate:approved','task':task,'documents':[]},'actionable':False,'draft':None,'comments':[],'closed_revision_draft':True}
+    page.route('**/api/tasks/sim/gates/gate-needs/review*',lambda r:r.fulfill(json=data));sent=[]
+    page.route('**/api/tasks/sim/gates/gate-needs/revision-drafts',lambda r:(sent.append(r.request.post_data_json),r.fulfill(json={'draft_id':'fake','committed':False,'dispatch_started':False})))
+    page.goto(ui+'/tasks/sim/gates/gate-needs');page.locator('#closedrevisiontext').fill('Proposed new requirement wording')
+    page.locator('#saveclosedrevision').click()
+    expect(page.locator('#closedrevisionstatus')).to_contain_text('unchanged')
+    assert sent==[{'review_revision':'gate:approved','edited_text':'Proposed new requirement wording'}]
+    expect(page.locator('[data-action="approve"]')).to_be_disabled()
+    page.screenshot(path='/downloads/closed-gate-proposal-desktop.png',full_page=True)

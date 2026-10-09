@@ -64,3 +64,22 @@ def test_semantic_findings_use_structured_page_not_free_text(tmp_path,monkeypatc
  engine.pending=engine.pending.model_copy(update={'kind':InputKind.TEXT,'options':[],'context':{'decision_purpose':'semantic_review','evidence_version':1,'session_id':'session-one','evidence_revision':digest,'evidence':evidence}})
  result=c.get(f'/api/tasks/{tid}/decisions/{engine.pending.input_id}').json()
  assert result['actionable'];assert result['review']['kind']=='semantic_review';assert result['review']['decision']['context']['evidence']==evidence
+
+
+def test_engine_same_sequence_conflicting_evidence_returns_409_retains_original(tmp_path,monkeypatch):
+ import copy
+ store,tid,engine,c=setup(tmp_path,monkeypatch);wait=str(engine.pending.input_id)
+ first=c.get(f'/api/tasks/{tid}/decisions/{wait}').json()['review']
+ context=copy.deepcopy(engine.pending.context)
+ context['evidence']['conops_draft']['operational_scenarios'][0]['success_outcome']='Changed outcome'
+ context['evidence_revision']=hashlib.sha256(json.dumps(context['evidence'],sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+ engine.pending=engine.pending.model_copy(update={'context':context})
+ response=c.get(f'/api/tasks/{tid}/decisions/{wait}')
+ assert response.status_code==409 and 'without a new revision' in response.text
+ assert store.decision_review(tid,wait,first['revision'])==first
+ assert not any(event['kind']=='answer' for event in store.events(tid))
+ engine.sequence+=1
+ current=c.get(f'/api/tasks/{tid}/decisions/{wait}').json()['review']
+ assert current['revision']!=first['revision']
+ assert current['decision']['context']['evidence']==context['evidence']
+ assert store.decision_review(tid,wait,first['revision'])==first

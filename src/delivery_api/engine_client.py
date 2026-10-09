@@ -31,6 +31,8 @@ class EngineClient(ABC):
     @abstractmethod
     def snapshot(self,session_id:str)->EngineSnapshot:...
     def progress(self,session_id:str,after:int=0):...
+    def stop(self,session_id:str)->EngineSnapshot:raise NotImplementedError("engine Stop is not supported")
+    def reconcile_stop(self,session_id:str)->EngineSnapshot:raise NotImplementedError("engine Stop reconciliation is not supported")
     @abstractmethod
     def switch_route(self,session_id:str,request:ModelRouteSwitchRequest)->ModelRouteSwitchResponse:
         reply=self._send('POST',f'/v1/sessions/{session_id}/model-route',json=request.model_dump(mode='json'))
@@ -48,6 +50,10 @@ class HttpEngineClient(EngineClient):
         # Transport failures (connection refused, timeouts) mean the engine
         # process is not there at all - translate them at this boundary so
         # callers never see a raw httpx traceback.
+        from . import config
+        if config.CLOUD_TENANTS:
+            from .tenancy import current_scope
+            kwargs['headers']={**kwargs.get('headers',{}),'X-Requi-Owner':current_scope().owner_id}
         try:return self._http.request(method,path,**kwargs)
         except httpx.TransportError as exc:raise EngineUnreachableError(self._http.base_url,exc) from exc
 
@@ -81,6 +87,16 @@ class HttpEngineClient(EngineClient):
         from vmodel_contracts.progress_signal import ProgressPage
         response=self._send('GET',f'/v1/sessions/{session_id}/progress',params={'after':after})
         return self._validated(response,ProgressPage,200)
+
+    def stop(self,session_id:str)->EngineSnapshot:
+        # Canonical UUID prevents request path substitution. Owner header comes
+        # only from current verified control-plane scope in _send.
+        sid=str(UUID(session_id))
+        return self._validated(self._send('POST',f'/v1/sessions/{sid}/stop'),EngineSnapshot,200)
+
+    def reconcile_stop(self,session_id:str)->EngineSnapshot:
+        sid=str(UUID(session_id))
+        return self._validated(self._send('POST',f'/v1/sessions/{sid}/stop/reconcile'),EngineSnapshot,200)
 
     def snapshot(self,session_id:str)->EngineSnapshot:
         response=self._send('GET',f'/v1/sessions/{session_id}')

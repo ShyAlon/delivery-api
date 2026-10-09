@@ -7,4 +7,4 @@ export function vmap(phases,gates=[],taskId=''){
  return `<div class="v-map"><svg viewBox="0 0 332 175"><path class="rail" d="${path}"/><path class="passed" d="M${passed.map(p=>p.join(',')).join(' L')}"/>${phases.map((p,i)=>`<circle class="${p.state}" cx="${pts[i][0]}" cy="${pts[i][1]}" r="7"/><text x="${pts[i][0]+(i===3?6:i===4?-6:0)}" y="${pts[i][1]+(i<3?-13:22)}" text-anchor="${i===3?'end':i===4?'start':'middle'}">${esc(p.label.split(' ')[0])}</text>`).join('')}${gateMarks}</svg></div>`;
 }
 
-export function stateLabel(s){ return s==='not_started'?'Not started':s==='running'?'In progress':s==='done'?'Complete':s==='waiting_gate'?'Waiting at gate':'Needs attention'; }
+export function stateLabel(s){ return s==='stop_requested'?'Stop requested':s==='stopped'?'Stopped':s==='not_started'?'Not started':s==='running'?'In progress':s==='done'?'Complete':s==='waiting_gate'?'Waiting at gate':'Needs attention'; }

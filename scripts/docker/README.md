@@ -1,0 +1,139 @@
+# Integrated image test preparation
+
+This is a test image, not the production launcher. It installs the exact built
+contracts, delivery, engine and generator wheels and runs fake SDK Stop checks.
+It does not connect a provider, mount existing accounts, apply migrations, enable
+cloud execution, launch the UI or exercise the full production lifecycle.
+
+Requirements: Docker Desktop/Engine, Python 3, uv and the four local source repos.
+The preparer refuses tracked source edits and records full source SHAs and wheel
+hashes. Commit the intended test snapshot first. It does not fetch or push.
+
+From delivery-api, with matching source snapshots:
+
+```bash
+python3 scripts/docker/prepare-context.py \
+  --delivery "$PWD" \
+  --engine ../interview-engine \
+  --generator ../spec-generator \
+  --contracts ../vmodel-contracts \
+  --constraints scripts/docker/tested-constraints.txt \
+  --output /tmp/requi-re-image-test
+scripts/docker/run-test-image.sh /tmp/requi-re-image-test
+```
+
+The wheel build uses the local uv build cache. The image build needs access to
+Python's image and dependency downloads. Runtime has no network, host mounts,
+provider secrets or exposed ports. Its root is read-only; scratch is temporary.
+Success prints a JSON result followed by the image tag. Build or runtime failure
+is not a production readiness result. Preserve the source manifest and full
+build/run output for diagnosis.
+
+Validation status: local exact-wheel build, installed-wheel invoke/stream Stop
+smoke and packaging contracts passed. Docker image build/run has NOT been run in
+the preparation environment because Docker is unavailable. The image is not yet
+certified as a ready Mac handoff. Both arm64 and amd64 container execution remain
+to be checked. No claim is made that these dependency pins have been resolved on
+both target platforms; the real image build is that check.
+
+## HTTP + browser test variant
+
+Add `--ui-test` to prepare-context.py to select the installed-wheel Chromium
+image instead of Stop-only smoke. Use the same run-test-image.sh command. It
+starts delivery web and private back-office listeners inside the isolated
+container and checks actual browser auto-loading, expanded detail API reads,
+per-task token/credit rendering, JSON download, mobile layout and revocation.
+No host port is exposed. This proves browser-to-listener reachability inside the
+container, not host-browser reachability or production authentication/RLS.
+
+The fixture injects a fake verified identity and in-memory read adapter only in
+the test script. No production registry is enabled, provider is called or SQL
+migration applied. Browser requests outside the two loopback listeners are
+blocked. Build downloads Chromium and its OS dependencies; runtime network
+remains disabled. Screenshots live only in temporary container scratch.
+
+The UI variant still needs actual Docker arm64/amd64 build/run validation.
+A passing Python/Chromium run outside Docker does not establish that result.
+
+## Mac host-browser fake preview (candidate, Docker validation pending)
+
+For a UI-test context, run `bash run-host-preview.sh /path/to/context`.
+It builds the UI image, runs the internal automated browser gate, then starts a
+separate fake read-only preview on loopback-published web8000/back-office8020.
+It checks both host health URLs before printing `/preview` links. Those links
+set a fake fixture cookie, not a real sign-in. Open the back office to expand
+fake session details, usage and state events. Press Ctrl-C to clean up.
+PREVIEW_WEB_PORT and PREVIEW_BACKOFFICE_PORT may select unused ports1024..65535.
+No host database, environment file, secrets or provider access is passed in.
+
+Preview uses an internal Docker bridge plus an application non-loopback outbound
+socket deny guard. Internal bridges still permit gateway/host communication;
+this is not equivalent to network-none. Only loopback host ports are published,
+with Docker Engine28+ required because older engines can expose localhost ports
+to the local network. Docker Desktop port publication on an internal bridge
+still needs actual Mac validation; a failed host health check is failure, not
+readiness. No fallback to a public bind or ordinary internet-enabled bridge.
+
+Network references:
+https://docs.docker.com/reference/cli/docker/network/create/
+https://docs.docker.com/engine/network/port-publishing/
+
+## HTTP + browser test variant
+
+Add `--ui-test` to prepare-context.py to select the installed-wheel Chromium
+image instead of Stop-only smoke. Use the same run-test-image.sh command. It
+starts delivery web and private back-office listeners inside the isolated
+container and checks actual browser auto-loading, expanded detail API reads,
+per-task token/credit rendering, JSON download, mobile layout and revocation.
+No host port is exposed. This proves browser-to-listener reachability inside the
+container, not host-browser reachability or production authentication/RLS.
+
+The fixture injects a fake verified identity and in-memory read adapter only in
+the test script. No production registry is enabled, provider is called or SQL
+migration applied. Browser requests outside the two loopback listeners are
+blocked. Build downloads Chromium and its OS dependencies; runtime network
+remains disabled. Screenshots live only in temporary container scratch.
+
+The UI variant still needs actual Docker arm64/amd64 build/run validation.
+A passing Python/Chromium run outside Docker does not establish that result.
+
+## Mac host-browser fake preview (candidate, Docker validation pending)
+
+For a UI-test context, run `bash run-host-preview.sh /path/to/context`.
+It builds the UI image, runs the internal automated browser gate, then starts a
+separate fake read-only preview on loopback-published web8000/back-office8020.
+It checks both host health URLs before printing `/preview` links. Those links
+set a fake fixture cookie, not a real sign-in. Open the back office to expand
+fake session details, usage and state events. Press Ctrl-C to clean up.
+PREVIEW_WEB_PORT and PREVIEW_BACKOFFICE_PORT may select unused ports1024..65535.
+No host database, environment file, secrets or provider access is passed in.
+
+Preview uses an internal Docker bridge plus an application non-loopback outbound
+socket deny guard. Internal bridges still permit gateway/host communication;
+this is not equivalent to network-none. Only loopback host ports are published,
+with Docker Engine28+ required because older engines can expose localhost ports
+to the local network. Docker Desktop port publication on an internal bridge
+still needs actual Mac validation; a failed host health check is failure, not
+readiness. No fallback to a public bind or ordinary internet-enabled bridge.
+
+Network references:
+https://docs.docker.com/reference/cli/docker/network/create/
+https://docs.docker.com/engine/network/port-publishing/
+
+## Fresh dependency check before another handoff
+
+From delivery-api, use Python3.12 with the final extracted UI-test context:
+
+```bash
+python scripts/docker/verify-clean-install.py /path/to/extracted/context
+```
+
+This creates a new temporary venv with no system-site packages, verifies the four
+wheel names/content/hashes against the context manifest and Docker hash file,
+installs only the packaged requirements plus Docker's explicit Playwright pin,
+checks dependencies and runs the installed UI smoke. It does not use dev extras,
+source PYTHONPATH, account environment variables or existing Python packages.
+An explicit --browser-path may reuse Chromium binaries only; otherwise it
+installs Chromium in temporary scratch. OS browser libraries must already exist.
+This is a dependency-completeness check, not Docker/arm64/read-only-root or
+host-browser bridge certification. Those checks remain separate.

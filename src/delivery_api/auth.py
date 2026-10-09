@@ -49,7 +49,7 @@ limiter = RateLimiter()
 
 
 def enabled() -> bool:
-    return config.BASIC_AUTH_ENABLED or bool(config.SESSION_SECRET and (config.GOOGLE_CLIENT_ID or config.GITHUB_CLIENT_ID))
+    return config.CLOUD_TENANTS or config.BASIC_AUTH_ENABLED or bool(config.SESSION_SECRET and (config.GOOGLE_CLIENT_ID or config.GITHUB_CLIENT_ID))
 
 EMAIL_RE=re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
 def normalize_email(value:str)->str:return value.strip().lower()
@@ -111,6 +111,13 @@ def _client_ip(request: Request) -> str:
 
 
 def actor(request: Request, *, required: bool = False) -> Actor:
+    if config.CLOUD_TENANTS:
+        verified = getattr(request.state, "supabase_actor", None)
+        if verified is not None:
+            return verified
+        if required:
+            raise HTTPException(401, "Supabase sign-in required")
+        return Actor("anonymous", "anonymous")
     if not enabled():
         return Actor("local", "local user", admin=True)
     sid = request.cookies.get(config.SESSION_COOKIE)
@@ -151,7 +158,9 @@ def csrf_guard(request: Request) -> None:
     """
     if not enabled() or request.method in {"GET", "HEAD", "OPTIONS"}: return
     origin = request.headers.get("origin")
-    if request.cookies.get(config.SESSION_COOKIE) and not origin:
+    if config.CLOUD_TENANTS and request.url.path.startswith('/auth/') and not origin:
+        raise HTTPException(403,'Authentication requires same-origin request')
+    if (request.cookies.get(config.SESSION_COOKIE) or request.cookies.get('requi_access') or request.cookies.get('requi_refresh')) and not origin:
         raise HTTPException(403, "Authenticated state changes require a same-origin request.")
     if origin and origin.rstrip("/") != (config.PUBLIC_ORIGIN or str(request.base_url)).rstrip("/"):
         raise HTTPException(403, "Cross-site request rejected.")

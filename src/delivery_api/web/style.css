@@ -300,3 +300,21 @@ header{z-index:6}
 .decision-launch-sticky{top:calc(var(--global-header-height,84px) + 12px)}
 .decision-page:not(.semantic-page) .gate-controls{top:calc(var(--global-header-height,84px) + 16px);max-height:calc(100dvh - var(--global-header-height,84px) - 32px)}
 @media(max-width:760px){.decision-page:not(.semantic-page) .gate-controls{max-height:none}}
+
+/* Long review progress belongs in document flow, not an overlapping footer. */
+#semanticform.applying .semantic-footer {position:static;display:flex;flex-direction:column;align-items:stretch;gap:12px;}
+#semanticform.applying #semanticstatus {width:100%;}
+.review-progress {padding:12px;min-width:0;overflow-wrap:anywhere;}
+.review-progress ol {padding-left:22px;}
+.review-progress details {padding:4px 0;}
+
+/* Structured progress needs the full panel width, not a narrow side column. */
+.live-status-row:has(.review-progress){align-items:flex-start;flex-direction:column}
+.live-status-row:has(.review-progress) .live-progress{width:100%}
+
+.closed-revision-draft label{display:block;margin:16px 0 8px}
+.closed-revision-draft textarea{display:block;width:100%;min-height:100px;margin-top:8px}
+
+/* Leave bottom clearance so the sticky decision controls cannot be pushed
+   beneath the global header at the end of a shorter evidence column. */
+@media(min-width:761px){.decision-page:not(.semantic-page) .gate-controls{box-sizing:border-box;max-height:calc(100dvh - 2 * var(--global-header-height,84px) - 64px)}}

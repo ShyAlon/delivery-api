@@ -62,8 +62,28 @@ def test_gate_semantic_draft_restores_exact_saved_fields(tmp_path,monkeypatch):
  path=tmp_path/'intent_model.json';path.write_text('{"problem_statement":"Exact evidence"}')
  import delivery_api.app as module
  monkeypatch.setattr(module,'_task_artifact_snapshot',lambda task:[{'phase_key':'intent','name':'intent_model.json','ref':str(path),'present':True,'valid':True,'stale':False,'generation':1}])
- revision=c.get(f'/api/tasks/{tid}/gates/gate-intent/review').json()['review']['revision']
+ first=c.get(f'/api/tasks/{tid}/gates/gate-intent/review').json()['review']
+ revision=first['revision']
  draft={'revision':revision,'choice':'Proceed','comment':'Review this','semantic_decisions':[{'item_id':'R-1','action':'replace','replacement_text':'{"statement":"saved"}'}]}
  saved=c.post(f'/api/tasks/{tid}/gates/gate-intent/drafts',json=draft);assert saved.status_code==200
- restored=c.get(f'/api/tasks/{tid}/gates/gate-intent/review',params={'revision':revision,'draft':saved.json()['draft_id']}).json()['draft']
+ response=c.get(f'/api/tasks/{tid}/gates/gate-intent/review',params={'revision':revision,'draft':saved.json()['draft_id']}).json()
+ assert response['review']==first
+ restored=response['draft']
  assert restored['semantic_decisions']==draft['semantic_decisions'];assert restored['comment']=='Review this'
+
+
+def test_gate_review_rejects_conflicting_retained_evidence(tmp_path,monkeypatch):
+ import copy
+ import delivery_api.app as module
+ store,tid,engine,c=setup(tmp_path,monkeypatch);store.wait_at_gate(tid,'intent')
+ first=c.get(f'/api/tasks/{tid}/gates/gate-intent/review').json()['review']
+ original=store.decision_review
+ for field in ('documents','artifacts'):
+  changed=copy.deepcopy(first)
+  if field=='documents':changed['documents']=[{'name':'fake','view':{'content':'changed'}}]
+  else:changed['task']['artifacts']=[{'phase_key':'intent','name':'fake','stale':False}]
+  monkeypatch.setattr(store,'decision_review',lambda *args,**kwargs:changed)
+  response=c.get(f'/api/tasks/{tid}/gates/gate-intent/review')
+  assert response.status_code==409,response.text
+ monkeypatch.setattr(store,'decision_review',original)
+ assert store.decision_review(tid,'gate:gate-intent',first['revision'])==first

@@ -1,0 +1,26 @@
+{
+  "delivery": {
+    "revision": "b6058a63319d8b6ae3481ee307dd34118789895e"
+  },
+  "engine": {
+    "revision": "4c9769f41923d0d3feedf1e177be7c28184832c0"
+  },
+  "generator": {
+    "revision": "fb425c41933419cf34712c9f3d5b260161a4489a"
+  },
+  "contracts": {
+    "revision": "5bdc1a0ec536c29daefc2ad344bace1b4568db5b"
+  },
+  "interview_engine-0.1.0-py3-none-any.whl": {
+    "sha256": "82231f276c1d1a4a454d36a93b79ec97c7c909acd62661e76c6c8d041c1fd3f6"
+  },
+  "delivery_api-0.2.0-py3-none-any.whl": {
+    "sha256": "d59c8ea886670d32803fce111ef74ef217afd22ff59832b41a81f10f2daa66f6"
+  },
+  "vmodel_contracts-0.28.0-py3-none-any.whl": {
+    "sha256": "128cc0e8a3abda204d107708fe7ade1db072d3a93a9349bbfd9e0bf8b96c9a84"
+  },
+  "spec_generator-0.1.0-py3-none-any.whl": {
+    "sha256": "d68842aabe51a78098552cda511b09b9abec1f9740249ea4cf01caf9f3e21564"
+  }
+}

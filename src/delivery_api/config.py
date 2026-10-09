@@ -20,8 +20,18 @@ def default_data_dir() -> Path:
     return Path.home() / ".local" / "share" / "requi-re"
 
 DEFAULT_DB_PATH = default_data_dir() / "delivery.db"
-DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+# Configuration import is read-only. The selected SQLiteStore creates only its
+# actual parent when opened; cloud/override users must not touch the default home.
 DATABASE_URL = os.environ.get("DELIVERY_DATABASE_URL", os.environ.get("DELIVERY_DB_PATH", f"sqlite:///{DEFAULT_DB_PATH}"))
+SUPABASE_URL = os.environ.get("DELIVERY_SUPABASE_URL", "").rstrip("/")
+SUPABASE_ANON_KEY = os.environ.get("DELIVERY_SUPABASE_ANON_KEY", "")
+CLOUD_TENANTS = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+if CLOUD_TENANTS and (not SUPABASE_URL or not SUPABASE_ANON_KEY):
+    raise RuntimeError("Postgres requires Supabase Auth URL and public anon/publishable key; no local-auth fallback.")
+if CLOUD_TENANTS and os.environ.get("TURSO_DATABASE_URL"):
+    raise RuntimeError("Cloud tenant control plane cannot use a Turso replica/fallback.")
+SUPABASE_ADMIN_SUBJECTS = {x.strip() for x in os.environ.get("DELIVERY_SUPABASE_ADMIN_SUBJECTS", "").split(",") if x.strip()}
+
 # Compatibility alias for older deployments; new code uses DATABASE_URL.
 DB_PATH = DATABASE_URL
 def local_database_path() -> Path:

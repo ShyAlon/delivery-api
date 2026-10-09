@@ -41,3 +41,38 @@ def plan_recovery(task:dict, latest_event:dict|None=None, *, has_session:bool=Fa
     if has_session and not interview_complete and (task.get("state") in ("running","waiting_gate") or legacy):
         return RecoveryPlan("resume","intent",reason="interview checkpoint is current")
     return IDLE
+
+
+def flag_orphaned_running(store,task_id,*,evidence):
+    """Flag a verified missing live owner, not a transport outage or Stop.
+
+    Review-only event. Never starts work, kills calls, changes Stop, or declares
+    provider quiescence. Idempotent for the current generation/active phase.
+    """
+    if evidence not in ('no_session_or_worker','engine_session_not_found'):
+        raise ValueError('verified absent execution owner required')
+    task=store.task(task_id)
+    if not task or task['state']!='running':return False
+    phase=task.get('active_phase');generation=task.get('generation',1)
+    identity={'source':'startup_orphan_review','generation':generation,'phase':phase,'evidence':evidence,'auto_restart':False}
+    if any(e.get('kind')=='orphaned_running' and e.get('payload')==identity for e in store.events(task_id)):
+        return False
+    store.add_event(task_id,'orphaned_running',f'Task {task_id} is marked running but has no verified live session or worker. Review required; no automatic restart.',phase_key=phase,payload=identity)
+    return True
+
+
+def orphan_review_items(store):
+    """Owner-scoped/admin-authorized service projection, not global SQL."""
+    result=[]
+    for task in store.list_tasks():
+        if task['state']!='running':continue
+        flags=[e for e in store.events(task['task_id']) if e.get('kind')=='orphaned_running'
+               and e.get('payload',{}).get('generation')==task.get('generation',1)
+               and e.get('payload',{}).get('phase')==task.get('active_phase')]
+        if flags:
+            result.append({'task_id':task['task_id'],'state':task['state'],'active_phase':task.get('active_phase'),
+                'generation':task.get('generation',1),'updated_at':task['updated_at'],
+                'flag_event_id':flags[-1]['id'],'evidence':flags[-1]['payload']['evidence'],
+                'review_required':True,'cleanup_available':False,
+                'reason':'A startup flag is not current quiescence proof; recheck execution ownership before cleanup.'})
+    return result
