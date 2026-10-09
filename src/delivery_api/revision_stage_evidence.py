@@ -9,7 +9,7 @@ from .producer_inputs import _open_directory,_identity,_content_stamp,MAX_DOCUME
 from .tenancy import session_root,TenantAccessDenied
 
 
-def read_staged_revision_manifest(store,capability,*,artifacts_base,lineage,lineage_sha256,manifest_sha256):
+def read_staged_revision_manifest(store,capability,*,artifacts_base,lineage,lineage_sha256,manifest_sha256,expected_documents=None):
     capability.validate(store)
     if not isinstance(lineage,dict) or hashlib.sha256(json.dumps(lineage,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=lineage_sha256:
         raise ValueError('exact held lineage digest required')
@@ -52,10 +52,15 @@ def read_staged_revision_manifest(store,capability,*,artifacts_base,lineage,line
         files=manifest['files'];required={'interview/intent_model.json','interview/conops.json','spec/needs.json','spec/system-baseline.json','spec/checkpoints.sqlite','spec/'+phase+'.json'}
         if phase=='architecture':required.add('spec/srs.json')
         if not isinstance(files,dict) or set(files)!=required:raise ValueError('exact upstream and edited-phase staging inventory required')
+        if expected_documents is not None and set(expected_documents)!=required-{'spec/checkpoints.sqlite'}:
+            raise ValueError('complete expected checkpoint documents required')
         for name,digest in files.items():
             if not isinstance(digest,str) or not re.fullmatch('[a-f0-9]{64}',digest):raise ValueError('exact staged file digest required')
             limit=64*1024*1024 if name.endswith('.sqlite') else MAX_DOCUMENT_BYTES
-            if hashlib.sha256(read(name,limit)).hexdigest()!=digest:raise ValueError('staged file digest mismatch')
+            content=read(name,limit)
+            if hashlib.sha256(content).hexdigest()!=digest:raise ValueError('staged file digest mismatch')
+            if expected_documents is not None and name in expected_documents and json.loads(content)!=expected_documents[name]:
+                raise ValueError('staged document differs from validated checkpoint channel')
         spec=os.open('spec',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
         try:
             for name in ('checkpoints.sqlite-wal','checkpoints.sqlite-shm','checkpoints.sqlite-journal'):
@@ -113,7 +118,11 @@ def read_validated_staged_receipt(store,capability,*,artifacts_base,lineage,line
     if read_closed_checkpoint(root/'spec'/'checkpoints.sqlite',session_id=capability.session_id,
         expected_checkpoint_id=lineage['source_checkpoint_id'])!=source:
         raise ValueError('source checkpoint changed across staged validation')
-    after=read_staged_revision_manifest(**arguments)
+    documents={'interview/intent_model.json':source.get('intent_model'),'interview/conops.json':source.get('conops'),
+        'spec/needs.json':source.get('needs'),'spec/system-baseline.json':source.get('system_baseline'),
+        'spec/'+lineage['phase']+'.json':staged.get(lineage['phase'])}
+    if lineage['phase']=='architecture':documents['spec/srs.json']=source.get('srs')
+    after=read_staged_revision_manifest(**arguments,expected_documents=documents)
     if after!=before:raise ValueError('staged receipt changed across typed readback')
     capability.validate(store)
     return after

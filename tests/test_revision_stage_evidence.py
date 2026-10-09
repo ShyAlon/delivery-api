@@ -79,3 +79,15 @@ def test_validated_receipt_connects_pinned_checkpoint_and_source_evidence(tmp_pa
     assert reads[1]['expected_review_phase']=='srs' and reads[1]['session_id']=='next'
     calls.clear();monkeypatch.setattr(revision_evidence,'read_revision_artifacts',lambda *a,**kwargs:[])
     with pytest.raises(ValueError,match='source artifacts changed'):module.read_validated_staged_receipt(**args,options=o)
+
+
+def test_valid_hashes_cannot_hide_document_checkpoint_mismatch(tmp_path):
+    root,args=setup(tmp_path)
+    expected={name:{} for name in ('interview/intent_model.json','interview/conops.json','spec/needs.json','spec/system-baseline.json','spec/srs.json')}
+    for name in expected:(root/name).write_text('{}')
+    (root/'spec'/'srs.json').write_text('{"changed":true}')
+    manifest=json.loads((root/'manifest.json').read_text())
+    for name in manifest['files']:manifest['files'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
+    (root/'manifest.json').write_text(json.dumps(manifest));args['manifest_sha256']=hashlib.sha256((root/'manifest.json').read_bytes()).hexdigest()
+    with pytest.raises(ValueError,match='validated checkpoint channel'):
+        read_staged_revision_manifest(**args,expected_documents=expected)

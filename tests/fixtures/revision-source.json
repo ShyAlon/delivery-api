@@ -1,0 +1,170 @@
+{
+  "architecture": {
+    "old": true
+  },
+  "bundle": {
+    "old": true
+  },
+  "expert_opinions": [
+    {
+      "gate": "srs"
+    },
+    {
+      "gate": "architecture"
+    }
+  ],
+  "gate_feedback": {
+    "architecture": "old",
+    "srs": "old"
+  },
+  "intent_model": {
+    "amendments": [],
+    "assumption_items": [],
+    "assumptions": [],
+    "constraints": [],
+    "contract_version": "0.28.0",
+    "core_value_proposition": "v",
+    "done_criteria": [],
+    "external_integrations": [],
+    "founder_register": null,
+    "glossary": {},
+    "in_scope": [
+      "a"
+    ],
+    "open_questions": [],
+    "operational_concepts": [],
+    "out_of_scope": [
+      "b"
+    ],
+    "problem_statement": "p",
+    "reference_names": [],
+    "research_briefs": [],
+    "scope_exclusions": [],
+    "session_id": "s",
+    "source_turns": {},
+    "stakeholder_needs": [
+      {
+        "amendment_id": null,
+        "contract_version": "0.28.0",
+        "deferred": false,
+        "kind": "functional",
+        "need_id": "SN-1",
+        "source_turns": [
+          0
+        ],
+        "statement": "founders need specs"
+      }
+    ],
+    "target_users": [
+      "u"
+    ],
+    "tech_preferences": []
+  },
+  "items": [
+    {
+      "old": true
+    }
+  ],
+  "needs": {
+    "contract_version": "0.28.0",
+    "needs": [
+      {
+        "contract_version": "0.28.0",
+        "intent_fields": [
+          "problem_statement"
+        ],
+        "intent_need_ids": [
+          "SN-1"
+        ],
+        "kind": "functional",
+        "need_id": "N-1",
+        "stakeholder": "founder",
+        "statement": "needs specs"
+      }
+    ],
+    "session_id": "s"
+  },
+  "semantic_reviews": {
+    "srs": {
+      "old": true
+    },
+    "srs_applied_sha256": "old"
+  },
+  "srs": {
+    "assumptions": [],
+    "constraints": [],
+    "contract_version": "0.28.0",
+    "definitions": {},
+    "design_constraints": [],
+    "founder_register": null,
+    "functional": [
+      {
+        "acceptance": [
+          {
+            "contract_version": "0.28.0",
+            "criterion_id": "AC-1",
+            "executable_hint": null,
+            "statement": "spec exists"
+          }
+        ],
+        "contract_version": "0.28.0",
+        "intent_fields": [
+          "problem_statement"
+        ],
+        "kind": "functional",
+        "merged_from": [],
+        "need_ids": [
+          "N-1"
+        ],
+        "priority": "must",
+        "requirement_id": "R-1",
+        "source_turns": [],
+        "statement": "system shall emit a spec",
+        "title": "Spec file"
+      }
+    ],
+    "intent_model_ref": "s",
+    "non_functional": [],
+    "open_questions": [],
+    "purpose": "p",
+    "scope_summary": "sc",
+    "session_id": "s"
+  },
+  "system_baseline": {
+    "baseline_id": "test-baseline",
+    "baseline_version": "1.0",
+    "contract_version": "0.28.0",
+    "immutable_decisions": [],
+    "mode": "existing",
+    "repositories": [
+      {
+        "contract_version": "0.28.0",
+        "existing_artifacts": [],
+        "existing_contracts": [],
+        "immutable_decisions": [],
+        "integrations": [],
+        "languages": [
+          "Python",
+          "ts"
+        ],
+        "module_entry_points": [
+          "python -m spec_generator.cli"
+        ],
+        "name": "spec-generator",
+        "package_entry_points": [],
+        "persistence": [
+          "PostgreSQL 14"
+        ],
+        "runtime": [
+          "Python"
+        ]
+      }
+    ],
+    "system_name": "Test system"
+  },
+  "tests": [
+    {
+      "old": true
+    }
+  ]
+}
