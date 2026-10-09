@@ -271,3 +271,6 @@ Private acceptance context02738cc fresh clean isolated installed-wheel verificat
 
 ## Concrete interruption/concurrency and cross-package installed control proof
 Extended real throwaway files/SQLite/PG coordinated fixture: held destination flock blocks before anchor/task effects; injected interruption before rename leaves private-stage-requires-review, after rename leaves promoted-files/DB-uninstalled-requires-review. Neither retries/resumes; replay refuses, parent generation remains untouched. Happy path exact installed DB WorkerCapability passed to engine private control loader verifies digest/gen2 and refuses new interview mutation or wrong DB digest. Fresh PG262/all24/no skips/1 warning. This is control helper proof, not SessionRegistry integration or real owner activation. No route/public effect.
+
+## Acceptance/install public fence regression
+Real ASGI client verifies private HTML/JS and proposed acceptance/install paths GET/POST404 with cloud disabled; route table lacks install/acceptance registration and app import AST excludes private presenter/coordinator/file effect helpers. Private renderer remains outside web package.1 route regression pass. This confirms tested paths/import boundary, not proof against all future dynamic wiring.
