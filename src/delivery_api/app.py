@@ -2053,6 +2053,19 @@ def _read_stack_decisions(task_id:str):
 def _open_stack_slots(data)->list[str]:
     return [s['key'] for s in (data or {}).get('slots',[]) if not s.get('founder_decision') and not s.get('technical_choice')]
 
+def _guard_task_file_operation(function):
+    # Sync endpoints/helpers only. Never hold a DB transaction across async
+    # provider dispatch or gate continuation. Local adapter is unchanged.
+    from functools import wraps
+    @wraps(function)
+    def guarded(*args,**kwargs):
+        if not config.CLOUD_TENANTS:return function(*args,**kwargs)
+        with store._task_operation_guard('task.gate.decide'):
+            return function(*args,**kwargs)
+    return guarded
+
+
+@_guard_task_file_operation
 def _use_architecture_defaults(task_id: str):
     """Persist only the defaults actually in the canonical reviewed artifact.
 
@@ -2170,6 +2183,7 @@ class SemanticDecisions(BaseModel):
     decisions:list[dict]=Field(max_length=1000)
 
 @app.post('/api/tasks/{task_id}/gates/{gate_key}/semantic-review')
+@_guard_task_file_operation
 def decide_semantic_gate(task_id:str,gate_key:str,body:SemanticDecisions,a:auth.Actor=Depends(auth.require_actor)):
     from vmodel_contracts.semantic_review import SemanticReview
     from vmodel_contracts import SRSDocument
@@ -2207,6 +2221,7 @@ class StackDecisions(BaseModel):
     decisions:list[StackDecision]=Field(min_length=1,max_length=200)
 
 @app.post('/api/tasks/{task_id}/gates/{gate_key}/stack-decisions')
+@_guard_task_file_operation
 def decide_stack_gate(task_id:str,gate_key:str,body:StackDecisions,a:auth.Actor=Depends(auth.require_actor)):
     """Save a founder override. Reason is optional; system rationale stays separate."""
     live=_gate_review(task_id,gate_key);data=live.get('stack_decisions')

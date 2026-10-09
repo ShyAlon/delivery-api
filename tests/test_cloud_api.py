@@ -508,3 +508,32 @@ def test_usage_route_has_own_capability_and_registry_revocation(cloud,monkeypatc
     finally:
         with psycopg.connect(DSN) as c:c.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))
         with tenant_context(B):store.delete_task(tid)
+
+
+def test_suspended_file_only_gate_mutations_rejected_before_artifact_effect(cloud,monkeypatch):
+    import psycopg,delivery_api.app as module
+    client,store,root=cloud
+    with tenant_context(A):task=store.create_task('suspended-file-'+uuid.uuid4().hex)
+    touched=[]
+    monkeypatch.setattr(module,'_gate_review',lambda *a: touched.append('review') or {})
+    with psycopg.connect(DSN) as c:c.execute('INSERT INTO user_task_policy VALUES (%s,true,1,0)',(A.owner_id,))
+    try:
+        for suffix,body in (('semantic-review',{'revision':'a'*64,'decisions':[]}),
+             ('stack-decisions',{'revision':'a'*64,'decisions':[{'key':'x','text':'y'}]})):
+            response=client.post('/api/tasks/'+task['task_id']+'/gates/gate-srs/'+suffix,json=body,headers=header('a'))
+            # Existing cloud protocol gate stays closed; don't lift it to test
+            # the guard that must also protect future admitted file operations.
+            assert response.status_code==503,response.text
+        with tenant_context(A):
+            with pytest.raises(TenantAccessDenied,match='suspended'):
+                module.decide_semantic_gate(task['task_id'],'gate-srs',module.SemanticDecisions(revision='a'*64,decisions=[]),None)
+            with pytest.raises(TenantAccessDenied,match='suspended'):
+                module.decide_stack_gate(task['task_id'],'gate-srs',module.StackDecisions(revision='a'*64,decisions=[{'key':'x','text':'y'}]),None)
+            with pytest.raises(TenantAccessDenied,match='suspended'):
+                module._use_architecture_defaults(task['task_id'])
+        assert touched==[]
+        assert client.get('/api/tasks',headers=header('a')).status_code==200
+        assert client.get('/api/tasks/'+task['task_id']+'/events',headers=header('a')).status_code==200
+        assert client.get('/api/auth',headers=header('a')).status_code==200
+    finally:
+        with psycopg.connect(DSN) as c:c.execute('DELETE FROM user_task_policy WHERE owner_id=%s',(A.owner_id,))

@@ -99,6 +99,27 @@ class PostgresStore(SQLiteStore):
         self._db = _Connection(self._connection)
         self._lock = threading.RLock()
 
+    def _task_operation_guard(self,action):
+        # Private scoped lease for synchronous file+DB task edits. Hold shared
+        # owner lock until all writes finish, not only a stale preflight read.
+        from contextlib import contextmanager
+        @contextmanager
+        def guard():
+            from .prepaid import owner_lock
+            from .suspension_policy import require_task_operation
+            if self._connection.get() is not None:
+                owner_lock(self);require_task_operation(self,action)
+                yield
+                return
+            with self._postgres.transaction() as connection:
+                connection.execute('SAVEPOINT operation_start')
+                token=self._connection.set(connection)
+                try:
+                    owner_lock(self);require_task_operation(self,action)
+                    yield
+                finally:self._connection.reset(token)
+        return guard()
+
     def auth_session_active(self):
         return bool(self._db.execute('SELECT public.requi_session_active() AS active').fetchone()['active'])
 
