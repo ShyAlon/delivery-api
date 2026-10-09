@@ -816,3 +816,34 @@ def test_suspension_blocks_new_operations_but_dispatched_calls_finish_and_bill(l
             c.execute('DELETE FROM user_task_policy WHERE owner_id=%s',(A.owner_id,))
             c.execute('DELETE FROM credit_charges WHERE attempt_id=%s',(dispatched,))
             c.execute('DELETE FROM credit_accounts WHERE owner_id=%s',(A.owner_id,))
+
+
+def test_reserve_rechecks_generation_after_waiting_for_stop_lock(ledger,monkeypatch):
+    import hashlib,psycopg,threading
+    import delivery_api.attempt_ledger as module
+    from delivery_api.tenancy import TenantAccessDenied
+    s,tid,job=ledger;aid=uuid.uuid4().hex;checked=threading.Event()
+    original=module._job
+    def checked_job(*args):
+        result=original(*args);checked.set();return result
+    monkeypatch.setattr(module,'_job',checked_job)
+    with tenant_context(A):generation=s.task(tid)['generation']
+    def reserve():
+        other=PostgresStore(DSN.replace('user=sandbox','user=delivery_app'))
+        with tenant_context(A):
+            try:other.reserve_provider_attempt(job,aid,Q,'race');return 'reserved'
+            except TenantAccessDenied:return 'stale'
+    key=int.from_bytes(hashlib.sha256(A.owner_id.encode()).digest()[:8],'big',signed=True)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with psycopg.connect(DSN) as c:
+                c.execute('SELECT pg_advisory_xact_lock(%s)',(key,))
+                c.execute("UPDATE tasks SET generation=generation+1,state='stop_requested',stop_requested_at=1 WHERE task_id=%s",(tid,))
+                result=pool.submit(reserve)
+                assert checked.wait(5) # Pre-lock read still sees the old committed generation.
+                assert not result.done()
+            assert result.result(timeout=5)=='stale'
+        with tenant_context(A):assert s.provider_attempt(aid) is None
+    finally:
+        with psycopg.connect(DSN) as c:
+            c.execute("UPDATE tasks SET generation=%s,state='not_started',stop_requested_at=NULL WHERE task_id=%s",(generation,tid))

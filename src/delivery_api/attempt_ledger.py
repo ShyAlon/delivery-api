@@ -43,6 +43,9 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
     # Shared owner lock serializes independent processes, not just one API worker.
     lock_key=int.from_bytes(hashlib.sha256(owner.encode()).digest()[:8],'big',signed=True)
     store._db.execute('SELECT pg_advisory_xact_lock(?)',(lock_key,)).fetchone()
+    # Authority can change while waiting on the shared Stop/admission lock.
+    # READ COMMITTED re-read after the lock, before replay or any new hold.
+    _job(store,job_id)
     from .suspension_policy import require_task_operation
     require_task_operation(store,'provider.reserve')
     limits=store._db.execute('SELECT * FROM admission_limits WHERE owner_id=?',(owner,)).fetchone()
