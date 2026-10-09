@@ -53,3 +53,6 @@ Restored explicit contracts0.28.0 metadata/UV local-wheel source from archived O
 
 ## Fresh rebuilt-current installed-wheel verifier
 Prepared a new four-wheel context from deliverydfae111, engine138409e, generator6d7b1f7, contracts5bdc1a0. Manifest/hashes saved under recovery-evidence/rebuilt-current-20261009-manifest.json. A fresh venv without system site packages/development extras passed dependency installation, pip check and fake-only web/back-office HTTP + Chromium UI smoke, actual JSON download, token/credit detail and revoked-cookie checks. Explicit local Chromium cache reused. Desktop/mobile back-office and web screenshots inspected: readable tables/cards, usage completeness and quiescence caveats visible. No Docker execution or production RLS validation is claimed. Frozen v3 unchanged.
+
+## Tenant login browser source recovered
+Recovered exact initial test file from October7 18:10:12 archived tool edit (hermetic cloud login, desktop/mobile privacy copy, signup and no local availability probe). Two tests pass against current source. Wider browser suite first subgroup13 passes; second subgroup9 passes and user-progress/debug-console test fails, under investigation. No tests deleted or gate lifted.
