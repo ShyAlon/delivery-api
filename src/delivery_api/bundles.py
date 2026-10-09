@@ -4,6 +4,8 @@ import json,os,re
 from datetime import datetime,timezone
 from pathlib import Path
 from . import config
+from .tenant_files import read_text
+from .tenancy import TenantAccessDenied
 
 SETTINGS_FILE=Path(__file__).resolve().parents[2]/".artifacts-root"
 def default_root()->Path:
@@ -25,7 +27,9 @@ def inspect_root(candidate:str)->dict:
 def save_root(candidate:str)->dict:
  result=inspect_root(candidate);SETTINGS_FILE.write_text(result["path"]+"\n");return result
 def _json(path:Path,default=None):
- try:return json.loads(path.read_text())
+ if not path.is_file():return default
+ try:return json.loads(read_text(path))
+ except TenantAccessDenied:raise
  except (OSError,json.JSONDecodeError):return default
 def _interview_status(interview:Path)->str:
  # The intent model is the accepted result; usage means work happened, not that
@@ -48,26 +52,27 @@ def _updated_at(interview:Path,spec:Path,run:dict)->float:
  files=(p for area in (interview,spec) if area.is_dir() for p in area.iterdir() if p.is_file())
  return max((p.stat().st_mtime for p in files),default=0.0)
 
+def session_summary(d:Path)->dict|None:
+ if not d.is_dir():return None
+ interview=d/"interview";spec=d/"spec"
+ has_interview=interview.is_dir() and any((interview/n).is_file() for n in ("intent_model.json","conops.json","usage.jsonl"))
+ has_spec=spec.is_dir() and any((spec/n).is_file() for n in ("needs.json","srs.json","architecture.json","bundle-integrity.json","usage.jsonl"))
+ if not has_interview and not has_spec:return None
+ run=_json(spec/"hands-free-run.json",{}) or {};integrity=_json(spec/"bundle-integrity.json",{}) or {};intent=_json(interview/"intent_model.json",{}) or {}
+ http=_json(interview/"http-session.json",{}) or {}
+ request=http.get("request") if isinstance(http,dict) else None
+ brief=request.get("idea") if isinstance(request,dict) else None
+ title=(intent.get("problem_statement") or intent.get("core_value_proposition") if isinstance(intent,dict) else None) or (brief.strip() if isinstance(brief,str) else None) or d.name
+ phases=[x for x,present in (("interview",has_interview),("spec",has_spec)) if present]
+ diagnostics=integrity.get("diagnostics") if isinstance(integrity,dict) else None
+ updated=_updated_at(interview,spec,run)
+ return {"session_id":d.name,"title":title,
+  "completed_at":run.get("completed_at"),"updated_at":datetime.fromtimestamp(updated,timezone.utc).isoformat() if updated else None,
+  "oracle_passed":bool(integrity) and not bool(diagnostics),"files_checked":integrity.get("files_checked",0),"phases":phases,"phase_status":_phase_status(interview,spec,run,integrity),"path":str(d)}
+
 def _discover(where:Path)->list[dict]:
- out=[]
- if not where.is_dir():return out
- for d in where.iterdir():
-  if not d.is_dir():continue
-  interview=d/"interview";spec=d/"spec"
-  has_interview=interview.is_dir() and any((interview/n).is_file() for n in ("intent_model.json","conops.json","usage.jsonl"))
-  has_spec=spec.is_dir() and any((spec/n).is_file() for n in ("needs.json","srs.json","architecture.json","bundle-integrity.json","usage.jsonl"))
-  if not has_interview and not has_spec:continue
-  run=_json(spec/"hands-free-run.json",{}) or {};integrity=_json(spec/"bundle-integrity.json",{}) or {};intent=_json(interview/"intent_model.json",{}) or {}
-  http=_json(interview/"http-session.json",{}) or {}
-  request=http.get("request") if isinstance(http,dict) else None
-  brief=request.get("idea") if isinstance(request,dict) else None
-  title=(intent.get("problem_statement") or intent.get("core_value_proposition") if isinstance(intent,dict) else None) or (brief.strip() if isinstance(brief,str) else None) or d.name
-  phases=[x for x,present in (("interview",has_interview),("spec",has_spec)) if present]
-  diagnostics=integrity.get("diagnostics") if isinstance(integrity,dict) else None
-  updated=_updated_at(interview,spec,run)
-  out.append({"session_id":d.name,"title":title,
-   "completed_at":run.get("completed_at"),"updated_at":datetime.fromtimestamp(updated,timezone.utc).isoformat() if updated else None,
-   "oracle_passed":bool(integrity) and not bool(diagnostics),"files_checked":integrity.get("files_checked",0),"phases":phases,"phase_status":_phase_status(interview,spec,run,integrity),"path":str(d)})
+ if not where.is_dir():return []
+ out=[row for d in where.iterdir() if (row:=session_summary(d)) is not None]
  return sorted(out,key=lambda x:(x["updated_at"] or "",x["session_id"]),reverse=True)
 def _phase_status(interview:Path,spec:Path,run:dict,integrity:dict)->dict:
  values={"interview":(interview/"intent_model.json").is_file(),"needs":(spec/"needs.json").is_file(),"srs":(spec/"srs.json").is_file(),"architecture":(spec/"architecture.json").is_file(),"specs":(spec/"items.json").is_file() or (spec/"spec_items.json").is_file(),"tests":(spec/"tests.json").is_file() or (spec/"test_specifications.json").is_file(),"validation":(spec/"validation.json").is_file(),"reviews":(interview/"audit.jsonl").is_file() or (spec/"audit.jsonl").is_file(),"oracle":bool(integrity)}
@@ -107,7 +112,7 @@ def bundle(session:str,*,base:Path|None=None)->dict:
  for area in (interview,spec):
   p=area/"audit.jsonl"
   if p.is_file():
-   for line in p.read_text().splitlines():
+   for line in read_text(p).splitlines():
     try: audits.append(json.loads(line))
     except json.JSONDecodeError:pass
  reqs=_rows(srs,"functional","requirements")+_rows(srs,"non_functional")
@@ -143,4 +148,4 @@ def bundle(session:str,*,base:Path|None=None)->dict:
   else:state="not_started"
   phase_status[key]=state
  phase_status["interview"]=_phase_status(interview,spec,run,integrity)["interview"]
- return {"session":next((x for x in discover() if x["session_id"]==session),{"session_id":session}),"phase_status":phase_status,"intent":intent,"conops":conops,"coverage":coverage,"needs":_rows(needs,"needs"),"srs":srs,"requirements":reqs,"architecture":arch,"items":items,"tests":tests,"validation":validation,"audits":audits,"integrity":integrity,"run":run,"graph":{"nodes":nodes,"edges":edges}}
+ return {"session":((session_summary(base) or {"session_id":session}) if supplied else next((x for x in discover() if x["session_id"]==session),{"session_id":session})),"phase_status":phase_status,"intent":intent,"conops":conops,"coverage":coverage,"needs":_rows(needs,"needs"),"srs":srs,"requirements":reqs,"architecture":arch,"items":items,"tests":tests,"validation":validation,"audits":audits,"integrity":integrity,"run":run,"graph":{"nodes":nodes,"edges":edges}}

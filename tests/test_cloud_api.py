@@ -124,6 +124,9 @@ def test_downloaded_bytes_never_cross_session_owner_or_unbound_ref(cloud):
     with zipfile.ZipFile(io.BytesIO(zipped.content)) as archive:
         assert original in [archive.read(name) for name in archive.namelist()]
     assert client.get('/api/tasks/'+task_id+'/artifacts.zip',headers=header('b')).status_code==404
+    visible=client.get('/api/tasks/'+task_id,headers=header('a'))
+    assert str(base) not in visible.text
+    assert all('ref' not in row for row in visible.json()['artifacts'])
 
 
 def test_owner_recovery_view_and_resume_admission_gate_leave_job_unchanged(cloud):
@@ -537,3 +540,136 @@ def test_suspended_file_only_gate_mutations_rejected_before_artifact_effect(clou
         assert client.get('/api/auth',headers=header('a')).status_code==200
     finally:
         with psycopg.connect(DSN) as c:c.execute('DELETE FROM user_task_policy WHERE owner_id=%s',(A.owner_id,))
+
+
+def test_cloud_task_read_never_consults_shared_local_runner_or_exposes_paths(cloud,monkeypatch):
+    import delivery_api.app as module
+    client,store,root=cloud
+    def shared_read(*a,**k):raise AssertionError('cloud read entered unscoped local runner')
+    monkeypatch.setattr(module.runner,'input_state',shared_read)
+    monkeypatch.setattr(module.runner,'work_state',shared_read)
+    created=client.post('/api/tasks',json={'title':'private-read-'+uuid.uuid4().hex},headers=header('a'))
+    assert created.status_code==201
+    task_id=created.json()['task_id']
+    for bound in (False,True):
+        if bound:
+            with tenant_context(A):store.set_engine_session(task_id,'isolated-'+uuid.uuid4().hex)
+        response=client.get('/api/tasks/'+task_id,headers=header('a'))
+        assert response.status_code==200,response.text
+        body=response.json()
+        assert body['active_work'] is None and body['artifact_projection']['root'] is None
+        assert not body['input_state']['process_live']
+        assert str(root) not in response.text
+        assert client.get('/api/tasks/'+task_id,headers=header('b')).status_code==404
+
+
+def test_cloud_bundle_reads_only_the_registered_session_and_hides_host_paths(cloud,monkeypatch):
+    import delivery_api.app as module
+    client,store,root=cloud
+    sid='owner-read-'+uuid.uuid4().hex
+    with tenant_context(A):
+        task=store.create_task(sid);store.set_engine_session(task['task_id'],sid)
+    path=session_root(root,A,sid)
+    (path/'interview').mkdir(parents=True)
+    (path/'interview'/'intent_model.json').write_text('{"problem_statement":"My bundle"}')
+    def global_scan(*a,**k):raise AssertionError('cloud read scanned a shared or sibling directory')
+    monkeypatch.setattr(module.bundles,'discover',global_scan)
+    monkeypatch.setattr(module.bundles,'_discover',global_scan)
+    listing=client.get('/api/sessions',headers=header('a'))
+    assert listing.status_code==200,listing.text
+    assert listing.json()['sessions'][0]['title']=='My bundle'
+    assert 'path' not in listing.json()['sessions'][0]
+    bundle=client.get('/api/sessions/'+sid,headers=header('a'))
+    assert bundle.status_code==200,bundle.text
+    assert bundle.json()['session']['title']=='My bundle'
+    assert 'path' not in bundle.json()['session']
+    assert str(root) not in listing.text+bundle.text
+    assert client.get('/api/sessions/'+sid,headers=header('b')).status_code==404
+    assert client.get('/api/sessions',headers=header('b')).json()['sessions']==[]
+
+def test_cloud_question_quality_settings_cannot_call_shared_engine(cloud,monkeypatch):
+    import delivery_api.app as module
+    client,_,_=cloud
+    def shared_read(*a,**k):raise AssertionError('customer reached global engine configuration')
+    monkeypatch.setattr(module.engine_client,'question_quality_config',shared_read)
+    assert client.get('/api/question-quality-config',headers=header('a')).status_code==404
+
+
+def test_cloud_download_rejects_symlink_swap_after_path_validation(cloud,monkeypatch):
+    import delivery_api.app as module
+    client,store,base=cloud
+    sid='download-race-'+uuid.uuid4().hex
+    with tenant_context(A):
+        task=store.create_task(sid);tid=task['task_id'];store.set_engine_session(tid,sid)
+    root=session_root(base,A,sid);folder=root/'interview';folder.mkdir(parents=True)
+    artifact=folder/'intent_model.json';artifact.write_text('{"problem_statement":"private"}')
+    outside=base/'foreign.json';outside.write_text('foreign-secret-bytes')
+    original=module._task_artifact
+    def swap(*args):
+        path=original(*args);artifact.unlink();artifact.symlink_to(outside);return path
+    monkeypatch.setattr(module,'_task_artifact',swap)
+    response=client.get('/api/tasks/'+tid+'/artifacts/intent/intent_model.json',headers=header('a'))
+    assert response.status_code==404,response.text
+    assert 'foreign-secret-bytes' not in response.text
+
+
+def test_owner_read_rechecks_revocation_after_opening_file(cloud,monkeypatch):
+    import delivery_api.tenant_files as files
+    client,store,base=cloud
+    sid='revoke-read-'+uuid.uuid4().hex
+    with tenant_context(A):
+        task=store.create_task(sid);store.set_engine_session(task['task_id'],sid)
+    root=session_root(base,A,sid);root.mkdir(parents=True)
+    (root/'output.txt').write_text('private bytes')
+    original=files.authorized_session;calls=[]
+    def revoke(*args,**kwargs):
+        calls.append(1)
+        if len(calls)>1:raise TenantAccessDenied('revoked after open')
+        return original(*args,**kwargs)
+    monkeypatch.setattr(files,'authorized_session',revoke)
+    with tenant_context(A),pytest.raises(TenantAccessDenied):files.read_session_bytes(base,sid,'output.txt',store)
+
+def test_read_rejects_replaced_directory_namespace(cloud,monkeypatch):
+    import delivery_api.tenant_files as files
+    import os
+    client,store,base=cloud
+    sid='namespace-read-'+uuid.uuid4().hex
+    with tenant_context(A):
+        task=store.create_task(sid);store.set_engine_session(task['task_id'],sid)
+    root=session_root(base,A,sid);folder=root/'interview';folder.mkdir(parents=True)
+    (folder/'output.txt').write_text('original')
+    original=os.fdopen
+    def swap(fd,*args,**kwargs):
+        folder.rename(root/'detached');folder.mkdir();(folder/'output.txt').write_text('replacement')
+        return original(fd,*args,**kwargs)
+    monkeypatch.setattr(os,'fdopen',swap)
+    with tenant_context(A),pytest.raises(TenantAccessDenied):files.read_session_bytes(base,sid,'interview/output.txt',store)
+
+def test_cloud_startup_skips_all_legacy_recovery_and_dispatch(cloud,monkeypatch):
+    import asyncio
+    import delivery_api.app as module
+    client,store,base=cloud
+    async def forbidden(*args,**kwargs):raise AssertionError('legacy recovery/dispatch during cloud startup')
+    def forbidden_sync(*args,**kwargs):raise AssertionError('legacy simulation recovery during cloud startup')
+    monkeypatch.setattr(module,'_recover_tasks',forbidden)
+    monkeypatch.setattr(module,'_catch_up_interview_progress',forbidden)
+    monkeypatch.setattr(module.jobs,'start',forbidden)
+    monkeypatch.setattr(module.simulation,'reconcile_interrupted',forbidden_sync)
+    async def run():
+        async with module.lifespan(module.app):pass
+    asyncio.run(run())
+    assert module.cloud_execution_admitted() is False
+
+
+def test_cloud_gate_artifact_reference_never_exposes_host_path(cloud):
+    client,store,base=cloud
+    sid='gate-safe-'+uuid.uuid4().hex
+    with tenant_context(A):
+        task=store.create_task(sid);tid=task['task_id'];store.set_engine_session(tid,sid)
+        store.update_phase(tid,'needs','running');store.wait_at_gate(tid,'needs')
+    root=session_root(base,A,sid);(root/'spec').mkdir(parents=True)
+    (root/'spec'/'needs.json').write_text('{}')
+    response=client.get('/api/tasks/'+tid,headers=header('a'))
+    assert response.status_code==200,response.text
+    assert response.json()['control_snapshot']['artifact_ref'] is None
+    assert str(base) not in response.text

@@ -395,7 +395,7 @@ if config.CLOUD_TENANTS:
     from .tenant_http import TenantMiddleware
     app.add_middleware(TenantMiddleware,verifier=SupabaseIdentityVerifier(config.SUPABASE_URL),
                        admin_subjects=config.SUPABASE_ADMIN_SUBJECTS,session_check=store.auth_session_active)
-from .tenant_files import authorized_session
+from .tenant_files import authorized_session,session_reader,read_text as read_bound_text
 from .tenancy import TenantAccessDenied
 
 @app.exception_handler(TenantAccessDenied)
@@ -405,7 +405,10 @@ async def tenant_access_denied(request,exc):
 
 def _session_bundle(session_id):
     if config.CLOUD_TENANTS:
-        return bundles.bundle(session_id,base=authorized_session(bundles.root(),session_id,store))
+        with session_reader(bundles.root(),session_id,store) as root:
+            result=bundles.bundle(session_id,base=root)
+        result["session"].pop("path",None)
+        return _customer_events(result)
     return bundles.bundle(session_id)
 
 
@@ -565,7 +568,9 @@ def sessions():
             session=store.engine_session(task['task_id'])
             if session:
                 base=authorized_session(bundles.root(),session,store)
-                if base.is_dir():result.extend(row for row in bundles._discover(base.parent) if row['session_id']==session)
+                with session_reader(bundles.root(),session,store):row=bundles.session_summary(base)
+                if row:
+                    row.pop('path',None);result.append(row)
         return {"sessions":list({row['session_id']:row for row in result}.values())}
     return {"sessions":bundles.discover(),"artifacts_root":str(bundles.root())}
 
@@ -736,6 +741,7 @@ def _quality_engine_down(exc):
 @app.get("/api/question-quality-config")
 def get_question_quality_config(a:auth.Actor=Depends(auth.require_actor)):
     """Global interview question-quality settings; the engine owns the schema and defaults."""
+    if config.CLOUD_TENANTS:raise HTTPException(404,"engine configuration is internal")
     try:return engine_client.question_quality_config()
     except EngineUnreachableError as exc:raise _quality_engine_down(exc)
     except EngineClientError as exc:raise HTTPException(502,{"error":"The engine could not return the settings.","cause":exc.error.detail,"next":"Retry; if it repeats, check the engine log."})
@@ -1070,6 +1076,12 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
         asyncio.create_task(_continue_reconciled_interview(task_id))
     return {"status":"accepted"}
 
+def _read_task_text(task_id:str,path:Path,*,errors='strict')->str:
+    if not config.CLOUD_TENANTS:return path.read_text(errors=errors)
+    from vmodel_contracts.runtime import artifacts_root
+    with session_reader(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),_recorded_engine_session(task_id),store):
+        return read_bound_text(path,errors=errors)
+
 def _task_artifact_snapshot(task_id:str)->list[dict]:
     """Project real session files into task artifacts; filesystem is source evidence."""
     task=store.task(task_id)
@@ -1103,9 +1115,9 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
                         else:
                             from vmodel_contracts.spec import ItemSpec
                             item_type=ItemSpec
-                        TypeAdapter(list[item_type]).validate_json(path.read_text())
+                        TypeAdapter(list[item_type]).validate_json(_read_task_text(task_id,path))
                     else:
-                        model=getattr(__import__(validator[0],fromlist=[validator[1]]),validator[1]);model.model_validate_json(path.read_text())
+                        model=getattr(__import__(validator[0],fromlist=[validator[1]]),validator[1]);model.model_validate_json(_read_task_text(task_id,path))
                     valid=True
                 except Exception as exc:valid=False;errors=[f"{type(exc).__name__}: {str(exc)[:600]}"]
             records.append({"phase_key":phase.key,"name":filename,"title":_ARTIFACT_TITLES.get(filename,Path(filename).stem.replace("_"," ").title()),"ref":str(path),"mime_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","stale":False,"generation":task["generation"],"present":True,"valid":valid,"validator":validator[1] if validator else None,"validation_errors":errors,"validation_error":errors[0] if errors else None})
@@ -1162,7 +1174,7 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
         source=folder/"__stale_partial__"
     if not final and source.is_file():
         try:
-            partial=json.loads(source.read_text())
+            partial=json.loads(_read_task_text(task_id,source))
             if ((phase=="architecture" and isinstance(partial,dict)
                  and not any(partial.get(k) for k in ("stack_entries","component_bodies","adr_bodies")))
                 or (phase in ("srs","tests","validation") and isinstance(partial,dict) and not partial)
@@ -1196,13 +1208,13 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
                     try:
                         if name in validators:
                             namespace,model=validators[name]
-                            getattr(__import__(namespace,fromlist=[model]),model).model_validate_json(candidate.read_text())
+                            getattr(__import__(namespace,fromlist=[model]),model).model_validate_json(_read_task_text(task_id,candidate))
                         elif name in ("items.json","tests.json","test_specifications.json"):
                             namespace,model=("vmodel_contracts.spec","ItemSpec") if name=="items.json" else ("vmodel_contracts.verification","AcceptanceTest")
-                            TypeAdapter(list[getattr(__import__(namespace,fromlist=[model]),model)]).validate_json(candidate.read_text())
+                            TypeAdapter(list[getattr(__import__(namespace,fromlist=[model]),model)]).validate_json(_read_task_text(task_id,candidate))
                         elif name=="spec_items.json":
                             from vmodel_contracts.spec import SpecBundle
-                            SpecBundle.model_validate_json(candidate.read_text())
+                            SpecBundle.model_validate_json(_read_task_text(task_id,candidate))
                         else:continue
                         prior=[{"ref":str(candidate),"name":name,"valid":True}]
                         break
@@ -1217,7 +1229,7 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
         if not source.is_file():return {"phase_key":phase,"generation":generation,"status":"waiting","items":[]}
     # No traversal and no outside-session file can be used as a phase output.
     if source.resolve().parent!=folder.resolve():raise HTTPException(409,"phase output source outside session")
-    try:data=json.loads(source.read_text())
+    try:data=json.loads(_read_task_text(task_id,source))
     except (OSError,ValueError):return {"phase_key":phase,"generation":generation,"status":"unavailable","items":[]}
     if final:
         if display_phase=="srs":rows=[*data.get("functional",[]),*data.get("non_functional",[])] if isinstance(data,dict) else []
@@ -1250,12 +1262,23 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}")
 def task_artifact_download(task_id:str,phase:str,name:str):
-    return FileResponse(_task_artifact(task_id,phase,name),filename=name)
+    path=_task_artifact(task_id,phase,name)
+    if config.CLOUD_TENANTS:
+        from .tenant_files import read_session_bytes
+        from vmodel_contracts.runtime import artifacts_root
+        from fastapi.responses import Response
+        base=artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'));session=_recorded_engine_session(task_id)
+        root=authorized_session(base,session,store)
+        data=read_session_bytes(base,session,str(path.relative_to(root)),store)
+        return Response(data,media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream',
+                        headers={'Content-Disposition':f'attachment; filename="{name}"'})
+    return FileResponse(path,filename=name)
 
 _ARTIFACT_TITLES={"intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification","validation.json":"Validation"}
 
 def _checkpoint_interview_turns(task_id:str)->list[tuple[str,str]]:
     """Recover historical turns when old API events stored only answer lengths."""
+    if config.CLOUD_TENANTS:return []  # Never deserialize legacy local checkpoint blobs from a customer read.
     session=_recorded_engine_session(task_id)
     if not session:return []
     from vmodel_contracts.runtime import artifacts_root
@@ -1313,7 +1336,7 @@ def _model_usage_segments(rows:list[dict])->list[dict]:
 
 def _interview_transcript_markdown(task_id:str)->str:
     turns=[]
-    for event in store.events(task_id):
+    for event in _customer_events(store.events(task_id)):
         if event.get("phase_key") not in ("intent","conops"):continue
         payload=event.get("payload") or {}
         if event.get("kind") in ("waiting_input","founder_decision"):
@@ -1326,7 +1349,7 @@ def _interview_transcript_markdown(task_id:str)->str:
     complete=[tuple(turn) for turn in turns if turn[1]]
     checkpoint_turns=_checkpoint_interview_turns(task_id)
     if checkpoint_turns:complete=checkpoint_turns
-    route_changes=[e for e in store.events(task_id) if e.get("kind")=="model_route" and (e.get("payload") or {}).get("scope")=="switch"]
+    route_changes=[e for e in _customer_events(store.events(task_id)) if e.get("kind")=="model_route" and (e.get("payload") or {}).get("scope")=="switch"]
     if not complete and not route_changes:return ""
     lines=_interview_model_provenance(task_id)+["","## Interview questions and answers"]
     # Keep switch markers in event order, between the questions and answers
@@ -1334,7 +1357,7 @@ def _interview_transcript_markdown(task_id:str)->str:
     # the reconstructed complete turns.
     numbered=0
     if not checkpoint_turns:
-        for event in store.events(task_id):
+        for event in _customer_events(store.events(task_id)):
             if event.get("phase_key") not in ("intent","conops"):continue
             payload=event.get("payload") or {}
             if event.get("kind")=="model_route" and payload.get("scope")=="switch":
@@ -1410,10 +1433,10 @@ def _validation_panel_for(task_id:str,raw:str)->dict|None:
 def task_artifact_view(task_id:str,phase:str,name:str):
     path=_task_artifact(task_id,phase,name)
     if path.stat().st_size>2_000_000:raise HTTPException(413,"artifact is too large for inline viewing")
-    text=path.read_text(errors="replace");raw=text;display_path=path
+    text=_read_task_text(task_id,path,errors="replace");raw=text;display_path=path
     if path.suffix==".json":
         sibling=path.with_suffix(".md")
-        if sibling.is_file():display_path=sibling;text=sibling.read_text(errors="replace")
+        if sibling.is_file():display_path=sibling;text=_read_task_text(task_id,sibling,errors="replace")
         try:raw=json.dumps(json.loads(raw),indent=2)
         except Exception:pass
     display_format="markdown" if display_path.suffix==".md" else ("json" if path.suffix==".json" else "text")
@@ -1431,7 +1454,15 @@ def task_artifacts_zip(task_id:str):
     if not records:raise HTTPException(404,"no artifacts found")
     data=io.BytesIO()
     with zipfile.ZipFile(data,"w",zipfile.ZIP_DEFLATED) as archive:
-        for artifact in records:archive.write(artifact["ref"],f"{artifact['phase_key']}/{artifact['name']}")
+        for artifact in records:
+            entry=f"{artifact['phase_key']}/{artifact['name']}"
+            if config.CLOUD_TENANTS:
+                from .tenant_files import read_session_bytes
+                from vmodel_contracts.runtime import artifacts_root
+                base=artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'));session=_recorded_engine_session(task_id)
+                root=authorized_session(base,session,store)
+                archive.writestr(entry,read_session_bytes(base,session,str(Path(artifact['ref']).relative_to(root)),store))
+            else:archive.write(artifact['ref'],entry)
     from fastapi.responses import Response
     title=(store.task(task_id) or {}).get("title","task").replace(" ","-").lower()
     return Response(data.getvalue(),media_type="application/zip",headers={"Content-Disposition":f'attachment; filename="{title}-artifacts.zip"'})
@@ -1499,8 +1530,8 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
                          "engine_error":{"http_status":exc.http_status,"code":int(exc.error.code),"detail":exc.error.detail}}
         except EngineUnreachableError:
             input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None,"engine_unreachable":True}
-    else:input_state=runner.input_state(task_id)
-    work=runner.work_state(task_id)
+    else:input_state=({"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None} if config.CLOUD_TENANTS else runner.input_state(task_id))
+    work=None if config.CLOUD_TENANTS else runner.work_state(task_id)
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
     artifacts=_task_artifact_snapshot(task_id);session=_recorded_engine_session(task_id)
     from .phases import PHASE_DEFINITIONS
@@ -1509,7 +1540,11 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
     from .control_snapshot import project as project_control
     control=project_control(task,input_state,snapshot,work,artifacts)
     _retain_decision_control(task_id,control.model_dump(mode="json"))
-    return _customer_events({**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": _customer_events(store.events(task_id)), "artifacts":artifacts,"artifact_projection":{"session":session,"root":str((authorized_session(__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"stop_control":{"available":bool(config.CLOUD_TENANTS and cloud_execution_admitted() and session_id),"requested":task.get("state") in ("stop_requested","stopped")}})
+    if config.CLOUD_TENANTS:
+        control.artifact_ref=None
+    if config.CLOUD_TENANTS:
+        artifacts=[{key:value for key,value in row.items() if key!='ref'} for row in artifacts]
+    return _customer_events({**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": _customer_events(store.events(task_id)), "artifacts":artifacts,"artifact_projection":{"session":session,"root":None if config.CLOUD_TENANTS else str((authorized_session(__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"stop_control":{"available":bool(config.CLOUD_TENANTS and cloud_execution_admitted() and session_id),"requested":task.get("state") in ("stop_requested","stopped")}})
 
 def _retain_decision_control(task_id:str,control:dict)->None:
     decision=control.get('decision') or {};context=decision.get('context') or {}
@@ -1906,7 +1941,10 @@ def _task_cost(task_id:str)->dict:
     if session:
         from vmodel_contracts.runtime import artifacts_root
         root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
-        interview_tokens=usage_tokens(root/"interview"/"usage.jsonl");spec_tokens=usage_tokens(root/"spec"/"usage.jsonl")
+        if config.CLOUD_TENANTS:
+            with session_reader(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store):
+                interview_tokens=usage_tokens(root/'interview'/'usage.jsonl');spec_tokens=usage_tokens(root/'spec'/'usage.jsonl')
+        else:interview_tokens=usage_tokens(root/"interview"/"usage.jsonl");spec_tokens=usage_tokens(root/"spec"/"usage.jsonl")
     counted=[e for e in latest.values() if _is_credit_event(e) and not (interview_tokens and e.get("phase_key") in ("intent","conops"))]
     event_price=sum(float((e.get("payload") or {}).get("price") or 0) for e in counted)
     event_tokens=sum(int((e.get("payload") or {}).get("tokens") or 0) for e in counted if e.get("phase_key") not in ("intent","conops"))
@@ -1917,7 +1955,7 @@ def _task_cost(task_id:str)->dict:
 def task_cost(task_id:str,request:Request):
     if not store.task(task_id):raise HTTPException(404,"task not found")
     session=_recorded_engine_session(task_id)
-    if session:
+    if session and not config.CLOUD_TENANTS:
         try:
             from vmodel_contracts.runtime import artifacts_root
             from .pricing import write_cost_json
@@ -1956,7 +1994,9 @@ def task_audit(task_id: str, request: Request):
         path=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"usage.jsonl"
         if path.is_file():
             from .pricing import _rows
-            interview_usage=_rows(path)
+            if config.CLOUD_TENANTS:
+                with session_reader(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store):interview_usage=_rows(path)
+            else:interview_usage=_rows(path)
     # The HTTP interview does not run through ProcessRunner, so it has no
     # phase-price event. Read its per-call records, but do not double-count
     # historical subprocess prices if both forms exist for an older task.
@@ -2384,6 +2424,7 @@ def _content_ref(text):
 def task_classifications(task_id:str, a:auth.Actor=Depends(auth.require_actor)):
     """Per-answer shadow categorization (Jev vs baseline) for debug-mode chips."""
     if not store.task(task_id): raise HTTPException(404,"task not found")
+    if config.CLOUD_TENANTS:raise HTTPException(404,"classification diagnostics are internal")
     session=store.engine_session(task_id)
     out={"session":session,"answers":{}}
     if not session: return out

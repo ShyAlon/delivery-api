@@ -17,7 +17,13 @@ class TenantMiddleware:
         # Static/login shell may load without identity. Every data API and old
         # link/run endpoint needs identity. Legacy auth endpoints cannot mint
         # local sessions in cloud mode.
-        public=not path.startswith(('/api/','/links','/runs')) or path=='/api/auth'
+        # New endpoints are private by default. Only known shell/static routes
+        # may bypass identity, never every path outside an /api prefix.
+        import re
+        public=(path in ('/','/about','/favicon.ico','/health','/api/auth','/sessions')
+                or path.startswith('/assets/')
+                or re.fullmatch(r'/tasks/[^/]+/(?:view|complete|gates/[^/]+|decisions/[^/]+)',path) is not None
+                or re.fullmatch(r'/sessions/[^/]+/(?:view|[^/]+)',path) is not None)
         if path.startswith('/api/auth/') or (path.startswith('/auth/') and path not in ('/auth/signin','/auth/signup','/auth/refresh','/auth/logout')):
             return await JSONResponse({'detail':'Use Supabase Auth in cloud mode'},status_code=404)(scope,receive,send)
         # Scoped engine protocol/recovery is not available yet. Prevent cloud
@@ -63,4 +69,4 @@ class TenantMiddleware:
                         return await JSONResponse({'detail':'Session expired or revoked'},status_code=401)(scope,receive,send)
                 return await self.app(scope,receive,send)
         except TenantAccessDenied:
-            return await JSONResponse({'detail':'Tenant access denied'},status_code=403)(scope,receive,send)
+            return await JSONResponse({'detail':'Tenant resource not found'},status_code=404)(scope,receive,send)

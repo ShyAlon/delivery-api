@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json,os
 from pathlib import Path
+from .tenant_files import read_text as read_bound_text
 
 PRICE_PER_TOKEN=float(os.environ.get("PRICE_PER_TOKEN","0.0000125"))
 PRICE_PER_10MS=float(os.environ.get("PRICE_PER_10MS","0.0000005"))
@@ -11,7 +12,7 @@ _STAGE_PHASE={"probing":"intent","distillation":"intent","phrasing":"intent","sc
 def _rows(path:Path,start:int=0)->list[dict]:
     if not path.is_file():return []
     out=[]
-    for line in path.read_text(errors="replace").splitlines()[start:]:
+    for line in read_bound_text(path,errors="replace").splitlines()[start:]:
         try:
             value=json.loads(line)
             if isinstance(value,dict):out.append(value)
@@ -19,7 +20,7 @@ def _rows(path:Path,start:int=0)->list[dict]:
     return out
 
 def line_count(path:Path)->int:
-    return len(path.read_text(errors="replace").splitlines()) if path.is_file() else 0
+    return len(read_bound_text(path,errors="replace").splitlines()) if path.is_file() else 0
 
 def price_execution(usage_path:Path,llm_path:Path,wall_ms:float,usage_start:int=0,llm_start:int=0)->list[dict]:
     usage=_rows(usage_path,usage_start);calls=_rows(llm_path,llm_start)
