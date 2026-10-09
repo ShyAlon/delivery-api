@@ -44,3 +44,6 @@ Restored recovered wheel's mandatory JWT dependency and supabase/dev optional de
 
 ## Same-host producer, SRS rework, back-office and networking tests
 Recovered missing source-written tests and baseline back-office fixtures. Reconciled exact current raw_usage name, current gate selected_option shape, pending Stop confirmation and positive legacy retail bound fixture (prepaid ignores that legacy bound). Restored explicit prepaid balance assertions rather than exempting prepaid tests. Targeted local PG same-host/SRS suite33 passed; back-office/networking and non-PG selection23 passed,26 skipped. No production change in this test unit.
+
+## Recovered browser checks
+Login-layout, validation-panel and recovered decision-page modules44 passed. Inspected latest final-approval checklist desktop1252x917 and mobile390x844 screenshots: readable required reason/checklist, continuation and rework controls, no clipped checklist text. Long UI/tenant-login modules and missing three earlier decision tests remain open.
