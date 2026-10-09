@@ -281,6 +281,51 @@ class PostgresStore(SQLiteStore):
         return self.enqueue_worker(task_id,'phase:'+phase,execution_options={
             'mode':'resume' if checkpoint else 'start','model_route':model})
 
+    def retain_closed_revision_restart_intent(self,task_id,*,request_key,options,proposal,
+                                             approval_reference,read_current_evidence):
+        """Atomically retain a held intent with owner/task CAS, never dispatch.
+
+        Trusted caller authenticates the approval and freshly loaded proposal.
+        Evidence callback runs under owner/task transaction locks; it must read
+        current artifacts and checkpoint under the same-host writer lease.
+        """
+        from .revision_intent import intent_payload
+        from .gate_revision import closed_revision_preflight
+        if not isinstance(request_key,str) or not 1<=len(request_key)<=200:
+            raise ValueError('bounded replay-safe request key required')
+        if not callable(read_current_evidence):raise ValueError('trusted current evidence reader required')
+        body,fingerprint=intent_payload(options=options,proposal=proposal,approval_reference=approval_reference)
+        with self._task_operation_guard('task.rerun'):
+            if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():
+                raise KeyError(task_id)
+            task=self.task(task_id);scope=current_scope()
+            if task['generation']!=proposal['generation'] or proposal['task_id']!=task_id:
+                raise ValueError('reviewed restart generation/task changed')
+            binding=self.session_binding(proposal['session_id'])
+            if not binding or binding['task_id']!=task_id or binding['generation']!=task['generation']:
+                raise TenantAccessDenied('reviewed restart session changed')
+            prior=self._db.execute('SELECT * FROM closed_revision_restart_intents WHERE owner_id=? AND request_key=?',
+                (scope.owner_id,request_key)).fetchone()
+            if prior:
+                if prior['fingerprint']!=fingerprint:raise ValueError('conflicting restart intent replay')
+                return {'intent_id':prior['intent_id'],'state':'held','replayed':True,'dispatch_started':False}
+            def compare():
+                evidence=read_current_evidence()
+                if not isinstance(evidence,dict) or set(evidence)!={'artifacts','checkpoint_id','proposal_sha256'}:
+                    raise ValueError('exact current restart evidence required')
+                if evidence['checkpoint_id']!=options['source_checkpoint_id'] or evidence['proposal_sha256']!=proposal['artifact_sha256']:
+                    raise ValueError('reviewed checkpoint/proposal evidence changed')
+                live=closed_revision_preflight(self,task_id,options['gate_key'],options['review_revision'],
+                    options['draft_id'],artifact_snapshot=evidence['artifacts'])
+                if live['review_digest']!=options['preflight_digest']:raise ValueError('reviewed artifact/gate evidence changed')
+            compare();compare()
+            intent_id=secrets.token_hex(16)
+            self._db.execute('INSERT INTO closed_revision_restart_intents(intent_id,request_key,owner_id,auth_session_id,task_id,source_generation,gate_key,fingerprint,payload,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (intent_id,request_key,scope.owner_id,scope.session_id,task_id,task['generation'],options['gate_key'],fingerprint,json.dumps(body,sort_keys=True),time.time()))
+            self.audit(scope.owner_id,'gate.revision_restart_intent_held',task_id,
+                {'intent_id':intent_id,'source_generation':task['generation'],'review_digest':options['preflight_digest']})
+            return {'intent_id':intent_id,'state':'held','replayed':False,'dispatch_started':False}
+
     def prepare_rerun(self,task_id,from_phase,policy='archive',actor='local user'):
         # Legacy generation reset leaves the immutable session binding stale.
         # Block internal callers too until a reviewed new-session copy exists.

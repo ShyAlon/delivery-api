@@ -478,3 +478,68 @@ def test_retained_review_conflict_is_not_silently_accepted(store):
         assert store.decision_review(tid,'gate:gate-needs','same') is None
         with pytest.raises(Exception):store.retain_decision_review(tid,'gate:gate-needs','same',{'evidence':'foreign'})
     with tenant_context(A):store.delete_task(tid)
+
+
+def _restart_intent_fixture(store):
+    from delivery_api.gate_revision import save_closed_revision,closed_revision_preflight
+    from test_closed_revision_job import options
+    from test_revision_intent import proposal
+    tid=store.create_task('revision-intent-'+uuid.uuid4().hex)['task_id'];sid='rev-'+uuid.uuid4().hex
+    store.set_engine_session(tid,sid);store.wait_at_gate(tid,'srs')
+    store.retain_decision_review(tid,'gate:gate-srs','review',{'task':store.task(tid)})
+    store.decide_gate(tid,'gate-srs','approve',selected_option='Proceed')
+    draft=save_closed_revision(store,tid,'gate-srs','review','Describe offline behavior')['draft_id']
+    o=options();o['draft_id']=draft;o['gate_revision']=next(g for g in store.task(tid)['gates'] if g['gate_key']=='gate-srs')['revision']
+    live=closed_revision_preflight(store,tid,'gate-srs','review',draft,artifact_snapshot=o['artifact_evidence'])
+    o['preflight_digest']=live['review_digest'];p=proposal()|{'task_id':tid,'session_id':sid}
+    evidence={'artifacts':o['artifact_evidence'],'checkpoint_id':'checkpoint','proposal_sha256':p['artifact_sha256']}
+    return tid,o,p,evidence
+
+
+def test_restart_intent_is_held_replay_safe_owner_scoped_and_preserves_task(store):
+    with tenant_context(A):
+        tid,o,p,evidence=_restart_intent_fixture(store);before=store.task(tid)
+        args=dict(request_key=uuid.uuid4().hex,options=o,proposal=p,approval_reference='fake-reviewed-owner-ref',read_current_evidence=lambda:evidence)
+        result=store.retain_closed_revision_restart_intent(tid,**args)
+        assert result['state']=='held' and not result['dispatch_started'] and not result['replayed']
+        again=store.retain_closed_revision_restart_intent(tid,**args)
+        assert again['intent_id']==result['intent_id'] and again['replayed']
+        assert store.task(tid)==before
+        with pytest.raises(ValueError,match='conflicting'):
+            store.retain_closed_revision_restart_intent(tid,**(args|{'approval_reference':'different'}))
+    with tenant_context(B):
+        with pytest.raises((KeyError,TenantAccessDenied)):
+            store.retain_closed_revision_restart_intent(tid,**args)
+    # Disposable CI database owns teardown; held audit intent must remain.
+
+
+def test_restart_intent_rejects_changed_current_evidence_without_partial_record(store):
+    with tenant_context(A):
+        tid,o,p,evidence=_restart_intent_fixture(store);before=store.task(tid);reads=[];key=uuid.uuid4().hex
+        def current():
+            reads.append(1)
+            return evidence if len(reads)==1 else evidence|{'checkpoint_id':'changed'}
+        with pytest.raises(ValueError,match='checkpoint'):
+            store.retain_closed_revision_restart_intent(tid,request_key=key,options=o,proposal=p,
+                approval_reference='fake-owner-ref',read_current_evidence=current)
+        with store._postgres.transaction() as conn:
+            assert not conn.execute('SELECT 1 FROM closed_revision_restart_intents WHERE request_key=%s',(key,)).fetchone()
+        assert store.task(tid)==before
+        # Disposable CI database owns teardown.
+
+
+def test_restart_intent_rows_are_immutable_to_backend_and_hidden_from_browser(store):
+    with tenant_context(A):
+        tid,o,p,evidence=_restart_intent_fixture(store)
+        held=store.retain_closed_revision_restart_intent(tid,request_key=uuid.uuid4().hex,options=o,proposal=p,
+            approval_reference='fake-owner-ref',read_current_evidence=lambda:evidence)
+        with pytest.raises(Exception):
+            with store._postgres.transaction() as conn:
+                conn.execute("UPDATE closed_revision_restart_intents SET state='held' WHERE intent_id=%s",(held['intent_id'],))
+        with pytest.raises(Exception):
+            with store._postgres.transaction() as conn:
+                conn.execute('SET LOCAL ROLE authenticated')
+                conn.execute('SELECT * FROM closed_revision_restart_intents').fetchall()
+    with tenant_context(B):
+        with store._postgres.transaction() as conn:
+            assert conn.execute('SELECT 1 FROM closed_revision_restart_intents WHERE intent_id=%s',(held['intent_id'],)).fetchone() is None
