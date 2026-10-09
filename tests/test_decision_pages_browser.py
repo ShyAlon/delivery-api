@@ -553,3 +553,26 @@ def test_gate_checklist_jump_reveals_collapsed_target_and_moves_focus(page):
  p.wait_for_timeout(500)
  expect(panel.locator('textarea[name=stack-text-0]')).to_be_in_viewport()
  p.screenshot(path='/downloads/gate-checklist-jump-mobile.png')
+
+
+def test_concept_shared_checklist_missing_choice_reason_and_jump(page):
+ p,base,root=page;state=fake(p)
+ p.goto(base+'/tasks/concept/decisions/wait-concept')
+ expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled()
+ expect(p.locator('#decision-checklist')).to_contain_text('Choose an operating concept')
+ expect(p.locator('#decision-checklist')).to_contain_text('Explain why this concept fits')
+ p.locator('#decision-checklist [data-jump=".decision-options"]').click()
+ expect(p.locator('input[name=choice]').first).to_be_focused()
+ p.locator('input[value="2"]').check()
+ expect(p.locator('#decision-checklist')).not_to_contain_text('Choose an operating concept')
+ p.locator('textarea[name=rationale]').fill('One deployment')
+ expect(p.get_by_role('button',name='Choose and continue')).to_be_enabled()
+ p.locator('textarea[name=rationale]').fill('')
+ expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled()
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ p.screenshot(path='/downloads/concept-checklist-desktop.png')
+ p.set_viewport_size({'width':390,'height':844})
+ p.locator('#decision-checklist').scroll_into_view_if_needed()
+ assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
+ p.screenshot(path='/downloads/concept-checklist-mobile.png')
+ assert not state['posts']
