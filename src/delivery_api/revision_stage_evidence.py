@@ -110,6 +110,7 @@ def read_validated_staged_receipt(store,capability,*,artifacts_base,lineage,line
     root=session_root(Path(artifacts_base),capability.scope,capability.session_id)
     source=read_closed_checkpoint(root/'spec'/'checkpoints.sqlite',session_id=capability.session_id,
         expected_checkpoint_id=lineage['source_checkpoint_id'])
+    validate_cloud_revision_conops(source,lineage['semantic_session_id'])
     staged_path=root/'spec'/'revision-proposals'/lineage['proposal_id']/'staged'/lineage['execution_session_id']/'spec'/'checkpoints.sqlite'
     staged=read_closed_checkpoint(staged_path,session_id=lineage['execution_session_id'],
         expected_checkpoint_id=before['checkpoint_id'],expected_review_phase=lineage['phase'])
@@ -178,3 +179,14 @@ def read_approved_upstream_bytes(root,*,expected_documents):
         finally:os.close(current)
         return digests
     finally:os.close(parent)
+
+
+def validate_cloud_revision_conops(source,semantic_session_id):
+    """Cloud staging preserves existing typed ConOps requirement, never heals."""
+    from vmodel_contracts import ConOpsDocument,check_compatible
+    conops=source.get('conops') if isinstance(source,dict) else None
+    if not isinstance(conops,dict):raise ValueError('cloud revision staging requires typed source ConOps')
+    check_compatible(conops)
+    typed=ConOpsDocument.model_validate(conops)
+    if typed.session_id!=semantic_session_id:raise ValueError('cloud ConOps semantic source identity mismatch')
+    return typed

@@ -69,6 +69,7 @@ def test_validated_receipt_connects_pinned_checkpoint_and_source_evidence(tmp_pa
     def read(path,**kwargs):
         reads.append(kwargs)
         return {'state':'staged'} if kwargs.get('expected_review_phase') else {'state':'source'}
+    monkeypatch.setattr(module,'validate_cloud_revision_conops',lambda *a:None)
     source.read_closed_checkpoint=read
     checkpoint.validate_staged_lineage_state=lambda **kwargs:calls.append(kwargs)
     monkeypatch.setitem(sys.modules,'spec_generator.revision_source',source);monkeypatch.setitem(sys.modules,'spec_generator.revision_checkpoint',checkpoint)
@@ -112,3 +113,27 @@ def test_equal_json_different_staged_bytes_are_rejected(tmp_path):
     original=b'{ "same": true }\n'
     with pytest.raises(ValueError,match='upstream bytes differ'):
         read_staged_revision_manifest(**args,expected_upstream_sha256={'interview/intent_model.json':hashlib.sha256(original).hexdigest()})
+
+
+@pytest.mark.parametrize('kind',['absent','null','foreign','old','unconfirmed'])
+def test_cloud_revision_requires_typed_conops_without_healing(kind):
+    from pathlib import Path
+    from copy import deepcopy
+    from delivery_api.revision_stage_evidence import validate_cloud_revision_conops
+    state=json.loads((Path(__file__).parent/'fixtures'/'revision-source.json').read_text())
+    if kind=='absent':state.pop('conops')
+    elif kind=='null':state['conops']=None
+    elif kind=='foreign':state['conops']['session_id']='foreign'
+    elif kind=='old':state['conops']['contract_version']='0.14.3'
+    else:state['conops']['decision']['founder_confirmed']=False
+    after=deepcopy(state)
+    with pytest.raises(ValueError):validate_cloud_revision_conops(state,'s')
+    assert state==after
+
+
+def test_cloud_revision_conops_validator_preserves_source():
+    from pathlib import Path
+    from copy import deepcopy
+    from delivery_api.revision_stage_evidence import validate_cloud_revision_conops
+    state=json.loads((Path(__file__).parent/'fixtures'/'revision-source.json').read_text());before=deepcopy(state)
+    assert validate_cloud_revision_conops(state,'s').session_id=='s' and state==before

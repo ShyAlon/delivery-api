@@ -5,6 +5,84 @@
   "bundle": {
     "old": true
   },
+  "conops": {
+    "concept_options": [
+      {
+        "advantages": [
+          "native APIs"
+        ],
+        "concept_id": "concept:native-app",
+        "contract_version": "0.28.0",
+        "disadvantages": [
+          "store distribution"
+        ],
+        "name": "Native app",
+        "summary": "installed mobile product"
+      },
+      {
+        "advantages": [
+          "one web deployment"
+        ],
+        "concept_id": "concept:pwa",
+        "contract_version": "0.28.0",
+        "disadvantages": [
+          "limited background APIs"
+        ],
+        "name": "PWA",
+        "summary": "installable web product"
+      }
+    ],
+    "contract_version": "0.28.0",
+    "decision": {
+      "contract_version": "0.28.0",
+      "founder_confirmed": true,
+      "rationale": "reliable native health access",
+      "selected_concept": "Native app",
+      "selected_concept_id": "concept:native-app",
+      "source_turns": [
+        9
+      ]
+    },
+    "operational_scenarios": [
+      {
+        "actors": [
+          "habit tracker"
+        ],
+        "contract_version": "0.28.0",
+        "exceptions": [
+          "offline"
+        ],
+        "name": "Log progress",
+        "no_exceptions_reason": null,
+        "operational_flow": [
+          "open product",
+          "record points"
+        ],
+        "scenario_id": "OS-1",
+        "source_turns": [
+          4,
+          5
+        ],
+        "success_outcome": "points persist across devices",
+        "trigger": "habit completed"
+      }
+    ],
+    "session_id": "s",
+    "stakeholder_context": [
+      {
+        "contract_version": "0.28.0",
+        "goals": [
+          "log in seconds"
+        ],
+        "operating_environment": "on a phone while moving",
+        "role": "records daily progress",
+        "source_turns": [
+          3
+        ],
+        "stakeholder": "habit tracker"
+      }
+    ]
+  },
   "expert_opinions": [
     {
       "gate": "srs"
