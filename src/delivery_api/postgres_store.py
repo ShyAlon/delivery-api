@@ -1129,6 +1129,25 @@ class PostgresStore(SQLiteStore):
             (json.dumps(raw_usage,allow_nan=False),time.time(),attempt_id))
         return self.provider_attempt(attempt_id)
 
+    def confirmed_expense_admission(self,job_id,expense_scale=None):
+        # Returning a denial commits its durable episode/outbox. Raising here
+        # would roll it back and lose the alert on every denied call.
+        row=self._db.execute('SELECT public.requi_confirmed_expense_guard(?,?) AS reason',(job_id,expense_scale)).fetchone()
+        return row['reason']
+
+    def start_launch_provider_attempt(self,attempt_id):
+        from .launch_admission_policy import validate_owner_limits,validate_launch_quote
+        from .attempt_ledger import AdmissionDenied
+        self._db.execute('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
+        row=self.provider_attempt(attempt_id)
+        if not row:raise AdmissionDenied('owned attempt required')
+        limits=self._db.execute('SELECT * FROM admission_limits WHERE owner_id=?',(current_scope().owner_id,)).fetchone()
+        validate_owner_limits(dict(limits) if limits else None);validate_launch_quote(row['quote'])
+        reason=self.confirmed_expense_admission(row['job_id'],row['quote']['expense_units_per_usd'])
+        if reason!='allowed':return {'started':False,'reason':reason}
+        self.transition_provider_attempt(attempt_id,'start',require_prepaid=True)
+        return {'started':True,'reason':'allowed'}
+
     def transition_provider_attempt(self,attempt_id,action,usage=None,*,require_prepaid=False):
         from .attempt_ledger import transition
         return transition(self,attempt_id,action,usage,require_prepaid=require_prepaid)

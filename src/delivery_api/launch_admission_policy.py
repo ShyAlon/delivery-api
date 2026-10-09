@@ -23,6 +23,6 @@ def validate_launch_quote(quote):
     _quote(quote)
     if quote.get('provider')!='deepseek':
         raise AdmissionDenied('launch provider must be DeepSeek')
-    if not {'expense_cache_hit','expense_cache_miss','retail_units_per_credit'}<=set(quote):
-        raise AdmissionDenied('launch requires reviewed cache expense prices and prepaid unit scale')
+    if not {'expense_cache_hit','expense_cache_miss','retail_units_per_credit','expense_units_per_usd'}<=set(quote):
+        raise AdmissionDenied('launch requires reviewed cache expense prices and explicit expense/prepaid unit scales')
     return dict(quote)

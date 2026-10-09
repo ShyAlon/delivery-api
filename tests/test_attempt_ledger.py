@@ -896,3 +896,179 @@ def test_dispatch_waiting_on_owner_lock_observes_committed_suspension(ledger):
             s.transition_provider_attempt(aid,'cancel')
     finally:
         with psycopg.connect(DSN) as c:c.execute('DELETE FROM user_task_policy WHERE owner_id=%s',(A.owner_id,))
+
+
+@pytest.fixture
+def expense_guard(credit_account):
+    import psycopg
+    s,tid,job=credit_account
+    with psycopg.connect(DSN) as c:
+        c.execute("INSERT INTO expense_guard_policy VALUES(true,'test-only',10,10,1,3)")
+    yield s,tid,job
+    with psycopg.connect(DSN) as c:
+        c.execute('DELETE FROM expense_alert_outbox')
+        c.execute('DELETE FROM expense_guard_episodes')
+        c.execute('DELETE FROM expense_guard_policy')
+
+LAUNCH_Q={**Q,'expense_units_per_usd':1,'provider':'deepseek','expense_cache_hit':1,'expense_cache_miss':1,'retail_units_per_credit':1000000}
+LAUNCH_USAGE={'input_tokens':2,'output_tokens':3,'cache_hit_tokens':1,'cache_miss_tokens':1}
+
+
+def test_confirmed_guard_ignores_holds_and_inflight_calls_finish(expense_guard):
+    s,tid,job=expense_guard
+    with tenant_context(A):
+        attempts=[]
+        for i in range(3):
+            aid=uuid.uuid4().hex
+            s.reserve_provider_attempt(job,aid,LAUNCH_Q,'large-hold-'+str(i))
+            assert s.start_launch_provider_attempt(aid)=={'started':True,'reason':'allowed'}
+            attempts.append(aid)
+        # Quotes held 30 each against a $10/session test policy. Actual cost
+        # alone counts, and running calls are never aborted at the threshold.
+        s.transition_provider_attempt(attempts[0],'settle',LAUNCH_USAGE)
+        assert s.confirmed_expense_admission(job)=='allowed' # actual=8
+        s.transition_provider_attempt(attempts[1],'settle',LAUNCH_USAGE)
+        assert s.confirmed_expense_admission(job)=='session_expense_limit'
+        s.transition_provider_attempt(attempts[2],'settle',LAUNCH_USAGE)
+        nxt=uuid.uuid4().hex;s.reserve_provider_attempt(job,nxt,LAUNCH_Q,'next')
+        result=s.start_launch_provider_attempt(nxt)
+        assert result=={'started':False,'reason':'session_expense_limit'}
+        assert s.provider_attempt(nxt)['state']=='reserved'
+        with s._postgres.transaction() as c:
+            assert c.execute("SELECT count(*) AS n FROM expense_alert_outbox WHERE payload->>'accounting'='confirmed_provider_charges'").fetchone()['n']==2 # session plus platform at 20
+            assert c.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']==1-3*18
+        assert s.confirmed_expense_admission(job)=='session_expense_limit'
+        with s._postgres.transaction() as c:assert c.execute("SELECT count(*) AS n FROM expense_alert_outbox WHERE payload->>'accounting'='confirmed_provider_charges'").fetchone()['n']==2
+
+
+def test_confirmed_guard_unknown_outcome_blocks_without_estimated_charge(expense_guard):
+    s,tid,job=expense_guard
+    with tenant_context(A):
+        first=uuid.uuid4().hex;s.reserve_provider_attempt(job,first,LAUNCH_Q,'unknown')
+        assert s.start_launch_provider_attempt(first)['started']
+        s.transition_provider_attempt(first,'settle',None)
+        assert s.confirmed_expense_admission(job)=='unknown_provider_outcome'
+        with s._postgres.transaction() as c:
+            assert c.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']==1
+            assert c.execute("SELECT count(*) AS n FROM expense_alert_outbox WHERE payload->>'accounting'='confirmed_provider_charges'").fetchone()['n']==0
+
+
+def test_confirmed_guard_policy_missing_and_browser_has_no_access(credit_account):
+    import psycopg
+    s,tid,job=credit_account
+    with tenant_context(A):
+        aid=uuid.uuid4().hex;s.reserve_provider_attempt(job,aid,LAUNCH_Q,'missing')
+        assert s.start_launch_provider_attempt(aid)=={'started':False,'reason':'expense_policy_missing'}
+        assert s.provider_attempt(aid)['state']=='reserved'
+    with psycopg.connect(DSN) as c:
+        c.execute('SET LOCAL ROLE authenticated')
+        for sql in ["SELECT requi_confirmed_expense_guard('x')",'SELECT * FROM expense_guard_policy','SELECT * FROM expense_guard_episodes']:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with c.transaction():c.execute(sql)
+
+
+def test_confirmed_guard_gateway_denial_commits_alert_episode(expense_guard):
+    import psycopg
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    s,tid,job=expense_guard
+    with tenant_context(A):
+        a=uuid.uuid4().hex;s.reserve_provider_attempt(job,a,LAUNCH_Q,'one');assert s.start_launch_provider_attempt(a)['started']
+        s.transition_provider_attempt(a,'settle',LAUNCH_USAGE)
+    with psycopg.connect(DSN) as c:c.execute('UPDATE expense_guard_policy SET session_units=8')
+    with tenant_context(A):
+        # Credit balance is negative now, but the expense guard commits its
+        # denial evidence before the gateway raises, without provider contact.
+        aid=uuid.uuid4().hex;s.reserve_provider_attempt(job,aid,LAUNCH_Q,'denied')
+        gw=WorkerAdmissionGateway(s,job,launch_guard=True)
+        with pytest.raises(AdmissionDenied,match='temporarily'):gw.start(aid)
+        with s._postgres.transaction() as c:assert c.execute("SELECT count(*) AS n FROM expense_alert_outbox WHERE payload->>'accounting'='confirmed_provider_charges'").fetchone()['n']==1
+
+
+def test_confirmed_guard_platform_counts_other_owner_and_rolls_off(expense_guard):
+    import psycopg,time
+    s,tid,job=expense_guard
+    with tenant_context(B):
+        task=s.create_task('platform-other-'+uuid.uuid4().hex)
+        s.set_engine_session(task['task_id'],'other-'+uuid.uuid4().hex)
+        other=s.enqueue_worker(task['task_id'],'phase:needs');s.claim_worker(other)
+    with psycopg.connect(DSN) as c:
+        c.execute('UPDATE expense_guard_policy SET session_units=100')
+        c.execute("INSERT INTO provider_attempts(attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,expense_actual,retail_actual,usage,created_at,updated_at,settled_at) VALUES (%s,%s,%s,'test-only','{}','test-only','settled',0,0,20,0,'{}',%s,%s,%s)",
+                  ('other-expense',B.owner_id,other,time.time(),time.time(),time.time()))
+    try:
+        with tenant_context(A):
+            assert s.confirmed_expense_admission(job)=='platform_rolling_24h_expense_limit'
+            assert s.provider_attempt('other-expense') is None
+        with psycopg.connect(DSN) as c:
+            c.execute('UPDATE provider_attempts SET settled_at=%s WHERE attempt_id=%s',(time.time()-86401,'other-expense'))
+        with tenant_context(A):assert s.confirmed_expense_admission(job)=='allowed'
+        with psycopg.connect(DSN) as c:
+            c.execute('UPDATE provider_attempts SET settled_at=%s WHERE attempt_id=%s',(time.time(),'other-expense'))
+        with tenant_context(A):
+            assert s.confirmed_expense_admission(job)=='platform_rolling_24h_expense_limit'
+            with s._postgres.transaction() as c:
+                rows=c.execute("SELECT payload FROM expense_alert_outbox WHERE payload->>'accounting'='confirmed_provider_charges'").fetchall()
+                assert len(rows)==2
+                assert rows[0]['payload']['episode_id']!=rows[1]['payload']['episode_id']
+    finally:
+        with psycopg.connect(DSN) as c:c.execute("DELETE FROM provider_attempts WHERE attempt_id='other-expense'")
+        with tenant_context(B):s.finish_worker(other);s.delete_task(task['task_id'])
+
+
+def test_confirmed_guard_parallel_dispatch_and_settlement_never_abort(expense_guard):
+    from concurrent.futures import ThreadPoolExecutor
+    s,tid,job=expense_guard
+    with tenant_context(A):
+        attempts=[]
+        for i in range(3):
+            aid=uuid.uuid4().hex;s.reserve_provider_attempt(job,aid,LAUNCH_Q,'parallel-guard-'+str(i));attempts.append(aid)
+    def start(aid):
+        db=PostgresStore(DSN.replace('user=sandbox','user=delivery_app'))
+        with tenant_context(A):return db.start_launch_provider_attempt(aid)
+    with ThreadPoolExecutor(3) as pool:assert all(r['started'] for r in pool.map(start,attempts))
+    def settle(aid):
+        db=PostgresStore(DSN.replace('user=sandbox','user=delivery_app'))
+        with tenant_context(A):return db.transition_provider_attempt(aid,'settle',LAUNCH_USAGE)
+    with ThreadPoolExecutor(3) as pool:assert all(r['state']=='settled' for r in pool.map(settle,attempts))
+    with tenant_context(A):assert s.confirmed_expense_admission(job)=='session_expense_limit'
+
+
+
+def test_confirmed_guard_wrong_scale_denied_before_provider_and_settlement_alert_atomic(expense_guard):
+    s,tid,job=expense_guard
+    with tenant_context(A):
+        aid=uuid.uuid4().hex;s.reserve_provider_attempt(job,aid,LAUNCH_Q|{'expense_units_per_usd':2},'scale')
+        assert s.start_launch_provider_attempt(aid)=={'started':False,'reason':'expense_scale_mismatch'}
+        assert s.provider_attempt(aid)['state']=='reserved'
+        s.transition_provider_attempt(aid,'cancel')
+        first=uuid.uuid4().hex;s.reserve_provider_attempt(job,first,LAUNCH_Q,'scale-good')
+        assert s.start_launch_provider_attempt(first)['started']
+        # One accepted call crosses a deliberately low test threshold. The
+        # settlement itself must commit both exact debit and outbox, no poll.
+        import psycopg
+        with psycopg.connect(DSN) as c:c.execute('UPDATE expense_guard_policy SET session_units=8')
+        settled=s.transition_provider_attempt(first,'settle',LAUNCH_USAGE)
+        assert settled['state']=='settled'
+        with s._postgres.transaction() as c:
+            assert c.execute("SELECT count(*) AS n FROM expense_alert_outbox WHERE payload->>'accounting'='confirmed_provider_charges'").fetchone()['n']==1
+        s.transition_provider_attempt(first,'settle',LAUNCH_USAGE)
+        with s._postgres.transaction() as c:assert c.execute("SELECT count(*) AS n FROM expense_alert_outbox WHERE payload->>'accounting'='confirmed_provider_charges'").fetchone()['n']==1
+
+
+def test_confirmed_guard_foreign_worker_and_revoked_identity_cannot_probe(expense_guard):
+    import psycopg
+    s,tid,job=expense_guard
+    with tenant_context(B):
+        assert s.confirmed_expense_admission(job)=='worker_unavailable'
+    with psycopg.connect(DSN) as c:
+        c.execute('DELETE FROM auth.sessions WHERE id=%s',(A.session_id,))
+    try:
+        with tenant_context(A):assert s.confirmed_expense_admission(job)=='session_inactive'
+    finally:
+        with psycopg.connect(DSN) as c:c.execute('INSERT INTO auth.sessions(id,user_id) VALUES(%s,%s)',(A.session_id,A.owner_id))
+
+
+def test_launch_guard_cannot_disable_prepaid():
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    with pytest.raises(AdmissionDenied,match='prepaid'):
+        WorkerAdmissionGateway(None,'fictional',launch_guard=True,require_prepaid=False)
