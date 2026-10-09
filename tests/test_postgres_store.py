@@ -1136,6 +1136,84 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                 assert (promoted_root/'spec/approved-continuation/checkpoints.sqlite').read_bytes()==immutable
                 assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
                 assert not asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))['started']
+                if coordinated in ('continuation_real_graph','architecture_continuation'):
+                    from delivery_api.revision_next_review import read_private_next_review,approve_private_next_review
+                    shown=read_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                    assert shown['review']['phase']==('specs' if phase=='architecture' else 'architecture')
+                    with pytest.raises(ValueError,match='changed'):
+                        approve_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256='f'*64,extra_cost_acknowledged=True,selected_option='Approve',validate_submission=lambda *a:'test-only-submission')
+                    for rejected in (False,None,1):
+                        with pytest.raises(ValueError,match='acknowledgement'):
+                            approve_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'],extra_cost_acknowledged=rejected,selected_option='Approve',validate_submission=lambda *a:'test-only-submission')
+                    with pytest.raises(ValueError,match='submission reference'):
+                        approve_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'],extra_cost_acknowledged=True,selected_option='Approve',validate_submission=lambda *a:None)
+                    assert next(g for g in store.task(tid)['gates'] if g['after_phase']==shown['review']['phase'])['state']=='waiting'
+                    approved=approve_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'],extra_cost_acknowledged=True,selected_option='Approve',validate_submission=lambda *a:'test-only-submission')
+                    assert approved['phase']==shown['review']['phase'] and not approved['dispatch_started']
+                    if coordinated=='continuation_real_graph':
+                        from delivery_api.revision_next_review import prepare_private_successor,queue_private_successor,execute_private_successor
+                        source_continuation=(promoted_root/'spec/continuation-execution/checkpoints.sqlite').read_bytes()
+                        with cli_execution(StopFence(promoted_root/'interview/stop-request.json',execution_anchor=later.execution_anchor),None):
+                            next_prepared=prepare_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])
+                        assert next_prepared['source_checkpoint_sha256']==shown['review']['checkpoint_sha256']
+                        with cli_execution(StopFence(promoted_root/'interview/stop-request.json',execution_anchor=later.execution_anchor),None):
+                            with pytest.raises(ValueError,match='reconciliation'):
+                                prepare_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])
+                        source_artifact=promoted_root/'spec/continuation-execution/architecture.json'
+                        source_artifact_raw=source_artifact.read_bytes()
+                        source_artifact.write_text('{}')
+                        with pytest.raises(ValueError,match='differs'):
+                            queue_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])
+                        source_artifact.write_bytes(source_artifact_raw)
+                        def next_runtime(c,r):return JobRuntime({'items':StageModel('fake','fake')},str(r/'calls.jsonl'),lambda text:None)
+                        next_worker=SameHostProducerWorker(store,tmp_path,gateway_factory=lambda c,j:SimpleNamespace(store=store,job_id=j),usage_log_factory=lambda *a:None,runtime_factory=next_runtime)
+                        def fake_next_items(stage,payload,log,progress,**kwargs):
+                            assert stage=='items'
+                            schema=kwargs.get('schema') or {}
+                            value=[{'slug':'api','kind':'api_surface','title':'API','requirement_ids':['R-1'],'depends_on':[]}] if schema.get('type')=='array' else {'body_markdown':'# Approved Spec\n\nThe API emits the complete approved specification.'}
+                            checked=kwargs['validate'](value)
+                            return checked if checked is not None else value
+                        monkeypatch.setattr(real_graph,'_call_json',fake_next_items)
+                        next_job=queue_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])
+                        next_consumed=asyncio.run(execute_private_successor(store,next_worker,next_job,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256']))
+                        assert next_consumed['started'] and next_consumed['outputs'][0]['phase']=='specs'
+                        assert queue_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])==next_job
+                        assert not asyncio.run(execute_private_successor(store,next_worker,next_job,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256']))['started']
+                        next_shown=read_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,result_reference=shown['review_sha256'])
+                        assert next_shown['review']['phase']=='specs'
+                        for expected_stage,expected_phase in [('tests','tests'),('validation','validation')]:
+                            source_reference=next_shown['review']['result_reference']
+                            next_approved=approve_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=next_shown['review_sha256'],extra_cost_acknowledged=True,selected_option='Approve',validate_submission=lambda *a:'test-only-submission',result_reference=source_reference)
+                            current_digest=next_shown['review_sha256']
+                            with cli_execution(StopFence(promoted_root/'interview/stop-request.json',execution_anchor=later.execution_anchor),None):
+                                prepared_successor=prepare_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=current_digest)
+                            def final_runtime(c,r):return JobRuntime({expected_stage:StageModel('fake','fake')},str(r/'calls.jsonl'),lambda text:None)
+                            final_worker=SameHostProducerWorker(store,tmp_path,gateway_factory=lambda c,j:SimpleNamespace(store=store,job_id=j),usage_log_factory=lambda *a:None,runtime_factory=final_runtime)
+                            def fake_final(stage,payload,log,progress,**kwargs):
+                                assert stage==expected_stage
+                                schema=kwargs['schema']
+                                if stage=='tests':
+                                    ids=schema['properties']['fills']['required']
+                                    value={'fills':{key:{'description':'Confirm approved specification output','runner':'static','components':['api'],'definition':{'preconditions':[],'steps':['Inspect generated API specification'],'expected_outcomes':['The API specification contains the approved requirement content'],'cleanup':[],'cases':[],'execution':{}}} for key in ids}}
+                                else:
+                                    value={'items':[{'components':['api'],'what_the_human_does':'Read the generated specification','what_to_observe':'The approved user workflow remains clear','pass_when':'The user can identify the intended behavior','evidence':'Record the review outcome','environment':'Local review'}]}
+                                    props=schema['properties']['items']['items']['properties']
+                                    if 'criterion_id' in props:value['items'][0]['criterion_id']=None
+                                checked=kwargs['validate'](value)
+                                return checked if checked is not None else value
+                            monkeypatch.setattr(real_graph,'_call_json',fake_final)
+                            final_job=queue_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=current_digest)
+                            final_result=asyncio.run(execute_private_successor(store,final_worker,final_job,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=current_digest))
+                            assert final_result['outputs'][0]['phase']==expected_phase
+                            next_shown=read_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,result_reference=current_digest)
+                            assert next_shown['review']['phase']==expected_phase
+                        terminal=approve_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=next_shown['review_sha256'],extra_cost_acknowledged=True,selected_option='Approve',validate_submission=lambda *a:'test-only-submission',result_reference=next_shown['review']['result_reference'])
+                        assert terminal['phase']=='validation' and store.task(tid)['state']=='done'
+                        from delivery_api.revision_next_review import successor_basis
+                        with pytest.raises(ValueError,match='terminal'):
+                            successor_basis(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=next_shown['review_sha256'])
+                        assert (promoted_root/'spec/continuation-execution/checkpoints.sqlite').read_bytes()==source_continuation
+                    assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
                 return
             (promoted_root/'spec/approved-continuation/receipt.json').write_text('{}')
             assert reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)['state']=='continuation_requires_review'

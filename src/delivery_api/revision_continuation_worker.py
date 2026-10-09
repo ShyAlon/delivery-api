@@ -33,9 +33,12 @@ def queue_private_approved_continuation(store,task_id,*,installation_id,artifact
         return job_id
 
 async def execute_private_approved_continuation(store,worker,job_id,*,installation_id,artifacts_base,graph_factory=None):
+    return await _execute_continuation(store,worker,job_id,installation_id=installation_id,artifacts_base=artifacts_base,graph_factory=graph_factory)
+
+async def _execute_continuation(store,worker,job_id,*,installation_id,artifacts_base,graph_factory=None,successor=None):
     job=store.worker_job(job_id)
     if not job or job['kind']!=KIND or job['execution_options']!={}:raise ValueError('exact continuation job required')
-    marker=store.decision_review(job['task_id'],'revision-continuation-job:'+installation_id,'queue')
+    marker=store.decision_review(job['task_id'],('revision-continuation-job:'+installation_id if successor is None else 'revision-chain-job:'+installation_id+':'+successor),'queue')
     if not marker or marker['job_id']!=job_id:raise ValueError('retained continuation job binding required')
     outputs=[]
     def producer(cap,root):
@@ -46,10 +49,14 @@ async def execute_private_approved_continuation(store,worker,job_id,*,installati
         from spec_generator.graph import build_graph,checkpoint_serde,validated_architecture,_check_baseline_reconciliation,_check_decision_drivers
         from vmodel_contracts import SystemBaseline
         from langgraph.checkpoint.sqlite import SqliteSaver
-        basis=store.private_approved_continuation_basis(cap.task_id,installation_id=installation_id,artifacts_base=artifacts_base,expected_job_id=job_id)
-        if basis['phase'] not in ('srs','architecture') or marker['review_sha256']!=basis['review_sha256']:raise ValueError('exact phase continuation approval required')
-        stage='architecture' if basis['phase']=='srs' else 'items'
-        next_phase='architecture' if stage=='architecture' else 'specs'
+        def get_basis():
+            if successor is None:return store.private_approved_continuation_basis(cap.task_id,installation_id=installation_id,artifacts_base=artifacts_base,expected_job_id=job_id)
+            from .revision_next_review import successor_basis
+            return successor_basis(store,cap.task_id,installation_id=installation_id,artifacts_base=artifacts_base,review_sha256=successor,expected_job_id=job_id)
+        basis=get_basis()
+        if basis['phase'] not in ('srs','architecture','specs','tests') or marker['review_sha256']!=basis['review_sha256']:raise ValueError('exact phase continuation approval required')
+        stage={'srs':'architecture','architecture':'items','specs':'tests','tests':'validation'}[basis['phase']]
+        next_phase={'architecture':'architecture','items':'specs','tests':'tests','validation':'validation'}[stage]
         runtime=current_runtime();binding=cli_stop_binding()
         expected=(cap.scope.owner_id,cap.task_id,job_id,cap.generation,str(root))
         if (runtime is None or runtime.worker_binding!=expected or binding is None
@@ -58,19 +65,21 @@ async def execute_private_approved_continuation(store,worker,job_id,*,installati
             raise ValueError('bound continuation runtime required')
         def authority():
             check_execution();cap.validate(store)
-            if store.private_approved_continuation_basis(cap.task_id,installation_id=installation_id,artifacts_base=artifacts_base,expected_job_id=job_id)!=basis:
+            if get_basis()!=basis:
                 raise ValueError('continuation approval basis changed')
         authority()
-        observed=reconcile_private_approved_continuation(store,cap.task_id,installation_id=installation_id,artifacts_base=artifacts_base,expected_job_id=job_id)
+        observed=(reconcile_private_approved_continuation(store,cap.task_id,installation_id=installation_id,artifacts_base=artifacts_base,expected_job_id=job_id) if successor is None else {'state':'continuation_prepared_verified_no_dispatch'})
         if observed['state']!='continuation_prepared_verified_no_dispatch':raise ValueError('continuation preparation differs')
-        prepared=root/'spec/approved-continuation/checkpoints.sqlite'
+        prepared=(root/'spec/approved-continuation/checkpoints.sqlite' if successor is None else root/'spec/continuation-chain'/successor/'prepared/checkpoints.sqlite')
         if prepared.resolve()!=prepared:raise ValueError('unsafe prepared checkpoint')
+        for suffix in ('-wal','-shm','-journal'):
+            if os.path.lexists(str(prepared)+suffix):raise ValueError('prepared checkpoint sidecar unresolved')
         fd=os.open(prepared,os.O_RDONLY|os.O_NOFOLLOW)
         try:
             with os.fdopen(fd,'rb',closefd=False) as f:raw=f.read(64*1024*1024+1)
         finally:os.close(fd)
         if len(raw)>64*1024*1024:raise ValueError('bounded checkpoint required')
-        destination=root/'spec/continuation-execution'
+        destination=(root/'spec/continuation-execution' if successor is None else root/'spec/continuation-chain'/successor/'execution')
         if destination.resolve()!=destination:raise ValueError('unsafe continuation destination')
         guarded_publish(lambda:destination.mkdir(mode=0o700))
         destination_fd=_open_directory(destination)
@@ -90,8 +99,11 @@ async def execute_private_approved_continuation(store,worker,job_id,*,installati
         try:os.fsync(fd)
         finally:os.close(fd)
         authority()
-        prepared_receipt=store.decision_review(cap.task_id,'revision-continuation:'+installation_id+':prepared',basis['review_sha256'])
-        if hashlib.sha256(raw).hexdigest()!=prepared_receipt['checkpoint_file_sha256']:
+        prepared_receipt=store.decision_review(cap.task_id,('revision-continuation:'+installation_id+':prepared' if successor is None else 'revision-chain-prepared:'+installation_id),basis['review_sha256'])
+        if (not prepared_receipt or prepared_receipt['review_sha256']!=basis['review_sha256']
+            or (successor is not None and (prepared_receipt['source_checkpoint_sha256']!=basis['checkpoint_sha256']
+                or prepared_receipt['approval_reference']!=basis['approval_reference']))
+            or hashlib.sha256(raw).hexdigest()!=prepared_receipt['checkpoint_file_sha256']):
             raise ValueError('prepared checkpoint changed before copy')
         conn=sqlite3.connect(str(checkpoint),check_same_thread=False)
         try:
@@ -104,7 +116,7 @@ async def execute_private_approved_continuation(store,worker,job_id,*,installati
             result=graph.invoke(None,config);authority()
             after=graph.get_state(config)
             if after.next:raise ValueError('continuation must stop before next approval')
-            upstream=('intent_model','conops','needs','system_baseline','srs')+ (('architecture',) if stage=='items' else ())
+            upstream=('intent_model','conops','needs','system_baseline','srs')+ (() if stage=='architecture' else ('architecture',))+ (('items',) if stage in ('tests','validation') else ()) + (('tests',) if stage=='validation' else ())
             for key in upstream:
                 if result.get(key)!=before.values.get(key):raise ValueError('continuation changed approved '+key)
             known={r['requirement_id'] for section in ('functional','non_functional') for r in result['srs'][section]}
@@ -116,7 +128,7 @@ async def execute_private_approved_continuation(store,worker,job_id,*,installati
                 if not artifact.components or any(not set(c.requirement_ids)<=known for c in artifact.components):raise ValueError('continuation requirement trace differs')
                 if set(r for c in artifact.components for r in c.requirement_ids)!=known:raise ValueError('continuation requirement coverage incomplete')
                 body=artifact.model_dump(mode='json')
-            else:
+            elif stage=='items':
                 from spec_generator.architecture_decisions import require_decided
                 require_decided(result['architecture'])
                 from vmodel_contracts import ItemSpec,check_compatible
@@ -129,7 +141,20 @@ async def execute_private_approved_continuation(store,worker,job_id,*,installati
                 _check_item_refs([t.model_dump(mode='json') for t in typed],list(known),key='spec_id')
                 if any(not item.body_markdown.strip() for item in typed):raise ValueError('nonempty specification body required')
                 body=[item.model_dump(mode='json') for item in typed]
-            forbidden=('items','tests','validation','bundle') if stage=='architecture' else ('tests','validation','bundle')
+            elif stage=='tests':
+                from vmodel_contracts import AcceptanceTest,check_compatible
+                for item in result['tests']:
+                    if 'contract_version' in item:check_compatible(item)
+                from spec_generator.graph import check_runner_execution,check_test_components
+                body=[AcceptanceTest.model_validate(x).model_dump(mode='json') for x in result['tests']]
+                check_runner_execution(body);check_test_components(body,result['srs'],result['items'],result['architecture'])
+                if not body or len({x['test_id'] for x in body})!=len(body):raise ValueError('unique complete tests required')
+            else:
+                from vmodel_contracts import ValidationPlan,check_compatible
+                if 'contract_version' in result[stage]:check_compatible(result[stage])
+                body=ValidationPlan.model_validate({'session_id':cap.execution_anchor.semantic_session_id,**result[stage]}).model_dump(mode='json')
+                if body['session_id']!=cap.execution_anchor.semantic_session_id:raise ValueError('continuation semantic identity differs')
+            forbidden=('items','tests','validation','bundle') if stage=='architecture' else (('tests','validation','bundle') if stage=='items' else (('validation','bundle') if stage=='tests' else ('bundle',)))
             if any(result.get(k) not in (None,[],{}) for k in forbidden):raise ValueError('continuation escaped next-phase boundary')
             receipt={'job_id':job_id,'installation_id':installation_id,'review_sha256':basis['review_sha256'],
                 'phase':next_phase,'artifact_sha256':hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
