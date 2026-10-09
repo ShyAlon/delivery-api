@@ -37,9 +37,19 @@ class PrivateRevisionAcceptanceAdapter:
             if not submitted or submitted.get('decision')!='edit' or submitted.get('extra_cost_acknowledged') is not True:
                 raise ValueError('exact retained same-phase change submission required')
             options=submitted['options']
-            return queue_closed_revision_proposal(self.store,self.task_id,gate_key=options['gate_key'],review_revision=options['review_revision'],
+            # Serialize against competing queue calls and reject ambiguous replay.
+            self.store._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(self.task_id,)).fetchone()
+            marker='revision-change-job:'+submission_id
+            prior=self.store.decision_review(self.task_id,marker,review['review_sha256'])
+            if prior:
+                job=self.store.worker_job(prior['job_id'])
+                if not job or job['execution_options']!=options:raise ValueError('retained change queue evidence differs')
+                return prior['job_id']
+            job_id=queue_closed_revision_proposal(self.store,self.task_id,gate_key=options['gate_key'],review_revision=options['review_revision'],
                 draft_id=options['draft_id'],reviewed_preflight_digest=options['preflight_digest'],source_checkpoint_id=options['source_checkpoint_id'],
                 artifact_snapshot=options['artifact_evidence'],extra_cost_acknowledged=options['extra_cost_acknowledged'])
+            self.store.retain_decision_review(self.task_id,marker,review['review_sha256'],{'job_id':job_id,'submission_id':submission_id,'dispatch_started':False})
+            return job_id
 
     def prepare_installation(self,acceptance_reference,installation_id):
         """Retain exact private intent using concrete DB receipt verifier only."""

@@ -869,6 +869,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                             conn.execute("INSERT INTO worker_jobs(job_id,owner_id,auth_session_id,task_id,session_id,generation,kind,state,attempt,created_at,updated_at,execution_options) VALUES (%s,%s,%s,%s,%s,1,%s,'pending',0,0,0,%s::jsonb)",
                                 (uuid.uuid4().hex,A.owner_id,A.session_id,tid,cap.session_id,KIND,json.dumps(changed['options']|invalid)))
             queued=adapter.queue_submitted_changes(changed['submission_id'])
+            assert adapter.queue_submitted_changes(changed['submission_id'])==queued
             assert store.worker_job(queued)['execution_options']==changed['options']
             assert store.worker_job(queued)['state']=='pending' and store.task(tid)==before
             with pytest.raises(ValueError,match='superseded'):store.record_private_revision_acceptance(tid,**acceptance_kw)
