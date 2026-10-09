@@ -35,3 +35,51 @@ def save_closed_revision(store,task_id,gate_key,review_revision,edited_text):
     preview=closed_revision_preview(store,task_id,gate_key,review_revision,edited_text)
     draft=store.save_decision_draft(task_id,'gate:'+gate_key,review_revision,preview)
     return {'draft_id':draft,'preview':preview,'committed':False,'dispatch_started':False}
+
+
+def closed_revision_preflight(store,task_id,gate_key,review_revision,draft_id,*,artifact_snapshot):
+    """Non-effectful review of a saved proposal against current approval/evidence.
+
+    artifact_snapshot must come from current authorized source reads. This function
+    does not authenticate a caller's digest, validate typed producer outputs, or
+    provide a route that commits/restarts work.
+    """
+    import hashlib,json,re
+    from .phases import PHASE_BY_KEY
+    initial=store.task(task_id)
+    if not initial:raise KeyError(task_id)
+    draft=store.decision_draft(task_id,'gate:'+gate_key,review_revision,draft_id)
+    if not isinstance(draft,dict) or draft.get('kind')!='closed_gate_revision':
+        raise ValueError('saved closed-gate revision proposal required')
+    preview=closed_revision_preview(store,task_id,gate_key,review_revision,draft.get('edited_text',''))
+    if draft!=preview:raise ValueError('saved proposal basis changed; save a current proposal')
+    if not isinstance(artifact_snapshot,list) or not artifact_snapshot:
+        raise ValueError('current authorized artifact evidence required')
+    task=store.task(task_id)
+    normalized=[];names=set()
+    for artifact in artifact_snapshot:
+        if not isinstance(artifact,dict) or set(artifact)!={'phase','name','generation','sha256'}:
+            raise ValueError('exact current artifact evidence required')
+        phase,name,generation,digest=(artifact[k] for k in ('phase','name','generation','sha256'))
+        if phase!=preview['phase'] or type(generation) is not int or generation!=task['generation']:
+            raise ValueError('artifact evidence belongs to another phase or generation')
+        if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,199}',name) or name in names:
+            raise ValueError('unique canonical artifact names required')
+        if not isinstance(digest,str) or not re.fullmatch(r'[a-f0-9]{64}',digest):
+            raise ValueError('current artifact content digest required')
+        names.add(name);normalized.append(dict(artifact))
+    required=set(PHASE_BY_KEY[preview['phase']].artifacts)
+    if not required<=names:raise ValueError('complete canonical phase artifact evidence required')
+    # A preflight is not atomic, but cannot knowingly bind a mixed task snapshot.
+    if task!=initial or store.task(task_id)!=task:
+        raise ValueError('task changed during revision preflight')
+    result={'kind':'closed_gate_revision_preflight','task_id':task_id,'generation':task['generation'],
+        'gate_key':gate_key,'review_revision':review_revision,'draft_id':draft_id,
+        'proposal':preview,'artifact_evidence':sorted(normalized,key=lambda a:a['name']),
+        'commit_available':False,'effect_executed':False,'dispatch_started':False,
+        'remaining_requirements':['typed producer revision/checkpoint validation',
+            'fresh authority and atomic gate/generation/artifact compare-and-swap',
+            'explicit reviewed approve-and-restart with admission',
+            'durable restart intent and no automatic replay after ambiguity']}
+    result['review_digest']=hashlib.sha256(json.dumps(result,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    return result
