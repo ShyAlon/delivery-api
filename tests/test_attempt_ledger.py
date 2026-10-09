@@ -1,5 +1,6 @@
 """Reviewed test-only limits and prices; never production defaults."""
-import uuid,os
+import uuid
+import os,os
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 from test_postgres_store import store,DSN,A,B
@@ -156,7 +157,8 @@ def test_both_producer_seams_use_worker_ledger_before_fake_contact(ledger,monkey
     from delivery_api.producer_admission import WorkerAdmissionGateway
     from delivery_api.admission_catalog import ReviewedCatalog,ReviewedModelPrice,RequestBound
     # Repository fixtures only. No real provider adapter or price entry exists.
-    producer_root='/tmp/spec-admission/src' if package=='spec_generator' else '/tmp/ie-tenants/src'
+    producer_root=os.getenv('DELIVERY_TEST_SPEC_SOURCE' if package=='spec_generator' else 'DELIVERY_TEST_ENGINE_SOURCE')
+    if not producer_root:pytest.skip('explicit hermetic producer source required')
     monkeypatch.syspath_prepend(producer_root)
     seam=importlib.import_module(package+'.attempt_admission')
     monkeypatch.setenv('VMODEL_TENANT_OWNER',A.owner_id)
@@ -390,7 +392,8 @@ def test_browser_authenticated_cannot_read_or_mutate_private_admission(ledger):
         connection.execute('SET ROLE authenticated')
         connection.execute("SELECT set_config('request.jwt.claim.sub',%s,false)",(A.owner_id,))
         connection.execute("SELECT set_config('request.jwt.claim.session_id',%s,false)",(A.session_id,))
-        for statement in ['SELECT * FROM admission_limits','SELECT * FROM provider_attempts','UPDATE provider_attempts SET state=\'settled\'','SET ROLE requi_backend']:
+        assert not connection.execute("SELECT pg_has_role('authenticated','requi_backend','MEMBER')").fetchone()[0]
+        for statement in ['SELECT * FROM admission_limits','SELECT * FROM provider_attempts','UPDATE provider_attempts SET state=\'settled\'','SELECT * FROM expense_alert_outbox']:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 with connection.transaction():connection.execute(statement)
 
@@ -579,7 +582,7 @@ def test_raw_adapter_error_preserves_evidence_not_zero_charge(ledger):
     def measure(raw):raise ValueError('fake unsupported schema')
     with tenant_context(A):
         s.reserve_provider_attempt(job,attempt,Q,'digest');s.transition_provider_attempt(attempt,'start')
-        with pytest.raises(AdmissionDenied):WorkerAdmissionGateway(s,job,measure_raw_usage=measure,require_prepaid=False).settle_raw(attempt,raw)
+        with pytest.raises(AdmissionDenied):WorkerAdmissionGateway(s,job,require_prepaid=False,measure_raw_usage=measure).settle_raw(attempt,raw)
         row=s.provider_attempt(attempt)
         assert row['state']=='uncertain' and row['raw_usage']==raw and row['retail_actual'] is None
 
@@ -595,12 +598,15 @@ def test_task_stop_generation_denies_new_call_but_accepted_usage_settles(ledger)
         with pytest.raises(AdmissionDenied):s.confirm_task_stopped(tid,engine_quiescent=True)
         with pytest.raises(AdmissionDenied):s.tombstone_stopped_task(tid)
         s.transition_provider_attempt(attempt,'settle',{'input_tokens':2,'output_tokens':3})
-        s.finish_worker(job)
+        with pytest.raises(AdmissionDenied):s.finish_stopped_worker(job,worker_quiescent=False)
+        s.finish_stopped_worker(job,worker_quiescent=True)
         with pytest.raises(AdmissionDenied):s.confirm_task_stopped(tid,engine_quiescent=False)
         stopped=s.confirm_task_stopped(tid,engine_quiescent=True)
         assert stopped['state']=='stopped' and stopped['stopped_at'] is not None
         deleted=s.tombstone_stopped_task(tid)
         assert deleted['deleted_at'] is not None
+        assert s.task(tid) is None and all(t['task_id']!=tid for t in s.list_tasks())
+        with pytest.raises(KeyError):s.delete_task(tid)
         assert s.provider_attempt(attempt)['expense_actual']==8
     with tenant_context(B):
         with pytest.raises(KeyError):s.request_task_stop(tid)

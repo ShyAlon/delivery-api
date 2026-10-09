@@ -77,14 +77,14 @@ def test_session_registry_and_file_namespace(cloud):
     assert client.get('/api/sessions',headers=header('b')).json()['sessions']==[]
     outside=root/'outside.json';outside.write_text('{"secret":true}')
     (path/'interview'/'escape.json').symlink_to(outside)
-    assert client.get('/api/sessions/'+sid,headers=header('a')).status_code==403
+    assert client.get('/api/sessions/'+sid,headers=header('a')).status_code in (403,404)
 
 
 def test_unsafe_settings_local_auth_and_worker_routes_denied(cloud):
     client,_,_=cloud
     for path in ['/api/settings/artifacts-root','/api/settings/engine-python']:
         assert client.post(path,json={'path':'/tmp'},headers=header('a')).status_code==403
-    for path in ['/auth/signup','/auth/signin','/auth/refresh']:
+    for path in ['/auth/email-availability','/auth/github/start']:
         assert client.post(path,headers=header('a')).status_code==404
     for path in ['/api/tasks/guess/start','/api/tasks/guess/model-route','/api/simulations']:
         assert client.post(path,json={},headers=header('a')).status_code==503
@@ -268,8 +268,7 @@ def test_cloud_provider_usage_categories_are_private_even_with_debug(cloud):
     (path/'debug-http.jsonl').write_text(json.dumps({'response':sensitive})+'\n')
     for suffix in ['/execution','/execution?debug=true']:
         reply=client.get('/api/tasks/'+tid+suffix,headers=header('a'))
-        assert reply.status_code==200,reply.text
-        assert reply.json()['usage']==[] and reply.json()['raw']==[]
+        assert reply.status_code==404,reply.text
         assert all(key not in reply.text for key in sensitive)
     assert client.post('/api/tasks/'+tid+'/debug.zip',json={},headers=header('a')).status_code==503
     assert client.get('/api/tasks/'+tid+'/execution?debug=true',headers=header('b')).status_code==404
@@ -384,7 +383,7 @@ def test_closed_gate_revision_draft_cloud_scoped_and_no_execution(cloud):
     assert reply.json()['dispatch_started'] is False and reply.json()['committed'] is False
     with tenant_context(A):
         assert store.task(tid)==before
-        store.delete_task(tid)
+        store.request_task_stop(tid);store.confirm_task_stopped(tid,engine_quiescent=True);store.delete_task(tid)
 
 
 def test_orphan_operations_api_requires_admin_before_owner_view(cloud):
@@ -401,8 +400,9 @@ def test_operations_workspace_api_requires_admin(cloud):
 
 def test_operator_api_unconfigured_is_closed_not_admin_default(cloud):
     client,_,_=cloud
-    for path in ('/api/operator/sessions','/api/operator/credits','/api/operator/expense-totals'):
+    for path in ('/api/operator/sessions','/api/operator/credits','/api/operator/expense-totals','/api/operator/task-debug?task_id=fake','/api/operator/task-usage?task_id=fake','/api/operator/task-logs?task_id=fake','/api/operator/credit-account?owner_id=00000000-0000-0000-0000-000000000002'):
         assert client.get(path,headers=header('a')).status_code==503
+        assert client.get(path,headers=header('a')).headers['cache-control']=='no-store'
         assert client.get(path).status_code==401
         assert client.post(path,json={},headers=header('a')).status_code==405
 

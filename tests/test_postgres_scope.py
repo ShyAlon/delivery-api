@@ -18,7 +18,7 @@ def test_transaction_identity_is_local_and_missing_scope_denied():
         with store.transaction(): pass
     for owner,task in [('00000000-0000-0000-0000-000000000001','a'),
                        ('00000000-0000-0000-0000-000000000002','b')]:
-        with tenant_context(TenantScope(owner)),store.transaction() as connection:
+        with tenant_context(TenantScope(owner,owner)),store.transaction() as connection:
             assert [row['task_id'] for row in connection.execute('SELECT task_id FROM tasks')] == [task]
     with pytest.raises(TenantAccessDenied):
         with store.transaction(): pass
