@@ -583,6 +583,33 @@ class PostgresStore(SQLiteStore):
             return {'installation_id':installation_id,'event_sha256':event['event_sha256'],'installed':True,'dispatch_started':False,
                 'approved_phase':phase,'next_phase':later[0] if later else None,'continuation_prepared':True}
 
+    def private_approved_continuation_basis(self,task_id,*,installation_id,artifacts_base):
+        """Exact current DB approval and immutable installed files, no dispatch."""
+        from .worker_capability import WorkerCapability
+        from .revision_install_files import _validate_plan
+        with self._task_operation_guard('task.rerun'):
+            cap=WorkerCapability.capture(self,task_id);cap.validate(self)
+            intent=self._db.execute('SELECT * FROM closed_revision_installations WHERE installation_id=? AND task_id=?',(installation_id,task_id)).fetchone()
+            if not intent:raise KeyError(installation_id)
+            plan=json.loads(intent['payload']);anchor=_validate_plan(plan,intent['plan_sha256'])
+            if cap.execution_anchor!=anchor:raise ValueError('current installed continuation binding differs')
+            review=self.decision_review(task_id,'revision-install:'+intent['lineage_id'],intent['review_sha256'])
+            self.verify_private_revision_acceptance(review,intent['review_sha256'],intent['acceptance_reference'])
+            task=cap.validate(self);phase=review['phase']
+            gate=next((g for g in task['gates'] if g['after_phase']==phase),None)
+            status=next((p for p in task['phases'] if p['phase_key']==phase),None)
+            if not gate or gate['state']!='decided' or not status or status['state']!='approved':
+                raise ValueError('exact installed edited phase approval required')
+            if (self._db.execute("SELECT 1 FROM worker_jobs WHERE task_id=? AND state IN ('pending','running','paused','failed') LIMIT 1",(task_id,)).fetchone()
+                or self._db.execute("SELECT 1 FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=? AND p.state IN ('reserved','dispatched','uncertain') LIMIT 1",(task_id,)).fetchone()):
+                raise ValueError('continuation requires quiescent jobs and providers')
+            reconciled=self.reconcile_private_revision_installation(task_id,installation_id=installation_id,artifacts_base=artifacts_base)
+            if reconciled['state']!='installed_verified_no_dispatch' or reconciled['unverified']:
+                raise ValueError('installed continuation file evidence unresolved')
+            return {'capability':cap,'phase':phase,'artifact_sha256':review['regenerated_artifact_sha256'],
+                'checkpoint_id':review['staged_receipt']['checkpoint_id'],'approval_reference':intent['acceptance_reference'],
+                'review_sha256':intent['review_sha256'],'installation_id':installation_id}
+
     def prepare_private_revision_changes(self,task_id,*,lineage_id,expected_staged_event_sha256,review_sha256,change_request,extra_cost_acknowledged,artifacts_base):
         """Retain same-phase edit submission and fresh original-source preflight.
 

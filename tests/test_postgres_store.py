@@ -961,6 +961,16 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                 with pytest.raises(ValueError,match='new interview input'):registry.respond(later.session_id,{})
             finally:_owner.reset(token)
             assert not (promoted_root/'interview'/'http-session.json').exists()
+            from delivery_api.revision_continuation import prepare_private_approved_continuation
+            original_checkpoint=(promoted_root/'spec/checkpoints.sqlite').read_bytes()
+            with cli_execution(StopFence(promoted_root/'interview/stop-request.json',execution_anchor=later.execution_anchor),None):
+                continuation=prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                assert continuation['next_node']=='architecture' and not continuation['provider_invoked'] and not continuation['dispatch_started']
+                with pytest.raises(ValueError,match='reconciliation'):
+                    prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+            assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
+            assert store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)['state']=='installed_verified_no_dispatch'
+
             assert store.revoke_private_revision_acceptance(tid,acceptance_reference=receipt['acceptance_reference'])['revoked']
             with pytest.raises(TenantAccessDenied,match='revoked'):
                 store.verify_private_revision_acceptance(installation_review['review'],installation_review['review_sha256'],receipt['acceptance_reference'])
