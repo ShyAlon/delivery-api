@@ -576,3 +576,33 @@ def test_concept_shared_checklist_missing_choice_reason_and_jump(page):
  assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
  p.screenshot(path='/downloads/concept-checklist-mobile.png')
  assert not state['posts']
+
+
+def test_closed_phase_change_draft_explains_regeneration_cost_without_commit(page):
+ p,base,root=page;data=_stack_review();posts=[];data['actionable']=False;data['closed_revision_draft']=True
+ data['review']['task']['gates'][0]['state']='decided'
+ def route(r):
+  path=__import__('urllib.parse',fromlist=['urlparse']).urlparse(r.request.url).path
+  if path.endswith('/revision-drafts'):
+   body=r.request.post_data_json;posts.append({'path':path,'body':body})
+   data['draft']={'kind':'closed_gate_revision','edited_text':body['edited_text']}
+   r.fulfill(json={'draft_id':'closed-draft','committed':False,'dispatch_started':False});return
+  if path.endswith('/review'):r.fulfill(json=data);return
+  if path=='/api/model-routes':r.fulfill(json={'routes':[]});return
+  if path=='/api/tasks/t1':r.fulfill(json=data['review']['task']);return
+  r.continue_()
+ p.route('**/api/**',route);p.goto(base+'/tasks/t1/gates/gate-architecture')
+ panel=p.locator('.closed-revision-draft')
+ expect(panel).to_contain_text('regenerate this phase and affected downstream work')
+ expect(panel).to_contain_text('incur extra cost');expect(panel).to_contain_text('not available yet')
+ expect(p.locator('[data-action=approve]')).to_be_disabled()
+ p.get_by_label('What should regeneration change?',exact=True).fill('Use offline-first storage throughout the document')
+ p.get_by_role('button',name='Save proposed revision',exact=True).click()
+ expect(p.locator('#closedrevisionstatus')).to_contain_text('approved result and downstream work are unchanged')
+ assert len(posts)==1 and posts[0]['path'].endswith('/revision-drafts')
+ assert posts[0]['body']['edited_text']=='Use offline-first storage throughout the document'
+ p.reload();expect(p.locator('#closedrevisiontext')).to_have_value(posts[0]['body']['edited_text'])
+ panel.scroll_into_view_if_needed();p.screenshot(path='/downloads/closed-regeneration-cost-desktop.png')
+ p.set_viewport_size({'width':390,'height':844});panel.scroll_into_view_if_needed();p.wait_for_timeout(250)
+ assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
+ p.screenshot(path='/downloads/closed-regeneration-cost-mobile.png')
