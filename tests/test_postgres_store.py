@@ -633,3 +633,41 @@ def test_staged_journal_receipt_drift_leaves_no_partial_event(store):
         with store._postgres.transaction() as conn:
             rows=conn.execute('SELECT state FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall()
             assert len(rows)==1 and rows[0]['state']=='prepared'
+
+
+def test_concrete_staging_recorder_loads_held_lineage_and_options_before_journal(store,tmp_path,monkeypatch):
+    from delivery_api import revision_stage_evidence
+    with tenant_context(A):
+        tid,args=_held_lineage_fixture(store);before=store.task(tid)
+        lid=store.retain_closed_revision_lineage_plan(tid,**args)['lineage_id']
+        first=store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=None,
+            state='prepared',evidence={'intent_id':args['intent_id'],'lineage_id':lid})
+        reads=[]
+        def validated(s,cap,**kwargs):
+            reads.append(kwargs)
+            assert s is store and cap.task_id==tid and cap.session_id==args['retained_proposal']['proposal']['session_id']
+            assert kwargs['lineage']['execution_session_id']==args['new_execution_session_id']
+            assert kwargs['options']['change_request']=='Describe offline behavior' and kwargs['artifacts_base']==tmp_path
+            return {'manifest_sha256':'e'*64,'checkpoint_id':'staged-checkpoint'}
+        monkeypatch.setattr(revision_stage_evidence,'read_validated_staged_receipt',validated)
+        staged=store.record_validated_revision_staging(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],
+            manifest_sha256='e'*64,artifacts_base=tmp_path)
+        assert len(reads)==3 and staged['event']['state']=='staged' and store.task(tid)==before
+        assert not staged['event']['dispatch_started'] and store.session_binding(args['new_execution_session_id']) is None
+    with tenant_context(B):
+        with pytest.raises((KeyError,TenantAccessDenied)):
+            store.record_validated_revision_staging(tid,lineage_id=lid,expected_previous_sha256=None,manifest_sha256='e'*64,artifacts_base=tmp_path)
+
+
+def test_concrete_staging_validation_failure_records_no_event(store,tmp_path,monkeypatch):
+    from delivery_api import revision_stage_evidence
+    with tenant_context(A):
+        tid,args=_held_lineage_fixture(store);lid=store.retain_closed_revision_lineage_plan(tid,**args)['lineage_id']
+        first=store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=None,
+            state='prepared',evidence={'intent_id':args['intent_id'],'lineage_id':lid})
+        def invalid(*a,**kwargs):raise ValueError('typed stage changed')
+        monkeypatch.setattr(revision_stage_evidence,'read_validated_staged_receipt',invalid)
+        with pytest.raises(ValueError,match='typed stage changed'):
+            store.record_validated_revision_staging(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],manifest_sha256='e'*64,artifacts_base=tmp_path)
+        with store._postgres.transaction() as conn:
+            assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1

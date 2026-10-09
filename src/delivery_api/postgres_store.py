@@ -397,6 +397,35 @@ class PostgresStore(SQLiteStore):
             self.audit(scope.owner_id,'gate.revision_preparation_journal',task_id,{'lineage_id':lineage_id,'state':state,'event_sha256':event['event_sha256']})
             return event
 
+    def record_validated_revision_staging(self,task_id,*,lineage_id,expected_previous_sha256,
+                                          manifest_sha256,artifacts_base):
+        """Bind concrete pinned/typed staged receipt to held journal, no install.
+
+        artifacts_base is server configuration, never client-controlled. Caller
+        holds the same-host writer lease for source and private stage namespace.
+        """
+        from .worker_capability import WorkerCapability
+        from .revision_stage_evidence import read_validated_staged_receipt
+        with self._task_operation_guard('task.rerun'):
+            if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():
+                raise KeyError(task_id)
+            capability=WorkerCapability.capture(self,task_id);capability.validate(self)
+            row=self._db.execute('SELECT * FROM closed_revision_lineage_plans WHERE lineage_id=? AND task_id=?',
+                (lineage_id,task_id)).fetchone()
+            if not row:raise KeyError(lineage_id)
+            intent=self._db.execute('SELECT * FROM closed_revision_restart_intents WHERE intent_id=? AND task_id=?',
+                (row['intent_id'],task_id)).fetchone()
+            if not intent:raise KeyError(row['intent_id'])
+            lineage=json.loads(row['payload']);held=json.loads(intent['payload'])
+            def current():
+                return read_validated_staged_receipt(self,capability,artifacts_base=artifacts_base,
+                    lineage=lineage,lineage_sha256=row['fingerprint'],manifest_sha256=manifest_sha256,
+                    options=held['options'])
+            evidence=current()
+            return self.append_closed_revision_preparation_event(task_id,lineage_id=lineage_id,
+                expected_previous_sha256=expected_previous_sha256,state='staged',evidence=evidence,
+                read_staged_receipt=current)
+
     def prepare_rerun(self,task_id,from_phase,policy='archive',actor='local user'):
         # Legacy generation reset leaves the immutable session binding stale.
         # Block internal callers too until a reviewed new-session copy exists.
