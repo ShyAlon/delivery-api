@@ -671,3 +671,35 @@ def test_concrete_staging_validation_failure_records_no_event(store,tmp_path,mon
             store.record_validated_revision_staging(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],manifest_sha256='e'*64,artifacts_base=tmp_path)
         with store._postgres.transaction() as conn:
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
+
+
+def test_upstream_review_snapshot_is_immutable_replay_safe_not_acceptance(store,tmp_path,monkeypatch):
+    from delivery_api import revision_source_review
+    from test_revision_source_review import args as snapshot_args
+    with tenant_context(A):
+        tid,args=_held_lineage_fixture(store);before=store.task(tid)
+        lid=store.retain_closed_revision_lineage_plan(tid,**args)['lineage_id']
+        def current(*a,**kw):
+            return revision_source_review.source_review_payload(**(snapshot_args()|{'lineage_sha256':kw['lineage_sha256'],
+                'checkpoint_id':kw['lineage']['source_checkpoint_id'],'semantic_session_id':kw['lineage']['semantic_session_id']}))
+        monkeypatch.setattr(revision_source_review,'read_source_review_snapshot',current)
+        first=store.retain_revision_source_review(tid,lineage_id=lid,artifacts_base=tmp_path)
+        assert first['state']=='awaiting_review' and not first['accepted'] and not first['replayed']
+        assert store.retain_revision_source_review(tid,lineage_id=lid,artifacts_base=tmp_path)['replayed']
+        assert store.task(tid)==before
+        with pytest.raises(Exception):
+            with store._postgres.transaction() as conn:
+                conn.execute('UPDATE closed_revision_source_reviews SET payload=payload WHERE review_id=%s',(first['review_id'],))
+        with pytest.raises(Exception):
+            with store._postgres.transaction() as conn:
+                conn.execute('SET LOCAL ROLE authenticated');conn.execute('SELECT * FROM closed_revision_source_reviews').fetchall()
+        def changed(*a,**kw):
+            inputs=snapshot_args();inputs['upstream_sha256']['spec/needs.json']='c'*64
+            return revision_source_review.source_review_payload(**(inputs|{'lineage_sha256':kw['lineage_sha256'],
+                'checkpoint_id':kw['lineage']['source_checkpoint_id'],'semantic_session_id':kw['lineage']['semantic_session_id']}))
+        monkeypatch.setattr(revision_source_review,'read_source_review_snapshot',changed)
+        with pytest.raises(ValueError,match='snapshot changed'):store.retain_revision_source_review(tid,lineage_id=lid,artifacts_base=tmp_path)
+    with tenant_context(B):
+        with pytest.raises((KeyError,TenantAccessDenied)):store.retain_revision_source_review(tid,lineage_id=lid,artifacts_base=tmp_path)
+        with store._postgres.transaction() as conn:
+            assert conn.execute('SELECT 1 FROM closed_revision_source_reviews WHERE review_id=%s',(first['review_id'],)).fetchone() is None

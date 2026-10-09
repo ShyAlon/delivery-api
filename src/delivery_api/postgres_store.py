@@ -426,6 +426,40 @@ class PostgresStore(SQLiteStore):
                 expected_previous_sha256=expected_previous_sha256,state='staged',evidence=evidence,
                 read_staged_receipt=current)
 
+    def retain_revision_source_review(self,task_id,*,lineage_id,artifacts_base):
+        """Freeze exact upstream bytes for later review, not approve or install.
+
+        Caller owns same-host source writer exclusion. artifacts_base is server
+        configuration, never a browser-supplied path.
+        """
+        from .worker_capability import WorkerCapability
+        from .revision_source_review import read_source_review_snapshot
+        with self._task_operation_guard('task.rerun'):
+            if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():
+                raise KeyError(task_id)
+            capability=WorkerCapability.capture(self,task_id);capability.validate(self)
+            row=self._db.execute('SELECT * FROM closed_revision_lineage_plans WHERE lineage_id=? AND task_id=?',(lineage_id,task_id)).fetchone()
+            if not row:raise KeyError(lineage_id)
+            def current():
+                return read_source_review_snapshot(self,capability,artifacts_base=artifacts_base,
+                    lineage=json.loads(row['payload']),lineage_sha256=row['fingerprint'])
+            snapshot=current()
+            from .revision_source_review import source_review_payload
+            body=snapshot['snapshot'];planned=json.loads(row['payload'])
+            expected=source_review_payload(lineage_sha256=row['fingerprint'],checkpoint_id=planned['source_checkpoint_id'],
+                semantic_session_id=planned['semantic_session_id'],phase=planned['phase'],upstream_sha256=body['upstream_sha256'])
+            if snapshot!=expected:raise ValueError('source review snapshot differs from held lineage')
+            if current()!=snapshot:raise ValueError('source review evidence changed')
+            prior=self._db.execute('SELECT * FROM closed_revision_source_reviews WHERE lineage_id=?',(lineage_id,)).fetchone()
+            if prior:
+                if prior['fingerprint']!=snapshot['snapshot_sha256']:raise ValueError('source review snapshot changed; explicit new review required')
+                return {'review_id':prior['review_id'],'snapshot_sha256':prior['fingerprint'],'state':'awaiting_review','accepted':False,'replayed':True}
+            scope=current_scope();review_id=secrets.token_hex(16)
+            self._db.execute('INSERT INTO closed_revision_source_reviews(review_id,lineage_id,owner_id,auth_session_id,fingerprint,payload,created_at) VALUES (?,?,?,?,?,?,?)',
+                (review_id,lineage_id,scope.owner_id,scope.session_id,snapshot['snapshot_sha256'],json.dumps(snapshot['snapshot'],sort_keys=True),time.time()))
+            self.audit(scope.owner_id,'gate.revision_source_review_retained',task_id,{'lineage_id':lineage_id,'review_id':review_id})
+            return {'review_id':review_id,'snapshot_sha256':snapshot['snapshot_sha256'],'state':'awaiting_review','accepted':False,'replayed':False}
+
     def prepare_rerun(self,task_id,from_phase,policy='archive',actor='local user'):
         # Legacy generation reset leaves the immutable session binding stale.
         # Block internal callers too until a reviewed new-session copy exists.

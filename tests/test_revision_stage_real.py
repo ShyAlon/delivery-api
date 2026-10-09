@@ -53,6 +53,13 @@ def test_real_staged_receipt_preserves_source_and_requires_fresh_gate(tmp_path):
     args=dict(store=None,capability=cap,artifacts_base=tmp_path,lineage=lineage,lineage_sha256=ld,manifest_sha256=md,options=o)
     assert read_validated_staged_receipt(**args)=={'manifest_sha256':md,'checkpoint_id':manifest['checkpoint_id']}
     assert (root/'spec'/'srs.json').read_bytes()==original
+    from delivery_api.revision_source_review import read_source_review_snapshot
+    review=read_source_review_snapshot(None,cap,artifacts_base=tmp_path,lineage=lineage,lineage_sha256=ld)
+    assert not review['snapshot']['accepted'] and review['snapshot']['upstream_sha256']=={name:files[name] for name in documents if name!='spec/srs.json'}
+    for key,value in (('installed',True),('dispatch_started',True),('state','installed'),('generation',True),('generation',3)):
+        changed=lineage|{key:value};changed_digest=hashlib.sha256(json.dumps(changed,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        with pytest.raises(ValueError,match='lineage differs|next generation'):
+            read_source_review_snapshot(None,cap,artifacts_base=tmp_path,lineage=changed,lineage_sha256=changed_digest)
     # Re-hash a wrong JSON document: byte inventory is consistent but semantic
     # checkpoint evidence must still reject it.
     (dest/'interview'/'intent_model.json').write_text('{}')
