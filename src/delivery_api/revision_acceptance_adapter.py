@@ -24,6 +24,31 @@ class PrivateRevisionAcceptanceAdapter:
                 'same_phase_review_required':True,'installed':False,'dispatch_started':False}
         raise ValueError('approve or edit choice required')
 
+    def queue_submitted_changes(self,submission_id):
+        """Explicit private orchestration step; no route or automatic polling.
+
+        Does not authorize a real run. Caller separately establishes owner scope
+        to incur cost. Reads retained submission, never accepts browser options.
+        """
+        from .closed_revision_job import queue_closed_revision_proposal
+        with self.store._task_operation_guard('task.rerun'):
+            review=self.store.retain_revision_installation_review(self.task_id,**self.basis)
+            submitted=self.store.decision_draft(self.task_id,'revision-changes:'+self.basis['lineage_id'],review['review_sha256'],submission_id)
+            if not submitted or submitted.get('decision')!='edit' or submitted.get('extra_cost_acknowledged') is not True:
+                raise ValueError('exact retained same-phase change submission required')
+            options=submitted['options']
+            return queue_closed_revision_proposal(self.store,self.task_id,gate_key=options['gate_key'],review_revision=options['review_revision'],
+                draft_id=options['draft_id'],reviewed_preflight_digest=options['preflight_digest'],source_checkpoint_id=options['source_checkpoint_id'],
+                artifact_snapshot=options['artifact_evidence'],extra_cost_acknowledged=options['extra_cost_acknowledged'])
+
+    def prepare_installation(self,acceptance_reference,installation_id):
+        """Retain exact private intent using concrete DB receipt verifier only."""
+        with self.store._task_operation_guard('task.rerun'):
+            review=self.store.retain_revision_installation_review(self.task_id,**self.basis)
+            return self.store.retain_private_installation_intent(self.task_id,**self.basis,review_sha256=review['review_sha256'],
+                installation_id=installation_id,acceptance_reference=acceptance_reference,
+                validate_acceptance=self.store.verify_private_revision_acceptance)
+
     def save_draft(self,payload):
         if not isinstance(payload,dict) or set(payload)!={'review_sha256','change_request'}:
             raise ValueError('exact private draft submission required')

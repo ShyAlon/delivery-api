@@ -859,6 +859,18 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             assert store.task(tid)==before and not (dest/'execution-generation.json').exists()
             submitted=store.decision_draft(tid,'revision-changes:'+lid,installation_review['review_sha256'],changed['submission_id'])
             assert submitted['change_request']=='Keep New Verbatim Guidance'
+            from delivery_api.closed_revision_job import KIND
+            for invalid in ({'extra_cost_acknowledged':False},{'artifact_evidence':[]},{'gate_key':'gate-needs'}):
+                with pytest.raises(ValueError):store.enqueue_worker(tid,KIND,execution_options=changed['options']|invalid)
+            with store._postgres.transaction() as conn:
+                for invalid in ({'extra_cost_acknowledged':False},{'extra_cost_acknowledged':None},{'phase':None},{'gate_key':'gate-needs'}):
+                    with pytest.raises(Exception):
+                        with conn.transaction():
+                            conn.execute("INSERT INTO worker_jobs(job_id,owner_id,auth_session_id,task_id,session_id,generation,kind,state,attempt,created_at,updated_at,execution_options) VALUES (%s,%s,%s,%s,%s,1,%s,'pending',0,0,0,%s::jsonb)",
+                                (uuid.uuid4().hex,A.owner_id,A.session_id,tid,cap.session_id,KIND,json.dumps(changed['options']|invalid)))
+            queued=adapter.queue_submitted_changes(changed['submission_id'])
+            assert store.worker_job(queued)['execution_options']==changed['options']
+            assert store.worker_job(queued)['state']=='pending' and store.task(tid)==before
             with pytest.raises(ValueError,match='superseded'):store.record_private_revision_acceptance(tid,**acceptance_kw)
             with pytest.raises(TenantAccessDenied,match='revoked'):
                 store.verify_private_revision_acceptance(installation_review['review'],installation_review['review_sha256'],receipt['acceptance_reference'])
@@ -869,7 +881,8 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             assert reference==receipt['acceptance_reference'];store.verify_private_revision_acceptance(review,sha,reference);auth_checks.append(1)
         intent_kw=dict(lineage_id=lid,expected_staged_event_sha256=staged['event_sha256'],review_sha256=installation_review['review_sha256'],
             installation_id='install-'+uuid.uuid4().hex,acceptance_reference=receipt['acceptance_reference'],validate_acceptance=test_acceptance,artifacts_base=tmp_path)
-        install=store.retain_private_installation_intent(tid,**intent_kw)
+        install=adapter.prepare_installation(receipt['acceptance_reference'],intent_kw['installation_id'])
+        auth_checks.extend([1,1])
         assert not install['replayed'] and not install['plan']['installed'] and len(auth_checks)==2
         assert store.retain_private_installation_intent(tid,**intent_kw)['replayed']
         def revoked(*a):raise PermissionError('test acceptance revoked')

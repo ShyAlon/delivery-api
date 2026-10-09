@@ -272,6 +272,9 @@ class PostgresStore(SQLiteStore):
         return result
 
     def enqueue_worker(self,task_id,kind,*,execution_options=None):
+        if kind=='proposal:closed-gate-revision':
+            from .closed_revision_job import _options
+            _options(execution_options)
         from .worker_capability import WorkerCapability
         capability=WorkerCapability.capture(self,task_id)
         capability.validate(self)
