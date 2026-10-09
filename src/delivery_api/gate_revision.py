@@ -41,7 +41,7 @@ def closed_revision_preflight(store,task_id,gate_key,review_revision,draft_id,*,
     """Non-effectful review of a saved proposal against current approval/evidence.
 
     artifact_snapshot must come from current authorized source reads. This function
-    does not authenticate a caller's digest, validate typed producer outputs, or
+    does not authenticate a caller's digest, validate regenerated typed outputs, or
     provide a route that commits/restarts work.
     """
     import hashlib,json,re
@@ -76,10 +76,22 @@ def closed_revision_preflight(store,task_id,gate_key,review_revision,draft_id,*,
     result={'kind':'closed_gate_revision_preflight','task_id':task_id,'generation':task['generation'],
         'gate_key':gate_key,'review_revision':review_revision,'draft_id':draft_id,
         'proposal':preview,'artifact_evidence':sorted(normalized,key=lambda a:a['name']),
+        # Save's historical draft schema stays unchanged. Commit semantics live
+        # here: founder wording is regeneration input, never replacement JSON.
+        'regeneration':{'input_kind':'founder_change_request',
+            'change_request':preview['edited_text'],'from_phase':preview['phase'],
+            'phases_requiring_reapproval':[preview['phase']]+preview['downstream_stale_on_commit'],
+            'direct_artifact_replacement':False,'preserve_previous_generation':True,
+            'producer':PHASE_BY_KEY[preview['phase']].executor},
+        'cost_review':{'extra_cost_expected':True,'amount_known':False,
+            'requires_explicit_cost_acknowledgement':True,
+            'warning':'Regenerating this phase and affected downstream work incurs extra cost.',
+            'admission_required_per_call':True},
         'commit_available':False,'effect_executed':False,'dispatch_started':False,
-        'remaining_requirements':['typed producer revision/checkpoint validation',
+        'remaining_requirements':['phase-specific founder-change input and fresh regeneration checkpoint',
+            'typed regenerated output and trace-link validation',
             'fresh authority and atomic gate/generation/artifact compare-and-swap',
-            'explicit reviewed approve-and-restart with admission',
+            'explicit reviewed regenerate-and-restart with extra-cost acknowledgement and admission',
             'durable restart intent and no automatic replay after ambiguity']}
     result['review_digest']=hashlib.sha256(json.dumps(result,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     return result

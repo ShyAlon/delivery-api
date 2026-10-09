@@ -102,3 +102,25 @@ def test_preflight_rejects_task_change_during_snapshot_read(tmp_path,monkeypatch
         return result
     monkeypatch.setattr(s,'task',task)
     with pytest.raises(ValueError):preflight(s,tid,'gate-needs',rev,draft,artifact_snapshot=evidence)
+
+
+@pytest.mark.parametrize('phase,expected_executor',[('intent','interview'),('conops','interview'),('needs','generator'),('validation','generator')])
+def test_closed_commit_preflight_regenerates_edited_phase_with_cost_review_not_replacement(tmp_path,phase,expected_executor):
+    from delivery_api.gate_revision import closed_revision_preflight
+    from delivery_api.phases import PHASE_BY_KEY,followers
+    s=SQLiteStore(str(tmp_path/'regen.db'));tid=s.create_task('regeneration')['task_id']
+    s.wait_at_gate(tid,phase);waiting=s.task(tid);gate='gate-'+phase
+    s.retain_decision_review(tid,'gate:'+gate,'review',{'task':waiting})
+    s.decide_gate(tid,gate,'approve',selected_option='Proceed')
+    saved=save_closed_revision(s,tid,gate,'review','Change the offline decision')
+    before=s.task(tid);events=s.events(tid)
+    evidence=[{'phase':phase,'name':name,'generation':before['generation'],'sha256':'a'*64} for name in PHASE_BY_KEY[phase].artifacts]
+    result=closed_revision_preflight(s,tid,gate,'review',saved['draft_id'],artifact_snapshot=evidence)
+    assert result['regeneration']=={'input_kind':'founder_change_request','change_request':'Change the offline decision',
+        'from_phase':phase,'phases_requiring_reapproval':[phase]+[p.key for p in followers(phase)],
+        'direct_artifact_replacement':False,'preserve_previous_generation':True,'producer':expected_executor}
+    assert result['cost_review']['extra_cost_expected'] and result['cost_review']['requires_explicit_cost_acknowledgement']
+    assert not result['cost_review']['amount_known'] and result['cost_review']['admission_required_per_call']
+    assert not result['commit_available'] and not result['dispatch_started']
+    assert s.task(tid)==before and s.events(tid)==events
+    assert s.decision_draft(tid,'gate:'+gate,'review',saved['draft_id'])==saved['preview']
