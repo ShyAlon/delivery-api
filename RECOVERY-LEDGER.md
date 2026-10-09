@@ -41,3 +41,6 @@ Validation: fresh disposable UTF8 DB, all19 migrations, explicit cross-repo path
 
 ## Package metadata reconciliation
 Restored recovered wheel's mandatory JWT dependency and supabase/dev optional dependencies, supported by wheel METADATA and Oct7 exact metadata edits. Offline wheel build passed. Main's prior contract Git pin is retained pending cross-repo revision reconciliation rather than replaced with an invented recovered revision.
+
+## Same-host producer, SRS rework, back-office and networking tests
+Recovered missing source-written tests and baseline back-office fixtures. Reconciled exact current raw_usage name, current gate selected_option shape, pending Stop confirmation and positive legacy retail bound fixture (prepaid ignores that legacy bound). Restored explicit prepaid balance assertions rather than exempting prepaid tests. Targeted local PG same-host/SRS suite33 passed; back-office/networking and non-PG selection23 passed,26 skipped. No production change in this test unit.
