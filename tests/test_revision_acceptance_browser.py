@@ -59,3 +59,18 @@ def test_typed_current_review_binding_rejects_stale_outcome_and_locks_inputs():
         page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/tmp/revision-acceptance-bound-mobile.png',full_page=True)
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         browser.close()
+
+
+@pytest.mark.parametrize('pending',['installation','regeneration'])
+def test_pending_private_backend_receipt_keeps_guidance_without_false_advance(pending):
+    html=Path(__file__).parents[1]/'scripts/private-ui/revision-acceptance.html'
+    with sync_playwright() as p:
+        browser=p.chromium.launch(headless=True);page=browser.new_page()
+        page.goto(html.as_uri())
+        page.evaluate('''pending=>{const review={binding:{review_sha256:'a'.repeat(64)},view:{phase_title:'Requirements',next_phase_title:'Architecture',decision:'Review This Result',artifact_rows:[{title:'Offline Status',description:'Show Offline Updates'}],spent_credits:4.2,extra_cost_warning:'Extra Cost',choices:[{value:'approve',effect:'Accepts This Result'},{value:'edit',effect:'Regenerates Same Phase'}]}};window.pendingReview=window.createRevisionAcceptance({root:document.querySelector('#page'),review,adapter:{async saveDraft(){},async submit(input){return {review_sha256:input.review_sha256,pending}}}})}''',pending)
+        page.locator('[value=edit]').check();page.locator('#change').fill('Keep Pending Guidance');page.locator('#ack').check();page.locator('#continue').click()
+        page.wait_for_function("document.querySelector('#status').textContent.includes('Waiting For')")
+        assert page.locator('h1').inner_text()=='Review Regenerated Requirements'
+        assert page.locator('.submitted-current').inner_text()=='Keep Pending Guidance'
+        assert page.locator('#continue').is_disabled()
+        browser.close()

@@ -15,7 +15,7 @@ def test_private_acceptance_and_install_not_exposed_as_routes_or_assets(monkeypa
     routes=[getattr(route,'path','') for route in service.app.routes]
     assert not any('revision-install' in route or 'revision-acceptance' in route for route in routes)
     tree=ast.parse(Path(service.__file__).read_text())
-    forbidden={'revision_acceptance_view','revision_install_coordinator','revision_install_files'}
+    forbidden={'revision_acceptance_view','revision_install_coordinator','revision_install_files','revision_acceptance_adapter'}
     for node in ast.walk(tree):
         if isinstance(node,ast.ImportFrom):assert not any(name in (node.module or '') for name in forbidden)
         if isinstance(node,ast.Import):assert not any(any(name in alias.name for name in forbidden) for alias in node.names)

@@ -827,7 +827,13 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         acceptance_kw=dict(lineage_id=lid,expected_staged_event_sha256=staged['event_sha256'],review_sha256=installation_review['review_sha256'],decision='approve',extra_cost_acknowledged=True,artifacts_base=tmp_path)
         for invalid in ({'extra_cost_acknowledged':False},{'extra_cost_acknowledged':1},{'decision':'edit'},{'review_sha256':'f'*64}):
             with pytest.raises(ValueError):store.record_private_revision_acceptance(tid,**(acceptance_kw|invalid))
-        receipt=store.record_private_revision_acceptance(tid,**acceptance_kw)
+        from delivery_api.revision_acceptance_adapter import PrivateRevisionAcceptanceAdapter
+        adapter=PrivateRevisionAcceptanceAdapter(store,tid,lineage_id=lid,staged_event_sha256=staged['event_sha256'],artifacts_base=tmp_path)
+        draft=adapter.save_draft({'review_sha256':installation_review['review_sha256'],'change_request':'Preserve Adapter Draft'})
+        assert not draft['installed'] and store.task(tid)==before
+        response=adapter.submit({'review_sha256':installation_review['review_sha256'],'choice':'approve','change_request':'','extra_cost_acknowledged':True})
+        assert response['pending']=='installation' and not response['installed'] and not response['dispatch_started']
+        receipt={'acceptance_reference':response['acceptance_reference'],'installed':False,'replayed':False}
         assert not receipt['installed'] and not receipt['replayed'] and store.task(tid)==before
         assert store.record_private_revision_acceptance(tid,**acceptance_kw)['replayed']
         with tenant_context(B):
@@ -843,7 +849,10 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             kw=dict(lineage_id=lid,expected_staged_event_sha256=staged['event_sha256'],review_sha256=installation_review['review_sha256'],change_request='Keep New Verbatim Guidance',extra_cost_acknowledged=True,artifacts_base=tmp_path)
             for invalid in ({'extra_cost_acknowledged':False},{'change_request':''},{'review_sha256':'f'*64}):
                 with pytest.raises(ValueError):store.prepare_private_revision_changes(tid,**(kw|invalid))
-            changed=store.prepare_private_revision_changes(tid,**kw)
+            adapter_result=adapter.submit({'review_sha256':installation_review['review_sha256'],'choice':'edit','change_request':kw['change_request'],'extra_cost_acknowledged':True})
+            assert adapter_result['pending']=='regeneration' and not adapter_result['installed']
+            payload=store.decision_draft(tid,'revision-changes:'+lid,installation_review['review_sha256'],adapter_result['submission_id'])
+            changed=payload|{'submission_id':adapter_result['submission_id']}
             assert changed['same_phase_review_required'] and not changed['installed'] and not changed['dispatch_started']
             assert changed['options']['phase']=='srs' and 'Keep New Verbatim Guidance' in changed['options']['change_request']
             assert o['change_request'] in changed['options']['change_request'] and changed['options']['source_checkpoint_id']==o['source_checkpoint_id']
