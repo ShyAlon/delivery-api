@@ -768,7 +768,7 @@ def test_source_change_during_concrete_stage_validation_leaves_only_prepared_eve
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
 
 
-@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes'])
+@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure'])
 def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch,coordinated):
     source_path=os.getenv("DELIVERY_TEST_SPEC_SOURCE")
     if source_path:monkeypatch.syspath_prepend(source_path)
@@ -899,7 +899,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                         apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=store.verify_private_revision_acceptance)
                 assert not (dest/'execution-generation.json').exists() and store.task(tid)==before
                 return
-            if isinstance(coordinated,str):
+            if isinstance(coordinated,str) and coordinated!='continuation_failure':
                 from delivery_api import revision_install_coordinator as coordinator
                 original=coordinator.promote_private_stage
                 def interrupted(**kwargs):
@@ -963,12 +963,30 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             assert not (promoted_root/'interview'/'http-session.json').exists()
             from delivery_api.revision_continuation import prepare_private_approved_continuation
             original_checkpoint=(promoted_root/'spec/checkpoints.sqlite').read_bytes()
+            from delivery_api.revision_continuation import reconcile_private_approved_continuation
+            if coordinated=='continuation_failure':
+                from spec_generator import revision_checkpoint
+                def fail(**kwargs):raise RuntimeError('constructed continuation interruption')
+                monkeypatch.setattr(revision_checkpoint,'prepare_approved_continuation_checkpoint',fail)
+                with cli_execution(StopFence(promoted_root/'interview/stop-request.json',execution_anchor=later.execution_anchor),None):
+                    with pytest.raises(RuntimeError,match='interruption'):
+                        prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                    with pytest.raises(ValueError,match='reconciliation'):
+                        prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                observed=reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                assert observed['state']=='continuation_requires_review' and not observed['automatic_retry']
+                assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
+                return
             with cli_execution(StopFence(promoted_root/'interview/stop-request.json',execution_anchor=later.execution_anchor),None):
                 continuation=prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
                 assert continuation['next_node']=='architecture' and not continuation['provider_invoked'] and not continuation['dispatch_started']
                 with pytest.raises(ValueError,match='reconciliation'):
                     prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
             assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
+            observed=reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+            assert observed['state']=='continuation_prepared_verified_no_dispatch' and not observed['dispatch_available']
+            (promoted_root/'spec/approved-continuation/receipt.json').write_text('{}')
+            assert reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)['state']=='continuation_requires_review'
             assert store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)['state']=='installed_verified_no_dispatch'
 
             assert store.revoke_private_revision_acceptance(tid,acceptance_reference=receipt['acceptance_reference'])['revoked']

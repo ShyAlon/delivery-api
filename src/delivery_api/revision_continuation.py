@@ -78,3 +78,63 @@ def prepare_private_approved_continuation(store,task_id,*,installation_id,artifa
         if conn is not None:conn.close()
         if dest is not None:os.close(dest)
         os.close(parent)
+
+
+def reconcile_private_approved_continuation(store,task_id,*,installation_id,artifacts_base):
+    """Read-only private receipt/file/DB comparison. Never retries or dispatches."""
+    import stat
+    from spec_generator.graph import build_graph,checkpoint_serde
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    with store._task_operation_guard('task.rerun'):
+        basis=store.private_approved_continuation_basis(task_id,installation_id=installation_id,artifacts_base=artifacts_base)
+        marker='revision-continuation:'+installation_id
+        pending=store.decision_review(task_id,marker,basis['review_sha256'])
+        prepared=store.decision_review(task_id,marker+':prepared',basis['review_sha256'])
+        result={'state':'continuation_requires_review','automatic_retry':False,'automatic_cleanup':False,'dispatch_available':False}
+        if not pending:return result|{'unverified':['preparation_intent_missing']}
+        cap=basis['capability'];root=session_root(Path(artifacts_base),cap.scope,cap.session_id)
+        try:
+            directory=_open_directory(root/'spec/approved-continuation')
+            try:
+                def read(name,limit):
+                    fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+                    try:
+                        info=os.fstat(fd)
+                        if not stat.S_ISREG(info.st_mode) or info.st_size>limit:raise ValueError('bounded continuation evidence required')
+                        with os.fdopen(fd,'rb',closefd=False) as stream:raw=stream.read(limit+1)
+                        if len(raw)>limit:raise ValueError('bounded continuation evidence required')
+                        return raw
+                    finally:os.close(fd)
+                receipt=json.loads(read('receipt.json',2*1024*1024));checkpoint=read('checkpoints.sqlite',64*1024*1024)
+                if receipt!=prepared or hashlib.sha256(checkpoint).hexdigest()!=receipt['checkpoint_file_sha256']:
+                    raise ValueError('continuation receipt/file/DB differs')
+                if (receipt['source_checkpoint_id']!=basis['checkpoint_id'] or receipt['review_sha256']!=basis['review_sha256']
+                    or receipt['approval_reference']!=basis['approval_reference'] or receipt['artifact_sha256']!=basis['artifact_sha256']
+                    or receipt['execution_session_id']!=cap.session_id or receipt['dispatch_started'] is not False or receipt['provider_invoked'] is not False):
+                    raise ValueError('continuation approval evidence differs')
+                for name in ('checkpoints.sqlite-wal','checkpoints.sqlite-shm','checkpoints.sqlite-journal'):
+                    try:os.stat(name,dir_fd=directory,follow_symlinks=False)
+                    except FileNotFoundError:continue
+                    raise ValueError('active continuation sidecar')
+                fd=os.open('checkpoints.sqlite',os.O_RDONLY|os.O_NOFOLLOW,dir_fd=directory)
+                try:
+                    conn=sqlite3.connect(f'file:/proc/self/fd/{fd}?mode=ro&immutable=1',uri=True,check_same_thread=False)
+                    try:
+                        graph=build_graph(SimpleNamespace(record=lambda *a:None),review=True,checkpointer=SqliteSaver(conn,serde=checkpoint_serde()))
+                        state=graph.get_state({'configurable':{'thread_id':cap.session_id}})
+                        if state.next!=(receipt['next_node'],) or state.config!=receipt['checkpoint']:
+                            raise ValueError('continuation checkpoint schedule differs')
+                        artifact=state.values[basis['phase']]
+                        if hashlib.sha256(json.dumps(artifact,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=basis['artifact_sha256']:
+                            raise ValueError('continuation typed artifact differs')
+                    finally:conn.close()
+                finally:os.close(fd)
+                if read('checkpoints.sqlite',64*1024*1024)!=checkpoint or json.loads(read('receipt.json',2*1024*1024))!=receipt:
+                    raise ValueError('continuation evidence changed during read')
+                current=_open_directory(root/'spec/approved-continuation')
+                try:
+                    if _identity(current)!=_identity(directory):raise ValueError('continuation namespace changed')
+                finally:os.close(current)
+            finally:os.close(directory)
+        except (OSError,ValueError,KeyError,TypeError):return result|{'unverified':['continuation_file_or_receipt_unverified']}
+        return result|{'state':'continuation_prepared_verified_no_dispatch','unverified':[],'next_node':receipt['next_node']}
