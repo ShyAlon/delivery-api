@@ -8,7 +8,7 @@ def test_route_value_default_and_env_override(monkeypatch):
     from delivery_api import model_routes
     monkeypatch.delenv("DELIVERY_OLLAMA_MODEL", raising=False)
     assert model_routes.route_value("ollama") == "ollama:phi4"
-    assert model_routes.route_value("deepseek") == "deepseek:deepseek-chat"
+    assert model_routes.route_value("deepseek") == "deepseek:deepseek-flash"
     monkeypatch.setenv("DELIVERY_OLLAMA_MODEL", "phi4")
     assert model_routes.route_value("ollama") == "ollama:phi4"
 

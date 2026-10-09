@@ -281,7 +281,11 @@ print('fake attempt complete')
     with tenant_context(A),worker_gateway(gateway):
         sid=s.engine_session(tid);path=session_root(tmp_path,A,sid)
         code=asyncio.run(ProcessRunner(s).run(tid,[sys.executable,'-c',script,'--out',str(path/'spec')],cwd=tmp_path,phase='needs',env={'VMODEL_ARTIFACTS_DIR':str(path.parent),'VMODEL_TENANT_OWNER':A.owner_id,'PYTHONPATH':root}))
-        assert code==0
+        # Fake subprocess writes no generator artifact. The admission socket
+        # settles successfully, while the current runner must reject gate opening.
+        assert code==1
+        assert s.task(tid)['state']!='waiting_gate'
+        assert any('no configured artifact was written' in event['message'] for event in s.events(tid))
         with s._postgres.transaction() as c:
             assert c.execute('SELECT state FROM provider_attempts WHERE job_id=%s',(job,)).fetchone()['state']=='settled'
         s.update_phase(tid,'needs','failed')
@@ -511,7 +515,7 @@ def test_default_gateway_prepaid_chain_never_uses_legacy_retail_reservation(cred
     s,tid,job=credit_account
     with psycopg.connect(DSN) as c:c.execute('UPDATE admission_limits SET retail_limit=0,attempt_retail_max=1 WHERE owner_id=%s',(A.owner_id,))
     catalog=ReviewedCatalog([ReviewedModelPrice('fake','fake','TEST','test',1,2,3,4,retail_units_per_credit=1000000)],{('fake','fake'):lambda **kw:RequestBound('TEST',10,10,b'complete fake',True)})
-    gateway=WorkerAdmissionGateway(s,job,require_prepaid=False,resolve_quote=catalog.resolve,measure_usage=catalog.measure_standard_usage)
+    gateway=WorkerAdmissionGateway(s,job,resolve_quote=catalog.resolve,measure_usage=catalog.measure_standard_usage)
     with tenant_context(A),worker_admission_channel(gateway) as channel:
         remote=client(channel.fileno())
         try:
@@ -648,7 +652,7 @@ def test_raw_cache_socket_evidence_and_exact_prepaid_settlement(credit_account,m
     s,tid,job=credit_account
     price=ReviewedModelPrice('fake','fake','TEST','test',1,2,3,4,usage_categories=('input_tokens','output_tokens','cache_hit_tokens','cache_miss_tokens'),retail_units_per_credit=1000000,expense_cache_hit=1,expense_cache_miss=5)
     catalog=ReviewedCatalog([price],{('serialized','fake','fake'):lambda **kw:RequestBound('TEST',10,10,kw['serialized_request'],True)})
-    gateway=WorkerAdmissionGateway(s,job,require_prepaid=False,resolve_serialized=catalog.resolve_serialized,measure_raw_usage=settlement_usage)
+    gateway=WorkerAdmissionGateway(s,job,resolve_serialized=catalog.resolve_serialized,measure_raw_usage=settlement_usage)
     raw={'prompt_tokens':2,'completion_tokens':3,'total_tokens':5,'prompt_cache_hit_tokens':1,'prompt_cache_miss_tokens':1,'completion_tokens_details':{'reasoning_tokens':2}}
     with tenant_context(A),worker_admission_channel(gateway) as channel:
         remote=client(channel.fileno())
