@@ -766,3 +766,46 @@ def test_source_change_during_concrete_stage_validation_leaves_only_prepared_eve
                 manifest_sha256='e'*64,artifacts_base=tmp_path)
         with store._postgres.transaction() as conn:
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
+
+
+def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch):
+    source_path=os.getenv("DELIVERY_TEST_SPEC_SOURCE")
+    if source_path:monkeypatch.syspath_prepend(source_path)
+    import hashlib,json
+    from delivery_api.worker_capability import WorkerCapability
+    from delivery_api.gate_revision import closed_revision_preflight
+    from test_revision_stage_real import build_real_stage_fixture
+    with tenant_context(A):
+        tid,o,p,_=_restart_intent_fixture(store);before=store.task(tid)
+        cap=WorkerCapability.capture(store,tid);saved={}
+        def lineage_factory(options,source,result,digest):
+            live=closed_revision_preflight(store,tid,'gate-srs','review',options['draft_id'],artifact_snapshot=options['artifact_evidence'])
+            options['preflight_digest']=live['review_digest']
+            proposal=p|{'proposal_id':'a'*32,'source_checkpoint_id':options['source_checkpoint_id'],
+                'artifact':result['srs'],'artifact_sha256':digest}
+            evidence={'artifacts':options['artifact_evidence'],'checkpoint_id':options['source_checkpoint_id'],'proposal_sha256':digest}
+            held=store.retain_closed_revision_restart_intent(tid,request_key=uuid.uuid4().hex,options=options,proposal=proposal,
+                approval_reference='constructed-test-review-not-founder-approval',read_current_evidence=lambda:evidence)
+            planned=store.retain_closed_revision_lineage_plan(tid,intent_id=held['intent_id'],semantic_session_id='s',
+                new_execution_session_id='next-'+uuid.uuid4().hex,retained_proposal={'proposal':proposal,'document_sha256':'d'*64})
+            saved.update(intent_id=held['intent_id'],lineage_id=planned['lineage_id'])
+            with store._postgres.transaction() as conn:
+                return json.loads(conn.execute('SELECT payload FROM closed_revision_lineage_plans WHERE lineage_id=%s',(planned['lineage_id'],)).fetchone()['payload'])
+        built=build_real_stage_fixture(tmp_path,cap=cap,options_override=o,lineage_factory=lineage_factory)
+        args,root,dest,documents,files,manifest,md,*_=built
+        lid=saved['lineage_id']
+        review=store.retain_revision_source_review(tid,lineage_id=lid,artifacts_base=tmp_path)
+        assert review['accepted'] is False
+        first=store.append_closed_revision_preparation_event(tid,lineage_id=lid,expected_previous_sha256=None,state='prepared',
+            evidence={'intent_id':saved['intent_id'],'lineage_id':lid})
+        staged=store.record_validated_revision_staging(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],
+            manifest_sha256=md,artifacts_base=tmp_path)
+        assert staged['event']['state']=='staged' and store.task(tid)==before
+        assert store.session_binding(args['lineage']['execution_session_id']) is None
+        # Equal JSON with different raw bytes cannot pass retained review.
+        (root/'spec'/'needs.json').write_text(json.dumps(documents['spec/needs.json'],indent=2))
+        with pytest.raises(ValueError,match='differs from retained review snapshot'):
+            store.record_validated_revision_staging(tid,lineage_id=lid,expected_previous_sha256=staged['event_sha256'],
+                manifest_sha256=md,artifacts_base=tmp_path)
+        with store._postgres.transaction() as conn:
+            assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==2
