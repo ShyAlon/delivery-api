@@ -768,7 +768,7 @@ def test_source_change_during_concrete_stage_validation_leaves_only_prepared_eve
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
 
 
-@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion'])
+@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion'])
 def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch,coordinated):
     source_path=os.getenv("DELIVERY_TEST_SPEC_SOURCE")
     if source_path:monkeypatch.syspath_prepend(source_path)
@@ -824,12 +824,27 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         assert store.decision_review(tid,'revision-install:'+lid,installation_review['review_sha256'])==installation_review['review']
         assert store.retain_revision_installation_review(tid,lineage_id=lid,
             expected_staged_event_sha256=staged['event_sha256'],artifacts_base=tmp_path)==installation_review
+        acceptance_kw=dict(lineage_id=lid,expected_staged_event_sha256=staged['event_sha256'],review_sha256=installation_review['review_sha256'],decision='approve',extra_cost_acknowledged=True,artifacts_base=tmp_path)
+        for invalid in ({'extra_cost_acknowledged':False},{'extra_cost_acknowledged':1},{'decision':'edit'},{'review_sha256':'f'*64}):
+            with pytest.raises(ValueError):store.record_private_revision_acceptance(tid,**(acceptance_kw|invalid))
+        receipt=store.record_private_revision_acceptance(tid,**acceptance_kw)
+        assert not receipt['installed'] and not receipt['replayed'] and store.task(tid)==before
+        assert store.record_private_revision_acceptance(tid,**acceptance_kw)['replayed']
+        with tenant_context(B):
+            with pytest.raises(TenantAccessDenied):
+                store.verify_private_revision_acceptance(installation_review['review'],installation_review['review_sha256'],receipt['acceptance_reference'])
+        with store._postgres.transaction() as conn:
+            with pytest.raises(Exception):
+                with conn.transaction():
+                    conn.execute('SET LOCAL ROLE authenticated');conn.execute('SELECT * FROM closed_revision_acceptances').fetchall()
+            with pytest.raises(Exception):
+                with conn.transaction():conn.execute('UPDATE closed_revision_acceptances SET decision=decision WHERE acceptance_id=%s',(receipt['acceptance_reference'],))
         auth_checks=[]
         def test_acceptance(review,sha,reference):
             assert review==installation_review['review'] and sha==installation_review['review_sha256']
-            assert reference=='constructed-private-test-acceptance';auth_checks.append(1)
+            assert reference==receipt['acceptance_reference'];store.verify_private_revision_acceptance(review,sha,reference);auth_checks.append(1)
         intent_kw=dict(lineage_id=lid,expected_staged_event_sha256=staged['event_sha256'],review_sha256=installation_review['review_sha256'],
-            installation_id='install-'+uuid.uuid4().hex,acceptance_reference='constructed-private-test-acceptance',validate_acceptance=test_acceptance,artifacts_base=tmp_path)
+            installation_id='install-'+uuid.uuid4().hex,acceptance_reference=receipt['acceptance_reference'],validate_acceptance=test_acceptance,artifacts_base=tmp_path)
         install=store.retain_private_installation_intent(tid,**intent_kw)
         assert not install['replayed'] and not install['plan']['installed'] and len(auth_checks)==2
         assert store.retain_private_installation_intent(tid,**intent_kw)['replayed']
@@ -839,6 +854,13 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             auth=conn.execute('SELECT * FROM closed_revision_install_events WHERE installation_id=%s',(intent_kw['installation_id'],)).fetchone()
         if coordinated:
             from delivery_api.revision_install_coordinator import apply_private_installation
+            if coordinated=='revoked_before_promotion':
+                store.revoke_private_revision_acceptance(tid,acceptance_reference=receipt['acceptance_reference'])
+                with pytest.raises(TenantAccessDenied,match='revoked'):
+                    with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+                        apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=store.verify_private_revision_acceptance)
+                assert not (dest/'execution-generation.json').exists() and store.task(tid)==before
+                return
             if isinstance(coordinated,str):
                 from delivery_api import revision_install_coordinator as coordinator
                 original=coordinator.promote_private_stage
@@ -897,6 +919,10 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                 with pytest.raises(ValueError,match='new interview input'):registry.respond(later.session_id,{})
             finally:_owner.reset(token)
             assert not (promoted_root/'interview'/'http-session.json').exists()
+            assert store.revoke_private_revision_acceptance(tid,acceptance_reference=receipt['acceptance_reference'])['revoked']
+            with pytest.raises(TenantAccessDenied,match='revoked'):
+                store.verify_private_revision_acceptance(installation_review['review'],installation_review['review_sha256'],receipt['acceptance_reference'])
+
 
             with pytest.raises(ValueError,match='new interview input'):
                 control.reject_interview_mutation()

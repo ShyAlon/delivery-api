@@ -578,6 +578,66 @@ class PostgresStore(SQLiteStore):
             self.audit(scope.owner_id,'gate.private_revision_installed',task_id,{'installation_id':installation_id,'generation':anchor.generation,'dispatch_started':False})
             return {'installation_id':installation_id,'event_sha256':event['event_sha256'],'installed':True,'dispatch_started':False}
 
+    def record_private_revision_acceptance(self,task_id,*,lineage_id,expected_staged_event_sha256,review_sha256,decision,extra_cost_acknowledged,artifacts_base):
+        """Private future authenticated submission seam, not wired to any route.
+
+        Callable only from trusted backend after the owner submits this exact
+        displayed review/choice/cost ack. A caller or fixture does not create
+        real-world owner permission merely by invoking this method.
+        """
+        if decision!='approve' or extra_cost_acknowledged is not True:
+            raise ValueError('explicit approval and extra cost acknowledgement required')
+        with self._task_operation_guard('task.gate.decide'):
+            current=self.retain_revision_installation_review(task_id,lineage_id=lineage_id,
+                expected_staged_event_sha256=expected_staged_event_sha256,artifacts_base=artifacts_base)
+            if current['review_sha256']!=review_sha256:raise ValueError('submitted review is stale')
+            scope=current_scope()
+            if scope.session_id is None or not self.auth_session_active():raise TenantAccessDenied('active authenticated owner submission required')
+            prior=self._db.execute('SELECT * FROM closed_revision_acceptances WHERE lineage_id=? AND review_sha256=? AND auth_session_id=?',
+                (lineage_id,review_sha256,scope.session_id)).fetchone()
+            if prior:
+                self.verify_private_revision_acceptance(current['review'],review_sha256,prior['acceptance_id'])
+                return {'acceptance_reference':prior['acceptance_id'],'review_sha256':review_sha256,'replayed':True,'installed':False}
+            import uuid
+            acceptance_id='accept-'+uuid.uuid4().hex
+            payload={'owner_id':scope.owner_id,'task_id':task_id,'lineage_id':lineage_id,'auth_session_id':scope.session_id,
+                'review_sha256':review_sha256,'decision':'approve','extra_cost_acknowledged':True,
+                'source':'private_authenticated_submission','installed':False,'dispatch_started':False}
+            self._db.execute('INSERT INTO closed_revision_acceptances(acceptance_id,lineage_id,owner_id,auth_session_id,task_id,review_sha256,decision,extra_cost_acknowledged,payload,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (acceptance_id,lineage_id,scope.owner_id,scope.session_id,task_id,review_sha256,'approve',True,json.dumps(payload,sort_keys=True),time.time()))
+            return {'acceptance_reference':acceptance_id,'review_sha256':review_sha256,'replayed':False,'installed':False}
+
+    def verify_private_revision_acceptance(self,review,review_sha256,acceptance_reference):
+        """Exact durable receipt verifier; current source checks belong to coordinator."""
+        import hashlib
+        scope=current_scope()
+        if hashlib.sha256(json.dumps(review,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=review_sha256:
+            raise ValueError('acceptance exact review required')
+        row=self._db.execute('SELECT * FROM closed_revision_acceptances WHERE acceptance_id=?',(acceptance_reference,)).fetchone()
+        if (not row or str(row['owner_id'])!=scope.owner_id or str(row['auth_session_id'])!=scope.session_id
+            or row['task_id']!=review['task_id'] or row['review_sha256']!=review_sha256
+            or review['owner_id']!=scope.owner_id or row['decision']!='approve' or row['extra_cost_acknowledged'] is not True
+            or not self.auth_session_active()):raise TenantAccessDenied('current exact authenticated acceptance required')
+        expected={'owner_id':scope.owner_id,'task_id':row['task_id'],'lineage_id':row['lineage_id'],'auth_session_id':scope.session_id,
+            'review_sha256':review_sha256,'decision':'approve','extra_cost_acknowledged':True,
+            'source':'private_authenticated_submission','installed':False,'dispatch_started':False}
+        if json.loads(row['payload'])!=expected:raise ValueError('durable acceptance payload differs')
+        if self._db.execute('SELECT 1 FROM closed_revision_acceptance_revocations WHERE acceptance_id=?',(acceptance_reference,)).fetchone():
+            raise TenantAccessDenied('private acceptance revoked')
+        held=self.decision_review(row['task_id'],'revision-install:'+row['lineage_id'],review_sha256)
+        if held!=review:raise ValueError('acceptance review is not retained')
+        return True
+
+    def revoke_private_revision_acceptance(self,task_id,*,acceptance_reference):
+        with self._task_operation_guard('task.gate.decide'):
+            row=self._db.execute('SELECT * FROM closed_revision_acceptances WHERE acceptance_id=? AND task_id=?',(acceptance_reference,task_id)).fetchone()
+            if not row:raise KeyError(acceptance_reference)
+            scope=current_scope()
+            if not self.auth_session_active():raise TenantAccessDenied('active owner required')
+            self._db.execute('INSERT OR IGNORE INTO closed_revision_acceptance_revocations(acceptance_id,owner_id,auth_session_id,created_at) VALUES (?,?,?,?)',
+                (acceptance_reference,scope.owner_id,scope.session_id,time.time()))
+            return {'revoked':True,'installed':False}
+
     def retain_private_installation_intent(self,task_id,*,lineage_id,expected_staged_event_sha256,review_sha256,
                                             installation_id,acceptance_reference,validate_acceptance,artifacts_base):
         """Private coordinator seam. No route/acceptance UI calls this method.
