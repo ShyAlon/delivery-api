@@ -397,6 +397,99 @@ class PostgresStore(SQLiteStore):
             self.audit(scope.owner_id,'gate.revision_preparation_journal',task_id,{'lineage_id':lineage_id,'state':state,'event_sha256':event['event_sha256']})
             return event
 
+    def read_promoted_installation_evidence(self,task_id,*,installation_id,artifacts_base):
+        """Concrete original+promoted typed receipt, not DB installation."""
+        from .worker_capability import WorkerCapability
+        from .revision_source_review import read_source_review_snapshot
+        from .revision_proposal import read_retained_revision_proposal
+        from .revision_stage_evidence import read_validated_staged_receipt
+        from .revision_install_files import _validate_plan
+        from .tenancy import session_root
+        from vmodel_contracts.execution_anchor import read_execution_anchor
+        from pathlib import Path
+        cap=WorkerCapability.capture(self,task_id);cap.validate(self)
+        intent=self._db.execute('SELECT * FROM closed_revision_installations WHERE installation_id=? AND task_id=?',(installation_id,task_id)).fetchone()
+        if not intent:raise KeyError(installation_id)
+        plan=json.loads(intent['payload']);anchor=_validate_plan(plan,intent['plan_sha256'])
+        row=self._db.execute('SELECT * FROM closed_revision_lineage_plans WHERE lineage_id=?',(intent['lineage_id'],)).fetchone()
+        source=self._db.execute('SELECT * FROM closed_revision_source_reviews WHERE lineage_id=?',(intent['lineage_id'],)).fetchone()
+        held=self._db.execute('SELECT * FROM closed_revision_restart_intents WHERE intent_id=?',(row['intent_id'],)).fetchone()
+        lineage=json.loads(row['payload']);options=json.loads(held['payload'])['options']
+        from .revision_evidence import read_revision_artifacts
+        from .gate_revision import closed_revision_preflight
+        original=session_root(Path(artifacts_base),cap.scope,cap.session_id)
+        phase_evidence=read_revision_artifacts(self,cap,original,lineage['phase'],artifacts_base=artifacts_base)
+        preflight=closed_revision_preflight(self,task_id,options['gate_key'],options['review_revision'],options['draft_id'],artifact_snapshot=phase_evidence)
+        if preflight['review_digest']!=options['preflight_digest']:raise ValueError('promoted installation gate/draft basis changed')
+        snapshot=read_source_review_snapshot(self,cap,artifacts_base=artifacts_base,lineage=lineage,lineage_sha256=row['fingerprint'])
+        if snapshot!={'snapshot':json.loads(source['payload']),'snapshot_sha256':source['fingerprint']}:
+            raise ValueError('promoted installation source review changed')
+        proposal=read_retained_revision_proposal(self,cap,session_root(Path(artifacts_base),cap.scope,cap.session_id),lineage['proposal_id'],artifacts_base=artifacts_base,options=options)
+        if proposal['document_sha256']!=lineage['proposal_document_sha256']:raise ValueError('promoted installation proposal changed')
+        receipt=read_validated_staged_receipt(self,cap,artifacts_base=artifacts_base,lineage=lineage,lineage_sha256=row['fingerprint'],
+            manifest_sha256=plan['staged_receipt']['manifest_sha256'],options=options,promoted=True)
+        if receipt!=plan['staged_receipt']:raise ValueError('promoted receipt differs from reviewed plan')
+        proof=read_execution_anchor(session_root(Path(artifacts_base),cap.scope,anchor.execution_session_id),expected=anchor)
+        return {'manifest_sha256':receipt['manifest_sha256'],'anchor_sha256':proof['document_sha256']}
+
+    def activate_private_revision_installation(self,task_id,*,installation_id,expected_previous_sha256,validate_acceptance,artifacts_base):
+        """Private concrete DB CAS after promoted files, never dispatch.
+
+        No route invokes this method. Owner acceptance verifier must authenticate
+        retained exact review and cost acknowledgement; test fixtures aren't it.
+        """
+        from .revision_install_files import _validate_plan
+        from .revision_install_journal import install_event
+        from .phases import followers
+        if not callable(validate_acceptance):raise ValueError('trusted acceptance verifier required')
+        with self._task_operation_guard('task.rerun'):
+            if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():raise KeyError(task_id)
+            intent=self._db.execute('SELECT * FROM closed_revision_installations WHERE installation_id=? AND task_id=?',(installation_id,task_id)).fetchone()
+            if not intent:raise KeyError(installation_id)
+            plan=json.loads(intent['payload']);anchor=_validate_plan(plan,intent['plan_sha256'])
+            latest=self._db.execute('SELECT * FROM closed_revision_install_events WHERE installation_id=? ORDER BY sequence DESC LIMIT 1',(installation_id,)).fetchone()
+            if not latest or latest['state']!='install_pending' or latest['event_sha256']!=expected_previous_sha256:
+                raise ValueError('exact install-pending journal CAS required')
+            review=self.decision_review(task_id,'revision-install:'+intent['lineage_id'],intent['review_sha256'])
+            if review is None:raise ValueError('retained accepted review basis missing')
+            task=self.task(task_id);parent=plan['expected_parent']
+            if task['generation']!=parent['generation'] or task['engine_session_id']!=parent['execution_session_id']:
+                raise ValueError('installation parent generation/session changed')
+            safety=self.inspect_revision_install_safety(task_id,lineage_id=intent['lineage_id'],artifacts_base=artifacts_base)
+            if not safety['observed_work_quiescent']:raise ValueError('installation work quiescence unresolved')
+            evidence=self.read_promoted_installation_evidence(task_id,installation_id=installation_id,artifacts_base=artifacts_base)
+            pending=json.loads(latest['payload'])
+            import hashlib
+            if (hashlib.sha256(json.dumps(pending,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=latest['event_sha256']
+                or pending['plan_sha256']!=intent['plan_sha256'] or pending['evidence']!=evidence):
+                raise ValueError('install-pending evidence changed')
+            validate_acceptance(review,intent['review_sha256'],intent['acceptance_reference'])
+            if self.read_promoted_installation_evidence(task_id,installation_id=installation_id,artifacts_base=artifacts_base)!=evidence:
+                raise ValueError('promoted evidence changed before database CAS')
+            if self.session_binding(anchor.execution_session_id):raise ValueError('installation destination already bound')
+            scope=current_scope();now=time.time()
+            self._db.execute('INSERT INTO engine_sessions VALUES (?,?,?,?,?)',(anchor.execution_session_id,scope.owner_id,task_id,anchor.generation,now))
+            self._db.execute('INSERT INTO installed_execution_bindings(session_id,owner_id,auth_session_id,task_id,generation,semantic_session_id,installation_id,lineage_sha256,anchor_sha256,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (anchor.execution_session_id,scope.owner_id,scope.session_id,task_id,anchor.generation,anchor.semantic_session_id,installation_id,anchor.lineage_sha256,evidence['anchor_sha256'],now))
+            changed=self._db.execute("UPDATE tasks SET engine_session_id=?,generation=?,state='waiting_gate',active_phase=?,updated_at=? WHERE task_id=? AND generation=? AND engine_session_id=?",
+                (anchor.execution_session_id,anchor.generation,review['phase'],now,task_id,parent['generation'],parent['execution_session_id']))
+            if changed.rowcount!=1:raise ValueError('installation parent CAS failed')
+            phase=review['phase'];later=[p.key for p in followers(phase)]
+            self._db.execute("UPDATE phases SET state='complete',completed_at=?,gate_basis_changed=1 WHERE task_id=? AND phase_key=?",(now,task_id,phase))
+            self._db.execute("UPDATE gates SET state='waiting',is_open=0,selected_option=NULL,edited_text=NULL,steer=NULL,revision=revision+1 WHERE task_id=? AND after_phase=?",(task_id,phase))
+            for key in later:
+                self._db.execute("UPDATE phases SET state='pending',detail='',completed=0,total=NULL,started_at=NULL,completed_at=NULL,gate_basis_changed=1 WHERE task_id=? AND phase_key=?",(task_id,key))
+                self._db.execute("UPDATE gates SET state='idle',is_open=0,selected_option=NULL,edited_text=NULL,steer=NULL,revision=revision+1 WHERE task_id=? AND after_phase=?",(task_id,key))
+            for key in [phase]+later:
+                self._db.execute("UPDATE task_artifacts SET stale=1,stale_reason='reviewed lineage regeneration' WHERE task_id=? AND phase_key=? AND generation=?",(task_id,key,parent['generation']))
+            event=install_event(plan_sha256=intent['plan_sha256'],previous={'event':json.loads(latest['payload']),'event_sha256':latest['event_sha256']},
+                state='installed',evidence=evidence|{'execution_session_id':anchor.execution_session_id})
+            body=event['event']
+            self._db.execute('INSERT INTO closed_revision_install_events(installation_id,owner_id,auth_session_id,sequence,state,event_sha256,previous_sha256,payload,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+                (installation_id,scope.owner_id,scope.session_id,body['sequence'],body['state'],event['event_sha256'],body['previous_sha256'],json.dumps(body,sort_keys=True),now))
+            self.audit(scope.owner_id,'gate.private_revision_installed',task_id,{'installation_id':installation_id,'generation':anchor.generation,'dispatch_started':False})
+            return {'installation_id':installation_id,'event_sha256':event['event_sha256'],'installed':True,'dispatch_started':False}
+
     def retain_private_installation_intent(self,task_id,*,lineage_id,expected_staged_event_sha256,review_sha256,
                                             installation_id,acceptance_reference,validate_acceptance,artifacts_base):
         """Private coordinator seam. No route/acceptance UI calls this method.

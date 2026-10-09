@@ -836,7 +836,10 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         with pytest.raises(PermissionError):store.retain_private_installation_intent(tid,**(intent_kw|{'validate_acceptance':revoked}))
         with store._postgres.transaction() as conn:
             auth=conn.execute('SELECT * FROM closed_revision_install_events WHERE installation_id=%s',(intent_kw['installation_id'],)).fetchone()
-        ev={'manifest_sha256':md,'anchor_sha256':'a'*64}
+        from delivery_api.revision_install_files import prepare_execution_anchor,promote_private_stage
+        def test_authority():test_acceptance(installation_review['review'],installation_review['review_sha256'],intent_kw['acceptance_reference'])
+        anchor_receipt=prepare_execution_anchor(stage_root=dest,plan=install['plan'],plan_sha256=install['plan_sha256'],validate_authority=test_authority)
+        ev={'manifest_sha256':md,'anchor_sha256':anchor_receipt['anchor_sha256']}
         pending=store.append_private_installation_event(tid,installation_id=intent_kw['installation_id'],expected_previous_sha256=auth['event_sha256'],
             state='promotion_pending',evidence=ev,read_current_evidence=lambda:ev)
         with pytest.raises(ValueError,match='CAS changed'):
@@ -864,3 +867,22 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                 manifest_sha256=md,artifacts_base=tmp_path)
         with store._postgres.transaction() as conn:
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==2
+        # Restore exact original bytes, then hermetically exercise private effects.
+        (root/'spec'/'needs.json').write_bytes((dest/'spec'/'needs.json').read_bytes())
+        promote_private_stage(artifacts_base=tmp_path,lineage=args['lineage'],plan=install['plan'],plan_sha256=install['plan_sha256'],validate_authority=test_authority)
+        with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+            current=lambda:store.read_promoted_installation_evidence(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+            assert current()==ev
+            promoted=store.append_private_installation_event(tid,installation_id=intent_kw['installation_id'],expected_previous_sha256=pending['event_sha256'],
+                state='files_promoted',evidence=ev,read_current_evidence=current)
+            ready=store.append_private_installation_event(tid,installation_id=intent_kw['installation_id'],expected_previous_sha256=promoted['event_sha256'],
+                state='install_pending',evidence=ev,read_current_evidence=current)
+            with pytest.raises(PermissionError):
+                store.activate_private_revision_installation(tid,installation_id=intent_kw['installation_id'],expected_previous_sha256=ready['event_sha256'],validate_acceptance=revoked,artifacts_base=tmp_path)
+            assert store.task(tid)==before and store.session_binding(args['lineage']['execution_session_id']) is None
+            installed=store.activate_private_revision_installation(tid,installation_id=intent_kw['installation_id'],expected_previous_sha256=ready['event_sha256'],validate_acceptance=test_acceptance,artifacts_base=tmp_path)
+        task=store.task(tid)
+        assert installed['installed'] and not installed['dispatch_started'] and task['generation']==2
+        assert task['engine_session_id']==args['lineage']['execution_session_id'] and task['state']=='waiting_gate'
+        assert next(g for g in task['gates'] if g['after_phase']=='srs')['state']=='waiting'
+        assert store.session_binding(cap.session_id)['generation']==1
