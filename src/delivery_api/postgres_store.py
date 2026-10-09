@@ -247,6 +247,25 @@ class PostgresStore(SQLiteStore):
         if not row:return None
         result=dict(row);result['owner_id']=str(result['owner_id']);return result
 
+    def installed_execution_anchor(self,session_id):
+        """Read exact immutable installed binding, no file-derived authority."""
+        from vmodel_contracts.execution_anchor import ExecutionAnchor
+        import hashlib
+        row=self._db.execute('SELECT * FROM installed_execution_bindings WHERE session_id=?',(session_id,)).fetchone()
+        if not row:return None
+        intent=self._db.execute('SELECT * FROM closed_revision_installations WHERE installation_id=?',(row['installation_id'],)).fetchone()
+        latest=self._db.execute('SELECT * FROM closed_revision_install_events WHERE installation_id=? ORDER BY sequence DESC LIMIT 1',(row['installation_id'],)).fetchone()
+        if not intent or not latest or latest['state']!='installed':raise TenantAccessDenied('installed execution journal unavailable')
+        payload=json.loads(latest['payload']);plan=json.loads(intent['payload'])
+        if (hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=latest['event_sha256']
+            or hashlib.sha256(json.dumps(plan,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=intent['plan_sha256']
+            or payload['plan_sha256']!=intent['plan_sha256'] or payload['evidence']['execution_session_id']!=session_id
+            or payload['evidence']['anchor_sha256']!=row['anchor_sha256']):
+            raise TenantAccessDenied('installed execution evidence differs from immutable journal')
+        anchor=ExecutionAnchor(str(row['owner_id']),row['task_id'],session_id,row['semantic_session_id'],row['generation'],row['lineage_sha256'],row['installation_id'])
+        if plan['destination_anchor']!=anchor.document():raise TenantAccessDenied('installed execution anchor differs from plan')
+        return {'anchor':anchor,'anchor_sha256':row['anchor_sha256']}
+
     def _task_record(self,row):
         result=super()._task_record(row)
         result['owner_id']=str(result['owner_id'])

@@ -886,3 +886,10 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         assert task['engine_session_id']==args['lineage']['execution_session_id'] and task['state']=='waiting_gate'
         assert next(g for g in task['gates'] if g['after_phase']=='srs')['state']=='waiting'
         assert store.session_binding(cap.session_id)['generation']==1
+        later=WorkerCapability.capture(store,tid);later.validate(store)
+        assert later.execution_anchor.semantic_session_id=='s' and later.execution_anchor.generation==2
+        with pytest.raises(TenantAccessDenied):cap.validate(store)
+        from vmodel_contracts.execution_anchor import read_execution_anchor
+        from delivery_api.tenancy import session_root
+        owned=session_root(tmp_path,A,later.session_id)
+        assert read_execution_anchor(owned,expected=later.execution_anchor)['document_sha256']==later.anchor_sha256

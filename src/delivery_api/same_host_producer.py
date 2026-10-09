@@ -43,7 +43,11 @@ class SameHostProducerWorker:
                 for directory,dirs,files in os.walk(root,followlinks=False):
                     if any((Path(directory)/name).is_symlink() for name in dirs+files):
                         raise TenantAccessDenied('session contains an unsafe symlink')
-            fence=StopFence(root/'interview'/'stop-request.json')
+            fence=StopFence(root/'interview'/'stop-request.json',execution_anchor=capability.execution_anchor)
+            if capability.execution_anchor is not None:
+                from vmodel_contracts.execution_anchor import read_execution_anchor
+                if read_execution_anchor(root,expected=capability.execution_anchor)['document_sha256']!=capability.anchor_sha256:
+                    raise TenantAccessDenied('installed anchor bytes differ from database')
             if fence.generation!=capability.generation or fence.requested:
                 raise TenantAccessDenied('producer stop generation mismatch')
             gateway=self.gateway_factory(capability,job_id)
