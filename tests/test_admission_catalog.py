@@ -74,3 +74,17 @@ def test_cache_catalog_requires_explicit_categories_and_pair_of_rates():
     assert quote['expense_cache_hit']==1 and quote['expense_cache_miss']==5
     for invalid in [replace(cache,expense_cache_hit=None),replace(cache,expense_cache_miss=True),replace(P,expense_cache_hit=1,expense_cache_miss=5)]:
         with pytest.raises(AdmissionDenied):ReviewedCatalog([invalid])
+
+
+def test_reviewed_full_context_ceiling_covers_tools_and_preserves_exact_bytes():
+    import json
+    from delivery_api.admission_catalog import ReviewedContextCeiling
+    bounder=ReviewedContextCeiling('fake',1000,100,'fake-reviewed-context','TEST-CONTEXT')
+    for tools in [[],[{'type':'function','function':{'parameters':{'type':'object','properties':{'fake':{'type':'string'}}}}}]]:
+        raw=json.dumps({'model':'fake','max_tokens':10,'messages':[{'role':'system','content':'fake'}],'tools':tools}).encode()
+        bound=bounder(stage='needs',serialized_request=raw,max_output_tokens=10)
+        assert bound.input_max==1000 and bound.output_max==10 and bound.serialized_request==raw
+        assert bound.includes_complete_request
+    for cap in [0,101,True]:
+        raw=json.dumps({'model':'fake','max_tokens':cap}).encode()
+        with pytest.raises(AdmissionDenied):bounder(stage='needs',serialized_request=raw,max_output_tokens=cap)

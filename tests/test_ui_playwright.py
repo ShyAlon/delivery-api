@@ -2075,3 +2075,16 @@ def test_global_cost_header_on_all_route_families(page,ui,path):
    if box.evaluate('e=>getComputedStyle(e).position')=='sticky':assert box.bounding_box()['y']>=head['height']-1
   name=path.strip('/').replace('/','-') or 'home'
   page.screenshot(path=f'/tmp/cost-route-{name}-{width}.png')
+
+
+def test_closed_gate_can_save_revision_proposal_without_restarting(page,ui):
+    task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['gate_key']=='gate-needs');gate['state']='decided'
+    data={'review':{'revision':'gate:approved','task':task,'documents':[]},'actionable':False,'draft':None,'comments':[],'closed_revision_draft':True}
+    page.route('**/api/tasks/sim/gates/gate-needs/review*',lambda r:r.fulfill(json=data));sent=[]
+    page.route('**/api/tasks/sim/gates/gate-needs/revision-drafts',lambda r:(sent.append(r.request.post_data_json),r.fulfill(json={'draft_id':'fake','committed':False,'dispatch_started':False})))
+    page.goto(ui+'/tasks/sim/gates/gate-needs');page.locator('#closedrevisiontext').fill('Proposed new requirement wording')
+    page.locator('#saveclosedrevision').click()
+    expect(page.locator('#closedrevisionstatus')).to_contain_text('unchanged')
+    assert sent==[{'review_revision':'gate:approved','edited_text':'Proposed new requirement wording'}]
+    expect(page.locator('[data-action="approve"]')).to_be_disabled()
+    page.screenshot(path='/downloads/closed-gate-proposal-desktop.png',full_page=True)

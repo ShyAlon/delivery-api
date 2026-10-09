@@ -857,3 +857,32 @@ def test_reserve_rechecks_generation_after_waiting_for_stop_lock(ledger,monkeypa
     finally:
         with psycopg.connect(DSN) as c:
             c.execute("UPDATE tasks SET generation=%s,state='not_started',stop_requested_at=NULL WHERE task_id=%s",(generation,tid))
+
+
+def test_dispatch_waiting_on_owner_lock_observes_committed_suspension(ledger):
+    import hashlib,psycopg,threading
+    from delivery_api.tenancy import TenantAccessDenied
+    s,tid,job=ledger;aid=uuid.uuid4().hex
+    with tenant_context(A):s.reserve_provider_attempt(job,aid,Q,'race')
+    entered=threading.Event()
+    def dispatch():
+        other=PostgresStore(DSN.replace('user=sandbox','user=delivery_app'))
+        with tenant_context(A):
+            entered.set()
+            try:other.transition_provider_attempt(aid,'start');return 'dispatched'
+            except TenantAccessDenied:return 'suspended'
+    key=int.from_bytes(hashlib.sha256(A.owner_id.encode()).digest()[:8],'big',signed=True)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with psycopg.connect(DSN) as c:
+                c.execute('SELECT pg_advisory_xact_lock(%s)',(key,))
+                c.execute('INSERT INTO user_task_policy VALUES (%s,true,1,0)',(A.owner_id,))
+                result=pool.submit(dispatch)
+                assert entered.wait(5)
+                assert not result.done()
+            assert result.result(timeout=5)=='suspended'
+        with tenant_context(A):
+            assert s.provider_attempt(aid)['state']=='reserved'
+            s.transition_provider_attempt(aid,'cancel')
+    finally:
+        with psycopg.connect(DSN) as c:c.execute('DELETE FROM user_task_policy WHERE owner_id=%s',(A.owner_id,))

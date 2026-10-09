@@ -54,3 +54,42 @@ def test_route_preview_passes_engine_model_map_and_preserves_conflict():
  client=HttpEngineClient('http://engine',transport=httpx.MockTransport(lambda r:httpx.Response(422,json={'detail':error})))
  with pytest.raises(EngineClientError,match='INTERVIEW_ENGINE_MODEL_PROBING'):
   client.preview_route('deepseek')
+
+
+def test_cloud_engine_calls_carry_verified_scope_not_caller_owner(monkeypatch):
+    from delivery_api import config
+    from delivery_api.tenancy import TenantScope,tenant_context,TenantAccessDenied
+    monkeypatch.setattr(config,'CLOUD_TENANTS',True)
+    seen=[]
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200,json={'route':'local','model':'fake'})
+    client=HttpEngineClient('http://engine',token='test-service',transport=httpx.MockTransport(handler))
+    with pytest.raises(TenantAccessDenied):client.default_route()
+    owner='00000000-0000-0000-0000-000000000001'
+    with tenant_context(TenantScope(owner)):client.default_route()
+    assert len(seen)==1
+    assert seen[0].headers['X-Requi-Owner']==owner
+    assert seen[0].headers['X-Interview-Engine-Token']=='test-service'
+
+
+def test_stop_client_validates_stopped_contract_and_uuid_path():
+ sid=str(uuid4());seen=[]
+ body=EngineSnapshot(session_id=sid,task_id='fake',sequence=1,process_status=ProcessStatus.STOP_REQUESTED,next_step=NextStep.STOP).model_dump(mode='json')
+ client=HttpEngineClient('http://fake',transport=httpx.MockTransport(lambda r:seen.append(r) or httpx.Response(200,json=body)))
+ assert client.stop(sid).process_status==ProcessStatus.STOP_REQUESTED
+ assert seen[0].method=='POST' and seen[0].url.path==f'/v1/sessions/{sid}/stop'
+ with pytest.raises(ValueError):client.stop('../other')
+ assert len(seen)==1
+
+
+def test_stop_client_uses_current_owner_scope(monkeypatch):
+ from delivery_api import config
+ from delivery_api.tenancy import TenantScope,tenant_context
+ monkeypatch.setattr(config,'CLOUD_TENANTS',True)
+ sid=str(uuid4());owner=str(uuid4());seen=[]
+ body=EngineSnapshot(session_id=sid,task_id='fake',sequence=1,process_status=ProcessStatus.STOPPED,next_step=NextStep.STOP).model_dump(mode='json')
+ client=HttpEngineClient('http://fake',transport=httpx.MockTransport(lambda r:seen.append(r) or httpx.Response(200,json=body)))
+ with tenant_context(TenantScope(owner)):
+  assert client.stop(sid).process_status==ProcessStatus.STOPPED
+ assert seen[0].headers['X-Requi-Owner']==owner

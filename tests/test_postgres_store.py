@@ -444,3 +444,37 @@ def test_cloud_store_rerun_cannot_bypass_missing_generation_lifecycle(store):
     with tenant_context(B):
         with pytest.raises(TenantAccessDenied):store.prepare_rerun(tid,'needs')
     with tenant_context(A):store.delete_task(tid)
+
+
+def test_task_file_guard_keeps_owner_lock_across_nested_store_work(store):
+    import hashlib,psycopg
+    from concurrent.futures import ThreadPoolExecutor
+    key=int.from_bytes(hashlib.sha256(A.owner_id.encode()).digest()[:8],'big',signed=True)
+    def lock_available():
+        with psycopg.connect(DSN) as c:
+            return c.execute('SELECT pg_try_advisory_xact_lock(%s)',(key,)).fetchone()[0]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with tenant_context(A):
+            with store._task_operation_guard('task.gate.decide'):
+                assert store.auth_session_active()
+                assert pool.submit(lock_available).result(timeout=5) is False
+            assert pool.submit(lock_available).result(timeout=5) is True
+            with pytest.raises(RuntimeError):
+                with store._task_operation_guard('task.gate.decide'):
+                    raise RuntimeError('fake file failure')
+            assert pool.submit(lock_available).result(timeout=5) is True
+
+
+def test_retained_review_conflict_is_not_silently_accepted(store):
+    with tenant_context(A):
+        tid=store.create_task('review-replay-'+uuid.uuid4().hex)['task_id']
+        payload={'evidence':'original'}
+        store.retain_decision_review(tid,'gate:gate-needs','same',payload)
+        store.retain_decision_review(tid,'gate:gate-needs','same',payload)
+        with pytest.raises(ValueError,match='conflicting'):
+            store.retain_decision_review(tid,'gate:gate-needs','same',{'evidence':'changed'})
+        assert store.decision_review(tid,'gate:gate-needs','same')==payload
+    with tenant_context(B):
+        assert store.decision_review(tid,'gate:gate-needs','same') is None
+        with pytest.raises(Exception):store.retain_decision_review(tid,'gate:gate-needs','same',{'evidence':'foreign'})
+    with tenant_context(A):store.delete_task(tid)
