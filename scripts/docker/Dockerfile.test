@@ -1,0 +1,10 @@
+# Integrated built-wheel verification image. Not a deployment image or live run.
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 REQUI_RE_DIST=1 DELIVERY_DATABASE_URL=sqlite:////tmp/test-delivery.db
+WORKDIR /app
+COPY wheels/ /wheels/
+COPY constraints.txt wheel-sha256.txt /app/
+RUN sha256sum --check /app/wheel-sha256.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/*.whl && pip check
+COPY source-manifest.json smoke.py /app/
+# Fake provider only. No host database/artifact mounts and no production secrets.
+CMD ["python", "/app/smoke.py"]
