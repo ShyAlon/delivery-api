@@ -1,4 +1,4 @@
-"""Private one-job approved SRS continuation consumer. No routes or queue scans.
+"""Private one-job approved phase continuation consumer. No routes or queue scans.
 
 The prepared checkpoint stays immutable. Runtime output goes to a fresh exclusive
 namespace. Ambiguous/failed jobs and partial output never auto-resume. The next
@@ -8,6 +8,7 @@ import hashlib,json,os,sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from .revision_continuation import reconcile_private_approved_continuation
+from .producer_inputs import _open_directory,_identity
 KIND='continuation:approved-revision'
 
 def queue_private_approved_continuation(store,task_id,*,installation_id,artifacts_base):
@@ -22,8 +23,8 @@ def queue_private_approved_continuation(store,task_id,*,installation_id,artifact
             if not job or job['kind']!=KIND or job['execution_options']!={}:raise ValueError('continuation queue evidence differs')
             return job['job_id']
         basis=store.private_approved_continuation_basis(task_id,installation_id=installation_id,artifacts_base=artifacts_base)
-        if basis['phase']!='srs':raise ValueError('architecture continuation consumer required for SRS only')
-        gate=next(g for g in store.task(task_id)['gates'] if g['after_phase']=='architecture')
+        next_phase='architecture' if basis['phase']=='srs' else 'specs'
+        gate=next(g for g in store.task(task_id)['gates'] if g['after_phase']==next_phase)
         if gate['is_open']:raise ValueError('next phase explicit closed review required')
         observed=reconcile_private_approved_continuation(store,task_id,installation_id=installation_id,artifacts_base=artifacts_base)
         if observed['state']!='continuation_prepared_verified_no_dispatch':raise ValueError('verified prepared continuation required')
@@ -46,12 +47,14 @@ async def execute_private_approved_continuation(store,worker,job_id,*,installati
         from vmodel_contracts import SystemBaseline
         from langgraph.checkpoint.sqlite import SqliteSaver
         basis=store.private_approved_continuation_basis(cap.task_id,installation_id=installation_id,artifacts_base=artifacts_base,expected_job_id=job_id)
-        if basis['phase']!='srs' or marker['review_sha256']!=basis['review_sha256']:raise ValueError('exact SRS continuation approval required')
+        if basis['phase'] not in ('srs','architecture') or marker['review_sha256']!=basis['review_sha256']:raise ValueError('exact phase continuation approval required')
+        stage='architecture' if basis['phase']=='srs' else 'items'
+        next_phase='architecture' if stage=='architecture' else 'specs'
         runtime=current_runtime();binding=cli_stop_binding()
         expected=(cap.scope.owner_id,cap.task_id,job_id,cap.generation,str(root))
         if (runtime is None or runtime.worker_binding!=expected or binding is None
             or binding[1]!=cap.generation or getattr(binding[0],'_execution_anchor',None)!=cap.execution_anchor
-            or Path(binding[0].path)!=root/'interview/stop-request.json' or 'architecture' not in runtime.models):
+            or Path(binding[0].path)!=root/'interview/stop-request.json' or stage not in runtime.models):
             raise ValueError('bound continuation runtime required')
         def authority():
             check_execution();cap.validate(store)
@@ -68,7 +71,16 @@ async def execute_private_approved_continuation(store,worker,job_id,*,installati
         finally:os.close(fd)
         if len(raw)>64*1024*1024:raise ValueError('bounded checkpoint required')
         destination=root/'spec/continuation-execution'
+        if destination.resolve()!=destination:raise ValueError('unsafe continuation destination')
         guarded_publish(lambda:destination.mkdir(mode=0o700))
+        destination_fd=_open_directory(destination)
+        destination_identity=_identity(destination_fd)
+        os.close(destination_fd)
+        def namespace():
+            fd=_open_directory(destination)
+            try:
+                if _identity(fd)!=destination_identity:raise ValueError('continuation destination changed')
+            finally:os.close(fd)
         checkpoint=destination/'checkpoints.sqlite'
         def write():
             fd=os.open(checkpoint,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
@@ -83,43 +95,64 @@ async def execute_private_approved_continuation(store,worker,job_id,*,installati
             raise ValueError('prepared checkpoint changed before copy')
         conn=sqlite3.connect(str(checkpoint),check_same_thread=False)
         try:
-            graph=(graph_factory or build_graph)(SimpleNamespace(record=lambda *a:None),review=True,stop_after='architecture',
+            graph=(graph_factory or build_graph)(SimpleNamespace(record=lambda *a:None),review=True,stop_after=stage,require_decisions=True,
                 checkpointer=FencedCheckpointer(SqliteSaver(conn,serde=checkpoint_serde()),publication_guard(binding[0],binding[1])))
             config={'configurable':{'thread_id':cap.session_id}}
             before=graph.get_state(config)
-            if before.next!=('architecture',) or before.config!=prepared_receipt['checkpoint']:
+            if before.next!=(stage,) or before.config!=prepared_receipt['checkpoint']:
                 raise ValueError('exact prepared next node required')
             result=graph.invoke(None,config);authority()
             after=graph.get_state(config)
             if after.next:raise ValueError('continuation must stop before next approval')
-            for key in ('intent_model','conops','needs','system_baseline','srs'):
+            upstream=('intent_model','conops','needs','system_baseline','srs')+ (('architecture',) if stage=='items' else ())
+            for key in upstream:
                 if result.get(key)!=before.values.get(key):raise ValueError('continuation changed approved '+key)
-            artifact=validated_architecture(result.get('architecture'))
-            if artifact.session_id!=cap.execution_anchor.semantic_session_id:raise ValueError('continuation semantic identity differs')
-            _check_baseline_reconciliation(artifact,SystemBaseline.model_validate(result['system_baseline']))
-            _check_decision_drivers(artifact,result['intent_model'],result.get('conops'))
             known={r['requirement_id'] for section in ('functional','non_functional') for r in result['srs'][section]}
-            if not artifact.components or any(not set(c.requirement_ids)<=known for c in artifact.components):raise ValueError('continuation requirement trace differs')
-            if set(r for c in artifact.components for r in c.requirement_ids)!=known:raise ValueError('continuation requirement coverage incomplete')
-            if any(result.get(k) not in (None,[],{}) for k in ('items','tests','validation','bundle')):raise ValueError('continuation escaped next-phase boundary')
-            body=artifact.model_dump(mode='json');receipt={'job_id':job_id,'installation_id':installation_id,'review_sha256':basis['review_sha256'],
-                'phase':'architecture','artifact_sha256':hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+            if stage=='architecture':
+                artifact=validated_architecture(result.get('architecture'))
+                if artifact.session_id!=cap.execution_anchor.semantic_session_id:raise ValueError('continuation semantic identity differs')
+                _check_baseline_reconciliation(artifact,SystemBaseline.model_validate(result['system_baseline']))
+                _check_decision_drivers(artifact,result['intent_model'],result.get('conops'))
+                if not artifact.components or any(not set(c.requirement_ids)<=known for c in artifact.components):raise ValueError('continuation requirement trace differs')
+                if set(r for c in artifact.components for r in c.requirement_ids)!=known:raise ValueError('continuation requirement coverage incomplete')
+                body=artifact.model_dump(mode='json')
+            else:
+                from spec_generator.architecture_decisions import require_decided
+                require_decided(result['architecture'])
+                from vmodel_contracts import ItemSpec,check_compatible
+                from spec_generator.graph import _check_item_refs
+                items=result.get('items')
+                if not isinstance(items,list) or not items:raise ValueError('typed item specifications required')
+                for item in items:
+                    if 'contract_version' in item:check_compatible(item)  # Generated body gets its current stamp through the model, never restamp explicit old versions.
+                typed=[ItemSpec.model_validate(item) for item in items]
+                _check_item_refs([t.model_dump(mode='json') for t in typed],list(known),key='spec_id')
+                if any(not item.body_markdown.strip() for item in typed):raise ValueError('nonempty specification body required')
+                body=[item.model_dump(mode='json') for item in typed]
+            forbidden=('items','tests','validation','bundle') if stage=='architecture' else ('tests','validation','bundle')
+            if any(result.get(k) not in (None,[],{}) for k in forbidden):raise ValueError('continuation escaped next-phase boundary')
+            receipt={'job_id':job_id,'installation_id':installation_id,'review_sha256':basis['review_sha256'],
+                'phase':next_phase,'artifact_sha256':hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
                 'requires_phase_approval':True,'downstream_dispatched':False}
             def publish():
-                for name,value in (('architecture.json',body),('receipt.json',receipt)):
+                for name,value in ((stage+'.json',body),('receipt.json',receipt)):
                     fd=os.open(destination/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
                     with os.fdopen(fd,'w') as f:json.dump(value,f,sort_keys=True,indent=2);f.flush();os.fsync(f.fileno())
                 fd=os.open(destination,os.O_RDONLY|os.O_DIRECTORY)
                 try:os.fsync(fd)
                 finally:os.close(fd)
-            authority();guarded_publish(publish)
+            # No result becomes reviewable while accepted provider work is unsettled.
             with store._task_operation_guard('task.rerun'):
-                authority()
-                gate=next(g for g in store.task(cap.task_id)['gates'] if g['after_phase']=='architecture')
+                if store._db.execute("SELECT 1 FROM provider_attempts WHERE job_id=? AND state IN ('reserved','dispatched','uncertain') LIMIT 1",(job_id,)).fetchone():
+                    raise ValueError('continuation provider settlement unresolved')
+            authority();namespace();guarded_publish(publish);namespace()
+            with store._task_operation_guard('task.rerun'):
+                authority();namespace()
+                gate=next(g for g in store.task(cap.task_id)['gates'] if g['after_phase']==next_phase)
                 if gate['is_open']:raise ValueError('next phase closed review changed')
                 store.retain_decision_review(cap.task_id,'revision-continuation-result:'+installation_id,basis['review_sha256'],receipt)
-                store.add_task_artifact(cap.task_id,'architecture','architecture.json',str(destination/'architecture.json'))
-                store.wait_at_gate(cap.task_id,'architecture')
+                store.add_task_artifact(cap.task_id,next_phase,stage+'.json',str(destination/(stage+'.json')))
+                store.wait_at_gate(cap.task_id,next_phase)
             if prepared.read_bytes()!=raw:raise ValueError('immutable preparation changed')
             outputs.append(receipt)
         finally:conn.close()

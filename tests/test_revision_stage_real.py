@@ -7,7 +7,7 @@ from delivery_api.tenancy import TenantScope,session_root
 from delivery_api.revision_stage_evidence import read_validated_staged_receipt
 
 
-def build_real_stage_fixture(tmp_path,*,cap=None,options_override=None,lineage_factory=None,semantic_session_id='s'):
+def build_real_stage_fixture(tmp_path,*,cap=None,options_override=None,lineage_factory=None,semantic_session_id='s',phase='srs'):
     pytest.importorskip('spec_generator.revision_checkpoint')
     from spec_generator.graph import build_graph,checkpoint_serde
     from spec_generator.revision_checkpoint import prepare_revision_seed,validate_revision_output,stage_reviewed_lineage_checkpoint
@@ -24,18 +24,23 @@ def build_real_stage_fixture(tmp_path,*,cap=None,options_override=None,lineage_f
         for key in ('intent_model','conops','needs','srs'):
             source[key]['session_id']=semantic_session_id
         source['srs']['intent_model_ref']=semantic_session_id
+    if phase=='architecture':
+        from vmodel_contracts.architecture import ArchitectureOverview
+        source['architecture']=ArchitectureOverview.model_validate({'session_id':semantic_session_id,'baseline_id':source['system_baseline']['baseline_id'],
+            'stack_entries':[],'components':[{'name':'api','responsibility':'serve','requirement_ids':['R-1'],'baseline_refs':['repo:spec-generator']}],
+            'decisions':[],'non_functionals':{}}).model_dump(mode='json')
     root=session_root(tmp_path,scope,cap.session_id);(root/'spec').mkdir(parents=True)
     conn=sqlite3.connect(root/'spec'/'checkpoints.sqlite');saver=SqliteSaver(conn,serde=checkpoint_serde())
     cp=empty_checkpoint();cp['channel_values']=source
     saved=saver.put({'configurable':{'thread_id':cap.session_id,'checkpoint_ns':''}},cp,{'source':'input','step':0,'parents':{}},{})
     conn.close();source_id=saved['configurable']['checkpoint_id']
-    original=json.dumps(source['srs']).encode();(root/'spec'/'srs.json').write_bytes(original)
+    original=json.dumps(source[phase]).encode();(root/'spec'/(phase+'.json')).write_bytes(original)
     o=options_override or options();o['source_checkpoint_id']=source_id;o['artifact_evidence'][0]['sha256']=hashlib.sha256(original).hexdigest()
-    result=prepare_revision_seed(source=source,phase='srs',change_request=o['change_request'],session_id=semantic_session_id)['seed']
-    result['srs']=source['srs'];result['gate_feedback'].pop('srs')
-    digest=validate_revision_output(source=source,result=result,phase='srs',change_request=o['change_request'],session_id=semantic_session_id)['artifact_sha256']
+    result=prepare_revision_seed(source=source,phase=phase,change_request=o['change_request'],session_id=semantic_session_id)['seed']
+    result[phase]=source[phase];result['gate_feedback'].pop(phase)
+    digest=validate_revision_output(source=source,result=result,phase=phase,change_request=o['change_request'],session_id=semantic_session_id)['artifact_sha256']
     lineage={'kind':'closed_revision_execution_lineage','owner_id':scope.owner_id,'task_id':'task','semantic_session_id':'s',
-        'parent_execution_session_id':'s','parent_generation':1,'execution_session_id':'next','generation':2,'phase':'srs',
+        'parent_execution_session_id':'s','parent_generation':1,'execution_session_id':'next','generation':2,'phase':phase,
         'source_checkpoint_id':source_id,'proposal_id':'a'*32,'regenerated_artifact_sha256':digest,'review_digest':o['preflight_digest'],
         'approved_source_artifact_evidence':o['artifact_evidence'],'state':'planned','installed':False,'dispatch_started':False}
     if lineage_factory:lineage=lineage_factory(o,source,result,digest)
@@ -47,10 +52,11 @@ def build_real_stage_fixture(tmp_path,*,cap=None,options_override=None,lineage_f
         staged=stage_reviewed_lineage_checkpoint(source=source,proposal_result=result,lineage=lineage,change_request=o['change_request'],graph=graph,config={'configurable':{'thread_id':lineage['execution_session_id']}})
     state=graph.get_state({'configurable':{'thread_id':lineage['execution_session_id']}}).values;conn.close()
     documents={'interview/intent_model.json':source['intent_model'],'interview/conops.json':source.get('conops'),
-        'spec/needs.json':source['needs'],'spec/system-baseline.json':source['system_baseline'],'spec/srs.json':state['srs']}
+        'spec/needs.json':source['needs'],'spec/system-baseline.json':source['system_baseline'],'spec/'+phase+'.json':state[phase]}
+    if phase=='architecture':documents['spec/srs.json']=source['srs']
     for name,body in documents.items():
         (dest/name).write_text(json.dumps(body))
-        if name!='spec/srs.json':
+        if name!='spec/'+phase+'.json':
             (root/name).parent.mkdir(parents=True,exist_ok=True)
             (root/name).write_bytes((dest/name).read_bytes())
     files={name:hashlib.sha256((dest/name).read_bytes()).hexdigest() for name in list(documents)+['spec/checkpoints.sqlite']}

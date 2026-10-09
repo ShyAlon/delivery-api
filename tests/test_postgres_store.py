@@ -480,18 +480,18 @@ def test_retained_review_conflict_is_not_silently_accepted(store):
     with tenant_context(A):store.delete_task(tid)
 
 
-def _restart_intent_fixture(store):
+def _restart_intent_fixture(store,phase='srs'):
     from delivery_api.gate_revision import save_closed_revision,closed_revision_preflight
     from test_closed_revision_job import options
     from test_revision_intent import proposal
     tid=store.create_task('revision-intent-'+uuid.uuid4().hex)['task_id'];sid='rev-'+uuid.uuid4().hex
-    store.set_engine_session(tid,sid);store.wait_at_gate(tid,'srs')
-    store.retain_decision_review(tid,'gate:gate-srs','review',{'task':store.task(tid)})
-    store.decide_gate(tid,'gate-srs','approve',selected_option='Proceed')
-    draft=save_closed_revision(store,tid,'gate-srs','review','Describe offline behavior')['draft_id']
-    o=options();o['draft_id']=draft;o['gate_revision']=next(g for g in store.task(tid)['gates'] if g['gate_key']=='gate-srs')['revision']
-    live=closed_revision_preflight(store,tid,'gate-srs','review',draft,artifact_snapshot=o['artifact_evidence'])
-    o['preflight_digest']=live['review_digest'];p=proposal()|{'task_id':tid,'session_id':sid}
+    store.set_engine_session(tid,sid);store.wait_at_gate(tid,phase)
+    store.retain_decision_review(tid,'gate:gate-'+phase,'review',{'task':store.task(tid)})
+    store.decide_gate(tid,'gate-'+phase,'approve',selected_option='Proceed')
+    draft=save_closed_revision(store,tid,'gate-'+phase,'review','Describe offline behavior')['draft_id']
+    o=options();o['phase']=phase;o['gate_key']='gate-'+phase;o['artifact_evidence']=[{'phase':phase,'name':phase+'.json','generation':1,'sha256':'a'*64}];o['draft_id']=draft;o['gate_revision']=next(g for g in store.task(tid)['gates'] if g['gate_key']=='gate-'+phase)['revision']
+    live=closed_revision_preflight(store,tid,'gate-'+phase,'review',draft,artifact_snapshot=o['artifact_evidence'])
+    o['preflight_digest']=live['review_digest'];p=proposal()|{'phase':phase}|{'task_id':tid,'session_id':sid}
     evidence={'artifacts':o['artifact_evidence'],'checkpoint_id':'checkpoint','proposal_sha256':p['artifact_sha256']}
     return tid,o,p,evidence
 
@@ -768,7 +768,7 @@ def test_source_change_during_concrete_stage_validation_leaves_only_prepared_eve
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
 
 
-@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph'])
+@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph','architecture_continuation'])
 def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch,coordinated):
     source_path=os.getenv("DELIVERY_TEST_SPEC_SOURCE")
     if source_path:monkeypatch.syspath_prepend(source_path)
@@ -777,13 +777,14 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
     from delivery_api.gate_revision import closed_revision_preflight
     from test_revision_stage_real import build_real_stage_fixture
     with tenant_context(A):
-        tid,o,p,_=_restart_intent_fixture(store);before=store.task(tid)
+        phase='architecture' if coordinated=='architecture_continuation' else 'srs'
+        tid,o,p,_=_restart_intent_fixture(store,phase);before=store.task(tid)
         cap=WorkerCapability.capture(store,tid);saved={}
         def lineage_factory(options,source,result,digest):
-            live=closed_revision_preflight(store,tid,'gate-srs','review',options['draft_id'],artifact_snapshot=options['artifact_evidence'])
+            live=closed_revision_preflight(store,tid,'gate-'+phase,'review',options['draft_id'],artifact_snapshot=options['artifact_evidence'])
             options['preflight_digest']=live['review_digest']
             proposal=p|{'proposal_id':'a'*32,'source_checkpoint_id':options['source_checkpoint_id'],
-                'artifact':result['srs'],'artifact_sha256':digest}
+                'artifact':result[phase],'artifact_sha256':digest}
             evidence={'artifacts':options['artifact_evidence'],'checkpoint_id':options['source_checkpoint_id'],'proposal_sha256':digest}
             held=store.retain_closed_revision_restart_intent(tid,request_key=uuid.uuid4().hex,options=options,proposal=proposal,
                 approval_reference='constructed-test-review-not-founder-approval',read_current_evidence=lambda:evidence)
@@ -792,7 +793,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             saved.update(intent_id=held['intent_id'],lineage_id=planned['lineage_id'],proposal=proposal)
             with store._postgres.transaction() as conn:
                 return json.loads(conn.execute('SELECT payload FROM closed_revision_lineage_plans WHERE lineage_id=%s',(planned['lineage_id'],)).fetchone()['payload'])
-        built=build_real_stage_fixture(tmp_path,cap=cap,options_override=o,lineage_factory=lineage_factory,semantic_session_id=cap.session_id)
+        built=build_real_stage_fixture(tmp_path,cap=cap,options_override=o,lineage_factory=lineage_factory,semantic_session_id=cap.session_id,phase=phase)
         args,root,dest,documents,files,manifest,md,*_=built
         lid=saved['lineage_id']
         review=store.retain_revision_source_review(tid,lineage_id=lid,artifacts_base=tmp_path)
@@ -960,7 +961,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                         apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=store.verify_private_revision_acceptance)
                 assert not (dest/'execution-generation.json').exists() and store.task(tid)==before
                 return
-            if isinstance(coordinated,str) and coordinated not in ('continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph'):
+            if isinstance(coordinated,str) and coordinated not in ('continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph','architecture_continuation'):
                 from delivery_api import revision_install_coordinator as coordinator
                 original=coordinator.promote_private_stage
                 def interrupted(**kwargs):
@@ -996,9 +997,9 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             assert result['installed'] and not result['dispatch_started'] and later.execution_anchor.semantic_session_id==cap.session_id
             assert store.task(tid)['generation']==2 and store.session_binding(cap.session_id)['generation']==1
             task=store.task(tid)
-            assert next(g for g in task['gates'] if g['after_phase']=='srs')['state']=='decided'
-            assert next(p for p in task['phases'] if p['phase_key']=='srs')['state']=='approved'
-            assert task['active_phase']=='architecture' and result['continuation_prepared'] and not result['dispatch_started']
+            assert next(g for g in task['gates'] if g['after_phase']==phase)['state']=='decided'
+            assert next(p for p in task['phases'] if p['phase_key']==phase)['state']=='approved'
+            assert task['active_phase']==('specs' if phase=='architecture' else 'architecture') and result['continuation_prepared'] and not result['dispatch_started']
             reconciled=store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
             assert reconciled['state']=='installed_verified_no_dispatch' and not reconciled['automatic_retry'] and not reconciled['unverified']
             from delivery_api.tenancy import session_root
@@ -1040,13 +1041,13 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                 return
             with cli_execution(StopFence(promoted_root/'interview/stop-request.json',execution_anchor=later.execution_anchor),None):
                 continuation=prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
-                assert continuation['next_node']=='architecture' and not continuation['provider_invoked'] and not continuation['dispatch_started']
+                assert continuation['next_node']==('items' if phase=='architecture' else 'architecture') and not continuation['provider_invoked'] and not continuation['dispatch_started']
                 with pytest.raises(ValueError,match='reconciliation'):
                     prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
             assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
             observed=reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
             assert observed['state']=='continuation_prepared_verified_no_dispatch' and not observed['dispatch_available']
-            if coordinated in ('continuation_consume','continuation_consume_revoked','continuation_real_graph'):
+            if coordinated in ('continuation_consume','continuation_consume_revoked','continuation_real_graph','architecture_continuation'):
                 import asyncio
                 from types import SimpleNamespace
                 from delivery_api.revision_continuation_worker import queue_private_approved_continuation,execute_private_approved_continuation
@@ -1078,7 +1079,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                 queued=queue_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
                 assert queue_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)==queued
                 immutable=(promoted_root/'spec/approved-continuation/checkpoints.sqlite').read_bytes()
-                def runtime(c,r):return JobRuntime({'architecture':StageModel('fake','fake')},str(r/'calls.jsonl'),lambda text:None)
+                def runtime(c,r):return JobRuntime({('items' if phase=='architecture' else 'architecture'):StageModel('fake','fake')},str(r/'calls.jsonl'),lambda text:None)
                 worker=SameHostProducerWorker(store,tmp_path,gateway_factory=lambda c,j:SimpleNamespace(store=store,job_id=j),usage_log_factory=lambda *a:None,runtime_factory=runtime)
                 if coordinated=='continuation_consume_revoked':
                     with pytest.raises(TenantAccessDenied,match='revoked'):
@@ -1115,12 +1116,23 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                         return checked if checked is not None else value
                     monkeypatch.setattr(real_graph,'_call_json',fake_call)
                     fake_graph=None  # Production graph construction/node routing, no model invocation.
+                if coordinated=='architecture_continuation':
+                    from spec_generator import graph as real_graph
+                    call_stages=[]
+                    def fake_items(stage,payload,log,progress,**kwargs):
+                        assert stage=='items';call_stages.append(stage)
+                        schema=kwargs.get('schema') or {}
+                        value=[{'slug':'api','kind':'api_surface','title':'API','requirement_ids':['R-1'],'depends_on':[]}] if schema.get('type')=='array' else {'body_markdown':'# Approved Spec\n\nThe API owns specification emission and provides a complete result for the approved requirement.'}
+                        checked=kwargs['validate'](value)
+                        return checked if checked is not None else value
+                    monkeypatch.setattr(real_graph,'_call_json',fake_items);fake_graph=None
                 consumed=asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))
+                if coordinated=='architecture_continuation':assert call_stages and set(call_stages)=={'items'}
                 if coordinated=='continuation_real_graph':assert call_stages and set(call_stages)=={'architecture'}
                 assert consumed['started'] and len(consumed['outputs'])==1 and store.worker_job(queued)['state']=='done'
                 assert not consumed['downstream_dispatched'] and store.task(tid)['state']=='waiting_gate'
-                assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='architecture')['state']=='waiting'
-                assert next(p for p in store.task(tid)['phases'] if p['phase_key']=='srs')['state']=='approved'
+                assert next(g for g in store.task(tid)['gates'] if g['after_phase']==('specs' if phase=='architecture' else 'architecture'))['state']=='waiting'
+                assert next(p for p in store.task(tid)['phases'] if p['phase_key']==phase)['state']=='approved'
                 assert (promoted_root/'spec/approved-continuation/checkpoints.sqlite').read_bytes()==immutable
                 assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
                 assert not asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))['started']
@@ -1194,9 +1206,9 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         task=store.task(tid)
         assert installed['installed'] and not installed['dispatch_started'] and task['generation']==2
         assert task['engine_session_id']==args['lineage']['execution_session_id'] and task['state']=='pending'
-        assert next(g for g in task['gates'] if g['after_phase']=='srs')['state']=='decided'
-        assert next(p for p in task['phases'] if p['phase_key']=='srs')['state']=='approved'
-        assert task['active_phase']=='architecture' and installed['continuation_prepared'] and installed['approved_phase']=='srs'
+        assert next(g for g in task['gates'] if g['after_phase']==phase)['state']=='decided'
+        assert next(p for p in task['phases'] if p['phase_key']==phase)['state']=='approved'
+        assert task['active_phase']==('specs' if phase=='architecture' else 'architecture') and installed['continuation_prepared'] and installed['approved_phase']=='srs'
         assert all(p['state']=='pending' for p in task['phases'] if p['phase_key'] in ('architecture','specs','tests','validation'))
         assert store.session_binding(cap.session_id)['generation']==1
         later=WorkerCapability.capture(store,tid);later.validate(store)
