@@ -326,6 +326,39 @@ class PostgresStore(SQLiteStore):
                 {'intent_id':intent_id,'source_generation':task['generation'],'review_digest':options['preflight_digest']})
             return {'intent_id':intent_id,'state':'held','replayed':False,'dispatch_started':False}
 
+    def retain_closed_revision_lineage_plan(self,task_id,*,intent_id,semantic_session_id,
+                                            new_execution_session_id,retained_proposal):
+        """Retain lineage planning only; session binding and generation unchanged.
+
+        Trusted caller reads semantic id from approved source lineage and proposal
+        from the pinned owner reader. This does not approve installation.
+        """
+        from .worker_capability import WorkerCapability
+        from .revision_lineage import plan_revision_lineage
+        with self._task_operation_guard('task.rerun'):
+            if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():
+                raise KeyError(task_id)
+            capability=WorkerCapability.capture(self,task_id);capability.validate(self)
+            intent=self._db.execute('SELECT * FROM closed_revision_restart_intents WHERE intent_id=? AND task_id=?',
+                (intent_id,task_id)).fetchone()
+            if not intent:raise KeyError(intent_id)
+            held=json.loads(intent['payload'])
+            if held['state']!='held' or held['proposal']!=retained_proposal.get('proposal'):
+                raise ValueError('lineage proposal differs from held reviewed intent')
+            planned=plan_revision_lineage(capability=capability,semantic_session_id=semantic_session_id,
+                new_execution_session_id=new_execution_session_id,options=held['options'],retained_proposal=retained_proposal)
+            prior=self._db.execute('SELECT * FROM closed_revision_lineage_plans WHERE intent_id=?',(intent_id,)).fetchone()
+            if prior:
+                if prior['fingerprint']!=planned['lineage_sha256']:raise ValueError('conflicting lineage plan replay')
+                return {'lineage_id':prior['lineage_id'],'state':'planned','replayed':True,'installed':False}
+            if self.session_binding(new_execution_session_id):raise ValueError('destination execution session already bound')
+            scope=current_scope();lineage_id=secrets.token_hex(16);body=planned['lineage']
+            self._db.execute('INSERT INTO closed_revision_lineage_plans(lineage_id,owner_id,auth_session_id,intent_id,task_id,parent_execution_session_id,parent_generation,execution_session_id,generation,semantic_session_id,fingerprint,payload,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                (lineage_id,scope.owner_id,scope.session_id,intent_id,task_id,capability.session_id,capability.generation,
+                 new_execution_session_id,body['generation'],semantic_session_id,planned['lineage_sha256'],json.dumps(body,sort_keys=True),time.time()))
+            self.audit(scope.owner_id,'gate.revision_lineage_planned',task_id,{'intent_id':intent_id,'lineage_id':lineage_id})
+            return {'lineage_id':lineage_id,'state':'planned','replayed':False,'installed':False}
+
     def prepare_rerun(self,task_id,from_phase,policy='archive',actor='local user'):
         # Legacy generation reset leaves the immutable session binding stale.
         # Block internal callers too until a reviewed new-session copy exists.

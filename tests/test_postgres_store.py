@@ -543,3 +543,50 @@ def test_restart_intent_rows_are_immutable_to_backend_and_hidden_from_browser(st
     with tenant_context(B):
         with store._postgres.transaction() as conn:
             assert conn.execute('SELECT 1 FROM closed_revision_restart_intents WHERE intent_id=%s',(held['intent_id'],)).fetchone() is None
+
+
+def _held_lineage_fixture(store):
+    import hashlib,json
+    tid,o,p,evidence=_restart_intent_fixture(store)
+    artifact={'session_id':'semantic','intent_model_ref':'semantic'}
+    p['artifact']=artifact;p['artifact_sha256']=hashlib.sha256(json.dumps(artifact,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    evidence['proposal_sha256']=p['artifact_sha256']
+    held=store.retain_closed_revision_restart_intent(tid,request_key=uuid.uuid4().hex,options=o,proposal=p,
+        approval_reference='fake-owner-ref',read_current_evidence=lambda:evidence)
+    args=dict(intent_id=held['intent_id'],semantic_session_id='semantic',new_execution_session_id='next-'+uuid.uuid4().hex,
+        retained_proposal={'proposal':p,'document_sha256':'d'*64})
+    return tid,args
+
+
+def test_held_lineage_is_immutable_owner_scoped_and_never_installs_session(store):
+    with tenant_context(A):
+        tid,args=_held_lineage_fixture(store);before=store.task(tid)
+        result=store.retain_closed_revision_lineage_plan(tid,**args)
+        assert result['state']=='planned' and not result['installed']
+        again=store.retain_closed_revision_lineage_plan(tid,**args)
+        assert again['lineage_id']==result['lineage_id'] and again['replayed']
+        assert store.task(tid)==before and store.session_binding(args['new_execution_session_id']) is None
+        with pytest.raises(ValueError,match='conflicting'):
+            store.retain_closed_revision_lineage_plan(tid,**(args|{'new_execution_session_id':'different'}))
+        with pytest.raises(Exception):
+            with store._postgres.transaction() as conn:
+                conn.execute('UPDATE closed_revision_lineage_plans SET payload=payload WHERE lineage_id=%s',(result['lineage_id'],))
+        with pytest.raises(Exception):
+            with store._postgres.transaction() as conn:
+                conn.execute('SET LOCAL ROLE authenticated');conn.execute('SELECT * FROM closed_revision_lineage_plans').fetchall()
+    with tenant_context(B):
+        with pytest.raises((KeyError,TenantAccessDenied)):store.retain_closed_revision_lineage_plan(tid,**args)
+        with store._postgres.transaction() as conn:
+            assert conn.execute('SELECT 1 FROM closed_revision_lineage_plans WHERE lineage_id=%s',(result['lineage_id'],)).fetchone() is None
+
+
+def test_lineage_proposal_mismatch_leaves_no_plan_or_task_change(store):
+    from copy import deepcopy
+    with tenant_context(A):
+        tid,args=_held_lineage_fixture(store);before=store.task(tid);wrong=deepcopy(args)
+        wrong['retained_proposal']['proposal']['change_request']='changed'
+        with pytest.raises(ValueError,match='differs'):
+            store.retain_closed_revision_lineage_plan(tid,**wrong)
+        assert store.task(tid)==before
+        with store._postgres.transaction() as conn:
+            assert not conn.execute('SELECT 1 FROM closed_revision_lineage_plans WHERE intent_id=%s',(args['intent_id'],)).fetchone()
