@@ -1544,7 +1544,9 @@ def _retain_decision_control(task_id:str,control:dict)->None:
     except (ValueError,KeyError,TypeError):return
 
     if context.get('session_id')!=control.get('precondition',{}).get('session_id'):return
-    store.retain_decision_review(task_id,control['wait_id'],control['revision'],control)
+    try:store.retain_decision_review(task_id,control['wait_id'],control['revision'],control)
+    except ValueError as exc:
+        raise HTTPException(409,'Engine decision evidence changed without a new revision; reload a fresh engine decision before answering') from exc
 
 @app.get("/api/tasks/{task_id}/decisions/{wait_id}")
 def get_decision_review(task_id:str,wait_id:str,revision:str|None=None,draft:str|None=None,a:auth.Actor=Depends(auth.require_actor)):
