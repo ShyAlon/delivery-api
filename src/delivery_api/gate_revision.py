@@ -46,6 +46,7 @@ def closed_revision_preflight(store,task_id,gate_key,review_revision,draft_id,*,
     """
     import hashlib,json,re
     from .phases import PHASE_BY_KEY
+    from .regeneration_plan import phase_change_plan
     initial=store.task(task_id)
     if not initial:raise KeyError(task_id)
     draft=store.decision_draft(task_id,'gate:'+gate_key,review_revision,draft_id)
@@ -83,6 +84,7 @@ def closed_revision_preflight(store,task_id,gate_key,review_revision,draft_id,*,
             'phases_requiring_reapproval':[preview['phase']]+preview['downstream_stale_on_commit'],
             'direct_artifact_replacement':False,'preserve_previous_generation':True,
             'producer':PHASE_BY_KEY[preview['phase']].executor},
+        'producer_change_plan':phase_change_plan(preview['phase']),
         'cost_review':{'extra_cost_expected':True,'amount_known':False,
             'requires_explicit_cost_acknowledgement':True,
             'warning':'Regenerating this phase and affected downstream work incurs extra cost.',

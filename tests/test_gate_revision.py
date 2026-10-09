@@ -124,3 +124,30 @@ def test_closed_commit_preflight_regenerates_edited_phase_with_cost_review_not_r
     assert not result['commit_available'] and not result['dispatch_started']
     assert s.task(tid)==before and s.events(tid)==events
     assert s.decision_draft(tid,'gate:'+gate,'review',saved['draft_id'])==saved['preview']
+
+
+def test_needs_change_preparation_does_not_claim_plain_rerun_consumes_guidance(tmp_path):
+    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path)
+    result=preflight(s,tid,'gate-needs',rev,draft,artifact_snapshot=evidence)
+    plan=result['producer_change_plan']
+    assert plan['generation_kind']=='deterministic_from_intent'
+    assert plan['must_not_claim_guidance_applied_without_upstream_change']
+    assert not plan['closed_change_adapter_available'] and not result['commit_available']
+    assert 'upstream IntentModel' in plan['missing_capabilities'][0]
+
+
+@pytest.mark.parametrize('phase,stage,boundary',[('intent','intent',None),('conops','conops','active_interview_approval_rework'),
+    ('srs','srs','active_generator_gate_feedback'),('architecture','architecture','active_generator_gate_feedback'),
+    ('specs','items',None),('tests','tests',None),('validation','validation',None)])
+def test_phase_change_plan_preserves_audited_producer_stage_and_closed_adapter_gap(phase,stage,boundary):
+    from delivery_api.regeneration_plan import phase_change_plan
+    result=phase_change_plan(phase)
+    assert result['producer_stage']==stage and result['existing_change_boundary']==boundary
+    assert result['missing_capabilities'] and not result['closed_change_adapter_available']
+    assert result['generation_kind']=='model_authoring'
+
+
+def test_phase_change_plan_rejects_unowned_stage_aliases():
+    from delivery_api.regeneration_plan import phase_change_plan
+    for phase in ('items','../srs','anything'):
+        with pytest.raises(ValueError):phase_change_plan(phase)
