@@ -397,6 +397,68 @@ class PostgresStore(SQLiteStore):
             self.audit(scope.owner_id,'gate.revision_preparation_journal',task_id,{'lineage_id':lineage_id,'state':state,'event_sha256':event['event_sha256']})
             return event
 
+    def retain_private_installation_intent(self,task_id,*,lineage_id,expected_staged_event_sha256,review_sha256,
+                                            installation_id,acceptance_reference,validate_acceptance,artifacts_base):
+        """Private coordinator seam. No route/acceptance UI calls this method.
+
+        Trusted callback must authenticate exact retained owner review and cost
+        acknowledgement; string reference alone grants nothing. Real owner
+        acceptance surface remains absent. Tests supply constructed authority.
+        """
+        from .revision_install_plan import prepare_installation_plan
+        if not callable(validate_acceptance):raise ValueError('trusted acceptance verifier required')
+        if not isinstance(acceptance_reference,str) or not acceptance_reference.strip() or len(acceptance_reference)>500:
+            raise ValueError('exact authenticated acceptance reference required')
+        with self._task_operation_guard('task.rerun'):
+            current=self.retain_revision_installation_review(task_id,lineage_id=lineage_id,
+                expected_staged_event_sha256=expected_staged_event_sha256,artifacts_base=artifacts_base)
+            if current['review_sha256']!=review_sha256:raise ValueError('accepted installation review changed')
+            validate_acceptance(current['review'],review_sha256,acceptance_reference)
+            plan=prepare_installation_plan(**current,installation_id=installation_id)
+            prior=self._db.execute('SELECT * FROM closed_revision_installations WHERE lineage_id=?',(lineage_id,)).fetchone()
+            if prior:
+                if prior['plan_sha256']!=plan['plan_sha256'] or prior['acceptance_reference']!=acceptance_reference:
+                    raise ValueError('conflicting installation intent replay')
+                return plan|{'replayed':True}
+            validate_acceptance(current['review'],review_sha256,acceptance_reference)
+            scope=current_scope()
+            self._db.execute('INSERT INTO closed_revision_installations(installation_id,lineage_id,owner_id,auth_session_id,task_id,review_sha256,plan_sha256,acceptance_reference,payload,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (installation_id,lineage_id,scope.owner_id,scope.session_id,task_id,review_sha256,plan['plan_sha256'],acceptance_reference,json.dumps(plan['plan'],sort_keys=True),time.time()))
+            self.append_private_installation_event(task_id,installation_id=installation_id,expected_previous_sha256=None,state='authorized',
+                evidence={'review_sha256':review_sha256,'acceptance_reference':acceptance_reference})
+            return plan|{'replayed':False}
+
+    def append_private_installation_event(self,task_id,*,installation_id,expected_previous_sha256,state,evidence,read_current_evidence=None):
+        """Append-only private install journal, never performs filesystem effects.
+
+        Installed DB activation uses a separate concrete transaction method;
+        arbitrary callers cannot append installed certification here.
+        """
+        from .revision_install_journal import install_event
+        if state=='installed':raise ValueError('installed certification requires concrete database activation')
+        with self._task_operation_guard('task.rerun'):
+            if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():raise KeyError(task_id)
+            intent=self._db.execute('SELECT * FROM closed_revision_installations WHERE installation_id=? AND task_id=?',(installation_id,task_id)).fetchone()
+            if not intent:raise KeyError(installation_id)
+            plan=json.loads(intent['payload']);task=self.task(task_id);parent=plan['expected_parent']
+            if task['generation']!=parent['generation'] or task['engine_session_id']!=parent['execution_session_id']:
+                raise ValueError('installation parent generation/session changed')
+            latest=self._db.execute('SELECT * FROM closed_revision_install_events WHERE installation_id=? ORDER BY sequence DESC LIMIT 1',(installation_id,)).fetchone()
+            if (latest['event_sha256'] if latest else None)!=expected_previous_sha256:raise ValueError('installation journal CAS changed')
+            previous={'event':json.loads(latest['payload']),'event_sha256':latest['event_sha256']} if latest else None
+            if state=='authorized' and evidence!={'review_sha256':intent['review_sha256'],'acceptance_reference':intent['acceptance_reference']}:
+                raise ValueError('installation authorization differs from retained intent')
+            event=install_event(plan_sha256=intent['plan_sha256'],previous=previous,state=state,evidence=evidence)
+            if state in ('promotion_pending','files_promoted','install_pending'):
+                if not callable(read_current_evidence):raise ValueError('trusted current installation evidence reader required')
+                if evidence['manifest_sha256']!=plan['staged_receipt']['manifest_sha256']:raise ValueError('installation manifest differs from held plan')
+                for _ in range(2):
+                    if read_current_evidence()!=evidence:raise ValueError('installation evidence changed')
+            scope=current_scope();body=event['event']
+            self._db.execute('INSERT INTO closed_revision_install_events(installation_id,owner_id,auth_session_id,sequence,state,event_sha256,previous_sha256,payload,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+                (installation_id,scope.owner_id,scope.session_id,body['sequence'],state,event['event_sha256'],body['previous_sha256'],json.dumps(body,sort_keys=True),time.time()))
+            return event
+
     def inspect_revision_install_safety(self,task_id,*,lineage_id,artifacts_base):
         """Read current DB work and held source fence, never approve/install.
 

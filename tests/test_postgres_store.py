@@ -823,6 +823,33 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         assert store.decision_review(tid,'revision-install:'+lid,installation_review['review_sha256'])==installation_review['review']
         assert store.retain_revision_installation_review(tid,lineage_id=lid,
             expected_staged_event_sha256=staged['event_sha256'],artifacts_base=tmp_path)==installation_review
+        auth_checks=[]
+        def test_acceptance(review,sha,reference):
+            assert review==installation_review['review'] and sha==installation_review['review_sha256']
+            assert reference=='constructed-private-test-acceptance';auth_checks.append(1)
+        intent_kw=dict(lineage_id=lid,expected_staged_event_sha256=staged['event_sha256'],review_sha256=installation_review['review_sha256'],
+            installation_id='install-'+uuid.uuid4().hex,acceptance_reference='constructed-private-test-acceptance',validate_acceptance=test_acceptance,artifacts_base=tmp_path)
+        install=store.retain_private_installation_intent(tid,**intent_kw)
+        assert not install['replayed'] and not install['plan']['installed'] and len(auth_checks)==2
+        assert store.retain_private_installation_intent(tid,**intent_kw)['replayed']
+        def revoked(*a):raise PermissionError('test acceptance revoked')
+        with pytest.raises(PermissionError):store.retain_private_installation_intent(tid,**(intent_kw|{'validate_acceptance':revoked}))
+        with store._postgres.transaction() as conn:
+            auth=conn.execute('SELECT * FROM closed_revision_install_events WHERE installation_id=%s',(intent_kw['installation_id'],)).fetchone()
+        ev={'manifest_sha256':md,'anchor_sha256':'a'*64}
+        pending=store.append_private_installation_event(tid,installation_id=intent_kw['installation_id'],expected_previous_sha256=auth['event_sha256'],
+            state='promotion_pending',evidence=ev,read_current_evidence=lambda:ev)
+        with pytest.raises(ValueError,match='CAS changed'):
+            store.append_private_installation_event(tid,installation_id=intent_kw['installation_id'],expected_previous_sha256=auth['event_sha256'],
+                state='files_promoted',evidence=ev,read_current_evidence=lambda:ev)
+        with pytest.raises(ValueError,match='concrete database activation'):
+            store.append_private_installation_event(tid,installation_id=intent_kw['installation_id'],expected_previous_sha256=pending['event_sha256'],state='installed',evidence=ev)
+        with pytest.raises(Exception):
+            with store._postgres.transaction() as conn:conn.execute('UPDATE closed_revision_installations SET payload=payload WHERE installation_id=%s',(intent_kw['installation_id'],))
+        with pytest.raises(Exception):
+            with store._postgres.transaction() as conn:
+                conn.execute('SET LOCAL ROLE authenticated');conn.execute('SELECT * FROM closed_revision_installations').fetchall()
+
         with pytest.raises(ValueError,match='current staged journal'):
             store.retain_revision_installation_review(tid,lineage_id=lid,expected_staged_event_sha256='f'*64,artifacts_base=tmp_path)
 
