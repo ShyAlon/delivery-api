@@ -29,6 +29,10 @@ def _identity(fd):
 
 
 
+def _content_stamp(info):
+    return info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns
+
+
 def read_fresh_inputs(store,capability,root,*,artifacts_base):
     """No client path, global baseline, inferred greenfield or contract restamp.
 
@@ -39,7 +43,7 @@ def read_fresh_inputs(store,capability,root,*,artifacts_base):
     root=Path(root)
     if root!=session_root(artifacts_base,capability.scope,capability.session_id):
         raise TenantAccessDenied('producer input root differs from owned session')
-    result={}
+    result={};evidence=[]
     root_fd=_open_directory(root)
     try:
         for key,directory,filename in (('intent','interview','intent_model.json'),('conops','interview','conops.json'),('baseline','spec','system-baseline.json')):
@@ -52,17 +56,29 @@ def read_fresh_inputs(store,capability,root,*,artifacts_base):
                         raise ValueError('bounded regular producer input file required')
                     with os.fdopen(fd,'rb',closefd=False) as stream:data=stream.read(MAX_DOCUMENT_BYTES+1)
                     if len(data)>MAX_DOCUMENT_BYTES:raise ValueError('producer input grew beyond bound')
+                    if _content_stamp(os.fstat(fd))!=_content_stamp(info):
+                        raise TenantAccessDenied('producer input content changed during read')
                     value=json.loads(data)
                     if not isinstance(value,dict):raise ValueError('producer input document object required')
                     # A changed namespace cannot be accepted as the original input.
                     check_fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root_fd)
                     try:
                         current=os.stat(filename,dir_fd=check_fd,follow_symlinks=False)
-                        if _identity(check_fd)!=_identity(parent_fd) or (current.st_dev,current.st_ino)!=(info.st_dev,info.st_ino):
+                        if _identity(check_fd)!=_identity(parent_fd) or _content_stamp(current)!=_content_stamp(info):
                             raise TenantAccessDenied('producer input namespace changed during read')
                     finally:os.close(check_fd)
+                    evidence.append((directory,filename,_identity(parent_fd),_content_stamp(info)))
                     result[key]=value
                 finally:os.close(fd)
+            finally:os.close(parent_fd)
+        # Recheck earlier documents after later reads. Metadata checks detect
+        # observed mutation; they do not make the source files an atomic snapshot.
+        for directory,filename,parent_identity,stamp in evidence:
+            parent_fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root_fd)
+            try:
+                current=os.stat(filename,dir_fd=parent_fd,follow_symlinks=False)
+                if _identity(parent_fd)!=parent_identity or _content_stamp(current)!=stamp:
+                    raise TenantAccessDenied('producer inputs changed across snapshot read')
             finally:os.close(parent_fd)
         check_root=_open_directory(root)
         try:

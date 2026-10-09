@@ -73,3 +73,33 @@ def test_final_file_swap_uses_pinned_fd_but_rejects_changed_identity(tmp_path,mo
         return info
     monkeypatch.setattr(module.os,'fstat',replace)
     with pytest.raises(TenantAccessDenied):read_fresh_inputs(None,cap,root,artifacts_base=tmp_path)
+
+
+@pytest.mark.parametrize('when',['during_read','later_document'])
+def test_same_inode_content_change_cannot_supply_mixed_input_snapshot(tmp_path,monkeypatch,when):
+    import os
+    from delivery_api import producer_inputs as module
+    cap,root,paths=setup(tmp_path);before_inode=paths[0].stat().st_ino;changed=[]
+    original_open=os.open;original_fdopen=os.fdopen
+    def mutate():
+        with paths[0].open('r+b') as file:file.write(b'{"mutate":"same-inode"}');file.truncate()
+        assert paths[0].stat().st_ino==before_inode
+        changed.append(True)
+    if when=='during_read':
+        class Reader:
+            def __init__(self,stream):self.stream=stream
+            def __enter__(self):return self
+            def __exit__(self,*args):self.stream.close()
+            def read(self,size):
+                answer=self.stream.read(size)
+                if not changed:mutate()
+                return answer
+        monkeypatch.setattr(module.os,'fdopen',lambda *args,**kwargs:Reader(original_fdopen(*args,**kwargs)))
+    else:
+        def open_later(path,flags,*args,**kwargs):
+            if path=='conops.json' and not changed:mutate()
+            return original_open(path,flags,*args,**kwargs)
+        monkeypatch.setattr(module.os,'open',open_later)
+    with pytest.raises(TenantAccessDenied,match='content changed|snapshot read'):
+        read_fresh_inputs(None,cap,root,artifacts_base=tmp_path)
+    assert changed and not (root/'spec'/'checkpoints.sqlite').exists()
