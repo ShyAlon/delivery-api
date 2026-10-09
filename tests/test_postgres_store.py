@@ -768,7 +768,7 @@ def test_source_change_during_concrete_stage_validation_leaves_only_prepared_eve
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
 
 
-@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion'])
+@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes'])
 def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch,coordinated):
     source_path=os.getenv("DELIVERY_TEST_SPEC_SOURCE")
     if source_path:monkeypatch.syspath_prepend(source_path)
@@ -839,6 +839,21 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                     conn.execute('SET LOCAL ROLE authenticated');conn.execute('SELECT * FROM closed_revision_acceptances').fetchall()
             with pytest.raises(Exception):
                 with conn.transaction():conn.execute('UPDATE closed_revision_acceptances SET decision=decision WHERE acceptance_id=%s',(receipt['acceptance_reference'],))
+        if coordinated=='ask_changes':
+            kw=dict(lineage_id=lid,expected_staged_event_sha256=staged['event_sha256'],review_sha256=installation_review['review_sha256'],change_request='Keep New Verbatim Guidance',extra_cost_acknowledged=True,artifacts_base=tmp_path)
+            for invalid in ({'extra_cost_acknowledged':False},{'change_request':''},{'review_sha256':'f'*64}):
+                with pytest.raises(ValueError):store.prepare_private_revision_changes(tid,**(kw|invalid))
+            changed=store.prepare_private_revision_changes(tid,**kw)
+            assert changed['same_phase_review_required'] and not changed['installed'] and not changed['dispatch_started']
+            assert changed['options']['phase']=='srs' and 'Keep New Verbatim Guidance' in changed['options']['change_request']
+            assert o['change_request'] in changed['options']['change_request'] and changed['options']['source_checkpoint_id']==o['source_checkpoint_id']
+            assert store.task(tid)==before and not (dest/'execution-generation.json').exists()
+            submitted=store.decision_draft(tid,'revision-changes:'+lid,installation_review['review_sha256'],changed['submission_id'])
+            assert submitted['change_request']=='Keep New Verbatim Guidance'
+            with pytest.raises(ValueError,match='superseded'):store.record_private_revision_acceptance(tid,**acceptance_kw)
+            with pytest.raises(TenantAccessDenied,match='revoked'):
+                store.verify_private_revision_acceptance(installation_review['review'],installation_review['review_sha256'],receipt['acceptance_reference'])
+            return
         auth_checks=[]
         def test_acceptance(review,sha,reference):
             assert review==installation_review['review'] and sha==installation_review['review_sha256']

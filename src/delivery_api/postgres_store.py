@@ -580,6 +580,44 @@ class PostgresStore(SQLiteStore):
             return {'installation_id':installation_id,'event_sha256':event['event_sha256'],'installed':True,'dispatch_started':False,
                 'approved_phase':phase,'next_phase':later[0] if later else None,'continuation_prepared':True}
 
+    def prepare_private_revision_changes(self,task_id,*,lineage_id,expected_staged_event_sha256,review_sha256,change_request,extra_cost_acknowledged,artifacts_base):
+        """Retain same-phase edit submission and fresh original-source preflight.
+
+        No queue/provider call, install or replacement of reviewed bytes. Exact
+        original guidance and new guidance are combined explicitly, so rejecting
+        this proposal cannot silently discard the first requested change.
+        """
+        if (not isinstance(change_request,str) or not change_request.strip() or len(change_request)>20000
+            or extra_cost_acknowledged is not True):raise ValueError('change guidance and explicit extra cost acknowledgement required')
+        from .gate_revision import save_closed_revision,closed_revision_preflight
+        from .closed_revision_job import _options
+        with self._task_operation_guard('task.rerun'):
+            current=self.retain_revision_installation_review(task_id,lineage_id=lineage_id,
+                expected_staged_event_sha256=expected_staged_event_sha256,artifacts_base=artifacts_base)
+            if current['review_sha256']!=review_sha256:raise ValueError('submitted review is stale')
+            if self._db.execute('SELECT 1 FROM decision_drafts WHERE task_id=? AND wait_id=? AND revision=? LIMIT 1',(task_id,'revision-changes:'+lineage_id,review_sha256)).fetchone():
+                raise ValueError('review superseded by further changes')
+            scope=current_scope()
+            if scope.session_id is None or not self.auth_session_active():raise TenantAccessDenied('active owner submission required')
+            lineage=self._db.execute('SELECT * FROM closed_revision_lineage_plans WHERE lineage_id=? AND task_id=?',(lineage_id,task_id)).fetchone()
+            intent=self._db.execute('SELECT * FROM closed_revision_restart_intents WHERE intent_id=?',(lineage['intent_id'],)).fetchone()
+            original=json.loads(intent['payload'])['options']
+            combined='Original Requested Change:\n'+original['change_request']+'\n\nFurther Requested Change After Reviewing The Regenerated Result:\n'+change_request
+            if len(combined)>20000:raise ValueError('combined original and further guidance exceeds supported limit')
+            saved=save_closed_revision(self,task_id,original['gate_key'],original['review_revision'],combined)
+            fresh=closed_revision_preflight(self,task_id,original['gate_key'],original['review_revision'],saved['draft_id'],artifact_snapshot=original['artifact_evidence'])
+            options=_options(original|{'draft_id':saved['draft_id'],'preflight_digest':fresh['review_digest'],
+                'change_request':combined,'extra_cost_acknowledged':True})
+            payload={'review_sha256':review_sha256,'decision':'edit','change_request':change_request,
+                'original_change_request':original['change_request'],'extra_cost_acknowledged':True,'options':options,
+                'same_phase_review_required':True,'installed':False,'dispatch_started':False}
+            submission=self.save_decision_draft(task_id,'revision-changes:'+lineage_id,review_sha256,payload)
+            # Rejecting a reviewed result revokes any previous receipt for it.
+            receipts=self._db.execute('SELECT acceptance_id FROM closed_revision_acceptances WHERE lineage_id=? AND review_sha256=?',(lineage_id,review_sha256)).fetchall()
+            for receipt in receipts:self.revoke_private_revision_acceptance(task_id,acceptance_reference=receipt['acceptance_id'])
+            return {'submission_id':submission,'review_sha256':review_sha256,'options':options,
+                'same_phase_review_required':True,'installed':False,'dispatch_started':False}
+
     def record_private_revision_acceptance(self,task_id,*,lineage_id,expected_staged_event_sha256,review_sha256,decision,extra_cost_acknowledged,artifacts_base):
         """Private future authenticated submission seam, not wired to any route.
 
@@ -593,6 +631,8 @@ class PostgresStore(SQLiteStore):
             current=self.retain_revision_installation_review(task_id,lineage_id=lineage_id,
                 expected_staged_event_sha256=expected_staged_event_sha256,artifacts_base=artifacts_base)
             if current['review_sha256']!=review_sha256:raise ValueError('submitted review is stale')
+            if self._db.execute('SELECT 1 FROM decision_drafts WHERE task_id=? AND wait_id=? AND revision=? LIMIT 1',(task_id,'revision-changes:'+lineage_id,review_sha256)).fetchone():
+                raise ValueError('review superseded by further changes')
             scope=current_scope()
             if scope.session_id is None or not self.auth_session_active():raise TenantAccessDenied('active authenticated owner submission required')
             prior=self._db.execute('SELECT * FROM closed_revision_acceptances WHERE lineage_id=? AND review_sha256=? AND auth_session_id=?',
@@ -626,6 +666,8 @@ class PostgresStore(SQLiteStore):
         if json.loads(row['payload'])!=expected:raise ValueError('durable acceptance payload differs')
         if self._db.execute('SELECT 1 FROM closed_revision_acceptance_revocations WHERE acceptance_id=?',(acceptance_reference,)).fetchone():
             raise TenantAccessDenied('private acceptance revoked')
+        if self._db.execute('SELECT 1 FROM decision_drafts WHERE task_id=? AND wait_id=? AND revision=? LIMIT 1',(row['task_id'],'revision-changes:'+row['lineage_id'],review_sha256)).fetchone():
+            raise ValueError('review superseded by further changes')
         held=self.decision_review(row['task_id'],'revision-install:'+row['lineage_id'],review_sha256)
         if held!=review:raise ValueError('acceptance review is not retained')
         return True
