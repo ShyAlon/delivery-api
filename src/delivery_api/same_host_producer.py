@@ -43,7 +43,11 @@ class SameHostProducerWorker:
                 for directory,dirs,files in os.walk(root,followlinks=False):
                     if any((Path(directory)/name).is_symlink() for name in dirs+files):
                         raise TenantAccessDenied('session contains an unsafe symlink')
-            fence=StopFence(root/'interview'/'stop-request.json')
+            fence=StopFence(root/'interview'/'stop-request.json',execution_anchor=capability.execution_anchor)
+            if capability.execution_anchor is not None:
+                from vmodel_contracts.execution_anchor import read_execution_anchor
+                if read_execution_anchor(root,expected=capability.execution_anchor)['document_sha256']!=capability.anchor_sha256:
+                    raise TenantAccessDenied('installed anchor bytes differ from database')
             if fence.generation!=capability.generation or fence.requested:
                 raise TenantAccessDenied('producer stop generation mismatch')
             gateway=self.gateway_factory(capability,job_id)
@@ -106,7 +110,17 @@ class SameHostProducerWorker:
         # Resolve the exact marker and lock siblings before accessing them.
         for path in (marker,marker.with_suffix('.marker-lock'),marker.with_suffix('.writer-lock')):
             if path.resolve()!=path:raise TenantAccessDenied('unsafe stop control path')
-        fence=StopFence(marker)
+        anchor=None
+        if job['generation']>1:
+            installed=self.store.installed_execution_anchor(job['session_id'])
+            if not installed:raise TenantAccessDenied('original installed stopped binding required')
+            anchor=installed['anchor']
+            if anchor.task_id!=job['task_id'] or anchor.generation!=job['generation']:
+                raise TenantAccessDenied('stopped installed lineage differs from original job')
+            from vmodel_contracts.execution_anchor import read_execution_anchor
+            if read_execution_anchor(root,expected=anchor)['document_sha256']!=installed['anchor_sha256']:
+                raise TenantAccessDenied('stopped installed anchor bytes changed')
+        fence=StopFence(marker,execution_anchor=anchor)
         if not fence.requested or fence.generation!=task['generation']:
             raise TenantAccessDenied('durable stopped generation required')
         try:fence.confirm_quiescent_after_recovery(no_live_worker=True)

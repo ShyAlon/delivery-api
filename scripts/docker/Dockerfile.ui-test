@@ -2,8 +2,22 @@
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 REQUI_RE_DIST=1 DELIVERY_DATABASE_URL=sqlite:////tmp/fake-ui.db PLAYWRIGHT_BROWSERS_PATH=/opt/browser
 WORKDIR /app
-COPY wheels/ /wheels/
-COPY constraints.txt wheel-sha256.txt /app/
-RUN sha256sum --check /app/wheel-sha256.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/*.whl playwright==1.62.0 && pip check && python -m playwright install --with-deps chromium
-COPY source-manifest.json ui-smoke.py ui-fixtures.py host-preview.py /app/
-CMD ["python", "/app/ui-smoke.py"]
+COPY constraints.txt /app/
+RUN pip install --no-cache-dir -c /app/constraints.txt playwright==1.62.0 && python -m playwright install --with-deps chromium
+COPY wheels/vmodel_contracts-*.whl /wheels/
+COPY wheel-sha256-contracts.txt /app/
+RUN sha256sum --check /app/wheel-sha256-contracts.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/vmodel_contracts-*.whl
+COPY wheels/interview_engine-*.whl /wheels/
+COPY wheel-sha256-engine.txt /app/
+RUN sha256sum --check /app/wheel-sha256-engine.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/interview_engine-*.whl
+COPY wheels/spec_generator-*.whl /wheels/
+COPY wheel-sha256-generator.txt /app/
+RUN sha256sum --check /app/wheel-sha256-generator.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/spec_generator-*.whl
+COPY wheels/delivery_api-*.whl /wheels/
+COPY wheel-sha256-delivery.txt /app/
+RUN sha256sum --check /app/wheel-sha256-delivery.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/delivery_api-*.whl
+COPY wheel-sha256.txt /app/
+RUN sha256sum --check /app/wheel-sha256.txt && pip check
+COPY source-manifest.json ui-smoke.py ui-fixtures.py host-preview.py acceptance-smoke.py /app/
+COPY private-ui/ /app/private-ui/
+CMD ["sh", "-c", "python /app/ui-smoke.py && python /app/acceptance-smoke.py"]

@@ -9,7 +9,7 @@ from .producer_inputs import _open_directory,_identity,_content_stamp,MAX_DOCUME
 from .tenancy import session_root,TenantAccessDenied
 
 
-def read_staged_revision_manifest(store,capability,*,artifacts_base,lineage,lineage_sha256,manifest_sha256,expected_documents=None,expected_upstream_sha256=None):
+def read_staged_revision_manifest(store,capability,*,artifacts_base,lineage,lineage_sha256,manifest_sha256,expected_documents=None,expected_upstream_sha256=None,promoted=False):
     capability.validate(store)
     if not isinstance(lineage,dict) or hashlib.sha256(json.dumps(lineage,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=lineage_sha256:
         raise ValueError('exact held lineage digest required')
@@ -26,6 +26,8 @@ def read_staged_revision_manifest(store,capability,*,artifacts_base,lineage,line
         raise ValueError('fresh implemented execution staging required')
     if not isinstance(manifest_sha256,str) or not re.fullmatch('[a-f0-9]{64}',manifest_sha256):raise ValueError('exact reviewed staged manifest digest required')
     root=session_root(Path(artifacts_base),capability.scope,capability.session_id)/'spec'/'revision-proposals'/pid/'staged'/sid
+    if promoted is True:root=session_root(Path(artifacts_base),capability.scope,sid)
+    elif promoted is not False:raise ValueError('exact private promoted reader mode required')
     parent=_open_directory(root);records=[]
     try:
         def read(relative,limit):
@@ -90,7 +92,7 @@ def read_staged_revision_manifest(store,capability,*,artifacts_base,lineage,line
     finally:os.close(parent)
 
 
-def read_validated_staged_receipt(store,capability,*,artifacts_base,lineage,lineage_sha256,manifest_sha256,options):
+def read_validated_staged_receipt(store,capability,*,artifacts_base,lineage,lineage_sha256,manifest_sha256,options,promoted=False):
     """Compose pinned bytes, exact SQLite gate and typed semantic readback.
 
     Caller derives lineage/options from immutable held records and owns writer
@@ -105,13 +107,14 @@ def read_validated_staged_receipt(store,capability,*,artifacts_base,lineage,line
         or options['artifact_evidence']!=lineage.get('approved_source_artifact_evidence')):
         raise ValueError('staged options differ from held lineage')
     arguments=dict(store=store,capability=capability,artifacts_base=artifacts_base,lineage=lineage,
-        lineage_sha256=lineage_sha256,manifest_sha256=manifest_sha256)
+        lineage_sha256=lineage_sha256,manifest_sha256=manifest_sha256,promoted=promoted)
     before=read_staged_revision_manifest(**arguments)
     root=session_root(Path(artifacts_base),capability.scope,capability.session_id)
     source=read_closed_checkpoint(root/'spec'/'checkpoints.sqlite',session_id=capability.session_id,
         expected_checkpoint_id=lineage['source_checkpoint_id'])
     validate_cloud_revision_conops(source,lineage['semantic_session_id'])
     staged_path=root/'spec'/'revision-proposals'/lineage['proposal_id']/'staged'/lineage['execution_session_id']/'spec'/'checkpoints.sqlite'
+    if promoted is True:staged_path=session_root(Path(artifacts_base),capability.scope,lineage['execution_session_id'])/'spec'/'checkpoints.sqlite'
     staged=read_closed_checkpoint(staged_path,session_id=lineage['execution_session_id'],
         expected_checkpoint_id=before['checkpoint_id'],expected_review_phase=lineage['phase'])
     validate_staged_lineage_state(source=source,staged_state=staged,lineage=lineage,change_request=options['change_request'])
@@ -138,6 +141,10 @@ def read_validated_staged_receipt(store,capability,*,artifacts_base,lineage,line
 
 
 def read_approved_upstream_bytes(root,*,expected_documents):
+    return {name:hashlib.sha256(raw).hexdigest() for name,raw in read_approved_upstream_documents(root,expected_documents=expected_documents).items()}
+
+
+def read_approved_upstream_documents(root,*,expected_documents):
     """Read exact original bytes matching approved checkpoint values, no healing.
 
     Caller supplies authorized canonical root and typed source checkpoint values.
@@ -147,7 +154,7 @@ def read_approved_upstream_bytes(root,*,expected_documents):
     allowed={'interview/intent_model.json','interview/conops.json','spec/needs.json','spec/system-baseline.json','spec/srs.json'}
     if not isinstance(expected_documents,dict) or not expected_documents or not set(expected_documents)<=allowed:
         raise ValueError('canonical approved upstream inventory required')
-    parent=_open_directory(root);records=[];digests={}
+    parent=_open_directory(root);records=[];documents={}
     try:
         for name,value in expected_documents.items():
             directory,filename=name.split('/');dfd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
@@ -164,7 +171,7 @@ def read_approved_upstream_bytes(root,*,expected_documents):
                     if _content_stamp(os.stat(filename,dir_fd=dfd,follow_symlinks=False))!=_content_stamp(before):
                         raise TenantAccessDenied('approved upstream namespace changed')
                     records.append((directory,filename,_identity(dfd),_content_stamp(before)))
-                    digests[name]=hashlib.sha256(raw).hexdigest()
+                    documents[name]=raw
                 finally:os.close(fd)
             finally:os.close(dfd)
         current=_open_directory(root)
@@ -177,7 +184,7 @@ def read_approved_upstream_bytes(root,*,expected_documents):
                         raise TenantAccessDenied('approved upstream inventory changed across readback')
                 finally:os.close(dfd)
         finally:os.close(current)
-        return digests
+        return documents
     finally:os.close(parent)
 
 

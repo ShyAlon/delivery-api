@@ -1,0 +1,105 @@
+"""Hermetic private HTML only. No app/public route or live install call."""
+from pathlib import Path
+import pytest
+from playwright.sync_api import sync_playwright
+
+
+def test_private_acceptance_founder_inputs_and_mobile_pixels(tmp_path):
+    html=Path(__file__).parents[1]/'scripts/private-ui/revision-acceptance.html'
+    with sync_playwright() as p:
+        browser=p.chromium.launch(headless=True)
+        page=browser.new_page(viewport={'width':1100,'height':1050})
+        page.goto(html.as_uri())
+        assert page.locator('[value=approve]').is_checked() and page.locator('#edit-fields').is_hidden()
+        assert page.locator('details[open]').count()==0
+        page.locator('[value=edit]').check();page.locator('#continue').click()
+        assert page.locator('#errors button').count()==2 and page.locator('#change').evaluate('(el)=>el===document.activeElement')
+        page.locator('#change').fill('Keep My Submitted Offline Guidance')
+        page.locator('#save').click();page.wait_for_function("document.querySelector('#draft-status').textContent.startsWith('Draft Saved')")
+        assert page.locator('#change').input_value()=='Keep My Submitted Offline Guidance'
+        page.reload();assert page.locator('#change').input_value()=='Keep My Submitted Offline Guidance'
+        page.locator('[value=edit]').check();page.locator('#ack').check()
+        page.evaluate('revisionPreview.failNext()');page.locator('#continue').click()
+        page.wait_for_function("document.querySelector('#status').textContent.includes('Could Not Be Saved')")
+        assert page.locator('#change').input_value()=='Keep My Submitted Offline Guidance' and page.locator('#continue').is_enabled()
+        page.screenshot(path='/tmp/revision-acceptance-desktop.png',full_page=True)
+        page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/tmp/revision-acceptance-mobile.png',full_page=True)
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        page.locator('#continue').click();page.wait_for_selector('.submitted-current')
+        assert page.locator('h1').inner_text()=='Review Regenerated Requirements'
+        assert page.locator('[value=approve]').is_checked() and not page.locator('#ack').is_checked()
+        page.locator('#ack').check();page.locator('#continue').click()
+        page.wait_for_function("document.querySelector('h1').textContent==='Review Regenerated Architecture'")
+        assert page.locator('.submitted-current').inner_text()=='Keep My Submitted Offline Guidance'
+        assert page.locator('[value=approve]').is_checked() and not page.locator('#ack').is_checked()
+        assert '4.20 Credits' in page.locator('#cost').inner_text()
+        browser.close()
+
+
+def test_typed_current_review_binding_rejects_stale_outcome_and_locks_inputs():
+    from test_revision_acceptance_view import basis
+    from delivery_api.revision_acceptance_view import revision_acceptance_view
+    artifact,review=basis()
+    view=revision_acceptance_view(**review,artifact=artifact,spent_credits=7.5)
+    html=Path(__file__).parents[1]/'scripts/private-ui/revision-acceptance.html'
+    with sync_playwright() as p:
+        browser=p.chromium.launch(headless=True)
+        page=browser.new_page(viewport={'width':1100,'height':1050});page.goto(html.as_uri())
+        page.evaluate('''review=>{window.bound=window.createRevisionAcceptance({root:document.querySelector('#page'),review,adapter:{async saveDraft(){},submit(input){window.sent=input;return new Promise(resolve=>window.resolveSubmission=resolve)}}})}''',view)
+        assert artifact['functional'][0]['statement'] in page.locator('#page').inner_text()
+        assert '7.50 Credits' in page.locator('#cost').inner_text()
+        page.locator('[value=edit]').check();page.locator('#change').fill('Keep Bound Guidance');page.locator('#ack').check();page.locator('#continue').click()
+        assert page.locator('#change').is_disabled() and page.locator('#ack').is_disabled()
+        assert page.evaluate('window.sent.review_sha256')==review['review_sha256']
+        page.evaluate("window.resolveSubmission({review_sha256:'f'.repeat(64),complete:true})")
+        page.wait_for_function("document.querySelector('#status').textContent.includes('Review Changed')")
+        assert page.locator('#change').input_value()=='Keep Bound Guidance' and page.locator('#continue').is_enabled()
+        assert page.locator('h1').inner_text()=='Review Regenerated Requirements'
+        page.screenshot(path='/tmp/revision-acceptance-bound-desktop.png',full_page=True)
+        page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/tmp/revision-acceptance-bound-mobile.png',full_page=True)
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        browser.close()
+
+
+@pytest.mark.parametrize('pending',['installation','regeneration'])
+def test_pending_private_backend_receipt_keeps_guidance_without_false_advance(pending):
+    html=Path(__file__).parents[1]/'scripts/private-ui/revision-acceptance.html'
+    with sync_playwright() as p:
+        browser=p.chromium.launch(headless=True);page=browser.new_page()
+        page.goto(html.as_uri())
+        page.evaluate('''pending=>{const review={binding:{review_sha256:'a'.repeat(64)},view:{phase_title:'Requirements',next_phase_title:'Architecture',decision:'Review This Result',artifact_rows:[{title:'Offline Status',description:'Show Offline Updates'}],spent_credits:4.2,extra_cost_warning:'Extra Cost',choices:[{value:'approve',effect:'Accepts This Result'},{value:'edit',effect:'Regenerates Same Phase'}]}};window.pendingReview=window.createRevisionAcceptance({root:document.querySelector('#page'),review,adapter:{async saveDraft(){},async submit(input){return {review_sha256:input.review_sha256,pending}}}})}''',pending)
+        page.locator('[value=edit]').check();page.locator('#change').fill('Keep Pending Guidance');page.locator('#ack').check();page.locator('#continue').click()
+        page.wait_for_function("document.querySelector('#status').textContent.includes('Waiting For')")
+        assert page.locator('h1').inner_text()=='Review Regenerated Requirements'
+        assert page.locator('.submitted-current').inner_text()=='Keep Pending Guidance'
+        assert page.locator('#continue').is_disabled()
+        browser.close()
+
+
+def assert_same_phase_refresh(old_review,fresh_review,pending_result):
+    """Used by real Postgres lifecycle: renderer receives the actual new review."""
+    html=Path(__file__).parents[1]/'scripts/private-ui/revision-acceptance.html'
+    with sync_playwright() as p:
+        browser=p.chromium.launch(headless=True)
+        page=browser.new_page(viewport={'width':1100,'height':1050});page.goto(html.as_uri())
+        page.evaluate("""data=>{window.receipts=data;window.samePhase=window.createRevisionAcceptance({root:document.querySelector('#page'),review:data.old_review,adapter:{async saveDraft(){},async submit(input){window.receivedInput=input;return data.pending_result}}})}""",
+            dict(old_review=old_review,pending_result=pending_result))
+        page.locator('[value=edit]').check();page.locator('#change').fill('Keep New Verbatim Guidance')
+        page.locator('#ack').check();page.locator('#continue').click()
+        page.wait_for_function("document.querySelector('#status').textContent.includes('Waiting For')")
+        assert page.locator('#continue').is_disabled()
+        assert page.evaluate('window.receivedInput.review_sha256')==old_review['binding']['review_sha256']
+        page.evaluate('review=>window.samePhase.refresh(review)',fresh_review)
+        assert page.locator('h1').inner_text()=='Review Regenerated Requirements'
+        assert page.locator('.submitted-current').inner_text()=='Keep New Verbatim Guidance'
+        assert 'Same Phase Regenerated With Submitted Offline Guidance' in page.locator('#page').inner_text()
+        assert page.locator('[value=approve]').is_checked() and not page.locator('#ack').is_checked()
+        assert page.locator('#continue').is_enabled()
+        page.locator('#ack').check();page.locator('#continue').click()
+        page.wait_for_function("document.querySelector('#status').textContent.includes('Review Changed')")
+        assert page.evaluate('window.receivedInput.review_sha256')==fresh_review['binding']['review_sha256']
+        page.screenshot(path='/tmp/revision-same-phase-desktop.png',full_page=True)
+        page.set_viewport_size({'width':390,'height':844})
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        page.screenshot(path='/tmp/revision-same-phase-mobile.png',full_page=True)
+        browser.close()

@@ -32,8 +32,21 @@ def validate_context(context):
     docker = (context / 'Dockerfile').read_text()
     # Keep this explicit contract tied to the Docker install command, not dev
     # extras or pip freeze from a working development environment.
-    if 'pip install --no-cache-dir -c /app/constraints.txt /wheels/*.whl playwright==1.62.0' not in docker:
-        raise ValueError('Docker dependency command changed; update clean verifier')
+    legacy='pip install --no-cache-dir -c /app/constraints.txt /wheels/*.whl playwright==1.62.0' in docker
+    if not legacy:
+        packages=('vmodel_contracts','interview_engine','spec_generator','delivery_api')
+        roles=('contracts','engine','generator','delivery')
+        expected=['RUN pip install --no-cache-dir -c /app/constraints.txt playwright==1.62.0 && python -m playwright install --with-deps chromium']
+        for package,role in zip(packages,roles):
+            selected=[w for w in wheels if w.name.startswith(package+'-')]
+            if len(selected)!=1:raise ValueError('exact named repo wheel required')
+            wheel=selected[0]
+            if (context/('wheel-sha256-'+role+'.txt')).read_text()!=manifest[wheel.name]['sha256']+'  /wheels/'+wheel.name+'\n':
+                raise ValueError('per-repo Docker hashes differ from source manifest')
+            expected.append('RUN sha256sum --check /app/wheel-sha256-'+role+'.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/'+package+'-*.whl')
+        expected.append('RUN sha256sum --check /app/wheel-sha256.txt && pip check')
+        if [line for line in docker.splitlines() if line.startswith('RUN ')]!=expected:
+            raise ValueError('Docker layered dependency command changed; update clean verifier')
     return context, wheels
 
 
@@ -55,8 +68,15 @@ def verify(context, *, browser_path=None):
         env = clean_environment(root)
         command = [str(python), '-m', 'pip']
         subprocess.run(command + ['list', '--format=freeze'], check=True, cwd=root, env=env)
-        subprocess.run(command + ['install', '--no-cache-dir', '-c', str(context / 'constraints.txt'),
-                                  *map(str, wheels), 'playwright==1.62.0'], check=True, cwd=root, env=env)
+        install=command + ['install', '--no-cache-dir', '-c', str(context / 'constraints.txt')]
+        docker=(context/'Dockerfile').read_text()
+        if 'wheel-sha256-contracts.txt' in docker:
+            subprocess.run(install+['playwright==1.62.0'],check=True,cwd=root,env=env)
+            for package in ('vmodel_contracts','interview_engine','spec_generator','delivery_api'):
+                wheel=next(w for w in wheels if w.name.startswith(package+'-'))
+                subprocess.run(install+[str(wheel)],check=True,cwd=root,env=env)
+        else:
+            subprocess.run(install+list(map(str,wheels))+['playwright==1.62.0'],check=True,cwd=root,env=env)
         subprocess.run(command + ['check'], check=True, cwd=root, env=env)
         if browser_path is None:
             subprocess.run([str(python), '-m', 'playwright', 'install', 'chromium'], check=True, cwd=root, env=env)
@@ -66,6 +86,8 @@ def verify(context, *, browser_path=None):
                 raise ValueError('explicit installed browser directory required')
             env['PLAYWRIGHT_BROWSERS_PATH'] = str(browser_path)
         subprocess.run([str(python), str(context / 'ui-smoke.py')], check=True, cwd=root, env=env)
+        if (context/'acceptance-smoke.py').is_file():
+            subprocess.run([str(python), str(context/'acceptance-smoke.py')],check=True,cwd=root,env=env)
     print(json.dumps({'clean_installed_wheel_ui_smoke': 'passed', 'docker_executed': False,
                       'system_site_packages': False, 'dev_extras': False}))
 
