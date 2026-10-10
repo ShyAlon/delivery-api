@@ -104,9 +104,12 @@ def validate(destination):
     return {'ready_for_dry_preflight':True,'run_started':False,'credentials_reported':False,'bindings_verified_live':False,'launch_authorized':False}
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('action',choices=('create','validate','fetch-model-data','init-env','import-config','apply-model-data','review-config','compile-config','create-env'));p.add_argument('directory',type=Path);p.add_argument('--model',help='Explicit model from current vendor table; no default');p.add_argument('--band',choices=('peak','off_peak'));p.add_argument('--context-tokens',type=int);p.add_argument('--confirm',help='Exact review hash from review-config');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('action',choices=('create','validate','fetch-model-data','init-env','import-config','apply-model-data','review-config','compile-config','create-env','diagnose-import'));p.add_argument('directory',type=Path);p.add_argument('--model',help='Explicit model from current vendor table; no default');p.add_argument('--band',choices=('peak','off_peak'));p.add_argument('--context-tokens',type=int);p.add_argument('--confirm',help='Exact review hash from review-config');a=p.parse_args()
     try:
-        if a.action=='fetch-model-data':
+        if a.action=='diagnose-import':
+            from config_diagnostics import diagnose
+            result=diagnose(a.directory)
+        elif a.action=='fetch-model-data':
             if not a.model:raise ValueError('explicit model choice required')
             from model_data import propose
             result=propose(a.directory,a.model)
@@ -114,10 +117,29 @@ if __name__=='__main__':
             from single_config import create_single,template,import_legacy,apply_proposal,review,compile_config
             if a.action=='create-env':result=create_single(a.directory)
             elif a.action=='init-env':result=template(a.directory)
-            elif a.action=='import-config':result=import_legacy(a.directory)
+            elif a.action=='import-config':
+                from config_diagnostics import diagnose
+                diagnostic=diagnose(a.directory)
+                if not diagnostic['import_ready']:
+                    print(json.dumps(diagnostic));raise SystemExit(1)
+                result=import_legacy(a.directory)
             elif a.action=='apply-model-data':result=apply_proposal(a.directory,a.band,a.context_tokens)
             elif a.action=='review-config':result=review(a.directory,a.confirm)
             else:result=compile_config(a.directory)
         else:result=scaffold(a.directory) if a.action=='create' else validate(a.directory)
         print(json.dumps(result))
-    except Exception:raise SystemExit('Scaffold action failed closed. Check private templates or current vendor documentation manually; executable config unchanged by fetch, no run started.') from None
+    except Exception as error:
+        # Arbitrary exception strings can contain local credentials/config fragments.
+        detail={'action':a.action,'checked':'private configuration/action prerequisites','expected':'complete valid schema, secure files and explicit arguments','found':type(error).__name__+'; details suppressed to protect private values','where':str(a.directory),'next':'For import use diagnose-import. Inspect listed private files locally, never paste keys or raw configs.','run_started':False,'action_completed':False}
+        # Only exact literal messages declared in our own code are safe to show.
+        import ast
+        known=set()
+        for module in ('single_config.py','model_data.py','isolation.py'):
+            tree=ast.parse((Path(__file__).parent/module).read_text())
+            for node in ast.walk(tree):
+                if isinstance(node,ast.Raise) and isinstance(node.exc,ast.Call) and node.exc.args and isinstance(node.exc.args[0],ast.Constant) and isinstance(node.exc.args[0].value,str):known.add(node.exc.args[0].value)
+        if type(error) is ValueError and str(error) in known:
+            detail.update(expected=str(error),found='requirement not met; private values suppressed',where=str(a.directory/'private/.env') if a.action in ('review-config','compile-config','apply-model-data') else str(a.directory))
+        if isinstance(error,FileExistsError):detail.update(checked='fresh output destination',expected='new file/snapshot; never overwrite',found='destination already exists; preserve and inspect it',next='For import, inspect existing private/.env. Do not delete a filled source or run evidence.')
+        if isinstance(error,ModuleNotFoundError):detail.update(checked='local Python dependency',expected='delivery-api wheel/environment installed for review/compile',found='required module unavailable; module name suppressed',next='Use the delivery-api .venv; diagnose-import/create/fetch need no provider keys.')
+        print(json.dumps(detail));raise SystemExit(1) from None
