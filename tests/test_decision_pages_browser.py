@@ -1,4 +1,7 @@
 """Browser contracts for typed ConOps pages; no model calls or user accounts."""
+import tempfile
+from pathlib import Path as _ScreenshotPath
+SCREENSHOTS = _ScreenshotPath(tempfile.mkdtemp(prefix='delivery-browser-evidence-'))
 import json,os,socket,subprocess,sys,time
 from pathlib import Path
 import pytest
@@ -474,11 +477,11 @@ def test_gate_render_failure_stays_explained_after_checklist_refresh(page):
  expect(p.locator('#decision-checklist')).to_contain_text('architecture.json could not be shown')
  expect(p.locator('[data-action=approve]')).to_have_attribute('aria-describedby','decision-checklist')
  p.locator('#decision-checklist button').first.click()
- p.screenshot(path='/downloads/gate-evidence-blocker-desktop.png',full_page=True)
+ p.screenshot(path=str(SCREENSHOTS/'gate-evidence-blocker-desktop.png'),full_page=True)
  p.set_viewport_size({'width':390,'height':844})
  assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
  p.locator('#decision-checklist').scroll_into_view_if_needed()
- p.screenshot(path='/downloads/gate-evidence-blocker-mobile.png',full_page=True)
+ p.screenshot(path=str(SCREENSHOTS/'gate-evidence-blocker-mobile.png'),full_page=True)
 
 
 def test_saved_stack_choice_checklist_explains_stale_evidence(page):
@@ -524,10 +527,10 @@ def test_required_next_model_has_checklist_blocker_and_jump(page):
  expect(p.locator('#decision-checklist')).to_contain_text('Ready to continue')
  p.locator('select[name=next_model]').select_option('')
  expect(p.locator('[data-action=approve]')).to_be_disabled()
- p.screenshot(path='/downloads/gate-required-model-desktop.png')
+ p.screenshot(path=str(SCREENSHOTS/'gate-required-model-desktop.png'))
  p.set_viewport_size({'width':390,'height':844})
  p.locator('#decision-checklist').scroll_into_view_if_needed()
- p.screenshot(path='/downloads/gate-required-model-mobile.png')
+ p.screenshot(path=str(SCREENSHOTS/'gate-required-model-mobile.png'))
 
 
 def test_gate_checklist_jump_reveals_collapsed_target_and_moves_focus(page):
@@ -547,13 +550,13 @@ def test_gate_checklist_jump_reveals_collapsed_target_and_moves_focus(page):
  expect(panel.locator('textarea[name=stack-text-0]')).to_be_visible()
  expect(panel.locator('textarea[name=stack-text-0]')).to_be_focused()
  p.wait_for_timeout(500)
- p.screenshot(path='/downloads/gate-checklist-jump-desktop.png')
+ p.screenshot(path=str(SCREENSHOTS/'gate-checklist-jump-desktop.png'))
  p.set_viewport_size({'width':390,'height':844})
  p.locator('#decision-checklist').scroll_into_view_if_needed()
  p.locator('#decision-checklist [data-jump="#stack-panel"]').click()
  p.wait_for_timeout(500)
  expect(panel.locator('textarea[name=stack-text-0]')).to_be_in_viewport()
- p.screenshot(path='/downloads/gate-checklist-jump-mobile.png')
+ p.screenshot(path=str(SCREENSHOTS/'gate-checklist-jump-mobile.png'))
 
 
 def test_concept_shared_checklist_missing_choice_reason_and_jump(page):
@@ -571,11 +574,11 @@ def test_concept_shared_checklist_missing_choice_reason_and_jump(page):
  p.locator('textarea[name=rationale]').fill('')
  expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled()
  p.locator('#decision-checklist').scroll_into_view_if_needed()
- p.screenshot(path='/downloads/concept-checklist-desktop.png')
+ p.screenshot(path=str(SCREENSHOTS/'concept-checklist-desktop.png'))
  p.set_viewport_size({'width':390,'height':844})
  p.locator('#decision-checklist').scroll_into_view_if_needed()
  assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
- p.screenshot(path='/downloads/concept-checklist-mobile.png')
+ p.screenshot(path=str(SCREENSHOTS/'concept-checklist-mobile.png'))
  assert not state['posts']
 
 
@@ -603,10 +606,10 @@ def test_closed_phase_change_draft_explains_regeneration_cost_without_commit(pag
  assert len(posts)==1 and posts[0]['path'].endswith('/revision-drafts')
  assert posts[0]['body']['edited_text']=='Use offline-first storage throughout the document'
  p.reload();expect(p.locator('#closedrevisiontext')).to_have_value(posts[0]['body']['edited_text'])
- panel.scroll_into_view_if_needed();p.screenshot(path='/downloads/closed-regeneration-cost-desktop.png')
+ panel.scroll_into_view_if_needed();p.screenshot(path=str(SCREENSHOTS/'closed-regeneration-cost-desktop.png'))
  p.set_viewport_size({'width':390,'height':844});panel.scroll_into_view_if_needed();p.wait_for_timeout(250)
  assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
- p.screenshot(path='/downloads/closed-regeneration-cost-mobile.png')
+ p.screenshot(path=str(SCREENSHOTS/'closed-regeneration-cost-mobile.png'))
 
 
 def test_flagged_inputs_shared_checklist_explains_missing_choice_and_jump(page):
@@ -619,13 +622,13 @@ def test_flagged_inputs_shared_checklist_explains_missing_choice_and_jump(page):
  expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_enabled()
  expect(p.locator('#decision-checklist')).to_contain_text('Ready to continue')
  assert not held
- p.screenshot(path='/downloads/findings-checklist-desktop.png')
+ p.screenshot(path=str(SCREENSHOTS/'findings-checklist-desktop.png'))
  p.set_viewport_size({'width':390,'height':844})
  p.locator('#decision-checklist').scroll_into_view_if_needed()
  assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
  p.wait_for_timeout(600)
  expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_in_viewport()
- p.screenshot(path='/downloads/findings-checklist-mobile.png')
+ p.screenshot(path=str(SCREENSHOTS/'findings-checklist-mobile.png'))
 
 
 def test_final_approval_shared_checklist_answer_reason_draft_and_leave_open(page):
@@ -648,10 +651,10 @@ def test_final_approval_shared_checklist_answer_reason_draft_and_leave_open(page
  p.locator('[data-founder-answer]').fill('Calm palette')
  p.locator('#decision-checklist').scroll_into_view_if_needed()
  expect(p.get_by_role('button',name='Continue',exact=True)).to_be_disabled()
- p.screenshot(path='/downloads/final-approval-checklist-desktop.png')
+ p.screenshot(path=str(SCREENSHOTS/'final-approval-checklist-desktop.png'))
  p.set_viewport_size({'width':390,'height':844});p.locator('#decision-checklist').scroll_into_view_if_needed();p.wait_for_timeout(250)
  assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
- p.screenshot(path='/downloads/final-approval-checklist-mobile.png')
+ p.screenshot(path=str(SCREENSHOTS/'final-approval-checklist-mobile.png'))
  p.locator('[data-founder-group] label.pill',has_text='Leave Open').click()
  expect(p.get_by_role('button',name='Continue',exact=True)).to_be_enabled()
  assert not state['posts']

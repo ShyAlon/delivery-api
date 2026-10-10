@@ -1,5 +1,8 @@
 """Actual InterviewApplication with hermetic models and attended typed responses."""
 import json
+import pytest
+pytest.importorskip("interview_engine.application")
+pytestmark=pytest.mark.engine_integration
 from langchain_core.messages import AIMessage
 from vmodel_contracts.interactive import InputResponse,InputKind
 from interview_engine.application import InterviewApplication

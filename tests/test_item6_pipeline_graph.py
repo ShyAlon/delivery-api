@@ -3,6 +3,7 @@ import importlib.util,sys,json
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
+pytestmark=pytest.mark.producer_integration
 ROOT=Path(__file__).parents[1]
 sys.path.insert(0,str(ROOT/'scripts/item6'))
 from pipeline_executor import PrivatePipeline
