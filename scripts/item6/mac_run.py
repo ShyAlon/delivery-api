@@ -135,7 +135,5 @@ if __name__=='__main__':
     try:main()
     except Exception as error:
         from delivery_api.attempt_ledger import AdmissionDenied
-        if isinstance(error,AdmissionDenied) and str(error)=='owner protective ceiling requires verified complete-request token bound adapter':
-            print(json.dumps({'checked':'owner protective context ceiling vs provider request bound','expected':'verified complete-request bound adapter','found':'owner 128000 ceiling is not a verified vendor-wide/request bound','where':'generated context.json','network_started':False,'database_changed':False,'run_started':False}),file=sys.stderr)
         print('Item6 stopped. Preserve private local evidence. No blind retry, launch, or cleanup.',file=sys.stderr)
         raise SystemExit(1) from None

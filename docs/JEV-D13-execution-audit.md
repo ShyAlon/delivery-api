@@ -41,7 +41,8 @@ This is an engineering checkpoint, not real-run authorization.
   fence lifting has occurred.
 
 ## Tests
-Affected Postgres/task/producer/item6 suites: 246 passed, 3 skipped.
+Latest current-main-pinned Postgres/producer/ledger/item6/balance/model suite: 206 passed, 3 skipped.
+Earlier task-inclusive affected suite: 246 passed, 3 skipped.
 Restricted payment repository suite: 29 passed.
 Additional model/source-drift/admission suite: 86 passed.
 Exact retail/snapshot/meter tests and narrow final config tests passed separately.
