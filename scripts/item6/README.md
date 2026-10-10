@@ -385,3 +385,19 @@ image still works because the generated schema is unchanged. Each launcher keeps
 the named container, so inspect/preserve its state; never blindly retry an unknown
 paid run. The existing separate explicit go rule remains. No new Docker image,
 provider request or payment is made by importing/reviewing/compiling config.
+
+## Diagnose import without exposing values
+
+```sh
+python3 scripts/item6/scaffold.py diagnose-import runs/item6-run-01
+```
+
+Read-only, no dependency install or credentials output. It batches failures using
+`checked`, `expected`, `found`, `where`: absent files, permissions, JSON syntax
+line/column, required schema fields, existing `.env`, source-identity/model/role
+conflicts and wrong rate/scale types. Arbitrary config values/unknown key names
+are suppressed so accidentally misplaced keys never enter the report. Share only
+this bounded diagnostic, never raw configs/.env or credential-bearing tracebacks.
+Import runs the same preflight before writing. Other actions print bounded errors
+instead of the old generic catch-all. Preserve existing source/evidence while
+fixing the specific reported field locally.
