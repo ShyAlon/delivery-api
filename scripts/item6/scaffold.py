@@ -104,12 +104,20 @@ def validate(destination):
     return {'ready_for_dry_preflight':True,'run_started':False,'credentials_reported':False,'bindings_verified_live':False,'launch_authorized':False}
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('action',choices=('create','validate','fetch-model-data'));p.add_argument('directory',type=Path);p.add_argument('--model',help='Explicit model from current vendor table; no default');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('action',choices=('create','validate','fetch-model-data','init-env','import-config','apply-model-data','review-config','compile-config','create-env'));p.add_argument('directory',type=Path);p.add_argument('--model',help='Explicit model from current vendor table; no default');p.add_argument('--band',choices=('peak','off_peak'));p.add_argument('--context-tokens',type=int);p.add_argument('--confirm',help='Exact review hash from review-config');a=p.parse_args()
     try:
         if a.action=='fetch-model-data':
             if not a.model:raise ValueError('explicit model choice required')
             from model_data import propose
             result=propose(a.directory,a.model)
+        elif a.action in ('init-env','import-config','apply-model-data','review-config','compile-config','create-env'):
+            from single_config import create_single,template,import_legacy,apply_proposal,review,compile_config
+            if a.action=='create-env':result=create_single(a.directory)
+            elif a.action=='init-env':result=template(a.directory)
+            elif a.action=='import-config':result=import_legacy(a.directory)
+            elif a.action=='apply-model-data':result=apply_proposal(a.directory,a.band,a.context_tokens)
+            elif a.action=='review-config':result=review(a.directory,a.confirm)
+            else:result=compile_config(a.directory)
         else:result=scaffold(a.directory) if a.action=='create' else validate(a.directory)
         print(json.dumps(result))
     except Exception:raise SystemExit('Scaffold action failed closed. Check private templates or current vendor documentation manually; executable config unchanged by fetch, no run started.') from None

@@ -133,9 +133,16 @@ def propose(directory,model,fetcher=fetch):
     directory=Path(directory).absolute()
     if any(p.is_symlink() for p in (directory,*directory.parents)) or not directory.is_dir() or directory.stat().st_mode&0o077:raise ValueError('existing private non-symlink scaffold required')
     private=directory/'private';run=private/'run.json';evidence=directory/'evidence'
-    if private.is_symlink() or private.stat().st_mode&0o077 or run.is_symlink() or run.stat().st_mode&0o077:raise ValueError('private config required')
+    if private.is_symlink() or private.stat().st_mode&0o077:raise ValueError('private config required')
     if evidence.is_symlink() or evidence.stat().st_mode&0o077 or any(evidence.iterdir()):raise ValueError('empty fresh evidence required')
-    config=json.loads(run.read_text())
+    if run.exists():
+        if run.is_symlink() or run.stat().st_mode&0o077:raise ValueError('private config required')
+        config=json.loads(run.read_text())
+    else:
+        # No .env or credential contents needed for fixed public-doc fetching.
+        from single_config import root_check
+        root_check(directory)
+        config={'model':model}
     if config['model'] not in ('REPLACE_LOCALLY',model):raise ValueError('existing different model must not be replaced')
     target=private/'deepseek-proposal.json'
     if target.exists() or target.is_symlink():raise ValueError('proposal already exists; review it instead of overwriting')
