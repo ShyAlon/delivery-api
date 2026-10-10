@@ -3,6 +3,7 @@ from pathlib import Path
 import hashlib,json,sqlite3
 from types import SimpleNamespace
 import pytest
+pytestmark=pytest.mark.producer_integration
 from delivery_api.tenancy import TenantScope,session_root
 from delivery_api.revision_stage_evidence import read_validated_staged_receipt
 

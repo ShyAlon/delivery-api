@@ -34,6 +34,7 @@ def test_foreign_or_different_artifact_cannot_be_shown_as_reviewed():
         revision_acceptance_view(**review,artifact=artifact|{'session_id':'foreign'},spent_credits=4.2)
 
 
+@pytest.mark.producer_integration
 def test_architecture_view_has_typed_components_and_foreign_source_rejects():
     from vmodel_contracts.architecture import ArchitectureOverview
     artifact=ArchitectureOverview.model_validate({'session_id':'s','stack_entries':[],
