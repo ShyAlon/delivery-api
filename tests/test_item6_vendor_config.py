@@ -64,3 +64,18 @@ def test_live_source_change_does_not_reprice_or_pass(tmp_path):
     assert verify_current_sources(snapshot,lambda u:P if u==PRICING_URL else A)
     with pytest.raises(ValueError,match='changed'):
         verify_current_sources(snapshot,lambda u:(P+'changed') if u==PRICING_URL else A)
+
+
+def test_d13_runtime_dry_preflight_contacts_nothing(tmp_path):
+    import subprocess
+    root=filled(tmp_path);r=review(root);review(root,r['review_hash']);out=compile_config(root)
+    runtime=Path(out['generated_runtime']);config=json.loads((runtime/'run.json').read_text())
+    # Adapt only mount paths for local Linux dry test. Database/provider never run.
+    config.update(root=str(root/'evidence/run'),service_file=str(runtime/'services.conf'),catalog_file=str(runtime/'catalog.json'),context_file=str(runtime/'context.json'),paypal_secret_file=str(runtime/'credentials.json'))
+    target=root/'private/local-dry.json';target.write_text(json.dumps(config));target.chmod(0o600)
+    identity=json.loads((root/'run-id.json').read_text())
+    result=subprocess.run([sys.executable,str(Path(__file__).parents[1]/'scripts/item6/mac_run.py'),'--config',str(target),'--run-id',identity['run_id']],capture_output=True,text=True)
+    assert result.returncode==0,result.stderr
+    receipt=json.loads(result.stdout)
+    assert receipt['network_started'] is False and receipt['database_changed'] is False
+    assert receipt['launch_authorized'] is False
