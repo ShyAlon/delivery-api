@@ -260,3 +260,128 @@ remove that exited dry container manually to free the name. Never remove a parti
 paid-run container just to retry. Only Shy's explicit go for the prepared run ID
 allows adding `--go` and that exact ID to the launcher. The command-line argument
 is an accident-prevention guard, not an approval source. Keys and go remain manual.
+
+## Fetch DeepSeek documentation as a proposal (no keys)
+
+From the updated delivery-api checkout, choose an explicit model from the current
+vendor pricing/API pages, then:
+
+```sh
+python3 scripts/item6/scaffold.py fetch-model-data runs/item6-run-01 --model MODEL_FROM_CURRENT_VENDOR_DOCS
+```
+
+This reads only two fixed public documentation URLs, no credential file or API key.
+It writes mode-600 `private/deepseek-proposal.json`, with model/version, raw limit
+labels, exact API output limit, both peak/off-peak USD rates, exact integer expense
+conversions, source hashes and UTC fetch time. It prints those public fetched facts
+and where they came from. It refuses to overwrite a proposal or reuse existing
+run evidence. Redirects, changed table labels/spans/units, duplicate fields or
+API/pricing disagreement stop without a partial proposal. The vendor publishes
+HTML, not a stable pricing API; parsing is strict against the current documented
+shape. If it stops, use the linked vendor pages manually and do not guess.
+
+It does NOT overwrite `run.json`, `catalog.json` or `context.json`. The file contains
+`run_model_proposal`, `catalog_proposals` and `context_proposal` ready for review and
+copying, with `reviewed: false`. This keeps the original downloaded Docker image
+safe too: a new metadata flag alone would not block its old entry point, so
+executable templates remain unresolved. After reviewing, copy the chosen catalog
+array, context object and model into their existing files; preserve the proposal
+and mark its `reviewed` true to record your review. That flag is a record, not run
+permission, and no script treats it as spending approval.
+
+Human decisions remain explicit: numeric context limit (the table gives a shorthand
+such as 1M, not an exact integer), current source/version confirmation, the applicable
+pricing period, and your retail rates. Fill `price_version`/`bound_version` review
+placeholders. Retail input/output are null and never fetched. No model is selected
+automatically. Prices can change between fetch and the run; check before go.
+
+A fixed catalog cannot faithfully price calls across peak/off-peak transitions.
+The proposal preserves the full vendor rule, including holiday exceptions; it does
+not choose today's band or silently apply peak prices as confirmed expense. Use
+one reviewed applicable band only when the entire attended run stays in it; otherwise
+stop and add per-call effective pricing before running. Network/model compatibility
+and the actual run remain unproved by documentation fetching. Run the usual local
+validation/dry preflight after completing the files. No paid provider request,
+webhook request, database action or go happens here.
+
+## One human-edited `.env` (preferred)
+
+Keep `runs/` ignored in Git and check the ignore before entering credentials. All
+run directories remain private, fresh and separate from source commits. The
+legacy `create` command is kept for old workflows; new single-source runs use:
+
+```sh
+mkdir -p -m 700 runs
+python3 scripts/item6/scaffold.py create-env runs/item6-run-02
+```
+
+It creates only a generated run identity plus `private/.env` and empty evidence.
+The model is `deepseek-flash`, selected by Shy. A new directory is required. If you
+already filled the old files, do NOT create another run or retype keys:
+
+```sh
+python3 scripts/item6/scaffold.py import-config runs/item6-run-01
+```
+
+This creates `.env` once, reading existing private configs locally. Old files are
+preserved. Different DB names/models/repeated input prices, changed destinations,
+wrong roles or insecure files fail without choosing a winner. Existing `.env` is
+never overwritten. The previous schema did not record pricing bands, so the
+import leaves that value unresolved rather than infer it from a number.
+
+`.env` is the ONLY human-edit source. Every field appears once. The syntax is
+`NAME="string"`, `NAME=123` or `NAME=null`; use JSON escaping for strings. Do not
+source it into a shell. No interpolation, shell expressions, duplicate/unknown
+keys, JSON arrays or objects are accepted. Secrets stay mode 600 and are never
+printed. Model/DB repetition survives only in generated old-image compatibility
+files, never as a second human-edit source. The database/run identity is generated,
+not copied by hand. Price/bound version labels are derived hashes, not vendor API
+parameters you must fill.
+
+Fields with prices ending `USD_PER_MILLION` are quoted exact decimal USD strings,
+not per-token integers. Input cache-hit and cache-miss prices are separate.
+`CONTEXT_TOKENS`/`MAX_OUTPUT_TOKENS` are exact integer tokens. Retail fields ending
+`UNITS_PER_TOKEN` are integers in the account's fixed 1,000-units-per-credit scale:
+1 retail unit per token is 0.001 credits per token. These are your margin choices,
+not vendor prices. No retail rate or unresolved context number is guessed.
+`PRICE_SOURCE`/`CONTEXT_SOURCE` record the reviewed source URLs. `PRICING_BAND` is
+`"peak"` or `"off_peak"`, reviewed against the full vendor timing/holiday rule.
+A fixed catalog must not span both bands. This helper does not fix that run-time
+accounting limit or grant permission to start a run.
+
+The public-doc fetch creates the proposal as above. To generate a candidate `.env`
+from a reviewed band and your explicitly checked numeric context ceiling:
+
+```sh
+python3 scripts/item6/scaffold.py apply-model-data runs/item6-run-01 \
+  --band off_peak --context-tokens YOUR_REVIEWED_INTEGER
+```
+
+It writes a NEW `.env-proposal-*` file, preserves secrets/retail and keeps `.env`
+unchanged. Existing differing values are conflicts, not silently replaced. Inspect
+locally, then explicitly replace the source `.env` with that candidate if correct.
+Nothing treats that replacement as review or spending approval. Fill the remaining
+null values and use the two-step review:
+
+```sh
+python3 scripts/item6/scaffold.py review-config runs/item6-run-01
+python3 scripts/item6/scaffold.py review-config runs/item6-run-01 --confirm HASH_PRINTED_ABOVE
+python3 scripts/item6/scaffold.py compile-config runs/item6-run-01
+```
+
+Review shows only non-secret source values, source/unit/band conditions and a hash.
+Confirmation records your exact local choice. Any source edit, including credential
+changes, invalidates the compile receipt. It still does NOT grant run go, prove
+sandbox bindings live or establish authentic webhook evidence. The compiler checks
+all schema/scale/role/destination restrictions and generates a fresh mode-700
+runtime snapshot containing the old image's exact JSON/services schema. Generated
+files are mode 600. Existing files/snapshots/evidence are not overwritten or removed.
+
+Use ONLY the returned `dry_launcher`, with no arguments for dry preflight. It
+verifies the editable source and compiled file hashes before calling Docker, and
+mounts only the generated runtime snapshot + evidence. `.env`/repo never enter the
+container. Do not edit generated files; review/compile again instead. The original
+image still works because the generated schema is unchanged. Each launcher keeps
+the named container, so inspect/preserve its state; never blindly retry an unknown
+paid run. The existing separate explicit go rule remains. No new Docker image,
+provider request or payment is made by importing/reviewing/compiling config.
