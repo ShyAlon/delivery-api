@@ -204,3 +204,59 @@ After the actual clean Mac run, inspect `result.json`, all seven receipt files,
 the private ZIP and DB archive. Cleanup/consolidation follows only after Shy sees
 that run. Launch/Gate-Edit fence lift and real PayPal use remain separate decisions
 and checks. Never infer either from this test result.
+
+## Repeatable package automation (manual only)
+
+`item6-package.yml` is a separate manual-dispatch workflow, never a PR/push trigger.
+Choose four full lowercase 40-character source SHAs. Engine/generator/contracts
+have the previously pinned defaults; delivery must be chosen explicitly, and must
+contain the package builder. Inputs describe selected sources, not user approval.
+The job checks all four checkout HEADs, builds offline wheels using preinstalled
+build tools, verifies wheel hashes and ZIP readback, and uploads one
+`requi-item6-package.zip` artifact with seven-day retention. It does not build a
+Docker image, deploy, start a database, request payment or call a provider. Dependency
+and build-tool installation still downloads packages. This is an exact source
+snapshot, not a claim that arbitrary selected SHAs passed acceptance tests.
+
+Private sibling repos require `ITEM6_SOURCE_READ_TOKEN`, a fine-grained GitHub token
+with read-only Contents access to the four project repos, saved directly in the
+repository's Actions secrets. No personal token goes in chat or the artifact. The
+workflow fails before checkout if that prerequisite is missing, and checkout does
+not persist credentials. The artifact contains no run credentials/configuration.
+Dispatch is still an operator action; this change does not run the workflow.
+
+After extracting the ZIP, generate templates without installing any packages:
+
+```sh
+python3 item6/scaffold.py create /ABSOLUTE/NEW-RUN
+```
+
+It prints only the fresh run/database identifiers. A new directory is required;
+existing destinations and symlink parents are rejected. `private/` and `evidence/`
+are mode 700; files are mode 600. The shell launcher is mode 700. No database,
+Docker or network request starts. The private `webhook.example.json` is explicitly
+an example, not authentic evidence. Fill the other files locally using the rules
+above. Dashboard bindings, current rate/context sources and authentic captured
+webhook event/headers still need manual verification.
+
+```sh
+python3 item6/scaffold.py validate /ABSOLUTE/NEW-RUN
+```
+
+Validation needs the built delivery wheel and its dependencies installed (use the
+container instead when avoiding a host install). With remaining placeholders it
+prints only filenames, never values. Structural readiness is not live merchant,
+webhook or price verification, spending permission or runtime certification. It
+also rejects reused evidence, redirected paths/services, unexpected roles, changed
+run identity and insecure permissions. The actual container performs its own dry
+checks again.
+
+The generated `run.sh` uses only the private/evidence mounts and the fixed
+`requi-item6-test` image. Its default is dry, with no `--go`. It keeps a named
+container rather than auto-removing it. Inspect the dry result and mount access;
+Docker build and Mac mount behavior remain unproved by this automation. Before
+starting the separately approved real run, preserve/review the dry container and
+remove that exited dry container manually to free the name. Never remove a partial
+paid-run container just to retry. Only Shy's explicit go for the prepared run ID
+allows adding `--go` and that exact ID to the launcher. The command-line argument
+is an accident-prevention guard, not an approval source. Keys and go remain manual.
