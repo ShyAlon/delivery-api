@@ -1,4 +1,7 @@
 """Actual shipped ES module, controlled local fixture boundary, no payment network."""
+import tempfile
+from pathlib import Path as _ScreenshotPath
+SCREENSHOTS = _ScreenshotPath(tempfile.mkdtemp(prefix='delivery-browser-evidence-'))
 import functools,http.server,json,threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -35,17 +38,17 @@ def test_all_checkout_states_and_actual_layout(tmp_path,width):
   page.route('**/api/client-log',lambda r:r.fulfill(body='{}',content_type='application/json'))
   page.goto(origin+'/credits?view=choose&offer=credits-50');page.wait_for_selector('.purchase-offer')
   assert page.locator('.purchase-discount').all_text_contents()==['4% off!','8% off!','10% off!']
-  page.wait_for_timeout(240);page.screenshot(path=f'/downloads/checkout-choose-{width}.png',full_page=True)
+  page.wait_for_timeout(240);page.screenshot(path=str(SCREENSHOTS/f'checkout-choose-{width}.png'),full_page=True)
   page.locator('[data-review]').click();assert page.locator('h1').inner_text()=='Review Purchase'
   page.reload();page.wait_for_selector('[data-pay]');assert '$45.00 USD' in page.locator('[data-pay]').inner_text()
-  page.locator('[data-pay]').click();page.wait_for_selector('[aria-busy=true]');page.screenshot(path=f'/downloads/checkout-busy-{width}.png',full_page=True)
+  page.locator('[data-pay]').click();page.wait_for_selector('[aria-busy=true]');page.screenshot(path=str(SCREENSHOTS/f'checkout-busy-{width}.png'),full_page=True)
   assert page.locator('button').is_disabled();assert page.evaluate('calls.create')==1
   page.evaluate('releaseCreate()');page.wait_for_selector('[data-check]');assert page.locator('h1').inner_text()=='Payment Pending'
   assert "Don't pay again" in page.locator('#app').inner_text()
   for state in ('pending','cancelled','declined','unknown','success'):
    page.evaluate('(s)=>window.fixtureState=s',state);page.evaluate('purchase.purchasePage()');page.wait_for_function('(s)=>document.title.includes({pending:"Payment Pending",cancelled:"Checkout Cancelled",declined:"Payment Not Completed",unknown:"Payment Needs Review",success:"Credits Added"}[s])',arg=state)
    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-   page.wait_for_timeout(240);page.screenshot(path=f'/downloads/checkout-{state}-{width}.png',full_page=True)
+   page.wait_for_timeout(240);page.screenshot(path=str(SCREENSHOTS/f'checkout-{state}-{width}.png'),full_page=True)
   with page.expect_download() as download:page.locator('[data-receipt]').click()
   assert download.value.suggested_filename=='requi-receipt.txt'
   assert page.locator('a[href="/"]').inner_text()=='Continue to Tasks'
@@ -64,7 +67,7 @@ def test_closed_boundary_never_creates_payment_or_spoofs_success():
   assert page.locator('h1').inner_text()=='Add Credits' and 'Unavailable' in page.locator('.purchase-balance').inner_text()
   page.locator('[data-review]').click();assert page.locator('[data-pay]').is_disabled()
   assert 'Payments have not been enabled' in page.locator('#app').inner_text();assert not payments
-  page.wait_for_timeout(240);page.screenshot(path='/downloads/checkout-closed-boundary.png',full_page=True)
+  page.wait_for_timeout(240);page.screenshot(path=str(SCREENSHOTS/'checkout-closed-boundary.png'),full_page=True)
   browser.close()
 
 @pytest.mark.parametrize('width',[320,390,1249])
@@ -83,7 +86,7 @@ def test_actual_workspace_shell_identity_and_checkout_entry(width):
   assert page.locator('header a[href="/credits"]').inner_text()=='Add Credits'
   assert page.locator('.purchase-balance').inner_text()=='Balance Unavailable'
   assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-  page.wait_for_timeout(240);page.screenshot(path=f'/downloads/checkout-shell-{width}.png',full_page=True)
+  page.wait_for_timeout(240);page.screenshot(path=str(SCREENSHOTS/f'checkout-shell-{width}.png'),full_page=True)
   browser.close()
 
 def test_unknown_outcome_blocks_new_purchase_after_back_and_refresh():

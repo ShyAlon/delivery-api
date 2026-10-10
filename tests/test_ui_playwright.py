@@ -1,4 +1,7 @@
 """Browser-level contracts for the three task views and traceable rerun UX."""
+import tempfile
+from pathlib import Path as _ScreenshotPath
+SCREENSHOTS = _ScreenshotPath(tempfile.mkdtemp(prefix='delivery-browser-evidence-'))
 import json
 import os
 import socket
@@ -2087,4 +2090,4 @@ def test_closed_gate_can_save_revision_proposal_without_restarting(page,ui):
     expect(page.locator('#closedrevisionstatus')).to_contain_text('unchanged')
     assert sent==[{'review_revision':'gate:approved','edited_text':'Proposed new requirement wording'}]
     expect(page.locator('[data-action="approve"]')).to_be_disabled()
-    page.screenshot(path='/downloads/closed-gate-proposal-desktop.png',full_page=True)
+    page.screenshot(path=str(SCREENSHOTS/'closed-gate-proposal-desktop.png'),full_page=True)

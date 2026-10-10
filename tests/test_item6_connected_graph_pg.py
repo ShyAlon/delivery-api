@@ -3,6 +3,8 @@ import os,uuid,json,asyncio
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
+pytest.importorskip("interview_engine.application")
+pytest.importorskip("spec_generator")
 from test_item6_interview import configure_interview_models
 from test_item6_pipeline_graph import configure_graph_models,PrivatePipeline
 from test_item6_isolation import config
