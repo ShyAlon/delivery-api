@@ -1939,6 +1939,9 @@ def _task_cost(task_id:str)->dict:
     price events; model tokens recorded in the usage files but not yet covered by an
     event (the phase is still running) and all interview tokens are added at the token
     rate, so the total grows as calls land. Interview calls carry no process-time part."""
+    if hasattr(store,'task_retail_totals'):
+        exact=store.task_retail_totals(task_id)
+        if exact is not None:return exact
     from .pricing import usage_tokens,token_credits,credits_to_usd
     latest={}
     for event in store.events(task_id):

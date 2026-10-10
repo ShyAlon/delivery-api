@@ -12,6 +12,9 @@ SECRET={'PAYPAL_CLIENT_ID','PAYPAL_CLIENT_SECRET','DEEPSEEK_API_KEY'}
 FIELDS=SECRET|{'MODEL','SANDBOX_MERCHANT_ID','SANDBOX_WEBHOOK_ID','PRICE_SOURCE','CONTEXT_SOURCE','PRICING_BAND',
     'INPUT_CACHE_HIT_USD_PER_MILLION','INPUT_CACHE_MISS_USD_PER_MILLION','OUTPUT_USD_PER_MILLION',
     'CONTEXT_TOKENS','MAX_OUTPUT_TOKENS','RETAIL_INPUT_UNITS_PER_TOKEN','RETAIL_OUTPUT_UNITS_PER_TOKEN'}
+LEGACY_FIELDS=set(FIELDS)
+FIELDS=SECRET|{'MODEL','SANDBOX_MERCHANT_ID','SANDBOX_WEBHOOK_ID'}
+OPTIONAL_FIELDS={'PRICE_PER_TOKEN','PRICE_PER_10MS','USD_PER_CREDIT'}
 SCALE=10**12
 
 
@@ -35,7 +38,7 @@ def root_check(root):
 
 
 def write_env(path,data):
-    if set(data)!=FIELDS:raise ValueError('exact single-source fields required')
+    if not FIELDS<=set(data) or set(data)-(FIELDS|OPTIONAL_FIELDS|LEGACY_FIELDS):raise ValueError('exact single-source fields required')
     fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
     with os.fdopen(fd,'w') as f:
         f.write('# Only human-edited run configuration. JSON scalars; no shell expansion.\n# null means unresolved. Never source this file into a shell.\n')
@@ -49,12 +52,12 @@ def load_env(root):
     for line in raw.decode().splitlines():
         if not line.strip() or line.lstrip().startswith('#'):continue
         key,sep,value=line.partition('=')
-        if not sep or key not in FIELDS or key in values:raise ValueError('unknown or duplicate .env field')
+        if not sep or key not in FIELDS|OPTIONAL_FIELDS|LEGACY_FIELDS or key in values:raise ValueError('unknown or duplicate .env field')
         try:decoded=json.loads(value)
         except ValueError:raise ValueError('JSON scalar syntax required; no interpolation') from None
         if not isinstance(decoded,(str,int,type(None))) or isinstance(decoded,bool):raise ValueError('JSON string/integer/null required')
         values[key]=decoded
-    if set(values)!=FIELDS:raise ValueError('exact single-source fields required')
+    if not FIELDS<=set(values) or set(values)-(FIELDS|OPTIONAL_FIELDS|LEGACY_FIELDS):raise ValueError('exact single-source fields required')
     return values,hashlib.sha256(raw).hexdigest()
 
 
@@ -110,59 +113,23 @@ def import_legacy(root):
     return {'single_source':'private/.env','legacy_preserved':True,'unresolved_fields':sorted(k for k,v in data.items() if unresolved(v)),'reviewed':False,'secrets_printed':False,'run_started':False}
 
 
-def apply_proposal(root,band,context_tokens):
-    root,identity=root_check(root);data,_=load_env(root);proposal=private_json(root/'private/deepseek-proposal.json')
-    if proposal['model']!=data['MODEL'] or band not in ('peak','off_peak') or type(context_tokens) is not int or context_tokens<=0:raise ValueError('explicit matching model, pricing band and numeric context required')
-    rates=proposal['published_usd_per_million'][band]
-    fields={'INPUT_CACHE_HIT_USD_PER_MILLION':rates['cache_hit'],'INPUT_CACHE_MISS_USD_PER_MILLION':rates['cache_miss'],'OUTPUT_USD_PER_MILLION':rates['output'],
-        'CONTEXT_TOKENS':context_tokens,'MAX_OUTPUT_TOKENS':proposal['context_proposal']['maximum_output_tokens'],
-        'PRICE_SOURCE':proposal['sources'][0]['url'],'CONTEXT_SOURCE':proposal['context_proposal']['source'],'PRICING_BAND':band}
-    # Explicit preview first: never overwrite already filled differing values.
-    conflicts=sorted(k for k,v in fields.items() if not unresolved(data[k]) and data[k]!=v)
-    if conflicts:raise ValueError('existing reviewed fields conflict; inspect .env locally')
-    new=data|fields
-    target=root/'private'/('.env-proposal-'+uuid.uuid4().hex)
-    write_env(target,new)
-    return {'proposed_env_file':str(target),'reviewed':False,'existing_env_unchanged':True,'next':'Review the proposed .env locally, then replace private/.env explicitly and use review-config.','run_started':False}
+def apply_proposal(root,band=None,context_tokens=None):
+    raise ValueError('manual band/context application retired; use fetch-vendor-snapshot and migrate-d13')
 
 
 def build(root,data,identity):
-    missing=sorted(k for k,v in data.items() if unresolved(v))
-    if missing:raise ValueError('unresolved single-source fields')
-    safe_model_route('deepseek',data['MODEL'],True)
-    if data['MODEL']!='deepseek-flash' or data['PRICING_BAND'] not in ('peak','off_peak'):raise ValueError('selected model and explicit band required')
-    def rate(name):
-        value=data[name]
-        if not isinstance(value,str) or not re.fullmatch(r'\d+(?:\.\d{1,6})?',value):raise ValueError('exact USD per-million decimal required')
-        scaled=Decimal(value)*SCALE/1000000
-        if scaled!=int(scaled):raise ValueError('exact integer expense conversion required')
-        return int(scaled)
-    prices={'provider':'deepseek','model':data['MODEL'],'source':data['PRICE_SOURCE'],'expense_input':rate('INPUT_CACHE_MISS_USD_PER_MILLION'),
-        'expense_cache_hit':rate('INPUT_CACHE_HIT_USD_PER_MILLION'),'expense_cache_miss':rate('INPUT_CACHE_MISS_USD_PER_MILLION'),'expense_output':rate('OUTPUT_USD_PER_MILLION'),
-        'expense_units_per_usd':SCALE,'retail_units_per_credit':1000,'retail_input':data['RETAIL_INPUT_UNITS_PER_TOKEN'],'retail_output':data['RETAIL_OUTPUT_UNITS_PER_TOKEN'],
-        'usage_categories':['input_tokens','output_tokens','cache_hit_tokens','cache_miss_tokens']}
-    price_hash=hashlib.sha256(json.dumps(prices,sort_keys=True).encode()).hexdigest();prices['price_version']='reviewed-price-'+price_hash[:24]
-    context={'model':data['MODEL'],'context_tokens':data['CONTEXT_TOKENS'],'maximum_output_tokens':data['MAX_OUTPUT_TOKENS'],'source':data['CONTEXT_SOURCE']}
-    context_hash=hashlib.sha256(json.dumps(context,sort_keys=True).encode()).hexdigest();context['bound_version']='reviewed-bound-'+context_hash[:24]
-    from delivery_api.admission_catalog import catalog_from_environment,ReviewedContextCeiling
-    from delivery_api.launch_admission_policy import validate_launch_quote
-    from delivery_api.paypal_adapter import PayPalBinding
-    PayPalBinding(data['SANDBOX_MERCHANT_ID'],data['SANDBOX_WEBHOOK_ID'],False)
-    if any(not isinstance(data[k],str) or not data[k] for k in SECRET):raise ValueError('local credential fields required')
-    ceiling=ReviewedContextCeiling(**context)
-    catalog=catalog_from_environment({'VMODEL_REVIEWED_MODEL_PRICES':json.dumps([prices])},bounders={('serialized','deepseek',data['MODEL']):ceiling})
-    quote,_=catalog.resolve_serialized(stage='dry',provider='deepseek',model=data['MODEL'],serialized_request=json.dumps({'model':data['MODEL'],'max_tokens':1}).encode(),max_output_tokens=1);validate_launch_quote(quote)
-    run={'root':'/evidence/run','database_name':identity['database_name'],'database_host':'127.0.0.1','service_file':'/private/services.conf','admin_service':'item6-admin','tenant_service':'item6-tenant','payment_service':'item6-payment','model':data['MODEL'],'catalog_file':'/private/catalog.json','context_file':'/private/context.json','paypal_secret_file':'/private/credentials.json','verified_sandbox_merchant':data['SANDBOX_MERCHANT_ID'],'sandbox_webhook_id':data['SANDBOX_WEBHOOK_ID'],'operator_registry_version':'item6-local-'+identity['run_id'][:12]}
-    credentials={'client_id':data['PAYPAL_CLIENT_ID'],'client_secret':data['PAYPAL_CLIENT_SECRET'],'deepseek_api_key':data['DEEPSEEK_API_KEY']}
-    return {'catalog.json':[prices],'context.json':context,'run.json':run,'credentials.json':credentials}
+    from vendor_config import build_runtime
+    return build_runtime(root,data,identity)
 
 
 def review(root,confirm=None):
     root,identity=root_check(root);data,source_hash=load_env(root);build(root,data,identity)
     public={k:v for k,v in data.items() if k not in SECRET}
-    digest=hashlib.sha256(json.dumps({'values':public,'identity':identity},sort_keys=True).encode()).hexdigest()
+    runtime=build(root,data,identity)
+    snapshot_hash=hashlib.sha256(json.dumps(runtime['catalog.json'],sort_keys=True).encode()).hexdigest()
+    digest=hashlib.sha256(json.dumps({'values':public,'identity':identity,'snapshot_hash':snapshot_hash},sort_keys=True).encode()).hexdigest()
     if confirm is None:return {'review_hash':digest,'nonsecret_values':public,'credentials':'present, not displayed','reviewed':False,'run_started':False,
-        'review_conditions':['verify current vendor sources and numeric limits','entire run must stay in selected pricing band','review retail rate units/margin','sandbox bindings verified manually; authentic webhook still required']}
+        'review_conditions':['generated vendor source/hash/time snapshot reviewed once','existing optional retail defaults/overrides','128000 owner protective ceiling is not a vendor fact','sandbox bindings verified manually; authentic webhook still required','rebuilt D13 image required; verified request bound remains required']}
     if confirm!=digest:raise ValueError('exact current review hash required')
     target=root/'private'/('review-'+digest+'-'+source_hash[:16]+'.json')
     RunIsolation.write(target,{'review_hash':digest,'source_sha256':source_hash,'identity':identity,'confirmed_locally':True,'launch_authorized':False})

@@ -1152,6 +1152,14 @@ class PostgresStore(SQLiteStore):
         from .attempt_ledger import transition
         return transition(self,attempt_id,action,usage,require_prepaid=require_prepaid)
 
+    def task_retail_totals(self,task_id):
+        from .retail_ledger import task_totals
+        return task_totals(self,task_id)
+
+    def retail_compute_status(self,task_id):
+        rows=self._db.execute("SELECT r.state,count(*) AS count FROM retail_compute_segments r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=? GROUP BY r.state",(task_id,)).fetchall()
+        return {r['state']:r['count'] for r in rows}
+
     def begin_retail_compute(self,key,job_id,phase,rates):
         from .retail_ledger import begin_compute
         return begin_compute(self,key,job_id,phase,rates)

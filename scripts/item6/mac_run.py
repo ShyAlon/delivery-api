@@ -33,7 +33,7 @@ def main():
     if set(secrets)!={'client_id','client_secret','deepseek_api_key'}:raise ValueError('exact local credential fields required')
     safe_model_route('deepseek',config['model'],True)
     if not config['operator_registry_version']:raise ValueError('reviewed operator registry version required')
-    if not prices or any(row.get('retail_units_per_credit')!=1000 for row in prices):raise ValueError('exact 1000-unit prepaid scale required')
+    if not prices or any(row.get('retail_units_per_credit')!=10**9 for row in prices):raise ValueError('exact D13 1000000000-unit prepaid scale required')
     from delivery_api.admission_catalog import catalog_from_environment,ReviewedContextCeiling
     ceiling=ReviewedContextCeiling(**context)
     if ceiling.model!=config['model']:raise ValueError('exact reviewed effective model ceiling required')
@@ -85,7 +85,7 @@ def main():
             enabled=c.execute('SELECT subject FROM operator_principals WHERE enabled').fetchall()
             if enabled:raise ValueError('fresh disposable operator registry required')
             c.execute("INSERT INTO operator_principals(subject,registry_version,capabilities,enabled) VALUES(%s,%s,ARRAY['payments.read'],true)",(scope.owner_id,config['operator_registry_version']))
-            c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,0,1000,0)',(scope.owner_id,))
+            c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,0,1000000000,0)',(scope.owner_id,))
             c.execute('INSERT INTO admission_limits(owner_id,config_version,period_seconds,rate_window_seconds,concurrency_max) VALUES(%s,%s,86400,60,3)',(scope.owner_id,config['operator_registry_version']))
         return OperatorPrincipal(scope.owner_id,config['operator_registry_version'],frozenset({'payments.read'}))
     operator=OperatorAdapter(identity,store=store,read_reviewed_registry=provision_registry)
@@ -94,8 +94,10 @@ def main():
     repository=PaymentRepository(make_conninfo(service=config['payment_service']),binding.ledger_binding)
     def balance(scope):
         with admin() as c:return c.execute('SELECT balance_units FROM credit_accounts WHERE owner_id=%s',(scope.owner_id,)).fetchone()[0]
-    purchase=SandboxPurchaseAdapter(identity,repository=repository,processor=PayPalAdapter(transport,binding),approve=attended.paypal,webhook_receipt=attended.webhook,read_balance=balance)
-    def gateway(cap,job):return WorkerAdmissionGateway(store,job,resolve_serialized=catalog.resolve_serialized,measure_raw_usage=settlement_usage,require_prepaid=True)
+    purchase=SandboxPurchaseAdapter(identity,repository=repository,processor=PayPalAdapter(transport,binding),approve=attended.paypal,webhook_receipt=attended.webhook,read_balance=balance,units_per_credit=10**9)
+    from delivery_api.retail_ledger import rates_from_snapshot
+    retail_rates=rates_from_snapshot(prices[0]['retail_formula'])
+    def gateway(cap,job):return WorkerAdmissionGateway(store,job,resolve_serialized=catalog.resolve_serialized,measure_raw_usage=settlement_usage,require_prepaid=True,retail_rates=retail_rates)
     def progress(state,text):print(f'{datetime.datetime.now().astimezone().isoformat(timespec="seconds")} | {state} | {text}',flush=True)
     # Shared diagnostic table is explicit for this selected model. Cache-aware
     # source-of-truth accounting remains in the exact quoted raw-usage ledger.

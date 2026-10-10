@@ -51,6 +51,9 @@ class PipelineReceiptAdapter:
             if any(p['state'] not in ('done','approved') for p in task['phases']):raise ValueError('all durable phase states must be done')
             jobs=self.jobs(task_id)
             if not jobs or any(j['state']!='done' or j['task_id']!=task_id or str(j['owner_id'])!=cap.scope.owner_id or j['generation']!=cap.generation for j in jobs):raise ValueError('same-owner completed worker jobs required')
+            if hasattr(self.store,'retail_compute_status'):
+                compute=self.store.retail_compute_status(task_id)
+                if compute.get('pending') or compute.get('unresolved'):raise ValueError('compute accounting incomplete')
             usage=self.usage(task_id)
             if not usage or any(x['state']!='settled' or x['expense_actual'] is None or x['retail_actual'] is None or x['provider']!='deepseek' for x in usage):raise ValueError('settled actual DeepSeek usage required')
             models={u['model'] for u in usage}

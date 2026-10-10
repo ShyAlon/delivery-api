@@ -69,6 +69,9 @@ class RecoveryAdapter:
         with tenant_context(scope):
             task=self.store.task(tid)
             if not task or self.store.recoverable_worker_jobs():raise ValueError('unresolved owned jobs require review, never retry')
+            if hasattr(self.store,'retail_compute_status'):
+                compute=self.store.retail_compute_status(tid)
+                if compute.get('pending') or compute.get('unresolved'):raise ValueError('unknown compute accounting requires review')
             usage=self.evidence.usage(tid)
             if not usage or any(x['state']!='settled' for x in usage):raise ValueError('unknown provider attempts require review')
             jobs=self.evidence.jobs(tid)

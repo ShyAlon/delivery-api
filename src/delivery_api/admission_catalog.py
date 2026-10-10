@@ -139,6 +139,7 @@ class ReviewedContextCeiling:
     maximum_output_tokens:int
     source:str
     bound_version:str
+    protective_run_ceiling:bool=False
 
     def __post_init__(self):
         if not all(isinstance(x,str) and x for x in (self.model,self.source,self.bound_version)) or not _integer(self.context_tokens) or not self.context_tokens or not _integer(self.maximum_output_tokens) or not self.maximum_output_tokens:
@@ -153,5 +154,9 @@ class ReviewedContextCeiling:
         except (ValueError,TypeError,AttributeError) as exc:raise AdmissionDenied('context ceiling request identity/cap mismatch') from exc
         if not _integer(max_output_tokens) or not 0<max_output_tokens<=min(self.maximum_output_tokens,self.context_tokens):
             raise AdmissionDenied('provider output cap exceeds reviewed ceiling')
+        if self.protective_run_ceiling:
+            # Byte-count proof is only valid for verified byte-based tokenizer
+            # accounting and exact wire payload. Refuse unverified contracts.
+            raise AdmissionDenied('owner protective ceiling requires verified complete-request token bound adapter')
         # Do not subtract output cap: max output is not guaranteed to be used.
         return RequestBound(self.bound_version,self.context_tokens,max_output_tokens,serialized_request,True)

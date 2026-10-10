@@ -25,7 +25,7 @@ def post(store,*,key,job_id,phase,kind,input_tokens=0,output_tokens=0,determinis
         raise AdmissionDenied('token and compute contribution must be separate')
     owner_lock(store)
     job=store.worker_job(job_id)
-    if not job or str(job['owner_id'])!=current_scope().owner_id:
+    if not job or str(job['owner_id'])!=current_scope().owner_id or str(job['auth_session_id'])!=current_scope().session_id:
         raise AdmissionDenied('same-owner contribution job required')
     payload={'job':job_id,'phase':phase,'kind':kind,'input':input_tokens,'output':output_tokens,'ms':str(ms),'rates':rates.snapshot()}
     fingerprint=hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()
@@ -104,3 +104,13 @@ def finish_compute(store,key,deterministic_ms):
     contribution=post(store,key='compute:'+key,job_id=segment['job_id'],phase=segment['phase_key'],kind='compute',deterministic_ms=ms,rates=segment['rates'])
     store._db.execute("UPDATE retail_compute_segments SET state='settled',deterministic_ms=?,settled_at=? WHERE segment_key=?",(ms,time.time(),key))
     return contribution
+
+
+def task_totals(store,task_id):
+    rows=store._db.execute('SELECT r.* FROM retail_contributions r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=?',(task_id,)).fetchall()
+    if not rows:return None
+    credits=Decimal(0);usd=Decimal(0)
+    for row in rows:
+        value=row['exact_units']/UNITS_PER_CREDIT
+        credits+=value;usd+=value*rates_from_snapshot(row['rates']).usd_per_credit
+    return {'price':float(round(credits,6)),'price_usd':float(round(usd,6))}

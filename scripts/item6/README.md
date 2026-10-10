@@ -401,3 +401,34 @@ this bounded diagnostic, never raw configs/.env or credential-bearing tracebacks
 Import runs the same preflight before writing. Other actions print bounded errors
 instead of the old generic catch-all. Preserve existing source/evidence while
 fixing the specific reported field locally.
+
+
+## JEV-D13 accounting replacement (rebuilt image required)
+
+The legacy fixed band and integer retail setup below is superseded for new runs.
+Do not launch the pre-D13 image with a changed .env. Preserve the current run and
+all private files. `scaffold.py migrate-d13 RUN` writes a separate candidate, not
+an overwrite. It retains keys and sandbox bindings and removes copied provider
+fields. MODEL is an attended fixture/default only; product selection is per phase.
+PRICE_PER_TOKEN, PRICE_PER_10MS and USD_PER_CREDIT are optional overrides. Omitted
+values use the approved existing defaults; an invalid explicit value fails.
+
+`scaffold.py fetch-vendor-snapshot RUN --model deepseek-flash` fetches fixed public
+sources without paid requests, generates source/hash/time evidence, and never
+copies a rate or band into human .env. Review/compile bind the entire snapshot and
+resolved retail formula. Stale or changed snapshot/source stops new admissions.
+
+New accounting uses 1e9 units per credit, a once-only contribution ledger and a
+retained fractional-unit remainder. Provider reservations are safe ceilings, not
+confirmed charges. Uniform-band UTC intervals can settle using the frozen source;
+unknown holiday/boundary facts hold settlement. Compute excludes provider and
+founder waits. Failed measurement remains unresolved, never fabricated elapsed time.
+Historic immutable payment intents and quotes retain their original scales. Active
+account migration writes a separate receipt and refuses pending provider/payments.
+
+The owner approved a 128,000 protective context ceiling for this run. It is NOT a
+vendor exact maximum. The existing model-wide-ceiling adapter cannot use that
+setting as a proven per-request token bound. Until a verified complete-request
+adapter exists, dry preflight fails with a bound diagnostic and no provider/DB
+contact. This is intentionally not a ready-to-run package. No paid run starts
+without a later prepared-package review and explicit go.
