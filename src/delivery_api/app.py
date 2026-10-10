@@ -438,7 +438,7 @@ async def request_log(request, call_next):
         activity("http.error","API request returned an error",endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
     if request.url.path.startswith("/api/operator/"):
         response.headers["Cache-Control"]="no-store"
-    if request.url.path == "/" or request.url.path.startswith("/assets/") or request.url.path.startswith("/tasks/"):
+    if request.url.path in ("/","/credits") or request.url.path.startswith("/assets/") or request.url.path.startswith("/tasks/"):
         response.headers["Cache-Control"]="no-store, max-age=0"
     if response.status_code in (401,403):activity("access.blocked","Unauthorized or forbidden request",method=request.method,path=request.url.path,status=response.status_code,actor=who)
     return response
@@ -535,6 +535,9 @@ def logout(request: Request):
     if sid: store.delete_session(sid)
     from fastapi.responses import JSONResponse
     response=JSONResponse({"status":"signed_out"}); response.delete_cookie(config.SESSION_COOKIE,path="/"); return response
+
+@app.get("/credits",include_in_schema=False)
+def credits_page():return FileResponse(WEB_DIR / "index.html")
 
 @app.get("/about",include_in_schema=False)
 def about_page():return FileResponse(WEB_DIR / "index.html")
