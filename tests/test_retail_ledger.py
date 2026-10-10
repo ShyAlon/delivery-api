@@ -163,3 +163,22 @@ def test_compute_allocation_uses_call_phase_and_preserves_total(account):
         assert totals['needs']['credits']==Decimal('0.000013')
         assert totals['srs']['credits']==Decimal('0.000026')
         assert sum(x['credits'] for x in totals.values())==Decimal('0.000039')
+
+
+def test_estimate_overrun_bills_actual_once_and_holds_new_calls(account):
+    from test_provider_snapshot import fixture
+    from delivery_api.provider_snapshot import ProviderSnapshot
+    from datetime import datetime,timezone
+    import psycopg
+    s,tid,job=account;d=fixture();now=datetime.now(timezone.utc);d['fetched_at']=now.isoformat();v=ProviderSnapshot(d)
+    with psycopg.connect(DSN) as c:c.execute('UPDATE admission_limits SET expense_limit=NULL,attempt_expense_max=NULL WHERE owner_id=%s',(A.owner_id,))
+    q={'provider':'fake','model':'fixture','price_version':'fixture','bound_version':'fixture','input_max':1,'output_max':10,'expense_input':300000,'expense_cache_hit':6000,'expense_cache_miss':300000,'expense_output':1200000,'expense_units_per_usd':10**12,'retail_input':12500,'retail_output':12500,'retail_units_per_credit':UNITS_PER_CREDIT,'retail_formula':RetailRates.from_environment({}).snapshot(),'provider_evidence':v.quote_evidence(now),'estimate_policy':{'kind':'complete-wire-bytes-plus4096-v1','ceiling':128000,'input_estimate':1,'hard_output_cap':10,'verified_input_bound':False}}
+    with tenant_context(A):
+        a=s.reserve_provider_attempt(job,uuid.uuid4().hex,q,'estimate',require_prepaid=True)['attempt_id']
+        s.record_provider_balance_check(a,{'response':{'is_available':True,'balance_infos':[{'currency':'USD','total_balance':'1'}]},'observed_at':now.isoformat()})
+        s.transition_provider_attempt(a,'start',require_prepaid=True)
+        u={'input_tokens':3,'output_tokens':2,'cache_hit_tokens':0,'cache_miss_tokens':3}
+        result=s.transition_provider_attempt(a,'settle',u)
+        assert result['state']=='settled' and result['input_estimate_overrun'] is True and result['retail_actual']==62500
+        assert s.transition_provider_attempt(a,'settle',u)['retail_actual']==62500
+        with pytest.raises(AdmissionDenied,match='estimate'):s.reserve_provider_attempt(job,uuid.uuid4().hex,q,'later',require_prepaid=True)

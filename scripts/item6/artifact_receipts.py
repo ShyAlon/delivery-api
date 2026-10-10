@@ -55,7 +55,7 @@ class PipelineReceiptAdapter:
                 compute=self.store.retail_compute_status(task_id)
                 if compute.get('pending') or compute.get('unresolved'):raise ValueError('compute accounting incomplete')
             usage=self.usage(task_id)
-            if not usage or any(x['state']!='settled' or x['expense_actual'] is None or x['retail_actual'] is None or x['provider']!='deepseek' for x in usage):raise ValueError('settled actual DeepSeek usage required')
+            if not usage or any(x.get('input_estimate_overrun') or x['state']!='settled' or x['expense_actual'] is None or x['retail_actual'] is None or x['provider']!='deepseek' for x in usage):raise ValueError('settled actual DeepSeek usage required')
             models={u['model'] for u in usage}
             if len(models)!=1:raise ValueError('exact selected effective model required')
             if task['model_default']!='deepseek:'+next(iter(models)):raise ValueError('effective provider differs from selected model')

@@ -16,7 +16,10 @@ def _integer(value):
 def _quote(quote):
     keys={'provider','model','price_version','bound_version','input_max','output_max',
           'expense_input','expense_output','retail_input','retail_output'}
-    optional={'retail_units_per_credit','expense_cache_hit','expense_cache_miss','expense_units_per_usd','retail_formula','provider_evidence','retail_phase'}
+    optional={'retail_units_per_credit','expense_cache_hit','expense_cache_miss','expense_units_per_usd','retail_formula','provider_evidence','retail_phase','estimate_policy'}
+    if 'estimate_policy' in quote:
+        p=quote['estimate_policy']
+        if set(p)!={'kind','ceiling','input_estimate','hard_output_cap','verified_input_bound'} or p['kind']!='complete-wire-bytes-plus4096-v1' or p['verified_input_bound'] is not False or p['input_estimate']!=quote['input_max'] or p['hard_output_cap']!=quote['output_max'] or p['input_estimate']+p['hard_output_cap']>p['ceiling']:raise AdmissionDenied('explicit reviewed estimate policy required')
     if 'retail_phase' in quote and (not isinstance(quote['retail_phase'],str) or not quote['retail_phase']):raise AdmissionDenied('retail phase identity required')
     if 'provider_evidence' in quote:
         from .provider_snapshot import ProviderSnapshot
@@ -70,6 +73,7 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
         return existing
     now=time.time()
     rows=store._db.execute('SELECT * FROM provider_attempts WHERE owner_id=?',(owner,)).fetchall()
+    if any(r.get('input_estimate_overrun') for r in rows):raise AdmissionDenied('actual input exceeded estimate; new admission held for review')
     held=[r for r in rows if r['state'] in ('reserved','dispatched','uncertain')]
     if 'retail_formula' in quote and store._db.execute("SELECT 1 FROM retail_compute_segments r JOIN worker_jobs w ON r.job_id=w.job_id WHERE r.owner_id=? AND (r.state='unresolved' OR (r.state='pending' AND w.state<>'running')) LIMIT 1",(owner,)).fetchone():raise AdmissionDenied('unresolved compute accounting requires review')
     if any(r['state']=='uncertain' for r in held):raise AdmissionDenied('uncertain provider usage requires review')
@@ -98,6 +102,11 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
     row=store._db.execute('SELECT * FROM provider_attempts WHERE attempt_id=? FOR UPDATE',(attempt_id,)).fetchone()
     if not row:raise AdmissionDenied('owner attempt not found')
     if action=='start':
+        if 'estimate_policy' in row['quote']:
+            from .provider_balance import validate_balance
+            balance=row.get('provider_balance_evidence')
+            if not balance:raise AdmissionDenied('pre-call provider balance evidence required')
+            validate_balance({'response':balance['response'],'observed_at':balance['observed_at']},row['expense_reserved'],row['quote']['expense_units_per_usd'])
         if 'provider_evidence' in row['quote']:
             from .provider_snapshot import ProviderSnapshot
             from datetime import datetime,timezone
@@ -127,10 +136,12 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         if 'expense_cache_hit' in quote:categories|={'cache_hit_tokens','cache_miss_tokens'}
         valid=isinstance(usage,dict) and set(usage)==categories and all(_integer(n) for n in usage.values())
         if valid and 'cache_hit_tokens' in usage:valid=usage['cache_hit_tokens']+usage['cache_miss_tokens']==usage['input_tokens']
-        if not valid or usage['input_tokens']>quote['input_max'] or usage['output_tokens']>quote['output_max']:
+        if not valid or (usage['input_tokens']>quote['input_max'] and 'estimate_policy' not in quote) or usage['output_tokens']>quote['output_max']:
             # Return the durable hold, not an exception that rolls it back.
             store._db.execute("UPDATE provider_attempts SET state='uncertain',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))
             return store.provider_attempt(attempt_id)
+        if 'estimate_policy' in quote and usage['input_tokens']>quote['input_max']:
+            store._db.execute('UPDATE provider_attempts SET input_estimate_overrun=true WHERE attempt_id=?',(attempt_id,))
         settled_quote=quote
         if 'provider_evidence' in quote:
             from .provider_snapshot import ProviderSnapshot

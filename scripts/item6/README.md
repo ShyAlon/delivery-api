@@ -426,9 +426,12 @@ founder waits. Failed measurement remains unresolved, never fabricated elapsed t
 Historic immutable payment intents and quotes retain their original scales. Active
 account migration writes a separate receipt and refuses pending provider/payments.
 
-The owner approved a 128,000 protective context ceiling for this run. It is NOT a
-vendor exact maximum. The existing model-wide-ceiling adapter cannot use that
-setting as a proven per-request token bound. Until a verified complete-request
-adapter exists, dry preflight fails with a bound diagnostic and no provider/DB
-contact. This is intentionally not a ready-to-run package. No paid run starts
-without a later prepared-package review and explicit go.
+The owner selected the simple estimate path. 128000 is enforced on conservative
+input estimate (complete SDK wire bytes + 4096 framing headroom) + hard output cap.
+This is NOT a verified input token bound or vendor maximum. The fixed provider
+balance endpoint is read before dispatch; USD balance must cover the estimate,
+CNY-only balances use provider is_available with no fabricated FX claim. Balance
+reads are not atomic reservations across concurrent calls. Actual input overrun
+settles once but records an overrun and stops new admissions/clean-run completion
+for review. Explicit output-cap violations remain uncertain. No paid calls start
+from config review or package build: the real run still requires separate go.

@@ -1,6 +1,6 @@
 # D13 request-bound review note (not run permission)
 
-Status: accounting branch prepared; paid admission still blocked.
+Status: owner selected the simple estimate path Oct10 19:08. Implemented with explicit estimate evidence and residual risk, not a verified input bound.
 
 DeepSeek's response usage is authoritative for actual billing. The implementation
 uses that fact for settlement. Admission is separate: a reservation is meaningful
@@ -35,3 +35,16 @@ Sources inspected:
 https://api-docs.deepseek.com/quick_start/pricing/
 https://api-docs.deepseek.com/api/create-chat-completion/
 https://api-docs.deepseek.com/zh-cn/quick_start/token_usage
+
+## Selected implementation
+Complete serialized wire byte length + 4096 framing headroom is the conservative
+input estimate. Estimate + explicit output cap must not exceed 128000 owner policy.
+This is intentionally an estimate, not a vendor tokenizer guarantee. Provider
+balance is fetched before dispatch: USD total must cover estimated expense; a
+CNY-only response uses is_available without fabricating an exchange rate. Missing,
+stale or unavailable response stops new contact. Three accepted concurrent calls
+can still outspend one observed balance. Actual response input/output/cache usage
+settles once at an evidenced uniform time-band. Input overrun settles the accepted
+call, records evidence and blocks new admissions and clean-run completion pending
+review; it is not silently priced at the estimate. Output-cap violations hold as
+uncertain. No under-40-cent worst-case promise is made.

@@ -26,8 +26,12 @@ This is an engineering checkpoint, not real-run authorization.
   New runtime refuses copied legacy band/vendor/retail fields until migration review.
 
 ## Held rather than silently incomplete
-- The owner's 128000 protective ceiling is not a provider-enforced input bound.
-  Paid admission refuses the current adapter until this is resolved/reviewed.
+- The owner's simple estimate path was selected Oct10 19:08. 128000 is enforced
+  on complete-wire-byte estimate plus 4096 framing allowance and output cap, not
+  claimed as a provider-enforced exact input bound. Explicit max_tokens remains a
+  hard output cap. A fresh provider balance read is required but is not atomic.
+  Actual input above estimate bills once, retains overrun evidence and holds new
+  admissions and clean-run completion for review. Concurrent accepted calls finish.
 - Exact-retail cloud subprocess dispatch refuses to start because its compute meter
   is not installed. The legacy local/fake paths still work; do not call them prepaid
   D13 proof. No cloud fence is lifted by this branch.
@@ -49,3 +53,5 @@ public source checker makes two public GET requests at admission/start/settlemen
 failed fetches hold. This is intentionally conservative for an attended run, not
 an efficient general production pricing service. A controlled cache/semantic
 snapshot change classifier can be designed separately without weakening evidence.
+
+Estimate path source: https://api-docs.deepseek.com/api/get-user-balance . USD balance is compared to the estimated reservation; CNY-only balance relies on provider is_available and is labeled as not a USD/FX proof.

@@ -100,7 +100,10 @@ def main():
     retail_rates=rates_from_snapshot(prices[0]['retail_formula'])
     from vendor_config import verify_current_sources
     def verify_vendor():return verify_current_sources(prices[0]['provider_snapshot'])
-    def gateway(cap,job):return WorkerAdmissionGateway(store,job,resolve_serialized=catalog.resolve_serialized,measure_raw_usage=settlement_usage,require_prepaid=True,retail_rates=retail_rates,verify_provider_snapshot=verify_vendor)
+    from network_boundaries import deepseek_balance_reader,FixedOriginTransport
+    balance_client=httpx.Client(transport=FixedOriginTransport(httpx.HTTPTransport(retries=0),'https://api.deepseek.com',lambda method,path:method=='GET' and path=='/user/balance'),trust_env=False,follow_redirects=False)
+    provider_balance=deepseek_balance_reader(client=balance_client,api_key=secrets['deepseek_api_key'])
+    def gateway(cap,job):return WorkerAdmissionGateway(store,job,resolve_serialized=catalog.resolve_serialized,measure_raw_usage=settlement_usage,require_prepaid=True,retail_rates=retail_rates,verify_provider_snapshot=verify_vendor,provider_balance=provider_balance)
     def progress(state,text):print(f'{datetime.datetime.now().astimezone().isoformat(timespec="seconds")} | {state} | {text}',flush=True)
     # Shared diagnostic table is explicit for this selected model. Cache-aware
     # source-of-truth accounting remains in the exact quoted raw-usage ledger.
@@ -125,7 +128,8 @@ def main():
     try:
         result=AcceptanceChain(isolation,adapters=adapters,progress=lambda line:print(line,flush=True)).execute(run_go=args.go)
         print(json.dumps(result),flush=True)
-    finally:paypal_client.close()
+    finally:
+        paypal_client.close();balance_client.close()
 
 if __name__=='__main__':
     try:main()

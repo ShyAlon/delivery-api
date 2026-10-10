@@ -69,3 +69,13 @@ def deepseek_client_factory(*,inner_sync,inner_async,owner_module):
         return (httpx.Client(transport=module.AdmittedTransport(sync,gateway,stage=stage,provider=provider,model=model),trust_env=False,follow_redirects=False),
             httpx.AsyncClient(transport=module.AsyncAdmittedTransport(AsyncFixed(),gateway,stage=stage,provider=provider,model=model),trust_env=False,follow_redirects=False))
     return factory
+
+
+def deepseek_balance_reader(*,client,api_key):
+    """Fixed public provider account endpoint; caller owns local key authority."""
+    def read():
+        import datetime
+        response=client.get('https://api.deepseek.com/user/balance',headers={'Authorization':'Bearer '+api_key},timeout=20,follow_redirects=False)
+        if response.status_code!=200 or len(response.content)>65536:raise ValueError('provider balance read unavailable')
+        return {'response':response.json(),'observed_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    return read

@@ -1152,6 +1152,14 @@ class PostgresStore(SQLiteStore):
         from .attempt_ledger import transition
         return transition(self,attempt_id,action,usage,require_prepaid=require_prepaid)
 
+    def record_provider_balance_check(self,attempt_id,evidence):
+        from .provider_balance import validate_balance
+        row=self.provider_attempt(attempt_id)
+        if not row or row['state']!='reserved':raise ValueError('reserved owner attempt required for balance evidence')
+        checked=validate_balance(evidence,row['expense_reserved'],row['quote']['expense_units_per_usd'])
+        self._db.execute('UPDATE provider_attempts SET provider_balance_evidence=?::jsonb WHERE attempt_id=?',(json.dumps(checked),attempt_id))
+        return checked
+
     def task_retail_totals(self,task_id):
         from .retail_ledger import task_totals
         return task_totals(self,task_id)

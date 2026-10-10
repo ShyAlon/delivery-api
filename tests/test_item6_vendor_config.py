@@ -47,8 +47,9 @@ def test_protective_owner_ceiling_is_not_a_vendor_fact_or_paid_admission(tmp_pat
     from delivery_api.attempt_ledger import AdmissionDenied
     root=filled(tmp_path);r=review(root);review(root,r['review_hash']);result=compile_config(root)
     context=json.loads((Path(result['generated_runtime'])/'context.json').read_text())
-    with pytest.raises(AdmissionDenied,match='verified complete-request'):
-        ReviewedContextCeiling(**context)(stage='needs',serialized_request=b'{"model":"deepseek-flash","max_tokens":1}',max_output_tokens=1)
+    bound=ReviewedContextCeiling(**context)(stage='needs',serialized_request=b'{"model":"deepseek-flash","max_tokens":1}',max_output_tokens=1)
+    assert bound.estimate_policy['verified_input_bound'] is False
+    assert bound.estimate_policy['ceiling']==128000
 
 
 def test_legacy_duplicate_fields_are_not_silently_ignored(tmp_path):

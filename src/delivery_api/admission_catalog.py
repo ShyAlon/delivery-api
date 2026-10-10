@@ -32,6 +32,7 @@ class RequestBound:
     output_max:int
     serialized_request:bytes
     includes_complete_request:bool
+    estimate_policy:dict|None=None
 
 class ReviewedCatalog:
     def __init__(self,prices=(),bounders=None):
@@ -75,6 +76,7 @@ class ReviewedCatalog:
             from datetime import datetime,timezone
             snapshot=ProviderSnapshot(price.provider_snapshot)
             quote['provider_evidence']=snapshot.quote_evidence(datetime.now(timezone.utc))
+        if bound.estimate_policy is not None:quote['estimate_policy']=dict(bound.estimate_policy)
         quote.update(bound_version=bound.bound_version,input_max=bound.input_max,output_max=bound.output_max)
         digest=hashlib.sha256(bound.serialized_request).hexdigest()
         return quote,digest
@@ -158,8 +160,12 @@ class ReviewedContextCeiling:
         if not _integer(max_output_tokens) or not 0<max_output_tokens<=min(self.maximum_output_tokens,self.context_tokens):
             raise AdmissionDenied('provider output cap exceeds reviewed ceiling')
         if self.protective_run_ceiling:
-            # Byte-count proof is only valid for verified byte-based tokenizer
-            # accounting and exact wire payload. Refuse unverified contracts.
-            raise AdmissionDenied('owner protective ceiling requires verified complete-request token bound adapter')
+            # Deliberately conservative estimate, NOT a tokenizer proof.
+            # Count the entire wire payload one unit/byte, plus framing headroom.
+            estimate=len(serialized_request)+4096
+            if estimate+max_output_tokens>self.context_tokens:
+                raise AdmissionDenied('request estimate plus output cap exceeds owner policy ceiling')
+            policy={'kind':'complete-wire-bytes-plus4096-v1','ceiling':self.context_tokens,'input_estimate':estimate,'hard_output_cap':max_output_tokens,'verified_input_bound':False}
+            return RequestBound(self.bound_version,estimate,max_output_tokens,serialized_request,True,policy)
         # Do not subtract output cap: max output is not guaranteed to be used.
         return RequestBound(self.bound_version,self.context_tokens,max_output_tokens,serialized_request,True)
