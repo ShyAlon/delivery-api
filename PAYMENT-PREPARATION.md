@@ -16,3 +16,14 @@ The first independent implementation is provider-neutral evidence handling:
 
 No secret, provider account, production migration, public payment route or charge
 is introduced by preparation-only code. Public execution remains fenced.
+
+Pure lifecycle plans also cover delayed completion, repeated paid callbacks,
+multiple distinct captures for one purchase, and refund/reversal/dispute events
+before or after completion. Adverse events park the purchase for review, with
+no automatic balance debit or re-grant. The lifecycle object is not a ledger:
+separate persistence must enforce global unique payment identity and one
+purchase credit posting, in the same transaction as the owner's balance write.
+
+PayPal research found no country-wide IL merchant blocker but did find digital
+Seller Protection exclusions, account-specific card eligibility, FX and holds.
+That does not enable an account, select commercial terms or lift rollout fences.
