@@ -85,7 +85,8 @@ class AcceptanceChain:
             if r['subject']!=self.receipts['identity']['subject'] or not r['registry_version'] or not r['capabilities']:raise ValueError('explicit operator binding required')
         elif stage=='sandbox_purchase':
             true('sandbox','signature_verified')
-            if (r['amount_minor'],r['credit_units'],r['posted_count'],r['balance_units'])!=(500,5000,1,5000):raise ValueError('exact5-credit sandbox purchase, once-only posting required')
+            units=5000 if self.isolation.mode=='hermetic' else 5*10**9
+            if (r['amount_minor'],r['credit_units'],r['posted_count'],r['balance_units'])!=(500,units,1,units):raise ValueError('exact5-credit sandbox purchase, once-only posting required')
             if not all(isinstance(r[k],str) and r[k] for k in ('purchase_id','payment_id','merchant_id')):raise ValueError('durable payment bindings required')
         elif stage=='pipeline':
             true('canonical_validated','all_stages_complete','usage_settled')

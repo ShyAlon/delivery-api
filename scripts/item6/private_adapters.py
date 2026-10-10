@@ -44,14 +44,16 @@ class OperatorAdapter:
 
 
 class SandboxPurchaseAdapter:
-    def __init__(self,identity,*,repository,processor,approve,webhook_receipt,read_balance):
+    def __init__(self,identity,*,repository,processor,approve,webhook_receipt,read_balance,units_per_credit=1000):
         if processor.binding.live_mode is not False:raise ValueError('PayPal sandbox only')
         self.identity=identity;self.repo=repository;self.processor=processor;self.approve=approve
         self.webhook=webhook_receipt;self.balance=read_balance
+        if units_per_credit not in (1000,10**9):raise ValueError('known acceptance retail scale required')
+        self.scale=units_per_credit
     def __call__(self,isolation,previous):
         if self.processor.binding.live_mode is not False:raise ValueError('sandbox binding changed')
         scope=self.identity.scope
-        intent=purchase_intent(purchase_id='item6-'+isolation.run_id,owner_id=scope.owner_id,offer_id='credits-5',units_per_credit=1000)
+        intent=purchase_intent(purchase_id='item6-'+isolation.run_id,owner_id=scope.owner_id,offer_id='credits-5',units_per_credit=self.scale)
         # Account provisioning is explicit reviewed fixture setup. Never overwrite
         # a balance or try another purchase to hide an uncertain prior capture.
         if self.balance(scope)!=0:raise ValueError('fresh zero balance required before purchase')
@@ -66,7 +68,7 @@ class SandboxPurchaseAdapter:
         replay=service.capture(intent.purchase_id)
         row=self.repo.get_purchase(intent.purchase_id)
         if one!=two or replay.get('credit_posted') is not False:raise ValueError('payment replay did not remain once-only')
-        if not row['credit_posted'] or self.balance(scope)!=5000:raise ValueError('durable balance/posting mismatch')
+        if not row['credit_posted'] or self.balance(scope)!=5*self.scale:raise ValueError('durable balance/posting mismatch')
         return base(isolation,'sandbox_purchase')|{'subject':scope.owner_id,'purchase_id':intent.purchase_id,
             'payment_id':row['capture_id'],'merchant_id':self.processor.binding.merchant_id,'sandbox':True,
             'amount_minor':intent.amount_minor,'credit_units':intent.credit_units,'posted_count':1,

@@ -10,8 +10,8 @@ def test_mac_config_dry_default_and_wrong_go_never_connects(tmp_path):
   p=tmp_path/name;p.write_text(json.dumps(body));p.chmod(0o600);return str(p)
  service=tmp_path/'services';service.write_text('\n'.join('[%s]\nhost=127.0.0.1\nport=9\ndbname=requi_item6_20261010_dry\nuser=fixture\n'%x for x in ('admin','tenant','payment')));service.chmod(0o600)
  prices=write('catalog.json',[{'provider':'deepseek','model':'fixture','price_version':'hermetic','source':'fixture',
-  'expense_input':1,'expense_output':2,'expense_cache_hit':1,'expense_cache_miss':1,'retail_input':1,'retail_output':2,
-  'retail_units_per_credit':1000,'expense_units_per_usd':1000000,'usage_categories':['input_tokens','output_tokens','cache_hit_tokens','cache_miss_tokens']}])
+  'expense_input':300000,'expense_output':1200000,'expense_cache_hit':6000,'expense_cache_miss':300000,'retail_input':12500,'retail_output':12500,
+  'retail_units_per_credit':10**9,'retail_formula':__import__('delivery_api.retail_pricing',fromlist=['RetailRates']).RetailRates.from_environment({}).snapshot(),'provider_snapshot':dict(__import__('test_provider_snapshot',fromlist=['fixture']).fixture(),fetched_at=__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()),'expense_units_per_usd':10**12,'usage_categories':['input_tokens','output_tokens','cache_hit_tokens','cache_miss_tokens']}])
  context=write('context.json',{'model':'fixture','context_tokens':100000,'maximum_output_tokens':10000,'source':'fixture','bound_version':'hermetic'})
  secrets=write('secret.json',{'client_id':'fixture','client_secret':'fixture','deepseek_api_key':'not-a-key'})
  cfg=write('run.json',{'root':str(tmp_path/'fresh'),'database_name':'requi_item6_20261010_dry','database_host':'127.0.0.1',

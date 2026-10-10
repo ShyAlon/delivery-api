@@ -22,6 +22,8 @@ class ReviewedModelPrice:
     expense_cache_hit:int|None=None
     expense_cache_miss:int|None=None
     expense_units_per_usd:int|None=None
+    retail_formula:dict|None=None
+    provider_snapshot:dict|None=None
 
 @dataclass(frozen=True)
 class RequestBound:
@@ -30,6 +32,7 @@ class RequestBound:
     output_max:int
     serialized_request:bytes
     includes_complete_request:bool
+    estimate_policy:dict|None=None
 
 class ReviewedCatalog:
     def __init__(self,prices=(),bounders=None):
@@ -64,6 +67,16 @@ class ReviewedCatalog:
         if price.expense_cache_hit is not None:quote.update(expense_cache_hit=price.expense_cache_hit,expense_cache_miss=price.expense_cache_miss)
         if price.retail_units_per_credit is not None:quote['retail_units_per_credit']=price.retail_units_per_credit
         if price.expense_units_per_usd is not None:quote['expense_units_per_usd']=price.expense_units_per_usd
+        if price.retail_formula is not None:
+            from .pricing import _STAGE_PHASE
+            quote['retail_formula']=dict(price.retail_formula)
+            quote['retail_phase']=_STAGE_PHASE.get(stage,stage)
+        if price.provider_snapshot is not None:
+            from .provider_snapshot import ProviderSnapshot
+            from datetime import datetime,timezone
+            snapshot=ProviderSnapshot(price.provider_snapshot)
+            quote['provider_evidence']=snapshot.quote_evidence(datetime.now(timezone.utc))
+        if bound.estimate_policy is not None:quote['estimate_policy']=dict(bound.estimate_policy)
         quote.update(bound_version=bound.bound_version,input_max=bound.input_max,output_max=bound.output_max)
         digest=hashlib.sha256(bound.serialized_request).hexdigest()
         return quote,digest
@@ -105,7 +118,7 @@ def catalog_from_environment(environ, *, bounders=None):
         prices=[]
         required={'provider','model','price_version','source','expense_input','expense_output','retail_input','retail_output'}
         for row in rows:
-            allowed=required|{'expense_units_per_usd','retail_units_per_credit','usage_categories','expense_cache_hit','expense_cache_miss'}
+            allowed=required|{'expense_units_per_usd','retail_units_per_credit','usage_categories','expense_cache_hit','expense_cache_miss','retail_formula','provider_snapshot'}
             if not isinstance(row,dict) or not required<=set(row) or set(row)-allowed:raise ValueError()
             row=dict(row)
             if 'usage_categories' in row:
@@ -131,6 +144,7 @@ class ReviewedContextCeiling:
     maximum_output_tokens:int
     source:str
     bound_version:str
+    protective_run_ceiling:bool=False
 
     def __post_init__(self):
         if not all(isinstance(x,str) and x for x in (self.model,self.source,self.bound_version)) or not _integer(self.context_tokens) or not self.context_tokens or not _integer(self.maximum_output_tokens) or not self.maximum_output_tokens:
@@ -145,5 +159,13 @@ class ReviewedContextCeiling:
         except (ValueError,TypeError,AttributeError) as exc:raise AdmissionDenied('context ceiling request identity/cap mismatch') from exc
         if not _integer(max_output_tokens) or not 0<max_output_tokens<=min(self.maximum_output_tokens,self.context_tokens):
             raise AdmissionDenied('provider output cap exceeds reviewed ceiling')
+        if self.protective_run_ceiling:
+            # Deliberately conservative estimate, NOT a tokenizer proof.
+            # Count the entire wire payload one unit/byte, plus framing headroom.
+            estimate=len(serialized_request)+4096
+            if estimate+max_output_tokens>self.context_tokens:
+                raise AdmissionDenied('request estimate plus output cap exceeds owner policy ceiling')
+            policy={'kind':'complete-wire-bytes-plus4096-v1','ceiling':self.context_tokens,'input_estimate':estimate,'hard_output_cap':max_output_tokens,'verified_input_bound':False}
+            return RequestBound(self.bound_version,estimate,max_output_tokens,serialized_request,True,policy)
         # Do not subtract output cap: max output is not guaranteed to be used.
         return RequestBound(self.bound_version,self.context_tokens,max_output_tokens,serialized_request,True)

@@ -7,6 +7,7 @@ from scaffold import scaffold
 from single_config import create_single,import_legacy,load_env,write_env,review,compile_config,apply_proposal
 from test_item6_scaffold import fill
 from model_data import propose,PRICING_URL
+from vendor_config import generate_snapshot
 from test_item6_model_data import P,A
 
 
@@ -15,8 +16,10 @@ def filled(tmp_path):
  # Owner's chosen model, existing price/context sources are fixture values.
  for name in ('run.json','catalog.json','context.json'):
   p=root/'private'/name;p.write_text(p.read_text().replace('fixture-model','deepseek-flash'))
- import_legacy(root);d,_=load_env(root);d['PRICING_BAND']='off_peak'
+ import_legacy(root);d,_=load_env(root)
+ d={k:v for k,v in d.items() if k in {'MODEL','PAYPAL_CLIENT_ID','PAYPAL_CLIENT_SECRET','DEEPSEEK_API_KEY','SANDBOX_MERCHANT_ID','SANDBOX_WEBHOOK_ID'}}
  p=root/'private/.env';p.unlink();write_env(p,d)
+ generate_snapshot(root,'deepseek-flash',lambda url:P if url==PRICING_URL else A)
  return root
 
 
@@ -40,7 +43,7 @@ def test_review_exact_hash_compile_private_snapshot_no_secret_output(tmp_path):
  assert runtime.stat().st_mode&0o777==0o700
  for p in runtime.iterdir():assert p.stat().st_mode&0o777==0o600
  catalog=json.loads((runtime/'catalog.json').read_text());context=json.loads((runtime/'context.json').read_text())
- assert catalog[0]['price_version'].startswith('reviewed-price-') and context['bound_version'].startswith('reviewed-bound-')
+ assert catalog[0]['price_version'].startswith('vendor-') and context['bound_version']=='owner-run-128000-v1'
  script=Path(compiled['dry_launcher']).read_text()
  assert '.env,dst=' not in script and '--go' in script and '--rm' not in script
  verifier=next((root/'private').glob('verify-*.py'))
@@ -64,10 +67,8 @@ def test_new_single_source_and_proposal_keep_review_manual(tmp_path):
  assert not (root/'private/run.json').exists()
  before=(root/'private/.env').read_bytes()
  propose(root,'deepseek-flash',lambda url:P if url==PRICING_URL else A)
- result=apply_proposal(root,'off_peak',1000000)
+ with pytest.raises(ValueError,match='retired'):apply_proposal(root,'off_peak',1000000)
  assert (root/'private/.env').read_bytes()==before
- d=Path(result['proposed_env_file']).read_text()
- assert 'fixture-key' not in d and 'RETAIL_INPUT_UNITS_PER_TOKEN=null' in d
  with pytest.raises(ValueError):review(root)
 
 
@@ -96,7 +97,7 @@ def test_legacy_model_conflict_and_symlink_secrets_do_not_import(tmp_path):
  with pytest.raises(ValueError):import_legacy(root)
 
 
-def test_generated_snapshot_roundtrips_old_image_schema_and_launcher_dry(tmp_path):
+def test_generated_snapshot_roundtrips_rebuilt_schema_and_launcher_dry(tmp_path):
  root=filled(tmp_path);r=review(root);review(root,r['review_hash']);c=compile_config(root)
  runtime=Path(c['generated_runtime']);run=json.loads((runtime/'run.json').read_text())
  assert run['root']=='/evidence/run' and run['service_file']=='/private/services.conf'

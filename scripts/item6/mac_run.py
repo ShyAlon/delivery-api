@@ -33,7 +33,8 @@ def main():
     if set(secrets)!={'client_id','client_secret','deepseek_api_key'}:raise ValueError('exact local credential fields required')
     safe_model_route('deepseek',config['model'],True)
     if not config['operator_registry_version']:raise ValueError('reviewed operator registry version required')
-    if not prices or any(row.get('retail_units_per_credit')!=1000 for row in prices):raise ValueError('exact 1000-unit prepaid scale required')
+    if not prices or any(row.get('retail_units_per_credit')!=10**9 for row in prices):raise ValueError('exact D13 1000000000-unit prepaid scale required')
+    if any('retail_formula' not in row or 'provider_snapshot' not in row for row in prices):raise ValueError('D13 formula and generated vendor snapshot required')
     from delivery_api.admission_catalog import catalog_from_environment,ReviewedContextCeiling
     ceiling=ReviewedContextCeiling(**context)
     if ceiling.model!=config['model']:raise ValueError('exact reviewed effective model ceiling required')
@@ -85,7 +86,7 @@ def main():
             enabled=c.execute('SELECT subject FROM operator_principals WHERE enabled').fetchall()
             if enabled:raise ValueError('fresh disposable operator registry required')
             c.execute("INSERT INTO operator_principals(subject,registry_version,capabilities,enabled) VALUES(%s,%s,ARRAY['payments.read'],true)",(scope.owner_id,config['operator_registry_version']))
-            c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,0,1000,0)',(scope.owner_id,))
+            c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,0,1000000000,0)',(scope.owner_id,))
             c.execute('INSERT INTO admission_limits(owner_id,config_version,period_seconds,rate_window_seconds,concurrency_max) VALUES(%s,%s,86400,60,3)',(scope.owner_id,config['operator_registry_version']))
         return OperatorPrincipal(scope.owner_id,config['operator_registry_version'],frozenset({'payments.read'}))
     operator=OperatorAdapter(identity,store=store,read_reviewed_registry=provision_registry)
@@ -94,8 +95,15 @@ def main():
     repository=PaymentRepository(make_conninfo(service=config['payment_service']),binding.ledger_binding)
     def balance(scope):
         with admin() as c:return c.execute('SELECT balance_units FROM credit_accounts WHERE owner_id=%s',(scope.owner_id,)).fetchone()[0]
-    purchase=SandboxPurchaseAdapter(identity,repository=repository,processor=PayPalAdapter(transport,binding),approve=attended.paypal,webhook_receipt=attended.webhook,read_balance=balance)
-    def gateway(cap,job):return WorkerAdmissionGateway(store,job,resolve_serialized=catalog.resolve_serialized,measure_raw_usage=settlement_usage,require_prepaid=True)
+    purchase=SandboxPurchaseAdapter(identity,repository=repository,processor=PayPalAdapter(transport,binding),approve=attended.paypal,webhook_receipt=attended.webhook,read_balance=balance,units_per_credit=10**9)
+    from delivery_api.retail_ledger import rates_from_snapshot
+    retail_rates=rates_from_snapshot(prices[0]['retail_formula'])
+    from vendor_config import verify_current_sources
+    def verify_vendor():return verify_current_sources(prices[0]['provider_snapshot'])
+    from network_boundaries import deepseek_balance_reader,FixedOriginTransport
+    balance_client=httpx.Client(transport=FixedOriginTransport(httpx.HTTPTransport(retries=0),'https://api.deepseek.com',lambda method,path:method=='GET' and path=='/user/balance'),trust_env=False,follow_redirects=False)
+    provider_balance=deepseek_balance_reader(client=balance_client,api_key=secrets['deepseek_api_key'])
+    def gateway(cap,job):return WorkerAdmissionGateway(store,job,resolve_serialized=catalog.resolve_serialized,measure_raw_usage=settlement_usage,require_prepaid=True,retail_rates=retail_rates,verify_provider_snapshot=verify_vendor,provider_balance=provider_balance)
     def progress(state,text):print(f'{datetime.datetime.now().astimezone().isoformat(timespec="seconds")} | {state} | {text}',flush=True)
     # Shared diagnostic table is explicit for this selected model. Cache-aware
     # source-of-truth accounting remains in the exact quoted raw-usage ledger.
@@ -120,10 +128,12 @@ def main():
     try:
         result=AcceptanceChain(isolation,adapters=adapters,progress=lambda line:print(line,flush=True)).execute(run_go=args.go)
         print(json.dumps(result),flush=True)
-    finally:paypal_client.close()
+    finally:
+        paypal_client.close();balance_client.close()
 
 if __name__=='__main__':
     try:main()
-    except Exception:
+    except Exception as error:
+        from delivery_api.attempt_ledger import AdmissionDenied
         print('Item6 stopped. Preserve private local evidence. No blind retry, launch, or cleanup.',file=sys.stderr)
         raise SystemExit(1) from None

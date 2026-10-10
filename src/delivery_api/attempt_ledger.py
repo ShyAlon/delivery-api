@@ -16,7 +16,22 @@ def _integer(value):
 def _quote(quote):
     keys={'provider','model','price_version','bound_version','input_max','output_max',
           'expense_input','expense_output','retail_input','retail_output'}
-    optional={'retail_units_per_credit','expense_cache_hit','expense_cache_miss','expense_units_per_usd'}
+    optional={'retail_units_per_credit','expense_cache_hit','expense_cache_miss','expense_units_per_usd','retail_formula','provider_evidence','retail_phase','estimate_policy'}
+    if 'estimate_policy' in quote:
+        p=quote['estimate_policy']
+        if set(p)!={'kind','ceiling','input_estimate','hard_output_cap','verified_input_bound'} or p['kind']!='complete-wire-bytes-plus4096-v1' or p['verified_input_bound'] is not False or p['input_estimate']!=quote['input_max'] or p['hard_output_cap']!=quote['output_max'] or p['input_estimate']+p['hard_output_cap']>p['ceiling']:raise AdmissionDenied('explicit reviewed estimate policy required')
+    if 'retail_phase' in quote and (not isinstance(quote['retail_phase'],str) or not quote['retail_phase']):raise AdmissionDenied('retail phase identity required')
+    if 'provider_evidence' in quote:
+        from .provider_snapshot import ProviderSnapshot
+        evidence=quote['provider_evidence'];snapshot=ProviderSnapshot(evidence['snapshot'])
+        if snapshot.id!=evidence['snapshot_sha256']:raise AdmissionDenied('provider snapshot hash mismatch')
+        ceiling=snapshot.ceiling()
+        if (quote['expense_cache_hit'],quote['expense_cache_miss'],quote['expense_output'])!=(ceiling['cache_hit'],ceiling['cache_miss'],ceiling['output']):raise AdmissionDenied('provider admission ceiling mismatch')
+    if 'retail_formula' in quote:
+        from .retail_ledger import rates_from_snapshot
+        rates=rates_from_snapshot(quote['retail_formula'])
+        if quote.get('retail_units_per_credit')!=quote['retail_formula']['units_per_credit'] or quote['retail_input']!=quote['retail_output'] or quote['retail_input']!=int(rates.price_per_token*quote['retail_units_per_credit']):
+            raise AdmissionDenied('retail integer compatibility rates differ from formula')
     if bool('expense_cache_hit' in quote)!=bool('expense_cache_miss' in quote):raise AdmissionDenied('complete reviewed cache rates required')
     if any(not _integer(quote[k]) for k in ('expense_cache_hit','expense_cache_miss') if k in quote):raise AdmissionDenied('integer cache prices required')
     if set(quote)-optional!=keys or ('retail_units_per_credit' in quote and (not _integer(quote['retail_units_per_credit']) or not quote['retail_units_per_credit'])) or any(not isinstance(quote[k],str) or not quote[k] for k in keys if k.endswith('version') or k in ('provider','model')):
@@ -58,7 +73,9 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
         return existing
     now=time.time()
     rows=store._db.execute('SELECT * FROM provider_attempts WHERE owner_id=?',(owner,)).fetchall()
+    if any(r.get('input_estimate_overrun') for r in rows):raise AdmissionDenied('actual input exceeded estimate; new admission held for review')
     held=[r for r in rows if r['state'] in ('reserved','dispatched','uncertain')]
+    if 'retail_formula' in quote and store._db.execute("SELECT 1 FROM retail_compute_segments r JOIN worker_jobs w ON r.job_id=w.job_id WHERE r.owner_id=? AND (r.state='unresolved' OR (r.state='pending' AND w.state<>'running')) LIMIT 1",(owner,)).fetchone():raise AdmissionDenied('unresolved compute accounting requires review')
     if any(r['state']=='uncertain' for r in held):raise AdmissionDenied('uncertain provider usage requires review')
     if len(held)>=limits['concurrency_max']:raise AdmissionDenied('owner attempt concurrency exhausted')
     if limits['rate_max'] is not None and sum(r['created_at']>now-limits['rate_window_seconds'] for r in rows)>=limits['rate_max']:
@@ -85,6 +102,15 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
     row=store._db.execute('SELECT * FROM provider_attempts WHERE attempt_id=? FOR UPDATE',(attempt_id,)).fetchone()
     if not row:raise AdmissionDenied('owner attempt not found')
     if action=='start':
+        if 'estimate_policy' in row['quote']:
+            from .provider_balance import validate_balance
+            balance=row.get('provider_balance_evidence')
+            if not balance:raise AdmissionDenied('pre-call provider balance evidence required')
+            validate_balance({'response':balance['response'],'observed_at':balance['observed_at']},row['expense_reserved'],row['quote']['expense_units_per_usd'])
+        if 'provider_evidence' in row['quote']:
+            from .provider_snapshot import ProviderSnapshot
+            from datetime import datetime,timezone
+            ProviderSnapshot(row['quote']['provider_evidence']['snapshot']).fresh(datetime.now(timezone.utc))
         from .suspension_policy import require_task_operation
         require_task_operation(store,'provider.dispatch')
         _job(store,row['job_id'])
@@ -92,7 +118,7 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         if require_prepaid:
             from .prepaid import authorize
             authorize(store,dict(row))
-        store._db.execute("UPDATE provider_attempts SET state='dispatched',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))
+        store._db.execute("UPDATE provider_attempts SET state='dispatched',updated_at=?,provider_started_at=? WHERE attempt_id=?",(time.time(),time.time(),attempt_id))
     elif action=='cancel':
         if row['state']=='cancelled':return dict(row)
         if row['state']!='reserved':raise AdmissionDenied('dispatched or uncertain funds cannot be released')
@@ -110,14 +136,33 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         if 'expense_cache_hit' in quote:categories|={'cache_hit_tokens','cache_miss_tokens'}
         valid=isinstance(usage,dict) and set(usage)==categories and all(_integer(n) for n in usage.values())
         if valid and 'cache_hit_tokens' in usage:valid=usage['cache_hit_tokens']+usage['cache_miss_tokens']==usage['input_tokens']
-        if not valid or usage['input_tokens']>quote['input_max'] or usage['output_tokens']>quote['output_max']:
+        if not valid or (usage['input_tokens']>quote['input_max'] and 'estimate_policy' not in quote) or usage['output_tokens']>quote['output_max']:
             # Return the durable hold, not an exception that rolls it back.
             store._db.execute("UPDATE provider_attempts SET state='uncertain',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))
             return store.provider_attempt(attempt_id)
-        expense=(usage['cache_hit_tokens']*quote['expense_cache_hit']+usage['cache_miss_tokens']*quote['expense_cache_miss'] if 'expense_cache_hit' in quote else usage['input_tokens']*quote['expense_input'])+usage['output_tokens']*quote['expense_output']
+        if 'estimate_policy' in quote and usage['input_tokens']>quote['input_max']:
+            store._db.execute('UPDATE provider_attempts SET input_estimate_overrun=true WHERE attempt_id=?',(attempt_id,))
+        settled_quote=quote
+        if 'provider_evidence' in quote:
+            from .provider_snapshot import ProviderSnapshot
+            from datetime import datetime,timezone
+            try:
+                snapshot=ProviderSnapshot(quote['provider_evidence']['snapshot'])
+                band,rates=snapshot.billed_rates(datetime.fromtimestamp(row['provider_started_at'],timezone.utc),datetime.now(timezone.utc))
+            except (AdmissionDenied,TypeError):
+                store._db.execute("UPDATE provider_attempts SET state='uncertain',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))
+                return store.provider_attempt(attempt_id)
+            settled_quote=dict(quote,expense_cache_hit=rates['cache_hit'],expense_cache_miss=rates['cache_miss'],expense_output=rates['output'])
+            store._db.execute('UPDATE provider_attempts SET billed_rate_evidence=?::jsonb WHERE attempt_id=?',(json.dumps({'snapshot_sha256':snapshot.id,'band':band,'rates':rates,'basis':'uniform UTC start-to-settlement interval','settlement_observed_at':datetime.now(timezone.utc).isoformat()}),attempt_id))
+        expense=(usage['cache_hit_tokens']*settled_quote['expense_cache_hit']+usage['cache_miss_tokens']*settled_quote['expense_cache_miss'] if 'expense_cache_hit' in quote else usage['input_tokens']*quote['expense_input'])+usage['output_tokens']*settled_quote['expense_output']
         retail=usage['input_tokens']*quote['retail_input']+usage['output_tokens']*quote['retail_output']
+        if 'retail_formula' in quote:
+            from .retail_ledger import post
+            job=store.worker_job(row['job_id'])
+            contribution=post(store,key='attempt:'+attempt_id,job_id=row['job_id'],phase=quote.get('retail_phase') or (job['phase_key'] if 'phase_key' in job else job['kind'].split(':')[-1]),kind='tokens',input_tokens=usage['input_tokens'],output_tokens=usage['output_tokens'],rates=quote['retail_formula'])
+            retail=contribution['posted_units']
         from .prepaid import debit
-        debit(store,dict(row),retail)
+        debit(store,dict(row),retail,already_posted='retail_formula' in quote)
         store._db.execute("UPDATE provider_attempts SET state='settled',expense_actual=?,retail_actual=?,usage=?::jsonb,updated_at=?,settled_at=? WHERE attempt_id=?",(expense,retail,json.dumps(usage),time.time(),time.time(),attempt_id))
         if 'expense_units_per_usd' in quote:
             # Atomically retain breach evidence with confirmed settlement. A

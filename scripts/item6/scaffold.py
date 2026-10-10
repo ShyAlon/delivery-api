@@ -104,9 +104,16 @@ def validate(destination):
     return {'ready_for_dry_preflight':True,'run_started':False,'credentials_reported':False,'bindings_verified_live':False,'launch_authorized':False}
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('action',choices=('create','validate','fetch-model-data','init-env','import-config','apply-model-data','review-config','compile-config','create-env','diagnose-import'));p.add_argument('directory',type=Path);p.add_argument('--model',help='Explicit model from current vendor table; no default');p.add_argument('--band',choices=('peak','off_peak'));p.add_argument('--context-tokens',type=int);p.add_argument('--confirm',help='Exact review hash from review-config');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('action',choices=('create','validate','fetch-model-data','init-env','import-config','apply-model-data','review-config','compile-config','create-env','diagnose-import','migrate-d13','fetch-vendor-snapshot'));p.add_argument('directory',type=Path);p.add_argument('--model',help='Explicit model from current vendor table; no default');p.add_argument('--band',choices=('peak','off_peak'));p.add_argument('--context-tokens',type=int);p.add_argument('--confirm',help='Exact review hash from review-config');a=p.parse_args()
     try:
-        if a.action=='diagnose-import':
+        if a.action=='migrate-d13':
+            from vendor_config import migrate_env
+            result=migrate_env(a.directory)
+        elif a.action=='fetch-vendor-snapshot':
+            from vendor_config import generate_snapshot
+            if not a.model:raise ValueError('explicit fixture model required')
+            result=generate_snapshot(a.directory,a.model)
+        elif a.action=='diagnose-import':
             from config_diagnostics import diagnose
             result=diagnose(a.directory)
         elif a.action=='fetch-model-data':
@@ -134,7 +141,7 @@ if __name__=='__main__':
         # Only exact literal messages declared in our own code are safe to show.
         import ast
         known=set()
-        for module in ('single_config.py','model_data.py','isolation.py'):
+        for module in ('single_config.py','model_data.py','vendor_config.py','isolation.py'):
             tree=ast.parse((Path(__file__).parent/module).read_text())
             for node in ast.walk(tree):
                 if isinstance(node,ast.Raise) and isinstance(node.exc,ast.Call) and node.exc.args and isinstance(node.exc.args[0],ast.Constant) and isinstance(node.exc.args[0].value,str):known.add(node.exc.args[0].value)

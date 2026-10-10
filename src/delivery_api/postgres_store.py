@@ -1152,6 +1152,38 @@ class PostgresStore(SQLiteStore):
         from .attempt_ledger import transition
         return transition(self,attempt_id,action,usage,require_prepaid=require_prepaid)
 
+    def record_provider_balance_check(self,attempt_id,evidence):
+        from .provider_balance import validate_balance
+        row=self.provider_attempt(attempt_id)
+        if not row or row['state']!='reserved':raise ValueError('reserved owner attempt required for balance evidence')
+        checked=validate_balance(evidence,row['expense_reserved'],row['quote']['expense_units_per_usd'])
+        self._db.execute('UPDATE provider_attempts SET provider_balance_evidence=?::jsonb WHERE attempt_id=?',(json.dumps(checked),attempt_id))
+        return checked
+
+    def task_retail_totals(self,task_id):
+        from .retail_ledger import task_totals
+        return task_totals(self,task_id)
+
+    def retail_compute_status(self,task_id):
+        rows=self._db.execute("SELECT r.state,count(*) AS count FROM retail_compute_segments r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=? GROUP BY r.state",(task_id,)).fetchall()
+        return {r['state']:r['count'] for r in rows}
+
+    def begin_retail_compute(self,key,job_id,phase,rates):
+        from .retail_ledger import begin_compute
+        return begin_compute(self,key,job_id,phase,rates)
+
+    def finish_retail_compute(self,key,deterministic_ms):
+        from .retail_ledger import finish_compute
+        return finish_compute(self,key,deterministic_ms)
+
+    def post_retail_contribution(self,**contribution):
+        from .retail_ledger import post
+        return post(self,**contribution)
+
+    def retail_phase_totals(self,job_id):
+        from .retail_ledger import phase_totals
+        return phase_totals(self,job_id)
+
     def operator_workspace_snapshot(self):
         """Read-only current-owner operations, never cross-tenant privilege."""
         owner=current_scope().owner_id

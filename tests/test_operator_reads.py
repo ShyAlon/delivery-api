@@ -44,7 +44,7 @@ def test_operator_credit_pages_preserve_negative_fixed_point_and_capability(stor
   c.execute('GRANT requi_operator_read TO delivery_app')
   c.execute('INSERT INTO operator_principals VALUES (%s,%s,%s,true)',(A.owner_id,'fake-v1',['analytics.read']))
   for owner,balance in ((A.owner_id,-17),(B.owner_id,1000)):
-   c.execute('INSERT INTO credit_accounts VALUES (%s,%s,100,0)',(owner,balance))
+   c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES (%s,%s,100,0)',(owner,balance))
  try:
   principal=OperatorPrincipal(A.owner_id,'fake-v1',frozenset({'analytics.read'}))
   reader=OperatorReadStore(DSN.replace('user=sandbox','user=delivery_app'),principal)
