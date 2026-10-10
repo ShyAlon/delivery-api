@@ -451,3 +451,33 @@ def test_private_worker_rejects_outside_runtime_sink_before_producer(worker):
         with pytest.raises(ValueError,match='owned runtime log'):
             asyncio.run(w.execute(job,lambda *args:calls.append(1)))
         assert calls==[] and not outside.exists() and s.worker_job(job)['state']=='failed'
+
+
+def test_d13_compute_posted_once_excludes_provider_and_founder_waits(worker):
+    import time
+    from delivery_api.retail_pricing import RetailRates
+    from delivery_api.compute_meter import excluded_wait
+    import psycopg
+    w,s,tid,job,base=worker
+    with psycopg.connect(DSN) as c:
+        c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,5000000000,1000000000,0)',(A.owner_id,))
+    r=RetailRates.from_environment({})
+    w.gateway_factory=lambda cap,jid:WorkerAdmissionGateway(s,jid,require_prepaid=False,retail_rates=r,resolve_quote=lambda **kw:(Q,'fixture'),measure_usage=lambda resp:resp.usage_metadata)
+    def producer(cap,root):
+        with excluded_wait():time.sleep(.02)
+        time.sleep(.005)
+    try:
+        with tenant_context(A):
+            assert asyncio.run(w.execute(job,producer))
+            totals=s.retail_phase_totals(job)
+            # Excluded founder sleep cannot appear in the work meter. Generous
+            # upper bound tolerates scheduler variance without fixed timestamps.
+            assert totals['needs']['credits']>0
+            status=s.retail_compute_status(tid);assert status=={'settled':1}
+            assert not asyncio.run(w.execute(job,producer))
+            assert s.retail_phase_totals(job)==totals
+    finally:
+        with psycopg.connect(DSN) as c:
+            c.execute('DELETE FROM retail_compute_segments WHERE job_id=%s',(job,))
+            c.execute('DELETE FROM retail_contributions WHERE job_id=%s',(job,))
+            c.execute('DELETE FROM credit_accounts WHERE owner_id=%s',(A.owner_id,))
