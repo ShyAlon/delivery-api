@@ -97,7 +97,9 @@ def main():
     purchase=SandboxPurchaseAdapter(identity,repository=repository,processor=PayPalAdapter(transport,binding),approve=attended.paypal,webhook_receipt=attended.webhook,read_balance=balance,units_per_credit=10**9)
     from delivery_api.retail_ledger import rates_from_snapshot
     retail_rates=rates_from_snapshot(prices[0]['retail_formula'])
-    def gateway(cap,job):return WorkerAdmissionGateway(store,job,resolve_serialized=catalog.resolve_serialized,measure_raw_usage=settlement_usage,require_prepaid=True,retail_rates=retail_rates)
+    from vendor_config import verify_current_sources
+    def verify_vendor():return verify_current_sources(prices[0]['provider_snapshot'])
+    def gateway(cap,job):return WorkerAdmissionGateway(store,job,resolve_serialized=catalog.resolve_serialized,measure_raw_usage=settlement_usage,require_prepaid=True,retail_rates=retail_rates,verify_provider_snapshot=verify_vendor)
     def progress(state,text):print(f'{datetime.datetime.now().astimezone().isoformat(timespec="seconds")} | {state} | {text}',flush=True)
     # Shared diagnostic table is explicit for this selected model. Cache-aware
     # source-of-truth accounting remains in the exact quoted raw-usage ledger.

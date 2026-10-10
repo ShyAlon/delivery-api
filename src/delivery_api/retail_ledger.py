@@ -101,7 +101,14 @@ def finish_compute(store,key,deterministic_ms):
         if ms!=segment['deterministic_ms']:raise AdmissionDenied('conflicting compute replay')
         return dict(segment)
     if segment['state']=='unresolved':raise AdmissionDenied('unresolved compute needs explicit reconciliation')
-    contribution=post(store,key='compute:'+key,job_id=segment['job_id'],phase=segment['phase_key'],kind='compute',deterministic_ms=ms,rates=segment['rates'])
+    counts=store._db.execute("SELECT phase_key,count(*) AS calls FROM retail_contributions WHERE job_id=? AND kind='tokens' GROUP BY phase_key ORDER BY phase_key",(segment['job_id'],)).fetchall()
+    if not counts:counts=[{'phase_key':segment['phase_key'],'calls':1}]
+    total=sum(r['calls'] for r in counts);remaining=ms;contributions=[]
+    for i,row in enumerate(counts):
+        share=remaining if i==len(counts)-1 else ms*row['calls']/total
+        remaining-=share
+        contributions.append(post(store,key='compute:'+key+':'+row['phase_key'],job_id=segment['job_id'],phase=row['phase_key'],kind='compute',deterministic_ms=share,rates=segment['rates']))
+    contribution={'contributions':contributions,'deterministic_ms':ms}
     store._db.execute("UPDATE retail_compute_segments SET state='settled',deterministic_ms=?,settled_at=? WHERE segment_key=?",(ms,time.time(),key))
     return contribution
 

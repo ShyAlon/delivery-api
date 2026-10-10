@@ -79,6 +79,9 @@ class SameHostProducerWorker:
                         meter=ComputeMeter();gateway.compute_meter=meter
                         try:
                             with bind(meter):result=producer(capability,root)
+                            if inspect.isawaitable(result):
+                                if inspect.iscoroutine(result):result.close()
+                                raise TypeError('synchronous producer required')
                             self.store.finish_retail_compute(segment,meter.milliseconds())
                         except BaseException:
                             self.store.finish_retail_compute(segment,None)

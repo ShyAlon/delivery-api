@@ -62,3 +62,15 @@ def build_runtime(root,data,identity):
     if any(not isinstance(data[k],str) or not data[k] for k in SECRET):raise ValueError('local credential fields required')
     run={'root':'/evidence/run','database_name':identity['database_name'],'database_host':'127.0.0.1','service_file':'/private/services.conf','admin_service':'item6-admin','tenant_service':'item6-tenant','payment_service':'item6-payment','model':data['MODEL'],'catalog_file':'/private/catalog.json','context_file':'/private/context.json','paypal_secret_file':'/private/credentials.json','verified_sandbox_merchant':data['SANDBOX_MERCHANT_ID'],'sandbox_webhook_id':data['SANDBOX_WEBHOOK_ID'],'operator_registry_version':'item6-local-'+identity['run_id'][:12]}
     return {'catalog.json':[price],'context.json':context,'run.json':run,'credentials.json':{'client_id':data['PAYPAL_CLIENT_ID'],'client_secret':data['PAYPAL_CLIENT_SECRET'],'deepseek_api_key':data['DEEPSEEK_API_KEY']}}
+
+
+def verify_current_sources(snapshot,fetcher=fetch):
+    """Before each new contact/settlement; public reads, never provider inference."""
+    checked=ProviderSnapshot(snapshot);checked.fresh(datetime.datetime.now(datetime.timezone.utc))
+    sources={s['url']:s['sha256'] for s in snapshot['sources']}
+    if set(sources)!={PRICING_URL,API_URL}:raise ValueError('fixed vendor source set changed; admission stopped')
+    for url,digest in sources.items():
+        current=fetcher(url)
+        if hashlib.sha256(current.encode()).hexdigest()!=digest:
+            raise ValueError('vendor source changed during run; preserve accepted attempts and review new snapshot')
+    return True

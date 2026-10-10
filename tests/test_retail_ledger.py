@@ -151,3 +151,15 @@ def test_failed_contribution_does_not_debit_or_drop_remainder(account):
             row=c.execute('SELECT balance_units,fractional_debit_units FROM credit_accounts').fetchone()
             assert row['balance_units']==1 and row['fractional_debit_units']==0
             assert c.execute('SELECT count(*) AS n FROM retail_contributions').fetchone()['n']==0
+
+
+def test_compute_allocation_uses_call_phase_and_preserves_total(account):
+    s,tid,job=account;r=RetailRates.from_environment({}).snapshot()
+    with tenant_context(A):
+        for phase in ('needs','srs','srs'):
+            s.post_retail_contribution(key=job+uuid.uuid4().hex,job_id=job,phase=phase,kind='tokens',input_tokens=1,rates=r)
+        s.begin_retail_compute(job,job,'needs',r);s.finish_retail_compute(job,30)
+        totals=s.retail_phase_totals(job)
+        assert totals['needs']['credits']==Decimal('0.000013')
+        assert totals['srs']['credits']==Decimal('0.000026')
+        assert sum(x['credits'] for x in totals.values())==Decimal('0.000039')

@@ -66,7 +66,10 @@ class ReviewedCatalog:
         if price.expense_cache_hit is not None:quote.update(expense_cache_hit=price.expense_cache_hit,expense_cache_miss=price.expense_cache_miss)
         if price.retail_units_per_credit is not None:quote['retail_units_per_credit']=price.retail_units_per_credit
         if price.expense_units_per_usd is not None:quote['expense_units_per_usd']=price.expense_units_per_usd
-        if price.retail_formula is not None:quote['retail_formula']=dict(price.retail_formula)
+        if price.retail_formula is not None:
+            from .pricing import _STAGE_PHASE
+            quote['retail_formula']=dict(price.retail_formula)
+            quote['retail_phase']=_STAGE_PHASE.get(stage,stage)
         if price.provider_snapshot is not None:
             from .provider_snapshot import ProviderSnapshot
             from datetime import datetime,timezone

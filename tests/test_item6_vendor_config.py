@@ -55,3 +55,11 @@ def test_legacy_duplicate_fields_are_not_silently_ignored(tmp_path):
     root=filled(tmp_path);d,_=load_env(root);d['RETAIL_INPUT_UNITS_PER_TOKEN']=1
     p=root/'private/.env';p.unlink();write_env(p,d)
     with pytest.raises(ValueError,match='migrate-d13'):review(root)
+
+
+def test_live_source_change_does_not_reprice_or_pass(tmp_path):
+    from vendor_config import verify_current_sources
+    root=filled(tmp_path);snapshot=json.loads(next((root/'private').glob('vendor-snapshot-*.json')).read_text())
+    assert verify_current_sources(snapshot,lambda u:P if u==PRICING_URL else A)
+    with pytest.raises(ValueError,match='changed'):
+        verify_current_sources(snapshot,lambda u:(P+'changed') if u==PRICING_URL else A)

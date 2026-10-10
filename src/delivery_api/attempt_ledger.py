@@ -16,7 +16,8 @@ def _integer(value):
 def _quote(quote):
     keys={'provider','model','price_version','bound_version','input_max','output_max',
           'expense_input','expense_output','retail_input','retail_output'}
-    optional={'retail_units_per_credit','expense_cache_hit','expense_cache_miss','expense_units_per_usd','retail_formula','provider_evidence'}
+    optional={'retail_units_per_credit','expense_cache_hit','expense_cache_miss','expense_units_per_usd','retail_formula','provider_evidence','retail_phase'}
+    if 'retail_phase' in quote and (not isinstance(quote['retail_phase'],str) or not quote['retail_phase']):raise AdmissionDenied('retail phase identity required')
     if 'provider_evidence' in quote:
         from .provider_snapshot import ProviderSnapshot
         evidence=quote['provider_evidence'];snapshot=ProviderSnapshot(evidence['snapshot'])
@@ -147,7 +148,7 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         if 'retail_formula' in quote:
             from .retail_ledger import post
             job=store.worker_job(row['job_id'])
-            contribution=post(store,key='attempt:'+attempt_id,job_id=row['job_id'],phase=job['phase_key'] if 'phase_key' in job else job['kind'].split(':')[-1],kind='tokens',input_tokens=usage['input_tokens'],output_tokens=usage['output_tokens'],rates=quote['retail_formula'])
+            contribution=post(store,key='attempt:'+attempt_id,job_id=row['job_id'],phase=quote.get('retail_phase') or (job['phase_key'] if 'phase_key' in job else job['kind'].split(':')[-1]),kind='tokens',input_tokens=usage['input_tokens'],output_tokens=usage['output_tokens'],rates=quote['retail_formula'])
             retail=contribution['posted_units']
         from .prepaid import debit
         debit(store,dict(row),retail,already_posted='retail_formula' in quote)

@@ -7,8 +7,9 @@ Missing resolver/usage fails closed. No monetary configuration defaults exist.
 from .attempt_ledger import AdmissionDenied
 
 class WorkerAdmissionGateway:
-    def __init__(self,store,job_id,*,resolve_quote=None,measure_usage=None,require_prepaid=True,resolve_serialized=None,measure_raw_usage=None,launch_guard=False,retail_rates=None):
+    def __init__(self,store,job_id,*,resolve_quote=None,measure_usage=None,require_prepaid=True,resolve_serialized=None,measure_raw_usage=None,launch_guard=False,retail_rates=None,verify_provider_snapshot=None):
         if launch_guard and not require_prepaid:raise AdmissionDenied('launch guard requires prepaid accounting')
+        self.verify_provider_snapshot=verify_provider_snapshot
         self.retail_rates=retail_rates
         self.compute_meter=None;self._meter_attempts=set()
         self.launch_guard=launch_guard
@@ -16,8 +17,22 @@ class WorkerAdmissionGateway:
         self.resolve_quote=resolve_quote;self.measure_usage=measure_usage
         self.resolve_serialized=resolve_serialized;self.measure_raw_usage=measure_raw_usage
 
+    def _verify_snapshot(self):
+        if self.verify_provider_snapshot is not None:
+            from .compute_meter import excluded_wait
+            with excluded_wait():self.verify_provider_snapshot()
+
+    def _phase_model(self,provider,model):
+        job=self.store.worker_job(self.job_id)
+        options=(job or {}).get('execution_options') or {}
+        selected=options.get('model_route')
+        if selected and selected!=provider+':'+model:
+            raise AdmissionDenied('provider model differs from durable user phase selection')
+
     def reserve(self,*,attempt_id,stage,provider,model,messages,max_output_tokens):
+        self._phase_model(provider,model)
         if self.resolve_quote is None:raise AdmissionDenied('reviewed request bound/price resolver unavailable')
+        self._verify_snapshot()
         quote,digest=self.resolve_quote(stage=stage,provider=provider,model=model,
             messages=messages,max_output_tokens=max_output_tokens)
         if quote['provider']!=provider or quote['model']!=model or quote['output_max']!=max_output_tokens:
@@ -26,6 +41,7 @@ class WorkerAdmissionGateway:
 
     def reserve_serialized(self,*,attempt_id,stage,provider,model,serialized_request,max_output_tokens):
         import base64,hashlib,json
+        self._phase_model(provider,model)
         if self.resolve_serialized is None:raise AdmissionDenied('serialized request resolver unavailable')
         try:raw=base64.b64decode(serialized_request,validate=True)
         except (ValueError,TypeError) as exc:raise AdmissionDenied('invalid serialized request') from exc
@@ -40,6 +56,7 @@ class WorkerAdmissionGateway:
             if existing['job_id']!=self.job_id or quote['provider']!=provider or quote['model']!=model or quote['output_max']!=max_output_tokens:
                 raise AdmissionDenied('existing attempt identity differs from request')
             return self.store.reserve_provider_attempt(self.job_id,attempt_id,quote,digest,require_prepaid=self.require_prepaid)['attempt_id']
+        self._verify_snapshot()
         quote,digest=self.resolve_serialized(stage=stage,provider=provider,model=model,
             serialized_request=raw,max_output_tokens=max_output_tokens)
         if quote['provider']!=provider or quote['model']!=model or quote['output_max']!=max_output_tokens or digest!=hashlib.sha256(raw).hexdigest():
@@ -49,6 +66,10 @@ class WorkerAdmissionGateway:
     def settle_raw(self,attempt,raw_usage):
         self._attempt(attempt)
         self.store.record_raw_provider_usage(attempt,raw_usage)
+        try:self._verify_snapshot()
+        except Exception:
+            self.uncertain(attempt)
+            raise AdmissionDenied('vendor source unverifiable/changed; accepted usage held') from None
         try:usage=self.measure_raw_usage(raw_usage) if self.measure_raw_usage else None
         except Exception:usage=None  # Evidence survives a failed schema/rate adapter.
         result=self.store.transition_provider_attempt(attempt,'settle',usage)
@@ -67,6 +88,7 @@ class WorkerAdmissionGateway:
 
     def start(self,attempt):
         self._attempt(attempt)
+        self._verify_snapshot()
         if self.launch_guard:
             result=self.store.start_launch_provider_attempt(attempt)
             if not result['started']:raise AdmissionDenied('service temporarily unavailable: '+result['reason'])
@@ -79,6 +101,10 @@ class WorkerAdmissionGateway:
 
     def settle(self,attempt,response):
         self._attempt(attempt)
+        try:self._verify_snapshot()
+        except Exception:
+            self.uncertain(attempt)
+            raise AdmissionDenied('vendor source unverifiable/changed; accepted usage held') from None
         usage=self.measure_usage(response) if self.measure_usage else None
         result=self.store.transition_provider_attempt(attempt,'settle',usage)
         self._resume_meter(attempt)
