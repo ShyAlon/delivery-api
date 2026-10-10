@@ -8,10 +8,10 @@ import httpx
 from fastapi import FastAPI,Request
 from fastapi.responses import JSONResponse,HTMLResponse
 
-ROUTES={'workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
+ROUTES={'payment-journal':'/api/operator/payment-journal','payment-totals':'/api/operator/payment-totals','workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
     'operator-sessions':'/api/operator/sessions','operator-credits':'/api/operator/credits',
     'expense-totals':'/api/operator/expense-totals','task-debug':'/api/operator/task-debug','task-logs':'/api/operator/task-logs','credit-account':'/api/operator/credit-account','task-usage':'/api/operator/task-usage'}
-QUERY_KEYS={'task-usage':{'task_id'},'credit-account':{'owner_id'},'task-logs':{'task_id','before_id','limit'},'task-debug':{'task_id'},'operator-sessions':{'limit','before_created_at','before_session_id'},
+QUERY_KEYS={'payment-journal':{'start_at','end_at','owner_id','limit','before_created_at','before_purchase_id'},'payment-totals':{'start_at','end_at','owner_id','limit'},'task-usage':{'task_id'},'credit-account':{'owner_id'},'task-logs':{'task_id','before_id','limit'},'task-debug':{'task_id'},'operator-sessions':{'limit','before_created_at','before_session_id'},
             'operator-credits':{'limit','after_owner'}}
 
 

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from uuid import UUID
 from .tenancy import current_scope,TenantAccessDenied
 
-CAPABILITIES=frozenset({'usage.read','analytics.read','sessions.read','debug.read','logs.read',
+CAPABILITIES=frozenset({'payments.read','usage.read','analytics.read','sessions.read','debug.read','logs.read',
     'credits.allocate','users.suspend','messages.prepare','sessions.operate','services.operate'})
 
 @dataclass(frozen=True)

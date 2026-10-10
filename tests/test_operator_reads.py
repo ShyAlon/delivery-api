@@ -1,6 +1,7 @@
 import uuid,os
 import pytest
 from test_postgres_store import store,A,B,DSN
+from test_attempt_ledger import ledger
 from delivery_api.tenancy import tenant_context,TenantAccessDenied
 from delivery_api.operator_authorization import OperatorPrincipal
 from delivery_api.operator_reads import OperatorReadStore
@@ -63,14 +64,16 @@ def test_operator_credit_pages_preserve_negative_fixed_point_and_capability(stor
    c.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))
 
 
-def test_operator_expense_aggregate_uses_settlement_time_and_retains_old_holds(store):
+def test_operator_expense_aggregate_uses_settlement_time_and_retains_old_holds(ledger):
  import psycopg,time
  from test_attempt_ledger import Q
  from delivery_api.attempt_ledger import _quote
+ store,tid,job=ledger
  owner=A;now=time.time();expense,retail=_quote(Q)
+ # This aggregate fixture deliberately retains three simultaneous historical
+ # attempts; configure its TEST ONLY concurrency bound explicitly.
+ with psycopg.connect(DSN) as c:c.execute('UPDATE admission_limits SET concurrency_max=3 WHERE owner_id=%s',(A.owner_id,))
  with tenant_context(owner):
-  tid=store.create_task('expense-op-'+uuid.uuid4().hex)['task_id'];store.set_engine_session(tid,'expense-'+uuid.uuid4().hex)
-  job=store.enqueue_worker(tid,'phase:needs');store.claim_worker(job)
   ids=[uuid.uuid4().hex for _ in range(3)]
   for aid in ids:store.reserve_provider_attempt(job,aid,Q,'fake')
  with psycopg.connect(DSN) as c:
@@ -93,7 +96,7 @@ def test_operator_expense_aggregate_uses_settlement_time_and_retains_old_holds(s
   with psycopg.connect(DSN) as c:
    c.execute('DELETE FROM provider_attempts WHERE attempt_id=ANY(%s)',(ids,))
    c.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))
-  with tenant_context(A):store.finish_worker(job);store.delete_task(tid)
+  # ledger fixture owns cleanup after the aggregate evidence is removed.
 
 
 def test_operator_debug_metadata_has_separate_capability_and_no_content_grants(store):
@@ -162,7 +165,11 @@ def test_curated_state_events_are_append_only_capability_separate_and_paged(stor
    with pytest.raises(TenantAccessDenied):reader.task_logs(store,tid)
  finally:
   with psycopg.connect(DSN) as c:c.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))
-  with tenant_context(B):store.delete_task(tid)
+  with tenant_context(B):
+   # No engine/worker was ever created in this fixture. Confirm that fact via
+   # the existing stop path, rather than deleting while Stop is pending.
+   store.confirm_task_stopped(tid,engine_quiescent=True)
+   store.delete_task(tid)
 
 
 def test_task_usage_separate_role_exact_tokens_and_actual_charges(ledger):
