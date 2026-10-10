@@ -20,6 +20,17 @@ def _positive(value):
 
 
 @dataclass(frozen=True)
+class ProcessorBinding:
+    processor:str
+    merchant_id:str
+    live_mode:bool
+
+    def __post_init__(self):
+        if not _key(self.processor) or not _key(self.merchant_id) or type(self.live_mode) is not bool:
+            raise ValueError('explicit processor merchant and mode required')
+
+
+@dataclass(frozen=True)
 class PurchaseIntent:
     purchase_id:str
     owner_id:str
@@ -58,6 +69,8 @@ class ProcessorEvidence:
     amount_minor:int
     status:str
     live_mode:bool
+    processor_fee_minor:int|None=None
+    net_received_minor:int|None=None
 
 
 def prepare_fulfillment(intent,evidence,*,expected_processor,expected_merchant,expected_live_mode):
@@ -79,10 +92,15 @@ def prepare_fulfillment(intent,evidence,*,expected_processor,expected_merchant,e
     if type(evidence.amount_minor) is not int or evidence.amount_minor!=intent.amount_minor or evidence.currency!=intent.currency:
         raise ValueError('confirmed amount or currency mismatch')
     if evidence.status!='paid':raise ValueError('confirmed paid state required; other states need review')
+    fee=evidence.processor_fee_minor;net=evidence.net_received_minor
+    if (fee is None)!=(net is None):raise ValueError('complete gross/fee/net evidence required')
+    if fee is not None and (type(fee) is not int or type(net) is not int or fee<0 or net<0 or fee+net!=intent.amount_minor):
+        raise ValueError('exact matching gross/fee/net amounts required')
     identity={'processor':evidence.processor,'merchant_account':evidence.merchant_account,
               'payment_id':evidence.payment_id,'live_mode':evidence.live_mode}
     return {'purchase_id':intent.purchase_id,'owner_id':intent.owner_id,
             'credit_units':intent.credit_units,'units_per_credit':intent.units_per_credit,
             'intent_digest':intent.digest,'event_id':evidence.event_id,
             'payment_key':hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+            'processor_fee_minor':fee,'net_received_minor':net,
             'effect_executed':False,'commit_available':False}

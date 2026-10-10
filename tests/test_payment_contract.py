@@ -37,3 +37,8 @@ def test_no_guessed_float_negative_overflow_or_owner_alias_intents(field,value):
 
 def test_plain_customer_json_is_not_processor_evidence():
     with pytest.raises(ValueError):prepare(evidence={'status':'paid','credits':999999})
+
+
+@pytest.mark.parametrize('fee,net',[(1,None),(None,1),(-1,124),(True,122),(1,122.0),(1,100)])
+def test_invalid_actual_fee_net_evidence_rejected(fee,net):
+    with pytest.raises(ValueError):prepare(evidence=replace(EVIDENCE,processor_fee_minor=fee,net_received_minor=net))
