@@ -49,3 +49,9 @@ def test_protective_owner_ceiling_is_not_a_vendor_fact_or_paid_admission(tmp_pat
     context=json.loads((Path(result['generated_runtime'])/'context.json').read_text())
     with pytest.raises(AdmissionDenied,match='verified complete-request'):
         ReviewedContextCeiling(**context)(stage='needs',serialized_request=b'{"model":"deepseek-flash","max_tokens":1}',max_output_tokens=1)
+
+
+def test_legacy_duplicate_fields_are_not_silently_ignored(tmp_path):
+    root=filled(tmp_path);d,_=load_env(root);d['RETAIL_INPUT_UNITS_PER_TOKEN']=1
+    p=root/'private/.env';p.unlink();write_env(p,d)
+    with pytest.raises(ValueError,match='migrate-d13'):review(root)

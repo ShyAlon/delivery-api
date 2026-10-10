@@ -53,6 +53,7 @@ def build_runtime(root,data,identity):
     from single_config import SECRET,unresolved
     from delivery_api.paypal_adapter import PayPalBinding
     if any(unresolved(data.get(k)) for k in BASE):raise ValueError('required local sandbox bindings, keys and fixture model missing')
+    if REMOVED & data.keys():raise ValueError('legacy manual provider/retail fields remain; review migrate-d13 candidate before compile')
     rates=RetailRates.from_environment({k:data[k] for k in RETAIL if k in data})
     snapshot,checked=load_snapshot(root,data['MODEL']);ceiling=checked.ceiling()
     price={'provider':'deepseek','model':data['MODEL'],'source':PRICING_URL,'price_version':'vendor-'+checked.id,'expense_input':ceiling['cache_miss'],'expense_cache_hit':ceiling['cache_hit'],'expense_cache_miss':ceiling['cache_miss'],'expense_output':ceiling['output'],'expense_units_per_usd':10**12,'retail_units_per_credit':UNITS_PER_CREDIT,'retail_input':int(rates.price_per_token*UNITS_PER_CREDIT),'retail_output':int(rates.price_per_token*UNITS_PER_CREDIT),'retail_formula':rates.snapshot(),'provider_snapshot':snapshot,'usage_categories':['input_tokens','output_tokens','cache_hit_tokens','cache_miss_tokens']}

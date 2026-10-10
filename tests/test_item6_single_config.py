@@ -16,7 +16,8 @@ def filled(tmp_path):
  # Owner's chosen model, existing price/context sources are fixture values.
  for name in ('run.json','catalog.json','context.json'):
   p=root/'private'/name;p.write_text(p.read_text().replace('fixture-model','deepseek-flash'))
- import_legacy(root);d,_=load_env(root);d['PRICING_BAND']='off_peak'
+ import_legacy(root);d,_=load_env(root)
+ d={k:v for k,v in d.items() if k in {'MODEL','PAYPAL_CLIENT_ID','PAYPAL_CLIENT_SECRET','DEEPSEEK_API_KEY','SANDBOX_MERCHANT_ID','SANDBOX_WEBHOOK_ID'}}
  p=root/'private/.env';p.unlink();write_env(p,d)
  generate_snapshot(root,'deepseek-flash',lambda url:P if url==PRICING_URL else A)
  return root
