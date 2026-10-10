@@ -27,6 +27,8 @@ def _candidates(engine_dir:Path)->list[Path]:
   if path not in result and path.is_file() and os.access(path,os.X_OK):result.append(path)
  return result
 async def validate_python(python:Path,module:str='langchain_core')->bool:
+ from .execution_fence import require_engine_execution
+ require_engine_execution()
  if not python.is_file() or not os.access(python,os.X_OK):return False
  proc=await asyncio.create_subprocess_exec(str(python),'-c',f'import {module}',stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
  return await proc.wait()==0

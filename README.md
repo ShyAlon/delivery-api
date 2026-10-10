@@ -29,58 +29,56 @@ Existing databases inside an older `dist/requi-re` folder are not migrated autom
 
 All routes, background jobs and the subprocess runner depend on the `Storage` protocol. Only `SQLiteStore` contains SQL or a database connection, and `create_store(DATABASE_URL)` is the single backend selection point. A Postgres adapter can implement the same protocol and be selected there; the HTTP and CLI job layers do not change. Additive local schema migrations run when SQLite opens, preserving existing task/audit history. `DELIVERY_DB_PATH` remains accepted for older setups. Rerun policy is isolated in `Store.prepare_rerun`; archive is implemented as the reversible option, while wipe and overwrite remain blocked until the founder chooses.
 
-## One image
+## Delivery-only container (fenced)
+
+The root Dockerfile installs only delivery-api and the bundled contracts wheel.
+No interview-engine, spec-generator, Ollama or provider SDK is installed. It runs
+as a non-root user with the delivery-only launcher: reads and health are available,
+mutations/engine dispatch/payments remain disabled. It is not a working full-run
+image or launch approval. Existing fake integrated test images are separate under
+scripts/docker and still contain the engines for dry validation.
 
 ```bash
-docker build -t vmodel .
-
-# The image pip-installs the private vmodel-contracts dependency. The clone
-# authenticates through a gitconfig passed as a BuildKit secret (CI sources it
-# from the VMODEL_CONTRACTS_PAT repo secret). For a local build, point docker
-# at a gitconfig that can clone ShyAlon/vmodel-contracts:
-#   docker build --secret id=gitconfig,src="$HOME/.gitconfig" -t vmodel .
-# Without the secret the build still runs, but the pip install fails with a
-# git authentication error.
-docker run --rm -p 8000:8000 -v "$PWD/.data:/data" \
-  -e DELIVERY_DB_PATH=/data/delivery.db vmodel
+docker build -t requi-control-plane .
+docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+  requi-control-plane
 ```
 
-Ollama is never in the image. Local deployments route to host Ollama; cloud deployments use API providers through the engines' shared model-routing environment. Source development and built distributions run the interview engine as a private authenticated HTTP service. Founder inputs cross the typed HTTP protocol; the interview path does not use a CLI subprocess or stdin. The single-runtime distribution installs the engine into its own runtime and needs no sibling checkout at launch.
+Runtime depends on PostgreSQL/Supabase configuration for the tenant control plane;
+the empty temporary SQLite default exists only for network-none packaging smoke.
+Never point a production launcher at a shared SQLite/Turso fallback. No provider
+credentials or existing user database are passed to the smoke run.
 
-## Hetzner production deployment
+## Private deployment preparation
 
-Production is one multi-architecture Docker image on a small Ubuntu VM. Pure SQLite can be mounted from `/data`; optional Turso mode uses the same local file as an embedded replica. The container binds port 8000 to localhost only; put a TLS reverse proxy on ports 80/443 before public launch. Ollama is not deployed.
+No deployment was performed by this change. Dry tests exercise a stub Docker
+boundary; actual amd64/arm64 image build/run remains a separate required check.
+Docker is unavailable in the preparation environment. Installed-wheel startup
+without engine/provider packages is evidence of packaging, not container proof.
 
-`CI and deploy` runs tests on pull requests to `main` (except docs-only changes) and builds/pushes an amd64/arm64 image only when manually started with Actions > CI and deploy > Run workflow; optional SSH deployment follows. Deployment is off until the repository variable `DEPLOY_ENABLED=true` exists, so CI stays green before a server is provisioned. Images are immutable `sha-<commit>` tags. The remote deploy keeps the previous image name and prints an exact rollback command if `/health` fails.
+Manual CI can build immutable SHA-tag images; no mutable main tag is published.
+The deployment job is off unless CONTROL_PLANE_DEPLOY_ENABLED=true is explicitly
+set, and uses the build's immutable registry digest. Do not set that variable or
+run remote deployment before the owner's step-6 scope review.
 
-### Provision once
+The prepared script requires an immutable image digest and an existing owner-only
+reviewed env file (for CI: /etc/requi/control-plane.env). It validates PostgreSQL
+and Supabase fields without printing values, starts an unpublished candidate,
+checks health, then replaces the loopback listener. The exact previous container
+and config are retained for rollback. A candidate failure leaves the old service
+untouched; cutover failure restores it. Existing candidate/previous containers
+block another deployment pending operator review. No image/data pruning occurs.
 
-1. Create an Ubuntu 24.04 Hetzner CX22 in an EU region. Add the dedicated deploy public key during creation. Do not paste private keys into the server or chat.
-2. Copy and run the idempotent bootstrap as root:
+```bash
+# Preparation syntax only, not permission to deploy:
+scripts/deploy-server.sh registry/image@sha256:ACTUAL_DIGEST /path/to/reviewed.env
+```
 
-   ```bash
-   scp scripts/bootstrap-server.sh root@SERVER_IP:/tmp/
-   ssh root@SERVER_IP 'bash /tmp/bootstrap-server.sh'
-   ```
-
-3. Verify the non-root deployment route:
-
-   ```bash
-   ssh -i ~/.ssh/vmodel-deploy deploy@SERVER_IP docker version
-   ```
-
-4. Set repository configuration from a logged-in `gh` CLI:
-
-   ```bash
-   cd ~/development/require/delivery-api
-   printf '%s' 'SERVER_IP' | gh secret set HETZNER_HOST
-   gh secret set HETZNER_SSH_KEY < ~/.ssh/vmodel-deploy
-   gh variable set DEPLOY_ENABLED --body true
-   ```
-
-5. Trigger the first deployment with `gh workflow run 'CI and deploy'`, or push to `main`. Watch it with `gh run watch`.
-
-The workflow uses `GITHUB_TOKEN` for GHCR. No registry password is stored. GitHub environments may optionally require manual production approval. Back up the active local database before database migrations; Hetzner VM backups and Turso sync do not replace an application-consistent backup.
+Runtime flags: read-only root, non-root UID, no capabilities/new privileges,
+bounded pids and temporary scratch, loopback-only host publication. No engine or
+billable worker runs in this profile. Host provisioning, TLS/auth, protected
+credentials, migrations, live health and recovery remain rollout checks.
 
 ## Production authentication and per-user token quotas
 
@@ -206,7 +204,7 @@ The build checks this before dependency installation and stops with Error / Like
 
 Run `./scripts/test-local.sh` from any directory. It creates a reusable `.venv`, installs the development dependencies and runs the full local suite using Python 3.12. Set DELIVERY_TEST_SCOPE=pr for the bounded PR suite. Install Python 3.12 first, and make sure your Git authentication can read private `ShyAlon/vmodel-contracts` where it is a dependency.
 
-For the local packaged app build, run `./scripts/build-dist.sh` from `delivery-api` with the sibling repositories checked out as described above. This builds the desktop distribution; it does not publish an image or deploy production. For a local container build, use the Docker command and private dependency instructions in the Docker section above.
+For the local packaged app build, run `./scripts/build-dist.sh` from `delivery-api` with the sibling repositories checked out as described above. This builds the desktop distribution; it does not publish an image or deploy production. For a delivery-only container build, use the fenced Docker section above; no private git clone credential or engines are required.
 
 For a standalone wheel build of this repository, run `./scripts/build-local.sh` (requires Python 3.12 and pip). This writes to `dist/` and does not publish or deploy anything.
 

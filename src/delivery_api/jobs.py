@@ -36,6 +36,8 @@ class JobQueue:
         self._handlers[kind] = fn
 
     async def start(self) -> None:
+        from .execution_fence import require_engine_execution
+        require_engine_execution()
         self._worker = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
@@ -43,6 +45,8 @@ class JobQueue:
             self._worker.cancel()
 
     async def submit(self, kind: str, run_id: str) -> None:
+        from .execution_fence import require_engine_execution
+        require_engine_execution()
         await self._queue.put((kind, run_id, time.time()))
 
     async def _loop(self) -> None:

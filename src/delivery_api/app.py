@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse
 from vmodel_contracts import RunState, RunStatus
 
 from . import config
+from .execution_fence import control_plane_only
 from .budget import BudgetExceeded, check_global_budget, check_run_budget
 from . import auth
 from .jobs import JobQueue
@@ -368,7 +369,7 @@ async def lifespan(application:FastAPI):
     from .observability import LOG_PATH,stage_log_paths
     print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
-    if not config.CLOUD_TENANTS:
+    if not config.CLOUD_TENANTS and not control_plane_only():
         simulation.reconcile_interrupted();await jobs.start();await _recover_tasks();await _catch_up_interview_progress()
     if threading.current_thread() is threading.main_thread() and signal.getsignal(signal.SIGINT) is not _shutdown_signal:
         _previous_sigint=signal.getsignal(signal.SIGINT);signal.signal(signal.SIGINT,_shutdown_signal)
@@ -416,6 +417,8 @@ app.mount("/assets", StaticFiles(directory=WEB_DIR), name="assets")
 
 @app.middleware("http")
 async def request_log(request, call_next):
+    if control_plane_only() and request.method not in ('GET','HEAD','OPTIONS'):
+        return JSONResponse({'detail':'Delivery-only runtime: mutations and execution remain fenced'},status_code=503,headers={'Cache-Control':'no-store'})
     if request.url.path.startswith('/api/operator/') and not config.CLOUD_TENANTS:
         return JSONResponse({'detail':'Operator resource not found'},status_code=404,headers={'Cache-Control':'no-store'})
     try:
@@ -2466,6 +2469,7 @@ def set_quota(user_id:str, req:QuotaUpdate, request:Request, a:auth.Actor=Depend
 
 @app.get("/health")
 def health():
+    if control_plane_only():return {"ok":True,"runtime_profile":"control_plane_only","engine_execution":False,"payments_enabled":False}
     if config.CLOUD_TENANTS:return {"ok":True}
     return {"ok": True, "total_spend_usd": store.total_spend(), "tasks": len(store.list_tasks()), **RUNTIME_VERSION}
 
@@ -2531,6 +2535,7 @@ async def resume_cloud_worker(task_id:str,body:WorkerResumeRequest,a:auth.Actor=
 
 
 def cloud_execution_admitted()->bool:
+    if control_plane_only():return False
     """Closed until rate/spend admission and the full lifecycle chain pass."""
     return False
 

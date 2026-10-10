@@ -1,6 +1,11 @@
-.git
-.pytest_cache
-__pycache__
-*.pyc
-delivery.db*
-artifacts
+**
+!Dockerfile
+!pyproject.toml
+!README.md
+!src/
+!src/delivery_api/
+!src/delivery_api/**
+!vendor/
+!vendor/vmodel_contracts-0.28.0-py3-none-any.whl
+**/__pycache__
+**/*.pyc
