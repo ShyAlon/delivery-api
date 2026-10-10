@@ -34,6 +34,12 @@ class WorkerAdmissionGateway:
             caps=[payload[k] for k in ('max_tokens','max_completion_tokens') if k in payload]
             if payload.get('model')!=model or len(caps)!=1 or type(caps[0]) is not int or caps[0]!=max_output_tokens:raise ValueError()
         except (ValueError,TypeError,AttributeError) as exc:raise AdmissionDenied('serialized request identity/cap mismatch') from exc
+        existing=self.store.provider_attempt(attempt_id)
+        if existing:
+            quote=existing['quote'];digest=hashlib.sha256(raw).hexdigest()
+            if existing['job_id']!=self.job_id or quote['provider']!=provider or quote['model']!=model or quote['output_max']!=max_output_tokens:
+                raise AdmissionDenied('existing attempt identity differs from request')
+            return self.store.reserve_provider_attempt(self.job_id,attempt_id,quote,digest,require_prepaid=self.require_prepaid)['attempt_id']
         quote,digest=self.resolve_serialized(stage=stage,provider=provider,model=model,
             serialized_request=raw,max_output_tokens=max_output_tokens)
         if quote['provider']!=provider or quote['model']!=model or quote['output_max']!=max_output_tokens or digest!=hashlib.sha256(raw).hexdigest():

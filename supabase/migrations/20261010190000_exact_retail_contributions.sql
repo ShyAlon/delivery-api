@@ -59,3 +59,5 @@ REVOKE ALL ON public.retail_compute_segments FROM PUBLIC,authenticated;
 DO $$ BEGIN IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN
  REVOKE ALL ON public.retail_compute_segments FROM anon; END IF; END $$;
 GRANT SELECT,INSERT,UPDATE ON public.retail_compute_segments TO requi_backend;
+ALTER TABLE public.provider_attempts ADD COLUMN provider_started_at DOUBLE PRECISION;
+ALTER TABLE public.provider_attempts ADD COLUMN billed_rate_evidence JSONB;

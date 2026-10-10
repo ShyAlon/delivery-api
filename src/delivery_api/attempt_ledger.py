@@ -16,7 +16,13 @@ def _integer(value):
 def _quote(quote):
     keys={'provider','model','price_version','bound_version','input_max','output_max',
           'expense_input','expense_output','retail_input','retail_output'}
-    optional={'retail_units_per_credit','expense_cache_hit','expense_cache_miss','expense_units_per_usd','retail_formula'}
+    optional={'retail_units_per_credit','expense_cache_hit','expense_cache_miss','expense_units_per_usd','retail_formula','provider_evidence'}
+    if 'provider_evidence' in quote:
+        from .provider_snapshot import ProviderSnapshot
+        evidence=quote['provider_evidence'];snapshot=ProviderSnapshot(evidence['snapshot'])
+        if snapshot.id!=evidence['snapshot_sha256']:raise AdmissionDenied('provider snapshot hash mismatch')
+        ceiling=snapshot.ceiling()
+        if (quote['expense_cache_hit'],quote['expense_cache_miss'],quote['expense_output'])!=(ceiling['cache_hit'],ceiling['cache_miss'],ceiling['output']):raise AdmissionDenied('provider admission ceiling mismatch')
     if 'retail_formula' in quote:
         from .retail_ledger import rates_from_snapshot
         rates=rates_from_snapshot(quote['retail_formula'])
@@ -98,7 +104,7 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         if require_prepaid:
             from .prepaid import authorize
             authorize(store,dict(row))
-        store._db.execute("UPDATE provider_attempts SET state='dispatched',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))
+        store._db.execute("UPDATE provider_attempts SET state='dispatched',updated_at=?,provider_started_at=? WHERE attempt_id=?",(time.time(),time.time(),attempt_id))
     elif action=='cancel':
         if row['state']=='cancelled':return dict(row)
         if row['state']!='reserved':raise AdmissionDenied('dispatched or uncertain funds cannot be released')
@@ -120,7 +126,19 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
             # Return the durable hold, not an exception that rolls it back.
             store._db.execute("UPDATE provider_attempts SET state='uncertain',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))
             return store.provider_attempt(attempt_id)
-        expense=(usage['cache_hit_tokens']*quote['expense_cache_hit']+usage['cache_miss_tokens']*quote['expense_cache_miss'] if 'expense_cache_hit' in quote else usage['input_tokens']*quote['expense_input'])+usage['output_tokens']*quote['expense_output']
+        settled_quote=quote
+        if 'provider_evidence' in quote:
+            from .provider_snapshot import ProviderSnapshot
+            from datetime import datetime,timezone
+            try:
+                snapshot=ProviderSnapshot(quote['provider_evidence']['snapshot'])
+                band,rates=snapshot.billed_rates(datetime.fromtimestamp(row['provider_started_at'],timezone.utc),datetime.now(timezone.utc))
+            except (AdmissionDenied,TypeError):
+                store._db.execute("UPDATE provider_attempts SET state='uncertain',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))
+                return store.provider_attempt(attempt_id)
+            settled_quote=dict(quote,expense_cache_hit=rates['cache_hit'],expense_cache_miss=rates['cache_miss'],expense_output=rates['output'])
+            store._db.execute('UPDATE provider_attempts SET billed_rate_evidence=?::jsonb WHERE attempt_id=?',(json.dumps({'snapshot_sha256':snapshot.id,'band':band,'rates':rates,'basis':'uniform UTC start-to-settlement interval','settlement_observed_at':datetime.now(timezone.utc).isoformat()}),attempt_id))
+        expense=(usage['cache_hit_tokens']*settled_quote['expense_cache_hit']+usage['cache_miss_tokens']*settled_quote['expense_cache_miss'] if 'expense_cache_hit' in quote else usage['input_tokens']*quote['expense_input'])+usage['output_tokens']*settled_quote['expense_output']
         retail=usage['input_tokens']*quote['retail_input']+usage['output_tokens']*quote['retail_output']
         if 'retail_formula' in quote:
             from .retail_ledger import post

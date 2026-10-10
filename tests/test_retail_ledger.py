@@ -84,3 +84,32 @@ def test_browser_roles_cannot_read_retail_evidence(account):
             with pytest.raises(Exception),c.transaction():
                 c.execute('SET LOCAL ROLE authenticated')
                 c.execute('SELECT * FROM '+name)
+
+
+def test_provider_ceiling_is_not_confirmed_expense_and_boundary_is_held(account):
+    from test_provider_snapshot import fixture
+    from delivery_api.provider_snapshot import ProviderSnapshot
+    from datetime import datetime,timezone
+    import psycopg
+    s,tid,job=account;data=fixture();now=datetime.now(timezone.utc);data['fetched_at']=now.isoformat()
+    with psycopg.connect(DSN) as c:c.execute('UPDATE admission_limits SET expense_limit=NULL,attempt_expense_max=NULL WHERE owner_id=%s',(A.owner_id,))
+    snapshot=ProviderSnapshot(data);rates=RetailRates.from_environment({}).snapshot()
+    q={'provider':'fake','model':'fixture','price_version':'fixture','bound_version':'fixture','input_max':10,'output_max':10,'expense_input':300000,'expense_cache_hit':6000,'expense_cache_miss':300000,'expense_output':1200000,'expense_units_per_usd':10**12,'retail_input':12500,'retail_output':12500,'retail_units_per_credit':UNITS_PER_CREDIT,'retail_formula':rates,'provider_evidence':snapshot.quote_evidence(now)}
+    with tenant_context(A):
+        attempt=s.reserve_provider_attempt(job,uuid.uuid4().hex,q,'one',require_prepaid=True)['attempt_id']
+        s.transition_provider_attempt(attempt,'start',require_prepaid=True)
+        u={'input_tokens':2,'output_tokens':3,'cache_hit_tokens':1,'cache_miss_tokens':1}
+        result=s.transition_provider_attempt(attempt,'settle',u)
+        assert result['expense_actual']==3000+150000+3*600000
+        assert result['billed_rate_evidence']['band']=='off_peak'
+        assert result['quote']['expense_output']==1200000
+        assert s.transition_provider_attempt(attempt,'settle',u)['expense_actual']==result['expense_actual']
+        # Deliberately unverifiable interval remains unknown, not a peak charge.
+        second=s.reserve_provider_attempt(job,uuid.uuid4().hex,q,'two',require_prepaid=True)['attempt_id']
+    with psycopg.connect(DSN) as c:c.execute('UPDATE credit_accounts SET balance_units=1 WHERE owner_id=%s',(A.owner_id,))
+    with tenant_context(A):s.transition_provider_attempt(second,'start',require_prepaid=True)
+    with psycopg.connect(DSN) as c:c.execute('UPDATE provider_attempts SET provider_started_at=%s WHERE attempt_id=%s',(now.timestamp()-90000,second))
+    with tenant_context(A):
+        result=s.transition_provider_attempt(second,'settle',u)
+        assert result['state']=='uncertain' and result['expense_actual'] is None
+        with s._postgres.transaction() as c:assert c.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']==1
