@@ -104,9 +104,12 @@ def validate(destination):
     return {'ready_for_dry_preflight':True,'run_started':False,'credentials_reported':False,'bindings_verified_live':False,'launch_authorized':False}
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('action',choices=('create','validate','fetch-model-data','init-env','import-config','apply-model-data','review-config','compile-config','create-env','diagnose-import','migrate-d13','fetch-vendor-snapshot'));p.add_argument('directory',type=Path);p.add_argument('--model',help='Explicit model from current vendor table; no default');p.add_argument('--band',choices=('peak','off_peak'));p.add_argument('--context-tokens',type=int);p.add_argument('--confirm',help='Exact review hash from review-config');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('action',choices=('create','validate','fetch-model-data','init-env','import-config','apply-model-data','review-config','compile-config','create-env','diagnose-import','migrate-d13','fetch-vendor-snapshot','diagnose-review'));p.add_argument('directory',type=Path);p.add_argument('--model',help='Explicit model from current vendor table; no default');p.add_argument('--band',choices=('peak','off_peak'));p.add_argument('--context-tokens',type=int);p.add_argument('--confirm',help='Exact review hash from review-config');a=p.parse_args()
     try:
-        if a.action=='migrate-d13':
+        if a.action=='diagnose-review':
+            from review_diagnostics import diagnose_review
+            result=diagnose_review(a.directory)
+        elif a.action=='migrate-d13':
             from vendor_config import migrate_env
             result=migrate_env(a.directory)
         elif a.action=='fetch-vendor-snapshot':
@@ -136,8 +139,11 @@ if __name__=='__main__':
         else:result=scaffold(a.directory) if a.action=='create' else validate(a.directory)
         print(json.dumps(result))
     except Exception as error:
+        from review_diagnostics import ReviewPrerequisite
+        if isinstance(error,ReviewPrerequisite):
+            print(json.dumps({'action':a.action,'checked':'D13 review prerequisites','expected':'valid local PayPal resource IDs','found':'one or more field checks failed; values not printed','where':'private/.env','checks':error.checks,'next':'Fix only the named fields locally; run diagnose-review, then review-config. Preserve successful snapshot and credentials.','run_started':False,'action_completed':False}));raise SystemExit(1) from None
         # Arbitrary exception strings can contain local credentials/config fragments.
-        detail={'action':a.action,'checked':'private configuration/action prerequisites','expected':'complete valid schema, secure files and explicit arguments','found':type(error).__name__+'; details suppressed to protect private values','where':str(a.directory),'next':'For import use diagnose-import. Inspect listed private files locally, never paste keys or raw configs.','run_started':False,'action_completed':False}
+        detail={'action':a.action,'checked':'private configuration/action prerequisites','expected':'complete valid schema, secure files and explicit arguments','found':type(error).__name__+'; details suppressed to protect private values','where':str(a.directory),'next':'Use diagnose-review for review/compile, diagnose-import only for one-time legacy import. Inspect named private files locally; never paste keys or raw configs.','run_started':False,'action_completed':False}
         # Only exact literal messages declared in our own code are safe to show.
         import ast
         known=set()
@@ -145,7 +151,15 @@ if __name__=='__main__':
             tree=ast.parse((Path(__file__).parent/module).read_text())
             for node in ast.walk(tree):
                 if isinstance(node,ast.Raise) and isinstance(node.exc,ast.Call) and node.exc.args and isinstance(node.exc.args[0],ast.Constant) and isinstance(node.exc.args[0].value,str):known.add(node.exc.args[0].value)
-        if type(error) is ValueError and str(error) in known:
+        try:
+            from delivery_api import paypal_adapter,provider_snapshot
+            extra_modules=(paypal_adapter,provider_snapshot)
+        except ImportError:extra_modules=()
+        for module in extra_modules:
+            tree=ast.parse(Path(module.__file__).read_text())
+            for node in ast.walk(tree):
+                if isinstance(node,ast.Raise) and isinstance(node.exc,ast.Call) and node.exc.args and isinstance(node.exc.args[0],ast.Constant) and isinstance(node.exc.args[0].value,str):known.add(node.exc.args[0].value)
+        if isinstance(error,ValueError) and str(error) in known:
             detail.update(expected=str(error),found='requirement not met; private values suppressed',where=str(a.directory/'private/.env') if a.action in ('review-config','compile-config','apply-model-data') else str(a.directory))
         if isinstance(error,FileExistsError):detail.update(checked='fresh output destination',expected='new file/snapshot; never overwrite',found='destination already exists; preserve and inspect it',next='For import, inspect existing private/.env. Do not delete a filled source or run evidence.')
         if isinstance(error,ModuleNotFoundError):detail.update(checked='local Python dependency',expected='delivery-api wheel/environment installed for review/compile',found='required module unavailable; module name suppressed',next='Use the delivery-api .venv; diagnose-import/create/fetch need no provider keys.')

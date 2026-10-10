@@ -52,6 +52,8 @@ def load_snapshot(root,model):
 def build_runtime(root,data,identity):
     from single_config import SECRET,unresolved
     from delivery_api.paypal_adapter import PayPalBinding
+    from review_diagnostics import require_bindings
+    require_bindings(data)
     if any(unresolved(data.get(k)) for k in BASE):raise ValueError('required local sandbox bindings, keys and fixture model missing')
     if REMOVED & data.keys():raise ValueError('legacy manual provider/retail fields remain; review migrate-d13 candidate before compile')
     rates=RetailRates.from_environment({k:data[k] for k in RETAIL if k in data})
