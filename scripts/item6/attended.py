@@ -50,5 +50,8 @@ class Attended:
         path=Path(input('Path to authentic PayPal sandbox event + transmission headers JSON: ').strip())
         if path.is_symlink() or path.stat().st_mode&0o077 or path.stat().st_size>2*1024*1024:raise ValueError('private bounded webhook file required')
         body=json.loads(path.read_text())
+        if body.get('format')=='item6-paypal-raw-v1':
+            from receiver.receiver import decode_envelope
+            return decode_envelope(body)
         if set(body)!={'event','headers'}:raise ValueError('exact event and original transmission headers required')
         return json.dumps(body['event'],separators=(',',':')).encode(),body['headers']
