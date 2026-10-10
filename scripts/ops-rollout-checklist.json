@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "launch_authorized": false,
+  "checks": [
+    "exact source/image digests and target container architectures",
+    "restricted runtime database roles, RLS and current migrations",
+    "Supabase verified identity, session expiry and revocation",
+    "operator identity provisioned only from verified first signup",
+    "TLS/public-origin/proxy and loopback-only listeners",
+    "provider expense policy, catalog and unknown-outcome admission",
+    "outbox delivery proof without leaking context or replaying unknown sends",
+    "PayPal sandbox complete/pending/refund/dispute signature and reconciliation",
+    "database archive, managed Auth and artifact coverage",
+    "backup timestamp, private storage, checksum and isolated restore drill",
+    "restart/recovery preserves uncertain jobs without automatic paid rerun",
+    "exact clean full run evidence and owner-scoped step6 launch decision"
+  ],
+  "real_money_tests": "only on explicit owner request",
+  "live_mutations": "not authorized by this checklist",
+  "health_is_readiness": false
+}

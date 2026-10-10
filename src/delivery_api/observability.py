@@ -1,6 +1,9 @@
 """Canonical human-readable event logging for local UI and server activity."""
 from __future__ import annotations
 import logging
+import threading
+from logging.handlers import RotatingFileHandler
+from .log_safety import safe_text,safe_fields
 from datetime import datetime
 from pathlib import Path
 from .config import default_data_dir
@@ -15,11 +18,15 @@ if not logger.handlers:
     formatter=logging.Formatter("%(message)s")
     stream=logging.StreamHandler();stream.setFormatter(formatter);logger.addHandler(stream)
     try:
-        file=logging.FileHandler(LOG_PATH,encoding="utf-8");file.setFormatter(formatter);logger.addHandler(file)
+        file=RotatingFileHandler(LOG_PATH,maxBytes=5*1024*1024,backupCount=3,encoding="utf-8");file.setFormatter(formatter);logger.addHandler(file)
     except OSError:pass
+
+_stage_log_lock=threading.RLock()
 
 def _line(kind:str,message:str,fields:dict)->str:
     stamp=datetime.now().astimezone().isoformat(timespec="milliseconds")
+    kind=safe_text(kind,80);message=safe_text(message)
+    fields=safe_fields(fields)
     safe=" ".join(f"{k}={str(v).replace(chr(10),' ')!r}" for k,v in fields.items() if v is not None)
     return f"{stamp} | {kind:<18} | {message}{' | '+safe if safe else ''}"
 
@@ -37,5 +44,9 @@ def event(kind:str,message:str,**fields)->None:
     if path:
         try:
             path.parent.mkdir(parents=True,exist_ok=True)
-            with path.open("a",encoding="utf-8") as handle:handle.write(line+"\n")
+            # No persistent handler cache across stage changes. Bounded files.
+            with _stage_log_lock:
+                handler=RotatingFileHandler(path,maxBytes=2*1024*1024,backupCount=2,encoding='utf-8')
+                try:handler.emit(logging.LogRecord('stage',logging.INFO,'',0,line,(),None))
+                finally:handler.close()
         except OSError:pass
