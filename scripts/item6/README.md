@@ -260,3 +260,46 @@ remove that exited dry container manually to free the name. Never remove a parti
 paid-run container just to retry. Only Shy's explicit go for the prepared run ID
 allows adding `--go` and that exact ID to the launcher. The command-line argument
 is an accident-prevention guard, not an approval source. Keys and go remain manual.
+
+## Fetch DeepSeek documentation as a proposal (no keys)
+
+From the updated delivery-api checkout, choose an explicit model from the current
+vendor pricing/API pages, then:
+
+```sh
+python3 scripts/item6/scaffold.py fetch-model-data runs/item6-run-01 --model MODEL_FROM_CURRENT_VENDOR_DOCS
+```
+
+This reads only two fixed public documentation URLs, no credential file or API key.
+It writes mode-600 `private/deepseek-proposal.json`, with model/version, raw limit
+labels, exact API output limit, both peak/off-peak USD rates, exact integer expense
+conversions, source hashes and UTC fetch time. It prints those public fetched facts
+and where they came from. It refuses to overwrite a proposal or reuse existing
+run evidence. Redirects, changed table labels/spans/units, duplicate fields or
+API/pricing disagreement stop without a partial proposal. The vendor publishes
+HTML, not a stable pricing API; parsing is strict against the current documented
+shape. If it stops, use the linked vendor pages manually and do not guess.
+
+It does NOT overwrite `run.json`, `catalog.json` or `context.json`. The file contains
+`run_model_proposal`, `catalog_proposals` and `context_proposal` ready for review and
+copying, with `reviewed: false`. This keeps the original downloaded Docker image
+safe too: a new metadata flag alone would not block its old entry point, so
+executable templates remain unresolved. After reviewing, copy the chosen catalog
+array, context object and model into their existing files; preserve the proposal
+and mark its `reviewed` true to record your review. That flag is a record, not run
+permission, and no script treats it as spending approval.
+
+Human decisions remain explicit: numeric context limit (the table gives a shorthand
+such as 1M, not an exact integer), current source/version confirmation, the applicable
+pricing period, and your retail rates. Fill `price_version`/`bound_version` review
+placeholders. Retail input/output are null and never fetched. No model is selected
+automatically. Prices can change between fetch and the run; check before go.
+
+A fixed catalog cannot faithfully price calls across peak/off-peak transitions.
+The proposal preserves the full vendor rule, including holiday exceptions; it does
+not choose today's band or silently apply peak prices as confirmed expense. Use
+one reviewed applicable band only when the entire attended run stays in it; otherwise
+stop and add per-call effective pricing before running. Network/model compatibility
+and the actual run remain unproved by documentation fetching. Run the usual local
+validation/dry preflight after completing the files. No paid provider request,
+webhook request, database action or go happens here.

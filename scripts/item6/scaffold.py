@@ -104,6 +104,12 @@ def validate(destination):
     return {'ready_for_dry_preflight':True,'run_started':False,'credentials_reported':False,'bindings_verified_live':False,'launch_authorized':False}
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('action',choices=('create','validate'));p.add_argument('directory',type=Path);a=p.parse_args()
-    try:print(json.dumps(scaffold(a.directory) if a.action=='create' else validate(a.directory)))
-    except Exception:raise SystemExit('Scaffold validation failed. Check private templates locally; no run started.') from None
+    p=argparse.ArgumentParser();p.add_argument('action',choices=('create','validate','fetch-model-data'));p.add_argument('directory',type=Path);p.add_argument('--model',help='Explicit model from current vendor table; no default');a=p.parse_args()
+    try:
+        if a.action=='fetch-model-data':
+            if not a.model:raise ValueError('explicit model choice required')
+            from model_data import propose
+            result=propose(a.directory,a.model)
+        else:result=scaffold(a.directory) if a.action=='create' else validate(a.directory)
+        print(json.dumps(result))
+    except Exception:raise SystemExit('Scaffold action failed closed. Check private templates or current vendor documentation manually; executable config unchanged by fetch, no run started.') from None
