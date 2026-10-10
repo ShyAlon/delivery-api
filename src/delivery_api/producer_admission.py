@@ -7,8 +7,10 @@ Missing resolver/usage fails closed. No monetary configuration defaults exist.
 from .attempt_ledger import AdmissionDenied
 
 class WorkerAdmissionGateway:
-    def __init__(self,store,job_id,*,resolve_quote=None,measure_usage=None,require_prepaid=True,resolve_serialized=None,measure_raw_usage=None,launch_guard=False):
+    def __init__(self,store,job_id,*,resolve_quote=None,measure_usage=None,require_prepaid=True,resolve_serialized=None,measure_raw_usage=None,launch_guard=False,retail_rates=None):
         if launch_guard and not require_prepaid:raise AdmissionDenied('launch guard requires prepaid accounting')
+        self.retail_rates=retail_rates
+        self.compute_meter=None;self._meter_attempts=set()
         self.launch_guard=launch_guard
         self.store=store;self.job_id=job_id;self.require_prepaid=require_prepaid
         self.resolve_quote=resolve_quote;self.measure_usage=measure_usage
@@ -44,7 +46,12 @@ class WorkerAdmissionGateway:
         try:usage=self.measure_raw_usage(raw_usage) if self.measure_raw_usage else None
         except Exception:usage=None  # Evidence survives a failed schema/rate adapter.
         result=self.store.transition_provider_attempt(attempt,'settle',usage)
+        self._resume_meter(attempt)
         if result['state']!='settled':raise AdmissionDenied('raw usage uncertain; reservation held for review')
+
+    def _resume_meter(self,attempt):
+        if attempt in self._meter_attempts:
+            self._meter_attempts.remove(attempt);self.compute_meter.resume()
 
     def _attempt(self,attempt):
         row=self.store.provider_attempt(attempt)
@@ -58,16 +65,23 @@ class WorkerAdmissionGateway:
             result=self.store.start_launch_provider_attempt(attempt)
             if not result['started']:raise AdmissionDenied('service temporarily unavailable: '+result['reason'])
         else:self.store.transition_provider_attempt(attempt,'start',require_prepaid=self.require_prepaid)
+        from .compute_meter import current
+        meter=self.compute_meter or current()
+        if meter:
+            self.compute_meter=meter
+            self.compute_meter.pause();self._meter_attempts.add(attempt)
 
     def settle(self,attempt,response):
         self._attempt(attempt)
         usage=self.measure_usage(response) if self.measure_usage else None
         result=self.store.transition_provider_attempt(attempt,'settle',usage)
+        self._resume_meter(attempt)
         if result['state']!='settled':raise AdmissionDenied('usage uncertain; reservation held for review')
 
     def uncertain(self,attempt):
         row=self._attempt(attempt)
         if row['state']=='dispatched':self.store.transition_provider_attempt(attempt,'uncertain')
+        self._resume_meter(attempt)
 
 
 # Runner boundary: a producer lacking the guarded admission protocol must never

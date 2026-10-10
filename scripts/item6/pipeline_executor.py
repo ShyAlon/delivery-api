@@ -58,7 +58,8 @@ class PrivatePipeline:
                             if not program.finished:raise ValueError('interview did not produce typed completion')
                             break
                         self.progress('interview.waiting','Waiting for founder input; no timeout')
-                        response=self.answer(pending)
+                        from delivery_api.compute_meter import excluded_wait
+                        with excluded_wait():response=self.answer(pending)
                         if not isinstance(response,InputResponse) or response.input_id!=pending.input_id or response.actor_id!=scope.owner_id:
                             raise ValueError('current exact founder input required')
                         pending=program.advance(response)
@@ -127,7 +128,8 @@ class PrivatePipeline:
                     retained={'task':self.store.task(cap.task_id),'graph_review':review,'graph_review_sha256':digest,'test_only':True}
                     retained_digest=hashlib.sha256(json.dumps(retained,sort_keys=True,separators=(',',':')).encode()).hexdigest()
                     self.store.retain_decision_review(cap.task_id,'gate:gate-'+review['gate'],retained_digest,retained)
-                response=self.review(review,digest)
+                from delivery_api.compute_meter import excluded_wait
+                with excluded_wait():response=self.review(review,digest)
                 if not isinstance(response,dict) or set(response)!={'review_sha256','decision'} or response['review_sha256']!=digest:
                     raise ValueError('stale/unreviewed gate decision')
                 decision=response['decision']

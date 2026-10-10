@@ -71,7 +71,19 @@ class SameHostProducerWorker:
                     if self.wire_client_factory is not None:
                         from spec_generator.wire_binding import wire_clients
                         stack.enter_context(wire_clients(gateway,self.wire_client_factory))
-                    result=producer(capability,root)
+                    if getattr(gateway,'retail_rates',None) is not None:
+                        from .compute_meter import ComputeMeter,bind
+                        segment=job_id+':compute'
+                        job=self.store.worker_job(job_id)
+                        self.store.begin_retail_compute(segment,job_id,job['kind'].split(':')[-1],gateway.retail_rates.snapshot())
+                        meter=ComputeMeter();gateway.compute_meter=meter
+                        try:
+                            with bind(meter):result=producer(capability,root)
+                            self.store.finish_retail_compute(segment,meter.milliseconds())
+                        except BaseException:
+                            self.store.finish_retail_compute(segment,None)
+                            raise
+                    else:result=producer(capability,root)
                     if inspect.isawaitable(result):
                         if inspect.iscoroutine(result):result.close()
                         raise TypeError('synchronous producer required')

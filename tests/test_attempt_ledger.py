@@ -445,7 +445,7 @@ def credit_account(ledger):
     import psycopg
     s,tid,job=ledger
     with psycopg.connect(DSN) as c:
-        c.execute('INSERT INTO credit_accounts VALUES (%s,1,1000000,0)',(A.owner_id,))
+        c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES (%s,1,1000000,0)',(A.owner_id,))
         c.execute('UPDATE admission_limits SET expense_limit=NULL,retail_limit=NULL,attempt_expense_max=NULL,attempt_retail_max=NULL,rate_max=NULL,concurrency_max=3 WHERE owner_id=%s',(A.owner_id,))
     yield ledger
     with psycopg.connect(DSN) as c:
@@ -504,7 +504,7 @@ def test_prepaid_unknown_usage_remains_pending_and_browser_cannot_provision(cred
             assert c.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']==1
             assert c.execute('SELECT state FROM credit_charges').fetchone()['state']=='pending'
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                with c.transaction():c.execute('INSERT INTO credit_accounts VALUES (%s,999,1000000,0)',(B.owner_id,))
+                with c.transaction():c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES (%s,999,1000000,0)',(B.owner_id,))
     with psycopg.connect(DSN) as c:
         c.execute('SET ROLE authenticated')
         for sql in ['SELECT * FROM credit_accounts','UPDATE credit_accounts SET balance_units=999','SELECT * FROM credit_charges']:
@@ -804,7 +804,7 @@ def test_suspension_blocks_new_operations_but_dispatched_calls_finish_and_bill(l
     scale_quote=Q|{'retail_units_per_credit':1000}
     dispatched,reserved=uuid.uuid4().hex,uuid.uuid4().hex
     with psycopg.connect(DSN) as c:
-        c.execute('INSERT INTO credit_accounts VALUES (%s,100,1000,0)',(A.owner_id,))
+        c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES (%s,100,1000,0)',(A.owner_id,))
     try:
         with tenant_context(A):
             s.reserve_provider_attempt(job,dispatched,scale_quote,'accepted',require_prepaid=True)

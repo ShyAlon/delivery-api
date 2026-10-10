@@ -16,7 +16,12 @@ def _integer(value):
 def _quote(quote):
     keys={'provider','model','price_version','bound_version','input_max','output_max',
           'expense_input','expense_output','retail_input','retail_output'}
-    optional={'retail_units_per_credit','expense_cache_hit','expense_cache_miss','expense_units_per_usd'}
+    optional={'retail_units_per_credit','expense_cache_hit','expense_cache_miss','expense_units_per_usd','retail_formula'}
+    if 'retail_formula' in quote:
+        from .retail_ledger import rates_from_snapshot
+        rates=rates_from_snapshot(quote['retail_formula'])
+        if quote.get('retail_units_per_credit')!=quote['retail_formula']['units_per_credit'] or quote['retail_input']!=quote['retail_output'] or quote['retail_input']!=int(rates.price_per_token*quote['retail_units_per_credit']):
+            raise AdmissionDenied('retail integer compatibility rates differ from formula')
     if bool('expense_cache_hit' in quote)!=bool('expense_cache_miss' in quote):raise AdmissionDenied('complete reviewed cache rates required')
     if any(not _integer(quote[k]) for k in ('expense_cache_hit','expense_cache_miss') if k in quote):raise AdmissionDenied('integer cache prices required')
     if set(quote)-optional!=keys or ('retail_units_per_credit' in quote and (not _integer(quote['retail_units_per_credit']) or not quote['retail_units_per_credit'])) or any(not isinstance(quote[k],str) or not quote[k] for k in keys if k.endswith('version') or k in ('provider','model')):
@@ -59,6 +64,7 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
     now=time.time()
     rows=store._db.execute('SELECT * FROM provider_attempts WHERE owner_id=?',(owner,)).fetchall()
     held=[r for r in rows if r['state'] in ('reserved','dispatched','uncertain')]
+    if 'retail_formula' in quote and store._db.execute("SELECT 1 FROM retail_compute_segments WHERE owner_id=? AND (state='unresolved' OR (state='pending' AND job_id<>?)) LIMIT 1",(owner,job_id)).fetchone():raise AdmissionDenied('unresolved compute accounting requires review')
     if any(r['state']=='uncertain' for r in held):raise AdmissionDenied('uncertain provider usage requires review')
     if len(held)>=limits['concurrency_max']:raise AdmissionDenied('owner attempt concurrency exhausted')
     if limits['rate_max'] is not None and sum(r['created_at']>now-limits['rate_window_seconds'] for r in rows)>=limits['rate_max']:
@@ -116,8 +122,13 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
             return store.provider_attempt(attempt_id)
         expense=(usage['cache_hit_tokens']*quote['expense_cache_hit']+usage['cache_miss_tokens']*quote['expense_cache_miss'] if 'expense_cache_hit' in quote else usage['input_tokens']*quote['expense_input'])+usage['output_tokens']*quote['expense_output']
         retail=usage['input_tokens']*quote['retail_input']+usage['output_tokens']*quote['retail_output']
+        if 'retail_formula' in quote:
+            from .retail_ledger import post
+            job=store.worker_job(row['job_id'])
+            contribution=post(store,key='attempt:'+attempt_id,job_id=row['job_id'],phase=job['phase_key'] if 'phase_key' in job else job['kind'].split(':')[-1],kind='tokens',input_tokens=usage['input_tokens'],output_tokens=usage['output_tokens'],rates=quote['retail_formula'])
+            retail=contribution['posted_units']
         from .prepaid import debit
-        debit(store,dict(row),retail)
+        debit(store,dict(row),retail,already_posted='retail_formula' in quote)
         store._db.execute("UPDATE provider_attempts SET state='settled',expense_actual=?,retail_actual=?,usage=?::jsonb,updated_at=?,settled_at=? WHERE attempt_id=?",(expense,retail,json.dumps(usage),time.time(),time.time(),attempt_id))
         if 'expense_units_per_usd' in quote:
             # Atomically retain breach evidence with confirmed settlement. A

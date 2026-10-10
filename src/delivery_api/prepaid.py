@@ -23,7 +23,7 @@ def authorize(store,attempt):
     store._db.execute("INSERT INTO credit_charges(attempt_id,owner_id,state,created_at,units_per_credit) VALUES (?,?,'pending',?,?)",(attempt['attempt_id'],current_scope().owner_id,time.time(),account['units_per_credit']))
 
 
-def debit(store,attempt,amount):
+def debit(store,attempt,amount,*,already_posted=False):
     owner_lock(store)
     charge=store._db.execute('SELECT * FROM credit_charges WHERE attempt_id=? FOR UPDATE',(attempt['attempt_id'],)).fetchone()
     if not charge:return  # Explicit legacy fake-only path, never a prepaid call.
@@ -36,5 +36,6 @@ def debit(store,attempt,amount):
     if charge['units_per_credit'] is None or charge['units_per_credit']!=account['units_per_credit']:
         raise AdmissionDenied('prepaid charge scale changed or unknown; settlement held')
     now=time.time()
-    store._db.execute('UPDATE credit_accounts SET balance_units=balance_units-?,updated_at=? WHERE owner_id=?',(amount,now,current_scope().owner_id))
+    if not already_posted:
+        store._db.execute('UPDATE credit_accounts SET balance_units=balance_units-?,updated_at=? WHERE owner_id=?',(amount,now,current_scope().owner_id))
     store._db.execute("UPDATE credit_charges SET state='settled',charged_units=?,settled_at=? WHERE attempt_id=?",(amount,now,attempt['attempt_id']))

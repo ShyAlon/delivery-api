@@ -205,7 +205,7 @@ def test_private_worker_actual_sdk_factory_raw_wire_once(worker,monkeypatch,stre
     if prepaid:
         import psycopg
         with psycopg.connect(DSN) as c:
-            c.execute('INSERT INTO credit_accounts VALUES (%s,1,1000000,0)',(A.owner_id,))
+            c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES (%s,1,1000000,0)',(A.owner_id,))
             c.execute('UPDATE admission_limits SET expense_limit=NULL,retail_limit=0,attempt_expense_max=NULL,attempt_retail_max=1,rate_max=NULL,concurrency_max=3 WHERE owner_id=%s',(A.owner_id,))
         w.gateway_factory=lambda cap,jid:WorkerAdmissionGateway(s,jid,
             resolve_serialized=lambda **kw:({**Q,'provider':'deepseek','retail_units_per_credit':1000000},hashlib.sha256(kw['serialized_request']).hexdigest()),

@@ -1152,6 +1152,22 @@ class PostgresStore(SQLiteStore):
         from .attempt_ledger import transition
         return transition(self,attempt_id,action,usage,require_prepaid=require_prepaid)
 
+    def begin_retail_compute(self,key,job_id,phase,rates):
+        from .retail_ledger import begin_compute
+        return begin_compute(self,key,job_id,phase,rates)
+
+    def finish_retail_compute(self,key,deterministic_ms):
+        from .retail_ledger import finish_compute
+        return finish_compute(self,key,deterministic_ms)
+
+    def post_retail_contribution(self,**contribution):
+        from .retail_ledger import post
+        return post(self,**contribution)
+
+    def retail_phase_totals(self,job_id):
+        from .retail_ledger import phase_totals
+        return phase_totals(self,job_id)
+
     def operator_workspace_snapshot(self):
         """Read-only current-owner operations, never cross-tenant privilege."""
         owner=current_scope().owner_id
