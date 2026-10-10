@@ -67,7 +67,20 @@ def test_local_operator_routes_are_absent_before_auth_and_no_store(monkeypatch):
  from delivery_api import app as service,config
  monkeypatch.setattr(config,'CLOUD_TENANTS',False)
  client=TestClient(service.app)
- for path in ('/api/operator/sessions','/api/operator/credits','/api/operator/task-debug?task_id=x','/api/operator/task-logs?task_id=x','/api/operator/expense-totals'):
+ for path in ('/api/operator/sessions','/api/operator/credits','/api/operator/task-debug?task_id=x','/api/operator/task-logs?task_id=x','/api/operator/expense-totals','/api/operator/payment-journal?start_at=1&end_at=2','/api/operator/payment-totals?start_at=1&end_at=2'):
   for method in ('GET','POST'):
    got=client.request(method,path)
    assert got.status_code==404 and got.headers['cache-control']=='no-store'
+
+
+def test_payment_read_proxy_only_bounded_known_parameters_and_no_writes():
+ calls=[]
+ def upstream(request):calls.append(request);return httpx.Response(503,json={'detail':'registry unavailable'})
+ c=TestClient(create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream)))
+ h={'Authorization':'Bearer fake'}
+ assert c.get('/api/operations/payment-totals?start_at=1&end_at=2',headers=h).status_code==503
+ assert calls[0].url.path=='/api/operator/payment-totals'
+ assert c.get('/api/operations/payment-journal?start_at=1&end_at=2&limit=1',headers=h).status_code==503
+ assert c.get('/api/operations/payment-journal?start_at=1&end_at=2&raw=true',headers=h).status_code==422
+ assert c.post('/api/operations/payment-journal',headers=h).status_code==405
+ assert len(calls)==2

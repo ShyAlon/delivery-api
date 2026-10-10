@@ -10,8 +10,8 @@ class OperatorReadStore:
     @contextmanager
     def _read(self,owner_store,capability,*,role="requi_operator_read"):
         authority=self.principal.authorize(owner_store,capability)
-        with self.db.transaction(repeatable_read=role=='requi_operator_usage') as connection:
-            if role not in ('requi_operator_read','requi_operator_usage'):raise ValueError('fixed role required')
+        with self.db.transaction(repeatable_read=role in ('requi_operator_usage','requi_operator_payment_read')) as connection:
+            if role not in ('requi_operator_read','requi_operator_usage','requi_operator_payment_read'):raise ValueError('fixed role required')
             connection.execute('SET LOCAL ROLE '+role)
             allowed=connection.execute('SELECT public.requi_operator_read_allowed(%s,%s) AS allowed',
                 (capability,authority['registry_version'])).fetchone()
@@ -162,3 +162,49 @@ class OperatorReadStore:
                 'settled_attempts_without_charge':row['settled_without_charge'],
                 'complete':not (row['unresolved_attempts'] or row['unknown_settled_usage'] or unknown or pending or row['settled_without_charge']),
                 'source':'normalized settled attempt usage and actual prepaid charges','mutations_available':False}
+
+    def payment_journal(self,owner_store,*,start_at,end_at,owner_id=None,limit=100,before_created_at=None,before_purchase_id=None):
+        from .payment_reporting import validate_period
+        validate_period(start_at,end_at,owner_id)
+        if type(limit) is not int or not 1<=limit<=100:raise ValueError('bounded payment page required')
+        if (before_created_at is None)!=(before_purchase_id is None):raise ValueError('complete payment page cursor required')
+        if before_created_at is not None:
+            import math
+            if type(before_created_at) not in (int,float) or not math.isfinite(before_created_at) or before_created_at<0 or not isinstance(before_purchase_id,str) or not 1<=len(before_purchase_id)<=127:raise ValueError('bounded payment page cursor required')
+        query='SELECT p.purchase_id,p.owner_id,p.processor,p.merchant_account,p.live_mode,p.offer_version,p.offer_id,p.currency,p.amount_minor,p.credit_units,p.units_per_credit,p.state,p.credit_posted,p.created_at,p.updated_at,c.processor_fee_minor,c.net_received_minor FROM public.payment_purchases p LEFT JOIN public.payment_credits c ON c.purchase_id=p.purchase_id WHERE p.created_at>=%s AND p.created_at<%s'
+        params=[start_at,end_at]
+        if owner_id:query+=' AND p.owner_id=%s';params.append(owner_id)
+        if before_created_at is not None:query+=' AND (p.created_at,p.purchase_id)<(%s,%s)';params.extend([before_created_at,before_purchase_id])
+        query+=' ORDER BY p.created_at DESC,p.purchase_id DESC LIMIT %s';params.append(limit+1)
+        with self._read(owner_store,'payments.read',role='requi_operator_payment_read') as (connection,authority):
+            rows=connection.execute(query,params).fetchall()
+        truncated=len(rows)>limit;page=rows[:limit]
+        for row in page:
+            row['owner_id']=str(row['owner_id'])
+            for key in ('amount_minor','credit_units','units_per_credit','processor_fee_minor','net_received_minor'):
+                if row[key] is not None:row[key]=str(row[key])
+            row['receiving_cost_known']=row['processor_fee_minor'] is not None
+        return {'scope':'reviewed_cross_user_operator_read','payments':page,'limit':limit,'truncated':truncated,
+            'next_before':{'created_at':page[-1]['created_at'],'purchase_id':page[-1]['purchase_id']} if truncated else None,
+            'start_at':start_at,'end_at':end_at,'mutations_available':False,'profit_available':False}
+
+    def payment_totals(self,owner_store,*,start_at,end_at,owner_id=None,limit=100):
+        from .payment_reporting import validate_period,cost_caveats
+        validate_period(start_at,end_at,owner_id)
+        if type(limit) is not int or not 1<=limit<=100:raise ValueError('bounded payment total group page required')
+        query="""SELECT c.processor,c.merchant_account,c.live_mode,c.owner_id,p.offer_version,p.offer_id,c.currency,
+          count(*) AS purchases,sum(c.amount_minor)::text AS gross_minor,
+          COALESCE(sum(c.processor_fee_minor),0)::text AS known_fee_minor,
+          COALESCE(sum(c.net_received_minor),0)::text AS known_net_minor,
+          count(*) FILTER(WHERE c.processor_fee_minor IS NULL) AS unknown_receiving_cost_count,
+          count(*) FILTER(WHERE p.state='operator_review') AS operator_review_count
+          FROM public.payment_credits c JOIN public.payment_purchases p USING(purchase_id)
+          WHERE c.posted_at>=%s AND c.posted_at<%s"""
+        params=[start_at,end_at]
+        if owner_id:query+=' AND c.owner_id=%s';params.append(owner_id)
+        query+=' GROUP BY c.processor,c.merchant_account,c.live_mode,c.owner_id,p.offer_version,p.offer_id,c.currency ORDER BY c.owner_id,p.offer_id,c.processor,c.merchant_account,c.live_mode,p.offer_version,c.currency LIMIT %s';params.append(limit+1)
+        with self._read(owner_store,'payments.read',role='requi_operator_payment_read') as (connection,authority):
+            rows=connection.execute(query,params).fetchall()
+        for row in rows:row['owner_id']=str(row['owner_id'])
+        return {'scope':'reviewed_cross_user_operator_read','groups':rows[:limit],'truncated':len(rows)>limit,
+            'limit':limit,'start_at':start_at,'end_at':end_at,'mutations_available':False,**cost_caveats()}

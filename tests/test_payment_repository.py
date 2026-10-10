@@ -331,3 +331,37 @@ def test_adverse_binding_vs_fulfillment_uses_shared_order_lock(repo,purchase):
         for f in futures:f.result()
     assert repo.get_purchase(later.purchase_id)['state']=='operator_review'
     assert not fulfill(repo,later,evidence(repo,later))['credit_posted'] and balance()==0
+
+
+def test_operator_payment_read_registry_session_capability_and_column_bounds(repo,purchase):
+    import psycopg,time
+    from delivery_api.operator_reads import OperatorReadStore
+    from delivery_api.operator_authorization import OperatorPrincipal
+    from delivery_api.postgres_store import PostgresStore
+    from delivery_api.tenancy import tenant_context,TenantAccessDenied
+    from test_postgres_store import A,B
+    tenant=DSN.replace('user=delivery_payment_test','user=delivery_app')
+    s=PostgresStore(tenant)
+    reader=OperatorReadStore(tenant,OperatorPrincipal(A.owner_id,'payment-test',frozenset({'payments.read'})))
+    with psycopg.connect(ADMIN) as c:
+        c.execute("INSERT INTO operator_principals(subject,registry_version,capabilities,enabled) VALUES(%s,'payment-test',ARRAY['payments.read'],true) ON CONFLICT(subject) DO UPDATE SET registry_version='payment-test',capabilities=ARRAY['payments.read'],enabled=true",(A.owner_id,))
+    try:
+        fulfill(repo,purchase,replace(evidence(repo,purchase),processor_fee_minor=95,net_received_minor=1055))
+        now=time.time()
+        with tenant_context(A):
+            journal=reader.payment_journal(s,start_at=now-60,end_at=now+60,owner_id=A.owner_id,limit=1)
+            assert journal['payments'][0]['owner_id']==A.owner_id and journal['payments'][0]['processor_fee_minor']=='95'
+            assert 'order_id' not in journal['payments'][0] and 'intent_digest' not in journal['payments'][0]
+            totals=reader.payment_totals(s,start_at=now-60,end_at=now+60,owner_id=A.owner_id)
+            assert totals['scope']=='reviewed_cross_user_operator_read' and not totals['profit_available']
+            assert totals['groups'][0]['known_fee_minor'].isdigit()
+        with tenant_context(B):
+            with pytest.raises(TenantAccessDenied):reader.payment_totals(s,start_at=now-60,end_at=now+60)
+        with psycopg.connect(tenant) as c:
+            c.execute('SET LOCAL ROLE requi_operator_payment_read')
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):c.execute('SELECT order_id FROM payment_purchases')
+        with psycopg.connect(ADMIN) as c:c.execute('UPDATE operator_principals SET enabled=false WHERE subject=%s',(A.owner_id,))
+        with tenant_context(A):
+            with pytest.raises(TenantAccessDenied):reader.payment_journal(s,start_at=now-60,end_at=now+60)
+    finally:
+        with psycopg.connect(ADMIN) as c:c.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))

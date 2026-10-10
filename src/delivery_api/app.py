@@ -2605,3 +2605,18 @@ def operator_task_usage(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     try:return _operator_reader().task_usage(store,task_id)
     except ValueError as exc:raise HTTPException(422,str(exc))
     except KeyError:raise HTTPException(404,'Task usage unavailable')
+
+
+@app.get('/api/operator/payment-journal')
+def operator_payment_journal(start_at:float,end_at:float,owner_id:str|None=None,limit:int=100,
+                             before_created_at:float|None=None,before_purchase_id:str|None=None,
+                             a:auth.Actor=Depends(auth.require_actor)):
+    try:return _operator_reader().payment_journal(store,start_at=start_at,end_at=end_at,owner_id=owner_id,limit=limit,before_created_at=before_created_at,before_purchase_id=before_purchase_id)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+
+@app.get('/api/operator/payment-totals')
+def operator_payment_totals(start_at:float,end_at:float,owner_id:str|None=None,limit:int=100,
+                            a:auth.Actor=Depends(auth.require_actor)):
+    try:return _operator_reader().payment_totals(store,start_at=start_at,end_at=end_at,owner_id=owner_id,limit=limit)
+    except ValueError as exc:raise HTTPException(422,str(exc))

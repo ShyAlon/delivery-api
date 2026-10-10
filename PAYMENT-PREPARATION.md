@@ -41,7 +41,7 @@ provider expense. Missing receiving costs remain unknown, never zero. Neutral
 reports group by processor/merchant/mode, owner, offer/version and currency in an
 explicit period. This is receiving-cost reporting, not profit.
 
-Existing back office does not expose payment reporting yet. Exact profit still
+Private operator read capability and back-office journal/totals surfaces are prepared under payments.read, but no principal capability or role membership is provisioned. Exact profit still
 needs withdrawal/FX/tax, refunds/dispute losses/fees, operations costs, and
 provider-cost allocation to credit lots. Session expense tripwires do not prove
 pack margin or bound a user's total provider expense to one session.
@@ -58,8 +58,7 @@ refund/dispute policy need verification before activation. IL Seller Protection
 excludes digital goods/licences and cash-equivalent vouchers; no protected
 classification is assumed. FX, holds and fees remain real costs.
 
-No public payment route, production migration, user UI or back-office read grant
-is activated. Full clean-run evidence remains the owner's step-6 launch boundary.
+No public payment route, production migration or customer purchase UI is activated. The new back-office column-limited read role requires explicit payments.read in both existing operator registries; no active registry change or membership is installed. Full clean-run evidence remains the owner's step-6 launch boundary.
 
 The private reconciliation candidate queue is bounded and inactive. A process
 must reconcile pending/lost notifications and expired remote-key cases before
@@ -67,3 +66,14 @@ real activation; no live scheduler, retry worker or owner notification is wired.
 The API factory requires a caller-supplied mutation/CSRF guard for authenticated
 POSTs, independently of owner/session validation. Webhooks require signature
 verification, not user cookies. Application middleware/wiring remains unmounted.
+
+Operator visibility is column-limited and read-only: purchase journal uses
+purchase creation time, receiving totals use credit-posted time, both require
+an explicit bounded period and optional canonical owner filter. Journal has a
+bounded keyset page; totals show at most100 groups, label truncation and require
+narrowing to avoid falsely calling a partial result complete. Signed event
+payloads, request keys, remote order/capture IDs and secrets are not exposed.
+UI displays Unknown (not USD0) when all receipt-cost evidence is missing, and
+known sums plus unknown when a group is incomplete. Sandbox/live mode and
+processor/version are visible. Desktop and390px mobile screenshots inspected
+with mock data, no horizontal overflow or script errors.
