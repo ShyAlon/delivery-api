@@ -134,6 +134,8 @@ def current_worker_gateway(store,task_id):
     job=store.worker_job(gateway.job_id)
     if not job or job['task_id']!=task_id or job['state']!='running':
         raise AdmissionDenied('cloud subprocess requires matching running worker job')
+    if gateway.retail_rates is not None:
+        raise AdmissionDenied('exact retail subprocess compute metering is not installed; dispatch held')
     if gateway.resolve_quote is None or gateway.measure_usage is None:
         raise AdmissionDenied('cloud subprocess reviewed bounds/pricing/usage unavailable')
     return gateway

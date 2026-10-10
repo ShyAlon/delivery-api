@@ -37,3 +37,14 @@ def test_product_phase_selection_not_env_model_is_the_authority():
     g=WorkerAdmissionGateway(s,'j',resolve_quote=lambda **kw: (_ for _ in ()).throw(AssertionError('must not reach resolver')))
     with pytest.raises(AdmissionDenied,match='phase selection'):
         g.reserve(attempt_id='a',stage='needs',provider='deepseek',model='env-model',messages=[],max_output_tokens=1)
+
+
+def test_exact_retail_subprocess_cannot_omit_compute_meter():
+    import pytest
+    from delivery_api.producer_admission import worker_gateway,current_worker_gateway
+    from delivery_api.retail_pricing import RetailRates
+    from delivery_api.attempt_ledger import AdmissionDenied
+    s=Store();s.worker_job=lambda j:{'task_id':'t','state':'running'}
+    g=WorkerAdmissionGateway(s,'j',retail_rates=RetailRates.from_environment({}))
+    with worker_gateway(g),pytest.raises(AdmissionDenied,match='subprocess compute'):
+        current_worker_gateway(s,'t')

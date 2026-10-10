@@ -34,6 +34,7 @@ def main():
     safe_model_route('deepseek',config['model'],True)
     if not config['operator_registry_version']:raise ValueError('reviewed operator registry version required')
     if not prices or any(row.get('retail_units_per_credit')!=10**9 for row in prices):raise ValueError('exact D13 1000000000-unit prepaid scale required')
+    if any('retail_formula' not in row or 'provider_snapshot' not in row for row in prices):raise ValueError('D13 formula and generated vendor snapshot required')
     from delivery_api.admission_catalog import catalog_from_environment,ReviewedContextCeiling
     ceiling=ReviewedContextCeiling(**context)
     if ceiling.model!=config['model']:raise ValueError('exact reviewed effective model ceiling required')

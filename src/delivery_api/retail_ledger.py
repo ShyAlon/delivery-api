@@ -70,7 +70,7 @@ def migrate_account(connection, owner_id, *, now):
         if not account:raise AdmissionDenied('prepaid account missing')
         if account['units_per_credit']==UNITS_PER_CREDIT:return False
         if account['units_per_credit']!=1000:raise AdmissionDenied('unsupported historical prepaid scale')
-        pending=connection.execute("SELECT EXISTS(SELECT 1 FROM public.provider_attempts WHERE owner_id=%s AND state IN ('reserved','dispatched','uncertain')) OR EXISTS(SELECT 1 FROM public.credit_charges WHERE owner_id=%s AND state='pending') OR EXISTS(SELECT 1 FROM public.payment_purchases WHERE owner_id=%s AND NOT credit_posted)",(owner_id,owner_id,owner_id)).fetchone()
+        pending=connection.execute("SELECT EXISTS(SELECT 1 FROM public.provider_attempts WHERE owner_id=%s AND state IN ('reserved','dispatched','uncertain')) OR EXISTS(SELECT 1 FROM public.credit_charges WHERE owner_id=%s AND state='pending') OR EXISTS(SELECT 1 FROM public.payment_purchases WHERE owner_id=%s AND NOT credit_posted) OR EXISTS(SELECT 1 FROM public.retail_compute_segments WHERE owner_id=%s AND state<>'settled')",(owner_id,owner_id,owner_id,owner_id)).fetchone()
         if next(iter(pending.values())):raise AdmissionDenied('pending provider or payment evidence; scale migration held')
         balance=account['balance_units']*(UNITS_PER_CREDIT//1000)
         if not -(2**63)<=balance<=2**63-1:raise AdmissionDenied('migrated balance outside integer range')
