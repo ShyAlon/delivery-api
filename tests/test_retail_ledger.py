@@ -113,3 +113,41 @@ def test_provider_ceiling_is_not_confirmed_expense_and_boundary_is_held(account)
         result=s.transition_provider_attempt(second,'settle',u)
         assert result['state']=='uncertain' and result['expense_actual'] is None
         with s._postgres.transaction() as c:assert c.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']==1
+
+
+def test_pending_attempt_refuses_scale_migration_without_history_rewrite(account):
+    import psycopg
+    from psycopg.rows import dict_row
+    from test_attempt_ledger import Q
+    s,tid,job=account
+    with tenant_context(A):s.reserve_provider_attempt(job,uuid.uuid4().hex,Q,'pending')
+    with psycopg.connect(DSN,row_factory=dict_row) as c:
+        c.execute('UPDATE credit_accounts SET units_per_credit=1000,balance_units=5000 WHERE owner_id=%s',(A.owner_id,))
+        with pytest.raises(AdmissionDenied,match='pending'):
+            migrate_account(c,A.owner_id,now=1)
+        assert c.execute('SELECT units_per_credit FROM credit_accounts WHERE owner_id=%s',(A.owner_id,)).fetchone()['units_per_credit']==1000
+
+
+def test_parallel_subunit_posting_serializes_owner_remainder(account):
+    from concurrent.futures import ThreadPoolExecutor
+    from delivery_api.postgres_store import PostgresStore
+    s,tid,job=account;r=RetailRates.from_environment({}).snapshot()
+    def one(i):
+        db=PostgresStore(DSN.replace('user=sandbox','user=delivery_app'))
+        with tenant_context(A):return db.post_retail_contribution(key=job+':parallel:'+str(i),job_id=job,phase='needs',kind='compute',deterministic_ms='0.01',rates=r)['posted_units']
+    with ThreadPoolExecutor(max_workers=8) as pool:results=list(pool.map(one,range(20)))
+    assert sum(results)==10
+    with tenant_context(A),s._postgres.transaction() as c:
+        row=c.execute('SELECT balance_units,fractional_debit_units FROM credit_accounts WHERE owner_id=%s',(A.owner_id,)).fetchone()
+        assert row['balance_units']==-9 and row['fractional_debit_units']==0
+
+
+def test_failed_contribution_does_not_debit_or_drop_remainder(account):
+    s,tid,job=account;r=RetailRates.from_environment({}).snapshot()
+    with tenant_context(A):
+        with pytest.raises(Exception):
+            s.post_retail_contribution(key=job+':bad',job_id=job,phase=None,kind='compute',deterministic_ms='0.01',rates=r)
+        with s._postgres.transaction() as c:
+            row=c.execute('SELECT balance_units,fractional_debit_units FROM credit_accounts').fetchone()
+            assert row['balance_units']==1 and row['fractional_debit_units']==0
+            assert c.execute('SELECT count(*) AS n FROM retail_contributions').fetchone()['n']==0

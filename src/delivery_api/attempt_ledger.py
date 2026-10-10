@@ -70,7 +70,7 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
     now=time.time()
     rows=store._db.execute('SELECT * FROM provider_attempts WHERE owner_id=?',(owner,)).fetchall()
     held=[r for r in rows if r['state'] in ('reserved','dispatched','uncertain')]
-    if 'retail_formula' in quote and store._db.execute("SELECT 1 FROM retail_compute_segments WHERE owner_id=? AND (state='unresolved' OR (state='pending' AND job_id<>?)) LIMIT 1",(owner,job_id)).fetchone():raise AdmissionDenied('unresolved compute accounting requires review')
+    if 'retail_formula' in quote and store._db.execute("SELECT 1 FROM retail_compute_segments r JOIN worker_jobs w ON r.job_id=w.job_id WHERE r.owner_id=? AND (r.state='unresolved' OR (r.state='pending' AND w.state<>'running')) LIMIT 1",(owner,)).fetchone():raise AdmissionDenied('unresolved compute accounting requires review')
     if any(r['state']=='uncertain' for r in held):raise AdmissionDenied('uncertain provider usage requires review')
     if len(held)>=limits['concurrency_max']:raise AdmissionDenied('owner attempt concurrency exhausted')
     if limits['rate_max'] is not None and sum(r['created_at']>now-limits['rate_window_seconds'] for r in rows)>=limits['rate_max']:
@@ -97,6 +97,10 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
     row=store._db.execute('SELECT * FROM provider_attempts WHERE attempt_id=? FOR UPDATE',(attempt_id,)).fetchone()
     if not row:raise AdmissionDenied('owner attempt not found')
     if action=='start':
+        if 'provider_evidence' in row['quote']:
+            from .provider_snapshot import ProviderSnapshot
+            from datetime import datetime,timezone
+            ProviderSnapshot(row['quote']['provider_evidence']['snapshot']).fresh(datetime.now(timezone.utc))
         from .suspension_policy import require_task_operation
         require_task_operation(store,'provider.dispatch')
         _job(store,row['job_id'])
