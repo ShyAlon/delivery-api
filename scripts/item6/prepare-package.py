@@ -4,6 +4,7 @@ import argparse,hashlib,json,shutil,subprocess
 from pathlib import Path
 p=argparse.ArgumentParser()
 for name in ('delivery','engine','generator','contracts','output'):p.add_argument('--'+name,required=True,type=Path)
+p.add_argument('--no-build-isolation',action='store_true',help='Use preinstalled hatchling, still offline wheel build')
 a=p.parse_args();out=a.output.resolve()
 if out.exists():raise SystemExit('new output directory required')
 manifest={}
@@ -15,11 +16,11 @@ for name in ('delivery','engine','generator','contracts'):
  manifest[name]={'revision':subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()}
 out.mkdir(mode=0o700);(out/'wheels').mkdir()
 for name in ('contracts','delivery','engine','generator'):
- subprocess.run(['uv','build','--offline','--wheel','--out-dir',str(out/'wheels'),str(getattr(a,name).resolve())],check=True)
+ subprocess.run(['uv','build',*(['--no-build-isolation'] if a.no_build_isolation else []),'--offline','--wheel','--out-dir',str(out/'wheels'),str(getattr(a,name).resolve())],check=True)
 for wheel in sorted((out/'wheels').glob('*.whl')):
  digest=hashlib.sha256(wheel.read_bytes()).hexdigest();manifest[wheel.name]={'sha256':digest}
  with (out/'wheel-sha256.txt').open('a') as f:f.write(f'{digest}  /wheels/{wheel.name}\n')
-here=Path(__file__).resolve().parent
+here=a.delivery.resolve()/'scripts/item6'
 shutil.copytree(here,out/'item6',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
 shutil.copytree(a.delivery/'supabase/migrations',out/'migrations')
 shutil.copyfile(here/'Dockerfile',out/'Dockerfile')

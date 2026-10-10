@@ -1,0 +1,113 @@
+name: Build item6 run package (manual only)
+on:
+  workflow_dispatch:
+    inputs:
+      delivery_sha:
+        description: Exact operator-selected delivery-api commit SHA
+        required: true
+        type: string
+      engine_sha:
+        description: Exact operator-selected interview-engine commit SHA
+        required: true
+        default: 0ba6aa15b8e170b91073114eb045561b9cdad4e4
+        type: string
+      generator_sha:
+        description: Exact operator-selected spec-generator commit SHA
+        required: true
+        default: 435df894c63958e685310966667fcfedd702ec87
+        type: string
+      contracts_sha:
+        description: Exact operator-selected vmodel-contracts commit SHA
+        required: true
+        default: f8b0306a35f774ec744545d9ea6877da76510fc6
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: item6-package-manual
+  cancel-in-progress: false
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate exact source inputs and cross-repo access prerequisite
+        env:
+          DELIVERY_SHA: ${{ inputs.delivery_sha }}
+          ENGINE_SHA: ${{ inputs.engine_sha }}
+          GENERATOR_SHA: ${{ inputs.generator_sha }}
+          CONTRACTS_SHA: ${{ inputs.contracts_sha }}
+          SOURCE_READ_TOKEN: ${{ secrets.ITEM6_SOURCE_READ_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os,re
+          for name in ('DELIVERY_SHA','ENGINE_SHA','GENERATOR_SHA','CONTRACTS_SHA'):
+              if not re.fullmatch('[0-9a-f]{40}',os.environ[name]):raise SystemExit('Full lowercase commit SHA required: '+name)
+          if not os.environ['SOURCE_READ_TOKEN']:raise SystemExit('ITEM6_SOURCE_READ_TOKEN must have read-only Contents access to the four private repos. No package built.')
+          PY
+      - uses: actions/checkout@v4
+        with:
+          path: delivery-api
+          ref: ${{ inputs.delivery_sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ShyAlon/interview-engine
+          path: interview-engine
+          ref: ${{ inputs.engine_sha }}
+          token: ${{ secrets.ITEM6_SOURCE_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ShyAlon/spec-generator
+          path: spec-generator
+          ref: ${{ inputs.generator_sha }}
+          token: ${{ secrets.ITEM6_SOURCE_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ShyAlon/vmodel-contracts
+          path: vmodel-contracts
+          ref: ${{ inputs.contracts_sha }}
+          token: ${{ secrets.ITEM6_SOURCE_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check all four checked-out commits exactly match inputs
+        env:
+          DELIVERY_SHA: ${{ inputs.delivery_sha }}
+          ENGINE_SHA: ${{ inputs.engine_sha }}
+          GENERATOR_SHA: ${{ inputs.generator_sha }}
+          CONTRACTS_SHA: ${{ inputs.contracts_sha }}
+        run: |
+          python - <<'PY'
+          import os,subprocess
+          for repo,key in [('delivery-api','DELIVERY_SHA'),('interview-engine','ENGINE_SHA'),('spec-generator','GENERATOR_SHA'),('vmodel-contracts','CONTRACTS_SHA')]:
+              actual=subprocess.check_output(['git','-C',repo,'rev-parse','HEAD'],text=True).strip()
+              if actual!=os.environ[key]:raise SystemExit('Source checkout SHA mismatch: '+repo)
+          PY
+      - name: Build exact package wheels, no image or paid run
+        run: |
+          python -m pip install uv hatchling
+          python delivery-api/scripts/item6/prepare-package.py --no-build-isolation \
+            --delivery delivery-api --engine interview-engine --generator spec-generator \
+            --contracts vmodel-contracts --output item6-package
+          python - <<'PY'
+          import hashlib,json,pathlib,zipfile
+          root=pathlib.Path('item6-package')
+          manifest=json.loads((root/'source-manifest.json').read_text())
+          for name,value in manifest.items():
+              if name.endswith('.whl'):
+                  assert hashlib.sha256((root/'wheels'/name).read_bytes()).hexdigest()==value['sha256']
+          with zipfile.ZipFile('requi-item6-package.zip','w',zipfile.ZIP_DEFLATED) as z:
+              for p in sorted(root.rglob('*')):
+                  if p.is_file():z.write(p,p.relative_to(root))
+          with zipfile.ZipFile('requi-item6-package.zip') as z:assert z.testzip() is None
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: requi-item6-package
+          path: requi-item6-package.zip
+          retention-days: 7
+          if-no-files-found: error
