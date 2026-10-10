@@ -66,6 +66,8 @@ class ProcessRunner:
     async def run(self, task_id: str, command: list[str], *, cwd: Path, phase: str = "intent",
                   env: dict[str,str] | None = None, completion_phases: tuple[str,...] = (),
                   infer_phase: bool = True, stall_timeout: float | None = None) -> int:
+        from .execution_fence import require_engine_execution
+        require_engine_execution()
         from . import config
         options=dict(cwd=cwd,phase=phase,env=env,completion_phases=completion_phases,
                      infer_phase=infer_phase,stall_timeout=stall_timeout)
@@ -91,6 +93,8 @@ class ProcessRunner:
     async def _run(self, task_id: str, command: list[str], *, cwd: Path, phase: str = "intent",
                   env: dict[str, str] | None = None, completion_phases: tuple[str, ...] = (), infer_phase: bool = True,
                   stall_timeout: float | None = None, admission_fds: tuple[int,...] = ()) -> int:
+        from .execution_fence import require_engine_execution
+        require_engine_execution()
         if task_id in self.processes:
             raise RuntimeError("task already has a live process")
         launched_phase=phase

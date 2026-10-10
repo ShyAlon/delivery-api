@@ -32,31 +32,49 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             uv.lock
-      - name: Authenticate private vmodel-contracts clone
-        env:
-          VMODEL_CONTRACTS_PAT: ${{ secrets.VMODEL_CONTRACTS_PAT }}
-        run: |
-          test -n "$VMODEL_CONTRACTS_PAT" || { echo 'Error: VMODEL_CONTRACTS_PAT repo secret is unset. Create a fine-grained PAT with read-only contents on ShyAlon/vmodel-contracts, then: gh secret set VMODEL_CONTRACTS_PAT'; exit 1; }
-          git config --global url."https://x-access-token:${VMODEL_CONTRACTS_PAT}@github.com/ShyAlon/vmodel-contracts.git".insteadOf "https://github.com/ShyAlon/vmodel-contracts.git"
+      - run: python -m pip install vendor/vmodel_contracts-0.28.0-py3-none-any.whl
       - run: DELIVERY_TEST_SCOPE=pr ./scripts/test-local.sh
         env:
           DELIVERY_BROWSER_SCOPE: ${{ github.event_name == 'workflow_dispatch' && 'full' || 'smoke' }}
 
+  control-plane-wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build
+      - run: python -m build --wheel --outdir /tmp/control-plane-wheels
+      - name: Clean delivery-only install and dry startup
+        run: |
+          python -m venv /tmp/control-plane-runtime
+          /tmp/control-plane-runtime/bin/pip install vendor/vmodel_contracts-0.28.0-py3-none-any.whl /tmp/control-plane-wheels/*.whl 'psycopg[binary]>=3.2,<4'
+          /tmp/control-plane-runtime/bin/pip check
+          cd /tmp
+          /tmp/control-plane-runtime/bin/python "$GITHUB_WORKSPACE/scripts/docker/control-plane-smoke.py"
+
   image:
     if: github.event_name == 'workflow_dispatch'
-    needs: test
+    needs: [test, control-plane-wheel]
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Prepare gitconfig for private vmodel-contracts clone
-        env:
-          VMODEL_CONTRACTS_PAT: ${{ secrets.VMODEL_CONTRACTS_PAT }}
+      - name: Dry delivery-only container gate before publication
         run: |
-          test -n "$VMODEL_CONTRACTS_PAT" || { echo 'Error: VMODEL_CONTRACTS_PAT repo secret is unset.'; exit 1; }
-          git config -f gitconfig.ci url."https://x-access-token:${VMODEL_CONTRACTS_PAT}@github.com/ShyAlon/vmodel-contracts.git".insteadOf "https://github.com/ShyAlon/vmodel-contracts.git"
+          docker build --tag requi-control-plane-check .
+          docker run --detach --name requi-control-plane-check --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=128m,mode=1777 requi-control-plane-check
+          trap 'docker logs requi-control-plane-check; docker rm --force requi-control-plane-check' EXIT
+          for attempt in $(seq 1 20); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' requi-control-plane-check)
+            if [ "$state" = healthy ]; then exit 0; fi
+            if [ "$state" = unhealthy ]; then exit 1; fi
+            sleep 3
+          done
+          exit 1
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -68,14 +86,11 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=sha,format=long
-            type=raw,value=main
       - id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          secret-files: |
-            gitconfig=./gitconfig.ci
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -83,7 +98,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
-    if: github.event_name == 'workflow_dispatch' && vars.DEPLOY_ENABLED == 'true'
+    if: github.event_name == 'workflow_dispatch' && vars.CONTROL_PLANE_DEPLOY_ENABLED == 'true'
     needs: image
     runs-on: ubuntu-latest
     environment: production
@@ -110,10 +125,10 @@ jobs:
           HETZNER_HOST: ${{ secrets.HETZNER_HOST }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_USER: ${{ github.actor }}
-          DEPLOY_IMAGE: ${{ env.IMAGE }}:sha-${{ github.sha }}
+          DEPLOY_IMAGE: ${{ env.IMAGE }}@${{ needs.image.outputs.digest }}
         run: |
           printf '%s' "$GHCR_TOKEN" | ssh -i ~/.ssh/vmodel-deploy deploy@"$HETZNER_HOST" \
             "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
           scp -i ~/.ssh/vmodel-deploy scripts/deploy-server.sh deploy@"$HETZNER_HOST":/tmp/deploy-server.sh
           ssh -i ~/.ssh/vmodel-deploy deploy@"$HETZNER_HOST" \
-            "chmod +x /tmp/deploy-server.sh && /tmp/deploy-server.sh '$DEPLOY_IMAGE'"
+            "chmod +x /tmp/deploy-server.sh && /tmp/deploy-server.sh '$DEPLOY_IMAGE' /etc/requi/control-plane.env"

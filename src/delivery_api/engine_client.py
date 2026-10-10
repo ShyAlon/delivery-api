@@ -50,6 +50,8 @@ class HttpEngineClient(EngineClient):
         # Transport failures (connection refused, timeouts) mean the engine
         # process is not there at all - translate them at this boundary so
         # callers never see a raw httpx traceback.
+        from .execution_fence import require_engine_execution
+        require_engine_execution()
         from . import config
         if config.CLOUD_TENANTS:
             from .tenancy import current_scope
