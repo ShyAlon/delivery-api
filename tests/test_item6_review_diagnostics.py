@@ -33,3 +33,21 @@ def test_diagnose_ready_is_read_only(tmp_path):
     root=filled(tmp_path);before={p.name:p.read_bytes() for p in (root/'private').iterdir()}
     result=diagnose_review(root);assert result['review_ready'] and not result['files_changed']
     assert before=={p.name:p.read_bytes() for p in (root/'private').iterdir()}
+
+
+def test_categories_preserve_requirement_but_not_arbitrary_error():
+    from review_diagnostics import safe_category
+    from delivery_api.payment_errors import PaymentRejected
+    assert safe_category(PaymentRejected('bounded PayPal resource ID required'))=='bounded PayPal resource ID required'
+    assert 'top-secret' not in safe_category(ValueError('top-secret'))
+    assert safe_category(ValueError('price_per_token: rate not representable at 1000000000 units per credit')).startswith('price_per_token: rate not representable')
+
+
+def test_snapshot_failure_names_category(tmp_path):
+    root=filled(tmp_path)
+    snapshot=next((root/'private').glob('vendor-snapshot-*.json'))
+    snapshot.unlink()
+    result=diagnose_review(root)
+    assert result['review_ready'] is False
+    assert result['checks'][0]['checked']=='generated vendor snapshot'
+    assert result['checks'][0]['found'].startswith('one generated current vendor snapshot required')

@@ -144,23 +144,11 @@ if __name__=='__main__':
             print(json.dumps({'action':a.action,'checked':'D13 review prerequisites','expected':'valid local PayPal resource IDs','found':'one or more field checks failed; values not printed','where':'private/.env','checks':error.checks,'next':'Fix only the named fields locally; run diagnose-review, then review-config. Preserve successful snapshot and credentials.','run_started':False,'action_completed':False}));raise SystemExit(1) from None
         # Arbitrary exception strings can contain local credentials/config fragments.
         detail={'action':a.action,'checked':'private configuration/action prerequisites','expected':'complete valid schema, secure files and explicit arguments','found':type(error).__name__+'; details suppressed to protect private values','where':str(a.directory),'next':'Use diagnose-review for review/compile, diagnose-import only for one-time legacy import. Inspect named private files locally; never paste keys or raw configs.','run_started':False,'action_completed':False}
-        # Only exact literal messages declared in our own code are safe to show.
-        import ast
-        known=set()
-        for module in ('single_config.py','model_data.py','vendor_config.py','isolation.py'):
-            tree=ast.parse((Path(__file__).parent/module).read_text())
-            for node in ast.walk(tree):
-                if isinstance(node,ast.Raise) and isinstance(node.exc,ast.Call) and node.exc.args and isinstance(node.exc.args[0],ast.Constant) and isinstance(node.exc.args[0].value,str):known.add(node.exc.args[0].value)
-        try:
-            from delivery_api import paypal_adapter,provider_snapshot
-            extra_modules=(paypal_adapter,provider_snapshot)
-        except ImportError:extra_modules=()
-        for module in extra_modules:
-            tree=ast.parse(Path(module.__file__).read_text())
-            for node in ast.walk(tree):
-                if isinstance(node,ast.Raise) and isinstance(node.exc,ast.Call) and node.exc.args and isinstance(node.exc.args[0],ast.Constant) and isinstance(node.exc.args[0].value,str):known.add(node.exc.args[0].value)
-        if isinstance(error,ValueError) and str(error) in known:
-            detail.update(expected=str(error),found='requirement not met; private values suppressed',where=str(a.directory/'private/.env') if a.action in ('review-config','compile-config','apply-model-data') else str(a.directory))
+        from review_diagnostics import safe_category
+        category=safe_category(error)
+        detail.update(found=category)
+        if not category.endswith('; private exception values not printed'):
+            detail.update(expected=category,found='requirement not met; private values not printed',where=str(a.directory/'private/.env') if a.action in ('review-config','compile-config','apply-model-data') else str(a.directory))
         if isinstance(error,FileExistsError):detail.update(checked='fresh output destination',expected='new file/snapshot; never overwrite',found='destination already exists; preserve and inspect it',next='For import, inspect existing private/.env. Do not delete a filled source or run evidence.')
         if isinstance(error,ModuleNotFoundError):detail.update(checked='local Python dependency',expected='delivery-api wheel/environment installed for review/compile',found='required module unavailable; module name suppressed',next='Use the delivery-api .venv; diagnose-import/create/fetch need no provider keys.')
         print(json.dumps(detail));raise SystemExit(1) from None

@@ -1,4 +1,6 @@
 """Read-only D13 review diagnostics. Field/category evidence, never config values."""
+import ast
+import importlib.util
 import re
 from pathlib import Path
 
@@ -6,6 +8,26 @@ class ReviewPrerequisite(ValueError):
     def __init__(self,checks):
         super().__init__('D13 review prerequisites failed')
         self.checks=checks
+
+
+def safe_category(error):
+    """Echo only fixed literals from owned validation code, never arbitrary strings."""
+    known=set()
+    paths=[Path(__file__).parent/name for name in ('single_config.py','model_data.py','vendor_config.py','isolation.py')]
+    for name in ('delivery_api.paypal_adapter','delivery_api.provider_snapshot'):
+        try:
+            spec=importlib.util.find_spec(name)
+            if spec and spec.origin:paths.append(Path(spec.origin))
+        except (ImportError,ValueError):pass
+    for path in paths:
+        try:tree=ast.parse(path.read_text())
+        except (OSError,SyntaxError):continue
+        for node in ast.walk(tree):
+            if isinstance(node,ast.Raise) and isinstance(node.exc,ast.Call) and node.exc.args and isinstance(node.exc.args[0],ast.Constant) and isinstance(node.exc.args[0].value,str):known.add(node.exc.args[0].value)
+    for label in ('price_per_token','price_per_10ms','usd_per_credit'):
+        for requirement in ('finite nonnegative decimal required','positive decimal required','rate not representable at 1000000000 units per credit'):
+            known.add(label+': '+requirement)
+    return str(error) if isinstance(error,ValueError) and str(error) in known else type(error).__name__+'; private exception values not printed'
 
 
 def binding_checks(values):
@@ -24,18 +46,18 @@ def require_bindings(values):
 
 
 def diagnose_review(root):
-    from single_config import root_check,load_env,SECRET,unresolved
+    from single_config import root_check,load_env,unresolved
     from delivery_api.retail_pricing import RetailRates
     from vendor_config import BASE,RETAIL,REMOVED,load_snapshot
     root=Path(root).absolute();checks=[]
     def record(checked,expected,found,where,ok):checks.append({'checked':checked,'expected':expected,'found':found,'where':where,'ok':ok})
     try:root_check(root)
-    except Exception:
-        record('run identity/file safety','private non-symlink run, false launch/run flags and empty evidence','run identity/safety/freshness check failed; preserve files/evidence',str(root),False)
+    except Exception as error:
+        record('run identity/file safety','private non-symlink run, false launch/run flags and empty evidence',safe_category(error),str(root),False)
         return result(checks)
     try:values,_=load_env(root)
-    except Exception:
-        record('.env syntax/schema/safety','secure JSON-scalar source with known fields','source parse/schema or file safety check failed; values not printed','private/.env',False)
+    except Exception as error:
+        record('.env syntax/schema/safety','secure JSON-scalar source with known fields',safe_category(error),'private/.env',False)
         return result(checks)
     checks.extend(binding_checks(values))
     for field in sorted(BASE):
@@ -46,14 +68,13 @@ def diagnose_review(root):
     for field in sorted(legacy):record(field+' retired duplicate field','absent from migrated source','legacy field still present; use reviewed migration candidate','private/.env:'+field,False)
     for field in sorted(RETAIL):
         try:RetailRates.from_environment({field:values[field]} if field in values else {})
-        except Exception:record(field+' optional override','finite nonnegative representable decimal; USD_PER_CREDIT positive','supplied override rejected; value not printed','private/.env:'+field,False)
+        except Exception as error:record(field+' optional override','finite nonnegative representable decimal; USD_PER_CREDIT positive',safe_category(error),'private/.env:'+field,False)
     model=values.get('MODEL')
     if isinstance(model,str):
         try:load_snapshot(root,model)
         except Exception as error:
-            from delivery_api.attempt_ledger import AdmissionDenied
             # Fixed categories, no arbitrary exception content or filename echo.
-            record('generated vendor snapshot','one fresh hash-matching parseable snapshot matching fixture model','snapshot missing, stale, changed, unparseable or model-mismatched; inspect private evidence','private/vendor-snapshot-*.json',False)
+            record('generated vendor snapshot','one fresh hash-matching parseable snapshot matching fixture model',safe_category(error),'private/vendor-snapshot-*.json',False)
     return result(checks)
 
 
