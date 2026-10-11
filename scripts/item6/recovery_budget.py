@@ -16,6 +16,7 @@ class RecoveryBudgetGateway:
         from delivery_api.prepaid import owner_lock
         @_transactional
         def bounded(store):
+            store._db.execute('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
             owner_lock(store)
             attempt=self.inner.reserve_serialized(**request)
             rows=store._db.execute('SELECT * FROM provider_attempts').fetchall()
