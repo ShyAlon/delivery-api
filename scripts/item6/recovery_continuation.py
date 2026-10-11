@@ -44,6 +44,10 @@ def check_quiescent_continuation(store,task_id,prior_job):
     compute=store.retail_compute_status(task_id)
     if compute.get('pending') or compute.get('unresolved'):raise ValueError('compute unresolved')
     if any(u['state']!='settled' or u.get('input_estimate_overrun') for u in reader.usage(task_id)):raise ValueError('provider ledger unresolved')
+    with store._postgres.transaction() as c:
+        installations=c.execute('SELECT installation_id FROM closed_revision_installations WHERE task_id=%s',(task_id,)).fetchall()
+    if not installations:raise ValueError('closed edit installation evidence required')
+    # The caller validates installation file lineage with its artifact root.
     return {'kind':'item6-linked-continuation-quiescent','original_failed_job':prior_job,'unknown_attempts':0,
       'blind_replays':0,'uninterrupted_acceptance':False,'launch_authorized':False}
 
@@ -78,6 +82,14 @@ def execute_continuation(*,store,scope,root,config,run_id,prior_job,task_id,outp
         exported=FinalArtifactsAdapter(identity,store=store,artifacts_base=Path(root))(stage_isolation,{'pipeline':receipt,'gate_edit':changed})
         RunIsolation.write(output/'final_artifacts.json',exported)
         quiescent=check_quiescent_continuation(store,task_id,prior_job)
+        with store._postgres.transaction() as c:
+            installations=c.execute('SELECT installation_id FROM closed_revision_installations WHERE task_id=%s',(task_id,)).fetchall()
+        for row in installations:
+            proof=store.reconcile_private_revision_installation(task_id,installation_id=row['installation_id'],artifacts_base=Path(root))
+            if proof['state']!='installed_verified_no_dispatch' or proof['unverified']:raise ValueError('continuation installation proof unresolved')
+        with tenant_context(TenantScope('00000000-0000-0000-0000-000000000099','00000000-0000-0000-0000-000000000099')):
+            if store.task(task_id) is not None or store.recoverable_worker_jobs():raise ValueError('unrelated identity saw continuation')
+        quiescent['foreign_owner_denied']=True
         RunIsolation.write(output/'recovery.json',quiescent)
         result={'result':'CONTINUATION_EVIDENCE_READY','original_run_id':run_id,'original_failed_job':prior_job,
           'uninterrupted_acceptance':False,'original_acceptance_result':'INCOMPLETE','launch_authorized':False,'production_routes_enabled':False,

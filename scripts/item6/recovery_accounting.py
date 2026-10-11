@@ -1,6 +1,7 @@
 """Private exact-run accounting. Caller supplies verified scope and reviewed plan.
 
-No public route, source fetch, model call, job re-dispatch or authentication mint.
+No public route, model call, job re-dispatch or authentication mint.
+Explicit source verification callback performs only bounded public reads.
 """
 import json,time
 from decimal import Decimal
