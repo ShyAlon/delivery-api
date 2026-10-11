@@ -16,7 +16,7 @@ from recovery_budget import RecoveryBudgetGateway
 from recovery_continuation import execute_continuation
 
 
-def run(*,store,scope,root,runtime,run_id,task_id,prior_job,output,maximum_expense_units):
+def run(*,store,scope,root,runtime,run_id,task_id,prior_job,output,maximum_expense_units,interrupted_job=None,pending_review=None):
     import httpx
     runtime=Path(runtime)
     prices=json.loads((runtime/'catalog.json').read_text());context=json.loads((runtime/'context.json').read_text())
@@ -34,13 +34,15 @@ def run(*,store,scope,root,runtime,run_id,task_id,prior_job,output,maximum_expen
     with tenant_context(scope):
         with store._postgres.transaction() as c:
             original_jobs=[r['job_id'] for r in c.execute('SELECT job_id FROM worker_jobs WHERE task_id=%s',(task_id,)).fetchall()]
-        if original_jobs!=[prior_job]:raise ValueError('one exact predecessor, no prior continuation required')
+        expected={prior_job} if interrupted_job is None else {'edad945ddadfa63b5bd73d5546a5bf69',interrupted_job}
+        if set(original_jobs)!=expected:raise ValueError('exact audited predecessors required')
+        budget_exempt=['edad945ddadfa63b5bd73d5546a5bf69']
     balance_client=httpx.Client(transport=FixedOriginTransport(httpx.HTTPTransport(retries=0),'https://api.deepseek.com',lambda method,path:method=='GET' and path=='/user/balance'),trust_env=False,follow_redirects=False)
     reader=deepseek_balance_reader(client=balance_client,api_key=credentials['deepseek_api_key'])
     def gateway(cap,job):
         inner=WorkerAdmissionGateway(store,job,resolve_serialized=catalog.resolve_serialized,measure_raw_usage=settlement_usage,
           require_prepaid=True,retail_rates=rates,verify_provider_snapshot=lambda:verify_current_sources(prices[0]['provider_snapshot']),provider_balance=reader)
-        return RecoveryBudgetGateway(inner,original_job_ids=original_jobs,maximum_expense_units=maximum_expense_units)
+        return RecoveryBudgetGateway(inner,original_job_ids=budget_exempt,maximum_expense_units=maximum_expense_units)
     def pipeline_factory(attended):
         return PrivatePipeline(store=store,artifacts_base=root,model=model,gateway_factory=gateway,
           generator_clients=deepseek_client_factory(inner_sync=lambda:httpx.HTTPTransport(retries=0),inner_async=lambda:httpx.AsyncHTTPTransport(retries=0),owner_module='spec_generator'),
@@ -48,5 +50,5 @@ def run(*,store,scope,root,runtime,run_id,task_id,prior_job,output,maximum_expen
           answer_input=attended.input,review_gate=attended.gate,progress=lambda state,text:print(state+' | '+text,flush=True))
     try:
         return execute_continuation(store=store,scope=scope,root=root,config={},run_id=run_id,task_id=task_id,prior_job=prior_job,
-           output=output,pipeline_factory=pipeline_factory)
+           output=output,pipeline_factory=pipeline_factory,original_failed_jobs=original_jobs,pending_review=pending_review)
     finally:balance_client.close()

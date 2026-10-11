@@ -27,7 +27,7 @@ class PrivatePipeline:
             self.store.set_model_default(tid,'deepseek:'+self.model)
             return self.execute_existing(isolation,scope,task)
 
-    def execute_existing(self,isolation,scope,task,*,prior_job=None,review=None):
+    def execute_existing(self,isolation,scope,task,*,prior_job=None,review=None,pending_review=None):
         with tenant_context(scope):
             tid=task['task_id']
             if prior_job:
@@ -72,8 +72,12 @@ class PrivatePipeline:
                     if prior_job:
                         from recovery_checkpoint import restore_for_conops
                         if review is None:raise ValueError('original semantic review required')
-                        restore_for_conops(program,review,actor=scope.owner_id)
-                    pending=program.advance()
+                        if pending_review is None:
+                            restore_for_conops(program,review,actor=scope.owner_id)
+                        else:
+                            from recovery_checkpoint import restore_pending_concept
+                            restore_pending_concept(program,review,pending_review,actor=scope.owner_id)
+                    pending=program.open_input if pending_review is not None else program.advance()
                     for _ in range(100):
                         cap.validate(self.store)
                         if pending is None:

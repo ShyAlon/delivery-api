@@ -26,3 +26,16 @@ def test_run_cap_reservation_atomic_and_meter_forwarded(ledger):
         s.transition_provider_attempt(first,'cancel')
         assert g.reserve_serialized(attempt_id=second)==second
         s.transition_provider_attempt(second,'cancel')
+
+
+def test_reentry_keeps_previous_continuation_expense_in_cumulative_cap(ledger):
+    s,tid,job=ledger
+    class Inner:
+        store=s
+        def reserve_serialized(self,attempt_id):return s.reserve_provider_attempt(job,attempt_id,Q,'new')['attempt_id']
+    with tenant_context(A):
+        earlier=uuid.uuid4().hex;s.reserve_provider_attempt(job,earlier,Q,'old');s.transition_provider_attempt(earlier,'start');s.transition_provider_attempt(earlier,'settle',{'input_tokens':2,'output_tokens':3})
+        g=RecoveryBudgetGateway(Inner(),original_job_ids=['original-failed-not-the-interrupted-job'],maximum_expense_units=37)
+        nxt=uuid.uuid4().hex
+        with pytest.raises(AdmissionDenied,match='cap'):g.reserve_serialized(attempt_id=nxt)
+        assert s.provider_attempt(nxt) is None

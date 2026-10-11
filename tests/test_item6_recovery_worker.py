@@ -20,7 +20,8 @@ from vmodel_contracts.interactive import InputResponse,InputKind
 pytestmark=[pytest.mark.engine_integration,pytest.mark.skipif(not DSN,reason='isolated PG required')]
 
 
-def test_exact_predecessor_new_writer_and_review_skip_old_interview(ledger,tmp_path,monkeypatch):
+@pytest.mark.parametrize('resume_pending',[False,True])
+def test_exact_predecessor_new_writer_and_review_skip_old_interview(ledger,tmp_path,monkeypatch,resume_pending):
     s,tid,prior=ledger
     configure_interview_models(monkeypatch)
     from interview_engine.wire_binding import register_model
@@ -44,6 +45,11 @@ def test_exact_predecessor_new_writer_and_review_skip_old_interview(ledger,tmp_p
         with fence.running():
             program=InterviewApplication(session,tid,'brief',artifact_root=str(root.parent))
             program.graph.update_state(program.cfg,{'intent_model':resolved,'semantic_review':review,'semantic_review_resolved':True,'messages':[HumanMessage(content='founder source')],'submission':{'submission_id':session},'verdict':{'accepted':True,'is_web_app':True}},as_node='distill_intent')
+            pending=None
+            if resume_pending:
+                from recovery_checkpoint import restore_for_conops
+                restore_for_conops(program,review,actor=A.owner_id)
+                pending=program.advance().model_dump(mode='json')
             program.checkpointer.conn.close()
         s.finish_worker(prior,failed=True)
         choices=[]
@@ -57,7 +63,7 @@ def test_exact_predecessor_new_writer_and_review_skip_old_interview(ledger,tmp_p
         runner.generate=lambda *a:None
         # No fake provider calls are billed. Models are registered fixtures.
         runner.worker=lambda:SameHostProducerWorker(s,tmp_path,gateway_factory=runner.gateway,usage_log_factory=lambda cap,root:__import__('spec_generator.telemetry',fromlist=['UsageLog']).UsageLog(cap.session_id))
-        assert runner.execute_existing(SimpleNamespace(root=tmp_path),A,s.task(tid),prior_job=prior,review=review)==tid
+        assert runner.execute_existing(SimpleNamespace(root=tmp_path),A,s.task(tid),prior_job=prior,review=review,pending_review=pending)==tid
         assert choices==[InputKind.CHOICE,InputKind.APPROVAL]
         assert s.worker_job(prior)['state']=='failed'
         linked=s.worker_job(runner.job_ids[0])

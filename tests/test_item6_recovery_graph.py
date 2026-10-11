@@ -36,3 +36,27 @@ def test_real_graph_checkpoint_binding_new_conops_review_not_interview(tmp_path,
         assert models['distillation'].replies
         assert pending.input_id is not None
         program.checkpointer.conn.close()
+
+
+def test_interrupted_pending_choice_restored_without_paid_regeneration(tmp_path,monkeypatch):
+    from recovery_checkpoint import restore_pending_concept
+    models=configure_interview_models(monkeypatch)
+    owner='00000000-0000-0000-0000-000000000001';sid='pending'
+    candidate=json.loads((Path(__file__).parent/'fixtures/revision-source.json').read_text())['intent_model'];candidate['session_id']=sid
+    review=make_review(sid,'intent',candidate,[]).model_dump(mode='json')
+    fence=StopFence(tmp_path/sid/'interview/stop-request.json')
+    with fence.running():
+        p=InterviewApplication(sid,'task','brief',artifact_root=str(tmp_path))
+        p.graph.update_state(p.cfg,{'intent_model':candidate,'semantic_review':review,'semantic_review_resolved':True,'messages':[HumanMessage(content='founder source')],'submission':{'submission_id':sid},'verdict':{'accepted':True}},as_node='distill_intent')
+        restore_for_conops(p,review,actor=owner)
+        pending=p.advance();before=p.graph.get_state(p.cfg)
+        p.checkpointer.conn.close()
+        resumed=InterviewApplication(sid,'task','brief',artifact_root=str(tmp_path))
+        calls=[];original=resumed.graph.invoke
+        monkeypatch.setattr(resumed.graph,'invoke',lambda *args,**kw:calls.append(args))
+        binding=restore_pending_concept(resumed,review,pending.model_dump(mode='json'),actor=owner)
+        assert not calls and resumed.open_input==pending and resumed.result==before.values
+        assert binding['regeneration'] is False
+        changed=pending.model_dump(mode='json');changed['prompt']='different'
+        with pytest.raises(ValueError):restore_pending_concept(resumed,review,changed,actor=owner)
+        resumed.checkpointer.conn.close()

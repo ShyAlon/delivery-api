@@ -8,10 +8,10 @@ from isolation import RunIsolation
 from artifact_receipts import inventory
 
 
-def continuation_pipeline_receipt(isolation,pipeline,store,scope,task,prior_job,review):
+def continuation_pipeline_receipt(isolation,pipeline,store,scope,task,prior_job,review,*,original_failed_jobs=None,pending_review=None):
     """Old failed job stays visible; only exact audited predecessor exempted."""
     from completion_adapters import EvidenceReader
-    tid=pipeline.execute_existing(isolation,scope,task,prior_job=prior_job,review=review)
+    tid=pipeline.execute_existing(isolation,scope,task,prior_job=prior_job,review=review,pending_review=pending_review)
     cap=WorkerCapability.capture(store,tid);cap.validate(store)
     root=session_root(pipeline.base,scope,cap.session_id)
     files,documents=inventory(root)
@@ -19,26 +19,29 @@ def continuation_pipeline_receipt(isolation,pipeline,store,scope,task,prior_job,
     if any(p['state'] not in ('done','approved') for p in task['phases']):raise ValueError('durable phase completion required')
     reader=EvidenceReader(store);jobs=reader.jobs(tid)
     failures=[j for j in jobs if j['state']!='done']
-    if len(failures)!=1 or failures[0]['job_id']!=prior_job or failures[0]['state']!='failed':
+    expected=set(original_failed_jobs or [prior_job])
+    if {j['job_id'] for j in failures}!=expected or any(j['state']!='failed' for j in failures):
         raise ValueError('only exact audited failed predecessor may remain')
     links=[e['detail']['new_job_id'] for e in store.audit_entries(tid) if e['action']=='item6.continuation.queued' and e['detail'].get('original_failed_job')==prior_job]
     linked=[j for j in jobs if j['job_id'] in links]
     if len(linked)!=1 or linked[0]['state']!='done':raise ValueError('one completed linked continuation required')
-    proofs=[e for e in store.audit_entries(tid) if e['action']=='item6.provider.reconciled' and e['detail'].get('plan',{}).get('job_id')==prior_job]
+    proofs=[e for e in store.audit_entries(tid) if e['action']=='item6.provider.reconciled' and e['detail'].get('plan',{}).get('job_id') in expected]
     if not proofs:raise ValueError('original uncertain accounting reconciliation audit required')
     compute=store.retail_compute_status(tid)
     if compute.get('unresolved') or compute.get('pending'):raise ValueError('compute unresolved')
     usage=reader.usage(tid)
     if not usage or any(u['state']!='settled' or u.get('input_estimate_overrun') for u in usage):raise ValueError('usage not reconciled')
-    return {'kind':'item6-continuation-pipeline','original_failed_job':prior_job,'task_id':tid,'session_id':cap.session_id,
+    return {'kind':'item6-continuation-pipeline','original_failed_job':prior_job,'failed_predecessor_job_ids':sorted(original_failed_jobs or [prior_job]),'task_id':tid,'session_id':cap.session_id,
       'artifact_sha256':files,'new_job_ids':pipeline.job_ids,'complete_canonical_pipeline':True,'uninterrupted_acceptance':False}
 
 
-def check_quiescent_continuation(store,task_id,prior_job):
+def check_quiescent_continuation(store,task_id,prior_job,*,original_failed_jobs=None):
     from completion_adapters import EvidenceReader
     reader=EvidenceReader(store)
     jobs=reader.jobs(task_id)
-    if any(j['state']!='done' and not(j['job_id']==prior_job and j['state']=='failed') for j in jobs):
+    expected=set(original_failed_jobs or [prior_job])
+    if {j['job_id'] for j in jobs if j['state']=='failed'}!=expected:raise ValueError('audited failed predecessors changed')
+    if any(j['state']!='done' and not(j['job_id'] in set(original_failed_jobs or [prior_job]) and j['state']=='failed') for j in jobs):
         raise ValueError('continuation jobs unresolved')
     if any(j['state']=='done' and j['attempt']!=1 for j in jobs):raise ValueError('new job replay detected')
     compute=store.retail_compute_status(task_id)
@@ -48,11 +51,11 @@ def check_quiescent_continuation(store,task_id,prior_job):
         installations=c.execute('SELECT installation_id FROM closed_revision_installations WHERE task_id=%s',(task_id,)).fetchall()
     if not installations:raise ValueError('closed edit installation evidence required')
     # The caller validates installation file lineage with its artifact root.
-    return {'kind':'item6-linked-continuation-quiescent','original_failed_job':prior_job,'unknown_attempts':0,
+    return {'kind':'item6-linked-continuation-quiescent','original_failed_job':prior_job,'failed_predecessor_job_ids':sorted(original_failed_jobs or [prior_job]),'unknown_attempts':0,
       'blind_replays':0,'uninterrupted_acceptance':False,'launch_authorized':False}
 
 
-def execute_continuation(*,store,scope,root,config,run_id,prior_job,task_id,output,pipeline_factory):
+def execute_continuation(*,store,scope,root,config,run_id,prior_job,task_id,output,pipeline_factory,original_failed_jobs=None,pending_review=None):
     """Only caller with reviewed exact paid go may invoke. Does not authorize go."""
     output=Path(output)
     if output.exists() or output.is_symlink():raise ValueError('fresh continuation result directory required')
@@ -69,7 +72,7 @@ def execute_continuation(*,store,scope,root,config,run_id,prior_job,task_id,outp
         session=session_root(Path(root),scope,cap.session_id)
         review=json.loads((session/'interview/semantic-review.json').read_text())
         pipeline=pipeline_factory(attended)
-        receipt=continuation_pipeline_receipt(isolation,pipeline,store,scope,task,prior_job,review)
+        receipt=continuation_pipeline_receipt(isolation,pipeline,store,scope,task,prior_job,review,original_failed_jobs=original_failed_jobs,pending_review=pending_review)
         RunIsolation.write(output/'pipeline.json',receipt)
         from revision_executor import PrivateGateEdit
         from completion_adapters import FinalArtifactsAdapter
@@ -81,7 +84,7 @@ def execute_continuation(*,store,scope,root,config,run_id,prior_job,task_id,outp
         RunIsolation.write(output/'gate_edit.json',changed)
         exported=FinalArtifactsAdapter(identity,store=store,artifacts_base=Path(root))(stage_isolation,{'pipeline':receipt,'gate_edit':changed})
         RunIsolation.write(output/'final_artifacts.json',exported)
-        quiescent=check_quiescent_continuation(store,task_id,prior_job)
+        quiescent=check_quiescent_continuation(store,task_id,prior_job,original_failed_jobs=original_failed_jobs)
         with store._postgres.transaction() as c:
             installations=c.execute('SELECT installation_id FROM closed_revision_installations WHERE task_id=%s',(task_id,)).fetchall()
         for row in installations:
@@ -91,7 +94,7 @@ def execute_continuation(*,store,scope,root,config,run_id,prior_job,task_id,outp
             if store.task(task_id) is not None or store.recoverable_worker_jobs():raise ValueError('unrelated identity saw continuation')
         quiescent['foreign_owner_denied']=True
         RunIsolation.write(output/'recovery.json',quiescent)
-        result={'result':'CONTINUATION_EVIDENCE_READY','original_run_id':run_id,'original_failed_job':prior_job,
+        result={'result':'CONTINUATION_EVIDENCE_READY','original_run_id':run_id,'original_failed_job':prior_job,'failed_predecessor_job_ids':sorted(original_failed_jobs or [prior_job]),
           'uninterrupted_acceptance':False,'original_acceptance_result':'INCOMPLETE','launch_authorized':False,'production_routes_enabled':False,
           'evidence_sha256':{n:hashlib.sha256((output/(n+'.json')).read_bytes()).hexdigest() for n in ('pipeline','gate_edit','final_artifacts','recovery')}}
         RunIsolation.write(output/'result.json',result)

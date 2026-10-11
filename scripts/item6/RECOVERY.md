@@ -48,3 +48,19 @@ public connectivity check does not prove the earlier fault's cause or external
 provider debit. Real raw usage proves received provider usage, not an invoice.
 The settlement-path source fetch is a code-path explanation, not a proven network
 root cause. Diagnostic/operator approval does not authorize new provider spending.
+
+## Exact interrupted continuation
+
+The private version-2 route restores only the exported `ea2b834...` archive and
+its pending concept choice `51cb41b...`. It keeps the ten already settled new
+calls in the cumulative $1.00 provider cap. Only the original failed job is
+excluded from that cap. It verifies the two exact failed predecessors, 76
+settled attempts, $0.005264388 new provider expense and 3.1954875-credit balance
+before an explicitly authorized unknown-compute failure waiver. No new tokens
+are posted for the pending choice, and no CONOPS regeneration or interview
+replay is performed. The exact original InputRequest is checked against the
+saved draft, typed options, rationale requirement and session evidence before
+it is shown again. A founder must still choose and supply the rationale.
+Both failed jobs remain visible; completion cannot claim uninterrupted
+acceptance. A new failure exports evidence and requires another explicit
+recovery decision, never an automatic restart.

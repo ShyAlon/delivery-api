@@ -34,3 +34,25 @@ def restore_for_conops(program,review,*,actor):
     program.graph.update_state(program.cfg,{},as_node='distill_intent')
     program.result=snapshot.values;program.state=None;program.open_input=None
     return evidence
+
+
+def restore_pending_concept(program,review,pending,*,actor):
+    """Restore exact unaccepted concept choice; never invoke graph or regenerate."""
+    from vmodel_contracts.interactive import InputRequest,InputKind,InputOption
+    from interview_engine.conops_stage import founder_decision
+    snapshot=program.graph.get_state(program.cfg)
+    values=snapshot.values
+    if not values.get('conops_draft') or values.get('conops') or snapshot.next:
+        raise ValueError('quiescent pending concept checkpoint required')
+    clean={**values,'conops_draft':None}
+    binding=validate_checkpoint(clean,review,actor=actor,session_id=program.session_id)
+    request=InputRequest.model_validate(pending)
+    if request.kind!=InputKind.CHOICE or request.context.get('decision_purpose')!='conops_concept':
+        raise ValueError('exact concept choice required')
+    program.result=values
+    expected=program._decision_context('conops_concept')
+    decision=founder_decision(expected['evidence']['conops_draft'])
+    if request.context!=expected or request.prompt!=decision['prompt'] or request.options!=[InputOption.model_validate(o) for o in decision['options']] or request.rationale_required!=decision.get('rationale_required',False):
+        raise ValueError('pending concept review differs from checkpoint')
+    program.open_input=request;program.state=None
+    return binding|{'next_action':'answer-existing-conops-concept','regeneration':False}
