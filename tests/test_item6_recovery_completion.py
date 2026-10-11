@@ -23,3 +23,13 @@ def test_only_original_failed_job_exempt_new_failure_blocks(monkeypatch):
     with pytest.raises(ValueError):m.check_quiescent_continuation(store,'task','old')
     jobs[1]['state']='done';usage[0]['state']='uncertain'
     with pytest.raises(ValueError):m.check_quiescent_continuation(store,'task','old')
+
+
+def test_two_audited_failed_predecessors_only(monkeypatch):
+    jobs=[{'job_id':'original','state':'failed','attempt':1},{'job_id':'interrupted','state':'failed','attempt':1},{'job_id':'new','state':'done','attempt':1}]
+    reader=SimpleNamespace(jobs=lambda tid:jobs,usage=lambda tid:[{'state':'settled'}])
+    monkeypatch.setattr(__import__('completion_adapters'),'EvidenceReader',lambda s:reader)
+    store=SimpleNamespace(retail_compute_status=lambda tid:{'waived':2},_postgres=SimpleNamespace(transaction=Connection))
+    m.check_quiescent_continuation(store,'task','interrupted',original_failed_jobs=['original','interrupted'])
+    jobs[2]['state']='failed'
+    with pytest.raises(ValueError):m.check_quiescent_continuation(store,'task','interrupted',original_failed_jobs=['original','interrupted'])

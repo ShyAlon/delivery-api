@@ -19,7 +19,7 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--dump',type=Path,required=True);p.add_argument('--identity',type=Path,required=True)
     p.add_argument('--attempt',required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--expected-dump-sha256',required=True)
     p.add_argument('--approve-plan');p.add_argument('--source-verification',choices=['matched-historic-snapshot'])
-    p.add_argument('--waiver-authorization')
+    p.add_argument('--waiver-authorization');p.add_argument('--pending-review',type=Path)
     p.add_argument('--continue-reviewed-sha256');p.add_argument('--continuation-review',type=Path)
     p.add_argument('--source-run',type=Path);p.add_argument('--runtime',type=Path)
     a=p.parse_args()
@@ -38,7 +38,8 @@ def main():
         reviewed=json.loads(a.continuation_review.read_text())
         from recovery_plan import digest
         required={'version','original_run_id','reconciled_dump_sha256','original_failed_job','task_id','source_tree_sha256','runtime_tree_sha256','maximum_expense_units','new_purchase','uninterrupted_acceptance'}
-        if set(reviewed)!=required or reviewed['version']!=1 or reviewed['new_purchase'] is not False or reviewed['uninterrupted_acceptance'] is not False:
+        if reviewed.get('version')==2:required=required|{'pending_review_sha256'}
+        if set(reviewed)!=required or reviewed['version'] not in (1,2) or reviewed['new_purchase'] is not False or reviewed['uninterrupted_acceptance'] is not False:
             raise ValueError('exact continuation review fields required')
         if type(reviewed['maximum_expense_units']) is not int or reviewed['maximum_expense_units']<=0:raise ValueError('approved positive provider expense budget required')
         from recovery_manifest import tree_digest
@@ -46,7 +47,12 @@ def main():
             raise ValueError('source or runtime tree differs from paid review')
         if digest(reviewed)!=a.continue_reviewed_sha256:raise ValueError('exact paid continuation review required')
         if reviewed['original_run_id']!=identity['run_id'] or reviewed['reconciled_dump_sha256']!=hashlib.sha256(a.dump.read_bytes()).hexdigest():raise ValueError('continuation archive/run changed')
-        if reviewed['original_failed_job']!='edad945ddadfa63b5bd73d5546a5bf69' or reviewed['task_id']!='c11813e4a4b7':raise ValueError('exact stopped task/job review required')
+        expected_prior='edad945ddadfa63b5bd73d5546a5bf69' if reviewed['version']==1 else '9e04190ef41fac9f64e5f75b96e60b77'
+        if reviewed['original_failed_job']!=expected_prior or reviewed['task_id']!='c11813e4a4b7':raise ValueError('exact stopped task/job review required')
+        if reviewed['version']==2:
+            if reviewed['maximum_expense_units']!=1000000000000:raise ValueError('original cumulative one-dollar cap required')
+            if not a.pending_review or not a.waiver_authorization or reviewed['reconciled_dump_sha256']!='ea2b834221db3ffc96c7e4ace98a604243ad700e0ec30dffe25d8349bb895e35':raise ValueError('exact interrupted archive and waiver authority required')
+            if digest(json.loads(a.pending_review.read_text()))!=reviewed['pending_review_sha256'] or reviewed['pending_review_sha256']!='51cb41b39274a514f1fba96dfce16972eab0026d6324443fb09c5462a46092e3':raise ValueError('exact pending choice required')
     if a.approve_plan and (not a.source_verification or not a.waiver_authorization):raise ValueError('exact accounting review, source evidence and waiver required')
     data=Path('/tmp/item6-recovery-pg')
     if data.exists():raise ValueError('new ephemeral recovery database required')
@@ -81,7 +87,14 @@ def main():
                 if tree_digest(root)!=reviewed['source_tree_sha256']:raise ValueError('copied source tree changed')
                 from recovery_run import run
                 try:
-                    result=run(store=store,scope=scope,root=root,runtime=a.runtime,run_id=identity['run_id'],task_id=job['task_id'],prior_job=job['job_id'],
+                    if reviewed['version']==2:
+                        from recovery_interrupted import validate_interrupted_ledger
+                        validate_interrupted_ledger(store)
+                        # Validate pending input BEFORE even the approved compute waiver.
+                        from recovery_interrupted import validate_pending_files
+                        validate_pending_files(root,a.pending_review)
+                        waive_unknown_compute(store,reviewed['original_failed_job']+':compute',original_dump_sha256=archive_hash,authorization_ref=a.waiver_authorization)
+                    result=run(store=store,scope=scope,root=root,runtime=a.runtime,run_id=identity['run_id'],task_id=job['task_id'],prior_job=reviewed['original_failed_job'],interrupted_job=reviewed['original_failed_job'] if reviewed['version']==2 else None,pending_review=json.loads(a.pending_review.read_text()) if reviewed['version']==2 else None,
                        output=a.output/'continuation',maximum_expense_units=reviewed['maximum_expense_units'])
                     print(json.dumps(result),flush=True)
                 finally:

@@ -22,3 +22,11 @@ def prepare_review(*,run_id,dump,source_run,runtime,maximum_expense_units):
        'source_tree_sha256':tree_digest(source_run),'runtime_tree_sha256':tree_digest(runtime),
        'maximum_expense_units':maximum_expense_units,'new_purchase':False,'uninterrupted_acceptance':False}
     return review,digest(review)
+
+
+def prepare_pending_review(*,dump,source_run,runtime,pending_review):
+    review,_=prepare_review(run_id='4eda39c0684945ff849b582c60dd91f8',dump=dump,source_run=source_run,runtime=runtime,maximum_expense_units=1000000000000)
+    review.update(version=2,original_failed_job='9e04190ef41fac9f64e5f75b96e60b77',pending_review_sha256=digest(json.loads(Path(pending_review).read_text())))
+    if review['reconciled_dump_sha256']!='ea2b834221db3ffc96c7e4ace98a604243ad700e0ec30dffe25d8349bb895e35' or review['pending_review_sha256']!='51cb41b39274a514f1fba96dfce16972eab0026d6324443fb09c5462a46092e3':
+        raise ValueError('exact interrupted archive/pending review required')
+    return review,digest(review)
