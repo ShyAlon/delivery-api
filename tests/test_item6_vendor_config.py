@@ -79,3 +79,29 @@ def test_d13_runtime_dry_preflight_contacts_nothing(tmp_path):
     receipt=json.loads(result.stdout)
     assert receipt['network_started'] is False and receipt['database_changed'] is False
     assert receipt['launch_authorized'] is False
+
+
+def test_only_public_source_network_errors_have_bounded_retry():
+    import urllib.error
+    from vendor_config import fetch_verified_source
+    calls=[];sleeps=[]
+    def transient(url):
+        calls.append(url)
+        if len(calls)<3:raise urllib.error.URLError('fixture connection failure')
+        return 'same verified source'
+    assert fetch_verified_source(PRICING_URL,transient,sleeps.append)=='same verified source'
+    assert len(calls)==3 and sleeps==[1,2]
+    calls.clear()
+    def changed(url):
+        calls.append(url);raise ValueError('source mismatch')
+    with pytest.raises(ValueError):fetch_verified_source(PRICING_URL,changed,sleeps.append)
+    assert len(calls)==1
+
+
+def test_source_retry_exhaustion_never_passes_or_retries_post():
+    import urllib.error
+    from vendor_config import fetch_verified_source
+    calls=[]
+    def down(url):calls.append(url);raise urllib.error.URLError('fixture down')
+    with pytest.raises(urllib.error.URLError):fetch_verified_source(PRICING_URL,down,lambda _:None)
+    assert len(calls)==3
