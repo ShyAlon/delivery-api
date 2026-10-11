@@ -3,6 +3,7 @@ import sys,json,uuid,asyncio
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
+pytest.importorskip('interview_engine.application')
 sys.path.insert(0,str(Path(__file__).parents[1]/'scripts/item6'))
 from test_attempt_ledger import ledger
 from test_postgres_store import DSN,A,B,store
@@ -16,7 +17,7 @@ from vmodel_contracts import IntentModel
 from interview_engine.application import InterviewApplication
 from interview_engine.stop_fence import StopFence
 from vmodel_contracts.interactive import InputResponse,InputKind
-pytestmark=pytest.mark.skipif(not DSN,reason='isolated PG required')
+pytestmark=[pytest.mark.engine_integration,pytest.mark.skipif(not DSN,reason='isolated PG required')]
 
 
 def test_exact_predecessor_new_writer_and_review_skip_old_interview(ledger,tmp_path,monkeypatch):

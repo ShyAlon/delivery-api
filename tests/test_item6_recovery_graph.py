@@ -2,6 +2,7 @@
 import sys,json
 from pathlib import Path
 import pytest
+pytest.importorskip('interview_engine.application')
 sys.path.insert(0,str(Path(__file__).parents[1]/'scripts/item6'))
 from recovery_checkpoint import restore_for_conops
 from test_item6_interview import configure_interview_models
