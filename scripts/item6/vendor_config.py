@@ -1,5 +1,5 @@
 """Generated snapshot compiler. No founder copies vendor price/band fields."""
-import datetime,hashlib,json
+import datetime,hashlib,json,time,urllib.error
 from pathlib import Path
 from decimal import Decimal
 from isolation import RunIsolation
@@ -66,13 +66,24 @@ def build_runtime(root,data,identity):
     return {'catalog.json':[price],'context.json':context,'run.json':run,'credentials.json':{'client_id':data['PAYPAL_CLIENT_ID'],'client_secret':data['PAYPAL_CLIENT_SECRET'],'deepseek_api_key':data['DEEPSEEK_API_KEY']}}
 
 
+def fetch_verified_source(url,fetcher=fetch,sleeper=time.sleep):
+    # Public GET only. Never retry model dispatch or mismatched source content.
+    for attempt in range(3):
+        try:return fetcher(url)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (429,500,502,503,504) or attempt==2:raise
+        except (urllib.error.URLError,TimeoutError,ConnectionError):
+            if attempt==2:raise
+        sleeper((1,2)[attempt])
+
+
 def verify_current_sources(snapshot,fetcher=fetch):
     """Before each new contact/settlement; public reads, never provider inference."""
     checked=ProviderSnapshot(snapshot);checked.fresh(datetime.datetime.now(datetime.timezone.utc))
     sources={s['url']:s['sha256'] for s in snapshot['sources']}
     if set(sources)!={PRICING_URL,API_URL}:raise ValueError('fixed vendor source set changed; admission stopped')
     for url,digest in sources.items():
-        current=fetcher(url)
+        current=fetch_verified_source(url,fetcher)
         if hashlib.sha256(current.encode()).hexdigest()!=digest:
             raise ValueError('vendor source changed during run; preserve accepted attempts and review new snapshot')
     return True

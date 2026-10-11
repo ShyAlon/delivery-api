@@ -25,7 +25,25 @@ class PrivatePipeline:
                 brief='A SaaS web household task board with logins for two adults to assign chores, see due dates, and confirm completion.')
             tid=task['task_id'];sid=str(uuid.uuid4());self.store.set_engine_session(tid,sid)
             self.store.set_model_default(tid,'deepseek:'+self.model)
+            return self.execute_existing(isolation,scope,task)
+
+    def execute_existing(self,isolation,scope,task,*,prior_job=None,review=None):
+        with tenant_context(scope):
+            tid=task['task_id']
+            if prior_job:
+                from delivery_api.worker_capability import WorkerCapability
+                cap=WorkerCapability.capture(self.store,tid);cap.validate(self.store)
+                old=self.store.worker_job(prior_job)
+                if not old or old['task_id']!=tid or old['state']!='failed' or old['session_id']!=cap.session_id or old['generation']!=cap.generation:
+                    raise ValueError('exact failed predecessor required')
+                if self.store.retail_compute_status(tid).get('unresolved') or self.store.retail_compute_status(tid).get('pending'):
+                    raise ValueError('compute accounting must be reconciled before continuation')
+                with self.store._postgres.transaction() as c:
+                    held=c.execute("SELECT 1 FROM provider_attempts p JOIN worker_jobs w ON w.job_id=p.job_id WHERE w.task_id=%s AND p.state IN ('reserved','dispatched','uncertain') LIMIT 1",(tid,)).fetchone()
+                if held:raise ValueError('provider accounting must be reconciled before continuation')
             job=self.store.enqueue_worker(tid,'phase:intent',execution_options={'model_route':'deepseek:'+self.model})
+            if prior_job:
+                self.store.audit(scope.owner_id,'item6.continuation.queued',tid,{'original_failed_job':prior_job,'new_job_id':job,'session_id':cap.session_id,'uninterrupted_acceptance':False})
             self.job_ids.append(job)
             worker=self.worker()
             def interview(cap,root):
@@ -51,6 +69,10 @@ class PrivatePipeline:
                 gateway=self.gateway(cap,job)
                 with admission_gateway(gateway,required=True),wire_clients(gateway,self.interview_clients),shared_writer():
                     program=InterviewApplication(cap.session_id,cap.task_id,task['brief'],artifact_root=str(root.parent),model_route='deepseek',initial_model=self.model)
+                    if prior_job:
+                        from recovery_checkpoint import restore_for_conops
+                        if review is None:raise ValueError('original semantic review required')
+                        restore_for_conops(program,review,actor=scope.owner_id)
                     pending=program.advance()
                     for _ in range(100):
                         cap.validate(self.store)
