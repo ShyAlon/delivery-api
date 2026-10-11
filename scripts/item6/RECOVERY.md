@@ -52,7 +52,7 @@ root cause. Diagnostic/operator approval does not authorize new provider spendin
 ## Exact interrupted continuation
 
 The private version-2 route restores only the exported `ea2b834...` archive and
-its pending concept choice `51cb41b...`. It keeps the ten already settled new
+its pending concept choice `51cb41b...`. It keeps the nine already settled new
 calls in the cumulative $1.00 provider cap. Only the original failed job is
 excluded from that cap. It verifies the two exact failed predecessors, 76
 settled attempts, $0.005264388 new provider expense and 3.1954875-credit balance

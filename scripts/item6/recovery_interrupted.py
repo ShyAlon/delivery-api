@@ -13,7 +13,7 @@ def validate_interrupted_ledger(store):
         rows=c.execute('SELECT * FROM provider_attempts').fetchall()
         if len(rows)!=76 or any(r['state']!='settled' or r.get('input_estimate_overrun') for r in rows):raise ValueError('exact76 settled attempts, no holds required')
         new=[r for r in rows if r['job_id']!=ORIGINAL]
-        if len(new)!=10 or any(r['job_id']!=INTERRUPTED for r in new) or sum(r['expense_actual'] for r in new)!=5264388000:raise ValueError('interrupted paid expense ledger changed')
+        if len(new)!=9 or any(r['job_id']!=INTERRUPTED for r in new) or sum(r['expense_actual'] for r in new)!=5264388000:raise ValueError('interrupted paid expense ledger changed')
         segments=c.execute('SELECT job_id,state,deterministic_ms FROM retail_compute_segments').fetchall()
         if len(segments)!=2 or {r['job_id']:r['state'] for r in segments}!={ORIGINAL:'waived',INTERRUPTED:'unresolved'} or any(r['deterministic_ms'] is not None for r in segments):raise ValueError('exact original waived and interrupted unknown compute required')
         account=c.execute('SELECT balance_units,units_per_credit FROM credit_accounts').fetchone()
