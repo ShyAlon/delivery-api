@@ -66,3 +66,19 @@ def test_setup_dry_and_shell_safety():
     assert 'ufw reset' not in text and 'PasswordAuthentication no' in text
     for script in [setup,setup.with_name('mac-setup.sh')]:
         assert subprocess.run(['bash','-n',str(script)]).returncode==0
+
+def test_acme_existing_private_intermediate_is_fixed_explicitly(tmp_path):
+    import subprocess
+    setup=Path(__file__).parents[1]/'scripts/item6/receiver/setup.sh'
+    text=setup.read_text()
+    marker=' for PUBLIC_DIR in /var/lib/requi-acme '
+    start=text.index(marker);end=text.index('\n done',start)+len('\n done')
+    root=tmp_path/'public-acme';root.mkdir(mode=0o755)
+    middle=root/'.well-known';middle.mkdir(mode=0o700)
+    private=tmp_path/'private-spool';private.mkdir(mode=0o700)
+    script=text[start:end].replace('/var/lib/requi-acme',str(root)).replace('-o caddy -g caddy ','')
+    out=subprocess.run(['bash','-c','umask 077; fail(){ exit 1; };'+script],capture_output=True)
+    assert out.returncode==0
+    for path in (root,middle,middle/'acme-challenge'):assert path.stat().st_mode&0o777==0o755
+    assert private.stat().st_mode&0o777==0o700
+    assert 'sudo -u caddy test -r' in text
