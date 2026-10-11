@@ -16,7 +16,7 @@ from recovery_budget import RecoveryBudgetGateway
 from recovery_continuation import execute_continuation
 
 
-def run(*,store,scope,root,runtime,run_id,task_id,prior_job,output,maximum_expense_units,interrupted_job=None,pending_review=None):
+def run(*,store,scope,root,runtime,run_id,task_id,prior_job,output,maximum_expense_units,interrupted_job=None,pending_review=None,generator_resume=None):
     import httpx
     runtime=Path(runtime)
     prices=json.loads((runtime/'catalog.json').read_text());context=json.loads((runtime/'context.json').read_text())
@@ -34,8 +34,13 @@ def run(*,store,scope,root,runtime,run_id,task_id,prior_job,output,maximum_expen
     with tenant_context(scope):
         with store._postgres.transaction() as c:
             original_jobs=[r['job_id'] for r in c.execute('SELECT job_id FROM worker_jobs WHERE task_id=%s',(task_id,)).fetchall()]
-        expected={prior_job} if interrupted_job is None else {'edad945ddadfa63b5bd73d5546a5bf69',interrupted_job}
+        if generator_resume is not None:
+            expected={'edad945ddadfa63b5bd73d5546a5bf69','9e04190ef41fac9f64e5f75b96e60b77','2068b70d89a9f5d94296309707176822','53467a7e6d7551d4d56c0a6ff62abff7'}
+            if prior_job!='2068b70d89a9f5d94296309707176822':raise ValueError('exact architecture predecessor required')
+        else:expected={prior_job} if interrupted_job is None else {'edad945ddadfa63b5bd73d5546a5bf69',interrupted_job}
         if set(original_jobs)!=expected:raise ValueError('exact audited predecessors required')
+        failed_jobs=[j for j in original_jobs if store.worker_job(j)['state']=='failed']
+        if generator_resume is not None and set(failed_jobs)!=expected-{'53467a7e6d7551d4d56c0a6ff62abff7'}:raise ValueError('three exact failed predecessors, retained completed interview required')
         budget_exempt=['edad945ddadfa63b5bd73d5546a5bf69']
     balance_client=httpx.Client(transport=FixedOriginTransport(httpx.HTTPTransport(retries=0),'https://api.deepseek.com',lambda method,path:method=='GET' and path=='/user/balance'),trust_env=False,follow_redirects=False)
     reader=deepseek_balance_reader(client=balance_client,api_key=credentials['deepseek_api_key'])
@@ -50,5 +55,5 @@ def run(*,store,scope,root,runtime,run_id,task_id,prior_job,output,maximum_expen
           answer_input=attended.input,review_gate=attended.gate,progress=lambda state,text:print(state+' | '+text,flush=True))
     try:
         return execute_continuation(store=store,scope=scope,root=root,config={},run_id=run_id,task_id=task_id,prior_job=prior_job,
-           output=output,pipeline_factory=pipeline_factory,original_failed_jobs=original_jobs,pending_review=pending_review)
+           output=output,pipeline_factory=pipeline_factory,original_failed_jobs=failed_jobs,pending_review=pending_review,generator_resume=generator_resume)
     finally:balance_client.close()

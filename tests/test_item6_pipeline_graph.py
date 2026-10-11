@@ -71,3 +71,34 @@ def test_private_real_full_graph_gates_persist_complete_bundle(tmp_path,monkeypa
  for name in ('needs.json','srs.json','architecture.json','items.json','tests.json','validation.json','manifest.json','traceability.json','AGENTS.md'):
   assert (root/'spec'/name).is_file(),name
  assert {'needs','srs','architecture','specs','tests','validation'} <= {p for p,s in phases if s=='done'}
+
+
+def test_exact_generator_checkpoint_resume_preserves_srs_and_only_new_gate(tmp_path,monkeypatch):
+ gp=configure_graph_models(monkeypatch)
+ owner='00000000-0000-0000-0000-000000000001';cap=SimpleNamespace(task_id='fixture',session_id='s',scope=SimpleNamespace(owner_id=owner),validate=lambda s:None)
+ root=tmp_path/'tenants'/owner/'sessions'/'s';(root/'interview').mkdir(parents=True)
+ (root/'interview/intent_model.json').write_text(json.dumps(gp.INTENT))
+ raw=json.loads((ROOT/'tests/fixtures/revision-source.json').read_text())['conops'];raw['session_id']='s';(root/'interview/conops.json').write_text(json.dumps(raw))
+ phases=[];store=SimpleNamespace(update_phase=lambda *a:phases.append(a),task=lambda tid:{'phases':[{'key':'srs','state':'approved'}]})
+ decisions=[]
+ def gate(review,digest):decisions.append(review['gate']);return {'review_sha256':digest,'decision':{'action':'accept'}}
+ runner=PrivatePipeline(store=store,artifacts_base=tmp_path,model='fixture',gateway_factory=lambda *a:None,generator_clients=lambda **kw:None,interview_clients=lambda **kw:None,answer_input=lambda x:None,review_gate=gate,progress=lambda *a:None)
+ from spec_generator import graph as gm
+ real=gm._call_json
+ def fail(stage,*a,**kw):
+  if stage=='architecture':raise RuntimeError('fixture interruption')
+  return real(stage,*a,**kw)
+ monkeypatch.setattr(gm,'_call_json',fail)
+ from spec_generator.stop_fence import StopFence
+ from spec_generator.cooperative_run import cli_execution
+ from spec_generator.telemetry import UsageLog
+ with cli_execution(StopFence(root/'interview/stop-request.json'),UsageLog('s')):
+  with pytest.raises(RuntimeError):runner.generate(cap,root)
+ assert decisions==['srs']
+ before={n:(root/'spec'/n).read_bytes() for n in ('needs.json','srs.json')}
+ from recovery_generator import generator_review
+ proof=generator_review(root,'s');assert proof['architecture_stage_reexecution_possible']
+ monkeypatch.setattr(gm,'_call_json',real)
+ with cli_execution(StopFence(root/'interview/stop-request.json'),UsageLog('s')):runner.generate(cap,root,generator_resume=proof)
+ assert decisions==['srs','architecture']
+ assert all((root/'spec'/n).read_bytes()==v for n,v in before.items())

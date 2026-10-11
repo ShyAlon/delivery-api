@@ -81,7 +81,7 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
     if limits['rate_max'] is not None and sum(r['created_at']>now-limits['rate_window_seconds'] for r in rows)>=limits['rate_max']:
         raise AdmissionDenied('owner attempt rate exhausted')
     # Outstanding holds survive period reset; only settled expense ages out.
-    active=held+[r for r in rows if r['state']=='settled' and r['created_at']>now-limits['period_seconds']]
+    active=held+[r for r in rows if r['state']=='failure_waived' or (r['state']=='settled' and r['created_at']>now-limits['period_seconds'])]
     used_expense=sum(r['expense_actual'] if r['state']=='settled' else r['expense_reserved'] for r in active)
     used_retail=sum(r['retail_actual'] if r['state']=='settled' else r['retail_reserved'] for r in active)
     if (limits['attempt_expense_max'] is not None and expense>limits['attempt_expense_max']) or (not require_prepaid and limits['attempt_retail_max'] is not None and retail>limits['attempt_retail_max']):

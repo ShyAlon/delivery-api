@@ -64,3 +64,39 @@ it is shown again. A founder must still choose and supply the rationale.
 Both failed jobs remain visible; completion cannot claim uninterrupted
 acceptance. A new failure exports evidence and requires another explicit
 recovery decision, never an automatic restart.
+
+## Unknown provider failure and generator checkpoint recovery
+
+An explicitly authorized unknown provider call is recorded as `failure_waived`,
+not a fabricated zero-cost settlement. Usage, provider actual expense, retail
+actual and settlement timestamps remain NULL. Its pending charge is explicitly
+waived, without a customer debit or token contribution. The failed worker remains
+failed. Its original conservative expense reservation continues to count against
+both owner allowance and the original cumulative continuation cap.
+
+The private wire audit stores attempt/job identity, exact response SHA256, byte
+and line-ending counts, event count, terminal token counts, DONE and bounded error
+class. It never stores keys, requests, prompts or complete responses.
+
+Generator recovery validates copied checkpoint/WAL, prior canonical artifacts and
+saved baseline. Only a saved architecture next-task may invoke with no new graph
+input. It preserves accepted intent/CONOPS/SRS and does not repeat their gate.
+The new generator still waits at the architecture gate and normal later reviews.
+The runner now wires per-item partial persistence for future interruptions. If
+an older interrupted run has no architecture partials, paid recovery can repeat
+architecture calls; that fact must be named in its separate exact paid review.
+
+Top-up preparation is sandbox-only and separate from generator recovery. It uses
+an immutable new purchase ID and stable create/capture request IDs against the
+existing nonzero credit account. Pack, amount and runtime are reviewed before
+network work. Buyer approval is not proof of payment: capture and signature-verified
+webhook reconciliation are required, with once-only credit posting. No manual
+credit grants, live activation, original-order replay or cap reset. Any partial
+payment work exports a private ledger dump and must be reconciled before another
+purchase or recovery. A top-up does not authorize paid generator execution.
+
+When approved write-off and top-up are both needed, use one restored ledger and
+one exported successor dump. The top-up entry can include the separately
+source-authorized failure waiver before payment work. Do not apply them to two
+independent restorations and then discard either successor ledger. Export and
+reconcile any partial order on the same ledger before paid generator review.

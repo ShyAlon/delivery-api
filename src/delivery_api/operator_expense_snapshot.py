@@ -31,7 +31,7 @@ def build_snapshot(*,accounts,attempts,as_of,registry_complete,ledger_complete,p
         if not isinstance(key,str) or not key or key in seen or owner not in owner_ids or not isinstance(session,str) or not session:
             raise AdmissionDenied('complete unique attempt/account/session binding required')
         seen.add(key)
-        if state not in ('reserved','dispatched','uncertain','settled','cancelled'):raise AdmissionDenied('unknown attempt state')
+        if state not in ('reserved','dispatched','uncertain','settled','cancelled','failure_waived'):raise AdmissionDenied('unknown attempt state')
         totals=sessions.setdefault((owner,session),{'settled_units':0,'held_units':0,'uncertain_attempts':0})
         if state=='settled':
             amount=attempt.get('expense_actual');ts=attempt.get('settled_at')
@@ -39,7 +39,7 @@ def build_snapshot(*,accounts,attempts,as_of,registry_complete,ledger_complete,p
                 raise AdmissionDenied('settled expense and source settlement time required')
             totals['settled_units']+=amount
             if as_of-86400<ts<=as_of:settled+=amount
-        elif state in ('reserved','dispatched','uncertain'):
+        elif state in ('reserved','dispatched','uncertain','failure_waived'):
             amount=attempt.get('expense_reserved')
             if not _integer(amount):raise AdmissionDenied('verified outstanding expense hold required')
             held+=amount;totals['held_units']+=amount
