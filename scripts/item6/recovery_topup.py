@@ -30,6 +30,8 @@ def finish_topup(*,review,scope,repository,processor,read_account,webhook_receip
         if capture.get('credit_posted') is not True:raise PaymentRejected('capture not confirmed; reconcile this purchase, never new order')
     raw,headers=webhook_receipt()
     event,_=processor.verify_event(raw,headers)
+    notice=processor.payment_notice(event)
+    if notice['action']!='paid' or notice['order_id']!=row['order_id'] or notice['payment_id']!=row['capture_id']:raise PaymentRejected('exact completed top-up webhook required')
     service.webhook(raw,headers)
     row=repository.get_purchase(intent.purchase_id);after=read_account(scope)
     if not row['credit_posted'] or row['state']=='operator_review' or after['balance_units']!=review['balance_before']+intent.credit_units:raise PaymentRejected('top-up posting/balance mismatch')

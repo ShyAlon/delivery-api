@@ -14,7 +14,7 @@ def test_existing_balance_and_stable_new_purchase_preserved(monkeypatch):
  class Repo:
   def create_purchase(self,intent):
    if intent.purchase_id in rows and rows[intent.purchase_id]['intent']!=intent:raise PaymentRejected('conflict')
-   rows.setdefault(intent.purchase_id,{'intent':intent,'credit_posted':False,'state':'created','capture_id':None});created.append(intent.purchase_id);return rows[intent.purchase_id]
+   rows.setdefault(intent.purchase_id,{'intent':intent,'credit_posted':False,'state':'created','capture_id':None,'order_id':'fixture-order'});created.append(intent.purchase_id);return rows[intent.purchase_id]
   def get_purchase(self,pid):return rows[pid]
  class Service:
   def __init__(self,*a):pass
@@ -24,7 +24,7 @@ def test_existing_balance_and_stable_new_purchase_preserved(monkeypatch):
    return {'credit_posted':True}
   def webhook(self,*a):return {'credit_posted':False}
  monkeypatch.setattr(m,'PaymentService',Service)
- repo=Repo();processor=SimpleNamespace(binding=SimpleNamespace(live_mode=False),verify_event=lambda *a:({'id':'fixture-event'},'a'*64))
+ repo=Repo();processor=SimpleNamespace(binding=SimpleNamespace(live_mode=False),verify_event=lambda *a:({'id':'fixture-event'},'a'*64),payment_notice=lambda e:{'action':'paid','order_id':'fixture-order','payment_id':'fixture-capture'})
  review=m.prepare_topup(scope=scope,run_id='original',offer_id='credits-5',repository=repo,processor=processor,read_account=lambda s:dict(account))
  assert review['balance_before']==362835621 and review['credit_units']==5*10**9 and review['amount_minor']==500
  assert review==m.prepare_topup(scope=scope,run_id='original',offer_id='credits-5',repository=repo,processor=processor,read_account=lambda s:dict(account))
@@ -33,5 +33,7 @@ def test_existing_balance_and_stable_new_purchase_preserved(monkeypatch):
  assert result['balance_after']==5362835621
  assert m.finish_topup(review=review,scope=scope,repository=repo,processor=processor,read_account=lambda s:dict(account),webhook_receipt=lambda:(b'fixture',{}))==result
  assert account['balance_units']==5362835621
+ processor.payment_notice=lambda e:{'action':'paid','order_id':'wrong','payment_id':'fixture-capture'}
+ with pytest.raises(PaymentRejected,match='webhook'):m.finish_topup(review=review,scope=scope,repository=repo,processor=processor,read_account=lambda s:dict(account),webhook_receipt=lambda:(b'fixture',{}))
  processor.binding.live_mode=True
  with pytest.raises(PaymentRejected):m.prepare_topup(scope=scope,run_id='original',offer_id='credits-5',repository=repo,processor=processor,read_account=lambda s:dict(account))
