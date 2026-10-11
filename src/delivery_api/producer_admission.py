@@ -5,6 +5,7 @@ and exact request digest. It runs in trusted delivery code, not producer input.
 Missing resolver/usage fails closed. No monetary configuration defaults exist.
 """
 from .attempt_ledger import AdmissionDenied
+from .tenancy import current_scope
 
 class WorkerAdmissionGateway:
     def __init__(self,store,job_id,*,resolve_quote=None,measure_usage=None,require_prepaid=True,resolve_serialized=None,measure_raw_usage=None,launch_guard=False,retail_rates=None,verify_provider_snapshot=None,provider_balance=None):
@@ -17,6 +18,27 @@ class WorkerAdmissionGateway:
         self.store=store;self.job_id=job_id;self.require_prepaid=require_prepaid
         self.resolve_quote=resolve_quote;self.measure_usage=measure_usage
         self.resolve_serialized=resolve_serialized;self.measure_raw_usage=measure_raw_usage
+
+    def record_wire_evidence(self,attempt,evidence):
+        import json
+        row=self._attempt(attempt)
+        allowed={'status','response_sha256','response_bytes','cr_count','lf_count','event_count','terminal_usage','done_seen','error_class'}
+        if set(evidence)!=allowed or len(json.dumps(evidence))>65536:raise AdmissionDenied('bounded exact wire evidence required')
+        if evidence['status'] not in ('settled','failed','closed_without_settlement','early_close') or (evidence['error_class'] is not None and (not isinstance(evidence['error_class'],str) or not evidence['error_class'].isidentifier() or len(evidence['error_class'])>100)):raise AdmissionDenied('bounded wire status/error class required')
+        usage=evidence['terminal_usage']
+        keys={'prompt_tokens','completion_tokens','total_tokens','prompt_cache_hit_tokens','prompt_cache_miss_tokens','prompt_tokens_details','completion_tokens_details'}
+        details={'cached_tokens','audio_tokens','reasoning_tokens','accepted_prediction_tokens','rejected_prediction_tokens'}
+        if usage is not None:
+            if not isinstance(usage,dict) or not set(usage)<=keys:raise AdmissionDenied('token-only wire usage required')
+            for key,value in usage.items():
+                if key.endswith('_details'):
+                    if not isinstance(value,dict) or not set(value)<=details or any(type(n) is not int or n<0 for n in value.values()):raise AdmissionDenied('token-only wire details required')
+                elif type(value) is not int or value<0:raise AdmissionDenied('exact wire token counts required')
+        digest=evidence['response_sha256']
+        if not isinstance(digest,str) or len(digest)!=64 or any(c not in '0123456789abcdef' for c in digest):raise AdmissionDenied('exact response hash required')
+        if any(type(evidence[k]) is not int or evidence[k]<0 for k in ('response_bytes','cr_count','lf_count','event_count')) or type(evidence['done_seen']) is not bool:raise AdmissionDenied('exact wire counts required')
+        with self.store._postgres.transaction():
+            self.store.audit(current_scope().owner_id,'provider.wire.evidence',self.store.worker_job(self.job_id)['task_id'],{'attempt_id':attempt,'job_id':self.job_id,'evidence':evidence})
 
     def _verify_snapshot(self):
         if self.verify_provider_snapshot is not None:

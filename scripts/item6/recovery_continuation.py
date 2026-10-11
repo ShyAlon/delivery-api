@@ -8,10 +8,24 @@ from isolation import RunIsolation
 from artifact_receipts import inventory
 
 
-def continuation_pipeline_receipt(isolation,pipeline,store,scope,task,prior_job,review,*,original_failed_jobs=None,pending_review=None):
+def require_reconciled_usage(store,task_id,usage,failed_jobs):
+    """Only a named audited failure may replace unknown usage, never zero usage."""
+    for u in usage:
+        if u.get('input_estimate_overrun'):raise ValueError('input estimate overrun')
+        if u['state']=='settled':continue
+        if u['state']!='failure_waived' or u.get('job_id') not in failed_jobs:raise ValueError('provider ledger unresolved')
+        proofs=[e['detail'] for e in store.audit_entries(task_id) if e['action']=='item6.provider.unknown_failure_waived' and e['detail'].get('attempt_id')==u['attempt_id']]
+        if len(proofs)!=1 or proofs[0].get('failed_job')!=u['job_id'] or proofs[0].get('provider_expense_actual') is not None or proofs[0].get('conservative_cap_consumption_units')!=u['expense_reserved'] or not proofs[0].get('authorization_ref') or not proofs[0].get('balance_unchanged'):raise ValueError('exact unknown failure audit required')
+        if any(u.get(k) is not None for k in ('usage','raw_usage','expense_actual','retail_actual','settled_at')):raise ValueError('waived unknown cannot be measured settlement')
+
+
+def continuation_pipeline_receipt(isolation,pipeline,store,scope,task,prior_job,review,*,original_failed_jobs=None,pending_review=None,generator_resume=None):
     """Old failed job stays visible; only exact audited predecessor exempted."""
     from completion_adapters import EvidenceReader
-    tid=pipeline.execute_existing(isolation,scope,task,prior_job=prior_job,review=review,pending_review=pending_review)
+    if generator_resume is not None:
+        tid=pipeline.execute_generator_existing(isolation,scope,task,prior_job=prior_job,generator_resume=generator_resume)
+    else:
+        tid=pipeline.execute_existing(isolation,scope,task,prior_job=prior_job,review=review,pending_review=pending_review)
     cap=WorkerCapability.capture(store,tid);cap.validate(store)
     root=session_root(pipeline.base,scope,cap.session_id)
     files,documents=inventory(root)
@@ -30,7 +44,8 @@ def continuation_pipeline_receipt(isolation,pipeline,store,scope,task,prior_job,
     compute=store.retail_compute_status(tid)
     if compute.get('unresolved') or compute.get('pending'):raise ValueError('compute unresolved')
     usage=reader.usage(tid)
-    if not usage or any(u['state']!='settled' or u.get('input_estimate_overrun') for u in usage):raise ValueError('usage not reconciled')
+    if not usage:raise ValueError('usage evidence required')
+    require_reconciled_usage(store,tid,usage,expected)
     return {'kind':'item6-continuation-pipeline','original_failed_job':prior_job,'failed_predecessor_job_ids':sorted(original_failed_jobs or [prior_job]),'task_id':tid,'session_id':cap.session_id,
       'artifact_sha256':files,'new_job_ids':pipeline.job_ids,'complete_canonical_pipeline':True,'uninterrupted_acceptance':False}
 
@@ -46,7 +61,7 @@ def check_quiescent_continuation(store,task_id,prior_job,*,original_failed_jobs=
     if any(j['state']=='done' and j['attempt']!=1 for j in jobs):raise ValueError('new job replay detected')
     compute=store.retail_compute_status(task_id)
     if compute.get('pending') or compute.get('unresolved'):raise ValueError('compute unresolved')
-    if any(u['state']!='settled' or u.get('input_estimate_overrun') for u in reader.usage(task_id)):raise ValueError('provider ledger unresolved')
+    require_reconciled_usage(store,task_id,reader.usage(task_id),expected)
     with store._postgres.transaction() as c:
         installations=c.execute('SELECT installation_id FROM closed_revision_installations WHERE task_id=%s',(task_id,)).fetchall()
     if not installations:raise ValueError('closed edit installation evidence required')
@@ -55,7 +70,7 @@ def check_quiescent_continuation(store,task_id,prior_job,*,original_failed_jobs=
       'blind_replays':0,'uninterrupted_acceptance':False,'launch_authorized':False}
 
 
-def execute_continuation(*,store,scope,root,config,run_id,prior_job,task_id,output,pipeline_factory,original_failed_jobs=None,pending_review=None):
+def execute_continuation(*,store,scope,root,config,run_id,prior_job,task_id,output,pipeline_factory,original_failed_jobs=None,pending_review=None,generator_resume=None):
     """Only caller with reviewed exact paid go may invoke. Does not authorize go."""
     output=Path(output)
     if output.exists() or output.is_symlink():raise ValueError('fresh continuation result directory required')
@@ -72,7 +87,7 @@ def execute_continuation(*,store,scope,root,config,run_id,prior_job,task_id,outp
         session=session_root(Path(root),scope,cap.session_id)
         review=json.loads((session/'interview/semantic-review.json').read_text())
         pipeline=pipeline_factory(attended)
-        receipt=continuation_pipeline_receipt(isolation,pipeline,store,scope,task,prior_job,review,original_failed_jobs=original_failed_jobs,pending_review=pending_review)
+        receipt=continuation_pipeline_receipt(isolation,pipeline,store,scope,task,prior_job,review,original_failed_jobs=original_failed_jobs,pending_review=pending_review,generator_resume=generator_resume)
         RunIsolation.write(output/'pipeline.json',receipt)
         from revision_executor import PrivateGateEdit
         from completion_adapters import FinalArtifactsAdapter

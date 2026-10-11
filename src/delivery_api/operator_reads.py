@@ -70,7 +70,7 @@ class OperatorReadStore:
               WITH moment AS (SELECT extract(epoch FROM statement_timestamp())::double precision AS as_of)
               SELECT moment.as_of,
                 COALESCE(sum(p.expense_actual) FILTER (WHERE p.state='settled' AND p.settled_at>moment.as_of-86400 AND p.settled_at<=moment.as_of),0) AS rolling_settled_units,
-                COALESCE(sum(p.expense_reserved) FILTER (WHERE p.state IN ('reserved','dispatched','uncertain')),0) AS outstanding_hold_units,
+                COALESCE(sum(p.expense_reserved) FILTER (WHERE p.state IN ('reserved','dispatched','uncertain','failure_waived')),0) AS outstanding_hold_units,
                 count(p.attempt_id) FILTER (WHERE p.state='uncertain') AS uncertain_attempts,
                 count(p.attempt_id) FILTER (WHERE p.state='settled' AND (p.settled_at IS NULL OR p.expense_actual IS NULL OR p.settled_at>moment.as_of)) AS unverifiable_settlements
               FROM moment LEFT JOIN public.provider_attempts p ON true GROUP BY moment.as_of
@@ -138,6 +138,7 @@ class OperatorReadStore:
                 AND (usage->>'input_tokens') ~ '^[0-9]+$' AND (usage->>'output_tokens') ~ '^[0-9]+$' AS verified FROM attempts)
               SELECT count(*) AS attempts, count(*) FILTER(WHERE state IN ('reserved','dispatched','uncertain')) AS unresolved_attempts,
                 count(*) FILTER(WHERE state='settled' AND verified IS NOT TRUE) AS unknown_settled_usage,
+                count(*) FILTER(WHERE state='failure_waived') AS waived_unknown_attempts,
                 COALESCE(sum(CASE WHEN verified THEN (usage->>'input_tokens')::numeric ELSE 0 END),0) AS input_tokens,
                 COALESCE(sum(CASE WHEN verified THEN (usage->>'output_tokens')::numeric ELSE 0 END),0) AS output_tokens,
                 count(*) FILTER(WHERE state='settled' AND NOT EXISTS(SELECT 1 FROM public.credit_charges c WHERE c.attempt_id=evidence.attempt_id AND c.owner_id=evidence.owner_id)) AS settled_without_charge
@@ -151,6 +152,7 @@ class OperatorReadStore:
               GROUP BY c.state,c.units_per_credit ORDER BY c.state,c.units_per_credit""",(task_id,)).fetchall()
             groups=[];unknown=pending=0
             for charge in charges:
+                if charge['state']=='failure_waived':continue
                 if charge['state']=='pending':pending+=charge['charges']
                 elif charge['units_per_credit'] is None or charge['invalid_amounts']:unknown+=charge['charges']
                 else:groups.append({'charged_units':str(charge['charged_units']),'units_per_credit':str(charge['units_per_credit']),'charges':charge['charges']})
@@ -158,9 +160,10 @@ class OperatorReadStore:
                 'input_tokens':str(row['input_tokens']),'output_tokens':str(row['output_tokens']),
                 'total_tokens':str(row['input_tokens']+row['output_tokens']),'attempts':row['attempts'],
                 'unresolved_attempts':row['unresolved_attempts'],'unknown_settled_usage':row['unknown_settled_usage'],
+                'waived_unknown_attempts':row['waived_unknown_attempts'],
                 'settled_credit_groups':groups,'unknown_charge_scale_or_amount':unknown,'pending_charges':pending,
                 'settled_attempts_without_charge':row['settled_without_charge'],
-                'complete':not (row['unresolved_attempts'] or row['unknown_settled_usage'] or unknown or pending or row['settled_without_charge']),
+                'complete':not (row['waived_unknown_attempts'] or row['unresolved_attempts'] or row['unknown_settled_usage'] or unknown or pending or row['settled_without_charge']),
                 'source':'normalized settled attempt usage and actual prepaid charges','mutations_available':False}
 
     def payment_journal(self,owner_store,*,start_at,end_at,owner_id=None,limit=100,before_created_at=None,before_purchase_id=None):

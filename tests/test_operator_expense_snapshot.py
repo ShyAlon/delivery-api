@@ -33,3 +33,11 @@ def test_duplicates_and_missing_account_are_rejected():
     kw=data()
     for rows in [kw['attempts']+[kw['attempts'][0]],[kw['attempts'][0]|{'owner_id':'unknown'}]]:
         with pytest.raises(AdmissionDenied):build_snapshot(**(kw|{'attempts':rows}))
+
+
+def test_waived_unknown_failure_retains_conservative_hold_not_settled_charge():
+ kw=data();kw['attempts'][-1]['state']='failure_waived'
+ got=build_snapshot(**kw)
+ assert got['platform_outstanding_hold_units']==250
+ assert got['platform_rolling_settled_units']==80
+ assert got['sessions'][1]['uncertain_attempts']==0

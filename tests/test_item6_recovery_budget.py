@@ -39,3 +39,17 @@ def test_reentry_keeps_previous_continuation_expense_in_cumulative_cap(ledger):
         nxt=uuid.uuid4().hex
         with pytest.raises(AdmissionDenied,match='cap'):g.reserve_serialized(attempt_id=nxt)
         assert s.provider_attempt(nxt) is None
+
+
+def test_waived_unknown_reservation_stays_in_cumulative_cap(ledger):
+ s,tid,job=ledger
+ class Inner:
+  store=s
+  def reserve_serialized(self,attempt_id):return s.reserve_provider_attempt(job,attempt_id,Q,'new')['attempt_id']
+ with tenant_context(A):
+  earlier=uuid.uuid4().hex;s.reserve_provider_attempt(job,earlier,Q,'old')
+  with s._postgres.transaction() as c:c.execute("UPDATE provider_attempts SET state='failure_waived' WHERE attempt_id=%s",(earlier,))
+  g=RecoveryBudgetGateway(Inner(),original_job_ids=[],maximum_expense_units=59)
+  nxt=uuid.uuid4().hex
+  with pytest.raises(AdmissionDenied,match='cap'):g.reserve_serialized(attempt_id=nxt)
+  assert s.provider_attempt(nxt) is None

@@ -99,6 +99,26 @@ class PrivatePipeline:
             if not asyncio.run(self.worker().execute(job,generate)):raise ValueError('generator job already claimed')
             return tid
 
+    def execute_generator_existing(self,isolation,scope,task,*,prior_job,generator_resume):
+        """New linked generator job only. No interview/needs/SRS replay."""
+        from delivery_api.worker_capability import WorkerCapability
+        with tenant_context(scope):
+            tid=task['task_id'];cap=WorkerCapability.capture(self.store,tid);cap.validate(self.store)
+            old=self.store.worker_job(prior_job)
+            if not old or old['task_id']!=tid or old['kind']!='phase:needs' or old['state']!='failed' or old['session_id']!=cap.session_id or old['generation']!=cap.generation:raise ValueError('exact failed generator predecessor required')
+            compute=self.store.retail_compute_status(tid)
+            if compute.get('unresolved') or compute.get('pending'):raise ValueError('compute accounting unresolved')
+            with self.store._postgres.transaction() as c:
+                if c.execute("SELECT 1 FROM provider_attempts p JOIN worker_jobs w ON w.job_id=p.job_id WHERE w.task_id=%s AND p.state IN ('reserved','dispatched','uncertain') LIMIT 1",(tid,)).fetchone():raise ValueError('provider accounting unresolved')
+            from recovery_generator import generator_review
+            root=session_root(self.base,scope,cap.session_id)
+            if generator_review(root,cap.session_id)!=generator_resume:raise ValueError('exact generator checkpoint review required')
+            job=self.store.enqueue_worker(tid,'phase:needs',execution_options={'model_route':'deepseek:'+self.model})
+            self.store.audit(scope.owner_id,'item6.continuation.queued',tid,{'original_failed_job':prior_job,'new_job_id':job,'session_id':cap.session_id,'uninterrupted_acceptance':False,'generator_checkpoint_id':generator_resume['checkpoint_id'],'interview_replayed':False,'needs_srs_replayed':False})
+            self.job_ids.append(job)
+            if not asyncio.run(self.worker().execute(job,lambda cap,root:self.generate(cap,root,generator_resume=generator_resume))):raise ValueError('generator job already claimed')
+            return tid
+
     def worker(self):
         from spec_generator.worker_runtime import JobRuntime
         from spec_generator.model_config import StageModel
@@ -109,9 +129,9 @@ class PrivatePipeline:
         return SameHostProducerWorker(self.store,self.base,gateway_factory=self.gateway,
             usage_log_factory=lambda cap,root:UsageLog(cap.session_id),runtime_factory=runtime,wire_client_factory=self.generator_clients)
 
-    def generate(self,cap,root):
+    def generate(self,cap,root,*,generator_resume=None):
         from spec_generator.graph import build_graph,checkpoint_serde
-        from spec_generator.cli import _make_persist,_atomic_write
+        from spec_generator.cli import _make_persist,_atomic_write,_make_partials
         from spec_generator.telemetry import UsageLog
         from spec_generator.progress import ProgressBus
         from spec_generator.stop_publication import FencedCheckpointer,publication_guard
@@ -121,8 +141,17 @@ class PrivatePipeline:
         from vmodel_contracts import SystemBaseline,SpecManifest
         intent=json.loads((root/'interview/intent_model.json').read_text());conops=json.loads((root/'interview/conops.json').read_text())
         baseline=SystemBaseline.model_validate({'baseline_id':cap.session_id+'-greenfield','system_name':'Household Tasks','mode':'greenfield','repositories':[],'immutable_decisions':[]}).model_dump(mode='json')
-        out=root/'spec';out.mkdir(exist_ok=False);(out/'specs').mkdir()
-        _atomic_write(out/'system-baseline.json',json.dumps(baseline))
+        out=root/'spec'
+        if generator_resume is None:
+            out.mkdir(exist_ok=False);(out/'specs').mkdir()
+            _atomic_write(out/'system-baseline.json',json.dumps(baseline))
+        else:
+            from recovery_generator import generator_review
+            current=generator_review(root,cap.session_id)
+            if {k:v for k,v in current.items() if k!='source_tree_sha256'}!={k:v for k,v in generator_resume.items() if k!='source_tree_sha256'}:raise ValueError('exact generator checkpoint/artifact review required')
+            baseline=SystemBaseline.model_validate(json.loads((out/'system-baseline.json').read_text())).model_dump(mode='json')
+            task=self.store.task(cap.task_id)
+            if next(p['state'] for p in task['phases'] if p['key']=='srs')!='approved':raise ValueError('preceding durable SRS approval required')
         bus=ProgressBus()
         phase_map={'items':'specs',**{p.generator_stage:p.key for p in PHASE_DEFINITIONS if p.generator_stage}}
         def progress(event):
@@ -135,9 +164,14 @@ class PrivatePipeline:
             saver=FencedCheckpointer(SqliteSaver(conn,serde=checkpoint_serde()),publication_guard(fence,generation))
             log=UsageLog(cap.session_id)
             graph=build_graph(log,checkpointer=saver,progress=bus,review=True,
-                stop_fence=fence,stop_generation=generation,persist=_make_persist(intent,out,greenfield=True,conops_present=True))
+                stop_fence=fence,stop_generation=generation,persist=_make_persist(intent,out,greenfield=True,conops_present=True),partials=_make_partials(out))
             cfg={'configurable':{'thread_id':cap.session_id}}
-            result=graph.invoke({'intent_model':intent,'conops':conops,'system_baseline':baseline},cfg)
+            if generator_resume is not None:
+                snapshot=graph.get_state(cfg)
+                if snapshot.config['configurable']['checkpoint_id']!=generator_resume['checkpoint_id'] or tuple(snapshot.next)!=('architecture',) or any(t.interrupts for t in snapshot.tasks):raise ValueError('exact failed architecture checkpoint required, no upstream replay')
+                result=graph.invoke(None,cfg)
+            else:
+                result=graph.invoke({'intent_model':intent,'conops':conops,'system_baseline':baseline},cfg)
             for _ in range(30):
                 cap.validate(self.store);snapshot=graph.get_state(cfg)
                 interrupts=[i.value for task in snapshot.tasks for i in task.interrupts]
