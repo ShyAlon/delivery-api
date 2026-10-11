@@ -29,6 +29,7 @@ def test_stale_checkpoint_or_review_rejected(change):
     with pytest.raises(ValueError):validate_checkpoint(v,r,actor='founder',session_id=r['session_id'])
 
 
+@pytest.mark.engine_integration
 def test_existing_checkpoint_readonly_does_not_run_setup_ddl(tmp_path):
     import sqlite3
     from langgraph.checkpoint.sqlite import SqliteSaver
@@ -44,6 +45,7 @@ def test_existing_checkpoint_readonly_does_not_run_setup_ddl(tmp_path):
     assert path.read_bytes()==before
 
 
+@pytest.mark.engine_integration
 def test_wal_checkpoint_read_on_ephemeral_copy_preserves_original(tmp_path):
     import sqlite3,shutil
     from langgraph.checkpoint.sqlite import SqliteSaver
