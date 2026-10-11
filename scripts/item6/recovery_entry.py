@@ -17,7 +17,7 @@ from recovery_accounting import reconcile,waive_unknown_compute
 def main():
     os.umask(0o077)
     p=argparse.ArgumentParser();p.add_argument('--dump',type=Path,required=True);p.add_argument('--identity',type=Path,required=True)
-    p.add_argument('--attempt',required=True);p.add_argument('--output',type=Path,required=True)
+    p.add_argument('--attempt',required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--expected-dump-sha256',required=True)
     p.add_argument('--approve-plan');p.add_argument('--source-verification',choices=['matched-historic-snapshot'])
     p.add_argument('--waiver-authorization')
     p.add_argument('--continue-reviewed-sha256');p.add_argument('--continuation-review',type=Path)
@@ -25,9 +25,12 @@ def main():
     a=p.parse_args()
     if a.output.exists() or a.output.is_symlink():raise ValueError('new private output directory required')
     if a.dump.is_symlink() or a.identity.is_symlink():raise ValueError('regular original evidence required')
+    if hashlib.sha256(a.dump.read_bytes()).hexdigest()!=a.expected_dump_sha256:raise ValueError('original reviewed archive changed')
     identity=json.loads(a.identity.read_text())
     if identity.get('stage')!='identity' or identity.get('source_mode')!='mac_acceptance' or identity.get('signature_verified') is not True:
         raise ValueError('original verified isolated identity receipt required')
+    if identity.get('run_id')!='4eda39c0684945ff849b582c60dd91f8' or identity.get('subject')!='045bafdf-e35b-4b4b-93f2-0cd981b52806' or identity.get('session_id')!='16caab89-5c55-4c36-af25-ba65105ed74f' or a.attempt!='a1c69b8a218c49d2829dff112d0a2688':
+        raise ValueError('exact stopped-run original identity and attempt required')
     scope=TenantScope(identity['subject'],identity['session_id']);db='requi_item6_recovery_'+identity['run_id'][:12]
     if a.continue_reviewed_sha256 and a.approve_plan:raise ValueError('accounting and paid continuation are separate invocations')
     if a.continue_reviewed_sha256:

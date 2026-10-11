@@ -8,9 +8,9 @@ import recovery_entry
 def test_missing_exact_recovery_review_rejected_before_database(monkeypatch,tmp_path):
     original=tmp_path/'dump';original.write_bytes(b'fixture')
     identity=tmp_path/'identity.json';identity.write_text(json.dumps({'stage':'identity','source_mode':'mac_acceptance','signature_verified':True,
-        'subject':'00000000-0000-0000-0000-000000000001','session_id':'00000000-0000-0000-0000-000000000001','run_id':'a'*32}))
+        'subject':'045bafdf-e35b-4b4b-93f2-0cd981b52806','session_id':'16caab89-5c55-4c36-af25-ba65105ed74f','run_id':'4eda39c0684945ff849b582c60dd91f8'}))
     calls=[];monkeypatch.setattr(recovery_entry.subprocess,'run',lambda *a,**kw:calls.append(a))
-    monkeypatch.setattr(sys,'argv',['recovery','--dump',str(original),'--identity',str(identity),'--attempt','attempt','--output',str(tmp_path/'new'),
+    monkeypatch.setattr(sys,'argv',['recovery','--dump',str(original),'--identity',str(identity),'--expected-dump-sha256',__import__('hashlib').sha256(b'fixture').hexdigest(),'--attempt','a1c69b8a218c49d2829dff112d0a2688','--output',str(tmp_path/'new'),
         '--approve-plan','a'*64])
     with pytest.raises(ValueError,match='review'):recovery_entry.main()
     assert calls==[] and not(tmp_path/'new').exists()
@@ -19,10 +19,10 @@ def test_missing_exact_recovery_review_rejected_before_database(monkeypatch,tmp_
 def test_changed_paid_review_rejected_before_database(monkeypatch,tmp_path):
     original=tmp_path/'dump';original.write_bytes(b'fixture')
     identity=tmp_path/'identity.json';identity.write_text(json.dumps({'stage':'identity','source_mode':'mac_acceptance','signature_verified':True,
-        'subject':'00000000-0000-0000-0000-000000000001','session_id':'00000000-0000-0000-0000-000000000001','run_id':'a'*32}))
+        'subject':'045bafdf-e35b-4b4b-93f2-0cd981b52806','session_id':'16caab89-5c55-4c36-af25-ba65105ed74f','run_id':'4eda39c0684945ff849b582c60dd91f8'}))
     review=tmp_path/'review';review.write_text('{}')
     calls=[];monkeypatch.setattr(recovery_entry.subprocess,'run',lambda *a,**kw:calls.append(a))
-    monkeypatch.setattr(sys,'argv',['recovery','--dump',str(original),'--identity',str(identity),'--attempt','attempt','--output',str(tmp_path/'new'),
+    monkeypatch.setattr(sys,'argv',['recovery','--dump',str(original),'--identity',str(identity),'--expected-dump-sha256',__import__('hashlib').sha256(b'fixture').hexdigest(),'--attempt','a1c69b8a218c49d2829dff112d0a2688','--output',str(tmp_path/'new'),
         '--continue-reviewed-sha256','a'*64,'--continuation-review',str(review),'--source-run',str(tmp_path),'--runtime',str(tmp_path)])
     with pytest.raises(ValueError,match='review'):recovery_entry.main()
     assert calls==[] and not(tmp_path/'new').exists()
