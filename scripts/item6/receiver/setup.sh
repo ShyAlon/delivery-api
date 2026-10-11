@@ -106,10 +106,25 @@ if [[ "$MODE" == tls ]]; then
  [[ ! -e "$BASE/tls/ready" ]] || fail 'TLS setup once' 'no existing ready TLS; use check/renew' 'already configured'
  # Validate challenge externally BEFORE proceeding. Public address must reach this host.
  CHALLENGE=$(python3 -c 'import secrets;print(secrets.token_hex(16))')
- install -d -o caddy -g caddy -m755 /var/lib/requi-acme/.well-known/acme-challenge
+ # Set each ancestor explicitly: install -d can leave a preexisting parent700.
+ for PUBLIC_DIR in /var/lib/requi-acme /var/lib/requi-acme/.well-known /var/lib/requi-acme/.well-known/acme-challenge; do
+  [[ ! -L "$PUBLIC_DIR" ]] || fail 'public ACME path safety' 'no symlinks in challenge tree' 'symlink found; preserve and review'
+  install -d -o caddy -g caddy -m755 "$PUBLIC_DIR"
+ done
  printf '%s' "$CHALLENGE" > /var/lib/requi-acme/.well-known/acme-challenge/receiver-check
  chmod 644 /var/lib/requi-acme/.well-known/acme-challenge/receiver-check
- [[ $(curl --noproxy '*' --fail --silent --max-time 15 "http://$IP/.well-known/acme-challenge/receiver-check") == "$CHALLENGE" ]] || fail 'ACME reachability' 'public80 reaches challenge file' 'unreachable/mismatch; check OVH firewall'
+ sudo -u caddy test -r /var/lib/requi-acme/.well-known/acme-challenge/receiver-check || fail 'ACME file traversal' 'Caddy can read public challenge' 'permission denied; private spool untouched'
+ if ! python3 - "$IP" <<'PROBE'
+import json,pathlib,subprocess,sys
+p=pathlib.Path('/var/lib/requi-acme/.well-known/acme-challenge/receiver-check')
+r=subprocess.run(['curl','--noproxy','*','--silent','--show-error','--max-time','15','--write-out','\n%{http_code}','http://'+sys.argv[1]+'/.well-known/acme-challenge/receiver-check'],capture_output=True)
+body,_,code=r.stdout.rpartition(b'\n')
+ok=r.returncode==0 and code==b'200' and body==p.read_bytes()
+category='challenge readable and exact' if ok else 'HTTP403: Caddy refused challenge; inspect traversal permissions/route' if code==b'403' else 'HTTP404: challenge route/file missing' if code==b'404' else 'network request failed; inspect routing/firewalls' if r.returncode else 'unexpected HTTP status or challenge-body mismatch'
+print(json.dumps({'checked':'ACME HTTP reachability','expected':'HTTP200 and exact public challenge bytes','found':{'category':category,'http_status':code.decode(errors='replace'),'curl_exit':r.returncode,'matches_file':body==p.read_bytes()},'where':'public ACME path from VPS','completed':ok}))
+raise SystemExit(0 if ok else 1)
+PROBE
+ then exit 1; fi
  # Public CA traffic discloses IP/email only, not payment data. No staging cert served.
  /opt/requi-certbot/bin/certbot certonly --non-interactive --agree-tos --email "$EMAIL" --preferred-profile shortlived --webroot --webroot-path /var/lib/requi-acme --ip-address "$IP" --cert-name requi-receiver-ip > /var/log/requi-receiver-certbot.log 2>&1
  cat > /opt/requi-receiver/reload-cert.sh <<'EOF'
