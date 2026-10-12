@@ -32,3 +32,15 @@ def test_missing_or_changed_go_cannot_initialize_database(tmp_path,monkeypatch):
  monkeypatch.setattr(sys,'argv',argv+['--go','wrong'])
  with pytest.raises(ValueError):m.main()
  assert calls==[] and not(tmp_path/'output').exists()
+
+
+def test_phase_failure_review_is_separate_and_binds_known_failure(tmp_path,monkeypatch):
+ args=fixture(tmp_path,monkeypatch)
+ old,old_sha=m.prepare(*args)
+ review,sha=m.prepare(*args,phase_failure_recovery=True)
+ assert sha!=old_sha and review['version']==4
+ assert review['original_failed_job']=='22535ad84a5ddccf380a88bdddf23e50'
+ assert review['phase_failure_recovery'] is True
+ assert review['phase_failure_archive_sha256']=='0be3e545e0669b85c3963dc40c53df6a809eab7a5295616c47058d2646873428'
+ assert review['maximum_expense_units']==old['maximum_expense_units']
+ assert review['remaining_original_provider_cap_units']==old['remaining_original_provider_cap_units']

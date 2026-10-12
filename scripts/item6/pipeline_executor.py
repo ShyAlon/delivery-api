@@ -7,6 +7,19 @@ from delivery_api.same_host_producer import SameHostProducerWorker
 from delivery_api.phases import PHASE_DEFINITIONS
 
 
+def require_approved_srs(task):
+    """Read canonical store phase rows, fail before enqueue/compute/provider work."""
+    phases=task.get('phases') if isinstance(task,dict) else None
+    if not isinstance(phases,list) or any(not isinstance(p,dict) or not isinstance(p.get('phase_key'),str) for p in phases):
+        raise ValueError('canonical durable phase_key rows required')
+    keys=[p['phase_key'] for p in phases]
+    if len(keys)!=len(set(keys)):
+        raise ValueError('duplicate durable phase keys')
+    srs=[p for p in phases if p['phase_key']=='srs']
+    if len(srs)!=1 or srs[0].get('state')!='approved':
+        raise ValueError('preceding durable SRS approval required')
+
+
 class PrivatePipeline:
     def __init__(self,*,store,artifacts_base,model,gateway_factory,generator_clients,
                  interview_clients,answer_input,review_gate,progress):
@@ -103,6 +116,7 @@ class PrivatePipeline:
         """New linked generator job only. No interview/needs/SRS replay."""
         from delivery_api.worker_capability import WorkerCapability
         with tenant_context(scope):
+            require_approved_srs(task)
             tid=task['task_id'];cap=WorkerCapability.capture(self.store,tid);cap.validate(self.store)
             old=self.store.worker_job(prior_job)
             if not old or old['task_id']!=tid or old['kind']!='phase:needs' or old['state']!='failed' or old['session_id']!=cap.session_id or old['generation']!=cap.generation:raise ValueError('exact failed generator predecessor required')
@@ -151,7 +165,7 @@ class PrivatePipeline:
             if {k:v for k,v in current.items() if k!='source_tree_sha256'}!={k:v for k,v in generator_resume.items() if k!='source_tree_sha256'}:raise ValueError('exact generator checkpoint/artifact review required')
             baseline=SystemBaseline.model_validate(json.loads((out/'system-baseline.json').read_text())).model_dump(mode='json')
             task=self.store.task(cap.task_id)
-            if next(p['state'] for p in task['phases'] if p['key']=='srs')!='approved':raise ValueError('preceding durable SRS approval required')
+            require_approved_srs(task)
         bus=ProgressBus()
         phase_map={'items':'specs',**{p.generator_stage:p.key for p in PHASE_DEFINITIONS if p.generator_stage}}
         def progress(event):
