@@ -36,11 +36,15 @@ def run(*,store,scope,root,runtime,run_id,task_id,prior_job,output,maximum_expen
             original_jobs=[r['job_id'] for r in c.execute('SELECT job_id FROM worker_jobs WHERE task_id=%s',(task_id,)).fetchall()]
         if generator_resume is not None:
             expected={'edad945ddadfa63b5bd73d5546a5bf69','9e04190ef41fac9f64e5f75b96e60b77','2068b70d89a9f5d94296309707176822','53467a7e6d7551d4d56c0a6ff62abff7'}
-            if prior_job!='2068b70d89a9f5d94296309707176822':raise ValueError('exact architecture predecessor required')
+            if prior_job=='22535ad84a5ddccf380a88bdddf23e50':
+                from recovery_phase_failure import validate_phase_failure
+                validate_phase_failure(store,waived=True)
+                expected.add(prior_job)
+            elif prior_job!='2068b70d89a9f5d94296309707176822':raise ValueError('exact architecture predecessor required')
         else:expected={prior_job} if interrupted_job is None else {'edad945ddadfa63b5bd73d5546a5bf69',interrupted_job}
         if set(original_jobs)!=expected:raise ValueError('exact audited predecessors required')
         failed_jobs=[j for j in original_jobs if store.worker_job(j)['state']=='failed']
-        if generator_resume is not None and set(failed_jobs)!=expected-{'53467a7e6d7551d4d56c0a6ff62abff7'}:raise ValueError('three exact failed predecessors, retained completed interview required')
+        if generator_resume is not None and set(failed_jobs)!=expected-{'53467a7e6d7551d4d56c0a6ff62abff7'}:raise ValueError('exact audited failed predecessors, retained completed interview required')
         budget_exempt=['edad945ddadfa63b5bd73d5546a5bf69']
     balance_client=httpx.Client(transport=FixedOriginTransport(httpx.HTTPTransport(retries=0),'https://api.deepseek.com',lambda method,path:method=='GET' and path=='/user/balance'),trust_env=False,follow_redirects=False)
     reader=deepseek_balance_reader(client=balance_client,api_key=credentials['deepseek_api_key'])
