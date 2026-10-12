@@ -15,7 +15,7 @@ def test_existing_balance_and_stable_new_purchase_preserved(monkeypatch):
   def create_purchase(self,intent):
    if intent.purchase_id in rows and rows[intent.purchase_id]['intent']!=intent:raise PaymentRejected('conflict')
    rows.setdefault(intent.purchase_id,{'intent':intent,'credit_posted':False,'state':'created','capture_id':None,'order_id':'fixture-order'});created.append(intent.purchase_id);return rows[intent.purchase_id]
-  def get_purchase(self,pid):return rows[pid]
+  def get_purchase(self,pid):return dict(rows[pid])
  class Service:
   def __init__(self,*a):pass
   def create(self,pid):return {'approval_url':'fixture-only'}
