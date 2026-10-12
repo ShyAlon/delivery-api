@@ -28,6 +28,7 @@ def finish_topup(*,review,scope,repository,processor,read_account,webhook_receip
     if not row['credit_posted']:
         capture=service.capture(intent.purchase_id)
         if capture.get('credit_posted') is not True:raise PaymentRejected('capture not confirmed; reconcile this purchase, never new order')
+    row=repository.get_purchase(intent.purchase_id)
     raw,headers=webhook_receipt()
     event,_=processor.verify_event(raw,headers)
     notice=processor.payment_notice(event)
