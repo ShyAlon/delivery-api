@@ -5,7 +5,7 @@ set -eu
 # Dry by default. Bootstrap changes firewall/users/host state and must only be
 # run on an explicitly approved target. This repository does not authorize it.
 if [ "${1:-}" != --execute ]; then
-  echo 'DRY: install packages/Docker, explicit deploy public key, private config dir, firewall and fail2ban. No host changes.'
+  echo 'DRY: install Docker (docker.io), explicit deploy public key, private config dir and firewall rules. No host changes.'
   echo 'Execution requires --execute and REQUI_DEPLOY_PUBLIC_KEY_FILE (reviewed public key only).'
   exit 0
 fi
@@ -41,18 +41,13 @@ fi
 step(){ printf '\n== %s ==\n' "$1"; }
 step "Base packages"
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg ufw fail2ban
+NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg ufw
 
 step "Docker"
 if ! command -v docker >/dev/null 2>&1; then
-  install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/"$ID"/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-  chmod a+r /etc/apt/keyrings/docker.gpg
-  arch=$(dpkg --print-architecture)
-  codename=${VERSION_CODENAME:-$(. /etc/os-release && echo "$VERSION_CODENAME")}
-  echo "deb [arch=$arch signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$ID $codename stable" > /etc/apt/sources.list.d/docker.list
-  apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+  # Ubuntu's own packaged Docker. Docker's apt repo has no candidate for every
+  # release (for example 26.04 "resolute"), and this host already carries Caddy.
+  NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io
 else
   echo "already installed"
 fi
@@ -82,22 +77,11 @@ install -d -o deploy -g deploy -m 0700 /etc/requi
 step "Firewall"
 ufw default deny incoming
 ufw default allow outgoing
-ufw allow OpenSSH
+ufw allow 22/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
 ufw --force enable
 ufw status
-
-step "Login protection"
-cat > /etc/fail2ban/jail.d/sshd.local <<'EOF'
-[sshd]
-enabled = true
-bantime = 1h
-findtime = 10m
-maxretry = 5
-EOF
-systemctl enable --now fail2ban
-systemctl restart fail2ban
 
 echo
 echo "Server bootstrap complete."
