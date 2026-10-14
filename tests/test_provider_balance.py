@@ -18,3 +18,17 @@ def test_unavailable_and_stale_stop():
     with pytest.raises(AdmissionDenied):validate_balance(e,1,1000)
     e=evidence();e['observed_at']=(datetime.now(timezone.utc)-timedelta(minutes=1)).isoformat()
     with pytest.raises(AdmissionDenied):validate_balance(e,1,1000)
+
+def test_start_verifies_source_before_balance_read_and_logs_failure_age(caplog):
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    order=[]
+    class Store:
+        def provider_attempt(self,a):return {'job_id':'j','quote':{'estimate_policy':1}}
+        def record_provider_balance_check(self,a,b):order.append('record')
+        def transition_provider_attempt(self,a,action,usage=None,*,require_prepaid=False):order.append('start')
+    g=WorkerAdmissionGateway(Store(),'j',provider_balance=lambda:order.append('read'),verify_provider_snapshot=lambda:order.append('source'))
+    g.start('a')
+    assert order==['source','read','record','start']
+    e=evidence();e['observed_at']=(datetime.now(timezone.utc)-timedelta(minutes=1)).isoformat()
+    with caplog.at_level('WARNING'),pytest.raises(AdmissionDenied):validate_balance(e,1,1000)
+    assert 'age_seconds=6' in caplog.text
