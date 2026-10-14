@@ -50,6 +50,7 @@ from delivery_api.store import SQLiteStore
 import os
 s=SQLiteStore(os.environ["DELIVERY_DB_PATH"])
 s.create_task("Empty definition", "Awaiting its first run", task_id="empty")
+s.create_task("Disposable definition", "Renamed and deleted by one test", task_id="disposable")
 s.create_task("Live definition", "Detailed progress", task_id="live")
 s.set_model_route("live", "ollama/phi4")
 s.update_phase("live", "intent", "done", detail="Approved")
@@ -147,8 +148,8 @@ def waiting_gate_snapshot(snapshot):
 def test_dashboard_draws_v_and_all_task_states(page, ui):
     page.goto(ui)
     page.locator(".task").first.wait_for()
-    assert page.locator(".task").count() == 4
-    assert page.locator(".v-map svg").count() == 4
+    assert page.locator(".task").count() == 5
+    assert page.locator(".v-map svg").count() == 5
     # Home is task-only. Session bundles retain their own /sessions route.
     assert page.locator('.hero,.home-sessions,.session-card').count()==0
     page.get_by_role('link',name='All sessions').click()
@@ -313,17 +314,17 @@ def test_task_filter_sort_rename_and_delete(page,ui):
     page.locator('#tasksort').select_option('name-asc')
     names=page.locator('.task h2').all_text_contents()
     assert names==sorted(names)
-    card=page.locator('.task',has_text='Empty definition')
+    card=page.locator('.task',has_text='Disposable definition')
     card.get_by_role('button',name='Rename').click()
-    page.locator('#renameform input[name=title]').fill('Renamed empty definition')
+    page.locator('#renameform input[name=title]').fill('Renamed disposable definition')
     page.get_by_role('button',name='Save name').click()
-    page.get_by_text('Renamed empty definition',exact=True).wait_for()
-    card=page.locator('.task',has_text='Renamed empty definition')
+    page.get_by_text('Renamed disposable definition',exact=True).wait_for()
+    card=page.locator('.task',has_text='Renamed disposable definition')
     card.get_by_role('button',name='Delete').click()
     assert page.get_by_text('Original files in the artifacts folder stay on disk.').is_visible()
     page.get_by_role('button',name='Delete task').click()
-    page.locator('#app').get_by_text('Renamed empty definition',exact=True).wait_for(state='detached')
-    assert page.get_by_text('Renamed empty definition',exact=True).count()==0
+    page.locator('#app').get_by_text('Renamed disposable definition',exact=True).wait_for(state='detached')
+    assert page.get_by_text('Renamed disposable definition',exact=True).count()==0
 
 
 def test_session_card_shows_live_brief_and_progress(page,ui):
