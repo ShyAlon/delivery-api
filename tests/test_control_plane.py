@@ -49,9 +49,8 @@ def test_image_has_only_delivery_contracts_nonroot_fixed_launcher():
 def test_workflow_manual_digest_no_live_secret_gitconfig_or_mutable_tag():
     from pathlib import Path
     root=Path(__file__).parents[1];workflow=(root/'.github/workflows/ci-cd.yml').read_text()
-    assert 'needs.image.outputs.digest' in workflow and "vars.CONTROL_PLANE_DEPLOY_ENABLED == 'true'" in workflow
+    assert 'steps.build.outputs.digest' in workflow and 'HETZNER' not in workflow and 'CONTROL_PLANE_DEPLOY_ENABLED' not in workflow
     assert 'type=raw,value=main' not in workflow and 'gitconfig' not in workflow and 'VMODEL_CONTRACTS_PAT' not in workflow
-    assert '/etc/requi/control-plane.env' in workflow
 
 
 def test_private_worker_boundaries_fail_before_import_claim_or_provider(monkeypatch):
