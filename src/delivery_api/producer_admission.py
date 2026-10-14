@@ -111,12 +111,14 @@ class WorkerAdmissionGateway:
 
     def start(self,attempt):
         row=self._attempt(attempt)
+        # Slow vendor-source verification runs first so the 30s balance freshness window
+        # covers only the balance read to the start transition.
+        self._verify_snapshot()
         if 'estimate_policy' in row.get('quote',{}):
             if self.provider_balance is None:raise AdmissionDenied('pre-call provider balance reader required')
             from .compute_meter import excluded_wait
             with excluded_wait():balance=self.provider_balance()
             self.store.record_provider_balance_check(attempt,balance)
-        self._verify_snapshot()
         if self.launch_guard:
             result=self.store.start_launch_provider_attempt(attempt)
             if not result['started']:raise AdmissionDenied('service temporarily unavailable: '+result['reason'])

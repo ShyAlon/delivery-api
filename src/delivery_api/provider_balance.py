@@ -1,10 +1,12 @@
 """Availability evidence, not an atomic provider hold or exchange-rate guess."""
+import logging
 from datetime import datetime,timezone
 from decimal import Decimal
 from .attempt_ledger import AdmissionDenied
 from .provider_snapshot import timestamp
 
 def validate_balance(evidence,reserved,scale):
+    age=None
     try:
         if not isinstance(evidence,dict) or set(evidence)!={'response','observed_at'}:raise ValueError()
         response=evidence['response'];observed=timestamp(evidence['observed_at'])
@@ -23,4 +25,6 @@ def validate_balance(evidence,reserved,scale):
             if any(r.get('currency')!='CNY' or not Decimal(r['total_balance']).is_finite() or Decimal(r['total_balance'])<0 for r in rows):raise ValueError()
             check='provider is_available only; no USD total/FX proof'
         return {'response':response,'observed_at':observed.isoformat(),'check':check,'atomic_hold':False}
-    except (KeyError,ValueError,TypeError,ArithmeticError) as exc:raise AdmissionDenied('provider balance unavailable, stale or insufficient; new call held') from exc
+    except (KeyError,ValueError,TypeError,ArithmeticError) as exc:
+        logging.getLogger(__name__).warning('provider balance validation failed: age_seconds=%s now=%s',age,datetime.now(timezone.utc).isoformat())
+        raise AdmissionDenied('provider balance unavailable, stale or insufficient; new call held') from exc
