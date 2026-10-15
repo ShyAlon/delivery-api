@@ -68,3 +68,35 @@ def test_image_publish_has_prior_network_none_read_only_container_health_gate():
     assert workflow.index('Dry delivery-only container gate')<workflow.index('docker/login-action')
     assert '--network none --read-only --cap-drop ALL' in workflow
     assert 'docker inspect' in workflow and 'unhealthy' in workflow
+
+
+def test_only_four_auth_posts_pass_the_fence_in_cloud_profile(monkeypatch):
+    monkeypatch.setenv('DELIVERY_CONTROL_PLANE_ONLY','1')
+    monkeypatch.setattr(service.config,'CLOUD_TENANTS',True)
+    import delivery_api.supabase_sessions as sessions
+    from fastapi.responses import JSONResponse
+    calls=[]
+    monkeypatch.setattr(sessions,'signup',lambda u,p:calls.append('signup') or JSONResponse({'status':'confirmation_required'}))
+    monkeypatch.setattr(sessions,'signin',lambda u,p:calls.append('signin') or JSONResponse({'status':'signed_in'}))
+    monkeypatch.setattr(sessions,'refresh',lambda request:calls.append('refresh') or JSONResponse({'status':'refreshed'}))
+    monkeypatch.setattr(sessions,'logout',lambda request:calls.append('logout') or JSONResponse({'status':'signed_out'}))
+    client=TestClient(service.app,base_url='http://testserver')
+    h={'origin':'http://testserver'}
+    body={'username':'shy@example.com','password':'Strong pass 42!'}
+    assert client.post('/auth/signup',json=body,headers=h).status_code==200
+    assert client.post('/auth/signin',json=body,headers=h).status_code==200
+    assert client.post('/auth/refresh',headers=h).status_code==200
+    assert client.post('/auth/logout',headers=h).status_code==200
+    assert calls==['signup','signin','refresh','logout']
+    for path in ('/api/tasks','/api/payments/webhook','/auth/google/start','/auth/signin/extra','/runs'):
+        assert client.post(path,json={},headers=h).status_code==503,path
+    for method in ('put','patch','delete'):
+        assert getattr(client,method)('/auth/signin',headers=h).status_code==503
+
+
+def test_auth_posts_stay_fenced_without_cloud_profile(monkeypatch):
+    monkeypatch.setenv('DELIVERY_CONTROL_PLANE_ONLY','1')
+    monkeypatch.setattr(service.config,'CLOUD_TENANTS',False)
+    client=TestClient(service.app)
+    for path in ('/auth/signup','/auth/signin','/auth/refresh','/auth/logout'):
+        assert client.post(path,json={'username':'a@example.com','password':'x'}).status_code==503,path

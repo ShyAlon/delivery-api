@@ -415,9 +415,13 @@ def _session_bundle(session_id):
 
 app.mount("/assets", StaticFiles(directory=WEB_DIR), name="assets")
 
+# Only these four POSTs talk to Supabase Auth; they write nothing to the app database.
+# Allowed only with a cloud (PostgreSQL) profile; the local SQLite auth path stays fenced.
+CONTROL_PLANE_AUTH_ROUTES=frozenset({"/auth/signup","/auth/signin","/auth/refresh","/auth/logout"})
+
 @app.middleware("http")
 async def request_log(request, call_next):
-    if control_plane_only() and request.method not in ('GET','HEAD','OPTIONS'):
+    if control_plane_only() and request.method not in ('GET','HEAD','OPTIONS') and not (config.CLOUD_TENANTS and request.method=='POST' and request.url.path in CONTROL_PLANE_AUTH_ROUTES):
         return JSONResponse({'detail':'Delivery-only runtime: mutations and execution remain fenced'},status_code=503,headers={'Cache-Control':'no-store'})
     if request.url.path.startswith('/api/operator/') and not config.CLOUD_TENANTS:
         return JSONResponse({'detail':'Operator resource not found'},status_code=404,headers={'Cache-Control':'no-store'})
