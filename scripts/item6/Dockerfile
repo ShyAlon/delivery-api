@@ -5,8 +5,9 @@ WORKDIR /app
 COPY wheels/ /wheels/
 COPY constraints.txt wheel-sha256.txt /app/
 RUN sha256sum --check /app/wheel-sha256.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/*.whl 'psycopg[binary]' && pip check
-COPY --chmod=a+rX item6/ /app/item6/
-COPY --chmod=a+rX migrations/ /app/migrations/
+COPY item6/ /app/item6/
+COPY migrations/ /app/migrations/
+RUN chmod -R a+rX /app/item6 /app/migrations
 COPY source-manifest.json /app/
 ENV PYTHONUNBUFFERED=1 DELIVERY_CONTROL_PLANE_ONLY=0
 USER requi
