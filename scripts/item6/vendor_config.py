@@ -77,13 +77,44 @@ def fetch_verified_source(url,fetcher=fetch,sleeper=time.sleep):
         sleeper((1,2)[attempt])
 
 
-def verify_current_sources(snapshot,fetcher=fetch):
-    """Before each new contact/settlement; public reads, never provider inference."""
-    checked=ProviderSnapshot(snapshot);checked.fresh(datetime.datetime.now(datetime.timezone.utc))
+_GOOD={}
+FACT_KEYS=('model','model_version','published_usd_per_million','published_period_rule','raw_context_limit','raw_output_limit')
+
+
+def check_max_age_minutes():
+    """One setting, one place: VENDOR_CHECK_MAX_AGE_MINUTES (default 60, 1 to 60)."""
+    import os
+    raw=os.environ.get('VENDOR_CHECK_MAX_AGE_MINUTES','60')
+    try:minutes=int(raw)
+    except ValueError:raise ValueError('VENDOR_CHECK_MAX_AGE_MINUTES must be a whole number of minutes from 1 to 60') from None
+    if not 1<=minutes<=60:raise ValueError('VENDOR_CHECK_MAX_AGE_MINUTES must be a whole number of minutes from 1 to 60')
+    return minutes
+
+
+def verify_current_sources(snapshot,fetcher=fetch,*,cached=True,clock=time.monotonic,log=None):
+    """Before a new contact/settlement; public reads, never provider inference.
+
+    A good check is reused for check_max_age_minutes(). A page whose bytes changed passes only
+    when the facts the run pinned (model, version, prices, limits, peak rule) are unchanged;
+    any change to those facts, or a model table that no longer parses, fails closed.
+    A failed check is never cached."""
+    now=datetime.datetime.now(datetime.timezone.utc)
+    checked=ProviderSnapshot(snapshot);checked.fresh(now)
     sources={s['url']:s['sha256'] for s in snapshot['sources']}
     if set(sources)!={PRICING_URL,API_URL}:raise ValueError('fixed vendor source set changed; admission stopped')
-    for url,digest in sources.items():
-        current=fetch_verified_source(url,fetcher)
-        if hashlib.sha256(current.encode()).hexdigest()!=digest:
-            raise ValueError('vendor source changed during run; preserve accepted attempts and review new snapshot')
+    log=log or (lambda text:print(text,flush=True))
+    key=checked.id;last=_GOOD.get(key)
+    if cached and last and clock()-last[0]<check_max_age_minutes()*60:return True
+    _GOOD.pop(key,None)
+    last_text='last good check '+last[1] if last else 'no earlier good check in this process'
+    bodies={url:fetch_verified_source(url,fetcher) for url in sources}
+    if any(hashlib.sha256(bodies[u].encode()).hexdigest()!=d for u,d in sources.items()):
+        try:current=parse(bodies[PRICING_URL],bodies[API_URL],snapshot['model'])
+        except ValueError as exc:
+            raise ValueError('vendor source changed during run and the published model table no longer parses ('+str(exc)+'); preserve accepted attempts and review new snapshot; '+last_text) from None
+        changed=[k for k in FACT_KEYS if current.get(k)!=snapshot.get(k)]
+        if current['context_proposal']['maximum_output_tokens']!=snapshot['context_proposal']['maximum_output_tokens']:changed.append('maximum_output_tokens')
+        if changed:raise ValueError('vendor source changed during run: pinned terms differ ('+', '.join(changed)+'); preserve accepted attempts and review new snapshot; '+last_text)
+        log(datetime.datetime.now(datetime.timezone.utc).isoformat()+' vendor pages changed but every pinned term is identical; check passes')
+    _GOOD[key]=(clock(),datetime.datetime.now(datetime.timezone.utc).isoformat())
     return True

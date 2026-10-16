@@ -18,15 +18,22 @@ def discover(c):
     jobs=c.execute('SELECT job_id,kind,state,task_id,attempt,generation,session_id,auth_session_id FROM worker_jobs').fetchall()
     by_kind={}
     for j in jobs:by_kind.setdefault(j['kind'],[]).append(j)
-    if set(by_kind)!={'phase:intent','phase:needs'} or any(len(v)!=1 for v in by_kind.values()):
+    if set(by_kind)!={'phase:intent','phase:needs'} or len(by_kind['phase:intent'])!=1:
         raise AdmissionDenied('exact stopped job chain required: one phase:intent and one phase:needs job')
-    intent=by_kind['phase:intent'][0];needs=by_kind['phase:needs'][0]
-    if intent['state']!='done' or needs['state']!='failed':raise AdmissionDenied('completed intent job and failed needs job required')
-    if intent['task_id']!=needs['task_id']:raise AdmissionDenied('one task required')
+    intent=by_kind['phase:intent'][0]
+    if intent['state']!='done' or any(j['state']!='failed' for j in by_kind['phase:needs']):raise AdmissionDenied('completed intent job and failed needs job required')
+    if any(intent['task_id']!=j['task_id'] for j in by_kind['phase:needs']):raise AdmissionDenied('one task required')
     attempts=c.execute('SELECT * FROM provider_attempts').fetchall()
     held=[a for a in attempts if a['state']!='settled']
     if len(held)!=1:raise AdmissionDenied('exactly one unsettled provider attempt required, found %d'%len(held))
     a=held[0]
+    # Earlier resumes may leave extra failed needs jobs. Only the job that owns the held attempt is the stopped one;
+    # each extra must be failed and must never have contacted the provider (no attempt row of any state).
+    owners=[j for j in by_kind['phase:needs'] if j['job_id']==a['job_id']]
+    if len(owners)!=1:raise AdmissionDenied('the unsettled attempt must be a never-started reservation of a failed needs job')
+    needs=owners[0]
+    for extra in (j for j in by_kind['phase:needs'] if j is not needs):
+        if any(x['job_id']==extra['job_id'] for x in attempts):raise AdmissionDenied('extra failed needs job '+extra['job_id']+' has provider attempts and needs its own review')
     waived=a['state']=='failure_waived'
     if waived:
         # A later resume of a run whose write-offs an earlier resume already made (typed yes) and recorded in the audit log.
@@ -45,11 +52,11 @@ def discover(c):
         if not seg or seg['state']!='waived':raise AdmissionDenied('the written-off run needs its compute segment waived')
     elif not seg or seg['state']!='unresolved' or seg['deterministic_ms'] is not None:raise AdmissionDenied('the failed job needs an unresolved, unmeasured compute segment')
     others=c.execute("SELECT 1 FROM retail_compute_segments WHERE job_id<>%s AND state IN ('pending','unresolved') LIMIT 1",(needs['job_id'],)).fetchone()
-    if others:raise AdmissionDenied('another compute segment is unresolved')
+    if others:raise AdmissionDenied('another compute segment is unresolved (an earlier failed resume job may need its own typed write-off)')
     accounts=c.execute('SELECT owner_id,balance_units,units_per_credit FROM credit_accounts').fetchall()
     if len(accounts)!=1 or accounts[0]['units_per_credit']!=10**9:raise AdmissionDenied('one prepaid account at the 1000000000 scale required')
     settled=[x for x in attempts if x['state']=='settled']
-    return {'task_id':needs['task_id'],'owner_id':str(accounts[0]['owner_id']),'intent_job':intent['job_id'],'failed_job':needs['job_id'],
+    return {'failed_jobs':sorted(j['job_id'] for j in by_kind['phase:needs']),'task_id':needs['task_id'],'owner_id':str(accounts[0]['owner_id']),'intent_job':intent['job_id'],'failed_job':needs['job_id'],
         'failed_job_session_id':str(needs['session_id']),'auth_session_id':str(needs['auth_session_id']),
         'attempt_id':a['attempt_id'],'attempt_state':a['state'],'expense_reserved':a['expense_reserved'],'retail_reserved':a['retail_reserved'],
         'compute_key':key,'settled_attempts':len(settled),'settled_expense_units':sum(x['expense_actual'] for x in settled),
@@ -67,6 +74,7 @@ def review_lines(facts,dump_sha256):
         '  task '+facts['task_id']+', failed job '+facts['failed_job']+' (phase:needs)',
         '  settled provider calls: %d, confirmed provider spend $%s'%(facts['settled_attempts'],usd(facts['settled_expense_units'])),
         '  credit balance: %.9f credits'%(facts['balance_units']/facts['units_per_credit']),
+        *(['  earlier resumes left %d extra failed needs job(s) with no provider call and no charge: %s'%(len(facts['failed_jobs'])-1,', '.join(j for j in facts['failed_jobs'] if j!=facts['failed_job']))] if len(facts.get('failed_jobs',[]))>1 else []),
         'Both unknown items were ALREADY written off by you in an earlier resume (audit records present); nothing is written off again:',
         '  1. provider call '+facts['attempt_id']+': never started, billed 0.',
         '     Its reservation of $%s stays counted against the spend ceiling.'%usd(facts['expense_reserved']),

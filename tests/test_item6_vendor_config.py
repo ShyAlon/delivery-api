@@ -61,9 +61,13 @@ def test_legacy_duplicate_fields_are_not_silently_ignored(tmp_path):
 def test_live_source_change_does_not_reprice_or_pass(tmp_path):
     from vendor_config import verify_current_sources
     root=filled(tmp_path);snapshot=json.loads(next((root/'private').glob('vendor-snapshot-*.json')).read_text())
-    assert verify_current_sources(snapshot,lambda u:P if u==PRICING_URL else A)
+    assert verify_current_sources(snapshot,lambda u:P if u==PRICING_URL else A,cached=False,log=lambda t:None)
+    # A harmless text change (every pinned term identical) passes; a changed published price never does.
+    assert verify_current_sources(snapshot,lambda u:(P+'<!-- edited -->') if u==PRICING_URL else A,cached=False,log=lambda t:None)
     with pytest.raises(ValueError,match='changed'):
-        verify_current_sources(snapshot,lambda u:(P+'changed') if u==PRICING_URL else A)
+        verify_current_sources(snapshot,lambda u:P.replace('$0.003','$0.004') if u==PRICING_URL else A,cached=False,log=lambda t:None)
+    with pytest.raises(ValueError,match='changed.*published_usd_per_million'):
+        verify_current_sources(snapshot,lambda u:P.replace('$0.003','$0.004').replace('$0.006','$0.008') if u==PRICING_URL else A,cached=False,log=lambda t:None)
 
 
 def test_d13_runtime_dry_preflight_contacts_nothing(tmp_path):

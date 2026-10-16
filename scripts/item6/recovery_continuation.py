@@ -37,7 +37,7 @@ def continuation_pipeline_receipt(isolation,pipeline,store,scope,task,prior_job,
     if {j['job_id'] for j in failures}!=expected or any(j['state']!='failed' for j in failures):
         raise ValueError('only exact audited failed predecessor may remain')
     links=[e['detail']['new_job_id'] for e in store.audit_entries(tid) if e['action']=='item6.continuation.queued' and e['detail'].get('original_failed_job')==prior_job]
-    linked=[j for j in jobs if j['job_id'] in links]
+    linked=[j for j in jobs if j['job_id'] in links and j['state']=='done']  # earlier failed resume jobs stay visible as failed
     if len(linked)!=1 or linked[0]['state']!='done':raise ValueError('one completed linked continuation required')
     proofs=[e for e in store.audit_entries(tid) if e['action']=='item6.provider.reconciled' and e['detail'].get('plan',{}).get('job_id') in expected]
     if not proofs:raise ValueError('original uncertain accounting reconciliation audit required')
