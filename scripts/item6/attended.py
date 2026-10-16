@@ -3,6 +3,13 @@ import datetime,json,sys
 from pathlib import Path
 from vmodel_contracts.interactive import InputResponse
 
+def stamp():return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def elapsed(seconds):
+    minutes,rest=divmod(int(seconds),60);return f'{minutes}m{rest:02d}s'
+
+
 class Attended:
     def __init__(self,root,owner):self.root=Path(root);self.owner=owner;self.counter=0
     def show(self,label,body,digest):
@@ -65,17 +72,27 @@ class Attended:
     def paypal(self,approval):
         print('PayPal sandbox approval: '+approval['approval_url'],flush=True)
         print('Open it, log in as your sandbox buyer and approve the payment. Nothing to type: the run continues when PayPal records the approval.',flush=True)
-    def webhook(self):
+    def webhook(self,clock=None,sleep=None):
         # The host-side watcher exports the capture for THIS run (invoice id) into the private mount; wait for it.
         # Falls back to the typed path after the wait, so a missing watcher cannot strand the run.
         import os,time
-        folder=Path(os.environ.get('ITEM6_WEBHOOK_DIR','/private'));deadline=time.monotonic()+float(os.environ.get('ITEM6_WEBHOOK_WAIT_SECONDS','1800'))
-        found=[]
-        print('Waiting for the PayPal sandbox event file to be exported by the host watcher (no input needed)...',flush=True)
-        while time.monotonic()<deadline:
+        clock=clock or time.monotonic;sleep=sleep or time.sleep
+        folder=Path(os.environ.get('ITEM6_WEBHOOK_DIR','/private'));wait=float(os.environ.get('ITEM6_WEBHOOK_WAIT_SECONDS','5400'))
+        start=clock();deadline=start+wait;last=None
+        say=lambda text:print(f'{stamp()} | webhook.waiting | {text}',flush=True)
+        say(f'waiting up to {elapsed(wait)} for the PayPal sandbox event file in {folder} (no input needed); PayPal retries a failed delivery by itself')
+        while True:
             found=sorted(folder.glob('webhook-*.json'))
             if found:break
-            time.sleep(5)
+            now=clock()
+            if now>=deadline:break
+            if last is None or now-last>=60:
+                say(f'elapsed {elapsed(now-start)} of {elapsed(wait)} | export files: 0 | the host watcher has not exported one yet');last=now
+            sleep(min(5,max(0.0,deadline-now)))
+        # One more look after the last sleep, so an export that lands at the deadline is not missed.
+        found=sorted(folder.glob('webhook-*.json'))
+        if found:say(f'export file seen after {elapsed(clock()-start)}')
+        else:say(f'no export file after {elapsed(clock()-start)}; asking for a typed path')
         if len(found)>1:raise ValueError('exactly one exported webhook file required')
         path=found[0] if found else Path(input('Path to authentic PayPal sandbox event + transmission headers JSON: ').strip())
         if path.is_symlink() or path.stat().st_mode&0o077 or path.stat().st_size>2*1024*1024:raise ValueError('private bounded webhook file required')

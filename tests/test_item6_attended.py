@@ -49,3 +49,46 @@ def test_paypal_step_prints_the_link_and_never_prompts(tmp_path,monkeypatch,caps
  monkeypatch.setattr('builtins.input',lambda prompt:pytest.fail('must not prompt'))
  Attended(tmp_path,lambda:'owner').paypal({'approval_url':'https://example.test/approve'})
  assert 'example.test/approve' in capsys.readouterr().out
+
+
+ISO=r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d'
+
+
+class Clock:
+    def __init__(self,folder=None,appear_at=None):self.t=0.0;self.folder=folder;self.appear_at=appear_at
+    def now(self):return self.t
+    def sleep(self,seconds):
+        self.t+=seconds
+        if self.appear_at is not None and self.t>=self.appear_at:
+            f=self.folder/'webhook-late.json';f.write_text(json.dumps({'event':{'late':1},'headers':{}}));f.chmod(0o600)
+
+
+def test_a_late_export_is_picked_up_without_prompting(tmp_path,monkeypatch,capsys):
+    import re
+    c=Clock(tmp_path,appear_at=200)
+    monkeypatch.setenv('ITEM6_WEBHOOK_DIR',str(tmp_path))
+    monkeypatch.setattr('builtins.input',lambda prompt:pytest.fail('must not prompt'))
+    raw,_=Attended(tmp_path,lambda:'owner').webhook(clock=c.now,sleep=c.sleep)
+    out=capsys.readouterr().out
+    assert json.loads(raw)=={'late':1}
+    assert 'export file seen after' in out
+    assert all(re.match(ISO+r' \| webhook\.waiting \| ',line) for line in out.splitlines() if line)
+
+
+def test_default_window_is_ninety_minutes_and_a_status_line_comes_every_minute(tmp_path,monkeypatch,capsys):
+    c=Clock();f=tmp_path/'typed.json';f.write_text(json.dumps({'event':{},'headers':{}}));f.chmod(0o600)
+    monkeypatch.setenv('ITEM6_WEBHOOK_DIR',str(tmp_path/'empty'));monkeypatch.delenv('ITEM6_WEBHOOK_WAIT_SECONDS',raising=False)
+    monkeypatch.setattr('builtins.input',lambda prompt:str(f))
+    Attended(tmp_path,lambda:'owner').webhook(clock=c.now,sleep=c.sleep)
+    out=capsys.readouterr().out
+    assert 'waiting up to 90m00s' in out and 'no export file after 90m00s' in out
+    assert out.count('| elapsed ')==90
+    assert 'elapsed 1m00s of 90m00s' in out
+
+
+def test_an_export_landing_exactly_at_the_deadline_is_not_missed(tmp_path,monkeypatch):
+    c=Clock(tmp_path,appear_at=600)
+    monkeypatch.setenv('ITEM6_WEBHOOK_DIR',str(tmp_path));monkeypatch.setenv('ITEM6_WEBHOOK_WAIT_SECONDS','600')
+    monkeypatch.setattr('builtins.input',lambda prompt:pytest.fail('must not prompt'))
+    raw,_=Attended(tmp_path,lambda:'owner').webhook(clock=c.now,sleep=c.sleep)
+    assert json.loads(raw)=={'late':1}
