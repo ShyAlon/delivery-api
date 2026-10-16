@@ -45,3 +45,26 @@ def test_mac_adapter_chain_cannot_start_without_exact_run_go(tmp_path):
     c=replace(config(tmp_path),mode='mac_acceptance');a=adapters(c)
     with pytest.raises(ValueError,match='go'):chain.AcceptanceChain(c,adapters=a).execute()
     assert not c.root.exists()
+
+
+def test_blocked_names_the_failing_check_without_leaking_the_message(tmp_path):
+    import json
+    c=config(tmp_path);a=adapters(c)
+    def failing(scope,previous):
+        error=ValueError('secret payload text');error.safe_check='order_status=CREATED';raise error
+    a['sandbox_purchase']=failing
+    lines=[]
+    with pytest.raises(RuntimeError,match='incomplete'):chain.AcceptanceChain(c,adapters=a,progress=lines.append).execute()
+    blocked=json.loads((c.root/'blocked.json').read_text())
+    assert blocked['failed_check']=='order_status=CREATED'
+    assert any('check=order_status=CREATED' in line for line in lines)
+    assert 'secret payload' not in (c.root/'blocked.json').read_text() and not any('secret payload' in line for line in lines)
+
+
+def test_unlabelled_failures_show_only_the_exception_class(tmp_path):
+    import json
+    c=config(tmp_path);a=adapters(c)
+    def failing(scope,previous):raise KeyError('token=abc')
+    a['operator']=failing
+    with pytest.raises(RuntimeError):chain.AcceptanceChain(c,adapters=a).execute()
+    assert json.loads((c.root/'blocked.json').read_text())['failed_check']=='unnamed:KeyError'

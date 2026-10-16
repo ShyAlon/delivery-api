@@ -33,9 +33,13 @@ class AcceptanceChain:
                 self.validate(stage,result)
                 self.isolation.write(self.root/(stage+'.json'),result)
                 self.receipts[stage]=result
-            except Exception:
+            except Exception as exc:
                 self.emit(stage,'blocked')
-                self.isolation.write(self.root/'blocked.json',{'stage':stage,'automatic_retry':False,
+                # Name the failing check, never the exception text: only a short label an adapter set on purpose is shown.
+                check=getattr(exc,'safe_check',None)
+                if not (isinstance(check,str) and re.fullmatch(r'[A-Za-z0-9_=. -]{1,80}',check)):check='unnamed:'+type(exc).__name__
+                self.emit(stage,'check='+check)
+                self.isolation.write(self.root/'blocked.json',{'stage':stage,'automatic_retry':False,'failed_check':check,
                     'result':'INCOMPLETE','launch_authorized':False,'reason':'Adapter or evidence check failed; preserve partial evidence and review locally'})
                 # Don't serialize arbitrary exception text or credential-bearing payloads.
                 raise RuntimeError('item6 chain incomplete at '+stage+'; no retry or launch') from None

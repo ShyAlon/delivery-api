@@ -43,6 +43,11 @@ class OperatorAdapter:
             'registry_version':evidence['registry_version'],'explicit_grant':True,'capabilities':sorted(principal.capabilities)}
 
 
+def blocked(check,message):
+    # The label is shown on the console and in blocked.json; keep it short and free of payloads.
+    error=ValueError(message);error.safe_check=check;return error
+
+
 class SandboxPurchaseAdapter:
     def __init__(self,identity,*,repository,processor,approve,webhook_receipt,read_balance,units_per_credit=1000):
         if processor.binding.live_mode is not False:raise ValueError('PayPal sandbox only')
@@ -50,25 +55,44 @@ class SandboxPurchaseAdapter:
         self.webhook=webhook_receipt;self.balance=read_balance
         if units_per_credit not in (1000,10**9):raise ValueError('known acceptance retail scale required')
         self.scale=units_per_credit
+    def await_approval(self,order_id):
+        """Read-only wait until PayPal reports the buyer approved this order, then the capture runs by itself.
+        No typed confirmation: PayPal's own order status is the evidence. Bounded; a miss is named, never retried blindly."""
+        import os,time
+        transport=getattr(self.processor,'transport',None)
+        if transport is None:return 'no-transport'
+        wait=float(os.environ.get('ITEM6_APPROVAL_WAIT_SECONDS','900'));poll=float(os.environ.get('ITEM6_APPROVAL_POLL_SECONDS','5'))
+        deadline=time.monotonic()+wait;status=None;last=0.0
+        print('Waiting for PayPal to record your sandbox approval (read-only checks; no typing needed)...',flush=True)
+        while True:
+            status=transport.request('GET','/v2/checkout/orders/'+order_id).get('status')
+            if status in ('APPROVED','COMPLETED'):return status
+            if time.monotonic()>=deadline:break
+            if time.monotonic()-last>=30:
+                print('  PayPal order status: '+str(status)+' - finish the approval in your sandbox buyer window',flush=True);last=time.monotonic()
+            time.sleep(poll)
+        raise blocked('order_status='+str(status)[:30],'PayPal never recorded the sandbox approval within the wait')
+
     def __call__(self,isolation,previous):
         if self.processor.binding.live_mode is not False:raise ValueError('sandbox binding changed')
         scope=self.identity.scope
         intent=purchase_intent(purchase_id='item6-'+isolation.run_id,owner_id=scope.owner_id,offer_id='credits-12',units_per_credit=self.scale)
         # Account provisioning is explicit reviewed fixture setup. Never overwrite
         # a balance or try another purchase to hide an uncertain prior capture.
-        if self.balance(scope)!=0:raise ValueError('fresh zero balance required before purchase')
+        if self.balance(scope)!=0:raise blocked('balance_not_zero','fresh zero balance required before purchase')
         self.repo.create_purchase(intent)
         service=PaymentService(self.processor,self.repo);approval=service.create(intent.purchase_id)
         self.approve(approval)
+        self.await_approval(self.repo.get_purchase(intent.purchase_id)['order_id'])
         first=service.capture(intent.purchase_id)
-        if first.get('credit_posted') is not True:raise ValueError('capture not confirmed; stop and reconcile existing purchase')
+        if first.get('credit_posted') is not True:raise blocked('capture_not_confirmed','capture not confirmed; stop and reconcile existing purchase')
         raw,headers=self.webhook()
         event,_=self.processor.verify_event(raw,headers)
         one=service.webhook(raw,headers);two=service.webhook(raw,headers)
         replay=service.capture(intent.purchase_id)
         row=self.repo.get_purchase(intent.purchase_id)
-        if one!=two or replay.get('credit_posted') is not False:raise ValueError('payment replay did not remain once-only')
-        if not row['credit_posted'] or self.balance(scope)!=12*self.scale:raise ValueError('durable balance/posting mismatch')
+        if one!=two or replay.get('credit_posted') is not False:raise blocked('replay_not_once_only','payment replay did not remain once-only')
+        if not row['credit_posted'] or self.balance(scope)!=12*self.scale:raise blocked('balance_posting_mismatch','durable balance/posting mismatch')
         return base(isolation,'sandbox_purchase')|{'subject':scope.owner_id,'purchase_id':intent.purchase_id,
             'payment_id':row['capture_id'],'merchant_id':self.processor.binding.merchant_id,'sandbox':True,
             'amount_minor':intent.amount_minor,'credit_units':intent.credit_units,'posted_count':1,

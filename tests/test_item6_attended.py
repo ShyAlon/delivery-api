@@ -44,3 +44,8 @@ def test_semantic_review_choices_assemble_the_exact_decision_json(tmp_path):
 def test_semantic_review_rejects_an_unknown_choice(tmp_path):
  review={'revision':'b'*64,'findings':[{'item_id':'i1','path':['a'],'rule':'r','reason':'w','original':1}]}
  with pytest.raises(ValueError,match='explicit'):Attended(tmp_path,lambda:'owner').semantic_value(review,lambda prompt:'yes')
+
+def test_paypal_step_prints_the_link_and_never_prompts(tmp_path,monkeypatch,capsys):
+ monkeypatch.setattr('builtins.input',lambda prompt:pytest.fail('must not prompt'))
+ Attended(tmp_path,lambda:'owner').paypal({'approval_url':'https://example.test/approve'})
+ assert 'example.test/approve' in capsys.readouterr().out
