@@ -64,7 +64,7 @@ class Attended:
         return {'review_sha256':shown['review_sha256'],'choice':'approve','change_request':'','extra_cost_acknowledged':True}
     def paypal(self,approval):
         print('PayPal sandbox approval: '+approval['approval_url'],flush=True)
-        if input('After approving in your sandbox buyer account, type SANDBOX APPROVED: ')!='SANDBOX APPROVED':raise ValueError('sandbox approval required')
+        print('Open it, log in as your sandbox buyer and approve the payment. Nothing to type: the run continues when PayPal records the approval.',flush=True)
     def webhook(self):
         # The host-side watcher exports the capture for THIS run (invoice id) into the private mount; wait for it.
         # Falls back to the typed path after the wait, so a missing watcher cannot strand the run.
