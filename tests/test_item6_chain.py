@@ -68,3 +68,46 @@ def test_unlabelled_failures_show_only_the_exception_class(tmp_path):
     a['operator']=failing
     with pytest.raises(RuntimeError):chain.AcceptanceChain(c,adapters=a).execute()
     assert json.loads((c.root/'blocked.json').read_text())['failed_check']=='unnamed:KeyError'
+
+
+class UserFacingError(Exception):pass
+
+
+def test_unlabelled_failure_names_the_cause_class_but_never_its_message(tmp_path):
+    import json
+    c=config(tmp_path);a=adapters(c)
+    def failing(scope,previous):
+        try:raise ConnectionError('token=abc')
+        except ConnectionError as e:raise UserFacingError('secret payload') from e
+    a['operator']=failing
+    with pytest.raises(RuntimeError):chain.AcceptanceChain(c,adapters=a).execute()
+    text=(c.root/'blocked.json').read_text()
+    assert json.loads(text)['failed_check']=='unnamed:UserFacingError caused by ConnectionError'
+    assert 'token=abc' not in text and 'secret payload' not in text
+
+
+def test_stage_failure_label_names_the_stage_and_cause_and_fits_the_label_rule():
+    import re
+    try:
+        try:raise OSError('Connection error. secret')
+        except OSError as e:raise UserFacingError('x') from e
+    except UserFacingError as exc:
+        label=chain.stage_failure_label('tests',exc)
+    assert label=='tests stage failed after UserFacingError then OSError'
+    assert re.fullmatch(r'[A-Za-z0-9_=. -]{1,80}',label) and 'secret' not in label
+    assert chain.stage_failure_label('Bad Stage!',ValueError()) is None
+
+
+def test_a_label_set_on_the_exception_is_shown_as_is(tmp_path):
+    import json
+    c=config(tmp_path);a=adapters(c)
+    def failing(scope,previous):
+        e=UserFacingError('x');e.safe_check=chain.stage_failure_label('tests',e);raise e
+    a['operator']=failing
+    with pytest.raises(RuntimeError):chain.AcceptanceChain(c,adapters=a).execute()
+    assert json.loads((c.root/'blocked.json').read_text())['failed_check']=='tests stage failed after UserFacingError'
+
+
+@pytest.mark.parametrize('raw,shown',[('T-13 (acceptance: AC-13)','T-13 (acceptance: AC-13)'),('',''),(None,''),('x'*61,''),('line\nbreak',''),('a=b&c',''),('{"k":1}','')])
+def test_item_labels_show_short_identifiers_only(raw,shown):
+    assert chain.item_label(raw)==shown

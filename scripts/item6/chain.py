@@ -7,6 +7,34 @@ No application import, mutation route, fence override or automatic next-run retr
 import datetime,hashlib,json,re
 from pathlib import Path
 
+def cause_names(exc,limit=3):
+    # Exception class names along the cause chain. Never messages: those can carry payloads or secrets.
+    names=[];seen=set();e=exc
+    while e is not None and id(e) not in seen and len(names)<limit:
+        seen.add(id(e));name=type(e).__name__
+        if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,60}',name):names.append(name)
+        e=e.__cause__ or e.__context__
+    return names
+
+
+def failure_label(exc):
+    names=cause_names(exc) or ['Exception']
+    return 'unnamed:'+names[0]+(' caused by '+' then '.join(names[1:]) if len(names)>1 else '')
+
+
+def stage_failure_label(stage,exc):
+    # Label for a failure inside a generator stage, for example: tests stage failed after OpenAIConnectionError
+    if not (isinstance(stage,str) and re.fullmatch(r'[a-z_]{1,30}',stage)):return None
+    names=cause_names(exc)
+    label=stage+' stage failed'+(' after '+' then '.join(names) if names else '')
+    return label if re.fullmatch(r'[A-Za-z0-9_=. -]{1,80}',label) else stage+' stage failed'
+
+
+def item_label(raw):
+    # Console label for a progress item: short identifiers only, never free text.
+    return raw if isinstance(raw,str) and re.fullmatch(r'[A-Za-z0-9_.:()# -]{1,60}',raw) else ''
+
+
 STAGES=('identity','operator','sandbox_purchase','pipeline','gate_edit','final_artifacts','recovery')
 
 
@@ -37,7 +65,7 @@ class AcceptanceChain:
                 self.emit(stage,'blocked')
                 # Name the failing check, never the exception text: only a short label an adapter set on purpose is shown.
                 check=getattr(exc,'safe_check',None)
-                if not (isinstance(check,str) and re.fullmatch(r'[A-Za-z0-9_=. -]{1,80}',check)):check='unnamed:'+type(exc).__name__
+                if not (isinstance(check,str) and re.fullmatch(r'[A-Za-z0-9_=. -]{1,80}',check)):check=failure_label(exc)
                 self.emit(stage,'check='+check)
                 self.isolation.write(self.root/'blocked.json',{'stage':stage,'automatic_retry':False,'failed_check':check,
                     'result':'INCOMPLETE','launch_authorized':False,'reason':'Adapter or evidence check failed; preserve partial evidence and review locally'})
