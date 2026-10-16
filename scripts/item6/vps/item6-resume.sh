@@ -42,9 +42,10 @@ echo "fresh_backup=$([ ! -e evidence-pre-resume-$N ] && echo yes || echo no)"
 # files on a copy of the run directory WITHOUT evidence or this resume's own files. Same hashes, no evidence guard.
 VT=$(mktemp -d ~/item6/vtmp.XXXXXX); chmod 700 $VT
 find . -maxdepth 1 -mindepth 1 ! -name 'evidence*' ! -name 'topup-webhook' ! -name 'manifest-*' ! -name 'resume-*' ! -name '*.log' ! -name 'go-*' ! -name 'watcher*' ! -name 'webhook-watch*' ! -name 'run-resume.sh' -exec cp -a {} $VT/ \;
+mkdir -m 700 $VT/evidence   # the verifier requires an existing, empty, 0700, non-symlink evidence dir
 vout=$(cd $VT && python3 private/verify-*.py . 2>&1); vrc=$?; rm -rf $VT
 echo "verifier=$([ $vrc = 0 ] && echo ok || echo FAIL)"
-echo "verifier_msg=$(printf '%s' "$vout" | head -3 | tr '\n' ' ' | cut -c1-300)"
+echo "verifier_msg=$(printf '%s\n' "$vout" | grep -v '^[[:space:]]*$' | tail -2 | tr '\n' ' ' | cut -c1-300)"
 echo "container=$(sudo -n docker ps -a --format '{{.Names}}' | grep -c "^$CONT\$" || true)"
 echo "session=$(tmux ls 2>/dev/null | grep -c "^$SESS" || true)"
 echo "tmux=$(command -v tmux >/dev/null && echo yes || echo no)"
