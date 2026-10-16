@@ -179,3 +179,29 @@ def test_a_generator_resume_never_reads_the_semantic_review_file():
     src=(Path(__file__).resolve().parents[1]/'scripts'/'item6'/'recovery_continuation.py').read_text()
     assert "review=None if generator_resume is not None else json.loads(" in src
     assert src.count("semantic-review.json")==1
+
+
+def extra_conn(**over):
+    base=dict(worker_jobs=[job('phase:intent','done','J1'),job('phase:needs','failed','J2'),job('phase:needs','failed','J3')],
+        provider_attempts=[attempt('settled',attempt_id='s'*32,job_id='J1'),attempt('failure_waived',attempt_id='r'*32,expense_actual=None)],
+        audit_log=[{'action':resume.ATTEMPT_ACTION},{'action':resume.RECONCILED_ACTION}],
+        retail_compute_segments=[{'state':'waived','deterministic_ms':None}],
+        credit_accounts=[{'owner_id':'o1','balance_units':5,'units_per_credit':10**9}])
+    base.update(over);return Conn(**base)
+
+
+def test_an_extra_failed_needs_job_without_attempts_is_accepted_and_listed():
+    facts=resume.discover(extra_conn())
+    assert facts['failed_job']=='J2' and facts['failed_jobs']==['J2','J3']
+    text='\n'.join(resume.review_lines(facts,'a'*64))
+    assert 'extra failed needs job' in text and 'J3' in text
+
+
+def test_an_extra_failed_needs_job_with_a_provider_attempt_is_refused():
+    rows=[attempt('settled',attempt_id='s'*32,job_id='J1'),attempt('failure_waived',attempt_id='r'*32,expense_actual=None),attempt('settled',attempt_id='t'*32,job_id='J3')]
+    with pytest.raises(AdmissionDenied,match='extra failed needs job J3 has provider attempts'):resume.discover(extra_conn(provider_attempts=rows))
+
+
+def test_an_extra_job_that_is_not_failed_is_refused():
+    jobs=[job('phase:intent','done','J1'),job('phase:needs','failed','J2'),job('phase:needs','running','J3')]
+    with pytest.raises(AdmissionDenied,match='failed needs'):resume.discover(extra_conn(worker_jobs=jobs))

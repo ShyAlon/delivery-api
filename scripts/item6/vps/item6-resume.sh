@@ -23,13 +23,13 @@ SESS=item6r-${RID:0:8}; CONT=requi-item6-resume$N-$RID
 TMPF=$(mktemp)
 echo "Resume $N of stopped run $NAME (id $RID) on ubuntu@$HOST"
 echo "== image"
-HAVE=$("${UBU[@]}" "sudo -n docker run --rm --network none --entrypoint grep requi-item6-test -q -e resume-number /app/item6/resume_entry.py && echo yes || echo no" 2>/dev/null | tail -1 || echo no)
+HAVE=$("${UBU[@]}" "sudo -n docker run --rm --network none --entrypoint sh requi-item6-test -c 'grep -q -e resume-number /app/item6/resume_entry.py && grep -q -e VENDOR_CHECK_MAX_AGE_MINUTES /app/item6/vendor_config.py && test -f /app/item6/source_check.py && echo yes || echo no'" 2>/dev/null | tail -1 || echo no)
 if [ "$REBUILD" = 1 ] || [ "$HAVE" != yes ]; then
   [ "$REBUILD" = 1 ] || echo "The image on the server has no current resume code: it must be rebuilt from your four repos on main (merge the resume PR first)."
   read -r -p "Type yes (English keyboard) to build the image from your repos (several minutes, nothing running is touched), anything else aborts: " A
   [ "$A" = yes ] || die DECLINED "You did not type yes." "Nothing was changed."
   ( stage_build )
-  HAVE=$("${UBU[@]}" "sudo -n docker run --rm --network none --entrypoint grep requi-item6-test -q -e resume-number /app/item6/resume_entry.py && echo yes || echo no" 2>/dev/null | tail -1 || echo no)
+  HAVE=$("${UBU[@]}" "sudo -n docker run --rm --network none --entrypoint sh requi-item6-test -c 'grep -q -e resume-number /app/item6/resume_entry.py && grep -q -e VENDOR_CHECK_MAX_AGE_MINUTES /app/item6/vendor_config.py && test -f /app/item6/source_check.py && echo yes || echo no'" 2>/dev/null | tail -1 || echo no)
   [ "$HAVE" = yes ] || die IMAGE-NO-RESUME "the rebuilt image has no current resume_entry.py: is the resume PR merged into delivery-api main and pulled?" "The image was rebuilt but cannot resume." "git -C $DELIVERY pull --ff-only && bash $HERE/item6-resume.sh --rebuild"
 else echo "ok  image has the current resume code (no rebuild needed)"; fi
 echo "== server checks (read-only)"
@@ -114,6 +114,10 @@ grep -q 'dry check passed' "$DRYOUT" || die DRY-FAILED "the dry check did not re
 SPENT=$(sed -n 's/.*confirmed provider spend \$\([0-9.]*\).*/\1/p' "$DRYOUT" | head -1); RESV=$(sed -n 's/.*reservation of \$\([0-9.]*\) stays counted.*/\1/p' "$DRYOUT" | head -1)
 [ -n "$SPENT" ] && [ -n "$RESV" ] || die DRY-PARSE "could not read the spend figures from the dry check" "Nothing was written and nothing was paid." "send me the output above"
 REMAIN=$(python3 -c "print('%.2f'%max(0.0,$CEILING-$SPENT-$RESV-0.005))")
+echo "== free source check on the server (WITH network, reads only: DNS, the vendor pages, the DeepSeek balance; no model call, nothing billed or written)"
+SRCOUT=$(mktemp)
+"${UBU[@]}" "cd $RDIR && D=\$(ls -d private/runtime-* | head -1) && sudo -n docker run --rm --memory=1g --memory-swap=1g --pids-limit=256 --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=256m --mount \"type=bind,src=\$PWD/\$D,dst=/private,readonly\" --entrypoint python requi-item6-test /app/item6/source_check.py" 2>&1 | tee "$SRCOUT" || true
+grep -q '^source check passed' "$SRCOUT" || die SOURCE-CHECK "the free source check failed (real messages above): the paid run would be refused" "Nothing was written and nothing was paid." "send me the output above"
 echo "== DeepSeek balance (this Mac, key not printed)"
 BAL=$(RUN="$RUN" python3 - <<'PY'
 import json,os,subprocess,sys

@@ -43,7 +43,12 @@ class WorkerAdmissionGateway:
     def _verify_snapshot(self):
         if self.verify_provider_snapshot is not None:
             from .compute_meter import excluded_wait
-            with excluded_wait():self.verify_provider_snapshot()
+            try:
+                with excluded_wait():self.verify_provider_snapshot()
+            except AdmissionDenied:raise
+            except Exception as exc:
+                # A plain error would reach the model client as a generic "Connection error"; name it.
+                raise AdmissionDenied('vendor source check failed: '+str(exc)[:300]) from exc
 
     def _phase_model(self,provider,model):
         job=self.store.worker_job(self.job_id)
@@ -117,7 +122,10 @@ class WorkerAdmissionGateway:
         if 'estimate_policy' in row.get('quote',{}):
             if self.provider_balance is None:raise AdmissionDenied('pre-call provider balance reader required')
             from .compute_meter import excluded_wait
-            with excluded_wait():balance=self.provider_balance()
+            try:
+                with excluded_wait():balance=self.provider_balance()
+            except AdmissionDenied:raise
+            except Exception as exc:raise AdmissionDenied('provider balance read failed: '+str(exc)[:300]) from exc
             self.store.record_provider_balance_check(attempt,balance)
         if self.launch_guard:
             result=self.store.start_launch_provider_attempt(attempt)

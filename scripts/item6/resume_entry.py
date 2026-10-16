@@ -214,7 +214,7 @@ def go(config,run_id,paths,facts,dump_sha,ceiling_units):
         if not resume.get('tests_partials_present'):raise ValueError('saved tests fills are required for this resume')
         say('resuming the generator from its saved tests checkpoint '+resume['checkpoint_id'])
         result=execute_continuation(store=store,scope=scope,root=paths['root'],config={},run_id=run_id,task_id=facts['task_id'],prior_job=facts['failed_job'],
-            output=paths['output'],pipeline_factory=pipeline_factory,original_failed_jobs=[facts['failed_job']],pending_review=None,generator_resume=resume)
+            output=paths['output'],pipeline_factory=pipeline_factory,original_failed_jobs=facts['failed_jobs'],pending_review=None,generator_resume=resume)
         print(json.dumps(result),flush=True)
     finally:
         paypal_client.close();balance_client.close()

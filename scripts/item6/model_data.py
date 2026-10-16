@@ -60,8 +60,10 @@ def expanded(rows):
 
 def parse(pricing_html,api_html,model):
     p=Table();p.feed(pricing_html);a=Table();a.feed(api_html)
-    if len(p.tables)!=1:raise SourceChanged('expected one explicit model/pricing table')
-    rows=expanded(p.tables[0]);header=rows[0]
+    # The vendor may add unrelated tables (e.g. Search & Fetch pricing); only the model table matters.
+    model_tables=[t for t in p.tables if t and t[0] and t[0][0][0]=='MODEL']
+    if len(model_tables)!=1:raise SourceChanged('expected one explicit model/pricing table')
+    rows=expanded(model_tables[0]);header=rows[0]
     models=[re.sub(r'\s*\(\d+\)$','',v) for v in header[3:]]
     if header[:3]!=['MODEL']*3 or len(set(models))!=2 or any(not re.fullmatch('deepseek-[a-z0-9-]{1,60}',m) for m in models):raise SourceChanged('model table changed')
     if model not in models:raise SourceChanged('selected model not in current published table')
@@ -77,7 +79,7 @@ def parse(pricing_html,api_html,model):
     if not match or output!='MAXIMUM: '+match[1]+'K':raise SourceChanged('output sources disagree or exact integer missing')
     api_models=re.search(r'model string required Possible values: \[ ([^]]+) \] ID of the model to use',text)
     if not api_models or {v.strip() for v in api_models[1].split(',')}!=set(models):raise SourceChanged('API model identities disagree')
-    if 'prices listed below are in units of per 1M tokens' not in ' '.join(' '.join(p.article_text).split()):raise SourceChanged('explicit per-million units required')
+    if not re.search(r'prices (?:listed below are in|are listed in) units of per 1M tokens',' '.join(' '.join(p.article_text).split())):raise SourceChanged('explicit per-million units required')
     rates={}
     labels={'1M INPUT TOKENS (CACHE HIT)':'cache_hit','1M INPUT TOKENS (CACHE MISS)':'cache_miss','1M OUTPUT TOKENS':'output'}
     for label,key in labels.items():
