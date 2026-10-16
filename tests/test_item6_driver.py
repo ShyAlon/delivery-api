@@ -40,3 +40,10 @@ def test_resume_checks_the_compiled_config_on_a_copy_without_evidence_and_shows_
     text = RESUME.read_text()
     assert "! -name 'evidence*'" in text
     assert 'verifier_msg' in text and 'verify-*.py . >/dev/null' not in text
+
+
+def test_resume_verifier_copy_has_an_empty_private_evidence_dir_and_prints_the_last_error_line():
+    text = RESUME.read_text()
+    assert 'mkdir -m 700 $VT/evidence' in text
+    assert text.index('mkdir -m 700 $VT/evidence') < text.index('python3 private/verify-*.py')
+    assert "tail -2 | tr" in text
