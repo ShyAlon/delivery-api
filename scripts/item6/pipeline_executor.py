@@ -27,7 +27,7 @@ class PrivatePipeline:
             raise ValueError('explicit reviewed job clients and attended callbacks required')
         self.store=store;self.base=Path(artifacts_base);self.model=model;self.gateway=gateway_factory
         self.generator_clients=generator_clients;self.interview_clients=interview_clients
-        self.answer=answer_input;self.review=review_gate;self.progress=progress;self.job_ids=[]
+        self.answer=answer_input;self.review=review_gate;self.progress=progress;self.job_ids=[];self.failed_stage=None
 
     def __call__(self,isolation,scope):
         # Caller has separately checked exact run go, local scope and price catalog.
@@ -169,7 +169,10 @@ class PrivatePipeline:
         bus=ProgressBus()
         phase_map={'items':'specs',**{p.generator_stage:p.key for p in PHASE_DEFINITIONS if p.generator_stage}}
         def progress(event):
-            cap.validate(self.store);self.progress(event.stage+'.'+event.status,event.label)
+            cap.validate(self.store)
+            if event.status=='failed':self.failed_stage=event.stage
+            from chain import item_label
+            self.progress(event.stage+'.'+event.status,event.label or item_label(getattr(event,'detail',None)))
             # ProgressBus deliberately swallows consumer errors. Durable phase state
             # is written below only after canonical contract validation succeeds.
         bus.subscribe(progress)
@@ -234,4 +237,10 @@ class PrivatePipeline:
                 if phase.executor=='generator':
                     state='approved' if phase.key in ('srs','architecture') and hasattr(self.store,'wait_at_gate') else 'done'
                     self.store.update_phase(cap.task_id,phase.key,state)
+        except Exception as exc:
+            if self.failed_stage and not getattr(exc,'safe_check',None):
+                from chain import stage_failure_label
+                label=stage_failure_label(self.failed_stage,exc)
+                if label:exc.safe_check=label
+            raise
         finally:conn.close()
