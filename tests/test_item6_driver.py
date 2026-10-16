@@ -47,3 +47,10 @@ def test_resume_verifier_copy_has_an_empty_private_evidence_dir_and_prints_the_l
     assert 'mkdir -m 700 $VT/evidence' in text
     assert text.index('mkdir -m 700 $VT/evidence') < text.index('python3 private/verify-*.py')
     assert "tail -2 | tr" in text
+
+
+def test_resume_driver_numbers_its_resumes_and_skips_top_up_after_the_first():
+    text = RESUME.read_text()
+    assert '--resume-number $N' in text and 'item6-database-resume-$((N-1)).dump' in text
+    assert 'if [ $N = 1 ]; then TOPMOUNT=' in text and 'if [ $N = 1 ]; then bash webhook-watch-topup.sh' in text
+    assert 'grep requi-item6-test -q -e resume-number' in text

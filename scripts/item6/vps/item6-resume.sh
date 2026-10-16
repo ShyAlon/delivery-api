@@ -8,26 +8,30 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ITEM6_RUN_LIB=1 source "$HERE/item6-run.sh"
 fix(){ echo "Fix: $1"; echo "Then run: bash $HERE/item6-resume.sh"; }
 die(){ echo; echo "ABORTED [$1]: $2"; echo "${3:-Nothing was changed.}"; fix "${4:-run it again; if it repeats, send me this whole output}"; exit 1; }
-CEILING=2.00; N=1
+CEILING=2.00
 REBUILD=0; for a in "$@"; do case "$a" in --rebuild) REBUILD=1;; *) die USAGE "unknown option $a" "Nothing changed." "bash $HERE/item6-resume.sh [--rebuild]";; esac; done
 RUN=${RESUME_RUN:-$(ls -d "$DELIVERY"/runs/item6-run-[0-9][0-9] 2>/dev/null | sort | tail -1)}
 [ -n "$RUN" ] && [ -d "$RUN" ] || die NO-RUN "no runs/item6-run-NN directory under $DELIVERY" "Nothing changed." "ls $DELIVERY/runs"
 RUN=$(cd "$RUN" && pwd); NAME=$(basename "$RUN")
 RID=$(python3 -c "import json;print(json.load(open('$RUN/run-id.json'))['run_id'])" 2>/dev/null) || die RUN-ID "cannot read $RUN/run-id.json" "Nothing changed." "ls $RUN"
 [ -f "$RUN/private/.env" ] || die NO-ENV "$RUN/private/.env is missing (needed to read the DeepSeek balance)" "Nothing changed." "ls -la $RUN/private"
-SESS=item6r-${RID:0:8}; CONT=requi-item6-resume$N-$RID; RDIR='~/item6/runs/'$NAME
+RDIR='~/item6/runs/'$NAME
+# Resume number: 1 for the first, otherwise one more than the archived resume dumps already on the server (each resume restores the previous one's dump).
+N=$("${UBU[@]}" "ls ~/item6/runs/$NAME/evidence 2>/dev/null | grep -c '^item6-database-resume-[0-9]*\\.dump\$' || true" | tail -1 | tr -dc 0-9); [ -n "$N" ] || die VPS-SSH "cannot read the server evidence listing" "Nothing changed." "ssh ubuntu@$HOST ls ~/item6/runs/$NAME/evidence"
+N=$((N+1))
+SESS=item6r-${RID:0:8}; CONT=requi-item6-resume$N-$RID
 TMPF=$(mktemp)
-echo "Resume of stopped run $NAME (id $RID) on ubuntu@$HOST"
+echo "Resume $N of stopped run $NAME (id $RID) on ubuntu@$HOST"
 echo "== image"
-HAVE=$("${UBU[@]}" "sudo -n docker run --rm --network none --entrypoint test requi-item6-test -f /app/item6/resume_entry.py && echo yes || echo no" 2>/dev/null | tail -1 || echo no)
+HAVE=$("${UBU[@]}" "sudo -n docker run --rm --network none --entrypoint grep requi-item6-test -q -e resume-number /app/item6/resume_entry.py && echo yes || echo no" 2>/dev/null | tail -1 || echo no)
 if [ "$REBUILD" = 1 ] || [ "$HAVE" != yes ]; then
-  [ "$REBUILD" = 1 ] || echo "The image on the server has no resume code yet: it must be rebuilt from your four repos on main (merge the resume PR first)."
+  [ "$REBUILD" = 1 ] || echo "The image on the server has no current resume code: it must be rebuilt from your four repos on main (merge the resume PR first)."
   read -r -p "Type yes (English keyboard) to build the image from your repos (several minutes, nothing running is touched), anything else aborts: " A
   [ "$A" = yes ] || die DECLINED "You did not type yes." "Nothing was changed."
   ( stage_build )
-  HAVE=$("${UBU[@]}" "sudo -n docker run --rm --network none --entrypoint test requi-item6-test -f /app/item6/resume_entry.py && echo yes || echo no" 2>/dev/null | tail -1 || echo no)
-  [ "$HAVE" = yes ] || die IMAGE-NO-RESUME "the rebuilt image has no resume_entry.py: is the resume PR merged into delivery-api main and pulled?" "The image was rebuilt but cannot resume." "git -C $DELIVERY pull --ff-only && bash $HERE/item6-resume.sh --rebuild"
-else echo "ok  image has the resume code"; fi
+  HAVE=$("${UBU[@]}" "sudo -n docker run --rm --network none --entrypoint grep requi-item6-test -q -e resume-number /app/item6/resume_entry.py && echo yes || echo no" 2>/dev/null | tail -1 || echo no)
+  [ "$HAVE" = yes ] || die IMAGE-NO-RESUME "the rebuilt image has no current resume_entry.py: is the resume PR merged into delivery-api main and pulled?" "The image was rebuilt but cannot resume." "git -C $DELIVERY pull --ff-only && bash $HERE/item6-resume.sh --rebuild"
+else echo "ok  image has the current resume code (no rebuild needed)"; fi
 echo "== server checks (read-only)"
 if ! "${UBU[@]}" "NAME=$NAME RID=$RID SESS=$SESS CONT=$CONT N=$N bash -s" >"$TMPF" <<'PRE'
 set -u
@@ -35,7 +39,9 @@ cd ~/item6/runs/$NAME 2>/dev/null || { echo "rundir=missing"; exit 0; }
 echo "rundir=ok"
 echo "blocked=$([ -f evidence/run/blocked.json ] && echo yes || echo no)"
 echo "dump=$([ -s evidence/item6-database.dump ] && echo yes || echo no)"
-echo "dumpsha=$(sha256sum evidence/item6-database.dump 2>/dev/null | cut -c1-16)"
+SRC=evidence/item6-database.dump; [ $N -gt 1 ] && SRC=evidence/item6-database-resume-$((N-1)).dump
+echo "srcdump=$([ -s $SRC ] && echo yes || echo no)"
+echo "dumpsha=$(sha256sum $SRC 2>/dev/null | cut -c1-16)"
 echo "fresh_out=$([ ! -e evidence/resume-$N ] && [ ! -e evidence/item6-database-resume-$N.dump ] && echo yes || echo no)"
 echo "fresh_backup=$([ ! -e evidence-pre-resume-$N ] && echo yes || echo no)"
 # The run-launch verifier refuses to run while evidence/ exists ("preserve prior run, do not retry"). So check the same pinned
@@ -64,7 +70,7 @@ PRE
 then die VPS-SSH "cannot ssh to ubuntu@$HOST" "Nothing changed." "ssh ubuntu@$HOST true"; fi
 PRE=$(cat "$TMPF"); g(){ printf '%s\n' "$PRE" | sed -n "s/^$1=//p" | head -1; }
 [ "$(g rundir)" = ok ] || die NO-RUNDIR "~/item6/runs/$NAME is not on the server" "Nothing changed." "ssh ubuntu@$HOST ls ~/item6/runs"
-[ "$(g blocked)" = yes ] && [ "$(g dump)" = yes ] || die NOT-STOPPED "the run has no blocked.json or no database dump on the server: it is not a stopped run this script can resume" "Nothing changed." "bash $HERE/item6-run.sh --resume $RUN status"
+[ "$(g blocked)" = yes ] && [ "$(g dump)" = yes ] && [ "$(g srcdump)" = yes ] || die NOT-STOPPED "the run has no blocked.json or no database dump on the server: it is not a stopped run this script can resume" "Nothing changed." "bash $HERE/item6-run.sh --resume $RUN status"
 [ "$(g fresh_out)" = yes ] && [ "$(g fresh_backup)" = yes ] || die ALREADY-RESUMED "resume $N already has output or a backup on the server" "Nothing was changed. Never overwritten." "ask me for resume number 2"
 [ "$(g verifier)" = ok ] || die VERIFIER "the compiled-config verifier (run on a copy without evidence) says: $(g verifier_msg)" "Do not run. Nothing was changed."
 [ "$(g container)" = 0 ] || die CONTAINER-EXISTS "container $CONT already exists: preserve it" "Nothing changed."
@@ -82,8 +88,8 @@ echo "== free dry check on the server (restores the dump into a throwaway databa
 set -eu
 cd ~/item6/runs/$NAME; umask 077
 D=$(ls -d private/runtime-* | head -1); [ "$(ls -d private/runtime-* | wc -l)" = 1 ]
-mkdir -p topup-webhook; chmod 700 topup-webhook
-[ -z "$(ls -A topup-webhook)" ] || { echo "topup-webhook is not empty"; exit 1; }
+if [ $N = 1 ]; then mkdir -p topup-webhook; chmod 700 topup-webhook; [ -z "$(ls -A topup-webhook)" ] || { echo "topup-webhook is not empty"; exit 1; }; fi
+if [ $N = 1 ]; then TOPMOUNT='--mount "type=bind,src=$HERE/topup-webhook,dst=/topup,readonly" -e ITEM6_WEBHOOK_DIR=/topup'; else TOPMOUNT=''; fi
 cat > run-resume.sh <<EOS
 #!/usr/bin/env bash
 # Resume $N of run $RID. Dry unless called as: run-resume.sh --go
@@ -92,13 +98,13 @@ HERE=\$PWD
 if [ "\${1:-}" = --go ]; then
   exec sudo -n docker run --name requi-item6-resume$N-$RID -it --memory=2800m --memory-swap=2800m --pids-limit=512 --read-only --cap-drop ALL --security-opt no-new-privileges \\
     --tmpfs /tmp:rw,nosuid,nodev,size=2g --mount "type=bind,src=\$HERE/$D,dst=/private,readonly" --mount "type=bind,src=\$HERE/evidence,dst=/evidence" \\
-    --mount "type=bind,src=\$HERE/topup-webhook,dst=/topup,readonly" -e ITEM6_WEBHOOK_DIR=/topup --entrypoint python requi-item6-test \\
-    /app/item6/resume_entry.py --config /private/run.json --run-id $RID --go $RID --ceiling-units 2000000000000
+    $TOPMOUNT --entrypoint python requi-item6-test \\
+    /app/item6/resume_entry.py --config /private/run.json --run-id $RID --resume-number $N --go $RID --ceiling-units 2000000000000
 fi
 exec sudo -n docker run --rm --memory=2800m --memory-swap=2800m --pids-limit=512 --network none --read-only --cap-drop ALL --security-opt no-new-privileges \\
     --tmpfs /tmp:rw,nosuid,nodev,size=2g --mount "type=bind,src=\$HERE/$D,dst=/private,readonly" --mount "type=bind,src=\$HERE/evidence,dst=/evidence,readonly" \\
-    --mount "type=bind,src=\$HERE/topup-webhook,dst=/topup,readonly" -e ITEM6_WEBHOOK_DIR=/topup --entrypoint python requi-item6-test \\
-    /app/item6/resume_entry.py --config /private/run.json --run-id $RID
+    $TOPMOUNT --entrypoint python requi-item6-test \\
+    /app/item6/resume_entry.py --config /private/run.json --run-id $RID --resume-number $N
 EOS
 bash -n run-resume.sh; chmod 700 run-resume.sh; echo "ok  run-resume.sh written (dry mounts evidence read-only, no network)"
 GEN
@@ -135,8 +141,13 @@ echo "THE PAID RESUME. Run id: $RID  (resume $N)"
 echo "  server: ubuntu@$HOST  run dir: ~/item6/runs/$NAME  tmux session: $SESS"
 echo "  Before anything is paid, in this order, each waiting for you:"
 echo "    1. a copy of the evidence is made on the server (evidence-pre-resume-$N); the original stays where it is"
+if [ $N = 1 ]; then
 echo "    2. the harness shows the two unknown items and asks: type yes to write them off (nothing is written before that)"
 echo "    3. one new SANDBOX top-up of the 12-credit pack (fake money): you click once in PayPal, nothing to type; the webhook is exported by a watcher"
+else
+echo "    2. the two unknown items were already written off by your typed yes in an earlier resume (audit records checked): nothing is written off again"
+echo "    3. the sandbox top-up is already paid and the balance is positive: no purchase, no PayPal click"
+fi
 echo "    4. only then the generator continues from its saved tests checkpoint (tests T-1..T-12 are kept; T-13 onward runs)"
 echo "  spend ceiling: USD $CEILING for the whole run. Already spent USD $SPENT plus USD $RESV reserved by the never-started call, so a balance watcher"
 echo "  stops the container at a further drop of USD $REMAIN from the current DeepSeek balance USD $B (SIGINT first so the database is archived, hard kill after 90s)."
@@ -165,8 +176,7 @@ cd "\$(dirname "\$0")"; umask 077
 TS=\$(date +%Y%m%dT%H%M%S)
 python3 watcher-resume.py "$CONT" "$CEILING" "$START" >> "resume-watch-\$TS.log" 2>&1 &
 W=\$!
-bash webhook-watch-topup.sh "$RID" "$CONT" >> "resume-webhook-watch-\$TS.log" 2>&1 &
-W2=\$!
+if [ $N = 1 ]; then bash webhook-watch-topup.sh "$RID" "$CONT" >> "resume-webhook-watch-\$TS.log" 2>&1 & W2=\$!; else W2=; fi
 script -qefc "bash run-resume.sh --go" "resume-console-\$TS.log"
 RC=\$?
 kill \$W \$W2 2>/dev/null || true

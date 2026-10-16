@@ -131,3 +131,51 @@ def test_discover_against_the_real_restored_run_database():
     from psycopg.rows import dict_row
     with psycopg.connect(os.environ['ITEM6_TEST_PG_DSN'],row_factory=dict_row) as c:facts=resume.discover(c)
     assert facts['settled_attempts']==174 and facts['attempt_state']=='reserved'
+
+
+def waived_conn(**over):
+    base=dict(provider_attempts=[attempt('settled',attempt_id='s'*32,job_id='J1'),attempt('failure_waived',attempt_id='r'*32)],
+        audit_log=[{'action':resume.ATTEMPT_ACTION},{'action':resume.RECONCILED_ACTION}],
+        retail_compute_segments=[{'state':'waived','deterministic_ms':None}],
+        credit_accounts=[{'owner_id':'o1','balance_units':11952700487,'units_per_credit':10**9}])
+    base.update(over);return conn(**base)
+
+
+def test_a_later_resume_sees_the_write_offs_as_already_done():
+    facts=resume.discover(waived_conn())
+    assert facts['already_written_off'] is True and facts['balance_units']==11952700487
+    assert any('ALREADY written off' in line for line in resume.review_lines(facts,'a'*64))
+    assert not resume.discover(conn())['already_written_off']
+
+
+@pytest.mark.parametrize('over,message',[
+ (dict(audit_log=[{'action':resume.ATTEMPT_ACTION}]),'audit record'),
+ (dict(audit_log=[]),'audit record'),
+ (dict(retail_compute_segments=[{'state':'unresolved','deterministic_ms':None}]),'waived'),
+ (dict(provider_attempts=[attempt('failure_waived',attempt_id='r'*32,job_id='J1')]),'failed needs job'),
+])
+def test_a_later_resume_refuses_an_unproven_write_off(over,message):
+    with pytest.raises(AdmissionDenied,match=message):resume.discover(waived_conn(**over))
+
+
+def test_resume_two_restores_the_resume_one_dump_and_never_reuses_resume_one_names(tmp_path,monkeypatch):
+    p=paths(tmp_path)
+    (tmp_path/'evidence'/'item6-database-resume-1.dump').write_bytes(b'y');(tmp_path/'evidence'/'resume-1').mkdir()
+    q=entry.plan_paths({'root':str(tmp_path/'evidence'/'run')},2)
+    assert q['dump'].name=='item6-database-resume-1.dump' and q['new_dump'].name=='item6-database-resume-2.dump' and q['output'].name=='resume-2'
+    monkeypatch.delenv('ITEM6_WEBHOOK_DIR',raising=False)
+    entry.preflight(cfg(),RID,q,data=tmp_path/'pg')   # no top-up folder needed
+    with pytest.raises(ValueError,match='already ran'):entry.preflight(cfg(),RID,entry.plan_paths({'root':str(tmp_path/'evidence'/'run')},1),data=tmp_path/'pg')
+
+
+def test_the_failure_message_names_the_file_and_the_code_location(tmp_path):
+    try:open(str(tmp_path/'nope.json'))
+    except OSError as error:text=entry.failure_text(error)
+    assert 'FileNotFoundError file '+str(tmp_path/'nope.json') in text and ' at ' in text and 'test_item6_resume.py' in text and 'no blind retry' in text
+
+
+def test_a_generator_resume_never_reads_the_semantic_review_file():
+    from pathlib import Path
+    src=(Path(__file__).resolve().parents[1]/'scripts'/'item6'/'recovery_continuation.py').read_text()
+    assert "review=None if generator_resume is not None else json.loads(" in src
+    assert src.count("semantic-review.json")==1

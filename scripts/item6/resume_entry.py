@@ -26,9 +26,11 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def plan_paths(config):
+def plan_paths(config,number=1):
+    """Resume N restores the dump of resume N-1 (resume 1 restores the stopped run's own dump) and writes new names."""
     root=Path(config['root']);parent=root.parent
-    return {'root':root,'dump':parent/'item6-database.dump','new_dump':parent/'item6-database-resume-1.dump','output':parent/'resume-1'}
+    source=parent/'item6-database.dump' if number==1 else parent/('item6-database-resume-%d.dump'%(number-1))
+    return {'root':root,'dump':source,'new_dump':parent/('item6-database-resume-%d.dump'%number),'output':parent/('resume-%d'%number),'number':number}
 
 
 def preflight(config,run_id,paths,*,data=DATA):
@@ -43,6 +45,7 @@ def preflight(config,run_id,paths,*,data=DATA):
     for name in ('new_dump','output'):
         if paths[name].exists() or paths[name].is_symlink():raise ValueError('this resume already ran: '+str(paths[name])+' exists; ask for a new resume number, never overwrite')
     if Path(data).exists():raise ValueError('new container database required')
+    if paths.get('number',1)>1:return   # a later resume never buys a top-up unless the balance is not positive, which is refused below
     given=os.environ.get('ITEM6_WEBHOOK_DIR','')
     folder=Path(given) if given else None
     if folder is None or str(folder).rstrip('/')=='/private' or not folder.is_dir() or any(folder.glob('webhook-*.json')):
@@ -86,10 +89,10 @@ def read_facts(dsn):
 def main(argv=None):
     os.umask(0o077)
     p=argparse.ArgumentParser();p.add_argument('--config',required=True,type=Path);p.add_argument('--run-id',required=True)
-    p.add_argument('--go');p.add_argument('--ceiling-units',type=int)
+    p.add_argument('--go');p.add_argument('--resume-number',type=int,default=1);p.add_argument('--ceiling-units',type=int)
     a=p.parse_args(argv)
     from mac_run import private_json
-    config=private_json(a.config);paths=plan_paths(config)
+    config=private_json(a.config);paths=plan_paths(config,a.resume_number)
     preflight(config,a.run_id,paths)
     if a.go is not None and (a.go!=a.run_id or a.ceiling_units!=2*10**12):raise ValueError('exact run go and the $2.00 ceiling are required')
     say('restoring the run database dump into a new throwaway database (no model call, no network)')
@@ -102,6 +105,7 @@ def main(argv=None):
         if a.go is None:
             for line in review_lines(facts,dump_sha):say(line)
             say('dry check passed; nothing was written. Balance is not positive, so a top-up purchase is needed before any paid step.' if facts['balance_units']<=0 else 'dry check passed; nothing was written.')
+            if facts['balance_units']<=0 and paths['number']>1:raise ValueError('a later resume needs a positive balance; the earlier top-up is missing')
             return
         go(config,a.run_id,paths,facts,dump_sha,a.ceiling_units)
     finally:
@@ -117,7 +121,7 @@ def go(config,run_id,paths,facts,dump_sha,ceiling_units):
     from psycopg.conninfo import make_conninfo
     from local_auth import DisposableSignup
     from mac_run import private_json
-    from recovery_resume import confirm,waive_attempt,waive_compute
+    from recovery_resume import confirm,waive_attempt,waive_compute,review_lines
     from recovery_topup import prepare_topup,finish_topup
     from recovery_continuation import execute_continuation
     from recovery_budget import RecoveryBudgetGateway
@@ -145,8 +149,11 @@ def go(config,run_id,paths,facts,dump_sha,ceiling_units):
     for name in ('admin_service','tenant_service','payment_service'):
         d=parse_loopback_service(Path(config['service_file']).read_text(),config[name])
         if d['database_name']!=config['database_name'] or d['host']!=config['database_host'] or d['port']!=int(PORT):raise ValueError('service destination differs from the restored run database')
-    # The operator's own typed answer is the only authority for the write-offs.
-    ref=confirm(facts,dump_sha,run_id)
+    # The operator's own typed answer is the only authority for the write-offs. A later resume finds them already written off.
+    if facts['already_written_off']:
+        for line in review_lines(facts,dump_sha):say(line)
+        ref=None
+    else:ref=confirm(facts,dump_sha,run_id)
     os.environ['PGSERVICEFILE']=config['service_file'];os.environ['DEEPSEEK_API_KEY']=secrets['deepseek_api_key']
     for key in list(os.environ):
         if key.startswith(('INTERVIEW_ENGINE_CATEGORIZER_','VMODEL_REPLAY','VMODEL_CAP_')) or key in ('VMODEL_LLM_MAX_TOKENS','VMODEL_TENANT_OWNER','INTERVIEW_ENGINE_TENANTS'):os.environ.pop(key,None)
@@ -159,10 +166,12 @@ def go(config,run_id,paths,facts,dump_sha,ceiling_units):
     if scope.owner_id!=facts['owner_id'] or scope.session_id!=facts['auth_session_id']:raise ValueError('restored identity differs from the stopped run')
     with tenant_context(scope):
         if store.auth_session_active() is not True:raise ValueError('active restored session required')
-        say('write-off 1 of 2: never-started provider call '+facts['attempt_id'])
-        say('result: '+json.dumps(waive_attempt(store,facts,authorization_ref=ref,dump_sha256=dump_sha),sort_keys=True,default=str))
-        say('write-off 2 of 2: unmeasured compute of the failed job')
-        say('result: '+json.dumps(waive_compute(store,facts,authorization_ref=ref,dump_sha256=dump_sha),sort_keys=True,default=str))
+        if ref is None:say('write-offs already done in an earlier resume: not repeated')
+        else:
+            say('write-off 1 of 2: never-started provider call '+facts['attempt_id'])
+            say('result: '+json.dumps(waive_attempt(store,facts,authorization_ref=ref,dump_sha256=dump_sha),sort_keys=True,default=str))
+            say('write-off 2 of 2: unmeasured compute of the failed job')
+            say('result: '+json.dumps(waive_compute(store,facts,authorization_ref=ref,dump_sha256=dump_sha),sort_keys=True,default=str))
     binding=PayPalBinding(config['verified_sandbox_merchant'],config['sandbox_webhook_id'],False)
     paypal_client,transport=sandbox_clients(inner=httpx.HTTPTransport(retries=0),client_id=secrets['client_id'],client_secret=secrets['client_secret'],binding=binding,verified_app_merchant=config['verified_sandbox_merchant'])
     balance_client=httpx.Client(transport=FixedOriginTransport(httpx.HTTPTransport(retries=0),'https://api.deepseek.com',lambda method,path:method=='GET' and path=='/user/balance'),trust_env=False,follow_redirects=False)
@@ -173,15 +182,19 @@ def go(config,run_id,paths,facts,dump_sha,ceiling_units):
                 row=c.execute('SELECT balance_units,units_per_credit FROM credit_accounts WHERE owner_id=%s',(scope.owner_id,)).fetchone()
             return {'balance_units':row[0],'units_per_credit':row[1]}
         processor=PayPalAdapter(transport,binding)
-        attended=Attended(paths['root'].parent,lambda:scope.owner_id)
-        review=prepare_topup(scope=scope,run_id=run_id,offer_id='credits-12',repository=repository,processor=processor,read_account=read_account)
-        say('top-up purchase '+review['purchase_id']+': balance before '+str(review['balance_before']))
-        attended.paypal(review['approval'])
-        waiter=SandboxPurchaseAdapter(type('Identity',(),{'scope':scope})(),repository=repository,processor=processor,approve=attended.paypal,webhook_receipt=attended.webhook,read_balance=lambda s:read_account(s)['balance_units'],units_per_credit=10**9)
-        waiter.await_approval(repository.get_purchase(review['purchase_id'])['order_id'])
-        topup=finish_topup(review=review,scope=scope,repository=repository,processor=processor,read_account=read_account,webhook_receipt=attended.webhook)
-        say('top-up done: balance after '+str(topup['balance_after']))
-        if topup['balance_after']<=0:raise ValueError('positive balance required before any paid step')
+        if facts['balance_units']>0:
+            say('credit balance is already positive ('+str(facts['balance_units'])+' units): no new top-up purchase')
+        elif paths['number']>1:raise ValueError('a later resume needs a positive balance; the earlier top-up is missing')
+        else:
+            attended=Attended(paths['root'].parent,lambda:scope.owner_id)
+            review=prepare_topup(scope=scope,run_id=run_id,offer_id='credits-12',repository=repository,processor=processor,read_account=read_account)
+            say('top-up purchase '+review['purchase_id']+': balance before '+str(review['balance_before']))
+            attended.paypal(review['approval'])
+            waiter=SandboxPurchaseAdapter(type('Identity',(),{'scope':scope})(),repository=repository,processor=processor,approve=attended.paypal,webhook_receipt=attended.webhook,read_balance=lambda s:read_account(s)['balance_units'],units_per_credit=10**9)
+            waiter.await_approval(repository.get_purchase(review['purchase_id'])['order_id'])
+            topup=finish_topup(review=review,scope=scope,repository=repository,processor=processor,read_account=read_account,webhook_receipt=attended.webhook)
+            say('top-up done: balance after '+str(topup['balance_after']))
+            if topup['balance_after']<=0:raise ValueError('positive balance required before any paid step')
         # The paid resume starts only after the top-up is confirmed. The ceiling counts all provider spend in this run.
         catalog=catalog_from_environment({'VMODEL_REVIEWED_MODEL_PRICES':json.dumps(prices)},bounders={('serialized','deepseek',config['model']):ReviewedContextCeiling(**context)})
         rates=rates_from_snapshot(prices[0]['retail_formula'])
@@ -228,7 +241,15 @@ def _resume_signup():
 def ResumeSignup(**kw):return _resume_signup()(**kw)
 
 
+def failure_text(error):
+    import traceback
+    where=' at '+' <- '.join('%s:%d %s'%(f.filename,f.lineno,f.name) for f in reversed(traceback.extract_tb(error.__traceback__)[-3:]))
+    # File and line names only: no exception text except for a missing or unreadable file (its path) and our own refusals.
+    detail=str(error)[:300] if isinstance(error,ValueError) else type(error).__name__+((' file '+str(error.filename)[:200]) if isinstance(error,OSError) and error.filename else '')
+    return 'Item6 resume stopped: '+detail+where+'. Evidence preserved; no blind retry.'
+
+
 if __name__=='__main__':
     try:main()
     except Exception as error:
-        print('Item6 resume stopped: '+(str(error)[:300] if isinstance(error,ValueError) else type(error).__name__)+'. Evidence preserved; no blind retry.',file=sys.stderr);raise SystemExit(1) from None
+        print(failure_text(error),file=sys.stderr);raise SystemExit(1) from None
