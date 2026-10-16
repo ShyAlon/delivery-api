@@ -11,7 +11,7 @@ def adapters(c):
     payloads={
         'identity':dict(subject=A,session_id=A,signature_verified=True,active_session=True,fresh_signup=True),
         'operator':dict(subject=A,registry_version='fixture-v1',explicit_grant=True,capabilities=['payments.read']),
-        'sandbox_purchase':dict(subject=A,purchase_id='fixture-purchase',payment_id='fixture-capture',merchant_id='fixture-merchant',sandbox=True,amount_minor=500,credit_units=5000,posted_count=1,signature_verified=True,balance_units=5000),
+        'sandbox_purchase':dict(subject=A,purchase_id='fixture-purchase',payment_id='fixture-capture',merchant_id='fixture-merchant',sandbox=True,amount_minor=1150,credit_units=12000,posted_count=1,signature_verified=True,balance_units=12000),
         'pipeline':dict(subject=A,task_id='fixture-task',session_id='fixture-engine',model_provider='deepseek',model='fixture-no-call',job_ids=['fixture-job'],canonical_validated=True,artifact_sha256={'spec/srs.json':'a'*64},all_stages_complete=True,usage_settled=True),
         'gate_edit':dict(task_id='fixture-task',owner_id=A,source_review_sha256='a'*64,fresh_review_sha256='b'*64,stale_rejected=True,same_phase_reapproval=True,source_preserved=True,installed_lineage_verified=True),
         'final_artifacts':dict(task_id='fixture-task',owner_id=A,session_id='fixture-engine',files_sha256={'spec/srs.json':'b'*64},download_verified=True,canonical_validated=True),

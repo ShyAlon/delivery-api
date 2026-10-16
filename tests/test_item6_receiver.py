@@ -50,6 +50,7 @@ def test_http_no_public_receipts_and_fixed_errors(tmp_path,capsys):
 def test_attended_raw_bytes(monkeypatch,tmp_path):
     from attended import Attended
     tmp_path.chmod(0o700);receipt=store(tmp_path,RAW,H);f=tmp_path/(receipt+'.json')
+    monkeypatch.setenv('ITEM6_WEBHOOK_DIR',str(tmp_path/'no-export'));monkeypatch.setenv('ITEM6_WEBHOOK_WAIT_SECONDS','0')  # typed-path fallback
     monkeypatch.setattr('builtins.input',lambda _:str(f))
     raw,headers=Attended(tmp_path,lambda:'owner').webhook();assert raw==RAW and headers==dict(H)
 

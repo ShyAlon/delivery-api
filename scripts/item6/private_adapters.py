@@ -53,7 +53,7 @@ class SandboxPurchaseAdapter:
     def __call__(self,isolation,previous):
         if self.processor.binding.live_mode is not False:raise ValueError('sandbox binding changed')
         scope=self.identity.scope
-        intent=purchase_intent(purchase_id='item6-'+isolation.run_id,owner_id=scope.owner_id,offer_id='credits-5',units_per_credit=self.scale)
+        intent=purchase_intent(purchase_id='item6-'+isolation.run_id,owner_id=scope.owner_id,offer_id='credits-12',units_per_credit=self.scale)
         # Account provisioning is explicit reviewed fixture setup. Never overwrite
         # a balance or try another purchase to hide an uncertain prior capture.
         if self.balance(scope)!=0:raise ValueError('fresh zero balance required before purchase')
@@ -68,7 +68,7 @@ class SandboxPurchaseAdapter:
         replay=service.capture(intent.purchase_id)
         row=self.repo.get_purchase(intent.purchase_id)
         if one!=two or replay.get('credit_posted') is not False:raise ValueError('payment replay did not remain once-only')
-        if not row['credit_posted'] or self.balance(scope)!=5*self.scale:raise ValueError('durable balance/posting mismatch')
+        if not row['credit_posted'] or self.balance(scope)!=12*self.scale:raise ValueError('durable balance/posting mismatch')
         return base(isolation,'sandbox_purchase')|{'subject':scope.owner_id,'purchase_id':intent.purchase_id,
             'payment_id':row['capture_id'],'merchant_id':self.processor.binding.merchant_id,'sandbox':True,
             'amount_minor':intent.amount_minor,'credit_units':intent.credit_units,'posted_count':1,
