@@ -27,3 +27,18 @@ def test_a_missing_approval_is_named_not_retried(monkeypatch):
     with pytest.raises(ValueError) as error:a.await_approval('ORDER1')
     assert error.value.safe_check=='order_status=CREATED'
     assert all(method=='GET' for method,_ in a.processor.transport.calls)
+
+
+
+def test_approval_wait_lines_carry_a_timestamp_with_zone_and_elapsed_time(monkeypatch,capsys):
+    import re,time
+    now=[0.0]
+    monkeypatch.setattr(time,'monotonic',lambda:now[0])
+    monkeypatch.setattr(time,'sleep',lambda seconds:now.__setitem__(0,now[0]+40))
+    monkeypatch.setenv('ITEM6_APPROVAL_POLL_SECONDS','0');monkeypatch.setenv('ITEM6_APPROVAL_WAIT_SECONDS','900')
+    a=adapter(['CREATED','CREATED','CREATED','APPROVED'])
+    assert a.await_approval('ORDER1')=='APPROVED'
+    lines=[l for l in capsys.readouterr().out.splitlines() if l]
+    assert len(lines)>=2
+    assert all(re.match(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d \| paypal\.waiting \| ',l) for l in lines)
+    assert any('elapsed 0m' in l or 'elapsed 1m' in l for l in lines[1:])

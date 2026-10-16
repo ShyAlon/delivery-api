@@ -58,18 +58,20 @@ class SandboxPurchaseAdapter:
     def await_approval(self,order_id):
         """Read-only wait until PayPal reports the buyer approved this order, then the capture runs by itself.
         No typed confirmation: PayPal's own order status is the evidence. Bounded; a miss is named, never retried blindly."""
-        import os,time
+        import datetime,os,time
         transport=getattr(self.processor,'transport',None)
+        stamp=lambda:datetime.datetime.now().astimezone().isoformat(timespec='seconds')
         if transport is None:return 'no-transport'
         wait=float(os.environ.get('ITEM6_APPROVAL_WAIT_SECONDS','900'));poll=float(os.environ.get('ITEM6_APPROVAL_POLL_SECONDS','5'))
-        deadline=time.monotonic()+wait;status=None;last=0.0
-        print('Waiting for PayPal to record your sandbox approval (read-only checks; no typing needed)...',flush=True)
+        start=time.monotonic();deadline=start+wait;status=None;last=0.0
+        print(f'{stamp()} | paypal.waiting | waiting up to {int(wait//60)}m{int(wait%60):02d}s for PayPal to record your sandbox approval (read-only checks; no typing needed)',flush=True)
         while True:
             status=transport.request('GET','/v2/checkout/orders/'+order_id).get('status')
             if status in ('APPROVED','COMPLETED'):return status
             if time.monotonic()>=deadline:break
             if time.monotonic()-last>=30:
-                print('  PayPal order status: '+str(status)+' - finish the approval in your sandbox buyer window',flush=True);last=time.monotonic()
+                spent=int(time.monotonic()-start)
+                print(f'{stamp()} | paypal.waiting | elapsed {spent//60}m{spent%60:02d}s | PayPal order status: {status} - finish the approval in your sandbox buyer window',flush=True);last=time.monotonic()
             time.sleep(poll)
         raise blocked('order_status='+str(status)[:30],'PayPal never recorded the sandbox approval within the wait')
 
