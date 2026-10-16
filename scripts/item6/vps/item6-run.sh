@@ -8,6 +8,9 @@ DELIVERY=${DELIVERY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}
 UBU=(ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes ubuntu@$HOST)
 abort(){ echo; echo "ABORTED [$1]: $2"; echo "${3:-Nothing was changed on the server.}"; exit 1; }
 gate(){ :; }   # the single yes is asked once, below
+# Archives made on a Mac carry extended attributes (com.apple.provenance) that the server's GNU tar warns about on every extract.
+# Leave them out at the source when this tar supports it (bsdtar --no-xattrs), and never add AppleDouble files.
+mactar(){ if COPYFILE_DISABLE=1 tar --no-xattrs -cf /dev/null /dev/null 2>/dev/null; then COPYFILE_DISABLE=1 tar --no-xattrs "$@"; else COPYFILE_DISABLE=1 tar "$@"; fi; }
 STATE=$(mktemp -d); trap 'rm -rf "$STATE"' EXIT
 stage_build(){
 PARENT=$(cd "$DELIVERY/.." && pwd); TS=$(date +%Y%m%d%H%M%S); PKG=$PARENT/item6-package-$TS
@@ -59,7 +62,7 @@ if ! OUT=$(cd "$DELIVERY" && "$PY" scripts/item6/prepare-package.py --delivery "
 fi
 echo "$OUT" | tail -3; echo "source revisions:"; python3 -c "import json,sys;m=json.load(open('$PKG/source-manifest.json'));[print('  ',k,v['revision'][:12]) for k,v in m.items() if 'revision' in v]"
 echo "== upload"
-COPYFILE_DISABLE=1 tar czf - -C "$PKG" . | "${UBU[@]}" "umask 077; mkdir -p ~/item6 && mkdir ~/item6/pkg-$TS && tar xzf - -C ~/item6/pkg-$TS && chmod -R u+rwX,go+rX ~/item6/pkg-$TS" || abort UPLOAD "upload failed" "Remote ~/item6/pkg-$TS may be partial; nothing else changed."
+mactar -czf - -C "$PKG" . | "${UBU[@]}" "umask 077; mkdir -p ~/item6 && mkdir ~/item6/pkg-$TS && tar xzf - -C ~/item6/pkg-$TS && chmod -R u+rwX,go+rX ~/item6/pkg-$TS" || abort UPLOAD "upload failed" "Remote ~/item6/pkg-$TS may be partial; nothing else changed."
 L=$(shasum -a 256 "$PKG/source-manifest.json" | cut -d' ' -f1); W=$(shasum -a 256 "$PKG/wheel-sha256.txt" | cut -d' ' -f1)
 R=$("${UBU[@]}" "cd ~/item6/pkg-$TS && sha256sum source-manifest.json wheel-sha256.txt | cut -d' ' -f1 | tr '\n' ' '")
 [ "$R" = "$L $W " ] || abort UPLOAD-HASH "uploaded manifest/wheel list differ from the local package" "Do not build. Tell me."
@@ -177,7 +180,7 @@ It contains private/.env and the runtime credentials (PayPal sandbox app keys an
 and stays there until you delete it. Then: create run-vps.sh, run the harness DRY preflight (no network, no database, no payment,
 no model call), and remove only that exited dry container. The real run needs a separate step and your exact go."
 echo "== upload"
-COPYFILE_DISABLE=1 tar cf - -C "$(dirname "$RUN")" "$NAME" | "${UBU[@]}" "umask 077; mkdir -p ~/item6/runs && tar xpf - -C ~/item6/runs" || abort UPLOAD "upload failed" "~/item6/runs/$NAME may be partial on the server: it is not used; tell me before deleting it."
+mactar -cf - -C "$(dirname "$RUN")" "$NAME" | "${UBU[@]}" "umask 077; mkdir -p ~/item6/runs && tar xpf - -C ~/item6/runs" || abort UPLOAD "upload failed" "~/item6/runs/$NAME may be partial on the server: it is not used; tell me before deleting it."
 echo "== verify byte-for-byte"
 (cd "$RUN" && find . -type f | sort | while IFS= read -r f; do shasum -a 256 "$f"; done) > "$TMPF.l"
 "${UBU[@]}" "cd ~/item6/runs/$NAME && find . -type f | sort | while IFS= read -r f; do sha256sum \"\$f\"; done" > "$TMPF.r" || abort VERIFY-REMOTE "could not hash the uploaded files"
