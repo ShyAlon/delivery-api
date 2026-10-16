@@ -27,15 +27,23 @@ def discover(c):
     held=[a for a in attempts if a['state']!='settled']
     if len(held)!=1:raise AdmissionDenied('exactly one unsettled provider attempt required, found %d'%len(held))
     a=held[0]
-    if a['state']!='reserved' or a['provider_started_at'] is not None or a['job_id']!=needs['job_id']:
+    waived=a['state']=='failure_waived'
+    if waived:
+        # A later resume of a run whose write-offs an earlier resume already made (typed yes) and recorded in the audit log.
+        if a['job_id']!=needs['job_id']:raise AdmissionDenied('the written-off attempt must belong to the failed needs job')
+        done=c.execute("SELECT action FROM audit_log WHERE detail::text LIKE %s AND action IN (%s,%s)",('%'+a['attempt_id']+'%',ATTEMPT_ACTION,RECONCILED_ACTION)).fetchall()
+        if {r['action'] for r in done}!={ATTEMPT_ACTION,RECONCILED_ACTION}:raise AdmissionDenied('the written-off attempt has no complete audit record')
+    elif a['state']!='reserved' or a['provider_started_at'] is not None or a['job_id']!=needs['job_id']:
         raise AdmissionDenied('the unsettled attempt must be a never-started reservation of the failed needs job')
     if any(a.get(k) is not None for k in MEASURED):raise AdmissionDenied('the unsettled attempt already has usage or settlement data')
     if c.execute('SELECT 1 FROM credit_charges WHERE attempt_id=%s',(a['attempt_id'],)).fetchone():raise AdmissionDenied('unexpected prepaid charge for the never-started attempt')
     if c.execute('SELECT 1 FROM retail_contributions WHERE contribution_key=%s',('attempt:'+a['attempt_id'],)).fetchone():raise AdmissionDenied('unexpected token contribution for the never-started attempt')
-    if c.execute("SELECT 1 FROM audit_log WHERE detail::text LIKE %s AND action IN (%s,%s)",('%'+a['attempt_id']+'%',ATTEMPT_ACTION,RECONCILED_ACTION)).fetchone():raise AdmissionDenied('this attempt already has a write-off audit')
+    if not waived and c.execute("SELECT 1 FROM audit_log WHERE detail::text LIKE %s AND action IN (%s,%s)",('%'+a['attempt_id']+'%',ATTEMPT_ACTION,RECONCILED_ACTION)).fetchone():raise AdmissionDenied('this attempt already has a write-off audit')
     key=needs['job_id']+':compute'
     seg=c.execute('SELECT state,deterministic_ms FROM retail_compute_segments WHERE segment_key=%s AND job_id=%s',(key,needs['job_id'])).fetchone()
-    if not seg or seg['state']!='unresolved' or seg['deterministic_ms'] is not None:raise AdmissionDenied('the failed job needs an unresolved, unmeasured compute segment')
+    if waived:
+        if not seg or seg['state']!='waived':raise AdmissionDenied('the written-off run needs its compute segment waived')
+    elif not seg or seg['state']!='unresolved' or seg['deterministic_ms'] is not None:raise AdmissionDenied('the failed job needs an unresolved, unmeasured compute segment')
     others=c.execute("SELECT 1 FROM retail_compute_segments WHERE job_id<>%s AND state IN ('pending','unresolved') LIMIT 1",(needs['job_id'],)).fetchone()
     if others:raise AdmissionDenied('another compute segment is unresolved')
     accounts=c.execute('SELECT owner_id,balance_units,units_per_credit FROM credit_accounts').fetchall()
@@ -45,7 +53,7 @@ def discover(c):
         'failed_job_session_id':str(needs['session_id']),'auth_session_id':str(needs['auth_session_id']),
         'attempt_id':a['attempt_id'],'attempt_state':a['state'],'expense_reserved':a['expense_reserved'],'retail_reserved':a['retail_reserved'],
         'compute_key':key,'settled_attempts':len(settled),'settled_expense_units':sum(x['expense_actual'] for x in settled),
-        'balance_units':accounts[0]['balance_units'],'units_per_credit':accounts[0]['units_per_credit']}
+        'balance_units':accounts[0]['balance_units'],'units_per_credit':accounts[0]['units_per_credit'],'already_written_off':waived}
 
 
 def facts_sha256(facts):
@@ -54,6 +62,17 @@ def facts_sha256(facts):
 
 def review_lines(facts,dump_sha256):
     usd=lambda units:'%.4f'%(units/10**12)
+    if facts.get('already_written_off'):
+        return ['Stopped run, restored from the database dump of an earlier resume (read only so far):',
+        '  task '+facts['task_id']+', failed job '+facts['failed_job']+' (phase:needs)',
+        '  settled provider calls: %d, confirmed provider spend $%s'%(facts['settled_attempts'],usd(facts['settled_expense_units'])),
+        '  credit balance: %.9f credits'%(facts['balance_units']/facts['units_per_credit']),
+        'Both unknown items were ALREADY written off by you in an earlier resume (audit records present); nothing is written off again:',
+        '  1. provider call '+facts['attempt_id']+': never started, billed 0.',
+        '     Its reservation of $%s stays counted against the spend ceiling.'%usd(facts['expense_reserved']),
+        '  2. unmeasured compute time of the failed job ('+facts['compute_key']+'): billed 0.',
+        'Database dump sha256: '+dump_sha256,
+        'Facts sha256: '+facts_sha256(facts)]
     return ['Stopped run, restored from its own database dump (read only so far):',
         '  task '+facts['task_id']+', failed job '+facts['failed_job']+' (phase:needs)',
         '  settled provider calls: %d, confirmed provider spend $%s'%(facts['settled_attempts'],usd(facts['settled_expense_units'])),

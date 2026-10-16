@@ -85,7 +85,8 @@ def execute_continuation(*,store,scope,root,config,run_id,prior_job,task_id,outp
         if not task:raise ValueError('original owned task required')
         cap=WorkerCapability.capture(store,task_id);cap.validate(store)
         session=session_root(Path(root),scope,cap.session_id)
-        review=json.loads((session/'interview/semantic-review.json').read_text())
+        # Only the older edit-resume path uses the semantic review; a generator resume never has one.
+        review=None if generator_resume is not None else json.loads((session/'interview/semantic-review.json').read_text())
         pipeline=pipeline_factory(attended)
         receipt=continuation_pipeline_receipt(isolation,pipeline,store,scope,task,prior_job,review,original_failed_jobs=original_failed_jobs,pending_review=pending_review,generator_resume=generator_resume)
         RunIsolation.write(output/'pipeline.json',receipt)
