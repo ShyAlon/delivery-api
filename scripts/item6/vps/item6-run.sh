@@ -350,7 +350,7 @@ PY
   echo "  spend ceiling: USD $CEILING of DeepSeek balance (run + one retry). A watcher on the server polls the real balance every 30s from the"
   echo "  start balance USD $B and stops the container (SIGINT first so the DB dump is archived, hard kill after 90s) at a drop of USD $CEILING."
   echo "  Calls in flight can overshoot slightly, and balance updates can lag. The harness has its own admission/balance checks as well."
-  echo "  You will be asked at the terminal: interview answers, accept/regenerate decisions, the cost approvals, and 'SANDBOX APPROVED' after your one PayPal sandbox click. The webhook file is exported by a watcher on the server. No auto answers."
+  echo "  You will be asked at the terminal: interview answers, accept/regenerate decisions, the cost approvals, and nothing else: after your one PayPal sandbox click the run continues by itself when PayPal records the approval. The webhook file is exported by a watcher on the server. No auto answers."
   echo "  If the connection drops: bash item6-run.sh --resume $RUN attach"
   echo "============================================================"
   read -r -p "To start, type exactly:  GO $RID CEILING $CEILING   > " PHRASE
@@ -452,7 +452,7 @@ This one command will, in order:
   2. create a NEW run directory on this Mac with a new run id, copy your sandbox PayPal and DeepSeek values from the previous run, fetch the public price pages
   3. upload it to the server and run the dry preflight (no network, no payment, no model call)
   4. (the reviewed values print in step 2) then ask for the paid-run phrase: GO <run id> CEILING 2.00  (that typed phrase is the approval)
-  5. start the interview in tmux: you answer content questions (interview answers, accept or regenerate decisions), click PayPal sandbox once and type SANDBOX APPROVED; the webhook file is handled automatically
+  5. start the interview in tmux: you answer content questions (interview answers, accept or regenerate decisions), click PayPal sandbox once (nothing to type, the run waits for PayPal's approval); the webhook file is handled automatically
   6. copy the evidence back to this Mac when it ends
 Costs: DeepSeek spend capped at USD 2.00 by a balance watcher; PayPal sandbox only (12-credit pack, fake money)."
 read -r -p "Type yes (English keyboard) to begin steps 1-3, anything else aborts with no change: " A
