@@ -38,7 +38,13 @@ echo "dump=$([ -s evidence/item6-database.dump ] && echo yes || echo no)"
 echo "dumpsha=$(sha256sum evidence/item6-database.dump 2>/dev/null | cut -c1-16)"
 echo "fresh_out=$([ ! -e evidence/resume-$N ] && [ ! -e evidence/item6-database-resume-$N.dump ] && echo yes || echo no)"
 echo "fresh_backup=$([ ! -e evidence-pre-resume-$N ] && echo yes || echo no)"
-echo "verifier=$(python3 private/verify-*.py . >/dev/null 2>&1 && echo ok || echo FAIL)"
+# The run-launch verifier refuses to run while evidence/ exists ("preserve prior run, do not retry"). So check the same pinned
+# files on a copy of the run directory WITHOUT evidence or this resume's own files. Same hashes, no evidence guard.
+VT=$(mktemp -d ~/item6/vtmp.XXXXXX); chmod 700 $VT
+find . -maxdepth 1 -mindepth 1 ! -name 'evidence*' ! -name 'topup-webhook' ! -name 'manifest-*' ! -name 'resume-*' ! -name '*.log' ! -name 'go-*' ! -name 'watcher*' ! -name 'webhook-watch*' ! -name 'run-resume.sh' -exec cp -a {} $VT/ \;
+vout=$(cd $VT && python3 private/verify-*.py . 2>&1); vrc=$?; rm -rf $VT
+echo "verifier=$([ $vrc = 0 ] && echo ok || echo FAIL)"
+echo "verifier_msg=$(printf '%s' "$vout" | head -3 | tr '\n' ' ' | cut -c1-300)"
 echo "container=$(sudo -n docker ps -a --format '{{.Names}}' | grep -c "^$CONT\$" || true)"
 echo "session=$(tmux ls 2>/dev/null | grep -c "^$SESS" || true)"
 echo "tmux=$(command -v tmux >/dev/null && echo yes || echo no)"
@@ -59,7 +65,7 @@ PRE=$(cat "$TMPF"); g(){ printf '%s\n' "$PRE" | sed -n "s/^$1=//p" | head -1; }
 [ "$(g rundir)" = ok ] || die NO-RUNDIR "~/item6/runs/$NAME is not on the server" "Nothing changed." "ssh ubuntu@$HOST ls ~/item6/runs"
 [ "$(g blocked)" = yes ] && [ "$(g dump)" = yes ] || die NOT-STOPPED "the run has no blocked.json or no database dump on the server: it is not a stopped run this script can resume" "Nothing changed." "bash $HERE/item6-run.sh --resume $RUN status"
 [ "$(g fresh_out)" = yes ] && [ "$(g fresh_backup)" = yes ] || die ALREADY-RESUMED "resume $N already has output or a backup on the server" "Nothing was changed. Never overwritten." "ask me for resume number 2"
-[ "$(g verifier)" = ok ] || die VERIFIER "the compiled-config verifier fails on the server: files changed" "Do not run."
+[ "$(g verifier)" = ok ] || die VERIFIER "the compiled-config verifier (run on a copy without evidence) says: $(g verifier_msg)" "Do not run. Nothing was changed."
 [ "$(g container)" = 0 ] || die CONTAINER-EXISTS "container $CONT already exists: preserve it" "Nothing changed."
 [ "$(g session)" = 0 ] || die SESSION-EXISTS "tmux session $SESS already exists" "Nothing changed." "bash $HERE/item6-resume.sh is not needed: attach with  ssh -t ubuntu@$HOST tmux attach -t $SESS"
 [ "$(g tmux)" = yes ] && [ "$(g dockerinfo)" = yes ] && [ "$(g uid)" = 1000 ] || die VPS-ENV "tmux, docker or the uid-1000 user is missing on the server"

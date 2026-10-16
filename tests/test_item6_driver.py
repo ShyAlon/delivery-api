@@ -34,3 +34,9 @@ def test_resume_driver_is_valid_bash_and_keeps_guards():
 
 def test_run_driver_can_be_sourced_without_running():
     assert 'ITEM6_RUN_LIB' in DRIVER.read_text()
+
+
+def test_resume_checks_the_compiled_config_on_a_copy_without_evidence_and_shows_the_real_message():
+    text = RESUME.read_text()
+    assert "! -name 'evidence*'" in text
+    assert 'verifier_msg' in text and 'verify-*.py . >/dev/null' not in text
