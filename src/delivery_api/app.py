@@ -364,6 +364,8 @@ async def _resume_one_interview(task_id:str,session:str)->None:
 async def lifespan(application:FastAPI):
     global _previous_sigint
     config.validate_auth_config()
+    from . import cloud_execution
+    cloud_execution.log_status()
     from .observability import LOG_PATH,stage_log_paths
     print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
@@ -2511,7 +2513,7 @@ def download_final_package(task_id:str,package_id:str,generation:int,a:auth.Acto
 @app.get('/api/worker-jobs/recovery')
 def recoverable_worker_jobs(a:auth.Actor=Depends(auth.require_actor)):
     if not config.CLOUD_TENANTS:raise HTTPException(404,'cloud worker recovery unavailable')
-    return {'jobs':store.recoverable_worker_jobs(),'execution_enabled':False,
+    return {'jobs':store.recoverable_worker_jobs(),'execution_enabled':cloud_execution_admitted(),
             'reason':'Admission and full cloud lifecycle tests pending'}
 
 class WorkerResumeRequest(BaseModel):
@@ -2535,9 +2537,10 @@ async def resume_cloud_worker(task_id:str,body:WorkerResumeRequest,a:auth.Actor=
 
 
 def cloud_execution_admitted()->bool:
+    """Closed unless the operator opened it (DELIVERY_CLOUD_EXECUTION=1) and every startup check passes; see cloud_execution."""
     if control_plane_only():return False
-    """Closed until rate/spend admission and the full lifecycle chain pass."""
-    return False
+    from . import cloud_execution
+    return cloud_execution.admitted()
 
 
 @app.get('/api/admin/operations/orphaned-tasks')
