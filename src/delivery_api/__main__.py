@@ -1,3 +1,6 @@
+"""Command line entry: serves the web UI and the server APIs on one uvicorn listener (python -m delivery_api)."""
+
+
 def main():
     import os
     import uvicorn
