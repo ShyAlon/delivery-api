@@ -53,7 +53,7 @@ def test_resume_driver_numbers_its_resumes_and_skips_top_up_after_the_first():
     text = RESUME.read_text()
     assert '--resume-number $N' in text and 'item6-database-resume-$((N-1)).dump' in text
     assert 'if [ $N = 1 ]; then TOPMOUNT=' in text and 'if [ $N = 1 ]; then bash webhook-watch-topup.sh' in text
-    assert 'grep -q -e resume-number /app/item6/resume_entry.py' in text and 'VENDOR_CHECK_MAX_AGE_MINUTES /app/item6/vendor_config.py' in text
+    assert 'imgcheck()' in text and 'sha256sum *.py | sort' in text and 'shasum -a 256 *.py | sort' in text and 'grep -q -e resume-number' not in text
 
 
 def test_resume_driver_runs_the_free_source_check_with_network_before_the_balance_and_go():
