@@ -7,19 +7,6 @@ from delivery_api.same_host_producer import SameHostProducerWorker
 from delivery_api.phases import PHASE_DEFINITIONS
 
 
-def require_approved_srs(task):
-    """Read canonical store phase rows, fail before enqueue/compute/provider work."""
-    phases=task.get('phases') if isinstance(task,dict) else None
-    if not isinstance(phases,list) or any(not isinstance(p,dict) or not isinstance(p.get('phase_key'),str) for p in phases):
-        raise ValueError('canonical durable phase_key rows required')
-    keys=[p['phase_key'] for p in phases]
-    if len(keys)!=len(set(keys)):
-        raise ValueError('duplicate durable phase keys')
-    srs=[p for p in phases if p['phase_key']=='srs']
-    if len(srs)!=1 or srs[0].get('state')!='approved':
-        raise ValueError('preceding durable SRS approval required')
-
-
 class PrivatePipeline:
     def __init__(self,*,store,artifacts_base,model,gateway_factory,generator_clients,
                  interview_clients,answer_input,review_gate,progress):
