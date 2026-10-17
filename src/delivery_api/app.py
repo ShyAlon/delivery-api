@@ -36,7 +36,7 @@ from . import auth
 from .jobs import JobQueue
 from .runner import ProcessRunner
 from .orchestrator import PhaseOrchestrator,ExecutionMode
-from .engine_runtime import EngineRuntimeError, resolve_engine_runtime, discover_engine_runtimes, save_python, saved_python
+from .engine_runtime import discover_engine_runtimes, save_python, saved_python
 from .engine_client import HttpEngineClient,EngineClientError,EngineUnreachableError,QualityConfigRejected
 from vmodel_contracts.interactive import InputKind,InputRequest,InputResponse,ProcessStatus,StartSessionRequest,EngineSnapshot,ModelRouteSwitchRequest
 from .store import create_store

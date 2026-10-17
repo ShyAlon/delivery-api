@@ -1,8 +1,7 @@
 """Test-only acceptance boundaries. Not imported or mounted by application code."""
 from dataclasses import dataclass
 from pathlib import Path
-import hashlib,json,os,re
-from urllib.parse import urlsplit
+import json,os,re
 
 
 @dataclass(frozen=True)

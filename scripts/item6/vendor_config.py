@@ -1,7 +1,5 @@
 """Generated snapshot compiler. No founder copies vendor price/band fields."""
 import datetime,hashlib,json,time,urllib.error
-from pathlib import Path
-from decimal import Decimal
 from isolation import RunIsolation
 from model_data import parse,fetch,PRICING_URL,API_URL
 from delivery_api.provider_snapshot import ProviderSnapshot

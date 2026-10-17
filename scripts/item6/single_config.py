@@ -6,7 +6,7 @@ Review records exact source bytes privately; prints only non-secret values.
 from decimal import Decimal
 from pathlib import Path
 import configparser,hashlib,json,os,re,uuid
-from isolation import RunIsolation,parse_loopback_service,safe_model_route
+from isolation import RunIsolation,parse_loopback_service
 
 SECRET={'PAYPAL_CLIENT_ID','PAYPAL_CLIENT_SECRET','DEEPSEEK_API_KEY'}
 FIELDS=SECRET|{'MODEL','SANDBOX_MERCHANT_ID','SANDBOX_WEBHOOK_ID','PRICE_SOURCE','CONTEXT_SOURCE','PRICING_BAND',

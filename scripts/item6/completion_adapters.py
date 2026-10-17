@@ -64,7 +64,6 @@ class FinalArtifactsAdapter:
 class RecoveryAdapter:
     def __init__(self,identity,*,store,read_evidence):self.identity=identity;self.store=store;self.evidence=read_evidence
     def __call__(self,isolation,previous):
-        from spec_generator.stop_fence import StopFence
         scope=self.identity.scope;tid=previous['pipeline']['task_id']
         with tenant_context(scope):
             task=self.store.task(tid)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Dry-default isolated Linux-on-Mac acceptance entry point. No public app import."""
-import argparse,datetime,hashlib,json,os,sys,uuid
+import argparse,datetime,json,os,sys
 from pathlib import Path
 
 
@@ -60,7 +60,6 @@ def main():
     from delivery_api.payment_repository import PaymentRepository
     from delivery_api.producer_admission import WorkerAdmissionGateway
     from delivery_api.deepseek_usage import settlement_usage
-    from delivery_api.tenancy import tenant_context
     from network_boundaries import sandbox_clients,deepseek_client_factory
     from pipeline_executor import PrivatePipeline
     from revision_executor import PrivateGateEdit
@@ -134,6 +133,5 @@ def main():
 if __name__=='__main__':
     try:main()
     except Exception as error:
-        from delivery_api.attempt_ledger import AdmissionDenied
         print('Item6 stopped. Preserve private local evidence. No blind retry, launch, or cleanup.',file=sys.stderr)
         raise SystemExit(1) from None

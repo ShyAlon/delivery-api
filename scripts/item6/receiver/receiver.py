@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Passive sandbox webhook evidence spool. Never verifies, posts credits or logs payloads."""
-import argparse,base64,hashlib,http.server,ipaddress,json,os,re,socket,stat,sys,threading,time,uuid
+import argparse,base64,hashlib,http.server,json,os,re,stat,sys,threading,time,uuid
 from pathlib import Path
 
 HEADERS=('paypal-auth-algo','paypal-cert-url','paypal-transmission-id','paypal-transmission-sig','paypal-transmission-time')
