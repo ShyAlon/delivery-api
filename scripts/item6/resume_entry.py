@@ -121,7 +121,7 @@ def go(config,run_id,paths,facts,dump_sha,ceiling_units):
     from psycopg.conninfo import make_conninfo
     from local_auth import DisposableSignup
     from mac_run import private_json
-    from recovery_resume import confirm,waive_attempt,waive_compute,review_lines
+    from recovery_resume import confirm,confirm_extra,waive_extra_compute,waive_attempt,waive_compute,review_lines
     from recovery_topup import prepare_topup,finish_topup
     from recovery_continuation import execute_continuation
     from recovery_budget import RecoveryBudgetGateway
@@ -153,7 +153,8 @@ def go(config,run_id,paths,facts,dump_sha,ceiling_units):
     if facts['already_written_off']:
         for line in review_lines(facts,dump_sha):say(line)
         ref=None
-    else:ref=confirm(facts,dump_sha,run_id)
+        extra_ref=confirm_extra(facts,dump_sha,run_id) if facts['extra_compute'] else None
+    else:ref=confirm(facts,dump_sha,run_id);extra_ref=None
     os.environ['PGSERVICEFILE']=config['service_file'];os.environ['DEEPSEEK_API_KEY']=secrets['deepseek_api_key']
     for key in list(os.environ):
         if key.startswith(('INTERVIEW_ENGINE_CATEGORIZER_','VMODEL_REPLAY','VMODEL_CAP_')) or key in ('VMODEL_LLM_MAX_TOKENS','VMODEL_TENANT_OWNER','INTERVIEW_ENGINE_TENANTS'):os.environ.pop(key,None)
@@ -172,6 +173,9 @@ def go(config,run_id,paths,facts,dump_sha,ceiling_units):
             say('result: '+json.dumps(waive_attempt(store,facts,authorization_ref=ref,dump_sha256=dump_sha),sort_keys=True,default=str))
             say('write-off 2 of 2: unmeasured compute of the failed job')
             say('result: '+json.dumps(waive_compute(store,facts,authorization_ref=ref,dump_sha256=dump_sha),sort_keys=True,default=str))
+        for item in facts['extra_compute'] if extra_ref else []:
+            say('write-off of unmeasured compute of earlier failed resume job '+item['job_id']+' ('+item['segment_key']+')')
+            say('result: '+json.dumps(waive_extra_compute(store,item,authorization_ref=extra_ref,dump_sha256=dump_sha),sort_keys=True,default=str))
     binding=PayPalBinding(config['verified_sandbox_merchant'],config['sandbox_webhook_id'],False)
     paypal_client,transport=sandbox_clients(inner=httpx.HTTPTransport(retries=0),client_id=secrets['client_id'],client_secret=secrets['client_secret'],binding=binding,verified_app_merchant=config['verified_sandbox_merchant'])
     balance_client=httpx.Client(transport=FixedOriginTransport(httpx.HTTPTransport(retries=0),'https://api.deepseek.com',lambda method,path:method=='GET' and path=='/user/balance'),trust_env=False,follow_redirects=False)

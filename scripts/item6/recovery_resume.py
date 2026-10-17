@@ -51,8 +51,17 @@ def discover(c):
     if waived:
         if not seg or seg['state']!='waived':raise AdmissionDenied('the written-off run needs its compute segment waived')
     elif not seg or seg['state']!='unresolved' or seg['deterministic_ms'] is not None:raise AdmissionDenied('the failed job needs an unresolved, unmeasured compute segment')
-    others=c.execute("SELECT 1 FROM retail_compute_segments WHERE job_id<>%s AND state IN ('pending','unresolved') LIMIT 1",(needs['job_id'],)).fetchone()
-    if others:raise AdmissionDenied('another compute segment is unresolved (an earlier failed resume job may need its own typed write-off)')
+    extras=[j['job_id'] for j in by_kind['phase:needs'] if j is not needs]
+    extra_compute=[]
+    if extras:
+        if c.execute('SELECT 1 FROM retail_contributions WHERE job_id=ANY(%s) LIMIT 1',(extras,)).fetchone():raise AdmissionDenied('an extra failed needs job has retail contributions and needs its own review')
+        for r in c.execute('SELECT segment_key,job_id,state,deterministic_ms,started_at FROM retail_compute_segments WHERE job_id=ANY(%s)',(extras,)).fetchall():
+            if r.get('job_id') not in extras:continue
+            if r['state']=='unresolved' and r['deterministic_ms'] is None:extra_compute.append({'job_id':r['job_id'],'segment_key':r['segment_key'],'started_at':float(r['started_at'])})
+            elif r['state'] not in ('waived','settled'):raise AdmissionDenied('extra failed needs job '+r['job_id']+' has a compute segment in state '+r['state']+' that cannot be written off')
+        if extra_compute and not waived:raise AdmissionDenied('the original write-offs must be done first; an extra failed job also has unmeasured compute')
+    others=c.execute("SELECT 1 FROM retail_compute_segments WHERE job_id<>ALL(%s) AND state IN ('pending','unresolved') LIMIT 1",([needs['job_id']]+extras,)).fetchone()
+    if others:raise AdmissionDenied('another compute segment is unresolved')
     accounts=c.execute('SELECT owner_id,balance_units,units_per_credit FROM credit_accounts').fetchall()
     if len(accounts)!=1 or accounts[0]['units_per_credit']!=10**9:raise AdmissionDenied('one prepaid account at the 1000000000 scale required')
     settled=[x for x in attempts if x['state']=='settled']
@@ -60,7 +69,7 @@ def discover(c):
         'failed_job_session_id':str(needs['session_id']),'auth_session_id':str(needs['auth_session_id']),
         'attempt_id':a['attempt_id'],'attempt_state':a['state'],'expense_reserved':a['expense_reserved'],'retail_reserved':a['retail_reserved'],
         'compute_key':key,'settled_attempts':len(settled),'settled_expense_units':sum(x['expense_actual'] for x in settled),
-        'balance_units':accounts[0]['balance_units'],'units_per_credit':accounts[0]['units_per_credit'],'already_written_off':waived}
+        'balance_units':accounts[0]['balance_units'],'units_per_credit':accounts[0]['units_per_credit'],'already_written_off':waived,'extra_compute':sorted(extra_compute,key=lambda x:x['segment_key'])}
 
 
 def facts_sha256(facts):
@@ -79,6 +88,7 @@ def review_lines(facts,dump_sha256):
         '  1. provider call '+facts['attempt_id']+': never started, billed 0.',
         '     Its reservation of $%s stays counted against the spend ceiling.'%usd(facts['expense_reserved']),
         '  2. unmeasured compute time of the failed job ('+facts['compute_key']+'): billed 0.',
+        *(['  unmeasured compute of earlier failed resume job(s), no provider call, would be written off, billed 0 (needs your typed yes below):']+['    - job '+x['job_id']+' ('+x['segment_key']+'), started at '+time.strftime('%Y-%m-%d %H:%M:%S UTC',time.gmtime(x['started_at'])) for x in facts['extra_compute']] if facts.get('extra_compute') else []),
         'Database dump sha256: '+dump_sha256,
         'Facts sha256: '+facts_sha256(facts)]
     return ['Stopped run, restored from its own database dump (read only so far):',
@@ -100,6 +110,21 @@ def confirm(facts,dump_sha256,run_id,*,ask=input,say=print,now=None):
     if answer.strip()!='yes':raise AdmissionDenied('write-offs not confirmed; nothing was written')
     stamp=now or time.strftime('%Y-%m-%dT%H:%M:%S%z')
     return 'typed-yes:%s:run-%s:attempt-%s:facts-%s'%(stamp,run_id,facts['attempt_id'][:8],facts_sha256(facts)[:12])
+
+
+def confirm_extra(facts,dump_sha256,run_id,*,ask=input,say=print,now=None):
+    """Typed yes for the unmeasured compute of earlier failed resume jobs only (billed 0). The review lines were already shown."""
+    n=len(facts['extra_compute'])
+    answer=ask('Type yes (English keyboard) to write off exactly these %d compute segment(s) (billed 0), anything else stops: '%n)
+    if answer.strip()!='yes':raise AdmissionDenied('write-off not confirmed; nothing was written')
+    stamp=now or time.strftime('%Y-%m-%dT%H:%M:%S%z')
+    return 'typed-yes:%s:run-%s:extra-compute-%s:facts-%s'%(stamp,run_id,facts['extra_compute'][0]['job_id'][:8],facts_sha256(facts)[:12])
+
+
+def waive_extra_compute(store,item,*,authorization_ref,dump_sha256):
+    if not authorization_ref.startswith('typed-yes:') or len(dump_sha256)!=64:raise AdmissionDenied('typed confirmation reference and dump hash required')
+    from recovery_accounting import waive_unknown_compute
+    return waive_unknown_compute(store,item['segment_key'],original_dump_sha256=dump_sha256,authorization_ref=authorization_ref)
 
 
 def waive_attempt(store,facts,*,authorization_ref,dump_sha256):
