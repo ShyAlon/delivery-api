@@ -371,7 +371,7 @@ async def lifespan(application:FastAPI):
     if cloud_execution.admitted():
         # Open: start the in-process engines under the money gateway. A failure keeps execution closed (cloud_execution reports it).
         from . import cloud_runtime
-        try:cloud_runtime.install(store,os.environ,_set_engine_client)
+        try:cloud_runtime.install(store,os.environ,_set_engine_client,watch_vendor=True)
         except Exception as exc:print('Cloud execution: could not start the in-process engine: '+f'{type(exc).__name__}: {str(exc)[:300]}',file=sys.stderr)
     cloud_execution.log_status()
     from .observability import LOG_PATH,stage_log_paths
@@ -2596,6 +2596,14 @@ def operator_credits(limit:int=100,after_owner:str|None=None,a:auth.Actor=Depend
 @app.get('/api/operator/expense-totals')
 def operator_expense_totals(a:auth.Actor=Depends(auth.require_actor)):
     return _operator_reader().expense_totals(store)
+
+
+@app.get('/api/operator/vendor-status')
+def operator_vendor_status(a:auth.Actor=Depends(auth.require_actor)):
+    """Warnings about the vendor's published terms (a failed refresh, an old pin); calls keep running on the pinned terms."""
+    _operator_reader()
+    from . import vendor_status
+    return vendor_status.status()
 
 
 @app.get('/api/operator/task-debug')

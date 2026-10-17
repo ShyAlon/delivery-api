@@ -6,6 +6,7 @@ source drift, missing units, duplicate rows and redirects all fail closed.
 from decimal import Decimal
 from html.parser import HTMLParser
 import datetime,hashlib,re,time,urllib.error,urllib.request
+from . import vendor_status
 from .provider_snapshot import ProviderSnapshot
 
 PRICING_URL='https://api-docs.deepseek.com/quick_start/pricing/'
@@ -155,27 +156,16 @@ def check_max_age_minutes():
     return minutes
 
 
-GRACE_MINUTES=60
-# A page that no longer parses only warns when the problem is layout; anything about rates, periods, limits or conversion still stops.
-HARD_PARSE_WORDS=('rate','period','limit','output','conversion','USD','selected model')
-WARN_ONLY_FACTS=('model_version',)   # facts that never change what a call costs; every other pinned fact is money or a limit
+# Owner ruling 2026-10-17: nothing the vendor page does stops a call. Every failure to confirm, and every changed term, is a persistent warning.
 _WARNED={}
-
-
-def _note(log,kind,text):
-    """One line with an ISO time,."""
-    line=datetime.datetime.now(datetime.timezone.utc).isoformat()+' WARNING '+text
-    log(line)
 
 
 def verify_current_sources(snapshot,fetcher=fetch,*,cached=True,clock=time.monotonic,log=None):
     """Before a new contact/settlement; public reads, never provider inference.
 
-    A good check is reused for check_max_age_minutes(). Within GRACE_MINUTES of the last good check
-    (this process, or the read that pinned the snapshot) a page that cannot be read, no longer parses,
-    or differs only in a fact that does not change cost (model_version) is a logged warning and a
-    finding, and the run continues. A changed price, peak rule or limit always stops. After the grace
-    period the old rule applies: any unreadable or changed source stops. A failed check is never cached."""
+    A good check is reused for check_max_age_minutes(). Owner ruling 2026-10-17: a page that cannot be read, no longer parses,
+    or differs in a pinned term (price, peak rule, limit, version) is a warning (log and vendor_status) and the run
+    continues on the pinned terms, however old the pin. A failed check is never cached."""
     now=datetime.datetime.now(datetime.timezone.utc)
     checked=ProviderSnapshot(snapshot);checked.fresh(now)
     sources={s['url']:s['sha256'] for s in snapshot['sources']}
@@ -187,28 +177,26 @@ def verify_current_sources(snapshot,fetcher=fetch,*,cached=True,clock=time.monot
     _GOOD.pop(key,None)
     ages=[(now-checked.fetched).total_seconds()/60]
     if last:ages.append((clock()-last[0])/60)
-    grace=min(ages)<GRACE_MINUTES
     last_text='last good check '+last[1] if last else 'no earlier good check in this process'
     def warn(kind,why):
         _WARNED[key]=clock()
-        _note(log,kind,'vendor check: '+why+'; last good check %.0f minutes ago (grace %d), so the run continues; '%(min(ages),GRACE_MINUTES)+last_text)
+        vendor_status.warn(kind,'vendor check: '+why+'; last good check %.0f minutes ago, so the run continues; '%min(ages)+last_text,log=log)
         return True
     try:bodies={url:fetch_verified_source(url,fetcher) for url in sources}
     except Exception as exc:
-        if not grace:raise
         return warn('vendor-read',type(exc).__name__+': '+str(exc)[:200].replace('\n',' '))
     if any(hashlib.sha256(bodies[u].encode()).hexdigest()!=d for u,d in sources.items()):
         try:current=parse(bodies[PRICING_URL],bodies[API_URL],snapshot['model'])
         except ValueError as exc:
-            if grace and not any(w in str(exc) for w in HARD_PARSE_WORDS):return warn('vendor-read','the published model table no longer parses ('+str(exc)[:200]+')')
-            raise ValueError('vendor source changed during run and the published model table no longer parses ('+str(exc)+'); preserve accepted attempts and review new snapshot; '+last_text) from None
+            return warn('vendor-read','the published model table no longer parses ('+str(exc)[:200]+'); prices or limits may have changed, calls and billing continue on the PINNED terms')
         changed=[k for k in FACT_KEYS if current.get(k)!=snapshot.get(k)]
         if current['context_proposal']['maximum_output_tokens']!=snapshot['context_proposal']['maximum_output_tokens']:changed.append('maximum_output_tokens')
-        hard=[k for k in changed if k not in WARN_ONLY_FACTS]
-        if hard or (changed and not grace):raise ValueError('vendor source changed during run: pinned terms differ ('+', '.join(changed)+'); preserve accepted attempts and review new snapshot; '+last_text)
         if changed:
-            return warn('vendor-change','pinned '+', '.join('%s %r -> %r'%(k,snapshot.get(k),current.get(k)) for k in changed)+'; prices, peak rule and limits unchanged')
+            now_value=lambda k:current['context_proposal']['maximum_output_tokens'] if k=='maximum_output_tokens' else current.get(k)
+            was_value=lambda k:snapshot['context_proposal']['maximum_output_tokens'] if k=='maximum_output_tokens' else snapshot.get(k)
+            return warn('vendor-change','pinned terms changed: '+'; '.join('%s was %r, now %r'%(k,was_value(k),now_value(k)) for k in changed)+'; calls and billing continue on the PINNED terms until the engineers update them')
         log(datetime.datetime.now(datetime.timezone.utc).isoformat()+' vendor pages changed but every pinned term is identical; check passes')
     _GOOD[key]=(clock(),datetime.datetime.now(datetime.timezone.utc).isoformat())
+    vendor_status.verified(snapshot)
     return True
 
