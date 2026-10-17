@@ -66,3 +66,19 @@ def test_missing_scope_is_still_denied(probe):
     store,_=probe
     with pytest.raises(TenantAccessDenied):
         with store.transaction():pass
+
+
+def test_a_burst_larger_than_the_cap_waits_instead_of_failing(probe):
+    import threading
+    from delivery_api import postgres_scope
+    store,table=probe
+    results=[]
+    def work(i):
+        try:
+            with tenant_context(A),store.transaction() as c:
+                c.execute('SELECT pg_sleep(0.05)');results.append(c.info.backend_pid)
+        except Exception as exc:results.append(exc)
+    threads=[threading.Thread(target=work,args=(i,)) for i in range(40)]
+    [t.start() for t in threads];[t.join(30) for t in threads]
+    assert len(results)==40 and all(isinstance(r,int) for r in results)
+    assert store.opened<=postgres_scope.POOL_OPEN_MAX and len(set(results))<=postgres_scope.POOL_OPEN_MAX

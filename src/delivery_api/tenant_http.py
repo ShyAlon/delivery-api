@@ -14,6 +14,10 @@ class TenantMiddleware:
         if scope['type']!='http':
             return await self.app(scope,receive,send)
         path=scope.get('path','')
+        # Public static files and the health probe carry no tenant data. They are never authenticated: a signed-in browser sends its cookie with
+        # every file, and verifying it plus the session database check for each of ~30 files per page load made pages slow and let the burst fail.
+        if path.startswith('/assets/') or path in ('/favicon.ico','/health'):
+            return await self.app(scope,receive,send)
         # Static/login shell may load without identity. Every data API and old
         # link/run endpoint needs identity. Legacy auth endpoints cannot mint
         # local sessions in cloud mode.
