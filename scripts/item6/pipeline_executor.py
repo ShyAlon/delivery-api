@@ -22,12 +22,12 @@ def require_approved_srs(task):
 
 class PrivatePipeline:
     def __init__(self,*,store,artifacts_base,model,gateway_factory,generator_clients,
-                 interview_clients,answer_input,review_gate,progress,accept_script=None):
+                 interview_clients,answer_input,review_gate,progress):
         if not all(callable(x) for x in (gateway_factory,generator_clients,interview_clients,answer_input,review_gate,progress)):
             raise ValueError('explicit reviewed job clients and attended callbacks required')
         self.store=store;self.base=Path(artifacts_base);self.model=model;self.gateway=gateway_factory
         self.generator_clients=generator_clients;self.interview_clients=interview_clients
-        self.answer=answer_input;self.review=review_gate;self.progress=progress;self.job_ids=[];self.failed_stage=None;self.accept_script=accept_script
+        self.answer=answer_input;self.review=review_gate;self.progress=progress;self.job_ids=[];self.failed_stage=None
 
     def __call__(self,isolation,scope):
         # Caller has separately checked exact run go, local scope and price catalog.
@@ -40,23 +40,10 @@ class PrivatePipeline:
             self.store.set_model_default(tid,'deepseek:'+self.model)
             return self.execute_existing(isolation,scope,task)
 
-    def execute_existing(self,isolation,scope,task,*,prior_job=None,review=None,pending_review=None):
+    def execute_existing(self,isolation,scope,task):
         with tenant_context(scope):
             tid=task['task_id']
-            if prior_job:
-                from delivery_api.worker_capability import WorkerCapability
-                cap=WorkerCapability.capture(self.store,tid);cap.validate(self.store)
-                old=self.store.worker_job(prior_job)
-                if not old or old['task_id']!=tid or old['state']!='failed' or old['session_id']!=cap.session_id or old['generation']!=cap.generation:
-                    raise ValueError('exact failed predecessor required')
-                if self.store.retail_compute_status(tid).get('unresolved') or self.store.retail_compute_status(tid).get('pending'):
-                    raise ValueError('compute accounting must be reconciled before continuation')
-                with self.store._postgres.transaction() as c:
-                    held=c.execute("SELECT 1 FROM provider_attempts p JOIN worker_jobs w ON w.job_id=p.job_id WHERE w.task_id=%s AND p.state IN ('reserved','dispatched','uncertain') LIMIT 1",(tid,)).fetchone()
-                if held:raise ValueError('provider accounting must be reconciled before continuation')
             job=self.store.enqueue_worker(tid,'phase:intent',execution_options={'model_route':'deepseek:'+self.model})
-            if prior_job:
-                self.store.audit(scope.owner_id,'item6.continuation.queued',tid,{'original_failed_job':prior_job,'new_job_id':job,'session_id':cap.session_id,'uninterrupted_acceptance':False})
             self.job_ids.append(job)
             worker=self.worker()
             def interview(cap,root):
@@ -82,15 +69,7 @@ class PrivatePipeline:
                 gateway=self.gateway(cap,job)
                 with admission_gateway(gateway,required=True),wire_clients(gateway,self.interview_clients),shared_writer():
                     program=InterviewApplication(cap.session_id,cap.task_id,task['brief'],artifact_root=str(root.parent),model_route='deepseek',initial_model=self.model)
-                    if prior_job:
-                        from recovery_checkpoint import restore_for_conops
-                        if review is None:raise ValueError('original semantic review required')
-                        if pending_review is None:
-                            restore_for_conops(program,review,actor=scope.owner_id)
-                        else:
-                            from recovery_checkpoint import restore_pending_concept
-                            restore_pending_concept(program,review,pending_review,actor=scope.owner_id)
-                    pending=program.open_input if pending_review is not None else program.advance()
+                    pending=program.advance()
                     for _ in range(100):
                         cap.validate(self.store)
                         if pending is None:
@@ -112,27 +91,6 @@ class PrivatePipeline:
             if not asyncio.run(self.worker().execute(job,generate)):raise ValueError('generator job already claimed')
             return tid
 
-    def execute_generator_existing(self,isolation,scope,task,*,prior_job,generator_resume):
-        """New linked generator job only. No interview/needs/SRS replay."""
-        from delivery_api.worker_capability import WorkerCapability
-        with tenant_context(scope):
-            require_approved_srs(task)
-            tid=task['task_id'];cap=WorkerCapability.capture(self.store,tid);cap.validate(self.store)
-            old=self.store.worker_job(prior_job)
-            if not old or old['task_id']!=tid or old['kind']!='phase:needs' or old['state']!='failed' or old['session_id']!=cap.session_id or old['generation']!=cap.generation:raise ValueError('exact failed generator predecessor required')
-            compute=self.store.retail_compute_status(tid)
-            if compute.get('unresolved') or compute.get('pending'):raise ValueError('compute accounting unresolved')
-            with self.store._postgres.transaction() as c:
-                if c.execute("SELECT 1 FROM provider_attempts p JOIN worker_jobs w ON w.job_id=p.job_id WHERE w.task_id=%s AND p.state IN ('reserved','dispatched','uncertain') LIMIT 1",(tid,)).fetchone():raise ValueError('provider accounting unresolved')
-            from recovery_generator import generator_review
-            root=session_root(self.base,scope,cap.session_id)
-            if generator_review(root,cap.session_id)!=generator_resume:raise ValueError('exact generator checkpoint review required')
-            job=self.store.enqueue_worker(tid,'phase:needs',execution_options={'model_route':'deepseek:'+self.model})
-            self.store.audit(scope.owner_id,'item6.continuation.queued',tid,{'original_failed_job':prior_job,'new_job_id':job,'session_id':cap.session_id,'uninterrupted_acceptance':False,'generator_checkpoint_id':generator_resume['checkpoint_id'],'interview_replayed':False,'needs_srs_replayed':False})
-            self.job_ids.append(job)
-            if not asyncio.run(self.worker().execute(job,lambda cap,root:self.generate(cap,root,generator_resume=generator_resume))):raise ValueError('generator job already claimed')
-            return tid
-
     def worker(self):
         from spec_generator.worker_runtime import JobRuntime
         from spec_generator.model_config import StageModel
@@ -143,7 +101,7 @@ class PrivatePipeline:
         return SameHostProducerWorker(self.store,self.base,gateway_factory=self.gateway,
             usage_log_factory=lambda cap,root:UsageLog(cap.session_id),runtime_factory=runtime,wire_client_factory=self.generator_clients)
 
-    def generate(self,cap,root,*,generator_resume=None):
+    def generate(self,cap,root):
         from spec_generator.graph import build_graph,checkpoint_serde
         from spec_generator.cli import _make_persist,_atomic_write,_make_partials
         from spec_generator.telemetry import UsageLog
@@ -156,16 +114,8 @@ class PrivatePipeline:
         intent=json.loads((root/'interview/intent_model.json').read_text());conops=json.loads((root/'interview/conops.json').read_text())
         baseline=SystemBaseline.model_validate({'baseline_id':cap.session_id+'-greenfield','system_name':'Household Tasks','mode':'greenfield','repositories':[],'immutable_decisions':[]}).model_dump(mode='json')
         out=root/'spec'
-        if generator_resume is None:
-            out.mkdir(exist_ok=False);(out/'specs').mkdir()
-            _atomic_write(out/'system-baseline.json',json.dumps(baseline))
-        else:
-            from recovery_generator import generator_review
-            current=generator_review(root,cap.session_id)
-            if {k:v for k,v in current.items() if k!='source_tree_sha256'}!={k:v for k,v in generator_resume.items() if k!='source_tree_sha256'}:raise ValueError('exact generator checkpoint/artifact review required')
-            baseline=SystemBaseline.model_validate(json.loads((out/'system-baseline.json').read_text())).model_dump(mode='json')
-            task=self.store.task(cap.task_id)
-            require_approved_srs(task)
+        out.mkdir(exist_ok=False);(out/'specs').mkdir()
+        _atomic_write(out/'system-baseline.json',json.dumps(baseline))
         bus=ProgressBus()
         phase_map={'items':'specs',**{p.generator_stage:p.key for p in PHASE_DEFINITIONS if p.generator_stage}}
         def progress(event):
@@ -183,23 +133,7 @@ class PrivatePipeline:
             graph=build_graph(log,checkpointer=saver,progress=bus,review=True,
                 stop_fence=fence,stop_generation=generation,persist=_make_persist(intent,out,greenfield=True,conops_present=True),partials=_make_partials(out))
             cfg={'configurable':{'thread_id':cap.session_id}}
-            if generator_resume is not None:
-                snapshot=graph.get_state(cfg)
-                # Only the saved next task may run: architecture, tests when the review pinned saved tests fills, or review when it pinned saved review chunks.
-                expected_next=('assemble',) if generator_resume.get('review_complete_present') else ('review',) if generator_resume.get('review_partials_present') else ('tests',) if generator_resume.get('tests_partials_present') else ('architecture',)
-                if snapshot.config['configurable']['checkpoint_id']!=generator_resume['checkpoint_id'] or tuple(snapshot.next)!=expected_next or any(t.interrupts for t in snapshot.tasks):raise ValueError('exact failed '+expected_next[0]+' checkpoint required, no upstream replay')
-                if generator_resume.get('review_complete_present'):
-                    # Same route as the library's own --dispose: the ledger goes in through the checkpoint, as the review node.
-                    from accept_findings import apply_to_ledger
-                    from spec_generator.findings_ledger import revision_of
-                    if not self.accept_script:raise ValueError('the founder disposition script is required to resume at assemble')
-                    ledger=apply_to_ledger(snapshot.values['findings_ledger'],self.accept_script,{i.get('spec_id'):revision_of(i.get('body_markdown') or '') for i in snapshot.values.get('items') or []})
-                    graph.update_state(cfg,{'findings_ledger':ledger},as_node='review')
-                    getattr(_make_persist(intent,out,greenfield=True,conops_present=True),'ledger',lambda *_:None)(ledger)
-                    self.progress('findings.accepted',str(len(self.accept_script['dispositions']))+' recorded')
-                result=graph.invoke(None,cfg)
-            else:
-                result=graph.invoke({'intent_model':intent,'conops':conops,'system_baseline':baseline},cfg)
+            result=graph.invoke({'intent_model':intent,'conops':conops,'system_baseline':baseline},cfg)
             for _ in range(30):
                 cap.validate(self.store);snapshot=graph.get_state(cfg)
                 interrupts=[i.value for task in snapshot.tasks for i in task.interrupts]

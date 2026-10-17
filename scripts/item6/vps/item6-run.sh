@@ -442,8 +442,6 @@ INNER
 esac
 }
 
-# item6-resume.sh sources this file for its functions only.
-[ "${ITEM6_RUN_LIB:-}" = 1 ] && return 0
 IMAGE=$("${UBU[@]}" 'sudo -n docker image inspect requi-item6-test --format "{{.Created}}" 2>/dev/null' || true)
 case "${1:-}" in
   --resume) RUN=${2:?run dir}; MODE=${3:-attach}; ( stage_launch "$RUN" "$MODE" ); exit $? ;;
