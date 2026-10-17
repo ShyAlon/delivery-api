@@ -205,3 +205,46 @@ def test_an_extra_failed_needs_job_with_a_provider_attempt_is_refused():
 def test_an_extra_job_that_is_not_failed_is_refused():
     jobs=[job('phase:intent','done','J1'),job('phase:needs','failed','J2'),job('phase:needs','running','J3')]
     with pytest.raises(AdmissionDenied,match='failed needs'):resume.discover(extra_conn(worker_jobs=jobs))
+
+
+def extra_segment(state='unresolved',ms=None,job='J3'):
+    return {'segment_key':job+':compute','job_id':job,'state':state,'deterministic_ms':ms,'started_at':1792152700.5}
+
+
+def test_unmeasured_compute_of_an_extra_failed_job_is_listed_for_a_typed_write_off():
+    facts=resume.discover(extra_conn(retail_compute_segments=[{'state':'waived','deterministic_ms':None},extra_segment()]))
+    assert facts['extra_compute']==[{'job_id':'J3','segment_key':'J3:compute','started_at':1792152700.5}]
+    text='\n'.join(resume.review_lines(facts,'a'*64))
+    assert 'J3:compute' in text and 'billed 0' in text and 'typed yes' in text
+
+
+def test_nothing_is_listed_when_the_extra_job_has_no_open_compute():
+    assert resume.discover(extra_conn())['extra_compute']==[]
+    assert resume.discover(extra_conn(retail_compute_segments=[{'state':'waived','deterministic_ms':None},extra_segment('waived')]))['extra_compute']==[]
+
+
+@pytest.mark.parametrize('segment,message',[(extra_segment('pending'),'cannot be written off'),(extra_segment('unresolved',12),'cannot be written off')])
+def test_an_extra_job_compute_segment_that_cannot_be_written_off_is_refused(segment,message):
+    with pytest.raises(AdmissionDenied,match=message):resume.discover(extra_conn(retail_compute_segments=[{'state':'waived','deterministic_ms':None},segment]))
+
+
+def test_an_extra_job_with_token_billing_is_refused():
+    class Billed(Conn):
+        def execute(self,sql,params=()):
+            if 'FROM retail_contributions WHERE job_id=ANY' in sql:return Result([{'x':1}])
+            return super().execute(sql,params)
+    base=extra_conn()
+    with pytest.raises(AdmissionDenied,match='retail contributions'):resume.discover(Billed(**base.tables))
+
+
+def test_extra_compute_write_off_needs_the_typed_yes_and_only_the_typed_yes():
+    facts=resume.discover(extra_conn(retail_compute_segments=[{'state':'waived','deterministic_ms':None},extra_segment()]))
+    asked=[]
+    ref=resume.confirm_extra(facts,'a'*64,RID,ask=lambda p:asked.append(p) or 'yes',now='2026-10-17T07:40:00+0300')
+    assert ref.startswith('typed-yes:2026-10-17T07:40:00+0300:run-'+RID) and 'extra-compute-J3' in ref and '1 compute segment' in asked[0]
+    for answer in ('y','YES','go',''):
+        with pytest.raises(AdmissionDenied,match='not confirmed'):resume.confirm_extra(facts,'a'*64,RID,ask=lambda p,a=answer:a)
+
+
+def test_the_extra_waiver_helper_never_accepts_a_non_typed_reference():
+    with pytest.raises(AdmissionDenied):resume.waive_extra_compute(object(),{'segment_key':'J3:compute'},authorization_ref='chat message 123',dump_sha256='a'*64)
