@@ -27,6 +27,13 @@ def problems(environ=None):
         catalog_from_environment(environ)
     except Exception as exc:
         out.append('reviewed model prices: '+str(exc))
+    try:
+        from .cloud_runtime import check_gateways
+        check_gateways(environ)
+    except Exception as exc:
+        out.append('money gateway: '+str(exc))
+    from .cloud_runtime import failure
+    if failure():out.append('in-process engine did not start: '+failure())
     return out
 
 

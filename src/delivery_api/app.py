@@ -71,6 +71,9 @@ orchestrator = PhaseOrchestrator(store,runner)
 runner.on_complete = orchestrator.continue_after
 simulation = Simulation(store)
 engine_client = HttpEngineClient(config.INTERVIEW_ENGINE_URL,token=config.INTERVIEW_ENGINE_TOKEN)
+def _set_engine_client(client):
+    global engine_client
+    engine_client=client
 
 ENGINE_START_HINT="cd ../interview-engine && .venv/bin/python -m uvicorn interview_engine.http_service:app --host 127.0.0.1 --port 8010"
 def _engine_unreachable_payload(exc:EngineUnreachableError)->dict:
@@ -365,6 +368,11 @@ async def lifespan(application:FastAPI):
     global _previous_sigint
     config.validate_auth_config()
     from . import cloud_execution
+    if cloud_execution.admitted():
+        # Open: start the in-process engines under the money gateway. A failure keeps execution closed (cloud_execution reports it).
+        from . import cloud_runtime
+        try:cloud_runtime.install(store,os.environ,_set_engine_client)
+        except Exception as exc:print('Cloud execution: could not start the in-process engine: '+f'{type(exc).__name__}: {str(exc)[:300]}',file=sys.stderr)
     cloud_execution.log_status()
     from .observability import LOG_PATH,stage_log_paths
     print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
@@ -379,6 +387,8 @@ async def lifespan(application:FastAPI):
         activity("server.shutdown.signal","Server shutdown received",streams=stream_count,engines=len(runner.processes))
         for event in tuple(_stream_shutdown_events):event.set()
         await runner.shutdown();await jobs.stop()
+        from . import cloud_runtime
+        cloud_runtime.uninstall()
         activity("server.shutdown.complete","Server shutdown complete",streams_closed=stream_count)
 
 def _shutdown_signal(signum,frame):
