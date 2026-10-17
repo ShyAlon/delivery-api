@@ -1,5 +1,5 @@
 """Local terminal controls. No auto answers, timers or instructions from artifacts."""
-import datetime,json,sys
+import datetime,json
 from pathlib import Path
 from vmodel_contracts.interactive import InputResponse
 
