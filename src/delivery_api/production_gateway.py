@@ -8,6 +8,7 @@ import json
 
 import httpx
 
+from . import vendor_status
 from .admission_catalog import ReviewedContextCeiling,catalog_from_environment
 from .attempt_ledger import AdmissionDenied
 from .deepseek_usage import settlement_usage
@@ -54,6 +55,7 @@ class ProductionGateways:
         self.catalog=catalog
         self.retail_rates=rates_from_snapshot(row['retail_formula'])
         snapshot=row['provider_snapshot']
+        vendor_status.pin(snapshot)
         fetcher=vendor_fetcher or vendor_sources.fetch
         self.verify_vendor=lambda:vendor_sources.verify_current_sources(snapshot,fetcher)
         self.balance_client=httpx.Client(transport=FixedOriginTransport(balance_transport or httpx.HTTPTransport(retries=0),

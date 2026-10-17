@@ -6,6 +6,8 @@ fails, nothing is installed, the reason is kept and execution stays closed (clou
 _state=None
 _failure=None
 _checked=set()
+_watcher=None
+VENDOR_WATCH_SECONDS=61*60   # just over the one-hour reuse of a good check, so each wake is a real check
 
 
 def check_gateways(environ):
@@ -32,8 +34,17 @@ def _clients(module):
         inner_async=lambda:httpx.AsyncHTTPTransport(retries=0),owner_module=module)
 
 
-def install(store,environ,set_engine_client):
-    global _state,_failure
+def _watch(gateways,stop,seconds):
+    """Checks the vendor pages about hourly, so a failed refresh shows as a warning even when nobody is using the service."""
+    from . import vendor_status
+    while True:
+        try:gateways.verify_vendor()
+        except Exception as exc:vendor_status.warn('vendor-stop','the live check could not complete: '+f'{type(exc).__name__}: {str(exc)[:300]}')
+        if stop.wait(seconds):return
+
+
+def install(store,environ,set_engine_client,watch_vendor=False):
+    global _state,_failure,_watcher
     if _state is not None:return
     from . import inprocess_engine,inprocess_interview
     from .production_gateway import ProductionGateways
@@ -53,11 +64,17 @@ def install(store,environ,set_engine_client):
     _failure=None
     inprocess_engine.configure(engine);inprocess_interview.configure(host);set_engine_client(client)
     _state=(gateways,engine,host)
+    if watch_vendor:
+        import threading
+        stop=threading.Event()
+        threading.Thread(target=_watch,args=(gateways,stop,VENDOR_WATCH_SECONDS),name='vendor-terms-watch',daemon=True).start()
+        _watcher=stop
 
 
 def uninstall():
-    global _state
+    global _state,_watcher
     if _state is None:return
+    if _watcher is not None:_watcher.set();_watcher=None
     from . import inprocess_engine,inprocess_interview
     gateways=_state[0]
     inprocess_engine.configure(None);inprocess_interview.configure(None)

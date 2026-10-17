@@ -73,6 +73,18 @@ def test_local_operator_routes_are_absent_before_auth_and_no_store(monkeypatch):
    assert got.status_code==404 and got.headers['cache-control']=='no-store'
 
 
+def test_vendor_status_is_proxied_to_the_operator_route_and_absent_locally(monkeypatch):
+ calls=[]
+ def upstream(request):calls.append(request);return httpx.Response(503,json={'detail':'registry unavailable'})
+ c=TestClient(create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream)))
+ assert c.get('/api/operations/vendor-status',headers={'Authorization':'Bearer fake'}).status_code==503
+ assert calls[0].url.path=='/api/operator/vendor-status'
+ from delivery_api import app as service,config
+ monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+ got=TestClient(service.app).get('/api/operator/vendor-status')
+ assert got.status_code==404 and got.headers['cache-control']=='no-store'
+
+
 def test_payment_read_proxy_only_bounded_known_parameters_and_no_writes():
  calls=[]
  def upstream(request):calls.append(request);return httpx.Response(503,json={'detail':'registry unavailable'})
