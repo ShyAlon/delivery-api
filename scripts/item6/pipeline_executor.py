@@ -22,12 +22,12 @@ def require_approved_srs(task):
 
 class PrivatePipeline:
     def __init__(self,*,store,artifacts_base,model,gateway_factory,generator_clients,
-                 interview_clients,answer_input,review_gate,progress):
+                 interview_clients,answer_input,review_gate,progress,accept_script=None):
         if not all(callable(x) for x in (gateway_factory,generator_clients,interview_clients,answer_input,review_gate,progress)):
             raise ValueError('explicit reviewed job clients and attended callbacks required')
         self.store=store;self.base=Path(artifacts_base);self.model=model;self.gateway=gateway_factory
         self.generator_clients=generator_clients;self.interview_clients=interview_clients
-        self.answer=answer_input;self.review=review_gate;self.progress=progress;self.job_ids=[];self.failed_stage=None
+        self.answer=answer_input;self.review=review_gate;self.progress=progress;self.job_ids=[];self.failed_stage=None;self.accept_script=accept_script
 
     def __call__(self,isolation,scope):
         # Caller has separately checked exact run go, local scope and price catalog.
@@ -186,8 +186,17 @@ class PrivatePipeline:
             if generator_resume is not None:
                 snapshot=graph.get_state(cfg)
                 # Only the saved next task may run: architecture, tests when the review pinned saved tests fills, or review when it pinned saved review chunks.
-                expected_next=('review',) if generator_resume.get('review_partials_present') else ('tests',) if generator_resume.get('tests_partials_present') else ('architecture',)
+                expected_next=('assemble',) if generator_resume.get('review_complete_present') else ('review',) if generator_resume.get('review_partials_present') else ('tests',) if generator_resume.get('tests_partials_present') else ('architecture',)
                 if snapshot.config['configurable']['checkpoint_id']!=generator_resume['checkpoint_id'] or tuple(snapshot.next)!=expected_next or any(t.interrupts for t in snapshot.tasks):raise ValueError('exact failed '+expected_next[0]+' checkpoint required, no upstream replay')
+                if generator_resume.get('review_complete_present'):
+                    # Same route as the library's own --dispose: the ledger goes in through the checkpoint, as the review node.
+                    from accept_findings import apply_to_ledger
+                    from spec_generator.findings_ledger import revision_of
+                    if not self.accept_script:raise ValueError('the founder disposition script is required to resume at assemble')
+                    ledger=apply_to_ledger(snapshot.values['findings_ledger'],self.accept_script,{i.get('spec_id'):revision_of(i.get('body_markdown') or '') for i in snapshot.values.get('items') or []})
+                    graph.update_state(cfg,{'findings_ledger':ledger},as_node='review')
+                    getattr(_make_persist(intent,out,greenfield=True,conops_present=True),'ledger',lambda *_:None)(ledger)
+                    self.progress('findings.accepted',str(len(self.accept_script['dispositions']))+' recorded')
                 result=graph.invoke(None,cfg)
             else:
                 result=graph.invoke({'intent_model':intent,'conops':conops,'system_baseline':baseline},cfg)

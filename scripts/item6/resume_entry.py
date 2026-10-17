@@ -228,16 +228,34 @@ def go(config,run_id,paths,facts,dump_sha,ceiling_units,topup_offer=None,topup_s
             inner=WorkerAdmissionGateway(store,job,resolve_serialized=catalog.resolve_serialized,measure_raw_usage=settlement_usage,require_prepaid=True,retail_rates=rates,
                 verify_provider_snapshot=lambda:verify_current_sources(prices[0]['provider_snapshot']),provider_balance=reader)
             return RecoveryBudgetGateway(inner,original_job_ids=[],maximum_expense_units=ceiling_units)
+        accept=None
         def pipeline_factory(att):
             return PrivatePipeline(store=store,artifacts_base=paths['root'],model=config['model'],gateway_factory=gateway,
                 generator_clients=deepseek_client_factory(inner_sync=lambda:httpx.HTTPTransport(retries=0),inner_async=lambda:httpx.AsyncHTTPTransport(retries=0),owner_module='spec_generator'),
                 interview_clients=deepseek_client_factory(inner_sync=lambda:httpx.HTTPTransport(retries=0),inner_async=lambda:httpx.AsyncHTTPTransport(retries=0),owner_module='interview_engine'),
-                answer_input=att.input,review_gate=att.gate,progress=lambda state,text:print(f'{stamp()} | {state} | {text}',flush=True))
+                answer_input=att.input,review_gate=att.gate,accept_script=accept,progress=lambda state,text:print(f'{stamp()} | {state} | {text}',flush=True))
         with tenant_context(scope):
             cap=WorkerCapability.capture(store,facts['task_id'])
             resume=generator_review(session_root(paths['root'],scope,cap.session_id),cap.session_id)
-        stage='review' if resume.get('review_partials_present') else 'tests' if resume.get('tests_partials_present') else None
-        if stage is None:raise ValueError('saved tests fills or saved review chunks are required for this resume')
+        stage='assemble' if resume.get('review_complete_present') else 'review' if resume.get('review_partials_present') else 'tests' if resume.get('tests_partials_present') else None
+        if stage is None:raise ValueError('saved tests fills, saved review chunks or a finished review are required for this resume')
+        if stage=='assemble':
+            from accept_findings import build_script,script_sha,phrase,summary_lines
+            import findings
+            with tenant_context(scope):
+                spec_dir=session_root(paths['root'],scope,cap.session_id)/'spec'
+            ledger=json.loads((spec_dir/'findings-ledger.json').read_text())
+            if hashlib.sha256(json.dumps(ledger,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=resume['ledger_sha256']:raise ValueError('the saved findings ledger differs from the checkpoint; nothing was changed')
+            script=build_script(ledger)
+            if not script['dispositions']:raise ValueError('assembly was blocked but no open finding exists; look at the ledger before resuming')
+            say('the review finished; assembly is blocked by its findings. Nothing has been spent in this step and no model is called.')
+            for line in summary_lines(ledger,script):say(line)
+            say('each entry is one exact finding id bound to its artifact revision; rationale: '+script['dispositions'][0]['rationale'])
+            want=phrase(script)
+            typed=input(stamp()+' | type exactly: '+want+'  (anything else stops with no change): ')
+            if typed.strip()!=want:raise ValueError('the accept phrase was not typed exactly; nothing was changed')
+            findings.record('accepted-review-findings',str(len(script['dispositions']))+' open review findings accepted by the typed phrase '+want+' (script sha256 '+script_sha(script)+'); recorded as accepted risk, not fixed')
+            accept=script
         say('resuming the generator from its saved '+stage+' checkpoint '+resume['checkpoint_id'])
         result=execute_continuation(store=store,scope=scope,root=paths['root'],config={},run_id=run_id,task_id=facts['task_id'],prior_job=facts['failed_job'],
             output=paths['output'],pipeline_factory=pipeline_factory,original_failed_jobs=facts['failed_jobs'],pending_review=None,generator_resume=resume)
