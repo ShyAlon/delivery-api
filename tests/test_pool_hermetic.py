@@ -78,11 +78,33 @@ def test_dead_reused_connection_is_replaced_before_work_and_a_dead_new_one_raise
 
 
 def test_idle_connections_are_bounded_and_expire(world,monkeypatch):
+    monkeypatch.setattr(postgres_scope,'POOL_IDLE_MAX',2)
     p=pool()
-    held=[p._connect() for _ in range(postgres_scope.POOL_IDLE_MAX+3)]
+    held=[p._checkout()[0] for _ in range(4)]
     for c in held:p._release(c)
-    assert len(p._idle)==postgres_scope.POOL_IDLE_MAX and sum(c.closed for c in held)==3
+    assert len(p._idle)==2 and sum(c.closed for c in held)==2 and p._open==2
     now=postgres_scope.time.monotonic()
     monkeypatch.setattr(postgres_scope.time,'monotonic',lambda:now+postgres_scope.POOL_IDLE_SECONDS+1)
     c,reused=p._checkout()
-    assert not reused and all(h.closed for h in held)
+    assert not reused and all(h.closed for h in held) and p._open==1
+
+
+def test_open_connections_are_capped_and_a_waiter_gets_the_returned_one(world,monkeypatch):
+    import threading,time
+    monkeypatch.setattr(postgres_scope,'POOL_OPEN_MAX',2)
+    p=pool();first,_=p._checkout();p._checkout()
+    got=[];waiter=threading.Thread(target=lambda:got.append(p._checkout()));waiter.start();time.sleep(0.1)
+    assert not got and len(world.made)==2          # the third caller waits; no third connection is opened
+    p._release(first);waiter.join(5)
+    assert got and got[0][0] is first and got[0][1] is True and len(world.made)==2
+
+
+def test_waiting_too_long_fails_with_a_clear_message_and_a_failed_connect_frees_its_place(world,monkeypatch):
+    monkeypatch.setattr(postgres_scope,'POOL_OPEN_MAX',1);monkeypatch.setattr(postgres_scope,'POOL_WAIT_SECONDS',0.2)
+    p=pool();held,_=p._checkout()
+    with pytest.raises(TimeoutError,match='connection limit'):p._checkout()
+    p._release(held)
+    sys.modules['psycopg'].connect=lambda dsn,**k:(_ for _ in ()).throw(world.OperationalError('refused'))
+    p._idle.clear();p._open=0
+    with pytest.raises(world.OperationalError):p._checkout()
+    assert p._open==0

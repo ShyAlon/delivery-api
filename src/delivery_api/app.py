@@ -409,6 +409,13 @@ if config.CLOUD_TENANTS:
 from .tenant_files import authorized_session,session_reader,read_text as read_bound_text
 from .tenancy import TenantAccessDenied
 
+@app.exception_handler(Exception)
+async def unexpected_error(request,exc):
+    """Any unhandled error: the browser gets the reference and the error's type (never its message, which may carry connection details);
+    the traceback is already in the server log under the same reference. The exception still propagates to the server and to tests."""
+    ref=getattr(request.state,'ref',None) or uuid4().hex[:8]
+    return JSONResponse({'detail':{'error':'The server hit an unexpected error.','cause':'Reference %s, %s.'%(ref,type(exc).__name__),'next':'Retry once. If it repeats, open the avatar Debug dialog and send the reference.'}},status_code=500,headers={'X-Request-Id':ref,'Cache-Control':'no-store'})
+
 @app.exception_handler(TenantAccessDenied)
 async def tenant_access_denied(request,exc):
     return JSONResponse({'detail':'Tenant resource not found'},status_code=404)
@@ -441,6 +448,7 @@ async def request_log(request, call_next):
         return JSONResponse({"detail": e.detail}, status_code=e.status_code)
     started = time.monotonic()
     ref=uuid4().hex[:8]    # shown in the browser (X-Request-Id), written on every log line of this request
+    request.state.ref=ref
     try:
         response = await call_next(request)
     except Exception:
