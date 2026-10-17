@@ -4,8 +4,7 @@ Hermetic adapters prove wiring only. mac_acceptance adapters must return verifia
 source receipts; network execution still requires a separately reviewed run go.
 No application import, mutation route, fence override or automatic next-run retry.
 """
-import datetime,hashlib,json,re
-from pathlib import Path
+import datetime,hashlib,re
 
 def cause_names(exc,limit=3):
     # Exception class names along the cause chain. Never messages: those can carry payloads or secrets.
