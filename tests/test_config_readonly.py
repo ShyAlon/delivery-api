@@ -9,8 +9,13 @@ def test_config_import_never_creates_default_home_directory(tmp_path,selected):
     env={**os.environ,'HOME':str(home),'XDG_DATA_HOME':str(home/'xdg'),
         'PYTHONPATH':str(Path(__file__).parents[1]/'src'),
         'DELIVERY_SUPABASE_URL':'https://test.invalid','DELIVERY_SUPABASE_ANON_KEY':'fake'}
-    for key in ('DELIVERY_DATABASE_URL','DELIVERY_DB_PATH','TURSO_DATABASE_URL','TURSO_AUTH_TOKEN'):
+    for key in ('DELIVERY_DATABASE_URL','DELIVERY_DB_PATH'):
         env.pop(key,None)
+    # Set, not removed: config calls load_dotenv(override=False), which fills any
+    # variable that is missing from a .env file found above the repo, but never
+    # replaces one that is set, even to an empty string (see tests/conftest.py).
+    for key in ('TURSO_DATABASE_URL','TURSO_AUTH_TOKEN'):
+        env[key]=''
     if selected:env['DELIVERY_DATABASE_URL']=selected
     code="""from pathlib import Path
 original=Path.mkdir
