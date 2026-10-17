@@ -23,15 +23,17 @@ SESS=item6r-${RID:0:8}; CONT=requi-item6-resume$N-$RID
 TMPF=$(mktemp)
 echo "Resume $N of stopped run $NAME (id $RID) on ubuntu@$HOST"
 echo "== image"
-HAVE=$("${UBU[@]}" "sudo -n docker run --rm --network none --entrypoint sh requi-item6-test -c 'grep -q -e resume-number /app/item6/resume_entry.py && grep -q -e VENDOR_CHECK_MAX_AGE_MINUTES /app/item6/vendor_config.py && test -f /app/item6/source_check.py && echo yes || echo no'" 2>/dev/null | tail -1 || echo no)
+# The image is current only when every item6 script in it is byte-identical to this checkout's scripts/item6 (not a marker string: a marker goes stale with every later fix).
+imgcheck(){ L=$(cd "$DELIVERY/scripts/item6" && shasum -a 256 *.py | sort); R=$("${UBU[@]}" "sudo -n docker run --rm --network none --entrypoint sh requi-item6-test -c 'cd /app/item6 && sha256sum *.py | sort'" 2>/dev/null || true); if [ -n "$R" ] && [ "$L" = "$R" ]; then HAVE=yes; else HAVE=no; printf '%s\n' "$L" > /tmp/img-local.$$; printf '%s\n' "$R" > /tmp/img-image.$$; echo "image differs from $DELIVERY (HEAD $(git -C "$DELIVERY" rev-parse --short HEAD)) in:"; diff /tmp/img-local.$$ /tmp/img-image.$$ | grep '^[<>]' | awk '{print "  "$3}' | sort -u | head -12 || true; rm -f /tmp/img-local.$$ /tmp/img-image.$$; fi; }
+imgcheck
 if [ "$REBUILD" = 1 ] || [ "$HAVE" != yes ]; then
-  [ "$REBUILD" = 1 ] || echo "The image on the server has no current resume code: it must be rebuilt from your four repos on main (merge the resume PR first)."
+  [ "$REBUILD" = 1 ] || echo "The image on the server is not built from this checkout's code: it must be rebuilt from your four repos on main (git pull each first)."
   read -r -p "Type yes (English keyboard) to build the image from your repos (several minutes, nothing running is touched), anything else aborts: " A
   [ "$A" = yes ] || die DECLINED "You did not type yes." "Nothing was changed."
   ( stage_build )
-  HAVE=$("${UBU[@]}" "sudo -n docker run --rm --network none --entrypoint sh requi-item6-test -c 'grep -q -e resume-number /app/item6/resume_entry.py && grep -q -e VENDOR_CHECK_MAX_AGE_MINUTES /app/item6/vendor_config.py && test -f /app/item6/source_check.py && echo yes || echo no'" 2>/dev/null | tail -1 || echo no)
-  [ "$HAVE" = yes ] || die IMAGE-NO-RESUME "the rebuilt image has no current resume_entry.py: is the resume PR merged into delivery-api main and pulled?" "The image was rebuilt but cannot resume." "git -C $DELIVERY pull --ff-only && bash $HERE/item6-resume.sh --rebuild"
-else echo "ok  image has the current resume code (no rebuild needed)"; fi
+  imgcheck
+  [ "$HAVE" = yes ] || die IMAGE-NO-RESUME "the rebuilt image still differs from this checkout's scripts/item6 (see above): is delivery-api pulled and clean?" "The image was rebuilt but cannot resume." "git -C $DELIVERY pull --ff-only && bash $HERE/item6-resume.sh --rebuild"
+else echo "ok  image matches this checkout's scripts/item6 byte for byte (no rebuild needed)"; fi
 echo "== server checks (read-only)"
 if ! "${UBU[@]}" "NAME=$NAME RID=$RID SESS=$SESS CONT=$CONT N=$N bash -s" >"$TMPF" <<'PRE'
 set -u
