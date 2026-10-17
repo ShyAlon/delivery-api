@@ -23,10 +23,10 @@ echo "image tag: $IMAGE   server: $HOST   build dir: ~/requi/build-$STAMP"
 printf 'This uploads the four source trees (no keys, a few MB) over ssh and builds the image on the server. Type yes to continue: '
 read -r A < /dev/tty || A=no; [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "run again and type yes"
 ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" 'sudo -n docker info >/dev/null && echo ok' | grep -q ok || abort SSH-DOCKER "cannot ssh to $HOST or ubuntu cannot run sudo docker" "ssh $HOST 'sudo -n docker info' | head -3"
-ssh "$HOST" "mkdir -p ~/requi/build-$STAMP && chmod 700 ~/requi" || abort MKDIR "cannot create the build folder"
+ssh "$HOST" "mkdir -p ~/requi && chmod 700 ~/requi && for d in ~/requi/build-[0-9]*; do [ -d \"\$d\" ] && rm -rf \"\$d\"; done; mkdir ~/requi/build-$STAMP" || abort MKDIR "cannot create the build folder"
 tar -c -C "$CTX" . | ssh "$HOST" "tar -x -C ~/requi/build-$STAMP" || abort UPLOAD "upload failed"
 echo "== docker build (several minutes the first time)"
-ssh "$HOST" "cd ~/requi/build-$STAMP && sudo -n docker build -f delivery-api/Dockerfile.full -t $IMAGE . > ../build-$STAMP.log 2>&1; rc=\$?; tail -15 ../build-$STAMP.log; exit \$rc" || abort BUILD "docker build failed (log: $HOST:~/requi/build-$STAMP.log)" "The image tag $IMAGE was not created."
+ssh "$HOST" "cd ~/requi/build-$STAMP && sudo -n docker build -f delivery-api/Dockerfile.full -t $IMAGE . > ../build-$STAMP.log 2>&1; rc=\$?; tail -15 ../build-$STAMP.log; exit \$rc" || { ssh "$HOST" "rm -rf ~/requi/build-$STAMP" || true; abort BUILD "docker build failed (log: $HOST:~/requi/build-$STAMP.log)" "The image tag $IMAGE was not created; the uploaded sources were removed from the server."; }
 echo "== smoke inside the image (no network, no provider key)"
 ssh "$HOST" "sudo -n docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 $IMAGE python /app/full-smoke.py" || abort SMOKE "the smoke check failed (output above)" "The image exists on the server as $IMAGE but is not approved."
 echo; echo "DONE. Image $IMAGE built and smoke-tested on $HOST. Nothing is running."
