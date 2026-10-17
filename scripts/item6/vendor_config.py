@@ -91,13 +91,31 @@ def check_max_age_minutes():
     return minutes
 
 
+GRACE_MINUTES=60
+# A page that no longer parses only warns when the problem is layout; anything about rates, periods, limits or conversion still stops.
+HARD_PARSE_WORDS=('rate','period','limit','output','conversion','USD','selected model')
+WARN_ONLY_FACTS=('model_version',)   # facts that never change what a call costs; every other pinned fact is money or a limit
+_WARNED={}
+
+
+def _note(log,kind,text):
+    """One line with an ISO time, and one entry in the findings list (best effort, never a reason to stop)."""
+    line=datetime.datetime.now(datetime.timezone.utc).isoformat()+' WARNING '+text
+    log(line)
+    try:
+        from findings import record
+        record(kind,text)
+    except Exception:pass
+
+
 def verify_current_sources(snapshot,fetcher=fetch,*,cached=True,clock=time.monotonic,log=None):
     """Before a new contact/settlement; public reads, never provider inference.
 
-    A good check is reused for check_max_age_minutes(). A page whose bytes changed passes only
-    when the facts the run pinned (model, version, prices, limits, peak rule) are unchanged;
-    any change to those facts, or a model table that no longer parses, fails closed.
-    A failed check is never cached."""
+    A good check is reused for check_max_age_minutes(). Within GRACE_MINUTES of the last good check
+    (this process, or the read that pinned the snapshot) a page that cannot be read, no longer parses,
+    or differs only in a fact that does not change cost (model_version) is a logged warning and a
+    finding, and the run continues. A changed price, peak rule or limit always stops. After the grace
+    period the old rule applies: any unreadable or changed source stops. A failed check is never cached."""
     now=datetime.datetime.now(datetime.timezone.utc)
     checked=ProviderSnapshot(snapshot);checked.fresh(now)
     sources={s['url']:s['sha256'] for s in snapshot['sources']}
@@ -105,16 +123,31 @@ def verify_current_sources(snapshot,fetcher=fetch,*,cached=True,clock=time.monot
     log=log or (lambda text:print(text,flush=True))
     key=checked.id;last=_GOOD.get(key)
     if cached and last and clock()-last[0]<check_max_age_minutes()*60:return True
+    if cached and key in _WARNED and clock()-_WARNED[key]<check_max_age_minutes()*60:return True
     _GOOD.pop(key,None)
+    ages=[(now-checked.fetched).total_seconds()/60]
+    if last:ages.append((clock()-last[0])/60)
+    grace=min(ages)<GRACE_MINUTES
     last_text='last good check '+last[1] if last else 'no earlier good check in this process'
-    bodies={url:fetch_verified_source(url,fetcher) for url in sources}
+    def warn(kind,why):
+        _WARNED[key]=clock()
+        _note(log,kind,'vendor check: '+why+'; last good check %.0f minutes ago (grace %d), so the run continues; '%(min(ages),GRACE_MINUTES)+last_text)
+        return True
+    try:bodies={url:fetch_verified_source(url,fetcher) for url in sources}
+    except Exception as exc:
+        if not grace:raise
+        return warn('vendor-read',type(exc).__name__+': '+str(exc)[:200].replace('\n',' '))
     if any(hashlib.sha256(bodies[u].encode()).hexdigest()!=d for u,d in sources.items()):
         try:current=parse(bodies[PRICING_URL],bodies[API_URL],snapshot['model'])
         except ValueError as exc:
+            if grace and not any(w in str(exc) for w in HARD_PARSE_WORDS):return warn('vendor-read','the published model table no longer parses ('+str(exc)[:200]+')')
             raise ValueError('vendor source changed during run and the published model table no longer parses ('+str(exc)+'); preserve accepted attempts and review new snapshot; '+last_text) from None
         changed=[k for k in FACT_KEYS if current.get(k)!=snapshot.get(k)]
         if current['context_proposal']['maximum_output_tokens']!=snapshot['context_proposal']['maximum_output_tokens']:changed.append('maximum_output_tokens')
-        if changed:raise ValueError('vendor source changed during run: pinned terms differ ('+', '.join(changed)+'); preserve accepted attempts and review new snapshot; '+last_text)
+        hard=[k for k in changed if k not in WARN_ONLY_FACTS]
+        if hard or (changed and not grace):raise ValueError('vendor source changed during run: pinned terms differ ('+', '.join(changed)+'); preserve accepted attempts and review new snapshot; '+last_text)
+        if changed:
+            return warn('vendor-change','pinned '+', '.join('%s %r -> %r'%(k,snapshot.get(k),current.get(k)) for k in changed)+'; prices, peak rule and limits unchanged')
         log(datetime.datetime.now(datetime.timezone.utc).isoformat()+' vendor pages changed but every pinned term is identical; check passes')
     _GOOD[key]=(clock(),datetime.datetime.now(datetime.timezone.utc).isoformat())
     return True
