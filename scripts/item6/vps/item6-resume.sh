@@ -257,3 +257,12 @@ OUTD=$DELIVERY/runs/$NAME-resume$N-collected-$(date +%Y%m%d%H%M%S)
 mkdir -m 700 "$OUTD"
 "${UBU[@]}" "cd $RDIR && tar cf - evidence manifest-before-resume-$N.txt \$(ls resume-*.log 2>/dev/null)" | tar xf - -C "$OUTD" || die COLLECT "copy failed" "Partial files may be in $OUTD; keep them." "bash $HERE/item6-run.sh --resume $RUN collect"
 chmod -R go-rwx "$OUTD"; echo "collected into $OUTD"
+# The tmux window closes on Enter and takes its screen with it, so show the end of the run here and keep it in a file that can be pasted.
+LASTLOG=$(ls -t "$OUTD"/resume-console-*.log 2>/dev/null | head -1)
+if [ -n "$LASTLOG" ]; then
+  { echo "== last 40 lines of $(basename "$LASTLOG") ($(date -u +%FT%TZ))"; tail -n 40 "$LASTLOG" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | tr -d '\r'; } | tee "$OUTD/last-screen.txt"
+  chmod 600 "$OUTD/last-screen.txt"
+  echo
+  if grep -q 'COMMAND_EXIT_CODE="0"' "$LASTLOG"; then echo "The run exited with code 0. Evidence: $OUTD"
+  else echo "The run did NOT finish cleanly. Evidence (preserved, nothing was retried): $OUTD"; echo "Fix: send me the zip of $OUTD (or just: cat $OUTD/last-screen.txt)"; echo "Then run: req"; fi
+else echo "no resume console log was collected: look in $OUTD"; fi
