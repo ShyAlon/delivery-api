@@ -71,7 +71,7 @@ def prepare_execution_anchor(*,stage_root,plan,plan_sha256,validate_authority):
 
 
 def promote_private_stage(*,artifacts_base,lineage,plan,plan_sha256,validate_authority):
-    """Linux same-filesystem no-overwrite rename; no DB activation or retry.
+    """Linux or macOS same-filesystem no-overwrite rename; no DB activation or retry.
 
     Trusted caller journals promotion_pending before this call, then validates
     promoted files/anchor and journals files_promoted. Any ambiguous outcome is
@@ -105,11 +105,12 @@ def promote_private_stage(*,artifacts_base,lineage,plan,plan_sha256,validate_aut
             finally:os.close(anchor_fd)
             validate_authority()
             libc=ctypes.CDLL(None,use_errno=True)
-            rename=getattr(libc,'renameat2',None)
+            rename=getattr(libc,'renameat2',None);no_replace=1  # Linux RENAME_NOREPLACE
+            if rename is None:rename=getattr(libc,'renameatx_np',None);no_replace=4  # macOS RENAME_EXCL
             if rename is None:raise ValueError('atomic no-overwrite promotion unsupported on this host')
             rename.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint);rename.restype=ctypes.c_int
             name=anchor.execution_session_id.encode()
-            if rename(source_fd,name,sessions_fd,name,1)!=0:
+            if rename(source_fd,name,sessions_fd,name,no_replace)!=0:
                 code=ctypes.get_errno()
                 if code==errno.EEXIST:raise ValueError('destination exists; explicit reconciliation required')
                 raise OSError(code,os.strerror(code))
