@@ -185,8 +185,8 @@ class PrivatePipeline:
             cfg={'configurable':{'thread_id':cap.session_id}}
             if generator_resume is not None:
                 snapshot=graph.get_state(cfg)
-                # Only the saved next task may run: architecture, or tests when the review pinned saved tests fills.
-                expected_next=('tests',) if generator_resume.get('tests_partials_present') else ('architecture',)
+                # Only the saved next task may run: architecture, tests when the review pinned saved tests fills, or review when it pinned saved review chunks.
+                expected_next=('review',) if generator_resume.get('review_partials_present') else ('tests',) if generator_resume.get('tests_partials_present') else ('architecture',)
                 if snapshot.config['configurable']['checkpoint_id']!=generator_resume['checkpoint_id'] or tuple(snapshot.next)!=expected_next or any(t.interrupts for t in snapshot.tasks):raise ValueError('exact failed '+expected_next[0]+' checkpoint required, no upstream replay')
                 result=graph.invoke(None,cfg)
             else:

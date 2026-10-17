@@ -127,6 +127,10 @@ def main(argv=None):
             stop_database()
 
 
+# An extra top-up is only bought below this balance, so a repeated start can never buy a second pack.
+EXTRA_TOPUP_BELOW_CREDITS=10
+
+
 def go(config,run_id,paths,facts,dump_sha,ceiling_units,topup_offer=None,topup_sequence=1):
     import httpx,psycopg,jwt
     from psycopg.conninfo import make_conninfo
@@ -198,6 +202,9 @@ def go(config,run_id,paths,facts,dump_sha,ceiling_units,topup_offer=None,topup_s
             return {'balance_units':row[0],'units_per_credit':row[1]}
         processor=PayPalAdapter(transport,binding)
         extra=topup_offer is not None
+        if extra and facts['balance_units']>=EXTRA_TOPUP_BELOW_CREDITS*10**9:
+            say('credit balance is already '+str(facts['balance_units'])+' units (at least '+str(EXTRA_TOPUP_BELOW_CREDITS)+' credits): the extra top-up is skipped')
+            extra=False
         if extra and paths['number']==1:raise ValueError('an extra top-up applies to a later resume')
         if extra and topup_sequence<2:raise ValueError('an extra top-up needs its own purchase sequence (2 or more)')
         if facts['balance_units']>0 and not extra:
@@ -229,8 +236,9 @@ def go(config,run_id,paths,facts,dump_sha,ceiling_units,topup_offer=None,topup_s
         with tenant_context(scope):
             cap=WorkerCapability.capture(store,facts['task_id'])
             resume=generator_review(session_root(paths['root'],scope,cap.session_id),cap.session_id)
-        if not resume.get('tests_partials_present'):raise ValueError('saved tests fills are required for this resume')
-        say('resuming the generator from its saved tests checkpoint '+resume['checkpoint_id'])
+        stage='review' if resume.get('review_partials_present') else 'tests' if resume.get('tests_partials_present') else None
+        if stage is None:raise ValueError('saved tests fills or saved review chunks are required for this resume')
+        say('resuming the generator from its saved '+stage+' checkpoint '+resume['checkpoint_id'])
         result=execute_continuation(store=store,scope=scope,root=paths['root'],config={},run_id=run_id,task_id=facts['task_id'],prior_job=facts['failed_job'],
             output=paths['output'],pipeline_factory=pipeline_factory,original_failed_jobs=facts['failed_jobs'],pending_review=None,generator_resume=resume)
         print(json.dumps(result),flush=True)
