@@ -197,9 +197,14 @@ def test_an_extra_failed_needs_job_without_attempts_is_accepted_and_listed():
     assert 'extra failed needs job' in text and 'J3' in text
 
 
-def test_an_extra_failed_needs_job_with_a_provider_attempt_is_refused():
+def test_an_extra_failed_needs_job_with_only_settled_provider_attempts_is_accepted():
     rows=[attempt('settled',attempt_id='s'*32,job_id='J1'),attempt('failure_waived',attempt_id='r'*32,expense_actual=None),attempt('settled',attempt_id='t'*32,job_id='J3')]
-    with pytest.raises(AdmissionDenied,match='extra failed needs job J3 has provider attempts'):resume.discover(extra_conn(provider_attempts=rows))
+    assert resume.discover(extra_conn(provider_attempts=rows))['failed_jobs']==['J2','J3']
+
+
+def test_an_extra_failed_needs_job_with_an_unsettled_provider_attempt_is_refused():
+    rows=[attempt('settled',attempt_id='s'*32,job_id='J1'),attempt('failure_waived',attempt_id='r'*32,expense_actual=None),attempt('reserved',attempt_id='t'*32,job_id='J3')]
+    with pytest.raises(AdmissionDenied,match='unsettled provider attempt'):resume.discover(extra_conn(provider_attempts=rows))
 
 
 def test_an_extra_job_that_is_not_failed_is_refused():
@@ -234,7 +239,7 @@ def test_an_extra_job_with_token_billing_is_refused():
             if 'FROM retail_contributions WHERE job_id=ANY' in sql:return Result([{'x':1}])
             return super().execute(sql,params)
     base=extra_conn()
-    with pytest.raises(AdmissionDenied,match='retail contributions'):resume.discover(Billed(**base.tables))
+    with pytest.raises(AdmissionDenied,match='non-token retail contribution'):resume.discover(Billed(**base.tables))
 
 
 def test_extra_compute_write_off_needs_the_typed_yes_and_only_the_typed_yes():

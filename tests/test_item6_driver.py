@@ -49,6 +49,11 @@ def test_resume_verifier_copy_has_an_empty_private_evidence_dir_and_prints_the_l
     assert "tail -2 | tr" in text
 
 
+def test_resume_driver_keeps_the_last_screen_after_the_tmux_window_closes():
+    text=open(Path(__file__).resolve().parents[1]/'scripts/item6/vps/item6-resume.sh').read()
+    assert 'last-screen.txt' in text and 'tail -n 40' in text and 'Fix: send me the zip' in text and 'COMMAND_EXIT_CODE="0"' in text
+
+
 def test_resume_driver_numbers_its_resumes_and_skips_top_up_after_the_first():
     text = RESUME.read_text()
     assert '--resume-number $N' in text and 'item6-database-resume-$((N-1)).dump' in text

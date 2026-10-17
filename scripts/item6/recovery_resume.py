@@ -28,12 +28,12 @@ def discover(c):
     if len(held)!=1:raise AdmissionDenied('exactly one unsettled provider attempt required, found %d'%len(held))
     a=held[0]
     # Earlier resumes may leave extra failed needs jobs. Only the job that owns the held attempt is the stopped one;
-    # each extra must be failed and must never have contacted the provider (no attempt row of any state).
+    # each extra must be failed and every provider attempt it made must be settled (measured and already charged).
     owners=[j for j in by_kind['phase:needs'] if j['job_id']==a['job_id']]
     if len(owners)!=1:raise AdmissionDenied('the unsettled attempt must be a never-started reservation of a failed needs job')
     needs=owners[0]
     for extra in (j for j in by_kind['phase:needs'] if j is not needs):
-        if any(x['job_id']==extra['job_id'] for x in attempts):raise AdmissionDenied('extra failed needs job '+extra['job_id']+' has provider attempts and needs its own review')
+        if any(x['job_id']==extra['job_id'] and x['state']!='settled' for x in attempts):raise AdmissionDenied('extra failed needs job '+extra['job_id']+' has an unsettled provider attempt and needs its own review')
     waived=a['state']=='failure_waived'
     if waived:
         # A later resume of a run whose write-offs an earlier resume already made (typed yes) and recorded in the audit log.
@@ -54,7 +54,7 @@ def discover(c):
     extras=[j['job_id'] for j in by_kind['phase:needs'] if j is not needs]
     extra_compute=[]
     if extras:
-        if c.execute('SELECT 1 FROM retail_contributions WHERE job_id=ANY(%s) LIMIT 1',(extras,)).fetchone():raise AdmissionDenied('an extra failed needs job has retail contributions and needs its own review')
+        if c.execute("SELECT 1 FROM retail_contributions WHERE job_id=ANY(%s) AND contribution_key NOT LIKE 'attempt:%%' LIMIT 1",(extras,)).fetchone():raise AdmissionDenied('an extra failed needs job has a non-token retail contribution and needs its own review')
         for r in c.execute('SELECT segment_key,job_id,state,deterministic_ms,started_at FROM retail_compute_segments WHERE job_id=ANY(%s)',(extras,)).fetchall():
             if r.get('job_id') not in extras:continue
             if r['state']=='unresolved' and r['deterministic_ms'] is None:extra_compute.append({'job_id':r['job_id'],'segment_key':r['segment_key'],'started_at':float(r['started_at'])})
@@ -83,12 +83,12 @@ def review_lines(facts,dump_sha256):
         '  task '+facts['task_id']+', failed job '+facts['failed_job']+' (phase:needs)',
         '  settled provider calls: %d, confirmed provider spend $%s'%(facts['settled_attempts'],usd(facts['settled_expense_units'])),
         '  credit balance: %.9f credits'%(facts['balance_units']/facts['units_per_credit']),
-        *(['  earlier resumes left %d extra failed needs job(s) with no provider call and no charge: %s'%(len(facts['failed_jobs'])-1,', '.join(j for j in facts['failed_jobs'] if j!=facts['failed_job']))] if len(facts.get('failed_jobs',[]))>1 else []),
+        *(['  earlier resumes left %d extra failed needs job(s), every provider call of theirs settled and charged: %s'%(len(facts['failed_jobs'])-1,', '.join(j for j in facts['failed_jobs'] if j!=facts['failed_job']))] if len(facts.get('failed_jobs',[]))>1 else []),
         'Both unknown items were ALREADY written off by you in an earlier resume (audit records present); nothing is written off again:',
         '  1. provider call '+facts['attempt_id']+': never started, billed 0.',
         '     Its reservation of $%s stays counted against the spend ceiling.'%usd(facts['expense_reserved']),
         '  2. unmeasured compute time of the failed job ('+facts['compute_key']+'): billed 0.',
-        *(['  unmeasured compute of earlier failed resume job(s), no provider call, would be written off, billed 0 (needs your typed yes below):']+['    - job '+x['job_id']+' ('+x['segment_key']+'), started at '+time.strftime('%Y-%m-%d %H:%M:%S UTC',time.gmtime(x['started_at'])) for x in facts['extra_compute']] if facts.get('extra_compute') else []),
+        *(['  unmeasured compute time of earlier failed resume job(s) (their provider calls are settled and charged; only the compute time was never measured), would be written off, billed 0 (needs your typed yes below):']+['    - job '+x['job_id']+' ('+x['segment_key']+'), started at '+time.strftime('%Y-%m-%d %H:%M:%S UTC',time.gmtime(x['started_at'])) for x in facts['extra_compute']] if facts.get('extra_compute') else []),
         'Database dump sha256: '+dump_sha256,
         'Facts sha256: '+facts_sha256(facts)]
     return ['Stopped run, restored from its own database dump (read only so far):',
