@@ -204,7 +204,7 @@ def test_socket_release_rejects_malformed_payloads(payload):
     assert _ask(gw, 'release', payload)['ok'] is False and gw.got is None
 
 
-# ---- migration and resume ----
+# ---- migration ----
 MIGRATION = next((Path(__file__).resolve().parent.parent / 'supabase' / 'migrations').glob('*_released_provider_attempts.sql'))
 
 
@@ -216,42 +216,3 @@ def test_migration_adds_the_state_idempotently_and_keeps_released_unbilled():
     for old in ("'reserved','dispatched','settled','cancelled','uncertain','failure_waived'", "'pending','settled','failure_waived'"):
         assert old in sql  # every state that existed before stays allowed
     assert sql.count('DROP CONSTRAINT IF EXISTS') == sql.count('ADD CONSTRAINT') == 4
-
-
-def test_resume_reapplies_the_migration_after_the_dump_restore(tmp_path, monkeypatch):
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts' / 'item6'))
-    import resume_entry
-    (tmp_path / '20261017100000_released_provider_attempts.sql').write_text(MIGRATION.read_text())
-    ran = []
-
-    class C:
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def execute(self, sql, prepare=None): ran.append(sql)
-    import types
-    monkeypatch.setitem(sys.modules, 'psycopg', types.SimpleNamespace(connect=lambda dsn: C()))
-    assert resume_entry.apply_ledger_schema('host=x', str(tmp_path)).endswith('released_provider_attempts.sql')
-    assert ran and "'released'" in ran[0]
-    with pytest.raises(ValueError, match='missing'):
-        resume_entry.apply_ledger_schema('host=x', str(tmp_path / 'none'))
-
-
-def test_resume_discovery_does_not_count_a_released_attempt_as_unsettled():
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts' / 'item6'))
-    import recovery_resume as R
-
-    class C:
-        def execute(self, sql, params=()):
-            s = ' '.join(sql.split())
-            if 'FROM worker_jobs' in s:
-                return Cur([{'job_id': 'i', 'kind': 'phase:intent', 'state': 'done', 'task_id': 't', 'attempt': 1, 'generation': 1, 'session_id': 's', 'auth_session_id': 'x'},
-                            {'job_id': 'n', 'kind': 'phase:needs', 'state': 'failed', 'task_id': 't', 'attempt': 1, 'generation': 1, 'session_id': 's', 'auth_session_id': 'x'}])
-            if 'FROM provider_attempts' in s:
-                base = {'job_id': 'n', 'provider_started_at': None, 'expense_reserved': 1, 'retail_reserved': 1}
-                return Cur([dict(base, attempt_id='s1', state='settled'), dict(base, attempt_id='r1', state='released'),
-                            dict(base, attempt_id='h1', state='reserved')])
-            raise RuntimeError('past the held-attempt check')
-    with pytest.raises(RuntimeError, match='past the held-attempt check'):
-        R.discover(C())

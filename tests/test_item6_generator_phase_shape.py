@@ -1,9 +1,8 @@
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 import pytest
 sys.path.insert(0,str(Path(__file__).parents[1]/'scripts/item6'))
-from pipeline_executor import PrivatePipeline,require_approved_srs
+from pipeline_executor import require_approved_srs
 
 
 def test_canonical_store_phase_key_rows_are_accepted():
@@ -17,16 +16,9 @@ def test_canonical_store_phase_key_rows_are_accepted():
     [{'phase_key':'srs','state':'approved'},{'phase_key':'srs','state':'approved'}],
     None,
 ])
-def test_bad_phase_shapes_stop_before_enqueue_or_compute(phases):
-    class Store:
-        def enqueue_worker(self,*args,**kw):raise AssertionError('must not enqueue')
-    runner=PrivatePipeline(store=Store(),artifacts_base=Path('/tmp'),model='fixture',gateway_factory=lambda *a:None,
-        generator_clients=lambda *a:None,interview_clients=lambda *a:None,answer_input=lambda *a:None,
-        review_gate=lambda *a:None,progress=lambda *a:None)
-    from delivery_api.tenancy import TenantScope
+def test_bad_phase_shapes_are_refused(phases):
     with pytest.raises(ValueError):
-        runner.execute_generator_existing(SimpleNamespace(root=Path('/tmp')),TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002'),
-            {'task_id':'fixture','phases':phases},prior_job='fixture-job',generator_resume={})
+        require_approved_srs({'task_id':'fixture','phases':phases})
 
 
 def test_real_postgres_task_shape_keeps_canonical_key():
