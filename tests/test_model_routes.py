@@ -137,6 +137,8 @@ def test_generator_phase_default_ignores_interview_route(monkeypatch,tmp_path):
     (repo/'.env').write_text('SPEC_GENERATOR_MODEL_SRS=ollama:phi4\nSPEC_GENERATOR_MODEL_NEEDS=ollama:qwen\n')
     monkeypatch.setenv('SPEC_GENERATOR_DIR',str(repo))
     monkeypatch.delenv('SPEC_GENERATOR_MODEL_SRS',raising=False)
+    # An earlier import of delivery_api.config can load a developer's .env into os.environ.
+    monkeypatch.delenv('SPEC_GENERATOR_MODEL_ARCHITECTURE',raising=False)
     assert model_routes.phase_initial_model('srs')=='ollama:phi4'
     assert model_routes.phase_initial_model('architecture')=='ollama:qwen2.5-coder:14b'
     monkeypatch.setenv('SPEC_GENERATOR_MODEL_SRS','deepseek:deepseek-chat')
