@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+# Full Requi.re service (interview engine + delivery API) for the private OVH server.
+# Build context is the folder made by scripts/docker/build-full-image.sh (one git archive per repo):
+#   delivery-api/  interview-engine/  spec-generator/  verification-loop/
+# Build:  docker build -f delivery-api/Dockerfile.full -t requi-full:<tag> <context>
+FROM python:3.12-slim AS build
+WORKDIR /src
+COPY delivery-api/ delivery-api/
+COPY interview-engine/ interview-engine/
+COPY spec-generator/ spec-generator/
+COPY verification-loop/ verification-loop/
+RUN echo "bc8cb30c63719e106451d514532b28a30d8e69fbcce8a771121eab2369f0391e  delivery-api/vendor/vmodel_contracts-0.28.0-py3-none-any.whl" | sha256sum --check - \
+    && pip wheel --no-cache-dir --no-deps --wheel-dir /wheels ./delivery-api ./interview-engine ./spec-generator ./verification-loop \
+    && cp delivery-api/vendor/vmodel_contracts-0.28.0-py3-none-any.whl /wheels/
+
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 \
+    DELIVERY_CONTROL_PLANE_ONLY=0 DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 \
+    REQUI_RE_DIST=1 INTERVIEW_ENGINE_PYTHON=/usr/local/bin/python INTERVIEW_ENGINE_TENANTS=1 \
+    VMODEL_ARTIFACTS_DIR=/data/artifacts XDG_DATA_HOME=/data HOME=/data
+WORKDIR /app
+COPY --from=build /wheels/ /wheels/
+RUN pip install --no-cache-dir /wheels/*.whl 'psycopg[binary]>=3.2,<4' fastapi uvicorn pydantic httpx python-multipart \
+      langgraph langgraph-checkpoint-sqlite langchain-core langchain-openai langchain-ollama python-dotenv 'typesafe-sdk==0.7.0' 'pyarrow>=17,<24' \
+    && pip check \
+    && python -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core' \
+    && rm -rf /wheels && useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin requi \
+    && mkdir -p /data/artifacts && chown -R 10001:10001 /data
+COPY delivery-api/scripts/docker/full_entry.py delivery-api/scripts/docker/full-smoke.py /app/
+USER 10001:10001
+EXPOSE 8000
+VOLUME /data
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+ CMD python /app/full_entry.py --healthcheck
+CMD ["python", "/app/full_entry.py"]
