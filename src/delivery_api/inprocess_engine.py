@@ -132,7 +132,10 @@ def stage_models(env):
     if len(routes)!=1:raise ValueError('exactly one model route is required for an in-process phase')
     provider,sep,model=routes.pop().partition(':')
     if provider!='deepseek' or not sep or not model:raise ValueError('only deepseek runs inside the service')
-    return {stage:StageModel('deepseek',model) for stage in _STAGES}
+    # Each stage keeps the output cap the generator ships for it (the tests stage needs 12288, not the 8192 default).
+    from spec_generator import model_config
+    caps=model_config._STAGE_DEFAULTS
+    return {stage:(StageModel('deepseek',model,max_tokens=caps[stage].max_tokens) if stage in caps else StageModel('deepseek',model)) for stage in _STAGES}
 
 
 class InProcessEngine:
