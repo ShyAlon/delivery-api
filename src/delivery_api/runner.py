@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .store import Storage
 from .observability import event as activity
+from . import inprocess_engine
 
 _MISSING_MODULE = re.compile(r"ModuleNotFoundError: No module named [\'\"]([^\'\"]+)[\'\"]")
 
@@ -85,6 +86,10 @@ class ProcessRunner:
             raise PermissionError('cloud subprocess output must match authorized session')
         if (env or {}).get('VMODEL_ARTIFACTS_DIR')!=str(expected.parent.parent):
             raise PermissionError('cloud subprocess root must match tenant namespace')
+        virtual=inprocess_engine.take(task_id)
+        if virtual is not None:
+            # The service runs this phase itself under its own gateway; no child process, no descriptor.
+            return await self._run(task_id,command,virtual=virtual,**options)
         gateway=current_worker_gateway(self.store,task_id)
         with worker_admission_channel(gateway) as channel:
             options['env']={**(env or {}),'VMODEL_ADMISSION_FD':str(channel.fileno())}
@@ -92,7 +97,7 @@ class ProcessRunner:
 
     async def _run(self, task_id: str, command: list[str], *, cwd: Path, phase: str = "intent",
                   env: dict[str, str] | None = None, completion_phases: tuple[str, ...] = (), infer_phase: bool = True,
-                  stall_timeout: float | None = None, admission_fds: tuple[int,...] = ()) -> int:
+                  stall_timeout: float | None = None, admission_fds: tuple[int,...] = (), virtual=None) -> int:
         from .execution_fence import require_engine_execution
         require_engine_execution()
         if task_id in self.processes:
@@ -114,7 +119,7 @@ class ProcessRunner:
                 raise PermissionError('cloud subprocess output must match authorized session')
             if (env or {}).get('VMODEL_ARTIFACTS_DIR')!=str(expected.parent.parent):
                 raise PermissionError('cloud subprocess root must match tenant namespace')
-        if config.CLOUD_TENANTS:
+        if config.CLOUD_TENANTS and virtual is None:
             from .producer_admission import current_worker_gateway
             # Guard before phase/event mutations and before child creation.
             current_worker_gateway(self.store,task_id)
@@ -125,14 +130,15 @@ class ProcessRunner:
         self.store.update_phase(task_id, phase, "running", detail="Starting engine")
         self.store.add_event(task_id, "command", "Engine process started", phase_key=phase,
                              payload={"argv": command, "cwd": str(cwd)})
-        proc = await asyncio.create_subprocess_exec(
+        if virtual is not None:virtual.attach(command,env)
+        proc = virtual if virtual is not None else await asyncio.create_subprocess_exec(
             *command, cwd=str(cwd), env={**os.environ, **(env or {})},
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
             start_new_session=(os.name == "posix"),
             **({"pass_fds":admission_fds} if admission_fds else {}),
         )
         self.processes[task_id] = proc
-        self.active_work[task_id]=ActiveWork("subprocess",phase,"running",time.time(),durable_ref=str(proc.pid))
+        self.active_work[task_id]=ActiveWork("subprocess",phase,"running",time.time(),durable_ref=str(proc.pid) if proc.pid is not None else "in-process")
         traceback_started = False
         missing_module: str | None = None
         cli_error: str | None = None
@@ -166,11 +172,11 @@ class ProcessRunner:
                 except asyncio.TimeoutError:
                     stalled=True
                     activity("engine.stalled","Engine produced no output; stopping the stalled run",task_id=task_id,phase=phase,silent_seconds=stall_timeout)
-                    try:os.killpg(proc.pid,signal.SIGTERM) if os.name == "posix" else proc.terminate()
+                    try:inprocess_engine.terminate(proc,signal.SIGTERM)
                     except ProcessLookupError:pass
                     try:await asyncio.wait_for(proc.wait(),2)
                     except asyncio.TimeoutError:
-                        try:os.killpg(proc.pid,signal.SIGKILL) if os.name == "posix" else proc.kill()
+                        try:inprocess_engine.terminate(proc,signal.SIGKILL)
                         except ProcessLookupError:pass
                         await proc.wait()
                     break
@@ -317,11 +323,11 @@ class ProcessRunner:
             # changing durable state, leaving a task marked running with no process.
             if proc.returncode is None:
                 try:
-                    os.killpg(proc.pid,signal.SIGTERM) if os.name == "posix" else proc.terminate()
+                    inprocess_engine.terminate(proc,signal.SIGTERM)
                 except ProcessLookupError:pass
                 try:await asyncio.wait_for(proc.wait(),1)
                 except asyncio.TimeoutError:
-                    try:os.killpg(proc.pid,signal.SIGKILL) if os.name == "posix" else proc.kill()
+                    try:inprocess_engine.terminate(proc,signal.SIGKILL)
                     except ProcessLookupError:pass
                     await proc.wait()
             error=f"Error: engine stream handling stopped. Likely cause: {type(exc).__name__}: {exc}. Next: restart Requi.re to resume the saved interview checkpoint; rerun Start only if recovery cannot resume it."
@@ -351,7 +357,7 @@ class ProcessRunner:
             self.interrupted_for_shutdown.add(task_id)
             activity("engine.shutdown.signal","Stopping engine for server shutdown",task_id=task_id,pid=proc.pid,signal="SIGTERM")
             try:
-                os.killpg(proc.pid,signal.SIGTERM) if os.name == "posix" else proc.terminate()
+                inprocess_engine.terminate(proc,signal.SIGTERM)
             except ProcessLookupError:pass
         if active:
             try:await asyncio.wait_for(asyncio.gather(*(p.wait() for _,p in active)),grace_seconds)
@@ -359,7 +365,7 @@ class ProcessRunner:
                 for task_id,proc in active:
                     if proc.returncode is not None:continue
                     activity("engine.shutdown.kill","Engine ignored shutdown grace period",task_id=task_id,pid=proc.pid,signal="SIGKILL")
-                    try:os.killpg(proc.pid,signal.SIGKILL) if os.name == "posix" else proc.kill()
+                    try:inprocess_engine.terminate(proc,signal.SIGKILL)
                     except ProcessLookupError:pass
                 await asyncio.gather(*(p.wait() for _,p in active),return_exceptions=True)
         activity("engine.shutdown.complete","Engine shutdown complete",processes=len(active))
