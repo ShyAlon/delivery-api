@@ -74,11 +74,18 @@ async def dispatch_phase(store,orchestrator,task_id,phase,*,resume_job_id=None,q
         store.reauthorize_worker(resume_job_id)
         job_id=resume_job_id
     else:job_id=store.enqueue_worker(task_id,'phase:'+phase,execution_options=durable)
+    options={}
+    if "mode" in durable:options["mode"]=ExecutionMode(durable["mode"])
+    if "model_route" in durable:options["model_route"]=durable["model_route"]
+    from . import config,inprocess_engine
+    engine=inprocess_engine.current()
+    if config.CLOUD_TENANTS and engine is not None:
+        # The service runs the generator itself under the money gateway; it claims the job and meters it.
+        if not await engine.dispatch(store,orchestrator,task_id,phase,job_id,options):
+            raise ValueError("worker job was already claimed; no execution started")
+        return job_id
     async def run(capability):
         capability.validate(store)
-        options={}
-        if "mode" in durable:options["mode"]=ExecutionMode(durable["mode"])
-        if "model_route" in durable:options["model_route"]=durable["model_route"]
         await orchestrator.execute_phase(capability.task_id,phase,**options)
     if not await execute_job(store,job_id,run):
         raise ValueError("worker job was already claimed; no execution started")
