@@ -16,7 +16,6 @@ for _name in ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"):
 os.environ["TURSO_SYNC_INTERVAL"] = "60"
 os.environ["XDG_DATA_HOME"] = _scratch
 os.environ["DELIVERY_DATABASE_URL"] = f"sqlite:///{_scratch}/delivery.db"
-os.environ.pop("DELIVERY_DB_PATH", None)
 
 # Private item6 scripts are test-only modules, not installed application imports.
 import sys

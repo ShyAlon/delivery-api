@@ -1,5 +1,4 @@
 import os
-os.environ["DELIVERY_DB_PATH"] = ":memory:"
 
 import pytest
 from fastapi.testclient import TestClient

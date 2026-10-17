@@ -32,7 +32,7 @@ async def test_lifespan(application):
 app.router.lifespan_context=test_lifespan
 uvicorn.run(app,host="127.0.0.1",port={port},log_level="warning")
 ''')
-    env={**os.environ,'PYTHONPATH':str(root/'src'),'DELIVERY_DB_PATH':str(tmp_path/'shutdown.db')}
+    env={**os.environ,'PYTHONPATH':str(root/'src'),'DELIVERY_DATABASE_URL':f"sqlite:///{tmp_path/'shutdown.db'}"}
     server=subprocess.Popen([sys.executable,str(launcher)],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     stream=None
     try:

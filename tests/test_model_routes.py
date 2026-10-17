@@ -1,5 +1,3 @@
-import os
-os.environ["DELIVERY_DB_PATH"] = ":memory:"
 
 import json
 
