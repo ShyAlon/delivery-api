@@ -32,8 +32,6 @@ if CLOUD_TENANTS and os.environ.get("TURSO_DATABASE_URL"):
     raise RuntimeError("Cloud tenant control plane cannot use a Turso replica/fallback.")
 SUPABASE_ADMIN_SUBJECTS = {x.strip() for x in os.environ.get("DELIVERY_SUPABASE_ADMIN_SUBJECTS", "").split(",") if x.strip()}
 
-# Compatibility alias for older deployments; new code uses DATABASE_URL.
-DB_PATH = DATABASE_URL
 def local_database_path() -> Path:
     if DATABASE_URL.startswith("sqlite:///"): return Path(DATABASE_URL.removeprefix("sqlite:///"))
     if "://" not in DATABASE_URL:return Path(DATABASE_URL)

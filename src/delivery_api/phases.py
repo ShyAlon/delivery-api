@@ -23,7 +23,6 @@ PHASE_DEFINITIONS = (
 )
 PHASE_BY_KEY = {phase.key: phase for phase in PHASE_DEFINITIONS}
 PHASE_KEYS = tuple(phase.key for phase in PHASE_DEFINITIONS)
-PHASE_LABELS = {phase.key: phase.label for phase in PHASE_DEFINITIONS}
 PHASE_POSITIONS = {phase.key: index for index, phase in enumerate(PHASE_DEFINITIONS)}
 
 def successor(key: str) -> PhaseDefinition | None:
