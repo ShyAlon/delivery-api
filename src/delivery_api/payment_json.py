@@ -1,3 +1,4 @@
+"""Strict parsing of webhook event bodies: bounded size, exact bytes, no duplicate keys, no NaN or Infinity, top level must be an object. Any violation raises PaymentRejected."""
 import json
 from .payment_errors import PaymentRejected
 
