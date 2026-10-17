@@ -1,9 +1,11 @@
 """Dry CLI performs no DB/network effects and requires exact go before connection."""
 import json,os,subprocess,sys
+import pytest
 from pathlib import Path
 from test_item6_isolation import config
 
 
+@pytest.mark.skipif(not Path('/proc/self/fd').is_dir(),reason='needs /proc/self/fd (Linux): mac_run.py requires it for pinned SQLite revision readers')
 def test_mac_config_dry_default_and_wrong_go_never_connects(tmp_path):
  root=Path(__file__).parents[1]
  def write(name,body):
