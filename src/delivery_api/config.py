@@ -9,8 +9,7 @@ from dotenv import load_dotenv
 # Shared local configuration; process environment still has precedence.
 load_dotenv(override=False)
 
-# Abuse protection (scoping doc section 5): per-run hard cap + global cap.
-PER_RUN_BUDGET_USD = float(os.environ.get("DELIVERY_PER_RUN_BUDGET_USD", "6.00"))
+# Abuse protection (scoping doc section 5): global cap.
 GLOBAL_BUDGET_USD = float(os.environ.get("DELIVERY_GLOBAL_BUDGET_USD", "100.00"))
 ADMIN_TOKEN = os.environ.get("DELIVERY_ADMIN_TOKEN", "dev-admin-token")  # link creation is Shy-only
 def default_data_dir() -> Path:
@@ -41,7 +40,6 @@ TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
 TURSO_SYNC_INTERVAL = int(os.environ.get("TURSO_SYNC_INTERVAL", "60"))
 if bool(TURSO_DATABASE_URL) != bool(TURSO_AUTH_TOKEN):
     raise RuntimeError("Turso configuration is incomplete: set both TURSO_DATABASE_URL and TURSO_AUTH_TOKEN, or neither.")
-ARTIFACT_DIR = os.environ.get("DELIVERY_ARTIFACT_DIR", "artifacts")
 
 SESSION_SECRET = os.environ.get("DELIVERY_SESSION_SECRET", "")
 BASIC_AUTH_ENABLED = os.environ.get("DELIVERY_BASIC_AUTH_ENABLED", "0") != "0"

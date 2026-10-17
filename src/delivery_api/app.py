@@ -676,7 +676,7 @@ def add_usage(run_id: str, rec: UsageRecord, request: Request):
     try: check_run_budget(total, run["budget_usd"], run_id)
     except BudgetExceeded:
         store.set_state(run_id, RunState.BUDGET_STOPPED)
-        raise HTTPException(402, f"run stopped by budget guard at ${total:.2f}; raise DELIVERY_PER_RUN_BUDGET_USD and retry")
+        raise HTTPException(402, f"run stopped by budget guard at ${total:.2f}; mint a new link to continue")
     return {"run_total_usd": total}
 
 @app.get("/runs/{run_id}/artifacts")
