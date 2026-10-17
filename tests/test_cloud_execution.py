@@ -5,8 +5,11 @@ import pytest
 
 from delivery_api import cloud_execution,config
 
-PRICES=json.dumps([{'provider':'deepseek','model':'deepseek-flash','price_version':'t1','source':'test','expense_input':1,'expense_output':2,'retail_input':3,'retail_output':4}])
-GOOD={'DELIVERY_CLOUD_EXECUTION':'1','DEEPSEEK_API_KEY':'k','INTERVIEW_ENGINE_TOKEN':'t'*32,'VMODEL_REVIEWED_MODEL_PRICES':PRICES}
+import importlib.util,pathlib
+_spec=importlib.util.spec_from_file_location('gateway_test_inputs',pathlib.Path(__file__).with_name('test_production_gateway.py'))
+_inputs=importlib.util.module_from_spec(_spec);_spec.loader.exec_module(_inputs)
+GOOD={**_inputs.env(),'DELIVERY_CLOUD_EXECUTION':'1','INTERVIEW_ENGINE_TOKEN':'t'*32}
+PRICES=GOOD['VMODEL_REVIEWED_MODEL_PRICES']
 
 
 @pytest.fixture(autouse=True)
