@@ -30,18 +30,18 @@ for repo in $REPOS; do
   # its project version does not. Force the pinned contracts wheel into each
   # dependent runtime. --locked still prevents rewriting the user's lockfile.
   if grep -q 'vmodel-contracts @ git+' "$path/pyproject.toml"; then
-    contracts_reinstall=(--reinstall-package vmodel-contracts)
+    contracts_reinstall='--reinstall-package vmodel-contracts'
   else
-    contracts_reinstall=()
+    contracts_reinstall=''
   fi
   if command -v uv >/dev/null 2>&1 && [ -f "$path/uv.lock" ]; then
-    (cd "$path" && uv sync --locked --quiet "${contracts_reinstall[@]}") || { echo "Error: $repo environment sync failed. Check its lockfile and dependencies." >&2; exit 1; }
+    (cd "$path" && uv sync --locked --quiet $contracts_reinstall) || { echo "Error: $repo environment sync failed. Check its lockfile and dependencies." >&2; exit 1; }
   elif command -v uv >/dev/null 2>&1; then
-    (cd "$path" && uv sync --quiet "${contracts_reinstall[@]}") || { echo "Error: $repo environment sync failed." >&2; exit 1; }
+    (cd "$path" && uv sync --quiet $contracts_reinstall) || { echo "Error: $repo environment sync failed." >&2; exit 1; }
   elif [ -x "$path/.venv/bin/python" ]; then
     # pip's VCS resolver also keys off the declared version. Reinstall the
     # pinned dependency before refreshing the editable sibling project.
-    if [ "${#contracts_reinstall[@]}" -gt 0 ]; then
+    if [ -n "$contracts_reinstall" ]; then
       "$path/.venv/bin/python" -m pip install --force-reinstall --no-deps "$(grep -o 'vmodel-contracts @ git+[^" ]*' "$path/pyproject.toml" | head -1)" || { echo "Error: $repo pinned contracts install failed." >&2; exit 1; }
     fi
     "$path/.venv/bin/python" -m pip install -e "$path" || { echo "Error: $repo environment install failed." >&2; exit 1; }
