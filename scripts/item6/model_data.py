@@ -6,7 +6,7 @@ source drift, missing units, duplicate rows and redirects all fail closed.
 from decimal import Decimal
 from html.parser import HTMLParser
 from pathlib import Path
-import datetime,hashlib,json,os,re,urllib.request
+import datetime,hashlib,json,re,urllib.request
 
 PRICING_URL='https://api-docs.deepseek.com/quick_start/pricing/'
 API_URL='https://api-docs.deepseek.com/api/create-chat-completion/'

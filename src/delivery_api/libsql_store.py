@@ -1,10 +1,8 @@
 """Turso embedded-replica adapter with SQLite-compatible local semantics."""
 from __future__ import annotations
-import logging
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
-from .observability import event as activity
 
 class MappingRow(dict):
     def __init__(self,columns:Sequence[str],values:Sequence[Any]):

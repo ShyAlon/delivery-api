@@ -3,9 +3,7 @@
 Hermetic network clients stay injected. mac_acceptance never accepts fixtures as
 identity/signup evidence. This module never retrieves credentials or starts work.
 """
-import hashlib,json
 from delivery_api.tenancy import tenant_context
-from delivery_api.supabase_auth import SupabaseIdentityVerifier
 from delivery_api.operator_authorization import OperatorPrincipal
 from delivery_api.payment_offers import purchase_intent
 from delivery_api.payment_service import PaymentService

@@ -1,8 +1,7 @@
 """Private same-owner graph runner. No CLI/global route override or auto answers."""
 import asyncio,hashlib,json,sqlite3,uuid
-from contextlib import ExitStack
 from pathlib import Path
-from delivery_api.tenancy import tenant_context,session_root
+from delivery_api.tenancy import tenant_context
 from delivery_api.same_host_producer import SameHostProducerWorker
 from delivery_api.phases import PHASE_DEFINITIONS
 

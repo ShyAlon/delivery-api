@@ -1,6 +1,5 @@
 """Explicitly constructed Mac-only network seams. No ambient clients or retries."""
 import httpx,re,time
-from urllib.parse import urlsplit
 from delivery_api.paypal_adapter import PayPalBinding
 from delivery_api.paypal_transport import PayPalHTTPTransport
 from delivery_api.payment_errors import PaymentRejected,PaymentUncertain

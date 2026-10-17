@@ -1,6 +1,6 @@
 """Read-only founder diagnostics. Never serialize arbitrary config values/keys."""
 from pathlib import Path
-import json,stat
+import json
 
 
 def diagnose(root):
