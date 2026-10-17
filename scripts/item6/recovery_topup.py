@@ -8,11 +8,12 @@ from delivery_api.payment_service import PaymentService
 from delivery_api.payment_errors import PaymentRejected
 
 
-def prepare_topup(*,scope,run_id,offer_id,repository,processor,read_account):
+def prepare_topup(*,scope,run_id,offer_id,repository,processor,read_account,sequence=1):
+    if type(sequence) is not int or not 1<=sequence<=9:raise PaymentRejected('top-up sequence 1 to 9 required')
     if processor.binding.live_mode is not False:raise PaymentRejected('isolated sandbox top-up only')
     before=read_account(scope)
     if before['units_per_credit']!=10**9:raise PaymentRejected('original retail account scale required')
-    intent=purchase_intent(purchase_id='item6-topup-'+run_id+'-01',owner_id=scope.owner_id,offer_id=offer_id,units_per_credit=before['units_per_credit'])
+    intent=purchase_intent(purchase_id='item6-topup-%s-%02d'%(run_id,sequence),owner_id=scope.owner_id,offer_id=offer_id,units_per_credit=before['units_per_credit'])
     # Immutable repository replay rejects a changed pack/owner/digest.
     row=repository.create_purchase(intent)
     if row['credit_posted']:raise PaymentRejected('already posted, reconcile existing purchase')

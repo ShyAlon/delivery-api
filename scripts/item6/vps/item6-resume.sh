@@ -19,6 +19,10 @@ RDIR='~/item6/runs/'$NAME
 # Resume number: 1 for the first, otherwise one more than the archived resume dumps already on the server (each resume restores the previous one's dump).
 N=$("${UBU[@]}" "ls ~/item6/runs/$NAME/evidence 2>/dev/null | grep -c '^item6-database-resume-[0-9]*\\.dump\$' || true" | tail -1 | tr -dc 0-9); [ -n "$N" ] || die VPS-SSH "cannot read the server evidence listing" "Nothing changed." "ssh ubuntu@$HOST ls ~/item6/runs/$NAME/evidence"
 N=$((N+1))
+# Optional extra sandbox top-up for a later resume (fake PayPal money only): REQ_TOPUP_OFFER=credits-50 (or credits-12).
+TOPUP_OFFER=${REQ_TOPUP_OFFER:-}; TOPSEQ=2
+case "$TOPUP_OFFER" in ''|credits-12|credits-50) ;; *) die TOPUP-OFFER "REQ_TOPUP_OFFER must be credits-12 or credits-50, not $TOPUP_OFFER" "Nothing changed." "unset REQ_TOPUP_OFFER";; esac
+[ -z "$TOPUP_OFFER" ] || [ "$N" -gt 1 ] || die TOPUP-OFFER "an extra top-up applies to a later resume; resume 1 already buys its own pack" "Nothing changed." "unset REQ_TOPUP_OFFER"
 SESS=item6r-${RID:0:8}; CONT=requi-item6-resume$N-$RID
 TMPF=$(mktemp)
 echo "Resume $N of stopped run $NAME (id $RID) on ubuntu@$HOST"
@@ -49,7 +53,7 @@ echo "fresh_backup=$([ ! -e evidence-pre-resume-$N ] && echo yes || echo no)"
 # The run-launch verifier refuses to run while evidence/ exists ("preserve prior run, do not retry"). So check the same pinned
 # files on a copy of the run directory WITHOUT evidence or this resume's own files. Same hashes, no evidence guard.
 VT=$(mktemp -d ~/item6/vtmp.XXXXXX); chmod 700 $VT
-find . -maxdepth 1 -mindepth 1 ! -name 'evidence*' ! -name 'topup-webhook' ! -name 'manifest-*' ! -name 'resume-*' ! -name '*.log' ! -name 'go-*' ! -name 'watcher*' ! -name 'webhook-watch*' ! -name 'run-resume.sh' -exec cp -a {} $VT/ \;
+find . -maxdepth 1 -mindepth 1 ! -name 'evidence*' ! -name 'topup-webhook*' ! -name 'manifest-*' ! -name 'resume-*' ! -name '*.log' ! -name 'go-*' ! -name 'watcher*' ! -name 'webhook-watch*' ! -name 'run-resume.sh' -exec cp -a {} $VT/ \;
 mkdir -m 700 $VT/evidence   # the verifier requires an existing, empty, 0700, non-symlink evidence dir
 vout=$(cd $VT && python3 private/verify-*.py . 2>&1); vrc=$?; rm -rf $VT
 echo "verifier=$([ $vrc = 0 ] && echo ok || echo FAIL)"
@@ -86,12 +90,16 @@ sk=$(( $(g now) - $(date -u +%s) )); [ ${sk#-} -le 60 ] || die CLOCK-SKEW "VPS c
 for u in api.deepseek.com api-m.sandbox.paypal.com; do case "$(g net_$u)" in 000|"") die "NET-$u" "$u unreachable from the VPS";; esac; done
 echo "ok  stopped run found, dump $(g dumpsha)..., fresh output names, verifier, no old container/session, docker, $(g mem_mb) MB, $(g free_gb) GB free, receiver, IP cert $(g cert_hours)h, clock, network"
 echo "== free dry check on the server (restores the dump into a throwaway database; no model call, no network, no payment, nothing written to evidence)"
-"${UBU[@]}" "NAME=$NAME RID=$RID N=$N bash -s" <<'GEN' || die GEN-LAUNCHER "could not write the resume launcher on the server" "Nothing else was changed." "ssh ubuntu@$HOST ls ~/item6/runs/$NAME"
+"${UBU[@]}" "NAME=$NAME RID=$RID N=$N TOPUP_OFFER=$TOPUP_OFFER TOPSEQ=$TOPSEQ bash -s" <<'GEN' || die GEN-LAUNCHER "could not write the resume launcher on the server" "Nothing else was changed." "ssh ubuntu@$HOST ls ~/item6/runs/$NAME"
 set -eu
 cd ~/item6/runs/$NAME; umask 077
 D=$(ls -d private/runtime-* | head -1); [ "$(ls -d private/runtime-* | wc -l)" = 1 ]
 if [ $N = 1 ]; then mkdir -p topup-webhook; chmod 700 topup-webhook; [ -z "$(ls -A topup-webhook)" ] || { echo "topup-webhook is not empty"; exit 1; }; fi
-if [ $N = 1 ]; then TOPMOUNT='--mount "type=bind,src=$HERE/topup-webhook,dst=/topup,readonly" -e ITEM6_WEBHOOK_DIR=/topup'; else TOPMOUNT=''; fi
+if [ -n "$TOPUP_OFFER" ]; then TD=topup-webhook-$TOPSEQ; mkdir -p $TD; chmod 700 $TD; [ -z "$(ls -A $TD)" ] || { echo "$TD is not empty"; exit 1; }; fi
+TOPFLAGS=''
+if [ $N = 1 ]; then TOPMOUNT='--mount "type=bind,src=$HERE/topup-webhook,dst=/topup,readonly" -e ITEM6_WEBHOOK_DIR=/topup'
+elif [ -n "$TOPUP_OFFER" ]; then TOPMOUNT='--mount "type=bind,src=$HERE/topup-webhook-'$TOPSEQ',dst=/topup,readonly" -e ITEM6_WEBHOOK_DIR=/topup'; TOPFLAGS="--topup-offer $TOPUP_OFFER --topup-sequence $TOPSEQ"
+else TOPMOUNT=''; fi
 cat > run-resume.sh <<EOS
 #!/usr/bin/env bash
 # Resume $N of run $RID. Dry unless called as: run-resume.sh --go
@@ -101,7 +109,7 @@ if [ "\${1:-}" = --go ]; then
   exec sudo -n docker run --name requi-item6-resume$N-$RID -it --memory=2800m --memory-swap=2800m --pids-limit=512 --read-only --cap-drop ALL --security-opt no-new-privileges \\
     --tmpfs /tmp:rw,nosuid,nodev,size=2g --mount "type=bind,src=\$HERE/$D,dst=/private,readonly" --mount "type=bind,src=\$HERE/evidence,dst=/evidence" \\
     $TOPMOUNT --entrypoint python requi-item6-test \\
-    /app/item6/resume_entry.py --config /private/run.json --run-id $RID --resume-number $N --go $RID --ceiling-units 2000000000000
+    /app/item6/resume_entry.py --config /private/run.json --run-id $RID --resume-number $N --go $RID --ceiling-units 2000000000000 $TOPFLAGS
 fi
 exec sudo -n docker run --rm --memory=2800m --memory-swap=2800m --pids-limit=512 --network none --read-only --cap-drop ALL --security-opt no-new-privileges \\
     --tmpfs /tmp:rw,nosuid,nodev,size=2g --mount "type=bind,src=\$HERE/$D,dst=/private,readonly" --mount "type=bind,src=\$HERE/evidence,dst=/evidence,readonly" \\
@@ -152,7 +160,11 @@ echo "    2. the harness shows the two unknown items and asks: type yes to write
 echo "    3. one new SANDBOX top-up of the 12-credit pack (fake money): you click once in PayPal, nothing to type; the webhook is exported by a watcher"
 else
 echo "    2. the two unknown items were already written off by your typed yes in an earlier resume (audit records checked): nothing is written off again"
+if [ -n "$TOPUP_OFFER" ]; then
+echo "    3. ONE extra SANDBOX top-up ($TOPUP_OFFER, fake money, purchase item6-topup-$RID-0$TOPSEQ): you click once in PayPal, nothing to type; the webhook is exported by a watcher"
+else
 echo "    3. the sandbox top-up is already paid and the balance is positive: no purchase, no PayPal click"
+fi
 fi
 echo "    4. only then the generator continues from its saved tests checkpoint (tests T-1..T-12 are kept; T-13 onward runs)"
 echo "  spend ceiling: USD $CEILING for the whole run. Already spent USD $SPENT plus USD $RESV reserved by the never-started call, so a balance watcher"
@@ -173,7 +185,7 @@ cp -a evidence evidence-pre-resume-$N
 echo "ok  $(wc -l < manifest-before-resume-$N.txt) files copied to evidence-pre-resume-$N and hashes match"
 BK
 echo "== starting"
-"${UBU[@]}" "NAME=$NAME RID=$RID CEILING=$REMAIN START=$B CONT=$CONT N=$N bash -s" <<'INNER'
+"${UBU[@]}" "NAME=$NAME RID=$RID CEILING=$REMAIN START=$B CONT=$CONT N=$N TOPUP_OFFER=$TOPUP_OFFER TOPSEQ=$TOPSEQ bash -s" <<'INNER'
 set -eu
 cd ~/item6/runs/$NAME; umask 077
 cat > go-resume-inner.sh <<EOS
@@ -182,7 +194,8 @@ cd "\$(dirname "\$0")"; umask 077
 TS=\$(date +%Y%m%dT%H%M%S)
 python3 watcher-resume.py "$CONT" "$CEILING" "$START" >> "resume-watch-\$TS.log" 2>&1 &
 W=\$!
-if [ $N = 1 ]; then bash webhook-watch-topup.sh "$RID" "$CONT" >> "resume-webhook-watch-\$TS.log" 2>&1 & W2=\$!; else W2=; fi
+if [ $N = 1 ]; then bash webhook-watch-topup.sh "$RID" "$CONT" 01 topup-webhook >> "resume-webhook-watch-\$TS.log" 2>&1 & W2=\$!
+elif [ -n "$TOPUP_OFFER" ]; then bash webhook-watch-topup.sh "$RID" "$CONT" 0$TOPSEQ topup-webhook-$TOPSEQ >> "resume-webhook-watch-\$TS.log" 2>&1 & W2=\$!; else W2=; fi
 script -qefc "bash run-resume.sh --go" "resume-console-\$TS.log"
 RC=\$?
 kill \$W \$W2 2>/dev/null || true
@@ -219,20 +232,20 @@ while True:
 EOW
 cat > webhook-watch-topup.sh <<'EOV'
 #!/usr/bin/env bash
-# Exports the PayPal sandbox capture of THIS run's top-up (invoice id item6-topup-<run id>-01) into topup-webhook/ once it arrives.
+# Exports the PayPal sandbox capture of THIS run's top-up (invoice id item6-topup-<run id>-<sequence>, default 01) into topup-webhook/ once it arrives.
 # Exactly one match required; never overwrites; exits after one export or when the container is gone.
-RID=$1; CONT=$2; umask 077; cd "$(dirname "$0")"
-D=topup-webhook; done_=0
+RID=$1; CONT=$2; SEQ=${3:-01}; umask 077; cd "$(dirname "$0")"
+D=${4:-topup-webhook}; done_=0
 while [ $done_ = 0 ]; do
   st=$(sudo -n docker inspect -f '{{.State.Status}}' "$CONT" 2>/dev/null)
   case "$st" in exited|dead) echo "$(date +%FT%T%z) container $st; watcher done"; exit 0;; esac
   M=""; N=0
   for f in $(sudo -n find /var/lib/requi-receiver/spool -maxdepth 1 -type f -name '*.json' | sort); do
-    r=$(sudo -n cat "$f" | RID="$RID" python3 -c '
+    r=$(sudo -n cat "$f" | RID="$RID" SEQ="$SEQ" python3 -c '
 import sys,json,base64,os
 try:
     e=json.load(sys.stdin); b=json.loads(base64.b64decode(e["raw_body_b64"]))
-    print("MATCH" if b.get("event_type")=="PAYMENT.CAPTURE.COMPLETED" and (b.get("resource") or {}).get("invoice_id")=="item6-topup-"+os.environ["RID"]+"-01" else "no")
+    print("MATCH" if b.get("event_type")=="PAYMENT.CAPTURE.COMPLETED" and (b.get("resource") or {}).get("invoice_id")=="item6-topup-"+os.environ["RID"]+"-"+os.environ["SEQ"] else "no")
 except Exception: print("no")
 ')
     [ "$r" = MATCH ] && { N=$((N+1)); M=$(basename "$f" .json); }

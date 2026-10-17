@@ -27,7 +27,7 @@ def test_resume_driver_is_valid_bash_and_keeps_guards():
     assert 'evidence-pre-resume-$N' in text and '[ ! -e evidence-pre-resume-$N ]' in text
     assert 'item6-database-resume-$N.dump' in text
     assert 'cp -a evidence evidence-pre-resume-$N' in text
-    assert 'item6-topup-"+os.environ["RID"]+"-01' in text
+    assert 'item6-topup-"+os.environ["RID"]+"-"+os.environ["SEQ"]' in text and 'SEQ=${3:-01}' in text
     assert 'docker rm' not in text
     assert 'ITEM6_RUN_LIB=1' in text
 
