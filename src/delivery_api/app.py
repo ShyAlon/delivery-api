@@ -1806,7 +1806,7 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
     store.add_event(task_id,"model_route",f"Needs retry model selected: {effective}",phase_key="needs",payload={"route":route,"resolved":effective,"source":"explicit_retry_choice"})
     store.audit(a.label,"phase.retry_model",task_id,{"phase":"needs","model":effective,"checkpoint":checkpoint})
     activity("phase.retry","Founder confirmed retry of Stakeholder needs",task_id=task_id,session_id=session,actor=a.label,model_route=effective,checkpoint=checkpoint)
-    asyncio.create_task(_run_failed_needs_retry(task_id,effective,checkpoint))
+    asyncio.create_task(_run_failed_phase_retry(task_id,"needs","Stakeholder needs",effective,checkpoint))
     return {"status":"started","phase":"needs","session_id":session}
 
 async def _dispatch_failed_retry(task_id:str,phase:str,model_route:str,checkpoint:bool,*,queued_job_id=None)->None:
@@ -1815,14 +1815,6 @@ async def _dispatch_failed_retry(task_id:str,phase:str,model_route:str,checkpoin
         from .tenant_jobs import dispatch_phase
         await dispatch_phase(store,orchestrator,task_id,phase,queued_job_id=queued_job_id,**options)
     else:await orchestrator.execute_phase(task_id,phase,**options)
-
-async def _run_failed_needs_retry(task_id:str,model_route:str,checkpoint:bool)->None:
-    try:await _dispatch_failed_retry(task_id,"needs",model_route,checkpoint)
-    except Exception as exc:
-        message=f"Stakeholder needs retry stopped: {type(exc).__name__}: {exc}"
-        store.update_phase(task_id,"needs","failed",detail=message)
-        store.add_event(task_id,"error",message,phase_key="needs",payload={"cause":str(exc),"retry":True})
-        activity("phase.retry.failed","Stakeholder needs retry did not launch",task_id=task_id,error=message)
 
 class FailedPhaseRetryRequest(BaseModel):
     phase: str
