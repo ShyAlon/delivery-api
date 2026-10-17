@@ -1,7 +1,8 @@
-import importlib.util,json,sqlite3,subprocess
+import importlib.util,sys,json,sqlite3,subprocess
 from pathlib import Path
 import pytest
 ROOT=Path(__file__).parents[1]
+sys.path.append(str(ROOT/'scripts'))  # scripts/ops_common.py, importable the way the scripts run
 spec=importlib.util.spec_from_file_location('ops_backup',ROOT/'scripts/ops-backup.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 
 
