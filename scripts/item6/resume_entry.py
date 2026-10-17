@@ -100,7 +100,7 @@ def read_facts(dsn):
 def main(argv=None):
     os.umask(0o077)
     p=argparse.ArgumentParser();p.add_argument('--config',required=True,type=Path);p.add_argument('--run-id',required=True)
-    p.add_argument('--go');p.add_argument('--resume-number',type=int,default=1);p.add_argument('--ceiling-units',type=int)
+    p.add_argument('--go');p.add_argument('--resume-number',type=int,default=1);p.add_argument('--ceiling-units',type=int);p.add_argument('--topup-offer',choices=('credits-12','credits-50'));p.add_argument('--topup-sequence',type=int,default=1)
     a=p.parse_args(argv)
     from mac_run import private_json
     config=private_json(a.config);paths=plan_paths(config,a.resume_number)
@@ -118,7 +118,7 @@ def main(argv=None):
             say('dry check passed; nothing was written. Balance is not positive, so a top-up purchase is needed before any paid step.' if facts['balance_units']<=0 else 'dry check passed; nothing was written.')
             if facts['balance_units']<=0 and paths['number']>1:raise ValueError('a later resume needs a positive balance; the earlier top-up is missing')
             return
-        go(config,a.run_id,paths,facts,dump_sha,a.ceiling_units)
+        go(config,a.run_id,paths,facts,dump_sha,a.ceiling_units,topup_offer=a.topup_offer,topup_sequence=a.topup_sequence)
     finally:
         if started:
             if a.go is not None:
@@ -127,7 +127,7 @@ def main(argv=None):
             stop_database()
 
 
-def go(config,run_id,paths,facts,dump_sha,ceiling_units):
+def go(config,run_id,paths,facts,dump_sha,ceiling_units,topup_offer=None,topup_sequence=1):
     import httpx,psycopg,jwt
     from psycopg.conninfo import make_conninfo
     from local_auth import DisposableSignup
@@ -197,12 +197,15 @@ def go(config,run_id,paths,facts,dump_sha,ceiling_units):
                 row=c.execute('SELECT balance_units,units_per_credit FROM credit_accounts WHERE owner_id=%s',(scope.owner_id,)).fetchone()
             return {'balance_units':row[0],'units_per_credit':row[1]}
         processor=PayPalAdapter(transport,binding)
-        if facts['balance_units']>0:
+        extra=topup_offer is not None
+        if extra and paths['number']==1:raise ValueError('an extra top-up applies to a later resume')
+        if extra and topup_sequence<2:raise ValueError('an extra top-up needs its own purchase sequence (2 or more)')
+        if facts['balance_units']>0 and not extra:
             say('credit balance is already positive ('+str(facts['balance_units'])+' units): no new top-up purchase')
-        elif paths['number']>1:raise ValueError('a later resume needs a positive balance; the earlier top-up is missing')
+        elif paths['number']>1 and not extra:raise ValueError('a later resume needs a positive balance; the earlier top-up is missing')
         else:
             attended=Attended(paths['root'].parent,lambda:scope.owner_id)
-            review=prepare_topup(scope=scope,run_id=run_id,offer_id='credits-12',repository=repository,processor=processor,read_account=read_account)
+            review=prepare_topup(scope=scope,run_id=run_id,offer_id=topup_offer or 'credits-12',repository=repository,processor=processor,read_account=read_account,sequence=topup_sequence if extra else 1)
             say('top-up purchase '+review['purchase_id']+': balance before '+str(review['balance_before']))
             attended.paypal(review['approval'])
             waiter=SandboxPurchaseAdapter(type('Identity',(),{'scope':scope})(),repository=repository,processor=processor,approve=attended.paypal,webhook_receipt=attended.webhook,read_balance=lambda s:read_account(s)['balance_units'],units_per_credit=10**9)
