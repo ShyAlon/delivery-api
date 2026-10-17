@@ -12,6 +12,13 @@ const browserCapture={started_at:new Date().toISOString(),records:[]};
 function capture(kind,message){browserCapture.records.push({ts:new Date().toISOString(),kind,path:location.pathname,message:String(message).slice(0,2000)});if(browserCapture.records.length>300)browserCapture.records.shift()}
 for(const kind of ['log','info','warn','error']){const original=console[kind].bind(console);console[kind]=(...args)=>{try{capture(kind,args.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' '))}catch{}original(...args)}}
 window.addEventListener('error',e=>capture('error',e.message));window.addEventListener('unhandledrejection',e=>capture('unhandledrejection',e.reason?.message||e.reason));
+const requestLog=[];
+export function recentRequests(){return requestLog.slice()}
+/** Plain-text table for the Debug dialog: total time in the browser, server time, status, reference, request. */
+export function requestTable(){
+  const rows=requestLog.slice(-40).reverse().map(r=>`${String(r.total_ms).padStart(6)} ms  server ${r.server_ms===null?'   ?':String(r.server_ms).padStart(4)} ms  ${r.status}  ref ${r.ref||'-'}  ${r.method} ${r.url}${r.total_ms>=2000?'  SLOW':''}`);
+  return rows.length?'browser total | server time | status | reference | request\n'+rows.join('\n'):'No requests yet.';
+}
 export function browserDiagnostics(){return {...browserCapture,ended_at:new Date().toISOString(),url:location.href,records:browserCapture.records.slice()}}
 export async function downloadDebug(taskId){
  await renewSessionIfDue();
@@ -67,6 +74,7 @@ function beginWait(url){
 
 export async function api(url,opts={}){
   if(url!=='/auth/refresh' && url!=='/api/auth' && !url.startsWith('/auth/sign') && !url.startsWith('/auth/email-availability'))await renewSessionIfDue();
+  const began=performance.now();
   const method=(opts.method||'GET').toUpperCase(),timeout=opts.timeout===undefined?(method==='GET'?60000:null):opts.timeout,controller=timeout?new AbortController():null;
   const foregroundRead=method==='GET'&&(/\/api\/tasks\/[^/]+$/.test(url)||/\/api\/tasks\/[^/]+\/artifacts\//.test(url)||/\/api\/sessions/.test(url)||/\/api\/tasks\/[^/]+\/audit$/.test(url));
   const endWait=opts.inlineProgress||(method==='GET'&&!foregroundRead)||url==='/api/client-log'||url==='/auth/refresh'||url.startsWith('/auth/')?()=>{}:beginWait(url);
@@ -77,14 +85,17 @@ export async function api(url,opts={}){
     if(error.name==='AbortError')throw error;
     throw new Error(`Error: The server could not be reached.\nLikely cause: ${error.message||'The connection failed.'}\nNext: your text is preserved. Check the server is running, then retry.`);
   }finally{if(timer)clearTimeout(timer);endWait()}
-  capture('network',`${method} ${url} -> ${response.status}`);
+  const ref=response.headers.get('x-request-id'),serverMs=Number((/dur=([0-9.]+)/.exec(response.headers.get('server-timing')||'')||[])[1]),totalMs=Math.round(performance.now()-began);
+  const entry={ts:new Date().toISOString(),method,url,status:response.status,total_ms:totalMs,server_ms:Number.isFinite(serverMs)?Math.round(serverMs):null,ref};
+  requestLog.push(entry);if(requestLog.length>200)requestLog.shift();
+  capture('network',`${method} ${url} -> ${response.status} ${totalMs} ms (server ${entry.server_ms===null?'unknown':entry.server_ms+' ms'}) ref ${ref||'none'}`);
   if(!response.ok){
     const raw=await response.text();let detail;
     try{detail=JSON.parse(raw).detail}catch{}
     const info=typeof detail==='object'?detail:{error:typeof detail==='string'?detail:raw};
-    const message=`Error: ${info.error||'The request failed.'}\nLikely cause: ${info.cause||'The server could not complete this action.'}\nNext: ${info.next||'Retry once. If it fails again, open the task audit and server log.'}`;
+    const message=`Error: ${info.error||'The request failed.'}\nLikely cause: ${info.cause||'The server could not complete this action.'}\nNext: ${info.next||'Retry once. If it fails again, open the task audit and server log.'}${ref?`\nReference: ${ref} (the avatar Debug dialog lists it with its timing)`:''}`;
     const error=new Error(message);error.status=response.status;error.info=info;error.endpoint=url;
-    clientLog('api.error',message,{endpoint:url,http_status:response.status,task_state:info.current_state,active_phase:info.active_phase,decision_id:opts.decisionId});
+    clientLog('api.error',message,{endpoint:url,http_status:response.status,ref,task_state:info.current_state,active_phase:info.active_phase,decision_id:opts.decisionId});
     throw error;
   }
   return response.json();
