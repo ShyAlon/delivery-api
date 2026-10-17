@@ -97,7 +97,7 @@ export VMODEL_ARTIFACTS_DIR="${VMODEL_ARTIFACTS_DIR:-$PWD/artifacts}"
 [ -x "$PYTHON" ] || { echo "Error: Requi.re runtime is incomplete."; echo "Likely cause: this launcher was separated from its built runtime."; echo "Next: copy the whole dist/requi-re folder and retry."; exit 1; }
 "$PYTHON" -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core' >/dev/null 2>&1 || { echo "Error: Requi.re runtime validation failed."; echo "Likely cause: the built folder is incomplete or incompatible."; echo "Next: rebuild on this operating system with scripts/build-dist.sh --clean."; exit 1; }
 export REQUI_RE_DIST=1 INTERVIEW_ENGINE_PYTHON="$PYTHON" DELIVERY_BASIC_AUTH_ENABLED="${DELIVERY_BASIC_AUTH_ENABLED:-1}" DELIVERY_COOKIE_SECURE="${DELIVERY_COOKIE_SECURE:-0}" OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}"
-DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/requi-re"; mkdir -p "$DATA_HOME"; export DELIVERY_DATABASE_URL="${DELIVERY_DATABASE_URL:-${DELIVERY_DB_PATH:-sqlite:///$DATA_HOME/delivery.db}}"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/requi-re"; mkdir -p "$DATA_HOME"; export DELIVERY_DATABASE_URL="${DELIVERY_DATABASE_URL:-sqlite:///$DATA_HOME/delivery.db}"
 PID_FILE="$DATA_HOME/server.pid"
 # Upgrade path for servers launched before PID ownership existed: discover the
 # listener once, validate it is delivery_api, and adopt the same replacement flow.

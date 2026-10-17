@@ -47,7 +47,7 @@ export DELIVERY_COOKIE_SECURE="${DELIVERY_COOKIE_SECURE:-0}"
 echo "V-model UI: http://$HOST:$PORT"
 DEFAULT_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/requi-re"
 mkdir -p "$DEFAULT_DATA_HOME"
-export DELIVERY_DATABASE_URL="${DELIVERY_DATABASE_URL:-${DELIVERY_DB_PATH:-sqlite:///$DEFAULT_DATA_HOME/delivery.db}}"
+export DELIVERY_DATABASE_URL="${DELIVERY_DATABASE_URL:-sqlite:///$DEFAULT_DATA_HOME/delivery.db}"
 echo "Data: $DELIVERY_DATABASE_URL"
 
 # Do not launch a task UI that can start a downstream generator in a broken

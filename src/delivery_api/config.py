@@ -21,7 +21,7 @@ def default_data_dir() -> Path:
 DEFAULT_DB_PATH = default_data_dir() / "delivery.db"
 # Configuration import is read-only. The selected SQLiteStore creates only its
 # actual parent when opened; cloud/override users must not touch the default home.
-DATABASE_URL = os.environ.get("DELIVERY_DATABASE_URL", os.environ.get("DELIVERY_DB_PATH", f"sqlite:///{DEFAULT_DB_PATH}"))
+DATABASE_URL = os.environ.get("DELIVERY_DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH}")
 SUPABASE_URL = os.environ.get("DELIVERY_SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.environ.get("DELIVERY_SUPABASE_ANON_KEY", "")
 CLOUD_TENANTS = DATABASE_URL.startswith(("postgres://", "postgresql://"))
