@@ -50,7 +50,7 @@ def test_budget_stop_message_is_actionable():
 
     e = BudgetExceeded("run-1", 6.01, 6.00)
     msg = str(e)
-    assert "budget guard" in msg and "DELIVERY_PER_RUN_BUDGET_USD" in msg and "no further llm calls" in msg.lower()
+    assert "budget guard" in msg and "mint a new link" in msg and "no further llm calls" in msg.lower()
 
 
 def test_job_failure_records_human_artifact(tmp_path):
