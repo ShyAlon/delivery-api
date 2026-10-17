@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).parents[1]/'scripts/item6'))
-import json,os
+import json
 import findings
 
 

@@ -1,4 +1,4 @@
-from datetime import datetime,timezone
+from datetime import datetime
 import pytest
 from delivery_api.billing_band import BandRates,peak_at,select_rates
 from delivery_api.attempt_ledger import AdmissionDenied

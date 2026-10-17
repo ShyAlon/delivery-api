@@ -1,5 +1,4 @@
 """Engine-unreachable failures surface as actionable 503s, never raw 500s."""
-from uuid import uuid4
 import httpx,pytest
 from fastapi.testclient import TestClient
 from vmodel_contracts.interactive import *

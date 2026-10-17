@@ -1,6 +1,4 @@
-import hashlib
 import time
-from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 

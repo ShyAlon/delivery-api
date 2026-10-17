@@ -1,5 +1,4 @@
 import io,json,zipfile
-from pathlib import Path
 from delivery_api.debug_export import diagnostic_zip,redact
 
 def test_debug_zip_is_scoped_bounded_and_secret_redacted(tmp_path):

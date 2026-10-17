@@ -4,7 +4,7 @@ Persistence must apply these transitions with unique purchase/payment bindings
 and an atomic credit ledger. A browser return is never a payment event.
 """
 from dataclasses import dataclass,replace
-from .payment_contract import PurchaseIntent,ProcessorEvidence,prepare_fulfillment
+from .payment_contract import PurchaseIntent, prepare_fulfillment
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,4 @@
-import uuid,os
+import uuid
 import pytest
 from test_postgres_store import store,A,B,DSN
 from test_attempt_ledger import ledger

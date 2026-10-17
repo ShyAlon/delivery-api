@@ -1,4 +1,3 @@
-import os
 
 
 def test_probe_turso_is_off_and_database_is_scratch():

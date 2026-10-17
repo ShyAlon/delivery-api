@@ -1,5 +1,4 @@
 import hashlib,json
-from pathlib import Path
 import pytest
 from delivery_api.revision_install_review import installation_review_payload
 from delivery_api.revision_install_plan import prepare_installation_plan

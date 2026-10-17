@@ -3,7 +3,7 @@ import asyncio,os,threading
 from types import SimpleNamespace
 import pytest
 from test_attempt_ledger import ledger,DSN,Q
-from test_postgres_store import store,A,B
+from test_postgres_store import A, B
 from delivery_api.tenancy import tenant_context,TenantAccessDenied,session_root
 from delivery_api.producer_admission import WorkerAdmissionGateway
 from delivery_api.same_host_producer import SameHostProducerWorker

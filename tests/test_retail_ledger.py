@@ -2,10 +2,10 @@ import uuid
 from decimal import Decimal
 import pytest
 from test_attempt_ledger import ledger
-from test_postgres_store import DSN,A,B,store
+from test_postgres_store import DSN, A, B
 from delivery_api.tenancy import tenant_context
 from delivery_api.retail_pricing import RetailRates,UNITS_PER_CREDIT
-from delivery_api.retail_ledger import post,phase_totals,migrate_account
+from delivery_api.retail_ledger import migrate_account
 from delivery_api.attempt_ledger import AdmissionDenied
 pytestmark=pytest.mark.skipif(not DSN,reason='disposable migrated Postgres required')
 

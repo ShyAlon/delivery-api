@@ -1,6 +1,5 @@
 from pathlib import Path
 import json,os,subprocess
-import pytest
 ROOT=Path(__file__).parents[1]
 
 
