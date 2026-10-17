@@ -43,8 +43,13 @@ def worker_admission_channel(gateway):
                         result=gateway.settle(payload['attempt'],SimpleNamespace(usage_metadata=payload['usage']))
                     else:raise ValueError()
                     reply={'ok':True,'result':result}
-                except Exception:
-                    reply={'ok':False,'error':'worker attempt admission denied'}
+                except Exception as exc:
+                    # The worker used to get only "denied", so a refusal looked like a dropped connection.
+                    # Our own refusal text is safe to show; any other exception (database, I/O) is named
+                    # by class only so no SQL, path or credential text crosses the boundary.
+                    name=type(exc).__name__
+                    reason=name+': '+str(exc)[:200] if name in ('AdmissionDenied','TenantAccessDenied') and str(exc) else name
+                    reply={'ok':False,'error':'worker attempt admission denied','reason':reason}
                 stream.write(json.dumps(reply).encode()+b'\n');stream.flush()
         finally:stream.close();parent.close()
     thread=threading.Thread(target=lambda:scope.run(serve),daemon=True);thread.start()
