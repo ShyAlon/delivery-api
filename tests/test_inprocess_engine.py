@@ -104,8 +104,9 @@ def fake_spec_generator(monkeypatch,main):
     errors.UserFacingError=UserFacingError
     mc=types.ModuleType('spec_generator.model_config')
     class StageModel:
-        def __init__(self,provider,model):self.provider,self.model=provider,model
+        def __init__(self,provider,model,max_tokens=8192):self.provider,self.model,self.max_tokens=provider,model,max_tokens
     mc.StageModel=StageModel
+    mc._STAGE_DEFAULTS={'needs':StageModel('ollama','x'),'tests':StageModel('ollama','x',max_tokens=12288)}
     for name,mod in (('spec_generator',pkg),('spec_generator.cli',cli),('spec_generator.cli_io',cli_io),('spec_generator.errors',errors),('spec_generator.model_config',mc)):
         monkeypatch.setitem(sys.modules,name,mod)
     return errors
@@ -115,6 +116,7 @@ def test_stage_models_only_the_one_deepseek_route(monkeypatch):
     fake_spec_generator(monkeypatch,lambda *a,**k:None)
     models=ie.stage_models({'SPEC_GENERATOR_MODEL_SRS':'deepseek:deepseek-v4','PATH':'/bin'})
     assert set(models)==set(ie._STAGES) and {(m.provider,m.model) for m in models.values()}=={('deepseek','deepseek-v4')}
+    assert models['tests'].max_tokens==12288 and models['needs'].max_tokens==8192 and models['repair'].max_tokens==8192
     for env in ({},{'SPEC_GENERATOR_MODEL_SRS':'ollama:phi4'},{'SPEC_GENERATOR_MODEL_SRS':'deepseek:'},
                 {'SPEC_GENERATOR_MODEL_SRS':'deepseek:a','SPEC_GENERATOR_MODEL_NEEDS':'deepseek:b'}):
         with pytest.raises(ValueError):ie.stage_models(env)
