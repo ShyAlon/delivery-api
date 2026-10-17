@@ -10,6 +10,23 @@ from .worker_capability import WorkerCapability
 
 class AdmissionDenied(ValueError):pass
 
+RELEASE_ERRORS=('ConnectError','ConnectTimeout')
+RELEASE_MAX_PER_JOB=3
+RELEASE_MAX_PER_OWNER_DAY=10
+
+def release_proof(row,evidence):
+    """Exact proof that the provider never received the request. A connect failure happens while the
+    connection is opened, before any request byte is written. Anything else (read or write error, any
+    response, any unknown class) cannot be released and stays uncertain."""
+    if not isinstance(evidence,dict) or set(evidence)!={'kind','error_class','bytes_sent','response_seen'}:raise AdmissionDenied('exact release proof required')
+    if (evidence['kind']!='connect-failure' or evidence['error_class'] not in RELEASE_ERRORS
+        or evidence['response_seen'] is not False or type(evidence['bytes_sent']) is not int or evidence['bytes_sent']!=0):
+        raise AdmissionDenied('only a connect failure before any request byte can release an attempt')
+    if row['state']!='dispatched':raise AdmissionDenied('only a dispatched attempt can be released')
+    if any(row.get(k) is not None for k in ('raw_usage','usage','expense_actual','retail_actual','settled_at')):
+        raise AdmissionDenied('an attempt with provider usage evidence cannot be released')
+    return evidence
+
 def _integer(value):
     return isinstance(value,int) and not isinstance(value,bool) and value>=0
 
@@ -168,5 +185,18 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
             # Atomically retain breach evidence with confirmed settlement. A
             # guard denial never rejects or undoes this accepted call's debit.
             store.confirmed_expense_admission(row['job_id'],quote['expense_units_per_usd'])
+    elif action=='release':
+        # usage carries the proof. Idempotent replay of an already released attempt.
+        if row['state']=='released':return dict(row)
+        evidence=release_proof(row,usage)
+        now=time.time()
+        per_job=store._db.execute("SELECT count(*) AS n FROM provider_attempts WHERE job_id=? AND state='released'",(row['job_id'],)).fetchone()['n']
+        per_owner=store._db.execute("SELECT count(*) AS n FROM provider_attempts WHERE owner_id=? AND state='released' AND updated_at>?",(row['owner_id'],now-86400)).fetchone()['n']
+        if per_job>=RELEASE_MAX_PER_JOB or per_owner>=RELEASE_MAX_PER_OWNER_DAY:
+            raise AdmissionDenied('release limit reached; the attempt stays held for review')
+        store._db.execute("UPDATE provider_attempts SET state='released',updated_at=? WHERE attempt_id=? AND state='dispatched'",(now,attempt_id))
+        store._db.execute("UPDATE credit_charges SET state='released' WHERE attempt_id=? AND state='pending'",(attempt_id,))
+        store.audit(str(row['owner_id']),'provider.attempt.released',store.worker_job(row['job_id'])['task_id'],
+                    {'attempt_id':attempt_id,'job_id':row['job_id'],'evidence':evidence,'expense_reserved':row['expense_reserved'],'billed_units':0})
     else:raise AdmissionDenied('unsupported attempt transition')
     return store.provider_attempt(attempt_id)

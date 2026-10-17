@@ -33,6 +33,9 @@ def worker_admission_channel(gateway):
                     elif action=='settle_raw':
                         if set(payload)!={'attempt','raw_usage'}:raise ValueError()
                         result=gateway.settle_raw(payload['attempt'],payload['raw_usage'])
+                    elif action=='release':
+                        if set(payload)!={'attempt','evidence'}:raise ValueError()
+                        result=gateway.release(payload['attempt'],payload['evidence'])
                     elif action in ('start','uncertain'):
                         if set(payload)!={'attempt'}:raise ValueError()
                         result=getattr(gateway,action)(payload['attempt'])

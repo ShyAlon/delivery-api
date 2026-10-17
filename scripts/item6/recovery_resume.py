@@ -24,7 +24,7 @@ def discover(c):
     if intent['state']!='done' or any(j['state']!='failed' for j in by_kind['phase:needs']):raise AdmissionDenied('completed intent job and failed needs job required')
     if any(intent['task_id']!=j['task_id'] for j in by_kind['phase:needs']):raise AdmissionDenied('one task required')
     attempts=c.execute('SELECT * FROM provider_attempts').fetchall()
-    held=[a for a in attempts if a['state']!='settled']
+    held=[a for a in attempts if a['state'] not in ('settled','released')]  # released = provider provably never reached, billed 0
     if len(held)!=1:raise AdmissionDenied('exactly one unsettled provider attempt required, found %d'%len(held))
     a=held[0]
     # Earlier resumes may leave extra failed needs jobs. Only the job that owns the held attempt is the stopped one;
@@ -33,7 +33,7 @@ def discover(c):
     if len(owners)!=1:raise AdmissionDenied('the unsettled attempt must be a never-started reservation of a failed needs job')
     needs=owners[0]
     for extra in (j for j in by_kind['phase:needs'] if j is not needs):
-        if any(x['job_id']==extra['job_id'] and x['state']!='settled' for x in attempts):raise AdmissionDenied('extra failed needs job '+extra['job_id']+' has an unsettled provider attempt and needs its own review')
+        if any(x['job_id']==extra['job_id'] and x['state'] not in ('settled','released') for x in attempts):raise AdmissionDenied('extra failed needs job '+extra['job_id']+' has an unsettled provider attempt and needs its own review')
     waived=a['state']=='failure_waived'
     if waived:
         # A later resume of a run whose write-offs an earlier resume already made (typed yes) and recorded in the audit log.
