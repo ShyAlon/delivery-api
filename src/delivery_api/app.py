@@ -440,19 +440,23 @@ async def request_log(request, call_next):
     except HTTPException as e:
         return JSONResponse({"detail": e.detail}, status_code=e.status_code)
     started = time.monotonic()
+    ref=uuid4().hex[:8]    # shown in the browser (X-Request-Id), written on every log line of this request
     try:
         response = await call_next(request)
     except Exception:
-        log.exception("request failed method=%s path=%s", request.method, request.url.path)
+        log.exception("request failed ref=%s method=%s path=%s", ref, request.method, request.url.path)
         raise
     who = auth.actor(request).label
     duration_ms=int((time.monotonic()-started)*1000)
-    activity("http.request","Request completed",method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
+    response.headers["X-Request-Id"]=ref;response.headers["Server-Timing"]="app;dur=%d"%duration_ms
+    activity("http.request","Request completed",ref=ref,method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
     if response.status_code >= 400:
-        activity("http.error","API request returned an error",endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
+        activity("http.error","API request returned an error",ref=ref,endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
     if request.url.path.startswith("/api/operator/"):
         response.headers["Cache-Control"]="no-store"
-    if request.url.path in ("/","/credits") or request.url.path.startswith("/assets/") or request.url.path.startswith("/tasks/"):
+    if request.url.path.startswith("/assets/"):
+        response.headers["Cache-Control"]="no-cache"    # keep a copy but ask the server each time; an unchanged file answers 304 with no body
+    elif request.url.path in ("/","/credits") or request.url.path.startswith("/tasks/"):
         response.headers["Cache-Control"]="no-store, max-age=0"
     if response.status_code in (401,403):activity("access.blocked","Unauthorized or forbidden request",method=request.method,path=request.url.path,status=response.status_code,actor=who)
     return response
@@ -483,7 +487,8 @@ class ClientLog(BaseModel):
 
 @app.post("/api/client-log",status_code=204)
 def client_log(request:Request,body:ClientLog):
-    activity("client."+body.kind,body.message,path=body.path,actor=auth.actor(request).label,client=request.client.host if request.client else "unknown",**body.detail)
+    # The browser's own detail keys are namespaced: a key such as "actor" or "path" must neither crash the call nor overwrite what the server records.
+    activity("client."+body.kind,body.message,path=body.path,actor=auth.actor(request).label,client=request.client.host if request.client else "unknown",**{"detail_"+str(key):value for key,value in body.detail.items()})
 
 class BasicCredentials(BaseModel):
     username: str = Field(min_length=3,max_length=254)
@@ -778,7 +783,10 @@ class TaskStartRequest(BaseModel):
 @app.get("/api/model-routes")
 def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     """The engine resolves routes; legacy env keys only seed the initial choice."""
-    if config.CLOUD_TENANTS:raise HTTPException(404,"model configuration is internal")
+    if config.CLOUD_TENANTS:
+        # Cloud users do not choose models: the service does. One managed route keeps the Start screen working; it is startable only while execution is open.
+        open_now=cloud_execution_admitted()
+        return {"routes":[{"id":"deepseek","available":open_now,"managed":True,**({} if open_now else {"error":"Execution is closed on this server."})}],"default_route":{"route":"deepseek"},"managed":True}
     routes=[]
     try:default=engine_client.default_route()
     except (EngineClientError,EngineUnreachableError,AttributeError):default=None
