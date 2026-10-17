@@ -1,5 +1,4 @@
 """Hermetic cloud login shell, no Supabase/GitHub requests."""
-import json
 from pathlib import Path
 import pytest
 pytest.importorskip('playwright.sync_api')

@@ -1,6 +1,5 @@
 """Restricted PG jobs ->real generator graph ->private revision; fixture models only."""
-import os,uuid,json,asyncio
-from pathlib import Path
+import os, uuid
 from types import SimpleNamespace
 import pytest
 pytest.importorskip("interview_engine.application")
@@ -8,7 +7,7 @@ pytest.importorskip("spec_generator")
 from test_item6_interview import configure_interview_models
 from test_item6_pipeline_graph import configure_graph_models,PrivatePipeline
 from test_item6_isolation import config
-from delivery_api.tenancy import TenantScope,tenant_context,session_root
+from delivery_api.tenancy import tenant_context, session_root
 from delivery_api.postgres_store import PostgresStore
 from revision_executor import PrivateGateEdit
 ADMIN=os.getenv('ITEM6_TEST_ADMIN_DSN')

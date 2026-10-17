@@ -1,6 +1,5 @@
 """Actual routes against isolated real Postgres, with hermetic verified identities."""
 import os
-from pathlib import Path
 import uuid
 import pytest
 from fastapi.testclient import TestClient

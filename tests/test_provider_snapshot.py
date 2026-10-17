@@ -1,4 +1,4 @@
-from datetime import datetime,timezone
+from datetime import datetime
 import pytest
 from delivery_api.provider_snapshot import ProviderSnapshot,RULE
 from delivery_api.attempt_ledger import AdmissionDenied

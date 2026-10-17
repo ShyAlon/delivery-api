@@ -1,5 +1,4 @@
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 import asyncio
 import pytest
 from delivery_api.tenancy import (

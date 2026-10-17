@@ -1,5 +1,5 @@
 """Actual isolated PG +signed synthetic auth +stub PayPal; not real signup/network."""
-import importlib.util,sys,uuid,time,json,os
+import importlib.util, uuid, time, json, os
 from pathlib import Path
 from types import SimpleNamespace
 import pytest,jwt

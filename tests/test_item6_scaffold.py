@@ -1,5 +1,5 @@
 """No subprocesses, live keys, Docker or provider/payment transport."""
-import importlib.util,json,os,sys
+import json, sys
 from pathlib import Path
 import pytest
 

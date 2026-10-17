@@ -1,5 +1,5 @@
 from copy import deepcopy
-import hashlib,json
+import json
 import pytest
 from delivery_api.revision_install_review import installation_review_payload
 from test_revision_lineage import setup as lineage_args

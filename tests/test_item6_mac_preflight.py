@@ -1,5 +1,5 @@
 """Dry CLI performs no DB/network effects and requires exact go before connection."""
-import json,os,subprocess,sys
+import json, subprocess, sys
 import pytest
 from pathlib import Path
 from test_item6_isolation import config

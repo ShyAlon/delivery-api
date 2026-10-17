@@ -1,4 +1,4 @@
-import base64,hashlib,json,sys,threading,http.client
+import json, sys, threading, http.client
 from pathlib import Path
 import pytest
 sys.path.insert(0,str(Path(__file__).parents[1]/'scripts/item6'))

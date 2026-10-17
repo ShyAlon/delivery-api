@@ -1,13 +1,12 @@
 """A dispatched provider attempt is released (billed 0) only on proof the provider never received the request."""
 import json
-import socket
 from pathlib import Path
 
 import pytest
 
 from delivery_api import attempt_ledger as L
 from delivery_api.admission_transport import worker_admission_channel
-from delivery_api.attempt_ledger import AdmissionDenied, release_proof, transition
+from delivery_api.attempt_ledger import AdmissionDenied, transition
 from delivery_api.producer_admission import WorkerAdmissionGateway
 
 PROOF = {'kind': 'connect-failure', 'error_class': 'ConnectError', 'bytes_sent': 0, 'response_seen': False}

@@ -1,7 +1,6 @@
 """Found/expected/where without secrets, arbitrary values or file mutations."""
 import json,sys,subprocess
 from pathlib import Path
-import pytest
 sys.path.insert(0,str(Path(__file__).parents[1]/'scripts/item6'))
 from scaffold import scaffold
 from config_diagnostics import diagnose

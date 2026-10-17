@@ -1,7 +1,7 @@
-import importlib.util,sys
+import importlib.util
 from pathlib import Path
 import pytest
-from test_item6_isolation import m,config
+from test_item6_isolation import config
 ROOT=Path(__file__).parents[1]
 spec=importlib.util.spec_from_file_location('item6_chain',ROOT/'scripts/item6/chain.py');chain=importlib.util.module_from_spec(spec);spec.loader.exec_module(chain)
 A='00000000-0000-0000-0000-000000000001'
