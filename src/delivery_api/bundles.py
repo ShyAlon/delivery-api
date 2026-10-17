@@ -3,7 +3,6 @@ from __future__ import annotations
 import json,os,re
 from datetime import datetime,timezone
 from pathlib import Path
-from . import config
 from .tenant_files import read_text
 from .tenancy import TenantAccessDenied
 
