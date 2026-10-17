@@ -21,7 +21,7 @@ class RecoveryBudgetGateway:
             attempt=self.inner.reserve_serialized(**request)
             rows=store._db.execute('SELECT * FROM provider_attempts').fetchall()
             cost=sum(r['expense_actual'] if r['state']=='settled' else r['expense_reserved']
-              for r in rows if r['job_id'] not in self.original and r['state']!='cancelled')
+              for r in rows if r['job_id'] not in self.original and r['state'] not in ('cancelled','released'))
             row=store.provider_attempt(attempt)
             if not any(r['attempt_id']==attempt for r in rows):cost+=row['expense_reserved']
             if cost>self.limit:raise AdmissionDenied('reviewed continuation provider expense cap exhausted')

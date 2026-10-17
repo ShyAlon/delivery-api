@@ -153,6 +153,13 @@ class WorkerAdmissionGateway:
         if row['state']=='dispatched':self.store.transition_provider_attempt(attempt,'uncertain')
         self._resume_meter(attempt)
 
+    def release(self,attempt,evidence):
+        # Proven not delivered (connect failure, no request byte): funds are freed and the compute meter resumes.
+        # The ledger checks the proof itself; a refusal raises and the caller marks the attempt uncertain.
+        self._attempt(attempt)
+        self.store.transition_provider_attempt(attempt,'release',evidence)
+        self._resume_meter(attempt)
+
 
 # Runner boundary: a producer lacking the guarded admission protocol must never
 # start merely because a route used a test-only gate override.

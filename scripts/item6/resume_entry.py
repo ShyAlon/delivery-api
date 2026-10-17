@@ -55,6 +55,16 @@ def preflight(config,run_id,paths,*,data=DATA):
 def run(cmd,**kw):return subprocess.run(cmd,check=True,**kw)
 
 
+def apply_ledger_schema(dsn,migrations='/app/migrations'):
+    """pg_restore --clean puts the OLD dump's table definitions back, including the old state checks, so the
+    released-attempt migration is applied again after the restore. The file is idempotent."""
+    found=sorted(Path(migrations).glob('*_released_provider_attempts.sql'))
+    if len(found)!=1:raise ValueError('the released-attempt migration is missing from the image (%d found)'%len(found))
+    import psycopg
+    with psycopg.connect(dsn) as c:c.execute(found[0].read_text(),prepare=False)
+    return found[0].name
+
+
 def start_database(config,dump):
     dbn=config['database_name']
     run([PG+'/initdb','-D',str(DATA),'--auth=trust','--encoding=UTF8','--no-locale'],stdout=subprocess.DEVNULL)
@@ -66,6 +76,7 @@ def start_database(config,dump):
     done=subprocess.run([PG+'/pg_restore','-h','127.0.0.1','-p',PORT,'-U','requi','-d',dbn,'--clean','--if-exists','--no-owner',str(dump)],capture_output=True,text=True)
     errors=[l for l in done.stderr.splitlines() if l.strip()]
     if done.returncode!=0 or errors:raise ValueError('restore of the run dump was not clean: exit %d, %d error lines; first: %s'%(done.returncode,len(errors),(errors[0][:160] if errors else '')))
+    say('provider-attempt schema brought up to date after the restore: '+apply_ledger_schema(dsn))
     return dsn
 
 

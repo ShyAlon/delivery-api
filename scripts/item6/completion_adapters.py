@@ -73,7 +73,7 @@ class RecoveryAdapter:
                 compute=self.store.retail_compute_status(tid)
                 if compute.get('pending') or compute.get('unresolved'):raise ValueError('unknown compute accounting requires review')
             usage=self.evidence.usage(tid)
-            if not usage or any(x['state']!='settled' or x.get('input_estimate_overrun') for x in usage):raise ValueError('unknown provider attempts require review')
+            if not usage or any(x['state'] not in ('settled','released') or x.get('input_estimate_overrun') for x in usage):raise ValueError('unknown provider attempts require review')
             jobs=self.evidence.jobs(tid)
             if any(x['attempt']!=1 or x['state']!='done' for x in jobs):raise ValueError('clean once-claimed completed jobs required')
             with self.store._postgres.transaction() as c:
