@@ -70,6 +70,7 @@ def test_live_source_change_does_not_reprice_or_pass(tmp_path):
         verify_current_sources(snapshot,lambda u:P.replace('$0.003','$0.004').replace('$0.006','$0.008') if u==PRICING_URL else A,cached=False,log=lambda t:None)
 
 
+@pytest.mark.skipif(not Path('/proc/self/fd').is_dir(),reason='needs /proc/self/fd (Linux): mac_run.py requires it for pinned SQLite revision readers')
 def test_d13_runtime_dry_preflight_contacts_nothing(tmp_path):
     import subprocess
     root=filled(tmp_path);r=review(root);review(root,r['review_hash']);out=compile_config(root)
