@@ -3,6 +3,9 @@
 Access/refresh tokens stay in HttpOnly cookies, never browser storage or URLs.
 Passwords pass directly to Supabase and are never persisted or logged here.
 """
+import logging
+import re
+
 import httpx
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -12,6 +15,30 @@ ACCESS_COOKIE='requi_access'
 REFRESH_COOKIE='requi_refresh'
 
 
+_CODE=re.compile(r'[a-z][a-z0-9_]{0,63}')
+
+
+def _error_code(response):
+    try:body=response.json()
+    except Exception:return 'unreadable'
+    if not isinstance(body,dict):return 'unreadable'
+    for key in ('error_code','code','error'):
+        value=body.get(key)
+        if isinstance(value,str) and _CODE.fullmatch(value):return value
+    return 'unknown'
+
+
+def _refusal(status,code):
+    """The message a person can act on, without confirming whether an email has an account."""
+    if code=='email_not_confirmed':return HTTPException(401,'Confirm your email first, then sign in')
+    if code=='invalid_credentials':return HTTPException(401,'Email or password is not right, or no account exists yet')
+    if code=='weak_password':return HTTPException(422,'That password is too weak, choose a longer one')
+    if status==429 or code=='over_request_rate_limit':return HTTPException(429,'Too many attempts, wait a minute and try again')
+    if status in (401,403) and code in ('invalid_api_key','unknown','unreadable') or status>=500:
+        return HTTPException(503,'Sign-in service is not set up correctly')
+    return HTTPException(401,'Sign-in failed or session expired')
+
+
 def _call(path,payload,*,access=None):
     headers={'apikey':config.SUPABASE_ANON_KEY,'Content-Type':'application/json'}
     if access:headers['Authorization']='Bearer '+access
@@ -19,8 +46,10 @@ def _call(path,payload,*,access=None):
         response=httpx.post(config.SUPABASE_URL+'/auth/v1/'+path,
                             headers=headers,json=payload,timeout=10)
         if response.status_code>=400:
-            # Don't log upstream response/token payloads or leak email existence.
-            raise HTTPException(401,'Sign-in failed or session expired')
+            # Log only the status and Supabase's short error code. Never the response body, tokens or the email.
+            code=_error_code(response)
+            logging.getLogger(__name__).warning('Supabase auth %s refused: status=%s code=%s',path.split('?')[0],response.status_code,code)
+            raise _refusal(response.status_code,code)
         return response.json() if response.content else {}
     except (httpx.HTTPError,ValueError) as exc:
         raise HTTPException(503,'Authentication service unavailable') from exc
