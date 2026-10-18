@@ -291,6 +291,9 @@ section.qa-history{max-height:min(44vh,440px);overflow-y:auto;overscroll-behavio
 
 .session-cost{font:11px/1.4 Manrope;text-align:right;white-space:nowrap;margin-left:auto;padding:8px 12px;color:var(--ink)}
 .session-cost[data-state="stale"],.session-cost[data-state="unavailable"]{color:#94631c}
+.session-cost.balance{margin-left:auto;font-weight:600}
+.session-cost.balance:not([hidden])+.session-cost{margin-left:0}
+#sessioncost[data-state="current"]::before,#sessioncost[data-state="stale"]::before{content:"Session cost: ";opacity:.7}
 @media(max-width:850px){header{flex-wrap:wrap;height:auto;min-height:84px;padding-top:10px;padding-bottom:10px;gap:8px}.session-cost{order:5;flex:1 1 100%;text-align:center;margin:0;padding:2px 0}.semantic-page .semantic-head,.page-head{top:110px}}
 
 /* Sticky content follows the measured shared header, including wrapped mobile rows. */
