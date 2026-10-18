@@ -16,7 +16,7 @@ const requestLog=[];
 export function recentRequests(){return requestLog.slice()}
 /** Plain-text table for the Debug dialog: total time in the browser, server time, status, reference, request. */
 export function requestTable(){
-  const rows=requestLog.slice(-40).reverse().map(r=>`${String(r.total_ms).padStart(6)} ms  server ${r.server_ms===null?'   ?':String(r.server_ms).padStart(4)} ms  ${r.status}  ref ${r.ref||'-'}  ${r.method} ${r.url}${r.total_ms>=2000?'  SLOW':''}`);
+  const rows=requestLog.slice(-40).reverse().map(r=>`${String(r.total_ms).padStart(6)} ms  server ${r.server_ms===null?'   ?':String(r.server_ms).padStart(4)} ms  ${r.status}  ref ${r.ref||'-'}  ${r.method} ${r.url}${r.db?'  [database '+r.db+']':''}${r.total_ms>=2000?'  SLOW':''}`);
   return rows.length?'browser total | server time | status | reference | request\n'+rows.join('\n'):'No requests yet.';
 }
 export function browserDiagnostics(){return {...browserCapture,ended_at:new Date().toISOString(),url:location.href,records:browserCapture.records.slice()}}
@@ -86,7 +86,7 @@ export async function api(url,opts={}){
     throw new Error(`Error: The server could not be reached.\nLikely cause: ${error.message||'The connection failed.'}\nNext: your text is preserved. Check the server is running, then retry.`);
   }finally{if(timer)clearTimeout(timer);endWait()}
   const ref=response.headers.get('x-request-id'),serverMs=Number((/dur=([0-9.]+)/.exec(response.headers.get('server-timing')||'')||[])[1]),totalMs=Math.round(performance.now()-began);
-  const entry={ts:new Date().toISOString(),method,url,status:response.status,total_ms:totalMs,server_ms:Number.isFinite(serverMs)?Math.round(serverMs):null,ref};
+  const entry={ts:new Date().toISOString(),method,url,status:response.status,total_ms:totalMs,server_ms:Number.isFinite(serverMs)?Math.round(serverMs):null,ref,db:((/db;dur=([0-9.]+);desc="([^"]*)"/.exec(response.headers.get('server-timing')||'')||[]).slice(1,3).join(' ms, '))||null};
   requestLog.push(entry);if(requestLog.length>200)requestLog.shift();
   capture('network',`${method} ${url} -> ${response.status} ${totalMs} ms (server ${entry.server_ms===null?'unknown':entry.server_ms+' ms'}) ref ${ref||'none'}`);
   if(!response.ok){

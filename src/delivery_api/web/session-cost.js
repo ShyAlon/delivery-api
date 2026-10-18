@@ -18,6 +18,6 @@ export function startSessionCostHeader(){
  }catch{if(stopped)return;host.dataset.state=hasValue?'stale':'unavailable';host.title='Cost Could Not Be Refreshed';
   if(hasValue){if(!host.textContent.endsWith(' · Last Known'))host.textContent+=' · Last Known'}else host.textContent='Session Cost Unavailable';
  }finally{pending=false}};
- refresh();const timer=setInterval(refresh,5000);
- const dispose=()=>{stopped=true;clearInterval(timer);sizing.disconnect()};window.addEventListener('pagehide',dispose,{once:true});return dispose;
+ refresh();const timer=setInterval(()=>{if(!document.hidden)refresh()},30000);const visible=()=>{if(!document.hidden)refresh()};document.addEventListener('visibilitychange',visible);
+ const dispose=()=>{stopped=true;clearInterval(timer);document.removeEventListener('visibilitychange',visible);sizing.disconnect()};window.addEventListener('pagehide',dispose,{once:true});return dispose;
 }

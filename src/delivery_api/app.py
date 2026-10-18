@@ -405,9 +405,11 @@ if config.CLOUD_TENANTS:
     from .supabase_auth import SupabaseIdentityVerifier
     from .tenant_http import TenantMiddleware
     app.add_middleware(TenantMiddleware,verifier=SupabaseIdentityVerifier(config.SUPABASE_URL),
-                       admin_subjects=config.SUPABASE_ADMIN_SUBJECTS,session_check=store.auth_session_active)
+                       admin_subjects=config.SUPABASE_ADMIN_SUBJECTS,session_check=store.auth_session_active,
+                       request_database=getattr(store,'_postgres',None))
 from .tenant_files import authorized_session,session_reader,read_text as read_bound_text
 from .tenancy import TenantAccessDenied
+from .postgres_scope import RequestStats, request_stats
 
 @app.exception_handler(Exception)
 async def unexpected_error(request,exc):
@@ -449,14 +451,16 @@ async def request_log(request, call_next):
     started = time.monotonic()
     ref=uuid4().hex[:8]    # shown in the browser (X-Request-Id), written on every log line of this request
     request.state.ref=ref
+    stats=RequestStats();stats_token=request_stats.set(stats)
     try:
         response = await call_next(request)
     except Exception:
         log.exception("request failed ref=%s method=%s path=%s", ref, request.method, request.url.path)
         raise
+    finally:request_stats.reset(stats_token)
     who = auth.actor(request).label
     duration_ms=int((time.monotonic()-started)*1000)
-    response.headers["X-Request-Id"]=ref;response.headers["Server-Timing"]="app;dur=%d"%duration_ms
+    response.headers["X-Request-Id"]=ref;response.headers["Server-Timing"]="app;dur=%d"%duration_ms+(", "+stats.header() if stats.queries else "")
     activity("http.request","Request completed",ref=ref,method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
     if response.status_code >= 400:
         activity("http.error","API request returned an error",ref=ref,endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")

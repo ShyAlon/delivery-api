@@ -16,7 +16,7 @@ import time
 import sqlite3
 from .store import SQLiteStore, PHASES
 from vmodel_contracts import RunState
-from .postgres_scope import ScopedPostgres
+from .postgres_scope import ScopedPostgres, note_query
 from .tenancy import current_scope, TenantAccessDenied
 
 
@@ -54,6 +54,7 @@ class _Connection:
                           'cursor=GREATEST(progress_ingest.cursor,excluded.cursor)')
         returning = bool(re.match(r'INSERT INTO (events|audit_log|review_comments)\b',sql))
         if returning: sql += ' RETURNING id'
+        started=time.monotonic()
         try:
             return _Cursor(connection.execute(sql,parameters),returning=returning)
         except Exception as exc:
@@ -61,6 +62,7 @@ class _Connection:
             if isinstance(exc,psycopg.errors.UniqueViolation):
                 raise sqlite3.IntegrityError(str(exc)) from exc
             raise
+        finally:note_query(time.monotonic()-started)
 
     def executemany(self,sql,parameters):
         for row in parameters: self.execute(sql,row)
