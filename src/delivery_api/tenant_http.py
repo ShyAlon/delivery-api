@@ -38,7 +38,7 @@ class TenantMiddleware:
         if scope.get('method') not in ('GET','HEAD','OPTIONS') and (
             path.startswith(('/runs','/links')) or
             path.endswith(blocked_suffixes) or ('/gates/' in path and not path.endswith(('/decide','/revision-drafts'))) or
-            '/simulations' in path or '/engine/' in path):
+            '/simulations' in path or '/engine/' in path) and not _interview_route_open(path):
             return await JSONResponse({'detail':'Cloud execution pending scoped worker protocol'},status_code=503)(scope,receive,send)
         headers=dict(scope.get('headers',[]))
         raw=headers.get(b'authorization',b'').decode('latin1')
@@ -90,6 +90,19 @@ class TenantMiddleware:
                 return await self.app(scope,receive,send)
         except TenantAccessDenied:
             return await JSONResponse({'detail':'Tenant resource not found'},status_code=404)(scope,receive,send)
+
+
+_INTERVIEW_ROUTES=('start','answer')
+
+
+def _interview_route_open(path):
+    """The only blocked routes reopened so far: starting an interview and answering it. Open only while the in-process engine is installed,
+    which happens only when execution is OPEN with every startup check passing; the money gateway still admits each model call."""
+    import re
+    m=re.fullmatch(r'/api/tasks/[^/]+/([a-z]+)',path)
+    if m is None or m.group(1) not in _INTERVIEW_ROUTES:return False
+    from . import cloud_runtime
+    return cloud_runtime.installed()
 
 
 def _shares_one_transaction(method,path):
