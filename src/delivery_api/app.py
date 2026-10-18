@@ -44,6 +44,8 @@ from .simulation import Simulation, ImportValidationError
 from . import bundles
 from . import model_routes as model_route_lib
 from .observability import event as activity
+from . import server_log_buffer
+server_log_buffer.install()
 
 def _runtime_version() -> dict:
     root=Path(__file__).resolve()
@@ -2498,6 +2500,11 @@ def get_quota(user_id:str, request:Request, a:auth.Actor=Depends(auth.require_ad
 def set_quota(user_id:str, req:QuotaUpdate, request:Request, a:auth.Actor=Depends(auth.require_admin)):
     try:return store.set_user_quota(user_id,req.token_quota,a.label)
     except KeyError:raise HTTPException(404,"user not found")
+
+@app.get("/api/server-log")
+def server_log(minutes:int=Query(30,ge=1,le=240),a:auth.Actor=Depends(auth.require_actor)):
+    # Scrubbed, bounded, in-memory. A customer gets only lines made while serving their own requests; the operator also gets system lines.
+    return server_log_buffer.read(a.id,bool(a.admin),minutes)
 
 @app.get("/health")
 def health():

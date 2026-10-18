@@ -1,3 +1,4 @@
+import {scrubText,buildClientReport} from './log-scrub.js';
 export const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 export const time = timestamp => timestamp ? new Date(timestamp*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
 export const fullTime = timestamp => timestamp ? new Intl.DateTimeFormat([], {year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'short'}).format(new Date(timestamp*1000)) : '—';
@@ -19,6 +20,9 @@ export function requestTable(){
   const rows=requestLog.slice(-40).reverse().map(r=>`${String(r.total_ms).padStart(6)} ms  server ${r.server_ms===null?'   ?':String(r.server_ms).padStart(4)} ms  ${r.status}  ref ${r.ref||'-'}  ${r.method} ${r.url}${r.db?'  [database '+r.db+']':''}${r.total_ms>=2000?'  SLOW':''}`);
   return rows.length?'browser total | server time | status | reference | request\n'+rows.join('\n'):'No requests yet.';
 }
+export function clientReport(build){return buildClientReport({requests:requestLog.slice(),records:browserCapture.records.slice(),startedAt:browserCapture.started_at,url:location.href,build})}
+export async function serverReport(minutes=30){const r=await api(`/api/server-log?minutes=${minutes}`);return {text:scrubText(r.text||'')+'\n',range:`${r.scope}, last ${r.minutes} minutes (${r.since} to ${r.until}), ${r.count} lines${r.buffer_full?', oldest lines already dropped (buffer full)':''}`}}
+export async function deliverText(text,filename){try{await navigator.clipboard.writeText(text);return 'copied'}catch{const url=URL.createObjectURL(new Blob([text],{type:'text/plain'})),a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);return 'downloaded'}}
 export function browserDiagnostics(){return {...browserCapture,ended_at:new Date().toISOString(),url:location.href,records:browserCapture.records.slice()}}
 export async function downloadDebug(taskId){
  await renewSessionIfDue();
