@@ -15,7 +15,9 @@ export function startSessionCostHeader(){
   if(!Number.isFinite(value.price)||!Number.isFinite(value.price_usd))throw new Error('Cost unavailable');
   host.textContent=`${value.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} credits · $${value.price_usd.toFixed(2)}`;
   host.dataset.state='current';hasValue=true;host.title='Rolling Session Cost';
- }catch{if(stopped)return;host.dataset.state=hasValue?'stale':'unavailable';host.title='Cost Could Not Be Refreshed';
+ }catch(error){if(stopped)return;
+  if(!hasValue&&error&&error.status===404){host.textContent='No Session Selected';host.dataset.state='empty';host.title='';return}
+  host.dataset.state=hasValue?'stale':'unavailable';host.title='Cost Could Not Be Refreshed';
   if(hasValue){if(!host.textContent.endsWith(' · Last Known'))host.textContent+=' · Last Known'}else host.textContent='Session Cost Unavailable';
  }finally{pending=false}};
  refresh();const timer=setInterval(()=>{if(!document.hidden)refresh()},30000);const visible=()=>{if(!document.hidden)refresh()};document.addEventListener('visibilitychange',visible);
