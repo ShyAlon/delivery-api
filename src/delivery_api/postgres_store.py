@@ -222,6 +222,12 @@ class PostgresStore(SQLiteStore):
         if not task: raise KeyError(task_id)
         if task['state'] in ('running','waiting_gate'):
             raise ValueError('a running or paused task cannot be deleted')
+        if (self._db.execute('SELECT 1 FROM retail_compute_segments r JOIN worker_jobs j ON j.job_id=r.job_id WHERE j.task_id=? LIMIT 1',(task_id,)).fetchone()
+                or self._db.execute('SELECT 1 FROM retail_contributions r JOIN worker_jobs j ON j.job_id=r.job_id WHERE j.task_id=? LIMIT 1',(task_id,)).fetchone()):
+            # Compute and token accounting rows reference the task's jobs: hide the task, keep the rows.
+            self._db.execute('UPDATE tasks SET deleted_at=?,updated_at=? WHERE task_id=? AND deleted_at IS NULL',(time.time(),time.time(),task_id))
+            self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False,'accounting_retained':True})
+            return
         self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False})
         for table in ('worker_jobs','engine_sessions','review_comments','decision_reviews','decision_drafts',
                       'answer_feedback','phases','gates','events','progress_ingest','progress_seen','task_artifacts'):
@@ -1173,6 +1179,14 @@ class PostgresStore(SQLiteStore):
     def begin_retail_compute(self,key,job_id,phase,rates):
         from .retail_ledger import begin_compute
         return begin_compute(self,key,job_id,phase,rates)
+
+    def close_failed_retail_compute(self,key):
+        from .retail_ledger import close_failed_compute
+        return close_failed_compute(self,key)
+
+    def release_own_compute(self,confirm):
+        from .retail_ledger import release_compute
+        return release_compute(self,current_scope().owner_id,bool(confirm))
 
     def finish_retail_compute(self,key,deterministic_ms):
         from .retail_ledger import finish_compute

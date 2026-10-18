@@ -5,6 +5,7 @@ from .retail_pricing import RetailRates, UNITS_PER_CREDIT, decimal_value
 from .tenancy import current_scope
 from .attempt_ledger import AdmissionDenied
 from .prepaid import owner_lock
+from .compute_segments import close_decision,releasable
 
 
 def rates_from_snapshot(snapshot):
@@ -121,3 +122,48 @@ def task_totals(store,task_id):
         value=row['exact_units']/UNITS_PER_CREDIT
         credits+=value;usd+=value*rates_from_snapshot(row['rates']).usd_per_credit
     return {'price':float(round(credits,6)),'price_usd':float(round(usd,6))}
+
+
+def _job_evidence(store,job_id):
+    attempts=store._db.execute('SELECT count(*) AS n FROM provider_attempts WHERE job_id=?',(job_id,)).fetchone()['n']
+    tokens=store._db.execute("SELECT count(*) AS n FROM retail_contributions WHERE job_id=? AND kind='tokens'",(job_id,)).fetchone()['n']
+    return int(attempts),int(tokens)
+
+
+def _close_without_charge(store,segment,action,attempts):
+    store._db.execute("UPDATE retail_compute_segments SET state='settled',deterministic_ms=?,settled_at=? WHERE segment_key=?",(Decimal(0),time.time(),segment['segment_key']))
+    store.audit(current_scope().owner_id,action,None,{'segment_key':str(segment['segment_key']),'job_id':str(segment['job_id']),'phase':segment['phase_key'],
+        'previous_state':segment['state'],'provider_attempts':attempts,'charged':False})
+
+
+def close_failed_compute(store,key):
+    """A job failed after its compute segment began. With no provider call and no token charge there is nothing to price, so close the
+    segment without a charge (audited). Otherwise keep it unresolved for review, as before."""
+    owner_lock(store)
+    segment=store._db.execute('SELECT * FROM retail_compute_segments WHERE segment_key=? FOR UPDATE',(key,)).fetchone()
+    if not segment:return 'missing'
+    if segment['state']=='settled':return 'settled'
+    attempts,tokens=_job_evidence(store,segment['job_id'])
+    if close_decision(attempts,tokens)=='void':
+        _close_without_charge(store,segment,'compute.segment_closed_no_provider_call',attempts)
+        return 'closed'
+    store._db.execute("UPDATE retail_compute_segments SET state='unresolved' WHERE segment_key=?",(key,))
+    return 'held'
+
+
+def release_compute(store,owner_id,confirm):
+    """The owner's own explicit release of segments that block new work. Only segments whose job is not running and never reached a
+    provider are released, each with an audit record; anything else is listed and left alone. confirm=False only reports."""
+    if confirm:owner_lock(store)
+    rows=store._db.execute("SELECT * FROM retail_compute_segments WHERE owner_id=? AND state<>'settled' ORDER BY started_at"+(' FOR UPDATE' if confirm else ''),(owner_id,)).fetchall()
+    closable=[];kept=[]
+    for row in rows:
+        job=store._db.execute('SELECT state FROM worker_jobs WHERE job_id=?',(row['job_id'],)).fetchone()
+        job_state=job['state'] if job else None
+        attempts,tokens=_job_evidence(store,row['job_id'])
+        item={'segment':str(row['segment_key'])[:8],'job':str(row['job_id'])[:8],'state':row['state'],'provider_calls':attempts}
+        if releasable(row['state'],job_state,attempts,tokens):closable.append((row,item,attempts))
+        else:kept.append({**item,'reason':'its job is still running' if job_state=='running' else 'its job reached a provider; needs review'})
+    if confirm:
+        for row,item,attempts in closable:_close_without_charge(store,row,'compute.segment_released_by_owner',attempts)
+    return {'releasable':[i for _,i,_ in closable],'kept':kept,'released':len(closable) if confirm else 0}

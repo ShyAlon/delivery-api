@@ -15,8 +15,9 @@ A='11111111-1111-4111-8111-111111111111'
 
 class Db:
     """Canned rows, keyed by what the query reads. Remembers every statement so the tests can prove it only reads."""
-    def __init__(self,account=None,attempts=(),states=(),kinds=(),debits=()):
+    def __init__(self,account=None,attempts=(),states=(),kinds=(),debits=(),segments=(),seg_attempts=(),seg_tokens=()):
         self.account,self.attempts,self.states,self.kinds,self.debits,self.asked=account,list(attempts),list(states),list(kinds),list(debits),[]
+        self.segments,self.seg_attempts,self.seg_tokens=list(segments),list(seg_attempts),list(seg_tokens)
     def execute(self,sql,params=()):
         self.asked.append((sql,params))
         db=self
@@ -24,6 +25,9 @@ class Db:
             def fetchone(s):
                 if 'FROM credit_accounts' in sql:return db.account
             def fetchall(s):
+                if 'FROM retail_compute_segments' in sql:return db.segments
+                if "kind='tokens'" in sql:return db.seg_tokens
+                if 'GROUP BY job_id' in sql:return db.seg_attempts
                 if 'GROUP BY state' in sql:return db.states
                 if 'GROUP BY kind' in sql:return db.kinds
                 if 'FROM retail_contributions' in sql:return db.debits
@@ -151,3 +155,54 @@ def test_store_method_runs_in_a_scoped_transaction():
 def test_debug_dialog_shows_the_ledger_section_and_loads_it():
     s=(ROOT/'web'/'identity.js').read_text()
     assert 'id="ledgerhost"' in s and "api('/api/account/ledger')" in s and 'Your credits and provider calls' in s
+
+
+def segment(n,state='unresolved',job_state='failed',phase='intent'):
+    return {'segment_key':'job%08d:compute'%n,'job_id':'job%08d'%n,'phase_key':phase,'state':state,'job_state':job_state}
+
+
+def test_stuck_compute_records_are_listed_with_what_blocks_and_what_can_be_released():
+    # Shy's live case: two failed Starts left unresolved compute records and no provider call, which blocks every later Start.
+    db=Db(ACCOUNT,segments=[segment(2),segment(1),segment(3,'settled','done')])
+    r=account_ledger.read(db,A,Decimal('1'));t=r['text']
+    assert 'Compute records: 3, 2 not settled, 2 block new work, 2 can be released below.' in t
+    assert 'unresolved' in t and 'blocks new work: yes  releasable: yes' in t and t.count('provider calls 0')==2
+    assert [s['releasable'] for s in r['segments']]==[True,True] and all(s['blocks_admission'] for s in r['segments'])
+    assert 'job00000003' not in t and set(r['segments'][0])=={'key','job','phase','state','job_state','provider_calls','blocks_admission','releasable'}
+
+
+def test_a_record_whose_job_reached_a_provider_blocks_but_cannot_be_released():
+    db=Db(ACCOUNT,segments=[segment(1)],seg_attempts=[{'job_id':'job00000001','n':1}])
+    r=account_ledger.read(db,A,Decimal('1'))
+    assert r['segments'][0]['blocks_admission'] is True and r['segments'][0]['releasable'] is False and 'releasable: no' in r['text']
+
+
+def test_a_record_of_a_running_job_neither_blocks_nor_releases():
+    r=account_ledger.read(Db(ACCOUNT,segments=[segment(1,'pending','running')]),A,Decimal('1'))
+    assert r['segments'][0]['blocks_admission'] is False and r['segments'][0]['releasable'] is False
+
+
+def test_no_or_settled_records_are_stated_plainly():
+    assert 'Compute records: none.' in account_ledger.read(Db(ACCOUNT),A,Decimal('1'))['text']
+    r=account_ledger.read(Db(ACCOUNT,segments=[segment(1,'settled','done')]),A,Decimal('1'))
+    assert 'Compute records: 1, all settled.' in r['text'] and r['segments']==[]
+
+
+def test_segment_reads_are_scoped_to_the_owner_and_only_select():
+    db=Db(ACCOUNT)
+    account_ledger.read(db,A,Decimal('1'))
+    seg=[(s,p) for s,p in db.asked if 'retail_compute_segments' in s]
+    assert len(seg)==1 and 'WHERE s.owner_id=?' in seg[0][0] and seg[0][1]==(A,) and seg[0][0].lstrip().upper().startswith('SELECT')
+
+
+def test_release_route_is_private_calls_the_store_and_confirms_before_writing():
+    s=(ROOT/'app.py').read_text()
+    body=s.split("@app.post('/api/account/compute-release')")[1].split('\n\n\n')[0]
+    assert 'Depends(auth.require_actor)' in body and 'store.release_own_compute(body.confirm)' in body and 'store._db' not in body
+    assert "if not config.CLOUD_TENANTS:raise HTTPException(404" in body and "out['status']='preview'" in body
+
+
+def test_debug_dialog_offers_the_release_only_when_something_is_releasable_and_asks_first():
+    s=(ROOT/'web'/'identity.js').read_text()
+    assert 'id="computefix"' in s and "filter(s=>s.releasable)" in s and "'/api/account/compute-release'" in s
+    assert s.index('confirm:false')<s.index('window.confirm(p.message)')<s.index('confirm:true')
