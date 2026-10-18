@@ -320,3 +320,20 @@ header{z-index:6}
 /* Leave bottom clearance so the sticky decision controls cannot be pushed
    beneath the global header at the end of a shorter evidence column. */
 @media(min-width:761px){.decision-page:not(.semantic-page) .gate-controls{box-sizing:border-box;max-height:calc(100dvh - 2 * var(--global-header-height,84px) - 64px)}}
+
+/* Debug dialog layout, and the hover Copy button for dark text blocks. */
+.debug-dialog{padding:28px 32px 32px}
+.debug-dialog .dialog-x{position:sticky;top:0;float:right;margin:-6px -10px 8px 14px;z-index:3}
+.debug-dialog h2{margin:0 0 4px}
+.debug-dialog .runtime-id{margin:0 0 14px}
+.debug-dialog .debug-actions{display:flex;flex-wrap:wrap;gap:12px;margin:20px 0 10px}
+.debug-dialog .debug-actions button{margin:0;padding:12px 18px;min-height:44px;line-height:1.2}
+.debug-dialog .debug-actions .primary{margin-right:4px;box-shadow:4px 4px 0 var(--lime)}
+.debug-dialog #debugstatus{min-height:18px;margin:0 0 12px;font-size:12px;color:var(--muted)}
+.debug-dialog details{margin:0;padding:12px 0;border-top:1px solid var(--line)}
+.debug-dialog details>summary{cursor:pointer;font-weight:600;font-size:14px;padding:2px 0 6px}
+.debug-dialog details[open]>summary{margin-bottom:8px}
+.debug-dialog .json-view{max-height:none;margin:0;overflow-x:auto;overflow-y:visible}
+.copy-block{position:fixed;z-index:60;padding:6px 11px;border-radius:8px;background:var(--lime);color:var(--ink);font:600 11px Manrope,sans-serif;box-shadow:0 2px 10px #0007;cursor:pointer}
+.copy-block.hidden{display:none}
+.copy-block:disabled{opacity:.75;cursor:progress}

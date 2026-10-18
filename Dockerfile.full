@@ -31,6 +31,8 @@ RUN pip install --no-cache-dir -r /wheels/requirements.txt 'psycopg[binary]>=3.2
     && rm -rf /wheels && useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin requi \
     && mkdir -p /data/artifacts && chown -R 10001:10001 /data
 COPY delivery-api/scripts/docker/full_entry.py delivery-api/scripts/docker/full-smoke.py /app/
+ARG REQUI_BUILD_ID=unknown
+ENV REQUI_BUILD_ID=$REQUI_BUILD_ID
 USER 10001:10001
 EXPOSE 8000
 VOLUME /data

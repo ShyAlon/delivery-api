@@ -15,22 +15,28 @@ A='11111111-1111-4111-8111-111111111111'
 
 class Db:
     """Canned rows, keyed by what the query reads. Remembers every statement so the tests can prove it only reads."""
-    def __init__(self,account=None,attempts=(),states=(),charged=(0,0)):
-        self.account,self.attempts,self.states,self.charged,self.asked=account,list(attempts),list(states),charged,[]
+    def __init__(self,account=None,attempts=(),states=(),kinds=(),debits=()):
+        self.account,self.attempts,self.states,self.kinds,self.debits,self.asked=account,list(attempts),list(states),list(kinds),list(debits),[]
     def execute(self,sql,params=()):
         self.asked.append((sql,params))
         db=self
         class R:
             def fetchone(s):
                 if 'FROM credit_accounts' in sql:return db.account
-                if 'FROM retail_contributions' in sql:return {'n':db.charged[0],'posted':db.charged[1]}
             def fetchall(s):
                 if 'GROUP BY state' in sql:return db.states
+                if 'GROUP BY kind' in sql:return db.kinds
+                if 'FROM retail_contributions' in sql:return db.debits
                 if 'FROM provider_attempts' in sql:return db.attempts
         return R()
 
 
 ACCOUNT={'balance_units':5*10**9,'units_per_credit':10**9}
+
+
+def debit(n,kind='compute',units=100_000,at=1760796340.0,extra=None):
+    r={'contribution_key':'k%d'%n,'owner_id':A,'job_id':'job%08d'%n,'phase_key':'probing','kind':kind,'posted_units':units,'exact_units':Decimal(units),'created_at':at+n,'fingerprint':'f','rates':{'x':1}}
+    r.update(extra or {});return r
 
 
 def attempt(n,state='settled',quote=None):
@@ -40,9 +46,9 @@ def attempt(n,state='settled',quote=None):
 
 def test_an_account_with_no_calls_says_so_and_shows_the_balance():
     r=account_ledger.read(Db(ACCOUNT),A,Decimal('1'))
-    assert 'Credit balance: 5.00 credits ($5.00)' in r['text']
+    assert 'Credit balance: 5.0000 credits ($5.0000)' in r['text']
     assert 'Provider calls recorded for your account: 0' in r['text'] and 'No provider calls are recorded for your account.' in r['text']
-    assert 'Credits charged so far: 0.0000' in r['text'] and r['calls']==0 and r['recent']==[]
+    assert 'Credits debited (tokens + compute): 0.000000 in 0 entries' in r['text'] and 'No debits are recorded for your account.' in r['text'] and r['calls']==0 and r['recent']==[] and r['debits']==[]
 
 
 def test_no_credit_account_is_zero():
@@ -50,11 +56,36 @@ def test_no_credit_account_is_zero():
 
 
 def test_calls_are_listed_with_state_provider_model_phase_and_counts():
-    db=Db(ACCOUNT,[attempt(2,'settled'),attempt(1,'cancelled')],[{'state':'settled','n':1},{'state':'cancelled','n':1}],(1,250_000_000))
+    db=Db(ACCOUNT,[attempt(2,'settled'),attempt(1,'cancelled')],[{'state':'settled','n':1},{'state':'cancelled','n':1}],[{'kind':'tokens','n':1,'posted':250_000_000}])
     r=account_ledger.read(db,A,Decimal('1'));t=r['text']
     assert 'Provider calls recorded for your account: 2 (cancelled 1, settled 1)' in t
     assert 'settled   deepseek/deepseek-flash  intent  job job00000' in t and 'cancelled' in t
-    assert 'Credits charged so far: 0.2500 (1 charged entries)' in t and r['charged_credits']==0.25
+    assert 'Credits debited (tokens + compute): 0.250000 in 1 entries (tokens 0.250000)' in t and r['charged_credits']==0.25
+
+
+def test_a_small_debit_is_visible_with_kind_phase_job_and_the_balance_shows_four_decimals():
+    # Shy's live case: balance 5 minus one 0.0001 compute debit must not display as 5.00.
+    acct={'balance_units':4_999_900_000,'units_per_credit':10**9}
+    db=Db(acct,kinds=[{'kind':'compute','n':1,'posted':100_000}],debits=[debit(1,'compute',100_000)])
+    r=account_ledger.read(db,A,Decimal('1'));t=r['text']
+    assert 'Credit balance: 4.9999 credits ($4.9999)' in t
+    assert 'Credits debited (tokens + compute): 0.000100 in 1 entries (compute 0.000100)' in t
+    assert 'compute  probing  job job00000  0.000100 credits' in t and 'No provider calls are recorded for your account.' in t
+    assert r['debits']==[{'time':'2025-10-18 14:05:41Z','kind':'compute','phase':'probing','job':'job00000','credits':0.0001}]
+
+
+def test_debits_are_newest_first_capped_and_only_fixed_fields_leave_the_module():
+    rows=[debit(n,'tokens' if n%2 else 'compute',1000,extra={'secret_note':'must not appear'}) for n in range(30)]
+    r=account_ledger.read(Db(ACCOUNT,kinds=[{'kind':'tokens','n':15,'posted':15000},{'kind':'compute','n':15,'posted':15000}],debits=rows),A,Decimal('1'))
+    assert len(r['debits'])==20 and r['debits'][0]['job']=='job00000'.replace('0'*8,'%08d'%29) and r['debits'][0]['time']>r['debits'][1]['time']
+    assert set(r['debits'][0])=={'time','kind','phase','job','credits'} and 'must not appear' not in r['text'] and 'fingerprint' not in r['text']
+    assert '(compute 0.000015, tokens 0.000015)' in r['text']
+
+
+def test_a_debit_table_without_a_time_column_still_lists_entries():
+    rows=[debit(1,extra={'created_at':None})]
+    r=account_ledger.read(Db(ACCOUNT,kinds=[{'kind':'compute','n':1,'posted':1000}],debits=rows),A,Decimal('1'))
+    assert '(time unknown)' in r['text'] and r['debits'][0]['time'] is None
 
 
 def test_quote_may_be_json_text_or_unreadable():
@@ -68,14 +99,18 @@ def test_it_only_reads_this_owner_and_never_writes():
     for sql,params in db.asked:
         assert sql.lstrip().upper().startswith('SELECT')
         if 'provider_attempts' in sql or 'credit_accounts' in sql:assert 'WHERE owner_id=?' in sql and params==(A,)
+    assert any('retail_contributions' in s for s,_ in db.asked)
     assert 'LIMIT 20' in [s for s,_ in db.asked if 'ORDER BY' in s][0]
 
 
 def test_only_listed_columns_are_read_no_prompt_or_answer_text():
     db=Db(ACCOUNT,[attempt(1)])
     account_ledger.read(db,A,Decimal('1'))
-    text=' '.join(s for s,_ in db.asked).lower()
+    text=' '.join(s for s,_ in db.asked if 'retail_contributions' not in s).lower()
     assert 'select *' not in text and 'messages' not in text and 'usage' not in text and 'response' not in text
+    # The one wildcard read is the numeric debit table; its output is cut to fixed fields (see the fixed-fields test above).
+    star=[s for s,_ in db.asked if 'select *' in s.lower()]
+    assert len(star)==1 and 'FROM retail_contributions' in star[0]
 
 
 def test_invalid_scale_is_refused():
