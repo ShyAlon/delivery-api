@@ -84,7 +84,7 @@ class SameHostProducerWorker:
                                 raise TypeError('synchronous producer required')
                             self.store.finish_retail_compute(segment,meter.milliseconds())
                         except BaseException:
-                            self.store.finish_retail_compute(segment,None)
+                            self.store.close_failed_retail_compute(segment)
                             raise
                     else:result=producer(capability,root)
                     if inspect.isawaitable(result):

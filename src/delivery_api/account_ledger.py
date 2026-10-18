@@ -4,10 +4,12 @@ Only the columns listed here are read. No prompt, answer or provider response te
 import json
 from datetime import datetime,timezone
 from decimal import Decimal
+from .compute_segments import segment_view
 
 RECENT=20
 TIME_COLUMNS=('created_at','posted_at','recorded_at','inserted_at','updated_at','ts')
 DEBIT_FETCH=200
+SEGMENT_FETCH=50
 
 
 def _credits(units,per):
@@ -46,6 +48,12 @@ def read(db,owner_id,usd_per_credit):
     by_kind={r['kind']:(int(r['n']),_credits(r['posted'],per)) for r in db.execute('SELECT kind,count(*) AS n,COALESCE(sum(posted_units),0) AS posted FROM retail_contributions GROUP BY kind',()).fetchall()}
     raw=db.execute('SELECT * FROM retail_contributions LIMIT %d'%DEBIT_FETCH,()).fetchall()
     rate=Decimal(str(usd_per_credit))
+    # Compute records: which ones are not settled, whether they block new work, and whether the owner can release them.
+    seg_rows=db.execute('SELECT s.segment_key,s.job_id,s.phase_key,s.state,w.state AS job_state FROM retail_compute_segments s LEFT JOIN worker_jobs w ON w.job_id=s.job_id WHERE s.owner_id=? ORDER BY s.started_at DESC LIMIT %d'%SEGMENT_FETCH,(owner_id,)).fetchall()
+    per_attempts={str(r['job_id']):int(r['n']) for r in db.execute('SELECT job_id,count(*) AS n FROM provider_attempts WHERE owner_id=? GROUP BY job_id',(owner_id,)).fetchall()}
+    per_tokens={str(r['job_id']):int(r['n']) for r in db.execute("SELECT job_id,count(*) AS n FROM retail_contributions WHERE kind='tokens' GROUP BY job_id",()).fetchall()}
+    segments=[segment_view(dict(r),per_attempts.get(str(r['job_id']),0),per_tokens.get(str(r['job_id']),0)) for r in seg_rows]
+    open_segments=[s for s in segments if s['state']!='settled']
     debits=[]
     for d in raw:
         stamp=_time_of(d)
@@ -72,5 +80,11 @@ def read(db,owner_id,usd_per_credit):
     else:
         lines.append('Most recent provider calls, newest first (up to %d):'%RECENT)
         lines+=['%s  %-9s %s/%s  %s  job %s'%(r['time'],r['state'],r['provider'] or '?',r['model'] or '?',r['phase'] or '-',r['job']) for r in rows]
-    return {'credits':float(round(balance,6)),'usd':float(round(balance*rate,6)),'calls':total,'by_state':by_state,
+    blocking=sum(1 for s in open_segments if s['blocks_admission']);can=sum(1 for s in open_segments if s['releasable'])
+    if not segments:lines.append('Compute records: none.')
+    elif not open_segments:lines.append('Compute records: %d, all settled.'%len(segments))
+    else:
+        lines.append('Compute records: %d, %d not settled, %d block new work, %d can be released below.'%(len(segments),len(open_segments),blocking,can))
+        lines+=['  %-10s job %s  %s  provider calls %d  blocks new work: %s  releasable: %s'%(s['state'],s['job'],s['phase'] or '-',s['provider_calls'],'yes' if s['blocks_admission'] else 'no','yes' if s['releasable'] else 'no') for s in open_segments[:RECENT]]
+    return {'segments':open_segments,'credits':float(round(balance,6)),'usd':float(round(balance*rate,6)),'calls':total,'by_state':by_state,
             'charged_credits':float(round(debit_credits,6)),'debits':debits,'recent':rows,'text':'\n'.join(lines)}

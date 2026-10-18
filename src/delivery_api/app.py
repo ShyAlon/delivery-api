@@ -2625,6 +2625,26 @@ def account_ledger_view(a:auth.Actor=Depends(auth.require_actor)):
     return store.own_ledger(retail_rates().usd_per_credit)
 
 
+class ComputeReleaseRequest(BaseModel):
+    confirm: bool = False
+
+@app.post('/api/account/compute-release')
+def account_compute_release(body:ComputeReleaseRequest,a:auth.Actor=Depends(auth.require_actor)):
+    # The signed-in customer releases their own stuck compute records. Only records whose job never reached a provider; each is audited.
+    if not config.CLOUD_TENANTS:raise HTTPException(404,'Not available on this server: it has no prepaid credit accounts.')
+    from .attempt_ledger import AdmissionDenied
+    try:out=store.release_own_compute(body.confirm)
+    except AdmissionDenied as exc:raise HTTPException(409,{"error":"Compute records were not released.","cause":str(exc),"next":"Open Debug, copy the ledger section and send it."})
+    n=len(out['releasable']);k=len(out['kept'])
+    if not body.confirm:
+        out['status']='preview'
+        out['message']=('Release %d stuck compute record%s? Each belongs to a job that made no provider call, so nothing is charged. It is recorded in the audit log.'%(n,'' if n==1 else 's'))+(' %d other record%s cannot be released here.'%(k,'' if k==1 else 's') if k else '')
+    else:
+        out['status']='released'
+        out['message']='Released %d compute record%s. No charge was made.'%(out['released'],'' if out['released']==1 else 's')+(' %d could not be released.'%k if k else '')
+    return out
+
+
 @app.get('/api/account/credits')
 def account_credits(a:auth.Actor=Depends(auth.require_actor)):
     # The signed-in customer's own prepaid balance, for the header. Local mode has no prepaid accounts.
