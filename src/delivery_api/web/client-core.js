@@ -93,7 +93,7 @@ export async function api(url,opts={}){
     const raw=await response.text();let detail;
     try{detail=JSON.parse(raw).detail}catch{}
     const info=typeof detail==='object'?detail:{error:typeof detail==='string'?detail:raw};
-    const message=`Error: ${info.error||'The request failed.'}\nLikely cause: ${info.cause||'The server could not complete this action.'}\nNext: ${info.next||'Retry once. If it fails again, open the task audit and server log.'}${ref?`\nReference: ${ref} (the avatar Debug dialog lists it with its timing)`:''}`;
+    const message=`Error: ${info.error||'The request failed.'}\nLikely cause: ${info.cause||(response.status===404?'This item does not exist, or it is not in your account.':'The server could not complete this action.')}\nNext: ${info.next||(response.status===404?'Go back to All sessions and pick one of your own tasks.':'Retry once. If it fails again, open the task audit and server log.')}${ref?`\nReference: ${ref} (the avatar Debug dialog lists it with its timing)`:''}`;
     const error=new Error(message);error.status=response.status;error.info=info;error.endpoint=url;
     clientLog('api.error',message,{endpoint:url,http_status:response.status,ref,task_state:info.current_state,active_phase:info.active_phase,decision_id:opts.decisionId});
     throw error;
