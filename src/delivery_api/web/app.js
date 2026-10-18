@@ -11,11 +11,13 @@ import {createCompletion} from './completion.js';
 import {createTaskActions} from './taskactions.js';
 import {createSessions} from './sessions.js';
 import {clientLog,esc} from './client-core.js';
+import {startCopyBlocks} from './copy-blocks.js';
 
 window.addEventListener('click',e=>{let target=e.target.closest('a,button,[role="button"]');if(target)clientLog('click',target.getAttribute('aria-label')||target.textContent.trim().replace(/\s+/g,' ').slice(0,120),{tag:target.tagName.toLowerCase()})},true);
 window.addEventListener('error',e=>ctx.debugState.client_errors.push({ts:new Date().toISOString(),message:e.message,source:e.filename,line:e.lineno}));window.addEventListener('unhandledrejection',e=>ctx.debugState.client_errors.push({ts:new Date().toISOString(),message:String(e.reason?.message||e.reason)}));
 window.addEventListener('popstate',()=>clientLog('navigation','Browser history navigation',{url:location.href}));
 clientLog('navigation','Page loaded',{url:location.href});
+startCopyBlocks();
 
 const ctx={};
 for(const create of [createPurchase,createQa,createIdentity,createDialogs,createDashboard,createTask,createGate,createCompletion,createDecisions,createTaskActions,createSessions])Object.assign(ctx,create(ctx));

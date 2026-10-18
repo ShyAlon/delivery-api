@@ -34,6 +34,7 @@ export async function downloadDebug(taskId){
 let refreshExpiresAt=0, refreshInFlight=null, lastActivity=Date.now();
 if(typeof document!=='undefined'){for(const name of ['pointerdown','keydown'])document.addEventListener(name,()=>{lastActivity=Date.now()},{passive:true})}
 export function setSessionExpiry(expiresAt){refreshExpiresAt=Number(expiresAt)||0}
+export function noteActivity(){lastActivity=Date.now()}
 export async function renewSessionIfDue(){
   if(!refreshExpiresAt || Date.now()/1000 < refreshExpiresAt-600 || Date.now()-lastActivity>20*60*1000)return;
   if(!refreshInFlight)refreshInFlight=fetch('/auth/refresh',{method:'POST',headers:{'content-type':'application/json'}})

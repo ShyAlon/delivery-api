@@ -1,4 +1,4 @@
-import {api} from './client-core.js';
+import {api,noteActivity} from './client-core.js';
 import {balanceLabel} from './account-balance.js';
 
 /* The customer's own prepaid credit balance, next to the session cost. Hidden when the server has no prepaid accounts. */
@@ -11,7 +11,7 @@ function startBalance(cost){
   if(label===null){el.hidden=true;return}
   el.textContent=label;el.hidden=false;el.dataset.state=reply.credits>0?'current':'unavailable';el.title=reply.credits>0?'Prepaid credit balance':'No credits left. Ask for more credits.';
  }catch{if(stopped)return;if(!el.hidden){el.dataset.state='stale';if(!el.textContent.endsWith(' · Last Known'))el.textContent+=' · Last Known'}}finally{pending=false}};
- refresh();const timer=setInterval(()=>{if(!document.hidden)refresh()},30000);const visible=()=>{if(!document.hidden)refresh()};document.addEventListener('visibilitychange',visible);
+ refresh();const timer=setInterval(()=>{if(!document.hidden)refresh()},30000);const visible=()=>{if(!document.hidden){noteActivity();refresh()}};document.addEventListener('visibilitychange',visible);
  return ()=>{stopped=true;clearInterval(timer);document.removeEventListener('visibilitychange',visible)};
 }
 
@@ -35,6 +35,6 @@ export function startSessionCostHeader(){
   host.dataset.state=hasValue?'stale':'unavailable';host.title='Cost Could Not Be Refreshed';
   if(hasValue){if(!host.textContent.endsWith(' · Last Known'))host.textContent+=' · Last Known'}else host.textContent='Session Cost Unavailable';
  }finally{pending=false}};
- refresh();const timer=setInterval(()=>{if(!document.hidden)refresh()},30000);const visible=()=>{if(!document.hidden)refresh()};document.addEventListener('visibilitychange',visible);
+ refresh();const timer=setInterval(()=>{if(!document.hidden)refresh()},30000);const visible=()=>{if(!document.hidden){noteActivity();refresh()}};document.addEventListener('visibilitychange',visible);
  const dispose=()=>{stopped=true;clearInterval(timer);stopBalance();document.removeEventListener('visibilitychange',visible);sizing.disconnect()};window.addEventListener('pagehide',dispose,{once:true});return dispose;
 }

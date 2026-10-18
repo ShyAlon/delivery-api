@@ -26,7 +26,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" 'sudo -n docker info >/dev/nul
 ssh "$HOST" "mkdir -p ~/requi && chmod 700 ~/requi && for d in ~/requi/build-[0-9]*; do [ -d \"\$d\" ] && rm -rf \"\$d\"; done; mkdir ~/requi/build-$STAMP" || abort MKDIR "cannot create the build folder"
 tar -c -C "$CTX" . | ssh "$HOST" "tar -x -C ~/requi/build-$STAMP" || abort UPLOAD "upload failed"
 echo "== docker build (several minutes the first time)"
-ssh "$HOST" "cd ~/requi/build-$STAMP && sudo -n docker build -f delivery-api/Dockerfile.full -t $IMAGE . > ../build-$STAMP.log 2>&1; rc=\$?; tail -15 ../build-$STAMP.log; exit \$rc" || { ssh "$HOST" "rm -rf ~/requi/build-$STAMP" || true; abort BUILD "docker build failed (log: $HOST:~/requi/build-$STAMP.log)" "The image tag $IMAGE was not created; the uploaded sources were removed from the server."; }
+ssh "$HOST" "cd ~/requi/build-$STAMP && sudo -n docker build --build-arg REQUI_BUILD_ID=$TAG -f delivery-api/Dockerfile.full -t $IMAGE . > ../build-$STAMP.log 2>&1; rc=\$?; tail -15 ../build-$STAMP.log; exit \$rc" || { ssh "$HOST" "rm -rf ~/requi/build-$STAMP" || true; abort BUILD "docker build failed (log: $HOST:~/requi/build-$STAMP.log)" "The image tag $IMAGE was not created; the uploaded sources were removed from the server."; }
 echo "== smoke inside the image (no network, no provider key)"
 ssh "$HOST" "sudo -n docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 $IMAGE python /app/full-smoke.py" || abort SMOKE "the smoke check failed (output above)" "The image exists on the server as $IMAGE but is not approved."
 echo; echo "DONE. Image $IMAGE built and smoke-tested on $HOST. Nothing is running."
