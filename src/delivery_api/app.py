@@ -2618,10 +2618,8 @@ def operator_sessions(limit:int=100,before_created_at:float|None=None,before_ses
 def account_credits(a:auth.Actor=Depends(auth.require_actor)):
     # The signed-in customer's own prepaid balance, for the header. Local mode has no prepaid accounts.
     if not config.CLOUD_TENANTS:return {'credits':None,'usd':None}
-    from . import account_balance
     from .pricing import retail_rates
-    from .tenancy import current_scope
-    return account_balance.read(store._db,current_scope().owner_id,retail_rates().usd_per_credit)
+    return store.own_credit_balance(retail_rates().usd_per_credit)
 
 
 @app.get('/api/operator/credits')
