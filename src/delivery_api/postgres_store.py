@@ -1202,6 +1202,11 @@ class PostgresStore(SQLiteStore):
         from .account_balance import read
         return read(self._db,current_scope().owner_id,usd_per_credit)
 
+    def own_ledger(self,usd_per_credit):
+        """Read-only: the signed-in owner's credit balance and provider-call ledger, as text for the Debug dialog."""
+        from .account_ledger import read
+        return read(self._db,current_scope().owner_id,usd_per_credit)
+
     def _unsupported(self,*args,**kwargs):
         raise TenantAccessDenied('local authentication or quota provisioning unavailable on user connection')
 
