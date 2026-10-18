@@ -1197,6 +1197,11 @@ class PostgresStore(SQLiteStore):
             'worker_jobs':[dict(row) for row in jobs],'credit_adjustment_available':False,
             'global_operator_access':False}
 
+    def own_credit_balance(self,usd_per_credit):
+        """Read-only: the signed-in owner's own prepaid balance. Public, so it runs inside a scoped transaction like every store operation."""
+        from .account_balance import read
+        return read(self._db,current_scope().owner_id,usd_per_credit)
+
     def _unsupported(self,*args,**kwargs):
         raise TenantAccessDenied('local authentication or quota provisioning unavailable on user connection')
 

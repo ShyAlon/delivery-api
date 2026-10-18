@@ -53,7 +53,36 @@ def test_route_is_private_and_local_mode_has_no_balance():
     s=(ROOT/'app.py').read_text()
     body=s.split("@app.get('/api/account/credits')")[1].split('\n\n')[0]
     assert 'Depends(auth.require_actor)' in body and 'if not config.CLOUD_TENANTS:return {\'credits\':None' in body
-    assert 'current_scope().owner_id' in body
+    # The database is only reachable through a store method (its scoped transaction); a direct store._db read is the 404 this fixed.
+    assert 'store.own_credit_balance(' in body and 'store._db' not in body
+
+
+def test_store_method_reads_inside_a_scoped_transaction_and_a_direct_read_is_refused():
+    from contextlib import contextmanager
+    from contextvars import ContextVar
+    from delivery_api.postgres_store import PostgresStore,_Connection
+    from delivery_api.tenancy import TenantAccessDenied,TenantScope,tenant_context
+
+    class Cursor:
+        def __init__(self,row):self.row=row;self.rowcount=1
+        def fetchone(self):return self.row
+
+    class Conn:
+        def __init__(self):self.sql=[]
+        def execute(self,sql,params=()):
+            self.sql.append(sql)
+            return Cursor({'balance_units':5*10**9,'units_per_credit':10**9} if 'credit_accounts' in sql else None)
+    conn=Conn()
+
+    class Postgres:
+        @contextmanager
+        def transaction(self,**kwargs):yield conn
+    store=PostgresStore.__new__(PostgresStore)
+    store._connection=ContextVar('scoped_transaction',default=None);store._db=_Connection(store._connection);store._postgres=Postgres()
+    with pytest.raises(TenantAccessDenied):store._db.execute('SELECT balance_units FROM credit_accounts WHERE owner_id=?',('o',))
+    with tenant_context(TenantScope('11111111-1111-4111-8111-111111111111')):
+        assert store.own_credit_balance(Decimal('1'))=={'credits':5.0,'usd':5.0}
+    assert any('SAVEPOINT operation_start' in q for q in conn.sql) and any('credit_accounts' in q for q in conn.sql)
 
 
 def run_node(code):
