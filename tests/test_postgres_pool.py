@@ -82,3 +82,20 @@ def test_a_burst_larger_than_the_cap_waits_instead_of_failing(probe):
     [t.start() for t in threads];[t.join(30) for t in threads]
     assert len(results)==40 and all(isinstance(r,int) for r in results)
     assert store.opened<=postgres_scope.POOL_OPEN_MAX and len(set(results))<=postgres_scope.POOL_OPEN_MAX
+
+
+def test_one_request_shares_one_backend_and_the_next_request_sees_only_its_own_rows(probe):
+    store,table=probe
+    with tenant_context(A),store.transaction() as c:c.execute(f"INSERT INTO {table} VALUES (%s,'a-note')",(A.owner_id,))
+    with tenant_context(B),store.transaction() as c:c.execute(f"INSERT INTO {table} VALUES (%s,'b-note')",(B.owner_id,))
+    handle,token=store.begin_request(A)
+    try:
+        with tenant_context(A):
+            seen=[]
+            for _ in range(3):
+                with store.transaction() as c:
+                    seen.append((c.execute('SELECT pg_backend_pid() AS pid').fetchone()['pid'],[r['note'] for r in c.execute(f'SELECT note FROM {table}')]))
+    finally:
+        store.end_context(token);store.finish_request(handle,False)
+    assert len({pid for pid,_ in seen})==1 and all(notes==['a-note'] for _,notes in seen)   # one connection, A's rows only
+    assert read(store,B,table)==['b-note']                                                  # the connection carries nothing of A afterwards

@@ -4,8 +4,9 @@ from .tenancy import tenant_context, TenantAccessDenied
 
 
 class TenantMiddleware:
-    def __init__(self,app,*,verifier,admin_subjects=(),session_check=None):
+    def __init__(self,app,*,verifier,admin_subjects=(),session_check=None,request_database=None):
         self.app=app
+        self.request_database=request_database
         self.session_check=session_check
         self.verifier=verifier
         self.admin_subjects=frozenset(admin_subjects)
@@ -63,6 +64,21 @@ class TenantMiddleware:
         from .auth import Actor
         scope.setdefault('state',{})['supabase_actor']=Actor(
             identity.owner_id,'Signed-In User',admin=identity.owner_id in self.admin_subjects)
+        shared=None
+        if self.request_database is not None and _shares_one_transaction(scope.get('method'),path):
+            shared=self.request_database.begin_request(identity)
+        failed=True
+        try:
+            await self._serve(scope,receive,send,path,identity)
+            failed=False
+        finally:
+            if shared is not None:
+                from starlette.concurrency import run_in_threadpool
+                self.request_database.end_context(shared[1])
+                await run_in_threadpool(self.request_database.finish_request,shared[0],failed)
+
+    async def _serve(self,scope,receive,send,path,identity):
+        from starlette.concurrency import run_in_threadpool
         try:
             with tenant_context(identity):
                 if self.session_check:
@@ -74,3 +90,8 @@ class TenantMiddleware:
                 return await self.app(scope,receive,send)
         except TenantAccessDenied:
             return await JSONResponse({'detail':'Tenant resource not found'},status_code=404)(scope,receive,send)
+
+
+def _shares_one_transaction(method,path):
+    """Plain reads answered from the database share one transaction. Streams and file downloads stay out so they never hold a connection."""
+    return (method in ('GET','HEAD') and path.startswith('/api/') and not path.endswith(('/stream','.zip')) and '/artifacts/' not in path)
