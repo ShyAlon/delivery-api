@@ -2614,6 +2614,14 @@ def operator_sessions(limit:int=100,before_created_at:float|None=None,before_ses
     except ValueError as exc:raise HTTPException(422,str(exc))
 
 
+@app.get('/api/account/ledger')
+def account_ledger_view(a:auth.Actor=Depends(auth.require_actor)):
+    # The signed-in customer's own credits and provider calls, read-only, for the Debug dialog. Local mode has no prepaid accounts.
+    if not config.CLOUD_TENANTS:return {'text':'Not available on this server: it has no prepaid credit accounts.'}
+    from .pricing import retail_rates
+    return store.own_ledger(retail_rates().usd_per_credit)
+
+
 @app.get('/api/account/credits')
 def account_credits(a:auth.Actor=Depends(auth.require_actor)):
     # The signed-in customer's own prepaid balance, for the header. Local mode has no prepaid accounts.
