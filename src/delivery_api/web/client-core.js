@@ -77,6 +77,13 @@ function beginWait(url){
   };
 }
 
+import {createConnectionState,isBackground} from './connection-state.js';
+let reconnectStrip=null;
+const connection=createConnectionState({
+  show(){reconnectStrip=document.createElement('div');reconnectStrip.id='reconnecting';reconnectStrip.className='reconnecting-strip';reconnectStrip.setAttribute('role','status');reconnectStrip.textContent='Reconnecting…';document.body.appendChild(reconnectStrip)},
+  hide(){if(reconnectStrip){reconnectStrip.remove();reconnectStrip=null}}
+});
+
 export async function api(url,opts={}){
   if(url!=='/auth/refresh' && url!=='/api/auth' && !url.startsWith('/auth/sign') && !url.startsWith('/auth/email-availability'))await renewSessionIfDue();
   const began=performance.now();
@@ -86,10 +93,13 @@ export async function api(url,opts={}){
   let timedOut=false,timer=timeout?setTimeout(()=>{timedOut=true;controller.abort()},timeout):null,response;
   try{response=await fetch(url,{headers:{'content-type':'application/json'},...opts,signal:opts.signal||(controller&&controller.signal)})}
   catch(error){
-    if(error.name==='AbortError'&&timedOut)throw new Error('Error: The request timed out.\nLikely cause: the server did not answer a read request within 60 seconds.\nNext: check the server log and retry the page load.');
+    const background=isBackground(method,opts,foregroundRead);
+    if(error.name!=='AbortError'||timedOut)connection.failed();
+    if(error.name==='AbortError'&&timedOut){const e=new Error('Error: The request timed out.\nLikely cause: the server did not answer a read request within 60 seconds.\nNext: check the server log and retry the page load.');e.background=background;throw e}
     if(error.name==='AbortError')throw error;
-    throw new Error(`Error: The server could not be reached.\nLikely cause: ${error.message||'The connection failed.'}\nNext: your text is preserved. Check the server is running, then retry.`);
+    const e=new Error(`Error: The server could not be reached.\nLikely cause: ${error.message||'The connection failed.'}\nNext: your text is preserved. Check the server is running, then retry.`);e.background=background;throw e;
   }finally{if(timer)clearTimeout(timer);endWait()}
+  connection.ok();
   const ref=response.headers.get('x-request-id'),serverMs=Number((/dur=([0-9.]+)/.exec(response.headers.get('server-timing')||'')||[])[1]),totalMs=Math.round(performance.now()-began);
   const entry={ts:new Date().toISOString(),method,url,status:response.status,total_ms:totalMs,server_ms:Number.isFinite(serverMs)?Math.round(serverMs):null,ref,db:((/db;dur=([0-9.]+);desc="([^"]*)"/.exec(response.headers.get('server-timing')||'')||[]).slice(1,3).join(' ms, '))||null};
   requestLog.push(entry);if(requestLog.length>200)requestLog.shift();
@@ -99,7 +109,7 @@ export async function api(url,opts={}){
     try{detail=JSON.parse(raw).detail}catch{}
     const info=typeof detail==='object'?detail:{error:typeof detail==='string'?detail:raw};
     const message=`Error: ${info.error||'The request failed.'}\nLikely cause: ${info.cause||(response.status===404?'This item does not exist, or it is not in your account.':'The server could not complete this action.')}\nNext: ${info.next||(response.status===404?'Go back to All sessions and pick one of your own tasks.':'Retry once. If it fails again, open the task audit and server log.')}${ref?`\nReference: ${ref} (the avatar Debug dialog lists it with its timing)`:''}`;
-    const error=new Error(message);error.status=response.status;error.info=info;error.endpoint=url;
+    const error=new Error(message);error.status=response.status;error.info=info;error.endpoint=url;error.background=isBackground(method,opts,foregroundRead);
     clientLog('api.error',message,{endpoint:url,http_status:response.status,ref,task_state:info.current_state,active_phase:info.active_phase,decision_id:opts.decisionId});
     throw error;
   }

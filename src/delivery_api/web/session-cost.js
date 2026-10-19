@@ -24,14 +24,19 @@ export function startSessionCostHeader(){
  const route=task?`/api/tasks/${task[1]}/cost`:session?`/api/sessions/${session[1]}/cost`:null;
  if(!route){host.textContent='No Session Selected';host.dataset.state='empty';return ()=>{sizing.disconnect();stopBalance()}}
  let stopped=false,pending=false,hasValue=false;
+ const here=task?`/tasks/${task[1]}`:`/sessions/${session[1]}`,stillHere=()=>location.pathname===here||location.pathname.startsWith(here+'/');
+ const empty=()=>{host.textContent='No Session Selected';host.dataset.state='empty';host.title='';hasValue=false};
  host.textContent='Session Cost: Loading';
- const refresh=async()=>{if(pending||stopped)return;pending=true;try{
+ const refresh=async()=>{if(pending||stopped)return;
+  if(!stillHere()){empty();return}   // the page no longer names this task or session (for example after Delete): do not ask about it
+  pending=true;try{
   const value=await api(route);if(stopped)return;
+  if(!stillHere()){empty();return}
   if(!Number.isFinite(value.price)||!Number.isFinite(value.price_usd))throw new Error('Cost unavailable');
   host.textContent=`${value.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} credits · $${value.price_usd.toFixed(2)}`;
   host.dataset.state='current';hasValue=true;host.title='Rolling Session Cost';
  }catch(error){if(stopped)return;
-  if(!hasValue&&error&&error.status===404){host.textContent='No Session Selected';host.dataset.state='empty';host.title='';return}
+  if(error&&error.status===404){empty();return}
   host.dataset.state=hasValue?'stale':'unavailable';host.title='Cost Could Not Be Refreshed';
   if(hasValue){if(!host.textContent.endsWith(' · Last Known'))host.textContent+=' · Last Known'}else host.textContent='Session Cost Unavailable';
  }finally{pending=false}};

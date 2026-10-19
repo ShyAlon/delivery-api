@@ -115,9 +115,9 @@ def test_client_report_states_range_and_has_no_bodies():
     assert 'shy@example.com' not in r['text'] and 'x=1' not in r['text'] and 'code=9' not in r['text'] and 'ref r1' in r['text'] and '--- browser events ---' in r['text']
 
 
-def test_debug_dialog_wires_both_buttons_with_states():
+def test_debug_dialog_shows_both_logs_in_black_boxes_and_copies_everything_with_states():
     s=(WEB/'identity.js').read_text()
-    for needle in ('id="copyserverlogs"','id="copyclientlogs"','Preparing','Copied','Failed'):
+    for needle in ('id="copyeverything"','id="serverloghost"','id="clientloghost"','serverReport','clientReport','Preparing','Copied','Failed'):
         assert needle in s
 
 

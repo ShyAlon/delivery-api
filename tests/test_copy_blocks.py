@@ -12,7 +12,8 @@ def test_the_copy_module_covers_every_dark_block_class_and_gives_busy_and_result
     js=_web('copy-blocks.js')
     for selector in ('.json-view','.console','.live-console','.artifact-content','.input-requirement code'):assert selector in js.split('export function')[0]
     assert "import {deliverText} from './client-core.js'" in js and 'export function startCopyBlocks' in js
-    for label in ("'Copy'","'Copying…'","'Copied'","'Downloaded'","'Copy failed'"):assert label in js
+    for icon,label in (("📋","Copy this text"),("⏳","Copying"),("✅","Copied"),("⬇️","Downloaded instead"),("⚠️","Copy failed")):assert icon in js and label in js
+    assert "button.setAttribute('aria-label',label);button.title=label" in js
     assert "aria-live" in js and 'if(busy||!target)return' in js and 'button.disabled=true' in js
 
 
@@ -40,8 +41,10 @@ def test_dark_blocks_in_the_stylesheet_are_all_copyable():
 def test_debug_dialog_buttons_sit_in_one_aligned_row_with_gaps():
     s=_web('identity.js')
     row=s.split('<div class="debug-actions">')[1].split('</div>')[0]
-    # download, copy debug info, server logs, client logs, task diagnostics
-    assert row.count('<button')==5 and 'id="downloaddebug"' in row and 'id="copyclientlogs"' in row and 'id="copydiag"' in row
+    # download ZIP and one copy-everything button; the logs live in black boxes with the hover copy button
+    assert row.count('<button')==2 and 'id="downloaddebug"' in row and 'id="copyeverything"' in row
+    for gone in ('copydebug','copyserverlogs','copyclientlogs','copydiag','logButton'):assert gone not in s
+    for box in ('debuginfohost','serverloghost','clientloghost'):assert re.search(r'<pre id="'+box+'" class="json-view"',s)
     css=_web('style.css')
     assert re.search(r'\.debug-dialog \.debug-actions\{display:flex;flex-wrap:wrap;gap:12px',css)
     assert re.search(r'\.debug-dialog \.debug-actions button\{margin:0;padding:12px 18px;min-height:44px',css)
