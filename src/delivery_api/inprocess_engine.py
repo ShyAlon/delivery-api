@@ -12,7 +12,7 @@ Limits, by design of running in one process:
     the thread finishes on its own, and the slot stays held until then.
   * A pending gate question lives in memory. After a restart the generator resumes from its checkpoint and asks again.
 """
-import asyncio,json,os,queue,threading,traceback
+import asyncio,json,os,queue,sys,threading,traceback
 from contextlib import contextmanager
 
 _STAGES=('needs','srs','architecture','items','tests','validation','review','repair','expert_opinion')
@@ -173,11 +173,15 @@ class InProcessEngine:
             except EngineStopped:
                 code=130
             except UserFacingError as exc:
-                out.write('\n'+exc.render()+'\n');code=1
+                from .user_messages import scrub_failure_text
+                out.write('\n'+scrub_failure_text(exc.render())+'\n');code=1
             except SystemExit as exc:
                 code=exc.code if isinstance(exc.code,int) else (0 if exc.code is None else 1)
             except BaseException:
-                out.write(traceback.format_exc());out.flush();proc.finish(1);raise
+                from .user_messages import scrub_failure_text
+                trace=traceback.format_exc()
+                if scrub_failure_text(trace)!=trace:print(trace,file=sys.stderr,flush=True)   # raw detail: server log only
+                out.write(scrub_failure_text(trace));out.flush();proc.finish(1);raise
             finally:out.flush()
             proc.finish(code)
         return producer

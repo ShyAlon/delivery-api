@@ -225,6 +225,12 @@ def _reconcile_terminal_http_interview(task_id:str,state:EngineSnapshot)->bool:
         return False
     return store.reconcile_completed_interview(task_id,state.session_id,state.sequence)
 
+def _customer_denial(exc,task_id=None):
+    """The plain message for a customer; the raw reason stays in the server log and the activity stream."""
+    from .user_messages import user_denial_message
+    activity("account.denial.internal","A safety check denied a request",task_id=task_id,reason=str(exc)[:300])
+    return user_denial_message(str(exc))
+
 def _finish_cloud_interview(task_id:str,snapshot)->None:
     """Record the finished interview in cloud without starting the next phase.
 
@@ -767,7 +773,7 @@ def stop_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     from .attempt_ledger import AdmissionDenied
     try:return request_stop(store,engine_client,task_id)
     except KeyError:raise HTTPException(404,"task not found")
-    except AdmissionDenied as exc:raise HTTPException(409,{"error":str(exc),"next":"Stop remains pending; verify worker completion and provider usage before Delete."})
+    except AdmissionDenied as exc:raise HTTPException(409,{"error":_customer_denial(exc,task_id),"next":"Stop remains pending; verify worker completion and provider usage before Delete."})
     except EngineUnreachableError as exc:raise _engine_unreachable(exc)
     except EngineClientError as exc:raise HTTPException(502,{"error":"Engine Stop was not confirmed.","cause":exc.error.detail,"next":"The durable request remains pending. Retry Stop; do not Delete."})
 
@@ -781,7 +787,7 @@ def reconcile_task_stop(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     from .cooperative_stop import request_stop
     from .attempt_ledger import AdmissionDenied
     try:return request_stop(store,engine_client,task_id,reconcile=True)
-    except AdmissionDenied as exc:raise HTTPException(409,{"error":str(exc),"next":"Worker completion and usage must be verified before Delete."})
+    except AdmissionDenied as exc:raise HTTPException(409,{"error":_customer_denial(exc,task_id),"next":"Worker completion and usage must be verified before Delete."})
     except EngineUnreachableError as exc:raise _engine_unreachable(exc)
     except EngineClientError as exc:raise HTTPException(502,{"error":"Engine quiescence not confirmed.","cause":exc.error.detail})
 
@@ -2680,7 +2686,7 @@ def account_compute_release(body:ComputeReleaseRequest,a:auth.Actor=Depends(auth
     if not config.CLOUD_TENANTS:raise HTTPException(404,'Not available on this server: it has no prepaid credit accounts.')
     from .attempt_ledger import AdmissionDenied
     try:out=store.release_own_compute(body.confirm)
-    except AdmissionDenied as exc:raise HTTPException(409,{"error":"Compute records were not released.","cause":str(exc),"next":"Open Debug, copy the ledger section and send it."})
+    except AdmissionDenied as exc:raise HTTPException(409,{"error":"Compute records were not released.","cause":_customer_denial(exc),"next":"Open Debug, copy the ledger section and send it."})
     n=len(out['releasable']);k=len(out['kept'])
     if not body.confirm:
         out['status']='preview'
