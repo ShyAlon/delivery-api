@@ -777,6 +777,32 @@ def stop_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     except EngineUnreachableError as exc:raise _engine_unreachable(exc)
     except EngineClientError as exc:raise HTTPException(502,{"error":"Engine Stop was not confirmed.","cause":exc.error.detail,"next":"The durable request remains pending. Retry Stop; do not Delete."})
 
+def _run_control(task_id):
+    # Whether a phase of this task is running as its own process here, so the owner can stop it.
+    from . import run_slots
+    return {"stoppable":bool(config.CLOUD_TENANTS and config.RUN_ISOLATION=="process" and run_slots.is_running(task_id))}
+
+
+class StopRunRequest(BaseModel):
+    confirm: bool = False
+
+STOP_RUN_MESSAGE="Stopping ends this phase now. Work already saved is kept and you can start it again. A model call in progress when you stop may still be counted against your credits."
+
+@app.post("/api/tasks/{task_id}/stop-run")
+def stop_run(task_id:str,body:StopRunRequest,a:auth.Actor=Depends(auth.require_actor)):
+    # The owner stops their own running phase. This ends the child process; it is not the interview engine's cooperative /stop.
+    if not config.CLOUD_TENANTS:raise HTTPException(404,"Not available on this server.")
+    if not store.task(task_id):raise HTTPException(404,"task not found")
+    if config.RUN_ISOLATION!="process":raise HTTPException(409,{"error":"A run cannot be stopped on this server yet.","cause":"Runs here do not have their own process.","next":"Wait for the run to finish."})
+    from . import run_slots
+    if not body.confirm:
+        return {"status":"preview","running":run_slots.is_running(task_id),"message":STOP_RUN_MESSAGE}
+    if not run_slots.request_stop(task_id,"owner",a.label):
+        raise HTTPException(409,{"error":"Nothing is running to stop.","cause":"The phase has already finished or has not started.","next":"Reload the task."})
+    store.audit(a.label,"run.stop_requested",task_id,{"by":"owner"})
+    activity("run.stop_requested","Owner asked to stop the run",task_id=task_id)
+    return {"status":"stopping","message":"Stopping. This takes a few seconds."}
+
 @app.post("/api/tasks/{task_id}/stop/reconcile")
 def reconcile_task_stop(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     if not config.CLOUD_TENANTS:raise HTTPException(404,"cooperative Stop unavailable")
@@ -1643,7 +1669,7 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
         control.artifact_ref=None
     if config.CLOUD_TENANTS:
         artifacts=[{key:value for key,value in row.items() if key!='ref'} for row in artifacts]
-    return _customer_events({**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": _customer_events(store.events(task_id)), "artifacts":artifacts,"artifact_projection":{"session":session,"root":None if config.CLOUD_TENANTS else str((authorized_session(__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"stop_control":{"available":bool(config.CLOUD_TENANTS and cloud_execution_admitted() and session_id),"requested":task.get("state") in ("stop_requested","stopped")}})
+    return _customer_events({**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": _customer_events(store.events(task_id)), "artifacts":artifacts,"artifact_projection":{"session":session,"root":None if config.CLOUD_TENANTS else str((authorized_session(__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"stop_control":{"available":bool(config.CLOUD_TENANTS and cloud_execution_admitted() and session_id),"requested":task.get("state") in ("stop_requested","stopped")},"run_control":_run_control(task_id)})
 
 def _retain_decision_control(task_id:str,control:dict)->None:
     decision=control.get('decision') or {};context=decision.get('context') or {}
