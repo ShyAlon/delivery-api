@@ -216,14 +216,30 @@ def _reconcile_terminal_http_interview(task_id:str,state:EngineSnapshot)->bool:
     from vmodel_contracts.conops import ConOpsDocument
     interview=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),state.session_id,store)/"interview"
     try:
-        intent=IntentModel.model_validate_json((interview/"intent_model.json").read_text())
-        conops=ConOpsDocument.model_validate_json((interview/"conops.json").read_text())
+        intent=IntentModel.model_validate_json(_read_task_text(task_id,interview/"intent_model.json"))
+        conops=ConOpsDocument.model_validate_json(_read_task_text(task_id,interview/"conops.json"))
         if intent.session_id!=state.session_id or conops.session_id!=state.session_id:
             raise ValueError("interview artifacts belong to a different session")
     except (OSError,ValueError) as exc:
         activity("engine.recovery.artifacts_invalid","Completed interview cannot be handed off without verified artifacts",task_id=task_id,session_id=state.session_id,error=str(exc)[:350])
         return False
     return store.reconcile_completed_interview(task_id,state.session_id,state.sequence)
+
+def _finish_cloud_interview(task_id:str,snapshot)->None:
+    """Record the finished interview in cloud without starting the next phase.
+
+    The next phase spends the owner's credits and needs its own spend approval,
+    which the interview-only admission does not cover. A failure here is shown
+    as an event; the engine already accepted the answer, so /answer must not 500."""
+    try:done=_reconcile_terminal_http_interview(task_id,snapshot)
+    except Exception as exc:
+        store.add_event(task_id,"error","Interview finished, but recording it failed.",phase_key="conops",
+                        payload={"cause":f"{type(exc).__name__}: {str(exc)[:300]}","session_id":str(snapshot.session_id)})
+        activity("engine.cloud_finish.failed","Cloud interview completion could not be recorded",task_id=task_id,error=f"{type(exc).__name__}: {str(exc)[:200]}")
+        return
+    if done:
+        store.add_event(task_id,"progress","Interview complete. The next phase has not started: it needs its own spend approval, which is not available yet.",phase_key="conops",
+                        payload={"session_id":str(snapshot.session_id),"next_phase":"needs","started":False})
 
 async def _continue_reconciled_interview(task_id:str)->None:
     try:
@@ -1117,8 +1133,10 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
     if answer_display:answer_payload["answer_display"]=answer_display
     store.add_event(task_id,"answer",f"You: {answer_display or body.answer}",phase_key=active_phase,payload=answer_payload)
     activity("engine.answer","Founder answer submitted",task_id=task_id,phase=active_phase,actor=a.label,character_count=len(body.answer))
-    if source=="http_interview" and _reconcile_terminal_http_interview(task_id,submitted.snapshot):
-        asyncio.create_task(_continue_reconciled_interview(task_id))
+    if source=="http_interview":
+        if config.CLOUD_TENANTS:_finish_cloud_interview(task_id,submitted.snapshot)
+        elif _reconcile_terminal_http_interview(task_id,submitted.snapshot):
+            asyncio.create_task(_continue_reconciled_interview(task_id))
     return {"status":"accepted"}
 
 def _read_task_text(task_id:str,path:Path,*,errors='strict')->str:
@@ -1544,6 +1562,35 @@ def _http_input_state(task_id:str,engine_state:EngineSnapshot)->dict:
             "process_live":engine_state.process_status in (ProcessStatus.RUNNING,ProcessStatus.WAITING_INPUT),
             "decision":decision,"requirement":None,"question":question,"input_id":input_id}
 
+def _cloud_engine_read(task_id:str,task:dict,session_id:str):
+    """Owner-session engine snapshot for a cloud task read.
+
+    Read-only: it shows the open question and never reconciles or starts work,
+    so a page refresh cannot launch the next phase. Engine errors become
+    visible fields on input_state instead of failing the whole task read."""
+    empty={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None}
+    try:snapshot=engine_client.snapshot(session_id)
+    except EngineClientError as exc:
+        return None,{**empty,"engine_error":{"http_status":exc.http_status,"code":int(exc.error.code),"detail":exc.error.detail}}
+    except EngineUnreachableError:
+        return None,{**empty,"engine_unreachable":True}
+    if task.get("active_phase") in ("intent","conops"):return snapshot,_http_input_state(task_id,snapshot)
+    return snapshot,{**empty,"engine_process_status":int(snapshot.process_status)}
+
+@app.get("/api/tasks/{task_id}/diagnostics")
+def task_diagnostics(task_id:str):
+    """Everything needed to diagnose this task's interview in one owner-scoped document."""
+    from . import task_diagnostics as diagnostics
+    if not store.task(task_id):raise HTTPException(404,"task not found")
+    detail=get_task(task_id)
+    session_id=store.engine_session(task_id);snapshot=None;error=None
+    if session_id:
+        try:snapshot=engine_client.snapshot(session_id)
+        except EngineClientError as exc:error=f"engine answered HTTP {exc.http_status}: {exc.error.detail}"
+        except EngineUnreachableError:error="the interview engine is not reachable"
+    return diagnostics.build(detail,detail.get("events") or [],detail.get("control_snapshot"),detail.get("input_state"),
+                             diagnostics.engine_summary(snapshot,error))
+
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str, background_tasks: BackgroundTasks = None):
     task = store.task(task_id)
@@ -1559,8 +1606,7 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
     if starting and task.get("state")=="running":
         input_state={"waiting":False,"process_live":True,"decision":None,"requirement":None,"question":None,"input_id":None}
     elif session_id and config.CLOUD_TENANTS:
-        input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,
-                     "question":None,"input_id":None,"execution_blocked":"scoped engine protocol pending"}
+        snapshot,input_state=_cloud_engine_read(task_id,task,session_id)
     elif session_id:
         try:
             snapshot=engine_client.snapshot(session_id)
