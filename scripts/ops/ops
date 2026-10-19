@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Short launcher for the operations scripts: `ops deploy-full`, `ops go-live`, `ops install`.
+# It finds the delivery-api checkout it lives in (also through a symlink), so no path is ever typed.
+SELF=$0
+while [ -L "$SELF" ]; do
+  D=$(cd "$(dirname "$SELF")" && pwd); T=$(readlink "$SELF")
+  case "$T" in /*) SELF=$T;; *) SELF=$D/$T;; esac
+done
+HERE=$(cd "$(dirname "$SELF")" && pwd)
+list(){ for f in "$HERE"/*.sh; do b=$(basename "$f" .sh); [ "$b" = lib ] || echo "  ops $b"; done; echo "  ops install   (puts ops on your PATH)"; }
+case "${1:-}" in
+  ""|-h|--help|help) echo "ops runs the scripts in $HERE:"; list; exit 0;;
+  install)
+    TARGET=""
+    for d in "$HOME/.local/bin" "$HOME/bin" /usr/local/bin; do
+      case ":$PATH:" in *":$d:"*) [ -d "$d" ] && [ -w "$d" ] && { TARGET=$d; break; };; esac
+    done
+    if [ -z "$TARGET" ]; then
+      echo; echo "ABORTED [NO-BIN-DIR]: no writable folder on your PATH among ~/.local/bin, ~/bin, /usr/local/bin."
+      echo "Nothing was changed."
+      echo "Fix: mkdir -p ~/.local/bin && echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && exec zsh"
+      echo "Then run: $HERE/ops install"; exit 1
+    fi
+    A=${2:-}; [ "$A" = --yes ] && A=yes
+    [ "$A" = yes ] || { printf 'Type yes to link %s/ops to %s/ops (nothing else is changed): ' "$TARGET" "$HERE"; read -r A; }
+    [ "$A" = yes ] || { echo "Not installed."; exit 1; }
+    ln -sf "$HERE/ops" "$TARGET/ops" && echo "ok  installed. From any folder: ops deploy-full  or  ops go-live"; exit $?;;
+  *)
+    [ -f "$HERE/$1.sh" ] && [ "$1" != lib ] || { echo; echo "ABORTED [UNKNOWN]: there is no ops script called '$1'."; echo "Nothing was changed."; echo "Fix: ops   (lists the scripts)"; echo "Then run: ops"; exit 1; }
+    N=$1; shift; exec bash "$HERE/$N.sh" "$@";;
+esac
