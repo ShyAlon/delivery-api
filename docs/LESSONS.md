@@ -29,3 +29,9 @@ Short rules that came from real failures. Add to this file when something goes w
 - Dry-run the whole script in a throwaway-origin harness, including the decline path, before sending it.
 - Never assume a stand-in clone is main. Fetch every edited file from main and build edits as exact-text pairs with count guards.
 - Secrets never go through chat. Spend needs a typed GO with a ceiling.
+
+## Capacity
+
+- Generator phases can run one child process each (`DELIVERY_RUN_ISOLATION=process`). The thread mode runs one phase at a time and is the fallback.
+- `DELIVERY_MAX_CONCURRENT_RUNS=2` is a starting value, not a measurement. Revisit it once the peak memory per run (logged as `run.finished` with `peak_rss_mb`) is known on the real server.
+- `DELIVERY_PHASE_TIME_LIMIT_S=1800` stops a run that passes 30 minutes. Revisit with real run times.
