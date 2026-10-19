@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 OPS = Path(__file__).resolve().parents[1] / "scripts" / "ops"
-NAMES = ("deploy-full.sh", "go-live.sh", "grant-credits.sh", "lib.sh")
+NAMES = ("deploy-full.sh", "go-live.sh", "grant-credits.sh", "lib.sh", "req-install.sh")
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None or shutil.which("git") is None, reason="needs bash and git")
 
 

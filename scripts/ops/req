@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# req: run the newest Requi.re script from ~/Downloads. No arguments needed. Expired scripts are archived by their expires= stamp; there is no age prompt.
+#   req            run the newest verified script (kept in place if it fails, so you can run req again)
+#   req list       show pending scripts
+#   req <name>     run the newest script with that name
+#   req status     read-only: git status of every repo under ~/development/require
+set -uo pipefail
+DL=${REQ_DOWNLOADS:-$HOME/Downloads}; DONE=$DL/requi-done
+mt(){ if [ "$(uname)" = Darwin ]; then stat -f %m "$1"; else stat -c %Y "$1"; fi; }
+superseded(){ # $1 name $2 mtime of candidate: a same-name script already ran that was downloaded later => candidate is old
+  for d in "$DONE/$1"-*.txt; do [ -f "$d" ] || continue
+    r=${d##*/}; r=${r#"$1"-}; [[ "$r" =~ ^[0-9a-f]{8}-[0-9]{6}\.txt$ ]] || continue
+    [ "$(mt "$d")" -ge "$2" ] && { echo "$d"; return 0; }
+  done; return 1; }
+sha8(){ grep -v '^# REQUI-SCRIPT ' "$1" | shasum -a 256 | cut -c1-8; }
+cands(){ # prints: mtime<TAB>file<TAB>name<TAB>sha8-in-marker
+  for f in "$DL"/*.txt; do [ -f "$f" ] || continue
+    m=$(sed -n '1,6p' "$f" | grep -m1 '^# REQUI-SCRIPT ') || continue
+    set -- $m; e=""; for w in "$@"; do case "$w" in expires=*) e=${w#expires=};; esac; done
+    printf '%s\t%s\t%s\t%s\t%s\n' "$(if [ "$(uname)" = Darwin ]; then stat -f %m "$f"; else stat -c %Y "$f"; fi)" "$f" "$3" "$4" "$e"
+  done | sort -rn; }
+case "${1:-}" in
+status)
+  R=${REQUI_ROOT:-$HOME/development/require}
+  for d in "$R"/*/; do [ -d "$d/.git" ] || continue
+    echo "== $(basename "$d")  branch $(git -C "$d" rev-parse --abbrev-ref HEAD)"
+    git -C "$d" status --short | head -15
+    git -C "$d" status --short | grep '^??' | sed 's/^?? //' | head -5 | while read -r p; do echo "   untracked and not ignored: $p   (fix: echo '$p' >> $d/.gitignore, or delete it)"; done
+    git -C "$d" status --short | grep -v '^??' | head -3 | while read -r l; do echo "   tracked change: $l   (see: git -C $d diff --stat)"; done
+  done; exit 0;;
+list) cands | while IFS=$'\t' read -r t f n s e; do echo "$n $s  $(basename "$f")  ${e:+expires $e}"; done; exit 0;;
+esac
+WANT=${1:-}; PICK=""
+NOW=$(date +%s)
+while IFS=$'\t' read -r t f n s e; do
+  [ -z "$WANT" ] || [ "$n" = "$WANT" ] || continue
+  if [ -n "$e" ]; then
+    X=$(python3 -c 'import sys,calendar,time;print(calendar.timegm(time.strptime(sys.argv[1],"%Y-%m-%dT%H:%M:%SZ")))' "$e" 2>/dev/null || echo 0)
+    if [ "$X" -gt 0 ] && [ "$NOW" -gt "$X" ]; then
+      mkdir -p "$DONE/expired"; mv "$f" "$DONE/expired/$n-$s.txt"
+      echo "(expired and archived: $n $s, it was valid until $e. Download the latest from the chat.)"; continue
+    fi
+  fi
+  if D2=$(superseded "$n" "$t"); then
+    mkdir -p "$DONE/superseded"; mv "$f" "$DONE/superseded/$n-$s.txt"
+    echo "(old copy archived, not run: $n $s. A newer script with the same name already ran: $(basename "$D2"). Download the latest from the chat if you need it again.)"; continue
+  fi
+  if [ -z "$PICK" ]; then PICK="$f|$n|$s|$t"; else echo "(older pending, skipped: $n $s)"; fi
+done < <(cands)
+[ -n "$PICK" ] || { echo "No Requi.re script found in $DL (looked for *.txt with a '# REQUI-SCRIPT' line)."; echo "Fix: download the attachment again, then run: req"; exit 1; }
+IFS='|' read -r F N S T <<<"$PICK"
+A=$(sha8 "$F")
+[ "$A" = "$S" ] || { echo "ABORTED: $(basename "$F") is damaged or edited (content hash $A, expected $S). Nothing was run."; echo "Fix: download the attachment again, then run: req"; exit 1; }
+echo "Running $N $S ($(basename "$F"))"
+bash "$F"; RC=$?
+if [ $RC -eq 0 ]; then mkdir -p "$DONE"; mv "$F" "$DONE/$N-$S-$(date +%H%M%S).txt"; echo "(script moved to $DONE so req cannot re-run it)"
+else echo "(exit $RC: script left in Downloads; fix what it said, then run: req)"; fi
+exit $RC
+
+
+[exit code: 0]
