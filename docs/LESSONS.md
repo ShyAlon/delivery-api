@@ -37,3 +37,4 @@ Short rules that came from real failures. Add to this file when something goes w
 - `DELIVERY_MAX_CONCURRENT_RUNS=2` is a starting value, not a measurement. Revisit it once the peak memory per run (logged as `run.finished` with `peak_rss_mb`) is known on the real server.
 - The operator Debug section "Server capacity" shows slots, running phases, machine memory and the biggest run seen. Set the slot count from that, not from a guess.
 - `DELIVERY_PHASE_TIME_LIMIT_S=1800` stops a run that passes 30 minutes. Revisit with real run times.
+- Each run is sampled every 10 seconds (CPU, memory, peak) and the container is sampled with it. Samples are in `run_metrics.db` in the data directory, so they survive a restart. Raw rows are kept 3 days, then each run becomes one permanent summary row (average and maximum). Debug > Server capacity shows the recent runs. Size the slot count from these numbers.

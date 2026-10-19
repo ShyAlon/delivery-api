@@ -2734,6 +2734,13 @@ def admin_operations_capacity(a:auth.Actor=Depends(auth.require_admin)):
     return snap
 
 
+@app.get('/api/admin/operations/run-metrics')
+def admin_operations_run_metrics(task_id:str='',a:auth.Actor=Depends(auth.require_admin)):
+    # Operator only: CPU and memory samples. With task_id, the raw samples and summaries of that task; without, the recent-runs overview shown in Debug.
+    from . import run_metrics
+    return run_metrics.for_task(task_id) if task_id else run_metrics.overview()
+
+
 class AdminStopRunRequest(BaseModel):
     task_id: str = Field(min_length=1,max_length=120)
     confirm: bool = False

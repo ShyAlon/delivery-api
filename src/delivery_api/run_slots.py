@@ -6,6 +6,7 @@ Peak memory of each child is read from /proc while it runs (Linux) and logged wh
 import asyncio,os,signal,time
 from . import config
 from .observability import event as activity
+from . import run_metrics
 
 _slots=None
 _slots_size=None
@@ -42,15 +43,18 @@ def peak_rss_mb(pid):
     except (OSError,ValueError,TypeError,subprocess.SubprocessError):return None
 
 
-async def _watch(orchestrator,task_id,limit_s,tick_s):
+async def _watch(orchestrator,task_id,limit_s,tick_s,store=None):
     from . import inprocess_engine
-    started=time.monotonic();info=running[task_id];stopped=False
+    started=time.monotonic();info=running[task_id];stopped=False;next_sample=started
     while True:
         await asyncio.sleep(tick_s)
         proc=orchestrator.runner.processes.get(task_id)
         if proc is None or proc.returncode is not None:continue
         peak=peak_rss_mb(proc.pid) if proc.pid else None
         if peak is not None:info["peak_rss_mb"]=max(info["peak_rss_mb"],peak)
+        if proc.pid and time.monotonic()>=next_sample:
+            next_sample=time.monotonic()+config.METRICS_INTERVAL_S
+            run_metrics.tick(info,task_id,proc.pid,store)   # CPU and memory samples for the operator; never raises
         by_request=bool(info.get("stop_by"))
         if not stopped and (by_request or time.monotonic()-started>=limit_s):
             stopped=True
@@ -77,7 +81,7 @@ async def run_limited(store,orchestrator,task_id,work,*,tick_s=2.0):
     try:await slots.acquire()
     finally:waiting-=1
     running[task_id]={"started":time.time(),"peak_rss_mb":0.0,"timed_out":False}
-    watcher=asyncio.ensure_future(_watch(orchestrator,task_id,config.PHASE_TIME_LIMIT_S,tick_s))
+    watcher=asyncio.ensure_future(_watch(orchestrator,task_id,config.PHASE_TIME_LIMIT_S,tick_s,store))
     try:return await work()
     finally:
         watcher.cancel()
@@ -139,7 +143,7 @@ def snapshot():
     now=time.time()
     return {"isolation":config.RUN_ISOLATION,"max_concurrent_runs":config.MAX_CONCURRENT_RUNS,"time_limit_s":config.PHASE_TIME_LIMIT_S,
         "running":[{"task_id":task,"seconds":round(now-info["started"]),"peak_rss_mb":info["peak_rss_mb"],"timed_out":info["timed_out"],"stopping":bool(info.get("stop_by"))} for task,info in running.items()],
-        "waiting":waiting,"recent_peaks":[{"task_id":task,"peak_rss_mb":peak} for task,peak in list(peaks.items())[-10:]],"host":host_capacity()}
+        "waiting":waiting,"recent_peaks":[{"task_id":task,"peak_rss_mb":peak} for task,peak in list(peaks.items())[-10:]],"host":host_capacity(),"metrics":run_metrics.overview()}
 
 
 def snapshot_text(snap):
@@ -154,6 +158,7 @@ def snapshot_text(snap):
         if host["mem_available_mb"] is not None:lines.append("Room for about %d more runs at that size (a guess from one measurement, not a limit)."%int(host["mem_available_mb"]//biggest))
     else:lines.append("No run has finished since the server started, so there is no memory figure yet. Run one and look again before changing the slot count.")
     for r in snap["running"]:lines.append("Running: %s, %ds, peak %s MB%s"%(r["task_id"],r["seconds"],r["peak_rss_mb"],", being stopped" if r["timed_out"] or r.get("stopping") else ""))
+    if snap.get("metrics"):lines.append(run_metrics.metrics_text(snap["metrics"]))
     return "\n".join(lines)
 
 

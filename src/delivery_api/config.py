@@ -67,6 +67,9 @@ RUN_ISOLATION = os.environ.get("DELIVERY_RUN_ISOLATION", "process").strip().lowe
 MAX_CONCURRENT_RUNS = max(1, int(os.environ.get("DELIVERY_MAX_CONCURRENT_RUNS", "2")))
 # A phase that runs longer than this is stopped (seconds). 30 minutes.
 PHASE_TIME_LIMIT_S = max(60, int(os.environ.get("DELIVERY_PHASE_TIME_LIMIT_S", "1800")))
+# Operator resource samples (src/delivery_api/run_metrics.py): one every METRICS_INTERVAL_S seconds while a run is active; raw rows are kept METRICS_RAW_DAYS days, then one summary row per run.
+METRICS_INTERVAL_S = max(2, int(os.environ.get("DELIVERY_METRICS_INTERVAL_S", "10")))
+METRICS_RAW_DAYS = max(1, int(os.environ.get("DELIVERY_METRICS_RAW_DAYS", "3")))
 
 def is_admin(email: str | None) -> bool:
     return bool(email and email.lower() in ADMIN_EMAILS)

@@ -81,3 +81,26 @@ def test_only_an_admin_can_read_capacity(monkeypatch, tmp_path):
     c.cookies.set(config.SESSION_COOKIE, "adminsid")
     r = c.get("/api/admin/operations/capacity")
     assert r.status_code == 200 and r.json()["max_concurrent_runs"] == config.MAX_CONCURRENT_RUNS and "Capacity:" in r.json()["text"]
+
+
+def test_only_an_admin_can_read_run_metrics_and_the_capacity_text_carries_them(monkeypatch, tmp_path):
+    from delivery_api import run_metrics
+    monkeypatch.setenv("DELIVERY_METRICS_DB", str(tmp_path / "metrics.db"))
+    run_metrics.reset()
+    store, c = _oauth(monkeypatch, tmp_path)
+    user = store.upsert_user("github", "9", "u@example.com", "u", 100, False)
+    admin = store.upsert_user("google", "1", "admin@example.com", "admin", 100, True)
+    store.create_session("usersid", user["user_id"], time.time() + 1000)
+    store.create_session("adminsid", admin["user_id"], time.time() + 1000)
+    conn = run_metrics._open()
+    with conn:
+        conn.execute("INSERT INTO run_samples(ts,run_key,task_id,session_id,phase,pid,procs,rss_mb,peak_rss_mb,cpu_seconds,cpu_pct) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                     (time.time(), "t1:needs:1", "t1", "sess1", "needs", 1, 1, 123.0, 123.0, 1.0, 5.0))
+    c.cookies.set(config.SESSION_COOKIE, "usersid")
+    assert c.get("/api/admin/operations/run-metrics").status_code == 403
+    assert c.get("/api/admin/operations/run-metrics?task_id=t1").status_code == 403
+    c.cookies.set(config.SESSION_COOKIE, "adminsid")
+    one = c.get("/api/admin/operations/run-metrics?task_id=t1").json()
+    assert one["samples"][0]["session_id"] == "sess1" and one["samples"][0]["rss_mb"] == 123.0
+    assert "Resource samples" in c.get("/api/admin/operations/capacity").json()["text"]
+    run_metrics.reset()
