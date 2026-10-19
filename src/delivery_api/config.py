@@ -30,6 +30,8 @@ if CLOUD_TENANTS and (not SUPABASE_URL or not SUPABASE_ANON_KEY):
 if CLOUD_TENANTS and os.environ.get("TURSO_DATABASE_URL"):
     raise RuntimeError("Cloud tenant control plane cannot use a Turso replica/fallback.")
 SUPABASE_ADMIN_SUBJECTS = {x.strip() for x in os.environ.get("DELIVERY_SUPABASE_ADMIN_SUBJECTS", "").split(",") if x.strip()}
+# The operator, held in code. Admin when the signed login token carries this email (sign-in refuses unconfirmed emails).
+OPERATOR_EMAIL = "shy.alon@gmail.com"
 
 def local_database_path() -> Path:
     if DATABASE_URL.startswith("sqlite:///"): return Path(DATABASE_URL.removeprefix("sqlite:///"))
