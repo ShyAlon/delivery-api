@@ -79,6 +79,15 @@ async def dispatch_phase(store,orchestrator,task_id,phase,*,resume_job_id=None,q
     if "model_route" in durable:options["model_route"]=durable["model_route"]
     from . import config,inprocess_engine
     engine=inprocess_engine.current()
+    if config.CLOUD_TENANTS and config.RUN_ISOLATION=="process":
+        # One child process per run, admitted through its own descriptor. Slots, time limit and peak memory live in run_slots.
+        from . import run_slots
+        async def run_child(capability):
+            capability.validate(store)
+            await orchestrator.execute_phase(capability.task_id,phase,**options)
+        started=await run_slots.run_limited(store,orchestrator,task_id,lambda:execute_job(store,job_id,run_child))
+        if not started:raise ValueError("worker job was already claimed; no execution started")
+        return job_id
     if config.CLOUD_TENANTS and engine is not None:
         # The service runs the generator itself under the money gateway; it claims the job and meters it.
         if not await engine.dispatch(store,orchestrator,task_id,phase,job_id,options):
