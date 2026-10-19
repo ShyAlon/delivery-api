@@ -57,6 +57,8 @@ ADMIN_EMAILS = {x.strip().lower() for x in os.environ.get("DELIVERY_ADMIN_EMAILS
 DEFAULT_USER_TOKEN_QUOTA = int(os.environ.get("DELIVERY_DEFAULT_USER_TOKEN_QUOTA", "250000"))
 AUTH_RATE_LIMIT = int(os.environ.get("DELIVERY_AUTH_RATE_LIMIT", "20"))
 RUN_START_RATE_LIMIT = int(os.environ.get("DELIVERY_RUN_START_RATE_LIMIT", "10"))
+# Credits an account must hold before the phase after the interview can start. One place; adjust once real cost is measured.
+NEXT_PHASE_MIN_CREDITS = float(os.environ.get("DELIVERY_NEXT_PHASE_MIN_CREDITS", "5"))
 
 def is_admin(email: str | None) -> bool:
     return bool(email and email.lower() in ADMIN_EMAILS)

@@ -311,6 +311,16 @@ class PostgresStore(SQLiteStore):
         return self.enqueue_worker(task_id,'phase:'+phase,execution_options={
             'mode':'resume' if checkpoint else 'start','model_route':model})
 
+    def prepare_next_phase(self,task_id,phase,actor,model):
+        """One durable transaction for the first start of a generator phase: claim, model and pending job."""
+        row=self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone()
+        if not row:return None
+        if not self.claim_next_phase(task_id,phase,actor):return None
+        self.set_model_default(task_id,model)
+        self.add_event(task_id,'model_route',f'{phase} model: {model}',phase_key=phase,
+          payload={'route':model.split(':',1)[0],'resolved':model,'source':'interview_session_default'})
+        return self.enqueue_worker(task_id,'phase:'+phase,execution_options={'mode':'start','model_route':model})
+
     def retain_closed_revision_restart_intent(self,task_id,*,request_key,options,proposal,
                                              approval_reference,read_current_evidence):
         """Atomically retain a held intent with owner/task CAS, never dispatch.

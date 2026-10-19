@@ -244,7 +244,7 @@ def _finish_cloud_interview(task_id:str,snapshot)->None:
         activity("engine.cloud_finish.failed","Cloud interview completion could not be recorded",task_id=task_id,error=f"{type(exc).__name__}: {str(exc)[:200]}")
         return
     if done:
-        store.add_event(task_id,"progress","Interview complete. The next phase has not started: it needs its own spend approval, which is not available yet.",phase_key="conops",
+        store.add_event(task_id,"progress","Interview complete. The next phase is ready. It starts only when you press Start, and it uses your credits.",phase_key="conops",
                         payload={"session_id":str(snapshot.session_id),"next_phase":"needs","started":False})
 
 async def _continue_reconciled_interview(task_id:str)->None:
@@ -1635,7 +1635,9 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
     phase_config={phase.key:{"executor":phase.executor,"generator_stage":phase.generator_stage,
                              "prerequisite":phase.prerequisite,"artifacts":list(phase.artifacts)} for phase in PHASE_DEFINITIONS}
     from .control_snapshot import project as project_control
-    control=project_control(task,input_state,snapshot,work,artifacts)
+    from . import phase_start
+    ready_next=phase_start.PHASE if config.CLOUD_TENANTS and session_id and phase_start.eligible(task) else None
+    control=project_control(task,input_state,snapshot,work,artifacts,ready_next=ready_next)
     _retain_decision_control(task_id,control.model_dump(mode="json"))
     if config.CLOUD_TENANTS:
         control.artifact_ref=None
@@ -1986,6 +1988,52 @@ async def _run_failed_phase_retry(task_id:str,phase:str,label:str,model_route:st
         store.update_phase(task_id,phase,"failed",detail=message)
         store.add_event(task_id,"error",message,phase_key=phase,payload={"cause":str(exc),"retry":True})
         activity("phase.retry.failed",f"{label} retry did not launch",task_id=task_id,error=message)
+
+class StartNextPhaseRequest(BaseModel):
+    confirm: bool = False
+
+_phase_jobs=set()
+
+@app.post("/api/tasks/{task_id}/start-next-phase")
+async def start_next_phase(task_id:str,body:StartNextPhaseRequest,a:auth.Actor=Depends(auth.require_run_start)):
+    """Start the phase after the interview for a cloud account. Only the owner's click starts it, never the finish of
+    the interview. The preview spends nothing. The only ceiling is the owner's credits; each provider call is then
+    reserved and checked on its own by the money gateway."""
+    if not config.CLOUD_TENANTS:raise HTTPException(404,"not available")
+    task=store.task(task_id)
+    if not task:raise HTTPException(404,"task not found")
+    from . import phase_start
+    from .phases import PHASE_BY_KEY
+    if not store.engine_session(task_id) or not phase_start.eligible(task):
+        raise HTTPException(409,{"error":"This phase cannot be started now.","cause":"The interview is not finished, or this phase has already started.","next":"Refresh the page."})
+    phase=phase_start.PHASE;label=PHASE_BY_KEY[phase].label
+    if body.confirm and not cloud_execution_admitted():raise HTTPException(503,"Cloud admission and lifecycle validation pending")
+    from .pricing import retail_rates
+    check=phase_start.credit_check(store.own_credit_balance(retail_rates().usd_per_credit).get("credits"),config.NEXT_PHASE_MIN_CREDITS)
+    if not body.confirm:return {"status":"preview","phase":phase,"label":label,**check}
+    if not check["can_start"]:
+        store.audit(a.label,"phase.start_refused",task_id,{"phase":phase,"reason":"credits"})
+        raise HTTPException(409,{"error":"Not enough credits to start this phase.","cause":check["message"],"next":"Add credits, then start it."})
+    model=task.get("model_default") or ""
+    if not model.startswith("deepseek:"):
+        activity("phase.start.no_model","Next phase has no recorded model",task_id=task_id,model=model[:60])
+        raise HTTPException(409,{"error":"This phase cannot be started now.","cause":"The task has no recorded model for it.","next":"Open Debug, copy everything and send it."})
+    job_id=store.prepare_next_phase(task_id,phase,a.label,model)
+    if not job_id:raise HTTPException(409,{"error":"This phase was already started.","cause":"A start for it is already recorded.","next":"Refresh the page."})
+    runner_task=asyncio.create_task(_run_next_phase(task_id,phase,label,job_id))
+    _phase_jobs.add(runner_task);runner_task.add_done_callback(_phase_jobs.discard)
+    return {"status":"started","phase":phase,"job_id":job_id}
+
+async def _run_next_phase(task_id:str,phase:str,label:str,job_id:str)->None:
+    try:
+        from .tenant_jobs import dispatch_phase
+        await dispatch_phase(store,orchestrator,task_id,phase,queued_job_id=job_id)
+    except Exception as exc:
+        from .user_messages import scrub_failure_text
+        message=scrub_failure_text(f"{label} stopped: {type(exc).__name__}: {exc}")
+        store.update_phase(task_id,phase,"failed",detail=message)
+        store.add_event(task_id,"error",message,phase_key=phase,payload={"cause":message,"first_start":True})
+        activity("phase.start.failed",f"{label} did not run",task_id=task_id,error=f"{type(exc).__name__}: {str(exc)[:300]}")
 
 class RerunRequest(BaseModel):
     from_phase: str

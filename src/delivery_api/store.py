@@ -517,6 +517,27 @@ class SQLiteStore:
             self.audit(actor,"phase.retry",task_id,{"phase":"needs","session_id":row["engine_session_id"]})
             self._commit();return True
 
+    def claim_next_phase(self, task_id: str, phase: str, actor: str) -> bool:
+        """Atomically move a task whose interview is approved into its first generator phase.
+
+        A second click finds the phase already running and gets False, so one click starts one job."""
+        from .phases import PHASE_KEYS, PHASE_BY_KEY
+        if phase!="needs" or phase not in PHASE_BY_KEY:return False
+        with self._lock:
+            row=self._db.execute("SELECT state,active_phase,engine_session_id FROM tasks WHERE task_id=?",(task_id,)).fetchone()
+            if not row or row["state"]!="running" or row["active_phase"]!="conops" or not row["engine_session_id"]:return False
+            states={p["phase_key"]:p["state"] for p in self._db.execute("SELECT phase_key,state FROM phases WHERE task_id=?",(task_id,))}
+            if any(states.get(key) not in ("approved","done") for key in ("intent","conops")) or states.get(phase)!="pending":return False
+            if any(states.get(key)!="pending" for key in PHASE_KEYS[PHASE_KEYS.index(phase)+1:]):return False
+            now=time.time()
+            self._db.execute("UPDATE phases SET state='running',detail=?,completed=0,total=NULL,started_at=?,completed_at=NULL WHERE task_id=? AND phase_key=?",
+                             (f"Starting {PHASE_BY_KEY[phase].label}",now,task_id,phase))
+            self._db.execute("UPDATE tasks SET state='running',active_phase=?,updated_at=? WHERE task_id=?",(phase,now,task_id))
+            self._db.execute("INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (?,?,?,?,?,?)",
+                             (task_id,phase,"progress",f"You started {PHASE_BY_KEY[phase].label}",json.dumps({"actor":actor,"session_id":row["engine_session_id"],"started":True}),now))
+            self.audit(actor,"phase.start",task_id,{"phase":phase,"session_id":row["engine_session_id"]})
+            self._commit();return True
+
     def claim_failed_phase_retry(self, task_id: str, phase: str, actor: str) -> bool:
         """Atomically claim a failed generator phase whose upstream phases are approved.
 

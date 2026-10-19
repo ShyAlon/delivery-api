@@ -12,7 +12,7 @@ class TaskControlSnapshot(BaseModel):
     version:Literal[2]=2
     task_id:str
     phase_key:str|None
-    mode:Literal["not_started","working","waiting_input","waiting_gate","completed","failed","stop_requested","stopped"]
+    mode:Literal["not_started","working","waiting_input","waiting_gate","ready","completed","failed","stop_requested","stopped"]
     owner:Literal["engine","delivery","none"]
     wait_id:str|None=None
     kind:str|None=None
@@ -35,7 +35,7 @@ class TaskControlSnapshot(BaseModel):
         return self
 
 
-def project(task:dict,input_state:dict,engine:EngineSnapshot|None=None,work=None,artifacts:list[dict]|None=None)->TaskControlSnapshot:
+def project(task:dict,input_state:dict,engine:EngineSnapshot|None=None,work=None,artifacts:list[dict]|None=None,ready_next:str|None=None)->TaskControlSnapshot:
     task_id=task["task_id"];phase=task.get("active_phase");state=task.get("state")
     # Only durable delivery reconciliation can call the whole task stopped.
     # Engine STOPPED says nothing about producer jobs or held provider usage.
@@ -97,5 +97,10 @@ def project(task:dict,input_state:dict,engine:EngineSnapshot|None=None,work=None
             "kind":"phase_gate","prompt":gate.get("label"),"options":[],"actions":["approve","edit","redo"],
             "precondition":{"gate_key":key,"gate_revision":gate.get("revision",0)},
             "revision":f"gate:{key}:{gate.get('revision',0)}"})
+    if ready_next and not process_live:
+        # The interview is done and nothing is running: the owner starts the next phase with a click.
+        return TaskControlSnapshot(**{**base,"mode":"ready","owner":"delivery","kind":"next_phase","diagnostic":None,
+            "prompt":"The next phase is ready to start","actions":["start_next_phase"],"precondition":{"phase":ready_next},
+            "revision":f"ready:{ready_next}:{task.get('updated_at',0)}"})
     if diagnostic:return TaskControlSnapshot(**{**base,"mode":"failed","owner":"none"})
     return TaskControlSnapshot(**base)
