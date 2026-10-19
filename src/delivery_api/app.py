@@ -2700,6 +2700,14 @@ def admin_operations_workspace(a:auth.Actor=Depends(auth.require_admin)):
         'reason':'Local legacy quota is not a prepaid credit account.'}
 
 
+@app.get('/api/admin/operations/capacity')
+def admin_operations_capacity(a:auth.Actor=Depends(auth.require_admin)):
+    # Operator only: slots, running phases and memory, to size the server. No cost, vendor or price figures. One server process: the numbers are this process's.
+    from . import run_slots
+    snap=run_slots.snapshot();snap['text']=run_slots.snapshot_text(snap)
+    return snap
+
+
 def _operator_reader():
     reader=getattr(app.state,'operator_read_store',None)
     if not config.CLOUD_TENANTS:raise HTTPException(404,'Operator resource not found')

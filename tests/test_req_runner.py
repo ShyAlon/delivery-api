@@ -57,3 +57,18 @@ def test_a_failing_script_stays_so_req_can_be_run_again(tmp_path):
     path = _script(tmp_path, "bad", body="echo ran; exit 3\n")
     out = _req(tmp_path)
     assert out.returncode == 3 and path.exists()
+
+
+def test_clean_keeps_the_newest_and_archives_the_other_pending_scripts(tmp_path):
+    old = _script(tmp_path, "stale-one", hours_old=9)
+    mid = _script(tmp_path, "stale-two", hours_old=6)
+    new = _script(tmp_path, "fresh", hours_old=1)
+    out = _req(tmp_path, "clean")
+    assert out.returncode == 0 and "kept (newest): fresh" in out.stdout and "RAN-IT" not in out.stdout, out.stdout + out.stderr
+    assert new.exists() and not old.exists() and not mid.exists()
+    assert len(list((tmp_path / "requi-done" / "stale").glob("stale-*.txt"))) == 2
+
+
+def test_clean_with_nothing_pending_says_so(tmp_path):
+    out = _req(tmp_path, "clean")
+    assert out.returncode == 0 and "no pending Requi.re script" in out.stdout
