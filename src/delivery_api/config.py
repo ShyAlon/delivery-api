@@ -61,8 +61,8 @@ AUTH_RATE_LIMIT = int(os.environ.get("DELIVERY_AUTH_RATE_LIMIT", "20"))
 RUN_START_RATE_LIMIT = int(os.environ.get("DELIVERY_RUN_START_RATE_LIMIT", "10"))
 # Credits an account must hold before the phase after the interview can start. One place; adjust once real cost is measured.
 NEXT_PHASE_MIN_CREDITS = float(os.environ.get("DELIVERY_NEXT_PHASE_MIN_CREDITS", "5"))
-# How a generator phase runs on the server: "thread" (inside the service, one at a time) or "process" (one child process per run).
-RUN_ISOLATION = os.environ.get("DELIVERY_RUN_ISOLATION", "thread").strip().lower()
+# How a generator phase runs on the server: "process" (one child process per run, the default) or "thread" (inside the service, one at a time: the rollback).
+RUN_ISOLATION = os.environ.get("DELIVERY_RUN_ISOLATION", "process").strip().lower()
 # Process mode only. 2 is a starting value to revisit once real memory use per run is measured (see docs/LESSONS.md).
 MAX_CONCURRENT_RUNS = max(1, int(os.environ.get("DELIVERY_MAX_CONCURRENT_RUNS", "2")))
 # A phase that runs longer than this is stopped (seconds). 30 minutes.

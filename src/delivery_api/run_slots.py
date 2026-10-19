@@ -98,16 +98,39 @@ async def run_limited(store,orchestrator,task_id,work,*,tick_s=2.0):
         slots.release()
 
 
+MEMINFO_FILE="/proc/meminfo"
+CGROUP_MEMORY_FILES=(("/sys/fs/cgroup/memory.max","/sys/fs/cgroup/memory.current"),
+                     ("/sys/fs/cgroup/memory/memory.limit_in_bytes","/sys/fs/cgroup/memory/memory.usage_in_bytes"))
+
+
+def _container_memory_mb():
+    """(limit_mb, used_mb) of this container's memory cgroup, or None when there is no limit or it cannot be read."""
+    for limit_path,used_path in CGROUP_MEMORY_FILES:
+        try:
+            with open(limit_path) as handle:raw=handle.read().strip()
+            if raw=="max":continue
+            limit=int(raw)
+            with open(used_path) as handle:used=int(handle.read().strip())
+        except (OSError,ValueError):continue
+        if limit<=0 or limit>=1<<60:continue
+        return round(limit/1048576),round(used/1048576)
+    return None
+
+
 def host_capacity():
-    """CPU count and memory of this machine in MB (from /proc/meminfo on Linux; None where it cannot be read)."""
+    """CPU count and memory in MB: /proc/meminfo on Linux, replaced by the container limit when the service runs in a memory-limited container. None where it cannot be read."""
     out={"cpus":os.cpu_count(),"mem_total_mb":None,"mem_available_mb":None}
     try:
-        with open("/proc/meminfo") as handle:
+        with open(MEMINFO_FILE) as handle:
             for line in handle:
                 key,_,value=line.partition(":")
                 if key=="MemTotal":out["mem_total_mb"]=round(int(value.split()[0])/1024)
                 elif key=="MemAvailable":out["mem_available_mb"]=round(int(value.split()[0])/1024)
     except (OSError,ValueError,IndexError):pass
+    box=_container_memory_mb()
+    if box is not None and (out["mem_total_mb"] is None or box[0]<out["mem_total_mb"]):
+        # Inside a container /proc/meminfo shows the whole machine; the container limit is what the service and its runs really share.
+        out["mem_total_mb"]=box[0];out["mem_available_mb"]=max(0,box[0]-box[1]);out["limited_by"]="container"
     return out
 
 
@@ -123,7 +146,7 @@ def snapshot_text(snap):
     host=snap["host"];lines=[]
     mode="one child process per run" if snap["isolation"]=="process" else "thread mode: one run at a time (the slot count below applies in process mode only)"
     lines.append("Capacity: %s. Slots %d, running %d, waiting %d. Time limit %d min."%(mode,snap["max_concurrent_runs"],len(snap["running"]),snap["waiting"],snap["time_limit_s"]//60))
-    if host["mem_total_mb"] is not None:lines.append("Server memory: %d MB total, %d MB available. CPUs: %s."%(host["mem_total_mb"],host["mem_available_mb"] or 0,host["cpus"]))
+    if host["mem_total_mb"] is not None:lines.append("Server memory: %d MB%s, %d MB available. CPUs: %s."%(host["mem_total_mb"]," (container limit)" if host.get("limited_by")=="container" else " total",host["mem_available_mb"] or 0,host["cpus"]))
     else:lines.append("Server memory: not readable on this machine.")
     seen=[p["peak_rss_mb"] for p in snap["recent_peaks"] if p["peak_rss_mb"]]+[r["peak_rss_mb"] for r in snap["running"] if r["peak_rss_mb"]]
     if seen:

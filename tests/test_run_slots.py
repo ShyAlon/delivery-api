@@ -26,11 +26,11 @@ def _orchestrator(processes=None):
     return NS(runner=NS(processes=processes if processes is not None else {}))
 
 
-def test_defaults_are_thread_mode_two_slots_and_thirty_minutes():
+def test_defaults_are_process_mode_two_slots_and_thirty_minutes():
     import importlib
     import delivery_api.config as fresh
     importlib.reload(fresh)
-    assert fresh.RUN_ISOLATION == "thread" and fresh.MAX_CONCURRENT_RUNS == 2 and fresh.PHASE_TIME_LIMIT_S == 1800
+    assert fresh.RUN_ISOLATION == "process" and fresh.MAX_CONCURRENT_RUNS == 2 and fresh.PHASE_TIME_LIMIT_S == 1800
     importlib.reload(fresh)
 
 
