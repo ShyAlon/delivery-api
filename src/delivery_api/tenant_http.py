@@ -57,13 +57,14 @@ class TenantMiddleware:
             return await JSONResponse({'detail':'Invalid authorization'},status_code=401)(scope,receive,send)
         try:
             from starlette.concurrency import run_in_threadpool
-            identity=await run_in_threadpool(self.verifier.verify,raw[7:])
+            if hasattr(self.verifier,'verify_with_operator'):identity,operator=await run_in_threadpool(self.verifier.verify_with_operator,raw[7:])
+            else:identity,operator=await run_in_threadpool(self.verifier.verify,raw[7:]),False
         except TenantAccessDenied:
             if path=='/api/auth':return await self.app(scope,receive,send)
             return await JSONResponse({'detail':'Invalid or expired access token'},status_code=401)(scope,receive,send)
         from .auth import Actor
         scope.setdefault('state',{})['supabase_actor']=Actor(
-            identity.owner_id,'Signed-In User',admin=identity.owner_id in self.admin_subjects)
+            identity.owner_id,'Signed-In User',admin=operator or identity.owner_id in self.admin_subjects)
         shared=None
         if self.request_database is not None and _shares_one_transaction(scope.get('method'),path):
             shared=self.request_database.begin_request(identity)
