@@ -2734,6 +2734,24 @@ def admin_operations_capacity(a:auth.Actor=Depends(auth.require_admin)):
     return snap
 
 
+class AdminStopRunRequest(BaseModel):
+    task_id: str = Field(min_length=1,max_length=120)
+    confirm: bool = False
+
+@app.post('/api/admin/operations/stop-run')
+def admin_stop_run(body:AdminStopRunRequest,a:auth.Actor=Depends(auth.require_admin)):
+    # Operator only: stop any running phase on this server. The owner is told an operator stopped it, and the audit entry is written in their workspace when the run ends.
+    if not config.CLOUD_TENANTS:raise HTTPException(404,'Not available on this server.')
+    if config.RUN_ISOLATION!='process':raise HTTPException(409,{'error':'A run cannot be stopped on this server yet.','cause':'Runs here do not have their own process.','next':'Wait for the run to finish.'})
+    from . import run_slots
+    if not body.confirm:
+        return {'status':'preview','running':run_slots.is_running(body.task_id),'message':'Stop the running phase of task %s? Its owner is told an operator stopped it, and it is recorded in the audit log.'%body.task_id}
+    if not run_slots.request_stop(body.task_id,'operator',a.label):
+        raise HTTPException(409,{'error':'Nothing is running for that task.','cause':'The phase has already finished or has not started.','next':'Reload the capacity view.'})
+    activity('run.stop_requested','Operator asked to stop a run',task_id=body.task_id,actor=a.label)
+    return {'status':'stopping','message':'Stopping. This takes a few seconds.'}
+
+
 def _operator_reader():
     reader=getattr(app.state,'operator_read_store',None)
     if not config.CLOUD_TENANTS:raise HTTPException(404,'Operator resource not found')
