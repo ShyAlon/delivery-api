@@ -37,7 +37,7 @@ def test_finishing_a_cloud_interview_records_it_and_does_not_start_the_next_phas
     monkeypatch.setattr(module.orchestrator,"continue_after",lambda *a,**k:started.append(a))
     module._finish_cloud_interview("t1",NS(session_id="s1"))
     assert started==[] and len(added)==1
-    assert added[0][1]["payload"]["started"] is False and "has not started" in added[0][0][2]
+    assert added[0][1]["payload"]["started"] is False and "starts only when you press Start" in added[0][0][2]
 
 
 def test_a_failure_while_recording_the_finished_interview_is_an_event_not_an_error_response(monkeypatch):

@@ -17,6 +17,9 @@
   "phase_gate": [
     "gate"
   ],
+  "ready_next": [
+    "next_phase"
+  ],
   "complete": [
     "artifacts"
   ],
