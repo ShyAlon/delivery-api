@@ -1,0 +1,83 @@
+"""Operator Debug capacity: the numbers come from run_slots, only an admin can read them, and none of it is a cost or vendor figure."""
+import time
+
+import pytest
+from fastapi.testclient import TestClient
+
+from delivery_api import auth, config, run_slots
+from delivery_api.app import app
+from delivery_api.store import SQLiteStore
+
+
+@pytest.fixture(autouse=True)
+def _fresh():
+    run_slots.reset()
+    yield
+    run_slots.reset()
+
+
+def _snap(host=None, peaks=(), running=None, isolation="process"):
+    return {"isolation": isolation, "max_concurrent_runs": 2, "time_limit_s": 1800,
+            "running": running or [], "waiting": 0,
+            "recent_peaks": [{"task_id": "t%d" % i, "peak_rss_mb": p} for i, p in enumerate(peaks)],
+            "host": host or {"cpus": 4, "mem_total_mb": 8192, "mem_available_mb": 4096}}
+
+
+def test_the_text_says_there_is_no_memory_figure_before_any_run_has_finished():
+    text = run_slots.snapshot_text(_snap())
+    assert "No run has finished" in text and "Slots 2" in text and "Time limit 30 min" in text
+
+
+def test_the_text_gives_room_for_runs_from_the_biggest_peak_and_calls_it_a_guess():
+    text = run_slots.snapshot_text(_snap(peaks=(300, 900)))
+    assert "Biggest run seen since the server started: 900 MB" in text
+    assert "Room for about 4 more runs" in text and "not a limit" in text
+
+
+def test_thread_mode_is_named_so_the_slot_count_is_not_misread():
+    assert "one run at a time" in run_slots.snapshot_text(_snap(isolation="thread"))
+
+
+def test_unreadable_machine_memory_is_stated_not_invented():
+    text = run_slots.snapshot_text(_snap(host={"cpus": 2, "mem_total_mb": None, "mem_available_mb": None}, peaks=(500,)))
+    assert "not readable" in text and "Room for" not in text
+
+
+def test_the_snapshot_lists_running_phases_and_keeps_only_recent_peaks(monkeypatch):
+    monkeypatch.setattr(config, "RUN_ISOLATION", "process")
+    run_slots.running["t1"] = {"started": time.time() - 12, "peak_rss_mb": 250.0, "timed_out": False}
+    for i in range(60):
+        run_slots.peaks["p%d" % i] = float(i)
+    snap = run_slots.snapshot()
+    assert snap["running"][0]["task_id"] == "t1" and snap["running"][0]["peak_rss_mb"] == 250.0
+    assert len(snap["recent_peaks"]) == 10 and snap["recent_peaks"][-1]["task_id"] == "p59"
+
+
+def test_no_cost_or_vendor_wording_appears_in_the_capacity_text():
+    text = run_slots.snapshot_text(_snap(peaks=(300,), running=[{"task_id": "t1", "seconds": 5, "peak_rss_mb": 300.0, "timed_out": True}])).lower()
+    for word in ("expense", "vendor", "cost", "price", "$", "usd", "spend"):
+        assert word not in text
+
+
+def _oauth(monkeypatch, tmp_path):
+    store = SQLiteStore(str(tmp_path / "cap.db")); app.state.store = store
+    monkeypatch.setattr("delivery_api.app.store", store)
+    monkeypatch.setattr(config, "SESSION_SECRET", "test-secret")
+    monkeypatch.setattr(config, "COOKIE_SECURE", False)
+    monkeypatch.setattr(config, "GOOGLE_CLIENT_ID", "google-id")
+    monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", "google-secret")
+    auth.limiter = auth.RateLimiter()
+    return store, TestClient(app)
+
+
+def test_only_an_admin_can_read_capacity(monkeypatch, tmp_path):
+    store, c = _oauth(monkeypatch, tmp_path)
+    user = store.upsert_user("github", "9", "u@example.com", "u", 100, False)
+    admin = store.upsert_user("google", "1", "admin@example.com", "admin", 100, True)
+    store.create_session("usersid", user["user_id"], time.time() + 1000)
+    store.create_session("adminsid", admin["user_id"], time.time() + 1000)
+    c.cookies.set(config.SESSION_COOKIE, "usersid")
+    assert c.get("/api/admin/operations/capacity").status_code == 403
+    c.cookies.set(config.SESSION_COOKIE, "adminsid")
+    r = c.get("/api/admin/operations/capacity")
+    assert r.status_code == 200 and r.json()["max_concurrent_runs"] == config.MAX_CONCURRENT_RUNS and "Capacity:" in r.json()["text"]
