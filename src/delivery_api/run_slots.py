@@ -51,9 +51,13 @@ async def _watch(orchestrator,task_id,limit_s,tick_s):
         if proc is None or proc.returncode is not None:continue
         peak=peak_rss_mb(proc.pid) if proc.pid else None
         if peak is not None:info["peak_rss_mb"]=max(info["peak_rss_mb"],peak)
-        if not stopped and time.monotonic()-started>=limit_s:
-            stopped=True;info["timed_out"]=True
-            activity("run.time_limit","Phase passed the time limit and is being stopped",task_id=task_id,limit_s=limit_s)
+        by_request=bool(info.get("stop_by"))
+        if not stopped and (by_request or time.monotonic()-started>=limit_s):
+            stopped=True
+            if by_request:activity("run.stop","Phase is being stopped on request",task_id=task_id,by=info["stop_by"])
+            else:
+                info["timed_out"]=True
+                activity("run.time_limit","Phase passed the time limit and is being stopped",task_id=task_id,limit_s=limit_s)
             try:inprocess_engine.terminate(proc,signal.SIGTERM)
             except ProcessLookupError:pass
             kill_at=time.monotonic()+10
@@ -86,6 +90,11 @@ async def run_limited(store,orchestrator,task_id,work,*,tick_s=2.0):
                  seconds=round(time.time()-info["started"],1) if info.get("started") else None)
         if info.get("timed_out"):
             store.add_event(task_id,"error","This run reached the time limit and was stopped. You can start it again.",phase_key=(store.task(task_id) or {}).get("active_phase"))
+        elif info.get("stop_by"):
+            who="You stopped this run." if info["stop_by"]=="owner" else "An operator stopped this run."
+            store.add_event(task_id,"progress",who+" You can start it again.",phase_key=(store.task(task_id) or {}).get("active_phase"))
+            try:store.audit(info.get("stop_label") or info["stop_by"],"run.stopped",task_id,{"by":info["stop_by"],"peak_rss_mb":info.get("peak_rss_mb")})
+            except Exception as exc:activity("run.audit_failed","The stop was done but its audit entry could not be written",task_id=task_id,error=type(exc).__name__)
         slots.release()
 
 
@@ -123,3 +132,16 @@ def snapshot_text(snap):
     else:lines.append("No run has finished since the server started, so there is no memory figure yet. Run one and look again before changing the slot count.")
     for r in snap["running"]:lines.append("Running: %s, %ds, peak %s MB%s"%(r["task_id"],r["seconds"],r["peak_rss_mb"],", being stopped" if r["timed_out"] else ""))
     return "\n".join(lines)
+
+
+def is_running(task_id):
+    """True while a phase of this task holds a slot in this server process."""
+    return task_id in running
+
+
+def request_stop(task_id,by,label=None):
+    """Ask the watchdog to stop a running phase (SIGTERM, then SIGKILL after 10 s). by is "owner" or "operator". False when nothing of this task is running."""
+    info=running.get(task_id)
+    if info is None:return False
+    if not info.get("stop_by"):info["stop_by"]=by;info["stop_label"]=label
+    return True
