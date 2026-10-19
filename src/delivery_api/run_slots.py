@@ -115,7 +115,7 @@ def snapshot():
     """What the operator needs to size the server: slots, who is running, peak memory of recent runs, machine memory. No cost or vendor figures."""
     now=time.time()
     return {"isolation":config.RUN_ISOLATION,"max_concurrent_runs":config.MAX_CONCURRENT_RUNS,"time_limit_s":config.PHASE_TIME_LIMIT_S,
-        "running":[{"task_id":task,"seconds":round(now-info["started"]),"peak_rss_mb":info["peak_rss_mb"],"timed_out":info["timed_out"]} for task,info in running.items()],
+        "running":[{"task_id":task,"seconds":round(now-info["started"]),"peak_rss_mb":info["peak_rss_mb"],"timed_out":info["timed_out"],"stopping":bool(info.get("stop_by"))} for task,info in running.items()],
         "waiting":waiting,"recent_peaks":[{"task_id":task,"peak_rss_mb":peak} for task,peak in list(peaks.items())[-10:]],"host":host_capacity()}
 
 
@@ -130,7 +130,7 @@ def snapshot_text(snap):
         biggest=max(seen);lines.append("Biggest run seen since the server started: %.0f MB."%biggest)
         if host["mem_available_mb"] is not None:lines.append("Room for about %d more runs at that size (a guess from one measurement, not a limit)."%int(host["mem_available_mb"]//biggest))
     else:lines.append("No run has finished since the server started, so there is no memory figure yet. Run one and look again before changing the slot count.")
-    for r in snap["running"]:lines.append("Running: %s, %ds, peak %s MB%s"%(r["task_id"],r["seconds"],r["peak_rss_mb"],", being stopped" if r["timed_out"] else ""))
+    for r in snap["running"]:lines.append("Running: %s, %ds, peak %s MB%s"%(r["task_id"],r["seconds"],r["peak_rss_mb"],", being stopped" if r["timed_out"] or r.get("stopping") else ""))
     return "\n".join(lines)
 
 
