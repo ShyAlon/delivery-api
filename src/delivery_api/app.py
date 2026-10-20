@@ -519,6 +519,7 @@ def auth_status(request: Request):
     session=request.app.state.store.session(request.cookies[config.SESSION_COOKIE]) if not config.CLOUD_TENANTS and auth.enabled() and request.cookies.get(config.SESSION_COOKIE) and a.id!="anonymous" else None
     result={"mode":mode,"authenticated":a.id not in {"anonymous"},"actor":a.email or a.label,"admin":a.admin,
             "providers":[p for p,ident in (("google",config.GOOGLE_CLIENT_ID),("github",config.GITHUB_CLIENT_ID)) if ident],"workspace":"private" if config.CLOUD_TENANTS else "shared"}
+    if os.environ.get("DELIVERY_PREVIEW")=="1":result["preview"]=True
     if config.CLOUD_TENANTS and a.id!='anonymous':
         from .supabase_sessions import ACCESS_COOKIE
         token=request.cookies.get(ACCESS_COOKIE)
@@ -3014,3 +3015,4 @@ def operator_payment_totals(start_at:float,end_at:float,owner_id:str|None=None,l
                             a:auth.Actor=Depends(auth.require_actor)):
     try:return _operator_reader().payment_totals(store,start_at=start_at,end_at=end_at,owner_id=owner_id,limit=limit)
     except ValueError as exc:raise HTTPException(422,str(exc))
+

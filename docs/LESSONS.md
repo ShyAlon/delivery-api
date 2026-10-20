@@ -61,3 +61,5 @@ Short rules that came from real failures. Add to this file when something goes w
 - The signed-in person is shown by email (verified token claim). The fixed label "Signed-In User" is only the fallback.
 - The header exists once (`web/shell-header.html`) and the server puts it into every page. A page never carries its own copy: two copies drifted (the session-cost slot was missing on the operator pages, so the navigation sat in a different place).
 - Page-specific styles stay inside the page's own content area (`#frame`). A rule on a bare `button` for one page also hits the header's avatar and breaks it.
+
+- The preview (`ops preview`) runs the merged-main image on a Mac against the real database with execution forced off and no model key. Its buttons that write are real writes. It copies settings to a mode-600 temp file and removes container and files on exit; Docker keeps the runtime env while the container exists, so there is no claim of secure erasure.
