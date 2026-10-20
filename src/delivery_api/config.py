@@ -75,6 +75,7 @@ MEMORY_WAIT_LIMIT_S = max(0, int(os.environ.get("DELIVERY_MEMORY_WAIT_LIMIT_S", 
 MEMORY_STOP_PERCENT = min(100, max(50, int(os.environ.get("DELIVERY_MEMORY_STOP_PERCENT", "92"))))
 # Operator resource samples (src/delivery_api/run_metrics.py): one every METRICS_INTERVAL_S seconds while a run is active; raw rows are kept METRICS_RAW_DAYS days, then one summary row per run.
 METRICS_INTERVAL_S = max(2, int(os.environ.get("DELIVERY_METRICS_INTERVAL_S", "10")))
+METRICS_IDLE_INTERVAL_S = max(5, int(os.environ.get("DELIVERY_METRICS_IDLE_INTERVAL_S", "30")))   # the container reading when no run is active
 METRICS_RAW_DAYS = max(1, int(os.environ.get("DELIVERY_METRICS_RAW_DAYS", "3")))
 
 def is_admin(email: str | None) -> bool:

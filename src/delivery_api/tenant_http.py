@@ -1,6 +1,21 @@
 """ASGI tenant boundary, including scope lifetime through streaming responses."""
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 from .tenancy import tenant_context, TenantAccessDenied
+
+
+# Pages a browser can open that need a signed-in person. Without one the browser is sent to the sign-in page, not shown a JSON error.
+SIGN_IN_PAGES=('/ops','/credits')
+
+
+def wants_html(scope):
+    """True for a browser opening a page (a GET or HEAD that accepts HTML). Scripts and fetch calls do not, so they keep the JSON answers."""
+    if scope.get('method') not in ('GET','HEAD'):return False
+    return b'text/html' in dict(scope.get('headers',[])).get(b'accept',b'').lower()
+
+
+def sign_in_redirect(path):
+    """Where a signed-out browser goes: the sign-in page, which returns the person to this page afterwards. Only the fixed pages above come back."""
+    return RedirectResponse('/?next='+path,status_code=302,headers={'Cache-Control':'no-store'})
 
 
 class TenantMiddleware:
@@ -50,27 +65,35 @@ class TenantMiddleware:
         if not raw and cookie:raw='Bearer '+cookie.value
         if path in ('/auth/signin','/auth/signup','/auth/refresh','/auth/logout'):
             return await self.app(scope,receive,send)
+        browser=wants_html(scope)
         if not raw:
             if public:return await self.app(scope,receive,send)
+            if browser and path in SIGN_IN_PAGES:return await sign_in_redirect(path)(scope,receive,send)
             return await JSONResponse({'detail':'Supabase sign-in required'},status_code=401)(scope,receive,send)
         if not raw.startswith('Bearer ') or len(raw.split())!=2:
+            if browser and public:return await self.app(scope,receive,send)     # a page with a damaged cookie opens as signed out, so the sign-in screen can show
+            if browser and path in SIGN_IN_PAGES:return await sign_in_redirect(path)(scope,receive,send)
             return await JSONResponse({'detail':'Invalid authorization'},status_code=401)(scope,receive,send)
         try:
             from starlette.concurrency import run_in_threadpool
-            if hasattr(self.verifier,'verify_with_operator'):identity,operator=await run_in_threadpool(self.verifier.verify_with_operator,raw[7:])
+            email=None
+            if hasattr(self.verifier,'verify_with_email'):identity,operator,email=await run_in_threadpool(self.verifier.verify_with_email,raw[7:])
+            elif hasattr(self.verifier,'verify_with_operator'):identity,operator=await run_in_threadpool(self.verifier.verify_with_operator,raw[7:])
             else:identity,operator=await run_in_threadpool(self.verifier.verify,raw[7:]),False
         except TenantAccessDenied:
             if path=='/api/auth':return await self.app(scope,receive,send)
+            if browser and public:return await self.app(scope,receive,send)     # an expired token on a page: open it signed out, the page signs the person in again
+            if browser and path in SIGN_IN_PAGES:return await sign_in_redirect(path)(scope,receive,send)
             return await JSONResponse({'detail':'Invalid or expired access token'},status_code=401)(scope,receive,send)
         from .auth import Actor
         scope.setdefault('state',{})['supabase_actor']=Actor(
-            identity.owner_id,'Signed-In User',admin=operator or identity.owner_id in self.admin_subjects)
+            identity.owner_id,'Signed-In User',email,admin=operator or identity.owner_id in self.admin_subjects)
         shared=None
         if self.request_database is not None and _shares_one_transaction(scope.get('method'),path):
             shared=self.request_database.begin_request(identity)
         failed=True
         try:
-            await self._serve(scope,receive,send,path,identity)
+            await self._serve(scope,receive,send,path,identity,browser,public)
             failed=False
         finally:
             if shared is not None:
@@ -78,7 +101,7 @@ class TenantMiddleware:
                 self.request_database.end_context(shared[1])
                 await run_in_threadpool(self.request_database.finish_request,shared[0],failed)
 
-    async def _serve(self,scope,receive,send,path,identity):
+    async def _serve(self,scope,receive,send,path,identity,browser=False,public=False):
         from starlette.concurrency import run_in_threadpool
         try:
             with tenant_context(identity):
@@ -87,6 +110,8 @@ class TenantMiddleware:
                     if not active:
                         scope['state'].pop('supabase_actor',None)
                         if path=='/api/auth':return await self.app(scope,receive,send)
+                        if browser and public:return await self.app(scope,receive,send)
+                        if browser and path in SIGN_IN_PAGES:return await sign_in_redirect(path)(scope,receive,send)
                         return await JSONResponse({'detail':'Session expired or revoked'},status_code=401)(scope,receive,send)
                 return await self.app(scope,receive,send)
         except TenantAccessDenied:
