@@ -597,6 +597,14 @@ def logout(request: Request):
 @app.get("/credits",include_in_schema=False)
 def credits_page():return FileResponse(WEB_DIR / "index.html")
 
+@app.get("/ops",include_in_schema=False)
+def operator_page():
+    # The page is a static shell. Every number on it comes from an admin-only endpoint, so a visitor who is not an operator sees only the refusal.
+    return FileResponse(WEB_DIR / "ops.html",headers={"Cache-Control":"no-store"})
+
+@app.get("/ops/ops.js",include_in_schema=False)
+def operator_page_script():return FileResponse(WEB_DIR / "ops.js",media_type="text/javascript",headers={"Cache-Control":"no-store"})
+
 @app.get("/about",include_in_schema=False)
 def about_page():return FileResponse(WEB_DIR / "index.html")
 
@@ -2739,6 +2747,23 @@ def admin_operations_capacity(a:auth.Actor=Depends(auth.require_admin)):
     from . import run_slots
     snap=run_slots.snapshot();snap['text']=run_slots.snapshot_text(snap)
     return snap
+
+
+@app.get('/api/admin/operations/health')
+def admin_operations_health(a:auth.Actor=Depends(auth.require_admin)):
+    # Operator only: uptime, runs, CPU, memory, signed-in users. Read from this server process; no cost, vendor or customer content.
+    from . import ops_health
+    return ops_health.health()
+
+
+@app.get('/api/admin/operations/log-download')
+def admin_operations_log_download(minutes:int=Query(60,ge=1,le=240),a:auth.Actor=Depends(auth.require_admin)):
+    # Operator only: the scrubbed server log as a text file. Each download is recorded in the activity log with who took it.
+    from . import ops_health
+    from fastapi.responses import Response
+    name,body=ops_health.log_download(minutes)
+    activity('ops.log_download','Operator downloaded the server log',actor=a.label,minutes=minutes,lines=body.count('\n'))
+    return Response(content=body,media_type='text/plain; charset=utf-8',headers={'Content-Disposition':'attachment; filename="%s"'%name,'Cache-Control':'no-store'})
 
 
 @app.get('/api/admin/operations/run-metrics')

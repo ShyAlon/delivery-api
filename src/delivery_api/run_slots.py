@@ -83,6 +83,10 @@ async def run_limited(store,orchestrator,task_id,work,*,tick_s=0.25):
     try:await slots.acquire()
     finally:waiting-=1
     running[task_id]={"started":time.time(),"peak_rss_mb":0.0,"timed_out":False}
+    try:   # who runs it and which phase, for the operator health page only (never shown to customers)
+        from .tenancy import current_scope
+        running[task_id]["owner_id"]=current_scope().owner_id;running[task_id]["phase"]=(store.task(task_id) or {}).get("active_phase")
+    except Exception:pass
     watcher=asyncio.ensure_future(_watch(orchestrator,task_id,config.PHASE_TIME_LIMIT_S,tick_s,store))
     try:return await work()
     finally:
