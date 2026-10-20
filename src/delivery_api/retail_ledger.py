@@ -5,6 +5,7 @@ from .retail_pricing import RetailRates, UNITS_PER_CREDIT, decimal_value
 from .tenancy import current_scope
 from .attempt_ledger import AdmissionDenied
 from .prepaid import owner_lock
+from . import credit_audit
 from .compute_segments import close_decision,releasable
 
 
@@ -44,6 +45,7 @@ def post(store,*,key,job_id,phase,kind,input_tokens=0,output_tokens=0,determinis
     now=time.time()
     store._db.execute('INSERT INTO retail_contributions VALUES (?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?)',
         (key,current_scope().owner_id,job_id,phase,kind,input_tokens,output_tokens,ms,json.dumps(rates.snapshot()),exact,units,UNITS_PER_CREDIT,fingerprint,now))
+    credit_audit.attribute(store._db.execute,'debit','system:retail_ledger',None,key)
     store._db.execute('UPDATE credit_accounts SET balance_units=balance_units-?,fractional_debit_units=?,updated_at=? WHERE owner_id=?',
         (units,remainder,now,current_scope().owner_id))
     return dict(store._db.execute('SELECT * FROM retail_contributions WHERE contribution_key=?',(key,)).fetchone())
@@ -77,6 +79,7 @@ def migrate_account(connection, owner_id, *, now):
         if not -(2**63)<=balance<=2**63-1:raise AdmissionDenied('migrated balance outside integer range')
         if account['fractional_debit_units']!=0:raise AdmissionDenied('legacy fractional remainder needs reconciliation')
         connection.execute('INSERT INTO public.retail_scale_migrations VALUES(%s,%s,%s,%s,%s,%s)',(owner_id,1000,account['balance_units'],UNITS_PER_CREDIT,balance,now))
+        credit_audit.attribute(connection.execute,'rescale','operator:scale_migration','prepaid scale 1000 to retail scale',None,marker='%s')
         connection.execute('UPDATE public.credit_accounts SET balance_units=%s,units_per_credit=%s,updated_at=%s WHERE owner_id=%s',(balance,UNITS_PER_CREDIT,now,owner_id))
         return True
 

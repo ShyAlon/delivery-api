@@ -1226,6 +1226,16 @@ class PostgresStore(SQLiteStore):
         from .account_balance import read
         return read(self._db,current_scope().owner_id,usd_per_credit)
 
+    def own_credit_history(self):
+        """Read-only: every recorded change to the signed-in owner's credit balance."""
+        from . import credit_history
+        return credit_history.read(self._db)
+
+    def own_last_topup(self):
+        """Read-only: the latest top-up or grant to the signed-in owner, or None."""
+        from . import credit_history
+        return credit_history.last_topup(self._db)
+
     def own_ledger(self,usd_per_credit):
         """Read-only: the signed-in owner's credit balance and provider-call ledger, as text for the Debug dialog."""
         from .account_ledger import read

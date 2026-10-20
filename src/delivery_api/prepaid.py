@@ -6,6 +6,7 @@ Unknown outcomes keep pending charge evidence, never imply a zero debit.
 import hashlib,time
 from .tenancy import current_scope
 from .attempt_ledger import AdmissionDenied,_integer
+from . import credit_audit
 
 
 def owner_lock(store):
@@ -37,5 +38,6 @@ def debit(store,attempt,amount,*,already_posted=False):
         raise AdmissionDenied('prepaid charge scale changed or unknown; settlement held')
     now=time.time()
     if not already_posted:
+        credit_audit.attribute(store._db.execute,'debit','system:prepaid',None,str(attempt['attempt_id']))
         store._db.execute('UPDATE credit_accounts SET balance_units=balance_units-?,updated_at=? WHERE owner_id=?',(amount,now,current_scope().owner_id))
     store._db.execute("UPDATE credit_charges SET state='settled',charged_units=?,settled_at=? WHERE attempt_id=?",(amount,now,attempt['attempt_id']))
