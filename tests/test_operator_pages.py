@@ -268,8 +268,9 @@ def test_the_task_audit_table_keeps_its_columns_when_empty():
 def test_the_app_and_the_operator_page_share_the_same_header_and_footer():
     import re
     header = lambda text: re.search(r"<header>.*?</header>", text, re.S).group(0)
-    index = (WEB / "index.html").read_text()
-    ops = (WEB / "ops.html").read_text()
+    import delivery_api.app as module
+    index = module._page("index.html").body.decode()
+    ops = module._page("ops.html").body.decode()
     for page in (index, ops):
         h = header(page)
         assert '<a class="brand" href="/">' in h and 'id="identity"' in h
@@ -277,8 +278,7 @@ def test_the_app_and_the_operator_page_share_the_same_header_and_footer():
             assert ">%s</a>" % label in h
         assert "/assets/chrome.js" in page and "/assets/chrome.css" in page and "/assets/style.css" in page
     # the same brand block and navigation links, character for character
-    cut = lambda h: re.sub(r'<span id="sessioncost".*?</span>', "", h, flags=re.S)
-    assert cut(header(index)) == cut(header(ops))
+    assert header(index) == header(ops)
     # the avatar menu on the operator page comes from the app's own identity code
     assert "ops-account.js" in ops and 'id="modal"' in ops
     assert "createIdentity" in (WEB / "ops-account.js").read_text()

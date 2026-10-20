@@ -59,3 +59,5 @@ Short rules that came from real failures. Add to this file when something goes w
 - The container's CPU and memory are read every 30 seconds whether or not a run is active (`DELIVERY_METRICS_IDLE_INTERVAL_S`). Reading them only while a run is active left the operator page saying "Not Available" on an idle server.
 - Logs download as a zip holding one text file. The text itself is unchanged and still scrubbed.
 - The signed-in person is shown by email (verified token claim). The fixed label "Signed-In User" is only the fallback.
+- The header exists once (`web/shell-header.html`) and the server puts it into every page. A page never carries its own copy: two copies drifted (the session-cost slot was missing on the operator pages, so the navigation sat in a different place).
+- Page-specific styles stay inside the page's own content area (`#frame`). A rule on a bare `button` for one page also hits the header's avatar and breaks it.
