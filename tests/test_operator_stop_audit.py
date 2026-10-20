@@ -32,7 +32,7 @@ def stops(store):
                   (A.owner_id, ["analytics.read", "sessions.read", "debug.read", "logs.read"]))
     yield store, tag
     with psycopg.connect(DSN) as c:
-        c.execute("UPDATE public.operator_principals SET enabled=false")
+        c.execute("DELETE FROM public.operator_principals WHERE subject=%s", (A.owner_id,))   # leave no operator row behind for other tests
 
 
 def read(store, owner=A, caps=CAPS, version="ops-v1"):
