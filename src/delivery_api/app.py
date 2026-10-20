@@ -2809,7 +2809,18 @@ def account_credits(a:auth.Actor=Depends(auth.require_actor)):
     # The signed-in customer's own prepaid balance, for the header. Local mode has no prepaid accounts.
     if not config.CLOUD_TENANTS:return {'credits':None,'usd':None}
     from .pricing import retail_rates
-    return store.own_credit_balance(retail_rates().usd_per_credit)
+    out=dict(store.own_credit_balance(retail_rates().usd_per_credit))
+    try:out['last_topup']=store.own_last_topup()
+    except Exception:
+        log.warning('last top-up unavailable',exc_info=True);out['last_topup']=None   # the balance itself must still show
+    return out
+
+
+@app.get('/api/account/credit-history')
+def account_credit_history(a:auth.Actor=Depends(auth.require_actor)):
+    # The signed-in customer's own credit changes, read-only, for the Debug dialog. Local mode has no prepaid accounts.
+    if not config.CLOUD_TENANTS:return {'available':False,'entries':[],'text':'Not available on this server: it has no prepaid credit accounts.'}
+    return store.own_credit_history()
 
 
 @app.get('/api/operator/credits')

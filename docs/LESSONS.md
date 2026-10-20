@@ -38,3 +38,11 @@ Short rules that came from real failures. Add to this file when something goes w
 - The operator Debug section "Server capacity" shows slots, running phases, machine memory and the biggest run seen. Set the slot count from that, not from a guess.
 - `DELIVERY_PHASE_TIME_LIMIT_S=1800` stops a run that passes 30 minutes. Revisit with real run times.
 - Each run is sampled every 10 seconds (CPU, memory, peak) and the container is sampled with it. Samples are in `run_metrics.db` in the data directory, so they survive a restart. Raw rows are kept 3 days, then each run becomes one permanent summary row (average and maximum). Debug > Server capacity shows the recent runs. Size the slot count from these numbers.
+
+## Credit ledger
+
+- Every change to a credit balance is recorded by the database itself (`credit_ledger`, filled by a trigger on `credit_accounts`), in the same transaction as the change. Code cannot move credits without a row.
+- Code names the kind, actor, reason and reference with `credit_audit.attribute(...)` before the UPDATE. A change that does not is recorded as `unattributed` and shows up as such in Debug. Fix the writer, do not hide the row.
+- No history was backfilled. The first recorded change starts the history.
+- Apply `supabase/migrations/20261020080000_credit_ledger.sql` in the Supabase SQL editor, then run `docs/credit-ledger-check.sql`. Code deployed before the SQL keeps working: history reads say the ledger is not set up yet.
+- Limit: a database owner can still drop the triggers. The ledger covers everything done through the app and the operator scripts.

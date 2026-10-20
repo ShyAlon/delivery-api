@@ -1,5 +1,5 @@
 import {api,noteActivity} from './client-core.js';
-import {balanceLabel} from './account-balance.js';
+import {balanceLabel,balanceTitle} from './account-balance.js';
 
 /* The customer's own prepaid credit balance, next to the session cost. Hidden when the server has no prepaid accounts. */
 function startBalance(cost){
@@ -9,7 +9,7 @@ function startBalance(cost){
  const refresh=async()=>{if(pending||stopped)return;pending=true;try{
   const reply=await api('/api/account/credits'),label=balanceLabel(reply);if(stopped)return;
   if(label===null){el.hidden=true;return}
-  el.textContent=label;el.hidden=false;el.dataset.state=reply.credits>0?'current':'unavailable';el.title=reply.credits>0?'Prepaid credit balance':'No credits left. Ask for more credits.';
+  el.textContent=label;el.hidden=false;el.dataset.state=reply.credits>0?'current':'unavailable';el.title=balanceTitle(reply);
  }catch{if(stopped)return;if(!el.hidden){el.dataset.state='stale';if(!el.textContent.endsWith(' · Last Known'))el.textContent+=' · Last Known'}}finally{pending=false}};
  refresh();const timer=setInterval(()=>{if(!document.hidden)refresh()},30000);const visible=()=>{if(!document.hidden){noteActivity();refresh()}};document.addEventListener('visibilitychange',visible);
  return ()=>{stopped=true;clearInterval(timer);document.removeEventListener('visibilitychange',visible)};

@@ -122,6 +122,7 @@ try:
             digest=hashlib.sha256(json.dumps({'owner':str(oid),'credits':str(p['credits']),'day':today,'operator':str(op)},sort_keys=True).encode()).hexdigest()
             cur.execute('INSERT INTO credit_adjustments(adjustment_id,request_key,owner_id,operator_subject,registry_version,review_digest,approval_reference,reason,delta_units,units_per_credit,before_balance_units,after_balance_units,expected_account_updated_at,applied_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
                 (uuid.uuid4(),p['key'],oid,op,reg,digest,'operator typed yes in the onboarding script at '+datetime.datetime.now().isoformat(timespec='seconds'),'free launch credits',delta,UNITS,before,before+delta,upd,now))
+            cur.execute("SELECT set_config('requi.ledger_kind','grant',true),set_config('requi.ledger_actor',%s,true),set_config('requi.ledger_reason','free launch credits',true),set_config('requi.ledger_reference',%s,true)",('operator:'+str(op),p['key']))
             cur.execute('UPDATE credit_accounts SET balance_units=balance_units+%s,updated_at=%s WHERE owner_id=%s',(delta,now,oid))
         if p['limit_action']:
             if p['own']:
