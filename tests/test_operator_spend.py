@@ -34,7 +34,7 @@ def world(store):
                   (A.owner_id, ["analytics.read", "sessions.read", "debug.read", "logs.read"]))
     yield store, oid, "spend-" + oid[:6], now
     with psycopg.connect(DSN, autocommit=True) as c:
-        c.execute("UPDATE public.operator_principals SET enabled=false")
+        c.execute("DELETE FROM public.operator_principals WHERE subject=%s", (A.owner_id,))   # leave no operator row behind for other tests
         c.execute("DELETE FROM credit_accounts WHERE owner_id=%s", (oid,))
 
 
@@ -71,7 +71,7 @@ def test_vendor_expense_is_summed_over_24_hours_and_7_days_in_dollars(world):
         job = store.enqueue_worker(task["task_id"], "phase:needs")
         store.claim_worker(job)
     with psycopg.connect(DSN, autocommit=True) as c:
-        c.execute("INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,%s,%s,0) ON CONFLICT (owner_id) DO NOTHING", (B.owner_id, SCALE, SCALE))
+        made_account = c.execute("INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,%s,%s,0) ON CONFLICT (owner_id) DO NOTHING RETURNING 1", (B.owner_id, SCALE, SCALE)).fetchone() is not None
         for name, usd, age in (("n", 5 * 10**11, 0), ("o", 10**12, 3 * 86400), ("x", 7 * 10**12, 30 * 86400)):
             c.execute("INSERT INTO provider_attempts(attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,expense_actual,retail_actual,usage,created_at,updated_at,settled_at) "
                       "VALUES (%s,%s,%s,'test-only','{}','test-only','settled',0,0,%s,0,'{}',%s,%s,%s)", ("sp-" + uuid.uuid4().hex, B.owner_id, job, usd, now - age, now - age, now - age))
@@ -81,6 +81,8 @@ def test_vendor_expense_is_summed_over_24_hours_and_7_days_in_dollars(world):
     finally:
         with psycopg.connect(DSN, autocommit=True) as c:
             c.execute("DELETE FROM provider_attempts WHERE attempt_id LIKE 'sp-%'")
+            if made_account:
+                c.execute("DELETE FROM credit_accounts WHERE owner_id=%s", (B.owner_id,))
 
 
 from test_cloud_api import cloud, header  # noqa: E402,F401
