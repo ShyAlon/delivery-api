@@ -9,14 +9,14 @@ HOST=${REQUI_SERVER:-ubuntu@15.235.101.85}; DATA=${REQUI_DATA:-/data/requi}; POR
 NAME=requi-preview; WORK=""; STARTED=0
 
 # Settings for the preview: ONLY the app's own DELIVERY_* settings are kept (allowlist), minus anything that names a model provider or an API key,
-# then the forced values last. Reads $1, writes $2 (mode 600, created that way). Prints nothing.
+# then the forced values last. The sign-in origin is the preview's own address (the live one would make sign-in reject the browser). Reads $1, writes $2 (mode 600, created that way). Prints nothing.
 build_env(){
   ( umask 077; : > "$2"; chmod 600 "$2"
     grep -E '^DELIVERY_[A-Z0-9_]*=' "$1" | grep -v -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|MISTRAL|GROQ|COHERE|XAI|PROVIDER|API_KEY|MODEL_KEY)[A-Z0-9_]*=' \
-      | grep -v -E '^(DELIVERY_CLOUD_EXECUTION|DELIVERY_COOKIE_SECURE|DELIVERY_PREVIEW|DELIVERY_METRICS_DB|DELIVERY_HOST|DELIVERY_PORT|DELIVERY_CONTROL_PLANE_ONLY)=' >> "$2" || true
+      | grep -v -E '^(DELIVERY_CLOUD_EXECUTION|DELIVERY_COOKIE_SECURE|DELIVERY_PREVIEW|DELIVERY_METRICS_DB|DELIVERY_HOST|DELIVERY_PORT|DELIVERY_CONTROL_PLANE_ONLY|DELIVERY_PUBLIC_ORIGIN)=' >> "$2" || true
     # The engine token is a password between the two processes inside the preview container only. It is made fresh here (never the live one, which the allowlist drops).
     tok=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n'); [ ${#tok} = 48 ] || exit 1
-    printf '%s\n' "INTERVIEW_ENGINE_TOKEN=$tok" DELIVERY_CONTROL_PLANE_ONLY=0 DELIVERY_CLOUD_EXECUTION=0 DELIVERY_COOKIE_SECURE=0 DELIVERY_PREVIEW=1 DELIVERY_METRICS_DB=/tmp/run_metrics.db DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 >> "$2" ) || return 1
+    printf '%s\n' "INTERVIEW_ENGINE_TOKEN=$tok" DELIVERY_CONTROL_PLANE_ONLY=0 DELIVERY_CLOUD_EXECUTION=0 DELIVERY_COOKIE_SECURE=0 DELIVERY_PREVIEW=1 DELIVERY_METRICS_DB=/tmp/run_metrics.db DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 "DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT" >> "$2" ) || return 1
   chmod 600 "$2"
 }
 # Hide connection strings in anything printed.
@@ -97,6 +97,7 @@ grep -q '^DELIVERY_DATABASE_URL=.' "$WORK/live.env" && grep -q '^DELIVERY_SUPABA
 build_env "$WORK/live.env" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"; rm -f "$WORK/live.env"
 grep -q -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|API_KEY)' "$WORK/preview.env" && abort MODEL-KEY "a model key is still in the preview settings" "" "send me this output (not the file)"
 [ "$(grep -c '^DELIVERY_CLOUD_EXECUTION=' "$WORK/preview.env")" = 1 ] && grep -q '^DELIVERY_CLOUD_EXECUTION=0$' "$WORK/preview.env" || abort EXEC-ON "execution is not forced off in the preview settings" "" "send me this output"
+[ "$(grep -c '^DELIVERY_PUBLIC_ORIGIN=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT\$" "$WORK/preview.env" || abort ORIGIN "the preview's sign-in address is not set to its own local address" "" "send me this output"
 
 # 4. can this Mac reach the database? (prints only OK or the error type, never the address)
 DBCHECK='import os,sys
@@ -140,6 +141,7 @@ EXECOUT=$(docker exec "$NAME" python -c "$PROBE" 2>/dev/null || true)
 echo "$EXECOUT" | grep -qx 'EXEC=0' && echo "$EXECOUT" | grep -qx 'KEYS=0' || abort EXEC-UNVERIFIED "the running container's environment does not confirm execution off and no provider key" "" "send me this output"
 echo
 echo "PREVIEW READY: http://127.0.0.1:$PORT   (execution CLOSED, no model key, real database, real sign-in)"
+echo "Open it exactly as http://127.0.0.1:$PORT (not localhost): sign-in accepts only that address."
 echo "Warning: Grant Credits, Admin Stop, delete task and stop run change REAL data. File changes stay in the local copy."
 echo "Press Ctrl-C here when you are done."
 docker logs -f "$NAME" 2>&1 | scrub || true

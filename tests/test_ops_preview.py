@@ -332,3 +332,64 @@ def test_a_setting_the_image_refuses_stops_the_preview_with_names_only(env):
         assert "ABORTED [NOT-STARTABLE]" in out.stdout and "Fix:" in out.stdout and "Then run:" in out.stdout and "PREVIEW READY" not in out.stdout
         assert "SECRETPASS" not in out.stdout + out.stderr
     assert not [l for l in log.read_text().splitlines() if l.startswith("docker run -d")]
+
+
+def _guard_request(origin):
+    from types import SimpleNamespace
+    return SimpleNamespace(method="POST", headers={"origin": origin} if origin else {}, cookies={}, url=SimpleNamespace(path="/api/auth/signin"),
+                           base_url="http://127.0.0.1:18765/")
+
+
+def _guard(monkeypatch, public_origin, origin):
+    from delivery_api import auth, config
+    monkeypatch.setattr(auth, "enabled", lambda: True)
+    monkeypatch.setattr(config, "PUBLIC_ORIGIN", public_origin)
+    monkeypatch.setattr(config, "CLOUD_TENANTS", False)
+    try:
+        auth.csrf_guard(_guard_request(origin))
+        return None
+    except Exception as e:  # HTTPException
+        return e
+
+
+def test_the_preview_uses_its_own_origin_on_its_own_port_not_the_live_one(tmp_path):
+    live = ["DELIVERY_DATABASE_URL=x", "DELIVERY_PUBLIC_ORIGIN=https://15-235-101-85.sslip.io"]
+    os.environ["PREVIEW_PORT"] = "18765"
+    try:
+        settings = _settings(tmp_path, live)
+    finally:
+        del os.environ["PREVIEW_PORT"]
+    assert settings["DELIVERY_PUBLIC_ORIGIN"] == "http://127.0.0.1:18765"
+    assert (tmp_path / "out.env").read_text().count("DELIVERY_PUBLIC_ORIGIN=") == 1
+    assert "sslip.io" not in (tmp_path / "out.env").read_text()
+
+
+def test_the_real_guard_accepts_only_the_preview_origin_with_the_generated_settings(tmp_path, monkeypatch):
+    os.environ["PREVIEW_PORT"] = "18765"
+    try:
+        settings = _settings(tmp_path, ["DELIVERY_PUBLIC_ORIGIN=https://15-235-101-85.sslip.io"])
+    finally:
+        del os.environ["PREVIEW_PORT"]
+    own = settings["DELIVERY_PUBLIC_ORIGIN"]
+    assert _guard(monkeypatch, own, "http://127.0.0.1:18765") is None
+    for bad in ("https://15-235-101-85.sslip.io", "http://localhost:18765", "http://127.0.0.1:8000", "http://127.0.0.1", "https://evil.example"):
+        err = _guard(monkeypatch, own, bad)
+        assert err is not None and err.status_code == 403, bad
+
+
+def test_the_live_guard_is_unchanged_and_the_rejection_explains_itself(monkeypatch):
+    live = "https://15-235-101-85.sslip.io"
+    assert _guard(monkeypatch, live, live) is None
+    err = _guard(monkeypatch, live, "http://127.0.0.1:18765")
+    assert err.status_code == 403 and err.detail["error"] == "Cross-site request rejected."
+    assert "different address" in err.detail["cause"] and "official address" in err.detail["next"]
+    assert "audit" not in str(err.detail).lower() and "server log" not in str(err.detail).lower()
+
+
+def test_the_preview_stops_if_its_origin_is_not_its_own_address(env):
+    api, e, log, _ = env
+    out = _run(api, e)
+    assert out.returncode == 0, out.stdout + out.stderr
+    lines = [l for l in Path(str(log) + ".env").read_text().splitlines() if l.startswith("DELIVERY_PUBLIC_ORIGIN=")]
+    assert lines == ["DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:18765"]
+    assert "sslip.io" not in Path(str(log) + ".env").read_text() and "Open it exactly as http://127.0.0.1:18765" in out.stdout
