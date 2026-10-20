@@ -52,7 +52,8 @@ def test_task_api_cross_tenant_ids_events_feedback_cost(cloud):
     assert client.patch('/api/tasks/'+task,json={'title':'stolen'},headers=header('b')).status_code==404
     assert client.delete('/api/tasks/'+task,headers=header('b')).status_code==404
     assert client.get('/api/tasks').status_code==401
-    assert client.get('/health').json()=={'ok':True}
+    health=client.get('/health').json()
+    assert health['ok'] is True and set(health)<={'ok','runtime_id'}   # cloud mode adds the build id and nothing else
 
 
 def test_session_registry_and_file_namespace(cloud):

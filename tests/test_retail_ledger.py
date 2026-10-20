@@ -2,7 +2,7 @@ import uuid
 from decimal import Decimal
 import pytest
 from test_attempt_ledger import ledger
-from test_postgres_store import DSN, A, B
+from test_postgres_store import DSN, A, B, store
 from delivery_api.tenancy import tenant_context
 from delivery_api.retail_pricing import RetailRates,UNITS_PER_CREDIT
 from delivery_api.retail_ledger import migrate_account
@@ -86,12 +86,24 @@ def test_browser_roles_cannot_read_retail_evidence(account):
                 c.execute('SELECT * FROM '+name)
 
 
-def test_provider_ceiling_is_not_confirmed_expense_and_boundary_is_held(account):
+def test_provider_ceiling_is_not_confirmed_expense_and_boundary_is_held(account,monkeypatch):
     from test_provider_snapshot import fixture
     from delivery_api.provider_snapshot import ProviderSnapshot
     from datetime import datetime,timezone
     import psycopg
-    s,tid,job=account;data=fixture();now=datetime.now(timezone.utc);data['fetched_at']=now.isoformat()
+    # The vendor bills 01:00-04:00 and 06:00-10:00 UTC on weekdays at the peak rate. Run at a fixed Saturday instant so the expected off-peak
+    # amount does not depend on the hour the suite runs at (it failed every weekday morning).
+    import delivery_api.attempt_ledger as attempts
+    pinned=datetime(2026,10,10,10,0,0,tzinfo=timezone.utc)
+    class PinnedClock:
+        @staticmethod
+        def time():return pinned.timestamp()
+    class PinnedDatetime(datetime):
+        @classmethod
+        def now(cls,tz=None):return pinned if tz else pinned.replace(tzinfo=None)
+    import datetime as datetime_module
+    monkeypatch.setattr(attempts,'time',PinnedClock);monkeypatch.setattr(datetime_module,'datetime',PinnedDatetime)   # attempt_ledger imports datetime inside its functions
+    s,tid,job=account;data=fixture();now=pinned;data['fetched_at']=now.isoformat()
     with psycopg.connect(DSN) as c:c.execute('UPDATE admission_limits SET expense_limit=NULL,attempt_expense_max=NULL WHERE owner_id=%s',(A.owner_id,))
     snapshot=ProviderSnapshot(data);rates=RetailRates.from_environment({}).snapshot()
     q={'provider':'fake','model':'fixture','price_version':'fixture','bound_version':'fixture','input_max':10,'output_max':10,'expense_input':300000,'expense_cache_hit':6000,'expense_cache_miss':300000,'expense_output':1200000,'expense_units_per_usd':10**12,'retail_input':12500,'retail_output':12500,'retail_units_per_credit':UNITS_PER_CREDIT,'retail_formula':rates,'provider_evidence':snapshot.quote_evidence(now)}
