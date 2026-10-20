@@ -40,7 +40,7 @@ case "$1" in
   load) cat > /dev/null;;
   run) for a in "$@"; do
          if [ "${prev:-}" = "--env-file" ]; then stat -c %a "$a" 2>/dev/null >> "$FAKE_LOG" || stat -f %Lp "$a" >> "$FAKE_LOG"; cp "$a" "$FAKE_LOG.env"; echo "$a" > "$FAKE_LOG.envpath"; fi; prev=$a; done
-       case "$*" in *"python -c"*) echo DBOK;; esac;;
+       case "$*" in *check_env*) printf '%b\n' "${CONTRACT_OUT:-CONTRACT-OK}";; *"python -c"*) echo DBOK;; esac;;
   logs) case "${LOGS_MODE:-closed}" in closed) echo "Cloud execution: CLOSED - x";; open) echo "Cloud execution: OPEN (x)";; absent) echo "Server log: /x";; esac; echo "connecting ${FAKE_SECRET:-}";;
   exec) printf '%b\n' "${EXEC_OUT:-EXEC=0\nKEYS=0}";;
   rm) :;;
@@ -145,7 +145,7 @@ def test_execution_is_forced_off_and_no_model_key_reaches_the_container(env):
     assert settings.count("DELIVERY_CLOUD_EXECUTION=0") == 1 and not any(l.startswith("DELIVERY_CLOUD_EXECUTION=1") for l in settings)
     assert "DELIVERY_COOKIE_SECURE=0" in settings and "DELIVERY_PREVIEW=1" in settings and "DELIVERY_COOKIE_SECURE=1" not in settings
     assert not any(w in l.upper() for l in settings for w in ("API_KEY", "DEEPSEEK", "OPENAI", "ANTHROPIC", "GEMINI", "STRIPE", "SECRETPASS_X"))
-    assert all(l.startswith("DELIVERY_") for l in settings) and "DELIVERY_SUPABASE_ANON_KEY=anon" in settings
+    assert all(l.startswith(("DELIVERY_", "INTERVIEW_ENGINE_TOKEN=")) for l in settings) and "DELIVERY_SUPABASE_ANON_KEY=anon" in settings
     assert any(l.startswith("DELIVERY_DATABASE_URL=") for l in settings)
 
 
@@ -277,3 +277,58 @@ def test_a_failed_image_that_cannot_be_removed_stops_the_preview(env):
 def test_the_build_runs_with_a_normal_umask_not_the_private_one():
     text = (OPS / "preview.sh").read_text()
     assert "( umask 022; bash scripts/docker/build-full-image.sh )" in text
+
+
+def _settings(tmp_path, live_lines):
+    live = tmp_path / "in.env"
+    live.write_text("\n".join(live_lines) + "\n")
+    out = tmp_path / "out.env"
+    r = subprocess.run(["bash", "-c", 'PREVIEW_FUNCTIONS_ONLY=1 . "%s"; build_env "%s" "%s"' % (OPS / "preview.sh", live, out)], capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout == "" and r.stderr == "", r.stdout + r.stderr
+    return dict(l.split("=", 1) for l in out.read_text().splitlines())
+
+
+def _load_entry():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("full_entry_real", OPS.parent / "docker" / "full_entry.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_generated_settings_pass_the_images_real_startup_rules(tmp_path):
+    entry = _load_entry()
+    live = ["DELIVERY_DATABASE_URL=%s" % SECRET, "DELIVERY_CONTROL_PLANE_ONLY=1", "INTERVIEW_ENGINE_TOKEN=live-production-token-0123456789abcdef"]
+    settings = _settings(tmp_path, live)
+    assert entry.check_env(settings) == []
+    assert settings["DELIVERY_CONTROL_PLANE_ONLY"] == "0" and settings["DELIVERY_CLOUD_EXECUTION"] == "0"
+    # the same rules refuse settings without the token, and the real messages carry no value
+    broken = {k: v for k, v in settings.items() if k != "INTERVIEW_ENGINE_TOKEN"}
+    problems = entry.check_env(broken)
+    assert problems and all("SECRETPASS" not in p for p in problems)
+
+
+def test_the_engine_token_is_fresh_private_and_never_the_live_one(tmp_path):
+    live = ["DELIVERY_DATABASE_URL=x", "INTERVIEW_ENGINE_TOKEN=live-production-token-0123456789abcdef"]
+    a = _settings(tmp_path, live)["INTERVIEW_ENGINE_TOKEN"]
+    b = _settings(tmp_path, live)["INTERVIEW_ENGINE_TOKEN"]
+    assert a != b and len(a) == 48 and a != "local-interview-engine-token" and "live-production" not in a + b
+    assert all(c in "0123456789abcdef" for c in a)
+
+
+def test_the_engine_token_is_not_printed_and_the_settings_check_runs_on_the_real_file(env):
+    api, e, log, _ = env
+    out = _run(api, e)
+    assert out.returncode == 0, out.stdout + out.stderr
+    token = [l for l in Path(str(log) + ".env").read_text().splitlines() if l.startswith("INTERVIEW_ENGINE_TOKEN=")][0].split("=", 1)[1]
+    assert len(token) == 48 and token not in out.stdout + out.stderr and "live-production" not in Path(str(log) + ".env").read_text()
+    assert "check_env" in log.read_text()
+
+
+def test_a_setting_the_image_refuses_stops_the_preview_with_names_only(env):
+    api, e, log, _ = env
+    for contract in ("CONTRACT-PROBLEMS\\nproblem: INTERVIEW_ENGINE_TOKEN must be set", "garbage"):
+        out = _run(api, e, CONTRACT_OUT=contract, FAKE_SECRET="")
+        assert "ABORTED [NOT-STARTABLE]" in out.stdout and "Fix:" in out.stdout and "Then run:" in out.stdout and "PREVIEW READY" not in out.stdout
+        assert "SECRETPASS" not in out.stdout + out.stderr
+    assert not [l for l in log.read_text().splitlines() if l.startswith("docker run -d")]

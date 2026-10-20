@@ -13,8 +13,10 @@ NAME=requi-preview; WORK=""; STARTED=0
 build_env(){
   ( umask 077; : > "$2"; chmod 600 "$2"
     grep -E '^DELIVERY_[A-Z0-9_]*=' "$1" | grep -v -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|MISTRAL|GROQ|COHERE|XAI|PROVIDER|API_KEY|MODEL_KEY)[A-Z0-9_]*=' \
-      | grep -v -E '^(DELIVERY_CLOUD_EXECUTION|DELIVERY_COOKIE_SECURE|DELIVERY_PREVIEW|DELIVERY_METRICS_DB|DELIVERY_HOST|DELIVERY_PORT)=' >> "$2" || true
-    printf '%s\n' DELIVERY_CLOUD_EXECUTION=0 DELIVERY_COOKIE_SECURE=0 DELIVERY_PREVIEW=1 DELIVERY_METRICS_DB=/tmp/run_metrics.db DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 >> "$2" )
+      | grep -v -E '^(DELIVERY_CLOUD_EXECUTION|DELIVERY_COOKIE_SECURE|DELIVERY_PREVIEW|DELIVERY_METRICS_DB|DELIVERY_HOST|DELIVERY_PORT|DELIVERY_CONTROL_PLANE_ONLY)=' >> "$2" || true
+    # The engine token is a password between the two processes inside the preview container only. It is made fresh here (never the live one, which the allowlist drops).
+    tok=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n'); [ ${#tok} = 48 ] || exit 1
+    printf '%s\n' "INTERVIEW_ENGINE_TOKEN=$tok" DELIVERY_CONTROL_PLANE_ONLY=0 DELIVERY_CLOUD_EXECUTION=0 DELIVERY_COOKIE_SECURE=0 DELIVERY_PREVIEW=1 DELIVERY_METRICS_DB=/tmp/run_metrics.db DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 >> "$2" ) || return 1
   chmod 600 "$2"
 }
 # Hide connection strings in anything printed.
@@ -92,7 +94,7 @@ ARCH=$(docker image inspect --format '{{.Architecture}}' "$IMAGE" 2>/dev/null ||
 "${SSHB[@]}" "sudo -n cat /etc/requi/full.env" > "$WORK/live.env" 2> "$WORK/ssh.err" || abort SETTINGS "cannot read /etc/requi/full.env on the server" "" "ssh $HOST 'sudo -n test -r /etc/requi/full.env && echo readable'"
 chmod 600 "$WORK/live.env"
 grep -q '^DELIVERY_DATABASE_URL=.' "$WORK/live.env" && grep -q '^DELIVERY_SUPABASE_URL=.' "$WORK/live.env" || abort SETTINGS "the live settings file has no database or Supabase address" "" "send me this output (the file itself must not be sent)"
-build_env "$WORK/live.env" "$WORK/preview.env"; rm -f "$WORK/live.env"
+build_env "$WORK/live.env" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"; rm -f "$WORK/live.env"
 grep -q -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|API_KEY)' "$WORK/preview.env" && abort MODEL-KEY "a model key is still in the preview settings" "" "send me this output (not the file)"
 [ "$(grep -c '^DELIVERY_CLOUD_EXECUTION=' "$WORK/preview.env")" = 1 ] && grep -q '^DELIVERY_CLOUD_EXECUTION=0$' "$WORK/preview.env" || abort EXEC-ON "execution is not forced off in the preview settings" "" "send me this output"
 
@@ -106,6 +108,11 @@ except Exception as e:
     print("DBFAIL",type(e).__name__)'
 OUT=$(docker run --rm --platform linux/amd64 --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$WORK/preview.env" "$IMAGE" python -c "$DBCHECK" 2>&1 | scrub | tail -1 || true)
 [ "$OUT" = DBOK ] || abort NO-DB "this Mac cannot open the database ($OUT)" "" "check your network or VPN; if it says OperationalError the database may only accept the server's address: send me this line"
+
+# 4b. the image's OWN startup rules, run on these exact settings. Prints problem names only, never a value.
+CONTRACT='import os,sys;sys.path.insert(0,"/app");import full_entry;p=full_entry.check_env(os.environ);print("CONTRACT-OK" if not p else "CONTRACT-PROBLEMS");[print("problem:",x) for x in p]'
+COUT=$(docker run --rm --platform linux/amd64 --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$WORK/preview.env" "$IMAGE" python -c "$CONTRACT" 2>&1 | scrub | tail -8 || true)
+echo "$COUT" | grep -qx CONTRACT-OK || abort NOT-STARTABLE "the image would not start with these settings: $(echo "$COUT" | grep '^problem:' | tr '\n' ' ')" "" "send me this output"
 
 # 5. the data folder, read only on the server, into the temp folder
 echo "== copying the server's data folder ($SIZE_MB MB), read only on the server"
