@@ -2804,6 +2804,59 @@ def admin_operations_spend(a:auth.Actor=Depends(auth.require_admin)):
             'next':'Run supabase/migrations/20261020130000_operator_stop_audit.sql and 20261020080000_credit_ledger.sql in the Supabase SQL editor, then reload.'})
 
 
+def _grant_reader(a):
+    from .operator_authorization import OperatorPrincipal
+    from .operator_reads import OperatorReadStore
+    reader=_stop_readers.get(('grant',a.id))
+    if reader is None:
+        reader=_stop_readers[('grant',a.id)]=OperatorReadStore(config.DATABASE_URL,OperatorPrincipal(a.id,'ops-v1',frozenset({'analytics.read','credits.allocate'})))
+    return reader
+
+def _grant_unavailable(a,exc):
+    _stop_readers.pop(('grant',a.id),None)
+    activity('ops.grant_unavailable','Operator credit grant could not be read or written',actor=a.label,error=type(exc).__name__)
+    return HTTPException(503,{'error':'Granting credits is not switched on yet.','cause':'The database has not been set up for operator grants.',
+        'next':'Run supabase/migrations/20261020150000_operator_grant_credits.sql in the Supabase SQL editor, then reload.'})
+
+class GrantRequest(BaseModel):
+    email: str = Field(min_length=3,max_length=320)
+    credits: float = Field(gt=0,le=500)
+    reason: str = Field(default='Free launch credits',min_length=1,max_length=400)
+    confirm: str = ''
+
+@app.get('/api/admin/operations/grants')
+def admin_operations_grants(a:auth.Actor=Depends(auth.require_admin)):
+    # Operator only: recent credit grants.
+    if not config.CLOUD_TENANTS:raise HTTPException(404,'Not available on this server.')
+    try:return _grant_reader(a).grants(store)
+    except Exception as exc:raise _grant_unavailable(a,exc)
+
+@app.post('/api/admin/operations/grant-preview')
+def admin_operations_grant_preview(body:GrantRequest,a:auth.Actor=Depends(auth.require_admin)):
+    # Operator only: what a grant would do. Writes nothing.
+    if not config.CLOUD_TENANTS:raise HTTPException(404,'Not available on this server.')
+    try:return _grant_reader(a).grant_preview(store,body.email,body.credits)
+    except ValueError as exc:raise HTTPException(400,str(exc))
+    except Exception as exc:
+        import psycopg
+        if isinstance(exc,psycopg.errors.RaiseException):raise HTTPException(400,exc.diag.message_primary or 'The grant was refused.')
+        raise _grant_unavailable(a,exc)
+
+@app.post('/api/admin/operations/grant')
+def admin_operations_grant(body:GrantRequest,a:auth.Actor=Depends(auth.require_admin)):
+    # Operator only: give credits. Needs the typed word yes. The database checks the operator registry again and refuses a same-day repeat.
+    if not config.CLOUD_TENANTS:raise HTTPException(404,'Not available on this server.')
+    if body.confirm!='yes':raise HTTPException(400,'Type yes to confirm the grant.')
+    try:out=_grant_reader(a).grant_apply(store,body.email,body.credits,body.reason)
+    except ValueError as exc:raise HTTPException(400,str(exc))
+    except Exception as exc:
+        import psycopg
+        if isinstance(exc,psycopg.errors.RaiseException):raise HTTPException(400,exc.diag.message_primary or 'The grant was refused.')
+        raise _grant_unavailable(a,exc)
+    activity('ops.credits_granted','Operator granted credits',actor=a.label,credits=body.credits,granted=bool(out.get('granted')))
+    return out
+
+
 @app.get('/api/admin/operations/run-metrics')
 def admin_operations_run_metrics(task_id:str='',a:auth.Actor=Depends(auth.require_admin)):
     # Operator only: CPU and memory samples. With task_id, the raw samples and summaries of that task; without, the recent-runs overview shown in Debug.

@@ -109,7 +109,72 @@ async function loadSpend(){
       card('Vendor Expense (7d)','$'+sum('expense_7d_usd').toFixed(2),'All accounts','Model provider charges in the last 7 days.'));
   }catch(e){fail('Could not read the credits page ('+e.message+'). Press Refresh to try again.')}
 }
-function view(name){document.body.dataset.view=name;history.replaceState(null,'',name==='stops'||name==='spend'?'#'+name:location.pathname);document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.view===name));if(name==='stops')loadStops();else if(name==='spend')loadSpend();else load()}
+const grants=makeTable($('#grant-view'),'Recent Grants','Credits given to accounts, newest first.',[
+  {key:'when',label:'When (UTC)',tip:'When the credits were added.'},
+  {key:'account',label:'Account',tip:'Who received the credits.'},
+  {key:'credits',label:'Credits',tip:'How many credits were added.',num:true,fmt:v=>num(v)},
+  {key:'reason',label:'Reason',tip:'Why the credits were given.'},
+  {key:'by',label:'Given By',tip:'Operator means the operator page. Script means the onboarding script.'}],
+  'No grants yet.');
+const gEmail=el('input',{id:'g-email',type:'email',placeholder:'name@example.com',title:'The sign-in email of the account that gets the credits.'});
+const gCredits=el('input',{id:'g-credits',type:'number',min:'0.01',max:'500',step:'any',placeholder:'50',title:'How many credits to give. At most 500 at a time.'});
+const gReason=el('input',{id:'g-reason',type:'text',value:'Free launch credits',maxLength:400,title:'Why the credits are given. It is kept in the credit history.'});
+const gConfirm=el('input',{id:'g-confirm',type:'text',placeholder:'yes',autocomplete:'off',title:'Type yes to allow the grant after you have read the preview.'});
+const gPreviewBtn=el('button',{id:'g-preview',textContent:'Preview',title:'Shows what the grant would do. Nothing is changed.'});
+const gGrantBtn=el('button',{id:'g-grant',textContent:'Grant Credits',disabled:true,title:'Press Preview first.'});
+const gOut=el('div',{id:'grant-preview',className:'empty'});
+const fld=(t,i)=>el('label',{textContent:t},i);
+const gForm=el('div',{id:'grant-form'},fld('Account Email',gEmail),fld('Credits',gCredits),fld('Reason',gReason),gPreviewBtn,fld('Type Yes To Confirm',gConfirm),gGrantBtn);
+$('#grant-view').prepend(gOut);$('#grant-view').prepend(gForm);
+let gPreview=null;
+function gSync(){
+  const ok=gPreview&&gPreview.found&&gPreview.scale_ok&&!gPreview.already_granted_today&&gPreview.key===gEmail.value.trim().toLowerCase()+'|'+gCredits.value;
+  const yes=gConfirm.value.trim()==='yes';
+  gGrantBtn.disabled=!(ok&&yes);
+  gGrantBtn.title=!gPreview||gPreview.key!==gEmail.value.trim().toLowerCase()+'|'+gCredits.value?'Press Preview first. Changing the email or credits needs a new preview.':
+    !gPreview.found?'No account has that email.':!gPreview.scale_ok?'This account uses a different credit scale.':gPreview.already_granted_today?'This exact grant was already given today.':
+    !yes?'Type yes in the confirm box.':'Gives the credits now.';
+}
+[gEmail,gCredits,gConfirm].forEach(i=>i.addEventListener('input',gSync));
+async function gCall(path,body){
+  const r=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){const x=d.detail;throw new Error(typeof x==='string'?x:x&&x.error?x.error+' '+(x.next||''):'Error '+r.status)}
+  return d;
+}
+gPreviewBtn.onclick=async()=>{
+  gPreview=null;gSync();gOut.textContent='Looking up the account...';
+  try{
+    const email=gEmail.value.trim(),credits=Number(gCredits.value);
+    if(!email||!(credits>0))throw new Error('Type an email and a number of credits above 0.');
+    const p=await gCall('/api/admin/operations/grant-preview',{email,credits,reason:gReason.value||'x'});
+    p.key=email.toLowerCase()+'|'+gCredits.value;gPreview=p;
+    gOut.textContent=!p.found?'No account has that email. They need to sign up first.':
+      'Balance now: '+num(p.balance_credits)+' credits\nGrant: +'+num(credits)+' credits\nBalance after: '+num(p.after_credits)+' credits\nLimits row: '+p.admission_row+
+      (p.already_granted_today?'\nThis exact grant was already given today. Nothing more can be granted.':'\nType yes, then press Grant Credits.');
+  }catch(e){gOut.textContent=e.message}
+  gSync();
+};
+gGrantBtn.onclick=async()=>{
+  gGrantBtn.disabled=true;gGrantBtn.title='Working. This takes a moment.';
+  try{
+    const d=await gCall('/api/admin/operations/grant',{email:gEmail.value.trim(),credits:Number(gCredits.value),reason:gReason.value,confirm:gConfirm.value.trim()});
+    gOut.textContent=d.granted?'Done. Balance went from '+num(d.before_credits)+' to '+num(d.after_credits)+' credits. Limits row: '+d.admission_row+'.':'Nothing was granted: this exact grant was already given today.';
+    gPreview=null;gConfirm.value='';loadGrants();
+  }catch(e){gOut.textContent='Not granted: '+e.message}
+  gSync();
+};
+async function loadGrants(){
+  try{
+    const r=await fetch('/api/admin/operations/grants',{credentials:'same-origin'});
+    if(r.status===401||r.status===403){gOut.textContent='This page is for administrators.';grants.set([]);return}
+    if(r.status===503){const d=((await r.json().catch(()=>({}))).detail)||{};gOut.textContent=(d.error||'Not available.')+' '+(d.next||'');grants.set([]);return}
+    if(!r.ok)throw new Error(String(r.status));
+    grants.set((await r.json()).grants);
+  }catch(e){gOut.textContent='Could not read the grants ('+e.message+'). Press Refresh to try again.';grants.set([])}
+}
+gSync();
+function view(name){document.body.dataset.view=name;history.replaceState(null,'',name==='stops'||name==='spend'||name==='grant'?'#'+name:location.pathname);document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.view===name));if(name==='stops')loadStops();else if(name==='spend')loadSpend();else if(name==='grant')loadGrants();else load()}
 document.querySelectorAll('.tab').forEach(t=>{t.onclick=()=>view(t.dataset.view)});
 
 function card(k,v,s,tip){return el('div',{className:'card',title:tip},el('div',{className:'k',textContent:k}),el('div',{className:'v',textContent:v}),el('div',{className:'s',textContent:s||''}))}
@@ -140,7 +205,7 @@ async function load(){
 }
 function fail(msg){$('#flags').replaceChildren(el('div',{className:'flag warning',textContent:msg}));$('#cards').replaceChildren();sessions.set([]);running.set([]);recent.set([])}
 
-$('#refresh').onclick=()=>{const v=document.body.dataset.view;v==='stops'?loadStops():v==='spend'?loadSpend():load()};
+$('#refresh').onclick=()=>{const v=document.body.dataset.view;v==='stops'?loadStops():v==='spend'?loadSpend():v==='grant'?loadGrants():load()};
 $('#dl').onclick=async()=>{
   const b=$('#dl');b.disabled=true;b.title='Preparing the file. This takes a moment.';
   try{
@@ -151,5 +216,5 @@ $('#dl').onclick=async()=>{
   }catch(e){$('#flags').prepend(el('div',{className:'flag warning',textContent:'The log could not be downloaded ('+e.message+'). Only administrators can download it.'}))}
   finally{b.disabled=false;b.title='Download the scrubbed server log as a text file. Secrets, emails and tokens are removed, and the download is recorded.'}
 };
-if(location.hash==='#stops'||location.hash==='#spend')view(location.hash.slice(1));else load();setInterval(()=>{if(document.body.dataset.view==='health')load()},10000);
+if(location.hash==='#stops'||location.hash==='#spend'||location.hash==='#grant')view(location.hash.slice(1));else load();setInterval(()=>{if(document.body.dataset.view==='health')load()},10000);
 })();
