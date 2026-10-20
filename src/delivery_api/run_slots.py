@@ -52,6 +52,8 @@ async def _watch(orchestrator,task_id,limit_s,tick_s,store=None):
         if proc is None or proc.returncode is not None:continue
         peak=peak_rss_mb(proc.pid) if proc.pid else None
         if peak is not None:info["peak_rss_mb"]=max(info["peak_rss_mb"],peak)
+        group=run_metrics.read_group(proc.pid) if proc.pid else None   # CPU seconds of the child and its group, charged when the run ends
+        if group is not None:info["cpu_seconds"]=max(info.get("cpu_seconds",0.0),group["cpu_seconds"])
         if proc.pid and time.monotonic()>=next_sample:
             next_sample=time.monotonic()+config.METRICS_INTERVAL_S
             run_metrics.tick(info,task_id,proc.pid,store)   # CPU and memory samples for the operator; never raises
@@ -70,7 +72,7 @@ async def _watch(orchestrator,task_id,limit_s,tick_s,store=None):
             except ProcessLookupError:pass
 
 
-async def run_limited(store,orchestrator,task_id,work,*,tick_s=2.0):
+async def run_limited(store,orchestrator,task_id,work,*,tick_s=0.25):
     """Wait for a free slot, run work() with the watchdog, release the slot even when work fails."""
     global waiting
     slots=_semaphore()
@@ -91,7 +93,7 @@ async def run_limited(store,orchestrator,task_id,work,*,tick_s=2.0):
         peaks[task_id]=info.get("peak_rss_mb")
         while len(peaks)>50:peaks.pop(next(iter(peaks)))
         activity("run.finished","Phase process finished",task_id=task_id,peak_rss_mb=info.get("peak_rss_mb"),timed_out=info.get("timed_out",False),
-                 seconds=round(time.time()-info["started"],1) if info.get("started") else None)
+                 seconds=round(time.time()-info["started"],1) if info.get("started") else None,cpu_seconds=info.get("cpu_seconds"))
         if info.get("timed_out"):
             store.add_event(task_id,"error","This run reached the time limit and was stopped. You can start it again.",phase_key=(store.task(task_id) or {}).get("active_phase"))
         elif info.get("stop_by"):

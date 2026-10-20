@@ -40,3 +40,15 @@ def store():
     if not dsn:pytest.skip('requires isolated migrated Postgres')
     from delivery_api.postgres_store import PostgresStore
     return PostgresStore(dsn.replace('user=sandbox','user=delivery_app'))
+
+@pytest.fixture(autouse=True)
+def _no_compute_segments_left_for_the_test_owners():
+    """Compute segments are owner-wide and block admission while open, so a test that dispatches a phase must not leave one for the next test."""
+    yield
+    dsn=os.environ.get('DELIVERY_TEST_POSTGRES_DSN')
+    if not dsn:return
+    try:
+        import psycopg
+        with psycopg.connect(dsn) as conn:
+            conn.execute("DELETE FROM retail_compute_segments WHERE owner_id IN (SELECT id FROM auth.users)")
+    except Exception:pass
