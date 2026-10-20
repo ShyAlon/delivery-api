@@ -1182,6 +1182,10 @@ class PostgresStore(SQLiteStore):
         from .retail_ledger import task_totals
         return task_totals(self,task_id)
 
+    def task_phase_credits(self,task_id):
+        from .retail_ledger import task_phase_totals
+        return task_phase_totals(self,task_id)
+
     def retail_compute_status(self,task_id):
         rows=self._db.execute("SELECT r.state,count(*) AS count FROM retail_compute_segments r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=? GROUP BY r.state",(task_id,)).fetchall()
         return {r['state']:r['count'] for r in rows}

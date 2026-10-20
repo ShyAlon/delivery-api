@@ -2129,6 +2129,13 @@ def task_cost(task_id:str,request:Request):
         except (OSError,ValueError):pass
     return _task_cost(task_id)
 
+@app.get("/api/tasks/{task_id}/cost-phases")
+def task_cost_phases(task_id:str):
+    # Credits per phase, for the header tooltip. Customer-safe: phase names and credits only. Local mode has no per-phase ledger.
+    if not store.task(task_id):raise HTTPException(404,"task not found")
+    if not hasattr(store,'task_phase_credits'):return {'phases':[]}
+    return {'phases':store.task_phase_credits(task_id)}
+
 @app.get("/api/sessions/{session_id}/cost")
 def session_cost(session_id:str):
     # Discovery validates the path and ties the read to an existing session.

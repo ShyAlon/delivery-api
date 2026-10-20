@@ -127,6 +127,14 @@ def task_totals(store,task_id):
     return {'price':float(round(credits,6)),'price_usd':float(round(usd,6))}
 
 
+def task_phase_totals(store,task_id):
+    """Credits per phase for one task, largest first. Credits only: no price, vendor cost or rate leaves this function."""
+    rows=store._db.execute('SELECT r.phase_key,r.exact_units FROM retail_contributions r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=?',(task_id,)).fetchall()
+    by={}
+    for row in rows:by[row['phase_key']]=by.get(row['phase_key'],Decimal(0))+Decimal(row['exact_units'])/UNITS_PER_CREDIT
+    return [{'phase':k,'credits':float(round(v,6))} for k,v in sorted(by.items(),key=lambda kv:(-kv[1],kv[0]))]
+
+
 def _job_evidence(store,job_id):
     attempts=store._db.execute('SELECT count(*) AS n FROM provider_attempts WHERE job_id=?',(job_id,)).fetchone()['n']
     tokens=store._db.execute("SELECT count(*) AS n FROM retail_contributions WHERE job_id=? AND kind='tokens'",(job_id,)).fetchone()['n']

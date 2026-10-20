@@ -46,3 +46,7 @@ Short rules that came from real failures. Add to this file when something goes w
 - No history was backfilled. The first recorded change starts the history.
 - Apply `supabase/migrations/20261020080000_credit_ledger.sql` in the Supabase SQL editor, then run `docs/credit-ledger-check.sql`. Code deployed before the SQL keeps working: history reads say the ledger is not set up yet.
 - Limit: a database owner can still drop the triggers. The ledger covers everything done through the app and the operator scripts.
+
+## Cost tooltip
+
+- The session-cost tooltip lists credits per phase (`/api/tasks/<id>/cost-phases`, from the same debit rows as the total). Phase names and credits only: no vendor cost, rate or spend limit. Sessions without a task show the plain tooltip.
