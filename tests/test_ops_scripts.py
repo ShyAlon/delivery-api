@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 OPS = Path(__file__).resolve().parents[1] / "scripts" / "ops"
-NAMES = ("deploy-full.sh", "go-live.sh", "grant-credits.sh", "lib.sh", "req-install.sh")
+NAMES = ("deploy-full.sh", "go-live.sh", "grant-credits.sh", "lib.sh", "preview.sh", "req-install.sh")
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None or shutil.which("git") is None, reason="needs bash and git")
 
 
@@ -97,3 +97,4 @@ def test_start_aborts_when_origin_is_another_repository(clone):
     _git(work, "remote", "set-url", "origin", str(work.parent / "ShyAlon" / "delivery-api.git").replace("delivery-api", "other"))
     out = _probe(work)
     assert "ABORTED [REMOTE]" in out.stdout
+

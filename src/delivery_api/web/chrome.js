@@ -39,11 +39,20 @@ export function addFooter(runtimeId){
   footer.querySelector('.footer-build').textContent='Build '+(runtimeId?String(runtimeId).slice(0,7):'unknown');
 }
 
+export function addPreviewBanner(auth){
+  if(!auth||!auth.preview||document.querySelector('.preview-banner'))return;
+  const b=document.createElement('div');b.className='preview-banner';b.setAttribute('role','status');
+  b.textContent='Preview: real data, execution off';
+  b.style.cssText='background:#92400e;color:#fff;text-align:center;font:600 13px system-ui,sans-serif;padding:4px 8px;position:sticky;top:0;z-index:1000';
+  document.body.prepend(b);
+}
+
 async function start(){
   markCurrentPage();
   window.addEventListener('hashchange',markCurrentPage);
   addFooter(null);
   try{const live=await (await fetch('/health',{cache:'no-store'})).json();addFooter(live.runtime_id)}catch(e){}
-  try{const auth=await (await fetch('/api/auth',{credentials:'same-origin'})).json();addOperatorLinks(document.querySelector('header nav'),auth)}catch(e){}
+  try{const auth=await (await fetch('/api/auth',{credentials:'same-origin'})).json();addOperatorLinks(document.querySelector('header nav'),auth);addPreviewBanner(auth)}catch(e){}
 }
 if(typeof document!=='undefined'&&document.querySelector('header nav'))start();
+
