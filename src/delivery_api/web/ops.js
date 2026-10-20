@@ -18,7 +18,7 @@ function makeTable(root,title,tip,cols,emptyText){
   const info=el('span',{className:'grow'});
   const pager=el('div',{className:'pager'},info,prev,next);
   root.replaceChildren(h2,tools,scroll,pager);
-  const text=(r,c)=>{const v=r[c.key];return v==null?'':String(c.fmt?c.fmt(v,r):v)};
+  const text=(r,c)=>{const v=r[c.key];return v==null?(c.empty||'Not Available'):String(c.fmt?c.fmt(v,r):v)};
   function draw(){
     const needle=st.q.toLowerCase();
     let rows=st.rows.filter(r=>!needle||cols.some(c=>text(r,c).toLowerCase().includes(needle)));
@@ -64,6 +64,28 @@ const recent=makeTable($('#p-recent'),'Recent Runs','The latest finished and run
   {key:'peak_memory_mb',label:'Peak Memory',tip:'Largest memory the run used, in megabytes.',num:true,fmt:v=>num(v,' MB')}],
   'No run has been measured yet.');
 
+const stops=makeTable($('#stops-view'),'Admin Stops','Every time a run was stopped, newest first. Operator stops name the operator.',[
+  {key:'when',label:'When (UTC)',tip:'When the stop was recorded.'},
+  {key:'stopped_by',label:'Stopped By',tip:'Owner means the person who started the run. Operator means an administrator.'},
+  {key:'operator',label:'Operator',tip:'Which administrator stopped it, when an operator did.',empty:'Not Applicable'},
+  {key:'owner',label:'Owner',tip:'Whose run it was.'},
+  {key:'phase',label:'Phase',tip:'Which phase was running. Older stops did not record it.',empty:'Not Recorded',fmt:v=>v.charAt(0).toUpperCase()+v.slice(1).replace(/_/g,' ')},
+  {key:'peak_memory_mb',label:'Peak Memory',tip:'Largest memory the run had used when it was stopped, in megabytes.',num:true,fmt:v=>num(v,' MB')}],
+  'No run has been stopped yet.');
+const stopsBox=el('div',{className:'empty',hidden:true});
+$('#stops-view').append(stopsBox);
+async function loadStops(){
+  try{
+    const r=await fetch('/api/admin/operations/stops',{credentials:'same-origin'});
+    if(r.status===401||r.status===403){stopsBox.hidden=false;stopsBox.textContent='This page is for administrators.';stops.set([]);return}
+    if(r.status===503){const b=await r.json().catch(()=>({}));const d=b.detail||{};stopsBox.hidden=false;stopsBox.textContent=(d.error||'The stop list is not available.')+' '+(d.next||'');stops.set([]);return}
+    if(!r.ok)throw new Error(String(r.status));
+    stopsBox.hidden=true;stops.set((await r.json()).stops);
+  }catch(e){stopsBox.hidden=false;stopsBox.textContent='Could not read the stop list ('+e.message+'). Press Refresh to try again.';stops.set([])}
+}
+function view(name){document.body.dataset.view=name;history.replaceState(null,'',name==='stops'?'#stops':location.pathname);document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.view===name));if(name==='stops')loadStops();else load()}
+document.querySelectorAll('.tab').forEach(t=>{t.onclick=()=>view(t.dataset.view)});
+
 function card(k,v,s,tip){return el('div',{className:'card',title:tip},el('div',{className:'k',textContent:k}),el('div',{className:'v',textContent:v}),el('div',{className:'s',textContent:s||''}))}
 
 function show(h){
@@ -92,7 +114,7 @@ async function load(){
 }
 function fail(msg){$('#flags').replaceChildren(el('div',{className:'flag warning',textContent:msg}));$('#cards').replaceChildren();sessions.set([]);running.set([]);recent.set([])}
 
-$('#refresh').onclick=load;
+$('#refresh').onclick=()=>document.body.dataset.view==='stops'?loadStops():load();
 $('#dl').onclick=async()=>{
   const b=$('#dl');b.disabled=true;b.title='Preparing the file. This takes a moment.';
   try{
@@ -103,5 +125,5 @@ $('#dl').onclick=async()=>{
   }catch(e){$('#flags').prepend(el('div',{className:'flag warning',textContent:'The log could not be downloaded ('+e.message+'). Only administrators can download it.'}))}
   finally{b.disabled=false;b.title='Download the scrubbed server log as a text file. Secrets, emails and tokens are removed, and the download is recorded.'}
 };
-load();setInterval(load,10000);
+if(location.hash==='#stops')view('stops');else load();setInterval(()=>{if(document.body.dataset.view==='health')load()},10000);
 })();
