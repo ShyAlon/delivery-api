@@ -29,7 +29,7 @@ cleanup(){
 if [ "${PREVIEW_FUNCTIONS_ONLY:-0}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
 
 . "$(dirname "$0")/lib.sh"; ops_start preview "$0"; REPO=$PWD
-OPS_NOTE="Nothing was changed on the server or in the database."
+OPS_NOTE="Nothing was started and the database was not touched. A built image may remain on the server unless the output says it was removed."
 for t in docker ssh curl git shasum tar; do command -v $t >/dev/null 2>&1 || abort "TOOL-$t" "$t is missing" "" "install $t (Docker: open Docker Desktop once, or brew install --cask docker)"; done
 docker info >/dev/null 2>&1 || abort NO-DOCKER "Docker is installed but not running" "" "open -a Docker   (wait until it says running)"
 case "$PORT" in ''|*[!0-9]*) abort PORT "PREVIEW_PORT is not a number" "" "unset PREVIEW_PORT";; esac
@@ -67,10 +67,19 @@ trap cleanup EXIT INT TERM
 umask 077; WORK=$(mktemp -d); chmod 700 "$WORK"; mkdir "$WORK/data"
 
 # 2. the image on the server, then here
-if ! "${SSHB[@]}" "sudo -n docker image inspect $IMAGE >/dev/null 2>&1"; then
-  echo "== the server does not have $IMAGE yet: building it there (build-full-image.sh asks its own yes)"
-  bash scripts/docker/build-full-image.sh || abort BUILD "the server build did not finish" "" "send me this output"
+HAVE=1; "${SSHB[@]}" "sudo -n docker image inspect $IMAGE >/dev/null 2>&1" || HAVE=0
+if [ "$HAVE" = 1 ]; then
+  echo "== the server already has $IMAGE: checking that it passes the smoke check before it is reused"
+  SRC=0; REQUI_SERVER="$HOST" bash scripts/docker/smoke-image.sh "$IMAGE" || SRC=$?
+  case "$SRC" in 0) ;; 1) HAVE=0; echo "== that image failed and its tag was removed (that exact tag only); building it again";; *) abort IMAGE-SMOKE "the existing image failed the smoke check and could not be removed" "" "send me the output above";; esac
 fi
+if [ "$HAVE" = 0 ]; then
+  echo "== building $IMAGE on the server (build-full-image.sh asks its own yes; it publishes the tag only after the smoke check passes)"
+  ( umask 022; bash scripts/docker/build-full-image.sh ) || abort BUILD "the server build did not finish" "Nothing was started on this Mac. The build script removes a candidate image that fails its smoke check." "send me this output"
+fi
+SRVID=$("${SSHB[@]}" "sudo -n docker image inspect --format '{{.Id}}' $IMAGE" 2>/dev/null || true)
+[ -n "$SRVID" ] || abort IMAGE-ID "cannot read the image id on the server" "" "send me this output"
+if [ "$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)" != "$SRVID" ]; then docker rmi "$IMAGE" >/dev/null 2>&1 || true; fi
 if docker image inspect "$IMAGE" >/dev/null 2>&1; then echo "== image already on this Mac"; else
   echo "== copying the image from the server (a few GB the first time)"
   "${SSHB[@]}" "sudo -n docker save $IMAGE" | docker load >/dev/null || abort IMAGE-COPY "could not copy $IMAGE from the server" "" "docker image ls requi-full   (send me this output)"
@@ -127,3 +136,4 @@ echo "PREVIEW READY: http://127.0.0.1:$PORT   (execution CLOSED, no model key, r
 echo "Warning: Grant Credits, Admin Stop, delete task and stop run change REAL data. File changes stay in the local copy."
 echo "Press Ctrl-C here when you are done."
 docker logs -f "$NAME" 2>&1 | scrub || true
+
