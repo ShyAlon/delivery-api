@@ -17,7 +17,9 @@ button:disabled{opacity:.5;cursor:not-allowed}
 select,input[type=search]{border:1px solid var(--line);border-radius:6px;padding:4px 8px;background:#fff}
 #tabs{display:flex;gap:4px}
 .tab{background:#fff;color:var(--accent)}.tab.active{background:var(--accent);color:#fff}
-body[data-view=health] #stops-view,body[data-view=stops] .hview{display:none !important}
+body[data-view=health] #stops-view,body[data-view=health] #spend-view,body[data-view=stops] .hview,body[data-view=spend] .hview,body[data-view=stops] #spend-view,body[data-view=spend] #stops-view{display:none !important}
+#spend-view{flex:1;min-height:0}
+#spend-cards{display:flex;gap:10px;flex-wrap:wrap;padding:10px 12px 0}
 #stops-view{flex:1;min-height:0}
 #flags{display:flex;flex-direction:column;gap:4px}
 .flag{padding:6px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card)}
@@ -44,7 +46,7 @@ td.num,th.num{text-align:right}
 <body data-view="health"><div id="frame">
 <header>
  <h1 title="Operator view of this server. Only administrators can load the numbers.">Operator</h1>
- <nav id="tabs"><button class="tab active" data-view="health" title="Uptime, runs, CPU, memory and who is signed in.">Server Health</button><button class="tab" data-view="stops" title="Every time a run was stopped, by whom, and whose run it was.">Admin Stops</button></nav>
+ <nav id="tabs"><button class="tab active" data-view="health" title="Uptime, runs, CPU, memory and who is signed in.">Server Health</button><button class="tab" data-view="stops" title="Every time a run was stopped, by whom, and whose run it was.">Admin Stops</button><button class="tab" data-view="spend" title="Credits left, credits used and vendor expense for every account. Operators only.">Credits And Spend</button></nav>
  <span class="asof" id="asof" title="When these numbers were read. They refresh by themselves every 10 seconds."></span>
  <span class="grow"></span>
  <label class="hview" for="mins" title="How far back the downloaded log goes. The server keeps at most the newest 2000 lines.">Log Window</label>
@@ -60,6 +62,7 @@ td.num,th.num{text-align:right}
  <section class="panel" id="p-recent"></section>
 </div>
 <section class="panel" id="stops-view"></section>
+<section class="panel" id="spend-view"></section>
 <div id="note" class="hview"></div>
 </div>
 <script src="/ops/ops.js"></script>

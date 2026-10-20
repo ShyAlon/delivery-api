@@ -83,7 +83,33 @@ async function loadStops(){
     stopsBox.hidden=true;stops.set((await r.json()).stops);
   }catch(e){stopsBox.hidden=false;stopsBox.textContent='Could not read the stop list ('+e.message+'). Press Refresh to try again.';stops.set([])}
 }
-function view(name){document.body.dataset.view=name;history.replaceState(null,'',name==='stops'?'#stops':location.pathname);document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.view===name));if(name==='stops')loadStops();else load()}
+const spend=makeTable($('#spend-view'),'Credits And Spend','Every account: credits left, credits used and what the model provider charged us. Operators only.',[
+  {key:'account',label:'Account',tip:'The account holder.'},
+  {key:'balance_credits',label:'Credit Balance',tip:'Credits the account has left.',num:true,fmt:v=>num(v)},
+  {key:'credits_24h',label:'Credits Used (24h)',tip:'Credits spent in the last 24 hours, including compute. History starts when the credit history was switched on.',num:true,fmt:v=>num(v)},
+  {key:'credits_7d',label:'Credits Used (7d)',tip:'Credits spent in the last 7 days.',num:true,fmt:v=>num(v)},
+  {key:'expense_24h_usd',label:'Vendor Expense (24h)',tip:'What the model provider charged us for this account in the last 24 hours, in US dollars.',num:true,fmt:v=>'$'+Number(v).toFixed(2)},
+  {key:'expense_7d_usd',label:'Vendor Expense (7d)',tip:'Provider charges for this account in the last 7 days, in US dollars.',num:true,fmt:v=>'$'+Number(v).toFixed(2)}],
+  'No accounts yet.');
+const spendBox=el('div',{className:'empty',hidden:true});
+const spendCards=el('div',{id:'spend-cards'});
+$('#spend-view').prepend(spendCards);$('#spend-view').append(spendBox);
+async function loadSpend(){
+  const fail=m=>{spendBox.hidden=false;spendBox.textContent=m;spend.set([]);spendCards.replaceChildren()};
+  try{
+    const r=await fetch('/api/admin/operations/spend',{credentials:'same-origin'});
+    if(r.status===401||r.status===403)return fail('This page is for administrators.');
+    if(r.status===503){const b=await r.json().catch(()=>({}));const d=b.detail||{};return fail((d.error||'The credits page is not available.')+' '+(d.next||''))}
+    if(!r.ok)throw new Error(String(r.status));
+    const d=await r.json(),sum=k=>d.accounts.reduce((s,x)=>s+x[k],0);
+    spendBox.hidden=true;spend.set(d.accounts);
+    spendCards.replaceChildren(card('Accounts',String(d.accounts.length),d.truncated?'First 500 shown':'','How many accounts have credits.'),
+      card('Credits Used (24h)',num(sum('credits_24h')),'All accounts','Credits spent by everyone in the last 24 hours.'),
+      card('Vendor Expense (24h)','$'+sum('expense_24h_usd').toFixed(2),'All accounts','Model provider charges in the last 24 hours.'),
+      card('Vendor Expense (7d)','$'+sum('expense_7d_usd').toFixed(2),'All accounts','Model provider charges in the last 7 days.'));
+  }catch(e){fail('Could not read the credits page ('+e.message+'). Press Refresh to try again.')}
+}
+function view(name){document.body.dataset.view=name;history.replaceState(null,'',name==='stops'||name==='spend'?'#'+name:location.pathname);document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.view===name));if(name==='stops')loadStops();else if(name==='spend')loadSpend();else load()}
 document.querySelectorAll('.tab').forEach(t=>{t.onclick=()=>view(t.dataset.view)});
 
 function card(k,v,s,tip){return el('div',{className:'card',title:tip},el('div',{className:'k',textContent:k}),el('div',{className:'v',textContent:v}),el('div',{className:'s',textContent:s||''}))}
@@ -114,7 +140,7 @@ async function load(){
 }
 function fail(msg){$('#flags').replaceChildren(el('div',{className:'flag warning',textContent:msg}));$('#cards').replaceChildren();sessions.set([]);running.set([]);recent.set([])}
 
-$('#refresh').onclick=()=>document.body.dataset.view==='stops'?loadStops():load();
+$('#refresh').onclick=()=>{const v=document.body.dataset.view;v==='stops'?loadStops():v==='spend'?loadSpend():load()};
 $('#dl').onclick=async()=>{
   const b=$('#dl');b.disabled=true;b.title='Preparing the file. This takes a moment.';
   try{
@@ -125,5 +151,5 @@ $('#dl').onclick=async()=>{
   }catch(e){$('#flags').prepend(el('div',{className:'flag warning',textContent:'The log could not be downloaded ('+e.message+'). Only administrators can download it.'}))}
   finally{b.disabled=false;b.title='Download the scrubbed server log as a text file. Secrets, emails and tokens are removed, and the download is recorded.'}
 };
-if(location.hash==='#stops')view('stops');else load();setInterval(()=>{if(document.body.dataset.view==='health')load()},10000);
+if(location.hash==='#stops'||location.hash==='#spend')view(location.hash.slice(1));else load();setInterval(()=>{if(document.body.dataset.view==='health')load()},10000);
 })();
