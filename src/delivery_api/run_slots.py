@@ -103,7 +103,7 @@ async def run_limited(store,orchestrator,task_id,work,*,tick_s=0.25):
         elif info.get("stop_by"):
             who="You stopped this run." if info["stop_by"]=="owner" else "An operator stopped this run."
             store.add_event(task_id,"progress",who+" You can start it again.",phase_key=(store.task(task_id) or {}).get("active_phase"))
-            try:store.audit(info.get("stop_label") or info["stop_by"],"run.stopped",task_id,{"by":info["stop_by"],"peak_rss_mb":info.get("peak_rss_mb")})
+            try:store.audit(info.get("stop_label") or info["stop_by"],"run.stopped",task_id,{"by":info["stop_by"],"peak_rss_mb":info.get("peak_rss_mb"),"phase":info.get("phase")})
             except Exception as exc:activity("run.audit_failed","The stop was done but its audit entry could not be written",task_id=task_id,error=type(exc).__name__)
         slots.release()
 

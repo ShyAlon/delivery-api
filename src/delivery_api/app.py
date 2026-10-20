@@ -2766,6 +2766,26 @@ def admin_operations_log_download(minutes:int=Query(60,ge=1,le=240),a:auth.Actor
     return Response(content=body,media_type='text/plain; charset=utf-8',headers={'Content-Disposition':'attachment; filename="%s"'%name,'Cache-Control':'no-store'})
 
 
+_stop_readers={}
+
+@app.get('/api/admin/operations/stops')
+def admin_operations_stops(a:auth.Actor=Depends(auth.require_admin)):
+    # Operator only: every run stop, read through the read-only operator database role. The database registry decides, not this check alone.
+    if not config.CLOUD_TENANTS:raise HTTPException(404,'Not available on this server.')
+    from .operator_authorization import OperatorPrincipal
+    from .operator_reads import OperatorReadStore
+    try:
+        reader=_stop_readers.get(a.id)
+        if reader is None:
+            reader=_stop_readers[a.id]=OperatorReadStore(config.DATABASE_URL,OperatorPrincipal(a.id,'ops-v1',frozenset({'logs.read','sessions.read'})))
+        return reader.stops(store)
+    except Exception as exc:
+        _stop_readers.pop(a.id,None)
+        activity('ops.stops_unavailable','Operator stop list could not be read',actor=a.label,error=type(exc).__name__)
+        raise HTTPException(503,{'error':'The stop list is not switched on yet.','cause':'The database has not been set up for operator reads.',
+            'next':'Run supabase/migrations/20261020130000_operator_stop_audit.sql in the Supabase SQL editor, then reload.'})
+
+
 @app.get('/api/admin/operations/run-metrics')
 def admin_operations_run_metrics(task_id:str='',a:auth.Actor=Depends(auth.require_admin)):
     # Operator only: CPU and memory samples. With task_id, the raw samples and summaries of that task; without, the recent-runs overview shown in Debug.

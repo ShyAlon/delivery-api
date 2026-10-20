@@ -15,6 +15,10 @@ button{border:1px solid var(--accent);background:var(--accent);color:#fff;border
 button.secondary{background:#fff;color:var(--accent)}
 button:disabled{opacity:.5;cursor:not-allowed}
 select,input[type=search]{border:1px solid var(--line);border-radius:6px;padding:4px 8px;background:#fff}
+#tabs{display:flex;gap:4px}
+.tab{background:#fff;color:var(--accent)}.tab.active{background:var(--accent);color:#fff}
+body[data-view=health] #stops-view,body[data-view=stops] .hview{display:none !important}
+#stops-view{flex:1;min-height:0}
 #flags{display:flex;flex-direction:column;gap:4px}
 .flag{padding:6px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card)}
 .flag.ok{border-color:var(--ok);color:var(--ok)}.flag.warning{border-color:var(--warn);color:var(--warn);background:#fff7ed}.flag.info{border-color:var(--info);color:var(--info)}
@@ -37,24 +41,26 @@ td.num,th.num{text-align:right}
 #note{color:var(--mute);font-size:12px}
 @media(max-width:900px){#panels{grid-template-columns:1fr}}
 </style></head>
-<body><div id="frame">
+<body data-view="health"><div id="frame">
 <header>
- <h1 title="Operator view of this server. Only administrators can load the numbers.">Server Health</h1>
+ <h1 title="Operator view of this server. Only administrators can load the numbers.">Operator</h1>
+ <nav id="tabs"><button class="tab active" data-view="health" title="Uptime, runs, CPU, memory and who is signed in.">Server Health</button><button class="tab" data-view="stops" title="Every time a run was stopped, by whom, and whose run it was.">Admin Stops</button></nav>
  <span class="asof" id="asof" title="When these numbers were read. They refresh by themselves every 10 seconds."></span>
  <span class="grow"></span>
- <label for="mins" title="How far back the downloaded log goes. The server keeps at most the newest 2000 lines.">Log Window</label>
- <select id="mins" title="How far back the downloaded log goes. The server keeps at most the newest 2000 lines.">
+ <label class="hview" for="mins" title="How far back the downloaded log goes. The server keeps at most the newest 2000 lines.">Log Window</label>
+ <select id="mins" class="hview" title="How far back the downloaded log goes. The server keeps at most the newest 2000 lines.">
   <option value="15">Last 15 Minutes</option><option value="60" selected>Last Hour</option><option value="240">Last 4 Hours</option></select>
- <button id="dl" title="Download the scrubbed server log as a text file. Secrets, emails and tokens are removed, and the download is recorded.">Download Logs</button>
+ <button id="dl" class="hview" title="Download the scrubbed server log as a text file. Secrets, emails and tokens are removed, and the download is recorded.">Download Logs</button>
  <button id="refresh" class="secondary" title="Read the numbers again now.">Refresh</button>
 </header>
-<div id="flags"></div>
-<div id="cards"></div>
-<div id="panels">
+<div id="flags" class="hview"></div>
+<div id="cards" class="hview"></div>
+<div id="panels" class="hview">
  <div class="col"><section class="panel" id="p-sessions"></section><section class="panel" id="p-running"></section></div>
  <section class="panel" id="p-recent"></section>
 </div>
-<div id="note"></div>
+<section class="panel" id="stops-view"></section>
+<div id="note" class="hview"></div>
 </div>
 <script src="/ops/ops.js"></script>
 </body></html>

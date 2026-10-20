@@ -39,6 +39,25 @@ class OperatorReadStore:
                 'next_before':{'created_at':page[-1]['created_at'],'session_id':page[-1]['session_id']} if truncated else None,
                 'mutations_available':False}
 
+    def stops(self,owner_store,*,limit=200):
+        """Run stops, newest first: when, who stopped it, whose run, which phase, peak memory. No task ids or titles."""
+        import json
+        from datetime import datetime,timezone
+        if type(limit) is not int or not 1<=limit<=500:raise ValueError('bounded operator page required')
+        with self._read(owner_store,'logs.read') as (connection,authority):
+            rows=connection.execute("SELECT a.ts,a.actor,a.detail,u.label AS owner_label FROM public.audit_log a LEFT JOIN public.users u ON u.user_id=a.owner_id "
+                "WHERE a.action='run.stopped' ORDER BY a.id DESC LIMIT %s",(limit+1,)).fetchall()
+            out=[]
+            for row in rows[:limit]:
+                try:detail=json.loads(row['detail'] or '{}')
+                except ValueError:detail={}
+                by=detail.get('by')
+                out.append({'when':datetime.fromtimestamp(row['ts'],timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
+                    'stopped_by':'Operator' if by=='operator' else 'Owner' if by=='owner' else 'Unknown',
+                    'operator':row['actor'] if by=='operator' else None,'owner':row['owner_label'] or 'Unknown User',
+                    'phase':detail.get('phase'),'peak_memory_mb':detail.get('peak_rss_mb')})
+            return {'scope':'reviewed_cross_user_operator_read','stops':out,'truncated':len(rows)>limit,'mutations_available':False}
+
     def credits(self,owner_store,*,limit=100,after_owner=None):
         """Fixed-point account page, no inferred unit conversion or adjustments."""
         from uuid import UUID
