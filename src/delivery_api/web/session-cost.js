@@ -1,5 +1,6 @@
 import {api,noteActivity} from './client-core.js';
 import {balanceLabel,balanceTitle} from './account-balance.js';
+import {costTitle} from './cost-breakdown.js';
 
 /* The customer's own prepaid credit balance, next to the session cost. Hidden when the server has no prepaid accounts. */
 function startBalance(cost){
@@ -35,6 +36,7 @@ export function startSessionCostHeader(){
   if(!Number.isFinite(value.price)||!Number.isFinite(value.price_usd))throw new Error('Cost unavailable');
   host.textContent=`${value.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} credits · $${value.price_usd.toFixed(2)}`;
   host.dataset.state='current';hasValue=true;host.title='Rolling Session Cost';
+  if(task){try{const parts=await api(`${route}-phases`);if(!stopped&&stillHere())host.title=costTitle(value.price,parts.phases)}catch{/* the total stands; the breakdown is optional */}}
  }catch(error){if(stopped)return;
   if(error&&error.status===404){empty();return}
   host.dataset.state=hasValue?'stale':'unavailable';host.title='Cost Could Not Be Refreshed';
