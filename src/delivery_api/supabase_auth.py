@@ -27,6 +27,10 @@ class SupabaseIdentityVerifier:
 
     def verify_with_operator(self, token: str):
         """The verified scope, and whether the signed token is the operator's confirmed email. Same checks as verify; the email is read only from the signed claims."""
+        return self.verify_with_email(token)[:2]
+
+    def verify_with_email(self, token: str):
+        """The verified scope, whether the token is the operator's, and the signed email (None when the token has none). Shown only to that person and on the operator page."""
         import jwt
         from . import config
         if not token or len(token) > 16384:
@@ -45,6 +49,6 @@ class SupabaseIdentityVerifier:
             email = claims.get('email')
             verified = (claims.get('user_metadata') or {}).get('email_verified') is not False
             operator = isinstance(email, str) and verified and email.strip().lower() == config.OPERATOR_EMAIL
-            return TenantScope(claims['sub'],claims['session_id']), operator
+            return TenantScope(claims['sub'],claims['session_id']), operator, (email.strip() if isinstance(email, str) and email.strip() else None)
         except (jwt.PyJWTError, ValueError, TypeError) as exc:
             raise TenantAccessDenied('invalid or expired access token') from exc

@@ -106,6 +106,15 @@ def health(now=None):
     return h
 
 
+def log_zip(minutes=60,now=None):
+    """The same scrubbed log, as a zip with one text file in it: (zip file name, zip bytes, line count). The text is not changed or trimmed."""
+    import io,zipfile
+    name,body=log_download(minutes,now)
+    buffer=io.BytesIO()
+    with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as archive:archive.writestr(name,body.encode('utf-8'))
+    return name[:-4]+'.zip',buffer.getvalue(),body.count('\n')
+
+
 def log_download(minutes=60,now=None):
     """The server log as a plain-text file body, and its file name. Stricter than the Debug view: see server_log_buffer.export."""
     from . import server_log_buffer

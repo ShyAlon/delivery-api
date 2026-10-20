@@ -1,47 +1,10 @@
+import {el,makeTable} from '/assets/ops-table.js';
 (function(){
 'use strict';
 const $=s=>document.querySelector(s);
-const el=(tag,props,...kids)=>{const n=document.createElement(tag);Object.assign(n,props||{});kids.forEach(k=>n.append(k));return n};
 const dur=s=>{s=Math.max(0,Math.floor(s));const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return d?`${d}d ${h}h ${m}m`:h?`${h}h ${m}m`:m?`${m}m ${s%60}s`:`${s}s`};
+const localTime=text=>{const t=new Date(String(text||'').replace(' UTC','Z').replace(' ','T'));return isNaN(t)?String(text||''):t.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'long'})};
 const num=(v,u)=>v==null?'Not Available':(typeof v==='number'?(Math.round(v*10)/10).toLocaleString():v)+(u||'');
-
-// A table with a filter box, sortable headers, paging, and a scrolling body only. cols: [{key,label,tip,num,fmt}]
-function makeTable(root,title,tip,cols,emptyText){
-  const st={rows:[],sort:null,dir:1,page:0,size:10,q:''};
-  const h2=el('h2',{textContent:title,title:tip});
-  const q=el('input',{type:'search',placeholder:'Filter',title:'Show only rows that contain this text in any column.'});
-  const size=el('select',{title:'How many rows to show per page.'});
-  [10,25,50].forEach(n=>size.append(el('option',{value:n,textContent:n+' Per Page'})));
-  const tools=el('div',{className:'tools'},q,size);
-  const scroll=el('div',{className:'scroll'});
-  const prev=el('button',{className:'secondary',textContent:'Previous'}),next=el('button',{className:'secondary',textContent:'Next'});
-  const info=el('span',{className:'grow'});
-  const pager=el('div',{className:'pager'},info,prev,next);
-  root.replaceChildren(h2,tools,scroll,pager);
-  const text=(r,c)=>{const v=r[c.key];return v==null?(c.empty||'Not Available'):String(c.fmt?c.fmt(v,r):v)};
-  function draw(){
-    const needle=st.q.toLowerCase();
-    let rows=st.rows.filter(r=>!needle||cols.some(c=>text(r,c).toLowerCase().includes(needle)));
-    if(st.sort){const c=cols.find(c=>c.key===st.sort);rows=rows.slice().sort((a,b)=>{const x=a[c.key],y=b[c.key];if(x==null)return 1;if(y==null)return -1;return (typeof x==='number'&&typeof y==='number'?x-y:String(x).localeCompare(String(y)))*st.dir})}
-    const pages=Math.max(1,Math.ceil(rows.length/st.size));st.page=Math.min(st.page,pages-1);
-    const view=rows.slice(st.page*st.size,(st.page+1)*st.size);
-    const tr=el('tr');
-    cols.forEach(c=>{const arrow=st.sort===c.key?(st.dir>0?' \u25B2':' \u25BC'):'';
-      const th=el('th',{textContent:c.label+arrow,title:c.tip+' Click to sort.',className:c.num?'num':''});
-      th.onclick=()=>{if(st.sort===c.key)st.dir=-st.dir;else{st.sort=c.key;st.dir=1}draw()};tr.append(th)});
-    const body=el('tbody');
-    view.forEach(r=>body.append(el('tr',{},...cols.map(c=>el('td',{textContent:text(r,c),className:c.num?'num':''})))));
-    const table=el('table',{},el('thead',{},tr),body);
-    scroll.replaceChildren(rows.length?table:el('div',{className:'empty',textContent:st.rows.length?'No rows match the filter.':emptyText}));
-    if(rows.length){scroll.replaceChildren(table)}
-    info.textContent=rows.length?`Showing ${st.page*st.size+1} to ${st.page*st.size+view.length} of ${rows.length}`:'No rows';
-    prev.disabled=st.page<=0;prev.title=prev.disabled?'You are on the first page.':'Go to the previous page.';
-    next.disabled=st.page>=pages-1;next.title=next.disabled?'You are on the last page.':'Go to the next page.';
-  }
-  q.oninput=()=>{st.q=q.value;st.page=0;draw()};size.onchange=()=>{st.size=+size.value;st.page=0;draw()};
-  prev.onclick=()=>{st.page--;draw()};next.onclick=()=>{st.page++;draw()};
-  return {set(rows){st.rows=rows;draw()}};
-}
 
 const sessions=makeTable($('#p-sessions'),'Signed-In Users','People who made a request in the last 15 minutes. Visible to administrators only.',[
   {key:'user',label:'User',tip:'The email the person signed in with.'},
@@ -174,13 +137,16 @@ async function loadGrants(){
   }catch(e){gOut.textContent='Could not read the grants ('+e.message+'). Press Refresh to try again.';grants.set([])}
 }
 gSync();
-function view(name){document.body.dataset.view=name;history.replaceState(null,'',name==='stops'||name==='spend'||name==='grant'?'#'+name:location.pathname);document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.view===name));if(name==='stops')loadStops();else if(name==='spend')loadSpend();else if(name==='grant')loadGrants();else load()}
-document.querySelectorAll('.tab').forEach(t=>{t.onclick=()=>view(t.dataset.view)});
+const VIEWS=['health','stops','spend','grant'];
+const TITLES={health:'Server Health',stops:'Admin Stops',spend:'Credits And Spend',grant:'Grant Credits'};
+function view(name){document.body.dataset.view=name;$('#page-title').textContent=TITLES[name];document.title='Requi.re '+TITLES[name];if(name==='stops')loadStops();else if(name==='spend')loadSpend();else if(name==='grant')loadGrants();else load()}
+const hashView=()=>{const n=location.hash.slice(1);return VIEWS.includes(n)?n:'health'};
+window.addEventListener('hashchange',()=>view(hashView()));
 
 function card(k,v,s,tip){return el('div',{className:'card',title:tip},el('div',{className:'k',textContent:k}),el('div',{className:'v',textContent:v}),el('div',{className:'s',textContent:s||''}))}
 
 function show(h){
-  $('#asof').textContent='As of '+h.as_of;
+  $('#asof').textContent='As of '+localTime(h.as_of);
   $('#flags').replaceChildren(...h.flags.map(f=>el('div',{className:'flag '+f.level,textContent:f.text})));
   const m=h.memory,c=h.cpu,cap=h.capacity;
   $('#cards').replaceChildren(
@@ -211,10 +177,10 @@ $('#dl').onclick=async()=>{
   try{
     const r=await fetch('/api/admin/operations/log-download?minutes='+$('#mins').value,{credentials:'same-origin'});
     if(!r.ok)throw new Error(String(r.status));
-    const name=(/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition')||'')||[])[1]||'requi-server-log.txt';
+    const name=(/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition')||'')||[])[1]||'requi-server-log.zip';
     const url=URL.createObjectURL(await r.blob());const a=el('a',{href:url,download:name});document.body.append(a);a.click();a.remove();URL.revokeObjectURL(url);
   }catch(e){$('#flags').prepend(el('div',{className:'flag warning',textContent:'The log could not be downloaded ('+e.message+'). Only administrators can download it.'}))}
-  finally{b.disabled=false;b.title='Download the scrubbed server log as a text file. Secrets, emails and tokens are removed, and the download is recorded.'}
+  finally{b.disabled=false;b.title='Download the scrubbed server log as a zip file. Secrets, emails and tokens are removed, and the download is recorded.'}
 };
-if(location.hash==='#stops'||location.hash==='#spend'||location.hash==='#grant')view(location.hash.slice(1));else load();setInterval(()=>{if(document.body.dataset.view==='health')load()},10000);
+view(hashView());setInterval(()=>{if(document.body.dataset.view==='health')load()},10000);
 })();

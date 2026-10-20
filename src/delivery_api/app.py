@@ -401,6 +401,8 @@ async def lifespan(application:FastAPI):
         try:cloud_runtime.install(store,os.environ,_set_engine_client,watch_vendor=True)
         except Exception as exc:print('Cloud execution: could not start the in-process engine: '+f'{type(exc).__name__}: {str(exc)[:300]}',file=sys.stderr)
     cloud_execution.log_status()
+    from . import run_metrics
+    run_metrics.start_idle_sampler()     # CPU and memory are read on a timer, so the operator page has numbers when no run is active
     from .observability import LOG_PATH,stage_log_paths
     print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
@@ -414,6 +416,7 @@ async def lifespan(application:FastAPI):
         activity("server.shutdown.signal","Server shutdown received",streams=stream_count,engines=len(runner.processes))
         for event in tuple(_stream_shutdown_events):event.set()
         await runner.shutdown();await jobs.stop()
+        run_metrics.stop_idle_sampler()
         from . import cloud_runtime
         cloud_runtime.uninstall()
         activity("server.shutdown.complete","Server shutdown complete",streams_closed=stream_count)
@@ -508,7 +511,7 @@ def auth_status(request: Request):
     a = auth.actor(request)
     mode="supabase" if config.CLOUD_TENANTS else "basic" if config.BASIC_AUTH_ENABLED else ("oauth" if auth.enabled() else "local")
     session=request.app.state.store.session(request.cookies[config.SESSION_COOKIE]) if not config.CLOUD_TENANTS and auth.enabled() and request.cookies.get(config.SESSION_COOKIE) and a.id!="anonymous" else None
-    result={"mode":mode,"authenticated":a.id not in {"anonymous"},"actor":a.label,"admin":a.admin,
+    result={"mode":mode,"authenticated":a.id not in {"anonymous"},"actor":a.email or a.label,"admin":a.admin,
             "providers":[p for p,ident in (("google",config.GOOGLE_CLIENT_ID),("github",config.GITHUB_CLIENT_ID)) if ident],"workspace":"private" if config.CLOUD_TENANTS else "shared"}
     if config.CLOUD_TENANTS and a.id!='anonymous':
         from .supabase_sessions import ACCESS_COOKIE
@@ -2758,12 +2761,12 @@ def admin_operations_health(a:auth.Actor=Depends(auth.require_admin)):
 
 @app.get('/api/admin/operations/log-download')
 def admin_operations_log_download(minutes:int=Query(60,ge=1,le=240),a:auth.Actor=Depends(auth.require_admin)):
-    # Operator only: the scrubbed server log as a text file. Each download is recorded in the activity log with who took it.
+    # Operator only: the scrubbed server log as a zip file holding one text file. Each download is recorded in the activity log with who took it.
     from . import ops_health
     from fastapi.responses import Response
-    name,body=ops_health.log_download(minutes)
-    activity('ops.log_download','Operator downloaded the server log',actor=a.label,minutes=minutes,lines=body.count('\n'))
-    return Response(content=body,media_type='text/plain; charset=utf-8',headers={'Content-Disposition':'attachment; filename="%s"'%name,'Cache-Control':'no-store'})
+    name,data,lines=ops_health.log_zip(minutes)
+    activity('ops.log_download','Operator downloaded the server log',actor=a.label,minutes=minutes,lines=lines)
+    return Response(content=data,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="%s"'%name,'Cache-Control':'no-store'})
 
 
 _stop_readers={}

@@ -92,8 +92,8 @@ def test_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_d
         health=client.get('/api/admin/operations/health')
         assert health.status_code==200 and 'capacity' in health.json()
         download=client.get('/api/admin/operations/log-download?minutes=15')
-        assert download.status_code==200 and download.headers['content-type'].startswith('text/plain')
-        assert 'attachment; filename="requi-server-log-' in download.headers['content-disposition'] and download.headers['cache-control']=='no-store'
+        assert download.status_code==200 and download.headers['content-type']=='application/zip'
+        assert 'attachment; filename="requi-server-log-' in download.headers['content-disposition'] and download.headers['content-disposition'].endswith('.zip"') and download.headers['cache-control']=='no-store'
         assert client.get('/api/admin/operations/log-download?minutes=999').status_code==422
     finally:
         module.app.dependency_overrides.pop(auth.require_admin,None)

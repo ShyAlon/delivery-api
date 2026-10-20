@@ -40,6 +40,7 @@ _db=None
 _db_path=None
 _problem=None
 _last_container=None   # (ts, cpu_seconds) of the previous container reading
+_idle_stop=None;_idle_thread=None
 _last_rollup=0.0
 
 
@@ -154,18 +155,22 @@ class RunSampler:
         return {"ts":now,"rss_mb":group["rss_mb"],"peak_rss_mb":self.peak,"cpu_seconds":group["cpu_seconds"],"cpu_pct":pct,"procs":group["procs"]}
 
 
+_container_lock=threading.Lock()
+
+
 def sample_container(now=None):
-    """Store the container's memory and CPU. Called at the same moments as the run samples."""
+    """Store the container's memory and CPU. Called with every run sample and by the idle timer below."""
     global _last_container
     from . import run_slots
     now=time.time() if now is None else now
     host=run_slots.host_capacity()
     if host.get("mem_total_mb") is None:return None
     used=host["mem_total_mb"]-(host.get("mem_available_mb") or 0)
-    cpu=_container_cpu_seconds();pct=None
-    if cpu is not None and _last_container is not None and now>_last_container[0]:
-        pct=round(max(0.0,(cpu-_last_container[1])/(now-_last_container[0])*100),1)
-    if cpu is not None:_last_container=(now,cpu)
+    with _container_lock:      # the run watchdog and the idle timer both come here; a reading and the one before it must stay in order
+        cpu=_container_cpu_seconds();pct=None
+        if cpu is not None and _last_container is not None and now>_last_container[0]:
+            pct=round(max(0.0,(cpu-_last_container[1])/(now-_last_container[0])*100),1)
+        if cpu is not None:_last_container=(now,cpu)
     try:
         with _lock:
             conn=_open()
@@ -173,6 +178,32 @@ def sample_container(now=None):
     except Exception as exc:
         _failed(exc);return None
     return {"mem_used_mb":used,"mem_limit_mb":host["mem_total_mb"],"cpu_pct":pct}
+
+
+def start_idle_sampler(interval_s=None):
+    """Read the container's CPU and memory every METRICS_IDLE_INTERVAL_S seconds whether or not a run is active. Safe to call twice. Never raises."""
+    global _idle_stop,_idle_thread
+    if _idle_thread is not None and _idle_thread.is_alive():return False
+    every=config.METRICS_IDLE_INTERVAL_S if interval_s is None else interval_s
+    stop=_idle_stop=threading.Event()
+    def loop():
+        global _last_rollup
+        while not stop.is_set():
+            try:
+                sample_container()
+                t=time.time()
+                if t-_last_rollup>=3600:_last_rollup=t;rollup(t)
+            except Exception as exc:_failed(exc)
+            stop.wait(every)
+    _idle_thread=threading.Thread(target=loop,name="container-metrics",daemon=True);_idle_thread.start()
+    return True
+
+
+def stop_idle_sampler():
+    global _idle_thread
+    if _idle_stop is not None:_idle_stop.set()
+    if _idle_thread is not None:_idle_thread.join(timeout=2)
+    _idle_thread=None
 
 
 def rollup(now=None,raw_days=None):

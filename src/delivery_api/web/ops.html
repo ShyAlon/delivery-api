@@ -1,68 +1,60 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Requi.re Operator</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/chrome.css">
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--line:#d9dde3;--ink:#1c2430;--mute:#5d6877;--ok:#1a7f4b;--warn:#b45309;--info:#1d4ed8;--accent:#1f4f8f}
-*{box-sizing:border-box}
-html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--ink);font:14px/1.4 -apple-system,Segoe UI,Roboto,sans-serif}
-#frame{display:flex;flex-direction:column;height:100vh;padding:12px 16px;gap:10px}
-header{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-header h1{font-size:18px;margin:0}
-header .grow{flex:1}
-header .asof{color:var(--mute);font-size:12px}
-button,select,input{font:inherit}
-button{border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:6px;padding:5px 12px;cursor:pointer}
-button.secondary{background:#fff;color:var(--accent)}
-button:disabled{opacity:.5;cursor:not-allowed}
-select,input[type=search]{border:1px solid var(--line);border-radius:6px;padding:4px 8px;background:#fff}
-#tabs{display:flex;gap:4px}
-.tab{background:#fff;color:var(--accent)}.tab.active{background:var(--accent);color:#fff}
+:root{--ok:#16a36a;--warn:#b45309;--info:#1d4ed8}
+.hview{}
 body:not([data-view=stops]) #stops-view,body:not([data-view=spend]) #spend-view,body:not([data-view=grant]) #grant-view,body[data-view=stops] .hview,body[data-view=spend] .hview,body[data-view=grant] .hview{display:none !important}
-#spend-view,#grant-view{flex:1;min-height:0}
+#spend-view,#grant-view,#stops-view{flex:1;min-height:0}
 #grant-form{display:flex;gap:10px;flex-wrap:wrap;align-items:end;padding:10px 12px}
-#grant-form label{display:flex;flex-direction:column;font-size:12px;color:#556}
-#grant-form input{padding:6px 8px;border:1px solid #c8cfd8;border-radius:6px;font:inherit}
+#grant-form label{display:flex;flex-direction:column;font:var(--fs-xs) DM Mono;letter-spacing:.06em;color:var(--muted);gap:4px}
 #grant-preview{padding:0 12px 10px;white-space:pre-line}
 #spend-cards{display:flex;gap:10px;flex-wrap:wrap;padding:10px 12px 0}
-#stops-view{flex:1;min-height:0}
 #flags{display:flex;flex-direction:column;gap:4px}
-.flag{padding:6px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card)}
+.flag{padding:6px 12px;border-radius:12px;border:1px solid var(--line);background:var(--card)}
 .flag.ok{border-color:var(--ok);color:var(--ok)}.flag.warning{border-color:var(--warn);color:var(--warn);background:#fff7ed}.flag.info{border-color:var(--info);color:var(--info)}
 #cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
-.card .k{color:var(--mute);font-size:12px}.card .v{font-size:20px;font-weight:600}.card .s{color:var(--mute);font-size:12px}
-#panels{flex:1;min-height:0;display:grid;grid-template-columns:minmax(260px,400px) minmax(0,1fr);gap:10px}
-.panel{background:var(--card);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;min-height:0;min-width:0}
-.col{display:flex;flex-direction:column;gap:10px;min-height:0;min-width:0}
-.panel h2{font-size:14px;margin:0;padding:8px 10px 0}
-.tools{display:flex;gap:8px;align-items:center;padding:6px 10px}
+.card{padding:8px 12px}
+.card .k{color:var(--muted);font:var(--fs-xs) DM Mono;letter-spacing:.06em}.card .v{font:700 var(--fs-lg) Manrope}.card .s{color:var(--muted);font-size:var(--fs-xs)}
+#panels{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:10px}
+#p-recent{grid-column:1/-1}
+#p-sessions .scroll,#p-running .scroll{max-height:230px}
+.panel{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
+.panel h2{font:700 var(--fs-md) Manrope;margin:0;padding:10px 12px 0}
+.tools{display:flex;gap:8px;align-items:center;padding:8px 12px}
 .scroll{flex:1;min-height:0;overflow:auto;border-top:1px solid var(--line)}
 table{border-collapse:collapse;width:100%}
-th{position:sticky;top:0;background:#eef1f5;text-align:left;padding:6px 8px;cursor:pointer;white-space:nowrap;border-bottom:1px solid var(--line);user-select:none}
-td{padding:5px 8px;border-bottom:1px solid #eef0f3;white-space:nowrap}
+th{position:sticky;top:0;text-align:left;padding:8px 10px;cursor:pointer;white-space:nowrap;border-bottom:1px solid var(--line);user-select:none}
+td{padding:6px 10px;border-bottom:1px solid #eceae2;white-space:nowrap}
 td.num,th.num{text-align:right}
-.pager{display:flex;gap:8px;align-items:center;padding:6px 10px;border-top:1px solid var(--line);color:var(--mute)}
+.pager{display:flex;gap:8px;align-items:center;padding:8px 12px;border-top:1px solid var(--line);color:var(--muted);font-size:var(--fs-sm)}
 .pager .grow{flex:1}
-.empty{padding:14px;color:var(--mute)}
-#note{color:var(--mute);font-size:12px}
-@media(max-width:900px){#panels{grid-template-columns:1fr}}
+@media(max-width:900px){#panels{grid-template-columns:1fr;grid-template-rows:auto}}
 </style></head>
-<body data-view="health"><div id="frame">
-<header>
- <h1 title="Operator view of this server. Only administrators can load the numbers.">Operator</h1>
- <nav id="tabs"><button class="tab active" data-view="health" title="Uptime, runs, CPU, memory and who is signed in.">Server Health</button><button class="tab" data-view="stops" title="Every time a run was stopped, by whom, and whose run it was.">Admin Stops</button><button class="tab" data-view="spend" title="Credits left, credits used and vendor expense for every account. Operators only.">Credits And Spend</button><button class="tab" data-view="grant" title="Give an account free credits. You see what will happen first and confirm by typing yes.">Grant Credits</button></nav>
- <span class="asof" id="asof" title="When these numbers were read. They refresh by themselves every 10 seconds."></span>
+<body class="ops-page" data-view="health"><div class="grain"></div>
+<header><a class="brand" href="/"><span>R</span><div class="brand-name"><span>Requi</span><strong>.re</strong><small>Product definition workspace</small></div></a><nav><a class="nav-link" href="/">Home</a><a class="nav-link" href="/sessions">All sessions</a><a class="nav-link" href="/credits">Add Credits</a><a class="nav-link" href="/about">About</a></nav><div id="identity" class="system"><i></i><span>Checking identity</span><b>ONLINE</b></div></header>
+<div id="frame">
+<div class="ops-toolbar">
+ <h1 id="page-title" title="Operator view of this server. Only administrators can load the numbers.">Operator</h1>
+ <span class="asof" id="asof" title="When these numbers were read, in your time zone. They refresh by themselves every 10 seconds."></span>
  <span class="grow"></span>
  <label class="hview" for="mins" title="How far back the downloaded log goes. The server keeps at most the newest 2000 lines.">Log Window</label>
  <select id="mins" class="hview" title="How far back the downloaded log goes. The server keeps at most the newest 2000 lines.">
   <option value="15">Last 15 Minutes</option><option value="60" selected>Last Hour</option><option value="240">Last 4 Hours</option></select>
- <button id="dl" class="hview" title="Download the scrubbed server log as a text file. Secrets, emails and tokens are removed, and the download is recorded.">Download Logs</button>
- <button id="refresh" class="secondary" title="Read the numbers again now.">Refresh</button>
-</header>
+ <button id="dl" class="hview" title="Download the scrubbed server log as a zip file. Secrets, emails and tokens are removed, and the download is recorded.">Download Logs</button>
+ <button id="refresh" class="secondary" title="Read the numbers again now. They also update by themselves every 10 seconds.">Refresh</button>
+ <span class="refresh-note" title="The Server Health numbers update by themselves.">Updates Every 10 Seconds</span>
+</div>
 <div id="flags" class="hview"></div>
 <div id="cards" class="hview"></div>
 <div id="panels" class="hview">
- <div class="col"><section class="panel" id="p-sessions"></section><section class="panel" id="p-running"></section></div>
+ <section class="panel" id="p-sessions"></section><section class="panel" id="p-running"></section>
  <section class="panel" id="p-recent"></section>
 </div>
 <section class="panel" id="stops-view"></section>
@@ -70,5 +62,8 @@ td.num,th.num{text-align:right}
 <section class="panel" id="grant-view"></section>
 <div id="note" class="hview"></div>
 </div>
-<script src="/ops/ops.js"></script>
+<div id="app" hidden></div><div id="modal" class="modal hidden"></div>
+<script type="module" src="/ops/ops.js"></script>
+<script type="module" src="/assets/chrome.js"></script>
+<script type="module" src="/assets/ops-account.js"></script>
 </body></html>

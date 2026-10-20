@@ -50,3 +50,12 @@ Short rules that came from real failures. Add to this file when something goes w
 ## Cost tooltip
 
 - The session-cost tooltip lists credits per phase (`/api/tasks/<id>/cost-phases`, from the same debit rows as the total). Phase names and credits only: no vendor cost, rate or spend limit. Sessions without a task show the plain tooltip.
+
+## Operator and app pages
+
+- Every table keeps its column headers when it has no rows. The "nothing yet" note goes in the table body, never in place of the table.
+- All pages share one header (logo, navigation, avatar menu) and one footer. The operator pages are navigation items for administrators, not a separate tab row. Operator pages use the app's styling.
+- A browser that opens a page without a valid session is sent to the sign-in page. Only API calls and scripts get the JSON 401. After sign-in only `/ops` and `/credits` come back (a fixed list, never a link taken from the address).
+- The container's CPU and memory are read every 30 seconds whether or not a run is active (`DELIVERY_METRICS_IDLE_INTERVAL_S`). Reading them only while a run is active left the operator page saying "Not Available" on an idle server.
+- Logs download as a zip holding one text file. The text itself is unchanged and still scrubbed.
+- The signed-in person is shown by email (verified token claim). The fixed label "Signed-In User" is only the fallback.
