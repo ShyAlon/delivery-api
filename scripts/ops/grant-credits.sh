@@ -28,6 +28,18 @@ OWN_LIMIT_USD_UNITS=2*10**12   # $2.00 in 1e-12 dollars
 MAX_PER_PERSON=D(100);MAX_TOTAL=D(500)
 def die(code,msg,fix):
     print('\nABORTED [%s]: %s\nNothing was written to the database.\nFix: %s\nThen run: ops grant-credits'%(code,msg,fix));sys.exit(1)
+def fmt(d):
+    s=format(d,'f')
+    return s.rstrip('0').rstrip('.') if '.' in s else s
+def ask(prompt):
+    # This script's own text arrives on stdin, so a question has to read the terminal itself.
+    line=''
+    try:
+        with open('/dev/tty') as tty:
+            sys.stdout.write(prompt);sys.stdout.flush();line=tty.readline()
+    except OSError:line=''
+    if line=='':die('NO-TERMINAL','could not read your answer: this is not running in a terminal window','run ops grant-credits from a normal terminal window, not through a pipe or redirect')
+    return line.strip()
 lines=[l.rstrip('\n') for l in open(os.environ['REQ_INPUT'])]
 own=[l[4:] for l in lines if l.startswith('OWN=')][0].strip().lower()
 try:default=D([l[8:] for l in lines if l.startswith('DEFAULT=')][0].strip())
@@ -94,10 +106,10 @@ tot=D(0)
 for p in plan:
     bal=D(p['acc'][0])/UNITS if p['acc'] else D(0)
     g=p['credits'] or D(0);tot+=g
-    print('%-34s %-10s %-9s %-9s %s'%(p['email'][:34],str(bal.normalize()) if p['acc'] else 'new',('+%s'%g.normalize()) if g else ('already today' if p['already'] else '-'),str((bal+g).normalize()),p['limit_action'] or 'ok as is'))
+    print('%-34s %-10s %-9s %-9s %s'%(p['email'][:34],fmt(bal) if p['acc'] else 'new',('+%s'%fmt(g)) if g else ('already today' if p['already'] else '-'),fmt(bal+g),p['limit_action'] or 'ok as is'))
 for e,why in skipped:print('  skipped %s: %s'%(e,why))
-print('Total credits granted: %s'%tot.normalize())
-if input('\nType yes (English keyboard) to write all of this in one transaction, anything else stops: ').strip()!='yes':
+print('Total credits granted: %s'%fmt(tot))
+if ask('\nType yes (English keyboard) to write all of this in one transaction, anything else stops: ')!='yes':
     conn.rollback();die('DECLINED','you did not type yes','nothing needed')
 now=time.time()
 try:
@@ -123,7 +135,7 @@ print('\nWritten. Balances now:')
 for p in plan:
     cur.execute('SELECT balance_units FROM credit_accounts WHERE owner_id=%s',(p['oid'],));b=cur.fetchone()
     cur.execute('SELECT concurrency_max,expense_limit FROM admission_limits WHERE owner_id=%s',(p['oid'],));l=cur.fetchone()
-    print('  %-34s %s credits, admission row %s'%(p['email'][:34],(D(b[0])/UNITS).normalize() if b else '-','yes (3 concurrent%s)'%(', $2.00/24h' if l and l[1]==OWN_LIMIT_USD_UNITS else '') if l else 'MISSING'))
+    print('  %-34s %s credits, admission row %s'%(p['email'][:34],fmt(D(b[0])/UNITS) if b else '-','yes (3 concurrent%s)'%(', $2.00/24h' if l and l[1]==OWN_LIMIT_USD_UNITS else '') if l else 'MISSING'))
 own_p=[p for p in plan if p['own']]
 if own_p:
     cur.execute('SELECT balance_units FROM credit_accounts WHERE owner_id=%s',(own_p[0]['oid'],));ob=cur.fetchone()
