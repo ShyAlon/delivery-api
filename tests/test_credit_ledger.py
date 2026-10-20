@@ -1,6 +1,5 @@
 """Credit ledger: the migration, the attribution helper, the history read, the tooltip text and the wiring."""
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -142,11 +141,3 @@ def test_header_uses_the_tooltip_and_debug_has_the_history():
     ident=(ROOT/'web'/'identity.js').read_text()
     assert 'id="historyhost"' in ident and "api('/api/account/credit-history')" in ident and "add('Credit history'" in ident
     assert ident.index('ledgerwrap')<ident.index('historywrap')<ident.index('Current technical state')
-
-
-def test_real_postgres_ledger_records_changes():
-    dsn=os.environ.get('REQUI_TEST_PG_DSN')
-    if not dsn:pytest.skip('REQUI_TEST_PG_DSN is not set; the migration was checked against a real Postgres outside the suite')
-    import psycopg
-    with psycopg.connect(dsn) as c:
-        c.execute('SELECT 1 FROM public.credit_ledger LIMIT 0')

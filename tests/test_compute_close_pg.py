@@ -24,6 +24,7 @@ def test_release_closes_an_unresolved_segment_with_no_provider_call_once(account
     with tenant_context(A):
         s.begin_retail_compute(job,job,'intent',r)
         s.finish_retail_compute(job,None)
+        s.finish_worker(job)   # a segment is only releasable once its job has stopped running (compute_segments.releasable)
         assert s.retail_compute_status(tid)=={'unresolved':1}
         assert s.own_ledger(1)['segments'][0]['releasable'] is True
         assert s.release_own_compute(False)['released']==0 and s.retail_compute_status(tid)=={'unresolved':1}

@@ -21,3 +21,22 @@ os.environ["DELIVERY_DATABASE_URL"] = f"sqlite:///{_scratch}/delivery.db"
 import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts/item6'))
+
+# A throwaway real Postgres for the database tests (see tests/pg_harness.py). Off with DELIVERY_TEST_NO_POSTGRES=1.
+import pg_harness
+pg_harness.start()
+
+# Files that use the `account` or `ledger` fixtures get them from here, not only from the files that define them.
+from test_attempt_ledger import ledger  # noqa: E402,F401
+
+
+import pytest
+
+
+@pytest.fixture
+def store():
+    """The app-role store on the test database. Shared here because several files use the `ledger` fixture, which needs it."""
+    dsn=os.environ.get('DELIVERY_TEST_POSTGRES_DSN')
+    if not dsn:pytest.skip('requires isolated migrated Postgres')
+    from delivery_api.postgres_store import PostgresStore
+    return PostgresStore(dsn.replace('user=sandbox','user=delivery_app'))
