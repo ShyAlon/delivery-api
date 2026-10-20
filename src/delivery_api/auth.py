@@ -165,7 +165,7 @@ def csrf_guard(request: Request) -> None:
     if (request.cookies.get(config.SESSION_COOKIE) or request.cookies.get('requi_access') or request.cookies.get('requi_refresh')) and not origin:
         raise HTTPException(403, "Authenticated state changes require a same-origin request.")
     if origin and origin.rstrip("/") != (config.PUBLIC_ORIGIN or str(request.base_url)).rstrip("/"):
-        raise HTTPException(403, "Cross-site request rejected.")
+        raise HTTPException(403, {"error": "Cross-site request rejected.", "cause": "This page was opened from a different address than the server expects.", "next": "Open the app from its official address and try again. If it keeps happening, tell the operator."})
 
 
 def oauth_start(request: Request, provider: str):
