@@ -58,6 +58,50 @@ class OperatorReadStore:
                     'phase':detail.get('phase'),'peak_memory_mb':detail.get('peak_rss_mb')})
             return {'scope':'reviewed_cross_user_operator_read','stops':out,'truncated':len(rows)>limit,'mutations_available':False}
 
+    @contextmanager
+    def _grant(self,owner_store):
+        """The only write path: a role that can call two database functions. The functions check the operator registry themselves."""
+        authority=self.principal.authorize(owner_store,'credits.allocate')
+        with self.db.transaction(repeatable_read=True) as connection:
+            connection.execute('SET LOCAL ROLE requi_operator_grant')
+            yield connection,authority
+
+    @staticmethod
+    def _grant_input(email,credits):
+        from decimal import Decimal,InvalidOperation
+        if not isinstance(email,str) or not 3<=len(email.strip())<=320 or '@' not in email:raise ValueError('A valid email is required.')
+        try:value=Decimal(str(credits))
+        except (InvalidOperation,ValueError) as exc:raise ValueError('Credits must be a number.') from exc
+        if not value.is_finite() or value<=0 or value>500:raise ValueError('Credits must be above 0 and at most 500.')
+        if value!=value.quantize(Decimal('0.000001')):raise ValueError('Credits can have at most 6 decimal places.')
+        return email.strip(),value
+
+    def grant_preview(self,owner_store,email,credits):
+        """What a grant would do. Changes nothing."""
+        email,value=self._grant_input(email,credits)
+        with self._grant(owner_store) as (connection,authority):
+            row=connection.execute('SELECT public.requi_operator_grant_preview(%s,%s) AS r',(email,value)).fetchone()
+            return row['r']
+
+    def grant_apply(self,owner_store,email,credits,reason):
+        """Give the credits in one database transaction. The database refuses a repeat of the same grant on the same day."""
+        email,value=self._grant_input(email,credits)
+        if not isinstance(reason,str) or not 1<=len(reason.strip())<=400:raise ValueError('A reason of 1 to 400 characters is required.')
+        with self._grant(owner_store) as (connection,authority):
+            row=connection.execute('SELECT public.requi_operator_grant_credits(%s,%s,%s) AS r',(email,value,reason.strip())).fetchone()
+            return row['r']
+
+    def grants(self,owner_store,*,limit=200):
+        """Recent credit grants, newest first, from the credit history."""
+        from datetime import datetime,timezone
+        if type(limit) is not int or not 1<=limit<=500:raise ValueError('bounded operator page required')
+        with self._read(owner_store,'analytics.read') as (connection,authority):
+            rows=connection.execute("SELECT l.recorded_at,l.delta_units,l.units_per_credit,l.actor,l.reason,u.label FROM public.credit_ledger l LEFT JOIN public.users u ON u.user_id=l.owner_id "
+                "WHERE l.kind='grant' ORDER BY l.entry_id DESC LIMIT %s",(limit,)).fetchall()
+            return {'grants':[{'when':datetime.fromtimestamp(r['recorded_at'],timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),'account':r['label'] or 'Unknown User',
+                'credits':round(r['delta_units']/r['units_per_credit'],2),'reason':r['reason'] or 'Not Recorded',
+                'by':'Operator' if str(r['actor']).startswith('operator:') else 'Script'} for r in rows]}
+
     def spend(self,owner_store,*,limit=500):
         """Per account: balance, credits used and vendor expense over 24 hours and 7 days. Operator only; users never see expense."""
         if type(limit) is not int or not 1<=limit<=500:raise ValueError('bounded operator page required')
