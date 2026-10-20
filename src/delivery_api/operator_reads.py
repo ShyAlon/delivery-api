@@ -53,7 +53,7 @@ class OperatorReadStore:
                 except ValueError:detail={}
                 by=detail.get('by')
                 out.append({'when':datetime.fromtimestamp(row['ts'],timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
-                    'stopped_by':'Operator' if by=='operator' else 'Owner' if by=='owner' else 'Unknown',
+                    'stopped_by':'Operator' if by=='operator' else 'Owner' if by=='owner' else 'Server (Memory)' if by=='memory' else 'Unknown',
                     'operator':row['actor'] if by=='operator' else None,'owner':row['owner_label'] or 'Unknown User',
                     'phase':detail.get('phase'),'peak_memory_mb':detail.get('peak_rss_mb')})
             return {'scope':'reviewed_cross_user_operator_read','stops':out,'truncated':len(rows)>limit,'mutations_available':False}
