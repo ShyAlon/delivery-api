@@ -94,3 +94,29 @@ def read(owner_id,admin,minutes=30,now=None):
             'since':datetime.fromtimestamp(since,timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
             'until':datetime.fromtimestamp(now,timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
             'buffer_full':len(rows)>=MAX_LINES,'scrubbed':True}
+
+
+EXPORT_MESSAGE_CAP=160
+
+
+def export(minutes,started,now=None):
+    """The operator's download: the same scrubbed lines, with two more cuts. Source lines of tracebacks are dropped, and any line from a
+    library (not the app's own activity log) is cut to 160 characters, because an exception message can echo a value a user typed
+    and no pattern can recognise that. Accounts show as 8 characters. No request bodies, headers or cookies are ever buffered."""
+    now=time.time() if now is None else now
+    minutes=max(1,min(int(minutes),240));since=now-minutes*60
+    with _lock:rows=[r for r in _lines if r[0]>=since]
+    out=[]
+    for stamp,owner,level,name,text in rows:
+        text=scrub(text)
+        if text.startswith('    '):continue
+        if name!='delivery_api.activity' and len(text)>EXPORT_MESSAGE_CAP:text=text[:EXPORT_MESSAGE_CAP]+' [cut]'
+        when=datetime.fromtimestamp(stamp,timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        who=' [account %s]'%owner[:8] if owner else ' [system]'
+        out.append('%s %-7s %s%s: %s'%(when,level,name,who,text))
+    fmt=lambda t:datetime.fromtimestamp(t,timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    head=['Requi.re server log','Window: %s to %s (%d minutes)'%(fmt(since),fmt(now),minutes),'Lines: %d'%len(out),
+          'Source: the memory of this server process, started %s. A restart empties it. Web request access lines are not included.'%fmt(started),
+          'Scrubbed: emails, tokens, keys, connection strings and long hex strings are removed. Exception text is cut to %d characters and traceback source lines are dropped.'%EXPORT_MESSAGE_CAP,
+          'The buffer keeps the newest %d lines%s.'%(MAX_LINES,'; it is full, so older lines in this window may be missing' if len(_lines)>=MAX_LINES else ''),'']
+    return '\n'.join(head+out)+'\n'

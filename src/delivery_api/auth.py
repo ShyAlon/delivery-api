@@ -114,6 +114,8 @@ def actor(request: Request, *, required: bool = False) -> Actor:
     if config.CLOUD_TENANTS:
         verified = getattr(request.state, "supabase_actor", None)
         if verified is not None:
+            from . import ops_health
+            ops_health.touch(verified.id,getattr(verified,"label",None),getattr(verified,"email",None))   # who is signed in right now, for the operator health page
             return verified
         if required:
             raise HTTPException(401, "Supabase sign-in required")
