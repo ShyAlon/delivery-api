@@ -2786,6 +2786,24 @@ def admin_operations_stops(a:auth.Actor=Depends(auth.require_admin)):
             'next':'Run supabase/migrations/20261020130000_operator_stop_audit.sql in the Supabase SQL editor, then reload.'})
 
 
+@app.get('/api/admin/operations/spend')
+def admin_operations_spend(a:auth.Actor=Depends(auth.require_admin)):
+    # Operator only: credits and vendor expense per account. Users never see this; no link in the user UI.
+    if not config.CLOUD_TENANTS:raise HTTPException(404,'Not available on this server.')
+    from .operator_authorization import OperatorPrincipal
+    from .operator_reads import OperatorReadStore
+    try:
+        reader=_stop_readers.get(('spend',a.id))
+        if reader is None:
+            reader=_stop_readers[('spend',a.id)]=OperatorReadStore(config.DATABASE_URL,OperatorPrincipal(a.id,'ops-v1',frozenset({'analytics.read'})))
+        return reader.spend(store)
+    except Exception as exc:
+        _stop_readers.pop(('spend',a.id),None)
+        activity('ops.spend_unavailable','Operator credits view could not be read',actor=a.label,error=type(exc).__name__)
+        raise HTTPException(503,{'error':'The credits page is not switched on yet.','cause':'The database has not been set up for operator reads or the credit history.',
+            'next':'Run supabase/migrations/20261020130000_operator_stop_audit.sql and 20261020080000_credit_ledger.sql in the Supabase SQL editor, then reload.'})
+
+
 @app.get('/api/admin/operations/run-metrics')
 def admin_operations_run_metrics(task_id:str='',a:auth.Actor=Depends(auth.require_admin)):
     # Operator only: CPU and memory samples. With task_id, the raw samples and summaries of that task; without, the recent-runs overview shown in Debug.
