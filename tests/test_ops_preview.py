@@ -17,7 +17,11 @@ pytestmark = pytest.mark.skipif(shutil.which("bash") is None or shutil.which("gi
 
 FAKE_SSH = r'''#!/usr/bin/env bash
 c="${@: -1}"
+echo "ssh $c" >> "$FAKE_LOG"
 case "$c" in
+  *full-smoke.py*) exit "${FAKE_SMOKE_RC:-0}";;
+  *"docker rmi"*) exit "${FAKE_RMI_RC:-0}";;
+  *"--format"*"image"*|*"image inspect --format"*) echo sha256:fake;;
   *"docker info"*) echo ok;;
   *"du -sm"*) echo "${FAKE_SIZE:-5}";;
   *"image inspect"*) exit 0;;
@@ -31,7 +35,8 @@ echo "docker $*" >> "$FAKE_LOG"
 case "$1" in
   info) [ -z "${NO_DOCKER:-}" ] || exit 1;;
   ps) if [ "${2:-}" = "-a" ]; then [ -z "${LEFTOVER:-}" ] || echo requi-preview; else echo requi-preview; fi;;
-  image) case "$*" in *--format*) echo amd64;; esac;;
+  image) case "$*" in *Architecture*) echo amd64;; *"{{.Id}}"*) echo sha256:fake;; esac;;
+  rmi) :;;
   load) cat > /dev/null;;
   run) for a in "$@"; do
          if [ "${prev:-}" = "--env-file" ]; then stat -c %a "$a" 2>/dev/null >> "$FAKE_LOG" || stat -f %Lp "$a" >> "$FAKE_LOG"; cp "$a" "$FAKE_LOG.env"; echo "$a" > "$FAKE_LOG.envpath"; fi; prev=$a; done
@@ -59,6 +64,7 @@ def _repo(tmp_path, owner, name, with_ops):
         (seed / "scripts" / "docker").mkdir(parents=True)
         for n in ("lib.sh", "preview.sh"):
             shutil.copy(OPS / n, seed / "scripts" / "ops" / n)
+        shutil.copy(OPS.parent / "docker" / "smoke-image.sh", seed / "scripts" / "docker" / "smoke-image.sh")
         (seed / "scripts" / "docker" / "build-full-image.sh").write_text("echo BUILD-SHOULD-NOT-RUN >> \"$FAKE_LOG\"\n")
     else:
         (seed / "README").write_text(name)
@@ -241,3 +247,33 @@ def test_the_settings_file_is_private_from_its_first_byte():
                        capture_output=True, text=True)
     lines = r.stdout.split()
     assert lines[0] == "600" and "DELIVERY_A=1" in lines and not any("OPENAI" in l for l in lines)
+
+
+
+def test_an_existing_image_is_smoke_checked_before_reuse_and_not_rebuilt_when_it_passes(env):
+    api, e, log, _ = env
+    assert _run(api, e).returncode == 0
+    text = log.read_text()
+    assert "full-smoke.py" in text and "BUILD-SHOULD-NOT-RUN" not in text
+
+
+def test_an_existing_image_that_fails_the_smoke_is_removed_by_exact_tag_and_rebuilt_once(env):
+    api, e, log, _ = env
+    _run(api, e, FAKE_SMOKE_RC="1")
+    text = log.read_text()
+    rm = [l for l in text.splitlines() if "docker rmi" in l]
+    assert len(rm) == 1 and "requi-full:" in rm[0] and rm[0].count("requi-full") == 1
+    assert text.count("BUILD-SHOULD-NOT-RUN") == 1
+
+
+def test_a_failed_image_that_cannot_be_removed_stops_the_preview(env):
+    api, e, log, _ = env
+    out = _run(api, e, FAKE_SMOKE_RC="1", FAKE_RMI_RC="1")
+    assert "ABORTED [IMAGE-SMOKE]" in out.stdout and "Fix:" in out.stdout and "Then run:" in out.stdout
+    assert "BUILD-SHOULD-NOT-RUN" not in log.read_text()
+    assert not [l for l in log.read_text().splitlines() if l.startswith("docker run") or l.startswith("docker load")]
+
+
+def test_the_build_runs_with_a_normal_umask_not_the_private_one():
+    text = (OPS / "preview.sh").read_text()
+    assert "( umask 022; bash scripts/docker/build-full-image.sh )" in text

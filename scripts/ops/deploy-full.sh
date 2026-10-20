@@ -142,7 +142,13 @@ HASMODELS=$(echo "$FACTS" | grep -c '^has cloud-models.env$' || true)
 RUNNING=$(echo "$FACTS" | sed -n 's/^running=//p'); PORT=$(echo "$FACTS" | sed -n 's/^port=.*:\([0-9][0-9]*\)$/\1/p'); PORT=${PORT:-$PORT_DEFAULT}
 LIST=$("${SSH[@]}" "MODE=list IMAGE=$IMAGE PORT=$PORT bash -s" < "$WORK/remote.sh" 2>&1) || abort SERVER "the read-only server check failed: $(echo "$LIST" | tail -2 | tr '\n' ' ')" "" "send me this output"
 STALE=$(echo "$LIST" | sed -n 's/^stale=//p'); CADDY=$(echo "$LIST" | sed -n 's/^caddy=//p')
-if [ "$(echo "$FACTS" | sed -n 's/^image=//p')" = missing ]; then
+IMGSTATE=$(echo "$FACTS" | sed -n 's/^image=//p')
+if [ "$IMGSTATE" = present ]; then
+  echo "== the server already has $IMAGE: checking that it passes the smoke check before it is reused (no network, no key, nothing touched)"
+  SRC=0; REQUI_SERVER="ubuntu@$HOST" bash scripts/docker/smoke-image.sh "$IMAGE" || SRC=$?
+  case "$SRC" in 0) ;; 1) IMGSTATE=missing; echo "== that image failed and its tag was removed (that exact tag only); building it again";; *) abort IMAGE-SMOKE "the existing image failed the smoke check and could not be removed" "The server service was not touched." "send me the output above";; esac
+fi
+if [ "$IMGSTATE" = missing ]; then
   echo "image $IMAGE is not on the server yet; running the image build first (it asks its own yes)"
   bash scripts/docker/build-full-image.sh || abort IMAGE-BUILD "the image build did not finish" "The server service was not touched." "send me the output above"
 fi
@@ -177,3 +183,4 @@ echo "request ref header: $(curl -sSI -m 15 "$PUBLIC/health" 2>/dev/null | tr -d
 echo
 echo "DONE. Full service running on the server, execution OFF, image $IMAGE."
 echo "Now, in your browser: open $PUBLIC , sign in, and look at the screens. Tell me what you see."
+

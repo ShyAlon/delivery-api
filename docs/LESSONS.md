@@ -63,3 +63,5 @@ Short rules that came from real failures. Add to this file when something goes w
 - Page-specific styles stay inside the page's own content area (`#frame`). A rule on a bare `button` for one page also hits the header's avatar and breaks it.
 
 - The preview (`ops preview`) runs the merged-main image on a Mac against the real database with execution forced off and no model key. Its buttons that write are real writes. It copies settings to a mode-600 temp file and removes container and files on exit; Docker keeps the runtime env while the container exists, so there is no claim of secure erasure.
+
+- The server image is built under a fixed umask 022 (a private umask made source files unreadable to the non-root image user). The final tag `requi-full:TAG` is created only after `scripts/docker/smoke-image.sh` passes on a candidate tag, and build, preview and deploy-full all use that one smoke before reusing an existing tag. A failed one is removed by its exact tag only.
