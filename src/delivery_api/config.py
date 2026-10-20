@@ -67,6 +67,12 @@ RUN_ISOLATION = os.environ.get("DELIVERY_RUN_ISOLATION", "process").strip().lowe
 MAX_CONCURRENT_RUNS = max(1, int(os.environ.get("DELIVERY_MAX_CONCURRENT_RUNS", "2")))
 # A phase that runs longer than this is stopped (seconds). 30 minutes.
 PHASE_TIME_LIMIT_S = max(60, int(os.environ.get("DELIVERY_PHASE_TIME_LIMIT_S", "1800")))
+# Memory guard (src/delivery_api/run_slots.py). A new run waits until free memory is at least the larger of MEMORY_START_FLOOR_MB and MEMORY_START_FACTOR times
+# the biggest recent run, for at most MEMORY_WAIT_LIMIT_S seconds. When the server's memory use passes MEMORY_STOP_PERCENT, the biggest running run is stopped.
+MEMORY_START_FLOOR_MB = max(0, int(os.environ.get("DELIVERY_MEMORY_START_FLOOR_MB", "600")))
+MEMORY_START_FACTOR = max(1.0, float(os.environ.get("DELIVERY_MEMORY_START_FACTOR", "1.25")))
+MEMORY_WAIT_LIMIT_S = max(0, int(os.environ.get("DELIVERY_MEMORY_WAIT_LIMIT_S", "900")))
+MEMORY_STOP_PERCENT = min(100, max(50, int(os.environ.get("DELIVERY_MEMORY_STOP_PERCENT", "92"))))
 # Operator resource samples (src/delivery_api/run_metrics.py): one every METRICS_INTERVAL_S seconds while a run is active; raw rows are kept METRICS_RAW_DAYS days, then one summary row per run.
 METRICS_INTERVAL_S = max(2, int(os.environ.get("DELIVERY_METRICS_INTERVAL_S", "10")))
 METRICS_RAW_DAYS = max(1, int(os.environ.get("DELIVERY_METRICS_RAW_DAYS", "3")))

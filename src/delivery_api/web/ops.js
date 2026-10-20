@@ -50,7 +50,7 @@ const sessions=makeTable($('#p-sessions'),'Signed-In Users','People who made a r
   'Nobody has been seen in the last 15 minutes.');
 const running=makeTable($('#p-running'),'Running Now','Phases that are using a slot on this server right now.',[
   {key:'run',label:'Run',tip:'A running phase. Names are numbered, not task ids.'},
-  {key:'state',label:'State',tip:'Running, Stopping after a stop request, or Past Time Limit.'},
+  {key:'state',label:'State',tip:'Running, Waiting For Memory, Stopping after a stop request, or Past Time Limit.'},
   {key:'seconds',label:'Running For',tip:'How long this phase has held its slot.',num:true,fmt:v=>dur(v)},
   {key:'peak_memory_mb',label:'Peak Memory',tip:'Largest memory this phase has used so far, in megabytes.',num:true,fmt:v=>num(v,' MB')}],
   'Nothing is running right now.');
@@ -66,7 +66,7 @@ const recent=makeTable($('#p-recent'),'Recent Runs','The latest finished and run
 
 const stops=makeTable($('#stops-view'),'Admin Stops','Every time a run was stopped, newest first. Operator stops name the operator.',[
   {key:'when',label:'When (UTC)',tip:'When the stop was recorded.'},
-  {key:'stopped_by',label:'Stopped By',tip:'Owner means the person who started the run. Operator means an administrator.'},
+  {key:'stopped_by',label:'Stopped By',tip:'Owner means the person who started the run. Operator means an administrator. Server (Memory) means the server stopped the biggest run because memory was nearly full.'},
   {key:'operator',label:'Operator',tip:'Which administrator stopped it, when an operator did.',empty:'Not Applicable'},
   {key:'owner',label:'Owner',tip:'Whose run it was.'},
   {key:'phase',label:'Phase',tip:'Which phase was running. Older stops did not record it.',empty:'Not Recorded',fmt:v=>v.charAt(0).toUpperCase()+v.slice(1).replace(/_/g,' ')},

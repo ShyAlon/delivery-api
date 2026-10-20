@@ -61,8 +61,9 @@ def _flags(h):
     out=[]
     mem=h['memory']
     if mem['used_percent'] is not None and mem['used_percent']>=85:
-        out.append({'level':'warning','text':'Memory is %d%% used. A new run may fail to start.'%mem['used_percent']})
+        out.append({'level':'warning','text':'Memory is %d%% used. New runs wait for memory, and the biggest run is stopped if it keeps rising.'%mem['used_percent']})
     cap=h['capacity']
+    if cap.get('waiting_memory',0)>0:out.append({'level':'warning','text':'%d run%s waiting for free memory.'%(cap['waiting_memory'],'' if cap['waiting_memory']==1 else 's')})
     if cap['waiting']>0:out.append({'level':'info','text':'%d run%s waiting for a free slot.'%(cap['waiting'],'' if cap['waiting']==1 else 's')})
     if h['cpu']['container_percent'] is not None and h['cpu']['cpus'] and h['cpu']['container_percent']>=90*h['cpu']['cpus']:
         out.append({'level':'warning','text':'CPU is above 90% of every core.'})
@@ -83,7 +84,7 @@ def health(now=None):
     box=(metrics.get('container') or {})
     last=box.get('last') or {};day=box.get('day') or {}
     running=[{'run':'Run %d'%(i+1),'seconds':int(r['seconds']),'peak_memory_mb':r['peak_rss_mb'],
-              'state':'Past Time Limit' if r['timed_out'] else 'Stopping' if r.get('stopping') else 'Running'} for i,r in enumerate(snap['running'])]
+              'state':'Past Time Limit' if r['timed_out'] else 'Stopping' if r.get('stopping') else 'Waiting For Memory' if r.get('waiting_memory') else 'Running'} for i,r in enumerate(snap['running'])]
     runs=[{'phase':_label(r.get('phase')),'started':_iso(r.get('started_at')),'ended':_iso(r.get('ended_at')),
            'avg_cpu_percent':round(r['avg_cpu_pct'],1) if r.get('avg_cpu_pct') is not None else None,
            'max_cpu_percent':round(r['max_cpu_pct'],1) if r.get('max_cpu_pct') is not None else None,
@@ -93,7 +94,7 @@ def health(now=None):
     h={'as_of':_iso(now),'started':_iso(STARTED),'uptime_seconds':int(max(0,now-STARTED)),
        'restart_note':'Uptime, signed-in users and the log start again when the server restarts.',
        'capacity':{'mode':'One Child Process Per Run' if snap['isolation']=='process' else 'Thread Mode: One Run At A Time','slots':snap['max_concurrent_runs'],
-                   'running':len(snap['running']),'waiting':snap['waiting'],'time_limit_minutes':snap['time_limit_s']//60},
+                   'running':len(snap['running']),'waiting':snap['waiting'],'waiting_memory':snap.get('waiting_memory',0),'time_limit_minutes':snap['time_limit_s']//60},
        'signed_in_users':active_users(now=now),'sessions':sessions(now=now),'signed_in_window_minutes':ACTIVE_MINUTES,
        'memory':{'total_mb':total,'available_mb':avail,'used_mb':used,'used_percent':round(100*used/total) if used is not None and total else None,
                  'limited_by':'Container' if host.get('limited_by')=='container' else 'Machine','container_average_24h_mb':round(day['am']) if day.get('am') is not None else None,
