@@ -503,8 +503,14 @@ async def request_log(request, call_next):
     if response.status_code in (401,403):activity("access.blocked","Unauthorized or forbidden request",method=request.method,path=request.url.path,status=response.status_code,actor=who)
     return response
 
+def _page(name,headers=None):
+    """Every HTML page is its file with the one shared header (web/shell-header.html) put in at <!--SHELL_HEADER-->, so no page carries its own copy."""
+    from fastapi.responses import HTMLResponse
+    text=(WEB_DIR/name).read_text(encoding="utf-8").replace("<!--SHELL_HEADER-->",(WEB_DIR/"shell-header.html").read_text(encoding="utf-8").strip())
+    return HTMLResponse(text,headers=headers or {"Cache-Control":"no-cache"})
+
 @app.get("/", include_in_schema=False)
-def index(): return FileResponse(WEB_DIR / "index.html")
+def index(): return _page("index.html")
 
 @app.get("/api/auth")
 def auth_status(request: Request):
@@ -598,42 +604,42 @@ def logout(request: Request):
     response=JSONResponse({"status":"signed_out"}); response.delete_cookie(config.SESSION_COOKIE,path="/"); return response
 
 @app.get("/credits",include_in_schema=False)
-def credits_page():return FileResponse(WEB_DIR / "index.html")
+def credits_page():return _page("index.html")
 
 @app.get("/ops",include_in_schema=False)
 def operator_page():
     # The page is a static shell. Every number on it comes from an admin-only endpoint, so a visitor who is not an operator sees only the refusal.
-    return FileResponse(WEB_DIR / "ops.html",headers={"Cache-Control":"no-store"})
+    return _page("ops.html",{"Cache-Control":"no-store"})
 
 @app.get("/ops/ops.js",include_in_schema=False)
 def operator_page_script():return FileResponse(WEB_DIR / "ops.js",media_type="text/javascript",headers={"Cache-Control":"no-store"})
 
 @app.get("/about",include_in_schema=False)
-def about_page():return FileResponse(WEB_DIR / "index.html")
+def about_page():return _page("index.html")
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon(): return FileResponse(WEB_DIR / "favicon.ico", media_type="image/x-icon")
 
 @app.get("/tasks/{task_id}/gates/{gate_key}", include_in_schema=False)
-def gate_page(task_id: str, gate_key: str): return FileResponse(WEB_DIR / "index.html")
+def gate_page(task_id: str, gate_key: str): return _page("index.html")
 
 @app.get("/tasks/{task_id}/complete", include_in_schema=False)
-def complete_page(task_id: str): return FileResponse(WEB_DIR / "index.html")
+def complete_page(task_id: str): return _page("index.html")
 
 @app.get("/tasks/{task_id}/decisions/{wait_id}", include_in_schema=False)
-def decision_page(task_id:str,wait_id:str):return FileResponse(WEB_DIR / "index.html")
+def decision_page(task_id:str,wait_id:str):return _page("index.html")
 
 @app.get("/tasks/{task_id}/view", include_in_schema=False)
-def task_view(task_id: str): return FileResponse(WEB_DIR / "index.html")
+def task_view(task_id: str): return _page("index.html")
 
 @app.get("/sessions", include_in_schema=False)
-def sessions_view(): return FileResponse(WEB_DIR / "index.html")
+def sessions_view(): return _page("index.html")
 
 @app.get("/sessions/{session_id}/view", include_in_schema=False)
-def session_view(session_id: str): return FileResponse(WEB_DIR / "index.html")
+def session_view(session_id: str): return _page("index.html")
 
 @app.get("/sessions/{session_id}/{phase}", include_in_schema=False)
-def session_phase_view(session_id: str, phase: str): return FileResponse(WEB_DIR / "index.html")
+def session_phase_view(session_id: str, phase: str): return _page("index.html")
 
 @app.get("/api/sessions")
 def sessions():
