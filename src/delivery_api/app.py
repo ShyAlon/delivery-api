@@ -12,6 +12,7 @@ import threading
 import logging
 import time
 import os
+import re
 import sys
 import mimetypes
 import zipfile
@@ -50,7 +51,13 @@ server_log_buffer.install()
 def _runtime_version() -> dict:
     # The full image has no MANIFEST.txt; the build script passes the four commit ids as REQUI_BUILD_ID.
     build_id=os.environ.get("REQUI_BUILD_ID","").strip()
-    if build_id and build_id!="unknown":return {"runtime_id":build_id,"repositories":{},"manifest":None}
+    if build_id and build_id!="unknown":
+        # The build script also passes name=commit pairs, so the repositories are named (commit ids only, nothing else).
+        repos={}
+        for pair in os.environ.get("REQUI_BUILD_REPOS","").split(","):
+            name,_,sha=pair.partition("=")
+            if re.fullmatch(r"[a-z0-9-]{1,40}",name) and re.fullmatch(r"[0-9a-f]{7,40}",sha):repos[name]=sha
+        return {"runtime_id":build_id,"repositories":repos,"manifest":None}
     root=Path(__file__).resolve()
     for parent in root.parents:
         manifest=parent/"MANIFEST.txt"
@@ -401,6 +408,7 @@ async def lifespan(application:FastAPI):
         try:cloud_runtime.install(store,os.environ,_set_engine_client,watch_vendor=True)
         except Exception as exc:print('Cloud execution: could not start the in-process engine: '+f'{type(exc).__name__}: {str(exc)[:300]}',file=sys.stderr)
     cloud_execution.log_status()
+    print("Build: "+(", ".join(f"{k} {v}" for k,v in RUNTIME_VERSION["repositories"].items()) or RUNTIME_VERSION["runtime_id"]),file=sys.stderr)
     from . import run_metrics
     run_metrics.start_idle_sampler()     # CPU and memory are read on a timer, so the operator page has numbers when no run is active
     from .observability import LOG_PATH,stage_log_paths
@@ -633,14 +641,14 @@ def decision_page(task_id:str,wait_id:str):return _page("index.html")
 @app.get("/tasks/{task_id}/view", include_in_schema=False)
 def task_view(task_id: str): return _page("index.html")
 
+# The old session-bundle pages are gone; the Home page lists the person's own tasks. Old links and bookmarks land on Home.
 @app.get("/sessions", include_in_schema=False)
-def sessions_view(): return _page("index.html")
-
+@app.get("/sessions/{session_id}", include_in_schema=False)
 @app.get("/sessions/{session_id}/view", include_in_schema=False)
-def session_view(session_id: str): return _page("index.html")
-
 @app.get("/sessions/{session_id}/{phase}", include_in_schema=False)
-def session_phase_view(session_id: str, phase: str): return _page("index.html")
+def old_session_pages_go_home(session_id: str = "", phase: str = ""):
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/", status_code=302)
 
 @app.get("/api/sessions")
 def sessions():

@@ -1,12 +1,10 @@
 import {returnPage} from './return-page.js';
-import {api,clientLog,esc,setSessionExpiry,renewSessionIfDue,downloadDebug,browserDiagnostics,requestTable,clientReport,serverReport,deliverText} from './client-core.js';
+import {api,clientLog,esc,setSessionExpiry,renewSessionIfDue,downloadDebug,browserDiagnostics,requestTable,clientReport,serverReport,deliverText,deliverTextZip} from './client-core.js';
 const app=document.querySelector('#app'),modal=document.querySelector('#modal');
 export function createIdentity(ctx){
 const showError=(...args)=>ctx.showError(...args);
 const detail=(...args)=>ctx.detail(...args);
 const gatePage=(...args)=>ctx.gatePage(...args);
-const bundleView=(...args)=>ctx.bundleView(...args);
-const sessionsDashboard=(...args)=>ctx.sessionsDashboard(...args);
 const aboutPage=(...args)=>ctx.aboutPage(...args);
 const dashboard=(...args)=>ctx.dashboard(...args);
 const openDialog=(...args)=>ctx.openDialog(...args);
@@ -51,7 +49,7 @@ document.querySelector('#copyeverything').onclick=async e=>{const btn=e.currentT
  if(taskId){add('Task diagnostics (question, control state, engine state)',JSON.stringify(diag,null,2));const taskData=await api(`/api/tasks/${encodeURIComponent(taskId)}`).catch(fail);add('Run events',JSON.stringify(taskData?.events||taskData,null,2))}
  add('Server logs (last 30 min)',(await serverText().catch(err=>({text:'unavailable: '+err.message}))).text);
  add('Client logs (this tab)',(await clientText().catch(err=>({text:'unavailable: '+err.message}))).text);
- const how=await deliverText(parts.join('\n\n'),'requi-everything.txt');btn.textContent=how==='copied'?'Copied':'Downloaded';status.textContent=how==='copied'?'Everything copied: debug info, credits, task diagnostics, run events, server and client logs.':'Clipboard blocked, so everything was downloaded instead.'
+ const how=await deliverTextZip(parts.join('\n\n'),'requi-everything.txt');btn.textContent=how==='copied'?'Copied':'Downloaded';status.textContent=how==='copied'?'Everything copied: debug info, credits, task diagnostics, run events, server and client logs.':'Clipboard blocked, so everything was downloaded as requi-everything.zip instead.'
 }catch(err){ok=false;btn.textContent='Failed';status.textContent='Copy everything failed: '+err.message}finally{btn.disabled=false;setTimeout(()=>{btn.textContent=idle},ok?2500:6000)}}}
 {const lh=document.querySelector('#ledgerhost'),fix=document.querySelector('#computefix'),status=document.querySelector('#debugstatus');const loadLedger=()=>api('/api/account/ledger').then(r=>{lh.textContent=r.text||'Unavailable';const n=(r.segments||[]).filter(s=>s.releasable).length;fix.classList.toggle('hidden',!n);fix.innerHTML=n?`<button id="releasecompute" class="secondary">Release ${n} stuck compute record${n==1?'':'s'} (no provider call was made)</button>`:'';if(n)fix.querySelector('#releasecompute').onclick=async e=>{const b=e.currentTarget;b.disabled=true;try{const p=await api('/api/account/compute-release',{method:'POST',body:JSON.stringify({confirm:false})});if(!window.confirm(p.message))return;const d=await api('/api/account/compute-release',{method:'POST',body:JSON.stringify({confirm:true})});status.textContent=d.message;await loadLedger()}catch(err){status.textContent='Release failed: '+err.message}finally{b.disabled=false}}}).catch(err=>{lh.textContent='Could not load: '+err.message});loadLedger()}
 {const hh=document.querySelector('#historyhost');api('/api/account/credit-history').then(r=>{hh.textContent=r.text||'Unavailable'}).catch(err=>{hh.textContent='Could not load: '+err.message})}

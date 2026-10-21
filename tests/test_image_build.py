@@ -158,3 +158,18 @@ def test_deploy_full_stops_before_the_service_when_a_failed_image_cannot_be_remo
     out = _deploy(api, env, FAKE_SMOKE_RC="1", FAKE_RMI_RC="1")
     assert "ABORTED [IMAGE-SMOKE]" in out.stdout and "Fix:" in out.stdout and "BUILD-RAN" not in log.read_text()
     assert "PLAN" not in out.stdout and "docker=ok" not in log.read_text().split("full-smoke.py")[-1]
+
+
+def test_the_build_passes_the_four_named_commits_to_the_image(tmp_path):
+    api, env, log, _ = _setup(tmp_path)
+    out = _build(api, env)
+    assert out.returncode == 0, out.stdout + out.stderr
+    cmd = [l for l in log.read_text().splitlines() if "docker build" in l][0]
+    import re
+    m = re.search(r"--build-arg REQUI_BUILD_ID=(\S+) -f delivery-api/Dockerfile.full --build-arg REQUI_BUILD_REPOS=(\S+) ", cmd)
+    assert m, cmd
+    pairs = [p.split("=") for p in m.group(2).split(",")]
+    assert [n for n, _ in pairs] == ["delivery-api", "interview-engine", "spec-generator", "verification-loop"]
+    assert "-".join(s for _, s in pairs) == m.group(1) and all(len(s) == 8 for _, s in pairs)
+    dockerfile = (ROOT / "Dockerfile.full").read_text()
+    assert "ARG REQUI_BUILD_REPOS" in dockerfile and "ENV REQUI_BUILD_REPOS=$REQUI_BUILD_REPOS" in dockerfile

@@ -13,7 +13,9 @@ export const stageName=e=>e?humanizeSnakeCase(String(e.payload?.label||e.message
 
 // Same renderer for task and blocking review-apply progress. Counts are source
 // values only; no percent or guessed hard-coded completion time.
-export function stageProgressHtml(events,{startedAt=Date.now()/1000,connected=true,nextStep='choose the operating concept when the engine requests it'}={}){
+export function stageProgressHtml(events,{startedAt=Date.now()/1000,connected=true,nextStep='choose the operating concept when the engine requests it',unavailable=''}={}){
+ // A session that is unavailable in this environment has no live counters, no estimate and no next step to promise: only what was last recorded.
+ if(unavailable)return `<section class="review-progress" aria-label="Run progress"><h3>Run progress</h3><p>${esc(unavailable)}</p></section>`;
  const stages=new Map(),measurements=new Map();let lastSignal=null;
  for(const e of events||[]){const p=e.payload||{};if(!p.stage||!p.status)continue;const key=p.stage+'|'+(p.label||'');
   const ts=Date.parse(p.timestamp)/1000||Number(e.ts)||startedAt;lastSignal=Math.max(lastSignal||0,ts);

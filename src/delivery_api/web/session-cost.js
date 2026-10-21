@@ -21,11 +21,11 @@ export function startSessionCostHeader(){
  const host=document.querySelector('#sessioncost');if(!host)return ()=>{};
  const header=host.closest('header');const stopBalance=startBalance(host);
  const sizing=new ResizeObserver(()=>document.documentElement.style.setProperty('--global-header-height',`${header.getBoundingClientRect().height}px`));sizing.observe(header);
- const task=location.pathname.match(/^\/tasks\/([^/]+)(?:\/|$)/),session=location.pathname.match(/^\/sessions\/([^/]+)(?:\/|$)/);
- const route=task?`/api/tasks/${task[1]}/cost`:session?`/api/sessions/${session[1]}/cost`:null;
+ const task=location.pathname.match(/^\/tasks\/([^/]+)(?:\/|$)/);
+ const route=task?`/api/tasks/${task[1]}/cost`:null;
  if(!route){host.textContent='No Session Selected';host.dataset.state='empty';return ()=>{sizing.disconnect();stopBalance()}}
  let stopped=false,pending=false,hasValue=false;
- const here=task?`/tasks/${task[1]}`:`/sessions/${session[1]}`,stillHere=()=>location.pathname===here||location.pathname.startsWith(here+'/');
+ const here=`/tasks/${task[1]}`,stillHere=()=>location.pathname===here||location.pathname.startsWith(here+'/');
  const empty=()=>{host.textContent='No Session Selected';host.dataset.state='empty';host.title='';hasValue=false};
  host.textContent='Session Cost: Loading';
  const refresh=async()=>{if(pending||stopped)return;

@@ -18,11 +18,11 @@ def test_no_page_file_carries_its_own_header():
 
 def test_the_shared_header_has_the_slots_every_page_needs():
     assert HEADER.count("<header>") == 1 and HEADER.count("<nav>") == 1
-    for needle in ('id="sessioncost"', 'id="identity"', 'class="brand"', 'href="/sessions"', 'href="/credits"', 'href="/about"'):
+    for needle in ('id="sessioncost"', 'id="identity"', 'class="brand"', 'href="/credits"', 'href="/about"'):
         assert needle in HEADER, needle
 
 
-@pytest.mark.parametrize("path", ["/", "/sessions", "/about", "/credits", "/ops"])
+@pytest.mark.parametrize("path", ["/", "/about", "/credits", "/ops"])
 def test_every_page_route_serves_exactly_the_same_header(path):
     import delivery_api.app as module
     response = TestClient(module.app).get(path, headers={"Accept": "text/html"})
@@ -33,8 +33,7 @@ def test_every_page_route_serves_exactly_the_same_header(path):
 
 def test_the_task_and_session_page_handlers_return_the_assembled_page():
     import delivery_api.app as module
-    pages = [module.task_view("t"), module.sessions_view(), module.session_view("s"), module.session_phase_view("s", "intent"),
-             module.gate_page("t", "g"), module.complete_page("t"), module.decision_page("t", "w")]
+    pages = [module.task_view("t"), module.gate_page("t", "g"), module.complete_page("t"), module.decision_page("t", "w")]
     for page in pages:
         assert HEADER in page.body.decode() and "SHELL_HEADER" not in page.body.decode()
 

@@ -33,6 +33,8 @@ RUN pip install --no-cache-dir -r /wheels/requirements.txt 'psycopg[binary]>=3.2
 COPY delivery-api/scripts/docker/full_entry.py delivery-api/scripts/docker/full-smoke.py /app/
 ARG REQUI_BUILD_ID=unknown
 ENV REQUI_BUILD_ID=$REQUI_BUILD_ID
+ARG REQUI_BUILD_REPOS=
+ENV REQUI_BUILD_REPOS=$REQUI_BUILD_REPOS
 USER 10001:10001
 EXPOSE 8000
 VOLUME /data

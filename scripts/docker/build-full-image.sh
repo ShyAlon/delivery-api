@@ -9,7 +9,7 @@ abort(){ echo; echo "ABORTED [$1]: $2"; echo "Nothing was started on the server 
 HERE=$(cd "$(dirname "$0")/../.." && pwd); ROOT=${REQUI_REPOS_ROOT:-$(dirname "$HERE")}
 for t in git ssh tar shasum; do command -v $t >/dev/null || abort "TOOL-$t" "$t is missing" "xcode-select --install"; done
 STAMP=$(date -u +%Y%m%d%H%M%S); CTX=$(mktemp -d); trap 'rm -rf "$CTX"' EXIT
-TAG=""
+TAG=""; REPOS=""
 for r in delivery-api interview-engine spec-generator verification-loop; do
   D=$ROOT/$r; [ -d "$D/.git" ] || abort "NO-$r" "no checkout at $D" "git clone https://github.com/ShyAlon/$r $D"
   [ -z "$(git -C "$D" status --porcelain --untracked-files=no)" ] || abort "DIRTY-$r" "$r has uncommitted changes" "git -C $D status --short"
@@ -17,7 +17,7 @@ for r in delivery-api interview-engine spec-generator verification-loop; do
   git -C "$D" fetch -q origin main || abort "FETCH-$r" "cannot fetch $r" "git -C $D fetch origin main"
   [ "$(git -C "$D" rev-parse HEAD)" = "$(git -C "$D" rev-parse origin/main)" ] || abort "STALE-$r" "$r main is not equal to origin/main" "git -C $D pull --ff-only origin main"
   mkdir "$CTX/$r"; git -C "$D" archive HEAD | tar -x -C "$CTX/$r"
-  S=$(git -C "$D" rev-parse --short=8 HEAD); TAG="${TAG:+$TAG-}$S"; printf '  %-18s %s\n' "$r" "$S"
+  S=$(git -C "$D" rev-parse --short=8 HEAD); TAG="${TAG:+$TAG-}$S"; REPOS="${REPOS:+$REPOS,}$r=$S"; printf '  %-18s %s\n' "$r" "$S"
 done
 chmod -R u+rwX,go+rX "$CTX"   # sources only: no secret is ever in this folder
 [ -f "$CTX/delivery-api/Dockerfile.full" ] || abort NO-DOCKERFILE "delivery-api main has no Dockerfile.full" "merge the Dockerfile.full PR first"
@@ -29,7 +29,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" 'sudo -n docker info >/dev/nul
 ssh "$HOST" "mkdir -p ~/requi && chmod 700 ~/requi && for d in ~/requi/build-[0-9]*; do [ -d \"\$d\" ] && rm -rf \"\$d\"; done; mkdir ~/requi/build-$STAMP" || abort MKDIR "cannot create the build folder"
 tar -c -C "$CTX" . | ssh "$HOST" "tar -x -p -C ~/requi/build-$STAMP" || abort UPLOAD "upload failed"
 echo "== docker build (several minutes the first time)"
-ssh "$HOST" "cd ~/requi/build-$STAMP && sudo -n docker build --build-arg REQUI_BUILD_ID=$TAG -f delivery-api/Dockerfile.full -t $CAND . > ../build-$STAMP.log 2>&1; rc=\$?; tail -15 ../build-$STAMP.log; exit \$rc" || { ssh "$HOST" "rm -rf ~/requi/build-$STAMP" || true; abort BUILD "docker build failed (log: $HOST:~/requi/build-$STAMP.log)" "The image tag $IMAGE was not created; the uploaded sources were removed from the server."; }
+ssh "$HOST" "cd ~/requi/build-$STAMP && sudo -n docker build --build-arg REQUI_BUILD_ID=$TAG -f delivery-api/Dockerfile.full --build-arg REQUI_BUILD_REPOS=$REPOS -t $CAND . > ../build-$STAMP.log 2>&1; rc=\$?; tail -15 ../build-$STAMP.log; exit \$rc" || { ssh "$HOST" "rm -rf ~/requi/build-$STAMP" || true; abort BUILD "docker build failed (log: $HOST:~/requi/build-$STAMP.log)" "The image tag $IMAGE was not created; the uploaded sources were removed from the server."; }
 SRC=0; REQUI_SERVER="$HOST" bash "$HERE/scripts/docker/smoke-image.sh" "$CAND" || SRC=$?
 if [ "$SRC" -ne 0 ]; then
   ssh "$HOST" "rm -rf ~/requi/build-$STAMP" || true
