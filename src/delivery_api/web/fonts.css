@@ -1,0 +1,11 @@
+/* Self-hosted fonts (see fonts/SHA256SUMS and the OFL texts). Latin subsets of the same families
+   the app always used; font-display:swap plus fixed slot geometry keeps text from moving the shell. */
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('/assets/fonts/dm-mono-400-latin.woff2') format('woff2');
+  unicode-range:U+0000-00FF,U+2000-206F,U+20AC,U+2022,U+00B7}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;
+  src:url('/assets/fonts/dm-mono-500-latin.woff2') format('woff2');
+  unicode-range:U+0000-00FF,U+2000-206F,U+20AC,U+2022,U+00B7}
+@font-face{font-family:'Manrope';font-style:normal;font-weight:400 700;font-display:swap;
+  src:url('/assets/fonts/manrope-var-latin.woff2') format('woff2');
+  unicode-range:U+0000-00FF,U+2000-206F,U+20AC,U+2022,U+00B7}

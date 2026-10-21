@@ -1,12 +1,3 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Requi.re Operator</title>
-<link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="/assets/style.css">
-<link rel="stylesheet" href="/assets/chrome.css">
 <style>
 :root{--ok:#16a36a;--warn:#b45309;--info:#1d4ed8}
 .hview{}
@@ -36,9 +27,7 @@ td.num,th.num{text-align:right}
 .pager{display:flex;gap:8px;align-items:center;padding:8px 12px;border-top:1px solid var(--line);color:var(--muted);font-size:var(--fs-sm)}
 .pager .grow{flex:1}
 @media(max-width:900px){#panels{grid-template-columns:1fr;grid-template-rows:auto}}
-</style></head>
-<body class="ops-page" data-view="health"><div class="grain"></div>
-<!--SHELL_HEADER-->
+</style>
 <div id="frame">
 <div class="ops-toolbar">
  <h1 id="page-title" title="Operator view of this server. Only administrators can load the numbers.">Operator</h1>
@@ -62,8 +51,3 @@ td.num,th.num{text-align:right}
 <section class="panel" id="grant-view"></section>
 <div id="note" class="hview"></div>
 </div>
-<div id="app" hidden></div><div id="modal" class="modal hidden"></div>
-<script type="module" src="/ops/ops.js"></script>
-<script type="module" src="/assets/chrome.js"></script>
-<script type="module" src="/assets/ops-account.js"></script>
-</body></html>

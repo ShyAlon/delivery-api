@@ -1,4 +1,5 @@
 import {esc} from './client-core.js';
+import {onPageExit} from './page-lifecycle.js';
 import {humanLabel,humanizeSnakeCase} from './format.js';
 export const isProgressEvent = e => ['progress','heartbeat'].includes(e?.kind);
 export const progressLine = e => {const message=humanizeSnakeCase(e.message);return `<div class="progress-item ${esc(e.kind)}"><span title="${esc(message)}">${esc(message)}</span></div>`};
@@ -47,6 +48,6 @@ export function watchReviewProgress(taskId,host){
   for(const e of rows){if(e.id>after){events.push(e);after=e.id;}}
   connected=true;
  }catch{connected=false}finally{busy=false;render()}};
- render();poll();const timer=setInterval(poll,1500);
+ render();poll();const timer=setInterval(poll,1500);onPageExit(()=>clearInterval(timer));
  return ()=>{closed=true;clearInterval(timer)};
 }

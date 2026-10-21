@@ -512,9 +512,12 @@ async def request_log(request, call_next):
     return response
 
 def _page(name,headers=None):
-    """Every HTML page is its file with the one shared header (web/shell-header.html) put in at <!--SHELL_HEADER-->, so no page carries its own copy."""
+    """Every HTML page is the app page: the persistent SPA shell (web/spa-shell.js) provides the one header at runtime, so no page carries its own copy. The boot config is injected at <!--REQUI_CONFIG--> so the preview row has its space from the first paint."""
     from fastapi.responses import HTMLResponse
-    text=(WEB_DIR/name).read_text(encoding="utf-8").replace("<!--SHELL_HEADER-->",(WEB_DIR/"shell-header.html").read_text(encoding="utf-8").strip())
+    text=(WEB_DIR/name).read_text(encoding="utf-8")
+    import json as _json
+    boot=_json.dumps({"preview":os.environ.get("DELIVERY_PREVIEW")=="1"})
+    text=text.replace("<!--REQUI_CONFIG-->","<script>window.__REQUI_CONFIG__="+boot+";</script>")
     return HTMLResponse(text,headers=headers or {"Cache-Control":"no-cache"})
 
 @app.get("/", include_in_schema=False)
@@ -617,11 +620,8 @@ def credits_page():return _page("index.html")
 
 @app.get("/ops",include_in_schema=False)
 def operator_page():
-    # The page is a static shell. Every number on it comes from an admin-only endpoint, so a visitor who is not an operator sees only the refusal.
-    return _page("ops.html",{"Cache-Control":"no-store"})
-
-@app.get("/ops/ops.js",include_in_schema=False)
-def operator_page_script():return FileResponse(WEB_DIR / "ops.js",media_type="text/javascript",headers={"Cache-Control":"no-store"})
+    # The operator views mount in the app shell. Every number on them comes from an admin-only endpoint, so a visitor who is not an operator sees only the refusal.
+    return _page("index.html",{"Cache-Control":"no-store"})
 
 @app.get("/about",include_in_schema=False)
 def about_page():return _page("index.html")
