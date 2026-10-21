@@ -23,11 +23,12 @@ case "$c" in
   *"docker rmi"*) exit "${FAKE_RMI_RC:-0}";;
   *"--format"*"image"*|*"image inspect --format"*) echo sha256:fake;;
   *"docker info"*) echo ok;;
+  *"http-session.json"*) echo "${FAKE_SESSION_SERVER:-NO}";;
   *"du -sm"*) echo "${FAKE_SIZE:-5}";;
   *"image inspect"*) exit 0;;
   *"docker save"*) :;;
   *"full.env"*) cat "$FAKE_ENV";;
-  *"tar -C"*) tar -cf - -T /dev/null;;
+  *"tar -C"*) if [ -n "${FAKE_COPY_FILE:-}" ]; then d=$(mktemp -d); mkdir -p "$d/$(dirname "$FAKE_COPY_FILE")"; echo '{"private":"CONTENTS-MUST-NOT-PRINT"}' > "$d/$FAKE_COPY_FILE"; tar -C "$d" -cf - .; else tar -cf - -T /dev/null; fi;;
 esac
 '''
 FAKE_DOCKER = r'''#!/usr/bin/env bash
@@ -340,10 +341,11 @@ def _guard_request(origin):
                            base_url="http://127.0.0.1:18765/")
 
 
-def _guard(monkeypatch, public_origin, origin):
+def _guard(monkeypatch, public_origin, origin, alt=frozenset()):
     from delivery_api import auth, config
     monkeypatch.setattr(auth, "enabled", lambda: True)
     monkeypatch.setattr(config, "PUBLIC_ORIGIN", public_origin)
+    monkeypatch.setattr(config, "ALT_ORIGINS", alt)
     monkeypatch.setattr(config, "CLOUD_TENANTS", False)
     try:
         auth.csrf_guard(_guard_request(origin))
@@ -392,4 +394,124 @@ def test_the_preview_stops_if_its_origin_is_not_its_own_address(env):
     assert out.returncode == 0, out.stdout + out.stderr
     lines = [l for l in Path(str(log) + ".env").read_text().splitlines() if l.startswith("DELIVERY_PUBLIC_ORIGIN=")]
     assert lines == ["DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:18765"]
-    assert "sslip.io" not in Path(str(log) + ".env").read_text() and "Open it exactly as http://127.0.0.1:18765" in out.stdout
+    assert "sslip.io" not in Path(str(log) + ".env").read_text() and "Open it as http://127.0.0.1:18765 or http://localhost:18765" in out.stdout
+
+
+def _preview_settings(tmp_path, live):
+    os.environ["PREVIEW_PORT"] = "18765"
+    try:
+        return _settings(tmp_path, live)
+    finally:
+        del os.environ["PREVIEW_PORT"]
+
+
+def test_the_preview_allows_exactly_localhost_on_its_own_port_and_drops_any_live_value(tmp_path):
+    settings = _preview_settings(tmp_path, ["DELIVERY_DATABASE_URL=x", "DELIVERY_ALT_ORIGINS=https://evil.example,http://localhost", "DELIVERY_PUBLIC_ORIGIN=https://15-235-101-85.sslip.io"])
+    text = (tmp_path / "out.env").read_text()
+    assert settings["DELIVERY_ALT_ORIGINS"] == "http://localhost:18765" and text.count("DELIVERY_ALT_ORIGINS=") == 1
+    assert "evil.example" not in text and "sslip.io" not in text and settings["DELIVERY_PUBLIC_ORIGIN"] == "http://127.0.0.1:18765"
+
+
+def test_the_real_guard_accepts_both_preview_aliases_on_the_port_and_nothing_else(tmp_path, monkeypatch):
+    from delivery_api import config
+    settings = _preview_settings(tmp_path, ["DELIVERY_PUBLIC_ORIGIN=https://15-235-101-85.sslip.io"])
+    alt = config.alt_origins(settings)
+    assert alt == {"http://localhost:18765"}
+    own = settings["DELIVERY_PUBLIC_ORIGIN"]
+    for good in ("http://127.0.0.1:18765", "http://localhost:18765"):
+        assert _guard(monkeypatch, own, good, alt) is None, good
+    for bad in ("https://15-235-101-85.sslip.io", "http://localhost:8000", "http://127.0.0.1:8000", "http://localhost", "https://localhost:18765",
+                "http://localhost:18765.evil.example", "http://evil.localhost:18765", "http://[::1]:18765", "https://evil.example", "null"):
+        err = _guard(monkeypatch, own, bad, alt)
+        assert err is not None and err.status_code == 403, bad
+
+
+def test_the_second_address_is_ignored_outside_the_preview_so_live_stays_strict(monkeypatch):
+    from delivery_api import config
+    live_env = {"DELIVERY_ALT_ORIGINS": "http://localhost:8000"}
+    assert config.alt_origins(live_env) == frozenset() and config.alt_origins({**live_env, "DELIVERY_PREVIEW": "0"}) == frozenset()
+    assert config.alt_origins({**live_env, "DELIVERY_PREVIEW": "1"}) == {"http://localhost:8000"}
+    live = "https://15-235-101-85.sslip.io"
+    assert _guard(monkeypatch, live, live, config.alt_origins(live_env)) is None
+    assert _guard(monkeypatch, live, "http://localhost:8000", config.alt_origins(live_env)).status_code == 403
+
+
+def test_the_server_names_the_four_repositories_of_the_running_image(monkeypatch):
+    from delivery_api import app as app_module
+    monkeypatch.setenv("REQUI_BUILD_ID", "aaaaaaaa-bbbbbbbb-cccccccc-dddddddd")
+    monkeypatch.setenv("REQUI_BUILD_REPOS", "delivery-api=aaaaaaaa,interview-engine=bbbbbbbb,spec-generator=cccccccc,verification-loop=dddddddd")
+    v = app_module._runtime_version()
+    assert v["runtime_id"] == "aaaaaaaa-bbbbbbbb-cccccccc-dddddddd"
+    assert v["repositories"] == {"delivery-api": "aaaaaaaa", "interview-engine": "bbbbbbbb", "spec-generator": "cccccccc", "verification-loop": "dddddddd"}
+    monkeypatch.setenv("REQUI_BUILD_REPOS", "delivery-api=aaaaaaaa,Bad Name=bbbbbbbb,x=not-hex,secret=$(id),,=")
+    assert app_module._runtime_version()["repositories"] == {"delivery-api": "aaaaaaaa"}
+    monkeypatch.delenv("REQUI_BUILD_REPOS")
+    assert app_module._runtime_version() == {"runtime_id": "aaaaaaaa-bbbbbbbb-cccccccc-dddddddd", "repositories": {}, "manifest": None}
+
+
+def test_the_preview_prints_both_addresses_and_the_four_commits_it_runs(env):
+    api, e, log, _ = env
+    out = _run(api, e)
+    assert out.returncode == 0, out.stdout + out.stderr
+    envtext = Path(str(log) + ".env").read_text()
+    assert [l for l in envtext.splitlines() if l.startswith("DELIVERY_ALT_ORIGINS=")] == ["DELIVERY_ALT_ORIGINS=http://localhost:18765"]
+    line = [l for l in out.stdout.splitlines() if l.startswith("Running build:")][0]
+    for name in ("delivery-api", "interview-engine", "spec-generator", "verification-loop"):
+        assert name in line
+    assert "http://localhost:18765" in out.stdout
+
+
+def _check_lines(out):
+    return [l.strip() for l in out.stdout.splitlines() if l.startswith("  ") and ("state file" in l or "VMODEL_ARTIFACTS_DIR" in l)]
+
+
+def test_without_a_session_name_there_is_no_check(env):
+    api, e, log, _ = env
+    out = _run(api, e)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "Session check" not in out.stdout and "http-session.json" not in log.read_text()
+
+
+def test_the_session_check_prints_only_yes_or_no_and_never_calls_absence_a_loss(env):
+    api, e, log, _ = env
+    out = _run(api, e, PREVIEW_CHECK_SESSION="c975886b-50d6-49c7-b51b-8c86bab28e8d")
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert _check_lines(out) == ["engine state file for the session you named, on the server: no",
+                                 "engine state file for it in this preview's copy: no",
+                                 "live settings define VMODEL_ARTIFACTS_DIR: no; differs from the image default /data/artifacts: no"]
+    assert "says nothing about any other place" in out.stdout
+    for word in ("lost", "gone", "cannot resume", "nothing running"):
+        assert word not in out.stdout.lower().split("session check")[1], word
+    ssh = [l for l in log.read_text().splitlines() if "http-session.json" in l]
+    assert ssh == ["ssh sudo -n test -f /data/requi/artifacts/c975886b-50d6-49c7-b51b-8c86bab28e8d/interview/http-session.json && echo YES || echo NO"]
+
+
+def test_the_session_check_sees_the_file_on_both_sides_without_reading_it(env):
+    api, e, log, _ = env
+    sid = "abc123"
+    out = _run(api, e, PREVIEW_CHECK_SESSION=sid, FAKE_SESSION_SERVER="YES", FAKE_COPY_FILE="artifacts/%s/interview/http-session.json" % sid)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert _check_lines(out)[:2] == ["engine state file for the session you named, on the server: yes", "engine state file for it in this preview's copy: yes"]
+    assert "CONTENTS-MUST-NOT-PRINT" not in out.stdout + out.stderr
+
+
+@pytest.mark.parametrize("bad", ["../x", ".", "..", "a/b", ".hidden", "a..b", "a b", "x;id", "", "a" * 81])
+def test_a_session_name_that_is_not_a_plain_id_is_refused_before_any_ssh(env, bad):
+    api, e, log, _ = env
+    out = _run(api, e, PREVIEW_CHECK_SESSION=bad)
+    if bad == "":
+        assert out.returncode == 0 and "Session check" not in out.stdout
+        return
+    assert out.returncode != 0 and "ABORTED [CHECK-ID]" in out.stdout and "Fix:" in out.stdout and "Then run:" in out.stdout
+    assert "ssh" not in log.read_text() and "PREVIEW READY" not in out.stdout
+
+
+@pytest.mark.parametrize("value,defined,differs", [("/data/artifacts", "yes", "no"), ("/data/other", "yes", "yes"), ('"/data/artifacts"', "yes", "no")])
+def test_the_session_check_says_whether_the_live_settings_move_the_artifacts_folder(env, value, defined, differs):
+    api, e, log, _ = env
+    live = Path(e["FAKE_ENV"])
+    live.write_text(live.read_text() + "VMODEL_ARTIFACTS_DIR=%s\n" % value)
+    out = _run(api, e, PREVIEW_CHECK_SESSION="abc")
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert _check_lines(out)[2] == "live settings define VMODEL_ARTIFACTS_DIR: %s; differs from the image default /data/artifacts: %s" % (defined, differs)
+    assert "/data/other" not in out.stdout

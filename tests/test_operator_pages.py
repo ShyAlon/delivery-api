@@ -274,8 +274,9 @@ def test_the_app_and_the_operator_page_share_the_same_header_and_footer():
     for page in (index, ops):
         h = header(page)
         assert '<a class="brand" href="/">' in h and 'id="identity"' in h
-        for label in ("Home", "All sessions", "Add Credits", "About"):
+        for label in ("Home", "Add Credits", "About"):
             assert ">%s</a>" % label in h
+        assert "All sessions" not in h
         assert "/assets/chrome.js" in page and "/assets/chrome.css" in page and "/assets/style.css" in page
     # the same brand block and navigation links, character for character
     assert header(index) == header(ops)

@@ -9,7 +9,6 @@ import {createTask} from './task.js';
 import {createGate} from './gate.js';
 import {createCompletion} from './completion.js';
 import {createTaskActions} from './taskactions.js';
-import {createSessions} from './sessions.js';
 import {clientLog,esc} from './client-core.js';
 import {startCopyBlocks} from './copy-blocks.js';
 
@@ -20,7 +19,7 @@ clientLog('navigation','Page loaded',{url:location.href});
 startCopyBlocks();
 
 const ctx={};
-for(const create of [createPurchase,createQa,createIdentity,createDialogs,createDashboard,createTask,createGate,createCompletion,createDecisions,createTaskActions,createSessions])Object.assign(ctx,create(ctx));
-const {purchasePage,loadIdentity,decisionPage,gatePage,completePage,bundleView,sessionsDashboard,aboutPage,detail,dashboard,showError}=ctx;
-loadIdentity().then(ok=>{if(!ok)return;startSessionCostHeader();const decisionMatch=location.pathname.match(/^\/tasks\/([^/]+)\/decisions\/([^/]+)$/),gateMatch=location.pathname.match(/^\/tasks\/([^/]+)\/gates\/([^/]+)$/),completeMatch=location.pathname.match(/^\/tasks\/([^/]+)\/complete$/),taskMatch=location.pathname.match(/^\/tasks\/([^/]+)\/view/),sessionMatch=location.pathname.match(/^\/sessions\/([^/]+)(?:\/(interview|needs|srs|architecture|specs|tests|reviews|oracle)|\/view)?$/);decisionMatch?decisionPage(decodeURIComponent(decisionMatch[1]),decodeURIComponent(decisionMatch[2])).catch(showError):gateMatch?gatePage(decodeURIComponent(gateMatch[1]),decodeURIComponent(gateMatch[2])).catch(showError):completeMatch?completePage(decodeURIComponent(completeMatch[1])).catch(showError):sessionMatch?bundleView(sessionMatch[1],sessionMatch[2]||'interview').catch(showError):location.pathname==='/credits'?purchasePage().catch(showError):location.pathname==='/sessions'?sessionsDashboard().catch(showError):location.pathname==='/about'?aboutPage():taskMatch?detail(taskMatch[1]).catch(showError):dashboard().catch(showError)}).catch(showError);
+for(const create of [createPurchase,createQa,createIdentity,createDialogs,createDashboard,createTask,createGate,createCompletion,createDecisions,createTaskActions])Object.assign(ctx,create(ctx));
+const {purchasePage,loadIdentity,decisionPage,gatePage,completePage,aboutPage,detail,dashboard,showError}=ctx;
+loadIdentity().then(ok=>{if(!ok)return;startSessionCostHeader();const decisionMatch=location.pathname.match(/^\/tasks\/([^/]+)\/decisions\/([^/]+)$/),gateMatch=location.pathname.match(/^\/tasks\/([^/]+)\/gates\/([^/]+)$/),completeMatch=location.pathname.match(/^\/tasks\/([^/]+)\/complete$/),taskMatch=location.pathname.match(/^\/tasks\/([^/]+)\/view/);decisionMatch?decisionPage(decodeURIComponent(decisionMatch[1]),decodeURIComponent(decisionMatch[2])).catch(showError):gateMatch?gatePage(decodeURIComponent(gateMatch[1]),decodeURIComponent(gateMatch[2])).catch(showError):completeMatch?completePage(decodeURIComponent(completeMatch[1])).catch(showError):location.pathname==='/credits'?purchasePage().catch(showError):location.pathname==='/about'?aboutPage():taskMatch?detail(taskMatch[1]).catch(showError):dashboard().catch(showError)}).catch(showError);
 window.addEventListener('unhandledrejection',e=>showError(e.reason));

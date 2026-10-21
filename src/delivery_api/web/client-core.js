@@ -1,4 +1,5 @@
 import {scrubText,buildClientReport} from './log-scrub.js';
+import {zipText} from './zip.js';
 export const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 export const time = timestamp => timestamp ? new Date(timestamp*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
 export const fullTime = timestamp => timestamp ? new Intl.DateTimeFormat([], {year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'short'}).format(new Date(timestamp*1000)) : '—';
@@ -23,6 +24,8 @@ export function requestTable(){
 export function clientReport(build){return buildClientReport({requests:requestLog.slice(),records:browserCapture.records.slice(),startedAt:browserCapture.started_at,url:location.href,build})}
 export async function serverReport(minutes=30){const r=await api(`/api/server-log?minutes=${minutes}`);return {text:scrubText(r.text||'')+'\n',range:`${r.scope}, last ${r.minutes} minutes (${r.since} to ${r.until}), ${r.count} lines${r.buffer_full?', oldest lines already dropped (buffer full)':''}`}}
 export async function deliverText(text,filename){try{await navigator.clipboard.writeText(text);return 'copied'}catch{const url=URL.createObjectURL(new Blob([text],{type:'text/plain'})),a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);return 'downloaded'}}
+// Same as deliverText, but when the clipboard is blocked the download is a ZIP holding the text file, built here in the browser.
+export async function deliverTextZip(text,filename){try{await navigator.clipboard.writeText(text);return 'copied'}catch{const url=URL.createObjectURL(new Blob([zipText(filename,text)],{type:'application/zip'})),a=document.createElement('a');a.href=url;a.download=filename.replace(/\.txt$/,'')+'.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);return 'downloaded'}}
 export function browserDiagnostics(){return {...browserCapture,ended_at:new Date().toISOString(),url:location.href,records:browserCapture.records.slice()}}
 export async function downloadDebug(taskId){
  await renewSessionIfDue();
@@ -108,7 +111,7 @@ export async function api(url,opts={}){
     const raw=await response.text();let detail;
     try{detail=JSON.parse(raw).detail}catch{}
     const info=typeof detail==='object'?detail:{error:typeof detail==='string'?detail:raw};
-    const message=`Error: ${info.error||'The request failed.'}\nLikely cause: ${info.cause||(response.status===404?'This item does not exist, or it is not in your account.':'The server could not complete this action.')}\nNext: ${info.next||(response.status===404?'Go back to All sessions and pick one of your own tasks.':'Retry once. If it fails again, open the task audit and server log.')}${ref?`\nReference: ${ref} (the avatar Debug dialog lists it with its timing)`:''}`;
+    const message=`Error: ${info.error||'The request failed.'}\nLikely cause: ${info.cause||(response.status===404?'This item does not exist, or it is not in your account.':'The server could not complete this action.')}\nNext: ${info.next||(response.status===404?'Go back to Home and pick one of your own tasks.':'Retry once. If it fails again, open the task audit and server log.')}${ref?`\nReference: ${ref} (the avatar Debug dialog lists it with its timing)`:''}`;
     const error=new Error(message);error.status=response.status;error.info=info;error.endpoint=url;error.background=isBackground(method,opts,foregroundRead);
     clientLog('api.error',message,{endpoint:url,http_status:response.status,ref,task_state:info.current_state,active_phase:info.active_phase,decision_id:opts.decisionId});
     throw error;

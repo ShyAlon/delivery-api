@@ -150,15 +150,8 @@ def test_dashboard_draws_v_and_all_task_states(page, ui):
     page.locator(".task").first.wait_for()
     assert page.locator(".task").count() == 5
     assert page.locator(".v-map svg").count() == 5
-    # Home is task-only. Session bundles retain their own /sessions route.
+    # Home is task-only; the old session pages are gone.
     assert page.locator('.hero,.home-sessions,.session-card').count()==0
-    page.get_by_role('link',name='All sessions').click()
-    partial=page.locator('.session-card',has_text='Partial discovery evidence')
-    partial.wait_for()
-    assert partial.locator('.session-v .status-done').count()==1
-    assert partial.locator('.session-v .status-not_started').count()==8
-    page.goto(ui)
-    page.locator('.task').first.wait_for()
     assert page.get_by_text("In progress").count() == 1
     assert page.get_by_text("Complete").count() == 1
 
@@ -261,11 +254,12 @@ def test_basic_auth_browser_signup_signin_persists_and_logs(tmp_path):
             try:import urllib.request;urllib.request.urlopen(base+"/health",timeout=.2);break
             except Exception:time.sleep(.1)
         with sync_playwright() as p:
-            browser=p.chromium.launch(headless=True);page=browser.new_page();page.goto(base+"/sessions")
+            browser=p.chromium.launch(headless=True);page=browser.new_page();page.goto(base+"/")
             page.get_by_text("Welcome to Requi.re",exact=True).wait_for()
             page.evaluate("window.__guardToken=Math.random()")
-            page.get_by_role("link",name="All sessions").click()
-            assert page.evaluate("window.__guardToken") is not None and page.url==base+"/sessions"
+            # clicking the link to the page you are already on must not reload it (the token survives and the address is unchanged)
+            page.get_by_role("link",name="Home",exact=True).click()
+            assert page.evaluate("window.__guardToken") is not None and page.url==base+"/"
             page.get_by_role("button",name="Create account").click()
             email=page.locator('input[name="username"]');email.fill('partial');assert page.locator('#emailstatus').inner_text()==''
             email.blur();assert page.locator('#emailstatus').inner_text()=='Enter a complete email address.'
@@ -274,7 +268,7 @@ def test_basic_auth_browser_signup_signin_persists_and_logs(tmp_path):
             page.locator('.avatar').wait_for();assert page.url==base+'/'
             assert page.locator('.avatar').inner_text()=='SH'
             page.reload();page.locator('.avatar').wait_for();assert page.locator('.avatar').is_visible()
-            page.get_by_role('link',name='All sessions').click();page.get_by_text('Artifacts folder').wait_for()
+            page.goto(base+'/sessions');page.wait_for_url(base+'/');page.locator('.avatar').wait_for()
             browser.close()
         assert 'auth.signup.success' in log.read_text() and 'client.navigation' in log.read_text()
     finally:proc.terminate();proc.wait(timeout=5)
@@ -327,100 +321,17 @@ def test_task_filter_sort_rename_and_delete(page,ui):
     assert page.get_by_text('Renamed disposable definition',exact=True).count()==0
 
 
-def test_session_card_shows_live_brief_and_progress(page,ui):
-    page.goto(ui+"/sessions")
-    page.get_by_role('link',name='A founder brief for a live interview').wait_for()
-    card=page.locator('.session-card',has=page.get_by_role('link',name='A founder brief for a live interview'))
-    assert card.is_visible()
-    assert card.locator('.status-in_progress').count()==1
-    assert page.get_by_text('The workspace is ready. Starting opens an interview with the connected engine and saves your progress here.').count()==0
-
-
-def test_session_discovery_bundle_and_trace_diagram(page,ui):
-    page.add_init_script("""Object.defineProperty(navigator,'clipboard',{value:{_text:'',writeText(v){this._text=v;return Promise.resolve()},readText(){return Promise.resolve(this._text)}}})""")
-    page.goto(ui+"/sessions")
-    page.get_by_text("Family task evidence",exact=True).click()
-    assert page.url.endswith("/sessions/golden-1/interview")
-    page.get_by_text("Start").wait_for();assert page.get_by_text("Start").is_visible()
-    assert not page.get_by_text("Stakeholder needs").is_visible()
-    # Desktop phase navigation follows a compact V: left leg descends, right leg rises.
-    pills={k:page.locator(f'[data-phase="{k}"]').bounding_box() for k in ("interview","needs","srs","architecture","specs","tests","reviews","oracle")}
-    assert pills["interview"]["y"] < pills["needs"]["y"] < pills["srs"]["y"] < pills["architecture"]["y"] < pills["specs"]["y"]
-    assert pills["specs"]["y"] > pills["tests"]["y"] > pills["reviews"]["y"] > pills["oracle"]["y"]
-    assert pills["interview"]["x"] < pills["needs"]["x"] < pills["specs"]["x"] < pills["tests"]["x"] < pills["oracle"]["x"]
-    assert page.locator(".bundle-panel .json-view").count()==0
-    answer=page.locator('#interview-gates .inspect-json',has_text='Interviewee Answer')
-    assert answer.is_visible();answer.click()
-    dialog=page.get_by_role("dialog",name="Interviewee Answer");assert dialog.is_visible()
-    dialog.get_by_role("button",name="Copy JSON").click()
-    assert dialog.get_by_role("button",name="JSON copied").is_visible()
-    assert '"confidence": "high"' in page.evaluate("navigator.clipboard.readText()")
-    page.get_by_role("button",name="Close").click()
-    assert page.locator('.phase-pill.status-done').count()==8
-    for status in ("done","error","warning","not_started","in_progress"):
-        assert page.locator(f'.phase-pill.status-{status}').evaluate_all("els=>els.every(e=>getComputedStyle(e).getPropertyValue('--phase-status').trim()!=='')")
-    # Every pill is a real phase page, and route refresh is stable.
-    page.evaluate("window.__spaToken=Math.random()")
-    body_handle=page.evaluate("window.__spaToken")
-    page.get_by_role("link",name="Needs ↗").click()
-    assert page.url.endswith("/sessions/golden-1/needs")
-    assert page.evaluate("window.__spaToken") == body_handle
-    page.locator('[data-panel="interview"]').wait_for(state="hidden")
-    assert page.locator('[data-panel="needs"]').evaluate("e=>({cls:e.className,path:location.pathname})")=={"cls":"bundle-panel","path":"/sessions/golden-1/needs"}
-    assert not page.get_by_text("Start").is_visible()
-    page.reload();assert page.get_by_role("link",name="Needs ↗").evaluate("e=>e.classList.contains('active')")
-    page.get_by_role("link",name="SRS ↗").click()
-    page.get_by_text("System requirements").wait_for();assert page.get_by_text("System requirements").is_visible()
-    assert page.locator(".trace-node").count()==5
-    node=page.locator('.trace-node[data-node="R-1"]')
-    node.hover();tip=page.locator('#trace-tooltip');assert tip.is_visible()
-    assert "R-1" in tip.inner_text() and "Visible status" in tip.inner_text()
-    page.get_by_role("link",name="Architecture ↗").click()
-    assert page.url.endswith("/sessions/golden-1/architecture")
-    page.get_by_text("Build a PWA").wait_for();assert page.get_by_text("Build a PWA").is_visible()
-    adr=page.locator('.inspect-item',has_text='ADR-1');adr.click()
-    item_dialog=page.get_by_role("dialog",name="ADR 1 · Progressive Web App")
-    item_dialog.get_by_text("Alternatives considered").wait_for();assert item_dialog.get_by_text("Alternatives considered").is_visible()
-    for text in ("Native","Deeper device access","Two codebases","Outside first release"):
-        assert item_dialog.get_by_text(text,exact=text=="Native").is_visible()
-    assert item_dialog.locator('.json-view').count()==0
-    page.get_by_role("button",name="Close").click()
-    # Ordinary readable cards open their JSON result.
-    page.get_by_text("Task service",exact=True).click()
-    assert page.get_by_role("dialog",name="Task service").locator('.json-view').count()==1
-    page.locator("#modal").click(position={"x":4,"y":4})
-    # Remaining phase routes each render only their own content.
-    expected={"specs":"Module specifications","tests":"Test specifications","reviews":"Gate decisions + review rounds","oracle":"Bundle integrity passed"}
-    for route,title in expected.items():
-        page.goto(f"{ui}/sessions/golden-1/{route}")
-        page.get_by_text(title,exact=True).wait_for();assert page.get_by_text(title,exact=True).is_visible()
-        assert page.get_by_role("link",name={"specs":"Module specs ↗","tests":"Tests ↗","reviews":"Reviews + gates ↗","oracle":"Oracle ↗"}[route]).evaluate("e=>e.classList.contains('active')")
-    # Compact sticky header sits below global nav and content starts below it.
-    head=page.locator('.detail-head.page-head');panel=page.locator('[data-panel="oracle"]')
-    assert head.evaluate("e=>e.parentElement.classList.contains('bundle-workspace')")
-    assert head.bounding_box()["height"] < 150
-    assert panel.bounding_box()["y"] >= head.bounding_box()["y"]+head.bounding_box()["height"]
-    page.screenshot(path=str(_screenshots_dir / "vmodel-phase-page-v-nav.png"),full_page=True)
-
-def test_artifacts_folder_setting_validates_and_reports_sessions(page,ui):
-    page.goto(ui+"/sessions");page.get_by_role("button",name="Artifacts folder").click()
-    page.screenshot(path=str(_screenshots_dir / "vmodel-artifacts-folder-setting.png"),full_page=True)
-    page.locator('input[name="path"]').fill('/definitely/missing/artifacts')
-    page.get_by_role("button",name="Validate & load sessions").click()
-    page.get_by_text("Artifacts folder could not be loaded.").wait_for()
-    assert page.get_by_text("Likely cause:",exact=False).is_visible()
-
 def test_dashboard_routes_local_loading_to_session_folder_not_file_picker(page,ui):
     page.goto(ui)
-    page.get_by_role("link",name="All sessions").wait_for();assert page.get_by_role("link",name="All sessions").is_visible()
+    page.get_by_role("navigation").get_by_role("link",name="Add Credits").wait_for();assert page.get_by_role("link",name="All sessions").count()==0
     assert page.get_by_role("button",name="Import run").count()==0
-    page.get_by_role("link",name="All sessions").click()
-    page.get_by_role("button",name="Artifacts folder").wait_for()
+    for old in ("/sessions","/sessions/golden-1/view","/sessions/golden-1/needs"):
+        page.goto(ui+old);page.locator(".task").first.wait_for();assert page.url==ui+"/" or page.url==ui
+    assert page.get_by_role("button",name="Artifacts folder").count()==0
 
-def test_page_headers_stay_sticky_and_sessions_have_no_evidence_vault_hero(page,ui):
-    page.goto(ui+"/sessions")
-    controls=page.locator('.session-controls.page-head');controls.wait_for()
-    assert controls.evaluate("e=>getComputedStyle(e).position")=="sticky"
+def test_page_headers_stay_sticky_and_home_has_no_evidence_vault_hero(page,ui):
+    page.goto(ui+"/")
+    page.locator(".task").first.wait_for()
     assert page.get_by_text("Evidence vault / completed sessions",exact=True).count()==0
     assert page.get_by_text("Every decision,",exact=False).count()==0
     page.goto(ui+"/tasks/done/view")
@@ -448,17 +359,6 @@ def test_create_task_dialog_keyboard_submit_textarea_and_cancel(page,ui):
     page.locator('#newform input[name="title"]').fill('Must not be created');page.keyboard.press('Escape')
     assert page.locator('#newform').count()==0 and page.locator('.task').count()==before
 
-
-def test_settings_creation_dialog_enter_and_escape(page,ui):
-    page.goto(ui+'/sessions');page.get_by_role('button',name='Artifacts folder').click()
-    path=page.locator('#rootform input[name="path"]');page.wait_for_function("document.activeElement?.name==='path'");assert path.evaluate('e=>document.activeElement===e')
-    path.press('Escape');assert page.locator('#rootform').count()==0
-    page.get_by_role('button',name='Artifacts folder').click();path=page.locator('#rootform input[name="path"]')
-    submitted=[]
-    page.route('**/api/settings/engine-python',lambda route:route.fulfill(json={'path':'','candidates':[],'count':0}) if route.request.method=='GET' else route.fulfill(json={'path':'','status':'saved'}))
-    page.route('**/api/settings/artifacts-root',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(status=400,json={'detail':{'error':'Artifacts folder could not be loaded.','cause':'Test path is missing.','next':'Choose an existing folder.'}})))
-    path.fill('/definitely/missing/by-enter');path.press('Enter')
-    page.get_by_text('Artifacts folder could not be loaded.',exact=False).wait_for();assert submitted==[{'path':'/definitely/missing/by-enter'}]
 
 def test_user_progress_and_composer_have_no_raw_console(page,ui):
     page.add_init_script("class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource")
@@ -2059,15 +1959,14 @@ def test_live_heartbeat_wraps_without_clipping(page, ui, width):
     page.locator(".live-status-row").screenshot(path=str(_screenshots_dir / f"heartbeat-wrap-{width}.png"))
 
 
-@pytest.mark.parametrize('path', ['/tasks/live/view','/tasks/live/gates/gate-conops','/tasks/done/complete','/sessions/golden-1/needs','/','/sessions','/about'])
+@pytest.mark.parametrize('path', ['/tasks/live/view','/tasks/live/gates/gate-conops','/tasks/done/complete','/','/about'])
 def test_global_cost_header_on_all_route_families(page,ui,path):
  base=ui
- task=path.startswith('/tasks/');session=path.startswith('/sessions/')
+ task=path.startswith('/tasks/')
  page.route('**/api/tasks/*/cost',lambda r:r.fulfill(json={'price':.73,'price_usd':.73}))
- page.route('**/api/sessions/*/cost',lambda r:r.fulfill(json={'price':.73,'price_usd':.73}))
  page.goto(base+path)
  host=page.locator('header #sessioncost')
- expect(host).to_have_text('0.73 credits · $0.73' if task or session else 'No Session Selected')
+ expect(host).to_have_text('0.73 credits · $0.73' if task else 'No Session Selected')
  assert page.locator('#sessioncost').count()==1
  for width in (1365,390):
   page.set_viewport_size({'width':width,'height':844});page.evaluate('window.scrollTo(0,0)');page.wait_for_timeout(200)
@@ -2092,3 +1991,43 @@ def test_closed_gate_can_save_revision_proposal_without_restarting(page,ui):
     assert sent==[{'review_revision':'gate:approved','edited_text':'Proposed new requirement wording'}]
     expect(page.locator('[data-action="approve"]')).to_be_disabled()
     page.screenshot(path=str(SCREENSHOTS/'closed-gate-proposal-desktop.png'),full_page=True)
+
+
+def test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_known(page,ui):
+    now=time.time()
+    live=page.request.get(ui+"/api/tasks/live").json()
+    live["state"]="running";live["active_phase"]="intent"
+    live["control_snapshot"]={"version":2,"task_id":"live","phase_key":"intent","mode":"failed","owner":"none","wait_id":None,"kind":None,"prompt":None,"options":[],
+        "artifact_ref":None,"actions":[],"precondition":{},"revision":"task:1","process_live":False,"decision":None,"gate":None,"input_id":None,
+        "diagnostic":{"reason":"engine protocol rejected the snapshot","http_status":404,"code":120,"detail":"session not found","task_state":"running","active_phase":"intent"}}
+    live["events"]=[{"id":1,"kind":"command","phase_key":"intent","message":"Started","ts":now-170000,"payload":{}},
+                    {"id":2,"kind":"waiting_input","phase_key":"intent","message":"Which concept should the architecture execute?","ts":now-123831,"payload":{}}]
+    page.route("**/api/tasks/live",lambda route:route.fulfill(json=live))
+    page.goto(ui+"/tasks/live/view")
+    page.locator(".live-status-row").wait_for()
+    body=page.locator("main, #app, body").first.inner_text()
+    assert "Session unavailable in this environment" in body and "needs attention" in body.lower()
+    assert "Last recorded state: waiting for your answer at" in body and "no active process reported" in body
+    assert "Connected to progress" not in body and "s elapsed" not in body and "so far" not in body and "in progress" not in body.lower() and "Waiting for stage progress" not in body and "Next:" not in body
+    for banned in ("earlier stages","cannot resume","lost","nothing running","Engine returned an error"):
+        assert banned not in body, banned
+    assert page.get_by_role("button",name="Rerun stage").count()==1          # existing control, wording untouched
+    page.screenshot(path=str(_screenshots_dir / "session-unavailable.png"),full_page=True)
+
+
+def test_copy_everything_downloads_a_zip_with_the_same_text_when_the_clipboard_is_blocked(page,ui,tmp_path):
+    import zipfile
+    page.add_init_script("Object.defineProperty(navigator,'clipboard',{value:{writeText:()=>Promise.reject(new Error('blocked'))},configurable:true})")
+    page.goto(ui+"/tasks/live/view");page.locator(".detail-head").wait_for()
+    page.locator(".avatar").click();page.locator("#opendebug").click();page.locator(".debug-dialog").wait_for()
+    with page.expect_download() as info:
+        page.locator("#copyeverything").click()
+    download=info.value
+    assert download.suggested_filename=="requi-everything.zip"
+    target=tmp_path/"everything.zip";download.save_as(str(target))
+    with zipfile.ZipFile(target) as z:
+        assert z.testzip() is None and z.namelist()==["requi-everything.txt"]
+        text=z.read("requi-everything.txt").decode("utf-8")
+    assert "Debug info" in text and "Client logs" in text and len(text)>200
+    expect(page.locator("#debugstatus")).to_contain_text("requi-everything.zip")
+    page.screenshot(path=str(_screenshots_dir / "copy-everything-zip.png"),full_page=True)

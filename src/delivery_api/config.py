@@ -51,6 +51,11 @@ SESSION_COOKIE = "vmodel_session"
 SESSION_TTL_SECONDS = int(os.environ.get("DELIVERY_SESSION_TTL_SECONDS", "43200"))
 COOKIE_SECURE = os.environ.get("DELIVERY_COOKIE_SECURE", "1") != "0"
 PUBLIC_ORIGIN = os.environ.get("DELIVERY_PUBLIC_ORIGIN", "").rstrip("/")
+def alt_origins(env=os.environ) -> frozenset:
+    """Extra exact browser origins for sign-in. Honoured ONLY in the local preview (DELIVERY_PREVIEW=1); the live service ignores the setting."""
+    if env.get("DELIVERY_PREVIEW") != "1": return frozenset()
+    return frozenset(x.strip().rstrip("/") for x in env.get("DELIVERY_ALT_ORIGINS", "").split(",") if x.strip())
+ALT_ORIGINS = alt_origins()
 GOOGLE_CLIENT_ID = os.environ.get("DELIVERY_GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("DELIVERY_GOOGLE_CLIENT_SECRET", "")
 GITHUB_CLIENT_ID = os.environ.get("DELIVERY_GITHUB_CLIENT_ID", "")
