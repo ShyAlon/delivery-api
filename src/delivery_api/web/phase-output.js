@@ -11,6 +11,7 @@ export function phaseOutputHtml(output){
   const previous=output.status==='previous_phase';
   const title=previous?`${shown} results (previous phase)`:`${phase} outputs`;
   const note=previous?`${phase} is generating. These are completed ${shown} results, not ${phase} outputs.`:
+    output.status==='local_preview'?`Phase result files are not part of a local preview. They stay on the server; this preview only shows what the database holds.`:
     output.status==='waiting'?`Waiting for the first persisted ${phase} output.`:
     output.status==='unavailable'?`A ${phase} output exists but could not be read.`:
     `${output.items.length} persisted result${output.items.length===1?'':'s'} from ${output.source||phase}.`;

@@ -245,6 +245,17 @@ def test_gate_redo_requires_steer_in_browser(page, ui):
     page.get_by_role("button", name="Ask for changes").click()
     page.get_by_text("a redo needs a reason", exact=False).wait_for()
 
+def test_an_unavailable_artifact_shows_a_notice_instead_of_a_dead_click(page, ui):
+    page.route('**/api/tasks/done/artifacts/**/view', lambda route: route.fulfill(status=404, json={'detail': 'Artifact files are not part of a local preview'}))
+    page.goto(ui + '/tasks/done/view')
+    button = page.locator('[data-view-artifact]').first
+    button.wait_for()
+    button.click()
+    dialog = page.locator('.dialog', has_text='not part of a local preview')
+    dialog.wait_for()
+    assert 'Artifact files are not part of a local preview' in dialog.inner_text()
+
+
 def test_basic_auth_browser_signup_signin_persists_and_logs(tmp_path):
     db=tmp_path/"basic-ui.db";port=_port();log=Path(__file__).parents[1]/"run.log"
     env={**os.environ,"DELIVERY_DB_PATH":str(db),"DELIVERY_DATABASE_URL":f"sqlite:///{db}","DELIVERY_BASIC_AUTH_ENABLED":"1","DELIVERY_COOKIE_SECURE":"0","PYTHONPATH":str(Path(__file__).parents[1]/"src")}
