@@ -1,4 +1,5 @@
 import {api,esc} from './client-core.js';
+import {onPageExit} from './page-lifecycle.js';
 import {explainerHtml,titleCase,titleCaseHeadings,pillifySelects,syncPills,collapseCards} from './gate-ui.js';
 import {markdownHtml} from './format.js';
 import {gateStructured,gateSummary} from './gate-presenters.js';
@@ -154,7 +155,7 @@ if(currentArtifacts.length){host.innerHTML='';for(const a of currentArtifacts){l
    }catch(e){document.querySelector('#gate-decision-status').textContent=`Could not refresh gate evidence: ${e.message}`}
    finally{gateRefreshPending=false}
  }
- const gateEvents=new EventSource(`/api/tasks/${taskId}/stream`);
+ onPageExit(()=>gateEvents.close());const gateEvents=new EventSource(`/api/tasks/${taskId}/stream`);
  gateEvents.addEventListener('progress',ev=>{
    if(!host.isConnected){gateEvents.close();return}
    const event=JSON.parse(ev.data);
@@ -164,7 +165,7 @@ if(currentArtifacts.length){host.innerHTML='';for(const a of currentArtifacts){l
  });
  // Files may appear after the last task event or a transport reconnect;
  // refresh without forcing the founder to lose unsaved gate choices.
- const gateRefreshInterval=setInterval(()=>{
+ onPageExit(()=>clearInterval(gateRefreshInterval));const gateRefreshInterval=setInterval(()=>{
    if(!host.isConnected){gateDispose();return}
    refreshGateEvidence();
  },5000);

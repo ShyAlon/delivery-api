@@ -49,7 +49,9 @@ def _web(name):return (module.WEB_DIR/name).read_text()
 def test_stylesheet_does_not_block_on_a_third_party_import_and_modules_load_in_parallel():
     assert '@import' not in _web('style.css')
     html=_web('index.html')
-    assert 'fonts.googleapis.com/css2' in html and 'display=swap' in html
+    assert 'fonts.googleapis.com' not in html and 'fonts.gstatic.com' not in html   # fonts are self-hosted: no third-party stylesheet request
+    fonts=_web('fonts.css')
+    assert 'display=swap' in fonts.replace(': swap',':swap') or 'font-display:swap' in fonts.replace(' ','')
     seen,todo=set(),['app.js']
     while todo:
         name=todo.pop()

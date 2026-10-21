@@ -103,6 +103,7 @@ def test_the_page_and_its_script_are_served_without_data():
     import delivery_api.app as module
     from fastapi.testclient import TestClient
     client=TestClient(module.app)
-    page=client.get('/ops');script=client.get('/ops/ops.js')
-    assert page.status_code==200 and 'Server Health' in page.text and script.status_code==200 and 'fetch(' in script.text
+    page=client.get('/ops');script=client.get('/assets/ops.js');body=client.get('/assets/ops-body.html')
+    assert page.status_code==200 and script.status_code==200 and 'fetch(' in script.text
+    assert body.status_code==200 and 'Server Health' in body.text   # the view markup the shell mounts at /ops
     assert 'example.com' not in page.text   # a static shell: no user data

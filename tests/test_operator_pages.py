@@ -266,38 +266,34 @@ def test_the_task_audit_table_keeps_its_columns_when_empty():
 # ---- 6. one header, navigation and footer ----
 
 def test_the_app_and_the_operator_page_share_the_same_header_and_footer():
-    import re
-    header = lambda text: re.search(r"<header>.*?</header>", text, re.S).group(0)
+    # the operator views mount inside the same persistent shell: /ops serves the same app page,
+    # so header and footer are the same DOM by construction, not a copied include.
     import delivery_api.app as module
     index = module._page("index.html").body.decode()
-    ops = module._page("ops.html").body.decode()
-    for page in (index, ops):
-        h = header(page)
-        assert '<a class="brand" href="/">' in h and 'id="identity"' in h
-        for label in ("Home", "Add Credits", "About"):
-            assert ">%s</a>" % label in h
-        assert "All sessions" not in h
-        assert "/assets/chrome.js" in page and "/assets/chrome.css" in page and "/assets/style.css" in page
-    # the same brand block and navigation links, character for character
-    assert header(index) == header(ops)
-    # the avatar menu on the operator page comes from the app's own identity code
-    assert "ops-account.js" in ops and 'id="modal"' in ops
-    assert "createIdentity" in (WEB / "ops-account.js").read_text()
+    ops = module.operator_page().body.decode()
+    assert ops == index
+    shell = (WEB / "spa-shell.js").read_text(encoding="utf-8")
+    for needle in ('<header>', '<footer', 'class="brand"', 'id="identity"', "label:'Home'", "label:'Add Credits'", "label:'About'"):
+        assert needle in shell, needle
+    assert "All sessions" not in shell
+    # the operator chrome is the app's own shell and identity code; there is no separate account script
+    assert not (WEB / "ops-account.js").exists() and (WEB / "identity.js").exists()
+    # the operator frame mounts into the app outlet from its own template
+    frame = (WEB / "ops-body.html").read_text(encoding="utf-8")
+    assert 'id="frame"' in frame and (WEB / "ops-mount.js").exists()
 
 
 @pytest.mark.skipif(subprocess.run(["which", "node"], capture_output=True).returncode != 0, reason="needs node")
 def test_the_operator_pages_are_navigation_items_for_administrators_only():
     out = _node(r"""
-class A{constructor(){this.dataset={};this.attrs={};this.className='';this.title='';this.textContent='';this.href=''}setAttribute(k,v){this.attrs[k]=v}removeAttribute(k){delete this.attrs[k]}}
-const made=[];const nav={links:[],append(a){this.links.push(a)},querySelector(s){return this.links.find(l=>l.dataset.operator)||null},};
-globalThis.document={createElement:()=>{const a=new A();made.push(a);return a},querySelectorAll:()=>[],querySelector:()=>null};
-globalThis.location={pathname:'/ops',hash:'#stops',href:'http://x/ops#stops'};
-const {addOperatorLinks,OPERATOR_PAGES}=await import(%r);
-const guest=addOperatorLinks(nav,{authenticated:true,admin:false});
-const anon=addOperatorLinks(nav,{authenticated:false,admin:true});
-const admin=addOperatorLinks(nav,{authenticated:true,admin:true});
-const twice=addOperatorLinks(nav,{authenticated:true,admin:true});
-console.log(JSON.stringify({guest,anon,admin,twice,links:nav.links.map(l=>[l.textContent,l.href])}));
-""" % (WEB / "chrome.js").as_uri())
-    assert out["guest"] is False and out["anon"] is False and out["admin"] is True and out["twice"] is False
-    assert out["links"] == [["Server Health", "/ops#health"], ["Admin Stops", "/ops#stops"], ["Credits And Spend", "/ops#spend"], ["Grant Credits", "/ops#grant"]]
+const {OPERATOR_PAGES}=await import(%r);
+const fs=await import('fs');
+const shell=fs.readFileSync(%r,'utf8');
+// the shell renders the operator links only behind the authenticated admin flag, inside a
+// container that stays hidden otherwise: guests never get the links in their DOM.
+if(!/admin=!!\(auth&&auth\.authenticated&&auth\.admin\)/.test(shell))throw new Error('admin gate missing from the shell');
+if(!/hidden=\${!admin}/.test(shell))throw new Error('operator links are not hidden for non-admins');
+for(const p of OPERATOR_PAGES){if(!p.view||!p.label||!p.tip)throw new Error('bad operator page '+JSON.stringify(p))}
+console.log(JSON.stringify({pages:OPERATOR_PAGES.length,views:OPERATOR_PAGES.map(p=>p.view)}));
+""" % ((WEB / "chrome.js").as_uri(), (WEB / "spa-shell.js").as_uri().replace('file://','')))
+    assert out["pages"] == 4 and out["views"] == ["health", "stops", "spend", "grant"]

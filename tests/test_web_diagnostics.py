@@ -86,7 +86,6 @@ def test_the_task_page_uses_the_unavailable_wording_and_stops_the_live_counters(
 
 
 def test_no_page_links_to_all_sessions_any_more():
-    assert "All sessions" not in (WEB / "shell-header.html").read_text()
     for path in WEB.glob("*"):
         if path.suffix in (".js", ".html", ".css"):
             assert "All sessions" not in path.read_text(encoding="utf-8"), path.name

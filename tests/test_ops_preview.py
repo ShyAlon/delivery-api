@@ -206,18 +206,14 @@ def test_the_temp_folder_is_gone_after_a_run(env):
 def test_the_banner_appears_only_when_the_server_says_preview():
     import json
     src = r"""
-const made=[];const body={prepended:[],prepend(b){this.prepended.push(b)}};
-globalThis.document={createElement:()=>{const b={style:{},setAttribute(){},className:'',textContent:''};made.push(b);return b},querySelector:()=>null,body};
-const {addPreviewBanner}=await import(%r);
-addPreviewBanner({preview:false});addPreviewBanner({});addPreviewBanner(null);
-const none=body.prepended.length;
-addPreviewBanner({preview:true});
-console.log(JSON.stringify({none,one:body.prepended.length,text:body.prepended[0].textContent}));
+const {previewBannerText}=await import(%r);
+const none=[previewBannerText({preview:false}),previewBannerText({}),previewBannerText(null)];
+console.log(JSON.stringify({none,one:previewBannerText({preview:true})}));
 """ % (WEB / "chrome.js").as_uri()
     r = subprocess.run(["node", "--input-type=module", "-e", src], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
-    assert out == {"none": 0, "one": 1, "text": "Preview: real data, execution off"}
+    assert out == {"none": [None, None, None], "one": "Preview: real data, execution off"}
 
 
 def test_only_the_preview_container_reports_preview(monkeypatch):

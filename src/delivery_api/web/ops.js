@@ -1,7 +1,13 @@
-import {el,makeTable} from '/assets/ops-table.js';
-(function(){
+import {el,makeTable} from './ops-table.js';
+import {onPageExit} from './page-lifecycle.js';
+// The operator views mount inside the app outlet like any other page. mountOpsPage returns nothing;
+// it registers its cleanup (timers, listeners, body flags) so leaving /ops tears the page down.
+export function mountOpsPage(root,initialView){
 'use strict';
-const $=s=>document.querySelector(s);
+let dead=false;
+onPageExit(()=>{dead=true;document.body.classList.remove('ops-page');delete document.body.dataset.view});
+document.body.classList.add('ops-page');
+const $=s=>root.querySelector(s);
 const dur=s=>{s=Math.max(0,Math.floor(s));const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return d?`${d}d ${h}h ${m}m`:h?`${h}h ${m}m`:m?`${m}m ${s%60}s`:`${s}s`};
 const localTime=text=>{const t=new Date(String(text||'').replace(' UTC','Z').replace(' ','T'));return isNaN(t)?String(text||''):t.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'long'})};
 const num=(v,u)=>v==null?'Not Available':(typeof v==='number'?(Math.round(v*10)/10).toLocaleString():v)+(u||'');
@@ -141,11 +147,12 @@ const VIEWS=['health','stops','spend','grant'];
 const TITLES={health:'Server Health',stops:'Admin Stops',spend:'Credits And Spend',grant:'Grant Credits'};
 function view(name){document.body.dataset.view=name;$('#page-title').textContent=TITLES[name];document.title='Requi.re '+TITLES[name];if(name==='stops')loadStops();else if(name==='spend')loadSpend();else if(name==='grant')loadGrants();else load()}
 const hashView=()=>{const n=location.hash.slice(1);return VIEWS.includes(n)?n:'health'};
-window.addEventListener('hashchange',()=>view(hashView()));
+const onHash=()=>view(hashView());window.addEventListener('hashchange',onHash);onPageExit(()=>window.removeEventListener('hashchange',onHash));
 
 function card(k,v,s,tip){return el('div',{className:'card',title:tip},el('div',{className:'k',textContent:k}),el('div',{className:'v',textContent:v}),el('div',{className:'s',textContent:s||''}))}
 
 function show(h){
+  if(dead)return;
   $('#asof').textContent='As of '+localTime(h.as_of);
   $('#flags').replaceChildren(...h.flags.map(f=>el('div',{className:'flag '+f.level,textContent:f.text})));
   const m=h.memory,c=h.cpu,cap=h.capacity;
@@ -169,7 +176,8 @@ async function load(){
     show(await r.json());
   }catch(e){fail('Could not reach the server. Check your connection and press Refresh.')}
 }
-function fail(msg){$('#flags').replaceChildren(el('div',{className:'flag warning',textContent:msg}));$('#cards').replaceChildren();sessions.set([]);running.set([]);recent.set([])}
+function fail(msg){
+  if(dead)return;$('#flags').replaceChildren(el('div',{className:'flag warning',textContent:msg}));$('#cards').replaceChildren();sessions.set([]);running.set([]);recent.set([])}
 
 $('#refresh').onclick=()=>{const v=document.body.dataset.view;v==='stops'?loadStops():v==='spend'?loadSpend():v==='grant'?loadGrants():load()};
 $('#dl').onclick=async()=>{
@@ -182,5 +190,5 @@ $('#dl').onclick=async()=>{
   }catch(e){$('#flags').prepend(el('div',{className:'flag warning',textContent:'The log could not be downloaded ('+e.message+'). Only administrators can download it.'}))}
   finally{b.disabled=false;b.title='Download the scrubbed server log as a zip file. Secrets, emails and tokens are removed, and the download is recorded.'}
 };
-view(hashView());setInterval(()=>{if(document.body.dataset.view==='health')load()},10000);
-})();
+view(initialView||hashView());const healthTimer=setInterval(()=>{if(!dead&&document.body.dataset.view==='health')load()},10000);onPageExit(()=>clearInterval(healthTimer));
+}

@@ -1,3 +1,5 @@
+/* The shell mount wrappers must not box the sticky header/banner: they participate in body layout directly, so position:sticky keeps working against the viewport. */
+#shell-top,#shell-tree{display:contents}
 /* The shared navigation bar and footer, and the operator pages in the app's own look. */
 /* One header everywhere: only the nav takes the free space (margin-left:auto), the session-cost slot sits right after it and is gone when empty. */
 header nav{flex-wrap:wrap;row-gap:6px}
@@ -8,12 +10,13 @@ header .avatar{padding:0;border:0;line-height:1;box-sizing:border-box;font:var(-
 header nav a.nav-link{padding:6px 2px;border-bottom:2px solid transparent}
 header nav a.nav-link:hover{border-bottom-color:var(--line)}
 header nav a.nav-link[aria-current="page"]{border-bottom-color:var(--green);font-weight:500}
-.site-footer{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:14px 34px;margin-top:40px;border-top:1px solid var(--line);font:var(--fs-xs) DM Mono;letter-spacing:.08em;color:var(--muted)}
+.site-footer{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:14px 34px;margin-top:40px;border-top:1px solid var(--line);font:var(--fs-xs) DM Mono;letter-spacing:.08em;color:var(--muted);flex-shrink:0}
 .site-footer .grow{flex:1}
 .site-footer .footer-brand b,.site-footer .footer-brand strong{font:700 var(--fs-sm) Manrope;letter-spacing:-.02em;color:var(--ink)}
 .site-footer .footer-brand strong{color:var(--green)}
 /* operator pages */
 body.ops-page{min-height:100vh;display:flex;flex-direction:column;overflow:hidden;height:100vh}
+body.ops-page #app{flex:1;min-height:0;display:flex;flex-direction:column;margin:0;max-width:none;padding:0}  /* the global main{margin:auto} would center the console vertically */
 body.ops-page #frame{flex:1;min-height:0;display:flex;flex-direction:column;gap:10px;padding:14px 34px 0}
 body.ops-page .site-footer{margin-top:0;padding:10px 34px}
 .ops-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -30,3 +33,52 @@ body.ops-page td.empty{color:var(--muted);white-space:normal;padding:16px 10px}
 .refresh-note{color:var(--muted);font:var(--fs-xs) DM Mono}
 body:not(.ops-page){min-height:100vh;display:flex;flex-direction:column}
 body:not(.ops-page)>main{flex:1}
+
+/* --- Persistent SPA shell: reserved geometry so async data never moves the navigation. --- */
+/* Order in the DOM: .preview-banner, header, main#app, footer.site-footer. The banner row exists
+   from the first paint when the server says preview (injected config), so it never pushes content. */
+.preview-banner{background:#92400e;color:#fff;text-align:center;font:600 13px Manrope,system-ui,sans-serif;padding:4px 8px;position:sticky;top:0;z-index:1000}
+header{display:grid;grid-template-columns:auto 1fr auto auto auto;align-items:center;column-gap:18px;height:84px;flex-shrink:0;border-bottom:1px solid var(--line);padding:0 4.5vw;background:rgba(242,240,233,.84);backdrop-filter:blur(16px);position:sticky;top:0;z-index:6}
+header .brand{justify-self:start;width:227px;white-space:nowrap}  /* fixed: font swap must not shift the nav */
+header nav{display:flex;gap:18px;align-items:center;min-width:0;overflow:hidden;margin:0;flex-wrap:nowrap;height:28px}  /* fixed: font swap must not shift the box */
+header nav a.nav-link{white-space:nowrap;flex:none}
+header nav .nav-ops{display:flex;gap:18px;align-items:center}
+header nav .nav-ops[hidden]{display:none}
+/* The async slots keep their space whether or not data has arrived: fixed minimum widths,
+   right aligned, and content that changes in place (visibility, never display). */
+header .session-cost{justify-self:end;min-width:150px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header .session-cost.balance{min-width:140px}
+header .session-cost[hidden]{display:block;visibility:hidden}
+header .session-cost:empty{display:block}
+header .session-cost:empty::after{content:' ';visibility:hidden}
+header #identity{justify-self:end;min-width:90px;display:flex;justify-content:flex-end}
+.nav-menu{display:none;justify-self:end;width:38px;height:38px;border:1px solid var(--line);border-radius:10px;background:var(--card);font-size:17px;line-height:1;color:var(--ink)}
+/* Medium screens (901-1400px): same stable geometry, tighter reservations so the full
+   link set still fits. Slots stay reserved; only the reserved widths change. */
+@media(max-width:1700px){
+  header{padding:0 2.5vw;column-gap:12px}
+  header nav{gap:12px}
+  header .brand small{display:none}
+  header .brand{width:110px}  /* wordmark-only tier */
+}
+/* The JS fit-check (spa-shell.js) adds .nav-compact when the inline set cannot fit:
+   the whole nav moves into the menu as one stable decision; slots never move. */
+header.nav-compact .nav-menu{display:block}
+header.nav-compact nav{height:auto;position:absolute;top:84px;right:4.5vw;flex-direction:column;align-items:stretch;gap:2px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 14px;box-shadow:0 14px 40px rgba(26,42,34,.16);display:none;z-index:7}
+header.nav-compact nav.open{display:flex}
+header.nav-compact nav .nav-ops{flex-direction:column;align-items:stretch;gap:2px;border-top:1px solid var(--line);margin-top:6px;padding-top:6px}
+/* Wide screens only show the full nav when everything fits (brand + 7 links + slots). */
+@media(max-width:900px){
+  header nav{height:auto;position:absolute;top:84px;right:4.5vw;flex-direction:column;align-items:stretch;gap:2px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 14px;box-shadow:0 14px 40px rgba(26,42,34,.16);display:none;z-index:7}
+  header nav.open{display:flex}
+  header nav .nav-ops{flex-direction:column;align-items:stretch;gap:2px;border-top:1px solid var(--line);margin-top:6px;padding-top:6px}
+  header nav .nav-ops[hidden]{display:none}
+  .nav-menu{display:block}
+}
+@media(max-width:640px){
+  header{height:auto;min-height:84px;grid-template-columns:auto 1fr auto;padding:10px 20px;row-gap:8px}
+  header .session-cost{grid-column:1/-1;min-width:0;text-align:center;justify-self:stretch}
+  header .session-cost.balance{grid-column:1/-1}
+  header #identity{min-width:48px}  /* still reserved: the widest narrow state (Sign in, 46px) never shifts the header */
+  header nav{top:100px;right:20px}
+}

@@ -1,5 +1,6 @@
-"""One header for every page: the markup lives in web/shell-header.html and is put into each page when it is served; the avatar and nav rules cannot be
-overridden by a page's own styles."""
+"""One header for every page: it is the persistent SPA shell (spa-shell.js), mounted once by the app page.
+Every HTML route serves the same app page, so the header, navigation, slots and footer are identical by
+construction; the avatar and operator-scoped style rules cannot be overridden by a page's own styles."""
 import re
 from pathlib import Path
 
@@ -7,42 +8,45 @@ import pytest
 from fastapi.testclient import TestClient
 
 WEB = Path(__file__).resolve().parents[1] / "src" / "delivery_api" / "web"
-HEADER = (WEB / "shell-header.html").read_text(encoding="utf-8").strip()
+SHELL = (WEB / "spa-shell.js").read_text(encoding="utf-8")
 
 
 def test_no_page_file_carries_its_own_header():
-    for name in ("index.html", "ops.html"):
-        text = (WEB / name).read_text(encoding="utf-8")
-        assert "<header" not in text and text.count("<!--SHELL_HEADER-->") == 1, name
+    # the shell builds the header at runtime; the served page must not carry a static one
+    text = (WEB / "index.html").read_text(encoding="utf-8")
+    assert "<header" not in text and '<div id="shell-top">' in text and 'id="app"' in text
+    assert not (WEB / "shell-header.html").exists() and not (WEB / "ops.html").exists()
 
 
-def test_the_shared_header_has_the_slots_every_page_needs():
-    assert HEADER.count("<header>") == 1 and HEADER.count("<nav>") == 1
-    for needle in ('id="sessioncost"', 'id="identity"', 'class="brand"', 'href="/credits"', 'href="/about"'):
-        assert needle in HEADER, needle
+def test_the_shell_has_the_slots_every_page_needs():
+    for needle in ('id="sessioncost"', 'id="accountbalance"', 'id="identity"', 'class="brand"', "href:'/credits'", "href:'/about'", '<header>', '<nav', '<footer'):
+        assert needle in SHELL, needle
 
 
 @pytest.mark.parametrize("path", ["/", "/about", "/credits", "/ops"])
-def test_every_page_route_serves_exactly_the_same_header(path):
+def test_every_page_route_serves_exactly_the_same_app_page(path):
     import delivery_api.app as module
     response = TestClient(module.app).get(path, headers={"Accept": "text/html"})
     assert response.status_code == 200 and response.headers["content-type"].startswith("text/html"), path
     body = response.text
-    assert body.count("<header>") == 1 and "SHELL_HEADER" not in body and HEADER in body
+    assert '<div id="shell-top">' in body and "/assets/spa-shell.js" in body and "<!--REQUI_CONFIG-->" not in body and "window.__REQUI_CONFIG__" in body
+    assert body == TestClient(module.app).get("/", headers={"Accept": "text/html"}).text
 
 
-def test_the_task_and_session_page_handlers_return_the_assembled_page():
+def test_the_task_and_session_page_handlers_return_the_app_page():
     import delivery_api.app as module
     pages = [module.task_view("t"), module.gate_page("t", "g"), module.complete_page("t"), module.decision_page("t", "w")]
     for page in pages:
-        assert HEADER in page.body.decode() and "SHELL_HEADER" not in page.body.decode()
+        body = page.body.decode()
+        assert '<div id="shell-top">' in body and 'id="app"' in body and "SHELL_HEADER" not in body
 
 
-def test_the_routes_serve_the_assembled_page_for_both_files():
+def test_the_routes_serve_the_app_page_and_the_operator_page_is_the_same_document():
     import delivery_api.app as module
     src = Path(module.__file__).read_text(encoding="utf-8")
-    assert 'FileResponse(WEB_DIR / "index.html")' not in src and 'FileResponse(WEB_DIR / "ops.html"' not in src
-    assert "app" in dir(module) and HEADER in module._page("index.html").body.decode() and HEADER in module._page("ops.html").body.decode()
+    assert 'FileResponse(WEB_DIR / "index.html")' not in src and "ops.html" not in src
+    assert "app" in dir(module) and '<div id="shell-top">' in module._page("index.html").body.decode()
+    assert '<div id="shell-top">' in module.operator_page().body.decode()
 
 
 def _rules(css):
@@ -59,8 +63,11 @@ def test_the_avatar_has_no_padding_and_no_page_rule_reaches_header_buttons():
                 assert "#frame" in one, "an operator button rule must stay inside #frame: " + one.strip()
 
 
-def test_only_the_nav_takes_free_space_and_an_empty_cost_slot_disappears():
+def test_only_the_nav_is_flexible_and_the_cost_slot_keeps_its_space():
     css = (WEB / "chrome.css").read_text(encoding="utf-8")
     bodies = {sel.strip(): body for sel, body in _rules(css)}
-    assert "margin-left:0" in bodies["header .session-cost"]
-    assert "display:none" in bodies["header .session-cost:empty"]
+    # the header is a grid where only the nav column flexes; the cost/balance slots keep their
+    # reserved space whether or not data has arrived (visibility, never display), so nothing moves.
+    assert "grid-template-columns:auto 1fr auto auto auto" in bodies["header"]
+    assert "display:block" in bodies["header .session-cost:empty"]
+    assert "visibility:hidden" in bodies["header .session-cost[hidden]"]
