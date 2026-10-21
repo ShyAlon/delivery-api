@@ -1,5 +1,6 @@
 import {el,makeTable} from './ops-table.js';
 import {onPageExit} from './page-lifecycle.js';
+import {reveal} from './client-core.js';
 // The operator views mount inside the app outlet like any other page. mountOpsPage returns nothing;
 // it registers its cleanup (timers, listeners, body flags) so leaving /ops tears the page down.
 export function mountOpsPage(root,initialView){
@@ -153,6 +154,7 @@ function card(k,v,s,tip){return el('div',{className:'card',title:tip},el('div',{
 
 function show(h){
   if(dead)return;
+  if(!$('#flags')||!$('#cards'))return;   // defense in depth: the router's epoch guard is what keeps this page alive
   $('#asof').textContent='As of '+localTime(h.as_of);
   $('#flags').replaceChildren(...h.flags.map(f=>el('div',{className:'flag '+f.level,textContent:f.text})));
   const m=h.memory,c=h.cpu,cap=h.capacity;
@@ -166,6 +168,7 @@ function show(h){
     card('Time Limit',cap.time_limit_minutes+' min',cap.mode,'How long one phase may run before it is stopped.'));
   sessions.set(h.sessions);running.set(h.running);recent.set(h.recent_runs);
   $('#note').textContent=h.restart_note;
+  reveal($('#cards'));reveal($('#panels'));
 }
 
 async function load(){
@@ -177,7 +180,8 @@ async function load(){
   }catch(e){fail('Could not reach the server. Check your connection and press Refresh.')}
 }
 function fail(msg){
-  if(dead)return;$('#flags').replaceChildren(el('div',{className:'flag warning',textContent:msg}));$('#cards').replaceChildren();sessions.set([]);running.set([]);recent.set([])}
+  if(dead)return;const f=$('#flags'),c=$('#cards');if(!f||!c)return;   // defense in depth, not the fix: the router's epoch guard owns liveness
+  f.replaceChildren(el('div',{className:'flag warning',textContent:msg}));c.replaceChildren();sessions.set([]);running.set([]);recent.set([])}
 
 $('#refresh').onclick=()=>{const v=document.body.dataset.view;v==='stops'?loadStops():v==='spend'?loadSpend():v==='grant'?loadGrants():load()};
 $('#dl').onclick=async()=>{

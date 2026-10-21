@@ -340,3 +340,21 @@ header{z-index:6}
 .waiting-banner{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;margin:0 0 16px;padding:14px 18px;border-radius:14px;background:var(--lime);color:var(--ink);border:1px solid #9bc43c;box-shadow:0 0 22px #c8f05c55}.waiting-banner b{font-size:var(--fs-lg)}.waiting-banner span{font-size:var(--fs-md)}
 .reconnecting-strip{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:70;padding:8px 16px;border-radius:99px;background:#192b49;color:#fff;font-size:var(--fs-sm);box-shadow:0 4px 16px #0005;pointer-events:none}
 .next-phase-panel{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;justify-content:space-between;margin:0 0 16px;padding:18px 20px;border-radius:16px;background:var(--card);border:1px solid var(--green);box-shadow:0 0 22px #16a36a22}.next-phase-panel div{display:flex;flex-direction:column;gap:4px}.next-phase-panel b{font-size:var(--fs-lg)}.next-phase-panel span{font-size:var(--fs-md);color:var(--muted)}.next-phase-button{min-height:46px;padding:12px 22px;font-size:var(--fs-md);font-weight:700;border-radius:12px;cursor:pointer}.next-phase-button:disabled{opacity:.6;cursor:progress}
+
+/* Page and data transitions: subtle, non-blocking, and never gating navigation or errors.
+   .view-in plays once after a route commits; .reveal plays when real data replaces a placeholder. */
+#app.view-in{animation:requi-view-in .18s ease-out}
+@keyframes requi-view-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.reveal{animation:requi-reveal .16s ease-out}
+@keyframes requi-reveal{from{opacity:0}to{opacity:1}}
+.route-loading{display:flex;align-items:center;justify-content:center;min-height:38vh}
+.task-skeleton{pointer-events:none;min-height:218px}
+.task-skeleton .sk{display:block;border-radius:8px;background:color-mix(in srgb,var(--muted) 18%,transparent);animation:requi-sk 1.6s ease-in-out infinite}
+.task-skeleton .sk-top{width:38%;height:12px;margin:2px 0 14px}
+.task-skeleton .sk-title{width:64%;height:20px;margin-bottom:10px}
+.task-skeleton .sk-meta{width:82%;height:12px;margin-bottom:18px}
+.task-skeleton .sk-graph{width:100%;height:64px;margin-bottom:18px}
+.task-skeleton .sk-foot{width:55%;height:12px}
+@keyframes requi-sk{50%{opacity:.55}}
+@media (prefers-reduced-motion:reduce){.task-skeleton .sk{animation:none}}
+@media (prefers-reduced-motion:reduce){#app.view-in,.reveal{animation:none}}

@@ -1477,6 +1477,121 @@ def test_cross_ui_waiting_banner_during_slow_write(page,ui):
     page.locator('#server-wait').wait_for(state='hidden',timeout=3000)
 
 
+def test_background_refresh_stays_quiet_and_terminal_output_poll_stops(page, ui):
+    # The task page polls every 5s: a background snapshot refresh plus a phase-output read.
+    # The background read must not flash the global wait banner, and once the environment
+    # reports phase output as unavailable here (local preview), that poll leg must stop
+    # while the snapshot liveness leg keeps running. Foreground reads must still show progress.
+    page.goto(ui + '/tasks/live/view')
+    page.locator('.detail-head').wait_for()
+    real = page.request.get(ui + '/api/tasks/live/phase-output').json()
+    terminal = {**real, 'status': 'local_preview', 'items': []}
+    hits = {'task': 0, 'output': 0}
+    def slow_task(route):
+        hits['task'] += 1
+        page.wait_for_timeout(900)  # longer than the 350ms banner delay
+        route.continue_()
+    def terminal_output(route):
+        hits['output'] += 1
+        route.fulfill(json=terminal)
+    page.evaluate("""() => {
+      window.__bannerShows = 0;
+      const banner = document.querySelector('#server-wait');
+      new MutationObserver(() => {
+        if (!banner.classList.contains('hidden')) window.__bannerShows++;
+      }).observe(banner, {attributes: true, attributeFilter: ['class']});
+    }""")
+    page.route('**/api/tasks/live', slow_task)
+    page.route('**/api/tasks/live/phase-output', terminal_output)
+    page.wait_for_timeout(11500)  # spans two 5s poll cycles
+    assert page.evaluate('window.__bannerShows') == 0, 'background refresh flashed the Loading task banner'
+    assert hits['task'] >= 2, f"snapshot liveness stopped: {hits}"
+    assert hits['output'] == 1, f"terminal output status did not stop the output poll: {hits}"
+    assert 'not part of a local preview' in page.locator('#phase-output-slot').inner_text()
+    # Foreground progress is preserved: a full reload issues a foreground task read, still delayed.
+    page.evaluate('window.__bannerShows = 0')
+    page.reload()
+    page.wait_for_function("document.querySelector('#server-wait') && !document.querySelector('#server-wait').classList.contains('hidden')", timeout=5000)
+    page.locator('.detail-head').wait_for()
+    page.unroute('**/api/tasks/live', slow_task)
+    page.unroute('**/api/tasks/live/phase-output', terminal_output)
+
+
+
+def test_route_placeholder_holds_geometry_then_reveals_without_shell_shift(page, ui):
+    # Delayed dashboard data: a labeled skeleton with reserved geometry fills the outlet
+    # immediately, then real data reveals in place; the shell never moves.
+    def slow(route):
+        page.wait_for_timeout(1200)
+        route.continue_()
+    page.route('**/api/tasks', slow)
+    page.goto(ui + '/about')
+    page.locator('#app h1').wait_for()
+    shell_y_before = page.locator('#shell-top').evaluate('e=>e.getBoundingClientRect().y')
+    page.click('a[href="/"]')
+    note = page.locator('.task-grid [role="status"]')
+    note.wait_for()
+    assert 'Loading tasks' in note.inner_text()
+    assert page.locator('.task-grid[aria-busy="true"]').count() == 1
+    skeletons = page.locator('.task-skeleton')
+    assert skeletons.count() == 3
+    height = skeletons.first.evaluate('e=>e.getBoundingClientRect().height')
+    assert height >= 200, f'skeleton must reserve card geometry, got {height}'
+    page.screenshot(path=str(_screenshots_dir / 'dashboard-loading-placeholder.png'), full_page=False)
+    page.locator('.task[data-open]').first.wait_for()
+    assert page.locator('.task-grid[aria-busy]').count() == 0
+    assert page.locator('.task-skeleton').count() == 0
+    assert page.evaluate("getComputedStyle(document.querySelector('.task-grid')).animationName") == 'requi-reveal'
+    shell_y_after = page.locator('#shell-top').evaluate('e=>e.getBoundingClientRect().y')
+    assert shell_y_before == shell_y_after, 'shell moved during placeholder-to-data transition'
+    page.screenshot(path=str(_screenshots_dir / 'dashboard-revealed.png'), full_page=False)
+    page.unroute('**/api/tasks', slow)
+
+
+def test_awaiting_mount_shows_labeled_placeholder_not_blank(page, ui):
+    # A route whose mount awaits before rendering (task detail) must show the labeled
+    # router placeholder with reserved geometry, never a blank outlet.
+    def slow(route):
+        page.wait_for_timeout(1200)
+        route.continue_()
+    page.route('**/api/tasks/live', slow)
+    page.goto(ui + '/about')
+    page.locator('#app h1').wait_for()
+    page.evaluate("location.href='/tasks/live/view'")
+    placeholder = page.locator('.route-loading[role="status"]')
+    placeholder.wait_for()
+    assert placeholder.inner_text().strip() != ''
+    height = placeholder.evaluate('e=>e.getBoundingClientRect().height')
+    assert height >= 250, f'router placeholder must reserve geometry, got {height}'
+    page.screenshot(path=str(_screenshots_dir / 'route-loading-placeholder.png'), full_page=False)
+    page.locator('.detail-head').wait_for()
+    assert page.locator('.route-loading').count() == 0
+    page.unroute('**/api/tasks/live', slow)
+
+
+def test_error_states_render_instantly_without_fade(page, ui):
+    # Mount failure: the error modal appears immediately and the outlet does not fade.
+    page.route('**/api/tasks/live', lambda route: route.fulfill(status=500, json={'error': 'boom'}))
+    page.goto(ui + '/tasks/live/view')
+    page.locator('#modal:not(.hidden)').wait_for()
+    assert page.evaluate("document.querySelector('#app').classList.contains('view-in')") is False
+    page.unroute('**/api/tasks/live')
+    # In-view error state: the warning is committed at full opacity, never animated in.
+    live = page.request.get(ui + '/api/tasks/live').json()
+    live['state'] = 'running'; live['active_phase'] = 'intent'
+    live['input_state'] = {'waiting': False, 'process_live': False, 'decision': None}
+    live['ui_state'] = {'mode': 'error', 'active_phase': 'intent', 'process_live': False, 'decision': None, 'gate': None}
+    live['events'].append({'id': 999, 'kind': 'error', 'message': 'Error: engine stream handling stopped.', 'phase_key': 'intent', 'payload': {}, 'ts': 1720003000})
+    page.route('**/api/tasks/live', lambda route: route.fulfill(json=_promote_control(live)))
+    page.goto(ui + '/tasks/live/view')
+    notice = page.locator('.task-error-state')
+    notice.wait_for()
+    assert page.evaluate("document.querySelector('#app').classList.contains('view-in')") is False
+    assert page.evaluate("getComputedStyle(document.querySelector('#app')).animationName") == 'none'
+    assert notice.evaluate('e=>getComputedStyle(e).opacity') == '1'
+    page.unroute('**/api/tasks/live')
+
+
 def test_browser_session_refresh_single_flight_before_expiry(page,ui):
     import threading,time
     page.goto(ui+'/tasks/empty/view')

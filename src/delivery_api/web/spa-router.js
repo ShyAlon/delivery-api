@@ -26,7 +26,7 @@ export async function dispatch(){
   const path=location.pathname,hash=location.hash;
   leavePage();
   const app=document.querySelector('#app');
-  if(app)app.innerHTML='';
+  if(app){app.classList.remove('view-in');app.innerHTML='<div class="loading route-loading" role="status">Loading\u2026</div>'}
   const my=pageEpoch();
   current={path,epoch:my};
   for(const r of routes){
@@ -36,12 +36,14 @@ export async function dispatch(){
     clientLog('navigation','Client route',{url:path+hash});
     await r.mount(params,hash);
     if(pageEpoch()!==my)return; // navigated away while mounting
+    if(app&&!app.querySelector('.task-error-state,[role="alert"],.gate-evidence-error,.route-loading'))app.classList.add('view-in');   // errors render instantly, never faded
     onNavigated(path,hash);
     return;
   }
   clientLog('navigation','No client route matched',{url:path+hash});
   await notFound(path);
   if(pageEpoch()!==my)return;
+  if(app&&!app.querySelector('.task-error-state,[role="alert"],.gate-evidence-error,.route-loading'))app.classList.add('view-in');
   onNavigated(path,hash);
 }
 export function startRouter(){

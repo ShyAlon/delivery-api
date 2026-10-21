@@ -1,5 +1,9 @@
 import {scrubText,buildClientReport} from './log-scrub.js';
 import {zipText} from './zip.js';
+import {pageController} from './page-lifecycle.js';
+/* Subtle placeholder-to-data transition: a short fade when real data replaces a placeholder.
+   Never blocks rendering and never applies to errors; reduced motion turns it off in style.css. */
+export function reveal(el){if(!el)return;el.classList.remove('reveal');void el.offsetWidth;el.classList.add('reveal')}
 export const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 export const time = timestamp => timestamp ? new Date(timestamp*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
 export const fullTime = timestamp => timestamp ? new Intl.DateTimeFormat([], {year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'short'}).format(new Date(timestamp*1000)) : '—';
@@ -90,11 +94,13 @@ const connection=createConnectionState({
 export async function api(url,opts={}){
   if(url!=='/auth/refresh' && url!=='/api/auth' && !url.startsWith('/auth/sign') && !url.startsWith('/auth/email-availability'))await renewSessionIfDue();
   const began=performance.now();
-  const method=(opts.method||'GET').toUpperCase(),timeout=opts.timeout===undefined?(method==='GET'?60000:null):opts.timeout,controller=timeout?new AbortController():null;
+  const method=(opts.method||'GET').toUpperCase(),timeout=opts.timeout===undefined?(method==='GET'?60000:null):opts.timeout,controller=new AbortController();
+  pageController().signal.addEventListener('abort',()=>controller.abort(),{once:true});   // leaving the page cancels its in-flight requests
+
   const foregroundRead=method==='GET'&&(/\/api\/tasks\/[^/]+$/.test(url)||/\/api\/tasks\/[^/]+\/artifacts\//.test(url)||/\/api\/sessions/.test(url)||/\/api\/tasks\/[^/]+\/audit$/.test(url));
-  const endWait=opts.inlineProgress||(method==='GET'&&!foregroundRead)||url==='/api/client-log'||url==='/auth/refresh'||url.startsWith('/auth/')?()=>{}:beginWait(url);
+  const endWait=opts.inlineProgress||opts.background||(method==='GET'&&!foregroundRead)||url==='/api/client-log'||url==='/auth/refresh'||url.startsWith('/auth/')?()=>{}:beginWait(url);
   let timedOut=false,timer=timeout?setTimeout(()=>{timedOut=true;controller.abort()},timeout):null,response;
-  try{response=await fetch(url,{headers:{'content-type':'application/json'},...opts,signal:opts.signal||(controller&&controller.signal)})}
+  try{response=await fetch(url,{headers:{'content-type':'application/json'},...opts,signal:opts.signal||controller.signal})}
   catch(error){
     const background=isBackground(method,opts,foregroundRead);
     if(error.name!=='AbortError'||timedOut)connection.failed();
