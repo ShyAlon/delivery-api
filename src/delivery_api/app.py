@@ -516,7 +516,7 @@ def _page(name,headers=None):
     from fastapi.responses import HTMLResponse
     text=(WEB_DIR/name).read_text(encoding="utf-8")
     import json as _json
-    boot=_json.dumps({"preview":os.environ.get("DELIVERY_PREVIEW")=="1"})
+    boot=_json.dumps({"preview":os.environ.get("DELIVERY_PREVIEW")=="1","local_preview":os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1"})
     text=text.replace("<!--REQUI_CONFIG-->","<script>window.__REQUI_CONFIG__="+boot+";</script>")
     return HTMLResponse(text,headers=headers or {"Cache-Control":"no-cache"})
 
@@ -531,6 +531,7 @@ def auth_status(request: Request):
     result={"mode":mode,"authenticated":a.id not in {"anonymous"},"actor":a.email or a.label,"admin":a.admin,
             "providers":[p for p,ident in (("google",config.GOOGLE_CLIENT_ID),("github",config.GITHUB_CLIENT_ID)) if ident],"workspace":"private" if config.CLOUD_TENANTS else "shared"}
     if os.environ.get("DELIVERY_PREVIEW")=="1":result["preview"]=True
+    if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1":result["local_preview"]=True
     if config.CLOUD_TENANTS and a.id!='anonymous':
         from .supabase_sessions import ACCESS_COOKIE
         token=request.cookies.get(ACCESS_COOKIE)
@@ -1248,7 +1249,7 @@ def _task_artifact(task_id:str,phase:str,name:str)->Path:
     artifact=next((a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==phase and a["name"]==name),None)
     if not artifact:raise HTTPException(404,"artifact not found")
     path=Path(artifact["ref"]).resolve()
-    if not path.is_file():raise HTTPException(404,"artifact file not found")
+    if not path.is_file():raise HTTPException(404,"Artifact files are not part of a local preview" if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1" else "artifact file not found")
     return path
 
 _OUTPUT_PARTIALS={"srs":"srs_fills.partial.json","architecture":"architecture.partial.json",
@@ -1260,7 +1261,9 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     """Current phase output only. Partial checkpoints are atomic producer writes, not control."""
     task=store.task(task_id)
     if not task:raise HTTPException(404,"task not found")
-    phase=task.get("active_phase");generation=task.get("generation");session=_recorded_engine_session(task_id)
+    phase=task.get("active_phase");generation=task.get("generation")
+    if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1":return {"phase_key":phase,"generation":generation,"status":"local_preview","items":[]}
+    session=_recorded_engine_session(task_id)
     if not session or not phase:return {"phase_key":phase,"generation":generation,"status":"waiting","items":[]}
     from vmodel_contracts.runtime import artifacts_root
     root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
@@ -1571,6 +1574,7 @@ def task_artifact_view(task_id:str,phase:str,name:str):
 
 @app.get("/api/tasks/{task_id}/artifacts.zip")
 def task_artifacts_zip(task_id:str):
+    if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1":raise HTTPException(404,"Artifact downloads are not part of a local preview")
     records=_task_artifact_snapshot(task_id)
     if not records:raise HTTPException(404,"no artifacts found")
     data=io.BytesIO()

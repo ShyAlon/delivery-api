@@ -102,7 +102,7 @@ def env(tmp_path):
 
 
 def _run(api, e, **extra):
-    return subprocess.run(["bash", "scripts/ops/preview.sh"], cwd=api, capture_output=True, text=True, env={**e, **extra}, timeout=60)
+    return subprocess.run(["bash", "scripts/ops/preview.sh"], cwd=api, capture_output=True, text=True, env={**e, "PREVIEW_VIA_SERVER": "1", **extra}, timeout=60)  # these tests cover the SSH server flow; the default local flow has its own file
 
 
 def test_it_aborts_with_fix_when_docker_is_not_running(env):
@@ -239,7 +239,7 @@ def test_readiness_needs_a_positive_closed_report_and_fails_closed(env):
 
 def test_the_settings_file_is_private_from_its_first_byte():
     text = (OPS / "preview.sh").read_text()
-    assert text.index("umask 077; WORK=$(mktemp -d)") < text.index('full.env" > "$WORK/live.env"')
+    assert text.index("umask 077; WORK=$(mktemp -d") < text.index('full.env" > "$WORK/live.env"')
     r = subprocess.run(["bash", "-c", 'umask 022; PREVIEW_FUNCTIONS_ONLY=1 . %s; printf "DELIVERY_A=1\nOPENAI_KEY=x\n" > /tmp/in.$$; build_env /tmp/in.$$ /tmp/out.$$; stat -c %%a /tmp/out.$$ 2>/dev/null || stat -f %%Lp /tmp/out.$$; cat /tmp/out.$$; rm -f /tmp/in.$$ /tmp/out.$$' % (OPS / "preview.sh")],
                        capture_output=True, text=True)
     lines = r.stdout.split()
