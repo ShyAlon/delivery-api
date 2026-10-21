@@ -1,3 +1,4 @@
+import {pageEpoch,pageStale} from './page-lifecycle.js';
 import {api,esc,clientLog} from './client-core.js';
 import {checklistHtml,refreshDecision} from './decision-panel.js';
 import {watchReviewProgress} from './progress.js';
@@ -28,12 +29,13 @@ function evidenceHtml(value){if(value===null||value===undefined)return '';return
 export function createDecisions(ctx){
  let generation=0;
  async function decisionPage(taskId,waitId){
-  const token=++generation,query=new URLSearchParams(location.search);
+  const token=++generation,query=new URLSearchParams(location.search),at=pageEpoch();
   let data;
   try{data=await api(`/api/tasks/${encodeURIComponent(taskId)}/decisions/${encodeURIComponent(waitId)}?${query}`)}catch(error){
+   if(pageStale(at))return;   // navigated away while loading: never commit
    app.innerHTML=`<section class="gate-page"><a class="back" href="/tasks/${encodeURIComponent(taskId)}/view">Back to task</a><h1>Review unavailable</h1><p class="notice">${esc(error.message)}</p></section>`;return;
   }
-  if(token!==generation)return;
+  if(token!==generation||pageStale(at))return;
   const r=data.review,purpose=decisionPurpose(r),evidence=r.decision?.context?.evidence;
   if(!purpose||!evidence)throw new Error('Typed review evidence is unavailable');
   if(purpose==='semantic_review'){return semanticPage(taskId,waitId,data,query)}
@@ -109,11 +111,13 @@ export function createDecisions(ctx){
  function shortTitle(t){const w=String(t||'').trim().split(/\s+/).filter(Boolean);return w.length>32?w.slice(0,32).join(' ')+'…':(w.join(' ')||'Open Question')}
  function registerHtml(register){if(!register)return'';const opts=[{value:'',label:'Leave Open',tip:'Leave this gap flagged. Approving the phase does not answer it, and it can still block the handoff.'},{value:'decided',label:'Answer It',tip:'Supply the missing answer yourself. Write it below with a reason. It is kept in this item\'s history.'},{value:'deferred',label:'Decide Later',tip:'Postpone it on the record. Add a reason. It stays open and can still block the handoff.'}];return `<section class="founder-register"><h2>Missing Data and Open Founder Inputs</h2><p>These gaps are flagged, not silently filled. Approving the phase does not answer them. Items left as Leave Open need nothing from you to continue.</p><div class="context-boxes">${register.items.map(x=>boxHtml(shortTitle(x.question),`${fullIfCut(x.question)}<small>Owner: ${esc(titleCase(x.owner))}. Blocks: ${esc(x.blocks.map(titleCase).join(', '))}</small>${pillGroup({name:'fs-'+x.item_id,legend:'Founder Response',options:opts,checked:'',attrs:`data-founder-group="${esc(x.item_id)}"`})}<label>Decision (only for Answer It)<textarea data-founder-answer="${esc(x.item_id)}"></textarea></label><label>Reason ${(x.blocks||[]).length?'(required - this blocks later work)':'(optional)'}<textarea data-founder-reason="${esc(x.item_id)}" ${(x.blocks||[]).length?'data-reason-required="1"':''}></textarea></label>${historyHtml(x)}`)).join('')}${register.advisories.map(x=>boxHtml(shortTitle(x.statement),`${fullIfCut(x.statement)}<ul class="advisory-facts"><li>Owner: ${esc(titleCase(x.owner))}</li><li>Status: ${esc(titleCase(x.status))}</li>${x.validation_expectation?`<li>How to verify: ${esc(x.validation_expectation)}</li>`:''}${(x.affected_ids||[]).length?`<li>Affects: ${esc(x.affected_ids.join(', '))}</li>`:''}</ul>`)).join('')}</div></section>`}
  async function semanticPage(taskId,waitId,data,query){
+  const at=pageEpoch();
   const r=data.review,review=r.decision.context.evidence.semantic_review;
   const items=[...new Map(review.findings.map(f=>[f.item_id,f])).values()];
   const item=query.get('item');if(item&&!items.some(f=>f.item_id===item))throw new Error('Unknown findings item');
   const selectors={...(item?{item}:{}),...(query.get('draft')?{draft:query.get('draft')}:{})};
   history.replaceState({},'',decisionUrl(taskId,r,selectors));
+  if(pageStale(at))return;   // navigated away while loading: never commit
   app.innerHTML=`<section class="gate-page decision-page semantic-page"><div class="page-head semantic-head compact-head"><div class="ch-left"><a class="back" href="/tasks/${encodeURIComponent(taskId)}/view">Back to task</a><div class="eyebrow">Phase: Intent Interview</div></div><div class="ch-main"><h1>Review Flagged Inputs</h1><p>Decide what happens to each flagged item before the ConOps is drafted.</p></div><a id="semantic-link" href="${esc(location.pathname+location.search)}">Link to this findings review</a></div>${data.actionable?'':'<p class="notice">Historical review - read-only.</p>'}${explainerHtml('semantic_review')}<form id="semanticform">${items.map((f,i)=>{const structural=review.findings.some(x=>x.item_id===f.item_id&&x.kind==='structural'),title=findingTitle(f);return `<article class="gate-artifact semantic-item" id="semantic-${i}"><h2>${esc(title)}</h2>${review.findings.filter(x=>x.item_id===f.item_id).map(x=>findingReasonHtml(x.reason)).join('')}<div class="flag-original"><small>As currently written</small>${typeof f.original==='string'?`<blockquote>${esc(f.original)}</blockquote>`:evidenceHtml(stripIds(f.original))}</div>${pillsHtml(i,title,structural)}${replaceFieldsHtml(i,f.original)}<label>Reason (optional)<textarea name="rationale-${i}" maxlength="7000"></textarea></label></article>`}).join('')}<section id="semantic-comments">${(data.comments||[]).map(c=>`<p><b>${esc(c.actor)}</b>: ${esc(c.comment)}</p>`).join('')}</section><label>Comment / annotate<textarea name="comment" maxlength="7000">${esc(data.draft?.comment||'')}</textarea></label>${checklistHtml()}<div class="semantic-footer"><span id="semantic-count" class="semantic-count"></span><div id="semanticstatus" role="status"></div><button type="button" id="semantic-save-draft" class="secondary">Save draft</button><button type="button" id="semantic-save-comment" class="secondary">Save comment only</button><button class="primary" type="submit">Apply decisions and continue</button></div></form></section>`;
   const form=document.querySelector('#semanticform'),status=document.querySelector('#semanticstatus');let accepted=false,applying=false,semanticBlocker='',stopProgress=()=>{};const applyBtn=form.querySelector('button[type=submit]');
   for(const d of data.draft?.semantic_decisions||review.decisions||[]){const i=items.findIndex(f=>f.item_id===d.item_id);if(i>=0){form.elements[`action-${i}`].value=d.action||'';{let saved=d.replacement;if(saved===undefined&&d.replacement_text){try{saved=JSON.parse(d.replacement_text)}catch{saved=undefined}}if(saved!==undefined)fillReplacement(form,i,saved)}form.elements[`rationale-${i}`].value=d.rationale||''}}

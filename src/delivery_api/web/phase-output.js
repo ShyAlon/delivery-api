@@ -21,5 +21,5 @@ export async function loadPhaseOutput(taskId,expectedPhase,generation,container)
   const result=await api(`/api/tasks/${encodeURIComponent(taskId)}/phase-output`);
   if(result.phase_key!==expectedPhase||result.generation!==generation)return false;
   if(container?.isConnected)container.innerHTML=phaseOutputHtml(result);
-  return true;
+  return result.status||true;
 }

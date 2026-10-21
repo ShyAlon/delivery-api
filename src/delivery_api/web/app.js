@@ -36,6 +36,7 @@ startCopyBlocks();
 const ctx={};
 for(const create of [createPurchase,createQa,createIdentity,createDialogs,createDashboard,createTask,createGate,createCompletion,createDecisions,createTaskActions])Object.assign(ctx,create(ctx));
 const {purchasePage,loadIdentity,decisionPage,gatePage,completePage,aboutPage,detail,dashboard,showError}=ctx;
+const mountError=e=>{if(e&&e.name==='AbortError')return;showError(e)};   // leaving a page cancels its loads; that is navigation, not an error
 window.addEventListener('unhandledrejection',e=>showError(e.reason));
 
 const config=window.__REQUI_CONFIG__||{};
@@ -51,14 +52,14 @@ onRouteChange((path,hash)=>{
 
 let authOk=false;
 defineRoutes([
-  {path:'/',mount:()=>dashboard().catch(showError)},
-  {path:'/credits',mount:()=>purchasePage().catch(showError)},
+  {path:'/',mount:()=>dashboard().catch(mountError)},
+  {path:'/credits',mount:()=>purchasePage().catch(mountError)},
   {path:'/about',mount:()=>{aboutPage()}},
-  {path:'/tasks/{taskId}/view',mount:p=>detail(p.taskId).catch(showError)},
-  {path:'/tasks/{taskId}/decisions/{waitId}',mount:p=>decisionPage(p.taskId,p.waitId).catch(showError)},
-  {path:'/tasks/{taskId}/gates/{gateKey}',mount:p=>gatePage(p.taskId,p.gateKey).catch(showError)},
-  {path:'/tasks/{taskId}/complete',mount:p=>completePage(p.taskId).catch(showError)},
-  {path:'/ops',mount:(p,hash)=>mountOps(ctx,hash).catch(showError)},
+  {path:'/tasks/{taskId}/view',mount:p=>detail(p.taskId).catch(mountError)},
+  {path:'/tasks/{taskId}/decisions/{waitId}',mount:p=>decisionPage(p.taskId,p.waitId).catch(mountError)},
+  {path:'/tasks/{taskId}/gates/{gateKey}',mount:p=>gatePage(p.taskId,p.gateKey).catch(mountError)},
+  {path:'/tasks/{taskId}/complete',mount:p=>completePage(p.taskId).catch(mountError)},
+  {path:'/ops',mount:(p,hash)=>mountOps(ctx,hash).catch(mountError)},
 ],(path)=>{
   const app=document.querySelector('#app');
   app.innerHTML=`<section class="empty-card"><div><strong>Page not found</strong><p>${esc(path)} does not exist. Use the navigation above.</p></div></section>`;

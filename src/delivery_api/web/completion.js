@@ -1,3 +1,4 @@
+import {pageEpoch,pageStale} from './page-lifecycle.js';
 import {api,esc} from './client-core.js';
 import {humanLabel} from './format.js';
 
@@ -19,8 +20,10 @@ export function confetti(host){
  host.append(layer);setTimeout(()=>layer.remove(),4200)}
 export function createCompletion(ctx){
  async function completePage(taskId){
+  const at=pageEpoch();
   const app=document.querySelector('#app'),id=encodeURIComponent(taskId);
   const [t,audit]=await Promise.all([api(`/api/tasks/${id}`),api(`/api/tasks/${id}/audit`).catch(()=>null)]);
+  if(pageStale(at))return;   // navigated away while loading: never commit
   if(t.state!=='done'){location.replace(`/tasks/${id}/view`);return}
   const events=t.events||[],priceOf=key=>events.filter(e=>e.kind==='price'&&e.phase_key===key).pop()?.payload,
    starts=t.phases.map(p=>Number(p.started_at||0)).filter(Boolean),ends=t.phases.map(p=>Number(p.completed_at||0)).filter(Boolean),
@@ -36,6 +39,7 @@ export function createCompletion(ctx){
    return `<li><span>${esc(p.label||humanLabel(p.phase_key))}</span><span>${p.started_at&&p.completed_at?esc(durationLabel(p.completed_at-p.started_at)):'-'}</span><span>${credit}</span></li>`}).join('');
   const approved=t.phases.filter(p=>['approved','done'].includes(p.state)).length;
   const total=audit?.totals?`${credits(audit.totals.price)} credits · ${usd(audit.totals.price_usd)}`:'-';
+  if(pageStale(at))return;   // the artifact counts resolved after navigation: never commit
   app.innerHTML=`<div class="complete-page"><div class="page-head compact-head"><div class="ch-left"><a class="back" href="/tasks/${id}/view">← Back to task</a><div class="eyebrow">Generation ${String(t.generation).padStart(2,'0')} · Complete</div></div><div class="ch-main"><h1>Congratulations, ${esc(t.title)} is complete</h1><p>${end?`Finished ${esc(new Date(end*1000).toLocaleString())}`:'Finished'}</p></div></div>
    <section class="panel complete-summary"><div class="audit-totals"><div><span>Total time</span><b>${start&&end?esc(durationLabel(end-start)):'-'}</b></div><div><span>Phases</span><b>${approved}/${t.phases.length}</b></div><div><span>Price</span><b>${total}</b></div></div>
    <div class="audit-totals complete-counts">${counts.map(c=>{const g=gateFor(c.phase),v=c.value===null?'-':c.value.toLocaleString();return `<div><span>${c.label}</span><b>${g?`<a href="/tasks/${id}/gates/${encodeURIComponent(g.gate_key)}">${v}</a>`:v}</b></div>`}).join('')}</div>
