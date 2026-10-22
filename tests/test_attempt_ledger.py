@@ -1126,7 +1126,9 @@ from delivery_api.producer_admission import WorkerAdmissionGateway
 
 def _stage_row(s, owner, session_id, ordinal, *, attempt_id=None, response=True, usage={'input_tokens': 5, 'output_tokens': 6}):
     """Insert one engine-side staged provider response row through the app role
-    (RLS-checked), in the shape the interview engine actually writes."""
+    (RLS-checked), in the shape the interview engine actually writes. The request
+    sha is namespaced by the (unique per test) session id: the harness database
+    persists for the whole pytest process and contract tests count by sha key."""
     import json, time, psycopg
     # Engine-side rows land through the engine's own backend connection in
     # production; the operator connection stands in for it here (the DA store
@@ -1136,7 +1138,7 @@ def _stage_row(s, owner, session_id, ordinal, *, attempt_id=None, response=True,
             "INSERT INTO staged_provider_responses(owner_id,session_id,generation,execution_point,node,stage,item,ordinal,"
             "attempt_id,request_sha256,provider,model,dispatched_at,response,usage,completed_at) "
             "VALUES (%s,%s,1,'anchor-1','scope-node','scope','',%s,%s,%s,'fake','fake',%s,%s::jsonb,%s::jsonb,%s)",
-            (owner.owner_id, session_id, ordinal, attempt_id, 'sha-' + str(ordinal), time.time(),
+            (owner.owner_id, session_id, ordinal, attempt_id, f'sha-{session_id}-{ordinal}', time.time(),
              json.dumps({'v': ordinal}) if response else None,
              json.dumps(usage) if usage is not None else None,
              time.time() if response else None))
