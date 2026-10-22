@@ -1,8 +1,8 @@
 """PR A schema contract: placement lease columns and the session journal.
 
-Runs against the isolated migrated Postgres (pg_harness). Verifies the
-migration's shape and that the journal carries the same tenant isolation and
-immutability posture as its parent registry - never a real database.
+Runs against the isolated migrated Postgres (pg_harness) as requi_backend,
+the engine's backend role: the journal is backend-role only, tenant isolated
+and immutable - never a real database.
 """
 import os
 import subprocess
@@ -17,7 +17,7 @@ B = '00000000-0000-0000-0000-000000000002'
 
 
 def sql(query, owner=A, success=True):
-    prefix = 'BEGIN; SET LOCAL ROLE authenticated; '
+    prefix = 'BEGIN; SET LOCAL ROLE requi_backend; '
     if owner is not None:
         prefix += f"SELECT set_config('request.jwt.claim.sub','{owner}',true); SELECT set_config('request.jwt.claim.session_id','{owner}',true); "
     result = subprocess.run(['psql', DSN, '-v', 'ON_ERROR_STOP=1', '-Atq', '-f', '-'], input=prefix + query + '; ROLLBACK;', text=True,
@@ -58,7 +58,7 @@ def test_journal_tenant_isolation():
     sql("INSERT INTO engine_session_journal VALUES ('lease-sa',2,'{}'::jsonb,0)", B, success=False)
 
 
-def test_journal_pages_are_immutable_for_authenticated():
+def test_journal_pages_are_immutable_for_backend_role():
     run("INSERT INTO engine_session_journal VALUES ('lease-sa',3,'{\"a\":1}'::jsonb,0) ON CONFLICT DO NOTHING")
     sql("UPDATE engine_session_journal SET page='{}'::jsonb WHERE session_id='lease-sa' AND cursor=3", success=False)
     sql("DELETE FROM engine_session_journal WHERE session_id='lease-sa' AND cursor=3", success=False)

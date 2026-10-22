@@ -27,11 +27,13 @@ CREATE TABLE engine_session_journal (
 );
 ALTER TABLE engine_session_journal ENABLE ROW LEVEL SECURITY;
 ALTER TABLE engine_session_journal FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON engine_session_journal TO authenticated
+CREATE POLICY tenant_isolation ON engine_session_journal TO requi_backend
  USING (public.requi_session_active() AND EXISTS(SELECT 1 FROM engine_sessions s
    WHERE s.session_id=engine_session_journal.session_id AND s.owner_id = (select auth.uid())))
  WITH CHECK (public.requi_session_active() AND EXISTS(SELECT 1 FROM engine_sessions s
    WHERE s.session_id=engine_session_journal.session_id AND s.owner_id = (select auth.uid())));
-GRANT SELECT, INSERT ON engine_session_journal TO authenticated;
--- Journal pages are immutable evidence: no UPDATE or DELETE for anyone, ever.
-REVOKE UPDATE, DELETE ON engine_session_journal FROM authenticated;
+REVOKE ALL ON engine_session_journal FROM PUBLIC, authenticated;
+GRANT SELECT, INSERT ON engine_session_journal TO requi_backend;
+-- The engine's backend role maintains the lease, control and pointer columns;
+-- user-facing UPDATE on engine_sessions stays revoked.
+GRANT UPDATE ON engine_sessions TO requi_backend;
