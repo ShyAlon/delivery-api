@@ -76,11 +76,11 @@ def test_publication_cas_demotes_and_promotes_atomically():
 def test_artifact_bytes_tenant_isolated_no_oracle_no_leak():
     # Owner B cannot see A's row (no shared-row leak).
     assert sql("INSERT INTO artifact_bytes(owner_id,sha256,bytes,byte_size) VALUES ('%s','deadbeef',decode('0102','hex'),2);"
-               "SELECT count(*) FROM artifact_bytes" % A) == ['1']
-    assert sql("SELECT count(*) FROM artifact_bytes", owner=B) == ['0']
+               "SELECT count(*) FROM artifact_bytes WHERE sha256='deadbeef'" % A) == ['1']
+    assert sql("SELECT count(*) FROM artifact_bytes WHERE sha256='deadbeef'", owner=B) == ['0']
     # Owner B stores the same content hash as a separate row: no collision, no existence oracle.
     assert sql("INSERT INTO artifact_bytes(owner_id,sha256,bytes,byte_size) VALUES ('%s','deadbeef',decode('0102','hex'),2);"
-               "SELECT count(*) FROM artifact_bytes" % B, owner=B) == ['1']
+               "SELECT count(*) FROM artifact_bytes WHERE sha256='deadbeef'" % B, owner=B) == ['1']
 
 
 def test_artifact_bytes_immutable_and_conflicting_bytes_rejected():

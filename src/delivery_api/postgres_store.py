@@ -1251,6 +1251,61 @@ class PostgresStore(SQLiteStore):
 
 # User-entry mutations and new work claims only. Nested accepted-worker writes,
 # progress/usage evidence and completion remain available. Never gate settlement.
+    # ---- PR B: artifact manifest authority (Postgres-only) ----
+    def publish_task_artifact(self,task_id,phase_key,name,ref,*,mime_type='application/json',writer_instance,validator=None,valid=None,validation_error=None):
+        """Measure, store and atomically publish one artifact: bytes into tenant-owned
+        artifact_bytes (content-addressed, immutable), a staged manifest row, then one
+        CAS demote-and-promote. The whole publication is this operation's transaction."""
+        import hashlib
+        from pathlib import Path
+        data=Path(ref).read_bytes()
+        digest=hashlib.sha256(data).hexdigest();size=len(data)
+        task=self.task(task_id)
+        if not task: raise KeyError(task_id)
+        scope=current_scope();now=time.time()
+        self._db.execute('INSERT INTO artifact_bytes(owner_id,sha256,bytes,byte_size) VALUES (?,?,?,?) ON CONFLICT (owner_id,sha256) DO NOTHING',
+            (scope.owner_id,digest,data,size))
+        existing=self._db.execute('SELECT bytes FROM artifact_bytes WHERE owner_id=? AND sha256=?',(scope.owner_id,digest)).fetchone()
+        if existing is None or bytes(existing['bytes'])!=data:
+            raise ValueError('stored artifact bytes do not match the recorded content hash')
+        self._db.execute(
+            "INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,mime_type,created_at,byte_size,sha256,publication_state,writer_instance,validator,valid,validation_error) VALUES (?,?,?,?,?,?,?,?,?,'staged',?,?,?,?)",
+            (task_id,task['generation'],phase_key,name,str(ref),mime_type,now,size,digest,writer_instance,validator,valid,validation_error))
+        self._db.execute("UPDATE task_artifacts SET publication_state='superseded' WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='published'",
+            (task_id,task['generation'],phase_key,name))
+        changed=self._db.execute("UPDATE task_artifacts SET publication_state='published',published_at=? WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='staged' AND sha256=?",
+            (now,task_id,task['generation'],phase_key,name,digest))
+        if changed.rowcount!=1: raise ValueError('artifact publication CAS failed')
+        return dict(self._db.execute("SELECT * FROM task_artifacts WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='published'",
+            (task_id,task['generation'],phase_key,name)).fetchone())
+
+    def manifest_artifacts(self,task_id,*,generation=None):
+        """Manifest rows for a task (all publication states), newest generation first."""
+        task=self.task(task_id)
+        if not task: return []  # foreign or missing task: no existence oracle
+        if generation is None: generation=task['generation']
+        return [dict(r) for r in self._db.execute(
+            'SELECT * FROM task_artifacts WHERE task_id=? AND generation=? ORDER BY phase_key,name,id',
+            (task_id,generation)).fetchall()]
+
+    def read_artifact_bytes(self,task_id,phase_key,name,*,generation=None):
+        """Hash-verified artifact bytes via the manifest only. Raises on a missing
+        manifest row, missing bytes row or hash mismatch - never a filesystem read."""
+        import hashlib
+        task=self.task(task_id)
+        if not task: raise KeyError(f'no published artifact {phase_key}/{name}')
+        if generation is None: generation=task['generation']
+        row=self._db.execute("SELECT * FROM task_artifacts WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='published'",
+            (task_id,generation,phase_key,name)).fetchone()
+        if row is None: raise KeyError(f'no published artifact {phase_key}/{name}')
+        stored=self._db.execute('SELECT bytes FROM artifact_bytes WHERE owner_id=? AND sha256=?',
+            (current_scope().owner_id,row['sha256'])).fetchone()
+        if stored is None: raise ValueError(f'manifest row without stored bytes for {phase_key}/{name}')
+        data=bytes(stored['bytes'])
+        if hashlib.sha256(data).hexdigest()!=row['sha256']:
+            raise ValueError(f'stored bytes failed hash verification for {phase_key}/{name}')
+        return data
+
 _TASK_ENTRY_OPERATIONS={
  'create_task':'task.create','rename_task':'task.edit','delete_task':'task.delete',
  'tombstone_stopped_task':'task.delete','request_task_stop':'task.stop',
