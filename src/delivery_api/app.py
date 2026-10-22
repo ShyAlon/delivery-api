@@ -1240,7 +1240,23 @@ def artifact_manifest_coverage(task_id:str)->dict:
 def _task_artifact_snapshot(task_id:str)->list[dict]:
     """Project real session files into task artifacts; filesystem is source evidence."""
     if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
-        return _manifest_artifact_snapshot(task_id)
+        records=_manifest_artifact_snapshot(task_id)
+        if not records:
+            # Readiness gate, enforced on the read path: an empty manifest while the
+            # legacy projection still has artifacts means publication/backfill has not
+            # covered this task. Fail loudly instead of presenting a false empty list.
+            # The filesystem comparison is temporary migration readiness, not a new
+            # filesystem authority - it is only consulted to reject the empty read.
+            flag=config.ARTIFACT_MANIFEST_READS
+            try:
+                config.ARTIFACT_MANIFEST_READS=False
+                legacy=_task_artifact_snapshot(task_id)
+            finally:
+                config.ARTIFACT_MANIFEST_READS=flag
+            if legacy:
+                log.error('manifest coverage incomplete task=%s legacy=%d published=0',task_id,len(legacy))
+                raise HTTPException(500,'artifact manifest coverage is incomplete for this task; reads stay disabled until publication or backfill covers the legacy artifacts')
+        return records
     task=store.task(task_id)
     if not task:return []
     session=_recorded_engine_session(task_id)

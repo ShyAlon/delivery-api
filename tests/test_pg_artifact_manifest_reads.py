@@ -28,7 +28,7 @@ def _published(pgstore, tmp_path):
         path = tmp_path / 'srs.json'; path.write_bytes(body)
         pgstore.publish_task_artifact(task['task_id'], 'spec', 'srs.json', str(path),
                                       mime_type='application/json', writer_instance='host#1',
-                                      validation_report={'validator':'SRSDocument','valid':True,'error':None,'sha256':hashlib.sha256(body).hexdigest()})
+                                      validation_report={'validator':'SRSDocument','validator_version':'vmodel-contracts==0.28.0','valid':True,'error':None,'sha256':hashlib.sha256(body).hexdigest()})
         return task['task_id'], body
 
 
@@ -134,7 +134,7 @@ def test_zip_reads_one_published_revision(pgstore, tmp_path):
         path = tmp_path / 'srs.json'; path.write_bytes(newer)
         pgstore.publish_task_artifact(task_id, 'spec', 'srs.json', str(path),
                                       writer_instance='host#1',
-                                      validation_report={'validator': 'SRSDocument', 'valid': True, 'error': None,
+                                      validation_report={'validator': 'SRSDocument', 'validator_version': 'vmodel-contracts==0.28.0', 'valid': True, 'error': None,
                                                          'sha256': hl.sha256(newer).hexdigest()})
         assert pgstore.read_artifact_bytes(task_id, 'spec', 'srs.json') == newer
         assert pgstore.read_artifact_bytes_sha(snapshot[0]['sha256']) == body  # snapshot revision intact
@@ -149,7 +149,7 @@ def test_validation_report_must_bind_published_bytes(pgstore, tmp_path):
         with pytest.raises(ValueError, match='hash does not match'):
             pgstore.publish_task_artifact(task['task_id'], 'spec', 'srs.json', str(path),
                                           writer_instance='host#1',
-                                          validation_report={'validator': 'SRSDocument', 'valid': True, 'error': None,
+                                          validation_report={'validator': 'SRSDocument', 'validator_version': 'vmodel-contracts==0.28.0', 'valid': True, 'error': None,
                                                              'sha256': hl.sha256(b'other bytes').hexdigest()})
 
 
@@ -165,3 +165,55 @@ def test_manifest_coverage_readiness_check(pgstore, tmp_path, monkeypatch):
         report = app.artifact_manifest_coverage(task_id)
     assert report['ready'] is True and report['legacy_only'] == []
     assert report['published'] == ['spec/srs.json']
+
+
+def test_validation_report_requires_version_provenance(pgstore, tmp_path):
+    body = b'{"requirements": ["x"]}'
+    path = tmp_path / 'srs.json'; path.write_bytes(body)
+    import hashlib as hl
+    with tenant_context(A):
+        task = pgstore.create_task('prov-' + uuid.uuid4().hex)
+        with pytest.raises(ValueError, match='validator_version'):
+            pgstore.publish_task_artifact(task['task_id'], 'spec', 'srs.json', str(path),
+                                          writer_instance='host#1',
+                                          validation_report={'validator': 'SRSDocument', 'valid': True, 'error': None,
+                                                             'sha256': hl.sha256(body).hexdigest()})
+
+
+def test_validator_provenance_records_installed_version_and_verdict_keeps_it(pgstore, tmp_path):
+    from delivery_api.postgres_store import validator_provenance
+    assert validator_provenance('vmodel_contracts.srs').startswith('vmodel-contracts==')
+    assert validator_provenance('no_such_module.anything') == 'unknown'
+    task_id, _ = _published(pgstore, tmp_path)
+    with tenant_context(A):
+        row = pgstore.manifest_artifacts(task_id)[0]
+    # A verdict recorded under one validator version keeps that version verbatim -
+    # it is never reinterpreted as the currently installed one.
+    assert row['validator_version'] == 'vmodel-contracts==0.28.0'
+
+
+def test_empty_manifest_with_uncovered_legacy_fails_loud(pgstore, tmp_path, monkeypatch):
+    """Enforced readiness gate: flag ON, empty manifest, legacy artifacts present ->
+    explicit 500, never a quietly empty list."""
+    from delivery_api import app
+    from fastapi import HTTPException
+    task_id, _ = _published(pgstore, tmp_path)
+    monkeypatch.setattr(app, 'store', pgstore)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
+    with tenant_context(A):
+        with pgstore._postgres.transaction() as connection:
+            connection.execute("UPDATE task_artifacts SET publication_state='staged' WHERE task_id=%s", (task_id,))
+        with pytest.raises(HTTPException) as exc:
+            app._task_artifact_snapshot(task_id)
+    assert exc.value.status_code == 500 and 'coverage' in exc.value.detail
+
+
+def test_empty_manifest_and_empty_legacy_is_clean(pgstore, tmp_path, monkeypatch):
+    from delivery_api import app
+    monkeypatch.setattr(app, 'store', pgstore)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
+    with tenant_context(A):
+        task = pgstore.create_task('empty-' + uuid.uuid4().hex)
+        assert app._task_artifact_snapshot(task['task_id']) == []

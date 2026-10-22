@@ -94,6 +94,19 @@ def _transactional(method):
     return call
 
 
+def validator_provenance(module_path):
+    """Version of the installed distribution that owns a validator module - the actual
+    provenance of the code that will run (e.g. 'vmodel_contracts.srs' ->
+    vmodel-contracts==0.28.0). Returns 'unknown' explicitly when no distribution can be
+    resolved; never a guess like 'latest'."""
+    import importlib.metadata
+    top=module_path.split('.')[0]
+    for dist in importlib.metadata.packages_distributions().get(top,[]):
+        try:return f'{dist}=={importlib.metadata.version(dist)}'
+        except importlib.metadata.PackageNotFoundError:continue
+    return 'unknown'
+
+
 class PostgresStore(SQLiteStore):
     def __init__(self,dsn):
         self._postgres = ScopedPostgres(dsn)
@@ -1258,19 +1271,26 @@ class PostgresStore(SQLiteStore):
         CAS demote-and-promote. The whole publication is this operation's transaction.
 
         validation_report binds a validator verdict to the EXACT bytes being stored:
-        {'validator':name,'valid':bool,'error':str|None,'sha256':hex}. Its sha256 must
-        equal the measured hash of the published bytes, otherwise the verdict came from
-        other content and the publish is refused - an unvalidated artifact can never
-        carry a verdict it did not earn."""
+        {'validator':name,'valid':bool,'error':str|None,'sha256':hex,
+        'validator_version':str}. Its sha256 must equal the measured hash of the
+        published bytes, otherwise the verdict came from other content and the publish
+        is refused - an unvalidated artifact can never carry a verdict it did not earn.
+        validator_version is the provenance of the validation code itself (package
+        version or schema fingerprint from validator_provenance); 'unknown' must be
+        explicit. A verdict recorded under one version is never reinterpreted as
+        another."""
         import hashlib
         from pathlib import Path
         data=Path(ref).read_bytes()
         digest=hashlib.sha256(data).hexdigest();size=len(data)
-        validator=valid=validation_error=None
+        validator=valid=validation_error=validator_version=None
         if validation_report is not None:
             if validation_report.get('sha256')!=digest:
                 raise ValueError('validation report hash does not match the published bytes')
-            validator=validation_report.get('validator');valid=validation_report.get('valid');validation_error=validation_report.get('error')
+            if 'validator_version' not in validation_report:
+                raise ValueError('validation report must name its validator_version provenance')
+            validator=validation_report.get('validator');valid=validation_report.get('valid')
+            validation_error=validation_report.get('error');validator_version=validation_report['validator_version']
         task=self.task(task_id)
         if not task: raise KeyError(task_id)
         scope=current_scope();now=time.time()
@@ -1280,8 +1300,8 @@ class PostgresStore(SQLiteStore):
         if existing is None or bytes(existing['bytes'])!=data:
             raise ValueError('stored artifact bytes do not match the recorded content hash')
         self._db.execute(
-            "INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,mime_type,created_at,byte_size,sha256,publication_state,writer_instance,validator,valid,validation_error) VALUES (?,?,?,?,?,?,?,?,?,'staged',?,?,?,?)",
-            (task_id,task['generation'],phase_key,name,str(ref),mime_type,now,size,digest,writer_instance,validator,valid,validation_error))
+            "INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,mime_type,created_at,byte_size,sha256,publication_state,writer_instance,validator,valid,validation_error,validator_version) VALUES (?,?,?,?,?,?,?,?,?,'staged',?,?,?,?,?)",
+            (task_id,task['generation'],phase_key,name,str(ref),mime_type,now,size,digest,writer_instance,validator,valid,validation_error,validator_version))
         self._db.execute("UPDATE task_artifacts SET publication_state='superseded' WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='published'",
             (task_id,task['generation'],phase_key,name))
         changed=self._db.execute("UPDATE task_artifacts SET publication_state='published',published_at=? WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='staged' AND sha256=?",

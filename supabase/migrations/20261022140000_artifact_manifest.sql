@@ -20,6 +20,10 @@ ALTER TABLE task_artifacts
   ADD COLUMN published_at DOUBLE PRECISION,
   ADD COLUMN writer_instance TEXT,
   ADD COLUMN validator TEXT,
+  -- Provenance of the validator implementation that produced the verdict: package
+  -- version or schema fingerprint of the actual validation entry point. 'unknown' is
+  -- an explicit marker (e.g. backfilled legacy verdicts), never a silent "latest".
+  ADD COLUMN validator_version TEXT,
   ADD COLUMN valid BOOLEAN,
   ADD COLUMN validation_error TEXT;
 -- At most one PUBLISHED row per logical artifact; staged/superseded rows are
