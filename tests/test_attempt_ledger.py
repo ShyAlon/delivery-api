@@ -1072,3 +1072,50 @@ def test_launch_guard_cannot_disable_prepaid():
     from delivery_api.producer_admission import WorkerAdmissionGateway
     with pytest.raises(AdmissionDenied,match='prepaid'):
         WorkerAdmissionGateway(None,'fictional',launch_guard=True,require_prepaid=False)
+
+
+def _staged_gateway(s, job):
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    return WorkerAdmissionGateway(s, job)
+
+
+def test_settle_staged_settles_from_staged_usage_and_replays_idempotently(ledger):
+    s, tid, job = ledger
+    with tenant_context(A):
+        g = _staged_gateway(s, job)
+        attempt = s.reserve_provider_attempt(job, uuid.uuid4().hex, Q, 'digest')['attempt_id']
+        s.transition_provider_attempt(attempt, 'start')
+        staged = {'input_tokens': 5, 'output_tokens': 6, 'total_tokens': 11}  # engine-staged shape
+        g.settle_staged(attempt, staged)
+        row = s.provider_attempt(attempt)
+        assert row['state'] == 'settled' and row['usage'] == {'input_tokens': 5, 'output_tokens': 6}
+        g.settle_staged(attempt, staged)  # same usage: no-op
+        with pytest.raises(AdmissionDenied, match='conflicting settlement replay'):
+            g.settle_staged(attempt, {'input_tokens': 9, 'output_tokens': 6, 'total_tokens': 15})
+
+
+def test_settle_staged_refuses_an_uncertain_attempt(ledger):
+    """An uncertain attempt (crash classification already landed) reconciles, it
+    does not auto-settle from staged bytes."""
+    s, tid, job = ledger
+    with tenant_context(A):
+        g = _staged_gateway(s, job)
+        attempt = s.reserve_provider_attempt(job, uuid.uuid4().hex, Q, 'digest')['attempt_id']
+        s.transition_provider_attempt(attempt, 'start')
+        s.transition_provider_attempt(attempt, 'uncertain')
+        with pytest.raises(AdmissionDenied):
+            g.settle_staged(attempt, {'input_tokens': 5, 'output_tokens': 6, 'total_tokens': 11})
+        assert s.provider_attempt(attempt)['state'] == 'uncertain'
+
+
+def test_settle_staged_rejects_incomplete_usage_without_moving_the_attempt(ledger):
+    s, tid, job = ledger
+    with tenant_context(A):
+        g = _staged_gateway(s, job)
+        attempt = s.reserve_provider_attempt(job, uuid.uuid4().hex, Q, 'digest')['attempt_id']
+        s.transition_provider_attempt(attempt, 'start')
+        with pytest.raises(AdmissionDenied, match='incomplete'):
+            g.settle_staged(attempt, {'input_tokens': 5})
+        with pytest.raises(AdmissionDenied, match='missing'):
+            g.settle_staged(attempt, None)
+        assert s.provider_attempt(attempt)['state'] == 'dispatched'

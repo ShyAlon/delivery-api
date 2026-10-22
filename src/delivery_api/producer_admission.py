@@ -148,6 +148,26 @@ class WorkerAdmissionGateway:
         self._resume_meter(attempt)
         if result['state']!='settled':raise AdmissionDenied('usage uncertain; reservation held for review')
 
+    def settle_staged(self,attempt,staged_usage):
+        """Settle a completed-but-unsettled staged provider call from its durably
+        staged usage (PR B staged responses: the raw usage was made durable before
+        the crash window, so it is the trusted settlement source - no vendor
+        re-verification). Attempt-keyed idempotent via the ledger: settled with the
+        same usage is a no-op, conflicting usage raises. An 'uncertain' attempt
+        refuses: it needs reconciliation, not an auto-settle. Engine-staged usage
+        carries the two billable categories; cache-split quotes hold for review
+        instead of guessing a split."""
+        self._attempt(attempt)
+        if not isinstance(staged_usage,dict):
+            raise AdmissionDenied('staged usage missing; reconcile before replay')
+        usage={k:staged_usage.get(k) for k in ('input_tokens','output_tokens')}
+        if any(not isinstance(v,int) or v<0 for v in usage.values()):
+            raise AdmissionDenied('staged usage incomplete; reconcile before replay')
+        result=self.store.transition_provider_attempt(attempt,'settle',usage)
+        self._resume_meter(attempt)
+        if result['state']!='settled':raise AdmissionDenied('staged usage uncertain; reservation held for review')
+        return result
+
     def uncertain(self,attempt):
         row=self._attempt(attempt)
         if row['state']=='dispatched':self.store.transition_provider_attempt(attempt,'uncertain')
