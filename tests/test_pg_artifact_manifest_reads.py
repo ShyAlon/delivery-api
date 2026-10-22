@@ -26,9 +26,11 @@ def _published(pgstore, tmp_path):
         task = pgstore.create_task('reads-' + uuid.uuid4().hex)
         body = b'{"requirements": ["x"]}'
         path = tmp_path / 'srs.json'; path.write_bytes(body)
-        pgstore.publish_task_artifact(task['task_id'], 'spec', 'srs.json', str(path),
-                                      mime_type='application/json', writer_instance='host#1',
-                                      validation_report={'validator':'SRSDocument','validator_version':'vmodel-contracts==0.28.0','valid':True,'error':None,'sha256':hashlib.sha256(body).hexdigest()})
+        pgstore.publish_task_revision(task['task_id'], [{'phase_key': 'spec', 'name': 'srs.json', 'ref': str(path),
+                                      'mime_type': 'application/json',
+                                      'validation_report': {'validator': 'SRSDocument', 'validator_version': 'vmodel-contracts==0.28.0',
+                                                            'valid': True, 'error': None, 'sha256': hashlib.sha256(body).hexdigest()}}],
+                                      writer_instance='host#1')
         return task['task_id'], body
 
 
@@ -202,7 +204,10 @@ def test_empty_manifest_with_uncovered_legacy_fails_loud(pgstore, tmp_path, monk
     monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     with tenant_context(A):
+        # Migration-pending state: marker moved to another generation, not deleted
+        # (the app role holds no DELETE grant on the marker table by design).
         with pgstore._postgres.transaction() as connection:
+            connection.execute("UPDATE artifact_manifest_ready SET generation=generation+1000 WHERE task_id=%s", (task_id,))
             connection.execute("UPDATE task_artifacts SET publication_state='staged' WHERE task_id=%s", (task_id,))
         with pytest.raises(HTTPException) as exc:
             app._task_artifact_snapshot(task_id)
@@ -217,3 +222,76 @@ def test_empty_manifest_and_empty_legacy_is_clean(pgstore, tmp_path, monkeypatch
     with tenant_context(A):
         task = pgstore.create_task('empty-' + uuid.uuid4().hex)
         assert app._task_artifact_snapshot(task['task_id']) == []
+
+
+def test_partial_manifest_without_marker_fails_loud(pgstore, tmp_path, monkeypatch):
+    """Non-empty manifest is NOT trusted without the readiness marker: one published
+    artifact plus an uncovered legacy row must still 500, not serve the partial set."""
+    from delivery_api import app
+    from fastapi import HTTPException
+    task_id, _ = _published(pgstore, tmp_path)
+    monkeypatch.setattr(app, 'store', pgstore)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
+    with tenant_context(A):
+        with pgstore._postgres.transaction() as connection:
+            connection.execute("UPDATE artifact_manifest_ready SET generation=generation+1000 WHERE task_id=%s", (task_id,))
+            connection.execute("UPDATE task_artifacts SET publication_state='staged' WHERE task_id=%s AND name='srs.json'", (task_id,))
+            connection.execute(
+                "INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,mime_type,created_at,publication_state) "
+                "VALUES (%s,1,'spec','srs.json','x','application/json',1,'published')", (task_id,))
+        with pytest.raises(HTTPException) as exc:
+            app._task_artifact_snapshot(task_id)
+    assert exc.value.status_code == 500
+
+
+def test_ready_revision_served_db_only_despite_extra_legacy(pgstore, tmp_path, monkeypatch):
+    """With the ready marker, the read path is pure manifest - an extra legacy row does
+    not trip the gate and no filesystem comparison happens."""
+    from delivery_api import app
+    task_id, _ = _published(pgstore, tmp_path)
+    monkeypatch.setattr(app, 'store', pgstore)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
+    with tenant_context(A):
+        with pgstore._postgres.transaction() as connection:
+            connection.execute(
+                "INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,mime_type,created_at,publication_state) "
+                "VALUES (%s,1,'spec','extra.json','x','application/json',1,'staged')", (task_id,))
+        records = app._task_artifact_snapshot(task_id)
+    assert [r['name'] for r in records] == ['srs.json']
+
+
+def test_marker_for_other_generation_not_ready(pgstore, tmp_path, monkeypatch):
+    from delivery_api import app
+    from fastapi import HTTPException
+    task_id, _ = _published(pgstore, tmp_path)
+    monkeypatch.setattr(app, 'store', pgstore)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
+    with tenant_context(A):
+        with pgstore._postgres.transaction() as connection:
+            connection.execute("UPDATE tasks SET generation=99 WHERE task_id=%s", (task_id,))
+        assert pgstore.manifest_ready(task_id) is False
+        with pytest.raises(HTTPException) as exc:
+            app._task_artifact_snapshot(task_id)
+    assert exc.value.status_code == 500
+
+
+def test_revision_publish_is_atomic(pgstore, tmp_path):
+    """A failed member publish rolls back the whole revision: no published rows, no marker."""
+    import hashlib as hl
+    good = tmp_path / 'a.json'; good.write_bytes(b'{"a": 1}')
+    bad = tmp_path / 'b.json'; bad.write_bytes(b'{"b": 2}')
+    report = lambda p: {'validator_version': 'v==1;schema=abc', 'validator': 'V', 'valid': True,
+                        'error': None, 'sha256': hl.sha256(p.read_bytes()).hexdigest()}
+    with tenant_context(A):
+        task = pgstore.create_task('atomic-' + uuid.uuid4().hex)
+        with pytest.raises(ValueError):
+            pgstore.publish_task_revision(task['task_id'], [
+                {'phase_key': 'spec', 'name': 'a.json', 'ref': str(good), 'validation_report': report(good)},
+                {'phase_key': 'spec', 'name': 'b.json', 'ref': str(bad),
+                 'validation_report': {**report(bad), 'sha256': hl.sha256(b'wrong').hexdigest()}}],
+                writer_instance='host#1')
+        assert pgstore.manifest_artifacts(task['task_id']) == []
+        assert pgstore.manifest_ready(task['task_id']) is False

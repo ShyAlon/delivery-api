@@ -94,17 +94,23 @@ def _transactional(method):
     return call
 
 
-def validator_provenance(module_path):
-    """Version of the installed distribution that owns a validator module - the actual
-    provenance of the code that will run (e.g. 'vmodel_contracts.srs' ->
-    vmodel-contracts==0.28.0). Returns 'unknown' explicitly when no distribution can be
-    resolved; never a guess like 'latest'."""
-    import importlib.metadata
+def validator_provenance(module_path,model=None):
+    """Provenance of the code that will actually validate: installed distribution
+    version for the module (e.g. 'vmodel_contracts.srs' -> vmodel-contracts==0.28.0)
+    plus, when the pydantic model is passed, a fingerprint of its JSON schema - the
+    semantics the verdict was produced under. An editable install keeps one version
+    string across code commits, so the schema fingerprint is what distinguishes two
+    validator implementations that share a version. 'unknown' is explicit when no
+    distribution resolves; never a guess like 'latest'."""
+    import hashlib,importlib.metadata,json
     top=module_path.split('.')[0]
+    version='unknown'
     for dist in importlib.metadata.packages_distributions().get(top,[]):
-        try:return f'{dist}=={importlib.metadata.version(dist)}'
+        try:version=f'{dist}=={importlib.metadata.version(dist)}';break
         except importlib.metadata.PackageNotFoundError:continue
-    return 'unknown'
+    if model is None:return version
+    schema=json.dumps(model.model_json_schema(),sort_keys=True).encode()
+    return f'{version};schema={hashlib.sha256(schema).hexdigest()[:16]}'
 
 
 class PostgresStore(SQLiteStore):
@@ -1318,6 +1324,30 @@ class PostgresStore(SQLiteStore):
         return [dict(r) for r in self._db.execute(
             'SELECT * FROM task_artifacts WHERE task_id=? AND generation=? ORDER BY phase_key,name,id',
             (task_id,generation)).fetchall()]
+
+    def manifest_ready(self,task_id,generation=None):
+        """True when a complete published revision is marked for this task+generation:
+        the manifest is the full authority and reads need no migration-era check."""
+        task=self.task(task_id)
+        if not task:return False
+        if generation is None:generation=task['generation']
+        return self._db.execute('SELECT 1 FROM artifact_manifest_ready WHERE task_id=? AND generation=?',
+            (task_id,generation)).fetchone() is not None
+
+    def publish_task_revision(self,task_id,artifacts,*,writer_instance):
+        """Publish one COMPLETE validated revision atomically: every artifact's bytes,
+        staged row and CAS promote, then the readiness marker - all in this operation's
+        single transaction, so a failed publish leaves no partial authority behind.
+        artifacts: [{'phase_key','name','ref','mime_type'?,'validation_report'?}]."""
+        published=[self.publish_task_artifact(task_id,a['phase_key'],a['name'],a['ref'],
+            mime_type=a.get('mime_type','application/json'),writer_instance=writer_instance,
+            validation_report=a.get('validation_report')) for a in artifacts]
+        task=self.task(task_id);scope=current_scope();now=time.time()
+        self._db.execute(
+            'INSERT INTO artifact_manifest_ready(owner_id,task_id,generation,marked_at,writer_instance) VALUES (?,?,?,?,?) '
+            'ON CONFLICT (task_id,generation) DO UPDATE SET marked_at=EXCLUDED.marked_at,writer_instance=EXCLUDED.writer_instance',
+            (scope.owner_id,task_id,task['generation'],now,writer_instance))
+        return published
 
     def read_artifact_bytes_sha(self,sha256):
         """Read immutable bytes by content hash - one exact published revision, safe to

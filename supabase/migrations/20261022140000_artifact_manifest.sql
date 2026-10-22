@@ -45,3 +45,24 @@ CREATE POLICY tenant_isolation ON artifact_bytes TO requi_backend
  WITH CHECK (public.requi_session_active() AND owner_id = (select auth.uid()));
 REVOKE ALL ON artifact_bytes FROM PUBLIC, authenticated;
 GRANT SELECT, INSERT ON artifact_bytes TO requi_backend;
+-- 4. Readiness marker: one row per (task, generation) marks that the manifest holds a
+--    COMPLETE published revision for that generation. Producer and backfill publish
+--    the full validated artifact set and mark readiness in one transaction; manifest
+--    reads require the marker, so a partial manifest can never quietly replace the
+--    legacy projection. Re-marks (revised publication of the same generation) update
+--    marked_at.
+CREATE TABLE artifact_manifest_ready (
+  owner_id UUID NOT NULL REFERENCES auth.users(id),
+  task_id TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  marked_at DOUBLE PRECISION NOT NULL,
+  writer_instance TEXT,
+  PRIMARY KEY (task_id, generation)
+);
+ALTER TABLE artifact_manifest_ready ENABLE ROW LEVEL SECURITY;
+ALTER TABLE artifact_manifest_ready FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON artifact_manifest_ready TO requi_backend
+ USING (public.requi_session_active() AND owner_id = (select auth.uid()))
+ WITH CHECK (public.requi_session_active() AND owner_id = (select auth.uid()));
+REVOKE ALL ON artifact_manifest_ready FROM PUBLIC, authenticated;
+GRANT SELECT, INSERT, UPDATE ON artifact_manifest_ready TO requi_backend;
