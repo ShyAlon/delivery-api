@@ -168,6 +168,39 @@ class WorkerAdmissionGateway:
         if result['state']!='settled':raise AdmissionDenied('staged usage uncertain; reservation held for review')
         return result
 
+    def reconcile_staged_calls(self,session_id,generation):
+        """Reconcile one session generation's staged provider calls against the
+        ledger (PR B). Read-only classification; the caller pauses on anything
+        not provably consistent. 'settleable' rows may be settled through
+        settle_staged by the owning worker; everything else is evidence for
+        review - never auto-settle, never blind-rerun a possibly-charged call."""
+        report={'consistent':[],'settleable':[],'paused':[]}
+        for row in self.store.staged_response_ledger_join(session_id,generation):
+            key={k:row[k] for k in ('session_id','generation','execution_point','node','stage','item','ordinal')}
+            attempt_id=row['attempt_id']
+            attempt_state=row['attempt_state']
+            completed=row['response'] is not None
+            def pause(reason):
+                report['paused'].append({**key,'attempt_id':attempt_id,'reason':reason})
+            if not completed:
+                if attempt_id is None:pause('unbound dispatch: call staged but never bound to a ledger attempt - unknown outcome')
+                elif attempt_state is None:pause('staged row names an attempt the ledger does not have')
+                elif attempt_state=='settled':pause('inconsistent: attempt settled but the staged row never completed')
+                else:pause(f"unknown outcome: call dispatched, no staged result (attempt {attempt_state})")
+                continue
+            usage=row['usage'] if isinstance(row['usage'],dict) else None
+            projected={k:(usage or {}).get(k) for k in ('input_tokens','output_tokens')} if usage else None
+            if not projected or any(not isinstance(v,int) or v<0 for v in projected.values()):
+                pause('completed staged row with missing or malformed usage');continue
+            if attempt_state is None:pause('completed staged row names an attempt the ledger does not have');continue
+            if attempt_state=='uncertain':pause('attempt uncertain: reconcile before any settlement');continue
+            if attempt_state=='settled':
+                if dict(row['attempt_usage'] or {})!=projected:pause('conflicting settlement: settled usage differs from the staged raw usage')
+                else:report['consistent'].append({**key,'attempt_id':attempt_id})
+                continue
+            report['settleable'].append({**key,'attempt_id':attempt_id,'staged_usage':projected})
+        return report
+
     def uncertain(self,attempt):
         row=self._attempt(attempt)
         if row['state']=='dispatched':self.store.transition_provider_attempt(attempt,'uncertain')

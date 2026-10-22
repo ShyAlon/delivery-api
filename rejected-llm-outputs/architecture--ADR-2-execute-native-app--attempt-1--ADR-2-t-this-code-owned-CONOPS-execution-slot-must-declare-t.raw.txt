@@ -1,0 +1,1 @@
+{"title": "t", "decision": "x", "rationale": "y", "driver": "simplicity", "options_considered": [{"option": "z", "reason": "heavier"}], "baseline_refs": [], "evidence": [], "affected_repositories": [], "executes_concept_ids": []}

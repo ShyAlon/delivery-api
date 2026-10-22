@@ -1119,3 +1119,104 @@ def test_settle_staged_rejects_incomplete_usage_without_moving_the_attempt(ledge
         with pytest.raises(AdmissionDenied, match='missing'):
             g.settle_staged(attempt, None)
         assert s.provider_attempt(attempt)['state'] == 'dispatched'
+
+
+from delivery_api.producer_admission import WorkerAdmissionGateway
+
+
+def _stage_row(s, owner, session_id, ordinal, *, attempt_id=None, response=True, usage={'input_tokens': 5, 'output_tokens': 6}):
+    """Insert one engine-side staged provider response row through the app role
+    (RLS-checked), in the shape the interview engine actually writes."""
+    import json, time, psycopg
+    # Engine-side rows land through the engine's own backend connection in
+    # production; the operator connection stands in for it here (the DA store
+    # has no staged-row writer by design).
+    with psycopg.connect(DSN) as c:
+        c.execute(
+            "INSERT INTO staged_provider_responses(owner_id,session_id,generation,execution_point,node,stage,item,ordinal,"
+            "attempt_id,request_sha256,provider,model,dispatched_at,response,usage,completed_at) "
+            "VALUES (%s,%s,1,'anchor-1','scope-node','scope','',%s,%s,%s,'fake','fake',%s,%s::jsonb,%s::jsonb,%s)",
+            (owner.owner_id, session_id, ordinal, attempt_id, 'sha-' + str(ordinal), time.time(),
+             json.dumps({'v': ordinal}) if response else None,
+             json.dumps(usage) if usage is not None else None,
+             time.time() if response else None))
+
+
+def _started_attempt(s, job, digest='digest'):
+    attempt = s.reserve_provider_attempt(job, uuid.uuid4().hex, Q, digest)['attempt_id']
+    s.transition_provider_attempt(attempt, 'start')
+    return attempt
+
+
+def test_reconcile_staged_calls_classifies_every_outcome(ledger):
+    """The staged-rows-vs-ledger join: settled+matching is consistent; completed
+    with an open attempt is settleable; every other shape is a pause item with
+    evidence - unknown outcomes are never rerun and never auto-settled."""
+    s, tid, job = ledger
+    session_id = 'sess-' + uuid.uuid4().hex
+    import psycopg
+    # The classification matrix needs four concurrently held attempts; the
+    # shared test limit is 2. Operator connection widens it for this test only.
+    with psycopg.connect(DSN) as c:
+        c.execute('UPDATE admission_limits SET concurrency_max=8 WHERE owner_id=%s', (A.owner_id,))
+    try:
+        with tenant_context(A):
+            # Reserve every attempt BEFORE any state change: admission refuses a
+            # new reserve while any attempt of the owner is uncertain.
+            consistent = _started_attempt(s, job)
+            settleable = _started_attempt(s, job)
+            unknown = _started_attempt(s, job)
+            uncertain = _started_attempt(s, job)
+            conflicting = _started_attempt(s, job)
+            settled_but_uncompleted = _started_attempt(s, job)
+            malformed_usage = _started_attempt(s, job)
+            s.transition_provider_attempt(consistent, 'settle', {'input_tokens': 5, 'output_tokens': 6})
+            s.transition_provider_attempt(uncertain, 'uncertain')
+            s.transition_provider_attempt(conflicting, 'settle', {'input_tokens': 9, 'output_tokens': 6})
+            s.transition_provider_attempt(settled_but_uncompleted, 'settle', {'input_tokens': 1, 'output_tokens': 1})
+        _stage_row(s, A, session_id, 0, attempt_id=consistent)
+        _stage_row(s, A, session_id, 1, attempt_id=settleable)
+        _stage_row(s, A, session_id, 2, attempt_id=unknown, response=False, usage=None)
+        _stage_row(s, A, session_id, 3, response=False, usage=None)              # unbound dispatch
+        _stage_row(s, A, session_id, 4, attempt_id='attempt-that-does-not-exist')
+        _stage_row(s, A, session_id, 5, attempt_id=uncertain)
+        _stage_row(s, A, session_id, 6, attempt_id=conflicting)
+        _stage_row(s, A, session_id, 7, attempt_id=settled_but_uncompleted, response=False, usage=None)
+        _stage_row(s, A, session_id, 8, attempt_id=malformed_usage, usage={'input_tokens': 'five'})
+
+        with tenant_context(A):
+            report = WorkerAdmissionGateway(s, job).reconcile_staged_calls(session_id, 1)
+        assert [r['ordinal'] for r in report['consistent']] == [0]
+        assert [r['ordinal'] for r in report['settleable']] == [1]
+        assert report['settleable'][0]['staged_usage'] == {'input_tokens': 5, 'output_tokens': 6}
+        reasons = {r['ordinal']: r['reason'] for r in report['paused']}
+        assert set(reasons) == {2, 3, 4, 5, 6, 7, 8}
+        assert 'unknown outcome' in reasons[2] and 'unbound dispatch' in reasons[3]
+        assert 'ledger does not have' in reasons[4] and 'uncertain' in reasons[5]
+        assert 'conflicting settlement' in reasons[6] and 'inconsistent' in reasons[7]
+        assert 'malformed usage' in reasons[8]
+
+        # The settleable row settles through the real attempt-keyed path and then
+        # reconciles as consistent - no graph progress was needed while it was open.
+        with tenant_context(A):
+            g = WorkerAdmissionGateway(s, job)
+            g.settle_staged(settleable, report['settleable'][0]['staged_usage'])
+            report2 = g.reconcile_staged_calls(session_id, 1)
+        assert [r['ordinal'] for r in report2['consistent']] == [0, 1] and report2['settleable'] == []
+        assert {r['ordinal'] for r in report2['paused']} == {2, 3, 4, 5, 6, 7, 8}
+    finally:
+        with psycopg.connect(DSN) as c:
+            c.execute('UPDATE admission_limits SET concurrency_max=2 WHERE owner_id=%s', (A.owner_id,))
+
+
+def test_reconcile_staged_calls_is_tenant_scoped(ledger):
+    """Another tenant's staged rows never enter the report (RLS), and a session
+    with no staged rows reconciles empty - not paused."""
+    s, tid, job = ledger
+    session_id = 'sess-' + uuid.uuid4().hex
+    with tenant_context(A):
+        attempt = _started_attempt(s, job)
+    _stage_row(s, A, session_id, 0, attempt_id=attempt)
+    with tenant_context(B):
+        report = WorkerAdmissionGateway(s, job).reconcile_staged_calls(session_id, 1)
+    assert report == {'consistent': [], 'settleable': [], 'paused': []}

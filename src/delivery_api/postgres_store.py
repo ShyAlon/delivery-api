@@ -1117,6 +1117,17 @@ class PostgresStore(SQLiteStore):
         self._db.execute("UPDATE worker_jobs SET state=?,updated_at=? WHERE job_id=? AND state='running'",
                          ('failed' if failed else 'done',time.time(),job_id))
 
+    @_transactional
+    def staged_response_ledger_join(self,session_id,generation):
+        """PR B reconciliation read: one session generation's engine-staged
+        provider calls LEFT JOINed to their ledger attempts, in logical-call
+        order. Read-only; the gateway classifies the rows."""
+        rows=self._db.execute('SELECT r.*, a.state AS attempt_state, a.usage AS attempt_usage '
+                              'FROM staged_provider_responses r LEFT JOIN provider_attempts a ON a.attempt_id=r.attempt_id '
+                              'WHERE r.session_id=? AND r.generation=? '
+                              'ORDER BY r.execution_point,r.node,r.stage,r.item,r.ordinal',(session_id,generation)).fetchall()
+        return [dict(r) for r in rows]
+
     def provider_attempt(self,attempt_id):
         row=self._db.execute('SELECT * FROM provider_attempts WHERE attempt_id=?',(attempt_id,)).fetchone()
         return dict(row) if row else None
