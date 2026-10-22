@@ -295,3 +295,98 @@ def test_revision_publish_is_atomic(pgstore, tmp_path):
                 writer_instance='host#1')
         assert pgstore.manifest_artifacts(task['task_id']) == []
         assert pgstore.manifest_ready(task['task_id']) is False
+
+
+def _revision(pgstore, task_id, tmp_path, members):
+    """members: {name: bytes}; publishes the complete set with a bound report."""
+    import hashlib as hl
+    artifacts = []
+    for name, data in members.items():
+        p = tmp_path / name; p.write_bytes(data)
+        artifacts.append({'phase_key': 'spec', 'name': name, 'ref': str(p),
+                          'validation_report': {'validator': 'V', 'validator_version': 'v==1',
+                                                'valid': True, 'error': None, 'sha256': hl.sha256(data).hexdigest()}})
+    return pgstore.publish_task_revision(task_id, artifacts, writer_instance='host#1')
+
+
+def test_republish_supersedes_omitted_member(pgstore, tmp_path):
+    with tenant_context(A):
+        task = pgstore.create_task('omit-' + uuid.uuid4().hex)
+        _revision(pgstore, task['task_id'], tmp_path, {'a.json': b'1', 'b.json': b'2'})
+        assert {r['name'] for r in pgstore.manifest_artifacts(task['task_id']) if r['publication_state'] == 'published'} == {'a.json', 'b.json'}
+        _revision(pgstore, task['task_id'], tmp_path, {'a.json': b'1'})
+        states = {r['name']: r['publication_state'] for r in pgstore.manifest_artifacts(task['task_id'])}
+        assert states['a.json'] == 'published' and states['b.json'] == 'superseded'
+        assert pgstore.manifest_ready(task['task_id']) is True  # marker re-bound to the smaller revision
+
+
+def test_empty_complete_set_is_ready(pgstore, tmp_path, monkeypatch):
+    """A revision of zero artifacts is a legitimate complete set: marked ready, read
+    path serves [] with no legacy comparison."""
+    from delivery_api import app
+    monkeypatch.setattr(app, 'store', pgstore)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
+    with tenant_context(A):
+        task = pgstore.create_task('emptyrev-' + uuid.uuid4().hex)
+        pgstore.publish_task_revision(task['task_id'], [], writer_instance='host#1')
+        assert pgstore.manifest_ready(task['task_id']) is True
+        assert app._task_artifact_snapshot(task['task_id']) == []
+
+
+def test_readiness_cas_rejects_stale_expected_revision(pgstore, tmp_path):
+    """The concurrent-producer mechanism: marking with an expected revision the marker
+    no longer carries matches zero rows and raises (the loser's whole publish rolls back
+    in real interleaving)."""
+    with tenant_context(A):
+        task = pgstore.create_task('cas-' + uuid.uuid4().hex)
+        _revision(pgstore, task['task_id'], tmp_path, {'a.json': b'1'})
+        with pgstore._postgres.transaction() as connection:
+            token = pgstore._connection.set(connection)
+            try:
+                with pytest.raises(ValueError, match='readiness CAS failed'):
+                    pgstore._mark_revision_ready(pgstore.task(task['task_id']), 'new-rev', 'hash', 'no-longer-current', 'host#2', 0.0)
+            finally:
+                pgstore._connection.reset(token)
+
+
+def test_corrupt_marker_hash_fails_read_loud(pgstore, tmp_path, monkeypatch):
+    from delivery_api import app
+    from fastapi import HTTPException
+    task_id, _ = _published(pgstore, tmp_path)
+    monkeypatch.setattr(app, 'store', pgstore)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
+    with tenant_context(A):
+        with pgstore._postgres.transaction() as connection:
+            connection.execute("UPDATE artifact_manifest_ready SET revision_hash='tampered' WHERE task_id=%s", (task_id,))
+        with pytest.raises(HTTPException) as exc:
+            app._task_artifact_snapshot(task_id)
+    assert exc.value.status_code == 500 and 'integrity' in exc.value.detail
+
+
+def test_provenance_labels_schema_and_source_exactly(pgstore):
+    from delivery_api.postgres_store import validator_provenance
+    from vmodel_contracts.srs import SRSDocument
+    prov = validator_provenance('vmodel_contracts.srs', SRSDocument)
+    assert prov.startswith('vmodel-contracts==') and ';schema=' in prov and ';source=' in prov
+    assert not prov.endswith('source=unknown')  # editable checkout ships readable sources
+
+
+def test_publish_session_revision_runs_real_validators_with_provenance(pgstore, tmp_path):
+    from delivery_api.artifact_publication import publish_session_revision
+    root = tmp_path / 'session'
+    (root / 'spec').mkdir(parents=True)
+    (root / 'spec' / 'srs.json').write_text('{"not": "a valid srs"}')
+    (root / 'interview').mkdir()
+    (root / 'interview' / 'intent_model.json').write_text('{"not": "valid either"}')
+    with tenant_context(A):
+        task = pgstore.create_task('pubrev-' + uuid.uuid4().hex)
+        published = publish_session_revision(pgstore, task['task_id'], root, writer_instance='host#1')
+        rows = {r['name']: r for r in pgstore.manifest_artifacts(task['task_id'])}
+        assert pgstore.manifest_ready(task['task_id']) is True
+        assert rows['srs.json']['validator'] == 'vmodel_contracts.srs.SRSDocument'
+        assert rows['srs.json']['valid'] is False  # real validator ran and recorded the verdict
+        assert rows['srs.json']['validation_error']
+        assert ';schema=' in rows['srs.json']['validator_version'] and ';source=' in rows['srs.json']['validator_version']
+        assert len(published) == 2

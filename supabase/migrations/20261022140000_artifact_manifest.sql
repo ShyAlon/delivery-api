@@ -55,6 +55,13 @@ CREATE TABLE artifact_manifest_ready (
   owner_id UUID NOT NULL REFERENCES auth.users(id),
   task_id TEXT NOT NULL,
   generation INTEGER NOT NULL,
+  -- Readiness is bound to one exact manifest revision: revision_id identifies the
+  -- atomic publication, revision_hash is over the sorted published (phase,name,sha256)
+  -- members at mark time. Marking compare-and-swaps on the expected prior
+  -- revision_id, so a concurrent producer loses, raises and rolls back instead of
+  -- leaving a mixed revision behind.
+  revision_id TEXT NOT NULL,
+  revision_hash TEXT NOT NULL,
   marked_at DOUBLE PRECISION NOT NULL,
   writer_instance TEXT,
   PRIMARY KEY (task_id, generation)

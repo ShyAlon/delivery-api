@@ -1247,7 +1247,11 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
         # marker the task is migration-pending: the legacy projection is consulted once
         # to distinguish 'no artifacts yet' from 'uncovered legacy', which fails loudly
         # instead of presenting a partial manifest (even a non-empty one) as complete.
-        if store.manifest_ready(task_id):
+        try:ready=store.manifest_ready(task_id)
+        except ValueError:
+            log.error('manifest readiness marker corrupt task=%s',task_id)
+            raise HTTPException(500,'artifact manifest failed its integrity check; the failure was recorded for diagnostics')
+        if ready:
             return _manifest_artifact_snapshot(task_id)
         flag=config.ARTIFACT_MANIFEST_READS
         try:
@@ -1267,13 +1271,8 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
     root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
     from .phases import PHASE_DEFINITIONS
     records=[]
-    validators={
-        "intent_model.json":("vmodel_contracts.interview","IntentModel"),"conops.json":("vmodel_contracts.conops","ConOpsDocument"),
-        "needs.json":("vmodel_contracts.needs","StakeholderNeedsSet"),"srs.json":("vmodel_contracts.srs","SRSDocument"),
-        "architecture.json":("vmodel_contracts.architecture","ArchitectureOverview"),"items.json":("vmodel_contracts.spec","ItemSpec[]"),
-        "spec_items.json":("vmodel_contracts.spec","SpecBundle"),"tests.json":("vmodel_contracts.verification","AcceptanceTest[]"),
-        "test_specifications.json":("vmodel_contracts.verification","AcceptanceTest[]"),
-        "validation.json":("vmodel_contracts.verification","ValidationPlan")}
+    from .artifact_publication import ARTIFACT_VALIDATORS
+    validators=ARTIFACT_VALIDATORS
     for phase in PHASE_DEFINITIONS:
         folder=root/("interview" if phase.key in ("intent","conops") else "spec")
         for filename in phase.artifacts:

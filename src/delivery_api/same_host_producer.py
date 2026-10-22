@@ -90,6 +90,13 @@ class SameHostProducerWorker:
                     if inspect.isawaitable(result):
                         if inspect.iscoroutine(result):result.close()
                         raise TypeError('synchronous producer required')
+                    # PR B (gated, default OFF): publish the complete validated artifact
+                    # revision into the manifest. A publication failure fails the job
+                    # loudly - no partial authority, no silent skip.
+                    from . import config as _config
+                    if _config.ARTIFACT_PUBLISH and hasattr(self.store,'publish_task_revision'):
+                        from .artifact_publication import publish_session_revision
+                        publish_session_revision(self.store,capability.task_id,root)
             try:await asyncio.to_thread(invoke)
             except StopRequested:
                 task=self.store.task(capability.task_id)
