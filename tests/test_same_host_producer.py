@@ -481,3 +481,41 @@ def test_d13_compute_posted_once_excludes_provider_and_founder_waits(worker):
             c.execute('DELETE FROM retail_compute_segments WHERE job_id=%s',(job,))
             c.execute('DELETE FROM retail_contributions WHERE job_id=%s',(job,))
             c.execute('DELETE FROM credit_accounts WHERE owner_id=%s',(A.owner_id,))
+
+
+def test_publication_failure_resume_never_reruns_paid_producer(worker,monkeypatch):
+    """Completed paid produce + failed publication = recovery case: the resume retries
+    publication against the durable bytes. Call counter stays 1, the settled ledger row
+    is untouched, and the manifest ends ready with the produced bytes."""
+    import hashlib
+    from delivery_api import config
+    import delivery_api.artifact_publication as publication
+    w,s,tid,job,base=worker;calls=[]
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    from spec_generator.attempt_admission import admitted_invoke
+    body=b'{"deliberately": "minimal"}'
+    def producer(cap,root):
+        calls.append(cap)
+        target=root/'spec';target.mkdir(parents=True,exist_ok=True)
+        (target/'srs.json').write_bytes(body)
+        admitted_invoke(lambda:SimpleNamespace(usage_metadata={'input_tokens':2,'output_tokens':3}),**OPTIONS)
+    real_publish=publication.publish_session_revision
+    def boom(*args,**kwargs):raise RuntimeError('injected publication failure')
+    monkeypatch.setattr(publication,'publish_session_revision',boom)
+    with tenant_context(A):
+        with pytest.raises(RuntimeError,match='injected publication failure'):
+            asyncio.run(w.execute(job,producer))
+        assert s.worker_job(job)['state']=='failed'
+        pending=s.producer_result(job)
+        assert pending is not None and pending['published_at'] is None
+    monkeypatch.setattr(publication,'publish_session_revision',real_publish)
+    with tenant_context(A):
+        s.reauthorize_worker(job)
+        assert asyncio.run(w.execute(job,producer))
+        assert s.worker_job(job)['state']=='done'
+        assert s.manifest_ready(tid) is True
+        assert s.read_artifact_bytes(tid,'srs','srs.json')==body
+        with s._postgres.transaction() as c:
+            rows=c.execute('SELECT state,expense_actual,retail_actual FROM provider_attempts WHERE job_id=%s',(job,)).fetchall()
+    assert len(calls)==1, f'paid producer re-ran on publication retry: {len(calls)} calls'
+    assert rows==[{'state':'settled','expense_actual':8,'retail_actual':18}]

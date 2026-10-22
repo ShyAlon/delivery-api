@@ -297,7 +297,7 @@ def test_revision_publish_is_atomic(pgstore, tmp_path):
         assert pgstore.manifest_ready(task['task_id']) is False
 
 
-def _revision(pgstore, task_id, tmp_path, members):
+def _revision(pgstore, task_id, tmp_path, members, writer='host#1'):
     """members: {name: bytes}; publishes the complete set with a bound report."""
     import hashlib as hl
     artifacts = []
@@ -306,7 +306,7 @@ def _revision(pgstore, task_id, tmp_path, members):
         artifacts.append({'phase_key': 'spec', 'name': name, 'ref': str(p),
                           'validation_report': {'validator': 'V', 'validator_version': 'v==1',
                                                 'valid': True, 'error': None, 'sha256': hl.sha256(data).hexdigest()}})
-    return pgstore.publish_task_revision(task_id, artifacts, writer_instance='host#1')
+    return pgstore.publish_task_revision(task_id, artifacts, writer_instance=writer)
 
 
 def test_republish_supersedes_omitted_member(pgstore, tmp_path):
@@ -390,3 +390,46 @@ def test_publish_session_revision_runs_real_validators_with_provenance(pgstore, 
         assert rows['srs.json']['validation_error']
         assert ';schema=' in rows['srs.json']['validator_version'] and ';source=' in rows['srs.json']['validator_version']
         assert len(published) == 2
+
+
+def test_concurrent_producers_one_pure_revision(pgstore, tmp_path):
+    """Two independent connections, barrier-synchronized, publishing different complete
+    revisions of the same task+generation. The readiness CAS admits exactly one first
+    publisher; the other either raises (rolled back) or legitimately supersedes AFTER
+    the winner commits. The final published set must be one producer's pure revision -
+    never a mix - and the marker hash must match it."""
+    import threading
+    from delivery_api.postgres_store import PostgresStore
+    other = PostgresStore(DSN.replace('user=sandbox', 'user=delivery_app'))
+    with tenant_context(A):
+        task = pgstore.create_task('race-' + uuid.uuid4().hex)
+    tid = task['task_id']
+    barrier = threading.Barrier(2)
+    outcome = {}
+
+    def publish(store, label, members):
+        with tenant_context(A):
+            barrier.wait(10)
+            try:
+                _revision(store, tid, tmp_path / label, members, writer=f'writer-{label}')
+                outcome[label] = 'published'
+            except ValueError as e:
+                outcome[label] = f'lost: {e}'
+
+    (tmp_path / 'wA').mkdir(); (tmp_path / 'wB').mkdir()
+    threads = [threading.Thread(target=publish, args=(pgstore, 'wA', {'a.json': b'A'})),
+               threading.Thread(target=publish, args=(other, 'wB', {'b.json': b'B'}))]
+    for t in threads: t.start()
+    for t in threads: t.join(30)
+    assert not [t for t in threads if t.is_alive()], 'concurrent publish deadlocked'
+    with tenant_context(A):
+        published = [r for r in pgstore.manifest_artifacts(tid) if r['publication_state'] == 'published']
+        names = {r['name'] for r in published}
+        assert names in ({'a.json'}, {'b.json'}), f'mixed revision published: {names} (outcomes {outcome})'
+        writers = {r['writer_instance'] for r in published}
+        assert len(writers) == 1
+        snapshot = pgstore.manifest_snapshot(tid)  # raises if marker disagrees with members
+        assert snapshot is not None and snapshot['rows']
+    # Either one lost the CAS outright, or the second legitimately superseded after the
+    # winner committed - both orders are valid; the purity assertions above are the point.
+    assert set(outcome) == {'wA', 'wB'}

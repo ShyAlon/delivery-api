@@ -73,3 +73,23 @@ CREATE POLICY tenant_isolation ON artifact_manifest_ready TO requi_backend
  WITH CHECK (public.requi_session_active() AND owner_id = (select auth.uid()));
 REVOKE ALL ON artifact_manifest_ready FROM PUBLIC, authenticated;
 GRANT SELECT, INSERT, UPDATE ON artifact_manifest_ready TO requi_backend;
+-- 5. Produced-awaiting-publication: once a paid producer run completes, its result
+--    reference is durable BEFORE publication is attempted. A publication failure is a
+--    recovery case: resuming the job reuses the exact produced bytes and retries only
+--    publication - the paid callable never re-runs and the settled ledger never moves.
+CREATE TABLE producer_results (
+  owner_id UUID NOT NULL REFERENCES auth.users(id),
+  job_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  session_root TEXT NOT NULL,
+  produced_at DOUBLE PRECISION NOT NULL,
+  published_at DOUBLE PRECISION
+);
+ALTER TABLE producer_results ENABLE ROW LEVEL SECURITY;
+ALTER TABLE producer_results FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON producer_results TO requi_backend
+ USING (public.requi_session_active() AND owner_id = (select auth.uid()))
+ WITH CHECK (public.requi_session_active() AND owner_id = (select auth.uid()));
+REVOKE ALL ON producer_results FROM PUBLIC, authenticated;
+GRANT SELECT, INSERT, UPDATE ON producer_results TO requi_backend;

@@ -1204,14 +1204,9 @@ def _read_task_text(task_id:str,path:Path,*,errors='strict')->str:
     with session_reader(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),_recorded_engine_session(task_id),store):
         return read_bound_text(path,errors=errors)
 
-def _manifest_artifact_snapshot(task_id:str)->list[dict]:
-    """Manifest-backed artifact reads (PR B): serve recorded rows - sizes, hashes,
-    publication state and the validator verdict measured at publish time - instead of
-    re-scanning and re-validating the session filesystem on every request. Gated by
-    config.ARTIFACT_MANIFEST_READS; any database failure raises, never a silent
-    filesystem fallback."""
+def _project_manifest_rows(rows:list[dict])->list[dict]:
     records=[]
-    for row in store.manifest_artifacts(task_id):
+    for row in rows:
         if row['publication_state']!='published':continue
         error=row.get('validation_error')
         records.append({"phase_key":row['phase_key'],"name":row['name'],"title":_ARTIFACT_TITLES.get(row['name'],Path(row['name']).stem.replace("_"," ").title()),
@@ -1232,7 +1227,8 @@ def artifact_manifest_coverage(task_id:str)->dict:
         legacy=_task_artifact_snapshot(task_id)
     finally:
         config.ARTIFACT_MANIFEST_READS=flag
-    manifest=_manifest_artifact_snapshot(task_id)
+    snapshot=store.manifest_snapshot(task_id) if hasattr(store,'manifest_snapshot') else None
+    manifest=_project_manifest_rows(snapshot['rows']) if snapshot else []
     legacy_names={f"{r['phase_key']}/{r['name']}" for r in legacy}
     manifest_names={f"{r['phase_key']}/{r['name']}" for r in manifest}
     return {"task_id":task_id,"published":sorted(manifest_names),"legacy_only":sorted(legacy_names-manifest_names),"ready":not (legacy_names-manifest_names)}
@@ -1247,12 +1243,12 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
         # marker the task is migration-pending: the legacy projection is consulted once
         # to distinguish 'no artifacts yet' from 'uncovered legacy', which fails loudly
         # instead of presenting a partial manifest (even a non-empty one) as complete.
-        try:ready=store.manifest_ready(task_id)
+        try:snapshot=store.manifest_snapshot(task_id)
         except ValueError:
             log.error('manifest readiness marker corrupt task=%s',task_id)
             raise HTTPException(500,'artifact manifest failed its integrity check; the failure was recorded for diagnostics')
-        if ready:
-            return _manifest_artifact_snapshot(task_id)
+        if snapshot is not None:
+            return _project_manifest_rows(snapshot['rows'])
         flag=config.ARTIFACT_MANIFEST_READS
         try:
             config.ARTIFACT_MANIFEST_READS=False

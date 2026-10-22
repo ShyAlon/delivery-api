@@ -1393,6 +1393,29 @@ class PostgresStore(SQLiteStore):
         self._mark_revision_ready(task,revision_id,self._revision_hash(members),expected,writer_instance,time.time())
         return published
 
+    def manifest_snapshot(self,task_id,generation=None):
+        """Marker + published members read as ONE statement = one consistent database
+        snapshot: no check/read race with a concurrent publisher. Returns
+        {'revision_id','revision_hash','rows'} or None when no ready marker exists.
+        A marker whose hash no longer matches the members in the same snapshot is
+        corruption - raise, never serve against it."""
+        import json as _json
+        task=self.task(task_id)
+        if not task:return None
+        if generation is None:generation=task['generation']
+        row=self._db.execute(
+            "WITH m AS (SELECT revision_id,revision_hash FROM artifact_manifest_ready WHERE task_id=? AND generation=?) "
+            "SELECT m.revision_id,m.revision_hash,"
+            "(SELECT json_agg(row_to_json(t)) FROM (SELECT * FROM task_artifacts WHERE task_id=? AND generation=? AND publication_state='published' ORDER BY phase_key,name,id) t) AS members FROM m",
+            (task_id,generation,task_id,generation)).fetchone()
+        if row is None:return None
+        members=row['members']
+        if isinstance(members,str):members=_json.loads(members)
+        rows=[dict(r) for r in (members or [])]
+        if self._revision_hash(rows)!=row['revision_hash']:
+            raise ValueError('readiness marker does not match the published manifest revision')
+        return {'revision_id':row['revision_id'],'revision_hash':row['revision_hash'],'rows':rows}
+
     def manifest_revision(self,task_id,generation=None):
         """The ready marker for this task+generation, verified against the current
         published set: (revision_id, revision_hash) or None when not ready. A marker
@@ -1409,6 +1432,28 @@ class PostgresStore(SQLiteStore):
         if self._revision_hash(members)!=marker['revision_hash']:
             raise ValueError('readiness marker does not match the published manifest revision')
         return marker['revision_id'],marker['revision_hash']
+
+    def producer_result(self,job_id):
+        """Durable produced-awaiting-publication state for a worker job, or None."""
+        row=self._db.execute('SELECT * FROM producer_results WHERE job_id=?',(job_id,)).fetchone()
+        return dict(row) if row else None
+
+    def record_producer_result(self,job_id,task_id,generation,session_root):
+        """Persist that the paid producer completed: its bytes are durable at
+        session_root and only publication remains. Upsert keeps the FIRST produced_at
+        for the job's current generation."""
+        import time as _time
+        self._db.execute(
+            'INSERT INTO producer_results(owner_id,job_id,task_id,generation,session_root,produced_at) VALUES (?,?,?,?,?,?) '
+            'ON CONFLICT (job_id) DO UPDATE SET task_id=EXCLUDED.task_id,generation=EXCLUDED.generation,'
+            'session_root=EXCLUDED.session_root,produced_at=EXCLUDED.produced_at,published_at=NULL',
+            (current_scope().owner_id,job_id,task_id,generation,session_root,_time.time()))
+
+    def mark_producer_published(self,job_id):
+        import time as _time
+        changed=self._db.execute('UPDATE producer_results SET published_at=? WHERE job_id=? AND published_at IS NULL',
+            (_time.time(),job_id))
+        if changed.rowcount!=1: raise ValueError('producer result was already marked published')
 
     def read_artifact_bytes_sha(self,sha256):
         """Read immutable bytes by content hash - one exact published revision, safe to

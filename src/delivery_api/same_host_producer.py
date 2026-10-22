@@ -57,6 +57,13 @@ class SameHostProducerWorker:
             if gateway.store is not self.store or gateway.job_id!=job_id:
                 raise TenantAccessDenied('producer gateway binding mismatch')
             usage_log=self.usage_log_factory(capability,root)
+            from . import config as _config
+            publishing=_config.ARTIFACT_PUBLISH and hasattr(self.store,'publish_task_revision')
+            pending=self.store.producer_result(job_id) if publishing else None
+            # Recovery case: the paid producer ALREADY completed for this generation and
+            # only publication failed. Never re-run the paid callable or rebill - reuse
+            # the exact durable bytes and retry publication alone.
+            resuming_publication=pending is not None and pending['generation']==capability.generation
             def invoke():
                 capability.validate(self.store)
                 with ExitStack() as stack:
@@ -78,7 +85,7 @@ class SameHostProducerWorker:
                         self.store.begin_retail_compute(segment,job_id,job['kind'].split(':')[-1],gateway.retail_rates.snapshot())
                         meter=ComputeMeter();gateway.compute_meter=meter
                         try:
-                            with bind(meter):result=producer(capability,root)
+                            with bind(meter):result=None if resuming_publication else producer(capability,root)
                             if inspect.isawaitable(result):
                                 if inspect.iscoroutine(result):result.close()
                                 raise TypeError('synchronous producer required')
@@ -86,17 +93,19 @@ class SameHostProducerWorker:
                         except BaseException:
                             self.store.close_failed_retail_compute(segment)
                             raise
-                    else:result=producer(capability,root)
+                    else:
+                        result=None if resuming_publication else producer(capability,root)
                     if inspect.isawaitable(result):
                         if inspect.iscoroutine(result):result.close()
                         raise TypeError('synchronous producer required')
-                    # PR B (gated, default OFF): publish the complete validated artifact
-                    # revision into the manifest. A publication failure fails the job
-                    # loudly - no partial authority, no silent skip.
-                    from . import config as _config
-                    if _config.ARTIFACT_PUBLISH and hasattr(self.store,'publish_task_revision'):
+                    if publishing:
+                        if not resuming_publication:
+                            self.store.record_producer_result(job_id,capability.task_id,capability.generation,str(root))
+                        # Publication failure fails the job loudly; the durable
+                        # producer_results row makes the resume publication-only.
                         from .artifact_publication import publish_session_revision
                         publish_session_revision(self.store,capability.task_id,root)
+                        self.store.mark_producer_published(job_id)
             try:await asyncio.to_thread(invoke)
             except StopRequested:
                 task=self.store.task(capability.task_id)
