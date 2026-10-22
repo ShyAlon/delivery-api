@@ -83,6 +83,10 @@ CREATE TABLE producer_results (
   task_id TEXT NOT NULL,
   generation INTEGER NOT NULL,
   session_root TEXT NOT NULL,
+  -- Hash over the produced set (sorted relpath:sha256) recorded when the paid produce
+  -- completed. Resume verifies the on-disk bytes against it; a mismatch or missing
+  -- file PAUSES with evidence - paid work is never regenerated from an unverified path.
+  content_hash TEXT NOT NULL,
   produced_at DOUBLE PRECISION NOT NULL,
   published_at DOUBLE PRECISION
 );

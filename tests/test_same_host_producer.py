@@ -519,3 +519,104 @@ def test_publication_failure_resume_never_reruns_paid_producer(worker,monkeypatc
             rows=c.execute('SELECT state,expense_actual,retail_actual FROM provider_attempts WHERE job_id=%s',(job,)).fetchall()
     assert len(calls)==1, f'paid producer re-ran on publication retry: {len(calls)} calls'
     assert rows==[{'state':'settled','expense_actual':8,'retail_actual':18}]
+
+
+def _paid_producer(calls,base_body=b'{"deliberately": "minimal"}'):
+    from spec_generator.attempt_admission import admitted_invoke
+    def producer(cap,root):
+        calls.append(cap)
+        target=root/'spec';target.mkdir(parents=True,exist_ok=True)
+        (target/'srs.json').write_bytes(base_body)
+        admitted_invoke(lambda:SimpleNamespace(usage_metadata={'input_tokens':2,'output_tokens':3}),**OPTIONS)
+    return producer
+
+
+def test_cross_host_missing_files_pause_never_regenerate(worker,monkeypatch,tmp_path):
+    """Host loss: produced marker exists but the original filesystem is gone (and the
+    manifest was never published). The resume PAUSES with specific evidence; the paid
+    callable is never re-run and the settled ledger row is untouched."""
+    from delivery_api import config
+    from delivery_api.same_host_producer import ProducerRecoveryPaused
+    w,s,tid,job,base=worker;calls=[]
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    import delivery_api.artifact_publication as publication
+    real=publication.publish_session_revision
+    monkeypatch.setattr(publication,'publish_session_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
+    with tenant_context(A):
+        with pytest.raises(RuntimeError):asyncio.run(w.execute(job,_paid_producer(calls)))
+    monkeypatch.setattr(publication,'publish_session_revision',real)
+    import shutil
+    shutil.rmtree(base)  # host loss: the original filesystem is gone
+    with tenant_context(A):
+        s.reauthorize_worker(job)
+        with pytest.raises(ProducerRecoveryPaused,match='not on this host/path'):
+            asyncio.run(w.execute(job,_paid_producer(calls)))
+        with s._postgres.transaction() as c:
+            rows=c.execute('SELECT state,expense_actual,retail_actual FROM provider_attempts WHERE job_id=%s',(job,)).fetchall()
+    assert len(calls)==1 and rows==[{'state':'settled','expense_actual':8,'retail_actual':18}]
+
+
+def test_crash_after_produce_before_marker_pauses_on_paid_evidence(worker,monkeypatch):
+    """Uncertain result: no produced marker but provider attempt rows exist - the
+    produce may have completed and crashed before marking. PAUSE, never blind-rerun."""
+    from delivery_api import config
+    from delivery_api.same_host_producer import ProducerRecoveryPaused
+    w,s,tid,job,base=worker;calls=[]
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    real=s.record_producer_result
+    monkeypatch.setattr(s,'record_producer_result',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('crash before marker')))
+    with tenant_context(A):
+        with pytest.raises(RuntimeError,match='crash before marker'):
+            asyncio.run(w.execute(job,_paid_producer(calls)))
+    monkeypatch.setattr(s,'record_producer_result',real)
+    with tenant_context(A):
+        assert s.producer_result(job) is None and s.producer_paid_evidence(job)>0
+        s.reauthorize_worker(job)
+        with pytest.raises(ProducerRecoveryPaused,match='provider attempt'):
+            asyncio.run(w.execute(job,_paid_producer(calls)))
+    assert len(calls)==1
+
+
+def test_content_hash_mismatch_pauses(worker,monkeypatch):
+    from delivery_api import config
+    from delivery_api.same_host_producer import ProducerRecoveryPaused
+    w,s,tid,job,base=worker;calls=[];roots=[]
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    import delivery_api.artifact_publication as publication
+    real=publication.publish_session_revision
+    monkeypatch.setattr(publication,'publish_session_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
+    def producer(cap,root):
+        roots.append(root)
+        return _paid_producer(calls)(cap,root)
+    with tenant_context(A):
+        with pytest.raises(RuntimeError):asyncio.run(w.execute(job,producer))
+    monkeypatch.setattr(publication,'publish_session_revision',real)
+    assert roots and (roots[0]/'spec'/'srs.json').is_file()
+    (roots[0]/'spec'/'srs.json').write_text('{"tampered": true}')
+    with tenant_context(A):
+        s.reauthorize_worker(job)
+        with pytest.raises(ProducerRecoveryPaused,match='content hash'):
+            asyncio.run(w.execute(job,_paid_producer(calls)))
+    assert len(calls)==1
+
+
+def test_generation_mismatch_pauses(worker,monkeypatch):
+    """Job authority: a produced marker naming another generation never justifies a
+    publication-only resume or a rerun - it pauses for reconciliation."""
+    from delivery_api import config
+    from delivery_api.same_host_producer import ProducerRecoveryPaused
+    w,s,tid,job,base=worker;calls=[]
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    import delivery_api.artifact_publication as publication
+    real=publication.publish_session_revision
+    monkeypatch.setattr(publication,'publish_session_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
+    with tenant_context(A):
+        with pytest.raises(RuntimeError):asyncio.run(w.execute(job,_paid_producer(calls)))
+    monkeypatch.setattr(publication,'publish_session_revision',real)
+    with tenant_context(A):
+        with s._postgres.transaction() as c:
+            c.execute('UPDATE producer_results SET generation=generation+1000 WHERE job_id=%s',(job,))
+        s.reauthorize_worker(job)
+        with pytest.raises(ProducerRecoveryPaused,match='generation'):
+            asyncio.run(w.execute(job,_paid_producer(calls)))
+    assert len(calls)==1

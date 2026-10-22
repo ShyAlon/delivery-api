@@ -1438,16 +1438,21 @@ class PostgresStore(SQLiteStore):
         row=self._db.execute('SELECT * FROM producer_results WHERE job_id=?',(job_id,)).fetchone()
         return dict(row) if row else None
 
-    def record_producer_result(self,job_id,task_id,generation,session_root):
-        """Persist that the paid producer completed: its bytes are durable at
-        session_root and only publication remains. Upsert keeps the FIRST produced_at
-        for the job's current generation."""
+    def record_producer_result(self,job_id,task_id,generation,session_root,content_hash):
+        """Persist that the paid producer completed: its bytes are at session_root
+        (pinned by content_hash) and only publication remains."""
         import time as _time
         self._db.execute(
-            'INSERT INTO producer_results(owner_id,job_id,task_id,generation,session_root,produced_at) VALUES (?,?,?,?,?,?) '
+            'INSERT INTO producer_results(owner_id,job_id,task_id,generation,session_root,content_hash,produced_at) VALUES (?,?,?,?,?,?,?) '
             'ON CONFLICT (job_id) DO UPDATE SET task_id=EXCLUDED.task_id,generation=EXCLUDED.generation,'
-            'session_root=EXCLUDED.session_root,produced_at=EXCLUDED.produced_at,published_at=NULL',
-            (current_scope().owner_id,job_id,task_id,generation,session_root,_time.time()))
+            'session_root=EXCLUDED.session_root,content_hash=EXCLUDED.content_hash,produced_at=EXCLUDED.produced_at,published_at=NULL',
+            (current_scope().owner_id,job_id,task_id,generation,session_root,content_hash,_time.time()))
+
+    def producer_paid_evidence(self,job_id):
+        """Count of provider attempt rows recorded for a job: evidence that paid work
+        may already have happened when no produced marker exists."""
+        row=self._db.execute('SELECT count(*) AS n FROM provider_attempts WHERE job_id=?',(job_id,)).fetchone()
+        return row['n'] if row else 0
 
     def mark_producer_published(self,job_id):
         import time as _time

@@ -4,6 +4,26 @@ An explicit owner-authorized durable job supplies all authority. Accepted calls
 finish on their threads; the engine and producer use the same filesystem marker.
 This seam neither enables cloud execution nor replaces the SDK wire adapter.
 """
+class ProducerRecoveryPaused(Exception):
+    """Paid work may already exist but its durable publication state is missing or
+    unverifiable. The job PAUSES with the specific evidence; paid work is never
+    regenerated blind."""
+
+
+def _produced_set_hash(root):
+    """(sha256 over present phase artifacts as sorted relpath:content-sha lines, count)."""
+    import hashlib
+    from .phases import PHASE_DEFINITIONS
+    lines=[]
+    for phase in PHASE_DEFINITIONS:
+        folder=root/("interview" if phase.key in ("intent","conops") else "spec")
+        for filename in phase.artifacts:
+            path=folder/filename
+            if path.is_file():
+                lines.append(f"{phase.key}/{filename}:{hashlib.sha256(path.read_bytes()).hexdigest()}")
+    return hashlib.sha256('\n'.join(sorted(lines)).encode()).hexdigest(),len(lines)
+
+
 import asyncio,inspect
 from contextlib import ExitStack
 from pathlib import Path
@@ -64,6 +84,16 @@ class SameHostProducerWorker:
             # only publication failed. Never re-run the paid callable or rebill - reuse
             # the exact durable bytes and retry publication alone.
             resuming_publication=pending is not None and pending['generation']==capability.generation
+            if publishing and pending is not None and not resuming_publication:
+                raise ProducerRecoveryPaused(f"produced marker names generation {pending['generation']}, job runs generation {capability.generation}; reconcile before any rerun")
+            if publishing and pending is None and self.store.producer_paid_evidence(job_id):
+                raise ProducerRecoveryPaused(f'no produced marker for job {job_id} but provider attempt row(s) exist; the produce may have completed and crashed before the marker - reconcile, never blind-rerun paid work')
+            if resuming_publication:
+                current,files=_produced_set_hash(root)
+                if files==0:
+                    raise ProducerRecoveryPaused(f'produced bytes for job {job_id} are not on this host/path ({root}) and no published manifest exists; restore staged bytes or reconcile - never regenerate paid work')
+                if current!=pending['content_hash']:
+                    raise ProducerRecoveryPaused(f'produced bytes for job {job_id} differ from the recorded content hash; reconcile - never publish or regenerate from an unverified path')
             def invoke():
                 capability.validate(self.store)
                 with ExitStack() as stack:
@@ -100,7 +130,8 @@ class SameHostProducerWorker:
                         raise TypeError('synchronous producer required')
                     if publishing:
                         if not resuming_publication:
-                            self.store.record_producer_result(job_id,capability.task_id,capability.generation,str(root))
+                            content_hash,_=_produced_set_hash(root)
+                            self.store.record_producer_result(job_id,capability.task_id,capability.generation,str(root),content_hash)
                         # Publication failure fails the job loudly; the durable
                         # producer_results row makes the resume publication-only.
                         from .artifact_publication import publish_session_revision
