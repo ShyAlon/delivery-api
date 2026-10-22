@@ -39,3 +39,50 @@ def test_no_delete_grant():
 def test_duplicate_key_conflicts_loudly():
     r = sql(insert(A) + '; ' + insert(A, '{"v": 2}'), success=False)
     assert r.returncode != 0 and 'duplicate key' in r.stderr
+
+
+def insert_dispatched(owner):
+    # A dispatched-but-incomplete row (response NULL): the crash-evidence state.
+    return (f"INSERT INTO staged_provider_responses(owner_id,session_id,generation,stage,item,ordinal,request_sha256,provider,model,dispatched_at) "
+            f"VALUES ('{owner}','sess-{owner[-1]}',1,'scope','',0,'sha-{owner[-1]}','fake','m',1)")
+
+
+def complete(owner, usage='{"input_tokens": 5}'):
+    return (f"UPDATE staged_provider_responses SET response='{{\"v\": 1}}', usage='{usage}', completed_at=2"
+            f" WHERE session_id='sess-{owner[-1]}'")
+
+
+def test_trigger_completed_response_is_immutable():
+    seed = insert_dispatched(A) + '; ' + complete(A)
+    r = sql(seed + "; UPDATE staged_provider_responses SET response='{\"v\": 2}' WHERE session_id='sess-1'", success=False)
+    assert r.returncode != 0 and 'completed response is immutable' in r.stderr, r.stderr
+    r = sql(seed + "; UPDATE staged_provider_responses SET usage='{\"input_tokens\": 9}' WHERE session_id='sess-1'", success=False)
+    assert r.returncode != 0 and 'completed response is immutable' in r.stderr, r.stderr
+
+
+def test_trigger_identity_fields_are_immutable():
+    seed = insert_dispatched(A) + '; ' + complete(A)
+    for col, val in (("request_sha256", "'forged'"), ("provider", "'forged'"), ("stage", "'forged'"),
+                     ("execution_point", "'forged'"), ("dispatched_at", "9")):
+        r = sql(seed + f"; UPDATE staged_provider_responses SET {col}={val} WHERE session_id='sess-1'", success=False)
+        assert r.returncode != 0 and 'identity fields are immutable' in r.stderr, (col, r.stderr)
+
+
+def test_trigger_attempt_binding_is_immutable():
+    seed = insert_dispatched(A) + "; UPDATE staged_provider_responses SET attempt_id='attempt-1' WHERE session_id='sess-1'"
+    r = sql(seed + "; UPDATE staged_provider_responses SET attempt_id='attempt-2' WHERE session_id='sess-1'", success=False)
+    assert r.returncode != 0 and 'attempt binding is immutable' in r.stderr, r.stderr
+
+
+def test_trigger_lifecycle_transitions_still_work():
+    # dispatch -> bind -> complete: the two legitimate transitions pass the guard.
+    seed = (insert_dispatched(A)
+            + "; UPDATE staged_provider_responses SET attempt_id='attempt-1' WHERE session_id='sess-1'"
+            + '; ' + complete(A))
+    out = sql(seed + "; SELECT count(*) FROM staged_provider_responses WHERE session_id='sess-1' AND response IS NOT NULL")
+    assert out.stdout.strip().splitlines()[-1] == '1'
+
+
+def test_trigger_completion_requires_completed_at():
+    r = sql(insert_dispatched(A) + "; UPDATE staged_provider_responses SET response='{\"v\": 1}' WHERE session_id='sess-1'", success=False)
+    assert r.returncode != 0 and 'completion requires completed_at' in r.stderr, r.stderr
