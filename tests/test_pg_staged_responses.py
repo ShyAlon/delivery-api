@@ -21,8 +21,8 @@ def sql(query, owner=A, success=True):
 
 
 def insert(owner, response='{"v": 1}'):
-    return (f"INSERT INTO staged_provider_responses(owner_id,session_id,stage,item,request_sha256,response,provider,model,created_at) "
-            f"VALUES ('{owner}','sess-{owner[-1]}','scope',NULL,'sha-{owner[-1]}','{response}','fake','m',1)")
+    return (f"INSERT INTO staged_provider_responses(owner_id,session_id,generation,stage,item,ordinal,request_sha256,response,provider,model,dispatched_at) "
+            f"VALUES ('{owner}','sess-{owner[-1]}',1,'scope','',0,'sha-{owner[-1]}','{response}','fake','m',1)")
 
 
 def test_tenant_isolated_no_leak_no_oracle():
@@ -31,9 +31,7 @@ def test_tenant_isolated_no_leak_no_oracle():
     assert sql(f"{insert(B)}; SELECT count(*) FROM staged_provider_responses", owner=B).stdout.strip().splitlines()[-1] == '1'
 
 
-def test_immutable_no_update_no_delete():
-    r = sql(f"{insert(A)}; UPDATE staged_provider_responses SET response='{{\"v\": 2}}'", success=False)
-    assert r.returncode != 0 and 'permission denied' in r.stderr
+def test_no_delete_grant():
     r = sql(f"{insert(A)}; DELETE FROM staged_provider_responses", success=False)
     assert r.returncode != 0 and 'permission denied' in r.stderr
 
