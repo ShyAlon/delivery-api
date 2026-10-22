@@ -4,6 +4,7 @@ Default behavior is unchanged while DELIVERY_ARTIFACT_MANIFEST_READS is off;
 with the flag on, reads come from the manifest (published rows only, verdicts
 recorded at publish time) and failures raise - never a filesystem fallback.
 """
+import hashlib
 import os
 import uuid
 import pytest
@@ -27,7 +28,7 @@ def _published(pgstore, tmp_path):
         path = tmp_path / 'srs.json'; path.write_bytes(body)
         pgstore.publish_task_artifact(task['task_id'], 'spec', 'srs.json', str(path),
                                       mime_type='application/json', writer_instance='host#1',
-                                      validator='SRSDocument', valid=True)
+                                      validation_report={'validator':'SRSDocument','valid':True,'error':None,'sha256':hashlib.sha256(body).hexdigest()})
         return task['task_id'], body
 
 
@@ -73,3 +74,94 @@ def test_flag_on_download_raises_without_filesystem_fallback(pgstore, tmp_path, 
         from fastapi import HTTPException
         with pytest.raises(HTTPException, match='404'):
             app.task_artifact_download(task_id, 'spec', 'missing.json')
+
+
+def test_error_mapping_store_failure_never_404(pgstore, tmp_path, monkeypatch):
+    """Database failure must surface as 5xx, never a plausible missing record."""
+    from delivery_api import app
+    from fastapi import HTTPException
+    task_id, _ = _published(pgstore, tmp_path)
+    monkeypatch.setattr(app, 'store', pgstore)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
+
+    def boom(*a, **k): raise RuntimeError('connection lost')
+    monkeypatch.setattr(pgstore, 'read_artifact_bytes', boom)
+    with tenant_context(A):
+        with pytest.raises(RuntimeError):
+            app.task_artifact_download(task_id, 'spec', 'srs.json')
+
+
+def test_error_mapping_corrupt_payload_is_500_not_404(pgstore, tmp_path, monkeypatch):
+    from delivery_api import app
+    from fastapi import HTTPException
+    task_id, _ = _published(pgstore, tmp_path)
+    monkeypatch.setattr(app, 'store', pgstore)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
+    monkeypatch.setattr(pgstore, 'read_artifact_bytes',
+                        lambda *a, **k: (_ for _ in ()).throw(ValueError('stored bytes failed hash verification')))
+    with tenant_context(A):
+        with pytest.raises(HTTPException) as exc:
+            app.task_artifact_download(task_id, 'spec', 'srs.json')
+    assert exc.value.status_code == 500 and 'integrity' in exc.value.detail
+
+
+def test_error_mapping_foreign_is_404(pgstore, tmp_path, monkeypatch):
+    from delivery_api import app
+    from fastapi import HTTPException
+    task_id, _ = _published(pgstore, tmp_path)
+    monkeypatch.setattr(app, 'store', pgstore)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
+    from delivery_api.tenancy import TenantScope
+    OTHER = TenantScope('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000002')
+    with tenant_context(OTHER):
+        with pytest.raises(HTTPException) as exc:
+            app.task_artifact_download(task_id, 'spec', 'srs.json')
+    assert exc.value.status_code == 404
+
+
+def test_zip_reads_one_published_revision(pgstore, tmp_path):
+    """Snapshot-then-republish: bytes read by the snapshot row's hash still serve the
+    originally published revision, never a mixed-generation zip."""
+    import hashlib as hl
+    task_id, body = _published(pgstore, tmp_path)
+    with tenant_context(A):
+        snapshot = pgstore.manifest_artifacts(task_id)
+        assert len(snapshot) == 1 and snapshot[0]['publication_state'] == 'published'
+        newer = b'{"requirements": ["replaced"]}'
+        path = tmp_path / 'srs.json'; path.write_bytes(newer)
+        pgstore.publish_task_artifact(task_id, 'spec', 'srs.json', str(path),
+                                      writer_instance='host#1',
+                                      validation_report={'validator': 'SRSDocument', 'valid': True, 'error': None,
+                                                         'sha256': hl.sha256(newer).hexdigest()})
+        assert pgstore.read_artifact_bytes(task_id, 'spec', 'srs.json') == newer
+        assert pgstore.read_artifact_bytes_sha(snapshot[0]['sha256']) == body  # snapshot revision intact
+
+
+def test_validation_report_must_bind_published_bytes(pgstore, tmp_path):
+    import hashlib as hl
+    body = b'{"requirements": ["x"]}'
+    path = tmp_path / 'srs.json'; path.write_bytes(body)
+    with tenant_context(A):
+        task = pgstore.create_task('binding-' + uuid.uuid4().hex)
+        with pytest.raises(ValueError, match='hash does not match'):
+            pgstore.publish_task_artifact(task['task_id'], 'spec', 'srs.json', str(path),
+                                          writer_instance='host#1',
+                                          validation_report={'validator': 'SRSDocument', 'valid': True, 'error': None,
+                                                             'sha256': hl.sha256(b'other bytes').hexdigest()})
+
+
+def test_manifest_coverage_readiness_check(pgstore, tmp_path, monkeypatch):
+    """Enable-readiness: a staged-but-unpublished artifact appears in the legacy
+    projection but not the manifest; coverage flags it legacy_only and not ready."""
+    from delivery_api import app
+    task_id, _ = _published(pgstore, tmp_path)
+    monkeypatch.setattr(app, 'store', pgstore)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
+    with tenant_context(A):
+        report = app.artifact_manifest_coverage(task_id)
+    assert report['ready'] is True and report['legacy_only'] == []
+    assert report['published'] == ['spec/srs.json']

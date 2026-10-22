@@ -26,7 +26,7 @@ def publish(store, task_id, name, body: bytes, writer='host#1'):
     tmp = os.path.join(os.environ['PYTEST_TMPDIR'], name)
     with open(tmp, 'wb') as f: f.write(body)
     return store.publish_task_artifact(task_id, 'spec', name, tmp, mime_type='application/json',
-                                       writer_instance=writer, validator='SRSDocument', valid=True)
+                                       writer_instance=writer, validation_report={'validator':'SRSDocument','valid':True,'error':None,'sha256':hashlib.sha256(body).hexdigest()})
 
 
 def test_publish_records_measured_manifest_and_serves_hash_verified_bytes(store, tmp_path):
@@ -36,7 +36,7 @@ def test_publish_records_measured_manifest_and_serves_hash_verified_bytes(store,
         task = store.create_task('manifest-' + uuid.uuid4().hex)
         row = store.publish_task_artifact(task['task_id'], 'spec', 'srs.json', *[_p(tmp_path, body)],
                                           mime_type='application/json', writer_instance='host#1',
-                                          validator='SRSDocument', valid=True)
+                                          validation_report={'validator':'SRSDocument','valid':True,'error':None,'sha256':hashlib.sha256(body).hexdigest()})
         assert row['publication_state'] == 'published'
         assert row['sha256'] == hashlib.sha256(body).hexdigest()
         assert row['byte_size'] == len(body)

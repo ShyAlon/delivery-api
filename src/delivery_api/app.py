@@ -1220,6 +1220,23 @@ def _manifest_artifact_snapshot(task_id:str)->list[dict]:
             "byte_size":row['byte_size'],"sha256":row['sha256']})
     return records
 
+def artifact_manifest_coverage(task_id:str)->dict:
+    """Operator readiness check before enabling manifest reads: compares the legacy
+    projection with the published manifest for one task. Enabling ARTIFACT_MANIFEST_READS
+    while 'legacy_only' is non-empty would make existing artifacts vanish, so enable only
+    after publication (or backfill) covers them. Both flags default OFF; production is
+    unchanged until an approved enable runs this check first."""
+    flag=config.ARTIFACT_MANIFEST_READS
+    try:
+        config.ARTIFACT_MANIFEST_READS=False
+        legacy=_task_artifact_snapshot(task_id)
+    finally:
+        config.ARTIFACT_MANIFEST_READS=flag
+    manifest=_manifest_artifact_snapshot(task_id)
+    legacy_names={f"{r['phase_key']}/{r['name']}" for r in legacy}
+    manifest_names={f"{r['phase_key']}/{r['name']}" for r in manifest}
+    return {"task_id":task_id,"published":sorted(manifest_names),"legacy_only":sorted(legacy_names-manifest_names),"ready":not (legacy_names-manifest_names)}
+
 def _task_artifact_snapshot(task_id:str)->list[dict]:
     """Project real session files into task artifacts; filesystem is source evidence."""
     if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
@@ -1407,7 +1424,14 @@ def task_artifact_download(task_id:str,phase:str,name:str):
     path=_task_artifact(task_id,phase,name)
     if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
         from fastapi.responses import Response
-        data=store.read_artifact_bytes(task_id,phase,name)
+        # Error mapping: genuinely missing or foreign-invisible artifact is 404; a
+        # corrupt/unverifiable payload is an explicit 500 (never a plausible missing
+        # record); database failures propagate as 5xx. No filesystem fallback.
+        try: data=store.read_artifact_bytes(task_id,phase,name)
+        except KeyError: raise HTTPException(404,'artifact not found')
+        except ValueError:
+            log.exception('artifact integrity failure task=%s phase=%s name=%s',task_id,phase,name)
+            raise HTTPException(500,'artifact failed its stored integrity check; the failure was recorded for diagnostics')
         return Response(data,media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream',
                         headers={'Content-Disposition':f'attachment; filename="{name}"'})
     if config.CLOUD_TENANTS:
@@ -1605,7 +1629,12 @@ def task_artifacts_zip(task_id:str):
         for artifact in records:
             entry=f"{artifact['phase_key']}/{artifact['name']}"
             if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
-                archive.writestr(entry,store.read_artifact_bytes(task_id,artifact['phase_key'],artifact['name']))
+                # Read by the snapshot row's content hash: the whole zip is one
+                # published revision, never a mix of generations under concurrent publish.
+                try: archive.writestr(entry,store.read_artifact_bytes_sha(artifact['sha256']))
+                except (KeyError,ValueError):
+                    log.exception('artifact integrity failure in zip task=%s entry=%s',task_id,entry)
+                    raise HTTPException(500,'an artifact failed its stored integrity check; the failure was recorded for diagnostics')
             elif config.CLOUD_TENANTS:
                 from .tenant_files import read_session_bytes
                 from vmodel_contracts.runtime import artifacts_root

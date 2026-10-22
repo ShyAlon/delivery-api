@@ -1252,14 +1252,25 @@ class PostgresStore(SQLiteStore):
 # User-entry mutations and new work claims only. Nested accepted-worker writes,
 # progress/usage evidence and completion remain available. Never gate settlement.
     # ---- PR B: artifact manifest authority (Postgres-only) ----
-    def publish_task_artifact(self,task_id,phase_key,name,ref,*,mime_type='application/json',writer_instance,validator=None,valid=None,validation_error=None):
+    def publish_task_artifact(self,task_id,phase_key,name,ref,*,mime_type='application/json',writer_instance,validation_report=None):
         """Measure, store and atomically publish one artifact: bytes into tenant-owned
         artifact_bytes (content-addressed, immutable), a staged manifest row, then one
-        CAS demote-and-promote. The whole publication is this operation's transaction."""
+        CAS demote-and-promote. The whole publication is this operation's transaction.
+
+        validation_report binds a validator verdict to the EXACT bytes being stored:
+        {'validator':name,'valid':bool,'error':str|None,'sha256':hex}. Its sha256 must
+        equal the measured hash of the published bytes, otherwise the verdict came from
+        other content and the publish is refused - an unvalidated artifact can never
+        carry a verdict it did not earn."""
         import hashlib
         from pathlib import Path
         data=Path(ref).read_bytes()
         digest=hashlib.sha256(data).hexdigest();size=len(data)
+        validator=valid=validation_error=None
+        if validation_report is not None:
+            if validation_report.get('sha256')!=digest:
+                raise ValueError('validation report hash does not match the published bytes')
+            validator=validation_report.get('validator');valid=validation_report.get('valid');validation_error=validation_report.get('error')
         task=self.task(task_id)
         if not task: raise KeyError(task_id)
         scope=current_scope();now=time.time()
@@ -1287,6 +1298,16 @@ class PostgresStore(SQLiteStore):
         return [dict(r) for r in self._db.execute(
             'SELECT * FROM task_artifacts WHERE task_id=? AND generation=? ORDER BY phase_key,name,id',
             (task_id,generation)).fetchall()]
+
+    def read_artifact_bytes_sha(self,sha256):
+        """Read immutable bytes by content hash - one exact published revision, safe to
+        combine with a previously taken manifest snapshot under concurrent republish."""
+        row=self._db.execute('SELECT bytes FROM artifact_bytes WHERE owner_id=? AND sha256=?',(current_scope().owner_id,sha256)).fetchone()
+        if row is None: raise KeyError(f'no stored bytes for hash {sha256[:12]}')
+        data=bytes(row['bytes'])
+        import hashlib
+        if hashlib.sha256(data).hexdigest()!=sha256: raise ValueError('stored bytes failed hash verification')
+        return data
 
     def read_artifact_bytes(self,task_id,phase_key,name,*,generation=None):
         """Hash-verified artifact bytes via the manifest only. Raises on a missing
