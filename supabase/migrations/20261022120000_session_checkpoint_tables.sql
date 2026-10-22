@@ -63,3 +63,10 @@ DO $$ DECLARE tab TEXT; BEGIN
 END $$;
 REVOKE ALL ON checkpoint_migrations FROM PUBLIC, authenticated;
 GRANT SELECT ON checkpoint_migrations TO requi_backend;
+
+-- Tenancy guard: every public table carries forced RLS. The version ledger is
+-- migration-owned and read-only for the runtime role (saver setup probes it).
+ALTER TABLE checkpoint_migrations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE checkpoint_migrations FORCE ROW LEVEL SECURITY;
+CREATE POLICY checkpoint_migrations_read ON checkpoint_migrations
+    FOR SELECT TO requi_backend USING (true);
