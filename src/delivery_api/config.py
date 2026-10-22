@@ -24,6 +24,7 @@ DEFAULT_DB_PATH = default_data_dir() / "delivery.db"
 DATABASE_URL = os.environ.get("DELIVERY_DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH}")
 SUPABASE_URL = os.environ.get("DELIVERY_SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.environ.get("DELIVERY_SUPABASE_ANON_KEY", "")
+ARTIFACT_MANIFEST_READS = os.environ.get("DELIVERY_ARTIFACT_MANIFEST_READS", "").strip() == "1"  # PR B: manifest-backed artifact reads; default OFF until approved enable
 CLOUD_TENANTS = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 if CLOUD_TENANTS and (not SUPABASE_URL or not SUPABASE_ANON_KEY):
     raise RuntimeError("Postgres requires Supabase Auth URL and public anon/publishable key; no local-auth fallback.")

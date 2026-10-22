@@ -1204,8 +1204,26 @@ def _read_task_text(task_id:str,path:Path,*,errors='strict')->str:
     with session_reader(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),_recorded_engine_session(task_id),store):
         return read_bound_text(path,errors=errors)
 
+def _manifest_artifact_snapshot(task_id:str)->list[dict]:
+    """Manifest-backed artifact reads (PR B): serve recorded rows - sizes, hashes,
+    publication state and the validator verdict measured at publish time - instead of
+    re-scanning and re-validating the session filesystem on every request. Gated by
+    config.ARTIFACT_MANIFEST_READS; any database failure raises, never a silent
+    filesystem fallback."""
+    records=[]
+    for row in store.manifest_artifacts(task_id):
+        if row['publication_state']!='published':continue
+        error=row.get('validation_error')
+        records.append({"phase_key":row['phase_key'],"name":row['name'],"title":_ARTIFACT_TITLES.get(row['name'],Path(row['name']).stem.replace("_"," ").title()),
+            "ref":row['ref'],"mime_type":row['mime_type'],"stale":bool(row['stale']),"generation":row['generation'],"present":True,
+            "valid":row['valid'],"validator":row['validator'],"validation_errors":[error] if error else [],"validation_error":error,
+            "byte_size":row['byte_size'],"sha256":row['sha256']})
+    return records
+
 def _task_artifact_snapshot(task_id:str)->list[dict]:
     """Project real session files into task artifacts; filesystem is source evidence."""
+    if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
+        return _manifest_artifact_snapshot(task_id)
     task=store.task(task_id)
     if not task:return []
     session=_recorded_engine_session(task_id)
@@ -1387,6 +1405,11 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}")
 def task_artifact_download(task_id:str,phase:str,name:str):
     path=_task_artifact(task_id,phase,name)
+    if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
+        from fastapi.responses import Response
+        data=store.read_artifact_bytes(task_id,phase,name)
+        return Response(data,media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream',
+                        headers={'Content-Disposition':f'attachment; filename="{name}"'})
     if config.CLOUD_TENANTS:
         from .tenant_files import read_session_bytes
         from vmodel_contracts.runtime import artifacts_root
@@ -1581,7 +1604,9 @@ def task_artifacts_zip(task_id:str):
     with zipfile.ZipFile(data,"w",zipfile.ZIP_DEFLATED) as archive:
         for artifact in records:
             entry=f"{artifact['phase_key']}/{artifact['name']}"
-            if config.CLOUD_TENANTS:
+            if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
+                archive.writestr(entry,store.read_artifact_bytes(task_id,artifact['phase_key'],artifact['name']))
+            elif config.CLOUD_TENANTS:
                 from .tenant_files import read_session_bytes
                 from vmodel_contracts.runtime import artifacts_root
                 base=artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'));session=_recorded_engine_session(task_id)
