@@ -41,20 +41,29 @@ def _validate(path: Path, validator) -> dict:
             'valid': valid, 'error': error, 'sha256': hashlib.sha256(data).hexdigest()}
 
 
-def publish_session_revision(store, task_id: str, root: Path, *, writer_instance: str = None):
-    """Publish every present phase artifact with its publish-time verdict, then mark
-    the revision ready - atomically. Missing files are simply not part of the set the
-    marker covers; a failed validation is RECORDED as a verdict, not an exception."""
+def session_artifact_files(root: Path):
+    """The present phase artifacts under a session root, as (phase_key, name, path).
+    Shared by publication and the legacy backfill - one walk, no drift."""
     from .phases import PHASE_DEFINITIONS
-    artifacts = []
+    found = []
     for phase in PHASE_DEFINITIONS:
         folder = root / ("interview" if phase.key in ("intent", "conops") else "spec")
         for filename in phase.artifacts:
             path = folder / filename
-            if not path.is_file(): continue
-            validator = ARTIFACT_VALIDATORS.get(filename)
-            artifacts.append({'phase_key': phase.key, 'name': filename, 'ref': str(path),
-                              'mime_type': mimetypes.guess_type(filename)[0] or 'application/octet-stream',
-                              'validation_report': _validate(path, validator) if validator else None})
+            if path.is_file():
+                found.append((phase.key, filename, path))
+    return found
+
+
+def publish_session_revision(store, task_id: str, root: Path, *, writer_instance: str = None):
+    """Publish every present phase artifact with its publish-time verdict, then mark
+    the revision ready - atomically. Missing files are simply not part of the set the
+    marker covers; a failed validation is RECORDED as a verdict, not an exception."""
+    artifacts = []
+    for phase_key, filename, path in session_artifact_files(root):
+        validator = ARTIFACT_VALIDATORS.get(filename)
+        artifacts.append({'phase_key': phase_key, 'name': filename, 'ref': str(path),
+                          'mime_type': mimetypes.guess_type(filename)[0] or 'application/octet-stream',
+                          'validation_report': _validate(path, validator) if validator else None})
     writer = writer_instance or f'{socket.gethostname()}#{os.getpid()}'
     return store.publish_task_revision(task_id, artifacts, writer_instance=writer)
