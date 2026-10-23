@@ -1,5 +1,5 @@
-"""Focused guards for the crosshost test harness (parent-approved harness
-corrections, 2026-10-23):
+"""Focused guards for the crosshost test harness (added with the 2026-10-23
+harness corrections):
 1. The crosshost stub derives its probing reply from the supplied message
    history, so an uninterrupted state and a restarted state return the
    identical next response for the same history.
