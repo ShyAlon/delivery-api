@@ -140,6 +140,19 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         if row['state']=='cancelled':return dict(row)
         if row['state']!='reserved':raise AdmissionDenied('dispatched or uncertain funds cannot be released')
         store._db.execute("UPDATE provider_attempts SET state='cancelled',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))
+        # Audited in the same scoped transaction as the state change (the
+        # outermost operation commits), mirroring the release audit below:
+        # releasing a reservation frees money-relevant holds, so the release
+        # and its reason must be traceable. usage carries optional caller
+        # context - {'refusal': reason} from the pre-dispatch refusal cleanup.
+        # Detail stays customer-projection safe: no reserved expense or rate
+        # fields (the operator read joins the attempt row for those), and the
+        # refusal text passes the log scrubber because a composed denial can
+        # carry an underlying client message with connection detail.
+        from .server_log_buffer import scrub
+        detail={'attempt_id':attempt_id,'job_id':row['job_id']}
+        if isinstance(usage,dict) and isinstance(usage.get('refusal'),str):detail['refusal']=scrub(usage['refusal'])[:300]
+        store.audit(str(row['owner_id']),'provider.attempt.cancelled',store.worker_job(row['job_id'])['task_id'],detail)
     elif action=='uncertain':
         if row['state'] not in ('dispatched','uncertain'):raise AdmissionDenied('only dispatched attempts can be uncertain')
         store._db.execute("UPDATE provider_attempts SET state='uncertain',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))

@@ -96,3 +96,16 @@ def test_payment_read_proxy_only_bounded_known_parameters_and_no_writes():
  assert c.get('/api/operations/payment-journal?start_at=1&end_at=2&raw=true',headers=h).status_code==422
  assert c.post('/api/operations/payment-journal',headers=h).status_code==405
  assert len(calls)==2
+
+def test_attempt_releases_proxy_preserves_authority_and_rejects_unknown_keys():
+ calls=[]
+ def upstream(request):
+  calls.append(request);return httpx.Response(503,json={'detail':'unconfigured'})
+ c=TestClient(create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream)))
+ h={'Authorization':'Bearer fake'}
+ assert c.get('/api/operations/attempt-releases?limit=50',headers=h).status_code==503
+ assert calls[0].url.path=='/api/admin/operations/attempt-releases'
+ assert calls[0].url.params.get('limit')=='50'
+ assert c.get('/api/operations/attempt-releases?raw=true',headers=h).status_code==422
+ assert c.get('/api/operations/attempt-releases').status_code==401
+ assert len(calls)==1

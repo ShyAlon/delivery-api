@@ -58,6 +58,49 @@ class OperatorReadStore:
                     'phase':detail.get('phase'),'peak_memory_mb':detail.get('peak_rss_mb')})
             return {'scope':'reviewed_cross_user_operator_read','stops':out,'truncated':len(rows)>limit,'mutations_available':False}
 
+    def attempt_releases(self,owner_store,*,limit=200):
+        """Reservation releases and failed releases, newest first: when, whose
+        run, which task, why, and whether a failed release still needs
+        attention (the attempt is still held). Operator-only: reserved expense
+        context is joined here, never written into the audit rows customers
+        can read."""
+        import json
+        from datetime import datetime,timezone
+        if type(limit) is not int or not 1<=limit<=500:raise ValueError('bounded operator page required')
+        with self._read(owner_store,'logs.read') as (connection,authority):
+            rows=connection.execute(
+                "SELECT a.ts,a.actor,a.action,a.detail,a.task_id,u.label AS owner_label,t.active_phase AS task_phase,"
+                " p.state AS attempt_state,p.expense_reserved FROM public.audit_log a"
+                " LEFT JOIN public.users u ON u.user_id=a.owner_id"
+                " LEFT JOIN public.tasks t ON t.task_id=a.task_id"
+                " LEFT JOIN public.provider_attempts p ON p.attempt_id=(a.detail::jsonb)->>'attempt_id'"
+                " WHERE a.action IN ('provider.attempt.cancelled','provider.attempt.released','provider.attempt.release_failed')"
+                " ORDER BY a.id DESC LIMIT %s",(limit+1,)).fetchall()
+            out=[]
+            for row in rows[:limit]:
+                try:detail=json.loads(row['detail'] or '{}')
+                except ValueError:detail={}
+                failed=row['action']=='provider.attempt.release_failed'
+                attention=failed and (row['attempt_state'] is None or row['attempt_state'] in ('reserved','dispatched','uncertain'))
+                if failed:event='Release Failed - Needs Attention' if attention else 'Release Failed - Since Resolved'
+                elif row['action']=='provider.attempt.cancelled':event='Reservation Released After Refusal' if detail.get('refusal') else 'Reservation Cancelled'
+                else:event='Reservation Released With Proof'
+                out.append({'when':datetime.fromtimestamp(row['ts'],timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
+                    'event':event,'attention':attention,
+                    'owner':row['owner_label'] or 'Unknown User','phase':row['task_phase'] or 'Unknown Phase',
+                    'task_id':row['task_id'],
+                    'reason':detail.get('refusal') or detail.get('error'),
+                    'current_state':row['attempt_state'] or 'missing',
+                    'expense_reserved':str(row['expense_reserved']) if row['expense_reserved'] is not None else None,
+                    'attempt_id':detail.get('attempt_id')})
+            state_labels={'reserved':'Held','dispatched':'Dispatched','uncertain':'Uncertain',
+                'cancelled':'Cancelled','settled':'Settled','released':'Released','missing':'No Attempt Row'}
+            for r in out:r['current_state']=state_labels.get(r['current_state'],r['current_state'])
+            return {'scope':'reviewed_cross_user_operator_read','operator_subject':authority['operator_subject'],
+                'registry_version':authority['registry_version'],'releases':out,'truncated':len(rows)>limit,
+                'attention_count':sum(1 for r in out if r['attention']),'mutations_available':False,
+                'note':'Release Failed - Since Resolved means the attempt later left its held state; only Needs Attention rows are still holding a reservation.'}
+
     @contextmanager
     def _grant(self,owner_store):
         """The only write path: a role that can call two database functions. The functions check the operator registry themselves."""

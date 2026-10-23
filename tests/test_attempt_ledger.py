@@ -1222,3 +1222,206 @@ def test_reconcile_staged_calls_is_tenant_scoped(ledger):
     with tenant_context(B):
         report = WorkerAdmissionGateway(s, job).reconcile_staged_calls(session_id, 1)
     assert report == {'consistent': [], 'settleable': [], 'paused': []}
+
+
+def test_gateway_refused_start_releases_reservation_launch_branch(credit_account):
+    """A refused launch-guard start releases the reservation: concurrency slots
+    and window accounting free up instead of wedging at three refused holds."""
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    s,tid,job=credit_account
+    with tenant_context(A):
+        gw=WorkerAdmissionGateway(s,job,launch_guard=True)
+        for i in range(3):
+            aid=uuid.uuid4().hex
+            s.reserve_provider_attempt(job,aid,LAUNCH_Q,'release-'+str(i))
+            with pytest.raises(AdmissionDenied,match='expense_policy_missing'):
+                gw.start(aid)
+            assert s.provider_attempt(aid)['state']=='cancelled'
+        # Every refused hold released its slot: a fourth reserve is admitted.
+        extra=uuid.uuid4().hex
+        s.reserve_provider_attempt(job,extra,LAUNCH_Q,'after-release')
+        assert s.provider_attempt(extra)['state']=='reserved'
+        s.transition_provider_attempt(extra,'cancel')
+
+
+def test_gateway_refused_start_releases_reservation_prepaid_branch(credit_account):
+    """A prepaid refusal at start releases the reservation and leaves no charge row."""
+    import psycopg
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    s,tid,job=credit_account
+    with psycopg.connect(DSN) as c:
+        c.execute('UPDATE credit_accounts SET balance_units=0 WHERE owner_id=%s',(A.owner_id,))
+    q={**Q,'retail_units_per_credit':1000000}
+    with tenant_context(A):
+        aid=uuid.uuid4().hex
+        s.reserve_provider_attempt(job,aid,q,'prepaid-refusal')
+        with pytest.raises(AdmissionDenied,match='positive prepaid balance required'):
+            WorkerAdmissionGateway(s,job).start(aid)
+        assert s.provider_attempt(aid)['state']=='cancelled'
+    with psycopg.connect(DSN) as c:
+        assert c.execute('SELECT count(*) FROM credit_charges WHERE attempt_id=%s',(aid,)).fetchone()[0]==0
+
+
+def test_repeated_start_keeps_denial_and_never_cancels_dispatched(credit_account):
+    """A repeated start on a dispatched attempt raises the original denial;
+    the refusal release must never touch accepted work."""
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    s,tid,job=credit_account
+    q={**Q,'retail_units_per_credit':1000000}
+    with tenant_context(A):
+        aid=uuid.uuid4().hex
+        s.reserve_provider_attempt(job,aid,q,'repeat')
+        gw=WorkerAdmissionGateway(s,job)
+        gw.start(aid)
+        assert s.provider_attempt(aid)['state']=='dispatched'
+        with pytest.raises(AdmissionDenied,match='attempt already dispatched or closed'):
+            gw.start(aid)
+        assert s.provider_attempt(aid)['state']=='dispatched'
+        assert s.transition_provider_attempt(aid,'settle',{'input_tokens':2,'output_tokens':3})['state']=='settled'
+
+
+def test_start_unexpected_failure_keeps_reservation_for_reconciliation(credit_account,monkeypatch):
+    """A non-refusal failure (crash/DB error) is not a proven pre-dispatch
+    refusal: the reservation stays held for reconciliation, never auto-released."""
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    s,tid,job=credit_account
+    q={**Q,'retail_units_per_credit':1000000}
+    with tenant_context(A):
+        aid=uuid.uuid4().hex
+        s.reserve_provider_attempt(job,aid,q,'crash')
+        def boom(*a,**k):raise RuntimeError('connection dropped mid-start')
+        monkeypatch.setattr(s,'transition_provider_attempt',boom)
+        with pytest.raises(RuntimeError,match='connection dropped mid-start'):
+            WorkerAdmissionGateway(s,job).start(aid)
+        assert s.provider_attempt(aid)['state']=='reserved'
+
+
+def test_start_denial_survives_unexpected_release_failure(credit_account,monkeypatch,caplog):
+    """If the post-refusal release itself fails unexpectedly, the original denial
+    is still what propagates (never masked by the cleanup error), the cleanup
+    failure is logged with its traceback, and the reservation stays held."""
+    import logging,psycopg
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    s,tid,job=credit_account
+    with psycopg.connect(DSN) as c:
+        c.execute('UPDATE credit_accounts SET balance_units=0 WHERE owner_id=%s',(A.owner_id,))
+    q={**Q,'retail_units_per_credit':1000000}
+    with tenant_context(A):
+        aid=uuid.uuid4().hex
+        s.reserve_provider_attempt(job,aid,q,'release-crash')
+        real=s.transition_provider_attempt
+        def flaky(attempt,action,*a,**k):
+            if action=='cancel':raise RuntimeError('db lost during release')
+            return real(attempt,action,*a,**k)
+        monkeypatch.setattr(s,'transition_provider_attempt',flaky)
+        with caplog.at_level(logging.WARNING,'delivery_api.producer_admission'):
+            with pytest.raises(AdmissionDenied,match='positive prepaid balance required'):
+                WorkerAdmissionGateway(s,job).start(aid)
+        assert s.provider_attempt(aid)['state']=='reserved'
+        assert any('post-refusal reservation release failed' in r.message for r in caplog.records)
+
+
+def test_cancel_transition_audits_release_with_reason(credit_account):
+    """A reservation release is money-relevant: the cancel transition writes a
+    provider.attempt.cancelled audit row atomically, carrying the refusal reason."""
+    s,tid,job=credit_account
+    q={**Q,'retail_units_per_credit':1000000}
+    with tenant_context(A):
+        aid=uuid.uuid4().hex
+        s.reserve_provider_attempt(job,aid,q,'audit-cancel')
+        s.transition_provider_attempt(aid,'cancel',{'refusal':'positive prepaid balance required'})
+        entries=[e for e in s.audit_entries(tid) if e['action']=='provider.attempt.cancelled']
+        assert len(entries)==1
+        assert entries[0]['detail']['attempt_id']==aid
+        assert entries[0]['detail']['refusal']=='positive prepaid balance required'
+        # Customer-projection safe: the audit row itself carries no provider
+        # cost fields; the operator read joins the attempt row for those.
+        assert 'expense_reserved' not in entries[0]['detail']
+
+
+def test_gateway_refusal_audit_and_release_failure_record(credit_account,monkeypatch):
+    """The refusal cleanup audits the release with the original refusal; if the
+    release itself fails unexpectedly, a provider.attempt.release_failed record
+    names the error type while the reservation stays held and the original
+    denial propagates."""
+    import psycopg
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    s,tid,job=credit_account
+    with psycopg.connect(DSN) as c:
+        c.execute('UPDATE credit_accounts SET balance_units=0 WHERE owner_id=%s',(A.owner_id,))
+    q={**Q,'retail_units_per_credit':1000000}
+    with tenant_context(A):
+        aid=uuid.uuid4().hex
+        s.reserve_provider_attempt(job,aid,q,'audit-refusal')
+        with pytest.raises(AdmissionDenied,match='positive prepaid balance required'):
+            WorkerAdmissionGateway(s,job).start(aid)
+        entries=[e for e in s.audit_entries(tid) if e['action']=='provider.attempt.cancelled' and e['detail']['attempt_id']==aid]
+        assert len(entries)==1 and entries[0]['detail']['refusal']=='positive prepaid balance required'
+    # The operator audit reason is allowlisted: denials that compose raw client
+    # errors into their message collapse to a canonical label, and unknown
+    # refusals become a generic one (full detail stays in the server log).
+    from delivery_api.producer_admission import _refusal_summary
+    assert _refusal_summary(AdmissionDenied('provider balance read failed: socket leak at /api/x'))=='provider balance read failed'
+    assert _refusal_summary(AdmissionDenied('service temporarily unavailable: capacity'))=='service temporarily unavailable'
+    assert _refusal_summary(AdmissionDenied('positive prepaid balance required'))=='positive prepaid balance required'
+    assert _refusal_summary(AdmissionDenied('anything else: raw detail'))=='admission refused'
+    with tenant_context(A):
+        stuck=uuid.uuid4().hex
+        s.reserve_provider_attempt(job,stuck,q,'audit-release-failure')
+        real=s.transition_provider_attempt
+        def flaky(attempt,action,*a,**k):
+            if action=='cancel':raise RuntimeError('db lost during release')
+            return real(attempt,action,*a,**k)
+        monkeypatch.setattr(s,'transition_provider_attempt',flaky)
+        with pytest.raises(AdmissionDenied,match='positive prepaid balance required'):
+            WorkerAdmissionGateway(s,job).start(stuck)
+        assert s.provider_attempt(stuck)['state']=='reserved'
+        failures=[e for e in s.audit_entries(tid) if e['action']=='provider.attempt.release_failed' and e['detail']['attempt_id']==stuck]
+        assert len(failures)==1 and failures[0]['detail']['error']=='RuntimeError'
+
+
+def test_repeated_start_never_audits_a_release(credit_account):
+    """A repeated start on a dispatched attempt is refused and the release
+    refuses too: no provider.attempt.cancelled audit row may appear."""
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    s,tid,job=credit_account
+    q={**Q,'retail_units_per_credit':1000000}
+    with tenant_context(A):
+        aid=uuid.uuid4().hex
+        s.reserve_provider_attempt(job,aid,q,'audit-repeat')
+        gw=WorkerAdmissionGateway(s,job)
+        gw.start(aid)
+        with pytest.raises(AdmissionDenied,match='attempt already dispatched or closed'):
+            gw.start(aid)
+        assert not [e for e in s.audit_entries(tid) if e['action']=='provider.attempt.cancelled' and e['detail']['attempt_id']==aid]
+
+
+def test_production_factory_gateway_honors_owner_rolling_expense_limit(credit_account):
+    """The wired production factory shape (launch guard off, prepaid on) honors
+    the existing owner rolling-24h expense setting at reserve: a reservation
+    that would pass the setting is refused and creates no row. No network."""
+    import base64,json,psycopg
+    from delivery_api import production_gateway as pg
+    from test_production_gateway import env as gateway_env
+    s,tid,job=credit_account
+    with psycopg.connect(DSN) as c:
+        c.execute('UPDATE admission_limits SET expense_limit=100000000000000,period_seconds=86400 WHERE owner_id=%s',(A.owner_id,))
+    factory=pg.ProductionGateways(s,gateway_env(),vendor_fetcher=lambda u:(_ for _ in ()).throw(RuntimeError('no network in tests')))
+    try:
+        with tenant_context(A):
+            gw=factory(None,job)
+            assert gw.launch_guard is False and gw.require_prepaid is True
+            req=base64.b64encode(json.dumps({'model':'deepseek-test-model','max_tokens':8000}).encode()).decode()
+            kw=dict(stage='preflight',provider='deepseek',model='deepseek-test-model',serialized_request=req,max_output_tokens=8000)
+            first=uuid.uuid4().hex
+            gw.reserve_serialized(attempt_id=first,**kw)
+            assert s.provider_attempt(first)['state']=='reserved'
+            # A setting between one and two reservations: the next call must be refused.
+            reserved=s.provider_attempt(first)['expense_reserved']
+            with psycopg.connect(DSN) as c:
+                c.execute('UPDATE admission_limits SET expense_limit=%s WHERE owner_id=%s',(reserved+reserved//2,A.owner_id))
+            denied=uuid.uuid4().hex
+            with pytest.raises(AdmissionDenied,match='owner spend allowance exhausted'):
+                gw.reserve_serialized(attempt_id=denied,**kw)
+            assert s.provider_attempt(denied) is None
+    finally:factory.close()
