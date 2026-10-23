@@ -1,4 +1,4 @@
-import {pageEpoch,pageStale} from './page-lifecycle.js';
+import {pageEpoch,pageStale,onPageExit} from './page-lifecycle.js';
 import {api,esc,clientLog} from './client-core.js';
 import {checklistHtml,refreshDecision} from './decision-panel.js';
 import {watchReviewProgress} from './progress.js';
@@ -7,6 +7,8 @@ import {stripIds,gateStructured} from './gate-presenters.js';
 import {findingTitle,findingReasonHtml,pillsHtml,replaceFieldsHtml,readReplacement,fillReplacement,OPTIONS} from './semantic-review-ui.js';
 const app=document.querySelector('#app');
 const PURPOSES=new Set(['conops_concept','interview_approval','semantic_review']);
+// One 'still pending' observation per slow decision load; observation only - fetch timeout, retry and navigation semantics are unchanged.
+const PENDING_LOG_MS=10000;
 export function decisionPurpose(control){return control?.owner==='engine'&&PURPOSES.has(control?.decision?.context?.decision_purpose)?control.decision.context.decision_purpose:null}
 export function decisionUrl(taskId,control,selectors={}){
  const query=new URLSearchParams({step:decisionPurpose(control)==='semantic_review'?'findings':decisionPurpose(control)==='conops_concept'?'concept':'review',revision:control.revision,tab:'evidence',...selectors});
@@ -30,20 +32,35 @@ export function createDecisions(ctx){
  let generation=0;
  async function decisionPage(taskId,waitId){
   const token=++generation,query=new URLSearchParams(location.search),at=pageEpoch();
+  const trace={wait_id:waitId,revision:query.get('revision')||null,step:query.get('step')||null,epoch:at};
+  const loadStart=performance.now();
+  let settled=false,requestRef=null;  // requestRef comes only from this load's own response (api onResponse); a request with no processed response stays null
+  function settle(outcome,extra={}){
+   if(settled)return;settled=true;
+   if(pendingTimer){clearTimeout(pendingTimer);pendingTimer=null}
+   try{clientLog('decision.outcome','Decision review load: '+outcome,{...trace,outcome,duration_ms:Math.round(performance.now()-loadStart),request_ref:requestRef,...extra})}catch(_){/* logging must never break the page */}
+  }
+  let pendingTimer=setTimeout(()=>{pendingTimer=null;if(!settled&&!pageStale(at)){try{clientLog('decision.pending','Decision review load still pending',{...trace,after_ms:PENDING_LOG_MS})}catch(_){}}},PENDING_LOG_MS);
+  onPageExit(()=>{if(pendingTimer){clearTimeout(pendingTimer);pendingTimer=null}});
+  try{clientLog('decision.load','Decision review load started',trace)}catch(_){/* logging must never break the page */}
   let data;
-  try{data=await api(`/api/tasks/${encodeURIComponent(taskId)}/decisions/${encodeURIComponent(waitId)}?${query}`)}catch(error){
-   if(pageStale(at))return;   // navigated away while loading: never commit
+  const apiUrl=`/api/tasks/${encodeURIComponent(taskId)}/decisions/${encodeURIComponent(waitId)}?${query}`;
+  const onResp=info=>{requestRef=(info&&info.ref)||null};
+  try{data=await api(apiUrl,{onResponse:onResp})}catch(error){
+   if(pageStale(at)){settle('stale_silent');return}   // navigated away while loading: never commit
+   settle('fetch_error',{error_kind:error&&error.status?'http_'+error.status:(String(error&&error.message||'').includes('timed out')?'timeout':'network')});
    app.innerHTML=`<section class="gate-page"><a class="back" href="/tasks/${encodeURIComponent(taskId)}/view">Back to task</a><h1>Review unavailable</h1><p class="notice">${esc(error.message)}</p></section>`;return;
   }
-  if(token!==generation||pageStale(at))return;
+  if(token!==generation||pageStale(at)){settle('stale_silent');return}
   const r=data.review,purpose=decisionPurpose(r),evidence=r.decision?.context?.evidence;
-  if(!purpose||!evidence)throw new Error('Typed review evidence is unavailable');
-  if(purpose==='semantic_review'){return semanticPage(taskId,waitId,data,query)}
+  if(!purpose||!evidence){settle('typed_evidence_missing');throw new Error('Typed review evidence is unavailable')}
+  if(purpose==='semantic_review'){settle('committed',{branch:'semantic_review'});return semanticPage(taskId,waitId,data,query)}
   const expectedStep=purpose==='conops_concept'?'concept':'review';
-  if(query.has('step')&&query.get('step')!==expectedStep){app.innerHTML=`<section class="gate-page"><h1>Review step does not match this link</h1><a href="${esc(decisionUrl(taskId,r))}">Open this decision's review</a></section>`;return}
+  if(query.has('step')&&query.get('step')!==expectedStep){settle('load_rejected',{reason:'step_mismatch'});app.innerHTML=`<section class="gate-page"><h1>Review step does not match this link</h1><a href="${esc(decisionUrl(taskId,r))}">Open this decision's review</a></section>`;return}
+  try{
   const draft=data.draft||{},item=query.get('item')||draft.choice||null,tab=query.get('tab')||'evidence';
-  if(!['evidence','comments'].includes(tab))throw new Error('Unknown review tab');
-  if(item&&!r.options.some(o=>String(o.value)===item))throw new Error('The selected item does not belong to this review');
+  if(!['evidence','comments'].includes(tab)){settle('load_rejected',{reason:'unknown_tab'});throw new Error('Unknown review tab')}
+  if(item&&!r.options.some(o=>String(o.value)===item)){settle('load_rejected',{reason:'unknown_item'});throw new Error('The selected item does not belong to this review')}
   const selectors={tab,...(item?{item}:{}),...(query.get('draft')?{draft:query.get('draft')}:{})};
   history.replaceState({},'',decisionUrl(taskId,r,selectors));
   const currentLink=decisionPurpose(data.current)?`<a href="${esc(decisionUrl(taskId,data.current))}">Open current review</a>`:`<a href="/tasks/${encodeURIComponent(taskId)}/view">Open current task</a>`;
@@ -105,6 +122,8 @@ export function createDecisions(ctx){
    }catch(e){stopProgress();status.textContent=accepted?'Decision was accepted, but the next view could not be loaded. Open the task to follow progress.':e.message;if(accepted)return;submitting=false;if(e.status===409||e.message.includes('review changed')){reviewBlocker='This review changed. Reload the current decision.';refreshConceptDecision();return}form.querySelectorAll('button,input,select,textarea').forEach(c=>c.disabled=false);refreshConceptDecision()}
   }
   form.onsubmit=e=>{e.preventDefault();submit(false)};
+  settle('committed',{form_present:document.querySelector('#reviewform')?1:0,radios:document.querySelectorAll('#reviewform input[type="radio"]').length});
+  }catch(renderError){settle('render_error',{error_kind:'js_'+((renderError&&renderError.name)||'Error'),form_present:document.querySelector('#reviewform')?1:0});throw renderError}
  }
  function historyHtml(x){const h=x.history||[];if(!h.length)return'';const label={decided:'Answered',deferred:'Postponed'};return `<div class="founder-history"><b>Earlier Entries</b><ol>${h.slice().reverse().map(e=>`<li>${esc(label[e.status]||e.status)} by ${esc(e.actor)} · ${esc(String(e.at).replace('T',' ').slice(0,16))}${e.decision?`: ${esc(e.decision)}`:''} <small>Reason: ${esc(e.reason)}</small></li>`).join('')}</ol></div>`}
  function fullIfCut(t){const w=String(t||'').trim().split(/\s+/).filter(Boolean);return w.length>32?`<p>${esc(w.join(' '))}</p>`:''}

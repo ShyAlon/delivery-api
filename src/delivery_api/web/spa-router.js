@@ -35,7 +35,8 @@ export async function dispatch(){
     const params={};r.keys.forEach((k,i)=>params[k]=decodeURIComponent(m[i+1]));
     clientLog('navigation','Client route',{url:path+hash});
     await r.mount(params,hash);
-    if(pageEpoch()!==my)return; // navigated away while mounting
+    if(pageEpoch()!==my){clientLog('route.outcome','Route mount superseded while mounting',{pattern:r.pattern,epoch:my,current_epoch:pageEpoch()});return} // navigated away while mounting
+    clientLog('route.outcome','Route mount settled',{pattern:r.pattern,epoch:my});
     if(app&&!app.querySelector('.task-error-state,[role="alert"],.gate-evidence-error,.route-loading'))app.classList.add('view-in');   // errors render instantly, never faded
     onNavigated(path,hash);
     return;
