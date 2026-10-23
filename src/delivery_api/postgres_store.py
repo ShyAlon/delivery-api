@@ -94,6 +94,34 @@ def _transactional(method):
     return call
 
 
+def validator_provenance(module_path,model=None):
+    """Provenance of the code that will actually validate: installed distribution
+    version for the module (e.g. 'vmodel_contracts.srs' -> vmodel-contracts==0.28.0)
+    plus, when the pydantic model is passed, two exactly-labelled fingerprints:
+    'schema=' is a fingerprint of the model's JSON schema only - it does NOT capture
+    custom validator Python behavior - and 'source=' is a hash of the validator
+    module's source bytes ('source=unknown' when unreadable, e.g. a build without
+    sources). Together they record which code ran; they do NOT fully distinguish two
+    implementations that share version, schema and module source (e.g. logic in a
+    helper module). An editable install keeps one version string across commits, which
+    is why the fingerprints exist. 'unknown' is explicit; never a guess like 'latest'."""
+    import hashlib,importlib.metadata,importlib.util,json
+    top=module_path.split('.')[0]
+    version='unknown'
+    for dist in importlib.metadata.packages_distributions().get(top,[]):
+        try:version=f'{dist}=={importlib.metadata.version(dist)}';break
+        except importlib.metadata.PackageNotFoundError:continue
+    if model is None:return version
+    schema=json.dumps(model.model_json_schema(),sort_keys=True).encode()
+    parts=f'{version};schema={hashlib.sha256(schema).hexdigest()[:16]}'
+    source='unknown'
+    spec=importlib.util.find_spec(module_path)
+    if spec and spec.origin and spec.origin.endswith('.py'):
+        try:source=hashlib.sha256(open(spec.origin,'rb').read()).hexdigest()[:16]
+        except OSError:pass
+    return f'{parts};source={source}'
+
+
 class PostgresStore(SQLiteStore):
     def __init__(self,dsn):
         self._postgres = ScopedPostgres(dsn)
@@ -1089,6 +1117,17 @@ class PostgresStore(SQLiteStore):
         self._db.execute("UPDATE worker_jobs SET state=?,updated_at=? WHERE job_id=? AND state='running'",
                          ('failed' if failed else 'done',time.time(),job_id))
 
+    @_transactional
+    def staged_response_ledger_join(self,session_id,generation):
+        """PR B reconciliation read: one session generation's engine-staged
+        provider calls LEFT JOINed to their ledger attempts, in logical-call
+        order. Read-only; the gateway classifies the rows."""
+        rows=self._db.execute('SELECT r.*, a.state AS attempt_state, a.usage AS attempt_usage '
+                              'FROM staged_provider_responses r LEFT JOIN provider_attempts a ON a.attempt_id=r.attempt_id '
+                              'WHERE r.session_id=? AND r.generation=? '
+                              'ORDER BY r.execution_point,r.node,r.stage,r.item,r.ordinal',(session_id,generation)).fetchall()
+        return [dict(r) for r in rows]
+
     def provider_attempt(self,attempt_id):
         row=self._db.execute('SELECT * FROM provider_attempts WHERE attempt_id=?',(attempt_id,)).fetchone()
         return dict(row) if row else None
@@ -1251,6 +1290,215 @@ class PostgresStore(SQLiteStore):
 
 # User-entry mutations and new work claims only. Nested accepted-worker writes,
 # progress/usage evidence and completion remain available. Never gate settlement.
+    # ---- PR B: artifact manifest authority (Postgres-only) ----
+    def publish_task_artifact(self,task_id,phase_key,name,ref,*,mime_type='application/json',writer_instance,validation_report=None):
+        """Measure, store and atomically publish one artifact: bytes into tenant-owned
+        artifact_bytes (content-addressed, immutable), a staged manifest row, then one
+        CAS demote-and-promote. The whole publication is this operation's transaction.
+
+        validation_report binds a validator verdict to the EXACT bytes being stored:
+        {'validator':name,'valid':bool,'error':str|None,'sha256':hex,
+        'validator_version':str}. Its sha256 must equal the measured hash of the
+        published bytes, otherwise the verdict came from other content and the publish
+        is refused - an unvalidated artifact can never carry a verdict it did not earn.
+        validator_version is the provenance of the validation code itself (package
+        version or schema fingerprint from validator_provenance); 'unknown' must be
+        explicit. A verdict recorded under one version is never reinterpreted as
+        another."""
+        import hashlib
+        from pathlib import Path
+        data=Path(ref).read_bytes()
+        digest=hashlib.sha256(data).hexdigest();size=len(data)
+        validator=valid=validation_error=validator_version=None
+        if validation_report is not None:
+            if validation_report.get('sha256')!=digest:
+                raise ValueError('validation report hash does not match the published bytes')
+            if 'validator_version' not in validation_report:
+                raise ValueError('validation report must name its validator_version provenance')
+            validator=validation_report.get('validator');valid=validation_report.get('valid')
+            validation_error=validation_report.get('error');validator_version=validation_report['validator_version']
+        task=self.task(task_id)
+        if not task: raise KeyError(task_id)
+        scope=current_scope();now=time.time()
+        self._db.execute('INSERT INTO artifact_bytes(owner_id,sha256,bytes,byte_size) VALUES (?,?,?,?) ON CONFLICT (owner_id,sha256) DO NOTHING',
+            (scope.owner_id,digest,data,size))
+        existing=self._db.execute('SELECT bytes FROM artifact_bytes WHERE owner_id=? AND sha256=?',(scope.owner_id,digest)).fetchone()
+        if existing is None or bytes(existing['bytes'])!=data:
+            raise ValueError('stored artifact bytes do not match the recorded content hash')
+        self._db.execute(
+            "INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,mime_type,created_at,byte_size,sha256,publication_state,writer_instance,validator,valid,validation_error,validator_version) VALUES (?,?,?,?,?,?,?,?,?,'staged',?,?,?,?,?)",
+            (task_id,task['generation'],phase_key,name,str(ref),mime_type,now,size,digest,writer_instance,validator,valid,validation_error,validator_version))
+        self._db.execute("UPDATE task_artifacts SET publication_state='superseded' WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='published'",
+            (task_id,task['generation'],phase_key,name))
+        changed=self._db.execute("UPDATE task_artifacts SET publication_state='published',published_at=? WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='staged' AND sha256=?",
+            (now,task_id,task['generation'],phase_key,name,digest))
+        if changed.rowcount!=1: raise ValueError('artifact publication CAS failed')
+        return dict(self._db.execute("SELECT * FROM task_artifacts WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='published'",
+            (task_id,task['generation'],phase_key,name)).fetchone())
+
+    def manifest_artifacts(self,task_id,*,generation=None):
+        """Manifest rows for a task (all publication states), newest generation first."""
+        task=self.task(task_id)
+        if not task: return []  # foreign or missing task: no existence oracle
+        if generation is None: generation=task['generation']
+        return [dict(r) for r in self._db.execute(
+            'SELECT * FROM task_artifacts WHERE task_id=? AND generation=? ORDER BY phase_key,name,id',
+            (task_id,generation)).fetchall()]
+
+    def manifest_ready(self,task_id,generation=None):
+        """True when a complete published revision is marked ready for this
+        task+generation AND the marker still matches the published set (a stale or
+        corrupt marker raises instead of vouching for a revision it no longer names)."""
+        return self.manifest_revision(task_id,generation) is not None
+
+    @staticmethod
+    def _revision_hash(rows):
+        """sha256 over the sorted published (phase_key,name,sha256) members - the exact
+        manifest revision a readiness marker is bound to."""
+        import hashlib
+        body='\n'.join(f"{r['phase_key']}/{r['name']}:{r['sha256']}" for r in sorted(rows,key=lambda r:(r['phase_key'],r['name'])))
+        return hashlib.sha256(body.encode()).hexdigest()
+
+    def _mark_revision_ready(self,task,revision_id,revision_hash,expected_revision_id,writer_instance,now):
+        """Compare-and-swap the readiness marker from the expected prior revision to the
+        new one. A concurrent producer that already re-marked makes this match zero rows;
+        the raise rolls this whole revision's publication back, so readers never see a
+        manifest mixing two producers' members."""
+        scope=current_scope()
+        if expected_revision_id is None:
+            changed=self._db.execute(
+                'INSERT INTO artifact_manifest_ready(owner_id,task_id,generation,revision_id,revision_hash,marked_at,writer_instance) VALUES (?,?,?,?,?,?,?) ON CONFLICT (task_id,generation) DO NOTHING',
+                (scope.owner_id,task['task_id'],task['generation'],revision_id,revision_hash,now,writer_instance))
+        else:
+            changed=self._db.execute(
+                'UPDATE artifact_manifest_ready SET revision_id=?,revision_hash=?,marked_at=?,writer_instance=? WHERE task_id=? AND generation=? AND revision_id=?',
+                (revision_id,revision_hash,now,writer_instance,task['task_id'],task['generation'],expected_revision_id))
+        if changed.rowcount!=1: raise ValueError('readiness CAS failed: a concurrent producer published a revision')
+
+    def publish_task_revision(self,task_id,artifacts,*,writer_instance):
+        """Publish one COMPLETE validated revision atomically, in this operation's
+        single transaction: every member's bytes + staged row + CAS promote, supersede
+        published members of this generation that the new revision omits, then CAS the
+        readiness marker (bound to the exact revision hash) from the expected prior
+        revision. Any failure - including losing the race to a concurrent producer -
+        rolls everything back: no partial authority, no mixed revisions.
+        artifacts: [{'phase_key','name','ref','mime_type'?,'validation_report'?}]."""
+        import uuid as _uuid
+        task=self.task(task_id)
+        if not task: raise KeyError(task_id)
+        marker=self._db.execute('SELECT revision_id FROM artifact_manifest_ready WHERE task_id=? AND generation=?',
+            (task_id,task['generation'])).fetchone()
+        expected=marker['revision_id'] if marker else None
+        revision_id=_uuid.uuid4().hex
+        published=[self.publish_task_artifact(task_id,a['phase_key'],a['name'],a['ref'],
+            mime_type=a.get('mime_type','application/json'),writer_instance=writer_instance,
+            validation_report=a.get('validation_report')) for a in artifacts]
+        keep={(a['phase_key'],a['name']) for a in artifacts}
+        for row in self._db.execute("SELECT phase_key,name FROM task_artifacts WHERE task_id=? AND generation=? AND publication_state='published'",
+            (task_id,task['generation'])).fetchall():
+            if (row['phase_key'],row['name']) not in keep:
+                self._db.execute("UPDATE task_artifacts SET publication_state='superseded' WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='published'",
+                    (task_id,task['generation'],row['phase_key'],row['name']))
+        members=self._db.execute("SELECT phase_key,name,sha256 FROM task_artifacts WHERE task_id=? AND generation=? AND publication_state='published'",
+            (task_id,task['generation'])).fetchall()
+        self._mark_revision_ready(task,revision_id,self._revision_hash(members),expected,writer_instance,time.time())
+        return published
+
+    def manifest_snapshot(self,task_id,generation=None):
+        """Marker + published members read as ONE statement = one consistent database
+        snapshot: no check/read race with a concurrent publisher. Returns
+        {'revision_id','revision_hash','rows'} or None when no ready marker exists.
+        A marker whose hash no longer matches the members in the same snapshot is
+        corruption - raise, never serve against it."""
+        import json as _json
+        task=self.task(task_id)
+        if not task:return None
+        if generation is None:generation=task['generation']
+        row=self._db.execute(
+            "WITH m AS (SELECT revision_id,revision_hash FROM artifact_manifest_ready WHERE task_id=? AND generation=?) "
+            "SELECT m.revision_id,m.revision_hash,"
+            "(SELECT json_agg(row_to_json(t)) FROM (SELECT * FROM task_artifacts WHERE task_id=? AND generation=? AND publication_state='published' ORDER BY phase_key,name,id) t) AS members FROM m",
+            (task_id,generation,task_id,generation)).fetchone()
+        if row is None:return None
+        members=row['members']
+        if isinstance(members,str):members=_json.loads(members)
+        rows=[dict(r) for r in (members or [])]
+        if self._revision_hash(rows)!=row['revision_hash']:
+            raise ValueError('readiness marker does not match the published manifest revision')
+        return {'revision_id':row['revision_id'],'revision_hash':row['revision_hash'],'rows':rows}
+
+    def manifest_revision(self,task_id,generation=None):
+        """The ready marker for this task+generation, verified against the current
+        published set: (revision_id, revision_hash) or None when not ready. A marker
+        whose hash no longer matches the published rows is corruption - raise, never
+        serve against it."""
+        task=self.task(task_id)
+        if not task:return None
+        if generation is None:generation=task['generation']
+        marker=self._db.execute('SELECT revision_id,revision_hash FROM artifact_manifest_ready WHERE task_id=? AND generation=?',
+            (task_id,generation)).fetchone()
+        if marker is None:return None
+        members=self._db.execute("SELECT phase_key,name,sha256 FROM task_artifacts WHERE task_id=? AND generation=? AND publication_state='published'",
+            (task_id,generation)).fetchall()
+        if self._revision_hash(members)!=marker['revision_hash']:
+            raise ValueError('readiness marker does not match the published manifest revision')
+        return marker['revision_id'],marker['revision_hash']
+
+    def producer_result(self,job_id):
+        """Durable produced-awaiting-publication state for a worker job, or None."""
+        row=self._db.execute('SELECT * FROM producer_results WHERE job_id=?',(job_id,)).fetchone()
+        return dict(row) if row else None
+
+    def record_producer_result(self,job_id,task_id,generation,session_root,content_hash):
+        """Persist that the paid producer completed: its bytes are at session_root
+        (pinned by content_hash) and only publication remains."""
+        import time as _time
+        self._db.execute(
+            'INSERT INTO producer_results(owner_id,job_id,task_id,generation,session_root,content_hash,produced_at) VALUES (?,?,?,?,?,?,?) '
+            'ON CONFLICT (job_id) DO UPDATE SET task_id=EXCLUDED.task_id,generation=EXCLUDED.generation,'
+            'session_root=EXCLUDED.session_root,content_hash=EXCLUDED.content_hash,produced_at=EXCLUDED.produced_at,published_at=NULL',
+            (current_scope().owner_id,job_id,task_id,generation,session_root,content_hash,_time.time()))
+
+    def producer_paid_evidence(self,job_id):
+        """Count of provider attempt rows recorded for a job: evidence that paid work
+        may already have happened when no produced marker exists."""
+        row=self._db.execute('SELECT count(*) AS n FROM provider_attempts WHERE job_id=?',(job_id,)).fetchone()
+        return row['n'] if row else 0
+
+    def mark_producer_published(self,job_id):
+        import time as _time
+        changed=self._db.execute('UPDATE producer_results SET published_at=? WHERE job_id=? AND published_at IS NULL',
+            (_time.time(),job_id))
+        if changed.rowcount!=1: raise ValueError('producer result was already marked published')
+
+    def read_artifact_bytes_sha(self,sha256):
+        """Read immutable bytes by content hash - one exact published revision, safe to
+        combine with a previously taken manifest snapshot under concurrent republish."""
+        row=self._db.execute('SELECT bytes FROM artifact_bytes WHERE owner_id=? AND sha256=?',(current_scope().owner_id,sha256)).fetchone()
+        if row is None: raise KeyError(f'no stored bytes for hash {sha256[:12]}')
+        data=bytes(row['bytes'])
+        import hashlib
+        if hashlib.sha256(data).hexdigest()!=sha256: raise ValueError('stored bytes failed hash verification')
+        return data
+
+    def read_artifact_bytes(self,task_id,phase_key,name,*,generation=None):
+        """Hash-verified artifact bytes via the manifest only. Raises on a missing
+        manifest row, missing bytes row or hash mismatch - never a filesystem read."""
+        import hashlib
+        task=self.task(task_id)
+        if not task: raise KeyError(f'no published artifact {phase_key}/{name}')
+        if generation is None: generation=task['generation']
+        row=self._db.execute("SELECT * FROM task_artifacts WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='published'",
+            (task_id,generation,phase_key,name)).fetchone()
+        if row is None: raise KeyError(f'no published artifact {phase_key}/{name}')
+        stored=self._db.execute('SELECT bytes FROM artifact_bytes WHERE owner_id=? AND sha256=?',
+            (current_scope().owner_id,row['sha256'])).fetchone()
+        if stored is None: raise ValueError(f'manifest row without stored bytes for {phase_key}/{name}')
+        data=bytes(stored['bytes'])
+        if hashlib.sha256(data).hexdigest()!=row['sha256']:
+            raise ValueError(f'stored bytes failed hash verification for {phase_key}/{name}')
+        return data
+
 _TASK_ENTRY_OPERATIONS={
  'create_task':'task.create','rename_task':'task.edit','delete_task':'task.delete',
  'tombstone_stopped_task':'task.delete','request_task_stop':'task.stop',

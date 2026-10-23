@@ -1204,8 +1204,61 @@ def _read_task_text(task_id:str,path:Path,*,errors='strict')->str:
     with session_reader(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),_recorded_engine_session(task_id),store):
         return read_bound_text(path,errors=errors)
 
+def _project_manifest_rows(rows:list[dict])->list[dict]:
+    records=[]
+    for row in rows:
+        if row['publication_state']!='published':continue
+        error=row.get('validation_error')
+        records.append({"phase_key":row['phase_key'],"name":row['name'],"title":_ARTIFACT_TITLES.get(row['name'],Path(row['name']).stem.replace("_"," ").title()),
+            "ref":row['ref'],"mime_type":row['mime_type'],"stale":bool(row['stale']),"generation":row['generation'],"present":True,
+            "valid":row['valid'],"validator":row['validator'],"validation_errors":[error] if error else [],"validation_error":error,
+            "byte_size":row['byte_size'],"sha256":row['sha256']})
+    return records
+
+def artifact_manifest_coverage(task_id:str)->dict:
+    """Operator readiness check before enabling manifest reads: compares the legacy
+    projection with the published manifest for one task. Enabling ARTIFACT_MANIFEST_READS
+    while 'legacy_only' is non-empty would make existing artifacts vanish, so enable only
+    after publication (or backfill) covers them. Both flags default OFF; production is
+    unchanged until an approved enable runs this check first."""
+    flag=config.ARTIFACT_MANIFEST_READS
+    try:
+        config.ARTIFACT_MANIFEST_READS=False
+        legacy=_task_artifact_snapshot(task_id)
+    finally:
+        config.ARTIFACT_MANIFEST_READS=flag
+    snapshot=store.manifest_snapshot(task_id) if hasattr(store,'manifest_snapshot') else None
+    manifest=_project_manifest_rows(snapshot['rows']) if snapshot else []
+    legacy_names={f"{r['phase_key']}/{r['name']}" for r in legacy}
+    manifest_names={f"{r['phase_key']}/{r['name']}" for r in manifest}
+    return {"task_id":task_id,"published":sorted(manifest_names),"legacy_only":sorted(legacy_names-manifest_names),"ready":not (legacy_names-manifest_names)}
+
 def _task_artifact_snapshot(task_id:str)->list[dict]:
     """Project real session files into task artifacts; filesystem is source evidence."""
+    if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
+        # Readiness gate, enforced on the read path: the manifest is authority only for
+        # a task+generation whose producer/backfill published a COMPLETE validated
+        # revision and marked it ready in the same transaction. A ready revision is
+        # served purely from the database - no per-request filesystem scan. Without the
+        # marker the task is migration-pending: the legacy projection is consulted once
+        # to distinguish 'no artifacts yet' from 'uncovered legacy', which fails loudly
+        # instead of presenting a partial manifest (even a non-empty one) as complete.
+        try:snapshot=store.manifest_snapshot(task_id)
+        except ValueError:
+            log.error('manifest readiness marker corrupt task=%s',task_id)
+            raise HTTPException(500,'artifact manifest failed its integrity check; the failure was recorded for diagnostics')
+        if snapshot is not None:
+            return _project_manifest_rows(snapshot['rows'])
+        flag=config.ARTIFACT_MANIFEST_READS
+        try:
+            config.ARTIFACT_MANIFEST_READS=False
+            legacy=_task_artifact_snapshot(task_id)
+        finally:
+            config.ARTIFACT_MANIFEST_READS=flag
+        if legacy:
+            log.error('manifest coverage incomplete task=%s legacy=%d (no ready marker)',task_id,len(legacy))
+            raise HTTPException(500,'artifact manifest coverage is incomplete for this task; reads stay disabled until publication or backfill covers the legacy artifacts')
+        return []
     task=store.task(task_id)
     if not task:return []
     session=_recorded_engine_session(task_id)
@@ -1214,13 +1267,8 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
     root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
     from .phases import PHASE_DEFINITIONS
     records=[]
-    validators={
-        "intent_model.json":("vmodel_contracts.interview","IntentModel"),"conops.json":("vmodel_contracts.conops","ConOpsDocument"),
-        "needs.json":("vmodel_contracts.needs","StakeholderNeedsSet"),"srs.json":("vmodel_contracts.srs","SRSDocument"),
-        "architecture.json":("vmodel_contracts.architecture","ArchitectureOverview"),"items.json":("vmodel_contracts.spec","ItemSpec[]"),
-        "spec_items.json":("vmodel_contracts.spec","SpecBundle"),"tests.json":("vmodel_contracts.verification","AcceptanceTest[]"),
-        "test_specifications.json":("vmodel_contracts.verification","AcceptanceTest[]"),
-        "validation.json":("vmodel_contracts.verification","ValidationPlan")}
+    from .artifact_publication import ARTIFACT_VALIDATORS
+    validators=ARTIFACT_VALIDATORS
     for phase in PHASE_DEFINITIONS:
         folder=root/("interview" if phase.key in ("intent","conops") else "spec")
         for filename in phase.artifacts:
@@ -1387,6 +1435,18 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}")
 def task_artifact_download(task_id:str,phase:str,name:str):
     path=_task_artifact(task_id,phase,name)
+    if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
+        from fastapi.responses import Response
+        # Error mapping: genuinely missing or foreign-invisible artifact is 404; a
+        # corrupt/unverifiable payload is an explicit 500 (never a plausible missing
+        # record); database failures propagate as 5xx. No filesystem fallback.
+        try: data=store.read_artifact_bytes(task_id,phase,name)
+        except KeyError: raise HTTPException(404,'artifact not found')
+        except ValueError:
+            log.exception('artifact integrity failure task=%s phase=%s name=%s',task_id,phase,name)
+            raise HTTPException(500,'artifact failed its stored integrity check; the failure was recorded for diagnostics')
+        return Response(data,media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream',
+                        headers={'Content-Disposition':f'attachment; filename="{name}"'})
     if config.CLOUD_TENANTS:
         from .tenant_files import read_session_bytes
         from vmodel_contracts.runtime import artifacts_root
@@ -1581,7 +1641,14 @@ def task_artifacts_zip(task_id:str):
     with zipfile.ZipFile(data,"w",zipfile.ZIP_DEFLATED) as archive:
         for artifact in records:
             entry=f"{artifact['phase_key']}/{artifact['name']}"
-            if config.CLOUD_TENANTS:
+            if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
+                # Read by the snapshot row's content hash: the whole zip is one
+                # published revision, never a mix of generations under concurrent publish.
+                try: archive.writestr(entry,store.read_artifact_bytes_sha(artifact['sha256']))
+                except (KeyError,ValueError):
+                    log.exception('artifact integrity failure in zip task=%s entry=%s',task_id,entry)
+                    raise HTTPException(500,'an artifact failed its stored integrity check; the failure was recorded for diagnostics')
+            elif config.CLOUD_TENANTS:
                 from .tenant_files import read_session_bytes
                 from vmodel_contracts.runtime import artifacts_root
                 base=artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'));session=_recorded_engine_session(task_id)
