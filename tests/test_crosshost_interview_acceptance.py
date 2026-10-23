@@ -103,12 +103,18 @@ def base_env(root, keys, extra_pythonpath):
 
 
 def gateway_env():
-    """The reviewed money-gateway environment, from the repo's own hermetic fixture."""
-    import importlib.util
+    """The reviewed money-gateway environment, from the repo's own hermetic
+    fixture, admitting exactly the session's model (deepseek-flash): the same
+    row shape, ceiling shape and env names as production review, no flattened
+    semantics."""
+    import importlib.util, json as _json
     spec = importlib.util.spec_from_file_location('gateway_test_inputs', REPO / 'tests/test_production_gateway.py')
     inputs = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(inputs)
-    return inputs.env()
+    return inputs.env(**{
+        inputs.pg.PRICES_ENV: _json.dumps([inputs.row(model='deepseek-flash')]),
+        inputs.pg.CEILING_ENV: _json.dumps({**inputs.CEILING, 'model': 'deepseek-flash'}),
+    })
 
 
 def app_dsn_uri(dsn_value):
@@ -215,7 +221,15 @@ def test_admitted_host_runs_the_first_interview_turn_through_the_ui(dsn, keys, t
                                   'A SaaS web app for surf schools, with booking and customer logins')
             page.locator('#startengine').click()
             # The stub asks its scripted first question; the answer form appears.
-            expect(page.locator('#answerform')).to_be_visible(timeout=30000)
+            try:
+                expect(page.locator('#answerform')).to_be_visible(timeout=30000)
+            except Exception:
+                import psycopg as _p, psycopg.rows as _pr
+                _c = _p.connect(dsn, autocommit=True, row_factory=_pr.dict_row)
+                for _r in _c.execute("select kind, message, payload from events where task_id=%s order by id", (task_id,)).fetchall():
+                    print('EVENT', _r['kind'], '|', _r['message'][:400], '|', str(_r.get('payload'))[:600])
+                _c.close()
+                raise
             question = page.locator('#currentquestion p').inner_text()
             assert 'booking' in question.lower()
             page.locator('#answerform textarea[name="answer"]').fill('Customers pick a slot and pay online.')
