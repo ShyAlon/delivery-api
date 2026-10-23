@@ -17,7 +17,7 @@ ops_venv(){
 }
 ops_start(){
   OPS_NAME=$1; OPS_SELF=$2; local want_venv=${3:-}
-  local repo; repo=$(cd "$(dirname "$OPS_SELF")/../.." 2>/dev/null && pwd) && [ -d "$repo/.git" ] || abort NO-REPO "$OPS_SELF is not inside a git checkout" "Nothing changed." "git clone https://github.com/ShyAlon/delivery-api ~/development/require/delivery-api   (then run its scripts/ops/$OPS_NAME.sh)"
+  local repo; repo=$(cd "$(dirname "$OPS_SELF")/../.." 2>/dev/null && pwd) && git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || abort NO-REPO "$OPS_SELF is not inside a git checkout" "Nothing changed." "git clone https://github.com/ShyAlon/delivery-api ~/development/require/delivery-api   (then run its scripts/ops/$OPS_NAME.sh)"
   cd "$repo"
   git remote get-url origin | grep -qi 'ShyAlon/delivery-api' || abort REMOTE "origin is not ShyAlon/delivery-api" "" "git -C $PWD remote -v   (this must be your delivery-api checkout)"
   git fetch -q origin main || abort FETCH "cannot fetch origin main" "" "git -C $PWD fetch origin main   (look at the error)"

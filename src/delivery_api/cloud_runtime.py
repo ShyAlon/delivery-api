@@ -54,8 +54,10 @@ def install(store,environ,set_engine_client,watch_vendor=False):
         gateways=ProductionGateways(store,environ)
         base=artifacts_root(environ.get('VMODEL_ARTIFACTS_DIR'))
         engine=inprocess_engine.InProcessEngine(base,gateway_factory=gateways,wire_client_factory=_clients('spec_generator'))
+        database_url=environ.get('DELIVERY_DATABASE_URL','')
+        session_dsn=database_url if database_url.startswith(('postgres://','postgresql://')) else None
         host=inprocess_interview.InProcessInterviewHost(store,base,gateway_factory=gateways,
-            generator_clients=_clients('spec_generator'),interview_clients=_clients('interview_engine'))
+            generator_clients=_clients('spec_generator'),interview_clients=_clients('interview_engine'),session_dsn=session_dsn)
         client=host.client()
     except BaseException as exc:
         if gateways is not None:gateways.close()
@@ -76,7 +78,11 @@ def uninstall():
     if _state is None:return
     if _watcher is not None:_watcher.set();_watcher=None
     from . import inprocess_engine,inprocess_interview
-    gateways=_state[0]
+    gateways,host=_state[0],_state[2]
     inprocess_engine.configure(None);inprocess_interview.configure(None)
     _state=None
+    # Release interview leases before the database gateways close: the release
+    # writes go through the store connection.
+    try:host.close()
+    except Exception:pass
     gateways.close()

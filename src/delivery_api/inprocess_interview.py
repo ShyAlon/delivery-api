@@ -47,12 +47,13 @@ class _HostedEngineTransport(httpx.BaseTransport):
 
 
 class InProcessInterviewHost:
-    def __init__(self,store,artifacts_base,*,gateway_factory,generator_clients,interview_clients):
+    def __init__(self,store,artifacts_base,*,gateway_factory,generator_clients,interview_clients,session_dsn=None):
         self.store=store
         self.artifacts_base=Path(artifacts_base)
         self.gateway_factory=gateway_factory
         self.generator_clients=generator_clients
         self.interview_clients=interview_clients
+        self._session_dsn=session_dsn
         self._token=secrets.token_hex(24)
         self._client=None
         self._lock=threading.Lock()
@@ -69,9 +70,21 @@ class InProcessInterviewHost:
         from interview_engine.http_service import create_app,default_program_factory
         from interview_engine.tenant_worker import TenantRegistryRouter,TenantWorkerMiddleware
         registry_type=self._registry_type()
-        app=create_app(TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base),service_token=self._token)
+        # Database session persistence is the engine default. On the local SQLite tier
+        # there is no Postgres for it to use, so file sessions are chosen explicitly here -
+        # never as a silent fallback. On the PG tier the sessions DSN is always set.
+        self._engine_router=TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn,allow_file_sessions=self._session_dsn is None)
+        app=create_app(self._engine_router,service_token=self._token)
         app.add_middleware(TenantWorkerMiddleware,base=self.artifacts_base,service_token=self._token)
         return app
+
+    def close(self):
+        # Shutdown: closing the router closes each per-owner engine registry,
+        # which releases held leases at committed boundaries (no TTL wait).
+        router=getattr(self,'_engine_router',None)
+        if router is not None:
+            try:router.close()
+            except Exception:pass
 
     def _registry_type(self):
         from interview_engine.http_service import SessionRegistry
