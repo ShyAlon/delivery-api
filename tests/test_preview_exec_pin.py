@@ -30,12 +30,10 @@ runpy.run_path(pin_path, run_name='__main__')
 '''
 
 def _original_embedded_pin():
-    import subprocess
-    src = subprocess.run(['git', '-C', str(REPO), 'show', 'HEAD:scripts/ops/go-live.sh'],
-                         capture_output=True, text=True, check=True).stdout
-    m = re.search(r"cat > \"\$WORK/pin\.py\" <<'PY_EOF'\n(.*?)\nPY_EOF\n", src, re.S)
-    assert m, 'embedded pin heredoc not found at HEAD'
-    return m.group(1) + '\n'
+    # Frozen copy of the heredoc embedded in scripts/ops/go-live.sh before the
+    # extraction (source: commit 5169b9c, scripts/ops/go-live.sh). Frozen as a
+    # fixture because HEAD no longer embeds it; extraction must stay byte-identical.
+    return (FIXTURES.parent / 'pin-embedded-original.py').read_text()
 
 def _run_pin(pin_source, out_dir):
     pin_path = out_dir / 'pin-under-test.py'
