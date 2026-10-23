@@ -1356,7 +1356,15 @@ def test_gateway_refusal_audit_and_release_failure_record(credit_account,monkeyp
         with pytest.raises(AdmissionDenied,match='positive prepaid balance required'):
             WorkerAdmissionGateway(s,job).start(aid)
         entries=[e for e in s.audit_entries(tid) if e['action']=='provider.attempt.cancelled' and e['detail']['attempt_id']==aid]
-        assert len(entries)==1 and 'positive prepaid balance required' in entries[0]['detail']['refusal']
+        assert len(entries)==1 and entries[0]['detail']['refusal']=='positive prepaid balance required'
+    # The operator audit reason is allowlisted: denials that compose raw client
+    # errors into their message collapse to a canonical label, and unknown
+    # refusals become a generic one (full detail stays in the server log).
+    from delivery_api.producer_admission import _refusal_summary
+    assert _refusal_summary(AdmissionDenied('provider balance read failed: socket leak at /api/x'))=='provider balance read failed'
+    assert _refusal_summary(AdmissionDenied('service temporarily unavailable: capacity'))=='service temporarily unavailable'
+    assert _refusal_summary(AdmissionDenied('positive prepaid balance required'))=='positive prepaid balance required'
+    assert _refusal_summary(AdmissionDenied('anything else: raw detail'))=='admission refused'
     with tenant_context(A):
         stuck=uuid.uuid4().hex
         s.reserve_provider_attempt(job,stuck,q,'audit-release-failure')

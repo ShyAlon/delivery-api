@@ -93,6 +93,9 @@ class OperatorReadStore:
                     'current_state':row['attempt_state'] or 'missing',
                     'expense_reserved':str(row['expense_reserved']) if row['expense_reserved'] is not None else None,
                     'attempt_id':detail.get('attempt_id')})
+            state_labels={'reserved':'Held','dispatched':'Dispatched','uncertain':'Uncertain',
+                'cancelled':'Cancelled','settled':'Settled','released':'Released','missing':'No Attempt Row'}
+            for r in out:r['current_state']=state_labels.get(r['current_state'],r['current_state'])
             return {'scope':'reviewed_cross_user_operator_read','operator_subject':authority['operator_subject'],
                 'registry_version':authority['registry_version'],'releases':out,'truncated':len(rows)>limit,
                 'attention_count':sum(1 for r in out if r['attention']),'mutations_available':False,

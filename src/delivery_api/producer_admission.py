@@ -9,6 +9,26 @@ import logging
 from .attempt_ledger import AdmissionDenied
 from .tenancy import current_scope
 
+
+# Operator audit carries only allowlisted refusal summaries: some denials compose raw
+# client errors into their message, and audit rows must not transport those verbatim
+# (the ledger additionally scrubs whatever it is handed).
+_ALLOWLISTED_REFUSALS = (
+    'positive prepaid balance required',
+    'owner spend allowance exhausted',
+    'pre-call provider balance reader required',
+    'provider balance read failed',
+    'service temporarily unavailable',
+)
+
+
+def _refusal_summary(denied):
+    text = str(denied).strip().lower()
+    for label in _ALLOWLISTED_REFUSALS:
+        if text.startswith(label):
+            return label
+    return 'admission refused'
+
 class WorkerAdmissionGateway:
     def __init__(self,store,job_id,*,resolve_quote=None,measure_usage=None,require_prepaid=True,resolve_serialized=None,measure_raw_usage=None,launch_guard=False,retail_rates=None,verify_provider_snapshot=None,provider_balance=None):
         if launch_guard and not require_prepaid:raise AdmissionDenied('launch guard requires prepaid accounting')
@@ -143,7 +163,7 @@ class WorkerAdmissionGateway:
             # A release refused because the attempt already left 'reserved'
             # never masks the original denial; non-refusal failures (crashes,
             # DB errors) keep the reservation for reconciliation instead.
-            try:self.store.transition_provider_attempt(attempt,'cancel',{'refusal':str(denied)[:300]})
+            try:self.store.transition_provider_attempt(attempt,'cancel',{'refusal':_refusal_summary(denied)})
             except AdmissionDenied:pass
             except Exception as cleanup:
                 # Cleanup must never mask the original refusal: log the failed

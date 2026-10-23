@@ -61,9 +61,9 @@ def test_the_operator_sees_releases_with_reason_and_current_attention(releases):
     assert out['mutations_available'] is False and out['scope'] == 'reviewed_cross_user_operator_read'
     assert by_attempt[refused]['event'] == 'Reservation Released After Refusal'
     assert by_attempt[refused]['reason'] == 'positive prepaid balance required'
-    assert by_attempt[refused]['current_state'] == 'cancelled' and by_attempt[refused]['attention'] is False
+    assert by_attempt[refused]['current_state'] == 'Cancelled' and by_attempt[refused]['attention'] is False
     assert by_attempt[stuck]['event'] == 'Release Failed - Needs Attention' and by_attempt[stuck]['attention'] is True
-    assert by_attempt[stuck]['reason'] == 'RuntimeError' and by_attempt[stuck]['current_state'] == 'reserved'
+    assert by_attempt[stuck]['reason'] == 'RuntimeError' and by_attempt[stuck]['current_state'] == 'Held'
     assert int(by_attempt[stuck]['expense_reserved']) > 0   # operator-only cost context, joined at read time
     assert by_attempt[resolved]['event'] == 'Release Failed - Since Resolved' and by_attempt[resolved]['attention'] is False
     assert by_attempt[proven]['event'] == 'Reservation Released With Proof'
