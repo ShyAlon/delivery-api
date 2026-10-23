@@ -285,55 +285,79 @@ def approve_gate(page, base, task_id, gate_key):
 
 
 def drive_interview(page, base, task_id, answers, timeout=240):
-    """Drive the interview to completion through the real UI: text questions get
-    scripted answers, structured founder decisions (the conops concept CHOICE
-    and the intent-model APPROVAL) are decided through the decision dialog.
-    Ends when the app reconciles completion (gate-intent leaves idle).
-    The form hides transiently while the engine processes, so the loop polls
-    the DOM and the task API instead of trusting a single hidden state.
+    """Drive the interview to completion through the real UI, keyed on the
+    task's live input_state (not the DOM question text): plain questions get
+    scripted text answers through #answerform, structured founder decisions
+    (the conops concept CHOICE and the intent-model APPROVAL) are decided
+    through the .decision-dialog. Ends when the app reconciles completion
+    (gate-intent leaves idle). Keying on input_state removes the race where
+    the SPA has already shown the decision prompt as question text before the
+    decision dialog opens.
     Deterministic: the stub model's script saturates coverage and closes the
     interview; the coverage bank owns question text when a candidate fails
     verification."""
     import time as _time
     deadline = _time.time() + timeout
-    last_question = page.locator('#currentquestion').inner_text()
+    last_question = None
     turns = 0
     while _time.time() < deadline:
-        dialog = page.locator('.decision-dialog')
-        if dialog.count() and dialog.is_visible():
-            compose = dialog.locator('.decision-compose')
-            if compose.count() and compose.locator('textarea').is_visible():
-                # Concept CHOICE: pick the first concept card, give a rationale.
-                dialog.locator('.decision-option').first.click()
-                compose.locator('textarea').fill('Deterministic acceptance: first concept fits.')
-                compose.locator('button[type="submit"]').click()
-            else:
-                # APPROVAL decisions submit on the option click itself.
-                for label in ('Proceed', 'Approve'):
-                    option = dialog.get_by_text(label, exact=True)
-                    if option.count():
-                        option.first.click()
-                        break
-                else:
-                    dialog.locator('.decision-option').first.click()
-            page.wait_for_timeout(500)
-            continue
-        form = page.locator('#answerform')
-        if form.count() and form.is_visible():
-            area = page.locator('#answerform textarea[name="answer"]')
-            question = page.locator('#currentquestion').inner_text()
-            if not area.is_disabled() and question != last_question:
-                area.fill(answers[turns % len(answers)])
-                page.locator('#answerform button[type="submit"]').click()
-                turns += 1
-                last_question = question
-                continue
         task = page.request.get(base + '/api/tasks/' + task_id).json()
-        intent = next((g for g in task.get('gates', []) if g['gate_key'] == 'gate-intent'), None)
-        if intent and intent.get('state') not in (None, 'idle'):
+        phases = {x['phase_key']: x['state'] for x in task.get('phases', [])}
+        # Terminal boundary: the interview's own founder approvals reconcile
+        # intent+conops to approved; the phase gates stay idle because the
+        # approval happened inside the interview. The next phase must NOT
+        # start on its own (it spends credits).
+        if phases.get('intent') in ('approved', 'done') and phases.get('conops') in ('approved', 'done'):
             return turns
+        state = task.get('input_state') or {}
+        if state.get('waiting') and state.get('decision'):
+            if '/decisions/' not in page.url:
+                # The live view renders a sticky launcher that navigates to
+                # the full decision page.
+                launcher = page.locator('#opendecision')
+                if launcher.count() and launcher.is_visible():
+                    launcher.click()
+                    page.wait_for_url('**/decisions/**', timeout=30000)
+                page.wait_for_timeout(500)
+                continue
+            # Decision page: concept CHOICE (radio cards + rationale) or the
+            # intent-model APPROVAL review. Pick the first option, give a
+            # rationale where the form asks for one, continue.
+            radios = page.locator('input[type="radio"]')
+            if radios.count():
+                radios.first.check()
+                rationale = page.locator('textarea[name="rationale"]')
+                if rationale.count() and rationale.is_visible():
+                    rationale.fill('Deterministic acceptance: first option fits.')
+            for label in ('Choose and continue', 'Proceed', 'Approve', 'Continue'):
+                button = page.get_by_role('button', name=label, exact=True)
+                if button.count() and button.first.is_enabled():
+                    button.first.click()
+                    break
+            page.wait_for_timeout(1000)
+            continue
+        elif state.get('waiting') and state.get('question'):
+            form = page.locator('#answerform')
+            if form.count() and form.is_visible():
+                area = page.locator('#answerform textarea[name="answer"]')
+                question = state['question']
+                if not area.is_disabled() and question != last_question:
+                    area.fill(answers[turns % len(answers)])
+                    page.locator('#answerform button[type="submit"]').click()
+                    turns += 1
+                    last_question = question
+                    continue
         page.wait_for_timeout(500)
-    raise AssertionError('interview did not complete within %ss after %d turns' % (timeout, turns))
+    task = page.request.get(base + '/api/tasks/' + task_id).json()
+    events = page.request.get(base + '/api/tasks/' + task_id + '/events').json()
+    tail = (events if isinstance(events, list) else events.get('events', []))[-12:]
+    raise AssertionError('interview did not complete within %ss after %d turns\n'
+        'state=%r active=%r phases=%r gates=%r input_state=%r\nevents=%s' % (
+        timeout, turns, task.get('state'), task.get('active_phase'),
+        [(x['phase_key'], x['state']) for x in task.get('phases', [])],
+        [(g['gate_key'], g['state']) for g in task.get('gates', [])],
+        task.get('input_state'),
+        [(e.get('kind'), str(e.get('message'))[:100]) for e in tail]))
 
 
 def test_interview_completes_single_host_reference(dsn, keys, tmp_path_factory):
@@ -363,9 +387,25 @@ def test_interview_completes_single_host_reference(dsn, keys, tmp_path_factory):
             for event in (events if isinstance(events, list) else events.get('events', []))[-10:]:
                 print('EV', event.get('kind'), str(event.get('message'))[:120])
             assert turns >= 2, 'the scripted interview took real turns'
-            review = wait_gate_review(page, host.base, task_id, 'gate-intent')
-            assert review.get('actionable'), 'intent gate is reviewable after completion'
-            assert any(gate_documents(review).values()), 'gate review carries the distilled evidence'
+            task = page.request.get(host.base + '/api/tasks/' + task_id).json()
+            phases = {x['phase_key']: x['state'] for x in task['phases']}
+            assert phases['intent'] == 'approved' and phases['conops'] == 'approved', phases
+            assert phases['needs'] == 'pending', 'the spend-gated next phase must not auto-start'
+            assert (task.get('input_state') or {}).get('engine_process_status') == 40, \
+                'engine reports the session COMPLETED'
+            # Persisted, validated artifacts under the configured root, bound
+            # to this session: the same files the terminal reconcile verified.
+            session_id = None
+            import psycopg as _pg
+            conn = _pg.connect(dsn, autocommit=True)
+            row = conn.execute("select session_id from engine_sessions where task_id=%s", (task_id,)).fetchone()
+            conn.close()
+            session_id = row[0]
+            base_dir = host.artifacts / 'tenants' / OWNER / 'sessions' / session_id / 'interview'
+            intent_doc = (base_dir / 'intent_model.json').read_text()
+            conops_doc = (base_dir / 'conops.json').read_text()
+            assert session_id in intent_doc and session_id in conops_doc, \
+                'artifacts are bound to the completing session'
             browser.close()
     finally:
         host.stop()
