@@ -96,3 +96,20 @@ def test_a_configuration_that_built_once_is_not_rebuilt(monkeypatch):
     with pytest.raises(AdmissionDenied):cloud_runtime.check_gateways(e)
     with pytest.raises(AdmissionDenied):cloud_runtime.check_gateways(e)
     assert len(calls)==3
+
+
+def test_install_passes_postgres_database_url_as_engine_session_dsn(fakes):
+    e=gateway_env(DELIVERY_DATABASE_URL='postgresql://db.example/requi')
+    cloud_runtime.install(object(),e,lambda c:None)
+    assert fakes['host'].kw['session_dsn']=='postgresql://db.example/requi'
+
+
+def test_install_without_postgres_keeps_engine_file_sessions(fakes):
+    e=gateway_env(DELIVERY_DATABASE_URL='sqlite:////tmp/local.db')
+    cloud_runtime.install(object(),e,lambda c:None)
+    assert fakes['host'].kw['session_dsn'] is None
+    e=gateway_env()
+    cloud_runtime.uninstall();cloud_runtime._failure=None;cloud_runtime._checked.clear()
+    fakes.pop('host',None)
+    cloud_runtime.install(object(),e,lambda c:None)
+    assert fakes['host'].kw['session_dsn'] is None

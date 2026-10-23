@@ -47,12 +47,13 @@ class _HostedEngineTransport(httpx.BaseTransport):
 
 
 class InProcessInterviewHost:
-    def __init__(self,store,artifacts_base,*,gateway_factory,generator_clients,interview_clients):
+    def __init__(self,store,artifacts_base,*,gateway_factory,generator_clients,interview_clients,session_dsn=None):
         self.store=store
         self.artifacts_base=Path(artifacts_base)
         self.gateway_factory=gateway_factory
         self.generator_clients=generator_clients
         self.interview_clients=interview_clients
+        self._session_dsn=session_dsn
         self._token=secrets.token_hex(24)
         self._client=None
         self._lock=threading.Lock()
@@ -69,7 +70,7 @@ class InProcessInterviewHost:
         from interview_engine.http_service import create_app,default_program_factory
         from interview_engine.tenant_worker import TenantRegistryRouter,TenantWorkerMiddleware
         registry_type=self._registry_type()
-        app=create_app(TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base),service_token=self._token)
+        app=create_app(TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn),service_token=self._token)
         app.add_middleware(TenantWorkerMiddleware,base=self.artifacts_base,service_token=self._token)
         return app
 
