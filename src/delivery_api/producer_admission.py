@@ -4,6 +4,8 @@ Resolver must serialize the COMPLETE provider request and return a reviewed quot
 and exact request digest. It runs in trusted delivery code, not producer input.
 Missing resolver/usage fails closed. No monetary configuration defaults exist.
 """
+import logging
+
 from .attempt_ledger import AdmissionDenied
 from .tenancy import current_scope
 
@@ -116,21 +118,39 @@ class WorkerAdmissionGateway:
 
     def start(self,attempt):
         row=self._attempt(attempt)
-        # Slow vendor-source verification runs first so the 30s balance freshness window
-        # covers only the balance read to the start transition.
-        self._verify_snapshot()
-        if 'estimate_policy' in row.get('quote',{}):
-            if self.provider_balance is None:raise AdmissionDenied('pre-call provider balance reader required')
-            from .compute_meter import excluded_wait
-            try:
-                with excluded_wait():balance=self.provider_balance()
-            except AdmissionDenied:raise
-            except Exception as exc:raise AdmissionDenied('provider balance read failed: '+str(exc)[:300]) from exc
-            self.store.record_provider_balance_check(attempt,balance)
-        if self.launch_guard:
-            result=self.store.start_launch_provider_attempt(attempt)
-            if not result['started']:raise AdmissionDenied('service temporarily unavailable: '+result['reason'])
-        else:self.store.transition_provider_attempt(attempt,'start',require_prepaid=self.require_prepaid)
+        try:
+            # Slow vendor-source verification runs first so the 30s balance freshness window
+            # covers only the balance read to the start transition.
+            self._verify_snapshot()
+            if 'estimate_policy' in row.get('quote',{}):
+                if self.provider_balance is None:raise AdmissionDenied('pre-call provider balance reader required')
+                from .compute_meter import excluded_wait
+                try:
+                    with excluded_wait():balance=self.provider_balance()
+                except AdmissionDenied:raise
+                except Exception as exc:raise AdmissionDenied('provider balance read failed: '+str(exc)[:300]) from exc
+                self.store.record_provider_balance_check(attempt,balance)
+            if self.launch_guard:
+                result=self.store.start_launch_provider_attempt(attempt)
+                if not result['started']:raise AdmissionDenied('service temporarily unavailable: '+result['reason'])
+            else:self.store.transition_provider_attempt(attempt,'start',require_prepaid=self.require_prepaid)
+        except AdmissionDenied as denied:
+            # Every refusal above is raised before the atomic dispatch commit,
+            # and no provider contact can happen before start returns, so the
+            # reserved attempt carries no provider-side effect and its hold is
+            # released here: concurrency slots and window accounting free up
+            # for the next call instead of wedging at three refused holds.
+            # A release refused because the attempt already left 'reserved'
+            # never masks the original denial; non-refusal failures (crashes,
+            # DB errors) keep the reservation for reconciliation instead.
+            try:self.store.transition_provider_attempt(attempt,'cancel')
+            except AdmissionDenied:pass
+            except Exception:
+                # Cleanup must never mask the original refusal: log the failed
+                # release with its traceback and keep the reservation for
+                # reconciliation, then re-raise the original denial below.
+                logging.getLogger(__name__).warning('post-refusal reservation release failed; reservation kept for reconciliation',exc_info=True)
+            raise denied
         from .compute_meter import current
         meter=self.compute_meter or current()
         if meter:
