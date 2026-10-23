@@ -9,10 +9,77 @@ model-listing preflight is answered from the stub.
 
 Nothing here is imported by production code; production behavior is unchanged
 without the environment opt-in.
+
+Lesson (2026-10-23 escaped-stub incident): a standalone diagnostic that set
+env vars after interpreter start, without this stub, dispatched real HTTPS
+request(s) to DeepSeek with a dummy key and got real 401s. Diagnostics and
+repros must run under this stub (or an equivalent fail-closed guard), never
+on expected-to-fail credentials: an expected failure still sends the request.
 """
 import os
 
 if os.environ.get('CROSSHOST_STUB') == '1':
+    # Fail-closed egress guard: only loopback TCP and Unix-domain sockets
+    # (Postgres) are reachable from a stubbed process. Patch below every HTTP
+    # client: raw connect/connect_ex (callers can bypass create_connection),
+    # the create_connection helper (urllib/http.client/httpcore sync), and
+    # getaddrinfo (async clients resolve before sock.connect through the
+    # event loop), so async paths are covered by the same two seams.
+    import socket as _socket
+
+    def _allowed(host):
+        return isinstance(host, str) and (host.startswith('127.') or host in ('::1', 'localhost'))
+
+    class _EgressBlocked(OSError):
+        pass
+
+    def _guard_host(host):
+        if not _allowed(host):
+            raise _EgressBlocked('crosshost egress guard: non-loopback destination %r refused' % (host,))
+
+    _real_connect = _socket.socket.connect
+    _real_connect_ex = _socket.socket.connect_ex
+    _real_create_connection = _socket.create_connection
+    _real_getaddrinfo = _socket.getaddrinfo
+
+    def _connect(sock, address):
+        if isinstance(address, tuple) and address:
+            _guard_host(address[0])
+        return _real_connect(sock, address)
+
+    def _connect_ex(sock, address):
+        if isinstance(address, tuple) and address:
+            _guard_host(address[0])
+        return _real_connect_ex(sock, address)
+
+    def _create_connection(address, *args, **kwargs):
+        if isinstance(address, tuple) and address:
+            _guard_host(address[0])
+        return _real_create_connection(address, *args, **kwargs)
+
+    def _getaddrinfo(host, *args, **kwargs):
+        _guard_host(host)
+        return _real_getaddrinfo(host, *args, **kwargs)
+
+    _socket.socket.connect = _connect
+    _socket.socket.connect_ex = _connect_ex
+    _socket.create_connection = _create_connection
+    _socket.getaddrinfo = _getaddrinfo
+
+    # Self-check, fail-closed at startup: external-IP and hostname attempts
+    # must fail before any connect, loopback must keep working.
+    try:
+        _socket.create_connection(('93.184.216.34', 443), timeout=1)
+        raise SystemExit('crosshost egress guard self-check FAILED: external IP connected')
+    except _EgressBlocked:
+        pass
+    try:
+        _socket.getaddrinfo('api.deepseek.com', 443)
+        raise SystemExit('crosshost egress guard self-check FAILED: hostname resolved')
+    except _EgressBlocked:
+        pass
+    _socket.getaddrinfo('127.0.0.1', 1)
+
     import json
 
     from langchain_core.messages import AIMessage
@@ -41,8 +108,19 @@ if os.environ.get('CROSSHOST_STUB') == '1':
 
     def _script(stage):
         if stage == 'probing':
-            return ([{'question': 'What does a booking look like for your customers?',
-                      'covered': [], 'thin': [], 'skipped': [], 'complete': False}] * _QUESTIONS)
+            # Saturate deterministically: coverage completion is code-owned in
+            # the engine (next_area(coverage) is None), so each scripted reply
+            # self-reports a chunk of the area map and the final scripted reply
+            # closes the interview. The founder's closing answer then takes the
+            # engine's pending_closing branch to [INTERVIEW COMPLETE].
+            from interview_engine.coverage_taxonomy import AREA_KEYS
+            chunks = [sorted(AREA_KEYS)[i::_QUESTIONS] for i in range(_QUESTIONS)]
+            envelopes = [{'question': 'Walk me through one concrete use case, part %d?' % (i + 1),
+                          'covered': chunk, 'thin': [], 'skipped': [], 'complete': False}
+                         for i, chunk in enumerate(chunks)]
+            envelopes.append({'question': 'Anything else to add before we wrap up?',
+                              'covered': [], 'thin': [], 'skipped': [], 'complete': True})
+            return envelopes
         if stage == 'distillation':
             return [_NEEDS, _SCOPE, []]
         if stage == 'conops':

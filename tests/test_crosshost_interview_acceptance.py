@@ -230,6 +230,232 @@ def create_task(page, base, title, brief):
     return page.url.split('/tasks/')[1].split('/')[0]
 
 
+
+
+
+def answer_question(page, text):
+    """Answer the currently rendered interview question and wait for the next
+    state: either the next question form or the interview-complete view."""
+    from playwright.sync_api import expect
+    expect(page.locator('#answerform')).to_be_visible(timeout=60000)
+    page.locator('#answerform textarea[name="answer"]').fill(text)
+    page.locator('#answerform button[type="submit"]').click()
+
+
+def placement(dsn_value, session_id):
+    """The live placement row: which host instance serves this session now."""
+    import psycopg, psycopg.rows
+    conn = psycopg.connect(dsn_value, autocommit=True, row_factory=psycopg.rows.dict_row)
+    row = conn.execute(
+        "select placement_instance, lease_epoch, generation from engine_sessions where session_id=%s",
+        (session_id,)).fetchone()
+    conn.close()
+    return row
+
+
+def wait_gate_review(page, base, task_id, gate_key, timeout=120):
+    """Poll the gate review API until the gate is actionable; return the JSON."""
+    import time as _time, json as _json
+    deadline = _time.time() + timeout
+    last = None
+    while _time.time() < deadline:
+        response = page.request.get('%s/api/tasks/%s/gates/%s/review' % (base, task_id, gate_key))
+        if response.ok:
+            data = response.json()
+            last = data
+            if data.get('actionable'):
+                return data
+        _time.sleep(2)
+    raise AssertionError('gate %s never became actionable: %s' % (gate_key, str(last)[:600]))
+
+
+def gate_documents(review):
+    """The evidence content of a gate review, compared across hosts."""
+    return {doc['name']: doc.get('view', {}).get('content') for doc in review.get('documents', [])}
+
+
+def approve_gate(page, base, task_id, gate_key):
+    from playwright.sync_api import expect
+    page.goto('%s/tasks/%s/gates/%s' % (base, task_id, gate_key))
+    button = page.locator('button[data-action="approve"]')
+    expect(button).to_be_enabled(timeout=60000)
+    button.click()
+    # A recorded decision navigates back to the task view.
+    page.wait_for_url('**/tasks/*/view**', timeout=60000)
+
+
+def drive_interview(page, base, task_id, answers, timeout=240):
+    """Drive the interview to completion through the real UI: text questions get
+    scripted answers, structured founder decisions (the conops concept CHOICE
+    and the intent-model APPROVAL) are decided through the decision dialog.
+    Ends when the app reconciles completion (gate-intent leaves idle).
+    The form hides transiently while the engine processes, so the loop polls
+    the DOM and the task API instead of trusting a single hidden state.
+    Deterministic: the stub model's script saturates coverage and closes the
+    interview; the coverage bank owns question text when a candidate fails
+    verification."""
+    import time as _time
+    deadline = _time.time() + timeout
+    last_question = page.locator('#currentquestion').inner_text()
+    turns = 0
+    while _time.time() < deadline:
+        dialog = page.locator('.decision-dialog')
+        if dialog.count() and dialog.is_visible():
+            compose = dialog.locator('.decision-compose')
+            if compose.count() and compose.locator('textarea').is_visible():
+                # Concept CHOICE: pick the first concept card, give a rationale.
+                dialog.locator('.decision-option').first.click()
+                compose.locator('textarea').fill('Deterministic acceptance: first concept fits.')
+                compose.locator('button[type="submit"]').click()
+            else:
+                # APPROVAL decisions submit on the option click itself.
+                for label in ('Proceed', 'Approve'):
+                    option = dialog.get_by_text(label, exact=True)
+                    if option.count():
+                        option.first.click()
+                        break
+                else:
+                    dialog.locator('.decision-option').first.click()
+            page.wait_for_timeout(500)
+            continue
+        form = page.locator('#answerform')
+        if form.count() and form.is_visible():
+            area = page.locator('#answerform textarea[name="answer"]')
+            question = page.locator('#currentquestion').inner_text()
+            if not area.is_disabled() and question != last_question:
+                area.fill(answers[turns % len(answers)])
+                page.locator('#answerform button[type="submit"]').click()
+                turns += 1
+                last_question = question
+                continue
+        task = page.request.get(base + '/api/tasks/' + task_id).json()
+        intent = next((g for g in task.get('gates', []) if g['gate_key'] == 'gate-intent'), None)
+        if intent and intent.get('state') not in (None, 'idle'):
+            return turns
+        page.wait_for_timeout(500)
+    raise AssertionError('interview did not complete within %ss after %d turns' % (timeout, turns))
+
+
+def test_interview_completes_single_host_reference(dsn, keys, tmp_path_factory):
+    """Reference drive on one host: the scripted interview runs to completion,
+    the terminal handoff is recorded, and the intent gate becomes reviewable."""
+    from playwright.sync_api import sync_playwright, expect
+    root = tmp_path_factory.mktemp('crosshost-complete')
+    host = AdmittedHost('local', root, keys, dsn)
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, host.base)
+            task_id = create_task(page, host.base, 'Surf school booking',
+                                  'A SaaS web app for surf schools, with booking and customer logins')
+            page.locator('#startengine').click()
+            answers = ['Customers pick a slot and pay online.', 'They pay by card when they book.',
+                       'Rainy days are automatically refunded.', 'Owners see a daily roster.',
+                       'Instructors confirm from their phone.', 'Weekly payouts are automatic.']
+            turns = drive_interview(page, host.base, task_id, answers)
+            print('TURNS', turns)
+            task = page.request.get(host.base + '/api/tasks/' + task_id).json()
+            print('FINAL', task.get('state'), task.get('active_phase'),
+                  [(p['phase_key'], p['state']) for p in task.get('phases', [])],
+                  [(g['gate_key'], g['state']) for g in task.get('gates', [])])
+            events = page.request.get(host.base + '/api/tasks/' + task_id + '/events').json()
+            for event in (events if isinstance(events, list) else events.get('events', []))[-10:]:
+                print('EV', event.get('kind'), str(event.get('message'))[:120])
+            assert turns >= 2, 'the scripted interview took real turns'
+            review = wait_gate_review(page, host.base, task_id, 'gate-intent')
+            assert review.get('actionable'), 'intent gate is reviewable after completion'
+            assert any(gate_documents(review).values()), 'gate review carries the distilled evidence'
+            browser.close()
+    finally:
+        host.stop()
+
+
+def test_interview_survives_local_cloud_local_with_one_lease_holder(dsn, keys, tmp_path_factory):
+    """The approved cross-host topology: two independent admitted app instances
+    (same in-process engine path, same throwaway PG), the actual UI over HTTP.
+
+    The interview starts on the local host, the cloud host takes the session
+    over only after the local lease lapses (one worker, enforced by the lease
+    row, never by convention), and the local host takes it back for the gates.
+    Placement rows and engine content must agree at every hop."""
+    from playwright.sync_api import sync_playwright, expect
+    root = tmp_path_factory.mktemp('crosshost-drive')
+    local = AdmittedHost('local', root, keys, dsn)
+    session_id = None
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, local.base)
+            task_id = create_task(page, local.base, 'Surf school booking',
+                                  'A SaaS web app for surf schools, with booking and customer logins')
+            page.locator('#startengine').click()
+            answer_question(page, 'Customers pick a slot and pay online.')
+            import psycopg, psycopg.rows
+            conn = psycopg.connect(dsn, autocommit=True, row_factory=psycopg.rows.dict_row)
+            session_id = conn.execute(
+                "select engine_session_id from tasks where task_id=%s", (task_id,)).fetchone()['engine_session_id']
+            conn.close()
+            assert session_id
+            first = placement(dsn, session_id)
+            assert first and first['placement_instance'], 'the local host holds the lease'
+            local_instance = first['placement_instance']
+            browser.close()
+    finally:
+        local.stop()
+
+    # While the local lease is still live, a cloud instance must not serve the
+    # session: the lease row, not politeness, is the single-writer boundary.
+    cloud = AdmittedHost('cloud', root, keys, dsn)
+    intent_review_cloud = None
+    try:
+        held = placement(dsn, session_id)
+        assert held['placement_instance'] == local_instance
+        import time as _time
+        _time.sleep(35)  # lease_ttl is 30s; the takeover is only legal after expiry
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, cloud.base)
+            page.goto(cloud.base + '/tasks/%s/view' % task_id)
+            answer_question(page, 'They pay by card when they book.')
+            second = placement(dsn, session_id)
+            assert second['placement_instance'] != local_instance, 'cloud claimed after the local lease lapsed'
+            assert second['lease_epoch'] > held['lease_epoch'], 'takeover bumped the lease epoch'
+            # Third scripted question completes the interview on the cloud host.
+            answer_question(page, 'Rainy days are automatically refunded.')
+            # The app ingests completion, runs distillation, and the intent gate
+            # becomes reviewable; poll the review API until it is.
+            intent_review_cloud = wait_gate_review(page, cloud.base, task_id, 'gate-intent')
+            browser.close()
+    finally:
+        cloud.stop()
+
+    # Back to the local host for the gates. The review the founder sees must be
+    # byte-identical to what the cloud host produced.
+    _time.sleep(35)
+    local2 = AdmittedHost('local2', root, keys, dsn)
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, local2.base)
+            page.goto(local2.base + '/tasks/%s/view' % task_id)
+            intent_review_local = wait_gate_review(page, local2.base, task_id, 'gate-intent')
+            assert gate_documents(intent_review_local) == gate_documents(intent_review_cloud), \
+                'intent gate evidence identical across hosts'
+            approve_gate(page, local2.base, task_id, 'gate-intent')
+            conops_review = wait_gate_review(page, local2.base, task_id, 'gate-conops')
+            approve_gate(page, local2.base, task_id, 'gate-conops')
+            third = placement(dsn, session_id)
+            assert third['placement_instance'] != second['placement_instance'], 'local reclaimed for the gates'
+            assert third['lease_epoch'] > second['lease_epoch']
+            browser.close()
+    finally:
+        local2.stop()
+
+
 def test_admitted_host_runs_the_first_interview_turn_through_the_ui(dsn, keys, tmp_path_factory):
     from playwright.sync_api import sync_playwright, expect
     root = tmp_path_factory.mktemp('crosshost-first-turn')
