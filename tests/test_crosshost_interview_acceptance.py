@@ -68,7 +68,29 @@ def dsn():
         pytest.skip('pg_harness unavailable: ' + pg_harness.STATE.get('reason', ''))
     if 'dbname=test_tenant_' not in value:
         pytest.skip('isolated test database required')
+    grant_founder_credits(value)
     return value
+
+
+def grant_founder_credits(dsn_value):
+    """The admission gate needs an admission row and a prepaid balance per
+    owner; the harness seeds owners with neither. Grant through the migration's
+    own operator machinery (20261020150000): a principal row for the founder,
+    then the SECURITY DEFINER grant function under the founder's claims -
+    the same path the operator page drives, never a direct balance write."""
+    import psycopg
+    conn = psycopg.connect(dsn_value, autocommit=True)
+    conn.execute(
+        "INSERT INTO operator_principals(subject, registry_version, capabilities, enabled)"
+        " VALUES (%s, 'ops-v1', ARRAY['credits.allocate'], true)"
+        " ON CONFLICT (subject) DO NOTHING", (OWNER,))
+    conn.execute("SELECT set_config('request.jwt.claim.sub', %s, false)", (OWNER,))
+    conn.execute("SELECT set_config('request.jwt.claim.session_id', %s, false)", (OWNER,))
+    result = conn.execute(
+        "SELECT public.requi_operator_grant_credits(%s, %s, %s)",
+        ('owner-a@example.test', 500, 'crosshost acceptance: founder prepaid balance')).fetchone()
+    conn.close()
+    assert result and result[0].get('granted'), 'operator grant through the migration function: %s' % (result,)
 
 
 @pytest.fixture(scope='module')

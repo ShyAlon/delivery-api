@@ -57,7 +57,13 @@ if os.environ.get('CROSSHOST_STUB') == '1':
         # Cache per stage like the graph does: one model, one reply queue.
         if stage not in _box:
             _box[stage] = _Fake(_script(stage))
-        return _box[stage]
+        # Register into the current job binding exactly like the real factory,
+        # so the worker-stage wire check (wire_model) still runs against the
+        # session's pinned provider/model.
+        from interview_engine import model_config as _mc
+        from interview_engine.wire_binding import register_model
+        cfg = _mc.for_stage(stage)
+        return register_model(_box[stage], stage=stage, provider=cfg.provider, model=cfg.model)
 
     model_config.build_chat_model = _build
 
