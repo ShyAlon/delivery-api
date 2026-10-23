@@ -113,6 +113,7 @@ export async function api(url,opts={}){
   const entry={ts:new Date().toISOString(),method,url,status:response.status,total_ms:totalMs,server_ms:Number.isFinite(serverMs)?Math.round(serverMs):null,ref,db:((/db;dur=([0-9.]+);desc="([^"]*)"/.exec(response.headers.get('server-timing')||'')||[]).slice(1,3).join(' ms, '))||null};
   requestLog.push(entry);if(requestLog.length>200)requestLog.shift();
   capture('network',`${method} ${url} -> ${response.status} ${totalMs} ms (server ${entry.server_ms===null?'unknown':entry.server_ms+' ms'}) ref ${ref||'none'}`);
+  if(opts.onResponse){try{opts.onResponse({ref:entry.ref,status:entry.status,total_ms:entry.total_ms})}catch{}}  // request-owned metadata for the caller; never blocks the response path
   if(!response.ok){
     const raw=await response.text();let detail;
     try{detail=JSON.parse(raw).detail}catch{}
