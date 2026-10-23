@@ -109,3 +109,54 @@ def test_launcher_structure_guards():
     assert 'grep -v -i -E' in build, 'the provider-key strip filter from the preview settings builder must be kept'
     assert 'DELIVERY_CLOUD_EXECUTION=1' in build
     assert "printenv DEEPSEEK_API_KEY" not in src and 'echo "$DEEPSEEK_API_KEY"' not in src
+
+
+def _real_git_layout(tmp_path, kind):
+    """A scripts/ops copy in a real git layout: primary checkout, linked
+    worktree, or copied-out (no repo). Uses the real git binary so the
+    detection semantics under test are git's own. No origin is configured,
+    so a detected checkout stops at the REMOTE gate before any network."""
+    base = tmp_path / kind
+    if kind == 'primary':
+        base.mkdir()
+        subprocess.run(['git', 'init', '-q', str(base)], check=True)
+    elif kind == 'linked':
+        primary = tmp_path / 'linked-src'
+        subprocess.run(['git', 'init', '-q', str(primary)], check=True)
+        subprocess.run(['git', '-C', str(primary), '-c', 'user.email=t@t', '-c', 'user.name=t',
+                        'commit', '-q', '--allow-empty', '-m', 'x'], check=True)
+        subprocess.run(['git', '-C', str(primary), 'worktree', 'add', '-q', '--detach', str(base)],
+                       check=True, capture_output=True)
+    else:  # copied-out: no git init at all
+        base.mkdir()
+    ops = base / 'scripts' / 'ops'
+    ops.mkdir(parents=True, exist_ok=True)
+    for f in ('preview-exec.sh', 'lib.sh', 'pin.py'):
+        (ops / f).write_text((REPO / 'scripts' / 'ops' / f).read_text())
+    return base
+
+
+def _run_real_git(script_base):
+    env = {'PATH': '/usr/bin:/bin', 'HOME': str(script_base)}
+    return subprocess.run(['bash', str(script_base / 'scripts' / 'ops' / 'preview-exec.sh')],
+                          input='no\n', capture_output=True, text=True, cwd=str(script_base),
+                          env=env, timeout=30)
+
+
+def test_repo_detection_accepts_primary_checkout(tmp_path):
+    p = _run_real_git(_real_git_layout(tmp_path, 'primary'))
+    assert 'ABORTED [NO-REPO]' not in p.stdout
+    assert 'ABORTED [REMOTE]' in p.stdout, p.stdout[-300:]
+
+
+def test_repo_detection_accepts_linked_worktree(tmp_path):
+    """A linked worktree has a .git file, not a directory - the old
+    [ -d .git ] check aborted NO-REPO on a perfectly good checkout."""
+    p = _run_real_git(_real_git_layout(tmp_path, 'linked'))
+    assert 'ABORTED [NO-REPO]' not in p.stdout
+    assert 'ABORTED [REMOTE]' in p.stdout, p.stdout[-300:]
+
+
+def test_repo_detection_rejects_copied_out_script(tmp_path):
+    p = _run_real_git(_real_git_layout(tmp_path, 'copied'))
+    assert 'ABORTED [NO-REPO]' in p.stdout, p.stdout[-300:]

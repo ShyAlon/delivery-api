@@ -28,7 +28,7 @@ cleanup(){
 candidate_tag(){
   ROOT=${REQUI_REPOS_ROOT:-$(dirname "$REPO")}; TAG=""; REPOS=""
   for r in delivery-api interview-engine spec-generator verification-loop; do
-    D=$ROOT/$r; [ -d "$D/.git" ] || abort "NO-$r" "no checkout at $D" "" "git clone https://github.com/ShyAlon/$r $D"
+    D=$ROOT/$r; git -C "$D" rev-parse --is-inside-work-tree >/dev/null 2>&1 || abort "NO-$r" "no checkout at $D" "" "git clone https://github.com/ShyAlon/$r $D"
     git -C "$D" fetch -q origin main || abort "FETCH-$r" "cannot fetch $r" "" "git -C $D fetch origin main"
     [ -z "$(git -C "$D" status --porcelain --untracked-files=no)" ] || abort "DIRTY-$r" "$r has uncommitted changes to tracked files" "" "git -C $D status --short   (commit, stash or discard them)"
     [ "$(git -C "$D" rev-parse --abbrev-ref HEAD)" = main ] || abort "BRANCH-$r" "$r is not on main" "" "git -C $D checkout main"
