@@ -143,13 +143,20 @@ class WorkerAdmissionGateway:
             # A release refused because the attempt already left 'reserved'
             # never masks the original denial; non-refusal failures (crashes,
             # DB errors) keep the reservation for reconciliation instead.
-            try:self.store.transition_provider_attempt(attempt,'cancel')
+            try:self.store.transition_provider_attempt(attempt,'cancel',{'refusal':str(denied)[:300]})
             except AdmissionDenied:pass
-            except Exception:
+            except Exception as cleanup:
                 # Cleanup must never mask the original refusal: log the failed
                 # release with its traceback and keep the reservation for
                 # reconciliation, then re-raise the original denial below.
                 logging.getLogger(__name__).warning('post-refusal reservation release failed; reservation kept for reconciliation',exc_info=True)
+                # A stuck reservation already shows under unresolved attempts;
+                # this durable record names why it still needs attention. Best
+                # effort and error type only - no message text, which can carry
+                # connection detail; an audit failure never masks the refusal.
+                try:self.store.audit(str(current_scope().owner_id),'provider.attempt.release_failed',self.store.worker_job(self.job_id)['task_id'],{'attempt_id':attempt,'error':type(cleanup).__name__})
+                except Exception:
+                    logging.getLogger(__name__).warning('release-failed audit record could not be written',exc_info=True)
             raise denied
         from .compute_meter import current
         meter=self.compute_meter or current()
