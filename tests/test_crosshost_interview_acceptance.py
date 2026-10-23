@@ -284,15 +284,16 @@ def approve_gate(page, base, task_id, gate_key):
     page.wait_for_url('**/tasks/*/view**', timeout=60000)
 
 
-def drive_interview(page, base, task_id, answers, timeout=240):
-    """Drive the interview to completion through the real UI, keyed on the
-    task's live input_state (not the DOM question text): plain questions get
-    scripted text answers through #answerform, structured founder decisions
-    (the conops concept CHOICE and the intent-model APPROVAL) are decided
-    through the .decision-dialog. Ends when the app reconciles completion
-    (gate-intent leaves idle). Keying on input_state removes the race where
-    the SPA has already shown the decision prompt as question text before the
-    decision dialog opens.
+def pump_interview(page, base, task_id, answers, *, max_turns=None, finish=True, timeout=240):
+    """Drive the interview through the real UI, keyed on the task's live
+    input_state (not the DOM question text): plain questions get scripted text
+    answers through #answerform, structured founder decisions (the conops
+    concept CHOICE and the intent-model APPROVAL) are decided through the real
+    decision pages. With finish=True, runs until the app reconciles completion
+    (intent+conops approved; phase gates stay idle because the founder
+    approved inside the interview). With max_turns=N, returns after N text
+    answers once the engine waits for the next input - a stable checkpoint
+    boundary the caller can safely stop the host at.
     Deterministic: the stub model's script saturates coverage and closes the
     interview; the coverage bank owns question text when a candidate fails
     verification."""
@@ -310,6 +311,10 @@ def drive_interview(page, base, task_id, answers, timeout=240):
         if phases.get('intent') in ('approved', 'done') and phases.get('conops') in ('approved', 'done'):
             return turns
         state = task.get('input_state') or {}
+        if max_turns is not None and turns >= max_turns and state.get('waiting'):
+            return turns
+        if not finish and state.get('waiting') and state.get('decision'):
+            return turns  # a decision is open; the caller asked for text turns only
         if state.get('waiting') and state.get('decision'):
             if '/decisions/' not in page.url:
                 # The live view renders a sticky launcher that navigates to
@@ -358,6 +363,11 @@ def drive_interview(page, base, task_id, answers, timeout=240):
         [(g['gate_key'], g['state']) for g in task.get('gates', [])],
         task.get('input_state'),
         [(e.get('kind'), str(e.get('message'))[:100]) for e in tail]))
+
+
+def drive_interview(page, base, task_id, answers, timeout=240):
+    """Full completion drive: every text turn and both founder decisions."""
+    return pump_interview(page, base, task_id, answers, finish=True, timeout=timeout)
 
 
 def test_interview_completes_single_host_reference(dsn, keys, tmp_path_factory):
@@ -415,14 +425,36 @@ def test_interview_survives_local_cloud_local_with_one_lease_holder(dsn, keys, t
     """The approved cross-host topology: two independent admitted app instances
     (same in-process engine path, same throwaway PG), the actual UI over HTTP.
 
-    The interview starts on the local host, the cloud host takes the session
-    over only after the local lease lapses (one worker, enforced by the lease
-    row, never by convention), and the local host takes it back for the gates.
-    Placement rows and engine content must agree at every hop."""
-    from playwright.sync_api import sync_playwright, expect
+    The interview starts on the local host (turn 1), the cloud host resumes it
+    mid-interview (turn 2) only after the local lease lapses, and the local
+    host takes it back mid-interview again and drives it to completion (turn 3
+    plus both founder decisions) - bidirectional continuation from committed
+    boundaries, not post-completion inspection. One lease holder at every
+    instant, enforced by the lease row, never by convention; placement rows
+    and engine content agree at every hop."""
+    from playwright.sync_api import sync_playwright
+    import psycopg, psycopg.rows
     root = tmp_path_factory.mktemp('crosshost-drive')
+    answers = ['Customers pick a slot and pay online.', 'They pay by card when they book.',
+               'Rainy days are automatically refunded.', 'Owners see a daily roster.']
+    answered = []
+
+    def session_id():
+        conn = psycopg.connect(dsn, autocommit=True, row_factory=psycopg.rows.dict_row)
+        row = conn.execute("select engine_session_id from tasks where task_id=%s", (task_id,)).fetchone()
+        conn.close()
+        return row['engine_session_id']
+
+    def answer_events():
+        conn = psycopg.connect(dsn, autocommit=True, row_factory=psycopg.rows.dict_row)
+        rows = conn.execute(
+            "select payload from events where task_id=%s and kind='answer' order by id", (task_id,)).fetchall()
+        conn.close()
+        import json as _json
+        return [_json.loads(r['payload'])['answer'] if isinstance(r['payload'], str)
+                else r['payload']['answer'] for r in rows]
+
     local = AdmittedHost('local', root, keys, dsn)
-    session_id = None
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
@@ -431,49 +463,40 @@ def test_interview_survives_local_cloud_local_with_one_lease_holder(dsn, keys, t
             task_id = create_task(page, local.base, 'Surf school booking',
                                   'A SaaS web app for surf schools, with booking and customer logins')
             page.locator('#startengine').click()
-            answer_question(page, 'Customers pick a slot and pay online.')
-            import psycopg, psycopg.rows
-            conn = psycopg.connect(dsn, autocommit=True, row_factory=psycopg.rows.dict_row)
-            session_id = conn.execute(
-                "select engine_session_id from tasks where task_id=%s", (task_id,)).fetchone()['engine_session_id']
-            conn.close()
-            assert session_id
-            first = placement(dsn, session_id)
-            assert first and first['placement_instance'], 'the local host holds the lease'
-            local_instance = first['placement_instance']
+            pump_interview(page, local.base, task_id, answers, max_turns=1, finish=False)
             browser.close()
+        sid = session_id()
+        first = placement(dsn, sid)
+        assert first and first['placement_instance'], 'the local host holds the lease'
     finally:
         local.stop()
+    answered.append(answers[0])
 
+    import time as _time
     # While the local lease is still live, a cloud instance must not serve the
     # session: the lease row, not politeness, is the single-writer boundary.
     cloud = AdmittedHost('cloud', root, keys, dsn)
-    intent_review_cloud = None
     try:
-        held = placement(dsn, session_id)
-        assert held['placement_instance'] == local_instance
-        import time as _time
+        held = placement(dsn, sid)
+        assert held['placement_instance'] == first['placement_instance']
         _time.sleep(35)  # lease_ttl is 30s; the takeover is only legal after expiry
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page()
             sign_in(page, cloud.base)
             page.goto(cloud.base + '/tasks/%s/view' % task_id)
-            answer_question(page, 'They pay by card when they book.')
-            second = placement(dsn, session_id)
-            assert second['placement_instance'] != local_instance, 'cloud claimed after the local lease lapsed'
-            assert second['lease_epoch'] > held['lease_epoch'], 'takeover bumped the lease epoch'
-            # Third scripted question completes the interview on the cloud host.
-            answer_question(page, 'Rainy days are automatically refunded.')
-            # The app ingests completion, runs distillation, and the intent gate
-            # becomes reviewable; poll the review API until it is.
-            intent_review_cloud = wait_gate_review(page, cloud.base, task_id, 'gate-intent')
+            pump_interview(page, cloud.base, task_id, answers[1:], max_turns=1, finish=False)
             browser.close()
+        second = placement(dsn, sid)
+        assert second['placement_instance'] != first['placement_instance'], \
+            'cloud claimed the session after the local lease lapsed'
+        assert second['lease_epoch'] > first['lease_epoch'], 'takeover bumped the lease epoch'
     finally:
         cloud.stop()
+    answered.append(answers[1])
 
-    # Back to the local host for the gates. The review the founder sees must be
-    # byte-identical to what the cloud host produced.
+    # Back to the local host mid-interview: it must continue the same session
+    # (turn 3 and both decisions), not inspect a finished one.
     _time.sleep(35)
     local2 = AdmittedHost('local2', root, keys, dsn)
     try:
@@ -482,16 +505,26 @@ def test_interview_survives_local_cloud_local_with_one_lease_holder(dsn, keys, t
             page = browser.new_page()
             sign_in(page, local2.base)
             page.goto(local2.base + '/tasks/%s/view' % task_id)
-            intent_review_local = wait_gate_review(page, local2.base, task_id, 'gate-intent')
-            assert gate_documents(intent_review_local) == gate_documents(intent_review_cloud), \
-                'intent gate evidence identical across hosts'
-            approve_gate(page, local2.base, task_id, 'gate-intent')
-            conops_review = wait_gate_review(page, local2.base, task_id, 'gate-conops')
-            approve_gate(page, local2.base, task_id, 'gate-conops')
-            third = placement(dsn, session_id)
-            assert third['placement_instance'] != second['placement_instance'], 'local reclaimed for the gates'
-            assert third['lease_epoch'] > second['lease_epoch']
+            drive_interview(page, local2.base, task_id, answers[2:])
+            task = page.request.get(local2.base + '/api/tasks/' + task_id).json()
             browser.close()
+        third = placement(dsn, sid)
+        assert third['placement_instance'] != second['placement_instance'], \
+            'local reclaimed the session for the remaining turns'
+        assert third['lease_epoch'] > second['lease_epoch']
+        phases = {x['phase_key']: x['state'] for x in task['phases']}
+        assert phases['intent'] == 'approved' and phases['conops'] == 'approved', phases
+        assert phases['needs'] == 'pending', 'the spend-gated next phase must not auto-start'
+        # Every text answer given on the earlier hosts is in the shared
+        # transcript, in order (later events are the local2 turns and the two
+        # decision submissions, which also post as answer events).
+        assert answer_events()[:2] == answered, 'answers from the earlier hosts persisted in order'
+        assert answers[2] in answer_events(), 'the reclaiming host added its own turn'
+        # The completing host's artifacts are bound to the one session that
+        # travelled across all three placements.
+        base_dir = local2.artifacts / 'tenants' / OWNER / 'sessions' / sid / 'interview'
+        assert sid in (base_dir / 'intent_model.json').read_text()
+        assert sid in (base_dir / 'conops.json').read_text()
     finally:
         local2.stop()
 
