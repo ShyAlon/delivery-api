@@ -1,0 +1,144 @@
+"""Deterministic cross-host acceptance stub, injected via PYTHONPATH.
+
+Active only when CROSSHOST_STUB=1. Runs at interpreter startup inside the test
+server processes (delivery app and, for the local host, the separate engine),
+so every instance - local or cloud, any process - answers model calls from the
+same deterministic script and verifies test-minted tokens. No provider HTTP
+call can happen: the chat-model factory is replaced wholesale, and the Ollama
+model-listing preflight is answered from the stub.
+
+Nothing here is imported by production code; production behavior is unchanged
+without the environment opt-in.
+"""
+import os
+
+if os.environ.get('CROSSHOST_STUB') == '1':
+    import json
+
+    from langchain_core.messages import AIMessage
+
+    from interview_engine import model_config
+
+    _NEEDS = {'stakeholder_needs': [{'need_id': 'SN-1', 'statement': 'founders need specs', 'kind': 'functional', 'source_turns': [0]}]}
+    _SCOPE = {'problem_statement': 'p', 'target_users': ['u'], 'core_value_proposition': 'v',
+              'in_scope': ['a'], 'out_of_scope': ['b'], 'source_turns': {}}
+    _CONOPS = [{'operating_environment': 'phone, often offline'}, {'trigger': 'habit completed'},
+               {'operational_flow': ['open product', 'record points']}, {'exceptions': ['offline']},
+               {'name': 'Native app', 'summary': 'installed app'}, {'name': 'PWA', 'summary': 'installable web product'},
+               {'advantages': ['native APIs']}, {'disadvantages': ['store release']},
+               {'advantages': ['one deployment']}, {'disadvantages': ['platform limits']}]
+    _TIEBREAK = {'is_web_app': True, 'archetype': 'saas_crud', 'confidence': 0.9, 'reason': 'web app'}
+    _QUESTIONS = int(os.environ.get('CROSSHOST_STUB_QUESTIONS', '3'))
+
+    class _Fake:
+        """One scripted reply queue per stage, like the repo's in-process fakes."""
+        def __init__(self, replies):
+            self.replies = list(replies)
+
+        def invoke(self, messages):
+            content = self.replies.pop(0) if self.replies else '[INTERVIEW COMPLETE]'
+            return AIMessage(content=content if isinstance(content, str) else json.dumps(content))
+
+    def _script(stage):
+        if stage == 'probing':
+            return ([{'question': 'What does a booking look like for your customers?',
+                      'covered': [], 'thin': [], 'skipped': [], 'complete': False}] * _QUESTIONS)
+        if stage == 'distillation':
+            return [_NEEDS, _SCOPE, []]
+        if stage == 'conops':
+            return list(_CONOPS)
+        if stage == 'scope_tiebreak':
+            return [_TIEBREAK] * 4
+        return ['[INTERVIEW COMPLETE]']
+
+    _box = {}
+
+    def _build(stage, **kwargs):
+        # Cache per stage like the graph does: one model, one reply queue.
+        if stage not in _box:
+            _box[stage] = _Fake(_script(stage))
+        return _box[stage]
+
+    model_config.build_chat_model = _build
+
+    # The Ollama model-listing preflight is the only plain httpx.get in the
+    # startup path; answer it from the stub so no local Ollama is needed.
+    import httpx
+
+    _real_get = httpx.get
+
+    class _Models:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'data': [{'id': 'qwen2.5-coder:14b'}, {'id': 'phi4:latest'}]}
+
+    def _get(url, *args, **kwargs):
+        if isinstance(url, str) and url.rstrip('/').endswith('/v1/models'):
+            return _Models()
+        return _real_get(url, *args, **kwargs)
+
+    httpx.get = _get
+
+    # Cloud instances verify founder tokens against a test key instead of a
+    # Supabase JWKS endpoint: the acceptance test mints its own ES256 tokens.
+    _jwks_file = os.environ.get('CROSSHOST_STUB_JWKS')
+    if _jwks_file:
+        try:
+            from delivery_api import supabase_auth
+            from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+            class _Keys:
+                def get_signing_key_from_jwt(self, token):
+                    from types import SimpleNamespace
+                    return SimpleNamespace(key=load_pem_public_key(open(_jwks_file, 'rb').read()))
+
+            def _init(self, project_url, *, key_provider=None):
+                # Bypass the real init: its strict <ref>.supabase.co hostname
+                # check and live JWKS client cannot apply to the hermetic
+                # crosshost URL. Set the same attributes the real init would.
+                self.issuer = project_url.rstrip('/') + '/auth/v1'
+                self.keys = key_provider or _Keys()
+
+            supabase_auth.SupabaseIdentityVerifier.__init__ = _init
+        except ImportError:
+            pass  # engine-only processes never import delivery_api
+
+    # Hermetic Supabase password sign-in: the real UI login flow posts to the
+    # app's own /auth routes; the app's call to the Supabase auth API is the
+    # single patched seam. The minted access token verifies through the JWKS
+    # stub above, so cookies, refresh and tenant scope all exercise real code.
+    if os.environ.get('CROSSHOST_STUB_AUTH') == '1':
+        try:
+            import time as _time
+            import jwt as _jwt
+            from delivery_api import supabase_sessions
+
+            _key = open(os.environ['CROSSHOST_STUB_JWT_KEY'], 'rb').read()
+            _owner = os.environ['CROSSHOST_STUB_OWNER']
+            _issuer = os.environ['CROSSHOST_STUB_ISSUER']
+            _session_id = os.environ.get('CROSSHOST_STUB_SESSION', _owner)
+
+            def _payload():
+                now = int(_time.time())
+                token = _jwt.encode(
+                    {'sub': _owner, 'session_id': _session_id, 'role': 'authenticated',
+                     'aud': 'authenticated', 'iss': _issuer, 'iat': now, 'exp': now + 3600,
+                     'email': 'founder@crosshost.test', 'user_metadata': {'email_verified': True}},
+                    _key, algorithm='ES256', headers={'kid': 'crosshost-stub'})
+                return {'access_token': token, 'refresh_token': 'crosshost-stub-refresh',
+                        'expires_in': 3600, 'expires_at': now + 3600}
+
+            def _call(path, payload, *, access=None):
+                if path.startswith('token?grant_type=password') or path.startswith('token?grant_type=refresh_token'):
+                    return _payload()
+                if path.startswith('signup'):
+                    return _payload()
+                if path.startswith('logout'):
+                    return {}
+                raise AssertionError('crosshost stub: unexpected Supabase auth call ' + path)
+
+            supabase_sessions._call = _call
+        except ImportError:
+            pass  # engine-only processes never import delivery_api
