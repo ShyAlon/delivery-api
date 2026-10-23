@@ -120,6 +120,7 @@ def base_env(root, keys, extra_pythonpath):
         'CROSSHOST_STUB_OWNER': OWNER,
         'CROSSHOST_STUB_ISSUER': 'https://supabase.crosshost.test/auth/v1',
         'DELIVERY_COOKIE_SECURE': '0',
+        # Temporary hang diagnosis passthrough (remove before final).
     })
     return env
 
@@ -183,6 +184,9 @@ class AdmittedHost:
             'INTERVIEW_ENGINE_TOKEN': TOKEN,
             'VMODEL_ARTIFACTS_DIR': str(self.artifacts),
             'VMODEL_PRICE_TABLE': str(price_table),
+            # Far above every drive timeout: no handoff in this test can be
+            # explained by lease expiry - only by the graceful release.
+            'INTERVIEW_ENGINE_LEASE_TTL': '300',
         })
         self.process = launch(name + ' app', [sys.executable, '-m', 'uvicorn', 'delivery_api.app:app',
                                               '--host', '127.0.0.1', '--port', str(self.port)],
@@ -284,7 +288,22 @@ def approve_gate(page, base, task_id, gate_key):
     page.wait_for_url('**/tasks/*/view**', timeout=60000)
 
 
-def pump_interview(page, base, task_id, answers, *, max_turns=None, finish=True, timeout=240):
+class TurnTracker:
+    """Answer each engine input exactly once, keyed by its durable input_id.
+    Question text is not a turn signal: the coverage bank can legitimately
+    re-ask the same text under a new input_id (and a restarted stub once did),
+    and each such input must be answered on its own."""
+    def __init__(self):
+        self._seen = set()
+
+    def should_answer(self, input_id):
+        if not input_id or input_id in self._seen:
+            return False
+        self._seen.add(input_id)
+        return True
+
+
+def pump_interview(page, base, task_id, answers, *, max_turns=None, finish=True, timeout=240, shots=None):
     """Drive the interview through the real UI, keyed on the task's live
     input_state (not the DOM question text): plain questions get scripted text
     answers through #answerform, structured founder decisions (the conops
@@ -299,8 +318,69 @@ def pump_interview(page, base, task_id, answers, *, max_turns=None, finish=True,
     verification."""
     import time as _time
     deadline = _time.time() + timeout
-    last_question = None
+    tracker = TurnTracker()
     turns = 0
+    def _errors():
+        ev = page.request.get(base + '/api/tasks/' + task_id + '/events').json()
+        ev = ev if isinstance(ev, list) else ev.get('events', [])
+        return [e for e in ev if e.get('kind') == 'error']
+
+    def fail_fast_on_rejection(before, waited_state):
+        # A deterministic 422/protocol rejection never succeeds on retry; the
+        # driver must surface the first error with evidence instead of
+        # storming the same answer against the same wait until the timeout.
+        deadline_ff = _time.time() + 8
+        while _time.time() < deadline_ff:
+            page.wait_for_timeout(400)
+            errors = _errors()
+            if len(errors) > before:
+                raise AssertionError('engine rejected the answer deterministically: %r state=%r' % (
+                    [str(e.get('message'))[:200] for e in errors[before:]], waited_state))
+            current = page.request.get(base + '/api/tasks/' + task_id).json().get('input_state') or {}
+            if current.get('input_id') != waited_state.get('input_id'):
+                return  # accepted: the wait advanced
+
+    decision_facts = {}
+    page._drive_facts = decision_facts  # callers print this on any drive failure
+    try:page.on('pageerror', lambda exc: decision_facts.setdefault('page_errors', []).append(str(exc)[:300]))
+    except Exception:pass
+    try:page.on('console', lambda msg: decision_facts.setdefault('console_warns', []).append(msg.text[:200])
+                 if msg.type in ('warning', 'error') else None)
+    except Exception:pass
+    try:page.on('framenavigated', lambda frame: decision_facts.setdefault('navigations', []).append(frame.url[:200])
+                 if frame == page.main_frame else None)
+    except Exception:pass
+    def capture_decision_facts(tag):
+        # Why is nothing clickable on this decision page? Read-only rendering
+        # (actionable=false), a render failure, or a driver predicate miss.
+        facts = {'tag': tag, 'url': page.url}
+        try:
+            facts['reviewform_count'] = page.locator('#reviewform').count()
+            facts['readonly_notice'] = page.locator('.notice').first.inner_text()[:120] if page.locator('.notice').count() else None
+            facts['buttons'] = [(b.inner_text()[:30], b.is_enabled()) for b in page.locator('#reviewform button').all()[:8]] if facts['reviewform_count'] else None
+            facts['radios'] = page.locator('input[type="radio"]').count()
+        except Exception as exc:
+            facts['dom_error'] = str(exc)[:120]
+        try:
+            from urllib.parse import urlparse, parse_qs
+            parts = urlparse(page.url)
+            wait_id = parts.path.rstrip('/').split('/')[-1]
+            revision = (parse_qs(parts.query).get('revision') or [None])[0]
+            api = page.request.get(base + '/api/tasks/' + task_id + '/decisions/' + wait_id,
+                                   params={'revision': revision} if revision else {})
+            if api.ok:
+                data = api.json()
+                facts['actionable'] = data.get('actionable')
+                facts['review_revision'] = (data.get('review') or {}).get('revision')
+                facts['current_revision'] = (data.get('current') or {}).get('revision')
+                facts['current_wait_id'] = (data.get('current') or {}).get('wait_id')
+            else:
+                facts['api_status'] = api.status
+        except Exception as exc:
+            facts['api_error'] = str(exc)[:120]
+        decision_facts[tag] = facts
+        return facts
+
     while _time.time() < deadline:
         task = page.request.get(base + '/api/tasks/' + task_id).json()
         phases = {x['phase_key']: x['state'] for x in task.get('phases', [])}
@@ -334,40 +414,55 @@ def pump_interview(page, base, task_id, answers, *, max_turns=None, finish=True,
                 rationale = page.locator('textarea[name="rationale"]')
                 if rationale.count() and rationale.is_visible():
                     rationale.fill('Deterministic acceptance: first option fits.')
+            errors_before = len(_errors())
+            clicked = False
             for label in ('Choose and continue', 'Proceed', 'Approve', 'Continue'):
                 button = page.get_by_role('button', name=label, exact=True)
                 if button.count() and button.first.is_enabled():
                     button.first.click()
+                    clicked = True
                     break
+            if not clicked and 'first_unclickable' not in decision_facts:
+                capture_decision_facts('first_unclickable')
             page.wait_for_timeout(1000)
+            fail_fast_on_rejection(errors_before, state)
             continue
         elif state.get('waiting') and state.get('question'):
             form = page.locator('#answerform')
             if form.count() and form.is_visible():
                 area = page.locator('#answerform textarea[name="answer"]')
-                question = state['question']
-                if not area.is_disabled() and question != last_question:
-                    area.fill(answers[turns % len(answers)])
+                if not area.is_disabled() and tracker.should_answer(state.get('input_id')):
+                    try:
+                        area.fill(answers[turns % len(answers)], timeout=15000)
+                    except Exception:
+                        raise
+                    errors_before = len(_errors())
                     page.locator('#answerform button[type="submit"]').click()
+                    fail_fast_on_rejection(errors_before, state)
                     turns += 1
-                    last_question = question
                     continue
         page.wait_for_timeout(500)
+    if shots:
+        try:page.screenshot(path=str(shots / ('stall-%s.png' % (base.split(':')[-1],))), full_page=True)
+        except Exception:pass
+    if '/decisions/' in page.url:
+        try:capture_decision_facts('stall')
+        except Exception:pass
     task = page.request.get(base + '/api/tasks/' + task_id).json()
     events = page.request.get(base + '/api/tasks/' + task_id + '/events').json()
     tail = (events if isinstance(events, list) else events.get('events', []))[-12:]
     raise AssertionError('interview did not complete within %ss after %d turns\n'
-        'state=%r active=%r phases=%r gates=%r input_state=%r\nevents=%s' % (
+        'state=%r active=%r phases=%r gates=%r input_state=%r\ndecision_facts=%r\nevents=%s' % (
         timeout, turns, task.get('state'), task.get('active_phase'),
         [(x['phase_key'], x['state']) for x in task.get('phases', [])],
         [(g['gate_key'], g['state']) for g in task.get('gates', [])],
-        task.get('input_state'),
+        task.get('input_state'), decision_facts,
         [(e.get('kind'), str(e.get('message'))[:100]) for e in tail]))
 
 
-def drive_interview(page, base, task_id, answers, timeout=240):
+def drive_interview(page, base, task_id, answers, timeout=240, shots=None):
     """Full completion drive: every text turn and both founder decisions."""
-    return pump_interview(page, base, task_id, answers, finish=True, timeout=timeout)
+    return pump_interview(page, base, task_id, answers, finish=True, timeout=timeout, shots=shots)
 
 
 def test_interview_completes_single_host_reference(dsn, keys, tmp_path_factory):
@@ -387,7 +482,12 @@ def test_interview_completes_single_host_reference(dsn, keys, tmp_path_factory):
             answers = ['Customers pick a slot and pay online.', 'They pay by card when they book.',
                        'Rainy days are automatically refunded.', 'Owners see a daily roster.',
                        'Instructors confirm from their phone.', 'Weekly payouts are automatic.']
-            turns = drive_interview(page, host.base, task_id, answers)
+            shots = root / 'shots'; shots.mkdir(exist_ok=True)
+            try:
+                turns = drive_interview(page, host.base, task_id, answers, shots=shots)
+            except Exception:
+                print('DRIVE_FACTS', getattr(page, '_drive_facts', {}))
+                raise
             print('TURNS', turns)
             task = page.request.get(host.base + '/api/tasks/' + task_id).json()
             print('FINAL', task.get('state'), task.get('active_phase'),
@@ -460,7 +560,7 @@ def test_interview_survives_local_cloud_local_with_one_lease_holder(dsn, keys, t
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page()
             sign_in(page, local.base)
-            task_id = create_task(page, local.base, 'Surf school booking',
+            task_id = create_task(page, local.base, 'Surf school booking (two-host)',
                                   'A SaaS web app for surf schools, with booking and customer logins')
             page.locator('#startengine').click()
             pump_interview(page, local.base, task_id, answers, max_turns=1, finish=False)
@@ -479,7 +579,8 @@ def test_interview_survives_local_cloud_local_with_one_lease_holder(dsn, keys, t
     try:
         held = placement(dsn, sid)
         assert held['placement_instance'] == first['placement_instance']
-        _time.sleep(35)  # lease_ttl is 30s; the takeover is only legal after expiry
+        # No expiry wait: the outgoing host's graceful shutdown released the
+        # lease at a committed boundary (TTL 300s rules expiry out).
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page()
@@ -496,8 +597,8 @@ def test_interview_survives_local_cloud_local_with_one_lease_holder(dsn, keys, t
     answered.append(answers[1])
 
     # Back to the local host mid-interview: it must continue the same session
-    # (turn 3 and both decisions), not inspect a finished one.
-    _time.sleep(35)
+    # (turn 3 and both decisions), not inspect a finished one. Again no expiry
+    # wait - the cloud host's shutdown released the lease.
     local2 = AdmittedHost('local2', root, keys, dsn)
     try:
         with sync_playwright() as pw:
@@ -505,7 +606,13 @@ def test_interview_survives_local_cloud_local_with_one_lease_holder(dsn, keys, t
             page = browser.new_page()
             sign_in(page, local2.base)
             page.goto(local2.base + '/tasks/%s/view' % task_id)
-            drive_interview(page, local2.base, task_id, answers[2:])
+            page.wait_for_timeout(3000)
+            shots = root / 'shots'
+            shots.mkdir(exist_ok=True)
+            drive_interview(page, local2.base, task_id, answers[2:], shots=shots)
+            page.goto(local2.base + '/tasks/%s/view' % task_id)
+            page.wait_for_timeout(1500)
+            page.screenshot(path=str(shots / 'complete.png'), full_page=True)
             task = page.request.get(local2.base + '/api/tasks/' + task_id).json()
             browser.close()
         third = placement(dsn, sid)
@@ -529,6 +636,81 @@ def test_interview_survives_local_cloud_local_with_one_lease_holder(dsn, keys, t
         local2.stop()
 
 
+def test_answer_composer_shadow_tracks_input_id_not_question_text(dsn, keys, tmp_path_factory):
+    """Regression for the confirmed cross-host UI defect: after an answer is
+    sent, the UI shows a 'Processing your answer...' shadow that hides the
+    composer until the next input is served. The shadow used to key on the
+    question TEXT, so a coverage-bank re-ask (same text, new input_id - a
+    legitimate, observed engine behavior) left the composer hidden forever
+    and the interview unanswerable through the real UI. The shadow now keys
+    on the served input_id (app.py always serves input_id while waiting).
+
+    Cases: a real submit captures the served input_id in the shadow record;
+    a stale input_id with the SAME question text clears the shadow and the
+    composer is editable again; the CURRENT input_id keeps the composer
+    hidden while the answer processes; a legacy shadow record without
+    input_id (only possible from the previous JS version in the same
+    browser session) keeps the pre-change question-text behavior."""
+    from playwright.sync_api import sync_playwright, expect
+    root = tmp_path_factory.mktemp('crosshost-shadow')
+    host = AdmittedHost('local', root, keys, dsn)
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, host.base)
+            task_id = create_task(page, host.base, 'Surf school booking (shadow)',
+                                  'A SaaS web app for surf schools, with booking and customer logins')
+            page.locator('#startengine').click()
+            expect(page.locator('#answerform')).to_be_visible(timeout=30000)
+
+            def served():
+                state = page.request.get(host.base + '/api/tasks/' + task_id).json()['input_state']
+                assert state['waiting'] and state['input_id'] and state['question'], state
+                return state
+
+            key = 'shadow-answer:%s' % task_id
+            first = served()
+            # Real submit through the composer captures the served input_id.
+            page.locator('#answerform textarea[name="answer"]').fill('Customers pick a slot and pay online.')
+            page.locator('#answerform button[type="submit"]').click()
+            expect(page.locator('#shadowcopy')).to_be_visible(timeout=10000)
+            shadow = page.evaluate("JSON.parse(sessionStorage.getItem(%r))" % key)
+            assert shadow['input_id'] == first['input_id'], shadow
+
+            cur = served()  # the next waiting input, whatever the engine asked
+            import json as _json
+
+            def seed(record):
+                page.evaluate("sessionStorage.setItem(%r, %r)" % (key, _json.dumps(record)))
+                page.reload()
+                page.wait_for_selector('#answerform', timeout=30000)
+
+            # Stale input_id, SAME question text: shadow clears, composer editable.
+            seed({'question': cur['question'], 'answer': 'x', 'input_id': 'stale-id',
+                  'at': page.evaluate('Date.now()')})
+            expect(page.locator('#shadowcopy')).to_be_hidden(timeout=10000)
+            area = page.locator('#answerform textarea[name="answer"]')
+            expect(area).to_be_visible(timeout=10000)
+            assert not area.is_disabled()
+
+            # Current input_id: answer still processing - shadow stays, composer hidden.
+            seed({'question': cur['question'], 'answer': 'x', 'input_id': cur['input_id'],
+                  'at': page.evaluate('Date.now()')})
+            expect(page.locator('#shadowcopy')).to_be_visible(timeout=10000)
+            expect(page.locator('#answerform textarea[name="answer"]')).to_be_hidden(timeout=10000)
+
+            # Legacy record (no input_id): pre-change question-text behavior preserved.
+            seed({'question': cur['question'], 'answer': 'x', 'at': page.evaluate('Date.now()')})
+            expect(page.locator('#answerform textarea[name="answer"]')).to_be_hidden(timeout=10000)
+            seed({'question': 'Some other question entirely?', 'answer': 'x',
+                  'at': page.evaluate('Date.now()')})
+            expect(page.locator('#answerform textarea[name="answer"]')).to_be_visible(timeout=10000)
+            browser.close()
+    finally:
+        host.stop()
+
+
 def test_admitted_host_runs_the_first_interview_turn_through_the_ui(dsn, keys, tmp_path_factory):
     from playwright.sync_api import sync_playwright, expect
     root = tmp_path_factory.mktemp('crosshost-first-turn')
@@ -538,7 +720,7 @@ def test_admitted_host_runs_the_first_interview_turn_through_the_ui(dsn, keys, t
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page()
             sign_in(page, host.base)
-            task_id = create_task(page, host.base, 'Surf school booking',
+            task_id = create_task(page, host.base, 'Surf school booking (first turn)',
                                   'A SaaS web app for surf schools, with booking and customer logins')
             page.locator('#startengine').click()
             # The stub asks its scripted first question; the answer form appears.
@@ -552,7 +734,9 @@ def test_admitted_host_runs_the_first_interview_turn_through_the_ui(dsn, keys, t
                 _c.close()
                 raise
             question = page.locator('#currentquestion p').inner_text()
-            assert 'booking' in question.lower()
+            # The deterministic stub opens with this exact question
+            # (tests/crosshost_stub/sitecustomize.py script).
+            assert question == 'Walk me through one concrete use case, part 1?'
             page.locator('#answerform textarea[name="answer"]').fill('Customers pick a slot and pay online.')
             page.locator('#answerform button[type="submit"]').click()
             browser.close()
@@ -560,7 +744,7 @@ def test_admitted_host_runs_the_first_interview_turn_through_the_ui(dsn, keys, t
         import psycopg
         import psycopg.rows
         conn = psycopg.connect(dsn, autocommit=True, row_factory=psycopg.rows.dict_row)
-        rows = conn.execute("select session_id, owner_id::text, generation from engine_sessions where owner_id=%s", (OWNER,)).fetchall()
+        rows = conn.execute("select session_id, owner_id::text, generation from engine_sessions where owner_id=%s and task_id=%s", (OWNER, task_id)).fetchall()
         conn.close()
         assert len(rows) == 1 and rows[0]['generation'] >= 1
     finally:

@@ -78,7 +78,11 @@ def uninstall():
     if _state is None:return
     if _watcher is not None:_watcher.set();_watcher=None
     from . import inprocess_engine,inprocess_interview
-    gateways=_state[0]
+    gateways,host=_state[0],_state[2]
     inprocess_engine.configure(None);inprocess_interview.configure(None)
     _state=None
+    # Release interview leases before the database gateways close: the release
+    # writes go through the store connection.
+    try:host.close()
+    except Exception:pass
     gateways.close()

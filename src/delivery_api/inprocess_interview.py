@@ -70,9 +70,18 @@ class InProcessInterviewHost:
         from interview_engine.http_service import create_app,default_program_factory
         from interview_engine.tenant_worker import TenantRegistryRouter,TenantWorkerMiddleware
         registry_type=self._registry_type()
-        app=create_app(TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn),service_token=self._token)
+        self._engine_router=TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn)
+        app=create_app(self._engine_router,service_token=self._token)
         app.add_middleware(TenantWorkerMiddleware,base=self.artifacts_base,service_token=self._token)
         return app
+
+    def close(self):
+        # Shutdown: closing the router closes each per-owner engine registry,
+        # which releases held leases at committed boundaries (no TTL wait).
+        router=getattr(self,'_engine_router',None)
+        if router is not None:
+            try:router.close()
+            except Exception:pass
 
     def _registry_type(self):
         from interview_engine.http_service import SessionRegistry

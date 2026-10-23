@@ -1324,3 +1324,61 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         from delivery_api.tenancy import session_root
         owned=session_root(tmp_path,A,later.session_id)
         assert read_execution_anchor(owned,expected=later.execution_anchor)['document_sha256']==later.anchor_sha256
+
+def test_request_tx_row_lock_never_deadlocks_concurrent_store_call(store):
+    """Regression for the cross-host resume hang: a request-scoped transaction
+    holds its row locks until the request ends. A second request's store write
+    must wait on the PG row lock alone - never on an in-process store mutex.
+    With a process-wide mutex held across the blocking write, the first
+    request's next read blocks on that mutex while still holding the row lock:
+    AB-BA across lock domains, invisible to PG deadlock detection (observed as
+    GET /api/tasks/<id> hanging on a fresh host's first read of a waiting
+    task)."""
+    import threading,time,psycopg
+    with tenant_context(A):
+        tid=store.create_task('deadlock-'+uuid.uuid4().hex)['task_id']
+    first_wrote=threading.Event()
+    def request_one():
+        with tenant_context(A):
+            handle,token=store._postgres.begin_request(A)
+            try:
+                store.add_event(tid,'waiting_input','first')
+                first_wrote.set()
+                # The second request must actually be waiting on this
+                # transaction's row lock before the first request continues,
+                # so the pre-fix mutex/row-lock ordering inversion is forced,
+                # not left to scheduling luck.
+                with psycopg.connect(DSN,autocommit=True) as watch:
+                    for _ in range(100):
+                        if watch.execute("SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE 'UPDATE tasks SET updated_at%'").fetchone():
+                            break
+                        time.sleep(0.05)
+                    else: raise AssertionError('second request never waited on the row lock')
+                # The get_task pattern continues with more store reads in the
+                # same request (e.g. _task_artifact_snapshot) while the write
+                # locks are still held.
+                assert store.task(tid)['task_id']==tid
+            finally:
+                store._postgres.finish_request(handle,False)
+                store._postgres.end_context(token)
+    def request_two():
+        with tenant_context(A):
+            assert first_wrote.wait(5)
+            handle,token=store._postgres.begin_request(A)
+            try:
+                store.add_event(tid,'waiting_input','second')
+            finally:
+                store._postgres.finish_request(handle,False)
+                store._postgres.end_context(token)
+    one=threading.Thread(target=request_one,daemon=True)
+    two=threading.Thread(target=request_two,daemon=True)
+    one.start();two.start()
+    one.join(15);two.join(15)
+    assert not one.is_alive() and not two.is_alive(),'concurrent requests deadlocked across the store mutex and the PG row lock'
+    with tenant_context(A):
+        kinds=[e['kind'] for e in store.events(tid)]
+    # Both request transactions committed their own copy: the application-level
+    # waiting_input dedupe (read-then-write across two store calls) cannot see
+    # a concurrent uncommitted insert, so duplicate waiting_input rows are a
+    # known, separately tracked scope - not guarded here or at the DB level yet.
+    assert kinds==['waiting_input','waiting_input']

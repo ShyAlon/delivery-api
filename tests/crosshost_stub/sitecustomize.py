@@ -98,12 +98,38 @@ if os.environ.get('CROSSHOST_STUB') == '1':
     _QUESTIONS = int(os.environ.get('CROSSHOST_STUB_QUESTIONS', '3'))
 
     class _Fake:
-        """One scripted reply queue per stage, like the repo's in-process fakes."""
-        def __init__(self, replies):
+        """One scripted reply sequence per stage, like the repo's in-process fakes.
+
+        Probing replies are addressed by conversation position - the count of
+        AI messages already in the supplied history - not by call order: each
+        engine turn appends exactly one AI message (the asked question) to the
+        checkpointed transcript, and the probing node passes that full
+        transcript (graph.py: request_messages = [SystemMessage, *history,
+        HumanMessage(contract)]). A real model infers its position from the
+        same history; a pop-order queue would restart at the first reply on
+        every host restart and pin the interview (coverage never advances on
+        the reclaiming host - observed 2026-10-23 as the cross-host stall).
+        Other stages (distillation/conops/tiebreak) do not thread their
+        outputs into the message list, so position cannot be recovered from
+        the supplied messages; they keep call order - their multi-call
+        sequences run inside one graph node, and langgraph resume re-executes
+        a node from its start, so a restart replays the same call sequence.
+        Residual harness limitation: the categorization consumer shares stage
+        'probing' but sends history-less calls, so it always derives envelope
+        0; the acceptance path never exercises it (no categorization model
+        call is made for the scripted answers), and a future graph that
+        checkpoints inside a multi-call stage or threads other stages into
+        the transcript invalidates the call-order assumption above."""
+        def __init__(self, stage, replies):
+            self.stage = stage
             self.replies = list(replies)
 
         def invoke(self, messages):
-            content = self.replies.pop(0) if self.replies else '[INTERVIEW COMPLETE]'
+            if self.stage == 'probing' and self.replies:
+                prior = sum(1 for m in messages if getattr(m, 'type', '') == 'ai')
+                content = self.replies[min(prior, len(self.replies) - 1)]
+            else:
+                content = self.replies.pop(0) if self.replies else '[INTERVIEW COMPLETE]'
             return AIMessage(content=content if isinstance(content, str) else json.dumps(content))
 
     def _script(stage):
@@ -134,7 +160,7 @@ if os.environ.get('CROSSHOST_STUB') == '1':
     def _build(stage, **kwargs):
         # Cache per stage like the graph does: one model, one reply queue.
         if stage not in _box:
-            _box[stage] = _Fake(_script(stage))
+            _box[stage] = _Fake(stage, _script(stage))
         # Register into the current job binding exactly like the real factory,
         # so the worker-stage wire check (wire_model) still runs against the
         # session's pinned provider/model.

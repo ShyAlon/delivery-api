@@ -11,9 +11,8 @@ from functools import wraps
 import json
 import re
 import secrets
-import threading
 import time
-import sqlite3
+import contextlib,sqlite3
 from .store import SQLiteStore, PHASES
 from vmodel_contracts import RunState
 from .postgres_scope import ScopedPostgres, note_query
@@ -127,7 +126,21 @@ class PostgresStore(SQLiteStore):
         self._postgres = ScopedPostgres(dsn)
         self._connection = ContextVar('postgres_operation',default=None)
         self._db = _Connection(self._connection)
-        self._lock = threading.RLock()
+        # No store-level mutex on Postgres. The SQLiteStore lock serializes a
+        # single shared native connection; here every store call runs on the
+        # calling thread's own scoped connection (ContextVar) inside a scoped
+        # transaction, so PG row locks and READ COMMITTED provide the
+        # serialization - exactly the semantics the multi-host topology
+        # requires anyway. A process-wide mutex held across a blocking PG
+        # statement inverts lock order against request-scoped transactions,
+        # which hold their row locks for the whole request: one request holds
+        # the mutex and waits on another's row lock while that request holds
+        # the row lock and waits on the mutex - a deadlock PG cannot detect.
+        # Inherited SQLiteStore methods still say `with self._lock:`; the
+        # no-op keeps them unchanged. Cross-call atomicity never came from
+        # this mutex (it is released between calls): read-modify-write paths
+        # use SELECT ... FOR UPDATE, CAS upserts and the advisory owner lock.
+        self._lock = contextlib.nullcontext()
 
     def _task_operation_guard(self,action):
         # Private scoped lease for synchronous file+DB task edits. Hold shared
