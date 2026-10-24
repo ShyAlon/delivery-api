@@ -199,32 +199,44 @@ if os.environ.get('CROSSHOST_STUB') == '1':
                                        'cleanup': [], 'cases': [], 'execution': {}}}
         _G_BODY_SEQ = _itertools.count(1)
 
-        def _g_arch(schema):
+        def _g_arch(schema, messages=None):
             """0.13.0 micro-pipeline: answer the one small call this schema shapes."""
             props = set(schema.get('properties', {}))
             if props == {'stack_keys'}:
                 return {'stack_keys': ['language']}
             if props == {'technology', 'off_list_justification', 'baseline_refs'}:
+                # Greenfield contract: no baseline refs may be cited.
                 return {'technology': 'python', 'off_list_justification': None,
-                        'baseline_refs': ['runtime:spec-generator:1']}
+                        'baseline_refs': []}
             if props == {'responsibility'}:
                 return {'responsibility': 'serve'}
             if props == {'position'}:
                 return {'position': 'fast'}
             if 'driver' in props:
+                refs_items = schema.get('properties', {}).get('founder_decision_refs', {}).get('items', {})
                 return {'title': 't', 'decision': 'x', 'rationale': 'y', 'driver': 'simplicity',
                         'options_considered': [{'option': 'z', 'reason': 'heavier'}],
-                        'baseline_refs': ['repo:spec-generator'], 'evidence': [],
-                        'affected_repositories': [], 'executes_concept_ids': []}
+                        'baseline_refs': [], 'evidence': [],
+                        'affected_repositories': [], 'executes_concept_ids': _adr_concept_ids(messages),
+                        'founder_decision_refs': refs_items.get('enum') or []}
             if schema.get('type') == 'array':
                 item_props = set(schema['items'].get('properties', {}))
                 if 'slug' in item_props:
                     return [{'slug': 't'}]
                 return [{'name': 'api', 'requirement_ids': ['R-1'],
-                         'baseline_refs': ['repo:spec-generator'], 'migration': False}]
+                         'baseline_refs': [], 'migration': False}]
             raise AssertionError('crosshost stub: unexpected architecture schema %r' % (schema,))
 
-        def _g_answer(stage, schema):
+        def _adr_concept_ids(messages):
+            # Execution slots are pipeline-owned as execute-<concept slug>; the
+            # slot JSON is quoted in the ADR body prompt. Non-execution slots
+            # must declare no concept ids (exact-match stage check).
+            import re as _re
+            text = '\n'.join(str(getattr(m, 'content', '') or '') for m in (messages or []))
+            found = _re.search(r'"slug":\s*"(execute-[a-z0-9-]+)"', text)
+            return ['concept:' + found.group(1)[len('execute-'):]] if found else []
+
+        def _g_answer(stage, schema, messages=None):
             if stage == 'srs':
                 if set(schema.get('properties', {})) == {'purpose', 'scope_summary'}:
                     return {'purpose': 'Deterministic acceptance purpose.', 'scope_summary': 'Acceptance scope.'}
@@ -239,7 +251,7 @@ if os.environ.get('CROSSHOST_STUB') == '1':
                 wanted = schema['properties']['fills']['required']
                 return {'fills': {tid: dict(_G_TEST_FILL, description='%s holds' % tid) for tid in wanted}}
             if stage == 'architecture':
-                return _g_arch(schema)
+                return _g_arch(schema, messages)
             if stage == 'needs':
                 return {'session_id': 's', 'needs': [{'need_id': 'N-1', 'stakeholder': 'founder',
                         'statement': 'needs specs', 'kind': 'functional',
@@ -255,15 +267,15 @@ if os.environ.get('CROSSHOST_STUB') == '1':
                 self.stage = stage
                 self.schema = schema or {}
 
-            def _out(self):
-                out = _g_answer(self.stage, self.schema)
+            def _out(self, messages=None):
+                out = _g_answer(self.stage, self.schema, messages)
                 return out if isinstance(out, str) else json.dumps(out)
 
             def invoke(self, messages):
-                return AIMessage(content=self._out())
+                return AIMessage(content=self._out(messages))
 
             def stream(self, messages):
-                text = self._out()
+                text = self._out(messages)
                 step = max(1, len(text) // 3)
                 for i in range(0, len(text), step):
                     yield AIMessage(content=text[i:i + step])

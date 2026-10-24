@@ -981,6 +981,199 @@ def test_phase_boundary_second_instance_picks_up_committed_needs(dsn, keys, tmp_
         local2.stop()
 
 
+def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_factory):
+    """Full-session cross-host acceptance, extending the needs pickup through every
+    remaining phase family: each boundary crosses hosts as verified published
+    bytes and settled work is never regenerated.
+
+    A runs the interview + needs (real UI child). B restores, approves gate-needs,
+    runs srs. A2 restores, approves gate-srs, runs architecture, records the founder
+    stack decisions through the gate's stack-decisions surface (the companion file
+    is host-local), approves gate-architecture, runs items with --require-decisions
+    satisfied. B2 restores, approves gate-specs, runs tests. A3 restores, approves
+    gate-tests, runs validation, approves gate-validation: the session reaches a
+    terminal state with every declared artifact published content-addressed."""
+    from playwright.sync_api import sync_playwright
+    import hashlib as _hashlib
+    root = tmp_path_factory.mktemp('crosshost-full')
+    answers = ['Customers pick a slot and pay online.', 'They pay by card when they book.',
+               'Rainy days are automatically refunded.', 'Owners see a daily roster.']
+    headers = lambda base: {'content-type': 'application/json', 'origin': base}
+
+    def decide(page, base, gate, option):
+        decision = page.request.post(base + '/api/tasks/%s/gates/%s/decide' % (task_id, gate),
+                                     data=json.dumps({'action': 'approve', 'selected_option': option}),
+                                     headers=headers(base))
+        assert decision.ok, (gate, decision.status, decision.text()[:300])
+
+    def spec_file(host, session_id, name):
+        return host.artifacts / 'tenants' / OWNER / 'sessions' / str(session_id) / 'spec' / name
+
+    # Host A: interview + needs through the real UI child process.
+    local = AdmittedHost('local', root, keys, dsn, extra_env=dict(PUBLISH_RESTORE_ENV))
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, local.base)
+            task_id = create_task(page, local.base, 'Surf school booking (full session)',
+                                  'A SaaS web app for surf schools, with booking and customer logins')
+            page.locator('#startengine').click()
+            drive_interview(page, local.base, task_id, answers, shots=root / 'shots-a')
+            started = page.request.post(local.base + '/api/tasks/%s/start-next-phase' % task_id,
+                                        data=json.dumps({'confirm': True}), headers=headers(local.base))
+            assert started.ok and started.json().get('status') == 'started', started.json()
+            review_a = wait_gate_review(page, local.base, task_id, 'gate-needs')
+            assert gate_documents(review_a).get('needs.json'), 'needs evidence committed on host A'
+            browser.close()
+    finally:
+        local.stop()
+
+    ready, rows, blobs, jobs = _manifest_state(dsn, task_id)
+    published = {(r['phase_key'], r['name']): r for r in rows if r['publication_state'] == 'published'}
+    needs_sha = published[('needs', 'needs.json')]['sha256']
+    task = None
+
+    # Host B: restore needs, approve, srs as a real child over restored inputs.
+    cloud = AdmittedHost('cloud', root, keys, dsn, extra_env=dict(PUBLISH_RESTORE_ENV))
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, cloud.base)
+            task = page.request.get(cloud.base + '/api/tasks/' + task_id).json()
+            session_id = task['engine_session_id']
+            review_b = wait_gate_review(page, cloud.base, task_id, 'gate-needs', timeout=30)
+            assert review_b.get('actionable'), 'B reviews the restored needs: %r' % (str(review_b)[:300],)
+            restored = spec_file(cloud, session_id, 'needs.json')
+            assert restored.is_file() and _hashlib.sha256(restored.read_bytes()).hexdigest() == needs_sha
+            decide(page, cloud.base, 'gate-needs', 'Approve Stakeholder needs')
+            review_srs = wait_gate_review(page, cloud.base, task_id, 'gate-srs', timeout=180)
+            assert gate_documents(review_srs).get('srs.json'), 'srs ran as a real child on B'
+            browser.close()
+    finally:
+        cloud.stop()
+
+    _, rows2, _, _ = _manifest_state(dsn, task_id)
+    published2 = {(r['phase_key'], r['name']): r for r in rows2 if r['publication_state'] == 'published'}
+    srs_sha = published2[('srs', 'srs.json')]['sha256']
+
+    # Host A2 (A's root): restore, approve gate-srs, architecture child, founder
+    # stack decisions on the gate surface, approve gate-architecture, items child.
+    local2 = AdmittedHost('local2', root, keys, dsn, artifacts=local.artifacts, extra_env=dict(PUBLISH_RESTORE_ENV))
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, local2.base)
+            review_srs_a = wait_gate_review(page, local2.base, task_id, 'gate-srs', timeout=30)
+            assert review_srs_a.get('actionable'), 'A2 reviews B\'s srs: %r' % (str(review_srs_a)[:300],)
+            restored_srs = spec_file(local2, session_id, 'srs.json')
+            assert restored_srs.is_file() and _hashlib.sha256(restored_srs.read_bytes()).hexdigest() == srs_sha
+            decide(page, local2.base, 'gate-srs', 'Approve Requirements')
+            review_arch = wait_gate_review(page, local2.base, task_id, 'gate-architecture', timeout=180)
+            assert gate_documents(review_arch).get('architecture.json'), 'architecture ran as a real child on A2'
+            # Greenfield stub reality: the design-proposal path answers the stack
+            # slot, so no research_required slot and no founder surface here. The
+            # research_required cross-host variant is separate; handle both.
+            stack = (review_arch.get('review') or {}).get('stack_decisions') or review_arch.get('stack_decisions')
+            open_slots = [s['key'] for s in (stack or {}).get('slots', [])
+                          if not s.get('founder_decision') and not s.get('technical_choice')]
+            if open_slots:
+                saved = page.request.post(local2.base + '/api/tasks/%s/gates/gate-architecture/stack-decisions' % task_id,
+                                          data=json.dumps({'revision': stack['revision'],
+                                                           'decisions': [{'key': key, 'text': 'python', 'reason': 'deterministic acceptance'} for key in open_slots]}),
+                                          headers=headers(local2.base))
+                assert saved.ok and not saved.json().get('open'), (saved.status, saved.text()[:300])
+            decide(page, local2.base, 'gate-architecture', 'Approve Architecture')
+            review_specs = wait_gate_review(page, local2.base, task_id, 'gate-specs', timeout=180)
+            docs_specs = gate_documents(review_specs)
+            # Generator 0.28.0 emits items.json (+ specs/*.md); spec_items.json is a
+            # legacy tolerated name, not a current output.
+            assert docs_specs.get('items.json'), \
+                'items ran as a real child on A2 with the decisions companion present: %r' % (sorted(docs_specs),)
+            browser.close()
+    finally:
+        local2.stop()
+
+    _, rows3, _, _ = _manifest_state(dsn, task_id)
+    published3 = {(r['phase_key'], r['name']): r for r in rows3 if r['publication_state'] == 'published'}
+    assert ('architecture', 'architecture.json') in published3 and ('specs', 'items.json') in published3, \
+        'A2 published architecture and items: %r' % (sorted(published3),)
+    # Producer identity: B's root never saw architecture/items while B was down.
+    assert not spec_file(cloud, session_id, 'architecture.json').exists(), 'architecture was produced on A2, not on B'
+
+    # Host B2 (B's root): restore, approve gate-specs, tests child.
+    cloud2 = AdmittedHost('cloud2', root, keys, dsn, artifacts=cloud.artifacts, extra_env=dict(PUBLISH_RESTORE_ENV))
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, cloud2.base)
+            review_specs_b = wait_gate_review(page, cloud2.base, task_id, 'gate-specs', timeout=30)
+            assert review_specs_b.get('actionable'), 'B2 reviews A2\'s items: %r' % (str(review_specs_b)[:300],)
+            restored_items = spec_file(cloud2, session_id, 'items.json')
+            assert restored_items.is_file() and \
+                _hashlib.sha256(restored_items.read_bytes()).hexdigest() == published3[('specs', 'items.json')]['sha256'], \
+                'B2 restored the published items bytes'
+            decide(page, cloud2.base, 'gate-specs', 'Approve Item specifications')
+            review_tests = wait_gate_review(page, cloud2.base, task_id, 'gate-tests', timeout=180)
+            docs_tests = gate_documents(review_tests)
+            assert docs_tests.get('tests.json'), 'tests ran as a real child on B2: %r' % (sorted(docs_tests),)
+            browser.close()
+    finally:
+        cloud2.stop()
+
+    _, rows4, _, _ = _manifest_state(dsn, task_id)
+    published4 = {(r['phase_key'], r['name']): r for r in rows4 if r['publication_state'] == 'published'}
+    assert ('tests', 'tests.json') in published4, sorted(published4)
+    assert not spec_file(local2, session_id, 'tests.json').exists(), 'tests were produced on B2, not on A'
+
+    # Host A3 (A's root): restore, approve gate-tests, validation child, terminal approval.
+    local3 = AdmittedHost('local3', root, keys, dsn, artifacts=local.artifacts, extra_env=dict(PUBLISH_RESTORE_ENV))
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, local3.base)
+            review_tests_a = wait_gate_review(page, local3.base, task_id, 'gate-tests', timeout=30)
+            assert review_tests_a.get('actionable'), 'A3 reviews B2\'s tests: %r' % (str(review_tests_a)[:300],)
+            restored_tests = spec_file(local3, session_id, 'tests.json')
+            assert restored_tests.is_file() and \
+                _hashlib.sha256(restored_tests.read_bytes()).hexdigest() == published4[('tests', 'tests.json')]['sha256']
+            decide(page, local3.base, 'gate-tests', 'Approve Verification')
+            review_val = wait_gate_review(page, local3.base, task_id, 'gate-validation', timeout=180)
+            assert gate_documents(review_val).get('validation.json'), 'validation ran as a real child on A3'
+            decide(page, local3.base, 'gate-validation', 'Approve Validation')
+            final = page.request.get(local3.base + '/api/tasks/' + task_id).json()
+            states = {x['phase_key']: x['state'] for x in final['phases']}
+            assert all(state == 'approved' for state in states.values()), 'terminal state: every phase approved: %r' % (states,)
+            gate_states = {g['gate_key']: g['state'] for g in final['gates']}
+            # Interview gates stay idle by design: intent/conops are approved inside
+            # the completed interview, never via gate decisions.
+            assert gate_states == {'gate-intent': 'idle', 'gate-conops': 'idle',
+                                   'gate-needs': 'decided', 'gate-srs': 'decided',
+                                   'gate-architecture': 'decided', 'gate-specs': 'decided',
+                                   'gate-tests': 'decided', 'gate-validation': 'decided'}, gate_states
+            browser.close()
+    finally:
+        local3.stop()
+
+    ready_f, rows_f, blobs_f, jobs_f = _manifest_state(dsn, task_id)
+    assert len(ready_f) == 1, 'one ready revision at the terminal commit: %r' % (ready_f,)
+    expected = {('intent', 'intent_model.json'), ('conops', 'conops.json'), ('needs', 'needs.json'),
+                ('srs', 'srs.json'), ('architecture', 'architecture.json'), ('specs', 'items.json'),
+                ('tests', 'tests.json'), ('validation', 'validation.json')}
+    published_f = {(r['phase_key'], r['name']) for r in rows_f if r['publication_state'] == 'published'}
+    assert expected <= published_f, 'terminal revision carries every declared artifact: missing %r' % (expected - published_f,)
+    for phase_key, name in expected:
+        row = next(r for r in rows_f if r['publication_state'] == 'published' and r['phase_key'] == phase_key and r['name'] == name)
+        assert any(b['sha256'] == row['sha256'] for b in blobs_f), '%s/%s bytes are stored content-addressed' % (phase_key, name)
+    done_jobs = {j['kind'] for j in jobs_f if j['state'] == 'done'}
+    for kind in ('phase:needs', 'phase:srs', 'phase:architecture', 'phase:tests', 'phase:validation'):
+        assert kind in done_jobs, '%s completed: %r' % (kind, sorted(done_jobs))
+
+
 def test_decision_page_recovers_when_the_post_accept_navigation_fetch_fails(dsn, keys, tmp_path_factory):
     """Injected-failure regression for the stranded-form repair: the decision
     page's submit() POSTs the answer, then fetches the task to choose its
