@@ -53,6 +53,7 @@ else
 fi
 case "${DELIVERY_TEST_SCOPE:-full}" in
   pr) exec ./scripts/ci/test-pr.sh ;;
+  cosmetic) exec ./scripts/ci/test-cosmetic.sh ;;
   full) "$PYTHON" -m pytest -q ;;
-  *) echo "Error: unknown DELIVERY_TEST_SCOPE; expected pr or full." >&2; exit 1 ;;
+  *) echo "Error: unknown DELIVERY_TEST_SCOPE; expected pr, cosmetic, or full." >&2; exit 1 ;;
 esac

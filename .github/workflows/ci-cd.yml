@@ -38,6 +38,25 @@ jobs:
         env:
           DELIVERY_BROWSER_SCOPE: ${{ github.event_name == 'workflow_dispatch' && 'full' || 'smoke' }}
 
+  # Tracked cosmetic debt, not part of the merge-gating selection: visual-polish
+  # assertions marked ui_cosmetic. This job reports honest red on failure so the
+  # debt stays visible; the gating test job excludes these tests, and the image
+  # build does not wait on this job.
+  ui-cosmetic:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+      - run: python -m pip install vendor/vmodel_contracts-0.28.0-py3-none-any.whl
+      - run: DELIVERY_TEST_SCOPE=cosmetic ./scripts/test-local.sh
+
   control-plane-wheel:
     runs-on: ubuntu-latest
     steps:

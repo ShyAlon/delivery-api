@@ -156,6 +156,7 @@ def test_dashboard_draws_v_and_all_task_states(page, ui):
     assert page.get_by_text("Complete").count() == 1
 
 
+@pytest.mark.ui_cosmetic
 def test_require_brand_is_consistent(page, ui):
     page.goto(ui)
     assert page.title() == "Requi.re / Product definition workspace"
@@ -911,6 +912,7 @@ def test_live_elapsed_uses_latest_phase_command_not_parked_phase_start(page,ui):
     page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');scope=page.locator('.progress-scope');scope.wait_for()
     assert '12 minutes so far' in scope.inner_text();assert '22 hours' not in scope.inner_text()
 
+@pytest.mark.ui_cosmetic
 def test_avatar_menu_does_not_emit_native_runtime_tooltip(page,ui):
     page.goto(ui+'/');button=page.locator('#accountbutton');button.wait_for();assert page.locator('#identity').get_attribute('title') is None
 
@@ -958,6 +960,7 @@ def test_greenfield_confirmation_is_single_flight(page,ui):
     page.wait_for_timeout(250)
     assert len(calls)==1
 
+@pytest.mark.ui_cosmetic
 def test_progress_slot_keys_render_as_title_case(page,ui):
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'stack:pwa_offline_runtime · 12 tok','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
@@ -1195,6 +1198,7 @@ def test_feedback_save_disables_while_pending_and_closes_only_on_success(page, u
     page.locator(".qa-note", has_text="Misread as a refusal").wait_for()
 
 
+@pytest.mark.ui_cosmetic
 def test_question_comment_columns_follow_character_ratio(page, ui):
     long_question = "What strategies will you implement to ensure data caching prevents downtime during peak usage?"
     def snapshot(data):
