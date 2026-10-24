@@ -1054,10 +1054,18 @@ def test_decision_page_recovers_when_the_post_accept_navigation_fetch_fails(dsn,
 
             assert seen['posts'] == 1, 'exactly one decision POST, no resubmission: %r' % (seen,)
             assert seen['aborted'], 'the navigation fetch was aborted: %r url=%s' % (seen, page.url)
-            status = page.locator('#review-status').inner_text()
+            status_loc = page.locator('#review-status')
+            status = status_loc.inner_text()
             assert 'Decision saved' in status and ('Reconnecting' in status or 'live view is unreachable' in status), \
                 'the recovery status replaces the strand signature: %r' % (status,)
-            page.screenshot(path=str(shots / 'recovery-status.png'), full_page=True)
+            # Viewport capture of the status area itself: full_page captures misplace
+            # sticky chrome, so prove the status is on-screen where the founder looks.
+            status_loc.scroll_into_view_if_needed()
+            page.wait_for_timeout(300)
+            box = status_loc.bounding_box()
+            assert box and 0 <= box['y'] and box['y'] + box['height'] <= page.viewport_size['height'], \
+                'the recovery status is fully in viewport: %r vs %r' % (box, page.viewport_size)
+            page.screenshot(path=str(shots / 'recovery-status.png'))
             # The committed decision advanced the engine.
             after = page.request.get(local.base + '/api/tasks/' + task_id).json().get('input_state') or {}
             assert after.get('input_id') != state.get('input_id'), 'the committed decision advanced the engine'
