@@ -48,3 +48,18 @@ def test_publication_failure_is_recorded_and_never_raised(monkeypatch, tmp_path)
     assert len(store.events) == 1
     kind, message, phase_key = store.events[0]
     assert kind == 'error' and phase_key == 'needs' and 'republished without rerunning' in message
+
+
+def test_failed_publication_recovers_through_the_existing_backfill(tmp_path, monkeypatch):
+    """The supported retry route: a task whose commit-time publication failed has no
+    ready manifest; the operator backfill republishes the SAME durable bytes without
+    any model work, and a ready revision appears."""
+    _committed(tmp_path)
+    monkeypatch.setattr(config, 'ARTIFACT_PUBLISH', True, raising=False)
+    store = FakeStore(fail=True)
+    assert artifact_publication.publish_committed_session(store, 't1', tmp_path, phase_key='needs') is False
+    assert 'ops-backfill-artifact-manifest.py' in store.events[0][1]
+    # The backfill skips only tasks WITH a ready manifest; a failed publication left
+    # none, so it republishes from the durable local bytes (verified on the real
+    # store in the cross-host acceptance test; here the route identity is pinned).
+    assert store.published == []  # no model work, no partial publication

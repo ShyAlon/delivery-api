@@ -83,6 +83,6 @@ def publish_committed_session(store, task_id: str, root: Path, *, phase_key: str
         return True
     except Exception as exc:
         store.add_event(task_id, "error",
-            f"Artifact publication failed for the committed {phase_key} output; the settled bytes stay on this host and can be republished without rerunning the phase: {type(exc).__name__}: {str(exc)[:240]}",
+            f"Artifact publication failed for the committed {phase_key} output; the settled bytes stay on this host and no model work is rerun. Recovery: run scripts/ops-backfill-artifact-manifest.py for this owner on the producing host - it republishes these durable bytes (it skips tasks that already have a ready revision): {type(exc).__name__}: {str(exc)[:240]}",
             phase_key=phase_key)
         return False
