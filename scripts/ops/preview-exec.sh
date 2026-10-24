@@ -134,7 +134,10 @@ rc=0; PYTHONPATH=src .venv/bin/python "$(dirname "$0")/pin.py" "$WORK" > "$WORK/
 fi
 if [ "$rc" != 0 ]; then
   tail -15 "$WORK/pin-out.txt"
-  case "$(tail -1 "$WORK/pin-out.txt")" in PIN-FAIL*) abort PIN "see the line above" "" "send me this output; the page or the parser changed, and I have to look before anything is pinned";; *) abort PIN-CRASH "the pin step crashed" "" "send me this whole output";; esac
+  case "$(tail -1 "$WORK/pin-out.txt")" in PIN-FAIL*)
+    if [ "$PROVIDER" = ollama ]; then abort PIN "see the line above" "" "follow the fix the PIN-FAIL line above names, then run this again; if it still refuses, send me this output"
+    else abort PIN "see the line above" "" "send me this output; the page or the parser changed, and I have to look before anything is pinned"; fi;;
+    *) abort PIN-CRASH "the pin step crashed" "" "send me this whole output";; esac
 fi
 cat "$WORK/pin-out.txt"
 [ -s "$WORK/cloud-models.env" ] || abort PIN-EMPTY "the pin step wrote no settings" "" "send me this output"
