@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 WEB = Path(__file__).resolve().parents[1] / "src" / "delivery_api" / "web"
 
@@ -92,6 +92,141 @@ def test_geometry_is_reserved_while_auth_is_delayed(page, ui):
     for sel in ("header", "header nav", "#sessioncost", "#accountbalance"):
         assert early[sel] == late[sel], (sel, early[sel], late[sel])
     assert early["#identity"][0] == late["#identity"][0] and early["#identity"][2] == late["#identity"][2], (early["#identity"], late["#identity"])
+
+
+def _next_cost_poll_fire(page):
+    """Virtual time of the steady-state session-cost header's next 30s interval fire.
+
+    The page records every setInterval registration through the init script below;
+    the header's poll is the LAST 30s registration (its pre-mount predecessor is
+    disposed on navigation, and the balance poll is registered just before it)."""
+    regs = [r for r in page.evaluate("window.__regs") if r["every"] == 30000]
+    assert regs, "no 30s interval was registered"
+    at = max(r["at"] for r in regs)
+    now = page.evaluate("Date.now()")
+    fire = at + 30000
+    while fire <= now:
+        fire += 30000
+    return fire
+
+
+_RECORD_INTERVALS = "window.__regs=[];const _si=window.setInterval;window.setInterval=(f,t,...a)=>{window.__regs.push({at:Date.now(),every:t});return _si(f,t,...a)}"
+
+
+def _wait_cost_hits(page, hits, n, timeout=10):
+    """Wait until the route has been hit exactly n times (real-time: the route handler runs outside the
+    fake clock). Requests issued around a clock.run_for pump can stall until the clock turns again,
+    so nudge it while waiting."""
+    deadline = time.time() + timeout
+    while len(hits) < n and time.time() < deadline:
+        time.sleep(0.4)
+        if len(hits) < n:
+            page.clock.run_for(100)
+    assert len(hits) == n, (len(hits), n)
+
+
+def _flush(page):
+    """Let any request issued around the last clock turn actually arrive before asserting it never happened."""
+    time.sleep(0.4)
+    page.clock.run_for(100)
+    time.sleep(0.4)
+
+
+def _quiet(hits, window=0.3, timeout=8):
+    """Real-time wait until no new route hits arrive for a window: every in-flight refresh has settled."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        n = len(hits)
+        time.sleep(window)
+        if len(hits) == n:
+            return n
+    return len(hits)
+
+
+def test_session_cost_header_polls_on_the_30s_interval_and_skips_while_hidden(page, ui):
+    """The periodic refresh itself: the 30s interval fires a real refresh (fake
+    clock, hermetic), no refresh happens while the tab is hidden, and returning
+    to the tab refreshes immediately."""
+    page.clock.install()
+    page.add_init_script(_RECORD_INTERVALS)
+    state = {"price": 0.73}
+    cost_hits, phases_hits = [], []
+    def cost(route):
+        cost_hits.append(1)
+        route.fulfill(json={"price": state["price"], "price_usd": state["price"]}, headers={"Cache-Control": "no-store"})
+    page.route("**/api/tasks/live/cost", cost)
+    page.route("**/api/tasks/live/cost-phases", lambda r: (phases_hits.append(1), r.fulfill(json={"phases": []}, headers={"Cache-Control": "no-store"})))
+    page.goto(ui + "/tasks/live/view")
+    page.wait_for_selector("#app.view-in")   # route mount settled and re-navigated: only the steady-state cost header instance stays live (the pre-mount instance is disposed on navigation)
+    cost_el = page.locator("#sessioncost")
+    expect(cost_el).to_have_text("0.73 credits · $0.73")
+    base = _quiet(cost_hits)                 # every startup refresh settled: the header's pending flag is clear
+    base_phases = _quiet(phases_hits)
+    now = page.evaluate("Date.now()")
+    page.clock.run_for(_next_cost_poll_fire(page) + 500 - now)
+    _wait_cost_hits(page, cost_hits, base + 1)          # the poll's own fire ran a real refresh (same price, so the text stands)
+    _wait_cost_hits(page, phases_hits, base_phases + 1) # ...and the refresh fully settled (pending cleared) before the clock moves on
+    assert cost_el.inner_text() == "0.73 credits · $0.73"
+    state["price"] = 0.9
+    now = page.evaluate("Date.now()")
+    page.clock.run_for(_next_cost_poll_fire(page) - 1500 - now)   # 1.5s before the poll's next fire: nothing
+    _flush(page)
+    assert len(cost_hits) == base + 1 and cost_el.inner_text() == "0.73 credits · $0.73"
+    page.clock.run_for(2_500)                                     # crosses it: the poll itself refreshes
+    _wait_cost_hits(page, cost_hits, base + 2)
+    _wait_cost_hits(page, phases_hits, base_phases + 2)
+    expect(cost_el).to_have_text("0.90 credits · $0.90", timeout=8000)
+    page.evaluate("Object.defineProperty(document, 'hidden', {configurable: true, get: () => window.__hidden === true})")
+    page.evaluate("window.__hidden = true")
+    state["price"] = 1.1
+    page.clock.run_for(65_000)               # two more interval fires, both skipped while the tab is hidden
+    _flush(page)
+    assert len(cost_hits) == base + 2 and cost_el.inner_text() == "0.90 credits · $0.90"
+    page.evaluate("window.__hidden = false")
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    _wait_cost_hits(page, cost_hits, base + 3)        # returning to the tab refreshes immediately
+    expect(cost_el).to_have_text("1.10 credits · $1.10", timeout=8000)
+
+
+def test_session_cost_refresh_debounces_overlap_and_recovers(page, ui):
+    """A refresh in flight debounces the interval and the visibility trigger;
+    once it settles the next interval fire refreshes normally - no refresh is lost."""
+    page.clock.install()
+    page.add_init_script(_RECORD_INTERVALS)
+    state = {"price": 0.73, "hold": False}
+    cost_hits, phases_hits, held = [], [], []
+    def cost(route):
+        cost_hits.append(1)
+        if state["hold"]:
+            held.append(route)
+            return
+        route.fulfill(json={"price": state["price"], "price_usd": state["price"]}, headers={"Cache-Control": "no-store"})
+    page.route("**/api/tasks/live/cost", cost)
+    page.route("**/api/tasks/live/cost-phases", lambda r: (phases_hits.append(1), r.fulfill(json={"phases": []}, headers={"Cache-Control": "no-store"})))
+    page.goto(ui + "/tasks/live/view")
+    page.wait_for_selector("#app.view-in")   # route mount settled and re-navigated: a single cost header instance is live
+    host = page.locator("#sessioncost")
+    expect(host).to_have_text("0.73 credits · $0.73")
+    base = _quiet(cost_hits)                 # every startup refresh settled
+    base_phases = _quiet(phases_hits)
+    state.update(price=0.9, hold=True)
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    _wait_cost_hits(page, cost_hits, base + 1)
+    assert len(held) == 1, ("the visibility trigger did not start exactly one refresh", held)
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")   # debounced while the first refresh is in flight
+    now = page.evaluate("Date.now()")
+    page.clock.run_for(_next_cost_poll_fire(page) + 500 - now)               # the interval fires too: also debounced (the parked request's own 60s read timeout is not crossed)
+    _flush(page)
+    assert len(cost_hits) == base + 1 and len(held) == 1, (cost_hits, held)
+    state["hold"] = False
+    held[0].fulfill(json={"price": 0.9, "price_usd": 0.9}, headers={"Cache-Control": "no-store"})
+    _wait_cost_hits(page, phases_hits, base_phases + 1)   # the released refresh fully settled (pending cleared)
+    expect(host).to_have_text("0.90 credits · $0.90", timeout=8000)
+    state["price"] = 1.1
+    now = page.evaluate("Date.now()")
+    page.clock.run_for(_next_cost_poll_fire(page) + 500 - now)               # pending cleared: the next interval fire refreshes normally
+    _wait_cost_hits(page, cost_hits, base + 2)
+    expect(host).to_have_text("1.10 credits · $1.10", timeout=8000)
 
 
 def test_signed_out_sign_in_fits_its_reserved_slot_and_geometry_holds(page, ui):
