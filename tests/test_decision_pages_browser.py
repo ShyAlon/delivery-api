@@ -316,7 +316,7 @@ def test_apply_failure_is_visible_and_recoverable(page):
  held[0].fulfill(status=500,json={'detail':'Engine unavailable'})
  expect(p.locator('#semanticstatus')).to_contain_text('Could not apply your decisions');expect(p.get_by_role('button',name='Apply decisions and continue')).to_be_enabled()
  p.screenshot(path=str(root/'semantic-apply-error.png'))
-def _concept_page(p,base,long_options=False,comments=None):
+def _concept_page(p,base,long_options=False,comments=None,tall=False):
  control=review()
  if long_options:
   control['options']=[{'value':'1','label':'The Installed Practice Toy: A Standalone Home-Screen Music App','summary':'Under this operating concept the product is a single, self-contained music toy that the 7-year-old installs once onto the iPhone or iPad home screen and then owns entirely - no sign-in, no setup wizard, no adult in the loop (turn 4). '*4,'advantages':['Zero adult in the loop at any point: no sign-in, no setup wizard (turns 0, 6)'],'disadvantages':['Progress lives only in browser local storage (turns 12, 18)']},{'value':'2','label':'A shared family workspace','summary':'Short','advantages':[],'disadvantages':[]}]
@@ -325,11 +325,20 @@ def _concept_page(p,base,long_options=False,comments=None):
  control['decision']['context']['evidence']['conops_draft']['stakeholder_context']=sc
  control['decision']['context']['evidence']['conops_draft']['operational_scenarios']=os_
  control['decision']['context']['evidence']['conops_draft']['contract_version']='1.2.3'
+ if tall:
+  # Deterministic deep scroll WITHOUT changing the box contract: same five
+  # context boxes, but with long inner content so the page really scrolls past
+  # the sticky controls' engagement point in every font environment (the y>=83
+  # sticky contract cannot be exercised when the document clamps the scroll).
+  draft=control['decision']['context']['evidence']['conops_draft']
+  for sh in draft['stakeholder_context']:sh['goals']=sh['goals']*30
+  for sc in draft['operational_scenarios']:sc['operational_flow']=sc['operational_flow']*30
  p.route('**/api/tasks/concept**',lambda r:r.fulfill(json={'task_id':'concept','title':'Habit tracking','review':control,'current':control,'actionable':True,'draft':None,'comments':comments or []}))
  p.goto(base+'/tasks/concept/decisions/wait-concept')
+ if tall:p.evaluate('document.fonts.ready.then(()=>1)')
 
 def test_concept_context_is_collapsed_without_debug_fields_and_does_not_overlap(page):
- p,base,root=page;_concept_page(p,base)
+ p,base,root=page;_concept_page(p,base,tall=True)
  text=p.locator('.gate-evidence').inner_text()
  assert 'source turns' not in text.lower() and 'contract version' not in text.lower() and '1.2.3' not in text
  boxes=p.locator('.context-box');assert boxes.count()==5
@@ -429,6 +438,18 @@ def test_reference_review_shows_precise_reason_and_cited_quote(page):
  p.screenshot(path='/tmp/reference-review-mobile-viewport.png')
  p.screenshot(path='/tmp/reference-review-mobile.png',full_page=True)
 
+def _return_to_tab_until(p,locator,text,timeout=12000):
+ # The header refreshes when the user returns to the tab; driving the app's own
+ # visibility trigger keeps the intentional 30s poll intact instead of racing it.
+ # A refresh already in flight debounces the next one, so a patient user may
+ # return more than once; the required text never changes.
+ deadline=time.monotonic()+timeout/1000
+ while True:
+  p.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+  try:expect(locator).to_have_text(text,timeout=500);return
+  except AssertionError:
+   if time.monotonic()>deadline:raise
+
 @pytest.mark.parametrize('screen', ['concept','review','semantic'])
 def test_shared_session_cost_above_every_decision_screen(page,screen):
  p,base,root=page;state=fake(p)
@@ -441,7 +462,7 @@ def test_shared_session_cost_above_every_decision_screen(page,screen):
  p.goto(base+'/tasks/concept/decisions/'+state['current']['wait_id'])
  cost=p.locator('header #sessioncost');expect(cost).to_have_text('0.73 credits · $0.73')
  totals.update(price=0.9,price_usd=0.9)
- expect(cost).to_have_text('0.90 credits · $0.90',timeout=12000)
+ _return_to_tab_until(p,cost,'0.90 credits · $0.90')
  assert p.locator('#sessioncost').count()==1
  p.screenshot(path=f'/tmp/global-cost-{screen}-desktop.png')
  p.set_viewport_size({'width':390,'height':844});p.evaluate('window.scrollTo(0,0)')
@@ -457,9 +478,9 @@ def test_header_cost_unavailable_last_known_and_recovery(page):
  p.route('**/api/tasks/concept/cost',cost)
  p.goto(base+'/tasks/concept/decisions/wait-concept');host=p.locator('#sessioncost')
  expect(host).to_have_text('Session Cost Unavailable')
- state['fail']=False;expect(host).to_have_text('0.73 credits · $0.73',timeout=12000)
- state['fail']=True;expect(host).to_have_text('0.73 credits · $0.73 · Last Known',timeout=12000)
- state.update(fail=False,price=.9);expect(host).to_have_text('0.90 credits · $0.90',timeout=12000)
+ state['fail']=False;_return_to_tab_until(p,host,'0.73 credits · $0.73')
+ state['fail']=True;_return_to_tab_until(p,host,'0.73 credits · $0.73 · Last Known')
+ state.update(fail=False,price=.9);_return_to_tab_until(p,host,'0.90 credits · $0.90')
 
 
 def test_gate_render_failure_stays_explained_after_checklist_refresh(page):

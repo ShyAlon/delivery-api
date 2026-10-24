@@ -79,6 +79,6 @@ header.nav-compact nav .nav-ops{flex-direction:column;align-items:stretch;gap:2p
   header{height:auto;min-height:84px;grid-template-columns:auto 1fr auto;padding:10px 20px;row-gap:8px}
   header .session-cost{grid-column:1/-1;min-width:0;text-align:center;justify-self:stretch}
   header .session-cost.balance{grid-column:1/-1}
-  header #identity{min-width:48px}  /* still reserved: the widest narrow state (Sign in, 46px) never shifts the header */
+  header #identity{min-width:56px}  /* still reserved: the widest narrow state (Sign in) never shifts the header; the buffer covers fallback-font metric variance */
   header nav{top:100px;right:20px}
 }
