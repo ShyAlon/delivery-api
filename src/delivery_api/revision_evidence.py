@@ -20,8 +20,16 @@ def read_revision_artifacts(store,capability,root,phase,*,artifacts_base):
     try:
         parent_fd=os.open('spec',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root_fd)
         evidence=[];stamps=[]
+        # Conditional companions (semantic-review record, decisions companion) exist
+        # only when the phase produced them: skip them when absent, never skip a
+        # required artifact - a missing core artifact stays a hard error.
+        conditional=set(PHASE_BY_KEY[phase].conditional_artifacts)
         for name in PHASE_BY_KEY[phase].artifacts:
-            fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent_fd)
+            try:
+                fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent_fd)
+            except FileNotFoundError:
+                if name in conditional:continue
+                raise
             try:
                 before=os.fstat(fd)
                 if not stat.S_ISREG(before.st_mode) or before.st_size>MAX_DOCUMENT_BYTES:

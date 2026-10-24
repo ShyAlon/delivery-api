@@ -52,7 +52,7 @@ class TenantMiddleware:
                           '/advance','/answer','/respond','/route','/model-route','/decision','/resolve')
         if scope.get('method') not in ('GET','HEAD','OPTIONS') and (
             path.startswith(('/runs','/links')) or
-            path.endswith(blocked_suffixes) or ('/gates/' in path and not path.endswith(('/decide','/revision-drafts'))) or
+            path.endswith(blocked_suffixes) or ('/gates/' in path and not path.endswith(('/decide','/revision-drafts','/stack-decisions'))) or
             '/simulations' in path or '/engine/' in path) and not _interview_route_open(path):
             return await JSONResponse({'detail':'Cloud execution pending scoped worker protocol'},status_code=503)(scope,receive,send)
         headers=dict(scope.get('headers',[]))

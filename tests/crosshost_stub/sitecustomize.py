@@ -1,3 +1,4 @@
+
 """Deterministic cross-host acceptance stub, injected via PYTHONPATH.
 
 Active only when CROSSHOST_STUB=1. Runs at interpreter startup inside the test
@@ -170,6 +171,139 @@ if os.environ.get('CROSSHOST_STUB') == '1':
         return register_model(_box[stage], stage=stage, provider=cfg.provider, model=cfg.model)
 
     model_config.build_chat_model = _build
+
+    # --- spec_generator: deterministic schema-routed stage models ---
+    # The generator runs in a worker thread of the same process (in-process
+    # engine), so this interpreter-startup patch covers it. The factory is
+    # replaced wholesale - no provider HTTP call can happen - and every fake
+    # registers into the current job wire binding exactly like the real
+    # factory, so the worker-stage wire check (wire_model) still runs against
+    # the phase's pinned provider/model. Answers are routed by the per-call
+    # SCHEMA (ADR-0022 micro-calls), mirroring the generator's own test fakes
+    # (test_per_item_resume._routing): needs is code-carried 1:1 from the
+    # intent model (no model call at all), srs is an overview call plus one
+    # fill per skeleton slot, architecture is the micro-contract router, items
+    # is a plan call plus one body per item, tests fills the required ids,
+    # validation/review answer their stage payloads.
+    try:
+        import itertools as _itertools
+
+        from spec_generator import model_config as _gmc
+        from spec_generator.wire_binding import register_model as _gregister
+
+        _G_PLAN = [{'slug': 'api', 'kind': 'api_surface', 'title': 'API',
+                    'requirement_ids': ['R-1'], 'depends_on': []},
+                   {'slug': 'web', 'kind': 'ui_flow', 'title': 'Web',
+                    'requirement_ids': ['R-1'], 'depends_on': ['api']}]
+        _G_TEST_FILL = {'description': 'criterion holds', 'components': ['api'], 'runner': 'pytest',
+                        'definition': {'preconditions': [], 'steps': ['Run x'], 'expected_outcomes': ['passes'],
+                                       'cleanup': [], 'cases': [], 'execution': {}}}
+        _G_BODY_SEQ = _itertools.count(1)
+
+        def _g_arch(schema, messages=None):
+            """0.13.0 micro-pipeline: answer the one small call this schema shapes."""
+            props = set(schema.get('properties', {}))
+            if props == {'stack_keys'}:
+                return {'stack_keys': ['language']}
+            if props == {'technology', 'off_list_justification', 'baseline_refs'}:
+                if os.environ.get('DELIVERY_TEST_STACK_MODE') == 'research_required':
+                    # Founder-decision flow: the slot cannot be resolved by design,
+                    # so the pipeline must surface it for a founder decision.
+                    return {'status': 'research_required',
+                            'research_brief': 'Choose the implementation language for the deterministic acceptance flow.',
+                            'candidate_options': ['python', 'node']}
+                # Greenfield contract: no baseline refs may be cited.
+                return {'technology': 'python', 'off_list_justification': None,
+                        'baseline_refs': []}
+            if props == {'responsibility'}:
+                return {'responsibility': 'serve'}
+            if props == {'position'}:
+                return {'position': 'fast'}
+            if 'default_value' in props and 'options' in props:
+                # Technical-choice framing for a research_required slot: the design
+                # proposal the founder confirms or overrides at the gate.
+                return {'title': 'Language choice', 'purpose': 'Implementation language.',
+                        'default_value': 'python', 'reason': 'Deterministic acceptance default.',
+                        'requirement_ids': (schema.get('properties', {}).get('requirement_ids', {})
+                                            .get('items', {}).get('enum') or [])[:1],
+                        'options': [{'value': 'python', 'label': 'Python', 'implication': 'Simple.'},
+                                    {'value': 'node', 'label': 'Node', 'implication': 'Heavier.'}]}
+            if 'driver' in props:
+                refs_items = schema.get('properties', {}).get('founder_decision_refs', {}).get('items', {})
+                return {'title': 't', 'decision': 'x', 'rationale': 'y', 'driver': 'simplicity',
+                        'options_considered': [{'option': 'z', 'reason': 'heavier'}],
+                        'baseline_refs': [], 'evidence': [],
+                        'affected_repositories': [], 'executes_concept_ids': _adr_concept_ids(messages),
+                        'founder_decision_refs': refs_items.get('enum') or []}
+            if schema.get('type') == 'array':
+                item_props = set(schema['items'].get('properties', {}))
+                if 'slug' in item_props:
+                    return [{'slug': 't'}]
+                return [{'name': 'api', 'requirement_ids': ['R-1'],
+                         'baseline_refs': [], 'migration': False}]
+            raise AssertionError('crosshost stub: unexpected architecture schema %r' % (schema,))
+
+        def _adr_concept_ids(messages):
+            # Execution slots are pipeline-owned as execute-<concept slug>; the
+            # slot JSON is quoted in the ADR body prompt. Non-execution slots
+            # must declare no concept ids (exact-match stage check).
+            import re as _re
+            text = '\n'.join(str(getattr(m, 'content', '') or '') for m in (messages or []))
+            found = _re.search(r'"slug":\s*"(execute-[a-z0-9-]+)"', text)
+            return ['concept:' + found.group(1)[len('execute-'):]] if found else []
+
+        def _g_answer(stage, schema, messages=None):
+            if stage == 'srs':
+                if set(schema.get('properties', {})) == {'purpose', 'scope_summary'}:
+                    return {'purpose': 'Deterministic acceptance purpose.', 'scope_summary': 'Acceptance scope.'}
+                return {'title': 'Requirement title', 'statement': 'The system shall meet the need.',
+                        'priority': 'must', 'acceptance': ['The criterion holds.']}
+            if stage == 'items':
+                if schema.get('type') == 'array':
+                    return _G_PLAN
+                n = next(_G_BODY_SEQ)
+                return {'body_markdown': '# body %d\n\nModule %d owns its own distinct contract: input shape %d, error case %d.' % (n, n, n * 7, n * 13)}
+            if stage == 'tests':
+                wanted = schema['properties']['fills']['required']
+                return {'fills': {tid: dict(_G_TEST_FILL, description='%s holds' % tid) for tid in wanted}}
+            if stage == 'architecture':
+                return _g_arch(schema, messages)
+            if stage == 'needs':
+                return {'session_id': 's', 'needs': [{'need_id': 'N-1', 'stakeholder': 'founder',
+                        'statement': 'needs specs', 'kind': 'functional',
+                        'intent_fields': ['problem_statement'], 'intent_need_ids': ['SN-1']}]}
+            if stage == 'validation':
+                return {'items': []}
+            if stage == 'review':
+                return []
+            return 'deterministic crosshost stub reply'
+
+        class _GenFake:
+            def __init__(self, stage, schema):
+                self.stage = stage
+                self.schema = schema or {}
+
+            def _out(self, messages=None):
+                out = _g_answer(self.stage, self.schema, messages)
+                return out if isinstance(out, str) else json.dumps(out)
+
+            def invoke(self, messages):
+                return AIMessage(content=self._out(messages))
+
+            def stream(self, messages):
+                text = self._out(messages)
+                step = max(1, len(text) // 3)
+                for i in range(0, len(text), step):
+                    yield AIMessage(content=text[i:i + step])
+
+        def _g_build(stage, **kwargs):
+            cfg = _gmc.for_stage(stage)
+            return _gregister(_GenFake(stage, kwargs.get('schema')), stage=stage,
+                              provider=cfg.provider, model=cfg.model)
+
+        _gmc.build_chat_model = _g_build
+    except ImportError:
+        pass  # engine-only processes never import spec_generator
 
     # The Ollama model-listing preflight is the only plain httpx.get in the
     # startup path; answer it from the stub so no local Ollama is needed.

@@ -40,7 +40,7 @@ def _options(options):
         names.add(item['name'])
         if not isinstance(item['sha256'],str) or not re.fullmatch('[a-f0-9]{64}',item['sha256']):
             raise ValueError('artifact content digest required')
-    if not set(PHASE_BY_KEY[options['phase']].artifacts)<=names:raise ValueError('complete phase artifact evidence required')
+    if not set(PHASE_BY_KEY[options['phase']].required_artifacts)<=names:raise ValueError('complete phase artifact evidence required')
     if options['extra_cost_acknowledged'] is not True:
         raise ValueError('explicit reviewed extra-cost acknowledgement required')
     return options

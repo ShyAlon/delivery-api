@@ -98,7 +98,10 @@ def test_accepted_decision_followup_failure_never_reenables_submit(page):
   else:route.fulfill(json={'control_snapshot':state['current']})
  p.route('**/api/tasks/concept',task_read)
  p.goto(base+'/tasks/concept/decisions/wait-concept');p.locator('input[value="2"]').check();p.locator('textarea[name=rationale]').fill('One deployment')
- p.get_by_role('button',name='Choose and continue').click();expect(p.locator('#review-status')).to_contain_text('Decision was accepted')
+ p.get_by_role('button',name='Choose and continue').click()
+ # Recovery contract: the committed answer is never resubmitted; the page shows
+ # the recovery status and keeps the submit disabled while it retries/navigates.
+ expect(p.locator('#review-status')).to_contain_text('Decision saved')
  expect(p.get_by_role('button',name='Choose and continue')).to_be_disabled();assert len(state['posts'])==1
 
 def test_semantic_findings_review_shows_choices_and_never_defaults(page):

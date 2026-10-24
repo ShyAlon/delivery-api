@@ -11,7 +11,8 @@ import httpx
 from . import vendor_status
 from .admission_catalog import ReviewedContextCeiling,catalog_from_environment
 from .attempt_ledger import AdmissionDenied
-from .deepseek_usage import settlement_usage
+from .deepseek_usage import settlement_usage as deepseek_settlement_usage
+from .ollama_usage import settlement_usage as ollama_settlement_usage
 from .launch_admission_policy import validate_launch_quote
 from .producer_admission import WorkerAdmissionGateway
 from .provider_network import FixedOriginTransport,deepseek_balance_reader
@@ -37,6 +38,9 @@ class ProductionGateways:
             raise AdmissionDenied('exactly one reviewed model price row required')
         row=rows[0]
         if not isinstance(context,dict):raise AdmissionDenied('reviewed context ceiling required')
+        if row.get('provider')=='ollama':
+            self._init_local_ollama(store,environ,row,context)
+            return
         api_key=(environ.get(KEY_ENV) or '').strip()
         if not api_key:raise AdmissionDenied('provider key required')
         if row.get('provider')!='deepseek':raise AdmissionDenied('launch provider must be DeepSeek')
@@ -50,6 +54,7 @@ class ProductionGateways:
         quote,_=catalog.resolve_serialized(stage='preflight',provider='deepseek',model=model,
             serialized_request=json.dumps({'model':model,'max_tokens':1}).encode(),max_output_tokens=1)
         validate_launch_quote(quote)
+        self.local=False
         self.model=model
         self.store=store
         self.catalog=catalog
@@ -63,13 +68,58 @@ class ProductionGateways:
         self.provider_balance=deepseek_balance_reader(client=self.balance_client,api_key=api_key)
 
     def __call__(self,capability,job_id):
+        if self.local:
+            return WorkerAdmissionGateway(self.store,job_id,resolve_serialized=self.catalog.resolve_serialized,
+                measure_raw_usage=ollama_settlement_usage,require_prepaid=True)
         return WorkerAdmissionGateway(self.store,job_id,resolve_serialized=self.catalog.resolve_serialized,
-            measure_raw_usage=settlement_usage,require_prepaid=True,retail_rates=self.retail_rates,
+            measure_raw_usage=deepseek_settlement_usage,require_prepaid=True,retail_rates=self.retail_rates,
             verify_provider_snapshot=self.verify_vendor,provider_balance=self.provider_balance)
 
+    def _init_local_ollama(self,store,environ,row,context):
+        """The operator's local execution preview: one reviewed $0 local Ollama row.
+
+        No provider key, vendor snapshot, retail formula or balance read exists for a
+        local model. The catalog still requires the reviewed row and context ceiling,
+        and every call reserves/settles through the same shared ledger at $0.
+        """
+        from .local_route import local_preview_enabled
+        if not local_preview_enabled(environ):raise AdmissionDenied('the local Ollama route exists only in the local execution preview')
+        if (environ.get(KEY_ENV) or '').strip():raise AdmissionDenied('the local Ollama route carries no provider key')
+        if 'retail_formula' in row or 'provider_snapshot' in row:raise AdmissionDenied('the local route carries no retail formula or vendor snapshot')
+        if row.get('retail_units_per_credit')!=PREPAID_UNITS:raise AdmissionDenied('exact 1000000000-unit prepaid scale required')
+        if any(row.get(k)!=0 for k in ('expense_input','expense_output','retail_input','retail_output')):raise AdmissionDenied('the local route prices must be zero')
+        if row.get('expense_cache_hit') is not None or row.get('expense_cache_miss') is not None:raise AdmissionDenied('the local route has no cache billing')
+        try:ceiling=ReviewedContextCeiling(**context)
+        except TypeError as exc:raise AdmissionDenied('reviewed context ceiling fields invalid') from exc
+        model=row.get('model')
+        if ceiling.model!=model:raise AdmissionDenied('context ceiling must name the reviewed model')
+        if ceiling.protective_run_ceiling:raise AdmissionDenied('the local route reserves the reviewed window, not a byte estimate')
+        catalog=catalog_from_environment({PRICES_ENV:json.dumps([row])},bounders={('serialized','ollama',model):ceiling})
+        quote,_=catalog.resolve_serialized(stage='preflight',provider='ollama',model=model,
+            serialized_request=json.dumps({'model':model,'max_tokens':1}).encode(),max_output_tokens=1)
+        validate_local_launch_quote(quote)
+        self.local=True
+        self.model=model
+        self.store=store
+        self.catalog=catalog
+        self.retail_rates=None
+        self.verify_vendor=None
+        self.balance_client=None
+        self.provider_balance=None
+
     def close(self):
-        self.balance_client.close()
+        if self.balance_client is not None:self.balance_client.close()
 
 
 def gateways_from_environment(store,environ,**kw):
     return ProductionGateways(store,environ,**kw)
+
+
+def validate_local_launch_quote(quote):
+    """The local launch check: a complete, exact, zero-priced Ollama quote with no estimate or vendor evidence."""
+    from .attempt_ledger import _quote
+    _quote(quote)
+    if quote.get('provider')!='ollama':raise AdmissionDenied('local launch provider must be Ollama')
+    if any(quote[k] for k in ('expense_input','expense_output','retail_input','retail_output')):raise AdmissionDenied('local launch quote must be zero-priced')
+    if 'estimate_policy' in quote or 'provider_evidence' in quote or 'retail_formula' in quote:raise AdmissionDenied('local launch quote carries no estimate, vendor evidence or retail formula')
+    return dict(quote)

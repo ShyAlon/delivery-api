@@ -84,20 +84,26 @@ async def dispatch_phase(store,orchestrator,task_id,phase,*,resume_job_id=None,q
         from . import run_slots
         async def run_child(capability):
             capability.validate(store)
-            from . import child_compute
-            segment=child_compute.begin(store,job_id,phase) if child_compute.available(store) else None
-            try:
-                await orchestrator.execute_phase(capability.task_id,phase,**options)
-            finally:
-                # Charged for the CPU the child used, also when it failed, was stopped or hit the time limit.
-                if segment is not None:
-                    cpu=run_slots.running.get(task_id,{}).get("cpu_seconds")
-                    try:child_compute.settle(store,segment,cpu)
-                    except Exception as exc:
-                        from .observability import event as activity
-                        activity("run.compute_unsettled","The run's compute charge could not be posted; it is marked unresolved for review",task_id=task_id,error=type(exc).__name__,detail=str(exc)[:120])
-                        try:store.finish_retail_compute(segment,None)
-                        except Exception:pass
+            from . import child_compute,cloud_runtime,producer_admission
+            from .attempt_ledger import AdmissionDenied
+            factory=cloud_runtime.gateway_factory()
+            if factory is None:raise AdmissionDenied('cloud execution is not installed on this server')
+            # The child self-wires its admission from the descriptor the runner hands it;
+            # this process supplies the job-bound gateway for the lifetime of the run.
+            with producer_admission.worker_gateway(factory(capability,job_id)):
+                segment=child_compute.begin(store,job_id,phase) if child_compute.available(store) else None
+                try:
+                    await orchestrator.execute_phase(capability.task_id,phase,**options)
+                finally:
+                    # Charged for the CPU the child used, also when it failed, was stopped or hit the time limit.
+                    if segment is not None:
+                        cpu=run_slots.running.get(task_id,{}).get("cpu_seconds")
+                        try:child_compute.settle(store,segment,cpu)
+                        except Exception as exc:
+                            from .observability import event as activity
+                            activity("run.compute_unsettled","The run's compute charge could not be posted; it is marked unresolved for review",task_id=task_id,error=type(exc).__name__,detail=str(exc)[:120])
+                            try:store.finish_retail_compute(segment,None)
+                            except Exception:pass
         started=await run_slots.run_limited(store,orchestrator,task_id,lambda:execute_job(store,job_id,run_child))
         if not started:raise ValueError("worker job was already claimed; no execution started")
         return job_id

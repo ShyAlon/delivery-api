@@ -48,6 +48,22 @@ def test_only_start_and_answer_open_when_the_engine_is_installed(monkeypatch):
             assert post(c,path).status_code==503,path
 
 
+def test_gate_decide_family_stays_open_for_session_file_operations(monkeypatch):
+    """Gate-scoped session file operations (decide, revision drafts, founder stack
+    decisions) run under the task-operation guard on any admitted host; the cloud
+    wall must not strand a founder decision on the pickup host."""
+    monkeypatch.setattr(cloud_runtime,'_state',None)
+    with client() as c:
+        for path in ('/api/tasks/t1/gates/g1/decide','/api/tasks/t1/gates/g1/revision-drafts',
+                     '/api/tasks/t1/gates/gate-architecture/stack-decisions'):
+            app_routes=[r for r in c.app.routes if getattr(r,'path',None)==path]
+            if not app_routes:
+                c.app.add_api_route(path,lambda:{'reached':True},methods=['POST'])
+            r=post(c,path)
+            assert r.status_code==200 and r.json()=={'reached':True},path
+        assert post(c,'/api/tasks/t1/gates/g1/redo').status_code==503
+
+
 def test_an_opened_route_still_needs_a_signed_in_user(monkeypatch):
     monkeypatch.setattr(cloud_runtime,'_state',object())
     with client() as c:

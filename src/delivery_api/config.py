@@ -26,6 +26,7 @@ SUPABASE_URL = os.environ.get("DELIVERY_SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.environ.get("DELIVERY_SUPABASE_ANON_KEY", "")
 ARTIFACT_PUBLISH = os.environ.get("DELIVERY_ARTIFACT_PUBLISH", "").strip() == "1"  # PR B: publish manifest revisions after produce; default OFF
 ARTIFACT_MANIFEST_READS = os.environ.get("DELIVERY_ARTIFACT_MANIFEST_READS", "").strip() == "1"  # PR B: manifest-backed artifact reads; default OFF until approved enable
+ARTIFACT_RESTORE = os.environ.get("DELIVERY_ARTIFACT_RESTORE", "").strip() == "1"  # PR C: restore completed-phase artifacts onto this host on read; default OFF
 CLOUD_TENANTS = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 if CLOUD_TENANTS and (not SUPABASE_URL or not SUPABASE_ANON_KEY):
     raise RuntimeError("Postgres requires Supabase Auth URL and public anon/publishable key; no local-auth fallback.")

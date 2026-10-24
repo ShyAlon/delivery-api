@@ -30,7 +30,7 @@ from fastapi.responses import JSONResponse
 
 from vmodel_contracts import RunState, RunStatus
 
-from . import config
+from . import config,local_route
 from .execution_fence import control_plane_only
 from .budget import BudgetExceeded, check_global_budget, check_run_budget
 from . import auth
@@ -876,9 +876,27 @@ class TaskStartRequest(BaseModel):
 def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     """The engine resolves routes; legacy env keys only seed the initial choice."""
     if config.CLOUD_TENANTS:
-        # Cloud users do not choose models: the service does. One managed route keeps the Start screen working; it is startable only while execution is open.
+        # Cloud users do not choose models: the service does. Managed routes keep the Start screen working; startable only while execution is open.
         open_now=cloud_execution_admitted()
-        return {"routes":[{"id":"deepseek","available":open_now,"managed":True,**({} if open_now else {"error":"Execution is closed on this server."})}],"default_route":{"route":"deepseek"},"managed":True}
+        routes=[{"id":"deepseek","available":open_now,"managed":True,**({} if open_now else {"error":"Execution is closed on this server."})}]
+        default={"route":"deepseek"}
+        if local_route.local_preview_enabled():
+            # The operator's local execution preview adds exactly one managed local
+            # Ollama route; the flag is absent on the deployed server. The engine
+            # still owns model resolution - no delivery-side model guessing.
+            default={"route":"ollama"}
+            try:
+                preview=engine_client.preview_route("ollama")
+                models=preview["model_map"]
+                pairs={tuple(pair) for pair in models.values()}
+                if len(pairs)!=1:raise ValueError("engine preview returned divergent stage models")
+                provider,model=next(iter(pairs))
+                if provider!="ollama":raise ValueError(f"engine preview returned {provider} for selected ollama")
+                routes.append({"id":"ollama","available":open_now,"managed":True,"model":f"ollama:{model}","model_map":models,"models":[model],**({} if open_now else {"error":"Execution is closed on this server."})})
+            except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
+                reason=exc.error.detail if isinstance(exc,EngineClientError) else str(exc)
+                routes.append({"id":"ollama","available":False,"managed":True,"error":reason})
+        return {"routes":routes,"default_route":default,"managed":True}
     routes=[]
     try:default=engine_client.default_route()
     except (EngineClientError,EngineUnreachableError,AttributeError):default=None
@@ -929,6 +947,8 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         if selected_route!=initial.get("route") or body.initial_model!=initial.get("model"):
             raise HTTPException(422,"initial model must match the engine's current new-session default")
         initial_model=body.initial_model
+    if config.CLOUD_TENANTS and selected_route not in local_route.managed_routes():
+        raise HTTPException(422,{"error":"That model route is not available on this server.","cause":"managed routes: "+", ".join(local_route.managed_routes()),"next":"Reload the Start screen and choose an available route."})
     # Same engine resolver as the Start screen; never infer a model from the
     # route name or a second copy of the .env in delivery.
     try:
@@ -1265,6 +1285,13 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
     if not session:return store.task_artifacts(task_id)
     from vmodel_contracts.runtime import artifacts_root
     root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
+    if config.CLOUD_TENANTS and config.ARTIFACT_RESTORE:
+        # A second host boots with an empty session root: committed phase artifacts
+        # are restored from the published manifest before the filesystem projection.
+        from . import artifact_restore
+        try:artifact_restore.restore_completed_phases(store,task_id,root)
+        except artifact_restore.RestoreRefused as exc:
+            raise HTTPException(409,f'completed-phase restore refused: {exc}')
     from .phases import PHASE_DEFINITIONS
     records=[]
     from .artifact_publication import ARTIFACT_VALIDATORS
@@ -1458,7 +1485,7 @@ def task_artifact_download(task_id:str,phase:str,name:str):
                         headers={'Content-Disposition':f'attachment; filename="{name}"'})
     return FileResponse(path,filename=name)
 
-_ARTIFACT_TITLES={"intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification","validation.json":"Validation"}
+_ARTIFACT_TITLES={"srs.semantic-review.json":"Requirements Semantic Review","architecture.decisions.json":"Architecture Stack Decisions","intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification","validation.json":"Validation"}
 
 def _checkpoint_interview_turns(task_id:str)->list[tuple[str,str]]:
     """Recover historical turns when old API events stored only answer lengths."""
@@ -2138,7 +2165,8 @@ async def start_next_phase(task_id:str,body:StartNextPhaseRequest,a:auth.Actor=D
         store.audit(a.label,"phase.start_refused",task_id,{"phase":phase,"reason":"credits"})
         raise HTTPException(409,{"error":"Not enough credits to start this phase.","cause":check["message"],"next":"Add credits, then start it."})
     model=task.get("model_default") or ""
-    if not model.startswith("deepseek:"):
+    route,sep,pinned=model.partition(":")
+    if not sep or not pinned or route not in local_route.managed_routes():
         activity("phase.start.no_model","Next phase has no recorded model",task_id=task_id,model=model[:60])
         raise HTTPException(409,{"error":"This phase cannot be started now.","cause":"The task has no recorded model for it.","next":"Open Debug, copy everything and send it."})
     job_id=store.prepare_next_phase(task_id,phase,a.label,model)
@@ -2363,6 +2391,81 @@ def _read_stack_decisions(task_id:str):
 def _open_stack_slots(data)->list[str]:
     return [s['key'] for s in (data or {}).get('slots',[]) if not s.get('founder_decision') and not s.get('technical_choice')]
 
+_LINEAGE_PHASE={'specs':'items'}.get  # lineage speaks generator stage names (restore mapping)
+
+def _lineage_record_root(task_id:str):
+    """The session's spec dir when this host holds the session artifacts, else None."""
+    if not _recorded_engine_session(task_id):return None
+    try:return _srs_semantic_path(task_id).parent
+    except HTTPException:return None
+
+def _lineage_module_or_none(spec):
+    """The generator owns the authority record's format; these decision-time rebinds
+    keep it in step with founder mutations. A host holding NO record (spec/lineage.json
+    absent) has nothing to maintain: decisions behave exactly as before binding existed,
+    and a later restore rebuilds the record from the published manifest. A host WITH a
+    record but WITHOUT spec-generator must never let record and bytes drift silently:
+    refuse the decision with a clear cause instead of a ModuleNotFoundError stack."""
+    try:
+        from spec_generator import lineage
+        return lineage
+    except ImportError as exc:
+        if (spec / 'lineage.json').is_file():
+            raise ValueError(
+                'this session has an authority record (spec/lineage.json) but spec-generator '
+                'is not importable on this host, so the decision cannot be bound to the record. '
+                'Decide this gate on a host with the full runtime image (or restore the session '
+                'there) - the decision was NOT recorded.') from exc
+        return None
+
+def _lineage_decision_preflight(task_id:str)->None:
+    # Refuse EARLY - before any artifact, manifest or decision-record mutation - when
+    # this host holds the session authority record but cannot maintain it. The rebind
+    # calls later in the endpoint re-check; this ordering guarantee means a refused
+    # decision changes nothing anywhere.
+    spec=_lineage_record_root(task_id)
+    if spec is None:return
+    try:_lineage_module_or_none(spec)
+    except ValueError as exc:raise HTTPException(409,str(exc))
+
+def _lineage_gate_settled(task_id:str,phase_key:str)->None:
+    """Gate approval flips the phase's bindings to settled: from here a stage commit
+    may not replace those bytes without an explicit rewind (--from or a gate redo)."""
+    spec=_lineage_record_root(task_id)
+    if spec is None:return
+    lineage=_lineage_module_or_none(spec)
+    if lineage is None:return
+    lineage.mark_settled(spec,_LINEAGE_PHASE(phase_key,phase_key))
+
+def _lineage_gate_redo_invalidate(task_id:str,phase_key:str)->None:
+    """A gate redo is the founder's explicit rewind: drop bindings for the redone
+    phase and everything downstream so the regeneration can re-bind; without this
+    the settled-overwrite refusal would fail a sanctioned redo closed."""
+    spec=_lineage_record_root(task_id)
+    if spec is None:return
+    lineage=_lineage_module_or_none(spec)
+    if lineage is None:return
+    order=['needs','srs','architecture','specs','tests','validation']
+    if phase_key not in order:return
+    lineage.invalidate_from(spec,{_LINEAGE_PHASE(k,k) for k in order[order.index(phase_key):]})
+
+def _lineage_rebind_decision(task_id:str,phase_key:str,names)->None:
+    """Re-bind delivery-side founder-decision mutations (semantic item decisions,
+    stack overrides, applied defaults) so generator resume verification admits the
+    new bytes. Provisional: the gate is still open; approval flips to settled."""
+    spec=_lineage_record_root(task_id)
+    if spec is None:return
+    lineage=_lineage_module_or_none(spec)
+    if lineage is None:return
+    task=store.task(task_id)
+    phase=_LINEAGE_PHASE(phase_key,phase_key)
+    for name in names:
+        path=spec/name
+        if not path.is_file():continue
+        lineage.bind(spec,task_id=task_id,session_id=task.get('session_id') or '',
+                     generation=task['generation'],phase=phase,name=name,
+                     sha256=lineage.sha256_file(path),source='founder-decision',settled=False)
+
 def _guard_task_file_operation(function):
     # Sync endpoints/helpers only. Never hold a DB transaction across async
     # provider dispatch or gate continuation. Local adapter is unchanged.
@@ -2410,6 +2513,11 @@ def _use_architecture_defaults(task_id: str):
     temporary = path.with_suffix('.tmp'); temporary.write_text(json.dumps(companion, indent=2)); temporary.replace(path)
     temporary = artifact.with_suffix('.tmp'); temporary.write_text(json.dumps(full, indent=2)); temporary.replace(artifact)
     artifact.with_suffix('.md').unlink(missing_ok=True)
+    # Applied defaults are durable decision data; republish so the manifest
+    # matches local bytes and a later restore does not refuse the batch.
+    from .artifact_publication import publish_committed_session
+    publish_committed_session(store, task_id, path.parent.parent, phase_key='architecture')
+    _lineage_rebind_decision(task_id, 'architecture', ('architecture.json', 'architecture.decisions.json'))
 
 
 def _gate_review(task_id:str,gate_key:str)->dict:
@@ -2511,6 +2619,7 @@ def decide_semantic_gate(task_id:str,gate_key:str,body:SemanticDecisions,a:auth.
         if any(full.get(k)!=v for k,v in basis.items()) and any(full.get(k)!=v for k,v in prior.candidate.items()):raise HTTPException(409,'SRS candidate changed outside its review')
         resolved=review.resolved_candidate(lambda candidate:SRSDocument.model_validate({**full,**candidate}))
     except ValueError as exc:raise HTTPException(422,str(exc))
+    _lineage_decision_preflight(task_id)
     path=_srs_semantic_path(task_id);artifact=_task_artifact(task_id,'srs','srs.json')
     # The revision record is consumed into the producer checkpoint on resume.
     # Never create an artifact without the companion override record.
@@ -2518,6 +2627,11 @@ def decide_semantic_gate(task_id:str,gate_key:str,body:SemanticDecisions,a:auth.
     full={**full,**resolved};temporary=artifact.with_suffix('.tmp');temporary.write_text(json.dumps(full,indent=2));temporary.replace(artifact)
     # A stale readable companion must not mask the reviewed canonical JSON.
     artifact.with_suffix('.md').unlink(missing_ok=True)
+    # Founder item decisions are durable review evidence; republish so the
+    # manifest matches local bytes and a later restore does not refuse the batch.
+    from .artifact_publication import publish_committed_session
+    publish_committed_session(store,task_id,path.parent.parent,phase_key='srs')
+    _lineage_rebind_decision(task_id,'srs',('srs.json','srs.semantic-review.json'))
     store.add_event(task_id,'semantic_review','Semantic candidate decisions recorded',phase_key='srs',payload={'revision':review.revision,'decisions':[d.model_dump() for d in review.decisions],'actor':a.label})
     return {'status':'reviewed','revision':review.revision}
 
@@ -2544,6 +2658,7 @@ def decide_stack_gate(task_id:str,gate_key:str,body:StackDecisions,a:auth.Actor=
     from datetime import datetime,timezone
     at=datetime.now(timezone.utc).isoformat()
     made={d.key:{'text':d.text.strip(),'reason':d.reason.strip(),'actor':a.label,'at':at} for d in body.decisions}
+    _lineage_decision_preflight(task_id)
     artifact=_task_artifact(task_id,'architecture','architecture.json')
     full=json.loads(artifact.read_text())
     for entry in full.get('stack_entry_dispositions') or []:
@@ -2554,6 +2669,12 @@ def decide_stack_gate(task_id:str,gate_key:str,body:StackDecisions,a:auth.Actor=
     path=_stack_decisions_path(task_id);temporary=path.with_suffix('.tmp');temporary.write_text(json.dumps(companion,indent=2));temporary.replace(path)
     temporary=artifact.with_suffix('.tmp');temporary.write_text(json.dumps(full,indent=2));temporary.replace(artifact)
     artifact.with_suffix('.md').unlink(missing_ok=True)
+    # The companion is the durable founder-decision record and must cross hosts:
+    # republish so the manifest matches the local bytes (otherwise a later
+    # completed-phase restore on this or another host refuses the batch).
+    from .artifact_publication import publish_committed_session
+    publish_committed_session(store,task_id,path.parent.parent,phase_key='architecture')
+    _lineage_rebind_decision(task_id,'architecture',('architecture.json','architecture.decisions.json'))
     store.add_event(task_id,'stack_decisions','Architecture stack decisions recorded',phase_key='architecture',payload={'decided':sorted(made),'open':_open_stack_slots(companion),'actor':a.label})
     return {'status':'saved','revision':data['revision'],'open':_open_stack_slots(companion)}
 
@@ -2580,24 +2701,44 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
         before=store.task(task_id)
         pending=next((g for g in before["gates"] if g["gate_key"]==gate_key),None) if before else None
         if not pending:raise KeyError(gate_key)
-        if pending['after_phase']=='srs' and _recorded_engine_session(task_id) and _srs_semantic_path(task_id).is_file():
-            from vmodel_contracts.semantic_review import SemanticReview
-            semantic=SemanticReview.model_validate_json(_srs_semantic_path(task_id).read_text())
-            if req.action!='redo':
-                resolved=semantic.resolved_candidate(lambda candidate:None)
-                canonical=json.loads(task_artifact_view(task_id,'srs','srs.json')['raw_content'])
-                if any(canonical.get(k)!=v for k,v in resolved.items()):raise ValueError('Reviewed SRS write is incomplete; save the item decisions again before approving')
-        if pending['after_phase']=='architecture' and req.action!='redo':
-            still_open=_open_stack_slots(_read_stack_decisions(task_id))
-            if still_open:raise ValueError(f'{len(still_open)} architecture decision(s) still open; decide each one before approving')
         if pending["state"]=="waiting" and req.action in ("approve","edit"):
+            # Runs first: on a restore-enabled host this materializes the committed
+            # evidence (companions included) before the enforcement checks below read it.
             evidence=[a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==pending["after_phase"] and not a.get("stale") and a.get("present",True)]
             if not evidence or not any(Path(a["ref"]).is_file() and a.get("valid") is not False for a in evidence):
                 raise ValueError("No current valid artifact is available to review at this gate")
+        if pending['after_phase']=='srs' and req.action!='redo' and _recorded_engine_session(task_id):
+            # Every srs run produces its semantic review (spec-generator graph node_srs),
+            # so the file is required approval evidence for a session-recorded task.
+            # Fail closed when it is absent - never skip the reviewed-write check silently.
+            semantic_path=_srs_semantic_path(task_id)
+            if not semantic_path.is_file():
+                raise ValueError('Required approval evidence is missing: the semantic review of the SRS produced in this session (srs.semantic-review.json) is not on this host. Restore the published artifacts on this host, or publish them on the producing host (scripts/ops-backfill-artifact-manifest.py), then review again - this gate does not approve without the reviewed-write evidence.')
+            from vmodel_contracts.semantic_review import SemanticReview
+            semantic=SemanticReview.model_validate_json(semantic_path.read_text())
+            resolved=semantic.resolved_candidate(lambda candidate:None)
+            canonical=json.loads(task_artifact_view(task_id,'srs','srs.json')['raw_content'])
+            if any(canonical.get(k)!=v for k,v in resolved.items()):raise ValueError('Reviewed SRS write is incomplete; save the item decisions again before approving')
+        if pending['after_phase']=='architecture' and req.action!='redo':
+            # research_required slots in the canonical artifact mean the generator
+            # wrote the founder-decision companion; it is required approval evidence.
+            try:
+                full=json.loads(_task_artifact(task_id,'architecture','architecture.json').read_text())
+                research_required=[d for d in full.get('stack_entry_dispositions') or [] if str(d.get('status'))=='research_required']
+            except HTTPException:
+                research_required=[]
+            decisions=_read_stack_decisions(task_id)
+            if research_required and decisions is None:
+                raise ValueError('Required approval evidence is missing: this architecture has research-required stack slots but architecture.decisions.json is not on this host. Restore the published artifacts on this host, or publish them on the producing host (scripts/ops-backfill-artifact-manifest.py), then review again - this gate does not approve while the founder-decision record is unavailable.')
+            still_open=_open_stack_slots(decisions)
+            if still_open:raise ValueError(f'{len(still_open)} architecture decision(s) still open; decide each one before approving')
         from .phases import PHASE_BY_KEY, successor
         target=pending["after_phase"] if req.action=="redo" else (successor(pending["after_phase"]).key if successor(pending["after_phase"]) else pending["after_phase"])
         if req.model_route and PHASE_BY_KEY[target].executor!="generator":
             raise ValueError("This gate has no generator phase for a model override")
+        if config.CLOUD_TENANTS and req.model_route and req.model_route not in local_route.managed_routes():
+            raise ValueError("That model route is not available on this server.")
+        _lineage_decision_preflight(task_id)
         selected=model_route_lib.route_value(req.model_route,req.model) if req.model_route else None
         if PHASE_BY_KEY[target].executor=="generator" and not selected:
             model_route_lib.task_default_model(store,task_id,PHASE_BY_KEY[target].generator_stage)
@@ -2608,12 +2749,16 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
                 model=selected,comment=req.comment,review_revision=req.review_revision,
                 selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,
                 expected_revision=req.expected_revision)
+            if req.action=='approve':_lineage_gate_settled(task_id,pending['after_phase'])
+            elif req.action=='redo':_lineage_gate_redo_invalidate(task_id,pending['after_phase'])
             if job_id:
                 from .tenant_jobs import dispatch_phase
                 await dispatch_phase(store,orchestrator,task_id,target_phase,queued_job_id=job_id)
             return gate
         gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label,expected_revision=req.expected_revision)
         phase=gate["after_phase"]
+        if req.action=='approve':_lineage_gate_settled(task_id,phase)
+        elif req.action=='redo':_lineage_gate_redo_invalidate(task_id,phase)
         if req.comment.strip():
             store.add_review_comment(task_id,'gate:'+gate_key,req.review_revision or str(req.expected_revision),a.label,req.comment)
         if selected:

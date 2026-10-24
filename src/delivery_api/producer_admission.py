@@ -281,6 +281,10 @@ def current_worker_gateway(store,task_id):
         raise AdmissionDenied('cloud subprocess requires matching running worker job')
     if gateway.retail_rates is not None:
         raise AdmissionDenied('exact retail subprocess compute metering is not installed; dispatch held')
-    if gateway.resolve_quote is None or gateway.measure_usage is None:
+    # Either complete admission protocol pair qualifies; an incomplete pair never
+    # reaches a provider. The serialized pair is the exact-byte catalog protocol.
+    message_shaped=gateway.resolve_quote is not None and gateway.measure_usage is not None
+    serialized=gateway.resolve_serialized is not None and gateway.measure_raw_usage is not None
+    if not (message_shaped or serialized):
         raise AdmissionDenied('cloud subprocess reviewed bounds/pricing/usage unavailable')
     return gateway

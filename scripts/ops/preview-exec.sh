@@ -54,12 +54,23 @@ docker info >/dev/null 2>&1 || abort NO-DOCKER "Docker is installed but not runn
 case "$PORT" in ''|*[!0-9]*) abort PORT "PREVIEW_EXEC_PORT is not a number" "" "unset PREVIEW_EXEC_PORT";; esac
 if (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null; then abort PORT-BUSY "something already listens on 127.0.0.1:$PORT" "" "stop it, or: PREVIEW_EXEC_PORT=8011 ops preview-exec"; fi
 docker ps -a --format '{{.Names}}' | grep -qx "$NAME" && abort LEFTOVER "a container named $NAME is left over from an earlier run" "" "docker rm -f $NAME"
-for f in scripts/ops/pin.py src/delivery_api/vendor_sources.py src/delivery_api/production_gateway.py src/delivery_api/retail_pricing.py; do [ -f "$f" ] || abort NO-FILE "$f is missing on main" "" "git -C $PWD log --oneline -5   (is main pulled?)"; done
+# Two provider modes. deepseek (default): the paid managed route, exactly as before. ollama: the operator's
+# local model at $0 - no key, no vendor pages, the reviewed row and ceiling grounded from this Mac's server.
+PROVIDER=${PREVIEW_EXEC_PROVIDER:-deepseek}
+case "$PROVIDER" in deepseek|ollama) ;; *) abort PROVIDER "PREVIEW_EXEC_PROVIDER must be deepseek or ollama, not '$PROVIDER'" "" "unset PREVIEW_EXEC_PROVIDER";; esac
+OLLAMA_MODEL=${PREVIEW_EXEC_OLLAMA_MODEL:-qwen2.5-coder:14b}
+OLLAMA_HOST=${OLLAMA_HOST:-http://localhost:11434}
+
+PINFILES="scripts/ops/pin.py src/delivery_api/vendor_sources.py src/delivery_api/retail_pricing.py"
+[ "$PROVIDER" = deepseek ] || PINFILES="scripts/ops/pin-local.py src/delivery_api/ollama_usage.py src/delivery_api/local_route.py src/delivery_api/provider_network.py"
+for f in $PINFILES src/delivery_api/production_gateway.py; do [ -f "$f" ] || abort NO-FILE "$f is missing on main" "" "git -C $PWD log --oneline -5   (is main pulled?)"; done
 
 # The provider key comes from this shell's own protected environment, never from a new file or a prompt.
+if [ "$PROVIDER" = deepseek ]; then
 [ -n "${DEEPSEEK_API_KEY:-}" ] || abort NO-KEY "DEEPSEEK_API_KEY is not in this shell's environment" "Nothing was started and the database was not touched." "export DEEPSEEK_API_KEY=... in the shell that runs this (your existing protected local environment), then run ops preview-exec again"
 case "$DEEPSEEK_API_KEY" in *[[:space:]]*) abort KEY-SPACE "DEEPSEEK_API_KEY has a space or line break in it" "" "export only the key, then run again";; esac
 [ "${#DEEPSEEK_API_KEY}" -ge 20 ] || abort KEY-SHORT "DEEPSEEK_API_KEY is too short to be a DeepSeek key" "" "export the whole key, then run again"
+fi
 
 # 1. the candidate: the four checkouts at origin/main, exactly as deploy-full takes them
 [ -f scripts/docker/build-local-image.sh ] || abort NO-FILE "scripts/docker/build-local-image.sh is missing on main" "" "git -C $PWD log --oneline -5   (is main pulled?)"
@@ -78,10 +89,17 @@ grep -q '^DELIVERY_DATABASE_URL=.' "$STORE" && grep -q '^DELIVERY_SUPABASE_URL=.
 
 echo "ops preview-exec: candidate $IMAGE (built on this Mac, no server access)"
 echo "  What it does: runs $IMAGE on http://127.0.0.1:$PORT with execution ON against the LIVE database."
-echo "  Vendor prices and limits are pinned fresh from the two public DeepSeek pages (public GETs, nothing paid),"
-echo "  with the configured safety ceiling 128000 tokens per call / 16384 max output - never the vendor maximum."
+if [ "$PROVIDER" = deepseek ]; then
+echo "  Provider: DeepSeek (paid). Vendor prices and limits are pinned fresh from the two public DeepSeek pages"
+echo "  (public GETs, nothing paid), with the configured safety ceiling 128000 tokens per call / 16384 max output."
 echo "  The DeepSeek key comes from this shell's environment and is passed to the container without touching disk."
 echo "  Real spend is possible only for a person with an admission row and prepaid credits; anyone else is 'not admitted'."
+else
+echo "  Provider: local Ollama model $OLLAMA_MODEL at $OLLAMA_HOST (\$0, nothing paid, no key needed)."
+echo "  The reviewed row and context ceiling are grounded from this Mac's own Ollama server and the candidate"
+echo "  checkouts; every call is still reserved and settled in the shared ledger at \$0. The container reaches"
+echo "  the server through host.docker.internal."
+fi
 echo "  This start is NOT the activation approval for the first real interview: spend limit, cost ceiling, model"
 echo "  route and live changes are approved once, separately, before that interview."
 printf 'Type yes (English keyboard) to start, anything else changes nothing: '
@@ -92,16 +110,28 @@ umask 077; WORK=$(mktemp -d "${TMPDIR:-/tmp}/requi-preview-exec.XXXXXXXXXX"); ch
 
 # 3. settings: saved file to a private temp file, never printed, execution ON, local-preview flag on
 build_exec_env "$STORE" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"
-printf 'DELIVERY_LOCAL_PREVIEW=1\n' >> "$WORK/preview.env"; chmod 600 "$WORK/preview.env"
+printf 'DELIVERY_LOCAL_PREVIEW=1\n' >> "$WORK/preview.env"
+if [ "$PROVIDER" = ollama ]; then
+  OPORT=$(printf '%s' "$OLLAMA_HOST" | sed -E 's#^[a-z]+://([^:/]+):?([0-9]*).*#\2#'); OPORT=${OPORT:-11434}
+  printf 'OLLAMA_BASE_URL=%s\n' "http://host.docker.internal:$OPORT/v1" >> "$WORK/preview.env"
+  [ -z "${VMODEL_OLLAMA_NUM_CTX:-}" ] || printf 'VMODEL_OLLAMA_NUM_CTX=%s\n' "$VMODEL_OLLAMA_NUM_CTX" >> "$WORK/preview.env"
+fi
+chmod 600 "$WORK/preview.env"
 grep -q -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|API_KEY)' "$WORK/preview.env" && abort MODEL-KEY "a model key is in the saved settings file; the key must come from this shell's environment only" "" "remove it from $STORE (it does not belong there)"
 [ "$(grep -c '^DELIVERY_CLOUD_EXECUTION=1$' "$WORK/preview.env")" = 1 ] || abort EXEC-OFF "execution is not forced on in the preview-exec settings" "" "send me this output"
-[ "$(grep -c '^DELIVERY_PUBLIC_ORIGIN=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT\$" || abort ORIGIN "the preview's sign-in address is not set to its own local address" "" "send me this output"
-[ "$(grep -c '^DELIVERY_ALT_ORIGINS=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_ALT_ORIGINS=http://localhost:$PORT\$" || abort ORIGIN "the preview's second sign-in address is not exactly localhost with its own port" "" "send me this output"
+[ "$(grep -c '^DELIVERY_PUBLIC_ORIGIN=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT\$" "$WORK/preview.env" || abort ORIGIN "the preview's sign-in address is not set to its own local address" "" "send me this output"
+[ "$(grep -c '^DELIVERY_ALT_ORIGINS=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_ALT_ORIGINS=http://localhost:$PORT\$" "$WORK/preview.env" || abort ORIGIN "the preview's second sign-in address is not exactly localhost with its own port" "" "send me this output"
 [ "$(grep -c '^DELIVERY_PREVIEW=1$' "$WORK/preview.env")" = 1 ] || abort PREVIEW-FLAG "the preview flag is not set exactly once" "" "send me this output"
 
-# 4. vendor prices and limits: the exact pin step ops go-live runs (public GETs, nothing paid; fails closed on any page change)
+# 4. reviewed prices and limits. deepseek: the exact pin step ops go-live runs (public GETs, nothing paid).
+# ollama: grounded from this Mac's own server and the candidate checkouts (local HTTP, nothing paid).
+if [ "$PROVIDER" = ollama ]; then
+echo "== grounding the local Ollama model and context window from this Mac's server (local HTTP, nothing paid)"
+rc=0; PYTHONPATH=src REQUI_REPOS_ROOT="$ROOT" PREVIEW_EXEC_OLLAMA_MODEL="$OLLAMA_MODEL" OLLAMA_HOST="$OLLAMA_HOST" .venv/bin/python "$(dirname "$0")/pin-local.py" "$WORK" "$ROOT" > "$WORK/pin-out.txt" 2>&1 || rc=$?
+else
 echo "== reading the two DeepSeek pages (public GET, nothing paid)"
 rc=0; PYTHONPATH=src .venv/bin/python "$(dirname "$0")/pin.py" "$WORK" > "$WORK/pin-out.txt" 2>&1 || rc=$?
+fi
 if [ "$rc" != 0 ]; then
   tail -15 "$WORK/pin-out.txt"
   case "$(tail -1 "$WORK/pin-out.txt")" in PIN-FAIL*) abort PIN "see the line above" "" "send me this output; the page or the parser changed, and I have to look before anything is pinned";; *) abort PIN-CRASH "the pin step crashed" "" "send me this whole output";; esac
@@ -143,13 +173,14 @@ OUT=$(docker run --rm --platform "$PLATFORM" --read-only --cap-drop ALL --securi
 
 # 7. the image's OWN startup rules, run on these exact settings plus the pinned prices and the key. Prints problem names only, never a value.
 CONTRACT='import os,sys;sys.path.insert(0,"/app");import full_entry;p=full_entry.check_env(os.environ);print("CONTRACT-OK" if not p else "CONTRACT-PROBLEMS");[print("problem:",x) for x in p]'
-COUT=$(docker run --rm --platform "$PLATFORM" --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$WORK/preview.env" --env-file "$WORK/cloud-models.env" -e DEEPSEEK_API_KEY "$IMAGE" python -c "$CONTRACT" 2>&1 | scrub | tail -8 || true)
+KEYPASS=(); [ "$PROVIDER" = deepseek ] && KEYPASS=(-e DEEPSEEK_API_KEY)
+COUT=$(docker run --rm --platform "$PLATFORM" --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$WORK/preview.env" --env-file "$WORK/cloud-models.env" ${KEYPASS[@]+"${KEYPASS[@]}"} "$IMAGE" python -c "$CONTRACT" 2>&1 | scrub | tail -8 || true)
 echo "$COUT" | grep -qx CONTRACT-OK || abort NOT-STARTABLE "the image would not start with these settings: $(echo "$COUT" | grep '^problem:' | tr '\n' ' ')" "" "send me this output"
 
 # 8. run it (the data folder is an empty local one: no server copy)
 docker run -d --name "$NAME" --platform "$PLATFORM" --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 2g --memory-swap 2g \
   --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 -v "$WORK/data":/data --env-file "$WORK/preview.env" --env-file "$WORK/cloud-models.env" \
-  -e DEEPSEEK_API_KEY -p "127.0.0.1:$PORT:8000" "$IMAGE" >/dev/null || abort RUN "the container did not start" "" "docker logs $NAME   (send me this output)"
+  ${KEYPASS[@]+"${KEYPASS[@]}"} --add-host host.docker.internal:host-gateway -p "127.0.0.1:$PORT:8000" "$IMAGE" >/dev/null || abort RUN "the container did not start" "" "docker logs $NAME   (send me this output)"
 STARTED=1
 OK=0
 for i in $(seq 1 "${PREVIEW_WAIT_TRIES:-90}"); do
@@ -164,9 +195,11 @@ LOGS=$(docker logs "$NAME" 2>&1 | scrub)
 echo "$LOGS" | grep -q 'Cloud execution: OPEN' || abort EXEC-UNKNOWN "the app did not report 'Cloud execution: OPEN' at startup" "" "send me this output"
 PROBE='import os,re;print("EXEC="+os.environ.get("DELIVERY_CLOUD_EXECUTION","unset"));print("KEYS="+str(len([k for k in os.environ if re.search("DEEPSEEK|OPENAI|ANTHROPIC|API_KEY",k,re.I)])))'
 EXECOUT=$(docker exec "$NAME" python -c "$PROBE" 2>/dev/null || true)
-echo "$EXECOUT" | grep -qx 'EXEC=1' && echo "$EXECOUT" | grep -qx 'KEYS=1' || abort EXEC-UNVERIFIED "the running container's environment does not confirm execution on with exactly one provider key" "" "send me this output"
+EXPECTED_KEYS=1; [ "$PROVIDER" = ollama ] && EXPECTED_KEYS=0
+echo "$EXECOUT" | grep -qx 'EXEC=1' && echo "$EXECOUT" | grep -qx "KEYS=$EXPECTED_KEYS" || abort EXEC-UNVERIFIED "the running container's environment does not confirm execution on with the expected provider key count ($EXPECTED_KEYS)" "" "send me this output"
 echo
-echo "PREVIEW-EXEC READY: http://127.0.0.1:$PORT   (execution OPEN, live database, real sign-in)"
+echo "PREVIEW-EXEC READY: http://127.0.0.1:$PORT   (execution OPEN, live database, real sign-in, provider: $PROVIDER)"
+[ "$PROVIDER" = ollama ] && echo "Local Ollama route: $OLLAMA_MODEL at \$0; every call is ledgered. The managed DeepSeek route is not configured in this mode."
 echo "Spend is possible only for a person with an admission row and prepaid credits."
 echo "Running build: $(printf '%s' "$REPOS" | sed 's/=/ /g; s/,/, /g')"
 echo "Reminder: the first real interview still needs its own one-time approval (spend limit, cost ceiling, model route, live changes)."

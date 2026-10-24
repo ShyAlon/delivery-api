@@ -82,6 +82,20 @@ def test_declined_confirmation_changes_nothing(tmp_path):
     p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY}, settings=_settings(tmp_path), tty_input='no\n')
     assert 'ABORTED [NOT-CONFIRMED]' in p.stdout
 
+def test_confirmed_start_passes_origin_checks(tmp_path):
+    """Regression: the ORIGIN checks must read the built env FILE. Both greps
+    once omitted the file argument and read the script's stdin instead, so
+    every confirmed start - either provider mode - hung on a terminal or
+    aborted ORIGIN. Reaching the pin step (a PIN abort: no Ollama server
+    listens in this hermetic run) proves the checks passed against the file."""
+    tty = tmp_path / 'tty'
+    tty.write_text('yes\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama',
+                        'OLLAMA_HOST': 'http://127.0.0.1:9'},
+             settings=_settings(tmp_path))
+    assert 'ABORTED [ORIGIN]' not in p.stdout, p.stdout[-500:]
+    assert 'ABORTED [PIN' in p.stdout, p.stdout[-500:]
+
 def test_key_never_written_or_printed(tmp_path):
     """Every abort path: the key value appears nowhere in output, and no file
     under the temp/settings locations contains it."""

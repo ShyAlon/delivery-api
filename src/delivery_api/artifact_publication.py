@@ -12,7 +12,8 @@ from pathlib import Path
 ARTIFACT_VALIDATORS = {
     "intent_model.json":("vmodel_contracts.interview","IntentModel"),"conops.json":("vmodel_contracts.conops","ConOpsDocument"),
     "needs.json":("vmodel_contracts.needs","StakeholderNeedsSet"),"srs.json":("vmodel_contracts.srs","SRSDocument"),
-    "architecture.json":("vmodel_contracts.architecture","ArchitectureOverview"),"items.json":("vmodel_contracts.spec","ItemSpec[]"),
+    "architecture.json":("vmodel_contracts.architecture","ArchitectureOverview"),"architecture.decisions.json":("delivery_api.stack_decisions_contract","StackDecisionsCompanion"),
+    "srs.semantic-review.json":("vmodel_contracts.semantic_review","SemanticReview"),"items.json":("vmodel_contracts.spec","ItemSpec[]"),
     "spec_items.json":("vmodel_contracts.spec","SpecBundle"),"tests.json":("vmodel_contracts.verification","AcceptanceTest[]"),
     "test_specifications.json":("vmodel_contracts.verification","AcceptanceTest[]"),
     "validation.json":("vmodel_contracts.verification","ValidationPlan")}
@@ -55,6 +56,53 @@ def session_artifact_files(root: Path):
     return found
 
 
+def pin_settled_artifacts(task, root: Path, *, current_phase: str):
+    """The authoritative completed-phase snapshot, pinned BEFORE a phase child starts:
+    (phase_key, name) -> sha256 for every present declared artifact of phases already
+    settled ('completed'/'approved'/'awaiting_approval'), excluding the child's own
+    phase. A phase child legitimately writes ONLY its own phase's artifacts (plus
+    non-declared diagnostics); no settled artifact may change, vanish, or appear
+    while it runs - gate-time founder mutations happen before the next child starts,
+    never during one."""
+    from .artifact_restore import _COMPLETED_STATES
+    settled = {p['phase_key'] for p in (task or {}).get('phases', [])
+               if p.get('state') in _COMPLETED_STATES} - {current_phase}
+    pinned = {}
+    for phase_key, filename, path in session_artifact_files(root):
+        if phase_key in settled:
+            pinned[(phase_key, filename)] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return pinned, settled
+
+
+def settled_substitutions(root: Path, pinned, settled) -> list:
+    """Settled artifacts that changed, vanished, or appeared while the child ran."""
+    after = {}
+    for phase_key, filename, path in session_artifact_files(root):
+        if phase_key in settled:
+            after[(phase_key, filename)] = hashlib.sha256(path.read_bytes()).hexdigest()
+    problems = []
+    for key, sha in pinned.items():
+        if key not in after:
+            problems.append(('vanished',) + key)
+        elif after[key] != sha:
+            problems.append(('changed',) + key)
+    for key in after:
+        if key not in pinned:
+            problems.append(('appeared',) + key)
+    return sorted(problems)
+
+
+def format_settled_substitution(phase: str, problems) -> str:
+    listed = '; '.join(f'{pk}/{name} {kind}' for kind, pk, name in problems)
+    return (f"Error: {phase} modified settled work from an earlier completed phase ({listed}). "
+            "Settled outputs are never regenerated: the authoritative bytes stay in the published "
+            "artifact store, and nothing from this run was published or approved - no committed work "
+            "is lost. Likely cause: this host was missing or misread the committed upstream state. "
+            f"Recovery: remove the listed substituted files from this session, reload the task so the "
+            f"published bytes are restored (verified against their recorded hashes), then retry {phase} "
+            "- do not rerun earlier phases.")
+
+
 def publish_session_revision(store, task_id: str, root: Path, *, writer_instance: str = None):
     """Publish every present phase artifact with its publish-time verdict, then mark
     the revision ready - atomically. Missing files are simply not part of the set the
@@ -67,3 +115,22 @@ def publish_session_revision(store, task_id: str, root: Path, *, writer_instance
                           'validation_report': _validate(path, validator) if validator else None})
     writer = writer_instance or f'{socket.gethostname()}#{os.getpid()}'
     return store.publish_task_revision(task_id, artifacts, writer_instance=writer)
+
+
+def publish_committed_session(store, task_id: str, root: Path, *, phase_key: str) -> bool:
+    """Publish a just-committed phase's artifact set under config.ARTIFACT_PUBLISH.
+
+    Failure is visible and recoverable: the settled work is never rerun - the error
+    is recorded on the task and the same durable bytes can be republished later.
+    Returns True when a revision was published, False when the flag is off."""
+    from . import config
+    if not (config.ARTIFACT_PUBLISH and hasattr(store, 'publish_task_revision')):
+        return False
+    try:
+        publish_session_revision(store, task_id, root)
+        return True
+    except Exception as exc:
+        store.add_event(task_id, "error",
+            f"Artifact publication failed for the committed {phase_key} output; the settled bytes stay on this host and no model work is rerun. Recovery: run scripts/ops-backfill-artifact-manifest.py for this owner on the producing host - it republishes these durable bytes (it skips tasks that already have a ready revision): {type(exc).__name__}: {str(exc)[:240]}",
+            phase_key=phase_key)
+        return False
