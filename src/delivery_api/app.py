@@ -2409,7 +2409,7 @@ def _lineage_module_or_none(spec):
     try:
         from spec_generator import lineage
         return lineage
-    except ModuleNotFoundError as exc:
+    except ImportError as exc:
         if (spec / 'lineage.json').is_file():
             raise ValueError(
                 'this session has an authority record (spec/lineage.json) but spec-generator '
@@ -2417,6 +2417,16 @@ def _lineage_module_or_none(spec):
                 'Decide this gate on a host with the full runtime image (or restore the session '
                 'there) - the decision was NOT recorded.') from exc
         return None
+
+def _lineage_decision_preflight(task_id:str)->None:
+    # Refuse EARLY - before any artifact, manifest or decision-record mutation - when
+    # this host holds the session authority record but cannot maintain it. The rebind
+    # calls later in the endpoint re-check; this ordering guarantee means a refused
+    # decision changes nothing anywhere.
+    spec=_lineage_record_root(task_id)
+    if spec is None:return
+    try:_lineage_module_or_none(spec)
+    except ValueError as exc:raise HTTPException(409,str(exc))
 
 def _lineage_gate_settled(task_id:str,phase_key:str)->None:
     """Gate approval flips the phase's bindings to settled: from here a stage commit
@@ -2609,6 +2619,7 @@ def decide_semantic_gate(task_id:str,gate_key:str,body:SemanticDecisions,a:auth.
         if any(full.get(k)!=v for k,v in basis.items()) and any(full.get(k)!=v for k,v in prior.candidate.items()):raise HTTPException(409,'SRS candidate changed outside its review')
         resolved=review.resolved_candidate(lambda candidate:SRSDocument.model_validate({**full,**candidate}))
     except ValueError as exc:raise HTTPException(422,str(exc))
+    _lineage_decision_preflight(task_id)
     path=_srs_semantic_path(task_id);artifact=_task_artifact(task_id,'srs','srs.json')
     # The revision record is consumed into the producer checkpoint on resume.
     # Never create an artifact without the companion override record.
@@ -2647,6 +2658,7 @@ def decide_stack_gate(task_id:str,gate_key:str,body:StackDecisions,a:auth.Actor=
     from datetime import datetime,timezone
     at=datetime.now(timezone.utc).isoformat()
     made={d.key:{'text':d.text.strip(),'reason':d.reason.strip(),'actor':a.label,'at':at} for d in body.decisions}
+    _lineage_decision_preflight(task_id)
     artifact=_task_artifact(task_id,'architecture','architecture.json')
     full=json.loads(artifact.read_text())
     for entry in full.get('stack_entry_dispositions') or []:
@@ -2726,6 +2738,7 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
             raise ValueError("This gate has no generator phase for a model override")
         if config.CLOUD_TENANTS and req.model_route and req.model_route not in local_route.managed_routes():
             raise ValueError("That model route is not available on this server.")
+        _lineage_decision_preflight(task_id)
         selected=model_route_lib.route_value(req.model_route,req.model) if req.model_route else None
         if PHASE_BY_KEY[target].executor=="generator" and not selected:
             model_route_lib.task_default_model(store,task_id,PHASE_BY_KEY[target].generator_stage)

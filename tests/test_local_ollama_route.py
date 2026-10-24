@@ -170,6 +170,7 @@ def test_local_usage_refuses_unknown_or_inconsistent_shapes(raw):
 
 # --- fixed local origin -------------------------------------------------------
 
+@pytest.mark.producer_integration  # factory imports the owner engine's provider_transport (cross-repo); full local release check covers it
 def test_local_clients_are_pinned_to_the_configured_origin(monkeypatch):
     from delivery_api.provider_network import ollama_client_factory
     monkeypatch.setenv('OLLAMA_BASE_URL', 'http://localhost:11434/v1')

@@ -210,3 +210,21 @@ def test_lineage_rebind_import_rule(tmp_path, monkeypatch):
     (spec / 'lineage.json').write_text('{"version": 1, "entries": [], "inputs": {}}')
     with pytest.raises(ValueError, match='authority record'):
         module._lineage_module_or_none(spec)
+
+def test_record_host_without_generator_refuses_before_any_mutation(tmp_path,monkeypatch):
+ # A host holding the session authority record (spec/lineage.json) without an
+ # importable spec_generator must refuse BEFORE any artifact, manifest or
+ # decision-record mutation - otherwise a refused decide would leave published
+ # bytes drifted from the record. Assert bytes, gate state and events unchanged.
+ import sys
+ from vmodel_contracts.semantic_review import make_review
+ store,tid,c,path,body,semantic=_seed_srs_gate(tmp_path,monkeypatch)
+ (path/'lineage.json').write_text('{"record_version":1,"session_id":"session-one"}')
+ monkeypatch.setitem(sys.modules,'spec_generator',None)
+ before=path.joinpath('srs.json').read_bytes()
+ denied=c.post(f'/api/tasks/{tid}/gates/gate-srs/semantic-review',json={'revision':semantic.revision,'decisions':[]})
+ assert denied.status_code==409 and 'authority record' in denied.text,denied.text
+ assert path.joinpath('srs.json').read_bytes()==before
+ gate=[g for g in store.task(tid)['gates'] if g['gate_key']=='gate-srs'][0]
+ assert gate['state']=='waiting'
+ assert not any(e['kind']=='semantic_review' for e in store.events(tid))
