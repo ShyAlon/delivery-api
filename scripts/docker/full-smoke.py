@@ -19,7 +19,8 @@ def main():
     env.update(HOME=scratch,XDG_DATA_HOME=scratch,VMODEL_ARTIFACTS_DIR=scratch+'/artifacts',PYTHONNOUSERSITE='1',
         DELIVERY_DATABASE_URL='sqlite:///'+scratch+'/smoke.db',DELIVERY_HOST='127.0.0.1',DELIVERY_PORT=str(port),
         DELIVERY_CONTROL_PLANE_ONLY='0',INTERVIEW_ENGINE_TOKEN='smoke-'+os.urandom(16).hex(),INTERVIEW_ENGINE_TENANTS='0',
-        DELIVERY_COOKIE_SECURE='0',DELIVERY_ADMIN_TOKEN='smoke-admin-'+os.urandom(8).hex())
+        DELIVERY_COOKIE_SECURE='0',DELIVERY_ADMIN_TOKEN='smoke-admin-'+os.urandom(8).hex(),
+        INTERVIEW_ENGINE_SESSIONS_FILE='1')
     here=os.path.dirname(os.path.abspath(__file__))
     log=open(scratch+'/entry.log','w+')
     proc=subprocess.Popen([sys.executable,os.path.join(here,'full_entry.py')],cwd=scratch,env=env,stdout=log,stderr=log)
