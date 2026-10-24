@@ -1285,6 +1285,13 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
     if not session:return store.task_artifacts(task_id)
     from vmodel_contracts.runtime import artifacts_root
     root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
+    if config.CLOUD_TENANTS and config.ARTIFACT_RESTORE:
+        # A second host boots with an empty session root: committed phase artifacts
+        # are restored from the published manifest before the filesystem projection.
+        from . import artifact_restore
+        try:artifact_restore.restore_completed_phases(store,task_id,root)
+        except artifact_restore.RestoreRefused as exc:
+            raise HTTPException(409,f'completed-phase restore refused: {exc}')
     from .phases import PHASE_DEFINITIONS
     records=[]
     from .artifact_publication import ARTIFACT_VALIDATORS
