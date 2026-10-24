@@ -105,6 +105,13 @@ def test_a_dispatched_child_run_is_charged_its_cpu_also_when_it_fails(account, m
     monkeypatch.setattr(config, "RUN_ISOLATION", "process")
     monkeypatch.setattr(config, "MAX_CONCURRENT_RUNS", 2)
     monkeypatch.setattr(config, "PHASE_TIME_LIMIT_S", 1800)
+    # Dispatch runs behind the job-bound admission gateway; install the test double.
+    from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime, "gateway_factory",
+                        lambda: (lambda capability, job_id: NS(job_id=job_id, retail_rates=None,
+                                                               resolve_quote=lambda **kw: None,
+                                                               measure_usage=lambda response: None,
+                                                               resolve_serialized=None, measure_raw_usage=None)))
     procs = {}
 
     async def execute_phase(task_id, phase, **options):

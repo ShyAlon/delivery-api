@@ -29,6 +29,15 @@ def cloud(monkeypatch,tmp_path):
     monkeypatch.setattr(module.orchestrator,'store',store)
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
     monkeypatch.setattr(module.bundles,'root',lambda:tmp_path)
+    # Cloud dispatch runs behind the job-bound admission gateway; install the
+    # test double so admitted routes exercise the seam (unadmitted stays 503).
+    from types import SimpleNamespace as _NS
+    from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'gateway_factory',
+                        lambda:(lambda capability,job_id:_NS(job_id=job_id,retail_rates=None,
+                                                             resolve_quote=lambda **kw:None,
+                                                             measure_usage=lambda response:None,
+                                                             resolve_serialized=None,measure_raw_usage=None)))
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path))
     app=TenantMiddleware(module.app,verifier=Verifier())
     # Don't start local legacy worker lifespan. Cloud mode must have no shared
@@ -238,6 +247,9 @@ def test_gate_redo_route_closed_gate_then_owner_durable_dispatch(cloud,monkeypat
         task=store.create_task(sid);tid=task['task_id'];store.set_engine_session(tid,sid)
         store.update_phase(tid,'needs','running');gate=store.wait_at_gate(tid,'needs')
         before=store.task(tid);events=store.events(tid)
+    # The redo override names the local route, which cloud admits only under the
+    # operator preview flag; this server has it (deployed cloud offers DeepSeek only).
+    monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
     url='/api/tasks/'+tid+'/gates/'+gate['gate_key']+'/decide'
     payload={'action':'redo','steer':'fix evidence','model_route':'ollama','model':'phi4','expected_revision':gate['revision']}
     assert client.post(url,json=payload,headers=header('b')).status_code==404
