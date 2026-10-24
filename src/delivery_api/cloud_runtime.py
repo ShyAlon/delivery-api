@@ -23,6 +23,11 @@ def failure():
     return _failure
 
 
+def gateway_factory():
+    """The installed callable gateway factory (factory(capability,job_id)), or None when execution is not installed."""
+    return _state[0] if _state is not None else None
+
+
 def installed():
     return _state is not None
 
