@@ -120,6 +120,10 @@ def base_env(root, keys, extra_pythonpath):
         'CROSSHOST_STUB_JWT_KEY': str(private),
         'CROSSHOST_STUB_JWKS': str(public),
         'CROSSHOST_STUB_OWNER': OWNER,
+        # The stub JWT carries the real seeded auth session for OWNER (pg_harness
+        # seeds sessions distinct from user ids): session authority is never the
+        # owner literal.
+        'CROSSHOST_STUB_SESSION': '00000000-0000-0000-0000-0000000000a1',
         'CROSSHOST_STUB_ISSUER': 'https://supabase.crosshost.test/auth/v1',
         'DELIVERY_COOKIE_SECURE': '0',
         # Temporary hang diagnosis passthrough (remove before final).
