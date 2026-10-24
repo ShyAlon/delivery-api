@@ -981,13 +981,13 @@ def test_phase_boundary_second_instance_picks_up_committed_needs(dsn, keys, tmp_
         local2.stop()
 
 
-def test_decision_page_strands_when_the_post_accept_navigation_fetch_fails(dsn, keys, tmp_path_factory):
-    """Bounded fault injection for the intermittent interview stall, no production
-    change: the decision page's submit() POSTs the answer, then fetches the task
-    to choose its navigation. Abort exactly that one fetch. Expected mechanism:
-    the catch path hits `if(accepted)return;` - the form strands disabled with the
-    'accepted but next view could not be loaded' status while the live decision
-    has advanced. The Back link remains the human recovery path."""
+def test_decision_page_recovers_when_the_post_accept_navigation_fetch_fails(dsn, keys, tmp_path_factory):
+    """Injected-failure regression for the stranded-form repair: the decision
+    page's submit() POSTs the answer, then fetches the task to choose its
+    navigation. Abort every post-accept read. The repair must (1) never resubmit
+    the committed answer, (2) retry the read with bounded backoff, then
+    (3) navigate to the task view itself instead of stranding the disabled form.
+    The pre-repair strand signature is pinned in git history (d8d668d)."""
     from playwright.sync_api import sync_playwright
     root = tmp_path_factory.mktemp('crosshost-strand')
     answers = ['Customers pick a slot and pay online.', 'They pay by card when they book.',
@@ -1014,14 +1014,16 @@ def test_decision_page_strands_when_the_post_accept_navigation_fetch_fails(dsn, 
             # task JSON AFTER the decision POST has gone through. Background pollers
             # and the pre-submit recheck fall through untouched.
             from urllib.parse import urlsplit
-            seen = {'post': False, 'aborted': False}
+            seen = {'posts': 0, 'aborted': 0}
+            shots = root / 'strand-shots'
+            shots.mkdir()
             def one_shot_abort(route):
                 path = urlsplit(route.request.url).path.rstrip('/')
                 if route.request.method == 'POST' and path.endswith('/answer'):
-                    seen['post'] = True
+                    seen['posts'] += 1
                     route.fallback()
                     return
-                if (route.request.method == 'GET' and seen['post']
+                if (route.request.method == 'GET' and seen['posts']
                         and path == '/api/tasks/%s' % task_id):
                     # Keep aborting: any poller may interleave with the real
                     # navigation fetch; the page must never get the post-accept read.
@@ -1047,24 +1049,30 @@ def test_decision_page_strands_when_the_post_accept_navigation_fetch_fails(dsn, 
                     clicked = True
                     break
             assert clicked, 'a live decision button was clicked'
-            page.wait_for_timeout(4000)
-
-            assert seen['post'], 'the decision POST passed the interceptor'
-            assert seen['aborted'], 'the navigation fetch was aborted: %r url=%s' % (seen, page.url)
             page.wait_for_selector('#review-status', timeout=15000)
+            page.wait_for_timeout(1200)
+
+            assert seen['posts'] == 1, 'exactly one decision POST, no resubmission: %r' % (seen,)
+            assert seen['aborted'], 'the navigation fetch was aborted: %r url=%s' % (seen, page.url)
             status = page.locator('#review-status').inner_text()
-            assert 'Decision was accepted' in status and 'could not be loaded' in status, \
-                'the stranded-form signature: %r' % (status,)
-            primary = page.locator('#reviewform button.primary')
-            assert primary.count() and not primary.first.is_enabled(), 'the stranded form stays disabled'
-            # The decision DID commit and the live state advanced past it.
+            assert 'Decision saved' in status and ('Reconnecting' in status or 'live view is unreachable' in status), \
+                'the recovery status replaces the strand signature: %r' % (status,)
+            page.screenshot(path=str(shots / 'recovery-status.png'), full_page=True)
+            # The committed decision advanced the engine.
             after = page.request.get(local.base + '/api/tasks/' + task_id).json().get('input_state') or {}
             assert after.get('input_id') != state.get('input_id'), 'the committed decision advanced the engine'
-            # Human recovery: the Back link reaches the task view, which renders
-            # the CURRENT state (a fresh decision page link or the next question).
-            page.locator('a.back').first.click()
-            page.wait_for_url('**/tasks/*/view**', timeout=30000)
-            assert page.locator('#opendecision, #answerform, #startneeds, body').first is not None
+            # Bounded retries all fail under the persistent abort; the page then
+            # navigates itself to the task view instead of stranding the form.
+            page.wait_for_url('**/tasks/*/view**', timeout=45000)
+            assert seen['posts'] == 1, 'still no duplicate POST after the retry loop: %r' % (seen,)
+            # Full recovery: lift the fault and the task view renders the live state.
+            page.unroute('**/api/tasks/%s**' % task_id)
+            page.reload()
+            page.wait_for_timeout(2500)
+            page.screenshot(path=str(shots / 'recovered-task-view.png'), full_page=True)
+            live = page.locator('#opendecision, #answerform, #startneeds')
+            assert live.count() and live.first.is_visible(), \
+                'the task view renders the live state after recovery: %s' % (page.url,)
             browser.close()
     finally:
         local.stop()

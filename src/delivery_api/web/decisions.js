@@ -119,7 +119,26 @@ export function createDecisions(ctx){
     const next=await api(`/api/tasks/${encodeURIComponent(taskId)}`),n=next.control_snapshot;
     if(decisionPurpose(n)&&n.wait_id!==waitId){history.replaceState({},'',decisionUrl(taskId,n));await decisionPage(taskId,n.wait_id)}
     else{const view=`/tasks/${encodeURIComponent(taskId)}/view`;form.classList.add('applied');status.innerHTML=`Decision saved. Taking you to the task progress… <a href="${view}">Open now</a>`;setTimeout(()=>location.assign(view),1200)}
-   }catch(e){stopProgress();status.textContent=accepted?'Decision was accepted, but the next view could not be loaded. Open the task to follow progress.':e.message;if(accepted)return;submitting=false;if(e.status===409||e.message.includes('review changed')){reviewBlocker='This review changed. Reload the current decision.';refreshConceptDecision();return}form.querySelectorAll('button,input,select,textarea').forEach(c=>c.disabled=false);refreshConceptDecision()}
+   }catch(e){
+    stopProgress();
+    if(accepted){
+     // The decision is committed; only reading the next state failed. Never
+     // resubmit: retry the read with bounded backoff, then land on the task view.
+     status.textContent='Decision saved. Reconnecting…';
+     for(let attempt=1;attempt<=3;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,1000*attempt));
+      try{
+       const next=await api(`/api/tasks/${encodeURIComponent(taskId)}`),n=next.control_snapshot;
+       if(decisionPurpose(n)&&n.wait_id!==waitId){history.replaceState({},'',decisionUrl(taskId,n));await decisionPage(taskId,n.wait_id)}else{location.assign(`/tasks/${encodeURIComponent(taskId)}/view`)}
+       return
+      }catch(_){/* read failed again; keep retrying */}
+     }
+     const view=`/tasks/${encodeURIComponent(taskId)}/view`;
+     status.innerHTML=`Decision saved. The live view is unreachable - <a href="${view}">open the task to continue</a>. Redirecting…`;
+     setTimeout(()=>location.assign(view),3000);
+     return
+    }
+    status.textContent=e.message;submitting=false;if(e.status===409||e.message.includes('review changed')){reviewBlocker='This review changed. Reload the current decision.';refreshConceptDecision();return}form.querySelectorAll('button,input,select,textarea').forEach(c=>c.disabled=false);refreshConceptDecision()}
   }
   form.onsubmit=e=>{e.preventDefault();submit(false)};
   settle('committed',{form_present:document.querySelector('#reviewform')?1:0,radios:document.querySelectorAll('#reviewform input[type="radio"]').length});
