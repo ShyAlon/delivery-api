@@ -175,3 +175,30 @@ def test_the_page_shows_a_ready_panel_with_a_styled_button_and_tooltip_and_binds
     actions = (WEB / "taskactions.js").read_text()
     assert "/start-next-phase" in actions and "confirm:false" in actions and "confirm:true" in actions and "showNextPhase" in actions.split("return {")[1]
     assert re.search(r"\.next-phase-panel\{", (WEB / "style.css").read_text())
+
+
+def test_ollama_pin_starts_only_when_the_local_route_is_managed(monkeypatch):
+    monkeypatch.setenv("DELIVERY_LOCAL_PREVIEW", "1")
+    calls = _route(monkeypatch, task=_task(model_default="ollama:qwen2.5-coder:14b"))
+    out = _call(True)
+    assert out["status"] == "started"
+    assert calls["prepared"] == [("t1", "needs", "owner@example.com", "ollama:qwen2.5-coder:14b")]
+
+
+def test_ollama_pin_denied_when_the_local_route_is_not_managed(monkeypatch):
+    # A persisted or replayed ollama pin must not start once the flag is off:
+    # the check is the current managed-route policy, not the pin's shape.
+    monkeypatch.delenv("DELIVERY_LOCAL_PREVIEW", raising=False)
+    _route(monkeypatch, task=_task(model_default="ollama:qwen2.5-coder:14b"))
+    with pytest.raises(HTTPException) as caught:
+        _call(True)
+    assert caught.value.status_code == 409 and "no recorded model" in caught.value.detail["cause"]
+
+
+def test_unknown_or_malformed_pins_are_denied(monkeypatch):
+    monkeypatch.delenv("DELIVERY_LOCAL_PREVIEW", raising=False)
+    for bad in ("openai:gpt-5", "ollama", "ollama:", "", ":qwen2.5-coder:14b"):
+        _route(monkeypatch, task=_task(model_default=bad))
+        with pytest.raises(HTTPException) as caught:
+            _call(True)
+        assert caught.value.status_code == 409 and "no recorded model" in caught.value.detail["cause"], bad

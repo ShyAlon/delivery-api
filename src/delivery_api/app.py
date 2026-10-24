@@ -2158,7 +2158,8 @@ async def start_next_phase(task_id:str,body:StartNextPhaseRequest,a:auth.Actor=D
         store.audit(a.label,"phase.start_refused",task_id,{"phase":phase,"reason":"credits"})
         raise HTTPException(409,{"error":"Not enough credits to start this phase.","cause":check["message"],"next":"Add credits, then start it."})
     model=task.get("model_default") or ""
-    if not model.startswith("deepseek:"):
+    route,sep,pinned=model.partition(":")
+    if not sep or not pinned or route not in local_route.managed_routes():
         activity("phase.start.no_model","Next phase has no recorded model",task_id=task_id,model=model[:60])
         raise HTTPException(409,{"error":"This phase cannot be started now.","cause":"The task has no recorded model for it.","next":"Open Debug, copy everything and send it."})
     job_id=store.prepare_next_phase(task_id,phase,a.label,model)
