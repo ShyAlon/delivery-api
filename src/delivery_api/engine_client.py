@@ -55,7 +55,13 @@ class HttpEngineClient(EngineClient):
         from . import config
         if config.CLOUD_TENANTS:
             from .tenancy import current_scope
-            kwargs['headers']={**kwargs.get('headers',{}),'X-Requi-Owner':current_scope().owner_id}
+            scope=current_scope()
+            headers={'X-Requi-Owner':scope.owner_id}
+            # The engine's database session persistence runs under the real
+            # auth session, never a synthetic substitute; when this call is
+            # detached from a login the engine rejects rather than degrades.
+            if scope.session_id:headers['X-Requi-Session-Id']=scope.session_id
+            kwargs['headers']={**kwargs.get('headers',{}),**headers}
         try:return self._http.request(method,path,**kwargs)
         except httpx.TransportError as exc:raise EngineUnreachableError(self._http.base_url,exc) from exc
 

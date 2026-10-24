@@ -13,7 +13,7 @@ from delivery_api.tenancy import TenantScope, tenant_context
 
 DSN = os.getenv('DELIVERY_TEST_POSTGRES_DSN')
 pytestmark = pytest.mark.skipif(not DSN, reason='requires isolated migrated Postgres')
-A = TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001')
+A = TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000a1')
 
 
 @pytest.fixture
@@ -117,7 +117,7 @@ def test_error_mapping_foreign_is_404(pgstore, tmp_path, monkeypatch):
     monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     from delivery_api.tenancy import TenantScope
-    OTHER = TenantScope('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000002')
+    OTHER = TenantScope('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-0000000000a2')
     with tenant_context(OTHER):
         with pytest.raises(HTTPException) as exc:
             app.task_artifact_download(task_id, 'spec', 'srs.json')

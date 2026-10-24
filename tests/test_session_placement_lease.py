@@ -14,12 +14,13 @@ if DSN and 'dbname=test_tenant_' not in DSN:
 pytestmark = pytest.mark.skipif(not DSN, reason='requires isolated migrated Postgres')
 A = '00000000-0000-0000-0000-000000000001'
 B = '00000000-0000-0000-0000-000000000002'
+SESSIONS = {A: '00000000-0000-0000-0000-0000000000a1', B: '00000000-0000-0000-0000-0000000000a2'}
 
 
 def sql(query, owner=A, success=True):
     prefix = 'BEGIN; SET LOCAL ROLE requi_backend; '
     if owner is not None:
-        prefix += f"SELECT set_config('request.jwt.claim.sub','{owner}',true); SELECT set_config('request.jwt.claim.session_id','{owner}',true); "
+        prefix += f"SELECT set_config('request.jwt.claim.sub','{owner}',true); SELECT set_config('request.jwt.claim.session_id','{SESSIONS[owner]}',true); "
     result = subprocess.run(['psql', DSN, '-v', 'ON_ERROR_STOP=1', '-Atq', '-f', '-'], input=prefix + query + '; ROLLBACK;', text=True,
                             capture_output=True)
     if success:

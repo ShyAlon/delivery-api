@@ -11,8 +11,8 @@ DSN=os.getenv('DELIVERY_TEST_POSTGRES_DSN')
 if DSN and 'dbname=test_tenant_' not in DSN:
     raise RuntimeError('isolated test database required')
 pytestmark=pytest.mark.skipif(not DSN,reason='requires isolated migrated Postgres')
-A=TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001')
-B=TenantScope('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000002')
+A=TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000a1')
+B=TenantScope('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-0000000000a2')
 
 class Verifier:
     def verify(self,token):

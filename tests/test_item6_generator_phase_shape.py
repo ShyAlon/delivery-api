@@ -8,7 +8,7 @@ def test_real_postgres_task_shape_keeps_canonical_key():
     from delivery_api.postgres_store import PostgresStore
     from delivery_api.tenancy import TenantScope,tenant_context
     store=PostgresStore(dsn.replace('user=sandbox','user=delivery_app'))
-    scope=TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001')
+    scope=TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000a1')
     with tenant_context(scope):
         task=store.create_task('phase-shape-'+uuid.uuid4().hex)
         try:
