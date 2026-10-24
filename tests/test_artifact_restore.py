@@ -112,7 +112,9 @@ def test_restore_writes_lineage_binding_only_for_verified_bytes(tmp_path):
     needs = lineage.lookup(record, 'needs', 'needs.json')
     assert needs['sha256'] == NEEDS_SHA and needs['source'] == 'restore' and needs['revision'] == 'rev-1'
     assert needs['task_id'] == 't1' and needs['generation'] == '1'
-    assert record['inputs'].get('conops.json') == CONOPS_SHA
+    # launch inputs record the scheme-tagged identity (lineage contract); the fixture's
+    # canonical bytes hash identically under jsonv1, so the tag is the only change
+    assert record['inputs'].get('conops.json') == 'jsonv1:' + CONOPS_SHA
     # a second identical restore re-binds without growth or error
     restore_completed_phases(store, 't1', tmp_path)
     assert len(lineage.load(tmp_path / 'spec')['entries']) == 2

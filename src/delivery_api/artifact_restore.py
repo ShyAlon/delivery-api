@@ -95,14 +95,18 @@ def _write_lineage(task, snapshot, rows, root: Path, phase_states) -> None:
                      generation=task["generation"], phase=stage_key(row["phase_key"], row["phase_key"]),
                      name=row["name"], sha256=row["sha256"], source="restore", revision=snapshot["revision_id"],
                      settled=phase_states.get(row["phase_key"]) in ("approved", "completed"))
+    # Launch inputs record their scheme-tagged identity (lineage contract): JSON
+    # inputs bind canonical content, so the generator's own serialization rewrite
+    # of the baseline cannot self-falsify the record; substantive input changes
+    # still refuse.
     inputs = {}
     for name in ("intent_model.json", "conops.json"):
         candidate = root / "interview" / name
         if candidate.is_file():
-            inputs[name] = lineage.sha256_file(candidate)
+            inputs[name] = lineage.hash_launch_input(candidate, name=name)
     baseline = spec / "system-baseline.json"
     if baseline.is_file():
-        inputs["system-baseline.json"] = lineage.sha256_file(baseline)
+        inputs["system-baseline.json"] = lineage.hash_launch_input(baseline, name="system-baseline.json")
     if inputs:
         lineage.record_inputs(spec, task_id=task["task_id"], session_id=task.get("session_id") or "",
                               generation=task["generation"], input_hashes=inputs)
