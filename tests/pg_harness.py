@@ -35,6 +35,16 @@ GRANT EXECUTE ON FUNCTION auth.uid(),auth.jwt() TO anon,authenticated,service_ro
 """
 
 
+SUPABASE_DEFAULT_ACL="""
+ALTER DEFAULT PRIVILEGES FOR ROLE sandbox IN SCHEMA public GRANT ALL ON TABLES TO anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE sandbox IN SCHEMA public GRANT ALL ON TABLES TO authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE sandbox IN SCHEMA public GRANT ALL ON TABLES TO service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE sandbox IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon;
+ALTER DEFAULT PRIVILEGES FOR ROLE sandbox IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE sandbox IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO service_role;
+"""   # Supabase grants ALL on new public tables / EXECUTE on new functions to these roles via pg_default_acl; model it so least-privilege regressions fail here the way the live project behaves (live abort 2026-10-24: anon held INSERT on artifact_bytes).
+
+
 SEED="""
 INSERT INTO auth.users(id,email,email_confirmed_at) VALUES
  ('00000000-0000-0000-0000-000000000001','owner-a@example.test',now()),
@@ -78,6 +88,7 @@ def start():
             admin.execute(ROLES)   # roles belong to the whole server, not one database
         with psycopg.connect(dsn,autocommit=True) as conn:
             conn.execute(SUPABASE_STAND_IN)
+            conn.execute(SUPABASE_DEFAULT_ACL)
             files=sorted(p for p in MIGRATIONS.glob('*.sql') if _numbered(p))
             if not files:
                 STATE.update(status='failed',reason='no migration files found in %s'%MIGRATIONS);return
