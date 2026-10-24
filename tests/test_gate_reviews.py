@@ -113,3 +113,79 @@ def test_missing_semantic_review_fails_closed_and_restore_recovers(tmp_path,monk
  monkeypatch.setattr(module.orchestrator,'continue_after',no_continue)
  reply=c.post(f'/api/tasks/{tid}/gates/gate-srs/decide',json={'action':'approve','selected_option':'Proceed'})
  assert reply.status_code==200,reply.text
+
+
+def _seed_srs_gate(tmp_path, monkeypatch):
+ """Session-recorded task waiting at gate-srs with canonical artifacts on disk."""
+ import json
+ from vmodel_contracts import SRSDocument
+ from vmodel_contracts.semantic_review import make_review
+ from vmodel_contracts.runtime import artifacts_root
+ import delivery_api.app as module
+ store,tid,engine,c=setup(tmp_path,monkeypatch)
+ monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
+ store.wait_at_gate(tid,'srs')
+ body=SRSDocument.model_validate({'session_id':'session-one','intent_model_ref':'session-one','purpose':'Test','scope_summary':'Test','functional':[{'requirement_id':'R-1','title':'Button','statement':'The system shall show a button.','priority':'must','kind':'functional','acceptance':[{'criterion_id':'AC-1','statement':'Click button'}],'need_ids':['N-1'],'intent_fields':['problem_statement']}],'non_functional':[]}).model_dump(mode='json')
+ path=artifacts_root(str(tmp_path/'artifacts'))/'session-one'/'spec';path.mkdir(parents=True)
+ artifact=path/'srs.json';artifact.write_text(json.dumps(body))
+ semantic=make_review('session-one','srs',body,[]);(path/'srs.semantic-review.json').write_text(semantic.model_dump_json())
+ monkeypatch.setattr(module,'_task_artifact_snapshot',lambda task:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
+ store.set_model_default(tid,'deepseek:deepseek-flash')
+ async def no_continue(*args,**kwargs): pass
+ monkeypatch.setattr(module.orchestrator,'continue_after',no_continue)
+ return store,tid,c,path,body,semantic
+
+def _seed_lineage(tid, store, spec, phase, name, settled):
+ from spec_generator import lineage
+ generation=store.task(tid)['generation']
+ lineage.bind(spec,task_id=tid,session_id='session-one',generation=generation,
+              phase=phase,name=name,sha256=lineage.sha256_file(spec/name),
+              source='stage-commit',settled=settled)
+
+def test_gate_approval_flips_lineage_bindings_settled(tmp_path,monkeypatch):
+ from spec_generator import lineage
+ store,tid,c,spec,body,semantic=_seed_srs_gate(tmp_path,monkeypatch)
+ _seed_lineage(tid,store,spec,'srs','srs.json',settled=False)
+ _seed_lineage(tid,store,spec,'srs','srs.semantic-review.json',settled=False)
+ reply=c.post(f'/api/tasks/{tid}/gates/gate-srs/decide',json={'action':'approve','selected_option':'Proceed'})
+ assert reply.status_code==200,reply.text
+ record=lineage.load(spec)
+ assert lineage.lookup(record,'srs','srs.json')['settled'] is True,'approval settles the phase binding'
+ assert lineage.lookup(record,'srs','srs.semantic-review.json')['settled'] is True
+
+def test_gate_redo_invalidates_redone_phase_and_downstream_only(tmp_path,monkeypatch):
+ from spec_generator import lineage
+ store,tid,c,spec,body,semantic=_seed_srs_gate(tmp_path,monkeypatch)
+ (spec/'needs.json').write_text('{"needs":[]}')
+ (spec/'architecture.json').write_text('{"session_id":"session-one"}')
+ _seed_lineage(tid,store,spec,'needs','needs.json',settled=True)
+ _seed_lineage(tid,store,spec,'srs','srs.json',settled=True)
+ _seed_lineage(tid,store,spec,'architecture','architecture.json',settled=False)
+ reply=c.post(f'/api/tasks/{tid}/gates/gate-srs/decide',json={'action':'redo','steer':'regenerate with tighter scope'})
+ assert reply.status_code==200,reply.text
+ record=lineage.load(spec)
+ assert lineage.lookup(record,'srs','srs.json') is None,'redone phase binding dropped'
+ assert lineage.lookup(record,'architecture','architecture.json') is None,'downstream binding dropped'
+ assert lineage.lookup(record,'needs','needs.json')['settled'] is True,'upstream settled work untouched'
+
+def test_semantic_decisions_rebind_the_new_bytes(tmp_path,monkeypatch):
+ import json
+ from vmodel_contracts.semantic_review import make_review
+ from spec_generator import lineage
+ store,tid,c,spec,body,semantic=_seed_srs_gate(tmp_path,monkeypatch)
+ # replace the empty review with one carrying a finding so a decision is required
+ flagged=make_review('session-one','srs',body,[{'finding_id':'f1','item_id':'R-1','path':['functional',0],'rule':'solution_language','reason':'Specifies a widget','original':body['functional'][0]}])
+ (spec/'srs.semantic-review.json').write_text(flagged.model_dump_json())
+ _seed_lineage(tid,store,spec,'srs','srs.json',settled=False)
+ _seed_lineage(tid,store,spec,'srs','srs.semantic-review.json',settled=False)
+ accepted=c.post(f'/api/tasks/{tid}/gates/gate-srs/semantic-review',json={'revision':flagged.revision,'decisions':[{'item_id':'R-1','action':'accept'}]})
+ assert accepted.status_code==200,accepted.text
+ record=lineage.load(spec)
+ entry=lineage.lookup(record,'srs','srs.json')
+ assert entry['sha256']==lineage.sha256_file(spec/'srs.json'),'binding tracks the reviewed write'
+ assert entry['source']=='founder-decision' and entry['settled'] is False,'decision binds provisional until gate approval'
+ companion=lineage.lookup(record,'srs','srs.semantic-review.json')
+ assert companion['sha256']==lineage.sha256_file(spec/'srs.semantic-review.json')
+ # and the re-bound record still verifies for resume hydration
+ lineage.verify_file(record,phase='srs',name='srs.json',path=spec/'srs.json',
+                     task_id=tid,session_id='session-one',generation=store.task(tid)['generation'])

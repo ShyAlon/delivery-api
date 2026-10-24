@@ -36,9 +36,10 @@ def restore_completed_phases(store, task_id: str, root: Path) -> list[str]:
     task = store.task(task_id)
     if not task:
         return []
-    completed = {p["phase_key"] for p in task["phases"] if p["state"] in _COMPLETED_STATES}
-    if not completed:
+    phase_states = {p["phase_key"]: p["state"] for p in task["phases"] if p["state"] in _COMPLETED_STATES}
+    if not phase_states:
         return []
+    completed = set(phase_states)
     snapshot = store.manifest_snapshot(task_id)  # hash-verified consistent read, or None
     if snapshot is None:
         return []
@@ -70,11 +71,11 @@ def restore_completed_phases(store, task_id: str, root: Path) -> list[str]:
         temporary = target.with_name(target.name + ".restore-tmp")
         temporary.write_bytes(data)
         os.replace(temporary, target)
-    _write_lineage(task, snapshot, rows, root)
+    _write_lineage(task, snapshot, rows, root, phase_states)
     return restored
 
 
-def _write_lineage(task, snapshot, rows, root: Path) -> None:
+def _write_lineage(task, snapshot, rows, root: Path, phase_states) -> None:
     """Bind every restored (or verified-identical) artifact to its published provenance:
     task/session/generation + content hash + manifest revision. Entries cover ONLY files
     this batch wrote or byte-verified; a refused batch never reaches here, so the record
@@ -87,9 +88,13 @@ def _write_lineage(task, snapshot, rows, root: Path) -> None:
     # validation) so stage commits and hydration agree with restore bindings.
     stage_key = {"specs": "items"}.get
     for row in rows:
+        # awaiting_approval binds PROVISIONAL: the open gate may still regenerate the
+        # phase on founder feedback. approved/completed bind settled - never re-bindable
+        # by a stage commit without an explicit rewind.
         lineage.bind(spec, task_id=task["task_id"], session_id=task.get("session_id") or "",
                      generation=task["generation"], phase=stage_key(row["phase_key"], row["phase_key"]),
-                     name=row["name"], sha256=row["sha256"], source="restore", revision=snapshot["revision_id"])
+                     name=row["name"], sha256=row["sha256"], source="restore", revision=snapshot["revision_id"],
+                     settled=phase_states.get(row["phase_key"]) in ("approved", "completed"))
     inputs = {}
     for name in ("intent_model.json", "conops.json"):
         candidate = root / "interview" / name

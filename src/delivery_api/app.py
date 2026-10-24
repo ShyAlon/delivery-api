@@ -2391,6 +2391,49 @@ def _read_stack_decisions(task_id:str):
 def _open_stack_slots(data)->list[str]:
     return [s['key'] for s in (data or {}).get('slots',[]) if not s.get('founder_decision') and not s.get('technical_choice')]
 
+_LINEAGE_PHASE={'specs':'items'}.get  # lineage speaks generator stage names (restore mapping)
+
+def _lineage_record_root(task_id:str):
+    """The session's spec dir when this host holds the session artifacts, else None."""
+    if not _recorded_engine_session(task_id):return None
+    try:return _srs_semantic_path(task_id).parent
+    except HTTPException:return None
+
+def _lineage_gate_settled(task_id:str,phase_key:str)->None:
+    """Gate approval flips the phase's bindings to settled: from here a stage commit
+    may not replace those bytes without an explicit rewind (--from or a gate redo)."""
+    spec=_lineage_record_root(task_id)
+    if spec is None:return
+    from spec_generator import lineage
+    lineage.mark_settled(spec,_LINEAGE_PHASE(phase_key,phase_key))
+
+def _lineage_gate_redo_invalidate(task_id:str,phase_key:str)->None:
+    """A gate redo is the founder's explicit rewind: drop bindings for the redone
+    phase and everything downstream so the regeneration can re-bind; without this
+    the settled-overwrite refusal would fail a sanctioned redo closed."""
+    spec=_lineage_record_root(task_id)
+    if spec is None:return
+    from spec_generator import lineage
+    order=['needs','srs','architecture','specs','tests','validation']
+    if phase_key not in order:return
+    lineage.invalidate_from(spec,{_LINEAGE_PHASE(k,k) for k in order[order.index(phase_key):]})
+
+def _lineage_rebind_decision(task_id:str,phase_key:str,names)->None:
+    """Re-bind delivery-side founder-decision mutations (semantic item decisions,
+    stack overrides, applied defaults) so generator resume verification admits the
+    new bytes. Provisional: the gate is still open; approval flips to settled."""
+    spec=_lineage_record_root(task_id)
+    if spec is None:return
+    from spec_generator import lineage
+    task=store.task(task_id)
+    phase=_LINEAGE_PHASE(phase_key,phase_key)
+    for name in names:
+        path=spec/name
+        if not path.is_file():continue
+        lineage.bind(spec,task_id=task_id,session_id=task.get('session_id') or '',
+                     generation=task['generation'],phase=phase,name=name,
+                     sha256=lineage.sha256_file(path),source='founder-decision',settled=False)
+
 def _guard_task_file_operation(function):
     # Sync endpoints/helpers only. Never hold a DB transaction across async
     # provider dispatch or gate continuation. Local adapter is unchanged.
@@ -2442,6 +2485,7 @@ def _use_architecture_defaults(task_id: str):
     # matches local bytes and a later restore does not refuse the batch.
     from .artifact_publication import publish_committed_session
     publish_committed_session(store, task_id, path.parent.parent, phase_key='architecture')
+    _lineage_rebind_decision(task_id, 'architecture', ('architecture.json', 'architecture.decisions.json'))
 
 
 def _gate_review(task_id:str,gate_key:str)->dict:
@@ -2554,6 +2598,7 @@ def decide_semantic_gate(task_id:str,gate_key:str,body:SemanticDecisions,a:auth.
     # manifest matches local bytes and a later restore does not refuse the batch.
     from .artifact_publication import publish_committed_session
     publish_committed_session(store,task_id,path.parent.parent,phase_key='srs')
+    _lineage_rebind_decision(task_id,'srs',('srs.json','srs.semantic-review.json'))
     store.add_event(task_id,'semantic_review','Semantic candidate decisions recorded',phase_key='srs',payload={'revision':review.revision,'decisions':[d.model_dump() for d in review.decisions],'actor':a.label})
     return {'status':'reviewed','revision':review.revision}
 
@@ -2595,6 +2640,7 @@ def decide_stack_gate(task_id:str,gate_key:str,body:StackDecisions,a:auth.Actor=
     # completed-phase restore on this or another host refuses the batch).
     from .artifact_publication import publish_committed_session
     publish_committed_session(store,task_id,path.parent.parent,phase_key='architecture')
+    _lineage_rebind_decision(task_id,'architecture',('architecture.json','architecture.decisions.json'))
     store.add_event(task_id,'stack_decisions','Architecture stack decisions recorded',phase_key='architecture',payload={'decided':sorted(made),'open':_open_stack_slots(companion),'actor':a.label})
     return {'status':'saved','revision':data['revision'],'open':_open_stack_slots(companion)}
 
@@ -2668,12 +2714,16 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
                 model=selected,comment=req.comment,review_revision=req.review_revision,
                 selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,
                 expected_revision=req.expected_revision)
+            if req.action=='approve':_lineage_gate_settled(task_id,pending['after_phase'])
+            elif req.action=='redo':_lineage_gate_redo_invalidate(task_id,pending['after_phase'])
             if job_id:
                 from .tenant_jobs import dispatch_phase
                 await dispatch_phase(store,orchestrator,task_id,target_phase,queued_job_id=job_id)
             return gate
         gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label,expected_revision=req.expected_revision)
         phase=gate["after_phase"]
+        if req.action=='approve':_lineage_gate_settled(task_id,phase)
+        elif req.action=='redo':_lineage_gate_redo_invalidate(task_id,phase)
         if req.comment.strip():
             store.add_review_comment(task_id,'gate:'+gate_key,req.review_revision or str(req.expected_revision),a.label,req.comment)
         if selected:
