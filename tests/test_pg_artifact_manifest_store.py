@@ -14,8 +14,8 @@ from delivery_api.tenancy import TenantScope, tenant_context
 
 DSN = os.getenv('DELIVERY_TEST_POSTGRES_DSN')
 pytestmark = pytest.mark.skipif(not DSN, reason='requires isolated migrated Postgres')
-A = TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001')
-B = TenantScope('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000002')
+A = TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000a1')
+B = TenantScope('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-0000000000a2')
 
 
 @pytest.fixture
