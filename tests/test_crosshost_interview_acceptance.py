@@ -979,3 +979,92 @@ def test_phase_boundary_second_instance_picks_up_committed_needs(dsn, keys, tmp_
             browser.close()
     finally:
         local2.stop()
+
+
+def test_decision_page_strands_when_the_post_accept_navigation_fetch_fails(dsn, keys, tmp_path_factory):
+    """Bounded fault injection for the intermittent interview stall, no production
+    change: the decision page's submit() POSTs the answer, then fetches the task
+    to choose its navigation. Abort exactly that one fetch. Expected mechanism:
+    the catch path hits `if(accepted)return;` - the form strands disabled with the
+    'accepted but next view could not be loaded' status while the live decision
+    has advanced. The Back link remains the human recovery path."""
+    from playwright.sync_api import sync_playwright
+    root = tmp_path_factory.mktemp('crosshost-strand')
+    answers = ['Customers pick a slot and pay online.', 'They pay by card when they book.',
+               'Rainy days are automatically refunded.', 'Owners see a daily roster.']
+    local = AdmittedHost('local', root, keys, dsn)
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, local.base)
+            task_id = create_task(page, local.base, 'Surf school booking (strand)',
+                                  'A SaaS web app for surf schools, with booking and customer logins')
+            page.locator('#startengine').click()
+            pump_interview(page, local.base, task_id, answers, finish=False)
+            state = page.request.get(local.base + '/api/tasks/' + task_id).json().get('input_state') or {}
+            assert state.get('waiting') and state.get('decision'), 'an open decision to commit: %r' % (state,)
+            launcher = page.locator('#opendecision')
+            page.wait_for_selector('#opendecision', state='visible', timeout=30000)
+            launcher.click()
+            page.wait_for_url('**/decisions/**', timeout=30000)
+            page.wait_for_selector('#reviewform', timeout=30000)
+
+            # Abort exactly the post-accept navigation fetch: the first GET of the
+            # task JSON AFTER the decision POST has gone through. Background pollers
+            # and the pre-submit recheck fall through untouched.
+            from urllib.parse import urlsplit
+            seen = {'post': False, 'aborted': False}
+            def one_shot_abort(route):
+                path = urlsplit(route.request.url).path.rstrip('/')
+                if route.request.method == 'POST' and path.endswith('/answer'):
+                    seen['post'] = True
+                    route.fallback()
+                    return
+                if (route.request.method == 'GET' and seen['post']
+                        and path == '/api/tasks/%s' % task_id):
+                    # Keep aborting: any poller may interleave with the real
+                    # navigation fetch; the page must never get the post-accept read.
+                    seen['aborted'] = seen.get('aborted', 0) + 1
+                    route.abort('connectionreset')
+                    return
+                route.fallback()
+            import json as _json
+            page.on('console', lambda m: seen.setdefault('console', []).append(m.text[:160]) if m.type in ('warning', 'error') else None)
+            page.route('**/api/tasks/%s**' % task_id, one_shot_abort)  # ** suffix: any query string
+
+            radios = page.locator('input[type="radio"]')
+            if radios.count():
+                radios.first.check()
+                rationale = page.locator('textarea[name="rationale"]')
+                if rationale.count() and rationale.is_visible():
+                    rationale.fill('Deterministic acceptance: first option fits.')
+            clicked = False
+            for label in ('Choose and continue', 'Proceed', 'Approve', 'Continue'):
+                button = page.get_by_role('button', name=label, exact=True)
+                if button.count() and button.first.is_enabled():
+                    button.first.click()
+                    clicked = True
+                    break
+            assert clicked, 'a live decision button was clicked'
+            page.wait_for_timeout(4000)
+
+            assert seen['post'], 'the decision POST passed the interceptor'
+            assert seen['aborted'], 'the navigation fetch was aborted: %r url=%s' % (seen, page.url)
+            page.wait_for_selector('#review-status', timeout=15000)
+            status = page.locator('#review-status').inner_text()
+            assert 'Decision was accepted' in status and 'could not be loaded' in status, \
+                'the stranded-form signature: %r' % (status,)
+            primary = page.locator('#reviewform button.primary')
+            assert primary.count() and not primary.first.is_enabled(), 'the stranded form stays disabled'
+            # The decision DID commit and the live state advanced past it.
+            after = page.request.get(local.base + '/api/tasks/' + task_id).json().get('input_state') or {}
+            assert after.get('input_id') != state.get('input_id'), 'the committed decision advanced the engine'
+            # Human recovery: the Back link reaches the task view, which renders
+            # the CURRENT state (a fresh decision page link or the next question).
+            page.locator('a.back').first.click()
+            page.wait_for_url('**/tasks/*/view**', timeout=30000)
+            assert page.locator('#opendecision, #answerform, #startneeds, body').first is not None
+            browser.close()
+    finally:
+        local.stop()
