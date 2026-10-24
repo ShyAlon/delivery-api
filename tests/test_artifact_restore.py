@@ -100,3 +100,30 @@ def test_bytes_failing_their_recorded_hash_refuse(tmp_path):
     with pytest.raises(RestoreRefused, match='failed verification'):
         restore_completed_phases(store, 't1', tmp_path)
     assert not (tmp_path / 'spec' / 'needs.json').exists()
+
+
+def test_restore_writes_lineage_binding_only_for_verified_bytes(tmp_path):
+    from spec_generator import lineage
+    store = FakeStore(phases=_phases(('conops', 'approved'), ('needs', 'awaiting_approval')),
+                      rows=[_row('conops', 'conops.json', CONOPS_SHA), _row('needs', 'needs.json', NEEDS_SHA)])
+    restore_completed_phases(store, 't1', tmp_path)
+    record = lineage.load(tmp_path / 'spec')
+    assert record is not None, 'a successful restore leaves the authority record'
+    needs = lineage.lookup(record, 'needs', 'needs.json')
+    assert needs['sha256'] == NEEDS_SHA and needs['source'] == 'restore' and needs['revision'] == 'rev-1'
+    assert needs['task_id'] == 't1' and needs['generation'] == '1'
+    assert record['inputs'].get('conops.json') == CONOPS_SHA
+    # a second identical restore re-binds without growth or error
+    restore_completed_phases(store, 't1', tmp_path)
+    assert len(lineage.load(tmp_path / 'spec')['entries']) == 2
+
+
+def test_refused_restore_writes_no_lineage(tmp_path):
+    (tmp_path / 'spec').mkdir()
+    (tmp_path / 'spec' / 'needs.json').write_bytes(b'conflicting local bytes')
+    store = FakeStore(phases=_phases(('needs', 'awaiting_approval')),
+                      rows=[_row('needs', 'needs.json', NEEDS_SHA)])
+    with pytest.raises(RestoreRefused):
+        restore_completed_phases(store, 't1', tmp_path)
+    from spec_generator import lineage
+    assert lineage.load(tmp_path / 'spec') is None, 'a refused batch never blesses local bytes'
