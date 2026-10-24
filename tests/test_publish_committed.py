@@ -47,7 +47,7 @@ def test_publication_failure_is_recorded_and_never_raised(monkeypatch, tmp_path)
     assert artifact_publication.publish_committed_session(store, 't1', tmp_path, phase_key='needs') is False
     assert len(store.events) == 1
     kind, message, phase_key = store.events[0]
-    assert kind == 'error' and phase_key == 'needs' and 'republished without rerunning' in message
+    assert kind == 'error' and phase_key == 'needs' and 'no model work is rerun' in message
 
 
 def test_failed_publication_recovers_through_the_existing_backfill(tmp_path, monkeypatch):
