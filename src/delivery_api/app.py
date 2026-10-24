@@ -2399,12 +2399,32 @@ def _lineage_record_root(task_id:str):
     try:return _srs_semantic_path(task_id).parent
     except HTTPException:return None
 
+def _lineage_module_or_none(spec):
+    """The generator owns the authority record's format; these decision-time rebinds
+    keep it in step with founder mutations. A host holding NO record (spec/lineage.json
+    absent) has nothing to maintain: decisions behave exactly as before binding existed,
+    and a later restore rebuilds the record from the published manifest. A host WITH a
+    record but WITHOUT spec-generator must never let record and bytes drift silently:
+    refuse the decision with a clear cause instead of a ModuleNotFoundError stack."""
+    try:
+        from spec_generator import lineage
+        return lineage
+    except ModuleNotFoundError as exc:
+        if (spec / 'lineage.json').is_file():
+            raise ValueError(
+                'this session has an authority record (spec/lineage.json) but spec-generator '
+                'is not importable on this host, so the decision cannot be bound to the record. '
+                'Decide this gate on a host with the full runtime image (or restore the session '
+                'there) - the decision was NOT recorded.') from exc
+        return None
+
 def _lineage_gate_settled(task_id:str,phase_key:str)->None:
     """Gate approval flips the phase's bindings to settled: from here a stage commit
     may not replace those bytes without an explicit rewind (--from or a gate redo)."""
     spec=_lineage_record_root(task_id)
     if spec is None:return
-    from spec_generator import lineage
+    lineage=_lineage_module_or_none(spec)
+    if lineage is None:return
     lineage.mark_settled(spec,_LINEAGE_PHASE(phase_key,phase_key))
 
 def _lineage_gate_redo_invalidate(task_id:str,phase_key:str)->None:
@@ -2413,7 +2433,8 @@ def _lineage_gate_redo_invalidate(task_id:str,phase_key:str)->None:
     the settled-overwrite refusal would fail a sanctioned redo closed."""
     spec=_lineage_record_root(task_id)
     if spec is None:return
-    from spec_generator import lineage
+    lineage=_lineage_module_or_none(spec)
+    if lineage is None:return
     order=['needs','srs','architecture','specs','tests','validation']
     if phase_key not in order:return
     lineage.invalidate_from(spec,{_LINEAGE_PHASE(k,k) for k in order[order.index(phase_key):]})
@@ -2424,7 +2445,8 @@ def _lineage_rebind_decision(task_id:str,phase_key:str,names)->None:
     new bytes. Provisional: the gate is still open; approval flips to settled."""
     spec=_lineage_record_root(task_id)
     if spec is None:return
-    from spec_generator import lineage
+    lineage=_lineage_module_or_none(spec)
+    if lineage is None:return
     task=store.task(task_id)
     phase=_LINEAGE_PHASE(phase_key,phase_key)
     for name in names:

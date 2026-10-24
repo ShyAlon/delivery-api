@@ -1,3 +1,4 @@
+import pytest
 from tests.test_decision_pages import setup
 
 def test_gate_content_revision_comments_drafts_and_history(tmp_path,monkeypatch):
@@ -142,6 +143,8 @@ def _seed_lineage(tid, store, spec, phase, name, settled):
               phase=phase,name=name,sha256=lineage.sha256_file(spec/name),
               source='stage-commit',settled=settled)
 
+
+@pytest.mark.producer_integration
 def test_gate_approval_flips_lineage_bindings_settled(tmp_path,monkeypatch):
  from spec_generator import lineage
  store,tid,c,spec,body,semantic=_seed_srs_gate(tmp_path,monkeypatch)
@@ -153,6 +156,8 @@ def test_gate_approval_flips_lineage_bindings_settled(tmp_path,monkeypatch):
  assert lineage.lookup(record,'srs','srs.json')['settled'] is True,'approval settles the phase binding'
  assert lineage.lookup(record,'srs','srs.semantic-review.json')['settled'] is True
 
+
+@pytest.mark.producer_integration
 def test_gate_redo_invalidates_redone_phase_and_downstream_only(tmp_path,monkeypatch):
  from spec_generator import lineage
  store,tid,c,spec,body,semantic=_seed_srs_gate(tmp_path,monkeypatch)
@@ -168,6 +173,8 @@ def test_gate_redo_invalidates_redone_phase_and_downstream_only(tmp_path,monkeyp
  assert lineage.lookup(record,'architecture','architecture.json') is None,'downstream binding dropped'
  assert lineage.lookup(record,'needs','needs.json')['settled'] is True,'upstream settled work untouched'
 
+
+@pytest.mark.producer_integration
 def test_semantic_decisions_rebind_the_new_bytes(tmp_path,monkeypatch):
  import json
  from vmodel_contracts.semantic_review import make_review
@@ -189,3 +196,17 @@ def test_semantic_decisions_rebind_the_new_bytes(tmp_path,monkeypatch):
  # and the re-bound record still verifies for resume hydration
  lineage.verify_file(record,phase='srs',name='srs.json',path=spec/'srs.json',
                      task_id=tid,session_id='session-one',generation=store.task(tid)['generation'])
+
+
+def test_lineage_rebind_import_rule(tmp_path, monkeypatch):
+    """No authority record on this host: decisions behave as before binding existed.
+    Record present but spec-generator absent: the decision refuses clearly, never drifts."""
+    import sys
+    import pytest
+    import delivery_api.app as module
+    spec = tmp_path / 'spec'; spec.mkdir()
+    monkeypatch.setitem(sys.modules, 'spec_generator', None)
+    assert module._lineage_module_or_none(spec) is None, 'no record: nothing to maintain'
+    (spec / 'lineage.json').write_text('{"version": 1, "entries": [], "inputs": {}}')
+    with pytest.raises(ValueError, match='authority record'):
+        module._lineage_module_or_none(spec)
