@@ -119,8 +119,8 @@ fi
 chmod 600 "$WORK/preview.env"
 grep -q -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|API_KEY)' "$WORK/preview.env" && abort MODEL-KEY "a model key is in the saved settings file; the key must come from this shell's environment only" "" "remove it from $STORE (it does not belong there)"
 [ "$(grep -c '^DELIVERY_CLOUD_EXECUTION=1$' "$WORK/preview.env")" = 1 ] || abort EXEC-OFF "execution is not forced on in the preview-exec settings" "" "send me this output"
-[ "$(grep -c '^DELIVERY_PUBLIC_ORIGIN=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT\$" || abort ORIGIN "the preview's sign-in address is not set to its own local address" "" "send me this output"
-[ "$(grep -c '^DELIVERY_ALT_ORIGINS=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_ALT_ORIGINS=http://localhost:$PORT\$" || abort ORIGIN "the preview's second sign-in address is not exactly localhost with its own port" "" "send me this output"
+[ "$(grep -c '^DELIVERY_PUBLIC_ORIGIN=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT\$" "$WORK/preview.env" || abort ORIGIN "the preview's sign-in address is not set to its own local address" "" "send me this output"
+[ "$(grep -c '^DELIVERY_ALT_ORIGINS=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_ALT_ORIGINS=http://localhost:$PORT\$" "$WORK/preview.env" || abort ORIGIN "the preview's second sign-in address is not exactly localhost with its own port" "" "send me this output"
 [ "$(grep -c '^DELIVERY_PREVIEW=1$' "$WORK/preview.env")" = 1 ] || abort PREVIEW-FLAG "the preview flag is not set exactly once" "" "send me this output"
 
 # 4. reviewed prices and limits. deepseek: the exact pin step ops go-live runs (public GETs, nothing paid).
