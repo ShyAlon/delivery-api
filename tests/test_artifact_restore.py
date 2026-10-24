@@ -127,3 +127,13 @@ def test_refused_restore_writes_no_lineage(tmp_path):
         restore_completed_phases(store, 't1', tmp_path)
     from spec_generator import lineage
     assert lineage.load(tmp_path / 'spec') is None, 'a refused batch never blesses local bytes'
+
+
+def test_specs_phase_binds_under_the_generator_stage_name(tmp_path):
+    from spec_generator import lineage
+    store = FakeStore(phases=_phases(('specs', 'approved')),
+                      rows=[_row('specs', 'items.json', NEEDS_SHA)])
+    restore_completed_phases(store, 't1', tmp_path)
+    record = lineage.load(tmp_path / 'spec')
+    assert lineage.lookup(record, 'items', 'items.json') is not None
+    assert lineage.lookup(record, 'specs', 'items.json') is None

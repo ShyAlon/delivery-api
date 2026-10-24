@@ -83,10 +83,13 @@ def _write_lineage(task, snapshot, rows, root: Path) -> None:
     from spec_generator import lineage
     spec = root / "spec"
     spec.mkdir(parents=True, exist_ok=True)
+    # The record speaks GENERATOR stage names (needs/srs/architecture/items/tests/
+    # validation) so stage commits and hydration agree with restore bindings.
+    stage_key = {"specs": "items"}.get
     for row in rows:
         lineage.bind(spec, task_id=task["task_id"], session_id=task.get("session_id") or "",
-                     generation=task["generation"], phase=row["phase_key"], name=row["name"],
-                     sha256=row["sha256"], source="restore", revision=snapshot["revision_id"])
+                     generation=task["generation"], phase=stage_key(row["phase_key"], row["phase_key"]),
+                     name=row["name"], sha256=row["sha256"], source="restore", revision=snapshot["revision_id"])
     inputs = {}
     for name in ("intent_model.json", "conops.json"):
         candidate = root / "interview" / name
