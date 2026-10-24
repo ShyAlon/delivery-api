@@ -50,7 +50,8 @@ def _patch_dispatch(monkeypatch, factory):
 
 def _gateway(**overrides):
     base = dict(job_id='job-1', retail_rates=None, resolve_quote=lambda **kw: None,
-                measure_usage=lambda response: None)
+                measure_usage=lambda response: None, resolve_serialized=None,
+                measure_raw_usage=None)
     base.update(overrides)
     return SimpleNamespace(**base)
 
@@ -101,3 +102,39 @@ def test_dispatch_gateway_without_runner_authorization_still_denies(monkeypatch)
     import asyncio
     with pytest.raises(AdmissionDenied, match='retail subprocess compute metering'):
         asyncio.run(tenant_jobs.dispatch_phase(store, Orchestrator(), 'task-1', 'needs'))
+
+
+def _real_gateway(**kw):
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    return WorkerAdmissionGateway(_Store(), 'job-1', **kw)
+
+
+class _Store:
+    def worker_job(self, job_id):
+        return {'task_id': 't1', 'state': 'running', 'job_id': job_id}
+
+
+def test_current_worker_gateway_accepts_a_complete_serialized_protocol_pair():
+    from delivery_api.producer_admission import current_worker_gateway, worker_gateway
+    gw = _real_gateway(resolve_serialized=lambda *a: None, measure_raw_usage=lambda *a: None)
+    with worker_gateway(gw):
+        assert current_worker_gateway(_Store(), 't1') is gw
+
+
+def test_current_worker_gateway_refuses_incomplete_pairs_before_any_provider_contact():
+    from delivery_api.attempt_ledger import AdmissionDenied
+    from delivery_api.producer_admission import current_worker_gateway, worker_gateway
+    for kw in ({'resolve_serialized': lambda *a: None},          # serialized without usage
+               {'measure_raw_usage': lambda *a: None},          # usage without resolution
+               {'resolve_quote': lambda *a: None},              # message-shaped without usage
+               {'measure_usage': lambda *a: None}):             # usage without resolution
+        with worker_gateway(_real_gateway(**kw)):
+            with pytest.raises(AdmissionDenied, match='bounds/pricing/usage unavailable'):
+                current_worker_gateway(_Store(), 't1')
+
+
+def test_current_worker_gateway_accepts_the_complete_message_shaped_pair():
+    from delivery_api.producer_admission import current_worker_gateway, worker_gateway
+    gw = _real_gateway(resolve_quote=lambda *a: None, measure_usage=lambda *a: None)
+    with worker_gateway(gw):
+        assert current_worker_gateway(_Store(), 't1') is gw
