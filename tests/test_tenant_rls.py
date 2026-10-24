@@ -13,12 +13,14 @@ if DSN and 'dbname=test_tenant_' not in DSN:
 pytestmark = pytest.mark.skipif(not DSN, reason='requires isolated migrated Postgres')
 A = '00000000-0000-0000-0000-000000000001'
 B = '00000000-0000-0000-0000-000000000002'
+# Live auth sessions seeded by pg_harness - deliberately distinct from the user ids.
+SESSIONS = {A: '00000000-0000-0000-0000-0000000000a1', B: '00000000-0000-0000-0000-0000000000a2'}
 
 
 def sql(query, owner=A, success=True):
     prefix = 'BEGIN; SET LOCAL ROLE authenticated; '
     if owner is not None:
-        prefix += f"SELECT set_config('request.jwt.claim.sub','{owner}',true); SELECT set_config('request.jwt.claim.session_id','{owner}',true); "
+        prefix += f"SELECT set_config('request.jwt.claim.sub','{owner}',true); SELECT set_config('request.jwt.claim.session_id','{SESSIONS[owner]}',true); "
     result = subprocess.run(['psql', DSN, '-v', 'ON_ERROR_STOP=1', '-Atq','-f','-'], input=prefix + query + '; ROLLBACK;', text=True,
                             capture_output=True)
     if success:
@@ -65,8 +67,8 @@ def test_missing_identity_denied():
 
 def test_cross_tenant_direct_id_reads_and_writes():
     assert sql("SELECT count(*) FROM tasks WHERE task_id='b'")[-1] == '0'
-    assert sql("UPDATE tasks SET title='stolen' WHERE task_id='b' RETURNING task_id") == [A,A]
-    assert sql("DELETE FROM tasks WHERE task_id='b' RETURNING task_id") == [A,A]
+    assert sql("UPDATE tasks SET title='stolen' WHERE task_id='b' RETURNING task_id") == [A,SESSIONS[A]]
+    assert sql("DELETE FROM tasks WHERE task_id='b' RETURNING task_id") == [A,SESSIONS[A]]
     sql(f"UPDATE tasks SET owner_id='{B}' WHERE task_id='a'",success=False)
 
 
@@ -106,14 +108,14 @@ def test_every_child_policy_insert_select_update_delete(table,insert):
     {insert.format(task='a')}; {insert.format(task='b')};
     SET LOCAL ROLE authenticated;
     SELECT set_config('request.jwt.claim.sub','{A}',true);
-    SELECT set_config('request.jwt.claim.session_id','{A}',true);
+    SELECT set_config('request.jwt.claim.session_id','{SESSIONS[A]}',true);
     SELECT count(*) FROM {table} WHERE task_id='b';
     UPDATE {table} SET task_id=task_id WHERE task_id='b' RETURNING task_id;
     DELETE FROM {table} WHERE task_id='b' RETURNING task_id;
     ROLLBACK;"""
     result=subprocess.run(['psql',DSN,'-v','ON_ERROR_STOP=1','-Atq','-f','-'],input=script,text=True,capture_output=True)
     assert result.returncode==0,result.stderr
-    assert result.stdout.strip().splitlines()==[A,A,'0']
+    assert result.stdout.strip().splitlines()==[A,SESSIONS[A],'0']
 
 
 def test_signup_profile_quota_not_metadata_or_client_controlled():
@@ -129,7 +131,7 @@ def test_signup_profile_quota_not_metadata_or_client_controlled():
 def test_supabase_native_json_claims_session_check():
     # PostgREST sets a claims JSON object, unlike our transaction-local hook.
     import json
-    claims=json.dumps({'sub':A,'session_id':A})
+    claims=json.dumps({'sub':A,'session_id':SESSIONS[A]})
     result=subprocess.run(['psql',DSN,'-v','ON_ERROR_STOP=1','-Atq','-f','-'],
       input=f"BEGIN; SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claim.sub','{A}',true); SELECT set_config('request.jwt.claims','{claims}',true); SELECT public.requi_session_active(); ROLLBACK;",
       text=True,capture_output=True)
@@ -139,7 +141,7 @@ def test_supabase_native_json_claims_session_check():
 
 def test_engine_session_registry_update_not_user_authorized():
     result=subprocess.run(['psql',DSN,'-v','ON_ERROR_STOP=1','-Atq','-f','-'],
-      input=f"BEGIN; SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claim.sub','{A}',true); SELECT set_config('request.jwt.claim.session_id','{A}',true); UPDATE engine_sessions SET task_id='b' WHERE session_id='sa'; ROLLBACK;",
+      input=f"BEGIN; SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claim.sub','{A}',true); SELECT set_config('request.jwt.claim.session_id','{SESSIONS[A]}',true); UPDATE engine_sessions SET task_id='b' WHERE session_id='sa'; ROLLBACK;",
       text=True,capture_output=True)
     assert result.returncode!=0
     assert 'permission denied' in result.stderr
@@ -165,14 +167,14 @@ def test_every_child_policy_insert_select_update_delete(table,insert):
     {insert.format(task='a')}; {insert.format(task='b')};
     SET LOCAL ROLE authenticated;
     SELECT set_config('request.jwt.claim.sub','{A}',true);
-    SELECT set_config('request.jwt.claim.session_id','{A}',true);
+    SELECT set_config('request.jwt.claim.session_id','{SESSIONS[A]}',true);
     SELECT count(*) FROM {table} WHERE task_id='b';
     UPDATE {table} SET task_id=task_id WHERE task_id='b' RETURNING task_id;
     DELETE FROM {table} WHERE task_id='b' RETURNING task_id;
     ROLLBACK;"""
     result=subprocess.run(['psql',DSN,'-v','ON_ERROR_STOP=1','-Atq','-f','-'],input=script,text=True,capture_output=True)
     assert result.returncode==0,result.stderr
-    assert result.stdout.strip().splitlines()==[A,A,'0']
+    assert result.stdout.strip().splitlines()==[A,SESSIONS[A],'0']
 
 
 def test_signup_profile_quota_not_metadata_or_client_controlled():

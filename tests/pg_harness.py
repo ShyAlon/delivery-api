@@ -50,9 +50,11 @@ INSERT INTO auth.users(id,email,email_confirmed_at) VALUES
  ('00000000-0000-0000-0000-000000000001','owner-a@example.test',now()),
  ('00000000-0000-0000-0000-000000000002','owner-b@example.test',now());
 INSERT INTO auth.sessions(id,user_id) VALUES
- ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001'),
- ('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000002');
-"""   # the two owners and live sessions the database tests are written against (tests A and B)
+ ('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-000000000001'),
+ ('00000000-0000-0000-0000-0000000000a2','00000000-0000-0000-0000-000000000002');
+"""   # the two owners and their live sessions the database tests are written against (tests A and B).
+# Session ids are deliberately DISTINCT from user ids: session authority must never
+# pass because a synthetic claim reused the owner UUID (vacuous policy coverage).
 
 
 def _numbered(path):

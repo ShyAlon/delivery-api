@@ -6,8 +6,10 @@ from delivery_api.tenancy import TenantScope,tenant_context,TenantAccessDenied
 
 DSN=os.getenv('DELIVERY_TEST_POSTGRES_DSN')
 pytestmark=pytest.mark.skipif(not DSN,reason='requires isolated migrated Postgres')
-A=TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001')
-B=TenantScope('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000002')
+# Session ids are the seeded live auth sessions, deliberately distinct from the
+# owner ids: tenant scope must never validate because session == owner.
+A=TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000a1')
+B=TenantScope('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-0000000000a2')
 
 @pytest.fixture
 def store(): return PostgresStore(DSN.replace('user=sandbox','user=delivery_app'))

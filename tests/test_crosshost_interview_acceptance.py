@@ -85,7 +85,7 @@ def grant_founder_credits(dsn_value):
         " VALUES (%s, 'ops-v1', ARRAY['credits.allocate'], true)"
         " ON CONFLICT (subject) DO NOTHING", (OWNER,))
     conn.execute("SELECT set_config('request.jwt.claim.sub', %s, false)", (OWNER,))
-    conn.execute("SELECT set_config('request.jwt.claim.session_id', %s, false)", (OWNER,))
+    conn.execute("SELECT set_config('request.jwt.claim.session_id', %s, false)", ('00000000-0000-0000-0000-0000000000a1',))
     result = conn.execute(
         "SELECT public.requi_operator_grant_credits(%s, %s, %s)",
         ('owner-a@example.test', 500, 'crosshost acceptance: founder prepaid balance')).fetchone()
