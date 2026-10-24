@@ -30,6 +30,8 @@ export async function serverReport(minutes=30){const r=await api(`/api/server-lo
 export async function deliverText(text,filename){try{await navigator.clipboard.writeText(text);return 'copied'}catch{const url=URL.createObjectURL(new Blob([text],{type:'text/plain'})),a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);return 'downloaded'}}
 // Same as deliverText, but when the clipboard is blocked the download is a ZIP holding the text file, built here in the browser.
 export async function deliverTextZip(text,filename){try{await navigator.clipboard.writeText(text);return 'copied'}catch{const url=URL.createObjectURL(new Blob([zipText(filename,text)],{type:'application/zip'})),a=document.createElement('a');a.href=url;a.download=filename.replace(/\.txt$/,'')+'.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);return 'downloaded'}}
+/* Explicit ZIP download: no clipboard attempt. Same single-text-entry zip as the copy fallback. */
+export function downloadTextZip(text,filename){const url=URL.createObjectURL(new Blob([zipText(filename,text)],{type:'application/zip'})),a=document.createElement('a');a.href=url;a.download=filename.replace(/\.txt$/,'')+'.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),30000)}
 export function browserDiagnostics(){return {...browserCapture,ended_at:new Date().toISOString(),url:location.href,records:browserCapture.records.slice()}}
 export async function downloadDebug(taskId){
  await renewSessionIfDue();

@@ -115,9 +115,9 @@ def test_client_report_states_range_and_has_no_bodies():
     assert 'shy@example.com' not in r['text'] and 'x=1' not in r['text'] and 'code=9' not in r['text'] and 'ref r1' in r['text'] and '--- browser events ---' in r['text']
 
 
-def test_debug_dialog_shows_both_logs_in_black_boxes_and_copies_everything_with_states():
+def test_debug_dialog_shows_both_logs_in_black_boxes_and_offers_summary_and_everything_zip():
     s=(WEB/'identity.js').read_text()
-    for needle in ('id="copyeverything"','id="serverloghost"','id="clientloghost"','serverReport','clientReport','Preparing','Copied','Failed'):
+    for needle in ('id="copysummary"','id="downloadeverything"','id="serverloghost"','id="clientloghost"','serverReport','clientReport','Preparing','Copied','Failed'):
         assert needle in s
 
 
@@ -125,3 +125,20 @@ def test_app_exposes_the_log_route_and_installs_the_buffer():
     s=(Path(__file__).resolve().parents[1]/'src'/'delivery_api'/'app.py').read_text()
     assert '@app.get("/api/server-log")' in s and 'server_log_buffer.install()' in s
     assert 'Depends(auth.require_actor)' in s.split('@app.get("/api/server-log")')[1].split('\n\n')[0]
+
+
+def test_export_part_scrubber_keeps_json_valid_and_preserves_session_ids():
+    out=run_node("""console.log(JSON.stringify([scrubPart('{"session_id":"eab542ae-4636-48c8-868a-43292118b9ef","nested":{"access_token":"abc123xyz"},"url":"https://h/x?token=leakme","email":"shy@example.com"}'),scrubPart('plain text with Bearer abc.def.ghi')]))""")
+    redacted,plain=json.loads(out)
+    parsed=json.loads(redacted)
+    assert parsed['session_id']=='eab542ae-4636-48c8-868a-43292118b9ef'   # diagnostic, not a credential
+    assert parsed['nested']['access_token']=='[redacted]'
+    assert 'leakme' not in redacted and 'shy@example.com' not in redacted
+    assert 'abc.def.ghi' not in plain
+
+
+def test_export_part_scrubber_redacts_nested_urls_and_errors():
+    out=run_node("""console.log(scrubPart(JSON.stringify({error:{detail:"connect postgresql://postgres:hunter2secret@db.example.com/x failed",chain:[{authorization:"Bearer abc.def.ghi"}]}})))""")
+    assert 'hunter2secret' not in out and 'abc.def.ghi' not in out
+    parsed=json.loads(out)   # stays valid JSON
+    assert parsed['error']['chain'][0]['authorization']=='[redacted]'

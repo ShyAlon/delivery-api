@@ -21,3 +21,23 @@ export function buildClientReport({requests,records,startedAt,url,build,now}){
   const evLines=records.map(r=>scrubText(`${r.ts} ${r.kind} ${r.path||''} ${String(r.message||'').replace(/\s+/g,' ').slice(0,2000)}`));
   return {text:head.concat(['--- requests ---'],reqLines,['','--- browser events ---'],evLines).join('\n')+'\n',range:`this tab since ${startedAt}, ${requests.length} requests and ${records.length} browser events`};
 }
+
+/* Structured redaction for exported JSON: mirrors the server export's sensitive
+   key set (no 'session' - session ids are diagnostic, not credentials) and keeps
+   the JSON valid, then scrubs free-text values with scrubText. */
+const SENSITIVE_JSON_KEY=/(password|passcode|secret|token|authorization|cookie|api[-_]?key|credential|private[-_]?key)/i;
+export function scrubJson(value){
+  if(Array.isArray(value))return value.map(scrubJson);
+  if(value&&typeof value==='object'){
+    const out={};
+    for(const[k,v]of Object.entries(value))out[k]=SENSITIVE_JSON_KEY.test(k)?'[redacted]':scrubJson(v);
+    return out;
+  }
+  if(typeof value==='string')return scrubText(value);
+  return value;
+}
+/* One exported part: JSON parts keep their structure redacted; anything else is plain text scrubbed. */
+export function scrubPart(text){
+  const s=String(text??'');
+  try{return JSON.stringify(scrubJson(JSON.parse(s)),null,2)}catch{return scrubText(s)}
+}
