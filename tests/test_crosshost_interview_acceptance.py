@@ -111,6 +111,8 @@ def base_env(root, keys, extra_pythonpath):
     private, public = keys
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(('DELIVERY_', 'INTERVIEW_ENGINE_', 'VMODEL_', 'OLLAMA_', 'DEEPSEEK_', 'CROSSHOST_'))}
+    if os.environ.get('DELIVERY_TEST_RUN_ISOLATION'):
+        env['DELIVERY_RUN_ISOLATION'] = os.environ['DELIVERY_TEST_RUN_ISOLATION']
     env.update({
         'PYTHONPATH': os.pathsep.join([str(REPO / 'tests/crosshost_stub'), str(REPO / 'src')] + extra_pythonpath),
         'CROSSHOST_STUB': '1',
@@ -126,18 +128,15 @@ def base_env(root, keys, extra_pythonpath):
 
 
 def gateway_env():
-    """The reviewed money-gateway environment, from the repo's own hermetic
-    fixture, admitting exactly the session's model (deepseek-flash): the same
-    row shape, ceiling shape and env names as production review, no flattened
-    semantics."""
+    """The reviewed money-gateway environment for the approved local route:
+    the repo's own local-Ollama fixture row (one reviewed $0 local model, no
+    provider key), so generator phases can run in a child process in the
+    deployed-default process isolation. Test environment only."""
     import importlib.util, json as _json
-    spec = importlib.util.spec_from_file_location('gateway_test_inputs', REPO / 'tests/test_production_gateway.py')
+    spec = importlib.util.spec_from_file_location('local_route_test_inputs', REPO / 'tests/test_local_ollama_route.py')
     inputs = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(inputs)
-    return inputs.env(**{
-        inputs.pg.PRICES_ENV: _json.dumps([inputs.row(model='deepseek-flash')]),
-        inputs.pg.CEILING_ENV: _json.dumps({**inputs.CEILING, 'model': 'deepseek-flash'}),
-    })
+    return inputs.local_env()
 
 
 def app_dsn_uri(dsn_value):
@@ -165,17 +164,17 @@ class AdmittedHost:
     Local and cloud hosts run this same admitted path; only the host identity
     (ports, artifacts directory, process) differs."""
 
-    def __init__(self, name, root, keys, dsn_value):
+    def __init__(self, name, root, keys, dsn_value, artifacts=None):
         self.name = name
         self.root = root
         self.port = free_port()
-        self.artifacts = root / ('artifacts-' + name)
+        self.artifacts = artifacts or (root / ('artifacts-' + name))
         env = base_env(root, keys, [str(ENGINE_SRC / 'src'), str(GENERATOR_SRC / 'src')])
         env.update(gateway_env())
         # The engine preflight fails closed without a price for the selected
         # route (unpriced calls are unbudgeted calls). Published peak values.
         price_table = root / ('prices-' + name + '.json')
-        price_table.write_text(json.dumps({'deepseek-flash': [0.30, 1.20]}))
+        price_table.write_text(json.dumps({'deepseek-flash': [0.30, 1.20], 'qwen2.5-coder:14b': [0.0, 0.0]}))
         env.update({
             'DELIVERY_DATABASE_URL': app_dsn_uri(dsn_value),
             'DELIVERY_SUPABASE_URL': 'https://supabase.crosshost.test',
@@ -184,6 +183,12 @@ class AdmittedHost:
             'INTERVIEW_ENGINE_TOKEN': TOKEN,
             'VMODEL_ARTIFACTS_DIR': str(self.artifacts),
             'VMODEL_PRICE_TABLE': str(price_table),
+            # Where the orchestrator finds the generator checkout (its
+            # .venv/bin/python must exist even for in-process phases).
+            'SPEC_GENERATOR_DIR': str(GENERATOR_SRC),
+            # The reviewed local route's model, aligned across the engine
+            # session catalog, generator phase defaults and the gateway row.
+            'DELIVERY_OLLAMA_MODEL': 'qwen2.5-coder:14b',
             # Far above every drive timeout: no handoff in this test can be
             # explained by lease expiry - only by the graceful release.
             'INTERVIEW_ENGINE_LEASE_TTL': '300',
@@ -749,3 +754,95 @@ def test_admitted_host_runs_the_first_interview_turn_through_the_ui(dsn, keys, t
         assert len(rows) == 1 and rows[0]['generation'] >= 1
     finally:
         host.stop()
+
+
+def test_phase_boundary_second_instance_cannot_pick_up_committed_needs(dsn, keys, tmp_path_factory):
+    """Reproduction, not acceptance: a committed phase boundary does NOT cross
+    hosts today. Host A completes the interview and the needs phase; host B
+    (own artifacts root, same database - the Mac/OVH shape) can see the task
+    and the waiting gate but cannot review it: the needs evidence lives only
+    on A's filesystem, nothing publishes committed artifact bytes to the
+    shared store by default (ARTIFACT_PUBLISH is off), and no restore path
+    materializes them on B. Approving the gate on B is refused with "No
+    current valid artifact", so srs - the full-phase successor, no mid-request
+    handoff involved - can never start there.
+
+    The interview itself does cross hosts (its engine checkpoints to the
+    database); generator phase artifacts have no equivalent seam. This test
+    pins the failure mode as evidence for the restore-seam design."""
+    from playwright.sync_api import sync_playwright
+    import psycopg, psycopg.rows
+    root = tmp_path_factory.mktemp('crosshost-phases')
+    answers = ['Customers pick a slot and pay online.', 'They pay by card when they book.',
+               'Rainy days are automatically refunded.', 'Owners see a daily roster.']
+
+    local = AdmittedHost('local', root, keys, dsn)
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, local.base)
+            task_id = create_task(page, local.base, 'Surf school booking (phase hop)',
+                                  'A SaaS web app for surf schools, with booking and customer logins')
+            page.locator('#startengine').click()
+            shots = root / 'shots'
+            shots.mkdir(exist_ok=True)
+            drive_interview(page, local.base, task_id, answers, shots=shots)
+            headers = {'content-type': 'application/json', 'origin': local.base}
+            preview = page.request.post(local.base + '/api/tasks/%s/start-next-phase' % task_id,
+                                        data=json.dumps({'confirm': False}), headers=headers)
+            assert preview.ok and preview.json().get('can_start'), preview.json()
+            started = page.request.post(local.base + '/api/tasks/%s/start-next-phase' % task_id,
+                                        data=json.dumps({'confirm': True}), headers=headers)
+            assert started.ok and started.json().get('status') == 'started', started.json()
+            review_a = wait_gate_review(page, local.base, task_id, 'gate-needs')
+            needs_docs = gate_documents(review_a)
+            assert needs_docs.get('needs.json'), 'needs evidence committed on host A: %r' % (list(needs_docs),)
+            task = page.request.get(local.base + '/api/tasks/' + task_id).json()
+            phases = {x['phase_key']: x['state'] for x in task['phases']}
+            assert phases['needs'] == 'awaiting_approval', phases
+            browser.close()
+    finally:
+        local.stop()
+
+    # Default configuration publishes nothing: no manifest rows exist at all.
+    conn = psycopg.connect(dsn, autocommit=True, row_factory=psycopg.rows.dict_row)
+    published = conn.execute("select count(*) as n from artifact_manifest_ready").fetchone()
+    stored_bytes = conn.execute("select count(*) as n from artifact_bytes").fetchone()
+    jobs = conn.execute("select kind, state from worker_jobs where task_id=%s order by created_at", (task_id,)).fetchall()
+    conn.close()
+    assert published['n'] == 0 and stored_bytes['n'] == 0, \
+        'committed needs bytes never reached the shared store: %r %r' % (published, stored_bytes)
+    assert [(j['kind'], j['state']) for j in jobs] == [('phase:needs', 'done')], jobs
+
+    cloud = AdmittedHost('cloud', root, keys, dsn)
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, cloud.base)
+            page.goto(cloud.base + '/tasks/%s/view' % task_id)
+            page.wait_for_timeout(3000)
+            # The task and its waiting gate are visible on B (control state is
+            # in the shared database), but the evidence is not.
+            task = page.request.get(cloud.base + '/api/tasks/' + task_id).json()
+            phases = {x['phase_key']: x['state'] for x in task['phases']}
+            assert phases['needs'] == 'awaiting_approval', phases
+            review_b = page.request.get(cloud.base + '/api/tasks/%s/gates/gate-needs/review' % task_id)
+            assert review_b.ok, review_b.status
+            data_b = review_b.json()
+            assert not data_b.get('actionable'), 'B must not treat missing evidence as reviewable: %r' % (data_b,)
+            assert not gate_documents(data_b).get('needs.json'), 'needs.json bytes exist only on host A'
+            # Approving anyway is refused: no valid artifact to review on B,
+            # so the srs successor can never start there.
+            decision = page.request.post(cloud.base + '/api/tasks/%s/gates/gate-needs/decide' % task_id,
+                                         data=json.dumps({'action': 'approve'}),
+                                         headers={'content-type': 'application/json', 'origin': cloud.base})
+            assert decision.status == 400, (decision.status, decision.text[:300])
+            assert 'No current valid artifact' in decision.text, decision.text[:400]
+            task = page.request.get(cloud.base + '/api/tasks/' + task_id).json()
+            phases = {x['phase_key']: x['state'] for x in task['phases']}
+            assert phases['srs'] == 'pending', phases
+            browser.close()
+    finally:
+        cloud.stop()

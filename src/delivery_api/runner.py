@@ -291,6 +291,8 @@ class ProcessRunner:
                             self.store.set_gate_open(task_id,'gate-srs',False,'semantic review policy')
                             self.store.add_event(task_id,'semantic_review','Open-gate auto approval paused for unresolved item findings',phase_key=phase,payload={'revision':semantic.revision})
                     self.store.update_phase(task_id, phase, "awaiting_approval", detail="Generated; waiting for founder approval")
+                    from .artifact_publication import publish_committed_session
+                    publish_committed_session(self.store,task_id,source.parent,phase_key=phase)
                     gate=self.store.wait_at_gate(task_id,phase)
                     self.store.add_event(task_id,"gate","Generated artifact is waiting for founder approval",phase_key=phase,payload={"gate_key":gate["gate_key"] if gate else None})
                     # Explicit open-gate policy approves in wait_at_gate. It

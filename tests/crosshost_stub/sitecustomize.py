@@ -171,6 +171,112 @@ if os.environ.get('CROSSHOST_STUB') == '1':
 
     model_config.build_chat_model = _build
 
+    # --- spec_generator: deterministic schema-routed stage models ---
+    # The generator runs in a worker thread of the same process (in-process
+    # engine), so this interpreter-startup patch covers it. The factory is
+    # replaced wholesale - no provider HTTP call can happen - and every fake
+    # registers into the current job wire binding exactly like the real
+    # factory, so the worker-stage wire check (wire_model) still runs against
+    # the phase's pinned provider/model. Answers are routed by the per-call
+    # SCHEMA (ADR-0022 micro-calls), mirroring the generator's own test fakes
+    # (test_per_item_resume._routing): needs is code-carried 1:1 from the
+    # intent model (no model call at all), srs is an overview call plus one
+    # fill per skeleton slot, architecture is the micro-contract router, items
+    # is a plan call plus one body per item, tests fills the required ids,
+    # validation/review answer their stage payloads.
+    try:
+        import itertools as _itertools
+
+        from spec_generator import model_config as _gmc
+        from spec_generator.wire_binding import register_model as _gregister
+
+        _G_PLAN = [{'slug': 'api', 'kind': 'api_surface', 'title': 'API',
+                    'requirement_ids': ['R-1'], 'depends_on': []},
+                   {'slug': 'web', 'kind': 'ui_flow', 'title': 'Web',
+                    'requirement_ids': ['R-1'], 'depends_on': ['api']}]
+        _G_TEST_FILL = {'description': 'criterion holds', 'components': ['api'], 'runner': 'pytest',
+                        'definition': {'preconditions': [], 'steps': ['Run x'], 'expected_outcomes': ['passes'],
+                                       'cleanup': [], 'cases': [], 'execution': {}}}
+        _G_BODY_SEQ = _itertools.count(1)
+
+        def _g_arch(schema):
+            """0.13.0 micro-pipeline: answer the one small call this schema shapes."""
+            props = set(schema.get('properties', {}))
+            if props == {'stack_keys'}:
+                return {'stack_keys': ['language']}
+            if props == {'technology', 'off_list_justification', 'baseline_refs'}:
+                return {'technology': 'python', 'off_list_justification': None,
+                        'baseline_refs': ['runtime:spec-generator:1']}
+            if props == {'responsibility'}:
+                return {'responsibility': 'serve'}
+            if props == {'position'}:
+                return {'position': 'fast'}
+            if 'driver' in props:
+                return {'title': 't', 'decision': 'x', 'rationale': 'y', 'driver': 'simplicity',
+                        'options_considered': [{'option': 'z', 'reason': 'heavier'}],
+                        'baseline_refs': ['repo:spec-generator'], 'evidence': [],
+                        'affected_repositories': [], 'executes_concept_ids': []}
+            if schema.get('type') == 'array':
+                item_props = set(schema['items'].get('properties', {}))
+                if 'slug' in item_props:
+                    return [{'slug': 't'}]
+                return [{'name': 'api', 'requirement_ids': ['R-1'],
+                         'baseline_refs': ['repo:spec-generator'], 'migration': False}]
+            raise AssertionError('crosshost stub: unexpected architecture schema %r' % (schema,))
+
+        def _g_answer(stage, schema):
+            if stage == 'srs':
+                if set(schema.get('properties', {})) == {'purpose', 'scope_summary'}:
+                    return {'purpose': 'Deterministic acceptance purpose.', 'scope_summary': 'Acceptance scope.'}
+                return {'title': 'Requirement title', 'statement': 'The system shall meet the need.',
+                        'priority': 'must', 'acceptance': ['The criterion holds.']}
+            if stage == 'items':
+                if schema.get('type') == 'array':
+                    return _G_PLAN
+                n = next(_G_BODY_SEQ)
+                return {'body_markdown': '# body %d\n\nModule %d owns its own distinct contract: input shape %d, error case %d.' % (n, n, n * 7, n * 13)}
+            if stage == 'tests':
+                wanted = schema['properties']['fills']['required']
+                return {'fills': {tid: dict(_G_TEST_FILL, description='%s holds' % tid) for tid in wanted}}
+            if stage == 'architecture':
+                return _g_arch(schema)
+            if stage == 'needs':
+                return {'session_id': 's', 'needs': [{'need_id': 'N-1', 'stakeholder': 'founder',
+                        'statement': 'needs specs', 'kind': 'functional',
+                        'intent_fields': ['problem_statement'], 'intent_need_ids': ['SN-1']}]}
+            if stage == 'validation':
+                return {'items': []}
+            if stage == 'review':
+                return []
+            return 'deterministic crosshost stub reply'
+
+        class _GenFake:
+            def __init__(self, stage, schema):
+                self.stage = stage
+                self.schema = schema or {}
+
+            def _out(self):
+                out = _g_answer(self.stage, self.schema)
+                return out if isinstance(out, str) else json.dumps(out)
+
+            def invoke(self, messages):
+                return AIMessage(content=self._out())
+
+            def stream(self, messages):
+                text = self._out()
+                step = max(1, len(text) // 3)
+                for i in range(0, len(text), step):
+                    yield AIMessage(content=text[i:i + step])
+
+        def _g_build(stage, **kwargs):
+            cfg = _gmc.for_stage(stage)
+            return _gregister(_GenFake(stage, kwargs.get('schema')), stage=stage,
+                              provider=cfg.provider, model=cfg.model)
+
+        _gmc.build_chat_model = _g_build
+    except ImportError:
+        pass  # engine-only processes never import spec_generator
+
     # The Ollama model-listing preflight is the only plain httpx.get in the
     # startup path; answer it from the stub so no local Ollama is needed.
     import httpx

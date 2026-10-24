@@ -67,3 +67,22 @@ def publish_session_revision(store, task_id: str, root: Path, *, writer_instance
                           'validation_report': _validate(path, validator) if validator else None})
     writer = writer_instance or f'{socket.gethostname()}#{os.getpid()}'
     return store.publish_task_revision(task_id, artifacts, writer_instance=writer)
+
+
+def publish_committed_session(store, task_id: str, root: Path, *, phase_key: str) -> bool:
+    """Publish a just-committed phase's artifact set under config.ARTIFACT_PUBLISH.
+
+    Failure is visible and recoverable: the settled work is never rerun - the error
+    is recorded on the task and the same durable bytes can be republished later.
+    Returns True when a revision was published, False when the flag is off."""
+    from . import config
+    if not (config.ARTIFACT_PUBLISH and hasattr(store, 'publish_task_revision')):
+        return False
+    try:
+        publish_session_revision(store, task_id, root)
+        return True
+    except Exception as exc:
+        store.add_event(task_id, "error",
+            f"Artifact publication failed for the committed {phase_key} output; the settled bytes stay on this host and can be republished without rerunning the phase: {type(exc).__name__}: {str(exc)[:240]}",
+            phase_key=phase_key)
+        return False
