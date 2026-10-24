@@ -1,0 +1,273 @@
+"""The operator's local Ollama route: env-gated managed route, $0 reviewed gateway, strict usage, fixed origin.
+
+Hermetic: no network, no database, no provider. Deployed-cloud isolation is proven by
+running every check with the local-preview flag absent (the deployed server env).
+"""
+import asyncio
+import json
+
+import httpx
+import pytest
+
+from delivery_api import config, local_route
+from delivery_api import production_gateway as pg
+from delivery_api.attempt_ledger import AdmissionDenied
+from delivery_api.ollama_usage import normalize, settlement_usage
+
+LOCAL_MODEL = 'qwen2.5-coder:14b'
+
+
+def local_row(**over):
+    base = {'provider': 'ollama', 'model': LOCAL_MODEL, 'price_version': 'local-t1', 'source': 'test-local',
+            'expense_input': 0, 'expense_output': 0, 'retail_input': 0, 'retail_output': 0,
+            'retail_units_per_credit': 10**9}
+    base.update(over)
+    return base
+
+
+LOCAL_CEILING = {'model': LOCAL_MODEL, 'context_tokens': 32768, 'maximum_output_tokens': 12288,
+                 'source': 'test-local', 'bound_version': 'local-t1', 'protective_run_ceiling': False}
+
+
+def local_env(**over):
+    base = {pg.PRICES_ENV: json.dumps([local_row()]), pg.CEILING_ENV: json.dumps(LOCAL_CEILING),
+            'DELIVERY_LOCAL_PREVIEW': '1'}
+    base.update(over)
+    return base
+
+
+# --- the managed route list -------------------------------------------------
+
+def test_deployed_cloud_manages_exactly_the_deepseek_route():
+    assert local_route.managed_routes({}) == ['deepseek']
+    assert local_route.managed_routes({'DELIVERY_LOCAL_PREVIEW': '0'}) == ['deepseek']
+    assert local_route.managed_routes({'DELIVERY_LOCAL_PREVIEW': 'true'}) == ['deepseek']
+
+
+def test_local_preview_adds_exactly_one_managed_ollama_route():
+    assert local_route.managed_routes({'DELIVERY_LOCAL_PREVIEW': '1'}) == ['deepseek', 'ollama']
+
+
+# --- the $0 reviewed gateway -------------------------------------------------
+
+def test_local_gateway_builds_with_zero_prices_and_no_vendor_parts():
+    factory = pg.gateways_from_environment(object(), local_env())
+    try:
+        assert factory.local is True and factory.model == LOCAL_MODEL
+        assert factory.retail_rates is None and factory.verify_vendor is None and factory.provider_balance is None
+        gateway = factory(None, 'job-1')
+        assert gateway.require_prepaid is True and gateway.retail_rates is None
+        assert gateway.resolve_serialized is not None and gateway.verify_provider_snapshot is None
+        assert gateway.provider_balance is None
+    finally:
+        factory.close()
+
+
+def test_local_quote_is_complete_exact_and_zero_priced():
+    factory = pg.gateways_from_environment(object(), local_env())
+    try:
+        quote, digest = factory.catalog.resolve_serialized(
+            stage='needs', provider='ollama', model=LOCAL_MODEL,
+            serialized_request=json.dumps({'model': LOCAL_MODEL, 'max_tokens': 2048}).encode(),
+            max_output_tokens=2048)
+        assert quote['provider'] == 'ollama' and quote['model'] == LOCAL_MODEL
+        assert quote['expense_input'] == quote['expense_output'] == 0
+        assert quote['retail_input'] == quote['retail_output'] == 0
+        assert 'estimate_policy' not in quote and 'provider_evidence' not in quote and 'retail_formula' not in quote
+        assert len(digest) == 64
+        pg.validate_local_launch_quote(quote)
+    finally:
+        factory.close()
+
+
+def test_local_gateway_refused_without_the_preview_flag():
+    env = local_env()
+    env.pop('DELIVERY_LOCAL_PREVIEW')
+    with pytest.raises(AdmissionDenied):
+        pg.gateways_from_environment(object(), env)
+    with pytest.raises(AdmissionDenied):
+        pg.gateways_from_environment(object(), local_env(DELIVERY_LOCAL_PREVIEW='0'))
+
+
+def test_local_gateway_refused_with_a_provider_key():
+    with pytest.raises(AdmissionDenied):
+        pg.gateways_from_environment(object(), local_env(DEEPSEEK_API_KEY='sk-test'))
+
+
+@pytest.mark.parametrize('field', ['expense_input', 'expense_output', 'retail_input', 'retail_output'])
+def test_local_gateway_refused_with_a_nonzero_price(field):
+    with pytest.raises(AdmissionDenied):
+        pg.gateways_from_environment(object(), local_env(**{pg.PRICES_ENV: json.dumps([local_row(**{field: 1})])}))
+
+
+def test_local_gateway_refused_with_cache_retail_or_vendor_parts():
+    with pytest.raises(AdmissionDenied):
+        pg.gateways_from_environment(object(), local_env(**{pg.PRICES_ENV: json.dumps([local_row(expense_cache_hit=0)])}))
+    with pytest.raises(AdmissionDenied):
+        pg.gateways_from_environment(object(), local_env(**{pg.PRICES_ENV: json.dumps([local_row(retail_formula={'x': 1})])}))
+    with pytest.raises(AdmissionDenied):
+        pg.gateways_from_environment(object(), local_env(**{pg.PRICES_ENV: json.dumps([local_row(provider_snapshot={'x': 1})])}))
+
+
+def test_local_gateway_refused_with_estimate_style_ceiling_or_model_mismatch():
+    with pytest.raises(AdmissionDenied):
+        pg.gateways_from_environment(object(), local_env(**{pg.CEILING_ENV: json.dumps({**LOCAL_CEILING, 'protective_run_ceiling': True})}))
+    with pytest.raises(AdmissionDenied):
+        pg.gateways_from_environment(object(), local_env(**{pg.CEILING_ENV: json.dumps({**LOCAL_CEILING, 'model': 'other'})}))
+
+
+def test_a_doctored_local_launch_quote_is_refused():
+    factory = pg.gateways_from_environment(object(), local_env())
+    try:
+        quote, _ = factory.catalog.resolve_serialized(
+            stage='needs', provider='ollama', model=LOCAL_MODEL,
+            serialized_request=json.dumps({'model': LOCAL_MODEL, 'max_tokens': 1}).encode(), max_output_tokens=1)
+    finally:
+        factory.close()
+    with pytest.raises(AdmissionDenied):
+        pg.validate_local_launch_quote({**quote, 'expense_input': 5})
+    with pytest.raises(AdmissionDenied):
+        pg.validate_local_launch_quote({**quote, 'estimate_policy': {'kind': 'complete-wire-bytes-plus4096-v1', 'ceiling': 99999,
+                                                                     'input_estimate': quote['input_max'], 'hard_output_cap': 1,
+                                                                     'verified_input_bound': False}})
+
+
+def test_deepseek_gateway_validation_is_unchanged():
+    # Regression: the managed DeepSeek branch keeps its exact requirements (no silent rewrite).
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location('gateway_test_inputs', pathlib.Path(__file__).with_name('test_production_gateway.py'))
+    inputs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(inputs)
+    factory = pg.gateways_from_environment(object(), inputs.env())
+    try:
+        assert factory.local is False and factory.retail_rates is not None
+        assert factory.verify_vendor is not None and factory.provider_balance is not None
+    finally:
+        factory.close()
+    with pytest.raises(AdmissionDenied):
+        pg.gateways_from_environment(object(), inputs.env(**{inputs.pg.KEY_ENV: ''}))
+
+
+# --- strict local usage ------------------------------------------------------
+
+def test_local_usage_accepts_the_openai_compatible_shape():
+    raw = {'prompt_tokens': 5, 'completion_tokens': 2, 'total_tokens': 7}
+    assert settlement_usage(raw) == {'input_tokens': 5, 'output_tokens': 2}
+    assert normalize(raw)['raw_usage'] == raw
+
+
+@pytest.mark.parametrize('raw', [
+    {'completion_tokens': 2, 'total_tokens': 7},                                  # missing prompt
+    {'prompt_tokens': 5, 'completion_tokens': 2, 'total_tokens': 8},              # inconsistent total
+    {'prompt_tokens': 5, 'completion_tokens': 2, 'total_tokens': 7, 'prompt_cache_hit_tokens': 1},  # no cache billing locally
+    {'prompt_tokens': '5', 'completion_tokens': 2, 'total_tokens': 7},            # non-integer
+    'not-a-dict',
+])
+def test_local_usage_refuses_unknown_or_inconsistent_shapes(raw):
+    with pytest.raises(AdmissionDenied):
+        settlement_usage(raw)
+
+
+# --- fixed local origin -------------------------------------------------------
+
+def test_local_clients_are_pinned_to_the_configured_origin(monkeypatch):
+    from delivery_api.provider_network import ollama_client_factory
+    monkeypatch.setenv('OLLAMA_BASE_URL', 'http://localhost:11434/v1')
+    seen = []
+    def inner():
+        return httpx.MockTransport(lambda request: seen.append(request) or httpx.Response(200, json={}))
+    factory = ollama_client_factory(inner_sync=inner, inner_async=lambda: None, owner_module='interview_engine')
+    with pytest.raises(ValueError):
+        factory(stage='needs', provider='deepseek', model='x', gateway=None)
+    sync, _ = factory(stage='needs', provider='ollama', model=LOCAL_MODEL, gateway=None)
+    try:
+        fixed = sync._transport.inner  # FixedOriginTransport under the admitted wrapper
+        response = fixed.handle_request(httpx.Request('POST', 'http://localhost:11434/v1/chat/completions', content=b'{}'))
+        assert response.status_code == 200 and len(seen) == 1
+        for bad in (httpx.Request('GET', 'http://localhost:11434/v1/chat/completions'),
+                    httpx.Request('POST', 'http://localhost:11434/api/show'),
+                    httpx.Request('POST', 'http://other-host:11434/v1/chat/completions'),
+                    httpx.Request('POST', 'https://localhost:11434/v1/chat/completions')):
+            with pytest.raises(ValueError):
+                fixed.handle_request(bad)
+        assert len(seen) == 1
+    finally:
+        sync.close()
+
+
+# --- the execution switch ------------------------------------------------------
+
+def test_execution_switch_admits_the_local_route_only_with_the_flag(monkeypatch):
+    from delivery_api import cloud_execution
+    monkeypatch.setattr(config, 'CLOUD_TENANTS', True)
+    monkeypatch.delenv('DELIVERY_CONTROL_PLANE_ONLY', raising=False)
+    good = local_env(DELIVERY_CLOUD_EXECUTION='1', INTERVIEW_ENGINE_TOKEN='t' * 32)
+    assert cloud_execution.problems(good) == []
+    noflag = dict(good); noflag.pop('DELIVERY_LOCAL_PREVIEW')
+    assert any('local execution preview' in p for p in cloud_execution.problems(noflag))
+    assert any('no provider key' in p for p in cloud_execution.problems({**good, 'DEEPSEEK_API_KEY': 'sk-test'}))
+
+
+# --- the deployed boundary (app) ----------------------------------------------
+
+def _cloud_app(monkeypatch, flag):
+    from delivery_api import app as module
+    monkeypatch.setattr(config, 'CLOUD_TENANTS', True)
+    if flag:
+        monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW', '1')
+    else:
+        monkeypatch.delenv('DELIVERY_LOCAL_PREVIEW', raising=False)
+    monkeypatch.setattr(module, 'cloud_execution_admitted', lambda: True)
+    return module
+
+
+def test_deployed_route_list_is_exactly_managed_deepseek(monkeypatch):
+    module = _cloud_app(monkeypatch, flag=False)
+    def explode(*args, **kwargs):
+        raise AssertionError('no engine call for a route the deployed server does not offer')
+    monkeypatch.setattr(module.engine_client, 'preview_route', explode)
+    result = module.model_routes(a=None)
+    assert [r['id'] for r in result['routes']] == ['deepseek']
+    assert result['default_route'] == {'route': 'deepseek'} and result['managed'] is True
+
+
+def test_local_preview_route_list_adds_managed_ollama(monkeypatch):
+    module = _cloud_app(monkeypatch, flag=True)
+    monkeypatch.setattr(module.engine_client, 'preview_route', lambda route: {
+        'model_map': {stage: ['ollama', LOCAL_MODEL] for stage in ('probing', 'distillation')}})
+    result = module.model_routes(a=None)
+    assert [r['id'] for r in result['routes']] == ['deepseek', 'ollama']
+    ollama = result['routes'][1]
+    assert ollama['managed'] is True and ollama['available'] is True and ollama['model'] == 'ollama:' + LOCAL_MODEL
+    assert result['default_route'] == {'route': 'ollama'}
+
+
+def test_local_preview_route_list_fails_closed_when_the_engine_cannot_resolve(monkeypatch):
+    module = _cloud_app(monkeypatch, flag=True)
+    def down(route):
+        raise module.EngineUnreachableError('http://engine', RuntimeError('down'))
+    monkeypatch.setattr(module.engine_client, 'preview_route', down)
+    result = module.model_routes(a=None)
+    assert result['routes'][1]['available'] is False and 'error' in result['routes'][1]
+
+
+def test_deployed_start_rejects_a_forced_ollama_route(monkeypatch):
+    module = _cloud_app(monkeypatch, flag=False)
+    store = module.store
+    task = store.create_task('forced-ollama-start-' + LOCAL_MODEL, 'an idea')
+    task_id = task['task_id'] if isinstance(task, dict) else task
+    def explode(*args, **kwargs):
+        raise AssertionError('a rejected route must not reach the engine')
+    monkeypatch.setattr(module.engine_client, 'preview_route', explode)
+    monkeypatch.setattr(module.engine_client, 'default_route', explode)
+    from delivery_api import auth
+    actor = auth.Actor(id='owner-1', label='tester')
+    with pytest.raises(module.HTTPException) as raised:
+        asyncio.run(module.start_task_engine(task_id, module.TaskStartRequest(model_route='ollama'), a=actor))
+    assert raised.value.status_code == 422
+    store.delete_task(task_id)
+
+
+def test_deployed_start_rejects_a_forced_ollama_route_even_when_open(monkeypatch):
+    # The rejection is route policy, not execution state: it fires while execution is admitted.
+    test_deployed_start_rejects_a_forced_ollama_route(monkeypatch)

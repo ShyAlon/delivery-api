@@ -30,7 +30,7 @@ from fastapi.responses import JSONResponse
 
 from vmodel_contracts import RunState, RunStatus
 
-from . import config
+from . import config,local_route
 from .execution_fence import control_plane_only
 from .budget import BudgetExceeded, check_global_budget, check_run_budget
 from . import auth
@@ -876,9 +876,27 @@ class TaskStartRequest(BaseModel):
 def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     """The engine resolves routes; legacy env keys only seed the initial choice."""
     if config.CLOUD_TENANTS:
-        # Cloud users do not choose models: the service does. One managed route keeps the Start screen working; it is startable only while execution is open.
+        # Cloud users do not choose models: the service does. Managed routes keep the Start screen working; startable only while execution is open.
         open_now=cloud_execution_admitted()
-        return {"routes":[{"id":"deepseek","available":open_now,"managed":True,**({} if open_now else {"error":"Execution is closed on this server."})}],"default_route":{"route":"deepseek"},"managed":True}
+        routes=[{"id":"deepseek","available":open_now,"managed":True,**({} if open_now else {"error":"Execution is closed on this server."})}]
+        default={"route":"deepseek"}
+        if local_route.local_preview_enabled():
+            # The operator's local execution preview adds exactly one managed local
+            # Ollama route; the flag is absent on the deployed server. The engine
+            # still owns model resolution - no delivery-side model guessing.
+            default={"route":"ollama"}
+            try:
+                preview=engine_client.preview_route("ollama")
+                models=preview["model_map"]
+                pairs={tuple(pair) for pair in models.values()}
+                if len(pairs)!=1:raise ValueError("engine preview returned divergent stage models")
+                provider,model=next(iter(pairs))
+                if provider!="ollama":raise ValueError(f"engine preview returned {provider} for selected ollama")
+                routes.append({"id":"ollama","available":open_now,"managed":True,"model":f"ollama:{model}","model_map":models,"models":[model],**({} if open_now else {"error":"Execution is closed on this server."})})
+            except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
+                reason=exc.error.detail if isinstance(exc,EngineClientError) else str(exc)
+                routes.append({"id":"ollama","available":False,"managed":True,"error":reason})
+        return {"routes":routes,"default_route":default,"managed":True}
     routes=[]
     try:default=engine_client.default_route()
     except (EngineClientError,EngineUnreachableError,AttributeError):default=None
@@ -929,6 +947,8 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         if selected_route!=initial.get("route") or body.initial_model!=initial.get("model"):
             raise HTTPException(422,"initial model must match the engine's current new-session default")
         initial_model=body.initial_model
+    if config.CLOUD_TENANTS and selected_route not in local_route.managed_routes():
+        raise HTTPException(422,{"error":"That model route is not available on this server.","cause":"managed routes: "+", ".join(local_route.managed_routes()),"next":"Reload the Start screen and choose an available route."})
     # Same engine resolver as the Start screen; never infer a model from the
     # route name or a second copy of the .env in delivery.
     try:
@@ -2598,6 +2618,8 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
         target=pending["after_phase"] if req.action=="redo" else (successor(pending["after_phase"]).key if successor(pending["after_phase"]) else pending["after_phase"])
         if req.model_route and PHASE_BY_KEY[target].executor!="generator":
             raise ValueError("This gate has no generator phase for a model override")
+        if config.CLOUD_TENANTS and req.model_route and req.model_route not in local_route.managed_routes():
+            raise ValueError("That model route is not available on this server.")
         selected=model_route_lib.route_value(req.model_route,req.model) if req.model_route else None
         if PHASE_BY_KEY[target].executor=="generator" and not selected:
             model_route_lib.task_default_model(store,task_id,PHASE_BY_KEY[target].generator_stage)

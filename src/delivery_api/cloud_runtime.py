@@ -13,7 +13,7 @@ VENDOR_WATCH_SECONDS=61*60   # just over the one-hour reuse of a good check, so 
 def check_gateways(environ):
     """Raises AdmissionDenied when the reviewed prices, context ceiling or provider key do not build a gateway."""
     from . import production_gateway as pg
-    key=tuple(environ.get(name) for name in (pg.PRICES_ENV,pg.CEILING_ENV,pg.KEY_ENV))
+    key=tuple(environ.get(name) for name in (pg.PRICES_ENV,pg.CEILING_ENV,pg.KEY_ENV,'DELIVERY_LOCAL_PREVIEW'))
     if key in _checked:return      # the switch is asked on every request; a configuration that built once is not rebuilt
     pg.ProductionGateways(None,environ).close()
     _checked.add(key)
@@ -29,9 +29,16 @@ def installed():
 
 def _clients(module):
     import httpx
-    from .provider_network import deepseek_client_factory
-    return deepseek_client_factory(inner_sync=lambda:httpx.HTTPTransport(retries=0),
-        inner_async=lambda:httpx.AsyncHTTPTransport(retries=0),owner_module=module)
+    from .provider_network import deepseek_client_factory,ollama_client_factory
+    inner_sync=lambda:httpx.HTTPTransport(retries=0)
+    inner_async=lambda:httpx.AsyncHTTPTransport(retries=0)
+    deepseek=deepseek_client_factory(inner_sync=inner_sync,inner_async=inner_async,owner_module=module)
+    ollama=ollama_client_factory(inner_sync=inner_sync,inner_async=inner_async,owner_module=module)
+    def factory(*,stage,provider,model,gateway):
+        if provider=='deepseek':return deepseek(stage=stage,provider=provider,model=model,gateway=gateway)
+        if provider=='ollama':return ollama(stage=stage,provider=provider,model=model,gateway=gateway)
+        raise ValueError('reviewed provider client required')
+    return factory
 
 
 def _watch(gateways,stop,seconds):
@@ -66,7 +73,7 @@ def install(store,environ,set_engine_client,watch_vendor=False):
     _failure=None
     inprocess_engine.configure(engine);inprocess_interview.configure(host);set_engine_client(client)
     _state=(gateways,engine,host)
-    if watch_vendor:
+    if watch_vendor and gateways.verify_vendor is not None:
         import threading
         stop=threading.Event()
         threading.Thread(target=_watch,args=(gateways,stop,VENDOR_WATCH_SECONDS),name='vendor-terms-watch',daemon=True).start()

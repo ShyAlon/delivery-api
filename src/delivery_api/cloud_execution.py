@@ -19,7 +19,16 @@ def problems(environ=None):
     out=[]
     if control_plane_only():out.append('the delivery-only runtime profile is active')
     if not config.CLOUD_TENANTS:out.append('cloud accounts (Supabase) are not configured')
-    if not environ.get('DEEPSEEK_API_KEY','').strip():out.append('DEEPSEEK_API_KEY is not set')
+    import json as _json
+    try:
+        _rows=_json.loads(environ.get('VMODEL_REVIEWED_MODEL_PRICES') or 'null')
+        _local=isinstance(_rows,list) and len(_rows)==1 and isinstance(_rows[0],dict) and _rows[0].get('provider')=='ollama'
+    except ValueError:_local=False
+    if _local:
+        # The local route carries no key and exists only in the operator's local execution preview.
+        if environ.get('DELIVERY_LOCAL_PREVIEW')!='1':out.append('the local Ollama route needs the local execution preview flag')
+        if environ.get('DEEPSEEK_API_KEY','').strip():out.append('the local Ollama route carries no provider key')
+    elif not environ.get('DEEPSEEK_API_KEY','').strip():out.append('DEEPSEEK_API_KEY is not set')
     token=environ.get('INTERVIEW_ENGINE_TOKEN','')
     if not token or token==DEFAULT_ENGINE_TOKEN or len(token)<24:out.append('INTERVIEW_ENGINE_TOKEN is missing, default or shorter than 24 characters')
     try:

@@ -114,12 +114,24 @@ def fake_spec_generator(monkeypatch,main):
 
 def test_stage_models_only_the_one_deepseek_route(monkeypatch):
     fake_spec_generator(monkeypatch,lambda *a,**k:None)
+    monkeypatch.delenv('DELIVERY_LOCAL_PREVIEW',raising=False)
     models=ie.stage_models({'SPEC_GENERATOR_MODEL_SRS':'deepseek:deepseek-v4','PATH':'/bin'})
     assert set(models)==set(ie._STAGES) and {(m.provider,m.model) for m in models.values()}=={('deepseek','deepseek-v4')}
     assert models['tests'].max_tokens==12288 and models['needs'].max_tokens==8192 and models['repair'].max_tokens==8192
     for env in ({},{'SPEC_GENERATOR_MODEL_SRS':'ollama:phi4'},{'SPEC_GENERATOR_MODEL_SRS':'deepseek:'},
-                {'SPEC_GENERATOR_MODEL_SRS':'deepseek:a','SPEC_GENERATOR_MODEL_NEEDS':'deepseek:b'}):
+                {'SPEC_GENERATOR_MODEL_SRS':'openai:gpt-5'},{'SPEC_GENERATOR_MODEL_SRS':'deepseek:a','SPEC_GENERATOR_MODEL_NEEDS':'deepseek:b'}):
         with pytest.raises(ValueError):ie.stage_models(env)
+
+
+def test_stage_models_local_preview_admits_the_ollama_route(monkeypatch):
+    """The operator's local execution preview adds the managed local route; the deployed
+    server (flag absent, the test above) keeps refusing it - including a replayed env."""
+    fake_spec_generator(monkeypatch,lambda *a,**k:None)
+    monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
+    models=ie.stage_models({'SPEC_GENERATOR_MODEL_SRS':'ollama:qwen2.5-coder:14b'})
+    assert {(m.provider,m.model) for m in models.values()}=={('ollama','qwen2.5-coder:14b')}
+    assert models['tests'].max_tokens==12288
+    with pytest.raises(ValueError):ie.stage_models({'SPEC_GENERATOR_MODEL_SRS':'openai:gpt-5'})
 
 
 class Harness:

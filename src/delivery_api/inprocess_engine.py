@@ -126,16 +126,22 @@ def process_settings(env):
 
 
 def stage_models(env):
-    """Every stage uses the one reviewed route the phase selected; only DeepSeek runs in the service."""
+    """Every stage uses the one reviewed route the phase selected; managed routes only.
+
+    Deployed cloud manages exactly the DeepSeek route; the operator's local
+    execution preview (DELIVERY_LOCAL_PREVIEW=1) adds the local Ollama route.
+    This check reads the live process flag, so a legacy or replayed phase
+    setting cannot smuggle the local route onto the deployed server."""
     from spec_generator.model_config import StageModel
     routes={v for k,v in (env or {}).items() if k.startswith('SPEC_GENERATOR_MODEL_') and v}
     if len(routes)!=1:raise ValueError('exactly one model route is required for an in-process phase')
     provider,sep,model=routes.pop().partition(':')
-    if provider!='deepseek' or not sep or not model:raise ValueError('only deepseek runs inside the service')
+    from .local_route import managed_routes
+    if not sep or not model or provider not in managed_routes():raise ValueError('the phase route is not a managed route on this service')
     # Each stage keeps the output cap the generator ships for it (the tests stage needs 12288, not the 8192 default).
     from spec_generator import model_config
     caps=model_config._STAGE_DEFAULTS
-    return {stage:(StageModel('deepseek',model,max_tokens=caps[stage].max_tokens) if stage in caps else StageModel('deepseek',model)) for stage in _STAGES}
+    return {stage:(StageModel(provider,model,max_tokens=caps[stage].max_tokens) if stage in caps else StageModel(provider,model)) for stage in _STAGES}
 
 
 class InProcessEngine:
