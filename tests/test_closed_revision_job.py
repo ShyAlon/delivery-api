@@ -80,3 +80,25 @@ def test_queue_retains_cost_ack_exact_draft_and_never_commits_source(tmp_path,mo
         with pytest.raises(ValueError,match='acknowledgement'):module.queue_closed_revision_proposal(store,tid,**kwargs)
         assert jobs==[]
     assert store.task(tid)==before and guard==['task.rerun']
+
+
+def test_preflight_requires_core_artifacts_but_not_conditional_companions(tmp_path, monkeypatch):
+    """Companions exist only when the phase produced them (semantic review ran /
+    research_required slots exist): evidence without them is complete; evidence
+    missing a core artifact still refuses."""
+    from delivery_api.store import SQLiteStore
+    from delivery_api.gate_revision import save_closed_revision, closed_revision_preflight
+    for phase, gate, core, companion in (('srs', 'gate-srs', 'srs.json', 'srs.semantic-review.json'),
+                                         ('architecture', 'gate-architecture', 'architecture.json', 'architecture.decisions.json')):
+        store = SQLiteStore(str(tmp_path / f'{phase}.db')); tid = store.create_task('revision')['task_id']
+        store.wait_at_gate(tid, phase); waiting = store.task(tid)
+        store.retain_decision_review(tid, f'gate:{gate}', 'review', {'task': waiting})
+        store.decide_gate(tid, gate, 'approve', selected_option='Proceed')
+        saved = save_closed_revision(store, tid, gate, 'review', 'Describe offline behavior')
+        without_companion = [{'phase': phase, 'name': core, 'generation': 1, 'sha256': 'a' * 64}]
+        prepared = closed_revision_preflight(store, tid, gate, 'review', saved['draft_id'],
+                                             artifact_snapshot=without_companion)
+        assert prepared['artifact_evidence'] == without_companion, f'{companion} is conditional, never forced'
+        with pytest.raises(ValueError, match='complete canonical phase artifact evidence required'):
+            closed_revision_preflight(store, tid, gate, 'review', saved['draft_id'],
+                                      artifact_snapshot=[{'phase': phase, 'name': companion, 'generation': 1, 'sha256': 'a' * 64}])

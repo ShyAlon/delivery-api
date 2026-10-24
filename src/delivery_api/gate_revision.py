@@ -69,7 +69,7 @@ def closed_revision_preflight(store,task_id,gate_key,review_revision,draft_id,*,
         if not isinstance(digest,str) or not re.fullmatch(r'[a-f0-9]{64}',digest):
             raise ValueError('current artifact content digest required')
         names.add(name);normalized.append(dict(artifact))
-    required=set(PHASE_BY_KEY[preview['phase']].artifacts)
+    required=set(PHASE_BY_KEY[preview['phase']].required_artifacts)
     if not required<=names:raise ValueError('complete canonical phase artifact evidence required')
     # A preflight is not atomic, but cannot knowingly bind a mixed task snapshot.
     if task!=initial or store.task(task_id)!=task:
