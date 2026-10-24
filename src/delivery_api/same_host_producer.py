@@ -94,6 +94,19 @@ class SameHostProducerWorker:
                     raise ProducerRecoveryPaused(f'produced bytes for job {job_id} are not on this host/path ({root}) and no published manifest exists; restore staged bytes or reconcile - never regenerate paid work')
                 if current!=pending['content_hash']:
                     raise ProducerRecoveryPaused(f'produced bytes for job {job_id} differ from the recorded content hash; reconcile - never publish or regenerate from an unverified path')
+            settled_pin=None
+            settled_phase=None
+            if publishing and not resuming_publication:
+                from .phases import PHASE_BY_KEY as _PHASE_BY_KEY
+                _job=self.store.worker_job(job_id) or {}
+                _kind=_job.get('kind','')
+                _phase_def=_PHASE_BY_KEY.get(_kind.split(':')[-1])
+                if _phase_def is not None and _phase_def.executor=='generator':
+                    from .artifact_publication import pin_settled_artifacts
+                    _pin_task=self.store.task(capability.task_id)
+                    if _pin_task:
+                        settled_pin=pin_settled_artifacts(_pin_task,root,current_phase=_kind.split(':')[-1])
+                        settled_phase=_phase_def.key
             def invoke():
                 capability.validate(self.store)
                 with ExitStack() as stack:
@@ -129,6 +142,16 @@ class SameHostProducerWorker:
                         if inspect.iscoroutine(result):result.close()
                         raise TypeError('synchronous producer required')
                     if publishing:
+                        if settled_pin is not None:
+                            from .artifact_publication import settled_substitutions, format_settled_substitution
+                            problems=settled_substitutions(root,*settled_pin)
+                            if problems:
+                                error=format_settled_substitution(settled_phase,problems)
+                                self.store.update_phase(capability.task_id,settled_phase,"failed",detail=error)
+                                self.store.add_event(capability.task_id,"error",error,phase_key=settled_phase,payload={"substitutions":[list(p) for p in problems]})
+                                from .observability import event as _activity
+                                _activity("settled_substitution.blocked","Settled-artifact substitution blocked before publication",task_id=capability.task_id,phase=settled_phase,substitutions=str([list(p) for p in problems]))
+                                raise ValueError(error)
                         if not resuming_publication:
                             content_hash,_=_produced_set_hash(root)
                             self.store.record_producer_result(job_id,capability.task_id,capability.generation,str(root),content_hash)

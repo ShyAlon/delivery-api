@@ -70,4 +70,31 @@ def restore_completed_phases(store, task_id: str, root: Path) -> list[str]:
         temporary = target.with_name(target.name + ".restore-tmp")
         temporary.write_bytes(data)
         os.replace(temporary, target)
+    _write_lineage(task, snapshot, rows, root)
     return restored
+
+
+def _write_lineage(task, snapshot, rows, root: Path) -> None:
+    """Bind every restored (or verified-identical) artifact to its published provenance:
+    task/session/generation + content hash + manifest revision. Entries cover ONLY files
+    this batch wrote or byte-verified; a refused batch never reaches here, so the record
+    never blesses unverified local bytes. spec/lineage.json is local authority for the
+    generator's resume hydration; it is not a declared artifact and never crosses hosts."""
+    from spec_generator import lineage
+    spec = root / "spec"
+    spec.mkdir(parents=True, exist_ok=True)
+    for row in rows:
+        lineage.bind(spec, task_id=task["task_id"], session_id=task.get("session_id") or "",
+                     generation=task["generation"], phase=row["phase_key"], name=row["name"],
+                     sha256=row["sha256"], source="restore", revision=snapshot["revision_id"])
+    inputs = {}
+    for name in ("intent_model.json", "conops.json"):
+        candidate = root / "interview" / name
+        if candidate.is_file():
+            inputs[name] = lineage.sha256_file(candidate)
+    baseline = spec / "system-baseline.json"
+    if baseline.is_file():
+        inputs["system-baseline.json"] = lineage.sha256_file(baseline)
+    if inputs:
+        lineage.record_inputs(spec, task_id=task["task_id"], session_id=task.get("session_id") or "",
+                              generation=task["generation"], input_hashes=inputs)

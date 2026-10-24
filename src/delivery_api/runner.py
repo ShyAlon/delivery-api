@@ -123,6 +123,14 @@ class ProcessRunner:
             from .producer_admission import current_worker_gateway
             # Guard before phase/event mutations and before child creation.
             current_worker_gateway(self.store,task_id)
+        settled_pin=None
+        if artifact_dir is not None:
+            from .phases import PHASE_BY_KEY as _PHASE_BY_KEY
+            _phase_def=_PHASE_BY_KEY.get(phase)
+            if _phase_def is not None and _phase_def.executor=='generator':
+                from .artifact_publication import pin_settled_artifacts
+                _pin_task=self.store.task(task_id)
+                if _pin_task:settled_pin=pin_settled_artifacts(_pin_task,artifact_dir.parent,current_phase=phase)
         usage_path=artifact_dir/"usage.jsonl" if artifact_dir else None
         llm_path=artifact_dir/"llm-calls.jsonl" if artifact_dir else None
         from .pricing import line_count
@@ -257,6 +265,16 @@ class ProcessRunner:
                 phase_row=next(p for p in current["phases"] if p["phase_key"]==phase)
                 from .phases import PHASE_BY_KEY
                 if phase_row["state"] != "approved" and PHASE_BY_KEY[launched_phase].executor=="generator":
+                    if settled_pin is not None:
+                        from .artifact_publication import settled_substitutions, format_settled_substitution
+                        problems=settled_substitutions(artifact_dir.parent,*settled_pin)
+                        if problems:
+                            error=format_settled_substitution(phase,problems)
+                            self.store.update_phase(task_id,phase,"failed",detail=error)
+                            self.store.add_event(task_id,"error",error,phase_key=phase,payload={"substitutions":[list(p) for p in problems]})
+                            from .observability import event as _activity
+                            _activity("settled_substitution.blocked","Settled-artifact substitution blocked before publication",task_id=task_id,phase=phase,substitutions=str([list(p) for p in problems]))
+                            return 1
                     # Exit 0 is not a generated artifact. Never park the user
                     # at a gate with nothing to review.
                     from vmodel_contracts.runtime import artifacts_root

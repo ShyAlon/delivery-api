@@ -90,6 +90,29 @@ def test_unsafe_settings_local_auth_and_worker_routes_denied(cloud):
         assert client.post(path,json={},headers=header('a')).status_code==503
 
 
+def test_opened_gate_stack_decisions_keeps_auth_tenant_and_csrf_walls(cloud):
+    """The route-wall exception for the founder stack-decision endpoint opens the
+    path, never the ownership model: identity is still required, another tenant
+    gets no existence confirmation, and cookie CSRF still applies."""
+    client,store,root=cloud
+    created=client.post('/api/tasks',json={'title':'stackwall-'+uuid.uuid4().hex},headers=header('a'))
+    assert created.status_code==201,created.text
+    task=created.json()['task_id']
+    url='/api/tasks/'+task+'/gates/gate-architecture/stack-decisions'
+    body={'revision':'0'*64,'decisions':[{'key':'language','text':'python'}]}
+    # Cookie-authenticated POST without a matching Origin: CSRF wall first.
+    client.cookies.set('requi_access','a')
+    assert client.post(url,json=body).status_code==403
+    client.cookies.clear()
+    # No identity at all: 401, never the handler.
+    assert client.post(url,json=body).status_code==401
+    # Verified identity of another tenant: 404, byte-identical to a genuinely
+    # nonexistent task - the response is no existence oracle.
+    denied=client.post(url,json=body,headers=header('b'))
+    missing=client.post(url.replace(task,'no-such-task'),json=body,headers=header('b'))
+    assert denied.status_code==404 and denied.text==missing.text,(denied.status_code,denied.text,missing.status_code,missing.text)
+
+
 def test_cloud_cookie_csrf_and_revoked_session(cloud):
     import psycopg
     client,store,root=cloud
@@ -521,12 +544,14 @@ def test_suspended_file_only_gate_mutations_rejected_before_artifact_effect(clou
     monkeypatch.setattr(module,'_gate_review',lambda *a: touched.append('review') or {})
     with psycopg.connect(DSN) as c:c.execute('INSERT INTO user_task_policy VALUES (%s,true,1,0)',(A.owner_id,))
     try:
-        for suffix,body in (('semantic-review',{'revision':'a'*64,'decisions':[]}),
-             ('stack-decisions',{'revision':'a'*64,'decisions':[{'key':'x','text':'y'}]})):
+        # semantic-review's cloud protocol gate stays closed (503). stack-decisions is
+        # now an admitted file operation (the founder records decisions on the pickup
+        # host): the route wall opens, and the suspended-tenant file guard itself
+        # rejects before any artifact effect - translated to 404, no existence oracle.
+        for suffix,body,expected in (('semantic-review',{'revision':'a'*64,'decisions':[]},503),
+             ('stack-decisions',{'revision':'a'*64,'decisions':[{'key':'x','text':'y'}]},404)):
             response=client.post('/api/tasks/'+task['task_id']+'/gates/gate-srs/'+suffix,json=body,headers=header('a'))
-            # Existing cloud protocol gate stays closed; don't lift it to test
-            # the guard that must also protect future admitted file operations.
-            assert response.status_code==503,response.text
+            assert response.status_code==expected,(suffix,response.status_code,response.text)
         with tenant_context(A):
             with pytest.raises(TenantAccessDenied,match='suspended'):
                 module.decide_semantic_gate(task['task_id'],'gate-srs',module.SemanticDecisions(revision='a'*64,decisions=[]),None)

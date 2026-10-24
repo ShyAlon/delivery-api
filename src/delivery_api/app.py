@@ -1485,7 +1485,7 @@ def task_artifact_download(task_id:str,phase:str,name:str):
                         headers={'Content-Disposition':f'attachment; filename="{name}"'})
     return FileResponse(path,filename=name)
 
-_ARTIFACT_TITLES={"intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification","validation.json":"Validation"}
+_ARTIFACT_TITLES={"srs.semantic-review.json":"Requirements Semantic Review","architecture.decisions.json":"Architecture Stack Decisions","intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification","validation.json":"Validation"}
 
 def _checkpoint_interview_turns(task_id:str)->list[tuple[str,str]]:
     """Recover historical turns when old API events stored only answer lengths."""
@@ -2438,6 +2438,10 @@ def _use_architecture_defaults(task_id: str):
     temporary = path.with_suffix('.tmp'); temporary.write_text(json.dumps(companion, indent=2)); temporary.replace(path)
     temporary = artifact.with_suffix('.tmp'); temporary.write_text(json.dumps(full, indent=2)); temporary.replace(artifact)
     artifact.with_suffix('.md').unlink(missing_ok=True)
+    # Applied defaults are durable decision data; republish so the manifest
+    # matches local bytes and a later restore does not refuse the batch.
+    from .artifact_publication import publish_committed_session
+    publish_committed_session(store, task_id, path.parent.parent, phase_key='architecture')
 
 
 def _gate_review(task_id:str,gate_key:str)->dict:
@@ -2546,6 +2550,10 @@ def decide_semantic_gate(task_id:str,gate_key:str,body:SemanticDecisions,a:auth.
     full={**full,**resolved};temporary=artifact.with_suffix('.tmp');temporary.write_text(json.dumps(full,indent=2));temporary.replace(artifact)
     # A stale readable companion must not mask the reviewed canonical JSON.
     artifact.with_suffix('.md').unlink(missing_ok=True)
+    # Founder item decisions are durable review evidence; republish so the
+    # manifest matches local bytes and a later restore does not refuse the batch.
+    from .artifact_publication import publish_committed_session
+    publish_committed_session(store,task_id,path.parent.parent,phase_key='srs')
     store.add_event(task_id,'semantic_review','Semantic candidate decisions recorded',phase_key='srs',payload={'revision':review.revision,'decisions':[d.model_dump() for d in review.decisions],'actor':a.label})
     return {'status':'reviewed','revision':review.revision}
 
@@ -2582,6 +2590,11 @@ def decide_stack_gate(task_id:str,gate_key:str,body:StackDecisions,a:auth.Actor=
     path=_stack_decisions_path(task_id);temporary=path.with_suffix('.tmp');temporary.write_text(json.dumps(companion,indent=2));temporary.replace(path)
     temporary=artifact.with_suffix('.tmp');temporary.write_text(json.dumps(full,indent=2));temporary.replace(artifact)
     artifact.with_suffix('.md').unlink(missing_ok=True)
+    # The companion is the durable founder-decision record and must cross hosts:
+    # republish so the manifest matches the local bytes (otherwise a later
+    # completed-phase restore on this or another host refuses the batch).
+    from .artifact_publication import publish_committed_session
+    publish_committed_session(store,task_id,path.parent.parent,phase_key='architecture')
     store.add_event(task_id,'stack_decisions','Architecture stack decisions recorded',phase_key='architecture',payload={'decided':sorted(made),'open':_open_stack_slots(companion),'actor':a.label})
     return {'status':'saved','revision':data['revision'],'open':_open_stack_slots(companion)}
 
@@ -2608,20 +2621,37 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
         before=store.task(task_id)
         pending=next((g for g in before["gates"] if g["gate_key"]==gate_key),None) if before else None
         if not pending:raise KeyError(gate_key)
-        if pending['after_phase']=='srs' and _recorded_engine_session(task_id) and _srs_semantic_path(task_id).is_file():
-            from vmodel_contracts.semantic_review import SemanticReview
-            semantic=SemanticReview.model_validate_json(_srs_semantic_path(task_id).read_text())
-            if req.action!='redo':
-                resolved=semantic.resolved_candidate(lambda candidate:None)
-                canonical=json.loads(task_artifact_view(task_id,'srs','srs.json')['raw_content'])
-                if any(canonical.get(k)!=v for k,v in resolved.items()):raise ValueError('Reviewed SRS write is incomplete; save the item decisions again before approving')
-        if pending['after_phase']=='architecture' and req.action!='redo':
-            still_open=_open_stack_slots(_read_stack_decisions(task_id))
-            if still_open:raise ValueError(f'{len(still_open)} architecture decision(s) still open; decide each one before approving')
         if pending["state"]=="waiting" and req.action in ("approve","edit"):
+            # Runs first: on a restore-enabled host this materializes the committed
+            # evidence (companions included) before the enforcement checks below read it.
             evidence=[a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==pending["after_phase"] and not a.get("stale") and a.get("present",True)]
             if not evidence or not any(Path(a["ref"]).is_file() and a.get("valid") is not False for a in evidence):
                 raise ValueError("No current valid artifact is available to review at this gate")
+        if pending['after_phase']=='srs' and req.action!='redo' and _recorded_engine_session(task_id):
+            # Every srs run produces its semantic review (spec-generator graph node_srs),
+            # so the file is required approval evidence for a session-recorded task.
+            # Fail closed when it is absent - never skip the reviewed-write check silently.
+            semantic_path=_srs_semantic_path(task_id)
+            if not semantic_path.is_file():
+                raise ValueError('Required approval evidence is missing: the semantic review of the SRS produced in this session (srs.semantic-review.json) is not on this host. Restore the published artifacts on this host, or publish them on the producing host (scripts/ops-backfill-artifact-manifest.py), then review again - this gate does not approve without the reviewed-write evidence.')
+            from vmodel_contracts.semantic_review import SemanticReview
+            semantic=SemanticReview.model_validate_json(semantic_path.read_text())
+            resolved=semantic.resolved_candidate(lambda candidate:None)
+            canonical=json.loads(task_artifact_view(task_id,'srs','srs.json')['raw_content'])
+            if any(canonical.get(k)!=v for k,v in resolved.items()):raise ValueError('Reviewed SRS write is incomplete; save the item decisions again before approving')
+        if pending['after_phase']=='architecture' and req.action!='redo':
+            # research_required slots in the canonical artifact mean the generator
+            # wrote the founder-decision companion; it is required approval evidence.
+            try:
+                full=json.loads(_task_artifact(task_id,'architecture','architecture.json').read_text())
+                research_required=[d for d in full.get('stack_entry_dispositions') or [] if str(d.get('status'))=='research_required']
+            except HTTPException:
+                research_required=[]
+            decisions=_read_stack_decisions(task_id)
+            if research_required and decisions is None:
+                raise ValueError('Required approval evidence is missing: this architecture has research-required stack slots but architecture.decisions.json is not on this host. Restore the published artifacts on this host, or publish them on the producing host (scripts/ops-backfill-artifact-manifest.py), then review again - this gate does not approve while the founder-decision record is unavailable.')
+            still_open=_open_stack_slots(decisions)
+            if still_open:raise ValueError(f'{len(still_open)} architecture decision(s) still open; decide each one before approving')
         from .phases import PHASE_BY_KEY, successor
         target=pending["after_phase"] if req.action=="redo" else (successor(pending["after_phase"]).key if successor(pending["after_phase"]) else pending["after_phase"])
         if req.model_route and PHASE_BY_KEY[target].executor!="generator":

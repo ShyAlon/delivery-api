@@ -87,3 +87,29 @@ def test_gate_review_rejects_conflicting_retained_evidence(tmp_path,monkeypatch)
   assert response.status_code==409,response.text
  monkeypatch.setattr(store,'decision_review',original)
  assert store.decision_review(tid,'gate:gate-intent',first['revision'])==first
+
+def test_missing_semantic_review_fails_closed_and_restore_recovers(tmp_path,monkeypatch):
+ # Integrity: every srs run produces its semantic review, so a session-recorded
+ # task at gate-srs REQUIRES srs.semantic-review.json locally. A fresh host
+ # before restore/backfill must be refused with a recoverable missing-evidence
+ # error - never silently approve without the reviewed-write evidence.
+ import json
+ from vmodel_contracts import SRSDocument
+ from vmodel_contracts.semantic_review import make_review
+ from vmodel_contracts.runtime import artifacts_root
+ import delivery_api.app as module
+ store,tid,engine,c=setup(tmp_path,monkeypatch)
+ monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
+ store.wait_at_gate(tid,'srs')
+ body=SRSDocument.model_validate({'session_id':'session-one','intent_model_ref':'session-one','purpose':'Test','scope_summary':'Test','functional':[{'requirement_id':'R-1','title':'Button','statement':'The system shall show a button.','priority':'must','kind':'functional','acceptance':[{'criterion_id':'AC-1','statement':'Click button'}],'need_ids':['N-1'],'intent_fields':['problem_statement']}],'non_functional':[]}).model_dump(mode='json')
+ path=artifacts_root(str(tmp_path/'artifacts'))/'session-one'/'spec';path.mkdir(parents=True);artifact=path/'srs.json';artifact.write_text(json.dumps(body))
+ monkeypatch.setattr(module,'_task_artifact_snapshot',lambda task:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
+ denied=c.post(f'/api/tasks/{tid}/gates/gate-srs/decide',json={'action':'approve','selected_option':'Proceed'})
+ assert denied.status_code==400 and 'Required approval evidence is missing' in denied.text,denied.text
+ # Recovery: the companion lands (restore/backfill); approval proceeds.
+ semantic=make_review('session-one','srs',body,[]);(path/'srs.semantic-review.json').write_text(semantic.model_dump_json())
+ store.set_model_default(tid,'deepseek:deepseek-flash')
+ async def no_continue(*args,**kwargs): pass
+ monkeypatch.setattr(module.orchestrator,'continue_after',no_continue)
+ reply=c.post(f'/api/tasks/{tid}/gates/gate-srs/decide',json={'action':'approve','selected_option':'Proceed'})
+ assert reply.status_code==200,reply.text

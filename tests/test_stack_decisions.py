@@ -54,13 +54,47 @@ def test_blank_unknown_and_stale_are_refused(tmp_path, monkeypatch):
     assert 'founder_decision' not in json.loads(artifact.read_text())['stack_entry_dispositions'][0]
 
 
-def test_no_open_slot_file_means_no_panel_and_approval_unchanged(tmp_path, monkeypatch):
+def test_missing_companion_with_research_required_slots_fails_closed(tmp_path, monkeypatch):
+    # Integrity: research_required slots mean the generator wrote the founder-decision
+    # companion. A missing companion (e.g. fresh host before restore/backfill) must
+    # REFUSE approval with a recoverable missing-evidence error - never silently
+    # approve without the required evidence.
     store, tid, c, spec, artifact = _arch_setup(tmp_path, monkeypatch, slots=1)
     (spec / 'architecture.decisions.json').unlink()
     review = c.get(f'/api/tasks/{tid}/gates/gate-architecture/review').json()['review']
     assert review['stack_decisions'] is None
+    denied = c.post(f'/api/tasks/{tid}/gates/gate-architecture/decide', json={'action': 'approve', 'selected_option': 'Proceed'})
+    assert denied.status_code == 400 and 'Required approval evidence is missing' in denied.text, denied.text
+    # Recovery: the companion lands (restore/backfill), the slot gets decided, approval proceeds.
+    store.set_model_default(tid, "deepseek:deepseek-flash")
+    async def no_continue(*args, **kwargs): pass
+    monkeypatch.setattr(__import__('delivery_api.app', fromlist=['orchestrator']).orchestrator, 'continue_after', no_continue)
+    (spec / 'architecture.decisions.json').write_text(json.dumps({'revision': REV, 'slots': [
+        {'key': 'database', 'brief': 'Which database?', 'founder_decision': {'text': 'SQLite', 'reason': 'One user', 'actor': 'local user', 'at': '2026-10-24T00:00:00+00:00'}}]}))
+    decided = {'text': 'SQLite', 'reason': 'One user', 'actor': 'local user', 'at': '2026-10-24T00:00:00+00:00'}
+    from vmodel_contracts.architecture import ArchitectureOverview
+    full = {'session_id': 'session-one', 'stack_entries': [], 'components': [], 'decisions': [], 'non_functionals': {},
+            'stack_entry_dispositions': [{'key': 'database', 'status': 'research_required', 'research_brief': 'Which database?',
+                                          'founder_decision': decided}]}
+    ArchitectureOverview.model_validate(full)
+    artifact.write_text(json.dumps(full))
     reply = c.post(f'/api/tasks/{tid}/gates/gate-architecture/decide', json={'action': 'approve', 'selected_option': 'Proceed'})
-    assert 'architecture decision' not in json.dumps(reply.json())
+    assert reply.status_code == 200, reply.text
+
+
+def test_no_research_required_slots_need_no_companion(tmp_path, monkeypatch):
+    # Genuinely non-applicable: no research_required dispositions, so no companion
+    # was ever produced - approval proceeds without it.
+    store, tid, c, spec, artifact = _arch_setup(tmp_path, monkeypatch, slots=1)
+    artifact.write_text(json.dumps({'stack_entry_dispositions': [{'key': 'database', 'status': 'resolved', 'value': 'SQLite'}]}))
+    (spec / 'architecture.decisions.json').unlink()
+    store.set_model_default(tid, "deepseek:deepseek-flash")
+    async def no_continue(*args, **kwargs): pass
+    monkeypatch.setattr(__import__('delivery_api.app', fromlist=['orchestrator']).orchestrator, 'continue_after', no_continue)
+    review = c.get(f'/api/tasks/{tid}/gates/gate-architecture/review').json()['review']
+    assert review['stack_decisions'] is None
+    reply = c.post(f'/api/tasks/{tid}/gates/gate-architecture/decide', json={'action': 'approve', 'selected_option': 'Proceed'})
+    assert reply.status_code == 200, reply.text
 
 
 FRAMING = {"title": "Storing Your Data", "purpose": "Keeps the product's records between visits.", "default_value": "SQLite", "reason": "A single local user needs a small store.", "requirement_ids": ["R-1"], "options": [{"value": "SQLite", "label": "One Local Store", "implication": "Simple to run; a shared server may be needed later."}, {"value": "PostgreSQL", "label": "A Shared Store", "implication": "Supports shared access but adds a server to manage."}], "provenance": "design_proposal", "research_status": "pending"}

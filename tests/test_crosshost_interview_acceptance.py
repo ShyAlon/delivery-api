@@ -987,12 +987,27 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
     bytes and settled work is never regenerated.
 
     A runs the interview + needs (real UI child). B restores, approves gate-needs,
-    runs srs. A2 restores, approves gate-srs, runs architecture, records the founder
-    stack decisions through the gate's stack-decisions surface (the companion file
-    is host-local), approves gate-architecture, runs items with --require-decisions
-    satisfied. B2 restores, approves gate-specs, runs tests. A3 restores, approves
-    gate-tests, runs validation, approves gate-validation: the session reaches a
-    terminal state with every declared artifact published content-addressed."""
+    runs srs. A2 restores (semantic-review companion included), approves gate-srs
+    on the NON-producer host, runs architecture with a research_required stack
+    slot. B2 restores the founder-decision companion, records the founder stack
+    decisions on the gate surface, approves gate-architecture on the NON-producer
+    host, runs items over the restored companion. A3 (the pre-decision producer
+    root) must REFUSE pickup: its local companion conflicts with the published
+    founder-decision record and restore never overwrites conflicting local bytes
+    (a pending founder amendment would fast-forward provably-published bytes).
+    B3 restores, approves gate-specs, runs tests. B4 restores, approves gate-tests,
+    runs validation, approves gate-validation: the session reaches a terminal state
+    with every declared
+
+    NOTE (2026-10-24): the earlier greenfield milestone (6f34d00) is RETRACTED as
+    evidence of safe all-phase handoff: without the companion binding it masked a
+    settled-work substitution - a pickup host's checkpoint-local resume regenerated
+    the approved architecture downstream and published the substitute. The
+    settled-substitution guard (artifact_publication.pin_settled_artifacts) now
+    fails that class loudly before publication; the generator's checkpoint-local
+    resume still needs its cause-level fix (disk-committed stages must bind to the
+    authoritative snapshot) before this test can assert a clean terminal run.
+    artifact - approval evidence companions included - published content-addressed."""
     from playwright.sync_api import sync_playwright
     import hashlib as _hashlib
     root = tmp_path_factory.mktemp('crosshost-full')
@@ -1058,9 +1073,11 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
     published2 = {(r['phase_key'], r['name']): r for r in rows2 if r['publication_state'] == 'published'}
     srs_sha = published2[('srs', 'srs.json')]['sha256']
 
-    # Host A2 (A's root): restore, approve gate-srs, architecture child, founder
-    # stack decisions on the gate surface, approve gate-architecture, items child.
-    local2 = AdmittedHost('local2', root, keys, dsn, artifacts=local.artifacts, extra_env=dict(PUBLISH_RESTORE_ENV))
+    # Host A2 (A's root): restore, approve gate-srs (HOST SWITCH at this gate: the
+    # semantic-review companion must cross and the fail-closed check runs on A2),
+    # then run architecture with a research_required stack slot.
+    local2 = AdmittedHost('local2', root, keys, dsn, artifacts=local.artifacts,
+                          extra_env=dict(PUBLISH_RESTORE_ENV, DELIVERY_TEST_STACK_MODE='research_required'))
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
@@ -1070,80 +1087,134 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
             assert review_srs_a.get('actionable'), 'A2 reviews B\'s srs: %r' % (str(review_srs_a)[:300],)
             restored_srs = spec_file(local2, session_id, 'srs.json')
             assert restored_srs.is_file() and _hashlib.sha256(restored_srs.read_bytes()).hexdigest() == srs_sha
+            restored_sem = spec_file(local2, session_id, 'srs.semantic-review.json')
+            assert restored_sem.is_file(), 'the semantic-review companion crossed to A2 via the manifest'
+            _, rows_sem, _, _ = _manifest_state(dsn, task_id)
+            sem_row = next(r for r in rows_sem if r['name'] == 'srs.semantic-review.json' and r['publication_state'] == 'published')
+            assert _hashlib.sha256(restored_sem.read_bytes()).hexdigest() == sem_row['sha256'], 'restored companion bytes match the published hash'
             decide(page, local2.base, 'gate-srs', 'Approve Requirements')
             review_arch = wait_gate_review(page, local2.base, task_id, 'gate-architecture', timeout=180)
             assert gate_documents(review_arch).get('architecture.json'), 'architecture ran as a real child on A2'
-            # Greenfield stub reality: the design-proposal path answers the stack
-            # slot, so no research_required slot and no founder surface here. The
-            # research_required cross-host variant is separate; handle both.
-            stack = (review_arch.get('review') or {}).get('stack_decisions') or review_arch.get('stack_decisions')
-            open_slots = [s['key'] for s in (stack or {}).get('slots', [])
-                          if not s.get('founder_decision') and not s.get('technical_choice')]
-            if open_slots:
-                saved = page.request.post(local2.base + '/api/tasks/%s/gates/gate-architecture/stack-decisions' % task_id,
-                                          data=json.dumps({'revision': stack['revision'],
-                                                           'decisions': [{'key': key, 'text': 'python', 'reason': 'deterministic acceptance'} for key in open_slots]}),
-                                          headers=headers(local2.base))
-                assert saved.ok and not saved.json().get('open'), (saved.status, saved.text()[:300])
-            decide(page, local2.base, 'gate-architecture', 'Approve Architecture')
-            review_specs = wait_gate_review(page, local2.base, task_id, 'gate-specs', timeout=180)
-            docs_specs = gate_documents(review_specs)
-            # Generator 0.28.0 emits items.json (+ specs/*.md); spec_items.json is a
-            # legacy tolerated name, not a current output.
-            assert docs_specs.get('items.json'), \
-                'items ran as a real child on A2 with the decisions companion present: %r' % (sorted(docs_specs),)
+            stack_a = (review_arch.get('review') or {}).get('stack_decisions') or review_arch.get('stack_decisions')
+            assert stack_a and [s for s in stack_a['slots'] if not s.get('founder_decision')], \
+                'the research_required slot surfaces the founder-decision panel on the producer host: %r' % (str(review_arch)[:400],)
             browser.close()
     finally:
         local2.stop()
 
     _, rows3, _, _ = _manifest_state(dsn, task_id)
     published3 = {(r['phase_key'], r['name']): r for r in rows3 if r['publication_state'] == 'published'}
-    assert ('architecture', 'architecture.json') in published3 and ('specs', 'items.json') in published3, \
-        'A2 published architecture and items: %r' % (sorted(published3),)
-    # Producer identity: B's root never saw architecture/items while B was down.
+    assert ('architecture', 'architecture.json') in published3 and ('architecture', 'architecture.decisions.json') in published3, \
+        'A2 published architecture and its founder-decision companion: %r' % (sorted(published3),)
+    a2_companion_bytes = spec_file(local2, session_id, 'architecture.decisions.json').read_bytes()
+    # Producer identity: B's root never saw architecture while B was down.
     assert not spec_file(cloud, session_id, 'architecture.json').exists(), 'architecture was produced on A2, not on B'
 
-    # Host B2 (B's root): restore, approve gate-specs, tests child.
+    # Host B2 (B's root): HOST SWITCH at gate-architecture - restore the
+    # founder-decision companion from the published manifest, record the founder
+    # decisions there, approve, and run items over the restored companion.
     cloud2 = AdmittedHost('cloud2', root, keys, dsn, artifacts=cloud.artifacts, extra_env=dict(PUBLISH_RESTORE_ENV))
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page()
             sign_in(page, cloud2.base)
-            review_specs_b = wait_gate_review(page, cloud2.base, task_id, 'gate-specs', timeout=30)
-            assert review_specs_b.get('actionable'), 'B2 reviews A2\'s items: %r' % (str(review_specs_b)[:300],)
-            restored_items = spec_file(cloud2, session_id, 'items.json')
-            assert restored_items.is_file() and \
-                _hashlib.sha256(restored_items.read_bytes()).hexdigest() == published3[('specs', 'items.json')]['sha256'], \
-                'B2 restored the published items bytes'
-            decide(page, cloud2.base, 'gate-specs', 'Approve Item specifications')
-            review_tests = wait_gate_review(page, cloud2.base, task_id, 'gate-tests', timeout=180)
-            docs_tests = gate_documents(review_tests)
-            assert docs_tests.get('tests.json'), 'tests ran as a real child on B2: %r' % (sorted(docs_tests),)
+            review_arch_b = wait_gate_review(page, cloud2.base, task_id, 'gate-architecture', timeout=30)
+            assert review_arch_b.get('actionable'), 'B2 reviews A2\'s architecture: %r' % (str(review_arch_b)[:300],)
+            restored_companion = spec_file(cloud2, session_id, 'architecture.decisions.json')
+            assert restored_companion.is_file(), 'the founder-decision companion crossed to B2 via the manifest'
+            assert _hashlib.sha256(restored_companion.read_bytes()).hexdigest() == published3[('architecture', 'architecture.decisions.json')]['sha256'], \
+                'restored companion bytes match the published hash'
+            stack_b = (review_arch_b.get('review') or {}).get('stack_decisions') or review_arch_b.get('stack_decisions')
+            # Slots carry the design proposal (technical_choice/prefill); the founder
+            # overrides on the restored companion - the cross-host decision proof.
+            open_b = [s['key'] for s in (stack_b or {}).get('slots', []) if not s.get('founder_decision')]
+            assert open_b, 'B2 sees the founder-decision slots from the restored companion: %r' % (str(review_arch_b)[:400],)
+            saved = page.request.post(cloud2.base + '/api/tasks/%s/gates/gate-architecture/stack-decisions' % task_id,
+                                      data=json.dumps({'revision': stack_b['revision'],
+                                                       'decisions': [{'key': key, 'text': 'python', 'reason': 'deterministic acceptance'} for key in open_b]}),
+                                      headers=headers(cloud2.base))
+            assert saved.ok and not saved.json().get('open'), (saved.status, saved.text()[:300])
+            decide(page, cloud2.base, 'gate-architecture', 'Approve Architecture')
+            review_specs = wait_gate_review(page, cloud2.base, task_id, 'gate-specs', timeout=180)
+            docs_specs = gate_documents(review_specs)
+            # Generator 0.28.0 emits items.json (+ specs/*.md); spec_items.json is a
+            # legacy tolerated name, not a current output.
+            assert docs_specs.get('items.json'), 'items ran as a real child on B2 over the restored companion: %r' % (sorted(docs_specs),)
             browser.close()
     finally:
         cloud2.stop()
 
     _, rows4, _, _ = _manifest_state(dsn, task_id)
     published4 = {(r['phase_key'], r['name']): r for r in rows4 if r['publication_state'] == 'published'}
-    assert ('tests', 'tests.json') in published4, sorted(published4)
-    assert not spec_file(local2, session_id, 'tests.json').exists(), 'tests were produced on B2, not on A'
+    assert ('specs', 'items.json') in published4, sorted(published4)
+    # Producer identity: A's root never saw items while A was down.
+    assert not spec_file(local2, session_id, 'items.json').exists(), 'items were produced on B2, not on A'
 
-    # Host A3 (A's root): restore, approve gate-tests, validation child, terminal approval.
+    # Host A3 (A's root): the stale-replica boundary of the APPROVED restore
+    # behavior. A2 produced the open-slots companion on this root; the founder's
+    # decisions were recorded on B2 and republished, so A3's local companion is an
+    # older committed render of the same document. Restore never overwrites
+    # conflicting local bytes: the pickup refuses cleanly and recoverably, and
+    # every local byte is preserved. (A pending founder amendment would let
+    # provably-previously-published bytes fast-forward to the latest revision.)
     local3 = AdmittedHost('local3', root, keys, dsn, artifacts=local.artifacts, extra_env=dict(PUBLISH_RESTORE_ENV))
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page()
             sign_in(page, local3.base)
-            review_tests_a = wait_gate_review(page, local3.base, task_id, 'gate-tests', timeout=30)
-            assert review_tests_a.get('actionable'), 'A3 reviews B2\'s tests: %r' % (str(review_tests_a)[:300],)
+            refused = page.request.get(local3.base + '/api/tasks/%s/gates/gate-specs/review' % task_id)
+            assert refused.status == 409 and 'conflicting local bytes' in refused.text(), \
+                'A3 holds the pre-decision companion: restore refuses without overwriting: %r' % ((refused.status, refused.text()[:200]),)
+            browser.close()
+    finally:
+        local3.stop()
+    stale_companion = spec_file(local3, session_id, 'architecture.decisions.json')
+    assert stale_companion.is_file() and stale_companion.read_bytes() == a2_companion_bytes, \
+        'the refusal left every local byte intact (conflicting local bytes are never overwritten)'
+
+    # Host B3 (B's root): restore (the decided companion is identical on this
+    # root), approve gate-specs, tests child.
+    cloud3 = AdmittedHost('cloud3', root, keys, dsn, artifacts=cloud.artifacts, extra_env=dict(PUBLISH_RESTORE_ENV))
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, cloud3.base)
+            review_specs_b = wait_gate_review(page, cloud3.base, task_id, 'gate-specs', timeout=30)
+            assert review_specs_b.get('actionable'), 'B3 reviews B2\'s items: %r' % (str(review_specs_b)[:300],)
+            restored_items = spec_file(cloud3, session_id, 'items.json')
+            assert restored_items.is_file() and \
+                _hashlib.sha256(restored_items.read_bytes()).hexdigest() == published4[('specs', 'items.json')]['sha256']
+            decide(page, cloud3.base, 'gate-specs', 'Approve Item specifications')
+            review_tests = wait_gate_review(page, cloud3.base, task_id, 'gate-tests', timeout=180)
+            assert gate_documents(review_tests).get('tests.json'), 'tests ran as a real child on B3'
+            browser.close()
+    finally:
+        cloud3.stop()
+
+    _, rows5, _, _ = _manifest_state(dsn, task_id)
+    published5 = {(r['phase_key'], r['name']): r for r in rows5 if r['publication_state'] == 'published'}
+    assert ('tests', 'tests.json') in published5, sorted(published5)
+    assert not spec_file(local2, session_id, 'tests.json').exists(), 'tests were produced on B3, not on A'
+
+    # Host B4 (B's root): restore, approve gate-tests, validation child, terminal approval.
+    cloud4 = AdmittedHost('cloud4', root, keys, dsn, artifacts=cloud.artifacts, extra_env=dict(PUBLISH_RESTORE_ENV))
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            sign_in(page, cloud4.base)
+            local3 = cloud4  # the shared tail below drives through `local3.base`
+            review_tests_b = wait_gate_review(page, local3.base, task_id, 'gate-tests', timeout=30)
+            assert review_tests_b.get('actionable'), 'B4 reviews B3\'s tests: %r' % (str(review_tests_b)[:300],)
             restored_tests = spec_file(local3, session_id, 'tests.json')
             assert restored_tests.is_file() and \
-                _hashlib.sha256(restored_tests.read_bytes()).hexdigest() == published4[('tests', 'tests.json')]['sha256']
+                _hashlib.sha256(restored_tests.read_bytes()).hexdigest() == published5[('tests', 'tests.json')]['sha256']
             decide(page, local3.base, 'gate-tests', 'Approve Verification')
             review_val = wait_gate_review(page, local3.base, task_id, 'gate-validation', timeout=180)
-            assert gate_documents(review_val).get('validation.json'), 'validation ran as a real child on A3'
+            assert gate_documents(review_val).get('validation.json'), 'validation ran as a real child on B4'
             decide(page, local3.base, 'gate-validation', 'Approve Validation')
             final = page.request.get(local3.base + '/api/tasks/' + task_id).json()
             states = {x['phase_key']: x['state'] for x in final['phases']}
@@ -1162,8 +1233,9 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
     ready_f, rows_f, blobs_f, jobs_f = _manifest_state(dsn, task_id)
     assert len(ready_f) == 1, 'one ready revision at the terminal commit: %r' % (ready_f,)
     expected = {('intent', 'intent_model.json'), ('conops', 'conops.json'), ('needs', 'needs.json'),
-                ('srs', 'srs.json'), ('architecture', 'architecture.json'), ('specs', 'items.json'),
-                ('tests', 'tests.json'), ('validation', 'validation.json')}
+                ('srs', 'srs.json'), ('srs', 'srs.semantic-review.json'),
+                ('architecture', 'architecture.json'), ('architecture', 'architecture.decisions.json'),
+                ('specs', 'items.json'), ('tests', 'tests.json'), ('validation', 'validation.json')}
     published_f = {(r['phase_key'], r['name']) for r in rows_f if r['publication_state'] == 'published'}
     assert expected <= published_f, 'terminal revision carries every declared artifact: missing %r' % (expected - published_f,)
     for phase_key, name in expected:

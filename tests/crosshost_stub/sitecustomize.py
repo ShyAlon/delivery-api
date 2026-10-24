@@ -1,3 +1,4 @@
+
 """Deterministic cross-host acceptance stub, injected via PYTHONPATH.
 
 Active only when CROSSHOST_STUB=1. Runs at interpreter startup inside the test
@@ -205,6 +206,12 @@ if os.environ.get('CROSSHOST_STUB') == '1':
             if props == {'stack_keys'}:
                 return {'stack_keys': ['language']}
             if props == {'technology', 'off_list_justification', 'baseline_refs'}:
+                if os.environ.get('DELIVERY_TEST_STACK_MODE') == 'research_required':
+                    # Founder-decision flow: the slot cannot be resolved by design,
+                    # so the pipeline must surface it for a founder decision.
+                    return {'status': 'research_required',
+                            'research_brief': 'Choose the implementation language for the deterministic acceptance flow.',
+                            'candidate_options': ['python', 'node']}
                 # Greenfield contract: no baseline refs may be cited.
                 return {'technology': 'python', 'off_list_justification': None,
                         'baseline_refs': []}
@@ -212,6 +219,15 @@ if os.environ.get('CROSSHOST_STUB') == '1':
                 return {'responsibility': 'serve'}
             if props == {'position'}:
                 return {'position': 'fast'}
+            if 'default_value' in props and 'options' in props:
+                # Technical-choice framing for a research_required slot: the design
+                # proposal the founder confirms or overrides at the gate.
+                return {'title': 'Language choice', 'purpose': 'Implementation language.',
+                        'default_value': 'python', 'reason': 'Deterministic acceptance default.',
+                        'requirement_ids': (schema.get('properties', {}).get('requirement_ids', {})
+                                            .get('items', {}).get('enum') or [])[:1],
+                        'options': [{'value': 'python', 'label': 'Python', 'implication': 'Simple.'},
+                                    {'value': 'node', 'label': 'Node', 'implication': 'Heavier.'}]}
             if 'driver' in props:
                 refs_items = schema.get('properties', {}).get('founder_decision_refs', {}).get('items', {})
                 return {'title': 't', 'decision': 'x', 'rationale': 'y', 'driver': 'simplicity',
