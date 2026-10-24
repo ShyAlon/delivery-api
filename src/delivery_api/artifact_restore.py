@@ -66,22 +66,37 @@ def restore_completed_phases(store, task_id: str, root: Path) -> list[str]:
             raise RestoreRefused(f"conflicting local bytes at {target}; restore never overwrites")
         writes.append((target, data))
         restored.append(row["name"])
+    # A restore batch ends in an authority-record binding (the generator's lineage
+    # module owns that record's format; a divergent copy here would fork the
+    # contract). Checked after every content refusal but BEFORE any byte is written,
+    # so a host without it refuses the batch cleanly instead of leaving unbound
+    # restored bytes. The full runtime image packages spec-generator (Dockerfile.full
+    # verifies the import); a control-plane-only host gets a clear refusal, not a
+    # stack trace.
+    try:
+        from spec_generator import lineage
+    except ModuleNotFoundError as exc:
+        raise RestoreRefused(
+            "cannot restore: spec-generator is not importable on this host, so the "
+            "restored bytes could not be bound to their authority record. Restore-on-read "
+            "requires the full runtime image (Dockerfile.full packages spec-generator); "
+            "nothing was written."
+        ) from exc
     for target, data in writes:
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(target.name + ".restore-tmp")
         temporary.write_bytes(data)
         os.replace(temporary, target)
-    _write_lineage(task, snapshot, rows, root, phase_states)
+    _write_lineage(lineage, task, snapshot, rows, root, phase_states)
     return restored
 
 
-def _write_lineage(task, snapshot, rows, root: Path, phase_states) -> None:
+def _write_lineage(lineage, task, snapshot, rows, root: Path, phase_states) -> None:
     """Bind every restored (or verified-identical) artifact to its published provenance:
     task/session/generation + content hash + manifest revision. Entries cover ONLY files
     this batch wrote or byte-verified; a refused batch never reaches here, so the record
     never blesses unverified local bytes. spec/lineage.json is local authority for the
     generator's resume hydration; it is not a declared artifact and never crosses hosts."""
-    from spec_generator import lineage
     spec = root / "spec"
     spec.mkdir(parents=True, exist_ok=True)
     # The record speaks GENERATOR stage names (needs/srs/architecture/items/tests/

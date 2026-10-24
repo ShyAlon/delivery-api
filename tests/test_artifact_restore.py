@@ -49,7 +49,10 @@ def test_no_ready_manifest_is_a_noop(tmp_path):
     assert list(tmp_path.rglob('*')) == []
 
 
+
+@pytest.mark.producer_integration
 def test_missing_completed_artifacts_are_restored_with_exact_bytes(tmp_path):
+    pytest.importorskip('spec_generator.lineage')
     store = FakeStore(phases=_phases(('conops', 'approved'), ('needs', 'awaiting_approval')),
                       rows=[_row('conops', 'conops.json', CONOPS_SHA), _row('needs', 'needs.json', NEEDS_SHA)])
     written = restore_completed_phases(store, 't1', tmp_path)
@@ -58,7 +61,10 @@ def test_missing_completed_artifacts_are_restored_with_exact_bytes(tmp_path):
     assert (tmp_path / 'spec' / 'needs.json').read_bytes() == NEEDS
 
 
+
+@pytest.mark.producer_integration
 def test_identical_local_bytes_are_a_noop(tmp_path):
+    pytest.importorskip('spec_generator.lineage')
     (tmp_path / 'spec').mkdir()
     target = tmp_path / 'spec' / 'needs.json'
     target.write_bytes(NEEDS)
@@ -79,7 +85,10 @@ def test_conflicting_local_bytes_refuse_the_whole_batch(tmp_path):
     assert not (tmp_path / 'interview' / 'conops.json').exists()  # no partial batch
 
 
+
+@pytest.mark.producer_integration
 def test_in_flight_phases_never_cross(tmp_path):
+    pytest.importorskip('spec_generator.lineage')
     store = FakeStore(phases=_phases(('needs', 'awaiting_approval'), ('srs', 'running')),
                       rows=[_row('needs', 'needs.json', NEEDS_SHA), _row('srs', 'srs.json', CONOPS_SHA)])
     assert restore_completed_phases(store, 't1', tmp_path) == ['needs.json']
@@ -102,7 +111,10 @@ def test_bytes_failing_their_recorded_hash_refuse(tmp_path):
     assert not (tmp_path / 'spec' / 'needs.json').exists()
 
 
+
+@pytest.mark.producer_integration
 def test_restore_writes_lineage_binding_only_for_verified_bytes(tmp_path):
+    pytest.importorskip('spec_generator.lineage')
     from spec_generator import lineage
     store = FakeStore(phases=_phases(('conops', 'approved'), ('needs', 'awaiting_approval')),
                       rows=[_row('conops', 'conops.json', CONOPS_SHA), _row('needs', 'needs.json', NEEDS_SHA)])
@@ -127,11 +139,13 @@ def test_refused_restore_writes_no_lineage(tmp_path):
                       rows=[_row('needs', 'needs.json', NEEDS_SHA)])
     with pytest.raises(RestoreRefused):
         restore_completed_phases(store, 't1', tmp_path)
-    from spec_generator import lineage
-    assert lineage.load(tmp_path / 'spec') is None, 'a refused batch never blesses local bytes'
+    assert not (tmp_path / 'spec' / 'lineage.json').exists(), 'a refused batch never blesses local bytes'
 
 
+
+@pytest.mark.producer_integration
 def test_specs_phase_binds_under_the_generator_stage_name(tmp_path):
+    pytest.importorskip('spec_generator.lineage')
     from spec_generator import lineage
     store = FakeStore(phases=_phases(('specs', 'approved')),
                       rows=[_row('specs', 'items.json', NEEDS_SHA)])
@@ -139,3 +153,16 @@ def test_specs_phase_binds_under_the_generator_stage_name(tmp_path):
     record = lineage.load(tmp_path / 'spec')
     assert lineage.lookup(record, 'items', 'items.json') is not None
     assert lineage.lookup(record, 'specs', 'items.json') is None
+
+
+def test_missing_spec_generator_refuses_clearly_before_any_write(tmp_path, monkeypatch):
+    """Restore's batch ends in the generator-owned authority record; a host without
+    spec-generator (control-plane-only image) must refuse BEFORE writing bytes."""
+    import sys
+    monkeypatch.setitem(sys.modules, 'spec_generator', None)
+    monkeypatch.setitem(sys.modules, 'spec_generator.lineage', None)
+    store = FakeStore(phases=_phases(('needs', 'awaiting_approval')),
+                      rows=[_row('needs', 'needs.json', NEEDS_SHA)])
+    with pytest.raises(RestoreRefused, match='spec-generator is not importable'):
+        restore_completed_phases(store, 't1', tmp_path)
+    assert not (tmp_path / 'spec').exists(), 'a dependency-less host writes nothing'
