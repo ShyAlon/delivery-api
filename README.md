@@ -217,6 +217,16 @@ every dependent assertion. The job has a ten-minute outer limit. This is not
 a full release check. Manual image-build/deploy runs use all browser tests
 with a twenty-minute outer limit; PRs use only the browser smoke set.
 
+Browser assertions about pure visual polish - brand presentation, layout
+ratios, decorative styling - are marked `ui_cosmetic`. They are excluded from
+the merge-gating job and run once in the separate `ui-cosmetic` check, which
+reports honest red on failure but is tracked debt, not a blocker: a cosmetic
+failure never merges-blocks, and it never hides a functional one, because any
+assertion that protects an action, required information, or truthful state
+and cost stays in the gating selection. `DELIVERY_TEST_SCOPE=cosmetic` runs
+the same selection locally, and the full local release check below still runs
+every cosmetic test.
+
 Three tests marked `engine_integration` exercise the real interview-engine
 boundary. They require interview-engine installed in the same environment;
 the delivery-only PR check explicitly excludes them. The real package-export

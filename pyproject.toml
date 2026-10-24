@@ -43,7 +43,11 @@ vmodel-server = "delivery_api.__main__:main"
 # Safety net: no single test may run longer than 5 minutes. The runner
 # bounds silent engine subprocesses itself; this catches anything else.
 timeout = 300
-markers = ["engine_integration: requires an installed interview-engine; run explicitly in the full local integration check", "producer_integration: requires a configured spec-generator environment; run in the full local integration check"]
+markers = [
+    "engine_integration: requires an installed interview-engine; run explicitly in the full local integration check",
+    "producer_integration: requires a configured spec-generator environment; run in the full local integration check",
+    "ui_cosmetic: visual polish (brand, layout ratios, decorative styling) that neither blocks an action, hides required information, nor misleads about state or cost; failures are tracked debt reported by the separate nonblocking ui-cosmetic check, never a merge gate",
+]
 
 [tool.uv.sources]
 vmodel-contracts = { path = "vendor/vmodel_contracts-0.28.0-py3-none-any.whl" }
