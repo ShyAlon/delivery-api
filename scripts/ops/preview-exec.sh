@@ -54,16 +54,16 @@ docker info >/dev/null 2>&1 || abort NO-DOCKER "Docker is installed but not runn
 case "$PORT" in ''|*[!0-9]*) abort PORT "PREVIEW_EXEC_PORT is not a number" "" "unset PREVIEW_EXEC_PORT";; esac
 if (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null; then abort PORT-BUSY "something already listens on 127.0.0.1:$PORT" "" "stop it, or: PREVIEW_EXEC_PORT=8011 ops preview-exec"; fi
 docker ps -a --format '{{.Names}}' | grep -qx "$NAME" && abort LEFTOVER "a container named $NAME is left over from an earlier run" "" "docker rm -f $NAME"
-PINFILES="scripts/ops/pin.py src/delivery_api/vendor_sources.py src/delivery_api/retail_pricing.py"
-[ "$PROVIDER" = deepseek ] || PINFILES="scripts/ops/pin-local.py src/delivery_api/ollama_usage.py src/delivery_api/local_route.py src/delivery_api/provider_network.py"
-for f in $PINFILES src/delivery_api/production_gateway.py; do [ -f "$f" ] || abort NO-FILE "$f is missing on main" "" "git -C $PWD log --oneline -5   (is main pulled?)"; done
-
 # Two provider modes. deepseek (default): the paid managed route, exactly as before. ollama: the operator's
 # local model at $0 - no key, no vendor pages, the reviewed row and ceiling grounded from this Mac's server.
 PROVIDER=${PREVIEW_EXEC_PROVIDER:-deepseek}
 case "$PROVIDER" in deepseek|ollama) ;; *) abort PROVIDER "PREVIEW_EXEC_PROVIDER must be deepseek or ollama, not '$PROVIDER'" "" "unset PREVIEW_EXEC_PROVIDER";; esac
 OLLAMA_MODEL=${PREVIEW_EXEC_OLLAMA_MODEL:-qwen2.5-coder:14b}
 OLLAMA_HOST=${OLLAMA_HOST:-http://localhost:11434}
+
+PINFILES="scripts/ops/pin.py src/delivery_api/vendor_sources.py src/delivery_api/retail_pricing.py"
+[ "$PROVIDER" = deepseek ] || PINFILES="scripts/ops/pin-local.py src/delivery_api/ollama_usage.py src/delivery_api/local_route.py src/delivery_api/provider_network.py"
+for f in $PINFILES src/delivery_api/production_gateway.py; do [ -f "$f" ] || abort NO-FILE "$f is missing on main" "" "git -C $PWD log --oneline -5   (is main pulled?)"; done
 
 # The provider key comes from this shell's own protected environment, never from a new file or a prompt.
 if [ "$PROVIDER" = deepseek ]; then
