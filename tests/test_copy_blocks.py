@@ -41,8 +41,8 @@ def test_dark_blocks_in_the_stylesheet_are_all_copyable():
 def test_debug_dialog_buttons_sit_in_one_aligned_row_with_gaps():
     s=_web('identity.js')
     row=s.split('<div class="debug-actions">')[1].split('</div>')[0]
-    # download ZIP and one copy-everything button; the logs live in black boxes with the hover copy button
-    assert row.count('<button')==2 and 'id="downloaddebug"' in row and 'id="copyeverything"' in row
+    # summary copy, everything ZIP and the server debug ZIP; the logs live in black boxes with the hover copy button
+    assert row.count('<button')==3 and 'id="copysummary"' in row and 'id="downloadeverything"' in row and 'id="downloaddebug"' in row
     for gone in ('copydebug','copyserverlogs','copyclientlogs','copydiag','logButton'):assert gone not in s
     for box in ('debuginfohost','serverloghost','clientloghost'):assert re.search(r'<pre id="'+box+'" class="json-view"',s)
     css=_web('style.css')

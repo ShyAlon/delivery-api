@@ -1,4 +1,4 @@
-"""The Debug 'Copy everything' ZIP fallback, the unavailable-session wording, and the removed All sessions link."""
+"""The text-to-ZIP helpers behind the Debug exports, the unavailable-session wording, and the removed All sessions link."""
 import json
 import re
 import shutil
@@ -32,12 +32,12 @@ def test_the_fallback_zip_unzips_to_exactly_the_text(tmp_path, text):
         assert subprocess.run(["unzip", "-tq", str(out)], capture_output=True).returncode == 0
 
 
-def test_copy_everything_tries_the_clipboard_first_and_falls_back_to_a_zip():
+def test_copy_helpers_try_the_clipboard_first_and_fall_back_to_a_zip():
     core = (WEB / "client-core.js").read_text()
     fn = re.search(r"export async function deliverTextZip\(.*", core).group(0).split("\n")[0]
     assert fn.index("navigator.clipboard.writeText") < fn.index("zipText(") and "application/zip" in fn and "'.zip'" in fn
     ident = (WEB / "identity.js").read_text()
-    assert "deliverTextZip(parts.join" in ident and "requi-everything.txt'" in ident and "deliverText(parts.join" not in ident
+    assert "deliverText(parts.join" not in ident
     assert "requi-everything.zip" in ident
     assert "deliverText(text,'requi-text.txt')" in (WEB / "copy-blocks.js").read_text()   # other copy buttons are unchanged
 

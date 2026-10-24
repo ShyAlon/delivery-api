@@ -939,14 +939,28 @@ def test_missing_resource_dialog_has_recovery_paths_and_greenfield_confirmation(
     assert dialog.get_by_text(requirement['path'],exact=True).is_visible();assert dialog.get_by_role('button',name="I've added the file · check it").is_visible();assert dialog.get_by_role('button',name='Copy fact checklist').is_visible();dialog.get_by_role('button',name='I chose Existing by mistake').click();confirm=page.get_by_role('dialog',name='Confirm Greenfield correction');confirm.wait_for();assert confirm.get_by_role('button',name='Switch & continue').is_visible()
     page.screenshot(path=str(_screenshots_dir / 'missing-resource-recovery.png'),full_page=True)
 
-def test_copy_debug_info_includes_runtime_snapshot_and_resource_decision(page,ui):
-    page.add_init_script("""window.__copied='';Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>window.__copied=text}})""")
+def test_everything_zip_includes_runtime_snapshot_and_resource_decision(page,ui,tmp_path):
+    import zipfile
     requirement={'kind':'external_input','title':'Baseline required','path':'/tmp/system-baseline.json','format':'SystemBaseline JSON'}
-    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.requirement-dialog').wait_for();page.keyboard.press('Escape');page.locator('#accountbutton').click();page.get_by_role('menuitem',name='Debug',exact=True).click();button=page.get_by_role('button',name='Copy everything for diagnosis',exact=True);button.click();page.wait_for_function("window.__copied.length>0",timeout=30000)
+    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement,'question':None,'input_id':None};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.requirement-dialog').wait_for();page.keyboard.press('Escape');page.locator('#accountbutton').click();page.get_by_role('menuitem',name='Debug',exact=True).click()
+    with page.expect_download() as info:
+        page.get_by_role('button',name='Download everything ZIP',exact=True).click()
+    target=tmp_path/'everything.zip';info.value.save_as(str(target))
+    with zipfile.ZipFile(target) as z:
+        assert z.namelist()==["requi-everything.txt"];text=z.read("requi-everything.txt").decode("utf-8")
+    debug_section=json.loads(text.split('===== Debug info =====\n',1)[1].split('\n\n=====',1)[0])
+    assert debug_section['task_id']=='live';assert '"owner": "requirement"' in text and '"detected": true' in text and '"task_id": "live"' in text
+    assert text.startswith('===== Known omissions =====')
+
+def test_copy_diagnostic_summary_copies_a_bounded_digest(page,ui):
+    page.add_init_script("""window.__copied='';Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>window.__copied=text}})""")
+    page.goto(ui+'/tasks/live/view');page.locator('.detail-head').wait_for()
+    page.locator('#accountbutton').click();page.get_by_role('menuitem',name='Debug',exact=True).click()
+    page.get_by_role('button',name='Copy diagnostic summary',exact=True).click();page.wait_for_function("window.__copied.length>0",timeout=30000)
     copied=page.evaluate('window.__copied')
-    debug_section=json.loads(copied.split('===== Debug info =====\n',1)[1].split('\n\n=====',1)[0])
-    assert debug_section['task_id']=='live';assert '"owner": "requirement"' in copied and '"detected": true' in copied and '"task_id": "live"' in copied
+    assert copied.startswith('Requi.re diagnostic summary') and '== Current state ==' in copied and 'Event coverage:' in copied
+    page.screenshot(path=str(_screenshots_dir / 'debug-dialog.png'),full_page=True)
 
 def test_greenfield_confirmation_is_single_flight(page,ui):
     requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture needs facts.','path':'/artifacts/session/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':[]}
@@ -2160,19 +2174,19 @@ def test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_
     page.screenshot(path=str(_screenshots_dir / "session-unavailable.png"),full_page=True)
 
 
-def test_copy_everything_downloads_a_zip_with_the_same_text_when_the_clipboard_is_blocked(page,ui,tmp_path):
+def test_everything_zip_downloads_with_the_manifest_first(page,ui,tmp_path):
     import zipfile
-    page.add_init_script("Object.defineProperty(navigator,'clipboard',{value:{writeText:()=>Promise.reject(new Error('blocked'))},configurable:true})")
     page.goto(ui+"/tasks/live/view");page.locator(".detail-head").wait_for()
     page.locator(".avatar").click();page.locator("#opendebug").click();page.locator(".debug-dialog").wait_for()
     with page.expect_download() as info:
-        page.locator("#copyeverything").click()
+        page.locator("#downloadeverything").click()
     download=info.value
     assert download.suggested_filename=="requi-everything.zip"
     target=tmp_path/"everything.zip";download.save_as(str(target))
     with zipfile.ZipFile(target) as z:
         assert z.testzip() is None and z.namelist()==["requi-everything.txt"]
         text=z.read("requi-everything.txt").decode("utf-8")
+    assert text.startswith("===== Known omissions =====") and "Engine process logs are not captured" in text
     assert "Debug info" in text and "Client logs" in text and len(text)>200
     expect(page.locator("#debugstatus")).to_contain_text("requi-everything.zip")
-    page.screenshot(path=str(_screenshots_dir / "copy-everything-zip.png"),full_page=True)
+    page.screenshot(path=str(_screenshots_dir / "everything-zip.png"),full_page=True)
