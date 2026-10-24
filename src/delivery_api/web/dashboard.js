@@ -39,7 +39,7 @@ function showDelete(t){
  cancel.onclick=()=>{if(!deleting)closeModal()};
  confirm.onclick=async()=>{
   if(deleting)return;deleting=true;confirm.disabled=true;cancel.disabled=true;confirm.textContent='Deleting…';
-  try{await api(`/api/tasks/${t.task_id}`,{method:'DELETE'});if(location.pathname.startsWith('/tasks/')){navigate('/');return}await refreshCurrent()}
+  try{await api(`/api/tasks/${t.task_id}`,{method:'DELETE'});if(location.pathname.startsWith('/tasks/')){closeModal();navigate('/');return}await refreshCurrent()}
   catch(x){deleting=false;confirm.disabled=false;cancel.disabled=false;confirm.textContent='Delete task';showError(x)}
  };
 }

@@ -20,11 +20,13 @@ def test_a_blank_build_id_is_ignored_and_the_manifest_search_still_answers(monke
     assert module._runtime_version()['runtime_id']
 
 
-def test_cloud_health_names_the_build_and_nothing_about_the_tenants(monkeypatch):
+def test_cloud_health_names_the_build_and_its_repositories_and_nothing_about_the_tenants(monkeypatch):
+    # The repository commit ids are baked into the image env and printed at startup;
+    # they carry nothing about tenants. The exact-dict assertion keeps everything else out.
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
     monkeypatch.setattr(module,'control_plane_only',lambda:False)
     out=module.health()
-    assert out=={'ok':True,'runtime_id':module.RUNTIME_VERSION['runtime_id']}
+    assert out=={'ok':True,'runtime_id':module.RUNTIME_VERSION['runtime_id'],'repositories':module.RUNTIME_VERSION['repositories']}
 
 
 def test_the_image_receives_the_build_id_from_the_build_script():
