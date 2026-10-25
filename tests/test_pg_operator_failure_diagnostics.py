@@ -158,3 +158,37 @@ def test_route_rechecks_operator_authorization_and_serves_only_sanitized_rows(cl
     finally:
         with psycopg.connect(DSN) as c:
             c.execute('DELETE FROM operator_principals WHERE subject=%s', (A.owner_id,))
+
+
+def test_route_without_migration_gives_actionable_503_not_bare_500(cloud, monkeypatch):
+    """Before the operator pastes the migration into the Supabase SQL editor,
+    the route must fail like the other operator surfaces: an actionable 503
+    naming the exact migration, never a bare 500 - and never at the cost of
+    the authorization semantics (non-operator still 404 after restore)."""
+    import psycopg
+    import delivery_api.app as module
+    from delivery_api.operator_reads import OperatorReadStore
+    from delivery_api.operator_authorization import OperatorPrincipal
+    client, store, _ = cloud
+    migration = open('supabase/migrations/20261025120000_operator_failure_diagnostics.sql').read()
+    with psycopg.connect(DSN) as c:
+        c.execute('GRANT requi_operator_read TO delivery_app')
+        c.execute("INSERT INTO operator_principals VALUES (%s,%s,%s,true)",
+                  (A.owner_id, 'route-diag-off', ['logs.read']))
+        c.execute('DROP TABLE public.operator_failure_diagnostics')
+    monkeypatch.setattr(module.app.state, 'operator_read_store',
+                        OperatorReadStore(APP, OperatorPrincipal(A.owner_id, 'route-diag-off', frozenset({'logs.read'}))),
+                        raising=False)
+    path = '/api/operator/task-failure-diagnostics?task_id=diag-task'
+    try:
+        off = client.get(path, headers=header('a'))
+        assert off.status_code == 503
+        detail = off.json()['detail']
+        assert 'not switched on' in detail['error']
+        assert '20261025120000_operator_failure_diagnostics.sql' in detail['next']
+        assert 'Supabase SQL editor' in detail['next']
+    finally:
+        with psycopg.connect(DSN) as c:
+            c.execute(migration)
+            c.execute('DELETE FROM operator_principals WHERE subject=%s', (A.owner_id,))
+    assert client.get(path, headers=header('b')).status_code == 404

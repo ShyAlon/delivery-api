@@ -3236,6 +3236,11 @@ def operator_task_debug(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 def operator_task_failure_diagnostics(task_id:str,limit:int=20,a:auth.Actor=Depends(auth.require_actor)):
     try:return _operator_reader().failure_diagnostics(store,task_id,limit=limit)
     except ValueError as exc:raise HTTPException(422,str(exc))
+    except (HTTPException,TenantAccessDenied):raise
+    except Exception as exc:
+        activity('ops.failure_diagnostics_unavailable','Operator failure diagnostics could not be read',actor=a.label,error=type(exc).__name__)
+        raise HTTPException(503,{'error':'The start-failure diagnostics are not switched on yet.','cause':'The database has not been set up for operator failure diagnostics.',
+            'next':'Run supabase/migrations/20261025120000_operator_failure_diagnostics.sql in the Supabase SQL editor, then reload.'})
 
 
 @app.get('/api/operator/task-logs')
