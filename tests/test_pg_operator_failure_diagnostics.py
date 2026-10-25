@@ -13,6 +13,7 @@ from delivery_api.postgres_store import PostgresStore
 from delivery_api.tenancy import TenantScope, tenant_context
 
 DSN = os.getenv('DELIVERY_TEST_POSTGRES_DSN')
+APP = DSN.replace('user=sandbox', 'user=delivery_app') if DSN else None
 pytestmark = pytest.mark.skipif(not DSN, reason='requires isolated migrated Postgres')
 A = TenantScope('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000000a1')
 B = TenantScope('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-0000000000a2')
@@ -110,3 +111,50 @@ def test_non_operator_session_reads_nothing():
         _claims(conn, B)
         rows = conn.execute("SELECT id FROM public.operator_failure_diagnostics").fetchall()
         assert rows == []
+
+
+from test_cloud_api import cloud, header  # noqa: E402,F401
+
+
+def test_route_rechecks_operator_authorization_and_serves_only_sanitized_rows(cloud, monkeypatch):
+    """Realistic entrypoint verification through the HTTP app, not only the
+    store: unauthenticated is 401, a signed-in non-operator is 404, a bad page
+    bound is 422, the enabled operator under the existing logs.read capability
+    gets the sanitized rows, and disabling the principal closes the route."""
+    import psycopg
+    import delivery_api.app as module
+    from delivery_api.operator_reads import OperatorReadStore
+    from delivery_api.operator_authorization import OperatorPrincipal
+    client, store, _ = cloud
+    with tenant_context(A):
+        store.record_failure_diagnostics('diag-task', 'engine.start', 503, BLOCK)
+    with psycopg.connect(DSN) as c:
+        c.execute('GRANT requi_operator_read TO delivery_app')
+        c.execute("INSERT INTO operator_principals VALUES (%s,%s,%s,true)",
+                  (A.owner_id, 'route-diag', ['logs.read']))
+    monkeypatch.setattr(module.app.state, 'operator_read_store',
+                        OperatorReadStore(APP, OperatorPrincipal(A.owner_id, 'route-diag', frozenset({'logs.read'}))),
+                        raising=False)
+    path = '/api/operator/task-failure-diagnostics?task_id=diag-task'
+    try:
+        assert client.get(path).status_code == 401
+        got = client.get(path, headers=header('a'))
+        assert got.status_code == 200
+        body = got.json()
+        assert body['content'] == 'sanitized_failure_diagnostics_only'
+        assert body['mutations_available'] is False
+        assert len(body['diagnostics']) == 1
+        row = body['diagnostics'][0]
+        assert row['error_class'] == 'InsufficientPrivilege' and row['sqlstate'] == '42501'
+        assert row['stage'] == 'session insert' and row['http_status'] == 503
+        assert row['sub_present'] == 'False' and row['session_active_for_sub'] == 'UNKNOWN'
+        assert 'engine_sessions' not in row['message']
+        assert client.get(path, headers=header('b')).status_code == 404
+        assert client.get(path + '&limit=0', headers=header('a')).status_code == 422
+        assert client.get(path + '&limit=1000', headers=header('a')).status_code == 422
+        with psycopg.connect(DSN) as c:
+            c.execute('UPDATE operator_principals SET enabled=false WHERE subject=%s', (A.owner_id,))
+        assert client.get(path, headers=header('a')).status_code == 404
+    finally:
+        with psycopg.connect(DSN) as c:
+            c.execute('DELETE FROM operator_principals WHERE subject=%s', (A.owner_id,))
