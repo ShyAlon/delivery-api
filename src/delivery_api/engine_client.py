@@ -10,8 +10,30 @@ from vmodel_contracts.interactive import (
 
 
 class EngineClientError(RuntimeError):
-    def __init__(self,http_status:int,error:ProtocolError):
+    def __init__(self,http_status:int,error:ProtocolError,operator_diagnostics:dict|None=None):
         super().__init__(error.detail);self.http_status,self.error=http_status,error
+        # Sanitized engine failure evidence, destined for the operator-only
+        # diagnostics record - never for customer-visible surfaces.
+        self.operator_diagnostics=operator_diagnostics
+
+
+_OPERATOR_DIAGNOSTICS_HEADER='x-engine-operator-diagnostics'
+
+def _operator_diagnostics(response:httpx.Response)->dict|None:
+    """Decode the engine's operator-diagnostics header defensively.
+
+    The block is the engine's sanitized 503 evidence (pg_diagnostics). Any
+    transport damage - missing, oversized, bad base64, non-JSON, non-object -
+    yields None rather than breaking the error path it rides on.
+    """
+    raw=response.headers.get(_OPERATOR_DIAGNOSTICS_HEADER)
+    if not raw or len(raw)>2400:return None
+    try:
+        import base64,json
+        block=json.loads(base64.urlsafe_b64decode(raw.encode('ascii')))
+    except Exception:
+        return None
+    return block if isinstance(block,dict) else None
 
 
 class EngineUnreachableError(RuntimeError):
@@ -126,5 +148,5 @@ class HttpEngineClient(EngineClient):
             except Exception:
                 error=ProtocolError(code=ProtocolErrorCode.INTERNAL_ERROR,
                     detail=f'engine returned HTTP {response.status_code} without a valid protocol error')
-            raise EngineClientError(response.status_code,error)
+            raise EngineClientError(response.status_code,error,_operator_diagnostics(response))
         return response.json() if model is dict else model.model_validate(response.json())

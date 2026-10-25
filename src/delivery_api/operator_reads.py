@@ -243,6 +243,29 @@ class OperatorReadStore:
                 'content':'curated_state_events_only','historical_backfill':False,'raw_logs_available':False,
                 'quiescence_verified':False,'mutations_available':False}
 
+    def failure_diagnostics(self,owner_store,task_id,*,limit=20):
+        """Sanitized engine start-failure evidence for one task, newest first.
+
+        Reads only the dedicated operator diagnostics store: the block's
+        message is identifier-redacted at the engine, claim fields are
+        presence booleans or UNKNOWN, never claim values. Same reviewed
+        operator identity and the existing logs.read capability - no new
+        audience, no raw logs, no customer data beyond the sanitized block.
+        """
+        if not isinstance(task_id,str) or not 1<=len(task_id)<=240:raise ValueError('bounded task identifier required')
+        if type(limit) is not int or not 1<=limit<=100:raise ValueError('bounded diagnostics page required')
+        with self._read(owner_store,'logs.read') as (connection,authority):
+            rows=connection.execute(
+                'SELECT id,owner_id,task_id,generation,source,http_status,error_class,sqlstate,stage,role,'
+                'sub_present,session_id_present,session_active_for_sub,message,block,created_at '
+                'FROM public.operator_failure_diagnostics WHERE task_id=%s ORDER BY id DESC LIMIT %s',
+                (task_id,limit+1)).fetchall()
+            page=rows[:limit]
+            return {'scope':'reviewed_cross_user_operator_read','operator_subject':authority['operator_subject'],
+                'registry_version':authority['registry_version'],
+                'diagnostics':[{**row,'id':str(row['id']),'owner_id':str(row['owner_id'])} for row in page],
+                'truncated':len(rows)>limit,'content':'sanitized_failure_diagnostics_only','mutations_available':False}
+
     def credit_account(self,owner_store,owner_id):
         from uuid import UUID
         try:

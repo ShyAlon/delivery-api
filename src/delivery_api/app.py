@@ -987,6 +987,12 @@ async def _complete_interview_start(task_id:str,proposed_session:str,selected_ro
         activity("model.route.preflight.rejected","Interview route rejected by engine",task_id=task_id,**payload)
         store.add_event(task_id,"model_preflight",f"Interview route {selected_route} rejected: {exc.error.detail}",phase_key="intent",payload=payload)
         store.add_event(task_id,"error",f"Interview start failed: {exc.error.detail}",phase_key="intent",payload=payload)
+        # Operator-only failure evidence: the engine's sanitized 503 block is
+        # recorded on the dedicated diagnostics store - never on the events or
+        # audit rows every customer surface reads.
+        if getattr(exc,'operator_diagnostics',None):
+            try:store.record_failure_diagnostics(task_id,'engine.start',exc.http_status,exc.operator_diagnostics)
+            except Exception as record_exc:activity("engine.start.diagnostics_unrecorded","Operator failure diagnostics could not be recorded",task_id=task_id,error=f"{type(record_exc).__name__}")
         store.update_phase(task_id,"intent","failed",detail=exc.error.detail[:300])
         return
     except Exception as exc:
@@ -3224,6 +3230,12 @@ def operator_task_debug(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     try:return _operator_reader().task_debug(store,task_id)
     except ValueError as exc:raise HTTPException(422,str(exc))
     except KeyError:raise HTTPException(404,'Task metadata unavailable')
+
+
+@app.get('/api/operator/task-failure-diagnostics')
+def operator_task_failure_diagnostics(task_id:str,limit:int=20,a:auth.Actor=Depends(auth.require_actor)):
+    try:return _operator_reader().failure_diagnostics(store,task_id,limit=limit)
+    except ValueError as exc:raise HTTPException(422,str(exc))
 
 
 @app.get('/api/operator/task-logs')
