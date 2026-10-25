@@ -2893,7 +2893,7 @@ def server_log(minutes:int=Query(30,ge=1,le=240),a:auth.Actor=Depends(auth.requi
 @app.get("/health")
 def health():
     if control_plane_only():return {"ok":True,"runtime_profile":"control_plane_only","engine_execution":False,"payments_enabled":False}
-    if config.CLOUD_TENANTS:return {"ok":True,"runtime_id":RUNTIME_VERSION["runtime_id"]}
+    if config.CLOUD_TENANTS:return {"ok":True,"runtime_id":RUNTIME_VERSION["runtime_id"],"repositories":RUNTIME_VERSION["repositories"]}
     return {"ok": True, "total_spend_usd": store.total_spend(), "tasks": len(store.list_tasks()), **RUNTIME_VERSION}
 
 @app.post('/api/tasks/{task_id}/packages')

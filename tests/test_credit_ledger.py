@@ -139,5 +139,5 @@ def test_header_uses_the_tooltip_and_debug_has_the_history():
     js=(ROOT/'web'/'session-cost.js').read_text()
     assert 'el.title=balanceTitle(reply)' in js and "import {balanceLabel,balanceTitle}" in js
     ident=(ROOT/'web'/'identity.js').read_text()
-    assert 'id="historyhost"' in ident and "api('/api/account/credit-history')" in ident and "add('Credit history'" in ident
+    assert 'id="historyhost"' in ident and "api('/api/account/credit-history')" in ident and "'Credit history',()=>" in ident
     assert ident.index('ledgerwrap')<ident.index('historywrap')<ident.index('Current technical state')
