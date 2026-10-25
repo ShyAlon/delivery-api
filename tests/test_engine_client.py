@@ -93,3 +93,38 @@ def test_stop_client_uses_current_owner_scope(monkeypatch):
  with tenant_context(TenantScope(owner)):
   assert client.stop(sid).process_status==ProcessStatus.STOPPED
  assert seen[0].headers['X-Requi-Owner']==owner
+
+def _diag_response(status, block=None, raw_header=None):
+    import base64, json as _json
+    headers = {}
+    if raw_header is not None:
+        headers['x-engine-operator-diagnostics'] = raw_header
+    elif block is not None:
+        headers['x-engine-operator-diagnostics'] = base64.urlsafe_b64encode(
+            _json.dumps(block).encode()).decode('ascii')
+    error = ProtocolError(code=ProtocolErrorCode.INTERNAL_ERROR, detail='engine program failed during start: X', retryable=True)
+    return httpx.Response(status, json={'detail': error.model_dump(mode='json')}, headers=headers)
+
+
+def test_start_failure_decodes_operator_diagnostics_header():
+    block = {'error_class': 'InsufficientPrivilege', 'sqlstate': '42501', 'stage': 'session insert',
+             'message': 'row-level security for table "[identifier]"', 'role': 'delivery_app',
+             'sub_present': False, 'session_id_present': False, 'session_active_for_sub': 'UNKNOWN'}
+    client = HttpEngineClient('http://engine', transport=httpx.MockTransport(lambda r: _diag_response(503, block=block)))
+    with pytest.raises(EngineClientError) as caught:
+        client.start(StartSessionRequest(task_id='t', idea='idea', model_route='m'))
+    assert caught.value.operator_diagnostics == block
+    assert caught.value.http_status == 503
+
+
+def test_operator_diagnostics_header_absent_or_damaged_yields_none():
+    client = HttpEngineClient('http://engine', transport=httpx.MockTransport(lambda r: _diag_response(503)))
+    with pytest.raises(EngineClientError) as caught:
+        client.start(StartSessionRequest(task_id='t', idea='idea', model_route='m'))
+    assert caught.value.operator_diagnostics is None
+    for damaged in ('not-base64!!!', 'e30' + 'x' * 3000,
+                    __import__('base64').urlsafe_b64encode(b'[1,2,3]').decode()):
+        client = HttpEngineClient('http://engine', transport=httpx.MockTransport(lambda r: _diag_response(503, raw_header=damaged)))
+        with pytest.raises(EngineClientError) as caught:
+            client.start(StartSessionRequest(task_id='t', idea='idea', model_route='m'))
+        assert caught.value.operator_diagnostics is None, damaged[:20]

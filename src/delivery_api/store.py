@@ -87,6 +87,13 @@ CREATE TABLE IF NOT EXISTS progress_seen (
  task_id TEXT NOT NULL, source TEXT NOT NULL, event_id TEXT NOT NULL,
  PRIMARY KEY(task_id,source,event_id)
 );
+CREATE TABLE IF NOT EXISTS operator_failure_diagnostics (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL DEFAULT '', task_id TEXT NOT NULL, source TEXT NOT NULL,
+  http_status INTEGER NOT NULL, error_class TEXT NOT NULL, sqlstate TEXT, stage TEXT,
+  role TEXT NOT NULL, sub_present TEXT NOT NULL, session_id_present TEXT NOT NULL,
+  session_active_for_sub TEXT NOT NULL, message TEXT NOT NULL, block TEXT NOT NULL, ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_operator_failure_diagnostics_task ON operator_failure_diagnostics(task_id, id);
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, action TEXT NOT NULL,
   task_id TEXT, detail TEXT NOT NULL DEFAULT '{}', ts REAL NOT NULL
@@ -143,6 +150,8 @@ class Storage(Protocol):
     def bind_interview_schema(self, task_id: str, schema_id: str, schema_version: str) -> dict: ...
     def interview_schema_binding(self, task_id: str) -> dict | None: ...
     def add_event(self, task_id: str, kind: str, message: str, **context) -> int: ...
+    def record_failure_diagnostics(self, task_id: str, source: str, http_status: int, block: dict) -> int: ...
+    def failure_diagnostics(self, task_id: str, limit: int = 20) -> list[dict]: ...
     def events(self, task_id: str, after: int = 0, limit: int = 500) -> list[dict]: ...
     def progress_cursor(self, task_id: str, source: str, session_id: str) -> int: ...
     def ingest_progress(self, signal, source: str) -> bool: ...
@@ -621,6 +630,60 @@ class SQLiteStore:
                                   (task_id, phase_key, kind, message, json.dumps(payload or {}), time.time()))
             self._db.execute("UPDATE tasks SET updated_at=? WHERE task_id=?", (time.time(), task_id)); self._commit()
             return cur.lastrowid
+
+    @staticmethod
+    def _validated_diagnostics_block(block: dict) -> dict:
+        """The operator block is presence-only by contract: booleans or the
+        honest UNKNOWN, never claim values, bounded sanitized message."""
+        if not isinstance(block, dict):
+            raise ValueError('operator diagnostics block required')
+        out = dict(block)
+        for key in ('sub_present', 'session_id_present', 'session_active_for_sub'):
+            if out.get(key) not in (True, False, 'UNKNOWN'):
+                raise ValueError(f'operator diagnostics {key} must be a presence boolean or UNKNOWN')
+        out['error_class'] = str(out.get('error_class') or 'UNKNOWN')[:120]
+        out['role'] = str(out.get('role') or 'UNKNOWN')[:120]
+        out['message'] = str(out.get('message') or '')[:300]
+        if out.get('sqlstate') is not None:
+            sqlstate = str(out['sqlstate'])
+            if len(sqlstate) != 5:
+                raise ValueError('operator diagnostics sqlstate is the five-character class code')
+            out['sqlstate'] = sqlstate
+        if out.get('stage') is not None:
+            out['stage'] = str(out['stage'])[:80]
+        return out
+
+    def record_failure_diagnostics(self, task_id: str, source: str, http_status: int, block: dict) -> int:
+        """Operator-only failure evidence. Deliberately NOT an event and NOT an
+        audit entry: no customer-visible surface reads this table."""
+        block = self._validated_diagnostics_block(block)
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO operator_failure_diagnostics(owner_id,task_id,source,http_status,error_class,sqlstate,stage,role,"
+                "sub_present,session_id_present,session_active_for_sub,message,block,ts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ('', task_id, source, http_status, block['error_class'], block.get('sqlstate'), block.get('stage'),
+                 block['role'], str(block['sub_present']), str(block['session_id_present']),
+                 str(block['session_active_for_sub']), block['message'], json.dumps(block), time.time()))
+            self._commit()
+            return cur.lastrowid
+
+    def failure_diagnostics(self, task_id: str, limit: int = 20) -> list[dict]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError('bounded diagnostics page required')
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id,task_id,source,http_status,error_class,sqlstate,stage,role,sub_present,session_id_present,"
+                "session_active_for_sub,message,block,ts FROM operator_failure_diagnostics WHERE task_id=? ORDER BY id DESC LIMIT ?",
+                (task_id, limit)).fetchall()
+            out = []
+            for row in rows:
+                row = dict(row)
+                try:
+                    row['block'] = json.loads(row['block'])
+                except ValueError:
+                    pass
+                out.append(row)
+            return out
 
     def add_review_comment(self,task_id:str,wait_id:str,revision:str,actor:str,comment:str)->int:
         with self._lock:

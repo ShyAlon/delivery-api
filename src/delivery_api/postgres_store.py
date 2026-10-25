@@ -51,7 +51,7 @@ class _Connection:
             sql = sql.replace('INSERT OR IGNORE ', 'INSERT ',1)+' ON CONFLICT DO NOTHING'
         sql = sql.replace('cursor=max(cursor,excluded.cursor)',
                           'cursor=GREATEST(progress_ingest.cursor,excluded.cursor)')
-        returning = bool(re.match(r'INSERT INTO (events|audit_log|review_comments)\b',sql))
+        returning = bool(re.match(r'INSERT INTO (events|audit_log|review_comments|operator_failure_diagnostics)\b',sql))
         if returning: sql += ' RETURNING id'
         started=time.monotonic()
         try:
@@ -165,6 +165,23 @@ class PostgresStore(SQLiteStore):
 
     def auth_session_active(self):
         return bool(self._db.execute('SELECT public.requi_session_active() AS active').fetchone()['active'])
+
+    def record_failure_diagnostics(self, task_id: str, source: str, http_status: int, block: dict) -> int:
+        """Tenant-scoped operator-only failure evidence on Postgres: the row
+        carries the caller's verified owner and the task's generation, and the
+        write policy checks owner_id against the session claim."""
+        block = self._validated_diagnostics_block(block)
+        owner = current_scope().owner_id
+        task = self.task(task_id)
+        if not task:
+            raise KeyError('task not found')
+        row = self._db.execute(
+            "INSERT INTO operator_failure_diagnostics(owner_id,task_id,generation,source,http_status,error_class,sqlstate,stage,role,"
+            "sub_present,session_id_present,session_active_for_sub,message,block,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (owner, task_id, task['generation'], source, http_status, block['error_class'], block.get('sqlstate'),
+             block.get('stage'), block['role'], str(block['sub_present']), str(block['session_id_present']),
+             str(block['session_active_for_sub']), block['message'], json.dumps(block), time.time()))
+        return row.lastrowid
 
     def create_task(self,title,brief='',*,task_id=None):
         title=title.strip()
