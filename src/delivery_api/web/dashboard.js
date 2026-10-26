@@ -1,6 +1,7 @@
 import {api,esc,reveal} from './client-core.js';
 import {navigate} from './spa-router.js';
 import {pageEpoch,pageStale} from './page-lifecycle.js';
+import {runAction} from './ui-action.js';
 import {vmap,stateLabel} from './vmap.js';
 const app=document.querySelector('#app'),modal=document.querySelector('#modal');
 export function createDashboard(ctx){
@@ -44,7 +45,7 @@ function showDelete(t){
  };
 }
 
-function showNew(){modal.classList.remove('hidden');modal.innerHTML=`<form class="dialog" id="newform"><div class="eyebrow">New definition task</div><h2>What are we building?</h2><p class="dialog-intro">Create the durable task first. Starting the interview is a separate action, so you can review the brief before any model work begins.</p><label>Task name<input name="title" required placeholder="Astronomy explorer for curious kids"></label><label>Starting idea<textarea name="brief" placeholder="Describe the product idea in a sentence or two…"></textarea></label><div class="actions"><button type="button" class="secondary" id="cancel">Cancel</button><button class="primary">Create empty task</button></div></form>`;document.querySelector('#cancel').onclick=()=>modal.classList.add('hidden');bindDialogKeys({form:document.querySelector('#newform'),focus:'input[name="title"]'});document.querySelector('#newform').onsubmit=async e=>{e.preventDefault();let d=Object.fromEntries(new FormData(e.target));let t=await api('/api/tasks',{method:'POST',body:JSON.stringify(d)});location.href=`/tasks/${t.task_id}/view`;};}
+function showNew(){modal.classList.remove('hidden');modal.innerHTML=`<form class="dialog" id="newform"><div class="eyebrow">New definition task</div><h2>What are we building?</h2><p class="dialog-intro">Create the durable task first. Starting the interview is a separate action, so you can review the brief before any model work begins.</p><label>Task name<input name="title" required placeholder="Astronomy explorer for curious kids"></label><label>Starting idea<textarea name="brief" placeholder="Describe the product idea in a sentence or two…"></textarea></label><div class="actions"><button type="button" class="secondary" id="cancel">Cancel</button><button class="primary">Create empty task</button></div></form>`;document.querySelector('#cancel').onclick=()=>modal.classList.add('hidden');bindDialogKeys({form:document.querySelector('#newform'),focus:'input[name="title"]'});document.querySelector('#newform').onsubmit=async e=>{e.preventDefault();let d=Object.fromEntries(new FormData(e.target));try{await runAction('task.create',e.target.querySelector('button.primary'),async()=>{let t=await api('/api/tasks',{method:'POST',body:JSON.stringify(d)});location.href=`/tasks/${t.task_id}/view`;},{busyLabel:'Creating…',reason:'Creating the task - one moment',keepDisabledOnSuccess:true})}catch(x){showError(x)}};}
 function openRouteSwitch(taskId,task,execution,routes){
  let busy=false,current=task.model_route||execution.route||'unknown',currentProvider=current.split(/[/:]/)[0],
   currentModel=(execution.effective_models?.probing||[])[1]||null;
