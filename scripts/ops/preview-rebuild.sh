@@ -58,5 +58,9 @@ EOF
 
 # 4. build (only when the candidate tag is missing) and launch, with preview-exec's own gates: its typed yes,
 # the build script's own yes, the pinned prices, and the health and execution checks, all unchanged.
-echo "== provider: ${PREVIEW_EXEC_PROVIDER:-ollama} (ollama is the default; PREVIEW_EXEC_PROVIDER=deepseek selects the paid managed route)"
+if [ -n "${PREVIEW_EXEC_PROVIDER:-}" ]; then
+  echo "== provider: $PREVIEW_EXEC_PROVIDER (from PREVIEW_EXEC_PROVIDER)"
+else
+  echo "== provider: preview-exec will ask you to pick: 1) ollama (local, \$0, heavy on this Mac) or 2) deepseek (paid, managed)"
+fi
 exec bash "${PREVIEW_EXEC_SCRIPT:-$REPO/scripts/ops/preview-exec.sh}"

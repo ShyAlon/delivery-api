@@ -75,9 +75,11 @@ def _run(tmp_path, container=False, running=False, images=(), dirty=False, tty='
 
 def test_provider_mode_is_printed_before_handover(tmp_path):
     out, _ = _run(tmp_path)
-    assert '== provider: ollama (ollama is the default' in out.stdout, out.stdout
+    assert '== provider: preview-exec will ask you to pick' in out.stdout, out.stdout
     out, _ = _run(tmp_path, env_extra={'PREVIEW_EXEC_PROVIDER': 'deepseek'})
-    assert '== provider: deepseek' in out.stdout, out.stdout
+    assert '== provider: deepseek (from PREVIEW_EXEC_PROVIDER)' in out.stdout, out.stdout
+    out, _ = _run(tmp_path, env_extra={'PREVIEW_EXEC_PROVIDER': 'ollama'})
+    assert '== provider: ollama (from PREVIEW_EXEC_PROVIDER)' in out.stdout, out.stdout
 
 def test_leftover_container_removed_and_old_tags_pruned_candidate_kept(tmp_path):
     p, calls = _run(tmp_path, container=True, images=['requi-full:old1', 'requi-full:old2', CANDIDATE])

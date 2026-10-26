@@ -66,20 +66,59 @@ def test_short_or_spaced_key_aborts(tmp_path):
         p = _run(tmp_path, {'DEEPSEEK_API_KEY': bad, 'PREVIEW_EXEC_PROVIDER': 'deepseek'}, settings=_settings(tmp_path))
         assert 'ABORTED [KEY-' in p.stdout, (bad, p.stdout[-300:])
 
+def test_deepseek_key_via_hidden_prompt(tmp_path):
+    """No key in the environment: the deepseek mode asks on the local terminal
+    with echo off (the switch-model.sh pattern), keeps the key in the shell
+    only, and continues. The TTY stub's first line feeds the key read; the
+    later yes-read then sees the same line and refuses, so reaching
+    NOT-CONFIRMED (not NO-KEY) proves the hidden prompt fed a passing key."""
+    tty = tmp_path / 'tty'
+    tty.write_text(KEY + '\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'deepseek'},
+             settings=_settings(tmp_path))
+    assert 'ABORTED [NO-KEY]' not in p.stdout, p.stdout[-500:]
+    assert 'ABORTED [NOT-CONFIRMED]' in p.stdout, p.stdout[-500:]
+    assert KEY not in p.stdout and KEY not in p.stderr, 'the key must never be echoed or printed'
+
+def test_deepseek_hidden_prompt_empty_still_aborts_no_key(tmp_path):
+    """An empty answer at the hidden prompt stops with NO-KEY; nothing is
+    started and no default or fallback key is invented."""
+    tty = tmp_path / 'tty'
+    tty.write_text('\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'deepseek'},
+             settings=_settings(tmp_path))
+    assert 'ABORTED [NO-KEY]' in p.stdout, p.stdout[-400:]
+    assert p.returncode == 1
+
+def test_deepseek_only_mode_carries_no_ollama_settings():
+    """DeepSeek-only means no Ollama dependency: the settings handed to the
+    container must contain no OLLAMA_* and no DELIVERY_LOCAL_PREVIEW line,
+    and the mode must abort OLLAMA-LEAK if one ever appears. Asserted on the
+    source: the Ollama writes stay inside the ollama branch, and the guard
+    runs in the deepseek branch after the settings file is built."""
+    src = SCRIPT.read_text()
+    ollama_write = src.split("if [ \"$PROVIDER\" = ollama ]; then\n  printf 'DELIVERY_LOCAL_PREVIEW=1", 1)
+    assert len(ollama_write) == 2 and 'OLLAMA_BASE_URL' in ollama_write[1].split('fi', 1)[0], \
+        'the Ollama settings writes must stay inside the ollama branch'
+    guard_block = src.split('if [ "$PROVIDER" = deepseek ]; then\n  grep -q -E', 1)
+    assert len(guard_block) == 2 and 'OLLAMA-LEAK' in guard_block[1].split('fi', 1)[0], \
+        'the no-Ollama guard must run in the deepseek branch'
+    assert src.index('MODEL-KEY') < src.index('OLLAMA-LEAK'), 'the guard runs after the env file is built'
+
 def test_unprovisioned_settings_abort(tmp_path):
-    p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY}, settings=tmp_path / 'absent.env')
+    p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY, 'PREVIEW_EXEC_PROVIDER': 'ollama'}, settings=tmp_path / 'absent.env')
     assert 'ABORTED [NOT-PROVISIONED]' in p.stdout
 
 def test_settings_mode_must_be_600(tmp_path):
-    p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY}, settings=_settings(tmp_path, mode=0o644))
+    p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY, 'PREVIEW_EXEC_PROVIDER': 'ollama'}, settings=_settings(tmp_path, mode=0o644))
     assert 'ABORTED [SETTINGS-PERMS]' in p.stdout
 
 def test_settings_without_database_aborts(tmp_path):
-    p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY}, settings=_settings(tmp_path, body='DELIVERY_SUPABASE_URL=https://x\n'))
+    p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY, 'PREVIEW_EXEC_PROVIDER': 'ollama'}, settings=_settings(tmp_path, body='DELIVERY_SUPABASE_URL=https://x\n'))
     assert 'ABORTED [SETTINGS]' in p.stdout
 
 def test_declined_confirmation_changes_nothing(tmp_path):
-    p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY}, settings=_settings(tmp_path), tty_input='no\n')
+    p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY, 'PREVIEW_EXEC_PROVIDER': 'ollama'}, settings=_settings(tmp_path), tty_input='no\n')
     assert 'ABORTED [NOT-CONFIRMED]' in p.stdout
 
 def test_confirmed_start_passes_origin_checks(tmp_path):
@@ -96,17 +135,79 @@ def test_confirmed_start_passes_origin_checks(tmp_path):
     assert 'ABORTED [ORIGIN]' not in p.stdout, p.stdout[-500:]
     assert 'ABORTED [PIN' in p.stdout, p.stdout[-500:]
 
-def test_default_provider_is_ollama_and_needs_no_key(tmp_path):
-    """No PREVIEW_EXEC_PROVIDER and no key: the preview is the $0 local Ollama
-    route by default. Reaching the pin step (PIN abort: no server listens in
-    this hermetic run) proves the deepseek key checks did not fire."""
+def test_provider_prompt_pick_ollama(tmp_path):
+    """Provider unset: the script asks 1) ollama 2) deepseek. Picking 1 runs
+    the ollama mode; the shared prompt handle then reaches EOF at the typed
+    yes, which refuses. There is no default provider any more."""
     tty = tmp_path / 'tty'
-    tty.write_text('yes\n')
+    tty.write_text('1\n')
     p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'OLLAMA_HOST': 'http://127.0.0.1:9'},
              settings=_settings(tmp_path))
+    assert 'Provider for this preview: 1) ollama' in p.stdout, p.stdout[-500:]
     assert 'Provider: local Ollama model' in p.stdout, p.stdout[-500:]
-    assert 'ABORTED [NO-KEY]' not in p.stdout
+    assert 'ABORTED [NOT-CONFIRMED]' in p.stdout, p.stdout[-500:]
+    assert 'ABORTED [NO-TERMINAL]' not in p.stdout and 'ABORTED [PROVIDER]' not in p.stdout
+
+def test_provider_prompt_pick_deepseek_then_hidden_key(tmp_path):
+    """Picking 2 runs the deepseek mode; with no key in the environment the
+    next line of the same prompt stream feeds the hidden key read. The key is
+    never echoed, and the flow then stops at the typed yes (EOF refuses)."""
+    tty = tmp_path / 'tty'
+    tty.write_text('2\n' + KEY + '\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty)}, settings=_settings(tmp_path))
+    assert 'ABORTED [NO-KEY]' not in p.stdout, p.stdout[-500:]
+    assert 'Provider: DeepSeek only (paid)' in p.stdout, p.stdout[-500:]
+    assert 'ABORTED [NOT-CONFIRMED]' in p.stdout, p.stdout[-500:]
+    assert KEY not in p.stdout and KEY not in p.stderr, 'the key must never be echoed or printed'
+
+def test_provider_prompt_pick_deepseek_empty_key_aborts(tmp_path):
+    """Picking 2 and answering the hidden key prompt with an empty line stops
+    with NO-KEY; no fallback key or route is invented."""
+    tty = tmp_path / 'tty'
+    tty.write_text('2\n\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty)}, settings=_settings(tmp_path))
+    assert 'ABORTED [NO-KEY]' in p.stdout, p.stdout[-400:]
+    assert p.returncode == 1
+
+def test_provider_prompt_invalid_input_reasks(tmp_path):
+    """An answer that is not 1 or 2 (including a bare Enter) is rejected and
+    re-asked; the pick succeeds on a later valid line."""
+    tty = tmp_path / 'tty'
+    tty.write_text('\njunk\n1\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'OLLAMA_HOST': 'http://127.0.0.1:9'},
+             settings=_settings(tmp_path))
+    assert "not 1 or 2" in p.stdout, p.stdout[-500:]
+    assert 'Provider: local Ollama model' in p.stdout, p.stdout[-500:]
+    assert 'ABORTED [NOT-CONFIRMED]' in p.stdout, p.stdout[-500:]
+
+def test_provider_prompt_eof_fails_fast(tmp_path):
+    """A readable but exhausted prompt stream (scripted run that forgot the
+    pick) stops with a clear NO-TERMINAL, not a loop or a silent default."""
+    tty = tmp_path / 'tty'
+    tty.write_text('')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty)}, settings=_settings(tmp_path))
+    assert 'ABORTED [NO-TERMINAL]' in p.stdout, p.stdout[-400:]
+    assert p.returncode == 1
+
+def test_provider_unset_without_terminal_fails_fast(tmp_path):
+    """Non-interactive with no PREVIEW_EXEC_PROVIDER: clear NO-TERMINAL naming
+    the variable to set - never a silent provider choice."""
+    p = _run(tmp_path, {}, settings=_settings(tmp_path))
+    assert 'ABORTED [NO-TERMINAL]' in p.stdout, p.stdout[-400:]
+    assert 'PREVIEW_EXEC_PROVIDER' in p.stdout
+    assert p.returncode == 1
+
+def test_provider_env_skips_the_prompt(tmp_path):
+    """PREVIEW_EXEC_PROVIDER set: no prompt is shown and the prompt stream is
+    not consumed by a pick - its first line feeds the typed yes."""
+    tty = tmp_path / 'tty'
+    tty.write_text('yes\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama',
+                        'OLLAMA_HOST': 'http://127.0.0.1:9'},
+             settings=_settings(tmp_path))
+    assert 'Provider for this preview' not in p.stdout, p.stdout[-500:]
     assert 'ABORTED [PIN' in p.stdout, p.stdout[-500:]
+
 
 def test_local_preview_flag_only_in_ollama_mode():
     """DELIVERY_LOCAL_PREVIEW=1 offers the ollama route; without OLLAMA_BASE_URL
