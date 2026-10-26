@@ -2186,7 +2186,7 @@ def test_everything_zip_downloads_with_the_manifest_first(page,ui,tmp_path):
     with zipfile.ZipFile(target) as z:
         assert z.testzip() is None and z.namelist()==["requi-everything.txt"]
         text=z.read("requi-everything.txt").decode("utf-8")
-    assert text.startswith("===== Known omissions =====") and "Engine process logs are not captured" in text
+    assert text.startswith("===== Known omissions =====") and "Engine process logs are included only as a bounded, scrubbed recent tail" in text
     assert "Debug info" in text and "Client logs" in text and len(text)>200
     expect(page.locator("#debugstatus")).to_contain_text("requi-everything.zip")
     page.screenshot(path=str(_screenshots_dir / "everything-zip.png"),full_page=True)
