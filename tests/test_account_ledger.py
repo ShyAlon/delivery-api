@@ -15,9 +15,9 @@ A='11111111-1111-4111-8111-111111111111'
 
 class Db:
     """Canned rows, keyed by what the query reads. Remembers every statement so the tests can prove it only reads."""
-    def __init__(self,account=None,attempts=(),states=(),kinds=(),debits=(),segments=(),seg_attempts=(),seg_tokens=()):
+    def __init__(self,account=None,attempts=(),states=(),kinds=(),debits=(),segments=(),seg_attempts=(),seg_tokens=(),seg_nonterminal=()):
         self.account,self.attempts,self.states,self.kinds,self.debits,self.asked=account,list(attempts),list(states),list(kinds),list(debits),[]
-        self.segments,self.seg_attempts,self.seg_tokens=list(segments),list(seg_attempts),list(seg_tokens)
+        self.segments,self.seg_attempts,self.seg_tokens,self.seg_nonterminal=list(segments),list(seg_attempts),list(seg_tokens),list(seg_nonterminal)
     def execute(self,sql,params=()):
         self.asked.append((sql,params))
         db=self
@@ -27,6 +27,7 @@ class Db:
             def fetchall(s):
                 if 'FROM retail_compute_segments' in sql:return db.segments
                 if "kind='tokens'" in sql:return db.seg_tokens
+                if "state IN ('reserved','dispatched','uncertain','held')" in sql:return db.seg_nonterminal
                 if 'GROUP BY job_id' in sql:return db.seg_attempts
                 if 'GROUP BY state' in sql:return db.states
                 if 'GROUP BY kind' in sql:return db.kinds
@@ -171,10 +172,18 @@ def test_stuck_compute_records_are_listed_with_what_blocks_and_what_can_be_relea
     assert 'job00000003' not in t and set(r['segments'][0])=={'key','job','phase','state','job_state','provider_calls','blocks_admission','releasable'}
 
 
-def test_a_record_whose_job_reached_a_provider_blocks_but_cannot_be_released():
-    db=Db(ACCOUNT,segments=[segment(1)],seg_attempts=[{'job_id':'job00000001','n':1}])
+def test_a_record_with_a_provider_call_still_in_flight_blocks_but_cannot_be_released():
+    db=Db(ACCOUNT,segments=[segment(1)],seg_attempts=[{'job_id':'job00000001','n':1}],seg_nonterminal=[{'job_id':'job00000001','n':1}])
     r=account_ledger.read(db,A,Decimal('1'))
     assert r['segments'][0]['blocks_admission'] is True and r['segments'][0]['releasable'] is False and 'releasable: no' in r['text']
+
+
+def test_a_crashed_record_whose_provider_calls_all_settled_can_be_released():
+    # The blocked-interview shape: the job died after both calls settled, so the
+    # charge is final; the owner releases it and admission unblocks.
+    db=Db(ACCOUNT,segments=[segment(1)],seg_attempts=[{'job_id':'job00000001','n':2}],seg_tokens=[{'job_id':'job00000001','n':1}])
+    r=account_ledger.read(db,A,Decimal('1'))
+    assert r['segments'][0]['blocks_admission'] is True and r['segments'][0]['releasable'] is True and 'releasable: yes' in r['text']
 
 
 def test_a_record_of_a_running_job_neither_blocks_nor_releases():

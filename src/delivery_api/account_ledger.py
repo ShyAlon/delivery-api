@@ -52,7 +52,8 @@ def read(db,owner_id,usd_per_credit):
     seg_rows=db.execute('SELECT s.segment_key,s.job_id,s.phase_key,s.state,w.state AS job_state FROM retail_compute_segments s LEFT JOIN worker_jobs w ON w.job_id=s.job_id WHERE s.owner_id=? ORDER BY s.started_at DESC LIMIT %d'%SEGMENT_FETCH,(owner_id,)).fetchall()
     per_attempts={str(r['job_id']):int(r['n']) for r in db.execute('SELECT job_id,count(*) AS n FROM provider_attempts WHERE owner_id=? GROUP BY job_id',(owner_id,)).fetchall()}
     per_tokens={str(r['job_id']):int(r['n']) for r in db.execute("SELECT job_id,count(*) AS n FROM retail_contributions WHERE kind='tokens' GROUP BY job_id",()).fetchall()}
-    segments=[segment_view(dict(r),per_attempts.get(str(r['job_id']),0),per_tokens.get(str(r['job_id']),0)) for r in seg_rows]
+    per_nonterminal={str(r['job_id']):int(r['n']) for r in db.execute("SELECT job_id,count(*) AS n FROM provider_attempts WHERE owner_id=? AND state IN ('reserved','dispatched','uncertain','held') GROUP BY job_id",(owner_id,)).fetchall()}
+    segments=[segment_view(dict(r),per_attempts.get(str(r['job_id']),0),per_tokens.get(str(r['job_id']),0),per_nonterminal.get(str(r['job_id']),0)) for r in seg_rows]
     open_segments=[s for s in segments if s['state']!='settled']
     debits=[]
     for d in raw:
