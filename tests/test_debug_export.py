@@ -50,3 +50,24 @@ def test_missing_verification_scores_are_listed_not_hidden(tmp_path):
  raw=diagnostic_zip(root,'t','s',1,{}, {},[],tmp_path/'absent')
  with zipfile.ZipFile(io.BytesIO(raw)) as z:
   assert {'source':'interview/verification.jsonl','reason':'not recorded'} in json.loads(z.read('manifest.json'))['omissions']
+
+def test_engine_log_tail_is_in_the_zip_filtered_to_the_task(tmp_path):
+ root=tmp_path/'session';(root/'interview').mkdir(parents=True)
+ sid='11111111-2222-3333-4444-555555555555'
+ engine=tmp_path/'engine.log'
+ engine.write_text("2026-10-26T06:25:28Z INFO pg.connect.end session=%s dur_ms=4\n"
+                   "2026-10-26T06:25:28Z ERROR interview session start failed task=task-a\n"
+                   "2026-10-26T06:25:29Z INFO pg.connect.end session=99999999-8888-7777-6666-555555555555 dur_ms=3\n"%sid)
+ raw=diagnostic_zip(root,'task-a',sid,1,{}, {},[],tmp_path/'absent-run.log',engine)
+ with zipfile.ZipFile(io.BytesIO(raw)) as z:
+  assert 'engine.log' in z.namelist()
+  text=z.read('engine.log').decode()
+  assert 'pg.connect.end session=%s'%sid in text and 'task=task-a' in text
+  assert '99999999' not in text
+
+def test_absent_engine_log_is_an_omission_not_a_failure(tmp_path):
+ root=tmp_path/'session';(root/'interview').mkdir(parents=True)
+ raw=diagnostic_zip(root,'t','s',1,{}, {},[],tmp_path/'absent-run.log',tmp_path/'absent-engine.log')
+ with zipfile.ZipFile(io.BytesIO(raw)) as z:
+  omissions=json.loads(z.read('manifest.json'))['omissions']
+  assert any(x['source']=='engine.log' and x['reason']=='not recorded' for x in omissions)

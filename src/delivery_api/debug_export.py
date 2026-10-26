@@ -18,7 +18,7 @@ def redact(value):
   return text
  return value
 
-def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:dict,control:dict,events:list,log_path:Path)->bytes:
+def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:dict,control:dict,events:list,log_path:Path,engine_log_path:Path=None)->bytes:
  files={};omissions=[];limit=2_000_000;total_limit=12_000_000
  def add(name,content,source):
   if isinstance(content,str):text=redact(content)
@@ -46,16 +46,22 @@ def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:d
  # Per-turn question verification scores (interview-engine E5): written by the
  # interview phase only, one JSON object per probing turn, for calibration.
  read(root/'interview'/'verification.jsonl','interview/verification.jsonl')
- # Server run.log is global. Filter by exact task/session to avoid another
- # task's project data; export a truthful bounded tail with its capture scope.
- if log_path.is_file():
-  with log_path.open('rb') as stream:
-   stream.seek(max(0,log_path.stat().st_size-limit));tail=stream.read(limit).decode(errors='replace')
-  ids=[f"task_id={task_id!r}",f"task={task_id!r}",f"session_id={session_id!r}",f"session={session_id!r}"]
+ # Server run.log and the engine process log are global. Filter each by exact
+ # task/session to avoid another task's project data; export a truthful
+ # bounded tail with its capture scope. Delivery activity lines quote the ids
+ # (task_id='x'); engine dotted-event lines do not (session=x) - both forms
+ # are matched so the engine's markers reach the per-task ZIP.
+ def add_log_tail(path,name,scope):
+  if not path or not path.is_file():omissions.append({'source':name,'reason':'not recorded'});return
+  with path.open('rb') as stream:
+   stream.seek(max(0,path.stat().st_size-limit));tail=stream.read(limit).decode(errors='replace')
+  ids=[f"task_id={task_id!r}",f"task={task_id!r}",f"session_id={session_id!r}",f"session={session_id!r}",
+       f"task_id={task_id}",f"task={task_id}",f"session_id={session_id}",f"session={session_id}"]
   lines=[line for line in tail.splitlines() if any(x in line for x in ids)]
-  if lines:add('run.log','\n'.join(lines)+'\n','scoped server run log tail')
-  else:omissions.append({'source':'run.log','reason':'no task/session-matched lines in bounded tail'})
- else:omissions.append({'source':'run.log','reason':'not recorded'})
+  if lines:add(name,'\n'.join(lines)+'\n',scope)
+  else:omissions.append({'source':name,'reason':'no task/session-matched lines in bounded tail'})
+ add_log_tail(log_path,'run.log','scoped server run log tail')
+ if engine_log_path is not None:add_log_tail(engine_log_path,'engine.log','scoped engine process log tail')
  add('task-events.json',events,'task event snapshot')
  add('control.json',control,'current control snapshot')
  add('browser.json',browser,'this browser captured diagnostics')
