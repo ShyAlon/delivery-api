@@ -16,7 +16,13 @@ logger=logging.getLogger("delivery_api.activity")
 if not logger.handlers:
     logger.setLevel(logging.INFO);logger.propagate=False
     formatter=logging.Formatter("%(message)s")
-    stream=logging.StreamHandler();stream.setFormatter(formatter);logger.addHandler(stream)
+    stream=logging.StreamHandler();stream.setFormatter(formatter)
+    # Console stays readable: call sites mark routine records console=False;
+    # the file handler below is unfiltered, so Debug evidence (run.log -> ZIP)
+    # always keeps every line.
+    class _ConsoleFilter(logging.Filter):
+        def filter(self,record):return getattr(record,'console',True)
+    stream.addFilter(_ConsoleFilter());logger.addHandler(stream)
     try:
         file=RotatingFileHandler(LOG_PATH,maxBytes=5*1024*1024,backupCount=3,encoding="utf-8");file.setFormatter(formatter);logger.addHandler(file)
     except OSError:pass
@@ -36,9 +42,9 @@ def stage_log_paths()->dict[str,Path]:
     return STAGE_LOG_PATHS
 
 
-def event(kind:str,message:str,**fields)->None:
+def event(kind:str,message:str,*,level:int=logging.INFO,console:bool=True,**fields)->None:
     line=_line(kind,message,fields)
-    logger.info(line)
+    logger.log(level,line,extra={'console':console})
     phase=fields.get("phase_key") or fields.get("phase") or fields.get("stage")
     path=STAGE_LOG_PATHS.get(str(phase)) if phase else None
     if path:

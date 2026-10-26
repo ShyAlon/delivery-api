@@ -29,7 +29,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" 'sudo -n docker info >/dev/nul
 ssh "$HOST" "mkdir -p ~/requi && chmod 700 ~/requi && for d in ~/requi/build-[0-9]*; do [ -d \"\$d\" ] && rm -rf \"\$d\"; done; mkdir ~/requi/build-$STAMP" || abort MKDIR "cannot create the build folder"
 tar -c -C "$CTX" . | ssh "$HOST" "tar -x -p -C ~/requi/build-$STAMP" || abort UPLOAD "upload failed"
 echo "== docker build (several minutes the first time)"
-ssh "$HOST" "cd ~/requi/build-$STAMP && sudo -n docker build --build-arg REQUI_BUILD_ID=$TAG -f delivery-api/Dockerfile.full --build-arg REQUI_BUILD_REPOS=$REPOS -t $CAND . > ../build-$STAMP.log 2>&1; rc=\$?; tail -15 ../build-$STAMP.log; exit \$rc" || { ssh "$HOST" "rm -rf ~/requi/build-$STAMP" || true; abort BUILD "docker build failed (log: $HOST:~/requi/build-$STAMP.log)" "The image tag $IMAGE was not created; the uploaded sources were removed from the server."; }
+ssh "$HOST" "cd ~/requi/build-$STAMP && sudo -n docker build --build-arg REQUI_BUILD_ID=$TAG -f delivery-api/Dockerfile.full --build-arg REQUI_BUILD_REPOS=$REPOS --build-arg REQUI_BUILD_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -t $CAND . > ../build-$STAMP.log 2>&1; rc=\$?; tail -15 ../build-$STAMP.log; exit \$rc" || { ssh "$HOST" "rm -rf ~/requi/build-$STAMP" || true; abort BUILD "docker build failed (log: $HOST:~/requi/build-$STAMP.log)" "The image tag $IMAGE was not created; the uploaded sources were removed from the server."; }
 SRC=0; REQUI_SERVER="$HOST" bash "$HERE/scripts/docker/smoke-image.sh" "$CAND" || SRC=$?
 if [ "$SRC" -ne 0 ]; then
   ssh "$HOST" "rm -rf ~/requi/build-$STAMP" || true

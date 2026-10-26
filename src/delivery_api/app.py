@@ -57,7 +57,9 @@ def _runtime_version() -> dict:
         for pair in os.environ.get("REQUI_BUILD_REPOS","").split(","):
             name,_,sha=pair.partition("=")
             if re.fullmatch(r"[a-z0-9-]{1,40}",name) and re.fullmatch(r"[0-9a-f]{7,40}",sha):repos[name]=sha
-        return {"runtime_id":build_id,"repositories":repos,"manifest":None}
+        # Image build timestamp (UTC ISO-8601) baked in by the build script; empty for old images.
+        built_at=os.environ.get("REQUI_BUILD_AT","").strip() or None
+        return {"runtime_id":build_id,"repositories":repos,"manifest":None,"built_at":built_at}
     root=Path(__file__).resolve()
     for parent in root.parents:
         manifest=parent/"MANIFEST.txt"
@@ -476,6 +478,8 @@ app.mount("/assets", StaticFiles(directory=WEB_DIR), name="assets")
 # Allowed only with a cloud (PostgreSQL) profile; the local SQLite auth path stays fenced.
 CONTROL_PLANE_AUTH_ROUTES=frozenset({"/auth/signup","/auth/signin","/auth/refresh","/auth/logout"})
 
+SLOW_REQUEST_MS=1000  # a request slower than this keeps its line on the console (with its DB cost)
+
 @app.middleware("http")
 async def request_log(request, call_next):
     if control_plane_only() and request.method not in ('GET','HEAD','OPTIONS') and not (config.CLOUD_TENANTS and request.method=='POST' and request.url.path in CONTROL_PLANE_AUTH_ROUTES):
@@ -499,7 +503,12 @@ async def request_log(request, call_next):
     who = auth.actor(request).label
     duration_ms=int((time.monotonic()-started)*1000)
     response.headers["X-Request-Id"]=ref;response.headers["Server-Timing"]="app;dur=%d"%duration_ms+(", "+stats.header() if stats.queries else "")
-    activity("http.request","Request completed",ref=ref,method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
+    import logging as _logging
+    _noteworthy=response.status_code>=400 or duration_ms>=SLOW_REQUEST_MS
+    # Routine successes go to the file log only (still in Debug evidence/ZIP);
+    # the console keeps non-2xx, slow and error lines. The per-request DB cost
+    # rides every line so a slow request carries its own evidence.
+    activity("http.request","Request completed",level=_logging.WARNING if _noteworthy else _logging.INFO,console=_noteworthy,ref=ref,method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,db_queries=stats.queries,db_ms=int(stats.db_seconds*1000),actor=who,client=request.client.host if request.client else "unknown")
     if response.status_code >= 400:
         activity("http.error","API request returned an error",ref=ref,endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
     if request.url.path.startswith("/api/operator/"):
@@ -1809,13 +1818,14 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
     task = store.task(task_id)
     if not task: raise HTTPException(404, "task not found")
     session_id=store.engine_session(task_id)
+    task_events=store.events(task_id)   # one read for the whole request (was three identical SELECTs per poll)
     snapshot=None
     starting=bool(session_id and task.get("active_phase")=="intent" and
                   any(e.get("kind")=="command" and e.get("message")=="Interview starting" and
-                      (e.get("payload") or {}).get("session_id")==session_id for e in store.events(task_id)) and
+                      (e.get("payload") or {}).get("session_id")==session_id for e in task_events) and
                   not any(e.get("kind")=="engine_protocol" and
                           (e.get("payload") or {}).get("snapshot",{}).get("session_id")==session_id
-                          for e in store.events(task_id)))
+                          for e in task_events))
     if starting and task.get("state")=="running":
         input_state={"waiting":False,"process_live":True,"decision":None,"requirement":None,"question":None,"input_id":None}
     elif session_id and config.CLOUD_TENANTS:
@@ -1850,7 +1860,7 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
         control.artifact_ref=None
     if config.CLOUD_TENANTS:
         artifacts=[{key:value for key,value in row.items() if key!='ref'} for row in artifacts]
-    return _customer_events({**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": _customer_events(store.events(task_id)), "artifacts":artifacts,"artifact_projection":{"session":session,"root":None if config.CLOUD_TENANTS else str((authorized_session(__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"stop_control":{"available":bool(config.CLOUD_TENANTS and cloud_execution_admitted() and session_id),"requested":task.get("state") in ("stop_requested","stopped")},"run_control":_run_control(task_id)})
+    return _customer_events({**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": _customer_events(task_events), "artifacts":artifacts,"artifact_projection":{"session":session,"root":None if config.CLOUD_TENANTS else str((authorized_session(__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"stop_control":{"available":bool(config.CLOUD_TENANTS and cloud_execution_admitted() and session_id),"requested":task.get("state") in ("stop_requested","stopped")},"run_control":_run_control(task_id)})
 
 def _retain_decision_control(task_id:str,control:dict)->None:
     decision=control.get('decision') or {};context=decision.get('context') or {}
@@ -2972,7 +2982,7 @@ def server_log(minutes:int=Query(30,ge=1,le=240),a:auth.Actor=Depends(auth.requi
 @app.get("/health")
 def health():
     if control_plane_only():return {"ok":True,"runtime_profile":"control_plane_only","engine_execution":False,"payments_enabled":False}
-    if config.CLOUD_TENANTS:return {"ok":True,"runtime_id":RUNTIME_VERSION["runtime_id"],"repositories":RUNTIME_VERSION["repositories"]}
+    if config.CLOUD_TENANTS:return {"ok":True,"runtime_id":RUNTIME_VERSION["runtime_id"],"repositories":RUNTIME_VERSION["repositories"],"built_at":RUNTIME_VERSION.get("built_at")}
     return {"ok": True, "total_spend_usd": store.total_spend(), "tasks": len(store.list_tasks()), **RUNTIME_VERSION}
 
 @app.post('/api/tasks/{task_id}/packages')
