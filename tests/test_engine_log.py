@@ -124,3 +124,47 @@ def test_route_merges_engine_block(tmp_path,monkeypatch):
     result=module.server_log(30,actor())
     assert engine_log.HEADER in result['text'] and SESSION_A in result['text']
     assert result['engine_log']['available'] is True and result['engine_log']['lines']==1
+
+
+def test_mirror_writes_stamped_scrubbed_lines_the_read_side_picks_up(tmp_path):
+    """The in-process engine's records land in the same file the Debug tail reads."""
+    import logging
+    path=tmp_path/'logs'/'engine.log'
+    engine_log.install_mirror(path=path,logger_name='interview_engine')
+    try:
+        logging.getLogger('interview_engine.http').warning('stop.swallowed session=%s reason=stop-requested',SESSION_A)
+        logging.getLogger('interview_engine.http').info('session lease heartbeat started session=%s interval=10.0s ttl=30.0s',SESSION_A)
+        logging.getLogger('interview_engine.http').warning('dsn postgres://user:secretpw@host/db leaked session=%s',SESSION_A)
+    finally:
+        engine_log.uninstall_mirror()
+    out=engine_log.read(OWNER_A,False,30,_resolver({SESSION_A:OWNER_A}),path=path)
+    assert out['available'] and out['count']==3
+    assert 'stop.swallowed' in out['text'] and 'lease heartbeat started' in out['text']
+    assert 'secretpw' not in out['text'] and '[redacted]' in out['text']
+
+
+def test_mirror_idempotent_and_never_fatal(tmp_path,monkeypatch):
+    import logging
+    path=tmp_path/'engine.log'
+    first=engine_log.install_mirror(path=path)
+    assert engine_log.install_mirror(path=tmp_path/'other.log') is first   # one handler per process
+    engine_log.uninstall_mirror()
+    # An unwritable path disables the handler instead of raising into the caller.
+    blocked=tmp_path/'a-dir'
+    blocked.mkdir()
+    engine_log.install_mirror(path=blocked)   # a directory: open() fails
+    logging.getLogger('interview_engine.http').warning('never written')
+    engine_log.uninstall_mirror()
+
+
+def test_mirror_rotates_at_bound(tmp_path,monkeypatch):
+    import logging
+    monkeypatch.setattr(engine_log,'MIRROR_MAX_BYTES',400)
+    path=tmp_path/'engine.log'
+    engine_log.install_mirror(path=path)
+    try:
+        for i in range(30):logging.getLogger('interview_engine.http').warning('fill %d %s',i,'x'*60)
+    finally:
+        engine_log.uninstall_mirror()
+    assert path.exists() and path.stat().st_size<=400+300   # one in-flight write may cross the bound once
+    assert (tmp_path/'engine.log.1').exists()

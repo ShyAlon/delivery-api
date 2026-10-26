@@ -77,6 +77,8 @@ def install(store,environ,set_engine_client,watch_vendor=False):
         raise
     _failure=None
     inprocess_engine.configure(engine);inprocess_interview.configure(host);set_engine_client(client)
+    from . import engine_log
+    engine_log.install_mirror()   # the in-process engine's stream reaches engine.log from here on
     _state=(gateways,engine,host)
     if watch_vendor and gateways.verify_vendor is not None:
         import threading
@@ -90,6 +92,8 @@ def uninstall():
     if _state is None:return
     if _watcher is not None:_watcher.set();_watcher=None
     from . import inprocess_engine,inprocess_interview
+    from . import engine_log
+    engine_log.uninstall_mirror()
     gateways,host=_state[0],_state[2]
     inprocess_engine.configure(None);inprocess_interview.configure(None)
     _state=None
