@@ -99,3 +99,102 @@ def test_one_request_shares_one_backend_and_the_next_request_sees_only_its_own_r
         store.end_context(token);store.finish_request(handle,False)
     assert len({pid for pid,_ in seen})==1 and all(notes==['a-note'] for _,notes in seen)   # one connection, A's rows only
     assert read(store,B,table)==['b-note']                                                  # the connection carries nothing of A afterwards
+
+
+def test_every_idle_connection_killed_by_the_server_is_still_replaced(probe):
+    """Regression: two dead reused connections in a row must not leave _begin without a transaction
+    (the unpack of its implicit None is the TypeError seen in the live log)."""
+    import psycopg,threading
+    store,table=probe
+    barrier=threading.Barrier(2)
+    def hold():
+        with tenant_context(A),store.transaction() as c:
+            barrier.wait(10);c.execute('SELECT 1')
+    threads=[threading.Thread(target=hold) for _ in range(2)]
+    [t.start() for t in threads];[t.join(15) for t in threads]
+    assert all(not t.is_alive() for t in threads)
+    assert len(store._idle)==2
+    pids=[c.info.backend_pid for c,_ in store._idle]
+    with psycopg.connect(DSN,autocommit=True) as admin:
+        for pid in pids:admin.execute('SELECT pg_terminate_backend(%s)',(pid,))
+    before=store.opened
+    with tenant_context(A),store.transaction() as c:c.execute(f"INSERT INTO {table} VALUES (%s,'alive')",(A.owner_id,))
+    assert store.opened==before+1                    # one direct fresh connect replaces the dead idle, no pool drain
+    assert read(store,A,table)==['alive']            # exactly one row: no statement was replayed across the retry
+    assert store.opened==before+1                    # the fresh connection serves the next transaction
+
+
+def test_many_requests_recover_together_after_the_idle_pool_is_killed(probe):
+    """Concurrent requests hitting server-killed idles all recover via bounded direct fresh replacements."""
+    import psycopg,threading
+    store,table=probe
+    barrier=threading.Barrier(3)
+    def hold():
+        with tenant_context(A),store.transaction() as c:
+            barrier.wait(10);c.execute('SELECT 1')
+    threads=[threading.Thread(target=hold) for _ in range(3)]
+    [t.start() for t in threads];[t.join(15) for t in threads]
+    pids=[c.info.backend_pid for c,_ in store._idle]
+    with psycopg.connect(DSN,autocommit=True) as admin:
+        for pid in pids:admin.execute('SELECT pg_terminate_backend(%s)',(pid,))
+    results=[]
+    def work(i):
+        try:
+            with tenant_context(A),store.transaction() as c:results.append(c.execute('SELECT 1 AS one').fetchone()['one'])
+        except Exception as exc:results.append(exc)
+    threads=[threading.Thread(target=work,args=(i,)) for i in range(10)]
+    [t.start() for t in threads];[t.join(30) for t in threads]
+    assert results==[1]*10
+
+
+class _Dead:
+    closed=False
+    class _Tx:
+        def __enter__(self):
+            import psycopg;raise psycopg.OperationalError('server closed the connection unexpectedly')
+        def __exit__(self,*exc):return False
+    def transaction(self):return self._Tx()
+    def close(self):pass
+
+
+def test_a_dead_reused_connection_is_replaced_by_one_fresh_connection(probe):
+    """After one dead reused connection the next candidate is a direct fresh connect, not another idle."""
+    import psycopg
+    store,table=probe
+    checkouts=[]
+    real_checkout=store._checkout
+    store._checkout=lambda:(checkouts.append(1) or (_Dead(),True))
+    try:
+        with tenant_context(A),store.transaction() as c:c.execute(f"INSERT INTO {table} VALUES (%s,'fresh')",(A.owner_id,))
+    finally:store._checkout=real_checkout
+    assert len(checkouts)==1                       # exactly one doomed idle was tried
+    assert read(store,A,table)==['fresh']
+
+
+def test_a_failed_fresh_replacement_raises_its_own_error(probe):
+    """If the direct fresh replacement cannot connect, that failure surfaces - no retry storm, no None."""
+    import psycopg
+    store,_=probe
+    checkouts=[]
+    store._checkout=lambda:(checkouts.append(1) or (_Dead(),True))
+    store._checkout_fresh=lambda:(_ for _ in ()).throw(psycopg.OperationalError('server refused the connection'))
+    try:
+        with pytest.raises(psycopg.OperationalError,match='refused'):
+            with tenant_context(A),store.transaction():pass
+    finally:pass
+    assert len(checkouts)==1
+
+
+def test_a_capped_pool_falls_back_once_and_then_fails_clearly(probe):
+    """With no fresh slot free the normal checkout is the fallback; a second dead candidate ends in a clear
+    bounded error instead of an unpack of None."""
+    import psycopg
+    store,_=probe
+    checkouts=[]
+    store._checkout=lambda:(checkouts.append(1) or (_Dead(),True))
+    store._checkout_fresh=lambda:None
+    try:
+        with pytest.raises(psycopg.OperationalError,match='replacement failed'):
+            with tenant_context(A),store.transaction():pass
+    finally:pass
+    assert len(checkouts)==2
