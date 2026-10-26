@@ -195,3 +195,20 @@ def test_repo_detection_accepts_linked_worktree(tmp_path):
 def test_repo_detection_rejects_copied_out_script(tmp_path):
     p = _run_real_git(_real_git_layout(tmp_path, 'copied'))
     assert 'ABORTED [NO-REPO]' in p.stdout, p.stdout[-300:]
+
+def test_ollama_pin_abort_points_at_the_pin_fail_fix_not_a_vendor_page(tmp_path):
+    """Regression: in ollama mode a PIN-FAIL is a local server/model/context
+    condition whose line names its own fix (start the server, pull the model,
+    raise OLLAMA_CONTEXT_LENGTH). The abort advice must point at that line.
+    The 'page or the parser changed' text belongs to the deepseek pin, which
+    scrapes vendor pages - it sent an operator hunting for a parser bug when
+    the Ollama server simply ran with the default 4096 context."""
+    tty = tmp_path / 'tty'
+    tty.write_text('yes\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama',
+                        'OLLAMA_HOST': 'http://127.0.0.1:9'},
+             settings=_settings(tmp_path))
+    assert 'ABORTED [PIN]' in p.stdout, p.stdout[-500:]
+    assert 'PIN-FAIL' in p.stdout
+    assert 'page or the parser changed' not in p.stdout
+    assert 'the PIN-FAIL line above names' in p.stdout
