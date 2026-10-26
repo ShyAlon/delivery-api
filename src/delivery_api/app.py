@@ -1016,6 +1016,10 @@ async def _complete_interview_start(task_id:str,proposed_session:str,selected_ro
         return
     provider,model=next(iter(pairs))
     resolved=f"{provider}:{model}"
+    activity("engine.start.response","Engine start response received",task_id=task_id,session_id=started.snapshot.session_id,
+             sequence=started.snapshot.sequence,status=int(started.snapshot.process_status),next_step=int(started.snapshot.next_step),
+             open_input='null' if started.snapshot.open_input is None else 'set')
+    t_persist=time.monotonic()
     # A route switch can arrive while Start is completing; do not roll the
     # founder's newer choice back to the initial engine preview.
     if not (store.task(task_id) or {}).get("model_default"):
@@ -1025,6 +1029,8 @@ async def _complete_interview_start(task_id:str,proposed_session:str,selected_ro
     detail="Waiting for founder input" if started.snapshot.process_status==ProcessStatus.WAITING_INPUT else "Interview engine running"
     store.update_phase(task_id,"intent","running",detail=detail)
     store.add_event(task_id,"engine_protocol","HTTP interview session started",phase_key="intent",payload=started.model_dump(mode="json"))
+    activity("engine.start.persisted","Interview start writes committed",task_id=task_id,session_id=started.snapshot.session_id,
+             dur_ms=int((time.monotonic()-t_persist)*1000))
     return
 
 class RequirementResolution(BaseModel):
@@ -1969,9 +1975,13 @@ async def task_stream(task_id: str, request: Request):
     async def generate():
         try:
             existing = store.events(task_id)
+            activity("stream.connect","Progress stream connected",task_id=task_id,backlog=len(existing))
             cursor = existing[-1]["id"] if existing else 0
             while not stop.is_set() and not await request.is_disconnected():
+                t_events=time.monotonic()
                 events = store.events(task_id, cursor)
+                if time.monotonic()-t_events>2:
+                    activity("stream.events.slow","Progress stream event read slow",task_id=task_id,dur_ms=int((time.monotonic()-t_events)*1000))
                 for event in _customer_events(events):
                     cursor = event["id"]
                     yield f"id: {cursor}\nevent: progress\ndata: {json.dumps(event)}\n\n"
