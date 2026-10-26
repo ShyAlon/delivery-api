@@ -1952,7 +1952,7 @@ def download_debug_zip(task_id:str,body:BrowserDiagnostics,a:auth.Actor=Depends(
     from .observability import LOG_PATH
     root=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)
     control=get_task(task_id)['control_snapshot']
-    data=diagnostic_zip(root,task_id,session,task['generation'],body.model_dump(),control,store.events(task_id),root/'server-run.log' if config.CLOUD_TENANTS else LOG_PATH)
+    data=diagnostic_zip(root,task_id,session,task['generation'],body.model_dump(),control,store.events(task_id),root/'server-run.log' if config.CLOUD_TENANTS else LOG_PATH,engine_log.default_path())
     from fastapi.responses import Response
     activity("task.export","Debug zip downloaded",task_id=task_id,export="debug_zip",actor=a.label)
     return Response(data,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{task_id}-debug.zip"'})

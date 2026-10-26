@@ -86,3 +86,13 @@ Short rules that came from real failures. Add to this file when something goes w
 ## 2026-10-26 - `git add -A` sweeps run artifacts into commits
 
 Twice in three days, local run artifacts landed on main: pytest chunk lists (`c1`, `c2`) and four 163KB test databases named after relative PG connection strings under `host=/tmp/...`. Cause in both cases: a local test or script wrote files into the workdir and a later `git add -A` committed them unseen. Prevention: review untracked files before staging (`git status` before `git add -A`), keep run outputs in /tmp, and keep the `/host=/` gitignore guard so the relative-DSN accident cannot re-land.
+
+## 2026-10-26 - a new log source must reach the per-task export, in its own tag format
+
+The engine process log (engine.log) was added to the everything ZIP but never
+to the per-task Debug ZIP, and the per-task filter matched only the delivery
+activity line format (quoted ids); engine dotted-event lines use unquoted
+session=/task= tags and would have been filtered out even if the file had
+been included. Prevention: when a log source is added, wire it into every
+export that filters logs and test the filter against the source's own line
+format, not the format of the sources already there.
