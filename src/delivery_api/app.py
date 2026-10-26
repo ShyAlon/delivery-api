@@ -45,7 +45,7 @@ from .simulation import Simulation, ImportValidationError
 from . import bundles
 from . import model_routes as model_route_lib
 from .observability import event as activity
-from . import server_log_buffer
+from . import engine_log,server_log_buffer
 server_log_buffer.install()
 
 def _runtime_version() -> dict:
@@ -2885,10 +2885,25 @@ def set_quota(user_id:str, req:QuotaUpdate, request:Request, a:auth.Actor=Depend
     try:return store.set_user_quota(user_id,req.token_quota,a.label)
     except KeyError:raise HTTPException(404,"user not found")
 
+def _engine_log_owner(session_id:str):
+    # Owner attribution for engine lines. The local store has no engine_sessions
+    # read (sole-operator mode shows everything to the operator anyway); a store
+    # without it resolves to None, which keeps the line operator-only.
+    binding_reader=getattr(store,'session_binding',None)
+    if binding_reader is None:return None
+    binding=binding_reader(session_id)
+    return binding.get('owner_id') if binding else None
+
+
 @app.get("/api/server-log")
 def server_log(minutes:int=Query(30,ge=1,le=240),a:auth.Actor=Depends(auth.require_actor)):
     # Scrubbed, bounded, in-memory. A customer gets only lines made while serving their own requests; the operator also gets system lines.
-    return server_log_buffer.read(a.id,bool(a.admin),minutes)
+    result=server_log_buffer.read(a.id,bool(a.admin),minutes)
+    engine=engine_log.read(a.id,bool(a.admin),minutes,_engine_log_owner)
+    if engine['available'] and engine['text']:
+        result['text']=result['text']+('\n' if result['text'] else '')+engine['text']
+    result['engine_log']={'available':engine['available'],'lines':engine['count'],'path':engine['path']}
+    return result
 
 @app.get("/health")
 def health():

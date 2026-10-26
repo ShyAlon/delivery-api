@@ -2,7 +2,9 @@
 
 Either process exiting stops the other and fails the container, so the restart policy sees it.
 `--healthcheck` is the container health probe. No provider is called by this file."""
-import json,os,signal,socket,subprocess,sys,time,urllib.request
+import json,os,signal,socket,subprocess,sys,threading,time,urllib.request
+from datetime import datetime,timezone
+from pathlib import Path
 
 ENGINE_HOST='127.0.0.1'
 ENGINE_PORT=8010
@@ -11,6 +13,50 @@ DEFAULT_TOKEN='local-interview-engine-token'
 
 SESSIONS_DSN_ENV='INTERVIEW_ENGINE_SESSIONS_DSN'
 SESSIONS_FILE_ENV='INTERVIEW_ENGINE_SESSIONS_FILE'
+
+ENGINE_LOG_MAX_BYTES=2*1024*1024
+
+
+def engine_log_path(env):
+    """Where the engine's copied output lands. Mirrors delivery_api.config.default_data_dir
+    (XDG_DATA_HOME or ~/.local/share, plus requi-re) so the delivery process reads back the
+    same file for the Debug server log."""
+    base=env.get('XDG_DATA_HOME')
+    root=(Path(base).expanduser() if base else Path.home()/'.local'/'share')/'requi-re'
+    return root/'logs'/'engine.log'
+
+
+def tee_engine_output(engine,path,max_bytes=ENGINE_LOG_MAX_BYTES,out=None):
+    """Copy the engine's combined stdout/stderr to our own stdout (the container log stays the
+    live view, bytes unchanged) and to a bounded file the delivery API reads back for the Debug
+    server log. File lines carry a UTC timestamp so the read side can window them; the file is
+    rotated once at max_bytes. Never fatal: without a writable file the output still passes through."""
+    out=out or sys.stdout
+    sink=None
+    try:
+        path.parent.mkdir(parents=True,exist_ok=True)
+        if path.exists() and path.stat().st_size>max_bytes:os.replace(path,path.with_suffix('.log.1'))
+        sink=open(path,'a',encoding='utf-8',buffering=1)
+    except OSError:sink=None
+    def pump():
+        nonlocal sink
+        for line in engine.stdout:
+            out.write(line);out.flush()
+            if sink:
+                try:
+                    if sink.tell()>max_bytes:
+                        sink.close();os.replace(path,path.with_suffix('.log.1'))
+                        sink=open(path,'a',encoding='utf-8',buffering=1)
+                    stamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                    sink.write(stamp+' '+line)
+                except OSError:
+                    try:sink.close()
+                    except OSError:pass
+                    sink=None
+        if sink:
+            try:sink.close()
+            except OSError:pass
+    threading.Thread(target=pump,daemon=True).start()
 
 
 def engine_env(env):
@@ -74,7 +120,9 @@ def main():
         for p in problems:print('full service not started:',p,file=sys.stderr)
         return 2
     engine_cmd,delivery_cmd=commands()
-    engine=subprocess.Popen(engine_cmd,env=engine_env(os.environ))
+    engine=subprocess.Popen(engine_cmd,env=engine_env(os.environ),
+                            stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,errors='replace',bufsize=1)
+    tee_engine_output(engine,engine_log_path(os.environ))
     procs=[engine]
     def stop(*_):
         for p in procs:
