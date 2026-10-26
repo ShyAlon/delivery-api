@@ -417,6 +417,7 @@ async def lifespan(application:FastAPI):
     print("Build: "+(", ".join(f"{k} {v}" for k,v in RUNTIME_VERSION["repositories"].items()) or RUNTIME_VERSION["runtime_id"]),file=sys.stderr)
     from . import run_metrics
     run_metrics.start_idle_sampler()     # CPU and memory are read on a timer, so the operator page has numbers when no run is active
+    loop_lag_task=asyncio.create_task(_loop_lag_monitor())
     from .observability import LOG_PATH,stage_log_paths
     print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
@@ -426,6 +427,7 @@ async def lifespan(application:FastAPI):
         _previous_sigint=signal.getsignal(signal.SIGINT);signal.signal(signal.SIGINT,_shutdown_signal)
     try:yield
     finally:
+        loop_lag_task.cancel()
         stream_count=_streams_closed_on_signal+len(_stream_shutdown_events)
         activity("server.shutdown.signal","Server shutdown received",streams=stream_count,engines=len(runner.processes))
         for event in tuple(_stream_shutdown_events):event.set()
@@ -506,13 +508,15 @@ async def request_log(request, call_next):
     finally:request_stats.reset(stats_token)
     who = auth.actor(request).label
     duration_ms=int((time.monotonic()-started)*1000)
-    response.headers["X-Request-Id"]=ref;response.headers["Server-Timing"]="app;dur=%d"%duration_ms+(", "+stats.header() if stats.queries else "")
+    from . import request_costs
+    request_costs.record_request(request.method,request.url.path,response.status_code,duration_ms,stats)
+    response.headers["X-Request-Id"]=ref;response.headers["Server-Timing"]="app;dur=%d"%duration_ms+(", "+stats.header() if (stats.queries or stats.engine_calls or stats.checkout_seconds or stats.auth_seconds) else "")
     import logging as _logging
     _noteworthy=response.status_code>=400 or duration_ms>=SLOW_REQUEST_MS
     # Routine successes go to the file log only (still in Debug evidence/ZIP);
     # the console keeps non-2xx, slow and error lines. The per-request DB cost
     # rides every line so a slow request carries its own evidence.
-    activity("http.request","Request completed",level=_logging.WARNING if _noteworthy else _logging.INFO,console=_noteworthy,ref=ref,method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,db_queries=stats.queries,db_ms=int(stats.db_seconds*1000),actor=who,client=request.client.host if request.client else "unknown")
+    activity("http.request","Request completed",level=_logging.WARNING if _noteworthy else _logging.INFO,console=_noteworthy,ref=ref,method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,db_queries=stats.queries,db_ms=int(stats.db_seconds*1000),engine_calls=stats.engine_calls,engine_ms=int(stats.engine_seconds*1000),checkout_ms=int(stats.checkout_seconds*1000),auth_ms=int(stats.auth_seconds*1000),held_ms=int(stats.tx_held_seconds*1000),actor=who,client=request.client.host if request.client else "unknown")
     if response.status_code >= 400:
         activity("http.error","API request returned an error",ref=ref,endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
     if request.url.path.startswith("/api/operator/"):
@@ -2028,18 +2032,54 @@ def task_events(task_id: str, after: int = Query(default=0, ge=0)):
     if not store.task(task_id): raise HTTPException(404, "task not found")
     return {"events": _customer_events(store.events(task_id, after))}
 
+def stream_events_timed(store, task_id, cursor, acc):
+    """One stream event read, timed. These sync DB reads run ON the event loop: while one
+    executes, every in-flight request waits. The accumulated blocked time is reported on
+    stream disconnect so loop stalls are measured, not guessed."""
+    started=time.monotonic()
+    events=store.events(task_id,cursor)
+    blocked=int((time.monotonic()-started)*1000)
+    acc['cycles']+=1;acc['blocked_ms']+=blocked;acc['max_ms']=max(acc['max_ms'],blocked)
+    return events
+
+
+def loop_lag_ms(expected, actual):
+    """How late the loop woke for a scheduled tick: positive means something blocked it."""
+    return max(0,int((actual-expected)*1000))
+
+
+import logging as _logging
+
+
+async def _loop_lag_monitor():
+    """Ticks once a second and names stalls: a request that 'hangs' while the loop is blocked
+    by sync work (stream DB reads, serialization) is otherwise indistinguishable from a slow
+    database. Rate-limited; routine ticks are not logged."""
+    import asyncio as _asyncio
+    from .observability import event as _activity
+    expected=time.monotonic()+1.0;last_report=0.0
+    while True:
+        await _asyncio.sleep(1.0)
+        now=time.monotonic();lag=loop_lag_ms(expected,now);expected=now+1.0
+        if lag>=500 and now-last_report>=60:
+            last_report=now
+            _activity("loop.lag","Event loop stall",level=_logging.WARNING,lag_ms=lag)
+
+
 @app.get("/api/tasks/{task_id}/stream")
 async def task_stream(task_id: str, request: Request):
     if not store.task(task_id): raise HTTPException(404, "task not found")
     stop=asyncio.Event();_stream_shutdown_events.add(stop)
     async def generate():
+        loop_block={'cycles':0,'blocked_ms':0,'max_ms':0}
+        connected_at=time.monotonic()
         try:
             existing = store.events(task_id)
             activity("stream.connect","Progress stream connected",task_id=task_id,backlog=len(existing))
             cursor = existing[-1]["id"] if existing else 0
             while not stop.is_set() and not await request.is_disconnected():
                 t_events=time.monotonic()
-                events = store.events(task_id, cursor)
+                events = stream_events_timed(store,task_id,cursor,loop_block)
                 if time.monotonic()-t_events>2:
                     activity("stream.events.slow","Progress stream event read slow",task_id=task_id,dur_ms=int((time.monotonic()-t_events)*1000))
                 for event in _customer_events(events):
@@ -2050,7 +2090,10 @@ async def task_stream(task_id: str, request: Request):
                 except asyncio.TimeoutError:pass
         finally:
             _stream_shutdown_events.discard(stop)
-            activity("stream.disconnect","Progress stream closed",task_id=task_id,reason="client" if await request.is_disconnected() else "server")
+            from . import request_costs
+            request_costs.record_stream((time.monotonic()-connected_at)*1000,loop_block['blocked_ms'],loop_block['max_ms'])
+            activity("stream.disconnect","Progress stream closed",task_id=task_id,reason="client" if await request.is_disconnected() else "server",
+                     loop_blocked_ms=loop_block['blocked_ms'],db_cycles=loop_block['cycles'],max_cycle_ms=loop_block['max_ms'])
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 class FailedNeedsRetryRequest(BaseModel):
@@ -3077,6 +3120,14 @@ def admin_operations_workspace(a:auth.Actor=Depends(auth.require_admin)):
                      'state':t['state'],'generation':t.get('generation',1)} for t in tasks if store.engine_session(t['task_id'])],
         'worker_jobs':[],'credit_adjustment_available':False,'global_operator_access':False,
         'reason':'Local legacy quota is not a prepaid credit account.'}
+
+
+@app.get('/api/admin/operations/request-costs')
+def admin_operations_request_costs(a:auth.Actor=Depends(auth.require_admin)):
+    # Operator only: where request time went, per request type and for the slowest recent
+    # requests, over a bounded rolling window. One process, no customer content, no raw ids.
+    from . import request_costs
+    return request_costs.summary()
 
 
 @app.get('/api/admin/operations/capacity')
