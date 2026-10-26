@@ -3,6 +3,9 @@
 Either process exiting stops the other and fails the container, so the restart policy sees it.
 `--healthcheck` is the container health probe. No provider is called by this file."""
 import json,os,signal,socket,subprocess,sys,threading,time,urllib.request
+
+sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))   # preflight.py sits next to this file (/app in the image)
+import preflight
 from datetime import datetime,timezone
 from pathlib import Path
 
@@ -76,20 +79,9 @@ def engine_env(env):
 
 
 def artifacts_root_problem(env):
-    """The engine's stop fence and every artifact write need a creatable, writable artifacts
-    root. A dead data mount otherwise stays invisible until the first interview pays for it
-    (2026-10-26: a container served for hours on a stale mount; the first engine start died
-    with FileNotFoundError and the task page showed only 'session unavailable'). Probe at
-    startup and refuse with the real reason. Returns the problem text, or None when ready."""
-    root=env.get('VMODEL_ARTIFACTS_DIR')
-    if not root:return 'VMODEL_ARTIFACTS_DIR is not set; the image sets it to /data/artifacts'
-    try:
-        path=Path(root);path.mkdir(parents=True,exist_ok=True)
-        probe=path/'.requi-write-probe'
-        probe.write_text('ok');probe.unlink()
-    except OSError as error:
-        return 'the artifacts root %s cannot be created and written (%s); the data volume is missing or stale - recreate the container with a fresh data mount' % (root,type(error).__name__)
-    return None
+    """Preflight check 1, kept under its public name: probe the artifacts root (mkdir -p + a real
+    write) and return the problem text, or None when ready."""
+    return preflight.artifacts_root_problem(env)
 
 
 def check_env(env):
@@ -133,10 +125,14 @@ def main():
             print('unhealthy:',error,file=sys.stderr);return 1
         return 0
     problems=check_env(os.environ)
-    artifacts=artifacts_root_problem(os.environ)
-    if artifacts:problems=problems+[artifacts]
     if problems:
         for p in problems:print('full service not started:',p,file=sys.stderr)
+        return 2
+    report=preflight.run(os.environ)
+    print(report.render_text(),flush=True)
+    preflight.write_report(report,preflight.report_path(os.environ))
+    if report.refused:
+        print('full service not started: the startup preflight found blocking problems (above)',file=sys.stderr)
         return 2
     engine_cmd,delivery_cmd=commands()
     engine=subprocess.Popen(engine_cmd,env=engine_env(os.environ),

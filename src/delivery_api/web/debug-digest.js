@@ -105,3 +105,24 @@ export function formatRequestCostsText(data){
   const head=`Request timing: ${data.count} requests since ${data.since||'start'} (this server process)`;
   return [head,_textTable(cols,requestCostRows(data)),'','Slowest Recent Requests',_textTable(COST_SLOWEST_COLUMNS,data.slowest||[])].join('\n');
 }
+
+// Startup preflight report (scripts/docker/preflight.py, read back via /api/debug/preflight).
+// Pure: no DOM, so node can test it.
+export function formatPreflightReport(report){
+  if(!report)return 'no startup preflight report: this container predates it';
+  const headline={pass:'PASS',warn:'PASS WITH WARNINGS',fail:'REFUSED TO START'}[report.status]||String(report.status||'unknown').toUpperCase();
+  const stamp=report.generated_at?(' at '+report.generated_at):'';
+  const lines=['status '+headline+stamp];
+  for(const c of (report.checks||[])){
+    let line=(c.status==='pass'?'pass ':c.status==='skip'?'skip ':String(c.status||'').padEnd(5))+(c.name||'');
+    if(c.status!=='pass'&&c.status!=='skip'){
+      if(c.checked)line+='\n    checked  '+(c.checked||'');
+      if(c.expected)line+='\n    expected '+(c.expected||'');
+      if(c.found)line+='\n    found    '+(c.found||'');
+      if(c.where)line+='\n    where    '+(c.where||'');
+      if(c.remedy)line+='\n    remedy   '+(c.remedy||'');
+    }
+    lines.push(line);
+  }
+  return lines.join('\n');
+}

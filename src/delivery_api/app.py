@@ -3122,6 +3122,13 @@ def admin_operations_workspace(a:auth.Actor=Depends(auth.require_admin)):
         'reason':'Local legacy quota is not a prepaid credit account.'}
 
 
+@app.get('/api/debug/preflight')
+def debug_preflight(a:auth.Actor=Depends(auth.require_actor)):
+    # The signed-in user's own container startup report (checked/expected/found/where). No secrets: paths, table names and build ids only.
+    from . import preflight_read
+    return {'startup': preflight_read.startup_report()}
+
+
 @app.get('/api/admin/operations/request-costs')
 def admin_operations_request_costs(a:auth.Actor=Depends(auth.require_admin)):
     # Operator only: where request time went, per request type and for the slowest recent

@@ -30,7 +30,7 @@ RUN pip install --no-cache-dir -r /wheels/requirements.txt 'psycopg[binary]>=3.2
     && python -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core' \
     && rm -rf /wheels && useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin requi \
     && mkdir -p /data/artifacts && chown -R 10001:10001 /data
-COPY delivery-api/scripts/docker/full_entry.py delivery-api/scripts/docker/full-smoke.py /app/
+COPY delivery-api/scripts/docker/full_entry.py delivery-api/scripts/docker/full-smoke.py delivery-api/scripts/docker/preflight.py /app/
 ARG REQUI_BUILD_ID=unknown
 ENV REQUI_BUILD_ID=$REQUI_BUILD_ID
 ARG REQUI_BUILD_REPOS=
