@@ -139,6 +139,17 @@ class ScopedPostgres:
         except Exception:pass
         with self._pool_cond:self._open-=1;self._pool_cond.notify()
 
+    def _checkout_fresh(self):
+        """A brand new connection that skips the idle pool: the direct replacement for a reused connection that
+        just died. Returns None when the open cap is reached, so the caller falls back to the normal checkout."""
+        with self._pool_cond:
+            if self._open>=POOL_OPEN_MAX:return None
+            self._open+=1
+        try:return self._connect()
+        except BaseException:
+            with self._pool_cond:self._open-=1;self._pool_cond.notify()
+            raise
+
     def _drop(self,connection):
         self._forget(connection)
 
@@ -156,12 +167,23 @@ class ScopedPostgres:
         for connection,_ in idle:self._forget(connection)
 
     def _begin(self,scope,repeatable_read):
-        """Starts the scoped transaction. A reused connection the server has closed is replaced once, before any work runs."""
+        """Starts the scoped transaction. A reused connection the server has closed is dropped and replaced directly
+        with one fresh connection, before any work runs: the replacement skips the idle pool, so a burst of
+        server-killed idles costs one doomed round trip plus one connect, never one round trip per dead idle.
+        A fresh connection's failure raises as before; if no fresh slot is free the normal checkout is the fallback,
+        and if that also dies a clear error is raised instead of returning without a transaction. Retrying here
+        cannot replay work: the only statements attempted on a dying candidate are the transaction settings and the
+        identity claim, so a caller's read or write never runs twice."""
         import psycopg
         stats=request_stats.get()
+        last_error=None
         for attempt in (0,1):
             started=time.monotonic()
-            connection,reused=self._checkout()
+            if attempt==0:connection,reused=self._checkout()
+            else:
+                fresh=self._checkout_fresh()
+                if fresh is not None:connection,reused=fresh,False
+                else:connection,reused=self._checkout()
             transaction=connection.transaction()
             try:
                 transaction.__enter__()
@@ -172,11 +194,14 @@ class ScopedPostgres:
                     if reused:stats.reused+=1
                     else:stats.opened+=1
                 return connection,transaction
-            except psycopg.OperationalError:
+            except psycopg.OperationalError as error:
                 self._drop(connection)
                 if not reused:raise
+                last_error=error
             except BaseException:
                 self._drop(connection);raise
+        raise psycopg.OperationalError(
+            'a reused database connection was already broken and its replacement failed before any statement ran') from last_error
 
     @contextmanager
     def transaction(self,*,repeatable_read=False):
