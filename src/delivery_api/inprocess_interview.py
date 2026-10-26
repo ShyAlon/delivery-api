@@ -70,10 +70,17 @@ class InProcessInterviewHost:
         from interview_engine.http_service import create_app,default_program_factory
         from interview_engine.tenant_worker import TenantRegistryRouter,TenantWorkerMiddleware
         registry_type=self._registry_type()
+        # One pool for the whole process: delivery's shared pool (db_pool) is
+        # injected into the engine's router, so the engine never builds a
+        # second pool and the connection budget stays one number.
+        engine_pool=None
+        if self._session_dsn is not None:
+            from .db_pool import pool_for
+            engine_pool=pool_for(self._session_dsn)
         # Database session persistence is the engine default. On the local SQLite tier
         # there is no Postgres for it to use, so file sessions are chosen explicitly here -
         # never as a silent fallback. On the PG tier the sessions DSN is always set.
-        self._engine_router=TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn,allow_file_sessions=self._session_dsn is None)
+        self._engine_router=TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn,allow_file_sessions=self._session_dsn is None,pool=engine_pool)
         app=create_app(self._engine_router,service_token=self._token)
         app.add_middleware(TenantWorkerMiddleware,base=self.artifacts_base,service_token=self._token)
         return app

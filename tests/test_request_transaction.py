@@ -45,15 +45,30 @@ def world(monkeypatch):
     return w
 
 
-def pool():
-    p=postgres_scope.ScopedPostgres.__new__(postgres_scope.ScopedPostgres);p.dsn='x';p._init_pool();return p
+class FakePool:
+    """Pool-shaped double: getconn/putconn over FakeConnections, like psycopg_pool."""
+    def __init__(self,world):self.world=world;self.idle=[]
+    def getconn(self,timeout=None):
+        if self.idle:return self.idle.pop()
+        c=FakeConnection(self.world);c._delivery_pool_new=True
+        self.world.made.append(c)
+        return c
+    def putconn(self,connection):
+        if not connection.closed:self.idle.append(connection)
+    def close(self):pass
+
+
+def pool(world):
+    p=postgres_scope.ScopedPostgres.__new__(postgres_scope.ScopedPostgres)
+    p.dsn='x';p._pool=FakePool(world);p.opened=0
+    return p
 
 
 def count(connection,what):return sum(1 for e in connection.log if e==what)
 
 
 def test_calls_in_one_request_share_one_connection_one_identity_setup_and_one_commit(world):
-    p=pool()
+    p=pool(world)
     with tenant_context(S1):
         handle,token=p.begin_request(S1)
         for _ in range(5):
@@ -63,17 +78,17 @@ def test_calls_in_one_request_share_one_connection_one_identity_setup_and_one_co
     log=world.made[0].log
     assert count(world.made[0],'begin')==1 and count(world.made[0],'commit')==1 and 'rollback' not in log
     assert sum(1 for e in log if isinstance(e,tuple))==1          # the identity statement ran once
-    assert len(p._idle)==1                                         # the connection went back for reuse
+    assert len(p._pool.idle)==1                                    # the connection went back for reuse
 
 
 def test_a_request_that_made_no_database_call_never_opens_a_connection(world):
-    p=pool()
+    p=pool(world)
     handle,token=p.begin_request(S1);p.end_context(token);p.finish_request(handle,False)
     assert world.made==[]
 
 
 def test_another_identity_never_uses_the_shared_connection(world):
-    p=pool()
+    p=pool(world)
     handle,token=p.begin_request(S1)
     with tenant_context(S1),p.transaction():pass
     with tenant_context(S2),p.transaction():pass
@@ -84,7 +99,7 @@ def test_another_identity_never_uses_the_shared_connection(world):
 
 
 def test_repeatable_read_is_never_shared(world):
-    p=pool()
+    p=pool(world)
     handle,token=p.begin_request(S1)
     with tenant_context(S1):
         with p.transaction():pass
@@ -94,7 +109,7 @@ def test_repeatable_read_is_never_shared(world):
 
 
 def test_a_failed_call_rolls_back_to_its_savepoint_and_the_request_still_commits(world):
-    p=pool()
+    p=pool(world)
     with tenant_context(S1):
         handle,token=p.begin_request(S1)
         with pytest.raises(ValueError):
@@ -106,7 +121,7 @@ def test_a_failed_call_rolls_back_to_its_savepoint_and_the_request_still_commits
 
 
 def test_when_the_savepoint_cannot_be_undone_the_request_is_rolled_back_and_dropped(world):
-    p=pool();world.savepoint_missing=True
+    p=pool(world);world.savepoint_missing=True
     with tenant_context(S1):
         handle,token=p.begin_request(S1)
         with pytest.raises(ValueError):
@@ -118,7 +133,7 @@ def test_when_the_savepoint_cannot_be_undone_the_request_is_rolled_back_and_drop
 
 
 def test_a_failed_request_is_rolled_back(world):
-    p=pool()
+    p=pool(world)
     with tenant_context(S1):
         handle,token=p.begin_request(S1)
         with p.transaction():pass
@@ -127,7 +142,7 @@ def test_a_failed_request_is_rolled_back(world):
 
 
 def test_request_statistics_count_one_transaction_for_the_whole_request(world):
-    p=pool();stats=postgres_scope.RequestStats();token=postgres_scope.request_stats.set(stats)
+    p=pool(world);stats=postgres_scope.RequestStats();token=postgres_scope.request_stats.set(stats)
     try:
         with tenant_context(S1):
             handle,t=p.begin_request(S1)
@@ -140,7 +155,7 @@ def test_request_statistics_count_one_transaction_for_the_whole_request(world):
 
 
 def test_through_the_middleware_the_session_check_and_the_handler_share_one_transaction(world):
-    p=pool()
+    p=pool(world)
     class Verifier:
         def verify(self,token):return S1
     def session_check():
