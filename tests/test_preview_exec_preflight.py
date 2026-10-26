@@ -57,13 +57,13 @@ def _run(tmp_path, env_extra, settings=None, tty_input='yes\n'):
     return proc
 
 def test_missing_key_aborts_before_anything(tmp_path):
-    p = _run(tmp_path, {}, settings=_settings(tmp_path))
+    p = _run(tmp_path, {'PREVIEW_EXEC_PROVIDER': 'deepseek'}, settings=_settings(tmp_path))
     assert 'ABORTED [NO-KEY]' in p.stdout, p.stdout[-400:]
     assert p.returncode == 1
 
 def test_short_or_spaced_key_aborts(tmp_path):
     for bad in ('sk-short', 'sk-has space init'):
-        p = _run(tmp_path, {'DEEPSEEK_API_KEY': bad}, settings=_settings(tmp_path))
+        p = _run(tmp_path, {'DEEPSEEK_API_KEY': bad, 'PREVIEW_EXEC_PROVIDER': 'deepseek'}, settings=_settings(tmp_path))
         assert 'ABORTED [KEY-' in p.stdout, (bad, p.stdout[-300:])
 
 def test_unprovisioned_settings_abort(tmp_path):
@@ -95,6 +95,27 @@ def test_confirmed_start_passes_origin_checks(tmp_path):
              settings=_settings(tmp_path))
     assert 'ABORTED [ORIGIN]' not in p.stdout, p.stdout[-500:]
     assert 'ABORTED [PIN' in p.stdout, p.stdout[-500:]
+
+def test_default_provider_is_ollama_and_needs_no_key(tmp_path):
+    """No PREVIEW_EXEC_PROVIDER and no key: the preview is the $0 local Ollama
+    route by default. Reaching the pin step (PIN abort: no server listens in
+    this hermetic run) proves the deepseek key checks did not fire."""
+    tty = tmp_path / 'tty'
+    tty.write_text('yes\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'OLLAMA_HOST': 'http://127.0.0.1:9'},
+             settings=_settings(tmp_path))
+    assert 'Provider: local Ollama model' in p.stdout, p.stdout[-500:]
+    assert 'ABORTED [NO-KEY]' not in p.stdout
+    assert 'ABORTED [PIN' in p.stdout, p.stdout[-500:]
+
+def test_local_preview_flag_only_in_ollama_mode():
+    """DELIVERY_LOCAL_PREVIEW=1 offers the ollama route; without OLLAMA_BASE_URL
+    (deepseek mode) that route is dead and fails task starts with a connection
+    error. The flag must be written exactly once, inside the ollama branch."""
+    src = SCRIPT.read_text()
+    assert src.count('DELIVERY_LOCAL_PREVIEW=1') == 1
+    block = 'if [ "$PROVIDER" = ollama ]; then\n  printf \'DELIVERY_LOCAL_PREVIEW=1\\n\' >> "$WORK/preview.env"'
+    assert block in src, 'the flag must be written inside the ollama provider branch'
 
 def test_key_never_written_or_printed(tmp_path):
     """Every abort path: the key value appears nowhere in output, and no file
