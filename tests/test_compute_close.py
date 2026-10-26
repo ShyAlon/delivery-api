@@ -32,16 +32,30 @@ def test_decision_voids_only_with_no_provider_call_and_no_token_charge():
 def test_release_needs_an_ended_job_with_no_provider_call():
     assert cs.releasable('unresolved','failed',0,0) is True
     assert cs.releasable('pending','failed',0,0) is True
-    assert cs.releasable('unresolved','failed',1,0) is False
     assert cs.releasable('unresolved','running',0,0) is False
     assert cs.releasable('settled','failed',0,0) is False
 
 
+def test_release_decision_waives_a_crashed_job_whose_provider_calls_are_all_terminal():
+    # The blocked-interview shape: job died after its provider calls settled
+    # (charges already taken). The owner can release it; only in-flight calls hold.
+    assert cs.release_decision('unresolved','failed',0,2,1)=='waive'
+    assert cs.release_decision('unresolved','done',0,1,0)=='waive'
+    assert cs.release_decision('unresolved','failed',0,0,0)=='void'
+    assert cs.release_decision('pending','failed',0,0,0)=='void'
+    assert cs.release_decision('unresolved','failed',1,2,1) is None   # a call still in flight: review
+    assert cs.release_decision('unresolved','running',0,2,1) is None  # job alive: not the owner's call
+    assert cs.release_decision('settled','failed',0,2,1) is None
+    assert cs.releasable('unresolved','failed',2,1,attempts_nonterminal=0) is True
+    assert cs.releasable('unresolved','failed',2,1,attempts_nonterminal=1) is False
+
+
 class Store:
     """Rows keyed by what the statement reads; records every write and audit entry."""
-    def __init__(self,segments,job_states,attempts=None,tokens=None):
+    def __init__(self,segments,job_states,attempts=None,tokens=None,nonterminal=None):
         self.segments={s['segment_key']:dict(s) for s in segments}
         self.job_states,self.attempts,self.tokens=job_states,attempts or {},tokens or {}
+        self.nonterminal=nonterminal or {}
         self.writes,self.audits=[],[]
         store=self
         class Db:
@@ -52,7 +66,7 @@ class Store:
                         if 'FROM retail_compute_segments WHERE segment_key=?' in sql:return store.segments.get(params[0])
                         if 'FROM worker_jobs' in sql:
                             st=store.job_states.get(params[0]);return {'state':st} if st else None
-                        if 'FROM provider_attempts' in sql:return {'n':store.attempts.get(params[0],0)}
+                        if 'FROM provider_attempts' in sql:return {'n':store.attempts.get(params[0],0),'nonterminal':store.nonterminal.get(params[0],0)}
                         if "kind='tokens'" in sql:return {'n':store.tokens.get(params[0],0)}
                     def fetchall(s):
                         if 'FROM retail_compute_segments WHERE owner_id=?' in sql:
@@ -96,23 +110,28 @@ def test_closing_twice_and_closing_a_settled_or_missing_segment_change_nothing()
 
 
 def test_release_preview_writes_nothing_and_lists_what_it_would_do():
-    s=Store([seg(1,'unresolved'),seg(2,'unresolved'),seg(3,'unresolved'),seg(4,'pending')],
-            {'job1':'failed','job2':'failed','job3':'failed','job4':'running'},attempts={'job3':2})
+    s=Store([seg(1,'unresolved'),seg(2,'unresolved'),seg(3,'unresolved'),seg(4,'pending'),seg(5,'unresolved')],
+            {'job1':'failed','job2':'failed','job3':'failed','job4':'running','job5':'failed'},
+            attempts={'job3':2,'job5':2},nonterminal={'job3':1},tokens={'job5':1})
     with tenant_context(TenantScope(A)):
         out=retail_ledger.release_compute(s,A,False)
-    assert [i['job'] for i in out['releasable']]==['job1','job2'] and out['released']==0 and s.writes==[] and s.audits==[]
+    # job5 is the crashed-job case: every provider call terminal, charges already settled - the owner can release it.
+    assert [i['job'] for i in out['releasable']]==['job1','job2','job5'] and out['released']==0 and s.writes==[] and s.audits==[]
     reasons={k['job']:k['reason'] for k in out['kept']}
-    assert 'running' in reasons['job4'] and 'reached a provider' in reasons['job3']
+    assert 'running' in reasons['job4'] and 'still in flight' in reasons['job3']
 
 
 def test_release_closes_only_eligible_segments_each_audited_and_never_charges():
-    s=Store([seg(1,'unresolved'),seg(2,'unresolved'),seg(3,'unresolved'),seg(4,'pending')],
-            {'job1':'failed','job2':'failed','job3':'failed','job4':'running'},attempts={'job3':2})
+    s=Store([seg(1,'unresolved'),seg(2,'unresolved'),seg(3,'unresolved'),seg(4,'pending'),seg(5,'unresolved')],
+            {'job1':'failed','job2':'failed','job3':'failed','job4':'running','job5':'failed'},
+            attempts={'job3':2,'job5':2},nonterminal={'job3':1},tokens={'job5':1})
     with tenant_context(TenantScope(A)):
         out=retail_ledger.release_compute(s,A,True)
-    assert out['released']==2 and len(out['kept'])==2
-    assert {k:v['state'] for k,v in s.segments.items()}=={'job1:compute':'settled','job2:compute':'settled','job3:compute':'unresolved','job4:compute':'pending'}
-    assert [a[1] for a in s.audits]==['compute.segment_released_by_owner']*2 and not [w for w in s.writes if 'INSERT' in w[0].upper()]
+    assert out['released']==3 and len(out['kept'])==2
+    assert {k:v['state'] for k,v in s.segments.items()}=={'job1:compute':'settled','job2:compute':'settled','job3:compute':'unresolved','job4:compute':'pending','job5:compute':'settled'}
+    # No-provider-call releases and terminal-call waives audit under distinct actions; neither posts a debit.
+    assert [a[1] for a in s.audits]==['compute.segment_released_by_owner']*2+['compute.segment_reconciled_no_charge']
+    assert all(a[3]['charged'] is False for a in s.audits) and not [w for w in s.writes if 'INSERT' in w[0].upper()]
 
 
 def test_a_released_segment_no_longer_blocks_the_next_admission():

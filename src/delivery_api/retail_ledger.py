@@ -6,7 +6,7 @@ from .tenancy import current_scope
 from .attempt_ledger import AdmissionDenied
 from .prepaid import owner_lock
 from . import credit_audit
-from .compute_segments import close_decision,releasable
+from .compute_segments import close_decision,releasable,release_decision
 
 
 def rates_from_snapshot(snapshot):
@@ -136,9 +136,9 @@ def task_phase_totals(store,task_id):
 
 
 def _job_evidence(store,job_id):
-    attempts=store._db.execute('SELECT count(*) AS n FROM provider_attempts WHERE job_id=?',(job_id,)).fetchone()['n']
+    row=store._db.execute("SELECT count(*) AS n, COALESCE(sum(CASE WHEN state IN ('reserved','dispatched','uncertain','held') THEN 1 ELSE 0 END),0) AS nonterminal FROM provider_attempts WHERE job_id=?",(job_id,)).fetchone()
     tokens=store._db.execute("SELECT count(*) AS n FROM retail_contributions WHERE job_id=? AND kind='tokens'",(job_id,)).fetchone()['n']
-    return int(attempts),int(tokens)
+    return int(row['n']),int(tokens),int(row['nonterminal'])
 
 
 def _close_without_charge(store,segment,action,attempts):
@@ -154,7 +154,7 @@ def close_failed_compute(store,key):
     segment=store._db.execute('SELECT * FROM retail_compute_segments WHERE segment_key=? FOR UPDATE',(key,)).fetchone()
     if not segment:return 'missing'
     if segment['state']=='settled':return 'settled'
-    attempts,tokens=_job_evidence(store,segment['job_id'])
+    attempts,tokens,_=_job_evidence(store,segment['job_id'])
     if close_decision(attempts,tokens)=='void':
         _close_without_charge(store,segment,'compute.segment_closed_no_provider_call',attempts)
         return 'closed'
@@ -171,10 +171,15 @@ def release_compute(store,owner_id,confirm):
     for row in rows:
         job=store._db.execute('SELECT state FROM worker_jobs WHERE job_id=?',(row['job_id'],)).fetchone()
         job_state=job['state'] if job else None
-        attempts,tokens=_job_evidence(store,row['job_id'])
+        attempts,tokens,nonterminal=_job_evidence(store,row['job_id'])
         item={'segment':str(row['segment_key'])[:8],'job':str(row['job_id'])[:8],'state':row['state'],'provider_calls':attempts}
-        if releasable(row['state'],job_state,attempts,tokens):closable.append((row,item,attempts))
-        else:kept.append({**item,'reason':'its job is still running' if job_state=='running' else 'its job reached a provider; needs review'})
+        decision=release_decision(row['state'],job_state,nonterminal,attempts,tokens)
+        if decision:closable.append((row,item,attempts,decision))
+        else:kept.append({**item,'reason':'its job is still running' if job_state=='running'
+                else 'a provider call is still in flight; needs review' if nonterminal
+                else 'its job reached a provider before it settled; needs review'})
     if confirm:
-        for row,item,attempts in closable:_close_without_charge(store,row,'compute.segment_released_by_owner',attempts)
-    return {'releasable':[i for _,i,_ in closable],'kept':kept,'released':len(closable) if confirm else 0}
+        for row,item,attempts,decision in closable:
+            action='compute.segment_released_by_owner' if decision=='void' else 'compute.segment_reconciled_no_charge'
+            _close_without_charge(store,row,action,attempts)
+    return {'releasable':[i for _,i,_,_ in closable],'kept':kept,'released':len(closable) if confirm else 0}
