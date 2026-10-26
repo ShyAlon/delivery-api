@@ -49,3 +49,26 @@ def test_long_event_messages_are_clipped_not_dropped():
     out=td.build({"task_id":"t"},[{"id":1,"kind":"error","message":"x"*10000}],{},{},None)
     message=out["events"]["items"][0]["message"]
     assert message.startswith("xxx") and len(message)<4200 and "more characters" in message
+
+
+def test_worker_state_section_shapes_rows_and_renders_times():
+    ws={"worker_jobs":[{"job_id":"j1","kind":"interview","state":"running","attempt":1,"session_id":"s1","generation":3,
+                        "created_at":1761472800.0,"updated_at":1761476400.0,"execution_options":{"secret":"kept-out"}}],
+        "provider_attempts":[{"attempt_id":"a1","job_id":"j1","state":"dispatched","expense_reserved":10,"retail_reserved":25,
+                              "expense_actual":None,"retail_actual":None,"created_at":1761472800.0,"updated_at":1761476400.0,
+                              "quote":{"kept":"out"},"fingerprint":"kept-out","usage":{"kept":"out"}}]}
+    out=td.build({"task_id":"t","title":"x","state":"running"},[],{}, {}, td.engine_summary(None),worker_state=ws)
+    section=out["worker_state"]
+    assert section["available"] is True
+    job=section["worker_jobs"][0]
+    assert job["job_id"]=="j1" and job["state"]=="running" and job["session_id"]=="s1"
+    assert job["created_at"]=="2025-10-26T10:00:00Z" and job["updated_at"]=="2025-10-26T11:00:00Z"
+    assert "execution_options" not in job
+    attempt=section["provider_attempts"][0]
+    assert attempt["state"]=="dispatched" and attempt["retail_reserved"]==25
+    assert "quote" not in attempt and "fingerprint" not in attempt and "usage" not in attempt
+
+
+def test_worker_state_omitted_when_not_passed_and_unavailable_when_none():
+    out=td.build({"task_id":"t","title":"x","state":"running"},[],{}, {}, td.engine_summary(None))
+    assert "worker_state" not in out

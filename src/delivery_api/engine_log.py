@@ -9,7 +9,10 @@ buffer's audience rule: a customer sees a line only when its session=<uuid> reso
 their account through the delivery store; lines without a resolvable owner are
 operator-only. Everything here is read-only and never fatal: a missing or unreadable
 file is an empty, unavailable result, not an error."""
+import logging
+import os
 import re
+import threading
 from datetime import datetime,timezone
 
 from . import config,server_log_buffer
@@ -73,3 +76,68 @@ def read(owner_id,admin,minutes,resolve_owner,path=None,now=None):
         out.append('%s engine%s: %s'%(when,who,text))
     if not out:return {'available':True,'text':'','count':0,'path':str(path)}
     return {'available':True,'text':HEADER+'\n'+'\n'.join(out),'count':len(out),'path':str(path)}
+
+
+MIRROR_MAX_BYTES=2*1024*1024   # same bound as scripts/docker/full_entry.py's tee
+
+
+class _MirrorHandler(logging.Handler):
+    """Append interview_engine log records to the same engine.log the docker tee writes.
+
+    The Mac full service hosts the engine in-process (cloud_runtime), so the real engine
+    stream - swallowed stops, fence trips, lease heartbeats - never reaches the tee'd
+    subprocess file: the uvicorn engine on 8010 sits idle and engine.log shows only its
+    startup lines. With this handler the in-process engine's records land in the same
+    bounded file the Debug engine tail reads. Lines are scrubbed on write, stamped like
+    the tee's, and the file rotates once at MIRROR_MAX_BYTES. Never fatal: the first
+    write error disables the handler."""
+
+    def __init__(self,path,level):
+        super().__init__(level)
+        self._path=path
+        self._dead=False
+        self._lock=threading.Lock()
+
+    def emit(self,record):
+        if self._dead:return
+        try:
+            line=server_log_buffer.scrub(record.getMessage())
+            rows=[line]
+            if record.exc_info:
+                fmt=self.formatter or logging.Formatter()
+                rows+=['    '+scrubbed for scrubbed in
+                       (server_log_buffer.scrub(l) for l in fmt.formatException(record.exc_info).splitlines()[-40:])]
+            stamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            text=''.join('%s %-7s %s: %s\n'%(stamp,record.levelname,record.name,row) for row in rows)
+            with self._lock:
+                self._path.parent.mkdir(parents=True,exist_ok=True)
+                if self._path.exists() and self._path.stat().st_size>MIRROR_MAX_BYTES:
+                    os.replace(self._path,self._path.with_suffix('.log.1'))
+                with open(self._path,'a',encoding='utf-8') as handle:handle.write(text)
+        except OSError:
+            self._dead=True
+        except Exception:
+            self._dead=True
+
+
+_mirrors=[]
+
+
+def install_mirror(path=None,level=None,logger_name='interview_engine'):
+    """Mirror the in-process engine's records into engine.log. Safe to call more than once.
+
+    INFO level: heartbeat lifecycle lines (start/lost/give-up) are INFO and WARNING and
+    belong in the operator's file; the customer-visible in-memory buffer stays WARNING-only."""
+    if _mirrors:return _mirrors[0][1]
+    handler=_MirrorHandler(path or default_path(),logging.INFO if level is None else level)
+    logger=logging.getLogger(logger_name)
+    if logger.getEffectiveLevel()>handler.level:logger.setLevel(handler.level)   # engine configures no logging; root is WARNING
+    logger.addHandler(handler)
+    _mirrors.append((logger_name,handler))
+    return handler
+
+
+def uninstall_mirror():
+    for name,handler in _mirrors:
+        logging.getLogger(name).removeHandler(handler)
+    _mirrors.clear()

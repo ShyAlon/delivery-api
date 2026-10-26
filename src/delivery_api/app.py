@@ -1802,7 +1802,7 @@ def task_diagnostics(task_id:str):
         except EngineClientError as exc:error=f"engine answered HTTP {exc.http_status}: {exc.error.detail}"
         except EngineUnreachableError:error="the interview engine is not reachable"
     return diagnostics.build(detail,detail.get("events") or [],detail.get("control_snapshot"),detail.get("input_state"),
-                             diagnostics.engine_summary(snapshot,error))
+                             diagnostics.engine_summary(snapshot,error),worker_state=store.task_worker_state(task_id))
 
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str, background_tasks: BackgroundTasks = None):

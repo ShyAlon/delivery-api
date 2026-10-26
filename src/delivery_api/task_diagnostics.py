@@ -45,15 +45,39 @@ def event_row(event):
     return row
 
 
-def build(task,events,control,input_state,engine,limit=EVENT_LIMIT):
+def _when(value):
+    if not isinstance(value,(int,float)):return value
+    from datetime import datetime,timezone
+    return datetime.fromtimestamp(value,timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def worker_state_summary(worker_state):
+    """The Stop-settle state for this task: worker jobs and provider attempts.
+
+    A session parked in stop-requested leaves its job 'running' forever and Stop waits
+    on it; before this section the only way to see that was a database console. Times
+    are rendered UTC; payloads (options, quotes, usage) never leave the store."""
+    if worker_state is None:return {"available":False}
+    jobs=[{**{k:row.get(k) for k in ("job_id","kind","state","attempt","session_id","generation")},
+           "created_at":_when(row.get("created_at")),"updated_at":_when(row.get("updated_at"))}
+          for row in worker_state.get("worker_jobs") or []]
+    attempts=[{**{k:row.get(k) for k in ("attempt_id","job_id","state","expense_reserved","retail_reserved","expense_actual","retail_actual")},
+               "created_at":_when(row.get("created_at")),"updated_at":_when(row.get("updated_at"))}
+              for row in worker_state.get("provider_attempts") or []]
+    return {"available":True,"worker_jobs":jobs,"provider_attempts":attempts}
+
+
+def build(task,events,control,input_state,engine,limit=EVENT_LIMIT,worker_state=None):
     """One JSON-able document. `question` is the text the owner should be seeing."""
     control=control or {};input_state=input_state or {}
     question=control.get("prompt") or input_state.get("question") or ((input_state.get("decision") or {}).get("prompt"))
     if not question and (engine or {}).get("open_input"):question=engine["open_input"].get("prompt")
     shown=list(events or [])[-limit:]
-    return {"task":{key:task.get(key) for key in ("task_id","title","state","active_phase","generation") if key in task},
+    out={"task":{key:task.get(key) for key in ("task_id","title","state","active_phase","generation") if key in task},
             "question":question,
             "control_snapshot":control,
             "input_state":input_state,
             "engine":engine,
             "events":{"total":len(events or []),"shown":len(shown),"items":[event_row(e) for e in shown]}}
+    if worker_state is not None:out["worker_state"]=worker_state_summary(worker_state)
+    return out

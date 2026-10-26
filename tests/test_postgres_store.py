@@ -1384,3 +1384,30 @@ def test_request_tx_row_lock_never_deadlocks_concurrent_store_call(store):
     # a concurrent uncommitted insert, so duplicate waiting_input rows are a
     # known, separately tracked scope - not guarded here or at the DB level yet.
     assert kinds==['waiting_input','waiting_input']
+
+
+def test_task_worker_state_reads_jobs_and_attempts_for_one_task(store):
+    # The 2026-10-26 parked session left its worker job open forever and Stop
+    # waited on it; this owner-scoped read is what the Debug export shows.
+    import psycopg,time
+    sid='ws-'+uuid.uuid4().hex
+    with tenant_context(A):
+        task=store.create_task(sid);store.set_engine_session(task['task_id'],sid)
+        job=store.enqueue_worker(task['task_id'],'fake-phase')
+    now=time.time()
+    with psycopg.connect(DSN) as admin:   # fixture setup, like the reauthorization test above
+        admin.execute("INSERT INTO provider_attempts (attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,created_at,updated_at) VALUES (%s,%s,%s,'v1','{}'::jsonb,'fp','dispatched',10,25,%s,%s)",
+            ('att-'+sid,A.owner_id,job,now,now))
+    with tenant_context(A):
+        state=store.task_worker_state(task['task_id'])
+        assert [j['job_id'] for j in state['worker_jobs']]==[job]
+        assert state['worker_jobs'][0]['state']=='pending' and 'execution_options' not in state['worker_jobs'][0]
+        assert state['provider_attempts'][0]['attempt_id']=='att-'+sid
+        assert state['provider_attempts'][0]['state']=='dispatched' and state['provider_attempts'][0]['retail_reserved']==25
+        assert 'quote' not in state['provider_attempts'][0] and 'usage' not in state['provider_attempts'][0]
+    with tenant_context(B):
+        assert store.task_worker_state(task['task_id'])=={'worker_jobs':[],'provider_attempts':[]}
+    with psycopg.connect(DSN) as admin:
+        admin.execute("DELETE FROM provider_attempts WHERE attempt_id=%s",('att-'+sid,))
+    with tenant_context(A):
+        store.delete_task(task['task_id'])

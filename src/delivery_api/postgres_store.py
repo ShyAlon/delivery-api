@@ -1091,6 +1091,22 @@ class PostgresStore(SQLiteStore):
         # Authenticated owner view only. Startup never calls this without scope.
         return [dict(row) for row in self._db.execute("SELECT * FROM worker_jobs WHERE state IN ('pending','running','paused','failed') ORDER BY updated_at,job_id")]
 
+    def task_worker_state(self,task_id,limit=20):
+        """Read-only worker_jobs + provider_attempts state for one task's diagnostics.
+
+        The Stop-settle gates and a parked interview both live in these two tables, and
+        neither was visible in any export: a session parked in stop-requested left its
+        job 'running' forever with no way to see that short of a database console. This
+        is the same authenticated owner view as recoverable_worker_jobs, scoped to one
+        task, newest first, with only the columns a diagnosis needs (no execution
+        options, quotes, fingerprints or usage payloads)."""
+        jobs=[dict(row) for row in self._db.execute(
+            "SELECT job_id,kind,state,attempt,session_id,generation,created_at,updated_at FROM worker_jobs WHERE task_id=? ORDER BY updated_at DESC LIMIT ?",(task_id,limit)).fetchall()]
+        attempts=[dict(row) for row in self._db.execute(
+            "SELECT p.attempt_id,p.job_id,p.state,p.expense_reserved,p.retail_reserved,p.expense_actual,p.retail_actual,p.created_at,p.updated_at "
+            "FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=? ORDER BY p.updated_at DESC LIMIT ?",(task_id,limit)).fetchall()]
+        return {'worker_jobs':jobs,'provider_attempts':attempts}
+
     def worker_job(self,job_id):
         row=self._db.execute('SELECT * FROM worker_jobs WHERE job_id=?',(job_id,)).fetchone()
         return dict(row) if row else None
