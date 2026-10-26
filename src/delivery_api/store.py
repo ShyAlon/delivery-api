@@ -338,17 +338,32 @@ class SQLiteStore:
             self._commit()
             return self.task(task_id)
 
+    # The whole task projection in one statement: every extra statement is a
+    # full round trip on a remote database, and the UI polls these reads.
+    _TASK_PROJECTION = """
+SELECT t.*,
+  (SELECT json_group_array(json(r.j)) FROM (
+     SELECT json_object('phase_key',p.phase_key,'label',p.label,'position',p.position,'state',p.state,
+                        'detail',p.detail,'completed',p.completed,'total',p.total,
+                        'gate_basis_changed',p.gate_basis_changed,'started_at',p.started_at,'completed_at',p.completed_at) AS j
+     FROM phases p WHERE p.task_id=t.task_id ORDER BY p.position) r) AS phases_json,
+  (SELECT json_group_array(json(r.j)) FROM (
+     SELECT json_object('task_id',g.task_id,'gate_key',g.gate_key,'after_phase',g.after_phase,'label',g.label,
+                        'position',g.position,'is_open',g.is_open,'state',g.state,'revision',g.revision,
+                        'options',g.options,'selected_option',g.selected_option,'edited_text',g.edited_text,'steer',g.steer) AS j
+     FROM gates g WHERE g.task_id=t.task_id ORDER BY g.position) r) AS gates_json,
+  (SELECT count(*) FROM task_artifacts a WHERE a.task_id=t.task_id AND a.stale=0) AS artifact_count
+FROM tasks t"""
+
     def list_tasks(self) -> list[dict]:
         # A single connection is shared by API worker threads and background jobs.
-        # Keep the lock through every query in the task projection, not just
-        # the initial fetch; _task_record performs more reads on this connection.
         with self._lock:
-            rows = self._db.execute("SELECT * FROM tasks ORDER BY updated_at DESC").fetchall()
+            rows = self._db.execute(self._TASK_PROJECTION + " ORDER BY t.updated_at DESC").fetchall()
             return [self._task_record(r) for r in rows]
 
     def task(self, task_id: str) -> dict | None:
         with self._lock:
-            row = self._db.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+            row = self._db.execute(self._TASK_PROJECTION + " WHERE t.task_id=?", (task_id,)).fetchone()
             return self._task_record(row) if row else None
 
     def rename_task(self, task_id: str, title: str, actor: str = "local user") -> dict:
@@ -377,16 +392,13 @@ class SQLiteStore:
             self.audit(actor,"task.deleted",task_id,{"title":row["title"],"source_artifacts_deleted":False});self._commit()
 
     def _task_record(self, row) -> dict:
-        with self._lock:
-            item = dict(row)
-            item["phases"] = [dict(r) for r in self._db.execute(
-                "SELECT phase_key,label,position,state,detail,completed,total,gate_basis_changed,started_at,completed_at "
-                "FROM phases WHERE task_id=? ORDER BY position", (item["task_id"],))]
-            item["gates"] = [self._gate_record(r) for r in self._db.execute(
-                "SELECT * FROM gates WHERE task_id=? ORDER BY position", (item["task_id"],))]
-            item["artifact_count"] = self._db.execute(
-                "SELECT count(*) n FROM task_artifacts WHERE task_id=? AND stale=0", (item["task_id"],)).fetchone()["n"]
-            return item
+        # The row already carries phases/gates as JSON and the artifact count,
+        # fetched by _TASK_PROJECTION in the same statement as the task row.
+        item = dict(row)
+        item["phases"] = json.loads(item.pop("phases_json"))
+        item["gates"] = [self._gate_record(g) for g in json.loads(item.pop("gates_json"))]
+        item["artifact_count"] = int(item["artifact_count"])
+        return item
 
     def _gate_record(self, row) -> dict:
         item = dict(row); item["options"] = json.loads(item["options"]); return item

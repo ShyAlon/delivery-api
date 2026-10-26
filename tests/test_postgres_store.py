@@ -1411,3 +1411,23 @@ def test_task_worker_state_reads_jobs_and_attempts_for_one_task(store):
         admin.execute("DELETE FROM provider_attempts WHERE attempt_id=%s",('att-'+sid,))
     with tenant_context(A):
         store.delete_task(task['task_id'])
+
+
+def test_task_and_list_reads_are_one_statement_each(store):
+    from delivery_api import postgres_scope
+    with tenant_context(A):
+        first=store.create_task('stmt-'+uuid.uuid4().hex)
+        store.create_task('stmt-'+uuid.uuid4().hex)
+        # Each operation pays one identity-setup statement at transaction begin;
+        # the read itself must add exactly ONE more, no matter how many tasks.
+        # Before the one-statement projection this was 5 for task and 2+3N for list.
+        for label,read in (('task',lambda:store.task(first['task_id'])),('list_tasks',store.list_tasks)):
+            stats=postgres_scope.RequestStats();token=postgres_scope.request_stats.set(stats)
+            try:read()
+            finally:postgres_scope.request_stats.reset(token)
+            assert stats.queries==2,(label,stats.queries)
+        record=store.task(first['task_id'])
+        assert [p['position'] for p in record['phases']]==sorted(p['position'] for p in record['phases'])
+        assert all(isinstance(g['options'],list) for g in record['gates'])
+        assert record['artifact_count']==0
+        store.delete_task(first['task_id'])

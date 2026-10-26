@@ -225,12 +225,24 @@ class PostgresStore(SQLiteStore):
         out['email']=None;out['is_admin']=0
         return out
 
+    # Same one-statement projection as the sqlite store, in Postgres dialect:
+    # jsonb aggregation cast to text so _task_record parses both identically.
+    _TASK_PROJECTION = """
+SELECT t.*,
+  (SELECT coalesce(jsonb_agg(to_jsonb(r))::text,'[]') FROM (
+     SELECT p.phase_key,p.label,p.position,p.state,p.detail,p.completed,p.total,p.gate_basis_changed,p.started_at,p.completed_at
+     FROM phases p WHERE p.task_id=t.task_id ORDER BY p.position) r) AS phases_json,
+  (SELECT coalesce(jsonb_agg(to_jsonb(r))::text,'[]') FROM (
+     SELECT g.* FROM gates g WHERE g.task_id=t.task_id ORDER BY g.position) r) AS gates_json,
+  (SELECT count(*) FROM task_artifacts a WHERE a.task_id=t.task_id AND a.stale=0) AS artifact_count
+FROM tasks t"""
+
     def list_tasks(self):
-        rows=self._db.execute('SELECT * FROM tasks WHERE deleted_at IS NULL ORDER BY updated_at DESC').fetchall()
+        rows=self._db.execute(self._TASK_PROJECTION+' WHERE t.deleted_at IS NULL ORDER BY t.updated_at DESC').fetchall()
         return [self._task_record(row) for row in rows]
 
     def task(self,task_id):
-        row=self._db.execute('SELECT * FROM tasks WHERE task_id=? AND deleted_at IS NULL',(task_id,)).fetchone()
+        row=self._db.execute(self._TASK_PROJECTION+' WHERE t.task_id=? AND t.deleted_at IS NULL',(task_id,)).fetchone()
         return self._task_record(row) if row else None
 
     def request_task_stop(self,task_id):
@@ -263,7 +275,7 @@ class PostgresStore(SQLiteStore):
         # Preserve FK chain, raw usage, charges and existing source artifacts.
         if task['deleted_at'] is None:
             self._db.execute('UPDATE tasks SET deleted_at=?,updated_at=? WHERE task_id=?',(time.time(),time.time(),task_id))
-        return self._task_record(self._db.execute('SELECT * FROM tasks WHERE task_id=?',(task_id,)).fetchone())
+        return self._task_record(self._db.execute(self._TASK_PROJECTION+' WHERE t.task_id=?',(task_id,)).fetchone())
 
     def delete_task(self,task_id,actor='local user'):
         task=self.task(task_id)

@@ -110,13 +110,17 @@ _stream_shutdown_events:set[asyncio.Event]=set()
 _previous_sigint=None
 _streams_closed_on_signal=0
 
-def _recorded_engine_session(task_id:str)->str|None:
+_SESSION_UNSET=object()
+
+def _recorded_engine_session(task_id:str,recorded=_SESSION_UNSET,events=None)->str|None:
     # The typed HTTP cutover stores this binding at session creation. It is
-    # authoritative; event/path scanning is legacy recovery only.
-    recorded=store.engine_session(task_id)
+    # authoritative; event/path scanning is legacy recovery only. A request
+    # that already read the binding (and the events) passes them in: one
+    # statement per request, not two.
+    if recorded is _SESSION_UNSET:recorded=store.engine_session(task_id)
     if recorded:return recorded
     if config.CLOUD_TENANTS:return None
-    for event in reversed(store.events(task_id)):
+    for event in reversed(store.events(task_id) if events is None else events):
         match=__import__('re').search(r"(?:^|\s)session:\s*([A-Za-z0-9._-]+)",event.get("message", ""))
         if match:return match.group(1)
         path=str((event.get("payload") or {}).get("path") or "")
@@ -1847,7 +1851,7 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
     else:input_state=({"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None} if config.CLOUD_TENANTS else runner.input_state(task_id))
     work=None if config.CLOUD_TENANTS else runner.work_state(task_id)
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
-    artifacts=_task_artifact_snapshot(task_id);session=_recorded_engine_session(task_id)
+    artifacts=_task_artifact_snapshot(task_id);session=_recorded_engine_session(task_id,recorded=session_id,events=task_events)
     from .phases import PHASE_DEFINITIONS
     phase_config={phase.key:{"executor":phase.executor,"generator_stage":phase.generator_stage,
                              "prerequisite":phase.prerequisite,"artifacts":list(phase.artifacts)} for phase in PHASE_DEFINITIONS}
