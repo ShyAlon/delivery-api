@@ -50,7 +50,7 @@ def _stubbin(tmp_path):
             f.chmod(0o755)
     return d
 
-def _run(tmp_path, container=False, running=False, images=(), dirty=False, tty='yes\n'):
+def _run(tmp_path, container=False, running=False, images=(), dirty=False, tty='yes\n', env_extra=None):
     root = tmp_path / 'repos'
     for r in ('delivery-api', 'interview-engine', 'spec-generator', 'verification-loop'):
         (root / r / '.git').mkdir(parents=True, exist_ok=True)
@@ -68,9 +68,16 @@ def _run(tmp_path, container=False, running=False, images=(), dirty=False, tty='
     env = {'PATH': '%s:/usr/bin:/bin' % _stubbin(tmp_path), 'HOME': str(tmp_path),
            'REQUI_REPOS_ROOT': str(root), 'DOCKER_STATE': str(state), 'GIT_STATE': str(gstate),
            'DOCKER_LOG': str(log), 'PREVIEW_EXEC_SCRIPT': str(handover), 'PREVIEW_TTY': str(ttyfile)}
+    if env_extra: env.update(env_extra)
     proc = subprocess.run(['bash', str(SCRIPT)], capture_output=True, text=True, cwd=REPO, env=env, timeout=30)
     calls = log.read_text() if log.exists() else ''
     return proc, calls
+
+def test_provider_mode_is_printed_before_handover(tmp_path):
+    out, _ = _run(tmp_path)
+    assert '== provider: ollama (ollama is the default' in out.stdout, out.stdout
+    out, _ = _run(tmp_path, env_extra={'PREVIEW_EXEC_PROVIDER': 'deepseek'})
+    assert '== provider: deepseek' in out.stdout, out.stdout
 
 def test_leftover_container_removed_and_old_tags_pruned_candidate_kept(tmp_path):
     p, calls = _run(tmp_path, container=True, images=['requi-full:old1', 'requi-full:old2', CANDIDATE])

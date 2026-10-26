@@ -58,4 +58,5 @@ EOF
 
 # 4. build (only when the candidate tag is missing) and launch, with preview-exec's own gates: its typed yes,
 # the build script's own yes, the pinned prices, and the health and execution checks, all unchanged.
+echo "== provider: ${PREVIEW_EXEC_PROVIDER:-ollama} (ollama is the default; PREVIEW_EXEC_PROVIDER=deepseek selects the paid managed route)"
 exec bash "${PREVIEW_EXEC_SCRIPT:-$REPO/scripts/ops/preview-exec.sh}"

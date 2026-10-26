@@ -5,9 +5,10 @@
 # 'not admitted'. Starting this preview is NOT the activation approval for the first real interview: the spend
 # limit, cost ceiling, model route and live changes are approved once, separately, before that interview.
 # Settings: the file saved on this Mac by scripts/ops/preview-provision.sh (~/.config/requi/preview.env), plus
-# vendor prices and limits pinned fresh from the two public DeepSeek pages by scripts/ops/pin.py (the exact step
-# ops go-live runs; public GETs only, never a paid call). The DeepSeek key is read from this shell's environment
-# (DEEPSEEK_API_KEY) when present and is passed straight to the container - it is never written to any file,
+# a fresh pin of the reviewed model row: the local Ollama server by default (scripts/ops/pin-local.py, $0,
+# nothing paid), or the two public DeepSeek pages in deepseek mode (scripts/ops/pin.py, the exact step
+# ops go-live runs; public GETs only, never a paid call). In deepseek mode the key is read from this shell's
+# environment (DEEPSEEK_API_KEY) and is passed straight to the container - it is never written to any file,
 # never printed, never sent anywhere new. If any prerequisite is missing this stops with a clear message; it
 # never falls back to another model route. Ctrl-C removes the container and the temp folder.
 set -euo pipefail
@@ -54,9 +55,10 @@ docker info >/dev/null 2>&1 || abort NO-DOCKER "Docker is installed but not runn
 case "$PORT" in ''|*[!0-9]*) abort PORT "PREVIEW_EXEC_PORT is not a number" "" "unset PREVIEW_EXEC_PORT";; esac
 if (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null; then abort PORT-BUSY "something already listens on 127.0.0.1:$PORT" "" "stop it, or: PREVIEW_EXEC_PORT=8011 ops preview-exec"; fi
 docker ps -a --format '{{.Names}}' | grep -qx "$NAME" && abort LEFTOVER "a container named $NAME is left over from an earlier run" "" "docker rm -f $NAME"
-# Two provider modes. deepseek (default): the paid managed route, exactly as before. ollama: the operator's
-# local model at $0 - no key, no vendor pages, the reviewed row and ceiling grounded from this Mac's server.
-PROVIDER=${PREVIEW_EXEC_PROVIDER:-deepseek}
+# Two provider modes. ollama (default): the operator's local model at $0 - no key, no vendor pages, the
+# reviewed row and ceiling grounded from this Mac's server. deepseek: the paid managed route, chosen
+# explicitly with PREVIEW_EXEC_PROVIDER=deepseek.
+PROVIDER=${PREVIEW_EXEC_PROVIDER:-ollama}
 case "$PROVIDER" in deepseek|ollama) ;; *) abort PROVIDER "PREVIEW_EXEC_PROVIDER must be deepseek or ollama, not '$PROVIDER'" "" "unset PREVIEW_EXEC_PROVIDER";; esac
 OLLAMA_MODEL=${PREVIEW_EXEC_OLLAMA_MODEL:-qwen2.5-coder:14b}
 OLLAMA_HOST=${OLLAMA_HOST:-http://localhost:11434}
@@ -90,12 +92,13 @@ grep -q '^DELIVERY_DATABASE_URL=.' "$STORE" && grep -q '^DELIVERY_SUPABASE_URL=.
 echo "ops preview-exec: candidate $IMAGE (built on this Mac, no server access)"
 echo "  What it does: runs $IMAGE on http://127.0.0.1:$PORT with execution ON against the LIVE database."
 if [ "$PROVIDER" = deepseek ]; then
-echo "  Provider: DeepSeek (paid). Vendor prices and limits are pinned fresh from the two public DeepSeek pages"
+echo "  Provider: DeepSeek (paid), selected explicitly. For the default \$0 local Ollama route, unset PREVIEW_EXEC_PROVIDER."
+$(printf '%s' '')
 echo "  (public GETs, nothing paid), with the configured safety ceiling 128000 tokens per call / 16384 max output."
 echo "  The DeepSeek key comes from this shell's environment and is passed to the container without touching disk."
 echo "  Real spend is possible only for a person with an admission row and prepaid credits; anyone else is 'not admitted'."
 else
-echo "  Provider: local Ollama model $OLLAMA_MODEL at $OLLAMA_HOST (\$0, nothing paid, no key needed)."
+echo "  Provider: local Ollama model $OLLAMA_MODEL at $OLLAMA_HOST (\$0, nothing paid, no key needed) - the default; PREVIEW_EXEC_PROVIDER=deepseek selects the paid managed route."
 echo "  The reviewed row and context ceiling are grounded from this Mac's own Ollama server and the candidate"
 echo "  checkouts; every call is still reserved and settled in the shared ledger at \$0. The container reaches"
 echo "  the server through host.docker.internal."
@@ -108,10 +111,12 @@ read -r A < "${PREVIEW_TTY:-/dev/tty}" || A=no; [ "$A" = yes ] || abort NOT-CONF
 trap cleanup EXIT INT TERM
 umask 077; WORK=$(mktemp -d "${TMPDIR:-/tmp}/requi-preview-exec.XXXXXXXXXX"); chmod 700 "$WORK"; mkdir "$WORK/data"
 
-# 3. settings: saved file to a private temp file, never printed, execution ON, local-preview flag on
+# 3. settings: saved file to a private temp file, never printed, execution ON. The local-preview flag -
+# which offers the ollama route - is written only in ollama mode: the route is dead without OLLAMA_BASE_URL,
+# and a selectable dead route fails the task start with a connection error instead of being absent.
 build_exec_env "$STORE" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"
-printf 'DELIVERY_LOCAL_PREVIEW=1\n' >> "$WORK/preview.env"
 if [ "$PROVIDER" = ollama ]; then
+  printf 'DELIVERY_LOCAL_PREVIEW=1\n' >> "$WORK/preview.env"
   OPORT=$(printf '%s' "$OLLAMA_HOST" | sed -E 's#^[a-z]+://([^:/]+):?([0-9]*).*#\2#'); OPORT=${OPORT:-11434}
   printf 'OLLAMA_BASE_URL=%s\n' "http://host.docker.internal:$OPORT/v1" >> "$WORK/preview.env"
   [ -z "${VMODEL_OLLAMA_NUM_CTX:-}" ] || printf 'VMODEL_OLLAMA_NUM_CTX=%s\n' "$VMODEL_OLLAMA_NUM_CTX" >> "$WORK/preview.env"
