@@ -15,3 +15,7 @@ Lessons:
   the request does, including slow engine HTTP calls. held_ms makes the pin
   window explicit before anyone "fixes" the pool size.
 - Add the timers first, run the real workload, then fix the measured term.
+- The numbers belong where the operator looks: a bounded rolling window behind
+  the Debug dialog (per-type p50/p95 + slowest recent, route templates instead
+  of raw ids) and a text rendering in the everything ZIP - not only in a log
+  file on the machine that is misbehaving.

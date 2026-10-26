@@ -508,6 +508,8 @@ async def request_log(request, call_next):
     finally:request_stats.reset(stats_token)
     who = auth.actor(request).label
     duration_ms=int((time.monotonic()-started)*1000)
+    from . import request_costs
+    request_costs.record_request(request.method,request.url.path,response.status_code,duration_ms,stats)
     response.headers["X-Request-Id"]=ref;response.headers["Server-Timing"]="app;dur=%d"%duration_ms+(", "+stats.header() if (stats.queries or stats.engine_calls or stats.checkout_seconds or stats.auth_seconds) else "")
     import logging as _logging
     _noteworthy=response.status_code>=400 or duration_ms>=SLOW_REQUEST_MS
@@ -2070,6 +2072,7 @@ async def task_stream(task_id: str, request: Request):
     stop=asyncio.Event();_stream_shutdown_events.add(stop)
     async def generate():
         loop_block={'cycles':0,'blocked_ms':0,'max_ms':0}
+        connected_at=time.monotonic()
         try:
             existing = store.events(task_id)
             activity("stream.connect","Progress stream connected",task_id=task_id,backlog=len(existing))
@@ -2087,6 +2090,8 @@ async def task_stream(task_id: str, request: Request):
                 except asyncio.TimeoutError:pass
         finally:
             _stream_shutdown_events.discard(stop)
+            from . import request_costs
+            request_costs.record_stream((time.monotonic()-connected_at)*1000,loop_block['blocked_ms'],loop_block['max_ms'])
             activity("stream.disconnect","Progress stream closed",task_id=task_id,reason="client" if await request.is_disconnected() else "server",
                      loop_blocked_ms=loop_block['blocked_ms'],db_cycles=loop_block['cycles'],max_cycle_ms=loop_block['max_ms'])
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
@@ -3115,6 +3120,14 @@ def admin_operations_workspace(a:auth.Actor=Depends(auth.require_admin)):
                      'state':t['state'],'generation':t.get('generation',1)} for t in tasks if store.engine_session(t['task_id'])],
         'worker_jobs':[],'credit_adjustment_available':False,'global_operator_access':False,
         'reason':'Local legacy quota is not a prepaid credit account.'}
+
+
+@app.get('/api/admin/operations/request-costs')
+def admin_operations_request_costs(a:auth.Actor=Depends(auth.require_admin)):
+    # Operator only: where request time went, per request type and for the slowest recent
+    # requests, over a bounded rolling window. One process, no customer content, no raw ids.
+    from . import request_costs
+    return request_costs.summary()
 
 
 @app.get('/api/admin/operations/capacity')

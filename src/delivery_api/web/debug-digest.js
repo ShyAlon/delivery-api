@@ -59,3 +59,49 @@ export function buildDiagnosticSummary({diag,runtime,url,now}){
   for(const e of recent)lines.push(eventLine(e));
   return lines.join('\n')+'\n';
 }
+
+// Request-cost view (operator Debug dialog). Pure functions: no DOM, so node can test them.
+const COST_METRICS=[['duration_ms','Duration'],['db_ms','DB'],['engine_ms','Engine'],['checkout_ms','Checkout'],['auth_ms','Auth'],['held_ms','Held'],['loop_blocked_ms','Loop Block']];
+
+export function requestCostColumns(){
+  const cols=[{key:'type',label:'Request'},{key:'count',label:'Requests'}];
+  for(const [metric,name] of COST_METRICS)for(const p of ['p50','p95'])cols.push({key:`${p}_${metric}`,label:`${p.toUpperCase()} ${name} Ms`});
+  return cols;
+}
+
+export function requestCostRows(data){
+  return (data?.types||[]).map(t=>{
+    const row={type:t.type,count:t.count};
+    for(const [metric] of COST_METRICS)for(const p of ['p50','p95'])row[`${p}_${metric}`]=t[p]?.[metric]??0;
+    return row;
+  });
+}
+
+export function sortRequestCostRows(rows,key,ascending){
+  const dir=ascending?1:-1;
+  return [...rows].sort((a,b)=>{
+    const av=a[key],bv=b[key];
+    if(typeof av==='string'||typeof bv==='string')return String(av).localeCompare(String(bv))*dir;
+    return ((av||0)-(bv||0))*dir;
+  });
+}
+
+const COST_SLOWEST_COLUMNS=[['type','Request'],['status','Status'],['at','At'],['duration_ms','Duration Ms'],['db_ms','DB Ms'],['engine_ms','Engine Ms'],['checkout_ms','Checkout Ms'],['auth_ms','Auth Ms'],['held_ms','Held Ms'],['loop_blocked_ms','Loop Block Ms']];
+
+export function requestCostSlowestColumns(){
+  return COST_SLOWEST_COLUMNS.map(([key,label])=>({key,label}));
+}
+
+function _textTable(columns,rows){
+  const widths=columns.map(([key,label])=>Math.max(label.length,...rows.map(r=>String(r[key]??'').length)));
+  const line=columns.map(([key,label],i)=>label.padEnd(widths[i])).join('  ').trimEnd();
+  const body=rows.map(r=>columns.map(([key],i)=>String(r[key]??'').padEnd(widths[i])).join('  ').trimEnd());
+  return [line,...body].join('\n');
+}
+
+export function formatRequestCostsText(data){
+  if(!data||!data.count)return 'No requests recorded in this window yet.';
+  const cols=[['type','Request'],['count','Requests'],...COST_METRICS.flatMap(([m,n])=>[[`p50_${m}`,`P50 ${n} Ms`],[`p95_${m}`,`P95 ${n} Ms`]])];
+  const head=`Request timing: ${data.count} requests since ${data.since||'start'} (this server process)`;
+  return [head,_textTable(cols,requestCostRows(data)),'','Slowest Recent Requests',_textTable(COST_SLOWEST_COLUMNS,data.slowest||[])].join('\n');
+}
