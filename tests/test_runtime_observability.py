@@ -101,8 +101,10 @@ def test_ui_action_module_is_preloaded_and_wired():
     assert '/assets/ui-action.js' in index
     checks = {
         "identity.js": ["actionBusy('auth.'+mode", "actionIdle('auth.'+mode", "logEnter('auth.'+mode"],
-        "task.js": ["actionBusy('engine.start'", "actionIdle('engine.start'", "guardBlocked('engine.answer'",
+        "task.js": ["runAction('engine.start'", "guardBlocked('engine.answer'",
                     "disabledSet('engine.answer'", "disabledClear('engine.answer'", "logEnter('answer-composer'"],
+        "dashboard.js": ["runAction('task.create'"],
+        "taskactions.js": ["runAction('task.rerun'", "runAction('task.rerun.preview'"],
         "dialogs.js": ["logEnter('dialog','form.requestSubmit')", "logEnter('dialog','primary.click')", "logEnter('dialog','none"],
     }
     for name, needles in checks.items():
@@ -113,7 +115,7 @@ def test_ui_action_module_is_preloaded_and_wired():
 
 
 @needs_node
-def test_ui_action_functions_set_disabled_and_log_names_only():
+def test_ui_action_helpers_log_only_run_action_owns_disabled():
     src = """
 globalThis.location={pathname:'/tasks/x/view'};
 globalThis.fetch=()=>Promise.resolve({ok:true});
@@ -124,9 +126,9 @@ const lines=[];const orig=console.info;console.info=(...a)=>lines.push(a.map(Str
 const m=await import('%s');
 const button={disabled:false};
 m.actionBusy('engine.answer',button);
-if(button.disabled!==true)throw new Error('actionBusy did not disable');
+if(button.disabled!==false)throw new Error('actionBusy must be log-only; DOM effects belong to runAction alone');
 m.actionIdle('engine.answer',button,'settled');
-if(button.disabled!==false)throw new Error('actionIdle did not re-enable');
+if(button.disabled!==false)throw new Error('actionIdle must be log-only; DOM effects belong to runAction alone');
 m.guardBlocked('engine.answer','already-sending');
 m.disabledSet('engine.answer','all-controls');
 m.disabledClear('engine.answer','textarea+submit');
@@ -140,3 +142,61 @@ process.stdout.write(JSON.stringify(lines));
     for needle in ("ui.inflight", "engine.answer busy", "idle (settled)", "blocked: already-sending",
                    "ui.disabled", "ui.enter", "answer-composer: Enter -> form.requestSubmit"):
         assert needle in text, f"missing log line {needle!r} in {text!r}"
+
+
+@needs_node
+def test_run_action_is_the_shared_inflight_guard():
+    src = """
+globalThis.location={pathname:'/tasks/x/view'};
+globalThis.fetch=()=>Promise.resolve({ok:true});
+globalThis.window=globalThis;
+globalThis.addEventListener=()=>{};
+globalThis.document={querySelector:()=>null,addEventListener:()=>{}};
+console.info=()=>{};
+const m=await import('%s');
+if(typeof m.runAction!=='function')throw new Error('runAction not exported');
+const button={disabled:false,textContent:'Create empty task',title:'',classList:{add(c){this[c]=true},remove(c){delete this[c]}},setAttribute(k,v){this['attr_'+k]=v},removeAttribute(k){delete this['attr_'+k]}};
+let resolveCall;
+const slow=()=>new Promise(r=>{resolveCall=r});
+// Busy state must be a synchronous DOM effect, not just a log line.
+const pending=m.runAction('task.create',button,slow,{busyLabel:'Creating…',reason:'Creating the task'});
+if(button.disabled!==true)throw new Error('triggering button not disabled');
+if(button['attr_aria-busy']!=='true')throw new Error('aria-busy not set');
+if(button.classList['is-busy']!==true)throw new Error('is-busy class not set');
+if(button.textContent!=='Creating…')throw new Error('busy label not shown');
+if(!button.title)throw new Error('disabled reason not visible (title empty)');
+// Re-entry while in flight is blocked and does not double-run.
+let ran=0;
+const again=await m.runAction('task.create',button,async()=>{ran++});
+if(ran!==0||again!==undefined)throw new Error('in-flight re-entry was not blocked');
+resolveCall('done');
+const out=await pending;
+if(out!=='done')throw new Error('runAction did not return the fn result');
+if(button.disabled!==false)throw new Error('button not re-enabled on success');
+if(button.textContent!=='Create empty task')throw new Error('label not restored');
+// Error path: re-enables and rethrows.
+let threw=false;
+try{await m.runAction('task.create',button,async()=>{throw new Error('boom')},{busyLabel:'Creating…'})}catch(e){threw=e.message==='boom'}
+if(!threw)throw new Error('error not rethrown');
+if(button.disabled!==false)throw new Error('button not re-enabled on error');
+// keepDisabledOnSuccess: stays down until the page re-renders.
+await m.runAction('engine.answer',button,async()=>{}, {keepDisabledOnSuccess:true});
+if(button.disabled!==true)throw new Error('keepDisabledOnSuccess did not hold');
+// Restore returns the button to its PRE-ACTION state, not blindly to enabled.
+button.disabled=false;
+const preDisabled={disabled:true,textContent:'Stop',title:'',classList:{add(c){this[c]=true},remove(c){delete this[c]}},setAttribute(k,v){this['attr_'+k]=v},removeAttribute(k){delete this['attr_'+k]}};
+await m.runAction('engine.stop',preDisabled,async()=>{});
+if(preDisabled.disabled!==true)throw new Error('runAction must restore the prior disabled state, not force-enable');
+process.stdout.write('ok');
+""" % (WEB / "ui-action.js")
+    assert _node(src).strip() == "ok"
+
+
+def test_pool_budget_leaves_room_for_engine_sessions():
+    # Failing-first guard for the 2026-10-26 EMAXCONNSESSION incident: the
+    # Supabase pooler (session mode) allows 15 clients; this service's pool
+    # plus two concurrent engine sessions (ENGINE_PEAK_SESSION_CONNS=4 each,
+    # pinned by interview-engine's own accounting test) must fit.
+    from delivery_api import postgres_scope
+    assert postgres_scope.POOL_OPEN_MAX == 6
+    assert postgres_scope.POOL_OPEN_MAX + 2 * 4 <= 15

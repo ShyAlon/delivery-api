@@ -14,7 +14,7 @@ from .tenancy import current_scope, TenantAccessDenied
 # A connection costs TCP + TLS + authentication, about a second to a remote database, so finished connections are kept for reuse.
 # Reuse is safe because identity is transaction-local: every transaction starts by setting the role and the caller's claims, and
 # both reset when the transaction ends, so a pooled connection carries no identity between requests.
-POOL_OPEN_MAX=10        # total connections this service holds open (in use + idle); below the database pooler's own client limit
+POOL_OPEN_MAX=6         # total connections this service holds open (in use + idle); the pooler (session mode, 15 clients) also feeds the interview engine: 6 + 2 engine sessions x 4 = 14 (see ENGINE_PEAK_SESSION_CONNS)
 POOL_WAIT_SECONDS=30    # how long a request waits for a free connection before failing with a clear message
 POOL_IDLE_MAX=8
 POOL_IDLE_SECONDS=240
