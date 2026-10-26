@@ -7,7 +7,10 @@ def main():
     from .networking import delivery_listener
     host,port=delivery_listener(os.environ)
     print(f'Web and server APIs: http://{host}:{port} (same listener)')
-    uvicorn.run('delivery_api.app:app',host=host,port=port,reload=False)
+    # No uvicorn access log: the request_log middleware records every request with
+    # richer fields (actor, duration, DB cost); routine successes go to the file
+    # log, non-2xx/slow/errors also to the console. Access lines would double-log.
+    uvicorn.run('delivery_api.app:app',host=host,port=port,reload=False,access_log=False)
 
 
 if __name__ == '__main__':
