@@ -34,7 +34,9 @@ async def execute_job(store,job_id,handler,*,verify_stopped_quiescence=None,veri
                         store.finish_stopped_worker(job_id,worker_quiescent=True)
                 elif verify_completion_quiescence is None or verify_completion_quiescence(capability) is True:
                     store.finish_worker(job_id,failed=True)
-            except Exception:pass
+            except Exception as record_exc:
+                from .observability import event as activity
+                activity("job.failure_record_failed","A worker job failed AND its failure record could not be written; the job may look stuck",task_id=capability.task_id,job_id=job_id,error=type(record_exc).__name__)
             raise
         # A returned handler can leave deadline/provider writer threads alive.
         # The private persistent runner supplies its same-host lock verifier.
@@ -51,6 +53,7 @@ async def dispatch_phase(store,orchestrator,task_id,phase,*,resume_job_id=None,q
     integration are complete. Resume is an explicit current-owner operation.
     """
     from .orchestrator import ExecutionMode
+    from .observability import event as activity
     requested={}
     if mode is not None:requested['mode']=mode.value if isinstance(mode,ExecutionMode) else mode
     if model_route is not None:requested['model_route']=model_route
@@ -58,18 +61,22 @@ async def dispatch_phase(store,orchestrator,task_id,phase,*,resume_job_id=None,q
     if resume_job_id or queued_job_id:
         job=store.worker_job(resume_job_id or queued_job_id)
         if not job or job["task_id"]!=task_id or job["kind"]!="phase:"+phase:
+            activity("phase.dispatch.rejected","Worker job dispatch rejected: job does not match task/phase",task_id=task_id,phase=phase,reason="job_mismatch")
             raise PermissionError("worker job does not match requested task/phase")
         durable=job["execution_options"]
         if any(durable.get(key)!=value for key,value in requested.items()):
+            activity("phase.dispatch.rejected","Worker job dispatch rejected: options differ from reserved job",task_id=task_id,phase=phase,reason="options_mismatch")
             raise ValueError("execution options differ from reserved worker job")
     else:durable=requested
     if queued_job_id:
         if not job or job["task_id"]!=task_id or job["kind"]!="phase:"+phase or job["state"]!="pending":
+            activity("phase.dispatch.rejected","Queued job dispatch rejected: no matching pending job",task_id=task_id,phase=phase,reason="queued_mismatch")
             raise PermissionError("queued job does not match requested task/phase")
         job_id=queued_job_id
     elif resume_job_id:
         job=store.worker_job(resume_job_id)
         if not job or job['task_id']!=task_id or job['kind']!='phase:'+phase:
+            activity("phase.dispatch.rejected","Worker resume rejected: job does not match task/phase",task_id=task_id,phase=phase,reason="resume_mismatch")
             raise PermissionError('resume job does not match requested task/phase')
         store.reauthorize_worker(resume_job_id)
         job_id=resume_job_id
@@ -105,16 +112,23 @@ async def dispatch_phase(store,orchestrator,task_id,phase,*,resume_job_id=None,q
                             try:store.finish_retail_compute(segment,None)
                             except Exception:pass
         started=await run_slots.run_limited(store,orchestrator,task_id,lambda:execute_job(store,job_id,run_child))
-        if not started:raise ValueError("worker job was already claimed; no execution started")
+        if not started:
+            activity("phase.dispatch.rejected","Worker job was already claimed; no execution started",task_id=task_id,phase=phase,job_id=job_id,reason="already_claimed")
+            raise ValueError("worker job was already claimed; no execution started")
+        activity("phase.dispatch.claimed","Worker job claimed and started",task_id=task_id,phase=phase,job_id=job_id)
         return job_id
     if config.CLOUD_TENANTS and engine is not None:
         # The service runs the generator itself under the money gateway; it claims the job and meters it.
         if not await engine.dispatch(store,orchestrator,task_id,phase,job_id,options):
+            activity("phase.dispatch.rejected","Worker job was already claimed; no execution started",task_id=task_id,phase=phase,job_id=job_id,reason="already_claimed")
             raise ValueError("worker job was already claimed; no execution started")
+        activity("phase.dispatch.claimed","Worker job claimed and started",task_id=task_id,phase=phase,job_id=job_id)
         return job_id
     async def run(capability):
         capability.validate(store)
         await orchestrator.execute_phase(capability.task_id,phase,**options)
     if not await execute_job(store,job_id,run):
+        activity("phase.dispatch.rejected","Worker job was already claimed; no execution started",task_id=task_id,phase=phase,job_id=job_id,reason="already_claimed")
         raise ValueError("worker job was already claimed; no execution started")
+    activity("phase.dispatch.claimed","Worker job claimed and started",task_id=task_id,phase=phase,job_id=job_id)
     return job_id

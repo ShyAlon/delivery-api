@@ -33,8 +33,13 @@ def debit(store,attempt,amount,*,already_posted=False):
         if charge['charged_units']!=amount:raise AdmissionDenied('conflicting prepaid charge replay')
         return
     account=store._db.execute('SELECT * FROM credit_accounts WHERE owner_id=? FOR UPDATE',(current_scope().owner_id,)).fetchone()
-    if not account:raise AdmissionDenied('prepaid account disappeared; settlement held')
+    if not account:
+        from .observability import event as activity
+        activity("credits.settlement_held","A prepaid settlement is held: the account disappeared",attempt_id=str(attempt['attempt_id']),reason="account_missing")
+        raise AdmissionDenied('prepaid account disappeared; settlement held')
     if charge['units_per_credit'] is None or charge['units_per_credit']!=account['units_per_credit']:
+        from .observability import event as activity
+        activity("credits.settlement_held","A prepaid settlement is held: the credit scale changed or is unknown",attempt_id=str(attempt['attempt_id']),reason="scale_changed")
         raise AdmissionDenied('prepaid charge scale changed or unknown; settlement held')
     now=time.time()
     if not already_posted:

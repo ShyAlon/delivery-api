@@ -681,8 +681,12 @@ async def set_engine_python(req:EnginePythonRequest,a:auth.Actor=Depends(auth.re
 class ArtifactsRootRequest(BaseModel): path: str
 @app.post("/api/settings/artifacts-root")
 def set_artifacts_root(req: ArtifactsRootRequest, a: auth.Actor = Depends(auth.require_admin)):
-    try:return bundles.save_root(req.path)
-    except ValueError as e:raise HTTPException(400,{"error":"Artifacts folder could not be loaded.","cause":str(e),"next":"Choose the folder that directly contains your session directories, then validate again."})
+    try:out=bundles.save_root(req.path)
+    except ValueError as e:
+        activity("settings.save_refused","Artifacts folder save refused",actor=a.label,key="artifacts-root",reason=str(e)[:200])
+        raise HTTPException(400,{"error":"Artifacts folder could not be loaded.","cause":str(e),"next":"Choose the folder that directly contains your session directories, then validate again."})
+    activity("settings.saved","Artifacts folder saved",actor=a.label,key="artifacts-root")
+    return out
 
 @app.get("/api/sessions/{session_id}")
 def session_bundle(session_id: str):
@@ -798,11 +802,20 @@ def stop_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     if not cloud_execution_admitted():raise HTTPException(503,"Cloud admission and lifecycle validation pending")
     from .cooperative_stop import request_stop
     from .attempt_ledger import AdmissionDenied
-    try:return request_stop(store,engine_client,task_id)
+    activity("task.stop.requested","Cooperative stop requested",task_id=task_id,actor=a.label)
+    try:out=request_stop(store,engine_client,task_id)
     except KeyError:raise HTTPException(404,"task not found")
-    except AdmissionDenied as exc:raise HTTPException(409,{"error":_customer_denial(exc,task_id),"next":"Stop remains pending; verify worker completion and provider usage before Delete."})
-    except EngineUnreachableError as exc:raise _engine_unreachable(exc)
-    except EngineClientError as exc:raise HTTPException(502,{"error":"Engine Stop was not confirmed.","cause":exc.error.detail,"next":"The durable request remains pending. Retry Stop; do not Delete."})
+    except AdmissionDenied as exc:
+        activity("task.stop.refused","Cooperative stop refused",task_id=task_id,actor=a.label,reason="admission")
+        raise HTTPException(409,{"error":_customer_denial(exc,task_id),"next":"Stop remains pending; verify worker completion and provider usage before Delete."})
+    except EngineUnreachableError as exc:
+        activity("task.stop.failed","Cooperative stop could not reach the engine",task_id=task_id,actor=a.label,error=type(exc).__name__)
+        raise _engine_unreachable(exc)
+    except EngineClientError as exc:
+        activity("task.stop.failed","Cooperative stop was not confirmed by the engine",task_id=task_id,actor=a.label,error=str(exc.error.detail)[:200])
+        raise HTTPException(502,{"error":"Engine Stop was not confirmed.","cause":exc.error.detail,"next":"The durable request remains pending. Retry Stop; do not Delete."})
+    activity("task.stop.result","Cooperative stop recorded",task_id=task_id,actor=a.label,outcome=str(out.get("status","ok"))[:40] if isinstance(out,dict) else "ok")
+    return out
 
 def _run_control(task_id):
     # Whether a phase of this task is running as its own process here, so the owner can stop it.
@@ -825,6 +838,7 @@ def stop_run(task_id:str,body:StopRunRequest,a:auth.Actor=Depends(auth.require_a
     if not body.confirm:
         return {"status":"preview","running":run_slots.is_running(task_id),"message":STOP_RUN_MESSAGE}
     if not run_slots.request_stop(task_id,"owner",a.label):
+        activity("run.stop.refused","Stop refused: nothing is running",task_id=task_id,actor=a.label,reason="not_running")
         raise HTTPException(409,{"error":"Nothing is running to stop.","cause":"The phase has already finished or has not started.","next":"Reload the task."})
     store.audit(a.label,"run.stop_requested",task_id,{"by":"owner"})
     activity("run.stop_requested","Owner asked to stop the run",task_id=task_id)
@@ -839,16 +853,30 @@ def reconcile_task_stop(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     if task['state'] not in ('stop_requested','stopped'):raise HTTPException(409,"durable Stop request required")
     from .cooperative_stop import request_stop
     from .attempt_ledger import AdmissionDenied
-    try:return request_stop(store,engine_client,task_id,reconcile=True)
-    except AdmissionDenied as exc:raise HTTPException(409,{"error":_customer_denial(exc,task_id),"next":"Worker completion and usage must be verified before Delete."})
-    except EngineUnreachableError as exc:raise _engine_unreachable(exc)
-    except EngineClientError as exc:raise HTTPException(502,{"error":"Engine quiescence not confirmed.","cause":exc.error.detail})
+    activity("task.stop.requested","Cooperative stop reconcile requested",task_id=task_id,actor=a.label,reconcile=True)
+    try:out=request_stop(store,engine_client,task_id,reconcile=True)
+    except AdmissionDenied as exc:
+        activity("task.stop.refused","Cooperative stop reconcile refused",task_id=task_id,actor=a.label,reason="admission")
+        raise HTTPException(409,{"error":_customer_denial(exc,task_id),"next":"Worker completion and usage must be verified before Delete."})
+    except EngineUnreachableError as exc:
+        activity("task.stop.failed","Cooperative stop reconcile could not reach the engine",task_id=task_id,actor=a.label,error=type(exc).__name__)
+        raise _engine_unreachable(exc)
+    except EngineClientError as exc:
+        activity("task.stop.failed","Engine quiescence was not confirmed",task_id=task_id,actor=a.label,error=str(exc.error.detail)[:200])
+        raise HTTPException(502,{"error":"Engine quiescence not confirmed.","cause":exc.error.detail})
+    activity("task.stop.result","Cooperative stop reconcile recorded",task_id=task_id,actor=a.label,reconcile=True,outcome=str(out.get("status","ok"))[:40] if isinstance(out,dict) else "ok")
+    return out
 
 @app.delete("/api/tasks/{task_id}")
 def delete_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     try:store.delete_task(task_id,a.label)
-    except KeyError:raise HTTPException(404,{"error":"Task not found.","cause":"It may already have been deleted.","next":"Return to the task list."})
-    except ValueError as e:raise HTTPException(409,{"error":str(e),"cause":"This task still has active work or a founder gate.","next":"Stop or finish the active work before deleting this task. A replay interrupted by restart will be marked stopped on startup."})
+    except KeyError:
+        activity("task.delete.refused","Task delete refused: no such task",task_id=task_id,actor=a.label,reason="not_found")
+        raise HTTPException(404,{"error":"Task not found.","cause":"It may already have been deleted.","next":"Return to the task list."})
+    except ValueError as e:
+        activity("task.delete.refused","Task delete refused: active work or founder gate",task_id=task_id,actor=a.label,reason="active_work")
+        raise HTTPException(409,{"error":str(e),"cause":"This task still has active work or a founder gate.","next":"Stop or finish the active work before deleting this task. A replay interrupted by restart will be marked stopped on startup."})
+    activity("task.deleted","Task deleted",task_id=task_id,actor=a.label)
     return {"status":"deleted","task_id":task_id,"source_artifacts_deleted":False}
 
 class QualityConfigRequest(BaseModel):
@@ -864,10 +892,18 @@ def get_question_quality_config(a:auth.Actor=Depends(auth.require_actor)):
     except EngineClientError as exc:raise HTTPException(502,{"error":"The engine could not return the settings.","cause":exc.error.detail,"next":"Retry; if it repeats, check the engine log."})
 @app.put("/api/question-quality-config")
 def put_question_quality_config(req:QualityConfigRequest,a:auth.Actor=Depends(auth.require_admin)):
-    try:return engine_client.save_question_quality_config(req.config)
-    except QualityConfigRejected as exc:raise HTTPException(422,{"error":str(exc),"cause":"The engine validates every setting before saving.","next":"Fix that setting and save again. Nothing was changed."})
-    except EngineUnreachableError as exc:raise _quality_engine_down(exc)
-    except EngineClientError as exc:raise HTTPException(502,{"error":"The engine could not save the settings.","cause":exc.error.detail,"next":"Retry; if it repeats, check the engine log."})
+    try:out=engine_client.save_question_quality_config(req.config)
+    except QualityConfigRejected as exc:
+        activity("settings.save_refused","Question quality settings refused by the engine",actor=a.label,key="question-quality",reason=str(exc)[:200])
+        raise HTTPException(422,{"error":str(exc),"cause":"The engine validates every setting before saving.","next":"Fix that setting and save again. Nothing was changed."})
+    except EngineUnreachableError as exc:
+        activity("settings.save_failed","Question quality settings could not reach the engine",actor=a.label,key="question-quality",error=type(exc).__name__)
+        raise _quality_engine_down(exc)
+    except EngineClientError as exc:
+        activity("settings.save_failed","The engine could not save the question quality settings",actor=a.label,key="question-quality",error=str(exc.error.detail)[:200])
+        raise HTTPException(502,{"error":"The engine could not save the settings.","cause":exc.error.detail,"next":"Retry; if it repeats, check the engine log."})
+    activity("settings.saved","Question quality settings saved",actor=a.label,key="question-quality")
+    return out
 
 class TaskStartRequest(BaseModel):
     model_route:Literal["ollama","deepseek"]|None=None
@@ -1480,10 +1516,13 @@ def task_artifact_download(task_id:str,phase:str,name:str):
         # corrupt/unverifiable payload is an explicit 500 (never a plausible missing
         # record); database failures propagate as 5xx. No filesystem fallback.
         try: data=store.read_artifact_bytes(task_id,phase,name)
-        except KeyError: raise HTTPException(404,'artifact not found')
+        except KeyError:
+            activity("task.export.refused","Artifact download refused: not found",task_id=task_id,export="artifact",reason="not_found")
+            raise HTTPException(404,'artifact not found')
         except ValueError:
             log.exception('artifact integrity failure task=%s phase=%s name=%s',task_id,phase,name)
             raise HTTPException(500,'artifact failed its stored integrity check; the failure was recorded for diagnostics')
+        activity("task.export","Artifact downloaded",task_id=task_id,export="artifact",phase=phase,name=name)
         return Response(data,media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream',
                         headers={'Content-Disposition':f'attachment; filename="{name}"'})
     if config.CLOUD_TENANTS:
@@ -1493,8 +1532,10 @@ def task_artifact_download(task_id:str,phase:str,name:str):
         base=artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'));session=_recorded_engine_session(task_id)
         root=authorized_session(base,session,store)
         data=read_session_bytes(base,session,str(path.relative_to(root)),store)
+        activity("task.export","Artifact downloaded",task_id=task_id,export="artifact",phase=phase,name=name)
         return Response(data,media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream',
                         headers={'Content-Disposition':f'attachment; filename="{name}"'})
+    activity("task.export","Artifact downloaded",task_id=task_id,export="artifact",phase=phase,name=name)
     return FileResponse(path,filename=name)
 
 _ARTIFACT_TITLES={"srs.semantic-review.json":"Requirements Semantic Review","architecture.decisions.json":"Architecture Stack Decisions","intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification","validation.json":"Validation"}
@@ -1675,7 +1716,9 @@ def task_artifact_view(task_id:str,phase:str,name:str):
 def task_artifacts_zip(task_id:str):
     if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1":raise HTTPException(404,"Artifact downloads are not part of a local preview")
     records=_task_artifact_snapshot(task_id)
-    if not records:raise HTTPException(404,"no artifacts found")
+    if not records:
+        activity("task.export.refused","Artifacts zip refused: no artifacts",task_id=task_id,export="zip",reason="no_artifacts")
+        raise HTTPException(404,"no artifacts found")
     data=io.BytesIO()
     with zipfile.ZipFile(data,"w",zipfile.ZIP_DEFLATED) as archive:
         for artifact in records:
@@ -1686,6 +1729,7 @@ def task_artifacts_zip(task_id:str):
                 try: archive.writestr(entry,store.read_artifact_bytes_sha(artifact['sha256']))
                 except (KeyError,ValueError):
                     log.exception('artifact integrity failure in zip task=%s entry=%s',task_id,entry)
+                    activity("task.export.failed","Artifacts zip failed an integrity check",task_id=task_id,export="zip",reason="integrity")
                     raise HTTPException(500,'an artifact failed its stored integrity check; the failure was recorded for diagnostics')
             elif config.CLOUD_TENANTS:
                 from .tenant_files import read_session_bytes
@@ -1696,6 +1740,7 @@ def task_artifacts_zip(task_id:str):
             else:archive.write(artifact['ref'],entry)
     from fastapi.responses import Response
     title=(store.task(task_id) or {}).get("title","task").replace(" ","-").lower()
+    activity("task.export","Artifacts zip downloaded",task_id=task_id,export="zip",artifacts=len(records))
     return Response(data.getvalue(),media_type="application/zip",headers={"Content-Disposition":f'attachment; filename="{title}-artifacts.zip"'})
 
 _STRUCTURED_INPUT_KINDS=(InputKind.CHOICE,InputKind.APPROVAL)
@@ -1909,6 +1954,7 @@ def download_debug_zip(task_id:str,body:BrowserDiagnostics,a:auth.Actor=Depends(
     control=get_task(task_id)['control_snapshot']
     data=diagnostic_zip(root,task_id,session,task['generation'],body.model_dump(),control,store.events(task_id),root/'server-run.log' if config.CLOUD_TENANTS else LOG_PATH)
     from fastapi.responses import Response
+    activity("task.export","Debug zip downloaded",task_id=task_id,export="debug_zip",actor=a.label)
     return Response(data,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{task_id}-debug.zip"'})
 
 @app.get("/api/tasks/{task_id}/execution")
@@ -1990,6 +2036,7 @@ async def task_stream(task_id: str, request: Request):
                 except asyncio.TimeoutError:pass
         finally:
             _stream_shutdown_events.discard(stop)
+            activity("stream.disconnect","Progress stream closed",task_id=task_id,reason="client" if await request.is_disconnected() else "server")
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 class FailedNeedsRetryRequest(BaseModel):
@@ -2179,6 +2226,7 @@ async def start_next_phase(task_id:str,body:StartNextPhaseRequest,a:auth.Actor=D
     if not body.confirm:return {"status":"preview","phase":phase,"label":label,**check}
     if not check["can_start"]:
         store.audit(a.label,"phase.start_refused",task_id,{"phase":phase,"reason":"credits"})
+        activity("phase.start.credit_refused","Next phase refused: not enough credits",task_id=task_id,phase=phase,actor=a.label)
         raise HTTPException(409,{"error":"Not enough credits to start this phase.","cause":check["message"],"next":"Add credits, then start it."})
     model=task.get("model_default") or ""
     route,sep,pinned=model.partition(":")
@@ -2187,6 +2235,7 @@ async def start_next_phase(task_id:str,body:StartNextPhaseRequest,a:auth.Actor=D
         raise HTTPException(409,{"error":"This phase cannot be started now.","cause":"The task has no recorded model for it.","next":"Open Debug, copy everything and send it."})
     job_id=store.prepare_next_phase(task_id,phase,a.label,model)
     if not job_id:raise HTTPException(409,{"error":"This phase was already started.","cause":"A start for it is already recorded.","next":"Refresh the page."})
+    activity("phase.start.queued","Next phase job queued",task_id=task_id,phase=phase,job_id=job_id,actor=a.label)
     runner_task=asyncio.create_task(_run_next_phase(task_id,phase,label,job_id))
     _phase_jobs.add(runner_task);runner_task.add_done_callback(_phase_jobs.discard)
     return {"status":"started","phase":phase,"job_id":job_id}
@@ -2211,8 +2260,11 @@ def rerun(task_id: str, req: RerunRequest, request: Request, a: auth.Actor = Dep
     task=store.task(task_id)
     if not task: raise HTTPException(404, "task not found")
     try:missing=store.rerun_prerequisite(task_id,req.from_phase)
-    except KeyError:raise HTTPException(409,{"error":f"Cannot rerun from unknown stage '{req.from_phase}'.","cause":"That stage is not part of this task.","next":"Choose one of the stages shown in the V-process."})
+    except KeyError:
+        activity("task.rerun.refused","Rerun refused: unknown stage",task_id=task_id,actor=a.label,from_phase=req.from_phase,reason="unknown_stage")
+        raise HTTPException(409,{"error":f"Cannot rerun from unknown stage '{req.from_phase}'.","cause":"That stage is not part of this task.","next":"Choose one of the stages shown in the V-process."})
     if missing:
+        activity("task.rerun.refused","Rerun refused: prerequisite incomplete",task_id=task_id,actor=a.label,from_phase=req.from_phase,reason="prerequisite")
         raise HTTPException(409,{"error":f"Cannot rerun from {req.from_phase}: prerequisite '{missing['label']}' is not complete.","cause":"Stages are sequential; rerunning a downstream stage without its upstream result would produce ungrounded output.","next":f"Run or rerun '{missing['label']}' first, then retry {req.from_phase}."})
     if not req.confirm:
         downstream = [p["phase_key"] for p in task["phases"] if p["position"] >= next(p["position"] for p in task["phases"] if p["phase_key"] == req.from_phase)]
@@ -2223,8 +2275,10 @@ def rerun(task_id: str, req: RerunRequest, request: Request, a: auth.Actor = Dep
         raise HTTPException(409,'Cloud rerun requires a new-generation session/checkpoint policy; no work changed')
     try: generation = store.prepare_rerun(task_id, req.from_phase, "archive", a.label)
     except (ValueError, KeyError) as e:
+        activity("task.rerun.refused","Rerun refused: invalid phase",task_id=task_id,actor=a.label,from_phase=req.from_phase,reason="invalid_phase")
         raise HTTPException(409, {"error": str(e), "cause": "The selected phase is invalid.",
                                   "next": "Choose one of the phases shown on this task."})
+    activity("task.rerun","Rerun prepared",task_id=task_id,actor=a.label,from_phase=req.from_phase,generation=generation)
     store.add_event(task_id, "rerun", f"Prepared generation {generation} from {req.from_phase}", phase_key=req.from_phase)
     return {"status": "prepared", "generation": generation, "policy": "archive"}
 
@@ -2947,12 +3001,17 @@ def create_final_package(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 def download_final_package(task_id:str,package_id:str,generation:int,a:auth.Actor=Depends(auth.require_actor)):
     if not __import__('re').fullmatch(r'[a-f0-9]{64}',package_id) or generation<1:raise HTTPException(404,'package not found')
     task=store.task(task_id)
-    if not task:raise HTTPException(404,'task not found')
+    if not task:
+        activity("task.export.refused","Package download refused: no such task",task_id=task_id,export="package",actor=a.label,reason="not_found")
+        raise HTTPException(404,'task not found')
     if config.CLOUD_TENANTS:raise HTTPException(503,'Cloud package export pending customer-safe diagnostics contract')
     from vmodel_contracts.runtime import artifacts_root
     package_root=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),store.engine_session(task_id),store).parent if config.CLOUD_TENANTS else artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))
     path=package_root/'packages'/task_id/str(generation)/(package_id+'.zip')
-    if not path.is_file() or path.is_symlink():raise HTTPException(404,'package not found')
+    if not path.is_file() or path.is_symlink():
+        activity("task.export.refused","Package download refused: not found",task_id=task_id,export="package",actor=a.label,reason="not_found")
+        raise HTTPException(404,'package not found')
+    activity("task.export","Package downloaded",task_id=task_id,export="package",actor=a.label,generation=generation)
     return FileResponse(path,media_type='application/zip',filename=f"coding-agent-{task_id}-g{generation}.zip")
 
 
