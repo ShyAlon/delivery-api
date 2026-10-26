@@ -22,12 +22,19 @@ POOL_IDLE_SECONDS=db_pool.POOL_IDLE_SECONDS
 
 
 class RequestStats:
-    """What one request cost the database: shown in the Server-Timing header and the Debug dialog so slowness is measured, not guessed."""
-    __slots__=('transactions','queries','db_seconds','reused','opened')
+    """What one request cost, split by where it went: database, engine calls, pool checkout
+    waits, auth checks and the window a connection was pinned. Shown in the Server-Timing
+    header and the Debug dialog so slowness is measured, not guessed."""
+    __slots__=('transactions','queries','db_seconds','reused','opened','engine_calls','engine_seconds','checkout_seconds','auth_seconds','tx_held_seconds')
     def __init__(self):
         self.transactions=self.queries=self.reused=self.opened=0;self.db_seconds=0.0
+        self.engine_calls=0;self.engine_seconds=self.checkout_seconds=self.auth_seconds=self.tx_held_seconds=0.0
     def header(self):
-        return 'db;dur=%d;desc="%d queries, %d transactions, %d reused connections, %d new"'%(int(self.db_seconds*1000),self.queries,self.transactions,self.reused,self.opened)
+        return ('db;dur=%d;desc="%d queries, %d transactions, %d reused connections, %d new"'
+                ', engine;dur=%d;desc="%d engine calls", checkout;dur=%d, auth;dur=%d, held;dur=%d'
+                %(int(self.db_seconds*1000),self.queries,self.transactions,self.reused,self.opened,
+                  int(self.engine_seconds*1000),self.engine_calls,int(self.checkout_seconds*1000),
+                  int(self.auth_seconds*1000),int(self.tx_held_seconds*1000)))
 
 request_stats=contextvars.ContextVar('delivery_request_stats',default=None)
 _request_tx=contextvars.ContextVar('delivery_request_tx',default=None)
@@ -36,6 +43,22 @@ _request_tx=contextvars.ContextVar('delivery_request_tx',default=None)
 def note_query(seconds):
     stats=request_stats.get()
     if stats is not None:stats.queries+=1;stats.db_seconds+=seconds
+
+def note_engine(seconds):
+    """One HTTP call to the interview engine, made inside this request. No request context: a no-op."""
+    stats=request_stats.get()
+    if stats is not None:stats.engine_calls+=1;stats.engine_seconds+=seconds
+
+def note_checkout(seconds):
+    """Time spent WAITING for a pooled database connection (pool saturated). The dominant term
+    when overlapping requests pin connections; today it hides inside db_ms or goes uncounted."""
+    stats=request_stats.get()
+    if stats is not None:stats.checkout_seconds+=seconds
+
+def note_auth(seconds):
+    """Identity verification and session checks for this request (Supabase round trips)."""
+    stats=request_stats.get()
+    if stats is not None:stats.auth_seconds+=seconds
 
 
 class _RequestTransaction:
@@ -46,6 +69,7 @@ class _RequestTransaction:
         self.lock=threading.RLock()
         self.connection=self.transaction=None
         self.broken=self.done=False
+        self.first_begin=None   # when the shared transaction actually opened; the pin window
 
     def finish(self,failed):
         with self.lock:
@@ -66,7 +90,9 @@ class _RequestTransaction:
             self.postgres._drop(connection);raise
         finally:
             stats=request_stats.get()
-            if stats is not None:stats.db_seconds+=time.monotonic()-started
+            if stats is not None:
+                stats.db_seconds+=time.monotonic()-started
+                if self.first_begin is not None:stats.tx_held_seconds+=time.monotonic()-self.first_begin
 
 
 _SETUP="SELECT set_config('role','requi_backend',true), set_config('request.jwt.claim.sub',%s,true), set_config('request.jwt.claim.session_id',%s,true)"
@@ -111,9 +137,12 @@ class ScopedPostgres:
         The database pooler refuses clients past its own limit, so a burst of requests queues here instead of failing there.
         Returns (connection, reused)."""
         from psycopg_pool import PoolTimeout
+        started=time.monotonic()
         try:connection=self._pool.getconn(timeout=POOL_WAIT_SECONDS)
         except PoolTimeout:
+            note_checkout(time.monotonic()-started)
             raise TimeoutError('the database connection limit (%d) stayed reached for %d s'%(POOL_OPEN_MAX,POOL_WAIT_SECONDS))
+        note_checkout(time.monotonic()-started)
         new=getattr(connection,'_delivery_pool_new',False)
         if new:
             connection._delivery_pool_new=False
@@ -189,7 +218,9 @@ class ScopedPostgres:
             shared.lock.acquire()
             try:
                 if not (shared.done or shared.broken):
-                    if shared.connection is None:shared.connection,shared.transaction=self._begin(scope,False)
+                    if shared.connection is None:
+                        shared.connection,shared.transaction=self._begin(scope,False)
+                        shared.first_begin=time.monotonic()
                     connection=shared.connection
                 else:connection=None
             except BaseException:

@@ -77,9 +77,14 @@ class TenantMiddleware:
         try:
             from starlette.concurrency import run_in_threadpool
             email=None
-            if hasattr(self.verifier,'verify_with_email'):identity,operator,email=await run_in_threadpool(self.verifier.verify_with_email,raw[7:])
-            elif hasattr(self.verifier,'verify_with_operator'):identity,operator=await run_in_threadpool(self.verifier.verify_with_operator,raw[7:])
-            else:identity,operator=await run_in_threadpool(self.verifier.verify,raw[7:]),False
+            import time as _time
+            from .postgres_scope import note_auth
+            _t_auth=_time.monotonic()
+            try:
+                if hasattr(self.verifier,'verify_with_email'):identity,operator,email=await run_in_threadpool(self.verifier.verify_with_email,raw[7:])
+                elif hasattr(self.verifier,'verify_with_operator'):identity,operator=await run_in_threadpool(self.verifier.verify_with_operator,raw[7:])
+                else:identity,operator=await run_in_threadpool(self.verifier.verify,raw[7:]),False
+            finally:note_auth(_time.monotonic()-_t_auth)
         except TenantAccessDenied:
             if path=='/api/auth':return await self.app(scope,receive,send)
             if browser and public:return await self.app(scope,receive,send)     # an expired token on a page: open it signed out, the page signs the person in again
@@ -106,7 +111,11 @@ class TenantMiddleware:
         try:
             with tenant_context(identity):
                 if self.session_check:
+                    import time as _time
+                    from .postgres_scope import note_auth
+                    _t_check=_time.monotonic()
                     active=await run_in_threadpool(self.session_check)
+                    note_auth(_time.monotonic()-_t_check)
                     if not active:
                         scope['state'].pop('supabase_actor',None)
                         if path=='/api/auth':return await self.app(scope,receive,send)
