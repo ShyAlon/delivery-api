@@ -14,10 +14,11 @@ from .tenancy import current_scope, TenantAccessDenied
 # A connection costs TCP + TLS + authentication, about a second to a remote database, so finished connections are kept for reuse.
 # Reuse is safe because identity is transaction-local: every transaction starts by setting the role and the caller's claims, and
 # both reset when the transaction ends, so a pooled connection carries no identity between requests.
-POOL_OPEN_MAX=6         # total connections this service holds open (in use + idle); the pooler (session mode, 15 clients) also feeds the interview engine: 6 + 2 engine sessions x 4 = 14 (see ENGINE_PEAK_SESSION_CONNS)
-POOL_WAIT_SECONDS=30    # how long a request waits for a free connection before failing with a clear message
-POOL_IDLE_MAX=8
-POOL_IDLE_SECONDS=240
+# The physical pool is the ONE process pool (db_pool) shared with the in-process engine; the caps live there.
+from . import db_pool
+POOL_OPEN_MAX=db_pool.PROCESS_POOL_MAX   # kept as the public name of the process cap
+POOL_WAIT_SECONDS=db_pool.POOL_WAIT_SECONDS
+POOL_IDLE_SECONDS=db_pool.POOL_IDLE_SECONDS
 
 
 class RequestStats:
@@ -69,7 +70,6 @@ class _RequestTransaction:
 
 
 _SETUP="SELECT set_config('role','requi_backend',true), set_config('request.jwt.claim.sub',%s,true), set_config('request.jwt.claim.session_id',%s,true)"
-_KEEPALIVE=dict(keepalives=1,keepalives_idle=30,keepalives_interval=10,keepalives_count=3)
 
 
 class ScopedPostgres:
@@ -100,71 +100,49 @@ class ScopedPostgres:
                 raise TenantAccessDenied('unprotected table or application schema ownership')
 
     def _init_pool(self):
-        self._idle=[]            # (connection, returned_at), newest last
-        self._pool_cond=threading.Condition()
-        self._open=0             # connections currently open, in use or idle
+        # The ONE process pool (db_pool), shared with the in-process engine.
+        # Identity is per-transaction on both sides, so no connection ever
+        # carries an owner between borrowers.
+        self._pool=db_pool.pool_for(self.dsn)
         self.opened=0            # connections opened since start (diagnostics)
 
-    def _connect(self):
-        import psycopg
-        from psycopg.rows import dict_row
-        self.opened+=1
-        return psycopg.connect(self.dsn,row_factory=dict_row,options='-c client_encoding=UTF8',prepare_threshold=None,**_KEEPALIVE)
-
     def _checkout(self):
-        """A recently used idle connection, or a new one while fewer than POOL_OPEN_MAX are open; otherwise wait for one to come back.
+        """A pooled connection, waiting up to POOL_WAIT_SECONDS for a free one.
         The database pooler refuses clients past its own limit, so a burst of requests queues here instead of failing there.
         Returns (connection, reused)."""
-        deadline=time.monotonic()+POOL_WAIT_SECONDS
-        with self._pool_cond:
-            while True:
-                now=time.monotonic()
-                while self._idle:
-                    connection,at=self._idle.pop()
-                    if now-at<=POOL_IDLE_SECONDS and not connection.closed:return connection,True
-                    self._forget(connection)
-                if self._open<POOL_OPEN_MAX:
-                    self._open+=1;break
-                left=deadline-now
-                if left<=0:raise TimeoutError('the database connection limit (%d) stayed reached for %d s'%(POOL_OPEN_MAX,POOL_WAIT_SECONDS))
-                self._pool_cond.wait(left)
-        try:return self._connect(),False
-        except BaseException:
-            with self._pool_cond:self._open-=1;self._pool_cond.notify()
-            raise
-
-    def _forget(self,connection):
-        """Closes a connection that was counted as open and frees its place. Call with or without the lock held."""
-        try:connection.close()
-        except Exception:pass
-        with self._pool_cond:self._open-=1;self._pool_cond.notify()
-
-    def _checkout_fresh(self):
-        """A brand new connection that skips the idle pool: the direct replacement for a reused connection that
-        just died. Returns None when the open cap is reached, so the caller falls back to the normal checkout."""
-        with self._pool_cond:
-            if self._open>=POOL_OPEN_MAX:return None
-            self._open+=1
-        try:return self._connect()
-        except BaseException:
-            with self._pool_cond:self._open-=1;self._pool_cond.notify()
-            raise
+        from psycopg_pool import PoolTimeout
+        try:connection=self._pool.getconn(timeout=POOL_WAIT_SECONDS)
+        except PoolTimeout:
+            raise TimeoutError('the database connection limit (%d) stayed reached for %d s'%(POOL_OPEN_MAX,POOL_WAIT_SECONDS))
+        new=getattr(connection,'_delivery_pool_new',False)
+        if new:
+            connection._delivery_pool_new=False
+            self.opened+=1
+        return connection,not new
 
     def _drop(self,connection):
-        self._forget(connection)
+        # A broken connection never goes back: closing it first makes the pool
+        # discard it at checkin and open a replacement on demand.
+        try:connection.close()
+        except Exception:pass
+        try:self._pool.putconn(connection)
+        except ValueError:pass  # not a pool connection (test doubles); already closed
 
     def _release(self,connection):
         import psycopg
         usable=not connection.closed and not getattr(connection,'broken',False) and connection.info.transaction_status==psycopg.pq.TransactionStatus.IDLE
-        if usable:
-            with self._pool_cond:
-                if len(self._idle)<POOL_IDLE_MAX:
-                    self._idle.append((connection,time.monotonic()));self._pool_cond.notify();return
-        self._forget(connection)
+        if not usable:
+            # Never hand a mid-transaction connection to the next borrower.
+            try:connection.close()
+            except Exception:pass
+        try:self._pool.putconn(connection)
+        except ValueError:pass  # not a pool connection (test doubles); already closed
 
     def close(self):
-        with self._pool_cond:idle,self._idle=self._idle,[]
-        for connection,_ in idle:self._forget(connection)
+        # The pool is process-shared (db_pool owns it): a store-level close
+        # must not take connections away from other borrowers or the engine.
+        # Process shutdown calls db_pool.close_all().
+        pass
 
     def _begin(self,scope,repeatable_read):
         """Starts the scoped transaction. A reused connection the server has closed is dropped and replaced directly
@@ -177,13 +155,13 @@ class ScopedPostgres:
         import psycopg
         stats=request_stats.get()
         last_error=None
-        for attempt in (0,1):
+        # A reused connection the server has killed is dropped and the next
+        # checkout tried, draining dead idles until a live one (or a fresh
+        # connect) is found. Only the transaction settings and the identity
+        # claim run on a dying candidate, so no caller statement is replayed.
+        for attempt in range(POOL_OPEN_MAX+1):
             started=time.monotonic()
-            if attempt==0:connection,reused=self._checkout()
-            else:
-                fresh=self._checkout_fresh()
-                if fresh is not None:connection,reused=fresh,False
-                else:connection,reused=self._checkout()
+            connection,reused=self._checkout()
             transaction=connection.transaction()
             try:
                 transaction.__enter__()
@@ -201,7 +179,7 @@ class ScopedPostgres:
             except BaseException:
                 self._drop(connection);raise
         raise psycopg.OperationalError(
-            'a reused database connection was already broken and its replacement failed before any statement ran') from last_error
+            'reused database connections were already broken and their replacement failed before any statement ran') from last_error
 
     @contextmanager
     def transaction(self,*,repeatable_read=False):
