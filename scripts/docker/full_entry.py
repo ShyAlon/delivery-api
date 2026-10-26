@@ -75,6 +75,23 @@ def engine_env(env):
     return derived
 
 
+def artifacts_root_problem(env):
+    """The engine's stop fence and every artifact write need a creatable, writable artifacts
+    root. A dead data mount otherwise stays invisible until the first interview pays for it
+    (2026-10-26: a container served for hours on a stale mount; the first engine start died
+    with FileNotFoundError and the task page showed only 'session unavailable'). Probe at
+    startup and refuse with the real reason. Returns the problem text, or None when ready."""
+    root=env.get('VMODEL_ARTIFACTS_DIR')
+    if not root:return 'VMODEL_ARTIFACTS_DIR is not set; the image sets it to /data/artifacts'
+    try:
+        path=Path(root);path.mkdir(parents=True,exist_ok=True)
+        probe=path/'.requi-write-probe'
+        probe.write_text('ok');probe.unlink()
+    except OSError as error:
+        return 'the artifacts root %s cannot be created and written (%s); the data volume is missing or stale - recreate the container with a fresh data mount' % (root,type(error).__name__)
+    return None
+
+
 def check_env(env):
     problems=[]
     token=env.get('INTERVIEW_ENGINE_TOKEN','')
@@ -116,6 +133,8 @@ def main():
             print('unhealthy:',error,file=sys.stderr);return 1
         return 0
     problems=check_env(os.environ)
+    artifacts=artifacts_root_problem(os.environ)
+    if artifacts:problems=problems+[artifacts]
     if problems:
         for p in problems:print('full service not started:',p,file=sys.stderr)
         return 2
