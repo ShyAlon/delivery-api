@@ -22,3 +22,5 @@ dist/
 .DS_Store
 .test-all-logs/
 runs/
+# Relative-DSN test databases created in the workdir by a local test run
+/host=/
