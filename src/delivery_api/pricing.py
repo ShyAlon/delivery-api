@@ -1,6 +1,6 @@
 """Credit pricing from measured engine usage and process time, with the customer USD price (credits x USD_PER_CREDIT). Raw model cost_usd is kept in the payload but not displayed."""
 from __future__ import annotations
-import json,os,logging
+import json,os,logging,math
 _logger=logging.getLogger(__name__)
 _warned_usage=set()
 from decimal import Decimal
@@ -29,7 +29,19 @@ def _rows(path:Path,start:int=0)->list[dict]:
     for line in read_bound_text(path,errors="replace").splitlines()[start:]:
         try:
             value=json.loads(line)
-            if isinstance(value,dict):out.append(value)
+            if isinstance(value,dict):
+                valid=True
+                for key in ('prompt_tokens','completion_tokens'):
+                    number=value.get(key)
+                    if number is not None and (isinstance(number,bool) or not isinstance(number,int) or number<0):valid=False
+                for key in ('latency_s','price_per_mtok_prompt_usd','price_per_mtok_completion_usd'):
+                    number=value.get(key)
+                    if number is not None:
+                        try:
+                            if isinstance(number,bool) or not math.isfinite(float(number)) or float(number)<0:valid=False
+                        except (ValueError,TypeError,OverflowError):valid=False
+                if valid:out.append(value)
+                else:out.rejected_rows+=1
             else:out.rejected_rows+=1
         except json.JSONDecodeError:out.rejected_rows+=1
     out.complete=out.rejected_rows==0
