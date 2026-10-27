@@ -285,6 +285,38 @@ def test_basic_auth_browser_signup_signin_persists_and_logs(tmp_path):
         assert 'auth.signup.success' in log.read_text() and 'client.navigation' in log.read_text()
     finally:proc.terminate();proc.wait(timeout=5)
 
+def test_boot_smoke_zero_console_errors_anonymous_and_after_fake_login(tmp_path):
+    # The browser-level boot gate: the page must leave "Loading workspace\u2026" with
+    # ZERO console/page errors, anonymous AND signed in (identity.js shipped a syntax
+    # error every python gate missed - PR #261). The fake account lives only in this
+    # test's own sqlite file; no live database is ever touched.
+    db=tmp_path/"boot-smoke.db";port=_port()
+    env={**os.environ,"DELIVERY_DB_PATH":str(db),"DELIVERY_DATABASE_URL":f"sqlite:///{db}","DELIVERY_BASIC_AUTH_ENABLED":"1","DELIVERY_COOKIE_SECURE":"0","PYTHONPATH":str(Path(__file__).parents[1]/"src")}
+    proc=subprocess.Popen([sys.executable,"-m","uvicorn","delivery_api.app:app","--host","127.0.0.1","--port",str(port)],env=env);base=f"http://127.0.0.1:{port}"
+    try:
+        for _ in range(50):
+            try:import urllib.request;urllib.request.urlopen(base+"/health",timeout=.2);break
+            except Exception:time.sleep(.1)
+        with sync_playwright() as p:
+            browser=p.chromium.launch(headless=True);page=browser.new_page()
+            errors=[]
+            page.on('console',lambda m:errors.append('console: '+m.text) if m.type=='error' else None)
+            page.on('pageerror',lambda e:errors.append('pageerror: '+str(e)))
+            page.goto(base+"/")
+            page.wait_for_function("!document.body.innerText.includes('Loading workspace')")
+            page.get_by_text("Welcome to Requi.re",exact=True).wait_for()
+            assert errors==[],f"anonymous boot produced browser errors: {errors}"
+            # fake login through the real UI - the account exists only in this test's DB
+            page.get_by_role("button",name="Create account").click()
+            page.locator('input[name="username"]').fill('boot.smoke@example.test');page.locator('input[name="password"]').fill('Boot smoke 42!');page.locator('.auth-submit').click()
+            page.locator('.avatar').wait_for()
+            page.reload();page.locator('.avatar').wait_for()
+            page.wait_for_function("!document.body.innerText.includes('Loading workspace')")
+            assert page.get_by_role('button',name='+ New task').is_visible()
+            assert errors==[],f"signed-in boot produced browser errors: {errors}"
+            browser.close()
+    finally:proc.terminate();proc.wait(timeout=5)
+
 def test_oauth_identity_and_logout_in_browser(tmp_path):
     db=tmp_path/"oauth-ui.db";port=_port()
     env={**os.environ,"DELIVERY_DB_PATH":str(db),"DELIVERY_DATABASE_URL":f"sqlite:///{db}","DELIVERY_SESSION_SECRET":"0123456789abcdef0123456789abcdef",
