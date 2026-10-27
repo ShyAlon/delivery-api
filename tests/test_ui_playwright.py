@@ -2312,3 +2312,38 @@ def test_start_route_pills_show_all_choices_and_disabled_reasons(page,ui):
     assert 'DELIVERY_LOCAL_PREVIEW' in choices.inner_text()
     assert choices.locator('[aria-pressed=true]').count()==0
     assert not page.get_by_role('button',name='Start interview').is_enabled()
+
+
+def test_idle_stream_reads_only_at_60s_safety_then_refreshes_on_events(page,ui):
+    from collections import Counter
+    page.clock.install()
+    page.add_init_script("""window.__stream=null;window.EventSource=class {constructor(){this.readyState=1;this.listeners={};window.__stream=this}addEventListener(k,f){this.listeners[k]=f}close(){this.readyState=2}}""")
+    counts=Counter()
+    page.on('request',lambda request:counts.update([__import__('urllib.parse',fromlist=['urlparse']).urlparse(request.url).path]))
+    page.route('**/api/account/credits',lambda r:r.fulfill(json={'credits':10}))
+    page.route('**/api/tasks/live/cost',lambda r:r.fulfill(json={'price':1.25,'price_usd':1.25}))
+    page.route('**/api/tasks/live/cost-phases',lambda r:r.fulfill(json={'phases':[{'phase':'intent','credits':1.25}]}))
+    page.goto(ui+'/tasks/live/view');page.locator('#stageprogress').wait_for();expect(page.locator('#sessioncost')).to_have_text('1.25 credits · $1.25');page.wait_for_timeout(1500)
+    for _ in range(10):
+        page.clock.run_for(100);time.sleep(.1)
+        if page.locator('#sessioncost').get_attribute('title').endswith('Total: 1.25 credits'):break
+    assert page.locator('#sessioncost').get_attribute('title').endswith('Total: 1.25 credits')
+    page.clock.pause_at(page.evaluate('Date.now()'))
+    keys=['/api/account/credits','/api/tasks/live/cost','/api/tasks/live/cost-phases','/api/tasks/live','/api/tasks/live/phase-output']
+    for _ in range(20):page.clock.run_for(100);time.sleep(.05)
+    before={k:counts[k] for k in keys}
+    page.clock.run_for(57000);time.sleep(.5);page.clock.run_for(100)
+    idle={k:counts[k]-before[k] for k in keys}
+    print('IDLE_57S_REQUESTS',idle)
+    assert idle==dict.fromkeys(keys,0)
+    page.clock.run_for(4000);time.sleep(.5);page.clock.run_for(100);time.sleep(.5);page.clock.run_for(100)
+    safety={k:counts[k]-before[k] for k in keys}
+    print('SAFETY_61S_REQUESTS',safety)
+    assert all(v==1 for v in safety.values())
+    page.evaluate("window.__stream.listeners.progress({data:JSON.stringify({id:999,kind:'progress',phase_key:'conops',message:'call done',payload:{stage:'llm_call:probing',status:'completed'}})})")
+    page.clock.run_for(500);time.sleep(.5);page.clock.run_for(100);time.sleep(.5);page.clock.run_for(100)
+    for _ in range(20):
+        if counts['/api/tasks/live/cost']==before['/api/tasks/live/cost']+2:break
+        page.clock.run_for(100);time.sleep(.1)
+    assert counts['/api/tasks/live/cost']==before['/api/tasks/live/cost']+2
+    assert counts['/api/tasks/live']==before['/api/tasks/live']+1, 'model call completion must not fetch task state'
