@@ -13,7 +13,7 @@ def die(why):
 out=sys.argv[1]
 root=sys.argv[2]
 host=os.environ.get('OLLAMA_HOST','http://localhost:11434').rstrip('/')
-model=os.environ.get('PREVIEW_EXEC_OLLAMA_MODEL','').strip() or 'qwen2.5-coder:14b'
+model=os.environ.get('PREVIEW_EXEC_OLLAMA_MODEL','').strip() or 'phi4'
 if '://' not in host: die('OLLAMA_HOST must be a plain http(s) URL')
 
 def call(method,path,payload=None,timeout=30):

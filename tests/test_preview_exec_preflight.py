@@ -12,6 +12,14 @@ REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / 'scripts' / 'ops' / 'preview-exec.sh'
 KEY = 'sk-testkey-0123456789abcdef'
 
+STAGE_MODEL_CONFIG = """from collections import namedtuple
+StageModel = namedtuple('StageModel', 'provider model max_tokens')
+_STAGE_DEFAULTS = {
+    'main': StageModel(provider='ollama', model='phi4', max_tokens=4096),
+}
+"""
+
+
 def _stubbin(tmp_path):
     d = tmp_path / 'bin'
     if d.exists():
@@ -43,10 +51,28 @@ def _settings(tmp_path, mode=0o600, body='DELIVERY_DATABASE_URL=postgresql://x/d
     f.chmod(mode)
     return f
 
+def _plant_source_trees(root):
+    """Minimal engine/generator source trees the launcher's source smoke reads
+    (parse step, ast engine-surface check, pin-local stage caps)."""
+    eng = root / 'interview-engine' / 'src' / 'interview_engine'
+    eng.mkdir(parents=True, exist_ok=True)
+    (eng / '__init__.py').write_text('')
+    (eng / 'model_config.py').write_text(STAGE_MODEL_CONFIG)
+    (eng / 'http_service.py').write_text(
+        "SESSIONS_DSN_ENV = 'INTERVIEW_ENGINE_SESSIONS_DSN'\n\ndef create_app():\n    return None\n")
+    (eng / 'pg_pool.py').write_text(
+        "ENGINE_POOL_MAX = 4\n\ndef build_pool(dsn, *, max_size=4, name='engine'):\n    return None\n")
+    gen = root / 'spec-generator' / 'src' / 'spec_generator'
+    gen.mkdir(parents=True, exist_ok=True)
+    (gen / '__init__.py').write_text('')
+    (gen / 'model_config.py').write_text(STAGE_MODEL_CONFIG)
+
+
 def _run(tmp_path, env_extra, settings=None, tty_input='yes\n'):
     root = tmp_path / 'repos'
     for r in ('delivery-api', 'interview-engine', 'spec-generator', 'verification-loop'):
         (root / r / '.git').mkdir(parents=True, exist_ok=True)
+    _plant_source_trees(root)
     env = {'PATH': '%s:/usr/bin:/bin' % _stubbin(tmp_path), 'HOME': str(tmp_path),
            'REQUI_REPOS_ROOT': str(root)}
     env.update(env_extra)
@@ -66,29 +92,25 @@ def test_short_or_spaced_key_aborts(tmp_path):
         p = _run(tmp_path, {'DEEPSEEK_API_KEY': bad, 'PREVIEW_EXEC_PROVIDER': 'deepseek'}, settings=_settings(tmp_path))
         assert 'ABORTED [KEY-' in p.stdout, (bad, p.stdout[-300:])
 
-def test_deepseek_key_via_hidden_prompt(tmp_path):
-    """No key in the environment: the deepseek mode asks on the local terminal
-    with echo off (the switch-model.sh pattern), keeps the key in the shell
-    only, and continues. The TTY stub's first line feeds the key read; the
-    later yes-read then sees the same line and refuses, so reaching
-    NOT-CONFIRMED (not NO-KEY) proves the hidden prompt fed a passing key."""
+def test_deepseek_without_an_exported_key_aborts_loudly_with_no_prompt(tmp_path):
+    """2026-10-27 approved drop: the hidden key prompt is gone. The key must be
+    exported in the shell that runs the preview; a missing key is a loud NO-KEY
+    immediately - no prompt is shown and no line is read for a key."""
     tty = tmp_path / 'tty'
     tty.write_text(KEY + '\n')
     p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'deepseek'},
              settings=_settings(tmp_path))
-    assert 'ABORTED [NO-KEY]' not in p.stdout, p.stdout[-500:]
-    assert 'ABORTED [NOT-CONFIRMED]' in p.stdout, p.stdout[-500:]
+    assert 'ABORTED [NO-KEY]' in p.stdout, p.stdout[-500:]
+    assert 'Type or paste it here' not in p.stdout
     assert KEY not in p.stdout and KEY not in p.stderr, 'the key must never be echoed or printed'
 
-def test_deepseek_hidden_prompt_empty_still_aborts_no_key(tmp_path):
-    """An empty answer at the hidden prompt stops with NO-KEY; nothing is
-    started and no default or fallback key is invented."""
-    tty = tmp_path / 'tty'
-    tty.write_text('\n')
-    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'deepseek'},
-             settings=_settings(tmp_path))
-    assert 'ABORTED [NO-KEY]' in p.stdout, p.stdout[-400:]
-    assert p.returncode == 1
+def test_the_script_has_no_hidden_key_read_at_all():
+    """The approved drop, at the source: no `read -rs`, no key prompt text -
+    a key typed into a terminal can end up in scrollback, so the script must
+    never ask for one."""
+    src = SCRIPT.read_text()
+    assert 'read -rs' not in src
+    assert 'Type or paste it here' not in src
 
 def test_deepseek_only_mode_carries_no_ollama_settings():
     """DeepSeek-only means no Ollama dependency: the settings handed to the
@@ -148,25 +170,27 @@ def test_provider_prompt_pick_ollama(tmp_path):
     assert 'ABORTED [NOT-CONFIRMED]' in p.stdout, p.stdout[-500:]
     assert 'ABORTED [NO-TERMINAL]' not in p.stdout and 'ABORTED [PROVIDER]' not in p.stdout
 
-def test_provider_prompt_pick_deepseek_then_hidden_key(tmp_path):
-    """Picking 2 runs the deepseek mode; with no key in the environment the
-    next line of the same prompt stream feeds the hidden key read. The key is
-    never echoed, and the flow then stops at the typed yes (EOF refuses)."""
+def test_provider_prompt_pick_deepseek_with_exported_key(tmp_path):
+    """Picking 2 runs the deepseek mode; the exported key passes the loud
+    presence check (no key prompt any more) and the flow stops at the typed
+    yes (EOF refuses)."""
     tty = tmp_path / 'tty'
-    tty.write_text('2\n' + KEY + '\n')
-    p = _run(tmp_path, {'PREVIEW_TTY': str(tty)}, settings=_settings(tmp_path))
+    tty.write_text('2\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'DEEPSEEK_API_KEY': KEY}, settings=_settings(tmp_path))
     assert 'ABORTED [NO-KEY]' not in p.stdout, p.stdout[-500:]
     assert 'Provider: DeepSeek only (paid)' in p.stdout, p.stdout[-500:]
     assert 'ABORTED [NOT-CONFIRMED]' in p.stdout, p.stdout[-500:]
+    assert 'Type or paste it here' not in p.stdout
     assert KEY not in p.stdout and KEY not in p.stderr, 'the key must never be echoed or printed'
 
-def test_provider_prompt_pick_deepseek_empty_key_aborts(tmp_path):
-    """Picking 2 and answering the hidden key prompt with an empty line stops
-    with NO-KEY; no fallback key or route is invented."""
+def test_provider_prompt_pick_deepseek_without_a_key_aborts(tmp_path):
+    """Picking 2 with no exported key stops loud with NO-KEY right after the
+    pick - before the plan echo, before anything is built or started."""
     tty = tmp_path / 'tty'
-    tty.write_text('2\n\n')
+    tty.write_text('2\n')
     p = _run(tmp_path, {'PREVIEW_TTY': str(tty)}, settings=_settings(tmp_path))
     assert 'ABORTED [NO-KEY]' in p.stdout, p.stdout[-400:]
+    assert 'Type or paste it here' not in p.stdout
     assert p.returncode == 1
 
 def test_provider_prompt_invalid_input_reasks(tmp_path):
@@ -313,3 +337,151 @@ def test_ollama_pin_abort_points_at_the_pin_fail_fix_not_a_vendor_page(tmp_path)
     assert 'PIN-FAIL' in p.stdout
     assert 'page or the parser changed' not in p.stdout
     assert 'the PIN-FAIL line above names' in p.stdout
+
+
+def test_phi4_is_the_default_local_model(tmp_path):
+    """Shy's local-preview model is phi4 ("a quicker engine, rather than an
+    accurate one", 2026-10-25); qwen2.5-coder:14b here was an unnoticed drift
+    (delivery's own DEFAULT_OLLAMA_MODEL is phi4). Engine stage defaults stay
+    qwen - this is the preview override only, in both the launcher and the pin."""
+    tty = tmp_path / 'tty'
+    tty.write_text('no\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama'},
+             settings=_settings(tmp_path))
+    assert 'Provider: local Ollama model phi4' in p.stdout, p.stdout[-800:]
+    pin = (REPO / 'scripts' / 'ops' / 'pin-local.py').read_text()
+    assert "'phi4'" in pin and 'qwen2.5-coder:14b' not in pin
+
+
+def test_the_plan_is_printed_up_front_with_expected_durations(tmp_path):
+    """Fail-fast redesign: the whole step list with expected durations prints
+    BEFORE step 1 runs, so a slow step is never a mystery wait."""
+    tty = tmp_path / 'tty'
+    tty.write_text('no\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama'},
+             settings=_settings(tmp_path))
+    plan = p.stdout.index('Plan (')
+    step1 = p.stdout.index('== [1/')
+    assert plan < step1
+    for word in ('source smoke', 'build', 'image smoke', 'start'):
+        assert word in p.stdout[:step1], word
+
+
+def test_a_failure_names_the_step_and_how_long_it_ran(tmp_path):
+    tty = tmp_path / 'tty'
+    tty.write_text('no\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama'},
+             settings=tmp_path / 'absent.env')   # unprovisioned: fails inside step 1
+    assert '== [1/' in p.stdout
+    assert 'ABORTED [NOT-PROVISIONED]' in p.stdout
+    assert 'Step 1/' in p.stdout and 'failed after' in p.stdout, p.stdout[-400:]
+
+
+def test_preview_env_pins_the_expected_build():
+    """The container's build-staleness check needs REQUI_EXPECTED_REPOS in the
+    preview env. preview-exec builds its env itself (build_exec_env), so the
+    #263 preview.sh pin never covered this path - it kept skipping."""
+    src = SCRIPT.read_text()
+    build = src[src.index('build_exec_env(){'):]
+    build = build[:build.index('\n}')]
+    assert 'REQUI_EXPECTED_REPOS' in build
+
+
+def test_the_build_is_not_asked_a_second_yes():
+    """Approved drop: invoked from preview-exec the build asks nothing of its
+    own (REQUI_BUILD_YES=1); the preview's one typed yes covers it. Standalone
+    runs keep their own yes (tests/test_ops_build_local_image.py)."""
+    src = SCRIPT.read_text()
+    assert 'REQUI_BUILD_YES=1' in src
+    build = (REPO / 'scripts' / 'docker' / 'build-local-image.sh').read_text()
+    assert 'REQUI_BUILD_YES' in build
+
+
+def test_the_grounding_step_says_it_loads_the_model(tmp_path):
+    """The ollama grounding step LOADS the model on this Mac (minutes of fan
+    noise) so the server reports the context window it will actually use -
+    the step must say that up front, not look like a hang."""
+    tty = tmp_path / 'tty'
+    tty.write_text('yes\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama',
+                        'OLLAMA_HOST': 'http://127.0.0.1:9'}, settings=_settings(tmp_path))
+    assert 'loads the model' in p.stdout, p.stdout[-800:]
+
+
+FULL_DOCKER = r'''#!/usr/bin/env bash
+case "$1" in
+  info) exit 0;;
+  ps) case "$*" in *-a*) exit 0;; *) echo requi-preview-exec;; esac;;
+  image)
+    case "$*" in
+      *Architecture*) case $(/usr/bin/uname -m) in arm64|aarch64) echo arm64;; *) echo amd64;; esac;;
+      *) exit 0;;
+    esac;;
+  run)
+    case "$*" in
+      *full-smoke.py*) echo "smoke ok";;
+      *psycopg*) echo DBOK;;
+      *full_entry*) echo CONTRACT-OK;;
+      *) echo container-id;;
+    esac;;
+  logs) echo "boot"; echo "Cloud execution: OPEN";;
+  exec) printf 'EXEC=1\nKEYS=0\n';;
+  rm|tag|rmi) :;;
+esac
+exit 0
+'''
+
+def _ollama_server():
+    import http.server, threading, json
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def _send(self, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(200)
+            self.send_header('content-type', 'application/json')
+            self.send_header('content-length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path == '/api/version':
+                self._send({'version': '0.0.0-test'})
+            elif self.path == '/api/ps':
+                self._send({'models': [{'model': 'phi4:latest', 'context_length': 32768}]})
+            else:
+                self._send({})
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get('content-length') or 0))
+            self._send({})
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), H)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_a_full_run_reaches_ready_with_the_steps_in_order(tmp_path):
+    """The whole launcher end to end, hermetically: a fake Ollama server, a
+    docker stub playing a passing reuse-smoke and start, real bash, the real
+    pin-local grounding. The real code path, not a mocked seam - both preflight
+    regressions this week shipped through seams their tests mocked."""
+    server = _ollama_server()
+    bin_dir = _stubbin(tmp_path)
+    (bin_dir / 'docker').write_text(FULL_DOCKER)
+    (bin_dir / 'docker').chmod(0o755)
+    tty = tmp_path / 'tty'
+    tty.write_text('yes\n')
+    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama',
+                        'OLLAMA_HOST': 'http://127.0.0.1:%d' % server.server_address[1]},
+             settings=_settings(tmp_path))
+    assert p.returncode == 0, p.stdout[-1500:]
+    assert 'PREVIEW-EXEC READY' in p.stdout, p.stdout[-1500:]
+    markers = ['== [%d/' % k for k in range(1, 9)]
+    positions = [p.stdout.index(m) for m in markers]
+    assert positions == sorted(positions), 'the 8 steps must run in the printed order'
+    assert 'Provider: local Ollama model phi4' in p.stdout
+    assert 'Type or paste' not in p.stdout and 'ABORTED' not in p.stdout
+    assert 'MODEL      phi4' in p.stdout   # the real pin-local grounding ran against the fake server
