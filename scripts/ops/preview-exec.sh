@@ -90,7 +90,7 @@ Plan (8 steps, fail fast - cheapest and most likely first; every step prints its
   6 image smoke (~30s): the image's own full smoke - no network, no provider key, not root
   7 database + startability (~20s): this Mac opens the database; the image would start with these settings
   8 start + readiness (~1 min): container up, healthy, execution and provider key verified from inside
-  9 browser smoke (~10s): the real page loads in a browser - any console error or a boot stuck on "Loading workspace…" fails the preview (anonymous, read-only: no sign-in against the live database)
+  9 browser smoke (~10s): the real page loads in a browser - any browser error beyond the page's own expected anonymous 401 probes (each named in the output) or a boot stuck on "Loading workspace…" fails the preview (anonymous, read-only: no sign-in against the live database)
 PLAN
 
 step "inputs and environment"
@@ -378,43 +378,17 @@ EXPECTED_KEYS=1; [ "$PROVIDER" = ollama ] && EXPECTED_KEYS=0
 echo "$EXECOUT" | grep -qx 'EXEC=1' && echo "$EXECOUT" | grep -qx "KEYS=$EXPECTED_KEYS" || abort EXEC-UNVERIFIED "the running container's environment does not confirm execution on with the expected provider key count ($EXPECTED_KEYS)" "" "send me this output"
 step_ok
 
-step "browser smoke: the real page boots with zero console errors"
+step "browser smoke: the real page boots clean - only named, expected anonymous 401s tolerated"
 # Anonymous and read-only BY CONSTRUCTION: the preview runs on the live database with real
 # sign-in, so this step never submits a form and never signs in - it only loads / exactly
-# like a visitor and fails the preview on any browser error or a boot stuck on
-# "Loading workspace…". The fake-login half lives in the hermetic pytest
-# (tests/test_ui_playwright.py::test_boot_smoke_zero_console_errors_anonymous_and_after_fake_login),
+# like a visitor. An anonymous cloud boot is NOT console-error-free by design: the tenant
+# boundary 401s the page's own pre-sign-in probes. The classifier (scripts/ops/browser_smoke.py,
+# tested in tests/test_preview_browser_smoke.py) tolerates only those named probes and fails on
+# anything else, naming the URL Chromium's console line omits. The fake-login half lives in the
+# hermetic pytest (tests/test_ui_playwright.py::test_boot_smoke_zero_console_errors_anonymous_and_after_fake_login),
 # which runs against a throwaway test database, never the live one.
 if .venv/bin/python -c "import playwright.sync_api" 2>/dev/null; then
-  rc=0; .venv/bin/python - "http://127.0.0.1:$PORT" <<'PYEOF' || rc=$?
-import sys
-from playwright.sync_api import sync_playwright
-base=sys.argv[1];errors=[]
-with sync_playwright() as p:
-    try:
-        browser=p.chromium.launch(headless=True)
-    except Exception as e:
-        if 'Executable' in str(e):sys.exit(2)
-        raise
-    page=browser.new_page()
-    page.on('console',lambda m:errors.append('console: '+m.text) if m.type=='error' else None)
-    page.on('pageerror',lambda e:errors.append('pageerror: '+str(e)))
-    page.goto(base+'/')
-    try:
-        page.wait_for_function("!document.body.innerText.includes('Loading workspace')",timeout=20000)
-    except Exception:
-        print('boot never left "Loading workspace..."')
-        for e in errors:print(' ',e)
-        sys.exit(1)
-    if not page.locator('#app').inner_text().strip():
-        print('boot left the loading state but rendered nothing');sys.exit(1)
-    browser.close()
-if errors:
-    print('browser errors during boot:')
-    for e in errors:print(' ',e)
-    sys.exit(1)
-print('browser smoke: page boots clean, zero console errors')
-PYEOF
+  rc=0; .venv/bin/python scripts/ops/browser_smoke.py "http://127.0.0.1:$PORT" || rc=$?
   case "$rc" in
     0) ;;
     2) echo "   NOTE: chromium is not installed for the checkout venv - boot NOT browser-verified; run: .venv/bin/python -m playwright install chromium";;
