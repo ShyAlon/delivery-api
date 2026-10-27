@@ -36,6 +36,7 @@ def test_assets_are_revalidated_not_refetched_and_pages_stay_uncached(client):
 def test_cloud_model_routes_are_managed_and_start_only_when_execution_is_open(monkeypatch,open_now):
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
     monkeypatch.setattr(module,'cloud_execution_admitted',lambda:open_now)
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-key')   # availability also needs the key (2026-10-27)
     reply=module.model_routes(None)
     assert reply['managed'] is True and reply['default_route']=={'route':'deepseek'}
     (route,)=reply['routes']
@@ -59,3 +60,16 @@ def test_stylesheet_does_not_block_on_a_third_party_import_and_modules_load_in_p
         seen.add(name);todo+=re.findall(r"from '\./([a-z0-9-]+\.js)'",_web(name))
     preloaded=set(re.findall(r'<link rel="modulepreload" href="/assets/([a-z0-9-]+\.js)">',html))
     assert seen-{'app.js'}==preloaded       # every module the app imports is requested at once, and nothing stale is listed
+
+
+def test_cloud_model_routes_keyless_deepseek_is_unavailable_with_the_reason(monkeypatch):
+    # Execution open but no billing key on the server: the route must say so, not
+    # offer a selectable failure (2026-10-27 availability fix).
+    monkeypatch.setattr(config,'CLOUD_TENANTS',True)
+    monkeypatch.setattr(module,'cloud_execution_admitted',lambda:True)
+    monkeypatch.delenv('DEEPSEEK_API_KEY',raising=False)
+    reply=module.model_routes(None)
+    (route,)=reply['routes']
+    assert route['available'] is False
+    assert route['error']=="missing key: DEEPSEEK_API_KEY is not set on this server"
+    assert 'test-key' not in str(route)   # presence boolean only, never a value
