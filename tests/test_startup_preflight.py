@@ -64,7 +64,7 @@ def healthy_env(tmp_path):
 
 
 def healthy_pg():
-    return lambda dsn: FakeConn({'information_schema': [(t,) for t in preflight.REQUIRED_TABLES],
+    return lambda dsn: FakeConn({'pg_class': [(t, True) for t in preflight.REQUIRED_TABLES],
                                  'current_user': [('delivery_app',)],
                                  'requi_session_active': [(False,)],
                                  'auth.uid()': [(None,)]})
@@ -77,6 +77,7 @@ def test_a_healthy_environment_passes(tmp_path):
     assert by_name['artifacts-root-writable'].status == 'pass'
     assert by_name['database-role-claims'].status == 'pass'
     assert by_name['required-tables'].status == 'pass'
+    assert by_name['feature-tables'].status == 'pass'
     assert by_name['pool-budget'].status == 'pass'
     assert by_name['provider-key'].status == 'skip'      # execution closed: no key needed
     assert by_name['engine-compatible'].status == 'pass'
@@ -103,16 +104,108 @@ def test_an_unreachable_database_refuses_and_names_it():
 
 
 def test_missing_tables_refuse_and_name_the_tables():
-    partial = [t for t in preflight.REQUIRED_TABLES if t != 'operator_failure_diagnostics']
-    connect = lambda dsn: FakeConn({'information_schema': [(t,) for t in partial], 'current_user': [('delivery_app',)]})
+    partial = [t for t in preflight.REQUIRED_TABLES if t != 'phases']   # a core table
+    connect = lambda dsn: FakeConn({'pg_class': [(t, True) for t in partial], 'current_user': [('delivery_app',)]})
     report = preflight.run(healthy_env(Path('/tmp/x-preflight-test')), connect=connect, import_module=fake_import(engine_modules()))
     check = {c.name: c for c in report.checks}['required-tables']
-    assert check.status == 'fail' and 'operator_failure_diagnostics' in check.found
+    assert check.status == 'fail' and 'phases' in check.found
     assert 'migration' in (check.remedy or '')
 
 
+def test_a_privilege_filtered_catalog_does_not_refuse_a_healthy_database():
+    """2026-10-27, second preflight regression: information_schema.tables hides every
+    table the querying login has no grant on, so a healthy database looked 'missing' 11
+    feature tables and the container refused to start. Existence must come from
+    pg_catalog (never privilege-filtered); visibility is a separate privilege probe."""
+    connect = lambda dsn: FakeConn({'information_schema': [],   # privilege-filtered to nothing
+                                    'pg_class': [(t, True) for t in preflight.REQUIRED_TABLES],
+                                    'current_user': [('delivery_app',)],
+                                    'requi_session_active': [(False,)],
+                                    'auth.uid()': [(None,)]})
+    report = preflight.run(healthy_env(Path('/tmp/x-preflight-test')), connect=connect, import_module=fake_import(engine_modules()))
+    by_name = {c.name: c for c in report.checks}
+    assert by_name['required-tables'].status == 'pass', by_name['required-tables'].found
+    assert by_name['feature-tables'].status == 'pass', by_name['feature-tables'].found
+    assert not report.refused
+
+
+def test_missing_feature_tables_warn_without_refusing_the_start():
+    """Payments/operator/expense-guard tables gate optional features: a database that
+    never applied those migrations must still start and pass interviews (his standing
+    rule: missing optional tables must not block the interview). Warn, name the table,
+    its feature, and the exact migration file that creates it."""
+    present = [t for t in preflight.REQUIRED_TABLES
+               if t not in ('payment_credits', 'payment_events', 'payment_purchases')]
+    connect = lambda dsn: FakeConn({'pg_class': [(t, True) for t in present], 'current_user': [('delivery_app',)]})
+    report = preflight.run(healthy_env(Path('/tmp/x-preflight-test')), connect=connect, import_module=fake_import(engine_modules()))
+    by_name = {c.name: c for c in report.checks}
+    assert not report.refused
+    assert by_name['required-tables'].status == 'pass'
+    check = by_name['feature-tables']
+    assert check.status == 'warn'
+    assert 'payment_credits' in check.found and 'payment_purchases' in check.found
+    assert '20261010090000_private_payment_ledger.sql' in (check.found + (check.remedy or ''))
+
+
+def test_a_present_but_unreadable_core_table_refuses_with_the_grant():
+    rows = [(t, t != 'phases') for t in preflight.REQUIRED_TABLES]
+    connect = lambda dsn: FakeConn({'pg_class': rows, 'current_user': [('delivery_app',)]})
+    report = preflight.run(healthy_env(Path('/tmp/x-preflight-test')), connect=connect, import_module=fake_import(engine_modules()))
+    check = {c.name: c for c in report.checks}['required-tables']
+    assert check.status == 'fail' and report.refused
+    assert 'phases' in check.found and 'requi_backend' in check.found
+    assert 'GRANT' in (check.remedy or '')
+
+
+def test_a_present_but_unreadable_feature_table_warns():
+    rows = [(t, t != 'payment_credits') for t in preflight.REQUIRED_TABLES]
+    connect = lambda dsn: FakeConn({'pg_class': rows, 'current_user': [('delivery_app',)]})
+    report = preflight.run(healthy_env(Path('/tmp/x-preflight-test')), connect=connect, import_module=fake_import(engine_modules()))
+    by_name = {c.name: c for c in report.checks}
+    assert not report.refused and by_name['feature-tables'].status == 'warn'
+    assert 'payment_credits' in by_name['feature-tables'].found
+
+
+def test_feature_tables_map_to_required_tables_and_migrations_that_create_them():
+    for table, (migration, feature) in preflight.FEATURE_TABLES.items():
+        assert table in preflight.REQUIRED_TABLES, table
+        path = ROOT / 'supabase' / 'migrations' / migration
+        assert path.is_file(), migration
+        assert table in preflight._CREATE_TABLE.findall(path.read_text(errors='replace')), (table, migration)
+        assert feature.strip(), table
+
+
+def test_provider_key_with_a_keyless_provider_does_not_crash():
+    """The engine's _API_KEY_ENV maps providers with no key (ollama) to None; the old
+    code fed None into os.environ.get and the whole preflight check crashed into the
+    unnamed 'unknown' fallback (2026-10-27: [warn] unknown, TypeError: str expected,
+    not NoneType). Keyless providers contribute nothing, not a crash."""
+    import types
+    modules = engine_modules()
+    modules['interview_engine.model_config'] = types.SimpleNamespace(
+        _API_KEY_ENV={'deepseek': 'DEEPSEEK_API_KEY', 'ollama': None})
+    env = healthy_env(Path('/tmp/x-preflight-test')); env['DELIVERY_CLOUD_EXECUTION'] = '1'
+    report = preflight.run(env, connect=healthy_pg(), import_module=fake_import(modules))
+    check = {c.name: c for c in report.checks}['provider-key']
+    assert check.status == 'warn' and 'DEEPSEEK_API_KEY' in check.found and 'None' not in check.found
+    env['DEEPSEEK_API_KEY'] = 'sk-test'
+    report = preflight.run(env, connect=healthy_pg(), import_module=fake_import(modules))
+    assert {c.name: c for c in report.checks}['provider-key'].status == 'pass'
+
+
+def test_a_crashing_check_names_itself_not_unknown():
+    """The crash fallback must name the check that died ('unknown' told him nothing
+    when provider-key crashed on 2026-10-27)."""
+    env = healthy_env(Path('/tmp/x-preflight-test')); env['REQUI_EXPECTED_REPOS'] = 123  # int: .strip() raises
+    report = preflight.run(env, connect=healthy_pg(), import_module=fake_import(engine_modules()))
+    by_name = {c.name: c for c in report.checks}
+    assert 'unknown' not in by_name
+    check = by_name['build-staleness']
+    assert check.status == 'warn' and 'the check itself failed' in check.found and 'AttributeError' in check.found
+
+
 def test_a_claims_failure_names_the_step():
-    conn = FakeConn({'information_schema': [(t,) for t in preflight.REQUIRED_TABLES],
+    conn = FakeConn({'pg_class': [(t, True) for t in preflight.REQUIRED_TABLES],
                      'current_user': [('delivery_app',)],
                      'set_config': Exception('permission denied to set role')})
     report = preflight.run(healthy_env(Path('/tmp/x-preflight-test')), connect=lambda dsn: conn, import_module=fake_import(engine_modules()))
@@ -160,6 +253,7 @@ def test_non_postgres_dsn_skips_the_database_checks():
     report = preflight.run(env, connect=None, import_module=fake_import(engine_modules()))
     by_name = {c.name: c for c in report.checks}
     assert by_name['database-role-claims'].status == 'skip' and by_name['required-tables'].status == 'skip'
+    assert by_name['feature-tables'].status == 'skip'
     assert not report.refused
 
 

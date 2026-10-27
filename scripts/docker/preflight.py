@@ -5,9 +5,10 @@ foundations, warn on degraded ones, and say it all in ONE readable report
 Deterministic checks only: no model calls, no spend, nothing invented. Database
 checks are read-only SELECTs run as the app's own restricted login - never DDL,
 never a write. Hard failures (refuse): artifacts root, database role/claims,
-required tables, engine compatibility. Warnings: pool budget, provider key,
-unsettled compute segments (owner-scoped: evaluated live in the Debug dialog),
-build staleness. Run by full_entry before any process is spawned; the report is
+required (core) tables, engine compatibility. Warnings: feature-gated tables
+(missing optional tables must never block the interview), pool budget, provider
+key, unsettled compute segments (owner-scoped: evaluated live in the Debug
+dialog), build staleness. Run by full_entry before any process is spawned; the report is
 also written next to the engine log for the Debug dialog."""
 import importlib
 import json
@@ -39,6 +40,27 @@ REQUIRED_TABLES = frozenset({
     'review_comments', 'runs', 'staged_provider_responses', 'task_artifacts', 'tasks', 'usage',
     'user_task_policy', 'user_task_policy_changes', 'users', 'worker_jobs',
 })
+
+# Tables that gate OPTIONAL features only: payments, the operator console, the
+# confirmed expense guard, credit-adjustment evidence, retail scale, task-policy
+# suspension. A database that never applied these migrations must still start and
+# serve interviews (a missing optional table must never block the interview), so
+# these are warn-level, each named with the migration file that creates it.
+# Pinned by tests: every entry sits in REQUIRED_TABLES and its migration creates it.
+FEATURE_TABLES = {
+    'credit_adjustments': ('20261009130000_private_credit_adjustment_evidence.sql',
+                           'private credit-adjustment evidence (operator grant credits)'),
+    'expense_guard_episodes': ('20261009213000_confirmed_expense_guard.sql', 'the confirmed expense guard'),
+    'expense_guard_policy': ('20261009213000_confirmed_expense_guard.sql', 'the confirmed expense guard'),
+    'operator_failure_diagnostics': ('20261025120000_operator_failure_diagnostics.sql', 'operator failure diagnostics'),
+    'operator_principals': ('20261009104000_operator_read_registry.sql', 'the operator console'),
+    'operator_state_events': ('20261009112000_operator_state_event_log.sql', 'the operator event log'),
+    'payment_credits': ('20261010090000_private_payment_ledger.sql', 'payments'),
+    'payment_events': ('20261010090000_private_payment_ledger.sql', 'payments'),
+    'payment_purchases': ('20261010090000_private_payment_ledger.sql', 'payments'),
+    'retail_scale_migrations': ('20261010190000_exact_retail_contributions.sql', 'retail scale contributions'),
+    'user_task_policy_changes': ('20261009133000_task_operation_suspension.sql', 'task-operation suspension policy'),
+}
 
 _CREATE_TABLE = re.compile(r'create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?([a-z_][a-z0-9_]*)', re.I)
 
@@ -179,28 +201,74 @@ def _check_database(env, connect, connection_holder):
                      'the app login must be able to SET ROLE requi_backend; row security hides tenant rows without claims')
 
 
-def _check_tables(env, connection_holder, required_tables):
-    if not env.get('DELIVERY_DATABASE_URL', '').startswith(('postgresql://', 'postgres://')):
-        return Check('required-tables', 'refuse', 'skip', 'that every table the code requires exists in the public schema',
-                     '%d tables from the checked-in migrations' % len(required_tables),
-                     'skipped: the DSN is not PostgreSQL', 'information_schema.tables')
-    if not connection_holder:
-        return Check('required-tables', 'refuse', 'fail', 'that every table the code requires exists in the public schema',
-                     '%d tables from the checked-in migrations' % len(required_tables),
-                     'cannot verify: no database connection (see database-role-claims)', 'information_schema.tables',
-                     'fix the database connection first')
+def _table_visibility(connection_holder):
+    """Existence AND readability per public table, from pg_catalog. Never
+    information_schema.tables: it hides every table the querying login has no
+    grant on (2026-10-27, second preflight regression: a healthy database looked
+    'missing' 11 feature tables and the container refused to start). Privilege is
+    checked separately as requi_backend - the role the app actually queries as."""
     rows = connection_holder[0].execute(
-        "SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()
-    present = {r[0] for r in rows}
-    missing = sorted(set(required_tables) - present)
-    if missing:
-        return Check('required-tables', 'refuse', 'fail', 'that every table the code requires exists in the public schema',
-                     '%d tables from the checked-in migrations' % len(required_tables),
-                     'missing or not visible to the app login: %s' % ', '.join(missing), 'information_schema.tables',
-                     'apply the missing migration to this database (see supabase/migrations)')
-    return Check('required-tables', 'refuse', 'pass', 'that every table the code requires exists in the public schema',
-                 '%d tables from the checked-in migrations' % len(required_tables),
-                 'all %d present' % len(required_tables), 'information_schema.tables')
+        "SELECT c.relname, has_table_privilege('requi_backend', c.oid, 'SELECT') "
+        "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'public' AND c.relkind IN ('r','p')").fetchall()
+    return {r[0]: bool(r[1]) for r in rows}
+
+
+def _table_problems(tables, visible):
+    missing = sorted(t for t in tables if t not in visible)
+    unreadable = sorted(t for t in tables if t in visible and not visible[t])
+    return missing, unreadable
+
+
+def _check_tables(env, connection_holder, required_tables):
+    core = sorted(set(required_tables) - set(FEATURE_TABLES))
+    checked = 'that every core table the interview requires exists in the public schema and is readable by requi_backend'
+    expected = '%d core tables from the checked-in migrations (feature-gated tables are the feature-tables check)' % len(core)
+    if not env.get('DELIVERY_DATABASE_URL', '').startswith(('postgresql://', 'postgres://')):
+        return Check('required-tables', 'refuse', 'skip', checked, expected,
+                     'skipped: the DSN is not PostgreSQL', 'pg_catalog (pg_class/pg_namespace)')
+    if not connection_holder:
+        return Check('required-tables', 'refuse', 'fail', checked, expected,
+                     'cannot verify: no database connection (see database-role-claims)', 'pg_catalog (pg_class/pg_namespace)',
+                     'fix the database connection first')
+    missing, unreadable = _table_problems(core, _table_visibility(connection_holder))
+    if missing or unreadable:
+        found = []
+        if missing: found.append('missing from the database: %s' % ', '.join(missing))
+        if unreadable: found.append('present but requi_backend cannot read: %s' % ', '.join(unreadable))
+        remedy = []
+        if missing: remedy.append('apply the missing migrations (supabase/migrations) to this database')
+        if unreadable: remedy.append('GRANT SELECT ON public.<table> TO requi_backend')
+        return Check('required-tables', 'refuse', 'fail', checked, expected,
+                     '; '.join(found), 'pg_catalog (pg_class/pg_namespace)', '; '.join(remedy))
+    return Check('required-tables', 'refuse', 'pass', checked, expected,
+                 'all %d present and readable' % len(core), 'pg_catalog (pg_class/pg_namespace)')
+
+
+def _check_feature_tables(env, connection_holder, required_tables):
+    feature = sorted(set(required_tables) & set(FEATURE_TABLES))
+    checked = 'the feature-gated tables (payments, operator console, expense guard, credit evidence, retail scale)'
+    expected = '%d optional feature tables present; a missing one disables only its feature, never the interview' % len(feature)
+    if not env.get('DELIVERY_DATABASE_URL', '').startswith(('postgresql://', 'postgres://')):
+        return Check('feature-tables', 'warn', 'skip', checked, expected,
+                     'skipped: the DSN is not PostgreSQL', 'pg_catalog (pg_class/pg_namespace)')
+    if not connection_holder:
+        return Check('feature-tables', 'warn', 'skip', checked, expected,
+                     'skipped: no database connection (see database-role-claims)', 'pg_catalog (pg_class/pg_namespace)')
+    missing, unreadable = _table_problems(feature, _table_visibility(connection_holder))
+    if missing or unreadable:
+        found = []
+        if missing:
+            found.append('missing: ' + ', '.join('%s (%s)' % (t, FEATURE_TABLES[t][0]) for t in missing))
+        if unreadable:
+            found.append('present but requi_backend cannot read: %s' % ', '.join(unreadable))
+        remedy = ('optional features only - the interview runs without them; to enable one, apply its named '
+                  'migration to this database (supabase/migrations), and GRANT SELECT ON public.<table> TO '
+                  'requi_backend for any unreadable one')
+        return Check('feature-tables', 'warn', 'warn', checked, expected,
+                     '; '.join(found), 'pg_catalog (pg_class/pg_namespace)', remedy)
+    return Check('feature-tables', 'warn', 'pass', checked, expected,
+                 'all %d present and readable' % len(feature), 'pg_catalog (pg_class/pg_namespace)')
 
 
 def _check_pool_budget(env, import_module):
@@ -235,7 +303,10 @@ def _check_provider_key(env, import_module):
                      'at least one configured provider key present (presence only - never a validation call)',
                      'skipped: execution is closed, no provider key is needed', 'provider key environment')
     try:
-        names = set(import_module('interview_engine.model_config')._API_KEY_ENV.values())
+        # Providers with no key (ollama maps to None) contribute no env var; feeding
+        # None into env.get crashed this whole check into the unnamed fallback
+        # (2026-10-27: [warn] unknown - TypeError: str expected, not NoneType).
+        names = {n for n in import_module('interview_engine.model_config')._API_KEY_ENV.values() if n}
     except Exception:
         names = {'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'}
     present = sorted(name for name in names if env.get(name))
@@ -322,21 +393,23 @@ def run(env, *, connect=None, import_module=importlib.import_module, required_ta
     connect = connect or _real_connect
     report = Report(generated_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'))
     connection_holder = []
-    builders = [lambda: _check_artifacts(env),
-                lambda: _check_database(env, connect, connection_holder),
-                lambda: _check_tables(env, connection_holder, required_tables),
-                lambda: _check_pool_budget(env, import_module),
-                lambda: _check_provider_key(env, import_module),
-                lambda: _check_engine(env, import_module),
-                lambda: _check_segments(env),
-                lambda: _check_staleness(env)]
-    for build in builders:
+    builders = [('artifacts-root-writable', lambda: _check_artifacts(env)),
+                ('database-role-claims', lambda: _check_database(env, connect, connection_holder)),
+                ('required-tables', lambda: _check_tables(env, connection_holder, required_tables)),
+                ('feature-tables', lambda: _check_feature_tables(env, connection_holder, required_tables)),
+                ('pool-budget', lambda: _check_pool_budget(env, import_module)),
+                ('provider-key', lambda: _check_provider_key(env, import_module)),
+                ('engine-compatible', lambda: _check_engine(env, import_module)),
+                ('unsettled-compute-segments', lambda: _check_segments(env)),
+                ('build-staleness', lambda: _check_staleness(env))]
+    for name, build in builders:
         try:
             report.checks.append(build())
         except Exception as error:
-            report.checks.append(Check('unknown', 'warn', 'warn', 'a preflight check', 'a clean evaluation',
+            report.checks.append(Check(name, 'warn', 'warn', 'the %s preflight check' % name, 'a clean evaluation',
                                        'the check itself failed: %s: %s' % (type(error).__name__, str(error)[:160]),
-                                       'scripts/docker/preflight.py'))
+                                       'scripts/docker/preflight.py (%s)' % name,
+                                       'a preflight check must never crash - report this'))
     for connection in connection_holder:
         try: connection.close()
         except Exception: pass
