@@ -1,3 +1,4 @@
+import {runAction} from './ui-action.js';
 import {pageEpoch,pageStale} from './page-lifecycle.js';
 import {api,esc} from './client-core.js';
 import {humanLabel} from './format.js';
@@ -48,7 +49,7 @@ export function createCompletion(ctx){
    <h2>Final coding-agent package</h2><button id="prepare-package" class="primary">Prepare final package</button><div id="package-status" role="status"></div></section></div>`;
   confetti(app.querySelector('.complete-page'));
   const button=app.querySelector('#prepare-package'),status=app.querySelector('#package-status');
-  button.onclick=async()=>{button.disabled=true;status.textContent='Checking outputs, decisions and traceability…';try{const result=await api(`/api/tasks/${id}/packages`,{method:'POST',body:'{}',timeout:null});status.innerHTML=`<p>Generation ${result.generation} · ready</p><a class="primary button-link" download href="${esc(result.url)}">Download coding-agent package</a><details><summary>Package contents</summary><ul>${(result.contents||[]).map(name=>`<li>${esc(name)}</li>`).join('')}</ul></details>`}catch(error){status.textContent=error.message;button.disabled=false}};
+  button.onclick=async()=>runAction(`package.prepare:${taskId}`,button,async()=>{status.textContent='Checking outputs, decisions and traceability…';try{const result=await api(`/api/tasks/${id}/packages`,{method:'POST',body:'{}',timeout:null});status.innerHTML=`<p>Generation ${result.generation} · ready</p><a class="primary button-link" download href="${esc(result.url)}">Download coding-agent package</a><details><summary>Package contents</summary><ul>${(result.contents||[]).map(name=>`<li>${esc(name)}</li>`).join('')}</ul></details>`}catch(error){status.textContent=error.message}});
  }
  return {completePage};
 }

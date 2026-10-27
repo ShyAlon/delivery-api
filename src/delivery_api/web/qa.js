@@ -1,3 +1,4 @@
+import {runAction} from './ui-action.js';
 import {api,esc} from './client-core.js';
 const app=document.querySelector('#app'),modal=document.querySelector('#modal');
 export function createQa(ctx){
@@ -64,7 +65,8 @@ function refreshQaRow(el){
  }else fresh.closest('.qa-answer').insertAdjacentHTML('afterend',qaNotesHtml(target,ref));
  wireQaActions(fresh);wireQaNotes(item);
 }
-async function sendThumb(el,target,ref,content,value){
+async function sendThumb(el,target,ref,content,value){return runAction(`feedback:${qaContext.taskId}:${target}:${ref}`,Array.from(el.querySelectorAll('button')),()=>saveThumb(el,target,ref,content,value))}
+async function saveThumb(el,target,ref,content,value){
  const key=fbKey(target,ref),existing=feedbackState.get(key);
  try{
   if(existing&&existing.thumb===value){
@@ -82,20 +84,20 @@ function openFeedbackDialog(target,ref,content){
  const dialog=openDialog(`<div class="dialog feedback-dialog" role="dialog" aria-label="${q?'Comment on this question':'Comment on this answer'}"><button class="dialog-x" aria-label="Close comment">×</button><div class="eyebrow">${q?'QUESTION FEEDBACK':'ANSWER FEEDBACK'} · ANNOTATION ONLY</div><h3>${q?'What should we learn from this question?':'What did the engine misread?'}</h3><p class="feedback-context">${esc(content||'')}</p><textarea id="feedbacktext" rows="4" maxlength="4000" placeholder="A note for the team - it does not steer the interview">${esc(existing?.comment||'')}</textarea><div class="dialog-actions"><button class="primary" id="savefeedback">Save comment</button>${existing?'<button class="secondary danger" id="deletefeedback">Delete feedback</button>':''}</div><div id="feedbackstatus" aria-live="polite"></div></div>`);
  if(!dialog)return;
  const text=dialog.querySelector('#feedbacktext'),status=dialog.querySelector('#feedbackstatus'),save=dialog.querySelector('#savefeedback');
- save.onclick=async()=>{
+ save.onclick=async()=>runAction(`feedback:${qaContext.taskId}:${target}:${ref}`,Array.from(dialog.querySelectorAll('.dialog-actions button')),async()=>{
   const comment=text.value.trim();
   if(!comment&&!existing?.thumb){status.textContent='Add a comment or a thumb first.';return}
-  save.disabled=true;save.textContent='Saving…';
+
   try{
    const row=await api(`/api/tasks/${qaContext.taskId}/feedback`,{method:'POST',body:JSON.stringify({input_ref:ref,target,content:content||'',thumb:existing?.thumb||null,comment:comment||null})});
    feedbackState.set(key,row);closeModal();
    const el=document.querySelector(`.qa-actions[data-target="${target}"][data-ref="${ref}"]`);if(el)refreshQaRow(el);
-  }catch(e){status.textContent=e.message;save.disabled=false;save.textContent='Save comment'}
- };
+  }catch(e){status.textContent=e.message}
+ },{busyLabel:'Saving…'});
  if(existing)dialog.querySelector('#deletefeedback').onclick=async e=>{
   const b=e.target;
   if(!b.dataset.armed){b.dataset.armed='1';b.textContent='Confirm delete?';setTimeout(()=>{if(b.isConnected){delete b.dataset.armed;b.textContent='Delete feedback'}},3000);return}
-  try{await api(`/api/tasks/${qaContext.taskId}/feedback/${existing.id}`,{method:'DELETE'});feedbackState.delete(key);closeModal();const el=document.querySelector(`.qa-actions[data-target="${target}"][data-ref="${ref}"]`);if(el)refreshQaRow(el)}catch(err){showError(err)}
+  await runAction(`feedback:${qaContext.taskId}:${target}:${ref}`,Array.from(dialog.querySelectorAll('.dialog-actions button')),async()=>{try{await api(`/api/tasks/${qaContext.taskId}/feedback/${existing.id}`,{method:'DELETE'});feedbackState.delete(key);closeModal();const el=document.querySelector(`.qa-actions[data-target="${target}"][data-ref="${ref}"]`);if(el)refreshQaRow(el)}catch(err){showError(err)}});
  };
 }
 async function contentRef(text){

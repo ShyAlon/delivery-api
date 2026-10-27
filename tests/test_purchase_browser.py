@@ -114,3 +114,21 @@ def test_unverified_success_is_never_displayed(tamper):
   assert page.locator('h1').inner_text()=='Payment Needs Review'
   assert '58.5' not in page.locator('.purchase-balance').inner_text() and not page.locator('[data-receipt]').count()
   browser.close()
+
+
+def test_receipt_uses_shared_guard_and_blocks_programmatic_double_click():
+ with serving() as origin,sync_playwright() as p:
+  browser=p.chromium.launch(headless=True);page=browser.new_page()
+  source=FIXTURE.replace("window.fixtureState='pending'","window.fixtureState='success'").replace("calls.receipt++;return", "calls.receipt++;await new Promise(resolve=>window.releaseReceipt=resolve);return")
+  page.route('**/credits**',lambda r:r.fulfill(body=source,content_type='text/html'))
+  page.route('**/assets/credit-offers.json',lambda r:r.fulfill(body=(ROOT/'src/delivery_api/web/credit-offers.json').read_text(),content_type='application/json'))
+  page.route('**/api/client-log',lambda r:r.fulfill(json={}))
+  page.goto(origin+'/credits?view=success&offer=credits-50&purchase=fixture-purchase');page.wait_for_selector('[data-receipt]')
+  page.locator('[data-receipt]').click()
+  page.wait_for_function('calls.receipt===1')
+  assert page.locator('[data-receipt]').get_attribute('aria-busy')=='true'
+  page.locator('[data-receipt]').dispatch_event('click')
+  assert page.evaluate('calls.receipt')==1
+  page.evaluate('releaseReceipt()');page.wait_for_function("!document.querySelector('[data-receipt]').disabled")
+  assert page.locator('[data-receipt]').get_attribute('aria-busy') is None
+  browser.close()

@@ -51,6 +51,6 @@ export async function runAction(action,buttons,fn,{busyLabel=null,reason='Workin
     throw error;
   }finally{
     inflight.delete(action);
-    if(!(ok&&keepDisabledOnSuccess))saved.forEach(({b,text,title,wasDisabled})=>{b.disabled=wasDisabled;b.classList.remove('is-busy');b.removeAttribute('aria-busy');b.textContent=text;b.title=title});
+    if(!(ok&&keepDisabledOnSuccess))saved.forEach(({b,text,title,wasDisabled})=>{b.disabled=wasDisabled;b.classList.remove('is-busy');b.removeAttribute('aria-busy');if(busyLabel)b.textContent=text;b.title=title});
   }
 }

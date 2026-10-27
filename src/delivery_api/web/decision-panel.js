@@ -28,5 +28,5 @@ export function refreshDecision(root,blockers,{gated=['[data-action="approve"]',
   }
   else{if(!target.hasAttribute('tabindex'))target.tabIndex=-1;target.focus({preventScroll:true});target.scrollIntoView({behavior:'smooth',block:'center'})}
  });
- for(const sel of gated)root.querySelectorAll(sel).forEach(b=>{b.disabled=blockers.length>0;b.setAttribute('aria-describedby','decision-checklist');if(blockers.length)b.title=blockers[0].text;else b.removeAttribute('title')});
+ for(const sel of gated)root.querySelectorAll(sel).forEach(b=>{b.disabled=b.getAttribute('aria-busy')==='true'||blockers.length>0;b.setAttribute('aria-describedby','decision-checklist');if(blockers.length)b.title=blockers[0].text;else b.removeAttribute('title')});
 }
