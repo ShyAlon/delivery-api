@@ -17,7 +17,7 @@ FAKE_SSH = r'''#!/usr/bin/env bash
 c="${@: -1}"
 echo "ssh $c" >> "$FAKE_LOG"
 case "$c" in
-  *full-smoke.py*) exit "${FAKE_SMOKE_RC:-0}";;
+  *full-smoke.py*) [ -z "${FAKE_SMOKE_OUT:-}" ] || printf '%s\n' "$FAKE_SMOKE_OUT"; exit "${FAKE_SMOKE_RC:-0}";;
   *"docker rmi"*) exit "${FAKE_RMI_RC:-0}";;
   *"tar -x"*) mkdir -p "$FAKE_UP"; tar -x -p -C "$FAKE_UP";;
   *MODE=list*) cat > /dev/null; echo "stale="; echo "caddy=no-file";;
@@ -173,3 +173,14 @@ def test_the_build_passes_the_four_named_commits_to_the_image(tmp_path):
     assert "-".join(s for _, s in pairs) == m.group(1) and all(len(s) == 8 for _, s in pairs)
     dockerfile = (ROOT / "Dockerfile.full").read_text()
     assert "ARG REQUI_BUILD_REPOS" in dockerfile and "ENV REQUI_BUILD_REPOS=$REQUI_BUILD_REPOS" in dockerfile
+
+
+def test_a_silent_smoke_failure_names_the_exit_code_and_says_the_container_printed_nothing(tmp_path):
+    """2026-10-27: the server smoke died with zero output and the operator saw only
+    '(output above)'. A silent death (signal kill, commonly OOM) must be SAID."""
+    api, env, log, _ = _setup(tmp_path)
+    out = _build(api, env, FAKE_SMOKE_RC="137")
+    assert out.returncode != 0
+    assert "exit code 137" in out.stdout, out.stdout
+    assert "produced no output" in out.stdout, out.stdout
+    assert "out of memory" in out.stdout, out.stdout

@@ -5,6 +5,7 @@ Born from the 2026-10-26 incidents: a container served for hours on a dead
 /data mount before the first task died; an owner was locked out by unsettled
 compute segments until a hand-run script; failure diagnostics went unrecorded
 because a migration was missing; the running build was three merges behind."""
+import os
 import importlib.util
 import json
 import sys
@@ -190,3 +191,45 @@ def test_the_full_image_carries_the_preflight_module():
     dockerfile = (Path(__file__).resolve().parents[1] / 'Dockerfile.full').read_text()
     copy_lines = [line for line in dockerfile.splitlines() if line.startswith('COPY') and 'full_entry.py' in line]
     assert copy_lines and any('preflight.py' in line for line in copy_lines)
+
+
+def _fake_engine_modules(monkeypatch):
+    import types
+    import inspect as _inspect
+    package = types.ModuleType('interview_engine')          # a real package re-exports nothing
+    http = types.ModuleType('interview_engine.http_service')
+    http.create_app = lambda: None
+    http.SESSIONS_DSN_ENV = 'INTERVIEW_ENGINE_SESSIONS_DSN'
+    pool = types.ModuleType('interview_engine.pg_pool')
+    pool.ENGINE_POOL_MAX = 4
+    def build_pool(dsn, *, max_size=4, name='engine'):
+        return None
+    pool.build_pool = build_pool
+    monkeypatch.setitem(sys.modules, 'interview_engine', package)
+    monkeypatch.setitem(sys.modules, 'interview_engine.http_service', http)
+    monkeypatch.setitem(sys.modules, 'interview_engine.pg_pool', pool)
+
+
+def test_the_default_import_path_resolves_submodules(monkeypatch, tmp_path):
+    """2026-10-27: __import__('a.b') returns the TOP package; the preflight's real
+    import_module must resolve the submodule, or check 6 refuses every real start
+    while every mocked test stays green (the smoke broke silently for exactly this)."""
+    _fake_engine_modules(monkeypatch)
+    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR', str(tmp_path))
+    monkeypatch.setenv('DELIVERY_DATABASE_URL', 'sqlite:///' + str(tmp_path / 's.db'))
+    report = preflight.run(os.environ)   # no import_module override: the REAL default
+    engine = next(c for c in report.checks if c.name == 'engine-compatible')
+    assert engine.status == 'pass', engine.found
+    budget = next(c for c in report.checks if c.name == 'pool-budget')
+    assert 'import failed' not in budget.found
+
+
+def test_an_engine_check_failure_names_the_missing_piece(monkeypatch):
+    import types
+    package = types.ModuleType('interview_engine')
+    http = types.ModuleType('interview_engine.http_service')
+    http.SESSIONS_DSN_ENV = 'INTERVIEW_ENGINE_SESSIONS_DSN'   # create_app missing
+    monkeypatch.setitem(sys.modules, 'interview_engine', package)
+    monkeypatch.setitem(sys.modules, 'interview_engine.http_service', http)
+    check = preflight._check_engine({}, preflight.importlib.import_module)
+    assert check.status == 'fail' and 'create_app' in check.found
