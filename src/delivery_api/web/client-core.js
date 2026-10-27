@@ -47,7 +47,7 @@ export function noteActivity(){lastActivity=Date.now()}
 export async function renewSessionIfDue(){
   if(!refreshExpiresAt || Date.now()/1000 < refreshExpiresAt-600 || Date.now()-lastActivity>20*60*1000)return;
   if(!refreshInFlight)refreshInFlight=fetch('/auth/refresh',{method:'POST',headers:{'content-type':'application/json'}})
-    .then(async response=>{if(!response.ok){refreshExpiresAt=0;throw new Error('Your sign-in expired. Sign in again before continuing.')}refreshExpiresAt=Number((await response.json()).expires_at)||0})
+    .then(async response=>{if(!response.ok){refreshExpiresAt=0;if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('requi:signin-needed',{detail:{reason:'session_expired'}}));throw new Error('Your sign-in expired. Sign in again before continuing.')}refreshExpiresAt=Number((await response.json()).expires_at)||0})
     .finally(()=>{refreshInFlight=null});
   return refreshInFlight;
 }
