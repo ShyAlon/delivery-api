@@ -148,11 +148,28 @@ if bad:
 print('parse: every shipped Python file parses')
 PYEOF
 [ "$rc" = 0 ] || abort SRC-PARSE "a shipped Python file does not parse - the image smoke would have found this after a full build" "Nothing was started." "the file and line are named above"
-# 2b: the startup preflight's own regression tests, on this checkout. Both 2026-10-27 preflight
+# 2b: every shipped JS asset parses, in MODULE goal. A JS syntax error is found by a
+# browser only AFTER deploy (PR #261 shipped exactly that: one stray '}' in identity.js,
+# the SPA stuck on "Loading workspace…"). node --check on a .js can silently pick script
+# goal and pass a broken module, so check real copies named .mjs. Without node this step
+# cannot verify and says so instead of passing silently.
+if command -v node >/dev/null 2>&1; then
+  JSTMP=$(mktemp -d); rc=0
+  for f in "$ROOT"/delivery-api/src/delivery_api/web/*.js; do
+    j="$JSTMP/$(basename "${f%.js}").mjs"; cp "$f" "$j"
+    out=$(node --check "$j" 2>&1) || { echo "  $(basename "$f"):"; echo "$out" | head -6 | sed 's/^/    /'; rc=1; }
+  done
+  rm -rf "$JSTMP"
+  [ "$rc" = 0 ] || abort SRC-JS-PARSE "a shipped JS asset does not parse - a browser would find this only after deploy" "Nothing was started." "the file and line are named above"
+  echo "parse: every shipped JS asset parses (module goal)"
+else
+  echo "   NOTE: node is not installed on this Mac - shipped JS syntax NOT verified here (the pytest gate covers it wherever node exists)"
+fi
+# 2c: the startup preflight's own regression tests, on this checkout. Both 2026-10-27 preflight
 # regressions reached the image through code whose tests passed here - this runs them BEFORE a build.
 rc=0; "$PY" -m pytest tests/test_startup_preflight.py -q -p no:cacheprovider || rc=$?
 [ "$rc" = 0 ] || abort SRC-PREFLIGHT "the startup preflight's own tests fail on this checkout" "Nothing was started." "run: .venv/bin/python -m pytest tests/test_startup_preflight.py -x   (the first failure is named)"
-# 2c: the candidate engine exposes the surface the image's preflight requires. Checked by ast, not
+# 2d: the candidate engine exposes the surface the image's preflight requires. Checked by ast, not
 # import: this Mac's delivery venv does not carry the engine's dependencies, but the image does.
 rc=0; "$PY" - "$ROOT/interview-engine/src/interview_engine" <<'PYEOF' || rc=$?
 import ast, pathlib, sys

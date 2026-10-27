@@ -45,6 +45,26 @@ def main():
         else:raise RuntimeError('delivery health timeout after 120s')
         assert health.get('ok') is True and health.get('runtime_profile')!='control_plane_only',health
         result['delivery_health']=True
+        stage='serving every shipped JS asset whole and parsed'
+        print('smoke stage: %s' % stage,flush=True)
+        import pathlib,shutil
+        import delivery_api
+        web=pathlib.Path(delivery_api.__file__).parent/'web'
+        assets=sorted(web.glob('*.js'));assert assets,'no shipped JS assets found'
+        for f in assets:
+            body=get(f'http://127.0.0.1:{port}/assets/{f.name}').read()
+            assert body==f.read_bytes(),f'/assets/{f.name}: served bytes differ from the shipped file'
+        result['js_assets_served_whole']=len(assets)
+        node=shutil.which('node')
+        if node:
+            bad=[]
+            for f in assets:
+                copy=pathlib.Path(scratch)/(f.stem+'.mjs');copy.write_bytes(f.read_bytes())  # real copy: a symlink resolves to .js and node picks script goal
+                if subprocess.run([node,'--check',str(copy)],capture_output=True).returncode:bad.append(f.name)
+            assert not bad,'shipped JS that does not parse: '+', '.join(bad)
+            result['js_assets_parse']=len(assets)
+        else:
+            print('smoke note: node is not in the image - JS SYNTAX not verified here (preview-exec step 2 and the pytest gate cover it where node exists)',flush=True)
         stage='checking the engine refuses a call without its token'
         print('smoke stage: %s' % stage,flush=True)
         try:get('http://127.0.0.1:8010/v1/model-routes/default');raise AssertionError('engine answered without its token')

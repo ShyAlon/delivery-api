@@ -53,3 +53,20 @@ def test_every_font_size_uses_the_type_scale():
         assert not re.findall(r'font:[^;}]*?\b\d+(?:\.\d+)?px',body),name
     root=_web('style.css').split('}',1)[0]
     for t in ('xs','sm','md','lg','xl','display'):assert f'--fs-{t}:' in root
+
+def test_every_shipped_js_asset_parses_as_an_es_module(tmp_path):
+    # One unparseable shipped asset kills the whole SPA boot - the page sits on
+    # "Loading workspace…" forever and no python gate sees it (PR #261 shipped
+    # exactly that in identity.js). Check every shipped file with a real parser
+    # in MODULE goal: node --check on a .js can silently fall back to script
+    # goal and pass a broken module, so force the goal with a .mjs link.
+    node=shutil.which('node')
+    if not node: pytest.skip('needs node')
+    failures=[]
+    for f in sorted(WEB.glob('*.js')):
+        link=tmp_path/(f.stem+'.mjs');link.write_bytes(f.read_bytes())  # real copy: a symlink resolves to the .js path and node picks script goal again
+        r=subprocess.run([node,'--check',str(link)],capture_output=True,text=True)
+        if r.returncode:
+            line=next((l.strip() for l in r.stderr.splitlines() if 'SyntaxError' in l),'unparseable')
+            failures.append(f'{f.name}: {line}')
+    assert not failures,'shipped JS that does not parse:\n'+'\n'.join(failures)
