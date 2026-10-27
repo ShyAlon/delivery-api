@@ -173,6 +173,14 @@ class PostgresStore(SQLiteStore):
         # use SELECT ... FOR UPDATE, CAS upserts and the advisory owner lock.
         self._lock = contextlib.nullcontext()
 
+    def ensure_waiting_input_event(self,task_id:str,message:str,*,phase_key:str,payload:dict)->int:
+        # Lock before checking. Under READ COMMITTED, a waiter then sees the
+        # winner's committed event. This is a database row lock, never a Python
+        # mutex held across a request's transaction or another PG lock wait.
+        if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():
+            raise KeyError(task_id)
+        return self._ensure_waiting_input_locked(task_id,message,phase_key=phase_key,payload=payload)
+
     def _task_operation_guard(self,action):
         # Private scoped lease for synchronous file+DB task edits. Hold shared
         # owner lock until all writes finish, not only a stale preflight read.

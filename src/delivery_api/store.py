@@ -152,6 +152,7 @@ class Storage(Protocol):
     def bind_interview_schema(self, task_id: str, schema_id: str, schema_version: str) -> dict: ...
     def interview_schema_binding(self, task_id: str) -> dict | None: ...
     def add_event(self, task_id: str, kind: str, message: str, **context) -> int: ...
+    def ensure_waiting_input_event(self,task_id:str,message:str,*,phase_key:str,payload:dict)->int: ...
     def record_failure_diagnostics(self, task_id: str, source: str, http_status: int, block: dict) -> int: ...
     def failure_diagnostics(self, task_id: str, limit: int = 20) -> list[dict]: ...
     def events(self, task_id: str, after: int = 0, limit: int = 500) -> list[dict]: ...
@@ -690,6 +691,29 @@ FROM tasks t"""
                                   (task_id, phase_key, kind, message, json.dumps(payload or {}), time.time()))
             self._db.execute("UPDATE tasks SET updated_at=? WHERE task_id=?", (time.time(), task_id)); self._commit();event_bus.notify(task_id)
             return cur.lastrowid
+
+    def ensure_waiting_input_event(self,task_id:str,message:str,*,phase_key:str,payload:dict)->int:
+        """One task/input event across independent SQLite connections."""
+        with self._lock:
+            self._db.execute('BEGIN IMMEDIATE')
+            try:
+                if self._db.execute('SELECT task_id FROM tasks WHERE task_id=?',(task_id,)).fetchone() is None:
+                    raise KeyError(task_id)
+                result=self._ensure_waiting_input_locked(task_id,message,phase_key=phase_key,payload=payload)
+                self._commit()
+                return result
+            except BaseException:
+                self._db.rollback()
+                raise
+
+    def _ensure_waiting_input_locked(self,task_id,message,*,phase_key,payload):
+        input_id=payload.get('input_id')
+        if not isinstance(input_id,str) or not input_id:raise ValueError('waiting input identity required')
+        # Do not use events(): its first-page limit can hide a previous input.
+        rows=self._db.execute("SELECT id,payload FROM events WHERE task_id=? AND kind='waiting_input'",(task_id,)).fetchall()
+        for event in rows:
+            if str(json.loads(event['payload']).get('input_id'))==input_id:return event['id']
+        return self.add_event(task_id,'waiting_input',message,phase_key=phase_key,payload=payload)
 
     @staticmethod
     def _validated_diagnostics_block(block: dict) -> dict:
