@@ -16,6 +16,7 @@ import threading
 from datetime import datetime,timezone
 
 from . import config,server_log_buffer
+from .log_durability import degraded
 
 TAIL_BYTES=256*1024
 MAX_LINES=400
@@ -114,10 +115,9 @@ class _MirrorHandler(logging.Handler):
                 if self._path.exists() and self._path.stat().st_size>MIRROR_MAX_BYTES:
                     os.replace(self._path,self._path.with_suffix('.log.1'))
                 with open(self._path,'a',encoding='utf-8') as handle:handle.write(text)
-        except OSError:
+        except Exception as error:
             self._dead=True
-        except Exception:
-            self._dead=True
+            degraded('engine-mirror',error)
 
 
 _mirrors=[]

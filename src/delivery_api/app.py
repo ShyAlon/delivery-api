@@ -3210,6 +3210,13 @@ def admin_operations_workspace(a:auth.Actor=Depends(auth.require_admin)):
         'reason':'Local legacy quota is not a prepaid credit account.'}
 
 
+@app.get('/api/debug/log-durability')
+def debug_log_durability(a:auth.Actor=Depends(auth.require_actor)):
+    if not a.admin:raise HTTPException(403,'operator access required')
+    from .log_durability import snapshot
+    return snapshot()
+
+
 @app.get('/api/debug/preflight')
 def debug_preflight(a:auth.Actor=Depends(auth.require_actor)):
     # The signed-in user's own container startup report (checked/expected/found/where). No secrets: paths, table names and build ids only.

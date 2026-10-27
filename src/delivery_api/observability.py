@@ -7,11 +7,18 @@ from .log_safety import safe_text,safe_fields
 from datetime import datetime
 from pathlib import Path
 from .config import default_data_dir
+from .log_durability import degraded
 
 LOG_PATH=Path(__file__).resolve().parents[2]/"run.log"
 STAGE_LOG_DIR=default_data_dir()/"logs"/"stages"
 STAGE_KEYS=("intent","conops","needs","srs","architecture","specs","tests","validation")
 STAGE_LOG_PATHS={phase:STAGE_LOG_DIR/f"{phase}.log" for phase in STAGE_KEYS}
+class _EvidenceFileHandler(RotatingFileHandler):
+    def handleError(self, record):
+        import sys
+        degraded('activity-file', sys.exc_info()[1] or OSError())
+
+
 logger=logging.getLogger("delivery_api.activity")
 if not logger.handlers:
     logger.setLevel(logging.INFO);logger.propagate=False
@@ -24,8 +31,8 @@ if not logger.handlers:
         def filter(self,record):return getattr(record,'console',True)
     stream.addFilter(_ConsoleFilter());logger.addHandler(stream)
     try:
-        file=RotatingFileHandler(LOG_PATH,maxBytes=5*1024*1024,backupCount=3,encoding="utf-8");file.setFormatter(formatter);logger.addHandler(file)
-    except OSError:pass
+        file=_EvidenceFileHandler(LOG_PATH,maxBytes=5*1024*1024,backupCount=3,encoding="utf-8");file.setFormatter(formatter);logger.addHandler(file)
+    except OSError as error:degraded('activity-file',error)
 
 _stage_log_lock=threading.RLock()
 
@@ -52,7 +59,14 @@ def event(kind:str,message:str,*,level:int=logging.INFO,console:bool=True,**fiel
             path.parent.mkdir(parents=True,exist_ok=True)
             # No persistent handler cache across stage changes. Bounded files.
             with _stage_log_lock:
-                handler=RotatingFileHandler(path,maxBytes=2*1024*1024,backupCount=2,encoding='utf-8')
+                handler=_StageFileHandler(path,maxBytes=2*1024*1024,backupCount=2,encoding='utf-8')
                 try:handler.emit(logging.LogRecord('stage',logging.INFO,'',0,line,(),None))
                 finally:handler.close()
-        except OSError:pass
+        except OSError as error:degraded('stage-file:'+str(phase),error)
+
+
+class _StageFileHandler(RotatingFileHandler):
+    def handleError(self, record):
+        import sys
+        key = Path(self.baseFilename).stem
+        degraded('stage-file:'+key, sys.exc_info()[1] or OSError())
