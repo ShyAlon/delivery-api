@@ -57,9 +57,13 @@ def _runtime_version() -> dict:
         for pair in os.environ.get("REQUI_BUILD_REPOS","").split(","):
             name,_,sha=pair.partition("=")
             if re.fullmatch(r"[a-z0-9-]{1,40}",name) and re.fullmatch(r"[0-9a-f]{7,40}",sha):repos[name]=sha
-        # Image build timestamp (UTC ISO-8601) baked in by the build script; empty for old images.
+        # Image build timestamp (UTC ISO-8601) baked in by the build script; absent for old
+        # images - the key is omitted rather than null so the runtime dict keeps one shape
+        # per source (pinned by test_the_server_names_the_four_repositories_of_the_running_image).
         built_at=os.environ.get("REQUI_BUILD_AT","").strip() or None
-        return {"runtime_id":build_id,"repositories":repos,"manifest":None,"built_at":built_at}
+        out={"runtime_id":build_id,"repositories":repos,"manifest":None}
+        if built_at:out["built_at"]=built_at
+        return out
     root=Path(__file__).resolve()
     for parent in root.parents:
         manifest=parent/"MANIFEST.txt"

@@ -443,6 +443,9 @@ def test_the_server_names_the_four_repositories_of_the_running_image(monkeypatch
     assert app_module._runtime_version()["repositories"] == {"delivery-api": "aaaaaaaa"}
     monkeypatch.delenv("REQUI_BUILD_REPOS")
     assert app_module._runtime_version() == {"runtime_id": "aaaaaaaa-bbbbbbbb-cccccccc-dddddddd", "repositories": {}, "manifest": None}
+    # built_at rides only when the build script baked one in - old images omit the key.
+    monkeypatch.setenv("REQUI_BUILD_AT", "2026-10-27T07:00:00Z")
+    assert app_module._runtime_version()["built_at"] == "2026-10-27T07:00:00Z"
 
 
 def test_the_preview_prints_both_addresses_and_the_four_commits_it_runs(env):
