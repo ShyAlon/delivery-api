@@ -40,9 +40,11 @@ def test_all_seven_phases_share_progress_and_gate_boundary(tmp_path):
             progress = ProgressSignal(event_id=str(uuid4()), cursor=1,
                 task_id=task_id, session_id=session_id, phase_key=phase.key,
                 stage="configured-step", label=f"Working on {phase.label}", status="started")
+            payload = ('[]' if phase.key == 'tests'
+                       else '{"session_id":"s","items":[]}' if phase.key == 'validation' else '{}')
             script = ("from pathlib import Path;import sys;"
                 "out=Path(sys.argv[sys.argv.index('--out')+1]);"
-                f"(out/{artifact!r}).write_text({('[]' if phase.key == 'tests' else '{"session_id":"s","items":[]}' if phase.key == 'validation' else '{}')!r});"
+                f"(out/{artifact!r}).write_text({payload!r});"
                 f"print({(PREFIX + progress.model_dump_json())!r},flush=True)")
             assert asyncio.run(runner.run(task_id,
                 [sys.executable, "-c", script, "--out", str(out)],
