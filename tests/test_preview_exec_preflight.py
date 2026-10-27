@@ -67,6 +67,13 @@ def _plant_source_trees(root):
     gen.mkdir(parents=True, exist_ok=True)
     (gen / '__init__.py').write_text('')
     (gen / 'model_config.py').write_text(STAGE_MODEL_CONFIG)
+    # The launcher's step 2b parse-gates every shipped web/*.js of the delivery-api
+    # candidate with node --check (PR #270). A real checkout always has them; the
+    # fake tree must plant at least one parseable module or the gate dies on the
+    # unmatched glob and every preflight test aborts at source smoke.
+    web = root / 'delivery-api' / 'src' / 'delivery_api' / 'web'
+    web.mkdir(parents=True, exist_ok=True)
+    (web / 'app.js').write_text('export {}\n')
 
 
 def _run(tmp_path, env_extra, settings=None, tty_input='yes\n'):
