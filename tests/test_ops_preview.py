@@ -146,7 +146,7 @@ def test_execution_is_forced_off_and_no_model_key_reaches_the_container(env):
     assert settings.count("DELIVERY_CLOUD_EXECUTION=0") == 1 and not any(l.startswith("DELIVERY_CLOUD_EXECUTION=1") for l in settings)
     assert "DELIVERY_COOKIE_SECURE=0" in settings and "DELIVERY_PREVIEW=1" in settings and "DELIVERY_COOKIE_SECURE=1" not in settings
     assert not any(w in l.upper() for l in settings for w in ("API_KEY", "DEEPSEEK", "OPENAI", "ANTHROPIC", "GEMINI", "STRIPE", "SECRETPASS_X"))
-    assert all(l.startswith(("DELIVERY_", "INTERVIEW_ENGINE_TOKEN=")) for l in settings) and "DELIVERY_SUPABASE_ANON_KEY=anon" in settings
+    assert all(l.startswith(("DELIVERY_", "INTERVIEW_ENGINE_TOKEN=", "REQUI_EXPECTED_REPOS=")) for l in settings) and "DELIVERY_SUPABASE_ANON_KEY=anon" in settings
     assert any(l.startswith("DELIVERY_DATABASE_URL=") for l in settings)
 
 

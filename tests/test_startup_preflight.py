@@ -327,3 +327,8 @@ def test_an_engine_check_failure_names_the_missing_piece(monkeypatch):
     monkeypatch.setitem(sys.modules, 'interview_engine.http_service', http)
     check = preflight._check_engine({}, preflight.importlib.import_module)
     assert check.status == 'fail' and 'create_app' in check.found
+
+
+def test_the_launcher_pins_the_expected_build_for_the_staleness_check():
+    script = (Path(__file__).resolve().parents[1] / 'scripts' / 'ops' / 'preview.sh').read_text()
+    assert script.count('REQUI_EXPECTED_REPOS=%s') == 2   # both preview paths (local settings and server settings)
