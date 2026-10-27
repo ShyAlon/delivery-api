@@ -64,6 +64,7 @@ class TenantMiddleware:
         # may bypass identity, never every path outside an /api prefix.
         import re
         public=(path in ('/','/about','/favicon.ico','/health','/api/auth','/sessions')
+                or (path=='/api/client-log' and scope.get('method')=='POST')
                 or path.startswith('/assets/')
                 or re.fullmatch(r'/tasks/[^/]+/(?:view|complete|gates/[^/]+|decisions/[^/]+)',path) is not None
                 or re.fullmatch(r'/sessions/[^/]+/(?:view|[^/]+)',path) is not None)

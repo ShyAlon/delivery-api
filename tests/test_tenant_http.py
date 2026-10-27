@@ -82,3 +82,27 @@ def test_unrecognized_non_api_routes_are_private_by_default():
         assert client.get('/new-data-route').status_code==401
         assert client.get('/new-data-route',headers={'Authorization':'Bearer a'}).json()=={'owner':A}
         assert client.get('/docs').status_code==401
+
+
+def test_only_client_log_post_is_public_without_tenant_identity(monkeypatch):
+    from delivery_api import app as delivery
+    monkeypatch.setattr(delivery.config,'CLOUD_TENANTS',True)
+    captured=[]
+    monkeypatch.setattr(delivery,'activity',lambda *args,**kwargs:captured.append((args,kwargs)))
+    app=FastAPI()
+    app.add_api_route('/api/client-log',delivery.client_log,methods=['POST'],status_code=204)
+    @app.get('/api/client-log')
+    def read_client_logs():return {'private':True}
+    app.add_middleware(TenantMiddleware,verifier=Verifier())
+    payload={'kind':'login.error','message':'failed','path':'/','detail':{'actor':'forged'}}
+    with TestClient(app) as client:
+        assert client.post('/api/client-log',json=payload).status_code==204
+        assert captured[0][0]==('client.login.error','failed')
+        assert captured[0][1]['actor']=='anonymous'
+        assert captured[0][1]['detail_actor']=='forged'
+        assert client.post('/api/client-log',json={**payload,'message':'x'*16001}).status_code==422
+        assert len(captured)==1
+        for method in ('GET','PUT','DELETE'):
+            assert client.request(method,'/api/client-log').status_code==401
+        assert client.post('/api/client-log/extra',json=payload).status_code==401
+        assert client.post('/api/data',json=payload).status_code==401
