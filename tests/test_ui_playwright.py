@@ -2439,3 +2439,52 @@ def test_customer_audit_summary_is_credits_only_even_with_legacy_provider_totals
     for text in ['Interview API cost','No usage records','USD','$']:
         expect(dialog).not_to_contain_text(text)
     page.screenshot(path='/downloads/audit-credits-only.png',full_page=True)
+
+
+def test_gate_comment_shared_guard_prevents_duplicate_and_allows_retry(page,ui):
+    route_task_snapshot(page,ui,'sim',waiting_gate_snapshot)
+    mock_gate_review(page,ui,'sim')
+    pending=[]
+    page.route('**/api/tasks/sim/gates/*/comments',lambda route:pending.append(route))
+    page.goto(ui+'/tasks/sim/gates/gate-intent');page.locator('#gateform').wait_for()
+    page.locator('#gateform [name=comment]').fill('Only one comment')
+    page.locator('#gate-save-comment').click()
+    page.wait_for_timeout(100)
+    assert len(pending)==1
+    assert page.locator('#gate-save-comment').get_attribute('aria-busy')=='true'
+    page.locator('#gate-save-comment').dispatch_event('click');page.wait_for_timeout(100)
+    assert len(pending)==1
+    pending.pop().fulfill(status=500,json={'detail':'retry fixture'})
+    expect(page.locator('#gate-decision-status')).to_contain_text('retry fixture')
+    expect(page.locator('#gate-save-comment')).to_be_enabled()
+    page.locator('#gate-save-comment').click();page.wait_for_timeout(100)
+    assert len(pending)==1
+    pending.pop().fulfill(json={'comment_id':1})
+    expect(page.locator('#gate-comments')).to_contain_text('Only one comment')
+    assert page.locator('#gate-save-comment').get_attribute('aria-busy') is None
+
+
+def test_gate_approval_shared_guard_ignores_second_action_and_preserves_retry(page,ui):
+    def with_evidence(task):
+        waiting_gate_snapshot(task)
+        task['artifacts']=[{'phase_key':'intent','name':'intent_model.json','title':'Needs and Scope','stale':False,'present':True,'valid':True,'generation':1}]
+    route_task_snapshot(page,ui,'sim',with_evidence)
+    page.route('**/api/tasks/sim/artifacts/intent/intent_model.json/view',lambda route:route.fulfill(json={'title':'Needs and Scope','format':'json','content':'{}'}))
+    mock_gate_review(page,ui,'sim')
+    pending=[]
+    page.route('**/api/tasks/sim/gates/*/decide',lambda route:pending.append(route))
+    page.goto(ui+'/tasks/sim/gates/gate-intent');page.locator('#gateform').wait_for()
+    page.locator('[data-action="approve"]').click();page.wait_for_timeout(100)
+    assert len(pending)==1
+    assert page.locator('[data-action="approve"]').get_attribute('aria-busy')=='true'
+    page.locator('[data-action="approve"]').dispatch_event('click');page.wait_for_timeout(100)
+    assert len(pending)==1
+    page.screenshot(path='/downloads/gate-shared-action-busy.png',full_page=True)
+    pending.pop().fulfill(status=500,json={'detail':'approval retry fixture'})
+    expect(page.locator('#gate-decision-status')).to_contain_text('approval retry fixture')
+    expect(page.locator('[data-action="approve"]')).to_be_enabled()
+    page.locator('[data-action="approve"]').click();page.wait_for_timeout(100)
+    assert len(pending)==1
+    pending.pop().fulfill(status=409,json={'detail':'stale review fixture'})
+    expect(page.locator('#gate-decision-status')).to_contain_text('stale review fixture')
+    expect(page.locator('[data-action="approve"]')).to_be_disabled()

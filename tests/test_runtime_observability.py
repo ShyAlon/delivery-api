@@ -215,3 +215,33 @@ def test_pool_budget_leaves_room_for_engine_sessions():
     assert db_pool.PROCESS_POOL_MAX == 10
     assert postgres_scope.POOL_OPEN_MAX == db_pool.PROCESS_POOL_MAX
     assert db_pool.PROCESS_POOL_MAX <= 15 - 5
+
+
+def test_remaining_server_action_surfaces_share_the_guard():
+    expected={
+        'purchase.js':['purchase.pay','purchase.check','purchase.receipt'],
+        'gate.js':['gate.decide','gate.comment','gate.draft','gate.toggle','gate.semantic','gate.stack','gate.revision','task.replay'],
+        'decisions.js':['decision.apply','decision.comment','decision.draft'],
+        'qa.js':['feedback:'],
+        'completion.js':['package.prepare'],
+        'ops.js':['ops.grant','ops.refresh','ops.logs'],
+        'dialogs.js':['requirement.resolve','founder.decision'],
+    }
+    for file,actions in expected.items():
+        source=(WEB/file).read_text()
+        assert 'runAction' in source,file
+        for action in actions:assert action in source,(file,action)
+
+
+@needs_node
+def test_guard_does_not_flatten_dom_when_no_busy_label_was_requested():
+    src=r"""
+import fs from 'node:fs';
+const code=fs.readFileSync(%r,'utf8').replace("import {clientLog} from './client-core.js';","const clientLog=()=>{};");
+const m=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
+let writes=0;
+const b={disabled:false,title:'',get textContent(){return 'nested label'},set textContent(x){writes++},classList:{add(){},remove(){}},setAttribute(){},removeAttribute(){}};
+await m.runAction('test',b,async()=>{});
+if(writes!==0)throw Error('Guard flattened caller-owned spinner or button content');
+""" % str(WEB/'ui-action.js')
+    _node(src)

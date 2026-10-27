@@ -1,3 +1,4 @@
+import {runAction} from './ui-action.js';
 import {el,makeTable} from './ops-table.js';
 import {onPageExit} from './page-lifecycle.js';
 import {reveal} from './client-core.js';
@@ -96,11 +97,11 @@ const gOut=el('div',{id:'grant-preview',className:'empty'});
 const fld=(t,i)=>el('label',{textContent:t},i);
 const gForm=el('div',{id:'grant-form'},fld('Account Email',gEmail),fld('Credits',gCredits),fld('Reason',gReason),gPreviewBtn,fld('Type Yes To Confirm',gConfirm),gGrantBtn);
 $('#grant-view').prepend(gOut);$('#grant-view').prepend(gForm);
-let gPreview=null;
+let gPreview=null,gWorking=false;
 function gSync(){
   const ok=gPreview&&gPreview.found&&gPreview.scale_ok&&!gPreview.already_granted_today&&gPreview.key===gEmail.value.trim().toLowerCase()+'|'+gCredits.value;
   const yes=gConfirm.value.trim()==='yes';
-  gGrantBtn.disabled=!(ok&&yes);
+  gGrantBtn.disabled=gWorking||gGrantBtn.getAttribute('aria-busy')==='true'||!(ok&&yes);
   gGrantBtn.title=!gPreview||gPreview.key!==gEmail.value.trim().toLowerCase()+'|'+gCredits.value?'Press Preview first. Changing the email or credits needs a new preview.':
     !gPreview.found?'No account has that email.':!gPreview.scale_ok?'This account uses a different credit scale.':gPreview.already_granted_today?'This exact grant was already given today.':
     !yes?'Type yes in the confirm box.':'Gives the credits now.';
@@ -112,7 +113,8 @@ async function gCall(path,body){
   if(!r.ok){const x=d.detail;throw new Error(typeof x==='string'?x:x&&x.error?x.error+' '+(x.next||''):'Error '+r.status)}
   return d;
 }
-gPreviewBtn.onclick=async()=>{
+gPreviewBtn.onclick=async()=>runAction('ops.grant',[gPreviewBtn,gGrantBtn],async()=>{
+  gWorking=true;
   gPreview=null;gSync();gOut.textContent='Looking up the account...';
   try{
     const email=gEmail.value.trim(),credits=Number(gCredits.value);
@@ -123,17 +125,17 @@ gPreviewBtn.onclick=async()=>{
       'Balance now: '+num(p.balance_credits)+' credits\nGrant: +'+num(credits)+' credits\nBalance after: '+num(p.after_credits)+' credits\nLimits row: '+p.admission_row+
       (p.already_granted_today?'\nThis exact grant was already given today. Nothing more can be granted.':'\nType yes, then press Grant Credits.');
   }catch(e){gOut.textContent=e.message}
-  gSync();
-};
-gGrantBtn.onclick=async()=>{
-  gGrantBtn.disabled=true;gGrantBtn.title='Working. This takes a moment.';
+  gWorking=false;
+}).finally(gSync);
+gGrantBtn.onclick=async()=>runAction('ops.grant',[gPreviewBtn,gGrantBtn],async()=>{
+  gWorking=true;
   try{
     const d=await gCall('/api/admin/operations/grant',{email:gEmail.value.trim(),credits:Number(gCredits.value),reason:gReason.value,confirm:gConfirm.value.trim()});
     gOut.textContent=d.granted?'Done. Balance went from '+num(d.before_credits)+' to '+num(d.after_credits)+' credits. Limits row: '+d.admission_row+'.':'Nothing was granted: this exact grant was already given today.';
     gPreview=null;gConfirm.value='';loadGrants();
   }catch(e){gOut.textContent='Not granted: '+e.message}
-  gSync();
-};
+  gWorking=false;
+}).finally(gSync);
 async function loadGrants(){
   try{
     const r=await fetch('/api/admin/operations/grants',{credentials:'same-origin'});
@@ -183,16 +185,14 @@ function fail(msg){
   if(dead)return;const f=$('#flags'),c=$('#cards');if(!f||!c)return;   // defense in depth, not the fix: the router's epoch guard owns liveness
   f.replaceChildren(el('div',{className:'flag warning',textContent:msg}));c.replaceChildren();sessions.set([]);running.set([]);recent.set([])}
 
-$('#refresh').onclick=()=>{const v=document.body.dataset.view;v==='stops'?loadStops():v==='spend'?loadSpend():v==='grant'?loadGrants():load()};
-$('#dl').onclick=async()=>{
-  const b=$('#dl');b.disabled=true;b.title='Preparing the file. This takes a moment.';
+$('#refresh').onclick=()=>runAction('ops.refresh',$('#refresh'),()=>{const v=document.body.dataset.view;return v==='stops'?loadStops():v==='spend'?loadSpend():v==='grant'?loadGrants():load()});
+$('#dl').onclick=async()=>runAction('ops.logs',$('#dl'),async()=>{
   try{
     const r=await fetch('/api/admin/operations/log-download?minutes='+$('#mins').value,{credentials:'same-origin'});
     if(!r.ok)throw new Error(String(r.status));
     const name=(/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition')||'')||[])[1]||'requi-server-log.zip';
     const url=URL.createObjectURL(await r.blob());const a=el('a',{href:url,download:name});document.body.append(a);a.click();a.remove();URL.revokeObjectURL(url);
   }catch(e){$('#flags').prepend(el('div',{className:'flag warning',textContent:'The log could not be downloaded ('+e.message+'). Only administrators can download it.'}))}
-  finally{b.disabled=false;b.title='Download the scrubbed server log as a zip file. Secrets, emails and tokens are removed, and the download is recorded.'}
-};
+});
 view(initialView||hashView());const healthTimer=setInterval(()=>{if(!dead&&document.body.dataset.view==='health')load()},10000);onPageExit(()=>clearInterval(healthTimer));
 }
