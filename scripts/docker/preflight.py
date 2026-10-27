@@ -62,6 +62,24 @@ FEATURE_TABLES = {
     'user_task_policy_changes': ('20261009133000_task_operation_suspension.sql', 'task-operation suspension policy'),
 }
 
+# Explicit access contract from the migrations. None means owner/function-only:
+# the normal backend must NOT have a direct SELECT grant. Do not repair these
+# intentional denials with a blanket grant. Other tables use the backend.
+TABLE_ACCESS = {table: 'requi_backend' for table in REQUIRED_TABLES}
+TABLE_ACCESS.update({
+    'payment_purchases': 'requi_payment',
+    'payment_credits': 'requi_payment',
+    'payment_events': 'requi_payment',
+    'operator_state_events': 'requi_operator_read',
+    'credit_adjustments': None,
+    'expense_guard_policy': None,
+    'expense_guard_episodes': None,
+    'operator_principals': None,
+    'retail_scale_migrations': None,
+    'user_task_policy_changes': None,
+})
+
+
 _CREATE_TABLE = re.compile(r'create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?([a-z_][a-z0-9_]*)', re.I)
 
 
@@ -202,16 +220,29 @@ def _check_database(env, connect, connection_holder):
 
 
 def _table_visibility(connection_holder):
-    """Existence AND readability per public table, from pg_catalog. Never
-    information_schema.tables: it hides every table the querying login has no
-    grant on (2026-10-27, second preflight regression: a healthy database looked
-    'missing' 11 feature tables and the container refused to start). Privilege is
-    checked separately as requi_backend - the role the app actually queries as."""
+    """Catalog existence and intended access, never privilege-filtered existence.
+
+    Only fixed application table/role literals enter the VALUES list. Resolve
+    pg_roles before probing: a missing optional role is a failed feature check,
+    not an exception that masks every other table.
+    """
+    policy = ','.join("('%s',%s)" % (table, "NULL" if role is None else "'%s'" % role)
+                      for table, role in sorted(TABLE_ACCESS.items()))
     rows = connection_holder[0].execute(
-        "SELECT c.relname, has_table_privilege('requi_backend', c.oid, 'SELECT') "
+        "SELECT c.relname, CASE WHEN policy.role_name IS NULL THEN "
+        "NOT has_table_privilege('requi_backend', c.oid, 'SELECT') "
+        "WHEN r.oid IS NULL THEN false ELSE has_table_privilege(r.oid, c.oid, 'SELECT') END "
         "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "JOIN (VALUES " + policy + ") AS policy(table_name,role_name) ON policy.table_name=c.relname "
+        "LEFT JOIN pg_roles r ON r.rolname=policy.role_name "
         "WHERE n.nspname = 'public' AND c.relkind IN ('r','p')").fetchall()
     return {r[0]: bool(r[1]) for r in rows}
+
+
+def _access_problem(table):
+    role=TABLE_ACCESS[table]
+    if role is None:return '%s (owner/function-only; requi_backend must not have direct SELECT)' % table
+    return '%s (expected SELECT by %s; verify role exists and its migration grants)' % (table,role)
 
 
 def _table_problems(tables, visible):
@@ -222,7 +253,7 @@ def _table_problems(tables, visible):
 
 def _check_tables(env, connection_holder, required_tables):
     core = sorted(set(required_tables) - set(FEATURE_TABLES))
-    checked = 'that every core table the interview requires exists in the public schema and is readable by requi_backend'
+    checked = 'that every core table the interview requires exists in the public schema with its intended role access'
     expected = '%d core tables from the checked-in migrations (feature-gated tables are the feature-tables check)' % len(core)
     if not env.get('DELIVERY_DATABASE_URL', '').startswith(('postgresql://', 'postgres://')):
         return Check('required-tables', 'refuse', 'skip', checked, expected,
@@ -235,14 +266,14 @@ def _check_tables(env, connection_holder, required_tables):
     if missing or unreadable:
         found = []
         if missing: found.append('missing from the database: %s' % ', '.join(missing))
-        if unreadable: found.append('present but requi_backend cannot read: %s' % ', '.join(unreadable))
+        if unreadable: found.append('intended access mismatch: %s' % ', '.join(_access_problem(t) for t in unreadable))
         remedy = []
         if missing: remedy.append('apply the missing migrations (supabase/migrations) to this database')
-        if unreadable: remedy.append('GRANT SELECT ON public.<table> TO requi_backend')
+        if unreadable: remedy.append('review GRANT/REVOKE for each named table against its checked-in migration and intended role; do not add broad grants')
         return Check('required-tables', 'refuse', 'fail', checked, expected,
                      '; '.join(found), 'pg_catalog (pg_class/pg_namespace)', '; '.join(remedy))
     return Check('required-tables', 'refuse', 'pass', checked, expected,
-                 'all %d present and readable' % len(core), 'pg_catalog (pg_class/pg_namespace)')
+                 'all %d present with intended role access' % len(core), 'pg_catalog (pg_class/pg_namespace)')
 
 
 def _check_feature_tables(env, connection_holder, required_tables):
@@ -261,14 +292,14 @@ def _check_feature_tables(env, connection_holder, required_tables):
         if missing:
             found.append('missing: ' + ', '.join('%s (%s)' % (t, FEATURE_TABLES[t][0]) for t in missing))
         if unreadable:
-            found.append('present but requi_backend cannot read: %s' % ', '.join(unreadable))
+            found.append('intended access mismatch: %s' % ', '.join(_access_problem(t) for t in unreadable))
         remedy = ('optional features only - the interview runs without them; to enable one, apply its named '
-                  'migration to this database (supabase/migrations), and GRANT SELECT ON public.<table> TO '
-                  'requi_backend for any unreadable one')
+                  'migration to this database (supabase/migrations); review named access mismatches against the intended '
+                  'role and migration, not blanket backend grants')
         return Check('feature-tables', 'warn', 'warn', checked, expected,
                      '; '.join(found), 'pg_catalog (pg_class/pg_namespace)', remedy)
     return Check('feature-tables', 'warn', 'pass', checked, expected,
-                 'all %d present and readable' % len(feature), 'pg_catalog (pg_class/pg_namespace)')
+                 'all %d present with intended role access (private tables stay owner/function-only)' % len(feature), 'pg_catalog (pg_class/pg_namespace)')
 
 
 def _check_pool_budget(env, import_module):
