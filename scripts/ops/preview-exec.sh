@@ -113,6 +113,11 @@ grep -q '^DELIVERY_DATABASE_URL=.' "$STORE" && grep -q '^DELIVERY_SUPABASE_URL=.
 candidate_tag
 PINFILES="scripts/ops/pin.py src/delivery_api/vendor_sources.py src/delivery_api/retail_pricing.py scripts/ops/pin-local.py src/delivery_api/ollama_usage.py src/delivery_api/local_route.py src/delivery_api/provider_network.py"
 for f in $PINFILES src/delivery_api/production_gateway.py; do [ -f "$f" ] || abort NO-FILE "$f is missing on main" "" "git -C $PWD log --oneline -5   (is main pulled?)"; done
+# The venv must carry what the steps ahead import - the pool redesign added psycopg-pool and older
+# venvs predate it (ops_venv installs -e . without extras, so even a fresh ops venv lacks it). Fail
+# here with the exact install line, not inside a step-2 pytest import traceback.
+rc=0; .venv/bin/python scripts/ops/venv_check.py || rc=$?
+[ "$rc" = 0 ] || abort VENV-DEPS "the checkout's .venv is missing declared dependencies" "Nothing was started." "run the exact pip line printed above, then run ops preview-exec again"
 step_ok
 
 step "source smoke: the image's startup checks against the candidate sources, minutes before the image exists"

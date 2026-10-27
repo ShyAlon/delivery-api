@@ -485,3 +485,30 @@ def test_a_full_run_reaches_ready_with_the_steps_in_order(tmp_path):
     assert 'Provider: local Ollama model phi4' in p.stdout
     assert 'Type or paste' not in p.stdout and 'ABORTED' not in p.stdout
     assert 'MODEL      phi4' in p.stdout   # the real pin-local grounding ran against the fake server
+
+
+def test_the_venv_gate_passes_with_the_real_venv_and_fails_loud_without_site_packages():
+    """The step-1 venv gate, exercised for real both ways: the checkout's own
+    .venv carries the declared deps (psycopg_pool included since the pool
+    redesign); a bare interpreter without site-packages fails and names the
+    exact per-module pip line (2026-10-27: his venv predated psycopg-pool and
+    the launcher died inside a pytest traceback in step 2 instead)."""
+    import subprocess
+    script = REPO / 'scripts' / 'ops' / 'venv_check.py'
+    venv_py = REPO / '.venv' / 'bin' / 'python'
+    ok = subprocess.run([str(venv_py), str(script)], capture_output=True, text=True)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    bare = subprocess.run([str(venv_py), '-S', str(script)], capture_output=True, text=True)
+    assert bare.returncode == 1
+    assert 'missing in .venv' in bare.stdout, bare.stdout
+    assert ".venv/bin/python -m pip install" in bare.stdout and 'psycopg-pool' in bare.stdout
+
+
+def test_the_venv_gate_runs_in_step_1_before_any_pytest():
+    """A missing declared dep must abort in step 1 with the fix command, not
+    inside a step-2 pytest import traceback."""
+    src = SCRIPT.read_text()
+    step1 = src.index('step "inputs and environment"')
+    gate = src.index('venv_check.py')
+    pytest_step = src.index('-m pytest')
+    assert step1 < gate < pytest_step
