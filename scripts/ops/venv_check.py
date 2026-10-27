@@ -2,7 +2,9 @@
 tests, the pin) import pytest, psycopg and psycopg_pool from this checkout's
 .venv. A venv that predates the pool redesign has no psycopg_pool
 (2026-10-27: the launcher died inside a step-2 pytest import traceback
-instead of saying so). Exit 1 names the exact per-module install line."""
+instead of saying so). ops_venv refreshes an old venv by itself since the
+extras fix; this gate is the belt for anything the refresh could not cover.
+Exit 1 names the exact per-module install line."""
 import importlib.util
 import sys
 
