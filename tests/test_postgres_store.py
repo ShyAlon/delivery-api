@@ -1431,3 +1431,74 @@ def test_task_and_list_reads_are_one_statement_each(store):
         assert all(isinstance(g['options'],list) for g in record['gates'])
         assert record['artifact_count']==0
         store.delete_task(first['task_id'])
+
+
+def test_task_snapshot_combines_events_and_preserves_rls(store):
+    with tenant_context(A):
+        task=store.create_task('snapshot-'+uuid.uuid4().hex)
+        store.add_event(task['task_id'],'progress','one')
+        store.add_event(task['task_id'],'progress','two')
+        snapshot=store.task_snapshot(task['task_id'])
+        assert snapshot['task']['task_id']==task['task_id']
+        assert [e['message'] for e in snapshot['events']]==['one','two']
+        assert snapshot['events'][0]['payload']=={}
+    with tenant_context(B):
+        assert store.task_snapshot(task['task_id']) is None
+
+
+def test_snapshot_cache_invalidates_after_postgres_commit(store,monkeypatch):
+    from delivery_api import task_read_cache,config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',True)
+    with tenant_context(A):
+        task=store.create_task('cache-'+uuid.uuid4().hex)
+        version=task_read_cache.version(store,task['task_id'])
+        data=store.task_snapshot(task['task_id'])
+        task_read_cache.put(store,task['task_id'],data,read_version=version)
+        assert task_read_cache.get(store,task['task_id']) is not None
+        store.rename_task(task['task_id'],'renamed-'+uuid.uuid4().hex)
+        assert task_read_cache.get(store,task['task_id']) is None
+
+
+def test_pipeline_setup_exits_before_write_error_and_counts_statements(store):
+    from delivery_api.postgres_scope import RequestStats,request_stats
+    stats=RequestStats();token=request_stats.set(stats)
+    try:
+        with tenant_context(A):
+            task=store.create_task('counts-'+uuid.uuid4().hex)
+            stats.queries=0;stats.statements.clear()
+            data=store.task_snapshot(task['task_id'])
+            assert data['task']['task_id']==task['task_id']
+            assert stats.queries==2  # identity + one combined SELECT (savepoint is control SQL)
+            labels=[label for label,ms in stats.statements]
+            assert sum(label.startswith("SELECT set_config") for label in labels)==1
+            # TimingConnection + SQL bridge must not double count the same read.
+            assert sum(label.startswith('SELECT t.*') for label in labels)==1
+            assert stats.db_seconds>=0
+    finally:request_stats.reset(token)
+
+
+def test_cloud_presentation_cold_two_statements_then_warm_zero(store,monkeypatch):
+    from delivery_api import app,config,task_read_cache
+    from delivery_api.postgres_scope import RequestStats,request_stats
+    from starlette.requests import Request
+    monkeypatch.setattr(app,'store',store)
+    monkeypatch.setattr(config,'CLOUD_TENANTS',True)
+    monkeypatch.setattr(config,'ARTIFACT_MANIFEST_READS',True)
+    with tenant_context(A):
+        task=store.create_task('http-counts-'+uuid.uuid4().hex)
+        request=Request({'type':'http','method':'GET','path':'/api/tasks/'+task['task_id'],'headers':[],'scheme':'http','server':('test',80),'query_string':b''})
+        stats=RequestStats();token=request_stats.set(stats)
+        handle,context=store._postgres.begin_request(A)
+        try:
+            assert app.get_task(task['task_id'],request=request)['task_id']==task['task_id']
+            assert stats.queries==2  # setup + snapshot; middleware session-check miss adds one
+        finally:
+            store._postgres.end_context(context);store._postgres.finish_request(handle,False);request_stats.reset(token)
+        stats=RequestStats();token=request_stats.set(stats)
+        handle,context=store._postgres.begin_request(A)
+        try:
+            assert app.get_task(task['task_id'],request=request)['task_id']==task['task_id']
+            assert stats.queries==0
+            assert handle.connection is None
+        finally:
+            store._postgres.end_context(context);store._postgres.finish_request(handle,False);request_stats.reset(token)

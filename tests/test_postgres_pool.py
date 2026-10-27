@@ -149,12 +149,20 @@ def test_many_requests_recover_together_after_the_idle_pool_is_killed(probe):
     assert results==[1]*10
 
 
+@pytest.fixture(autouse=True)
+def _dead_transaction_double(monkeypatch):
+    import psycopg
+    real=psycopg.Transaction
+    monkeypatch.setattr(psycopg,'Transaction',lambda conn: conn._Tx() if isinstance(conn,_Dead) else real(conn))
+
+
 class _Dead:
     closed=False
     class _Tx:
         def __enter__(self):
             import psycopg;raise psycopg.OperationalError('server closed the connection unexpectedly')
         def __exit__(self,*exc):return False
+    def pipeline(self):return __import__('contextlib').nullcontext()
     def transaction(self):return self._Tx()
     def close(self):pass
 

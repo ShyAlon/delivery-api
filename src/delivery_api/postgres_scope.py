@@ -95,6 +95,7 @@ class _RequestTransaction:
         self.lock=threading.RLock()
         self.connection=self.transaction=None
         self.broken=self.done=False
+        self.cache_invalidations=set()
         self.first_begin=None   # when the shared transaction actually opened; the pin window
 
     def finish(self,failed):
@@ -115,6 +116,8 @@ class _RequestTransaction:
         except BaseException:
             self.postgres._drop(connection);raise
         finally:
+            from . import task_read_cache
+            for store in self.cache_invalidations:task_read_cache.invalidate(store)
             stats=request_stats.get()
             if stats is not None:
                 stats.db_seconds+=time.monotonic()-started
@@ -217,12 +220,24 @@ class ScopedPostgres:
         for attempt in range(POOL_OPEN_MAX+1):
             started=time.monotonic()
             connection,reused=self._checkout()
-            transaction=connection.transaction()
+            # Use the public Transaction object directly: Connection.transaction()
+            # entered inside pipeline() keeps nested pipeline contexts alive until
+            # COMMIT, accidentally deferring later write errors to another call.
+            transaction=psycopg.Transaction(connection)
             try:
-                transaction.__enter__()
-                timed=TimingConnection(connection)
-                if repeatable_read:timed.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
-                timed.execute(_SETUP,(scope.owner_id,scope.session_id or ''))
+                # psycopg pipeline batches BEGIN + transaction-local identity
+                # on ONE connection. Exit synchronizes before any caller may
+                # fetch private data; failed setup never dispatches a read.
+                batch_started=time.monotonic()
+                with connection.pipeline():
+                    transaction.__enter__()
+                    if repeatable_read:connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+                    connection.execute(_SETUP,(scope.owner_id,scope.session_id or ''))
+                # A pipelined execute only measures enqueue time. Label each
+                # statement once; attach the synchronized batch wall time to
+                # identity setup (includes BEGIN), not invented per-SQL times.
+                if repeatable_read:note_statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ [batched]',0)
+                note_statement(statement_label(_SETUP),time.monotonic()-batch_started)
                 if stats is not None:
                     stats.transactions+=1;stats.queries+=1;stats.db_seconds+=time.monotonic()-started
                     if reused:stats.reused+=1

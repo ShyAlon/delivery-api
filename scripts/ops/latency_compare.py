@@ -117,7 +117,8 @@ def request_metrics(app_module, store, connection, task_id):
     client = TestClient(app_module.app)
     rows = []
     for label, path in (('GET /api/tasks/<id>/events', '/api/tasks/%s/events?after=0' % task_id),
-                        ('GET /api/tasks/<id>', '/api/tasks/%s' % task_id)):
+                        ('GET /api/tasks/<id>', '/api/tasks/%s' % task_id),
+                        ('GET /api/tasks/<id> warm', '/api/tasks/%s' % task_id)):
         connection.selects = 0
         started = time.monotonic()
         response = client.get(path)

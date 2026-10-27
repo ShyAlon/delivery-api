@@ -82,16 +82,20 @@ def test_task_get_reads_events_once(monkeypatch, tmp_path):
     monkeypatch.setattr(config, 'CLOUD_TENANTS', True)
     task = store.create_task('Observed task')
     calls = {"n": 0}
-    real_events = store.events
+    real_snapshot = store.task_snapshot
     def counting(task_id):
         calls["n"] += 1
-        return real_events(task_id)
-    monkeypatch.setattr(store, 'events', counting)
+        return real_snapshot(task_id)
+    monkeypatch.setattr(store, 'task_snapshot', counting)
+    # This SQLite fixture has no verified cloud middleware identity. Test the
+    # local HTTP projection; real PostgreSQL owner isolation has its own test.
+    monkeypatch.setattr(config, 'CLOUD_TENANTS', False)
     client = TestClient(app)
     reply = client.get(f"/api/tasks/{task['task_id']}")
     assert reply.status_code == 200, reply.text
-    assert calls["n"] == 1, f"expected one events read per request, got {calls['n']}"
+    assert calls["n"] == 1, f"expected one combined task/events read, got {calls['n']}"
     assert reply.json()["events"] == []
+
 
 
 # --- UI action logging ------------------------------------------------------

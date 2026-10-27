@@ -130,9 +130,6 @@ def test_diagnostics_route_includes_model_calls_when_session_recorded(monkeypatc
     from delivery_api.store import SQLiteStore
     store=SQLiteStore(str(tmp_path/'d.db'))
     monkeypatch.setattr('delivery_api.app.store',store)
-    # task_worker_state is cloud-only today (pre-existing: the route 500s locally
-    # without it); not under test here.
-    monkeypatch.setattr(store,'task_worker_state',lambda task_id:None,raising=False)
     task=store.create_task('demo task')
     store._db.execute("UPDATE tasks SET engine_session_id=? WHERE task_id=?",('sess-1',task['task_id']))
     artifacts=tmp_path/'artifacts'
@@ -156,9 +153,6 @@ def test_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_pa
     from delivery_api.store import SQLiteStore
     store=SQLiteStore(str(tmp_path/'d.db'))
     monkeypatch.setattr('delivery_api.app.store',store)
-    # task_worker_state is cloud-only today (pre-existing: the route 500s locally
-    # without it); not under test here.
-    monkeypatch.setattr(store,'task_worker_state',lambda task_id:None,raising=False)
     task=store.create_task('demo task')
     reply=TestClient(app).get(f"/api/tasks/{task['task_id']}/diagnostics")
     assert reply.status_code==200,reply.text[:400]

@@ -26,6 +26,7 @@ class FakeConnection:
     def __init__(self,world):
         self.world,self.closed,self.log=world,False,[]
         self.info=types.SimpleNamespace(transaction_status=Status.IDLE)
+    def pipeline(self):return __import__("contextlib").nullcontext()
     def transaction(self):return FakeTransaction(self)
     def execute(self,sql,params=()):
         if sql.startswith('ROLLBACK TO') and self.world.savepoint_missing:raise self.world.OperationalError('no such savepoint')
@@ -39,6 +40,7 @@ def world(monkeypatch):
     def connect(dsn,**kwargs):
         c=FakeConnection(w);w.made.append(c);return c
     fake=types.ModuleType('psycopg');fake.connect=connect;fake.OperationalError=w.OperationalError
+    fake.Transaction=FakeTransaction
     fake.pq=types.SimpleNamespace(TransactionStatus=Status)
     rows=types.ModuleType('psycopg.rows');rows.dict_row=object();fake.rows=rows
     monkeypatch.setitem(sys.modules,'psycopg',fake);monkeypatch.setitem(sys.modules,'psycopg.rows',rows)
@@ -188,3 +190,34 @@ def test_only_plain_reads_share_a_transaction():
     assert not _shares_one_transaction('GET','/api/tasks/abc/artifacts.zip')
     assert not _shares_one_transaction('GET','/api/tasks/abc/artifacts/p/n')
     assert not _shares_one_transaction('GET','/tasks/abc/view')
+
+
+def test_begin_pipelines_identity_after_begin_and_syncs_before_use(world,monkeypatch):
+    from contextlib import contextmanager
+    @contextmanager
+    def pipeline(self):
+        self.log.append('pipeline.enter')
+        try:yield
+        finally:self.log.append('pipeline.exit')
+    monkeypatch.setattr(FakeConnection,'pipeline',pipeline,raising=False)
+    p=pool(world)
+    with tenant_context(S1),p.transaction() as conn:
+        conn.execute('SELECT private_data')
+    log=world.made[0].log
+    assert log[0]=='pipeline.enter'
+    assert log.index('begin') < next(i for i,e in enumerate(log) if isinstance(e,tuple))
+    assert log.index('pipeline.exit') < log.index('SELECT')
+
+
+def test_pipeline_setup_failure_never_dispatches_private_read(world,monkeypatch):
+    from contextlib import contextmanager
+    @contextmanager
+    def pipeline(self):
+        yield
+        raise ValueError('identity rejected at pipeline synchronization')
+    monkeypatch.setattr(FakeConnection,'pipeline',pipeline)
+    p=pool(world)
+    with pytest.raises(ValueError),tenant_context(S1),p.transaction() as conn:
+        conn.execute('SELECT private_data')
+    assert not any(e=='SELECT' for c in world.made for e in c.log)
+    assert world.made[0].closed

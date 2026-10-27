@@ -433,3 +433,22 @@ def test_concurrent_producers_one_pure_revision(pgstore, tmp_path):
     # Either one lost the CAS outright, or the second legitimately superseded after the
     # winner committed - both orders are valid; the purity assertions above are the point.
     assert set(outcome) == {'wA', 'wB'}
+
+
+def test_combined_task_snapshot_verifies_manifest_hash(pgstore,tmp_path,monkeypatch):
+    from delivery_api import config
+    task_id,_=_published(pgstore,tmp_path)
+    monkeypatch.setattr(config,'ARTIFACT_MANIFEST_READS',True)
+    with tenant_context(A):
+        snapshot=pgstore.task_snapshot(task_id)
+        assert snapshot['manifest']['rows'] and snapshot['task']['task_id']==task_id
+        with pgstore._postgres.transaction() as connection:
+            connection.execute("UPDATE artifact_manifest_ready SET revision_hash='tampered' WHERE task_id=%s",(task_id,))
+        with pytest.raises(ValueError,match='readiness marker'):
+            pgstore.task_snapshot(task_id)
+
+
+def test_snapshot_flag_off_does_not_require_manifest_table(pgstore,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'ARTIFACT_MANIFEST_READS',False)
+    assert 'artifact_manifest_ready' not in pgstore._snapshot_artifacts_sql()

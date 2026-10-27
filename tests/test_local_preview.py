@@ -21,7 +21,7 @@ def test_the_boot_config_and_auth_status_expose_the_local_preview(monkeypatch):
 def test_a_missing_artifact_file_names_the_local_preview(monkeypatch):
     import delivery_api.app as module
     record = [{"phase_key": "architecture", "name": "architecture.json", "ref": "/nonexistent-local-preview/architecture.json"}]
-    monkeypatch.setattr(module, "_task_artifact_snapshot", lambda task_id: record)
+    monkeypatch.setattr(module, "_task_artifact_snapshot", lambda snapshot_task_id, **kwargs: record)
     monkeypatch.setenv("DELIVERY_LOCAL_PREVIEW", "1")
     with pytest.raises(HTTPException) as local:
         module._task_artifact("t1", "architecture", "architecture.json")

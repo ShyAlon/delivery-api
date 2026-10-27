@@ -94,7 +94,7 @@ def test_artifact_download_marks_success_and_refusal(marks, monkeypatch, tmp_pat
 
 def test_artifacts_zip_refusal_is_marked(marks, monkeypatch):
     monkeypatch.delenv("DELIVERY_LOCAL_PREVIEW", raising=False)
-    monkeypatch.setattr(module, "_task_artifact_snapshot", lambda tid: [])
+    monkeypatch.setattr(module, "_task_artifact_snapshot", lambda snapshot_task_id, **kwargs: [])
     with pytest.raises(HTTPException):
         module.task_artifacts_zip("t1")
     assert "task.export.refused" in _kinds(marks)

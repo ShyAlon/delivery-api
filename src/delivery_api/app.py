@@ -1328,7 +1328,7 @@ def artifact_manifest_coverage(task_id:str)->dict:
     manifest_names={f"{r['phase_key']}/{r['name']}" for r in manifest}
     return {"task_id":task_id,"published":sorted(manifest_names),"legacy_only":sorted(legacy_names-manifest_names),"ready":not (legacy_names-manifest_names)}
 
-def _task_artifact_snapshot(task_id:str)->list[dict]:
+def _task_artifact_snapshot(task_id:str, *, task=None, session=_SESSION_UNSET, events=None, stored_artifacts=None, manifest=_SESSION_UNSET)->list[dict]:
     """Project real session files into task artifacts; filesystem is source evidence."""
     if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
         # Readiness gate, enforced on the read path: the manifest is authority only for
@@ -1338,7 +1338,7 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
         # marker the task is migration-pending: the legacy projection is consulted once
         # to distinguish 'no artifacts yet' from 'uncovered legacy', which fails loudly
         # instead of presenting a partial manifest (even a non-empty one) as complete.
-        try:snapshot=store.manifest_snapshot(task_id)
+        try:snapshot=store.manifest_snapshot(task_id) if manifest is _SESSION_UNSET else manifest
         except ValueError:
             log.error('manifest readiness marker corrupt task=%s',task_id)
             raise HTTPException(500,'artifact manifest failed its integrity check; the failure was recorded for diagnostics')
@@ -1347,17 +1347,17 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
         flag=config.ARTIFACT_MANIFEST_READS
         try:
             config.ARTIFACT_MANIFEST_READS=False
-            legacy=_task_artifact_snapshot(task_id)
+            legacy=_task_artifact_snapshot(task_id,task=task,session=session,events=events,stored_artifacts=stored_artifacts)
         finally:
             config.ARTIFACT_MANIFEST_READS=flag
         if legacy:
             log.error('manifest coverage incomplete task=%s legacy=%d (no ready marker)',task_id,len(legacy))
             raise HTTPException(500,'artifact manifest coverage is incomplete for this task; reads stay disabled until publication or backfill covers the legacy artifacts')
         return []
-    task=store.task(task_id)
+    if task is None:task=store.task(task_id)
     if not task:return []
-    session=_recorded_engine_session(task_id)
-    if not session:return store.task_artifacts(task_id)
+    session=_recorded_engine_session(task_id,recorded=session,events=events)
+    if not session:return stored_artifacts if stored_artifacts is not None else store.task_artifacts(task_id)
     from vmodel_contracts.runtime import artifacts_root
     root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
     if config.CLOUD_TENANTS and config.ARTIFACT_RESTORE:
@@ -1393,7 +1393,7 @@ def _task_artifact_snapshot(task_id:str)->list[dict]:
                     valid=True
                 except Exception as exc:valid=False;errors=[f"{type(exc).__name__}: {str(exc)[:600]}"]
             records.append({"phase_key":phase.key,"name":filename,"title":_ARTIFACT_TITLES.get(filename,Path(filename).stem.replace("_"," ").title()),"ref":str(path),"mime_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","stale":False,"generation":task["generation"],"present":True,"valid":valid,"validator":validator[1] if validator else None,"validation_errors":errors,"validation_error":errors[0] if errors else None})
-    return records if config.CLOUD_TENANTS else records or store.task_artifacts(task_id)
+    return records if config.CLOUD_TENANTS else records or (stored_artifacts if stored_artifacts is not None else store.task_artifacts(task_id))
 
 def _task_artifact(task_id:str,phase:str,name:str)->Path:
     artifact=next((a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==phase and a["name"]==name),None)
@@ -1834,14 +1834,30 @@ def task_diagnostics(task_id:str):
         root=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session_id,store)
         model_calls=diagnostics.model_calls(root/"interview",cloud=config.CLOUD_TENANTS)
     return diagnostics.build(detail,detail.get("events") or [],detail.get("control_snapshot"),detail.get("input_state"),
-                             diagnostics.engine_summary(snapshot,error),worker_state=store.task_worker_state(task_id),model_calls=model_calls)
+                             diagnostics.engine_summary(snapshot,error),worker_state=store.task_worker_state(task_id) if config.CLOUD_TENANTS else None,model_calls=model_calls)
 
 @app.get("/api/tasks/{task_id}")
-def get_task(task_id: str, background_tasks: BackgroundTasks = None):
-    task = store.task(task_id)
-    if not task: raise HTTPException(404, "task not found")
-    session_id=store.engine_session(task_id)
-    task_events=store.events(task_id)   # one read for the whole request (was three identical SELECTs per poll)
+def get_task(task_id: str, background_tasks: BackgroundTasks = None, request: Request = None):
+    # One snapshot statement on a cold read (was 3: task + engine_session +
+    # events), zero on a warm one (task_read_cache; 60s cross-process safety).
+    from . import task_read_cache
+    # Only the HTTP presentation read may use stale data. Internal callers
+    # (answer/gate preconditions, exports) always read fresh authority.
+    use_cache = request is not None and request.method == "GET" and request.url.path == f"/api/tasks/{task_id}"
+    cached=task_read_cache.get(store,task_id) if use_cache else None
+    if cached is not None:
+        read_snapshot=cached
+    else:
+        version=task_read_cache.version(store,task_id)
+        try:read_snapshot=store.task_snapshot(task_id)
+        except ValueError as exc:
+            if 'readiness marker' not in str(exc):raise
+            log.error('manifest readiness marker corrupt task=%s',task_id)
+            raise HTTPException(500,'artifact manifest failed its integrity check; the failure was recorded for diagnostics') from exc
+        if read_snapshot is None: raise HTTPException(404, "task not found")
+        if use_cache:task_read_cache.put(store,task_id,read_snapshot,read_version=version)
+    task,task_events=read_snapshot["task"],read_snapshot["events"]
+    session_id=task.get("engine_session_id")   # the column rides the task row (was a separate statement)
     snapshot=None
     starting=bool(session_id and task.get("active_phase")=="intent" and
                   any(e.get("kind")=="command" and e.get("message")=="Interview starting" and
@@ -1870,7 +1886,7 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None):
     else:input_state=({"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None} if config.CLOUD_TENANTS else runner.input_state(task_id))
     work=None if config.CLOUD_TENANTS else runner.work_state(task_id)
     work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
-    artifacts=_task_artifact_snapshot(task_id);session=_recorded_engine_session(task_id,recorded=session_id,events=task_events)
+    artifacts=_task_artifact_snapshot(task_id,task=task,session=session_id,events=task_events,stored_artifacts=read_snapshot["artifacts"],manifest=read_snapshot["manifest"]);session=_recorded_engine_session(task_id,recorded=session_id,events=task_events)
     from .phases import PHASE_DEFINITIONS
     phase_config={phase.key:{"executor":phase.executor,"generator_stage":phase.generator_stage,
                              "prerequisite":phase.prerequisite,"artifacts":list(phase.artifacts)} for phase in PHASE_DEFINITIONS}

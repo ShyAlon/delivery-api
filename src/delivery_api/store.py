@@ -261,6 +261,8 @@ class SQLiteStore:
     def _commit(self):
         with self._lock:
             self._db.commit()
+            from . import task_read_cache
+            task_read_cache.invalidate(self)
 
     # Legacy link/run API, kept while the task UI replaces the tester flow.
     def create_link(self, founder_label: str) -> dict:
@@ -357,6 +359,22 @@ SELECT t.*,
   (SELECT count(*) FROM task_artifacts a WHERE a.task_id=t.task_id AND a.stale=0) AS artifact_count
 FROM tasks t"""
 
+    # Newest N events ride the same statement as the task record: the hot task
+    # read costs one round trip, not two. Payload stays text here and is parsed
+    # per event in Python, exactly as events() does.
+    _EVENTS_SUBQUERY = """
+  (SELECT coalesce(nullif(json_group_array(json(r.j)),''),'[]') FROM (
+     SELECT json_object('id',e.id,'task_id',e.task_id,'phase_key',e.phase_key,'kind',e.kind,
+                        'message',e.message,'payload',e.payload,'ts',e.ts) AS j
+     FROM (SELECT * FROM events WHERE task_id=t.task_id ORDER BY id DESC LIMIT ?) e) r) AS events_json"""
+    _TASK_WHERE = " WHERE t.task_id=?"
+    _ARTIFACTS_SUBQUERY = """
+  (SELECT coalesce(json_group_array(json(r.j)), '[]') FROM (
+    SELECT json_object('id',a.id,'task_id',a.task_id,'generation',a.generation,
+      'phase_key',a.phase_key,'name',a.name,'ref',a.ref,'mime_type',a.mime_type,
+      'stale',a.stale,'stale_reason',a.stale_reason,'created_at',a.created_at) AS j
+    FROM task_artifacts a WHERE a.task_id=t.task_id ORDER BY generation DESC,id) r) AS artifacts_json"""
+
     def list_tasks(self) -> list[dict]:
         # A single connection is shared by API worker threads and background jobs.
         with self._lock:
@@ -367,6 +385,34 @@ FROM tasks t"""
         with self._lock:
             row = self._db.execute(self._TASK_PROJECTION + " WHERE t.task_id=?", (task_id,)).fetchone()
             return self._task_record(row) if row else None
+
+    def _snapshot_artifacts_sql(self):
+        return self._ARTIFACTS_SUBQUERY
+
+    def task_snapshot(self, task_id: str, event_limit: int = 500) -> dict | None:
+        """Task record + newest events in ONE statement - the whole cold cost of
+        a task page read. Events come back newest-500 ascending, payload parsed,
+        the same shape events() returns."""
+        artifact_sql=self._snapshot_artifacts_sql()
+        sql = self._TASK_PROJECTION.replace("\nFROM tasks t", ",\n" + self._EVENTS_SUBQUERY + (",\n" + artifact_sql if artifact_sql else "") + "\nFROM tasks t") + self._TASK_WHERE
+        with self._lock:
+            row = self._db.execute(sql, (event_limit, task_id)).fetchone()
+            if row is None:
+                return None
+            item = dict(row)
+            events_json = item.pop("events_json", "[]")
+            artifacts = json.loads(item.pop("artifacts_json", "[]") or "[]")
+            manifest = json.loads(item.pop("manifest_json", None) or "null")
+            if manifest is not None and self._revision_hash(manifest['rows']) != manifest['revision_hash']:
+                raise ValueError('readiness marker does not match the published manifest revision')
+            task = self._task_record(item)
+            events = [self._event_record(e) for e in reversed(json.loads(events_json or "[]"))]
+            return {"task": task, "events": events, "artifacts": artifacts, "manifest": manifest}
+
+    def _event_record(self, item: dict) -> dict:
+        item = dict(item)
+        item["payload"] = json.loads(item["payload"]) if isinstance(item.get("payload"), str) else item.get("payload", {})
+        return item
 
     def rename_task(self, task_id: str, title: str, actor: str = "local user") -> dict:
         title=title.strip()
@@ -712,6 +758,14 @@ FROM tasks t"""
 
     def retain_decision_review(self, task_id:str, wait_id:str, revision:str, payload:dict)->None:
         with self._lock:
+            # A decision can wait through hundreds of task reads; the evidence pin
+            # must cost one read once pinned, not a write per read.
+            retained=self._db.execute('SELECT payload FROM decision_reviews WHERE task_id=? AND wait_id=? AND revision=?',
+                (task_id,wait_id,revision)).fetchone()
+            if retained is not None:
+                if json.loads(retained[0])!=json.loads(json.dumps(payload)):
+                    raise ValueError('conflicting retained decision review revision')
+                return
             self._db.execute("INSERT OR IGNORE INTO decision_reviews VALUES (?,?,?,?,?)",
                 (task_id,wait_id,revision,json.dumps(payload),time.time()))
             retained=self._db.execute('SELECT payload FROM decision_reviews WHERE task_id=? AND wait_id=? AND revision=?',
