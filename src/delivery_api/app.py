@@ -177,11 +177,22 @@ async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=
     from .progress_adapter import ingest_interview_page
     while True:
         cursor=store.progress_cursor(task_id,"interview",session_id)
+        fetched_at=time.monotonic()
         try:page=await run_in_threadpool(engine_client.progress,session_id,cursor)
         except EngineClientError as exc:
             if allow_absent and exc.http_status==404:return
             raise
+        fetch_ms=int((time.monotonic()-fetched_at)*1000)
+        ingest_at=time.monotonic()
         ingest_interview_page(store,task_id,session_id,page)
+        if page.events:
+            from datetime import datetime,timezone
+            now=datetime.now(timezone.utc)
+            lags=[max(0,int((now-event.timestamp).total_seconds()*1000)) for event in page.events]
+            activity('progress.ingest.timing','Engine progress page retained',task_id=task_id,
+                     session_id=session_id,events=len(page.events),cursor=cursor,next_cursor=page.next_cursor,
+                     fetch_ms=fetch_ms,ingest_ms=int((time.monotonic()-ingest_at)*1000),
+                     source_age_max_ms=max(lags),source_age_min_ms=min(lags))
         if not page.events:return
         if page.next_cursor<=cursor:raise RuntimeError("engine progress page made no cursor advance")
 
@@ -1052,7 +1063,11 @@ async def _complete_interview_start(task_id:str,proposed_session:str,selected_ro
                                     initial_model:str|None,idea:str,effective_models:dict,actor_label:str):
     progress_stop=asyncio.Event()
     progress_watch=asyncio.create_task(_watch_engine_advance(task_id,proposed_session,progress_stop))
-    try:started=await run_in_threadpool(engine_client.start,StartSessionRequest(task_id=task_id,session_id=UUID(proposed_session),idea=idea,model_route=selected_route,initial_model=initial_model))
+    engine_started_at=time.monotonic()
+    try:
+        started=await run_in_threadpool(engine_client.start,StartSessionRequest(task_id=task_id,session_id=UUID(proposed_session),idea=idea,model_route=selected_route,initial_model=initial_model))
+        activity('engine.start.returned','Engine Start call returned before final progress drain',task_id=task_id,
+                 session_id=proposed_session,dur_ms=int((time.monotonic()-engine_started_at)*1000))
     except EngineUnreachableError as exc:
         activity("engine.unreachable","Interview engine unreachable at task start",task_id=task_id,base_url=exc.base_url,cause=str(exc.cause))
         store.add_event(task_id,"error",f"Error: the interview engine is not reachable. Likely cause: nothing accepted the connection at {exc.base_url} - the engine service is not running. Next: restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Then retry.",phase_key="intent",payload=_engine_unreachable_payload(exc))
@@ -1077,7 +1092,10 @@ async def _complete_interview_start(task_id:str,proposed_session:str,selected_ro
         store.update_phase(task_id,"intent","failed",detail=f"{type(exc).__name__}: {str(exc)[:200]}")
         return
     finally:
+        drain_started_at=time.monotonic()
         progress_stop.set();await progress_watch
+        activity('engine.start.progress_drain','Final Start progress watch completed',task_id=task_id,
+                 session_id=proposed_session,dur_ms=int((time.monotonic()-drain_started_at)*1000))
     if started.snapshot.session_id!=proposed_session or started.snapshot.task_id!=task_id:
         store.add_event(task_id,"error","Interview engine returned a different task or session ID",phase_key="intent")
         store.update_phase(task_id,"intent","failed",detail="Engine task or session ID mismatch")

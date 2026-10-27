@@ -122,3 +122,20 @@ def test_every_generator_phase_uses_one_progress_and_gate_boundary(tmp_path):
                     and e["phase_key"] == definition.key and e["payload"]["source"] == "generator"]) == 1
         assert project(current, {"process_live": False}, artifacts=[{"phase_key": definition.key,
                        "ref": str(out / artifact), "present": True, "valid": True}]).mode == "waiting_gate"
+
+
+def test_progress_page_timing_measures_fetch_ingest_and_source_age(tmp_path,monkeypatch):
+    import asyncio
+    from delivery_api import app as module
+    store=SQLiteStore(str(tmp_path/'timing.db'));task=store.create_task('Timing');sid=str(uuid4())
+    row=signal(task['task_id'],sid,'intent');reports=[]
+    monkeypatch.setattr(module,'store',store)
+    class Engine:
+        def progress(self,session,cursor):return ProgressPage(events=[row],next_cursor=1) if cursor==0 else ProgressPage(events=[],next_cursor=1)
+    monkeypatch.setattr(module,'engine_client',Engine())
+    monkeypatch.setattr(module,'activity',lambda name,message,**fields:reports.append((name,fields)))
+    asyncio.run(module._drain_engine_progress(task['task_id'],sid))
+    timing=[fields for name,fields in reports if name=='progress.ingest.timing']
+    assert len(timing)==1 and timing[0]['events']==1
+    assert all(timing[0][key]>=0 for key in ('fetch_ms','ingest_ms','source_age_max_ms','source_age_min_ms'))
+    assert timing[0]['next_cursor']==1

@@ -95,18 +95,18 @@ def test_geometry_is_reserved_while_auth_is_delayed(page, ui):
 
 
 def _next_cost_poll_fire(page):
-    """Virtual time of the steady-state session-cost header's next 30s interval fire.
+    """Virtual time of the steady-state session-cost header's next 60s interval fire.
 
     The page records every setInterval registration through the init script below;
-    the header's poll is the LAST 30s registration (its pre-mount predecessor is
+    the header's poll is the LAST 60s registration (its pre-mount predecessor is
     disposed on navigation, and the balance poll is registered just before it)."""
-    regs = [r for r in page.evaluate("window.__regs") if r["every"] == 30000]
-    assert regs, "no 30s interval was registered"
+    regs = [r for r in page.evaluate("window.__regs") if r["every"] == 60000]
+    assert regs, "no 60s interval was registered"
     at = max(r["at"] for r in regs)
     now = page.evaluate("Date.now()")
-    fire = at + 30000
+    fire = at + 60000
     while fire <= now:
-        fire += 30000
+        fire += 60000
     return fire
 
 
@@ -143,8 +143,8 @@ def _quiet(hits, window=0.3, timeout=8):
     return len(hits)
 
 
-def test_session_cost_header_polls_on_the_30s_interval_and_skips_while_hidden(page, ui):
-    """The periodic refresh itself: the 30s interval fires a real refresh (fake
+def test_session_cost_header_uses_60s_safety_and_skips_while_hidden(page, ui):
+    """The periodic refresh itself: the 60s safety interval fires a real refresh (fake
     clock, hermetic), no refresh happens while the tab is hidden, and returning
     to the tab refreshes immediately."""
     page.clock.install()
@@ -215,7 +215,7 @@ def test_session_cost_refresh_debounces_overlap_and_recovers(page, ui):
     assert len(held) == 1, ("the visibility trigger did not start exactly one refresh", held)
     page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")   # debounced while the first refresh is in flight
     now = page.evaluate("Date.now()")
-    page.clock.run_for(_next_cost_poll_fire(page) + 500 - now)               # the interval fires too: also debounced (the parked request's own 60s read timeout is not crossed)
+    page.clock.run_for(30_500)               # halfway to the 60s safety interval: also debounced (the parked request's own 60s read timeout is not crossed)
     _flush(page)
     assert len(cost_hits) == base + 1 and len(held) == 1, (cost_hits, held)
     state["hold"] = False
