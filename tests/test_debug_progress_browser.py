@@ -134,6 +134,7 @@ def test_debug_sections_report_unavailable_instead_of_empty(page,ui):
     _open_debug(page,ui)
     page.locator('#debugexecution').wait_for()
     page.wait_for_function("() => document.querySelector('#debugexecution').textContent.includes('unavailable')")
+    page.locator('#debugexecution details').nth(1).evaluate('el=>el.open=true')
     assert 'read_failed' in page.locator('#debugexecution').inner_text()
     assert 'private-error' not in page.locator('#debugexecution').inner_text()
     page.locator('#debugexecution details').nth(1).evaluate('el=>el.open=true')
