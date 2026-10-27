@@ -1,6 +1,8 @@
 """Credit pricing from measured engine usage and process time, with the customer USD price (credits x USD_PER_CREDIT). Raw model cost_usd is kept in the payload but not displayed."""
 from __future__ import annotations
-import json,os
+import json,os,logging
+_logger=logging.getLogger(__name__)
+_warned_usage=set()
 from decimal import Decimal
 from .retail_pricing import RetailRates
 from pathlib import Path
@@ -16,15 +18,31 @@ def retail_rates()->RetailRates:
 
 _STAGE_PHASE={"probing":"intent","distillation":"intent","phrasing":"intent","scope_tiebreak":"intent","expert_opinion":"intent","conops":"conops","needs":"needs","srs":"srs","architecture":"architecture","items":"specs","tests":"tests","validation":"validation","review":"tests"}
 
+class UsageRows(list):
+    rejected_rows=0
+    complete=True
+
+
 def _rows(path:Path,start:int=0)->list[dict]:
-    if not path.is_file():return []
-    out=[]
+    out=UsageRows()
+    if not path.is_file():return out
     for line in read_bound_text(path,errors="replace").splitlines()[start:]:
         try:
             value=json.loads(line)
             if isinstance(value,dict):out.append(value)
-        except json.JSONDecodeError:pass
+            else:out.rejected_rows+=1
+        except json.JSONDecodeError:out.rejected_rows+=1
+    out.complete=out.rejected_rows==0
+    if not out.complete and path not in _warned_usage and len(_warned_usage)<128:
+        # Bound the warning cache and never print source bytes or private paths.
+        if len(_warned_usage)<128:_warned_usage.add(path)
+        _logger.warning('local_usage_incomplete rejected_rows=%d; source preserved',out.rejected_rows)
     return out
+
+
+def usage_evidence(root):
+    rejected=sum(_rows(Path(root)/area/'usage.jsonl').rejected_rows for area in ('interview','spec'))
+    return {'complete':not rejected,'rejected_rows':rejected,'scope':'local usage evidence only'}
 
 def line_count(path:Path)->int:
     return len(read_bound_text(path,errors="replace").splitlines()) if path.is_file() else 0
@@ -68,10 +86,12 @@ def write_cost_json(session_root:Path)->dict|None:
     artifact, and is never listed, zipped or handed off. Estimate: tokens x the
     versioned price table, an upper bound (no cache-hit or off-peak pricing)."""
     from vmodel_contracts import cost_rollup
-    rows=[]
-    for area in ("interview","spec"):rows+=_rows(session_root/area/"usage.jsonl")
-    if not rows:return None
-    report=cost_rollup(rows)
+    rows=[];rejected=0
+    for area in ("interview","spec"):
+        batch=_rows(session_root/area/"usage.jsonl");rows+=batch;rejected+=batch.rejected_rows
+    if not rows and not rejected:return None
+    report=cost_rollup(rows) if rows else {}
+    report['evidence']={'complete':not rejected,'rejected_rows':rejected,'scope':'local usage evidence only'}
     target=session_root/"cost.json";tmp=session_root/".cost.json.tmp"
     tmp.write_text(json.dumps(report,indent=1,sort_keys=True));tmp.replace(target)
     return report
