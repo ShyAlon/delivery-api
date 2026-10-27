@@ -63,3 +63,14 @@ def test_the_preflight_report_renders_checked_expected_found_where():
     assert 'where    supabase' in rendered['text']
     assert 'remedy   grant the role' in rendered['text']
     assert rendered['missing'] == 'no startup preflight report: this container predates it'
+
+
+def test_cached_report_freshness_compares_launcher_generation(tmp_path,monkeypatch):
+    monkeypatch.setenv('XDG_DATA_HOME',str(tmp_path))
+    monkeypatch.setenv('REQUI_PREFLIGHT_GENERATED_AT','current-generation')
+    monkeypatch.setenv('REQUI_PREFLIGHT_REPORT_SAVED','0')
+    path=tmp_path/'requi-re/logs/preflight-report.json';path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'generated_at':'old-generation','status':'pass'}))
+    state=preflight_read.persistence_status()
+    assert state['availability']=='stale' and state['write_status']=='failed'
+    assert state['expected_generated_at']=='current-generation'

@@ -400,3 +400,13 @@ def test_unknown_optional_role_does_not_crash_the_table_probe():
         assert result.status=='warn' and 'nonexistent_preflight_role' in result.found
         assert 'payment_events' in result.found and 'operator_principals' not in result.found
     finally:preflight.TABLE_ACCESS.clear();preflight.TABLE_ACCESS.update(policy)
+
+
+def test_report_write_failure_warns_and_retains_stdout_authority(tmp_path,capsys):
+    blocker=tmp_path/'blocked';blocker.write_text('file')
+    report=preflight.Report(generated_at='now')
+    assert preflight.write_report(report,blocker/'report.json') is False
+    text=capsys.readouterr().err
+    assert 'cached Debug report was not updated' in text and 'FileExistsError' in text
+    assert str(blocker) not in text
+    assert preflight.write_report(report,tmp_path/'ok.json') is True

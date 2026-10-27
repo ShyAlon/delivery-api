@@ -152,8 +152,10 @@ def write_report(report, path):
         tmp = path.with_suffix('.tmp')
         tmp.write_text(json.dumps(report.to_dict(), indent=2))
         os.replace(tmp, path)
-    except OSError:
-        pass
+        return True
+    except OSError as error:
+        print('WARNING: cached Debug report was not updated (%s); stdout preflight is authoritative.' % type(error).__name__,file=sys.stderr)
+        return False
 
 
 def artifacts_root_problem(env):
