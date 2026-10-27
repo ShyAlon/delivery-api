@@ -64,7 +64,7 @@ export const shouldPollNow=(streamOpen,lastPollMs,nowMs)=>!streamOpen||nowMs-las
 
 export function watchReviewProgress(taskId,host){
  const events=[],startedAt=Date.now()/1000;let connected=false,after=0,busy=false,closed=false,lastPoll=0,streamOpen=false;
- const render=()=>{if(host?.isConnected)renderStageProgress(host,events,{startedAt,connected,scopeKey:'review:'+taskId})};
+ const render=()=>{if(host?.isConnected)renderStageProgress(host,events,{startedAt,connected,scopeKey:'review:'+taskId,currentLine:'Recording decisions. Reading engine progress without resubmitting.'})};
  const poll=async(force)=>{if(closed||busy||!host?.isConnected)return;if(!force&&!shouldPollNow(streamOpen,lastPoll,Date.now()))return;busy=true;lastPoll=Date.now();try{
   const response=await fetch(`/api/tasks/${encodeURIComponent(taskId)}/events?after=${after}`,{cache:'no-store'});
   if(!response.ok)throw new Error('progress unavailable');
