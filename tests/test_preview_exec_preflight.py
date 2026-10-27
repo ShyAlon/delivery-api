@@ -131,7 +131,7 @@ def test_deepseek_only_mode_carries_no_ollama_settings():
     lib = LIB.read_text()
     call = 'preview_ollama_env "$WORK/preview.env" "$OLLAMA_MODEL" "$OLLAMA_HOST"'
     assert src.count(call) == 1, 'preview_ollama_env is called exactly once'
-    ollama_write = src.split('if [ "$PROVIDER" = ollama ]; then\n  ' + call, 1)
+    ollama_write = src.split('if [ "$PROVIDER" != deepseek ]; then\n  ' + call, 1)
     assert len(ollama_write) == 2, 'the only Ollama settings write path must stay inside the ollama branch'
     assert 'OLLAMA_BASE_URL=' not in src, 'the launcher writes no Ollama settings itself'
     fn = lib.split('preview_ollama_env(){', 1)[1].split('\n}', 1)[0]
@@ -216,7 +216,7 @@ def test_provider_prompt_invalid_input_reasks(tmp_path):
     tty.write_text('\njunk\n1\n')
     p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'OLLAMA_HOST': 'http://127.0.0.1:9'},
              settings=_settings(tmp_path))
-    assert "not 1 or 2" in p.stdout, p.stdout[-500:]
+    assert "not 1, 2 or 3" in p.stdout, p.stdout[-500:]
     assert 'Provider: local Ollama model' in p.stdout, p.stdout[-500:]
     assert 'ABORTED [NOT-CONFIRMED]' in p.stdout, p.stdout[-500:]
 
@@ -260,7 +260,7 @@ def test_local_preview_flag_only_in_ollama_mode():
     fn = lib.split('preview_ollama_env(){', 1)[1].split('\n}', 1)[0]
     assert 'DELIVERY_LOCAL_PREVIEW=1' in fn
     assert 'DELIVERY_LOCAL_PREVIEW=1' not in src, 'the launcher never writes the flag itself'
-    block = 'if [ "$PROVIDER" = ollama ]; then\n  preview_ollama_env "$WORK/preview.env" "$OLLAMA_MODEL" "$OLLAMA_HOST"'
+    block = 'if [ "$PROVIDER" != deepseek ]; then\n  preview_ollama_env "$WORK/preview.env" "$OLLAMA_MODEL" "$OLLAMA_HOST"'
     assert block in src, 'the flag must be written inside the ollama provider branch'
 
 
@@ -536,3 +536,13 @@ def test_the_venv_gate_runs_in_step_1_before_any_pytest():
     gate = src.index('venv_check.py')
     pytest_step = src.index('-m pytest')
     assert step1 < gate < pytest_step
+
+
+def test_both_mode_requires_key_and_warns_of_local_grounding_before_confirmation(tmp_path):
+    p=_run(tmp_path,{'PREVIEW_EXEC_PROVIDER':'both'},settings=_settings(tmp_path))
+    assert 'ABORTED [NO-KEY]' in p.stdout
+    tty=tmp_path/'both-tty';tty.write_text('3\n')
+    p=_run(tmp_path,{'PREVIEW_TTY':str(tty),'DEEPSEEK_API_KEY':KEY},settings=_settings(tmp_path))
+    assert 'Providers: both' in p.stdout and 'loads the local model once' in p.stdout
+    assert 'ABORTED [NOT-CONFIRMED]' in p.stdout
+    assert KEY not in p.stdout+p.stderr

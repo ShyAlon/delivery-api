@@ -34,12 +34,16 @@ class ProductionGateways:
             context=json.loads(environ.get(CEILING_ENV) or 'null')
         except ValueError as exc:
             raise AdmissionDenied('reviewed prices or context ceiling are not valid JSON') from exc
+        if isinstance(rows,list) and len(rows)==2:
+            self._init_dual(store,environ,rows,context,balance_transport=balance_transport,vendor_fetcher=vendor_fetcher)
+            return
         if not isinstance(rows,list) or len(rows)!=1 or not isinstance(rows[0],dict):
             raise AdmissionDenied('exactly one reviewed model price row required')
         row=rows[0]
         if not isinstance(context,dict):raise AdmissionDenied('reviewed context ceiling required')
         if row.get('provider')=='ollama':
             self._init_local_ollama(store,environ,row,context)
+            self.models={'ollama':self.model}
             return
         api_key=(environ.get(KEY_ENV) or '').strip()
         if not api_key:raise AdmissionDenied('provider key required')
@@ -54,6 +58,7 @@ class ProductionGateways:
         quote,_=catalog.resolve_serialized(stage='preflight',provider='deepseek',model=model,
             serialized_request=json.dumps({'model':model,'max_tokens':1}).encode(),max_output_tokens=1)
         validate_launch_quote(quote)
+        self.models={'deepseek':model}
         self.local=False
         self.model=model
         self.store=store
@@ -68,12 +73,50 @@ class ProductionGateways:
         self.provider_balance=deepseek_balance_reader(client=self.balance_client,api_key=api_key)
 
     def __call__(self,capability,job_id):
+        if hasattr(self,'_providers'):
+            job=self.store.worker_job(job_id) or {}
+            selected=(job.get('execution_options') or {}).get('model_route')
+            if not selected:raise AdmissionDenied('durable provider:model selection required for dual-provider job')
+            provider,sep,model=selected.partition(':')
+            if not sep or self.models.get(provider)!=model:raise AdmissionDenied('durable provider:model selection is not reviewed')
+            child=self._providers[provider](capability,job_id)
+            child.bound_model=(provider,model)
+            return child
         if self.local:
             return WorkerAdmissionGateway(self.store,job_id,resolve_serialized=self.catalog.resolve_serialized,
                 measure_raw_usage=ollama_settlement_usage,require_prepaid=True)
         return WorkerAdmissionGateway(self.store,job_id,resolve_serialized=self.catalog.resolve_serialized,
             measure_raw_usage=deepseek_settlement_usage,require_prepaid=True,retail_rates=self.retail_rates,
             verify_provider_snapshot=self.verify_vendor,provider_balance=self.provider_balance)
+
+    def _init_dual(self,store,environ,rows,contexts,**kw):
+        """Two independently reviewed providers, never one mixed accounting adapter.
+
+        Bind to the immutable job choice before compute metering starts. Each child
+        enforces that same choice at reserve and owns settlement/recovery unchanged.
+        """
+        if environ.get('DELIVERY_LOCAL_PREVIEW')!='1':raise AdmissionDenied('dual providers require the local execution preview')
+        providers={r.get('provider') for r in rows if isinstance(r,dict)}
+        if providers!={'deepseek','ollama'}:raise AdmissionDenied('one reviewed row per supported provider required')
+        if not isinstance(contexts,list) or len(contexts)!=2 or any(not isinstance(c,dict) for c in contexts):
+            raise AdmissionDenied('one provider-keyed reviewed context per provider required')
+        by_provider={c.get('provider'):c for c in contexts}
+        if set(by_provider)!=providers:raise AdmissionDenied('reviewed provider contexts must match price rows exactly')
+        self._providers={};self.store=store
+        try:
+            for row in rows:
+                provider=row['provider'];context=dict(by_provider[provider]);context.pop('provider')
+                child_env=dict(environ)
+                child_env[PRICES_ENV]=json.dumps([row]);child_env[CEILING_ENV]=json.dumps(context)
+                # Key belongs only to the paid child. It is never passed into the
+                # local child's configuration, checks, or transport.
+                if provider=='ollama':child_env.pop(KEY_ENV,None)
+                self._providers[provider]=ProductionGateways(store,child_env,**kw)
+        except BaseException:
+            for child in self._providers.values():child.close()
+            raise
+        self.models={provider:child.model for provider,child in self._providers.items()}
+        self.verify_vendor=self._providers['deepseek'].verify_vendor
 
     def _init_local_ollama(self,store,environ,row,context):
         """The operator's local execution preview: one reviewed $0 local Ollama row.
@@ -108,6 +151,9 @@ class ProductionGateways:
         self.provider_balance=None
 
     def close(self):
+        if hasattr(self,'_providers'):
+            for child in self._providers.values():child.close()
+            return
         if self.balance_client is not None:self.balance_client.close()
 
 

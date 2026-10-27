@@ -958,7 +958,7 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
         from . import cloud_runtime
         gateway=cloud_runtime.gateway_factory()
         open_now=cloud_execution_admitted()
-        admitted_provider=('ollama' if gateway.local else 'deepseek') if gateway else None
+        admitted_models=getattr(gateway,'models',{}) if gateway else {}
         routes=[]
         for route in ('deepseek','ollama'):
             errors=[];models=None;model=None
@@ -968,7 +968,7 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
                 errors.append('DELIVERY_LOCAL_PREVIEW is not enabled on this server')
             if not open_now:errors.append('Execution is closed on this server.')
             if gateway is None:errors.append('Admission gateway is not installed on this server.')
-            elif admitted_provider!=route:errors.append(f'Admission gateway is configured for {admitted_provider} only.')
+            elif route not in admitted_models:errors.append('Admission gateway is configured for '+', '.join(admitted_models)+' only; no reviewed '+route+' route.')
             if not errors:
                 try:
                     preview=engine_client.preview_route(route)
@@ -976,7 +976,7 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
                     if len(pairs)!=1:raise ValueError('engine preview returned divergent stage models')
                     provider,model=next(iter(pairs))
                     if provider!=route:raise ValueError(f'engine preview returned {provider} for selected {route}')
-                    if model!=gateway.model:raise ValueError(f'Admission gateway reviewed model is {gateway.model}; engine selected {model}.')
+                    if model!=admitted_models.get(route):raise ValueError(f'Admission gateway reviewed model is {admitted_models.get(route)}; engine selected {model}.')
                 except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
                     errors.append(exc.error.detail if isinstance(exc,EngineClientError) else str(exc))
             routes.append({'id':route,'available':not errors,'managed':True,

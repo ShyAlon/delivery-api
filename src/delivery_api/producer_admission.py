@@ -32,6 +32,7 @@ def _refusal_summary(denied):
 class WorkerAdmissionGateway:
     def __init__(self,store,job_id,*,resolve_quote=None,measure_usage=None,require_prepaid=True,resolve_serialized=None,measure_raw_usage=None,launch_guard=False,retail_rates=None,verify_provider_snapshot=None,provider_balance=None):
         if launch_guard and not require_prepaid:raise AdmissionDenied('launch guard requires prepaid accounting')
+        self.bound_model=None
         self.provider_balance=provider_balance
         self.verify_provider_snapshot=verify_provider_snapshot
         self.retail_rates=retail_rates
@@ -134,6 +135,10 @@ class WorkerAdmissionGateway:
         row=self.store.provider_attempt(attempt)
         if not row or row['job_id']!=self.job_id:
             raise AdmissionDenied('attempt does not belong to this worker job')
+        if self.bound_model is not None:
+            quote=row.get('quote') or {}
+            if (quote.get('provider'),quote.get('model'))!=self.bound_model:
+                raise AdmissionDenied('attempt quote differs from durable job selection')
         return row
 
     def start(self,attempt):

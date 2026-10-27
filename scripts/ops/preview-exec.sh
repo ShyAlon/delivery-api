@@ -204,31 +204,32 @@ PYEOF
 step_ok
 
 step "confirmation"
-# Two provider modes. ollama: the operator's local model at $0 - no key, no vendor pages, the reviewed row
+# Three explicit provider modes. both composes the two independent pins. ollama: the operator's local model at $0 - no key, no vendor pages, the reviewed row
 # and ceiling grounded from this Mac's server; heavy on this Mac while it runs. deepseek: the paid managed
 # route, nothing local, DeepSeek-only. PREVIEW_EXEC_PROVIDER picks one for scripted runs; unset, the operator
-# picks 1 or 2 at the terminal - there is no default and nothing is picked silently.
+# picks 1, 2 or 3 at the terminal - there is no default and nothing is picked silently.
 if [ -n "${PREVIEW_EXEC_PROVIDER:-}" ]; then
   PROVIDER=$PREVIEW_EXEC_PROVIDER
 else
-  prompt_open || abort NO-TERMINAL "PREVIEW_EXEC_PROVIDER is unset and there is no terminal to ask which provider to use" "Nothing was started and the database was not touched." "run from a terminal, or set PREVIEW_EXEC_PROVIDER=ollama or =deepseek for a non-interactive run"
+  prompt_open || abort NO-TERMINAL "PREVIEW_EXEC_PROVIDER is unset and there is no terminal to ask which provider to use" "Nothing was started and the database was not touched." "run from a terminal, or set PREVIEW_EXEC_PROVIDER=ollama or =deepseek or =both for a non-interactive run"
   while true; do
-    printf 'Provider for this preview: 1) ollama (local, $0, heavy on this Mac)  2) deepseek (paid, managed, nothing local) - type 1 or 2 and press Enter: '
-    read -r PICK <&9 || abort NO-TERMINAL "the provider prompt reached the end of its input without a choice" "Nothing was started and the database was not touched." "set PREVIEW_EXEC_PROVIDER=ollama or =deepseek for a non-interactive run"
+    printf 'Provider for this preview: 1) ollama (local, $0, heavy on this Mac)  2) deepseek (paid, managed, nothing local)  3) both (choose in UI; local grounding loads model once) - type 1, 2 or 3 and press Enter: '
+    read -r PICK <&9 || abort NO-TERMINAL "the provider prompt reached the end of its input without a choice" "Nothing was started and the database was not touched." "set PREVIEW_EXEC_PROVIDER=ollama or =deepseek or =both for a non-interactive run"
     case "$PICK" in
       1) PROVIDER=ollama; break;;
       2) PROVIDER=deepseek; break;;
-      *) echo "  '$PICK' is not 1 or 2 - no default, nothing is picked silently.";;
+      3) PROVIDER=both; break;;
+      *) echo "  '$PICK' is not 1, 2 or 3 - no default, nothing is picked silently.";;
     esac
   done
 fi
-case "$PROVIDER" in deepseek|ollama) ;; *) abort PROVIDER "PREVIEW_EXEC_PROVIDER must be deepseek or ollama, not '$PROVIDER'" "" "unset PREVIEW_EXEC_PROVIDER";; esac
+case "$PROVIDER" in deepseek|ollama|both) ;; *) abort PROVIDER "PREVIEW_EXEC_PROVIDER must be deepseek, ollama or both, not '$PROVIDER'" "" "unset PREVIEW_EXEC_PROVIDER";; esac
 OLLAMA_MODEL=${PREVIEW_EXEC_OLLAMA_MODEL:-phi4}
 OLLAMA_HOST=${OLLAMA_HOST:-http://localhost:11434}
 # The DeepSeek key comes from this shell's own protected environment only. There is no key prompt:
 # a missing key is a loud stop before anything is built (a key typed into a terminal can end up in
 # scrollback). It is passed straight to the container with -e - never written to any file, never printed.
-if [ "$PROVIDER" = deepseek ]; then
+if [ "$PROVIDER" != ollama ]; then
   [ -n "${DEEPSEEK_API_KEY:-}" ] || abort NO-KEY "DEEPSEEK_API_KEY is not in this shell's environment" "Nothing was started and the database was not touched." "export DEEPSEEK_API_KEY=... in this shell (your existing protected local environment), then run ops preview-exec again"
   case "${DEEPSEEK_API_KEY:-}" in *[[:space:]]*) abort KEY-SPACE "DEEPSEEK_API_KEY has a space or line break in it" "" "export only the key, then run again";; esac
   [ "${#DEEPSEEK_API_KEY}" -ge 20 ] || abort KEY-SHORT "DEEPSEEK_API_KEY is too short to be a DeepSeek key" "" "export the whole key, then run again"
@@ -242,6 +243,10 @@ echo "  The reviewed row and ceiling are grounded from the two public DeepSeek p
 echo "  with the configured safety ceiling 128000 tokens per call / 16384 max output."
 echo "  The DeepSeek key comes from this shell's environment and is passed to the container without touching disk."
 echo "  Real spend is possible only for a person with an admission row and prepaid credits; anyone else is 'not admitted'."
+elif [ "$PROVIDER" = both ]; then
+echo "  Providers: both. UI choice per task: paid DeepSeek or local Ollama $OLLAMA_MODEL at \$0. No automatic fallback."
+echo "  Grounding loads the local model once (heavy on this Mac for 1-5 min); DeepSeek pin reads public pages only."
+echo "  Later local model work runs only when you select Ollama; DeepSeek remains independently available."
 else
 echo "  Provider: local Ollama model $OLLAMA_MODEL at $OLLAMA_HOST (\$0, nothing paid, no key needed) - heavy on this Mac while it runs; PREVIEW_EXEC_PROVIDER=deepseek or picking 2 selects the paid managed route."
 echo "  The reviewed row and context ceiling are grounded from this Mac's own Ollama server and the candidate"
@@ -261,7 +266,7 @@ umask 077; WORK=$(mktemp -d "${TMPDIR:-/tmp}/requi-preview-exec.XXXXXXXXXX"); ch
 # which offers the ollama route - is written only in ollama mode: the route is dead without OLLAMA_BASE_URL,
 # and a selectable dead route fails the task start with a connection error instead of being absent.
 build_exec_env "$STORE" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"
-if [ "$PROVIDER" = ollama ]; then
+if [ "$PROVIDER" != deepseek ]; then
   preview_ollama_env "$WORK/preview.env" "$OLLAMA_MODEL" "$OLLAMA_HOST"
 fi
 chmod 600 "$WORK/preview.env"
@@ -280,7 +285,18 @@ fi
 # reviewed prices and limits. deepseek: the exact pin step ops go-live runs (public GETs, nothing paid).
 # ollama: grounded from this Mac's own server and the candidate checkouts (local HTTP, nothing paid) -
 # this LOADS the model once so the server reports the context window it will actually use.
-if [ "$PROVIDER" = ollama ]; then
+if [ "$PROVIDER" = both ]; then
+  mkdir "$WORK/paid-pin" "$WORK/local-pin"
+  echo "== both: public DeepSeek pin, then local Ollama grounding (loads the model once; no paid call)"
+  rc=0
+  PYTHONPATH=src .venv/bin/python "$(dirname "$0")/pin.py" "$WORK/paid-pin" > "$WORK/pin-out.txt" 2>&1 || rc=$?
+  if [ "$rc" = 0 ]; then
+    PYTHONPATH=src REQUI_REPOS_ROOT="$ROOT" PREVIEW_EXEC_OLLAMA_MODEL="$OLLAMA_MODEL" OLLAMA_HOST="$OLLAMA_HOST" .venv/bin/python "$(dirname "$0")/pin-local.py" "$WORK/local-pin" "$ROOT" >> "$WORK/pin-out.txt" 2>&1 || rc=$?
+  fi
+  if [ "$rc" = 0 ]; then
+    PYTHONPATH=src .venv/bin/python "$(dirname "$0")/combine-provider-pins.py" "$WORK" "$WORK/paid-pin" "$WORK/local-pin" >> "$WORK/pin-out.txt" 2>&1 || rc=$?
+  fi
+elif [ "$PROVIDER" = ollama ]; then
 echo "== grounding the local Ollama row and context ceiling (local HTTP, \$0, nothing paid)"
 echo "   What this does: checks the server, loads the model once (this Mac works hard for ~1-5 min - fan noise"
 echo "   is normal), reads the context window the server actually loaded, caps it by the largest stage output in"
@@ -350,7 +366,7 @@ OUT=$(docker run --rm --platform "$PLATFORM" --read-only --cap-drop ALL --securi
 [ "$OUT" = DBOK ] || abort NO-DB "this Mac cannot open the database ($OUT)" "" "check your network or VPN; if it says OperationalError the database may not accept this Mac's address: send me this line"
 # the image's OWN startup rules, run on these exact settings plus the pinned prices and the key. Prints problem names only, never a value.
 CONTRACT='import os,sys;sys.path.insert(0,"/app");import full_entry;p=full_entry.check_env(os.environ);print("CONTRACT-OK" if not p else "CONTRACT-PROBLEMS");[print("problem:",x) for x in p]'
-KEYPASS=(); [ "$PROVIDER" = deepseek ] && KEYPASS=(-e DEEPSEEK_API_KEY)
+KEYPASS=(); [ "$PROVIDER" != ollama ] && KEYPASS=(-e DEEPSEEK_API_KEY)
 COUT=$(docker run --rm --platform "$PLATFORM" --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$WORK/preview.env" --env-file "$WORK/cloud-models.env" ${KEYPASS[@]+"${KEYPASS[@]}"} "$IMAGE" python -c "$CONTRACT" 2>&1 | scrub | tail -8 || true)
 echo "$COUT" | grep -qx CONTRACT-OK || abort NOT-STARTABLE "the image would not start with these settings: $(echo "$COUT" | grep '^problem:' | tr '\n' ' ')" "" "send me this output"
 step_ok
@@ -399,6 +415,7 @@ fi
 step_ok
 echo
 echo "PREVIEW-EXEC READY: http://127.0.0.1:$PORT   (execution OPEN, live database, real sign-in, provider: $PROVIDER)"
+[ "$PROVIDER" = both ] && echo "Both routes admitted: choose DeepSeek or Ollama in the UI. Local is zero-cost; DeepSeek uses credits. No fallback."
 [ "$PROVIDER" = ollama ] && echo "Local Ollama route: $OLLAMA_MODEL at \$0; every call is ledgered. The managed DeepSeek route is not configured in this mode."
 echo "Spend is possible only for a person with an admission row and prepaid credits."
 echo "Running build: $(printf '%s' "$REPOS" | sed 's/=/ /g; s/,/, /g')"
