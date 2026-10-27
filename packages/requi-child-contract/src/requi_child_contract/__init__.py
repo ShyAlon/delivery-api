@@ -74,13 +74,21 @@ class InterviewAnswer(_Frozen):
     answer_ref: Ref
 
 
+class InterviewRoute(_Frozen):
+    kind: Literal['interview.route']
+    checkpoint_sha256: Digest
+    expected_sequence: Sequence
+    wait_id: Ref
+    request_ref: Ref
+
+
 class GeneratorPhase(_Frozen):
     kind: Literal['generator.phase']
     phase: Literal['needs','srs','architecture','items','tests','validation','review','repair','expert_opinion']
     input_manifest_sha256: Digest
 
 
-Operation=Annotated[Union[InterviewStart,InterviewAdvance,InterviewAnswer,GeneratorPhase],Field(discriminator='kind')]
+Operation=Annotated[Union[InterviewStart,InterviewAdvance,InterviewAnswer,InterviewRoute,GeneratorPhase],Field(discriminator='kind')]
 
 
 class ExecutionOperation(_Frozen):

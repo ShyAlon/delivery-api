@@ -113,3 +113,12 @@ def test_install_without_postgres_keeps_engine_file_sessions(fakes):
     fakes.pop('host',None)
     cloud_runtime.install(object(),e,lambda c:None)
     assert fakes['host'].kw['session_dsn'] is None
+
+
+def test_explicit_local_child_selector_refuses_paid_default_before_install(fakes,monkeypatch):
+    e=gateway_env(DELIVERY_CHILD_EXECUTION='local',DELIVERY_LOCAL_PREVIEW='1')
+    # A local selector cannot route to a paid default or silently keep the
+    # in-process engine installed. Trusted construction is verified separately.
+    with pytest.raises(Exception,match='local|Ollama|ollama'):
+        cloud_runtime.install(object(),e,lambda c:None)
+    assert not cloud_runtime.installed()

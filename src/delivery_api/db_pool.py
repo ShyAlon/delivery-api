@@ -14,13 +14,15 @@ rolled back / discarded if returned mid-transaction. The budget is ONE number
 for the whole process instead of per-actor arithmetic.
 """
 import threading
+import os
 
 from psycopg_pool import ConnectionPool
 
 # One number: the entire process - delivery traffic AND the in-process engine -
 # shares this cap, below the Supabase pooler's 15-client limit (session mode).
 # Pinned by tests/test_db_pool.py; the engine pins its standalone side.
-PROCESS_POOL_MAX = 10
+from .child_pool_budget import pool_budget
+PROCESS_POOL_MAX = pool_budget(os.environ)[0]
 POOL_WAIT_SECONDS = 30    # a request waits this long for a free connection before failing clearly
 POOL_IDLE_SECONDS = 240   # idle connections are retired after this
 

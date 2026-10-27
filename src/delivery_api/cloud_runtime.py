@@ -65,11 +65,22 @@ def install(store,environ,set_engine_client,watch_vendor=False):
     try:
         gateways=ProductionGateways(store,environ)
         base=artifacts_root(environ.get('VMODEL_ARTIFACTS_DIR'))
-        engine=inprocess_engine.InProcessEngine(base,gateway_factory=gateways,wire_client_factory=_clients('spec_generator'))
         database_url=environ.get('DELIVERY_DATABASE_URL','')
         session_dsn=database_url if database_url.startswith(('postgres://','postgresql://')) else None
-        host=inprocess_interview.InProcessInterviewHost(store,base,gateway_factory=gateways,
-            generator_clients=_clients('spec_generator'),interview_clients=_clients('interview_engine'),session_dsn=session_dsn)
+        from .child_pool_budget import child_mode
+        if child_mode(environ):
+            if set(gateways.models)!={'ollama'}:
+                raise ValueError('local child mode requires only reviewed Ollama; paid child remains refused')
+            if not session_dsn:raise ValueError('local child mode requires Postgres session persistence')
+            from .child_generator import ChildGeneratorEngine
+            from .child_interview import ChildInterviewHost
+            endpoint=(environ.get('OLLAMA_BASE_URL') or 'http://localhost:11434/v1').rstrip('/')+'/chat/completions'
+            engine=ChildGeneratorEngine(base,gateway_factory=gateways,dsn=session_dsn,endpoint=endpoint)
+            host=ChildInterviewHost(store,base,gateway_factory=gateways,session_dsn=session_dsn,endpoint=endpoint)
+        else:
+            engine=inprocess_engine.InProcessEngine(base,gateway_factory=gateways,wire_client_factory=_clients('spec_generator'))
+            host=inprocess_interview.InProcessInterviewHost(store,base,gateway_factory=gateways,
+                generator_clients=_clients('spec_generator'),interview_clients=_clients('interview_engine'),session_dsn=session_dsn)
         client=host.client()
     except BaseException as exc:
         if gateways is not None:gateways.close()

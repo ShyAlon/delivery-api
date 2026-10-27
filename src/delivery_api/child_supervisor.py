@@ -7,6 +7,7 @@ outcomes: no execution/money/quiescence state is written by this module.
 import asyncio
 from dataclasses import dataclass
 import os
+import json
 import signal
 import socket
 from requi_child_contract import encode_operation,decode_event
@@ -44,23 +45,40 @@ class ChildSupervisor:
         except ProcessLookupError:pass
         self.last_result=ChildResult(process.pid,process.returncode,True)
 
-    async def run(self,operation,*,authorize,on_event=lambda event:None,timeout_seconds=3600,stop=None,persist_stop=None):
+    async def run(self,operation,*,authorize,on_event=lambda event:None,timeout_seconds=3600,stop=None,persist_stop=None,private_config=None,descriptors=None):
         if self.active:raise ChildRunError('single child slot already occupied')
         if stop is not None and persist_stop is None:raise ValueError('durable stop callback required')
         # Callback is supplied by trusted parent wiring, never from the request.
+        descriptors=dict(descriptors or {})
+        if set(descriptors)-{'broker','compute','output'}:raise ValueError('unknown private child descriptor')
+        if any(type(fd) is not int or fd<0 for fd in descriptors.values()):raise ValueError('valid descriptor required')
+        raw=None
+        if private_config is not None:
+            raw=json.dumps(private_config,separators=(',',':'),allow_nan=False).encode()+b'\n'
+            if len(raw)>32768:raise ValueError('bounded private launch config required')
         authorize(operation)
         wire=encode_operation(operation)
         parent,child=socket.socketpair(socket.AF_UNIX,socket.SOCK_STREAM)
+        config_parent=config_child=None
+        if raw is not None:config_parent,config_child=socket.socketpair()
         self.active=True
         process=None;writer=None;stop_task=None;receive_task=None
         try:
             # Deliberate allowlist: never inherit provider keys, DB URLs, auth
             # headers, cloud credentials, PYTHONPATH, proxy or shell controls.
             env={'LANG':'C.UTF-8','PATH':os.defpath,'REQUI_CHILD_FD':str(child.fileno())}
-            process=await asyncio.create_subprocess_exec(*self.command,pass_fds=(child.fileno(),),
+            fds=[child.fileno(),*descriptors.values()]
+            for name,fd in descriptors.items():env['REQUI_CHILD_'+name.upper()+'_FD']=str(fd)
+            if config_child is not None:
+                fds.append(config_child.fileno());env['REQUI_CHILD_CONFIG_FD']=str(config_child.fileno())
+            process=await asyncio.create_subprocess_exec(*self.command,pass_fds=tuple(fds),
                 start_new_session=True,env=env,stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
             child.close()
+            if config_child is not None:
+                config_child.close()
+                # Small bounded socket write, no secret in argv/environment/disk.
+                config_parent.sendall(raw);config_parent.shutdown(socket.SHUT_WR)
             reader,writer=await asyncio.open_connection(sock=parent,limit=4096)
             writer.write(wire);await writer.drain()
             stop_task=asyncio.create_task(stop.wait()) if stop is not None else None
@@ -102,6 +120,8 @@ class ChildSupervisor:
                     except BaseException:pass
             if writer is not None:writer.close()
             parent.close();child.close()
+            for channel in (config_parent,config_child):
+                if channel is not None:channel.close()
             try:
                 if process is not None:await self._reap(process)
             finally:self.active=False

@@ -5,6 +5,6 @@ supplies owner authority and this module installs no runtime consumer.
 """
 from requi_child_contract import (  # noqa: F401
     MAX_FRAME_BYTES, Ref, Digest, Model, Positive, Sequence, JobBinding,
-    InterviewStart, InterviewAdvance, InterviewAnswer, GeneratorPhase,
+    InterviewStart, InterviewAdvance, InterviewAnswer, InterviewRoute, GeneratorPhase,
     Operation, ExecutionOperation, decode_operation, encode_operation, require_binding,
 )

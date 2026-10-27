@@ -86,7 +86,8 @@ async def dispatch_phase(store,orchestrator,task_id,phase,*,resume_job_id=None,q
     if "model_route" in durable:options["model_route"]=durable["model_route"]
     from . import config,inprocess_engine
     engine=inprocess_engine.current()
-    if config.CLOUD_TENANTS and config.RUN_ISOLATION=="process":
+    from .child_pool_budget import child_mode
+    if config.CLOUD_TENANTS and config.RUN_ISOLATION=="process" and not child_mode(__import__('os').environ):
         # One child process per run, admitted through its own descriptor. Slots, time limit and peak memory live in run_slots.
         from . import run_slots
         async def run_child(capability):

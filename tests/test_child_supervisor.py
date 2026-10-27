@@ -118,3 +118,26 @@ def test_stubborn_grandchild_group_is_killed_after_leader_exits(tmp_path):
             await asyncio.sleep(.01)
         else:pytest.fail('descendant survived process-group cleanup')
     run(go())
+
+
+def test_private_config_and_separate_descriptors_are_not_environment_secrets(tmp_path,monkeypatch):
+    import socket
+    fixture=tmp_path/'config-child.py'
+    fixture.write_text('''import os,socket,json
+f=socket.socket(fileno=int(os.environ['REQUI_CHILD_FD'])).makefile('rwb',buffering=0)
+op=json.loads(f.readline())
+c=socket.socket(fileno=int(os.environ['REQUI_CHILD_CONFIG_FD'])).makefile('rb')
+assert json.loads(c.readline())=={'dsn':'private-not-env'}
+b=socket.socket(fileno=int(os.environ['REQUI_CHILD_BROKER_FD']))
+b.sendall(b'broker-separate')
+assert all('private-not-env' not in v for v in os.environ.values())
+for i,state in enumerate(('ready','running','completed'),1):
+ f.write(json.dumps({'version':1,'operation_id':op['operation_id'],'sequence':i,'state':state}).encode()+b'\\n')
+''')
+    a,b=socket.socketpair()
+    try:
+        s=ChildSupervisor([sys.executable,str(fixture)])
+        result=run(s.run(decode_operation(frame(operation())),authorize=lambda op:None,
+            private_config={'dsn':'private-not-env'},descriptors={'broker':b.fileno()}))
+        assert result.reaped and a.recv(100)==b'broker-separate'
+    finally:a.close();b.close()
