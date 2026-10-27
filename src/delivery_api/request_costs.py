@@ -13,7 +13,7 @@ from collections import deque
 from datetime import datetime, timezone
 
 MAX_ENTRIES = 2000
-FIELDS = ('duration_ms', 'db_ms', 'engine_ms', 'checkout_ms', 'auth_ms', 'held_ms', 'loop_blocked_ms')
+FIELDS = ('duration_ms', 'db_ms', 'engine_ms', 'checkout_ms', 'auth_ms', 'held_ms', 'loop_blocked_ms', 'max_cycle_ms')
 
 # Task ids are hex strings (12+ chars) or UUIDs; path segments that are pure numbers
 # (generations, job numbers) are ids too. Everything else stays readable.
@@ -40,11 +40,13 @@ def record(entry):
 
 def record_request(method, path, status, duration_ms, stats):
     """One HTTP request with its measured decomposition. Called by the request-log middleware."""
+    top_label, top_ms = stats.top_statement()
     record({'type': request_type(method, path), 'status': int(status), 'duration_ms': int(duration_ms),
             'db_ms': int(stats.db_seconds * 1000), 'db_queries': int(stats.queries),
             'engine_ms': int(stats.engine_seconds * 1000), 'engine_calls': int(stats.engine_calls),
             'checkout_ms': int(stats.checkout_seconds * 1000), 'auth_ms': int(stats.auth_seconds * 1000),
-            'held_ms': int(stats.tx_held_seconds * 1000), 'loop_blocked_ms': 0, 'at': _now()})
+            'held_ms': int(stats.tx_held_seconds * 1000), 'loop_blocked_ms': 0, 'max_cycle_ms': 0,
+            'top_statement': top_label, 'top_statement_ms': top_ms, 'at': _now()})
 
 
 def record_stream(duration_ms, loop_blocked_ms, max_cycle_ms):
@@ -52,7 +54,8 @@ def record_stream(duration_ms, loop_blocked_ms, max_cycle_ms):
     blocked the event loop in total (the loop-block column exists for this row type)."""
     record({'type': 'GET /api/tasks/<id>/stream', 'status': 200, 'duration_ms': int(duration_ms),
             'db_ms': 0, 'db_queries': 0, 'engine_ms': 0, 'engine_calls': 0, 'checkout_ms': 0,
-            'auth_ms': 0, 'held_ms': 0, 'loop_blocked_ms': int(loop_blocked_ms), 'at': _now()})
+            'auth_ms': 0, 'held_ms': 0, 'loop_blocked_ms': int(loop_blocked_ms),
+            'max_cycle_ms': int(max_cycle_ms), 'top_statement': None, 'top_statement_ms': 0, 'at': _now()})
 
 
 def _percentile(values, p):

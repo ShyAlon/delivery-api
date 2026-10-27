@@ -134,3 +134,32 @@ def test_loop_lag_computation():
     from delivery_api.app import loop_lag_ms
     assert loop_lag_ms(100.0, 100.4) == 400
     assert loop_lag_ms(100.0, 99.9) == 0
+
+
+def test_statements_are_labeled_and_timed_per_request():
+    from delivery_api.postgres_scope import TimingConnection, note_statement
+    note_statement('SELECT 1', 0.001)  # no request context: never raises
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+        def execute(self, sql, params=()):
+            self.calls.append(sql)
+            return 'rows'
+        def close(self):
+            self.closed = True
+
+    token = request_stats.set(RequestStats())
+    try:
+        conn = TimingConnection(Fake())
+        assert conn.execute('SELECT   public.requi_session_active()   AS active') == 'rows'
+        conn.execute('SELECT t.task_id,\n  t.title FROM tasks t')
+        stats = request_stats.get()
+        labels = [label for label, _ in stats.statements]
+        assert labels == ['SELECT public.requi_session_active() AS active',
+                          'SELECT t.task_id, t.title FROM tasks t']
+        assert all(ms >= 0 for _, ms in stats.statements)
+        top_label, top_ms = stats.top_statement()
+        assert top_label in labels and top_ms >= 0
+    finally:
+        request_stats.reset(token)

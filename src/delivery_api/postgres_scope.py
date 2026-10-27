@@ -25,10 +25,16 @@ class RequestStats:
     """What one request cost, split by where it went: database, engine calls, pool checkout
     waits, auth checks and the window a connection was pinned. Shown in the Server-Timing
     header and the Debug dialog so slowness is measured, not guessed."""
-    __slots__=('transactions','queries','db_seconds','reused','opened','engine_calls','engine_seconds','checkout_seconds','auth_seconds','tx_held_seconds')
+    __slots__=('transactions','queries','db_seconds','reused','opened','engine_calls','engine_seconds','checkout_seconds','auth_seconds','tx_held_seconds','statements')
+    MAX_STATEMENTS=500   # one pathological request cannot grow memory without bound
     def __init__(self):
         self.transactions=self.queries=self.reused=self.opened=0;self.db_seconds=0.0
         self.engine_calls=0;self.engine_seconds=self.checkout_seconds=self.auth_seconds=self.tx_held_seconds=0.0
+        self.statements=[]
+    def top_statement(self):
+        """The (label, ms) of the slowest statement this request ran, or (None, 0)."""
+        if not self.statements:return None,0
+        label,ms=max(self.statements,key=lambda row:row[1]);return label,ms
     def header(self):
         return ('db;dur=%d;desc="%d queries, %d transactions, %d reused connections, %d new"'
                 ', engine;dur=%d;desc="%d engine calls", checkout;dur=%d, auth;dur=%d, held;dur=%d'
@@ -59,6 +65,26 @@ def note_auth(seconds):
     """Identity verification and session checks for this request (Supabase round trips)."""
     stats=request_stats.get()
     if stats is not None:stats.auth_seconds+=seconds
+
+def statement_label(sql):
+    """A stable per-statement label: whitespace-collapsed SQL prefix, no parameter values."""
+    return ' '.join(str(sql).split())[:64]
+
+def note_statement(label,seconds):
+    """One timed statement with its label. No request context: a no-op."""
+    stats=request_stats.get()
+    if stats is not None and len(stats.statements)<RequestStats.MAX_STATEMENTS:
+        stats.statements.append((label,int(seconds*1000)))
+
+class TimingConnection:
+    """Wraps a raw driver connection so every statement lands in the request's labeled
+    statement list. Attributes other than execute pass through to the driver connection."""
+    def __init__(self,inner):self._inner=inner
+    def execute(self,sql,params=()):
+        started=time.monotonic()
+        try:return self._inner.execute(sql,params)
+        finally:note_statement(statement_label(sql),time.monotonic()-started)
+    def __getattr__(self,name):return getattr(self._inner,name)
 
 
 class _RequestTransaction:
@@ -194,8 +220,9 @@ class ScopedPostgres:
             transaction=connection.transaction()
             try:
                 transaction.__enter__()
-                if repeatable_read:connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
-                connection.execute(_SETUP,(scope.owner_id,scope.session_id or ''))
+                timed=TimingConnection(connection)
+                if repeatable_read:timed.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+                timed.execute(_SETUP,(scope.owner_id,scope.session_id or ''))
                 if stats is not None:
                     stats.transactions+=1;stats.queries+=1;stats.db_seconds+=time.monotonic()-started
                     if reused:stats.reused+=1
@@ -227,7 +254,7 @@ class ScopedPostgres:
                 shared.lock.release();raise
             if connection is not None:
                 try:
-                    try:yield connection
+                    try:yield TimingConnection(connection)
                     except BaseException:
                         # Undo only the failed operation; if that cannot be done the request's transaction is discarded at its end
                         # and later calls in the request use their own transaction.
@@ -239,7 +266,7 @@ class ScopedPostgres:
             shared.lock.release()
         connection,transaction=self._begin(scope,repeatable_read)
         try:
-            yield connection
+            yield TimingConnection(connection)
         except BaseException:
             try:transaction.__exit__(*sys.exc_info())
             except BaseException:self._drop(connection)

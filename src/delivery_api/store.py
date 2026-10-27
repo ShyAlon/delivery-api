@@ -7,6 +7,8 @@ import secrets
 import sqlite3
 import threading
 import time
+
+from . import event_bus
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -519,7 +521,7 @@ FROM tasks t"""
             self._db.execute("INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (?,?,?,?,?,?)",
                              (task_id,"conops","progress","Completed HTTP interview reconciled with V-process",json.dumps({"session_id":session_id,"sequence":sequence,"source":"terminal_engine_snapshot","handoff":"needs"}),now))
             self.audit("engine", "interview.reconciled", task_id, {"session_id":session_id,"sequence":sequence,"next_phase":"needs"})
-            self._commit()
+            self._commit();event_bus.notify(task_id)
             return True
 
     def claim_failed_needs_retry(self, task_id: str, actor: str) -> bool:
@@ -536,7 +538,7 @@ FROM tasks t"""
             self._db.execute("INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (?,?,?,?,?,?)",
                              (task_id,"needs","retry","Founder confirmed retry of failed Stakeholder needs",json.dumps({"actor":actor,"session_id":row["engine_session_id"]}),now))
             self.audit(actor,"phase.retry",task_id,{"phase":"needs","session_id":row["engine_session_id"]})
-            self._commit();return True
+            self._commit();event_bus.notify(task_id);return True
 
     def claim_next_phase(self, task_id: str, phase: str, actor: str) -> bool:
         """Atomically move a task whose interview is approved into its first generator phase.
@@ -557,7 +559,7 @@ FROM tasks t"""
             self._db.execute("INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (?,?,?,?,?,?)",
                              (task_id,phase,"progress",f"You started {PHASE_BY_KEY[phase].label}",json.dumps({"actor":actor,"session_id":row["engine_session_id"],"started":True}),now))
             self.audit(actor,"phase.start",task_id,{"phase":phase,"session_id":row["engine_session_id"]})
-            self._commit();return True
+            self._commit();event_bus.notify(task_id);return True
 
     def claim_failed_phase_retry(self, task_id: str, phase: str, actor: str) -> bool:
         """Atomically claim a failed generator phase whose upstream phases are approved.
@@ -580,7 +582,7 @@ FROM tasks t"""
             self._db.execute("INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (?,?,?,?,?,?)",
                              (task_id,phase,"retry",f"Founder confirmed retry of failed {PHASE_BY_KEY[phase].label}",json.dumps({"actor":actor,"session_id":row["engine_session_id"]}),now))
             self.audit(actor,"phase.retry",task_id,{"phase":phase,"session_id":row["engine_session_id"]})
-            self._commit();return True
+            self._commit();event_bus.notify(task_id);return True
 
     def set_model_route(self, task_id: str, model_route: str) -> None:
         with self._lock:
@@ -610,7 +612,7 @@ FROM tasks t"""
             self._db.execute("UPDATE phases SET state='running',detail='Starting interview',started_at=? WHERE task_id=? AND phase_key='intent'",(now,task_id))
             self._db.execute("INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (?,?,?,?,?,?)",
                              (task_id,'intent','command','Interview starting',json.dumps({'session_id':session_id,'route':route}),now))
-            self._commit()
+            self._commit();event_bus.notify(task_id)
             return True
 
     def engine_session(self, task_id: str) -> str | None:
@@ -640,7 +642,7 @@ FROM tasks t"""
         with self._lock:
             cur = self._db.execute("INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (?,?,?,?,?,?)",
                                   (task_id, phase_key, kind, message, json.dumps(payload or {}), time.time()))
-            self._db.execute("UPDATE tasks SET updated_at=? WHERE task_id=?", (time.time(), task_id)); self._commit()
+            self._db.execute("UPDATE tasks SET updated_at=? WHERE task_id=?", (time.time(), task_id)); self._commit();event_bus.notify(task_id)
             return cur.lastrowid
 
     @staticmethod
@@ -775,7 +777,7 @@ FROM tasks t"""
                                  "WHERE task_id=? AND phase_key=? AND state='running'",
                                  (message,signal.completed,signal.total,signal.task_id,signal.phase_key))
                 self._db.execute("UPDATE tasks SET updated_at=? WHERE task_id=?",(time.time(),signal.task_id))
-                self._commit()
+                self._commit();event_bus.notify(signal.task_id)
             except Exception:
                 self._db.rollback()
                 raise
