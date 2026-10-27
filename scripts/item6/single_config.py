@@ -135,6 +135,30 @@ def review(root,confirm=None):
     return {'review_file':str(target),'review_hash':digest,'reviewed':True,'run_started':False,'launch_authorized':False}
 
 
+def attest_config(root,*,prompt=input,output=None):
+    """Attest the locally displayed config only. Never authorize execution."""
+    import sys
+    output=output or sys.stdout
+    root,identity=root_check(root)
+    _,source_hash=load_env(root)
+    facts=review(root)
+    print(json.dumps(facts,indent=2),file=output,flush=True)
+    print('Config review only. This does not authorize a run, spending or any other gate.',file=output,flush=True)
+    try:answer=prompt('Confirm this exact config review? Type yes, or Enter to leave unreviewed: ')
+    except EOFError:answer=''
+    if answer.strip()!='yes':
+        return {'reviewed':False,'run_started':False,'launch_authorized':False,'files_changed':False}
+    current_root,current_identity=root_check(root)
+    _,current_hash=load_env(root)
+    current=review(root)
+    if current_identity!=identity or current_hash!=source_hash or current['review_hash']!=facts['review_hash']:
+        raise ValueError('configuration changed during review; inspect it again')
+    digest=facts['review_hash']
+    target=root/'private'/('review-'+digest+'-'+source_hash[:16]+'.json')
+    RunIsolation.write(target,{'review_hash':digest,'source_sha256':source_hash,'identity':identity,'confirmed_locally':True,'launch_authorized':False})
+    return {'review_file':str(target),'review_hash':digest,'reviewed':True,'run_started':False,'launch_authorized':False}
+
+
 def compile_config(root):
     root,identity=root_check(root);data,source_hash=load_env(root);facts=review(root);digest=facts['review_hash']
     review_path=root/'private'/('review-'+digest+'-'+source_hash[:16]+'.json');receipt=private_json(review_path)
