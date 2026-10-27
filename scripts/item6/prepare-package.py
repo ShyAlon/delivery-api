@@ -17,7 +17,7 @@ for name in ('delivery','engine','generator','contracts'):
 out.mkdir(mode=0o700);(out/'wheels').mkdir()
 for name in ('contracts','delivery','engine','generator'):
  subprocess.run(['uv','build',*(['--no-build-isolation'] if a.no_build_isolation else []),'--offline','--wheel','--out-dir',str(out/'wheels'),str(getattr(a,name).resolve())],check=True)
-shutil.copyfile(a.delivery.resolve()/'vendor/requi_child_contract-0.1.0-py3-none-any.whl',out/'wheels/requi_child_contract-0.1.0-py3-none-any.whl')
+shutil.copyfile(a.delivery.resolve()/'vendor/requi_child_contract-0.2.0-py3-none-any.whl',out/'wheels/requi_child_contract-0.2.0-py3-none-any.whl')
 for wheel in sorted((out/'wheels').glob('*.whl')):
  digest=hashlib.sha256(wheel.read_bytes()).hexdigest();manifest[wheel.name]={'sha256':digest}
  with (out/'wheel-sha256.txt').open('a') as f:f.write(f'{digest}  /wheels/{wheel.name}\n')
