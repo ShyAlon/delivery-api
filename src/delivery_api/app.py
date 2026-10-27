@@ -557,7 +557,7 @@ def _page(name,headers=None):
     from fastapi.responses import HTMLResponse
     text=(WEB_DIR/name).read_text(encoding="utf-8")
     import json as _json
-    boot=_json.dumps({"preview":os.environ.get("DELIVERY_PREVIEW")=="1","local_preview":os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1"})
+    boot=_json.dumps({"preview":os.environ.get("DELIVERY_PREVIEW")=="1","local_preview":os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1","execution_enabled":os.environ.get("DELIVERY_CLOUD_EXECUTION")=="1"})
     text=text.replace("<!--REQUI_CONFIG-->","<script>window.__REQUI_CONFIG__="+boot+";</script>")
     return HTMLResponse(text,headers=headers or {"Cache-Control":"no-cache"})
 
@@ -2531,9 +2531,9 @@ def task_audit(task_id: str, request: Request):
     totals["unpriced_calls"]=sum(int((event.get("payload") or {}).get("unpriced_calls") or 0) for event in counted)+totals["interview_unpriced_calls"]
     entries=store.audit_entries(task_id)
     if config.CLOUD_TENANTS:
-        from .customer_projection import without_provider_usage
-        entries=_customer_events(entries)
-        totals={key:totals[key] for key in ('price','price_usd')}
+        from .customer_projection import audit_credits_only
+        entries=audit_credits_only(_customer_events(entries))
+        totals={'price':totals['price']}
     return {"actor_mode": auth.actor(request).label, "entries": entries,"totals":totals}
 
 @app.post("/api/simulations", status_code=201)

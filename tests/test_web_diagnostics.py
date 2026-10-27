@@ -78,9 +78,9 @@ def test_the_unavailable_wording_states_only_what_the_snapshot_shows():
 def test_the_task_page_uses_the_unavailable_wording_and_stops_the_live_counters():
     task = (WEB / "task.js").read_text()
     assert "sessionUnavailable(t.control_snapshot)" in task and "unavail?'Needs attention':stateLabel(t.state)" in task
-    assert task.count("unavailable:unavail?unavailText:''") == 2 and "Session unavailable in this environment" in task
+    assert task.count("unavailable:unavail?unavailText:''") == 6 and "Session unavailable in this environment" in task
     progress = (WEB / "progress.js").read_text()
-    assert "if(unavailable)return `<section class=\"review-progress\"" in progress and progress.index("if(unavailable)")<progress.index("Connected to progress")
+    assert "if(unavailable)return `<details class=\"review-progress\"" in progress and progress.index("if(unavailable)")<progress.index("Connected to progress")
     assert "${unavail?'':progressScope(" in task and "${unavail?'Needs attention':stateLabel(t.state)}" in task
     assert "Rerun stage" in task          # the stage rerun button and its existing wording are untouched
 
@@ -113,3 +113,16 @@ def test_the_old_session_page_code_is_gone_but_the_data_endpoints_stay():
     import delivery_api.app as module
     paths = {r.path for r in module.app.routes}
     assert "/api/sessions" in paths and "/api/settings/artifacts-root" in paths
+
+
+def test_server_boot_config_carries_preview_execution_setting(monkeypatch):
+    import delivery_api.app as module
+    monkeypatch.setenv('DELIVERY_PREVIEW','1')
+    monkeypatch.setenv('DELIVERY_CLOUD_EXECUTION','1')
+    body=module._page('index.html').body.decode()
+    config=json.loads(body.split('window.__REQUI_CONFIG__=',1)[1].split(';',1)[0])
+    assert config['preview'] is True and config['execution_enabled'] is True
+    monkeypatch.setenv('DELIVERY_CLOUD_EXECUTION','0')
+    body=module._page('index.html').body.decode()
+    config=json.loads(body.split('window.__REQUI_CONFIG__=',1)[1].split(';',1)[0])
+    assert config['preview'] is True and config['execution_enabled'] is False

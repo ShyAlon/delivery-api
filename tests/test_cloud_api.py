@@ -1,5 +1,5 @@
 """Actual routes against isolated real Postgres, with hermetic verified identities."""
-import os
+import os,json
 import uuid
 import pytest
 from fastapi.testclient import TestClient
@@ -326,7 +326,10 @@ def test_cloud_events_and_audit_never_project_provider_categories(cloud):
         assert reply.status_code==200,reply.text
         assert 'reasoning_tokens' not in reply.text and 'cache_hit_tokens' not in reply.text and 'output_tokens' not in reply.text
         assert 'kept' in reply.text
-    assert set(client.get('/api/tasks/'+tid+'/audit',headers=header('a')).json()['totals'])=={'price','price_usd'}
+    audit=client.get('/api/tasks/'+tid+'/audit',headers=header('a')).json()
+    assert set(audit['totals'])=={'price'}
+    assert 'price_usd' not in json.dumps(audit)
+    assert audit['entries'][0]['detail']['price']==2
     with tenant_context(A):
         assert store.events(tid)[-1]['payload']==payload
         assert store.audit_entries(tid)[0]['detail']==payload
