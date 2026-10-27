@@ -2406,3 +2406,23 @@ def test_waiting_phase_status_is_not_overwritten_by_late_heartbeat(page,ui):
     page.evaluate("liveSource.emit({id:10001,kind:'heartbeat',phase_key:'intent',message:'Old working heartbeat',payload:{stage:'probe',status:'heartbeat'},ts:Date.now()/1000})")
     expect(line).to_have_text('Waiting for your answer')
     expect(page.locator('#stageprogress > details > summary')).to_contain_text('Waiting for your answer')
+
+
+def test_both_admitted_routes_can_be_selected_without_hiding_either(page,ui):
+    routes={'managed':True,'default_route':{'route':'deepseek'},'routes':[
+        {'id':'deepseek','managed':True,'available':True,'model':'deepseek:deepseek-flash'},
+        {'id':'ollama','managed':True,'available':True,'model':'ollama:phi4'}]}
+    page.route('**/api/model-routes',lambda route:route.fulfill(json=routes))
+    page.goto(ui+'/tasks/empty/view')
+    choices=page.get_by_role('group',name='Default model route')
+    for name in ['DeepSeek','Ollama','DeepSeek']:
+        button=choices.get_by_role('button',name=name)
+        expect(button).to_be_enabled();button.click()
+        expect(button).to_have_attribute('aria-pressed','true')
+        expect(choices.locator('[aria-pressed=true]')).to_have_count(1)
+    expect(page.locator('#defaultroute')).to_have_value('deepseek')
+    page.screenshot(path='/downloads/both-provider-options.png',full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    assert choices.evaluate('e=>e.scrollWidth<=e.clientWidth')
+    expect(choices.get_by_role('button',name='Ollama')).to_be_enabled()
+    page.screenshot(path='/downloads/both-provider-options-mobile.png',full_page=True)

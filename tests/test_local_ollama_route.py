@@ -222,7 +222,7 @@ def _cloud_app(monkeypatch, flag):
     monkeypatch.setattr(module, 'cloud_execution_admitted', lambda: True)
     from types import SimpleNamespace
     from delivery_api import cloud_runtime
-    monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(local=flag,model=LOCAL_MODEL if flag else 'deepseek-flash'))
+    monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(models={'ollama':LOCAL_MODEL} if flag else {'deepseek':'deepseek-flash'}))
     return module
 
 
@@ -340,3 +340,25 @@ def test_engine_model_missing_reason_is_preserved_below_disabled_route(monkeypat
     assert result['routes'][1]['available'] is False
     assert result['routes'][1]['error']=='Ollama model phi4 is unavailable; pull phi4 and retry'
     assert result['default_route'] is None
+
+
+def test_dual_preview_offers_both_only_after_independent_engine_preflights(monkeypatch):
+    module=_cloud_app(monkeypatch,flag=True)
+    from types import SimpleNamespace
+    from delivery_api import cloud_runtime
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(models={'deepseek':'deepseek-flash','ollama':LOCAL_MODEL}))
+    seen=[]
+    def preview(route):
+        seen.append(route)
+        return {'model_map':{'probing':[route,LOCAL_MODEL if route=='ollama' else 'deepseek-flash']}}
+    monkeypatch.setattr(module.engine_client,'preview_route',preview)
+    result=module.model_routes(None)
+    assert seen==['deepseek','ollama']
+    assert all(route['available'] for route in result['routes'])
+    def missing_local(route):
+        if route=='ollama':raise module.EngineUnreachableError('local',RuntimeError('down'))
+        return preview(route)
+    monkeypatch.setattr(module.engine_client,'preview_route',missing_local)
+    result=module.model_routes(None)
+    assert result['routes'][0]['available'] and not result['routes'][1]['available']

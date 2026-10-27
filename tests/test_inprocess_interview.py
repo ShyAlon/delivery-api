@@ -171,3 +171,44 @@ def test_configure_and_current():
         ii.configure(None);assert ii.current() is None
         ii.configure('h');assert ii.current()=='h'
     finally:ii.configure(saved)
+
+def test_dual_interview_step_pins_program_route_in_durable_job_options(fake_engine):
+    host,log=host_with()
+    host.gateway_factory.models={'deepseek':'deepseek-flash','ollama':'phi4'}
+    session=Session();session.program=types.SimpleNamespace(model_map={'probing':('ollama','phi4'),'conops':('ollama','phi4')})
+    with tenant_context(scope()):
+        assert host.run_step(session,lambda:'local result')=='local result'
+    assert host.store.jobs==[('task-1','phase:intent',{'model_route':'ollama:phi4'})]
+
+
+def test_dual_interview_missing_or_divergent_route_refuses_before_enqueue(fake_engine):
+    from delivery_api.attempt_ledger import AdmissionDenied
+    host,log=host_with();host.gateway_factory.models={'deepseek':'deepseek-flash','ollama':'phi4'}
+    with tenant_context(scope()):
+        with pytest.raises(AdmissionDenied,match='pinned'):host.run_step(Session(),lambda:None)
+        session=Session();session.program=types.SimpleNamespace(model_map={'probing':('ollama','phi4'),'conops':('deepseek','deepseek-flash')})
+        with pytest.raises(AdmissionDenied,match='pinned'):host.run_step(session,lambda:None)
+    assert host.store.jobs==[]
+
+
+def test_dual_interview_initial_request_and_switch_target_are_pinned_before_metering(fake_engine,monkeypatch):
+    host,log=host_with();host.gateway_factory.models={'deepseek':'deepseek-flash','ollama':'phi4'}
+    models=types.ModuleType('interview_engine.session_models')
+    models.resolve=lambda route,model:{'probing':(route,model or 'phi4')}
+    monkeypatch.setitem(sys.modules,'interview_engine.session_models',models)
+    session=Session();session.request=types.SimpleNamespace(model_route='ollama',initial_model='phi4')
+    with tenant_context(scope()):assert host.run_step(session,lambda:'constructed')=='constructed'
+    assert host.store.jobs[-1][2]=={'model_route':'ollama:phi4'}
+    # Old session program must not select the accounting of a new candidate.
+    session.program=types.SimpleNamespace(model_map={'probing':('ollama','phi4')})
+    http=types.ModuleType('interview_engine.http_service')
+    class Registry:
+        def switch_route(self,session_id,request):
+            assert host._execution_options(session)=={'model_route':'deepseek:deepseek-flash'}
+            raise RuntimeError('candidate refuses')
+    http.SessionRegistry=Registry
+    monkeypatch.setitem(sys.modules,'interview_engine.http_service',http)
+    registry=host._registry_type()()
+    with pytest.raises(RuntimeError,match='candidate refuses'):
+        registry.switch_route('s',types.SimpleNamespace(model_route='deepseek',model='deepseek-flash'))
+    assert host._execution_options(session)=={'model_route':'ollama:phi4'}

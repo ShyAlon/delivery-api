@@ -57,6 +57,8 @@ class InProcessInterviewHost:
         self._token=secrets.token_hex(24)
         self._client=None
         self._lock=threading.Lock()
+        from contextvars import ContextVar
+        self._route_target=ContextVar('interview_job_route_target',default=None)
 
     def client(self):
         """The engine client the service uses; created once."""
@@ -98,6 +100,14 @@ class InProcessInterviewHost:
         host=self
         class GatedRegistry(SessionRegistry):
             """The engine's registry with each model-calling step run as a gated job."""
+            def switch_route(self,session_id,request):
+                # Candidate construction precedes installation on session.program.
+                # Bind the explicit target, not the old live program's route.
+                from interview_engine import session_models
+                target=session_models.resolve(request.model_route,request.model)
+                token=host._route_target.set(target)
+                try:return super().switch_route(session_id,request)
+                finally:host._route_target.reset(token)
             def _prepare_program(self,session,build):
                 return host.run_step(session,build)
             def _advance(self,session,response=None):
@@ -137,6 +147,28 @@ class InProcessInterviewHost:
         finally:
             for variable,token in reversed(tokens):variable.reset(token)
 
+    def _execution_options(self,session):
+        """Freeze the selected route before metering, never guess from usage.
+
+        Single-provider legacy jobs keep their existing contract. With two
+        admitted providers there must be exactly one trustworthy model map.
+        """
+        if len(getattr(self.gateway_factory,'models',{}))<2:return {}
+        from .attempt_ledger import AdmissionDenied
+        models=self._route_target.get() or getattr(getattr(session,'program',None),'model_map',None)
+        if not models:
+            request=getattr(session,'request',None)
+            if request is not None:
+                from interview_engine import session_models
+                models=session_models.resolve(request.model_route,request.initial_model)
+        try:pairs={tuple(pair) for pair in (models or {}).values()}
+        except (TypeError,ValueError):raise AdmissionDenied('one pinned interview provider:model required') from None
+        if len(pairs)!=1:raise AdmissionDenied('one pinned interview provider:model required')
+        pair=next(iter(pairs))
+        if len(pair)!=2 or self.gateway_factory.models.get(pair[0])!=pair[1]:
+            raise AdmissionDenied('pinned interview provider:model is not reviewed')
+        return {'model_route':pair[0]+':'+pair[1]}
+
     def run_step(self,session,call):
         """Run one model-calling step as a claimed worker job; return what it returned."""
         from .tenancy import current_scope,tenant_context
@@ -145,7 +177,7 @@ class InProcessInterviewHost:
         box={}
         async def go():
             with tenant_context(scope):
-                job_id=self.store.enqueue_worker(session.task_id,'phase:intent',execution_options={})
+                job_id=self.store.enqueue_worker(session.task_id,'phase:intent',execution_options=self._execution_options(session))
                 def producer(capability,root):
                     with self._bound(capability,job_id):
                         box['result']=call()

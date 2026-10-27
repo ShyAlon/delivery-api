@@ -102,3 +102,61 @@ def test_dispatch_with_no_gateway_installed_refuses_before_any_provider_call():
     # The cloud runner asks for the job's gateway first; with none installed it must stop, not run unmetered.
     assert producer_admission._active_gateway.get() is None
     with pytest.raises(AdmissionDenied):producer_admission.current_worker_gateway(object(),'task-1')
+
+
+def dual_env():
+    local={'provider':'ollama','model':'phi4','price_version':'local-test','source':'test-local',
+           'expense_input':0,'expense_output':0,'retail_input':0,'retail_output':0,'retail_units_per_credit':10**9}
+    local_context={'provider':'ollama','model':'phi4','context_tokens':32768,'maximum_output_tokens':8000,
+                   'source':'test-local','bound_version':'local-test','protective_run_ceiling':False}
+    return env(**{pg.PRICES_ENV:json.dumps([row(),local]),pg.CEILING_ENV:json.dumps([dict(CEILING,provider='deepseek'),local_context]),'DELIVERY_LOCAL_PREVIEW':'1'})
+
+
+def test_dual_gateway_binds_one_durable_route_per_job_without_cross_provider_money():
+    class Store:
+        jobs={'local':{'execution_options':{'model_route':'ollama:phi4'}},
+              'paid':{'execution_options':{'model_route':'deepseek:'+MODEL}},
+              'missing':{'execution_options':{}},
+              'wrong':{'execution_options':{'model_route':'ollama:unknown'}}}
+        def worker_job(self,j):return self.jobs[j]
+    store=Store();contacts=[]
+    def remote(request):contacts.append(request);raise AssertionError('must not contact provider while building/binding')
+    factory=pg.gateways_from_environment(store,dual_env(),balance_transport=httpx.MockTransport(remote))
+    try:
+        assert factory.models=={'deepseek':MODEL,'ollama':'phi4'}
+        local=factory(None,'local');paid=factory(None,'paid')
+        assert local.retail_rates is None and local.verify_provider_snapshot is None and local.provider_balance is None
+        assert paid.retail_rates is not None and paid.verify_provider_snapshot is not None and paid.provider_balance is not None
+        assert local.measure_raw_usage({'prompt_tokens':3,'completion_tokens':2,'total_tokens':5})=={'input_tokens':3,'output_tokens':2}
+        with pytest.raises(AdmissionDenied,match='durable.*selection'):factory(None,'missing')
+        with pytest.raises(AdmissionDenied,match='reviewed'):factory(None,'wrong')
+        import base64
+        with pytest.raises(AdmissionDenied,match='phase selection'):
+            local.reserve_serialized(attempt_id='x',stage='probing',provider='deepseek',model=MODEL,
+                serialized_request=base64.b64encode(json.dumps({'model':MODEL,'max_tokens':1}).encode()).decode(),max_output_tokens=1)
+        assert contacts==[]
+    finally:factory.close()
+
+
+@pytest.mark.parametrize('mutation',['duplicate','missing_ceiling','wrong_model','not_preview'])
+def test_dual_gateway_refuses_incomplete_or_ambiguous_review(mutation):
+    e=dual_env();rows=json.loads(e[pg.PRICES_ENV]);contexts=json.loads(e[pg.CEILING_ENV])
+    if mutation=='duplicate':rows.append(rows[1])
+    if mutation=='missing_ceiling':contexts.pop()
+    if mutation=='wrong_model':contexts[1]['model']='wrong'
+    if mutation=='not_preview':e.pop('DELIVERY_LOCAL_PREVIEW')
+    e[pg.PRICES_ENV]=json.dumps(rows);e[pg.CEILING_ENV]=json.dumps(contexts)
+    with pytest.raises(AdmissionDenied):pg.gateways_from_environment(None,e)
+
+
+def test_dual_settlement_refuses_foreign_quote_before_raw_evidence_or_normalization():
+    class Store:
+        def worker_job(self,j):return {'execution_options':{'model_route':'ollama:phi4'}}
+        def provider_attempt(self,a):return {'job_id':'local','quote':{'provider':'deepseek','model':MODEL}}
+        def record_raw_provider_usage(self,*a):raise AssertionError('wrong provider evidence must not be recorded')
+    factory=pg.gateways_from_environment(Store(),dual_env())
+    try:
+        gateway=factory(None,'local')
+        with pytest.raises(AdmissionDenied,match='quote.*selection'):
+            gateway.settle_raw('foreign',{'prompt_tokens':3,'completion_tokens':2,'total_tokens':5})
+    finally:factory.close()
