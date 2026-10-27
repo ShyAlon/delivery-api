@@ -1812,7 +1812,7 @@ def _sync_waiting_input_event(task_id:str,pending:InputRequest,*,events=None,tas
         return
     phase=((store.task(task_id) if task is None else task) or {}).get("active_phase") or "intent"
     payload={"waiting_input":True,"question":pending.prompt,"input_id":input_id,"kind":int(pending.kind)}
-    store.add_event(task_id,"waiting_input",pending.prompt,phase_key=phase,payload=payload)
+    store.ensure_waiting_input_event(task_id,pending.prompt,phase_key=phase,payload=payload)
     if events is not None:
         # Include the durable event written during this read in THIS response,
         # rather than returning the pre-sync list until the next refresh.
