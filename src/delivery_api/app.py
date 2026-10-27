@@ -935,7 +935,13 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     if config.CLOUD_TENANTS:
         # Cloud users do not choose models: the service does. Managed routes keep the Start screen working; startable only while execution is open.
         open_now=cloud_execution_admitted()
-        routes=[{"id":"deepseek","available":open_now,"managed":True,**({} if open_now else {"error":"Execution is closed on this server."})}]
+        # Availability means startable: execution open AND the key the in-process engine
+        # bills with actually present. A keyless DeepSeek route is dead - say so (naming
+        # the variable, never the value) instead of offering a selectable failure.
+        deepseek_error=None if open_now else "Execution is closed on this server."
+        if deepseek_error is None and not (os.environ.get("DEEPSEEK_API_KEY") or "").strip():
+            deepseek_error="missing key: DEEPSEEK_API_KEY is not set on this server"
+        routes=[{"id":"deepseek","available":deepseek_error is None,"managed":True,**({} if deepseek_error is None else {"error":deepseek_error})}]
         default={"route":"deepseek"}
         if local_route.local_preview_enabled():
             # The operator's local execution preview adds exactly one managed local
