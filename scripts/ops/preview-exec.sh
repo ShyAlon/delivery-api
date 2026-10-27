@@ -191,12 +191,18 @@ grep -q '^VMODEL_REVIEWED_MODEL_PRICES=.' "$WORK/cloud-models.env" && grep -q '^
 HAVE=1; docker image inspect "$IMAGE" >/dev/null 2>&1 || HAVE=0
 if [ "$HAVE" = 1 ]; then
   echo "== the image is already on this Mac: checking that it passes the smoke check before it is reused"
-  if docker run --rm --platform "$PLATFORM" --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 "$IMAGE" python /app/full-smoke.py; then
+  rc=0
+  SMOKE_OUT=$(docker run --rm --platform "$PLATFORM" --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 "$IMAGE" python /app/full-smoke.py 2>&1) || rc=$?
+  [ -z "$SMOKE_OUT" ] || printf '%s\n' "$SMOKE_OUT"
+  if [ "$rc" = 0 ]; then
     echo "== reuse smoke passed"
-  elif docker rmi "$IMAGE" >/dev/null 2>&1; then
-    HAVE=0; echo "== that image failed and its tag was removed (that exact tag only); building it again"
   else
-    abort IMAGE-SMOKE "the existing image failed the smoke check and could not be removed" "" "send me the output above"
+    [ -n "$SMOKE_OUT" ] || echo "== the smoke container produced no output at all (docker exit code $rc): it was killed before it could print - a signal kill, commonly the Docker Desktop VM running out of memory, leaves no output"
+    if docker rmi "$IMAGE" >/dev/null 2>&1; then
+      HAVE=0; echo "== that image failed (exit code $rc) and its tag was removed (that exact tag only); building it again"
+    else
+      abort IMAGE-SMOKE "the existing image failed the smoke check (exit code $rc) and could not be removed" "" "send me the output above"
+    fi
   fi
 fi
 if [ "$HAVE" = 0 ]; then

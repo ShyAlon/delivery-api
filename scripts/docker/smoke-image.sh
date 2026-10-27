@@ -10,9 +10,11 @@ case "$IMAGE" in *[!A-Za-z0-9:._-]*) echo "smoke-image: refusing '$IMAGE': unexp
 SSHB=(ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST")
 echo "== smoke inside the image $IMAGE (no network, no provider key, not root)"
 rc=0
-"${SSHB[@]}" "sudo -n docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 $IMAGE python /app/full-smoke.py" || rc=$?
+OUT=$("${SSHB[@]}" "sudo -n docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 $IMAGE python /app/full-smoke.py" 2>&1) || rc=$?
+[ -z "$OUT" ] || printf '%s\n' "$OUT"
 [ "$rc" -ne 0 ] || { echo "smoke passed: $IMAGE"; exit 0; }
 if [ "$rc" = 255 ]; then echo "smoke-image: cannot reach $HOST; nothing was changed"; exit 2; fi
-echo "smoke FAILED for $IMAGE (output above)"
+[ -n "$OUT" ] || echo "== the smoke container produced no output at all (exit code $rc): it was killed before it could print - a signal kill, commonly out of memory, leaves no output"
+echo "smoke FAILED for $IMAGE (exit code $rc; output above)"
 if "${SSHB[@]}" "sudo -n docker rmi $IMAGE" >/dev/null 2>&1; then echo "removed the failed image tag $IMAGE from the server (only that tag)"; exit 1; fi
 echo "could not remove $IMAGE (a container may be using it); it is NOT approved and was left in place"; exit 2

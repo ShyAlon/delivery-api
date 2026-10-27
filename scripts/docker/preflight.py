@@ -9,6 +9,7 @@ required tables, engine compatibility. Warnings: pool budget, provider key,
 unsettled compute segments (owner-scoped: evaluated live in the Debug dialog),
 build staleness. Run by full_entry before any process is spawned; the report is
 also written next to the engine log for the Debug dialog."""
+import importlib
 import json
 import os
 import re
@@ -248,20 +249,31 @@ def _check_provider_key(env, import_module):
                  'provider key environment', 'set a provider key or close execution')
 
 
+def _engine_fail(piece):
+    return Check('engine-compatible', 'refuse', 'fail', 'the interview engine copy this delivery build requires',
+                 'importable interview_engine.http_service (create_app, sessions DSN contract) and pg_pool.build_pool(max_size=) for pool injection',
+                 piece, 'interview_engine package in this image',
+                 'rebuild the image with the engine commit this delivery build requires')
+
+
 def _check_engine(env, import_module):
     try:
         http = import_module('interview_engine.http_service')
-        assert callable(getattr(http, 'create_app', None))
-        assert getattr(http, 'SESSIONS_DSN_ENV', None) == 'INTERVIEW_ENGINE_SESSIONS_DSN'
-        import inspect
-        pool = import_module('interview_engine.pg_pool')
-        assert 'max_size' in inspect.signature(pool.build_pool).parameters
     except Exception as error:
-        return Check('engine-compatible', 'refuse', 'fail', 'the interview engine copy this delivery build requires',
-                     'importable interview_engine.http_service (create_app, sessions DSN contract) and pg_pool.build_pool(max_size=) for pool injection',
-                     'the installed engine does not expose the required surface: %s: %s' % (type(error).__name__, str(error)[:160]),
-                     'interview_engine package in this image',
-                     'rebuild the image with the engine commit this delivery build requires')
+        return _engine_fail('interview_engine.http_service is not importable: %s: %s' % (type(error).__name__, str(error)[:160]))
+    if not callable(getattr(http, 'create_app', None)):
+        return _engine_fail('interview_engine.http_service.create_app is missing or not callable')
+    if getattr(http, 'SESSIONS_DSN_ENV', None) != 'INTERVIEW_ENGINE_SESSIONS_DSN':
+        return _engine_fail('the sessions DSN contract changed: SESSIONS_DSN_ENV is %r, expected INTERVIEW_ENGINE_SESSIONS_DSN'
+                            % (getattr(http, 'SESSIONS_DSN_ENV', None),))
+    import inspect
+    try:
+        pool = import_module('interview_engine.pg_pool')
+        params = inspect.signature(pool.build_pool).parameters
+    except Exception as error:
+        return _engine_fail('interview_engine.pg_pool.build_pool is not introspectable: %s: %s' % (type(error).__name__, str(error)[:160]))
+    if 'max_size' not in params:
+        return _engine_fail('pg_pool.build_pool lost the max_size parameter (pool injection is impossible): %s' % list(params))
     repos = dict(pair.split('=', 1) for pair in env.get('REQUI_BUILD_REPOS', '').split(',') if '=' in pair)
     engine_sha = repos.get('interview-engine', 'development install')
     return Check('engine-compatible', 'refuse', 'pass', 'the interview engine copy this delivery build requires',
@@ -301,7 +313,10 @@ def _real_connect(dsn):
     return psycopg.connect(dsn, connect_timeout=10)
 
 
-def run(env, *, connect=None, import_module=__import__, required_tables=REQUIRED_TABLES):
+def run(env, *, connect=None, import_module=importlib.import_module, required_tables=REQUIRED_TABLES):
+    # import_module defaults to importlib.import_module, never __import__: __import__('a.b')
+    # returns the TOP package (2026-10-27: check 6 refused every real start with a bare
+    # AssertionError because the package re-exports nothing, while mocked tests stayed green).
     """Run every check and return the report. Nothing here raises: an unexpected error
     inside a warn-level check becomes a warning, inside a refuse-level check a refusal."""
     connect = connect or _real_connect

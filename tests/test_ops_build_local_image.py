@@ -20,7 +20,7 @@ case "$1" in
   info) :;;
   buildx) :;;
   build) [ -z "${FAKE_BUILD_RC:-}" ] || exit "$FAKE_BUILD_RC";;
-  run) case "$*" in *full-smoke.py*) exit "${FAKE_SMOKE_RC:-0}";; esac;;
+  run) case "$*" in *full-smoke.py*) [ -z "${FAKE_SMOKE_OUT:-}" ] || printf '%s\n' "$FAKE_SMOKE_OUT"; exit "${FAKE_SMOKE_RC:-0}";; esac;;
   tag) :;;
   image) exit 1;;
   rmi) exit "${FAKE_RMI_RC:-0}";;
@@ -118,3 +118,23 @@ def test_an_unknown_architecture_value_is_refused(env):
     api, e, log, _ = env
     out = _run(api, e, PREVIEW_ARCH="sparc")
     assert "ABORTED [ARCH]" in out.stdout and "docker build" not in log.read_text()
+
+
+def test_a_silent_smoke_failure_names_the_exit_code_and_says_the_container_printed_nothing(env):
+    """2026-10-27: a smoke died with zero container output and the script said only
+    '(output above)' - nothing above. A silent death (signal kill, commonly the Docker
+    Desktop VM memory limit) must be SAID, with the docker exit code."""
+    api, e, log, _ = env
+    out = _run(api, e, FAKE_SMOKE_RC="137")
+    assert out.returncode != 0
+    assert "exit code 137" in out.stdout, out.stdout
+    assert "produced no output" in out.stdout, out.stdout
+    assert "out of memory" in out.stdout, out.stdout
+
+
+def test_a_smoke_failure_prints_the_containers_own_reason(env):
+    api, e, log, _ = env
+    out = _run(api, e, FAKE_SMOKE_RC="1",
+               FAKE_SMOKE_OUT="RuntimeError: entry exited early: [fail] engine-compatible: create_app is missing")
+    assert "entry exited early" in out.stdout, out.stdout
+    assert "exit code 1" in out.stdout, out.stdout
