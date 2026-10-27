@@ -482,6 +482,9 @@ def test_user_progress_and_composer_have_no_raw_console(page,ui):
     page.get_by_role('button',name='Close debug').click()
     assert page.locator('#answerform').is_visible()
     page.evaluate("liveSource.emit({id:999999,kind:'progress',message:'Still working',phase_key:'intent',payload:{status:'heartbeat',stage:'intent'},ts:1720000200})")
+    # Waiting-for-input is authoritative over a late heartbeat; history remains inspectable.
+    expect(page.locator('#stageprogress .progress-current')).to_have_text('Waiting for your answer')
+    page.locator('#stageprogress > details > summary').click()
     assert page.locator('#stageprogress').get_by_text('Still working',exact=False).is_visible()
 
 
@@ -847,7 +850,7 @@ def test_gate_page_shows_requirements_evidence_and_full_content(page,ui):
 
 
 def test_gate_transition_reconciles_delayed_next_phase(page,ui):
-    page.add_init_script("""class FakeEventSource{addEventListener(){}close(){}}window.EventSource=FakeEventSource""")
+    page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}close(){}}window.EventSource=FakeEventSource""")
     live=page.request.get(ui+'/api/tasks/sim').json();gate=live['gates'][0]
     gate.update({'state':'waiting','is_open':0})
     live.update({'state':'waiting_gate','active_phase':gate['after_phase'],
@@ -869,6 +872,15 @@ def test_gate_transition_reconciles_delayed_next_phase(page,ui):
     notice.wait_for()
     assert 'Starting Concept of operations' in notice.inner_text()
     page.screenshot(path=str(_screenshots_dir / 'jev-d7-phase-transition-desktop.png'),full_page=True)
+    # State events refresh immediately; the timer is only the 60-second safety net.
+    for _ in range(2):
+        before=reads['count']
+        page.evaluate("window.liveSource.handlers.progress({data:JSON.stringify({id:2147483647,kind:'command',phase_key:'conops',message:'Next phase started'})})")
+        for tick in range(50):
+            if reads['count']>before:break
+            page.wait_for_timeout(50)
+        assert reads['count']>before
+        page.wait_for_timeout(100)
     expect(notice).to_have_count(0,timeout=12000)
     assert reads['count']>3
 
@@ -1593,10 +1605,11 @@ def test_cross_ui_waiting_banner_during_slow_write(page,ui):
 
 
 def test_background_refresh_stays_quiet_and_terminal_output_poll_stops(page, ui):
-    # The task page polls every 5s: a background snapshot refresh plus a phase-output read.
+    # Drive the approved 60s safety callbacks explicitly; state events are the normal refresh path.
     # The background read must not flash the global wait banner, and once the environment
     # reports phase output as unavailable here (local preview), that poll leg must stop
     # while the snapshot liveness leg keeps running. Foreground reads must still show progress.
+    page.add_init_script("""const originalInterval=window.setInterval;window.__safety=[];window.setInterval=(fn,ms,...args)=>{if(ms===60000)window.__safety.push(()=>fn(...args));return originalInterval(fn,ms,...args)}""")
     page.goto(ui + '/tasks/live/view')
     page.locator('.detail-head').wait_for()
     real = page.request.get(ui + '/api/tasks/live/phase-output').json()
@@ -1618,7 +1631,11 @@ def test_background_refresh_stays_quiet_and_terminal_output_poll_stops(page, ui)
     }""")
     page.route('**/api/tasks/live', slow_task)
     page.route('**/api/tasks/live/phase-output', terminal_output)
-    page.wait_for_timeout(11500)  # spans two 5s poll cycles
+    assert page.evaluate('window.__safety.length')>=1
+    for cycle in range(2):
+        page.evaluate('window.__safety.forEach(fn=>fn())')
+        page.wait_for_timeout(1200)  # allow the deliberate 900ms request to finish
+
     assert page.evaluate('window.__bannerShows') == 0, 'background refresh flashed the Loading task banner'
     assert hits['task'] >= 2, f"snapshot liveness stopped: {hits}"
     assert hits['output'] == 1, f"terminal output status did not stop the output poll: {hits}"
@@ -2026,6 +2043,7 @@ def test_phase_change_dialog_explains_pauses_input_and_keeps_progress_underneath
     page.get_by_text("Live process").first.wait_for()
     assert page.locator(".phase-change-dialog").count() == 0          # first look at a phase is not a change
     cur["s"] = snap("needs", "executing")                              # the engine moves to the next phase
+    page.evaluate("window.__emit({id:2147483647,kind:'command',phase_key:'needs',message:'Snapshot changed'})")
     dialog = page.locator(".phase-change-dialog")
     dialog.wait_for(timeout=12000)
     text = dialog.inner_text()
@@ -2054,11 +2072,14 @@ def test_phase_change_dialog_closes_when_the_founder_can_act_again_and_never_sho
     page.goto(ui + "/tasks/live/view")
     page.get_by_text("Live process").first.wait_for()
     cur["s"] = snap("needs", "executing")
+    page.evaluate("window.__emit({id:2147483647,kind:'command',phase_key:'needs',message:'Snapshot changed'})")
     page.locator(".phase-change-dialog").wait_for(timeout=12000)
     cur["s"] = snap("needs", "engine_question")                        # input is possible again
+    page.evaluate("window.__emit({id:2147483647,kind:'command',phase_key:'needs',message:'Snapshot changed'})")
     page.wait_for_function("!document.querySelector('.phase-change-dialog')", timeout=12000)
     # a phase change that arrives together with a question is not a paused state: no dialog
     cur["s"] = snap("srs", "engine_question")
+    page.evaluate("window.__emit({id:2147483647,kind:'command',phase_key:'needs',message:'Snapshot changed'})")
     page.wait_for_timeout(6500)
     assert page.locator(".phase-change-dialog").count() == 0
 
