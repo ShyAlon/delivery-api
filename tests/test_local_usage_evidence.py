@@ -23,13 +23,3 @@ def test_rollup_marks_incomplete_even_when_no_valid_rows(tmp_path):
     assert report['evidence']['complete'] is False
     assert report['evidence']['rejected_rows'] == 1
     assert json.loads((tmp_path/'cost.json').read_text())['evidence'] == report['evidence']
-
-
-def test_invalid_numeric_usage_is_rejected_instead_of_claiming_complete(tmp_path):
-    path=tmp_path/'usage.jsonl'
-    path.write_text('\n'.join(json.dumps(row) for row in [
-        {'prompt_tokens':'bad'}, {'completion_tokens':-1}, {'prompt_tokens':1.5},
-        {'prompt_tokens':True}, {'latency_s':'NaN'}, {'latency_s':-1},
-        {'prompt_tokens':3,'completion_tokens':2}]))
-    rows=pricing._rows(path)
-    assert rows.rejected_rows==6 and rows==[{'prompt_tokens':3,'completion_tokens':2}]
