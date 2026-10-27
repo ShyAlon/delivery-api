@@ -38,16 +38,26 @@ export function stageProgressHtml(events,{startedAt=Date.now()/1000,connected=tr
  return `<section class="review-progress" aria-label="Run progress"><h3>Run progress</h3><p>${connected?'Connected to progress':'Progress connection lost; reconnecting without resubmitting'} · ${Math.max(0,Math.floor(now-startedAt))}s elapsed${lastSignal!==null?` · last engine signal ${Math.max(0,Math.floor(now-lastSignal))}s ago`:''}</p><p>${esc(eta)}</p>${latest?progressLine(latest):''}${rows.length?`<ol>${rows.map(s=>`<li class="${esc(s.status)}"><details ${s===active?'open':''}><summary>${s.status==='completed'||s.status==='item_completed'&&s.completed===s.total?'Completed':s.status==='failed'?'Failed':'Working'} · ${esc(humanLabel(s.label))}${Number.isFinite(s.total)?` · ${Number(s.completed||0)}/${Number(s.total)}`:''}</summary>${s.detail?`<p>${esc(s.detail)}</p>`:''}</details></li>`).join('')}</ol>`:'<p>Waiting for stage progress.</p>'}<p>Next: ${esc(nextStep)}.</p></section>`;
 }
 
+// While the progress stream is open the page polls only once a minute: stream events
+// trigger an immediate poll, the timer is the safety net (2026-10-27 ruling - polled
+// database reads are not a heartbeat). A dead stream returns polling to 1.5s.
+export const REVIEW_POLL_STREAM_MS=60000;
+export const shouldPollNow=(streamOpen,lastPollMs,nowMs)=>!streamOpen||nowMs-lastPollMs>=REVIEW_POLL_STREAM_MS;
+
 export function watchReviewProgress(taskId,host){
- const events=[],startedAt=Date.now()/1000;let connected=true,after=0,busy=false,closed=false;
+ const events=[],startedAt=Date.now()/1000;let connected=true,after=0,busy=false,closed=false,lastPoll=0,streamOpen=false;
  const render=()=>{if(host?.isConnected)host.innerHTML='<p>Recording decisions. Reading engine progress without resubmitting.</p>'+stageProgressHtml(events,{startedAt,connected})};
- const poll=async()=>{if(closed||busy||!host?.isConnected)return;busy=true;try{
+ const poll=async(force)=>{if(closed||busy||!host?.isConnected)return;if(!force&&!shouldPollNow(streamOpen,lastPoll,Date.now()))return;busy=true;lastPoll=Date.now();try{
   const response=await fetch(`/api/tasks/${encodeURIComponent(taskId)}/events?after=${after}`,{cache:'no-store'});
   if(!response.ok)throw new Error('progress unavailable');
   const page=await response.json(),rows=Array.isArray(page)?page:page.events||[];
   for(const e of rows){if(e.id>after){events.push(e);after=e.id;}}
   connected=true;
  }catch{connected=false}finally{busy=false;render()}};
- render();poll();const timer=setInterval(poll,1500);onPageExit(()=>clearInterval(timer));
- return ()=>{closed=true;clearInterval(timer)};
+ const es=new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/stream`);
+ es.onopen=()=>{streamOpen=true;connected=true;render()};
+ es.onerror=()=>{streamOpen=false;connected=false;render()};
+ es.addEventListener('progress',()=>{poll(true)});
+ render();poll(true);const timer=setInterval(()=>poll(false),1500);onPageExit(()=>{clearInterval(timer);es.close()});
+ return ()=>{closed=true;clearInterval(timer);es.close()};
 }

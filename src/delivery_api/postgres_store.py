@@ -15,7 +15,7 @@ import time
 import contextlib,sqlite3
 from .store import SQLiteStore, PHASES
 from vmodel_contracts import RunState
-from .postgres_scope import ScopedPostgres, note_query
+from .postgres_scope import ScopedPostgres, note_query, note_statement, statement_label
 from .tenancy import current_scope, TenantAccessDenied
 
 
@@ -61,7 +61,9 @@ class _Connection:
             if isinstance(exc,psycopg.errors.UniqueViolation):
                 raise sqlite3.IntegrityError(str(exc)) from exc
             raise
-        finally:note_query(time.monotonic()-started)
+        finally:
+            elapsed=time.monotonic()-started
+            note_query(elapsed);note_statement(statement_label(sql),elapsed)
 
     def executemany(self,sql,parameters):
         for row in parameters: self.execute(sql,row)

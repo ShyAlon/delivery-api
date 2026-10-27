@@ -2053,12 +2053,21 @@ def stream_events_timed(store, task_id, cursor, acc):
     return events
 
 
+# The stream waits on writes through this process (event_bus) and otherwise reads only
+# on the safety cadence - no steady-state database polling. Client heartbeats keep the
+# SSE connection alive for free between reads.
+STREAM_HEARTBEAT_SECONDS = 15.0
+STREAM_SAFETY_SECONDS = 60.0
+
+
 def loop_lag_ms(expected, actual):
     """How late the loop woke for a scheduled tick: positive means something blocked it."""
     return max(0,int((actual-expected)*1000))
 
 
 import logging as _logging
+
+from . import event_bus
 
 
 async def _loop_lag_monitor():
@@ -2078,26 +2087,37 @@ async def _loop_lag_monitor():
 
 @app.get("/api/tasks/{task_id}/stream")
 async def task_stream(task_id: str, request: Request):
-    if not store.task(task_id): raise HTTPException(404, "task not found")
+    # Every database read for this endpoint runs in the threadpool: the reads are
+    # synchronous and remote, and on the event loop each one stalls every request.
+    from starlette.concurrency import run_in_threadpool
+    if not await run_in_threadpool(store.task,task_id): raise HTTPException(404, "task not found")
     stop=asyncio.Event();_stream_shutdown_events.add(stop)
     async def generate():
         loop_block={'cycles':0,'blocked_ms':0,'max_ms':0}
         connected_at=time.monotonic()
         try:
-            existing = store.events(task_id)
+            seen_version = event_bus.version(task_id)
+            existing = await run_in_threadpool(stream_events_timed,store,task_id,0,loop_block)
             activity("stream.connect","Progress stream connected",task_id=task_id,backlog=len(existing))
             cursor = existing[-1]["id"] if existing else 0
+            since_read = 0.0
+            yield f"event: heartbeat\ndata: {json.dumps({'task_id': task_id})}\n\n"
             while not stop.is_set() and not await request.is_disconnected():
-                t_events=time.monotonic()
-                events = stream_events_timed(store,task_id,cursor,loop_block)
-                if time.monotonic()-t_events>2:
-                    activity("stream.events.slow","Progress stream event read slow",task_id=task_id,dur_ms=int((time.monotonic()-t_events)*1000))
-                for event in _customer_events(events):
-                    cursor = event["id"]
-                    yield f"id: {cursor}\nevent: progress\ndata: {json.dumps(event)}\n\n"
+                woke = await run_in_threadpool(event_bus.wait,task_id,STREAM_HEARTBEAT_SECONDS,stop,seen_version)
+                if stop.is_set():break
+                since_read += STREAM_HEARTBEAT_SECONDS
+                if woke or since_read >= STREAM_SAFETY_SECONDS:
+                    since_read = 0.0
+                    seen_version = event_bus.version(task_id)
+                    t_events=time.monotonic()
+                    events = await run_in_threadpool(stream_events_timed,store,task_id,cursor,loop_block)
+                    if time.monotonic()-t_events>2:
+                        activity("stream.events.slow","Progress stream event read slow",task_id=task_id,dur_ms=int((time.monotonic()-t_events)*1000))
+                    for event in _customer_events(events):
+                        cursor = event["id"]
+                        yield f"id: {cursor}\nevent: progress\ndata: {json.dumps(event)}\n\n"
                 yield f"event: heartbeat\ndata: {json.dumps({'task_id': task_id})}\n\n"
-                try:await asyncio.wait_for(stop.wait(),2)
-                except asyncio.TimeoutError:pass
+
         finally:
             _stream_shutdown_events.discard(stop)
             from . import request_costs

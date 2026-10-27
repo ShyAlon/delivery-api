@@ -38,6 +38,7 @@ def _entry(type_, duration, **kw):
             'engine_ms': kw.get('engine', 0), 'engine_calls': kw.get('ecalls', 0),
             'checkout_ms': kw.get('checkout', 0), 'auth_ms': kw.get('auth', 0),
             'held_ms': kw.get('held', 0), 'loop_blocked_ms': kw.get('loop', 0),
+            'max_cycle_ms': kw.get('max_cycle', 0), 'top_statement': None, 'top_statement_ms': 0,
             'at': kw.get('at', '2026-10-26T20:00:00Z')}
 
 
@@ -121,3 +122,12 @@ if(!text.includes('Slowest Recent Requests'))throw new Error('text export lost t
 console.log('ok');
 """ % (digest, json.dumps(EXPECTED_COLUMNS))
     assert _node(src).strip() == 'ok'
+
+
+def test_stream_max_cycle_is_stored_in_the_window():
+    request_costs.record_stream(duration_ms=60000, loop_blocked_ms=4100, max_cycle_ms=700)
+    s = request_costs.summary()
+    row = next(r for r in s['types'] if r['type'] == 'GET /api/tasks/<id>/stream')
+    assert row['p95']['max_cycle_ms'] == 700
+    slow = next(r for r in s['slowest'] if r['type'] == 'GET /api/tasks/<id>/stream')
+    assert slow['max_cycle_ms'] == 700
