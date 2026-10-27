@@ -67,7 +67,50 @@ def worker_state_summary(worker_state):
     return {"available":True,"worker_jobs":jobs,"provider_attempts":attempts}
 
 
-def build(task,events,control,input_state,engine,limit=EVENT_LIMIT,worker_state=None):
+def model_calls(root,cloud,limit=300):
+    """Per-call model timing for the Debug window: every llm_call_end in the
+    session's llm-calls.jsonl plus a per-call-type aggregate - which types of
+    calls took how long. Cloud mirrors the provider-diagnostics privacy rule:
+    token counts and derived rates stay server-side; durations stay visible."""
+    import json as _json
+    path=root/"llm-calls.jsonl"
+    calls=[]
+    if path.is_file():
+        with path.open(errors="replace") as stream:
+            for line in stream:
+                try:entry=_json.loads(line)
+                except ValueError:continue
+                if entry.get("event")!="llm_call_end":continue
+                call={key:entry[key] for key in ("ts","stage","item","provider","model","latency_s","keep_alive") if key in entry}
+                timing=entry.get("timing")
+                if isinstance(timing,dict):
+                    if cloud:timing={k:v for k,v in timing.items() if not k.endswith("_count")}
+                    if timing:call["timing"]=timing
+                if not cloud:
+                    if entry.get("usage"):call["usage"]=entry["usage"]
+                    if entry.get("tokens_per_s") is not None:call["tokens_per_s"]=entry["tokens_per_s"]
+                calls.append(call)
+        calls=calls[-limit:]
+    by_stage={}
+    for call in calls:
+        key=(call.get("provider"),call.get("model"),call.get("stage"))
+        agg=by_stage.setdefault(key,{"provider":key[0],"model":key[1],"stage":key[2],"calls":0,"total_s":0.0})
+        agg["calls"]+=1;agg["total_s"]=round(agg["total_s"]+call.get("latency_s",0.0),2)
+        timing=call.get("timing") or {}
+        for k in ("load_ms","prompt_eval_ms","eval_ms"):
+            if k in timing:agg[k]=agg.get(k,0)+timing[k]
+        if not cloud and call.get("usage"):
+            agg["input_tokens"]=agg.get("input_tokens",0)+call["usage"].get("input_tokens",0)
+            agg["output_tokens"]=agg.get("output_tokens",0)+call["usage"].get("output_tokens",0)
+    aggregates=[]
+    for agg in by_stage.values():
+        agg["mean_s"]=round(agg["total_s"]/agg["calls"],2)
+        aggregates.append(agg)
+    aggregates.sort(key=lambda a:-a["total_s"])
+    return {"calls":calls,"by_stage":aggregates}
+
+
+def build(task,events,control,input_state,engine,limit=EVENT_LIMIT,worker_state=None,model_calls=None):
     """One JSON-able document. `question` is the text the owner should be seeing."""
     control=control or {};input_state=input_state or {}
     question=control.get("prompt") or input_state.get("question") or ((input_state.get("decision") or {}).get("prompt"))
@@ -80,4 +123,5 @@ def build(task,events,control,input_state,engine,limit=EVENT_LIMIT,worker_state=
             "engine":engine,
             "events":{"total":len(events or []),"shown":len(shown),"items":[event_row(e) for e in shown]}}
     if worker_state is not None:out["worker_state"]=worker_state_summary(worker_state)
+    if model_calls is not None:out["model_calls"]=model_calls
     return out
