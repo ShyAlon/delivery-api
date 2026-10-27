@@ -361,16 +361,19 @@ It writes a NEW `.env-proposal-*` file, preserves secrets/retail and keeps `.env
 unchanged. Existing differing values are conflicts, not silently replaced. Inspect
 locally, then explicitly replace the source `.env` with that candidate if correct.
 Nothing treats that replacement as review or spending approval. Fill the remaining
-null values and use the two-step review:
+null values and review locally:
 
 ```sh
 python3 scripts/item6/scaffold.py review-config runs/item6-run-01
-python3 scripts/item6/scaffold.py review-config runs/item6-run-01 --confirm HASH_PRINTED_ABOVE
 python3 scripts/item6/scaffold.py compile-config runs/item6-run-01
 ```
 
 Review shows only non-secret source values, source/unit/band conditions and a hash.
-Confirmation records your exact local choice. Any source edit, including credential
+In a terminal, review-config asks you to type `yes` after showing the review. No
+hash copying is needed. Enter, no, or EOF leaves it unreviewed. Noninteractive
+review-config prints a read-only review and never confirms automatically. The
+legacy exact `--confirm HASH` path remains supported for existing callers.
+Confirmation records your exact unchanged local choice. Any source edit, including credential
 changes, invalidates the compile receipt. It still does NOT grant run go, prove
 sandbox bindings live or establish authentic webhook evidence. The compiler checks
 all schema/scale/role/destination restrictions and generates a fresh mode-700

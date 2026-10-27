@@ -124,7 +124,7 @@ if __name__=='__main__':
             from model_data import propose
             result=propose(a.directory,a.model)
         elif a.action in ('init-env','import-config','apply-model-data','review-config','compile-config','create-env'):
-            from single_config import create_single,template,import_legacy,apply_proposal,review,compile_config
+            from single_config import create_single,template,import_legacy,apply_proposal,review,compile_config,attest_config
             if a.action=='create-env':result=create_single(a.directory)
             elif a.action=='init-env':result=template(a.directory)
             elif a.action=='import-config':
@@ -134,7 +134,9 @@ if __name__=='__main__':
                     print(json.dumps(diagnostic));raise SystemExit(1)
                 result=import_legacy(a.directory)
             elif a.action=='apply-model-data':result=apply_proposal(a.directory,a.band,a.context_tokens)
-            elif a.action=='review-config':result=review(a.directory,a.confirm)
+            elif a.action=='review-config':
+                import sys
+                result=attest_config(a.directory) if a.confirm is None and sys.stdin.isatty() else review(a.directory,a.confirm)
             else:result=compile_config(a.directory)
         else:result=scaffold(a.directory) if a.action=='create' else validate(a.directory)
         print(json.dumps(result))
