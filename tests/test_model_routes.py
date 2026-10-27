@@ -178,3 +178,18 @@ def test_bound_legacy_session_without_exact_selection_requires_a_choice(tmp_path
     store.add_event(tid,'model_route','generator used legacy configured model',phase_key='needs',payload={'resolved':'ollama:qwen','mode':'start'})
     with pytest.raises(ValueError,match='choose a model'):
         model_routes.task_default_model(store,tid,'srs')
+
+
+def test_installed_model_failure_preserves_pinned_route_but_discloses_list_status(monkeypatch):
+    from delivery_api import app as module
+    from types import SimpleNamespace
+    monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+    def preview(route,**kw):return {'model_map':{'probing':[route,'pinned']}}
+    def unavailable():raise AttributeError('private-error')
+    monkeypatch.setattr(module,'engine_client',SimpleNamespace(default_route=lambda:None,preview_route=preview,local_models=unavailable))
+    result=module.model_routes()
+    route=next(r for r in result['routes'] if r['id']=='ollama')
+    assert route['available'] and route['models']==['pinned']
+    assert route['model_list']['availability']=='unavailable'
+    assert route['model_list']['reason']=='installed_lookup_failed'
+    assert 'private-error' not in str(result)
