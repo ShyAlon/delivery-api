@@ -62,8 +62,16 @@ def test_image_build_time_baked_and_surfaced():
     for script in ("build-local-image.sh", "build-full-image.sh"):
         text = (ROOT / "scripts" / "docker" / script).read_text()
         assert "--build-arg REQUI_BUILD_AT=" in text and "date -u" in text
-    src = (ROOT / "src" / "delivery_api" / "app.py").read_text()
-    assert '"built_at":built_at' in src and '"built_at":RUNTIME_VERSION.get("built_at")' in src
+    from delivery_api import app as module
+    from fastapi.testclient import TestClient
+    from unittest.mock import patch
+    import os
+    stamp="2026-10-27T10:00:00Z"
+    with patch.dict(os.environ, {"REQUI_BUILD_ID":"test-build","REQUI_BUILD_AT":stamp}):
+        runtime=module._runtime_version()
+    assert runtime['built_at']==stamp
+    with patch.object(module,'RUNTIME_VERSION',runtime), patch.object(module.config,'CLOUD_TENANTS',True):
+        assert TestClient(module.app).get('/health').json()['built_at']==stamp
 
 
 # --- one events read per task GET -----------------------------------------

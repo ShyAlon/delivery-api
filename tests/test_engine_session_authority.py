@@ -4,7 +4,7 @@ Hermetic regression for the 2026-10-24 interview-start failure: the engine
 connected with synthetic claims (session id = owner UUID) and the
 engine_sessions policy (requi_session_active) rejected its first write with
 SQLSTATE 42501. These tests drive the engine's REAL store path (PgSessionStore
-over owner_scoped_dsn claims) on the throwaway migrated Postgres: synthetic
+over pooled transaction-local claims) on the throwaway migrated Postgres: synthetic
 claims fail, real claims pass, a foreign session fails, and a deleted
 (signed-out) session fails on an ALREADY-OPEN connection (the policy re-reads
 auth.sessions on every statement). The seed keeps owner and session ids
@@ -43,9 +43,11 @@ def dsn():
 def _engine_store(dsn, sub, session_id):
     # The engine's real connection path: the delivery_app role (NOSUPERUSER
     # NOBYPASSRLS, inheriting requi_backend -> authenticated) with tenant
-    # claims in the conninfo.
+    # claims applied per transaction, never in conninfo.
     dsn = dsn.replace('user=sandbox', 'user=delivery_app')
-    return tenant_worker.pg_session_store(tenant_worker.owner_scoped_dsn(dsn, sub, session_id))
+    from interview_engine.pg_pool import build_pool
+    pool=build_pool(dsn,max_size=1,name='authority-test')
+    return tenant_worker.pg_session_store(pool,sub,session_id,close_pool=True)
 
 
 def _seed_task(dsn, tag):
@@ -85,7 +87,7 @@ def test_engine_synthetic_claims_rejected(dsn, tag):
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             store.create('sess-'+tag, 'task-'+tag, OWNER_A)
     finally:
-        store.conn.close()
+        store.close()
 
 
 def test_engine_real_session_claims_accepted(dsn, tag):
@@ -94,7 +96,7 @@ def test_engine_real_session_claims_accepted(dsn, tag):
         _seed_task(dsn, tag)
         store.create('sess-'+tag, 'task-'+tag, OWNER_A)
     finally:
-        store.conn.close()
+        store.close()
 
 
 def test_engine_foreign_session_rejected(dsn, tag):
@@ -105,7 +107,7 @@ def test_engine_foreign_session_rejected(dsn, tag):
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             store.create('sess-'+tag, 'task-'+tag, OWNER_A)
     finally:
-        store.conn.close()
+        store.close()
 
 
 def test_signout_fails_next_statement_on_existing_connection(dsn, tag):
@@ -113,14 +115,17 @@ def test_signout_fails_next_statement_on_existing_connection(dsn, tag):
     try:
         _seed_task(dsn, tag)
         store.create('sess-'+tag, 'task-'+tag, OWNER_A)
+        with store.pool.connection() as conn:
+            backend=conn.info.backend_pid
         with psycopg.connect(dsn, autocommit=True) as admin:
             admin.execute('DELETE FROM auth.sessions WHERE id=%s', (SESSION_A,))
-        # Same open serving connection, next statement: the policy re-reads
+        with store.pool.connection() as conn:
+            assert conn.info.backend_pid==backend
+        # Same pooled backend, next transaction: the policy re-reads
         # auth.sessions, so sign-out takes effect without any reconnect.
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            _seed_task(dsn, tag)
-            store.create('sess-'+tag, 'task-'+tag, OWNER_A)
+            store.create('revoked-'+tag, 'task-'+tag, OWNER_A)
     finally:
-        store.conn.close()
+        store.close()
         with psycopg.connect(dsn, autocommit=True) as admin:
             admin.execute('INSERT INTO auth.sessions(id,user_id) VALUES (%s,%s) ON CONFLICT (id) DO NOTHING', (SESSION_A, OWNER_A))

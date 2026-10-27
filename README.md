@@ -229,11 +229,17 @@ every cosmetic test.
 
 Three tests marked `engine_integration` exercise the real interview-engine
 boundary. They require interview-engine installed in the same environment;
-the delivery-only PR check explicitly excludes them. The real package-export
-test is marked `producer_integration` and requires a configured spec-generator
-environment; it is also excluded explicitly, rather than silently skipped.
-Before release, install the approved sibling engine and configure
-SPEC_GENERATOR_DIR with its export environment and run the full local suite, including every
+the delivery-only PR check explicitly excludes them. The package-export and lineage-binding
+tests are marked `producer_integration` and require a configured spec-generator
+environment; they are excluded explicitly, rather than silently skipped.
+Before release, install the approved sibling engine and generator into the
+same test interpreter (the lineage tests import `spec_generator.lineage` directly):
+
+```sh
+.venv/bin/python -m pip install -e ../interview-engine -e ../spec-generator
+```
+
+Also configure SPEC_GENERATOR_DIR with its export environment and run the full local suite, including every
 browser test, with `./scripts/test-local.sh`. No live model is required. The
 four command-planning tests use a test-owned generator path and fake runners,
 not a sibling generator environment. Nothing is quarantined as an unexplained

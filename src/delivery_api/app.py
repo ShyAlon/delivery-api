@@ -111,7 +111,7 @@ if config.ADMIN_TOKEN == "dev-admin-token":
     )
 
 _stream_shutdown_events:set[asyncio.Event]=set()
-_previous_sigint=None
+_previous_shutdown_handlers={}
 _streams_closed_on_signal=0
 
 _SESSION_UNSET=object()
@@ -409,7 +409,8 @@ async def _resume_one_interview(task_id:str,session:str)->None:
 
 @asynccontextmanager
 async def lifespan(application:FastAPI):
-    global _previous_sigint
+    global _streams_closed_on_signal
+    _streams_closed_on_signal=0
     config.validate_auth_config()
     from . import cloud_execution
     if cloud_execution.admitted():
@@ -427,8 +428,11 @@ async def lifespan(application:FastAPI):
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
     if not config.CLOUD_TENANTS and not control_plane_only():
         simulation.reconcile_interrupted();await jobs.start();await _recover_tasks();await _catch_up_interview_progress()
-    if threading.current_thread() is threading.main_thread() and signal.getsignal(signal.SIGINT) is not _shutdown_signal:
-        _previous_sigint=signal.getsignal(signal.SIGINT);signal.signal(signal.SIGINT,_shutdown_signal)
+    if threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGINT,signal.SIGTERM):
+            if signal.getsignal(signum) is not _shutdown_signal:
+                _previous_shutdown_handlers[signum]=signal.getsignal(signum)
+                signal.signal(signum,_shutdown_signal)
     try:yield
     finally:
         loop_lag_task.cancel()
@@ -440,13 +444,18 @@ async def lifespan(application:FastAPI):
         from . import cloud_runtime
         cloud_runtime.uninstall()
         activity("server.shutdown.complete","Server shutdown complete",streams_closed=stream_count)
+        if threading.current_thread() is threading.main_thread():
+            for signum,previous in _previous_shutdown_handlers.items():
+                if signal.getsignal(signum) is _shutdown_signal:signal.signal(signum,previous)
+            _previous_shutdown_handlers.clear()
 
 def _shutdown_signal(signum,frame):
     global _streams_closed_on_signal
     count=len(_stream_shutdown_events);_streams_closed_on_signal+=count
-    activity("server.shutdown.signal","Server shutdown signal received",streams=count,signal="SIGINT")
+    activity("server.shutdown.signal","Server shutdown signal received",streams=count,signal=signal.Signals(signum).name)
     for event in tuple(_stream_shutdown_events):event.set()
-    if callable(_previous_sigint):_previous_sigint(signum,frame)
+    previous=_previous_shutdown_handlers.get(signum)
+    if callable(previous):previous(signum,frame)
 
 
 app = FastAPI(title="Requi.re API", version="0.2.0", lifespan=lifespan)
@@ -1772,18 +1781,24 @@ def task_artifacts_zip(task_id:str):
 
 _STRUCTURED_INPUT_KINDS=(InputKind.CHOICE,InputKind.APPROVAL)
 
-def _sync_waiting_input_event(task_id:str,pending:InputRequest)->None:
+def _sync_waiting_input_event(task_id:str,pending:InputRequest,*,events=None,task=None)->None:
     """Record each distinct engine input request once, so the question panel,
     the interview transcript and SSE state refreshes have durable evidence in
     HTTP mode (the subprocess runner used to emit these itself)."""
     input_id=str(pending.input_id)
-    if any(event.get("kind")=="waiting_input" and str(event.get("payload",{}).get("input_id"))==input_id for event in store.events(task_id)):
+    if any(event.get("kind")=="waiting_input" and str(event.get("payload",{}).get("input_id"))==input_id for event in (store.events(task_id) if events is None else events)):
         return
-    phase=((store.task(task_id) or {}).get("active_phase")) or "intent"
-    store.add_event(task_id,"waiting_input",pending.prompt,phase_key=phase,
-        payload={"waiting_input":True,"question":pending.prompt,"input_id":input_id,"kind":int(pending.kind)})
+    phase=((store.task(task_id) if task is None else task) or {}).get("active_phase") or "intent"
+    payload={"waiting_input":True,"question":pending.prompt,"input_id":input_id,"kind":int(pending.kind)}
+    store.add_event(task_id,"waiting_input",pending.prompt,phase_key=phase,payload=payload)
+    if events is not None:
+        # Include the durable event written during this read in THIS response,
+        # rather than returning the pre-sync list until the next refresh.
+        # Re-read only after writing, keeping the store's exact timestamp and
+        # row shape. Steady-state reads do not need another query.
+        events[:]=store.events(task_id)
 
-def _http_input_state(task_id:str,engine_state:EngineSnapshot)->dict:
+def _http_input_state(task_id:str,engine_state:EngineSnapshot,*,events=None,task=None)->dict:
     """Project a live HTTP engine snapshot into the task input contract.
 
     Only structured inputs (choice/approval) may surface as decisions; a text
@@ -1797,12 +1812,12 @@ def _http_input_state(task_id:str,engine_state:EngineSnapshot)->dict:
         input_id=str(pending.input_id)
         if pending.kind in _STRUCTURED_INPUT_KINDS or pending.context.get('decision_purpose')=='semantic_review':decision=pending.model_dump(mode="json")
         else:question=pending.prompt
-        _sync_waiting_input_event(task_id,pending)
+        _sync_waiting_input_event(task_id,pending,events=events,task=task)
     return {"waiting":waiting,"engine_process_status":int(engine_state.process_status),
             "process_live":engine_state.process_status in (ProcessStatus.RUNNING,ProcessStatus.WAITING_INPUT),
             "decision":decision,"requirement":None,"question":question,"input_id":input_id}
 
-def _cloud_engine_read(task_id:str,task:dict,session_id:str):
+def _cloud_engine_read(task_id:str,task:dict,session_id:str,*,events=None):
     """Owner-session engine snapshot for a cloud task read.
 
     Read-only: it shows the open question and never reconciles or starts work,
@@ -1814,7 +1829,7 @@ def _cloud_engine_read(task_id:str,task:dict,session_id:str):
         return None,{**empty,"engine_error":{"http_status":exc.http_status,"code":int(exc.error.code),"detail":exc.error.detail}}
     except EngineUnreachableError:
         return None,{**empty,"engine_unreachable":True}
-    if task.get("active_phase") in ("intent","conops"):return snapshot,_http_input_state(task_id,snapshot)
+    if task.get("active_phase") in ("intent","conops"):return snapshot,_http_input_state(task_id,snapshot,events=events,task=task)
     return snapshot,{**empty,"engine_process_status":int(snapshot.process_status)}
 
 @app.get("/api/tasks/{task_id}/diagnostics")
@@ -1868,7 +1883,7 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None, request: Re
     if starting and task.get("state")=="running":
         input_state={"waiting":False,"process_live":True,"decision":None,"requirement":None,"question":None,"input_id":None}
     elif session_id and config.CLOUD_TENANTS:
-        snapshot,input_state=_cloud_engine_read(task_id,task,session_id)
+        snapshot,input_state=_cloud_engine_read(task_id,task,session_id,events=task_events)
     elif session_id:
         try:
             snapshot=engine_client.snapshot(session_id)
@@ -1876,7 +1891,7 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None, request: Re
                 activity("engine.recovery.reconciled","Restored completed interview boundary from task read; queuing Stakeholder needs",task_id=task_id,session_id=session_id,sequence=snapshot.sequence,next_phase="needs")
                 if background_tasks is not None:background_tasks.add_task(_continue_reconciled_interview,task_id)
                 task=store.task(task_id)
-            input_state=(_http_input_state(task_id,snapshot) if task.get("active_phase") in ("intent","conops")
+            input_state=(_http_input_state(task_id,snapshot,events=task_events,task=task) if task.get("active_phase") in ("intent","conops")
                          else {**runner.input_state(task_id),"engine_process_status":int(snapshot.process_status)})
         except EngineClientError as exc:
             input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None,

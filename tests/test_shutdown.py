@@ -1,5 +1,6 @@
 """Real-process shutdown contract: open SSE and an engine child cannot pin uvicorn."""
 import os
+import pytest
 import signal
 import socket
 import subprocess
@@ -14,7 +15,8 @@ def _port():
         sock.bind(('127.0.0.1',0));return sock.getsockname()[1]
 
 
-def test_sigint_closes_sse_and_terminates_engine_process(tmp_path):
+@pytest.mark.parametrize('shutdown_signal',[signal.SIGINT,signal.SIGTERM],ids=['sigint','sigterm'])
+def test_shutdown_closes_sse_and_terminates_engine_process(tmp_path,shutdown_signal):
     port=_port();pidfile=tmp_path/'engine.pid';root=Path(__file__).parents[1]
     engine=tmp_path/'engine.py'
     engine.write_text("import os,sys,time;open(sys.argv[1],'w').write(str(os.getpid()));time.sleep(120)\n")
@@ -43,7 +45,7 @@ uvicorn.run(app,host="127.0.0.1",port={port},log_level="warning")
         assert pidfile.exists()
         stream=subprocess.Popen([sys.executable,'-c',f"import time,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:{port}/api/tasks/shutdown-live/stream');r.readline();time.sleep(120)"],env=env)
         time.sleep(.4);assert stream.poll() is None
-        started=time.monotonic();server.send_signal(signal.SIGINT)
+        started=time.monotonic();server.send_signal(shutdown_signal)
         server.wait(timeout=7)
         assert time.monotonic()-started<7
         child=int(pidfile.read_text())

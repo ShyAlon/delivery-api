@@ -194,6 +194,15 @@ def test_validator_provenance_records_installed_version_and_verdict_keeps_it(pgs
     assert row['validator_version'] == 'vmodel-contracts==0.28.0'
 
 
+def test_provenance_uses_record_when_top_level_metadata_is_absent(monkeypatch):
+    import importlib.metadata as metadata
+    from delivery_api.postgres_store import validator_provenance
+    expected='vmodel-contracts=='+metadata.version('vmodel-contracts')
+    monkeypatch.setattr(metadata,'packages_distributions',lambda:{})
+    assert validator_provenance('vmodel_contracts.srs')==expected
+    assert validator_provenance('no_such_module.anything')=='unknown'
+
+
 def test_empty_manifest_with_uncovered_legacy_fails_loud(pgstore, tmp_path, monkeypatch):
     """Enforced readiness gate: flag ON, empty manifest, legacy artifacts present ->
     explicit 500, never a quietly empty list."""
