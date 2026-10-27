@@ -125,7 +125,19 @@ def validator_provenance(module_path,model=None):
     import hashlib,importlib.metadata,importlib.util,json
     top=module_path.split('.')[0]
     version='unknown'
-    for dist in importlib.metadata.packages_distributions().get(top,[]):
+    distributions=importlib.metadata.packages_distributions().get(top,[])
+    if not distributions:
+        # Some installers omit top_level.txt and their inference can miss valid
+        # installed wheels. RECORD is authoritative ownership evidence: match
+        # the imported module's exact resolved file, never guess a dist name.
+        from pathlib import Path
+        try:module_spec=importlib.util.find_spec(module_path)
+        except (ModuleNotFoundError,ValueError):module_spec=None
+        origin=Path(module_spec.origin).resolve() if module_spec and module_spec.origin else None
+        if origin is not None:
+            distributions=[d.metadata['Name'] for d in importlib.metadata.distributions()
+                if any(str(f).startswith(top+'/') and Path(d.locate_file(f)).resolve()==origin for f in d.files or [])]
+    for dist in distributions:
         try:version=f'{dist}=={importlib.metadata.version(dist)}';break
         except importlib.metadata.PackageNotFoundError:continue
     if model is None:return version

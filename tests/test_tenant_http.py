@@ -35,16 +35,30 @@ def test_all_data_routes_require_identity_and_static_can_load():
         assert client.post('/api/auth/signup').status_code==404
 
 
-def test_copied_verified_token_rejected_after_session_revoked():
-    active=[True]
+def test_copied_verified_token_rejected_after_approved_cache_window(monkeypatch):
+    from delivery_api.tenant_http import SessionCheckCache
+    active=[True]; now=[100.0]; checks=[]
+    original_init=SessionCheckCache.__init__
+    def init(self,*args,**kwargs):
+        original_init(self,*args,**kwargs)
+        self._time=lambda:now[0]
+    monkeypatch.setattr(SessionCheckCache,'__init__',init)
+    class SessionVerifier:
+        def verify(self,token):return TenantScope(A,"00000000-0000-0000-0000-0000000000a1")
     app=FastAPI()
     @app.get('/api/data')
     def data():return {'owner':current_scope().owner_id}
-    app.add_middleware(TenantMiddleware,verifier=Verifier(),session_check=lambda:active[0])
+    def check():checks.append(now[0]);return active[0]
+    app.add_middleware(TenantMiddleware,verifier=SessionVerifier(),session_check=check)
     with TestClient(app) as client:
-        assert client.get('/api/data',headers={'Authorization':'Bearer a'}).status_code==200
-        active[0]=False
-        assert client.get('/api/data',headers={'Authorization':'Bearer a'}).status_code==401
+        headers={'Authorization':'Bearer a'}
+        assert client.get('/api/data',headers=headers).status_code==200
+        active[0]=False;now[0]=129.99
+        assert client.get('/api/data',headers=headers).status_code==200
+        assert checks==[100.0]
+        now[0]=130.0
+        assert client.get('/api/data',headers=headers).status_code==401
+        assert checks==[100.0,130.0]
 
 
 
