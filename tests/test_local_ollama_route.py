@@ -220,17 +220,26 @@ def _cloud_app(monkeypatch, flag):
     else:
         monkeypatch.delenv('DELIVERY_LOCAL_PREVIEW', raising=False)
     monkeypatch.setattr(module, 'cloud_execution_admitted', lambda: True)
+    from types import SimpleNamespace
+    from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(local=flag,model=LOCAL_MODEL if flag else 'deepseek-flash'))
     return module
 
 
-def test_deployed_route_list_is_exactly_managed_deepseek(monkeypatch):
+def test_deployed_route_list_displays_both_but_only_deepseek_is_admitted(monkeypatch):
     module = _cloud_app(monkeypatch, flag=False)
-    def explode(*args, **kwargs):
-        raise AssertionError('no engine call for a route the deployed server does not offer')
-    monkeypatch.setattr(module.engine_client, 'preview_route', explode)
-    result = module.model_routes(a=None)
-    assert [r['id'] for r in result['routes']] == ['deepseek']
-    assert result['default_route'] == {'route': 'deepseek'} and result['managed'] is True
+    monkeypatch.setenv('DEEPSEEK_API_KEY','fake-only')
+    def preview(route):
+        assert route=='deepseek', 'disabled Ollama must not be probed'
+        return {'model_map':{'probing':['deepseek','deepseek-flash']}}
+    monkeypatch.setattr(module.engine_client,'preview_route',preview)
+    result=module.model_routes(a=None)
+    assert [r['id'] for r in result['routes']]==['deepseek','ollama']
+    assert result['routes'][0]['available'] is True
+    assert result['routes'][1]['available'] is False
+    assert 'DELIVERY_LOCAL_PREVIEW' in result['routes'][1]['error']
+    assert 'deepseek only' in result['routes'][1]['error']
+    assert result['default_route']=={'route':'deepseek'}
 
 
 def test_local_preview_route_list_adds_managed_ollama(monkeypatch):
@@ -260,14 +269,15 @@ def test_a_keyless_deepseek_route_shows_unavailable_missing_key(monkeypatch):
     assert result['routes'][1]['available'] is True, 'the local route is untouched'
 
 
-def test_a_present_deepseek_key_keeps_the_route_available(monkeypatch):
+def test_a_present_key_cannot_bypass_the_ollama_only_gateway(monkeypatch):
     module = _cloud_app(monkeypatch, flag=True)
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'sk-test-0123456789abcdef')
     monkeypatch.setattr(module.engine_client, 'preview_route', lambda route: {
         'model_map': {stage: ['ollama', LOCAL_MODEL] for stage in ('probing', 'distillation')}})
     result = module.model_routes(a=None)
     deepseek = result['routes'][0]
-    assert deepseek['available'] is True and 'error' not in deepseek
+    assert deepseek['available'] is False and 'ollama only' in deepseek['error']
+    assert result['default_route']=={'route':'ollama'}
 
 
 def test_local_preview_route_list_fails_closed_when_the_engine_cannot_resolve(monkeypatch):
@@ -299,3 +309,34 @@ def test_deployed_start_rejects_a_forced_ollama_route(monkeypatch):
 def test_deployed_start_rejects_a_forced_ollama_route_even_when_open(monkeypatch):
     # The rejection is route policy, not execution state: it fires while execution is admitted.
     test_deployed_start_rejects_a_forced_ollama_route(monkeypatch)
+
+
+def test_engine_model_must_match_the_installed_gateway(monkeypatch):
+    module=_cloud_app(monkeypatch,flag=True)
+    monkeypatch.setattr(module.engine_client,'preview_route',lambda route:{'model_map':{'probing':['ollama','unreviewed-model']}})
+    result=module.model_routes(None)
+    assert result['routes'][1]['available'] is False
+    assert 'reviewed model' in result['routes'][1]['error']
+    assert result['default_route'] is None
+
+
+def test_missing_gateway_disables_both_without_probing(monkeypatch):
+    module=_cloud_app(monkeypatch,flag=True)
+    from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:None)
+    monkeypatch.setattr(module.engine_client,'preview_route',lambda route:(_ for _ in ()).throw(AssertionError('must not probe')))
+    result=module.model_routes(None)
+    assert all(not r['available'] and 'not installed' in r['error'] for r in result['routes'])
+    assert result['default_route'] is None
+
+
+def test_engine_model_missing_reason_is_preserved_below_disabled_route(monkeypatch):
+    module=_cloud_app(monkeypatch,flag=True)
+    from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
+    def missing(route):
+        raise module.EngineClientError(422,ProtocolError(code=ProtocolErrorCode.INVALID_RESPONSE,detail='Ollama model phi4 is unavailable; pull phi4 and retry'))
+    monkeypatch.setattr(module.engine_client,'preview_route',missing)
+    result=module.model_routes(None)
+    assert result['routes'][1]['available'] is False
+    assert result['routes'][1]['error']=='Ollama model phi4 is unavailable; pull phi4 and retry'
+    assert result['default_route'] is None

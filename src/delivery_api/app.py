@@ -942,33 +942,37 @@ class TaskStartRequest(BaseModel):
 def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     """The engine resolves routes; legacy env keys only seed the initial choice."""
     if config.CLOUD_TENANTS:
-        # Cloud users do not choose models: the service does. Managed routes keep the Start screen working; startable only while execution is open.
+        # Display every supported route; availability is bounded by the installed
+        # gateway AND the same live engine preflight used by Start.
+        from . import cloud_runtime
+        gateway=cloud_runtime.gateway_factory()
         open_now=cloud_execution_admitted()
-        # Availability means startable: execution open AND the key the in-process engine
-        # bills with actually present. A keyless DeepSeek route is dead - say so (naming
-        # the variable, never the value) instead of offering a selectable failure.
-        deepseek_error=None if open_now else "Execution is closed on this server."
-        if deepseek_error is None and not (os.environ.get("DEEPSEEK_API_KEY") or "").strip():
-            deepseek_error="missing key: DEEPSEEK_API_KEY is not set on this server"
-        routes=[{"id":"deepseek","available":deepseek_error is None,"managed":True,**({} if deepseek_error is None else {"error":deepseek_error})}]
-        default={"route":"deepseek"}
-        if local_route.local_preview_enabled():
-            # The operator's local execution preview adds exactly one managed local
-            # Ollama route; the flag is absent on the deployed server. The engine
-            # still owns model resolution - no delivery-side model guessing.
-            default={"route":"ollama"}
-            try:
-                preview=engine_client.preview_route("ollama")
-                models=preview["model_map"]
-                pairs={tuple(pair) for pair in models.values()}
-                if len(pairs)!=1:raise ValueError("engine preview returned divergent stage models")
-                provider,model=next(iter(pairs))
-                if provider!="ollama":raise ValueError(f"engine preview returned {provider} for selected ollama")
-                routes.append({"id":"ollama","available":open_now,"managed":True,"model":f"ollama:{model}","model_map":models,"models":[model],**({} if open_now else {"error":"Execution is closed on this server."})})
-            except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
-                reason=exc.error.detail if isinstance(exc,EngineClientError) else str(exc)
-                routes.append({"id":"ollama","available":False,"managed":True,"error":reason})
-        return {"routes":routes,"default_route":default,"managed":True}
+        admitted_provider=('ollama' if gateway.local else 'deepseek') if gateway else None
+        routes=[]
+        for route in ('deepseek','ollama'):
+            errors=[];models=None;model=None
+            if route=='deepseek' and not (os.environ.get('DEEPSEEK_API_KEY') or '').strip():
+                errors.append('missing key: DEEPSEEK_API_KEY is not set on this server')
+            if route=='ollama' and not local_route.local_preview_enabled():
+                errors.append('DELIVERY_LOCAL_PREVIEW is not enabled on this server')
+            if not open_now:errors.append('Execution is closed on this server.')
+            if gateway is None:errors.append('Admission gateway is not installed on this server.')
+            elif admitted_provider!=route:errors.append(f'Admission gateway is configured for {admitted_provider} only.')
+            if not errors:
+                try:
+                    preview=engine_client.preview_route(route)
+                    models=preview['model_map'];pairs={tuple(pair) for pair in models.values()}
+                    if len(pairs)!=1:raise ValueError('engine preview returned divergent stage models')
+                    provider,model=next(iter(pairs))
+                    if provider!=route:raise ValueError(f'engine preview returned {provider} for selected {route}')
+                    if model!=gateway.model:raise ValueError(f'Admission gateway reviewed model is {gateway.model}; engine selected {model}.')
+                except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
+                    errors.append(exc.error.detail if isinstance(exc,EngineClientError) else str(exc))
+            routes.append({'id':route,'available':not errors,'managed':True,
+                **({'error':' '.join(errors)} if errors else {}),
+                **({'model':f'{route}:{model}','model_map':models,'models':[model]} if model else {})})
+        enabled=next((r['id'] for r in routes if r['available']),None)
+        return {'routes':routes,'default_route':{'route':enabled} if enabled else None,'managed':True}
     routes=[]
     try:default=engine_client.default_route()
     except (EngineClientError,EngineUnreachableError,AttributeError):default=None

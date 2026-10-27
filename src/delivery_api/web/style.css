@@ -359,3 +359,15 @@ header{z-index:6}
 @keyframes requi-sk{50%{opacity:.55}}
 @media (prefers-reduced-motion:reduce){.task-skeleton .sk{animation:none}}
 @media (prefers-reduced-motion:reduce){#app.view-in,.reveal{animation:none}}
+
+/* Start choices stay visible and wrap instead of clipping a select label. */
+.not-started .start-controls{width:min(100%,760px);grid-template-columns:1fr;align-items:stretch}
+.start-route-options{display:flex;flex-wrap:wrap;gap:14px;letter-spacing:normal;text-transform:none}
+.start-route-option{flex:1 1 210px;min-width:0}
+.route-pill{display:flex;flex-direction:column;align-items:flex-start;gap:6px;width:100%;height:100%;min-height:100px;border:1px solid var(--line);border-radius:18px;padding:16px;background:white;color:var(--ink);text-align:left;white-space:normal;overflow-wrap:anywhere}
+.route-pill[aria-pressed=true]{border:2px solid var(--green);background:#edf7ed}
+.route-pill:disabled{opacity:.7;cursor:not-allowed}
+.route-pill:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+.route-pill span,.route-pill small{font:var(--fs-xs)/1.5 Manrope}
+.route-unavailable{margin-top:8px;font:var(--fs-xs)/1.5 Manrope;color:#a33;overflow-wrap:anywhere}
+.start-route-option:has(.route-unavailable) .route-pill{height:auto}
