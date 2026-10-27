@@ -32,13 +32,14 @@ from .tenant_jobs import execute_job
 
 
 class SameHostProducerWorker:
-    def __init__(self,store,artifacts_base,*,gateway_factory,usage_log_factory,wire_client_factory=None,runtime_factory=None):
+    def __init__(self,store,artifacts_base,*,gateway_factory,usage_log_factory,wire_client_factory=None,runtime_factory=None,isolated_quiescent=None):
         self.store=store
         self.artifacts_base=artifacts_base
         self.gateway_factory=gateway_factory
         self.usage_log_factory=usage_log_factory
         self.wire_client_factory=wire_client_factory
         self.runtime_factory=runtime_factory
+        self.isolated_quiescent=isolated_quiescent
 
     async def execute(self,job_id,producer):
         """Claim once, bind a synchronous producer, never restart automatically.
@@ -73,6 +74,8 @@ class SameHostProducerWorker:
             if fence.generation!=capability.generation or fence.requested:
                 raise TenantAccessDenied('producer stop generation mismatch')
             gateway=self.gateway_factory(capability,job_id)
+            if self.isolated_quiescent is not None and getattr(gateway,'retail_rates',None) is not None:
+                raise PermissionError('paid child producer remains refused')
             # A caller cannot accidentally lend another job's gateway.
             if gateway.store is not self.store or gateway.job_id!=job_id:
                 raise TenantAccessDenied('producer gateway binding mismatch')
@@ -117,7 +120,8 @@ class SameHostProducerWorker:
                             job_id=job_id,generation=capability.generation,session_root=root)
                         stack.enter_context(job_runtime(runtime))
                     stack.enter_context(admission_gateway(gateway,required=True))
-                    stack.enter_context(cli_execution(fence,usage_log))
+                    if self.isolated_quiescent is None:
+                        stack.enter_context(cli_execution(fence,usage_log))
                     if self.wire_client_factory is not None:
                         from spec_generator.wire_binding import wire_clients
                         stack.enter_context(wire_clients(gateway,self.wire_client_factory))
@@ -166,11 +170,12 @@ class SameHostProducerWorker:
                 if not task or task.get('stop_requested_at') is None:raise
                 # Expected Stop is control state, not a failed producer job.
         def quiescent(capability):
+            if self.isolated_quiescent is not None and self.isolated_quiescent() is not True:return False
             if fence is None or not fence.state:return False
             try:return fence.confirm_quiescent_after_recovery(no_live_worker=True)=='STOPPED'
             except StopRequested:return False
         return await execute_job(self.store,job_id,run,verify_stopped_quiescence=quiescent,
-            verify_completion_quiescence=lambda cap:fence is not None and fence.writer_quiescent())
+            verify_completion_quiescence=lambda cap:fence is not None and fence.writer_quiescent() and (self.isolated_quiescent is None or self.isolated_quiescent() is True))
 
     def reconcile_stopped(self,job_id):
         """Explicit owner recovery, not a timer or automatic resume.

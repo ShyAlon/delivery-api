@@ -42,3 +42,9 @@ def test_session_persistence_must_be_chosen_or_startup_refuses():
     no_choice={'INTERVIEW_ENGINE_TOKEN':'x'*32,'DELIVERY_DATABASE_URL':'sqlite:////tmp/x.db'}
     problems=full_entry.check_env(no_choice)
     assert any('INTERVIEW_ENGINE_SESSIONS_DSN' in p and 'INTERVIEW_ENGINE_SESSIONS_FILE' in p for p in problems),problems
+
+
+def test_child_optin_omits_compatibility_service_and_health_port(monkeypatch):
+    env={'DELIVERY_CHILD_EXECUTION':'local','DELIVERY_LOCAL_PREVIEW':'1'}
+    assert full_entry.compatibility_engine_required(env) is False
+    assert full_entry.compatibility_engine_required({}) is True

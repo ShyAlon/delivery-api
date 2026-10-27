@@ -332,3 +332,8 @@ def test_an_engine_check_failure_names_the_missing_piece(monkeypatch):
 def test_the_launcher_pins_the_expected_build_for_the_staleness_check():
     script = (Path(__file__).resolve().parents[1] / 'scripts' / 'ops' / 'preview.sh').read_text()
     assert script.count('REQUI_EXPECTED_REPOS=%s') == 2   # both preview paths (local settings and server settings)
+
+
+def test_child_pool_budget_counts_active_child_and_no_compatibility():
+    result=preflight._check_pool_budget({'DELIVERY_CHILD_EXECUTION':'local','DELIVERY_LOCAL_PREVIEW':'1'},__import__('importlib').import_module)
+    assert '8 parent + 4 active child + 0 compatibility' in result.found

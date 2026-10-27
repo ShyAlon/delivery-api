@@ -110,12 +110,18 @@ def port_open(host,port,timeout=0.5):
     except OSError:return False
 
 
+def compatibility_engine_required(env):
+    from delivery_api.child_pool_budget import child_mode
+    return not child_mode(env)
+
+
 def healthcheck(env=os.environ):
     port=int(env.get('DELIVERY_PORT','8000'))
     with urllib.request.urlopen(f'http://127.0.0.1:{port}/health',timeout=3) as response:
         body=json.load(response)
     assert body.get('ok') is True and body.get('runtime_profile')!='control_plane_only'
-    assert port_open(ENGINE_HOST,int(env.get('INTERVIEW_ENGINE_PORT',str(ENGINE_PORT))))
+    if compatibility_engine_required(env):
+        assert port_open(ENGINE_HOST,int(env.get('INTERVIEW_ENGINE_PORT',str(ENGINE_PORT))))
 
 
 def main():
@@ -135,21 +141,22 @@ def main():
         print('full service not started: the startup preflight found blocking problems (above)',file=sys.stderr)
         return 2
     engine_cmd,delivery_cmd=commands()
-    engine=subprocess.Popen(engine_cmd,env=engine_env(os.environ),
-                            stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,errors='replace',bufsize=1)
-    tee_engine_output(engine,engine_log_path(os.environ))
-    procs=[engine]
+    engine=None;procs=[]
     def stop(*_):
         for p in procs:
             if p.poll() is None:p.terminate()
     signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
-    for _ in range(120):
-        if engine.poll() is not None:
-            print('interview engine exited during start',file=sys.stderr);return 3
-        if port_open(ENGINE_HOST,ENGINE_PORT):break
-        time.sleep(0.5)
-    else:
-        stop();print('interview engine did not open its port in 60s',file=sys.stderr);return 3
+    if compatibility_engine_required(os.environ):
+        engine=subprocess.Popen(engine_cmd,env=engine_env(os.environ),
+                                stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,errors='replace',bufsize=1)
+        tee_engine_output(engine,engine_log_path(os.environ));procs.append(engine)
+        for _ in range(120):
+            if engine.poll() is not None:
+                print('interview engine exited during start',file=sys.stderr);return 3
+            if port_open(ENGINE_HOST,ENGINE_PORT):break
+            time.sleep(0.5)
+        else:
+            stop();print('interview engine did not open its port in 60s',file=sys.stderr);return 3
     delivery=subprocess.Popen(delivery_cmd);procs.append(delivery)
     while True:
         for p in procs:
