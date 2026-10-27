@@ -5,7 +5,16 @@
 OPS_NAME=""; OPS_SELF=""; OPS_NOTE="Nothing was changed on the server."
 abort(){ echo; echo "ABORTED [$1]: $2"; echo "${3:-$OPS_NOTE}"; echo "Fix: ${4:-run scripts/ops/$OPS_NAME.sh again; if it repeats, send me this whole output}"; echo "Then run: scripts/ops/$OPS_NAME.sh"; exit 1; }
 ops_venv(){
-  [ -x .venv/bin/python ] && return 0
+  if [ -x .venv/bin/python ]; then
+    # An existing venv predating the extras never received them (the pool redesign added
+    # psycopg-pool, declared in the dev/supabase extras - 2026-10-27: the preview launcher
+    # died on the missing module). Refresh in place; a failed refresh aborts but leaves the
+    # old venv untouched - it still works for everything that does not need the extras.
+    .venv/bin/python -c 'import psycopg_pool' 2>/dev/null && return 0
+    echo "== refreshing .venv with the declared extras (the dev tools and psycopg-pool)"
+    .venv/bin/python -m pip install -q vendor/vmodel_contracts-0.28.0-py3-none-any.whl && .venv/bin/python -m pip install -q -e '.[dev,supabase]' && return 0
+    abort VENV-INSTALL "pip could not install the declared extras into the existing .venv" "The venv was left as it was; nothing else changed." "check your network, then run it again"
+  fi
   echo "== building .venv (first run only)"
   local c="" k
   for k in python3.12 python3.13 python3.14 python3; do
@@ -13,7 +22,7 @@ ops_venv(){
   done
   [ -n "$c" ] || abort NO-PYTHON "no Python 3.12 or newer on PATH" "" "brew install python@3.12"
   "$c" -m venv .venv || abort VENV "cannot create .venv" "" "rm -rf $PWD/.venv"
-  .venv/bin/python -m pip install -q vendor/vmodel_contracts-0.28.0-py3-none-any.whl && .venv/bin/python -m pip install -q -e . || { rm -rf .venv; abort VENV-INSTALL "pip could not install the project" "The half-built .venv was removed." "check your network, then run it again"; }
+  .venv/bin/python -m pip install -q vendor/vmodel_contracts-0.28.0-py3-none-any.whl && .venv/bin/python -m pip install -q -e '.[dev,supabase]' || { rm -rf .venv; abort VENV-INSTALL "pip could not install the project" "The half-built .venv was removed." "check your network, then run it again"; }
 }
 ops_start(){
   OPS_NAME=$1; OPS_SELF=$2; local want_venv=${3:-}
