@@ -337,3 +337,66 @@ def test_the_launcher_pins_the_expected_build_for_the_staleness_check():
 def test_child_pool_budget_counts_active_child_and_no_compatibility():
     result=preflight._check_pool_budget({'DELIVERY_CHILD_EXECUTION':'local','DELIVERY_LOCAL_PREVIEW':'1'},__import__('importlib').import_module)
     assert '8 parent + 4 active child + 0 compatibility' in result.found
+
+
+def test_migrated_private_tables_use_their_intended_roles_not_backend_select():
+    import psycopg
+    from test_postgres_store import DSN
+    assert DSN,'isolated migrated Postgres is required for this regression'
+    with psycopg.connect(DSN.replace('user=sandbox','user=delivery_app')) as conn:
+        conn.execute('SET ROLE requi_backend')
+        result=preflight._check_feature_tables({'DELIVERY_DATABASE_URL':'postgresql://test'},[conn],preflight.REQUIRED_TABLES)
+    assert result.status=='pass',result.found
+    assert 'GRANT SELECT' not in (result.remedy or '')
+
+
+def test_intended_role_policy_names_every_exception_from_migrations():
+    assert preflight.TABLE_ACCESS['payment_events']=='requi_payment'
+    assert preflight.TABLE_ACCESS['operator_state_events']=='requi_operator_read'
+    assert preflight.TABLE_ACCESS['operator_principals'] is None
+    assert preflight.TABLE_ACCESS['operator_failure_diagnostics']=='requi_backend'
+
+
+def test_real_optional_role_grant_loss_and_private_exposure_are_named():
+    import psycopg
+    from test_postgres_store import DSN
+    with psycopg.connect(DSN) as conn:
+        try:
+            # Isolated test database only; rollback restores the migration ACLs.
+            conn.execute('REVOKE SELECT ON public.payment_events FROM requi_payment')
+            conn.execute('GRANT SELECT ON public.operator_principals TO requi_backend')
+            result=preflight._check_feature_tables({'DELIVERY_DATABASE_URL':'postgresql://test'},[conn],preflight.REQUIRED_TABLES)
+            assert result.status=='warn'
+            assert 'payment_events (expected SELECT by requi_payment' in result.found
+            assert 'operator_principals (owner/function-only' in result.found
+            assert 'must not have direct SELECT' in result.found
+            assert 'blanket' in result.remedy and 'GRANT SELECT ON' not in result.remedy
+        finally:conn.rollback()
+
+
+def test_missing_diagnostics_still_warns_with_exact_migration():
+    import psycopg
+    from test_postgres_store import DSN
+    with psycopg.connect(DSN) as conn:
+        try:
+            conn.execute('ALTER TABLE public.operator_failure_diagnostics RENAME TO hidden_diagnostics')
+            result=preflight._check_feature_tables({'DELIVERY_DATABASE_URL':'postgresql://test'},[conn],preflight.REQUIRED_TABLES)
+            assert result.status=='warn'
+            assert 'operator_failure_diagnostics (20261025120000_operator_failure_diagnostics.sql)' in result.found
+            assert 'payment_' not in result.found
+        finally:conn.rollback()
+
+
+def test_unknown_optional_role_does_not_crash_the_table_probe():
+    # A missing role resolves to NULL in the pg_roles join, before the privilege
+    # function is evaluated. Assert the actual PG evaluation, not a fake bool.
+    import psycopg
+    from test_postgres_store import DSN
+    policy=preflight.TABLE_ACCESS.copy()
+    try:
+        preflight.TABLE_ACCESS['payment_events']='nonexistent_preflight_role'
+        with psycopg.connect(DSN.replace('user=sandbox','user=delivery_app')) as conn:
+            result=preflight._check_feature_tables({'DELIVERY_DATABASE_URL':'postgresql://test'},[conn],preflight.REQUIRED_TABLES)
+        assert result.status=='warn' and 'nonexistent_preflight_role' in result.found
+        assert 'payment_events' in result.found and 'operator_principals' not in result.found
+    finally:preflight.TABLE_ACCESS.clear();preflight.TABLE_ACCESS.update(policy)
