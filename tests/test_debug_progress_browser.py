@@ -127,3 +127,11 @@ def test_copy_summary_uses_the_repository_build_identity(page, ui):
     copied = page.evaluate("navigator.clipboard.readText()")
     assert f"build: {LABEL}" in copied
     page.locator(".debug-dialog .dialog-x").click()
+
+
+def test_result_freshness_notice_is_readable_and_keeps_content(page,ui):
+    page.goto(ui+'/tasks/dbg/view');page.locator('#accountbutton').wait_for()
+    page.evaluate('''async()=>{const {refreshResult}=await import('/assets/result-freshness.js');const slot=document.createElement('div');slot.id='test-results';slot.textContent='Previous saved results';document.querySelector('#app').prepend(slot);await refreshResult(slot,async()=>true);try{await refreshResult(slot,async()=>{throw Error('offline')})}catch{}}''')
+    assert 'Previous saved results' in page.locator('#test-results').inner_text()
+    assert 'Phase results stale' in page.locator('.result-stale').inner_text()
+    page.screenshot(path='/downloads/row12-07-stale.png',full_page=True)
