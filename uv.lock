@@ -255,6 +255,7 @@ dependencies = [
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-dotenv" },
     { name = "python-multipart" },
+    { name = "requi-child-contract" },
     { name = "uvicorn" },
     { name = "vmodel-contracts" },
 ]
@@ -266,6 +267,7 @@ dev = [
     { name = "pgserver" },
     { name = "playwright" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg-pool" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pytest" },
     { name = "pytest-timeout" },
@@ -273,6 +275,7 @@ dev = [
 ]
 supabase = [
     { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg-pool" },
     { name = "pyjwt", extra = ["crypto"] },
 ]
 turso = [
@@ -290,6 +293,8 @@ requires-dist = [
     { name = "playwright", marker = "extra == 'dev'", specifier = ">=1.48" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3.2,<4" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'supabase'", specifier = ">=3.2,<4" },
+    { name = "psycopg-pool", marker = "extra == 'dev'", specifier = ">=3.2,<4" },
+    { name = "psycopg-pool", marker = "extra == 'supabase'", specifier = ">=3.2,<4" },
     { name = "pydantic", specifier = ">=2.6,<3" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'dev'", specifier = ">=2.10,<3" },
@@ -299,6 +304,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1,<2" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6,<7" },
+    { name = "requi-child-contract", path = "vendor/requi_child_contract-0.1.0-py3-none-any.whl" },
     { name = "uvicorn", specifier = ">=0.29" },
     { name = "vmodel-contracts", path = "vendor/vmodel_contracts-0.28.0-py3-none-any.whl" },
 ]
@@ -715,6 +721,18 @@ wheels = [
 ]
 
 [[package]]
+name = "psycopg-pool"
+version = "3.3.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/74/5e/c0664b968b102ff68b811d999c728546c48d5c1eec03e3bbaf88c0cb4472/psycopg_pool-3.3.3.tar.gz", hash = "sha256:df87b5d9d0ad7db37f6cdad4fa8ce113d250f5997f6db38e9a99192fb67f9e1d", size = 32006, upload-time = "2026-09-22T15:53:24.947Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5d/b4/452c6607a0f479465cd8a9b0d9956919fcb150050c1f83f9f11e6b8ee8dc/psycopg_pool-3.3.3-py3-none-any.whl", hash = "sha256:9b9cd6a4fcec47a410f7e82d408540e7f77b478509e91b44c1a5457a13e5ff37", size = 40304, upload-time = "2026-09-22T15:53:23.712Z" },
+]
+
+[[package]]
 name = "pycparser"
 version = "3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1003,6 +1021,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f0/7a/1c7270340330e575b92f397352af856a8c06f230aa3e76f86b39d01b416a/pyyaml-6.0.3-cp314-cp314t-win_amd64.whl", hash = "sha256:4ad1906908f2f5ae4e5a8ddfce73c320c2a1429ec52eafd27138b7f1cbe341c9", size = 174062, upload-time = "2025-09-25T21:32:55.767Z" },
     { url = "https://files.pythonhosted.org/packages/f1/12/de94a39c2ef588c7e6455cfbe7343d3b2dc9d6b6b2f40c4c6565744c873d/pyyaml-6.0.3-cp314-cp314t-win_arm64.whl", hash = "sha256:ebc55a14a21cb14062aa4162f906cd962b28e2e9ea38f9b4391244cd8de4ae0b", size = 149341, upload-time = "2025-09-25T21:32:56.828Z" },
 ]
+
+[[package]]
+name = "requi-child-contract"
+version = "0.1.0"
+source = { path = "vendor/requi_child_contract-0.1.0-py3-none-any.whl" }
+dependencies = [
+    { name = "pydantic" },
+]
+wheels = [
+    { filename = "requi_child_contract-0.1.0-py3-none-any.whl", hash = "sha256:e9ddf0dda1451d5fde73dd226363790e94a28f9602775ddc95d6baa722f0de9c" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.6,<3" }]
 
 [[package]]
 name = "starlette"

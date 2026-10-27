@@ -25,12 +25,13 @@ if not a.constraints.is_file():raise SystemExit('Explicit tested dependency cons
 out.mkdir(parents=True);(out/'wheels').mkdir()
 for root in repos.values():
     subprocess.run(['uv','build','--offline','--wheel','--out-dir',str(out/'wheels'),str(root)],check=True)
+shutil.copyfile(a.delivery.resolve()/'vendor/requi_child_contract-0.1.0-py3-none-any.whl',out/'wheels/requi_child_contract-0.1.0-py3-none-any.whl')
 for wheel in (out/'wheels').glob('*.whl'):
     digest=hashlib.sha256(wheel.read_bytes()).hexdigest()
     manifest[wheel.name]={'sha256':digest}
     with (out/'wheel-sha256.txt').open('a') as file:file.write(f'{digest}  /wheels/{wheel.name}\n')
     if a.ui_test:
-        names={'vmodel_contracts':'contracts','interview_engine':'engine','spec_generator':'generator','delivery_api':'delivery'}
+        names={'vmodel_contracts':'contracts','requi_child_contract':'child-contract','interview_engine':'engine','spec_generator':'generator','delivery_api':'delivery'}
         package=wheel.name.split('-')[0]
         if package not in names:raise SystemExit('Unexpected UI wheel package')
         (out/('wheel-sha256-'+names[package]+'.txt')).write_text(f'{digest}  /wheels/{wheel.name}\n')

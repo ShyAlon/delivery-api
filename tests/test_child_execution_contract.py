@@ -95,7 +95,8 @@ def test_contract_has_no_runtime_consumers_or_effectful_imports():
     for path in root.glob('*.py'):
         if path.name=='child_execution_contract.py':continue
         assert 'child_execution_contract' not in path.read_text(),path.name
-    tree=ast.parse((root/'child_execution_contract.py').read_text())
+    schema=root.parents[1]/'packages/requi-child-contract/src/requi_child_contract/__init__.py'
+    tree=ast.parse(schema.read_text())
     allowed={'__future__','json','typing','uuid','pydantic'}
     for node in ast.walk(tree):
         if isinstance(node,ast.Import):assert all(a.name in allowed for a in node.names)

@@ -76,6 +76,7 @@ elif [ "$(state_get dependencies)" != "$DEP_HASH" ]; then
   echo "boundary=dependencies decision=install reason=dependency-input-changed"; install_dependencies
 else echo "boundary=dependencies decision=skip reason=unchanged"; fi
 : > "$STATE"; printf 'dependencies=%s\n' "$DEP_HASH" >> "$STATE"
+"$PYTHON" -m pip install --no-deps "$REPOS_ROOT/delivery-api/vendor/requi_child_contract-0.1.0-py3-none-any.whl"
 for repo in $PACKAGES; do
   current=$(repo_fingerprint "$repo"); prior=$(state_get "repo.$repo")
   if [ "$CLEAN" = 1 ] || [ ! -x "$OUTPUT/runtime/bin/python" ] || [ "$current" != "$prior" ]; then

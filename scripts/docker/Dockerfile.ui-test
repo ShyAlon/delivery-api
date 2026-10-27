@@ -7,6 +7,9 @@ RUN pip install --no-cache-dir -c /app/constraints.txt playwright==1.62.0 && pyt
 COPY wheels/vmodel_contracts-*.whl /wheels/
 COPY wheel-sha256-contracts.txt /app/
 RUN sha256sum --check /app/wheel-sha256-contracts.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/vmodel_contracts-*.whl
+COPY wheels/requi_child_contract-*.whl /wheels/
+COPY wheel-sha256-child-contract.txt /app/
+RUN sha256sum --check /app/wheel-sha256-child-contract.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/requi_child_contract-*.whl
 COPY wheels/interview_engine-*.whl /wheels/
 COPY wheel-sha256-engine.txt /app/
 RUN sha256sum --check /app/wheel-sha256-engine.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/interview_engine-*.whl

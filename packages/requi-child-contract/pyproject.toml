@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "requi-child-contract"
+version = "0.1.0"
+description = "Private typed request and lifecycle wire for Requi child execution"
+requires-python = ">=3.10"
+dependencies = ["pydantic>=2.6,<3"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/requi_child_contract"]
