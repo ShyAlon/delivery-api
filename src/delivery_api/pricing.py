@@ -41,8 +41,22 @@ def _rows(path:Path,start:int=0)->list[dict]:
 
 
 def usage_evidence(root):
-    rejected=sum(_rows(Path(root)/area/'usage.jsonl').rejected_rows for area in ('interview','spec'))
-    return {'complete':not rejected,'rejected_rows':rejected,'scope':'local usage evidence only'}
+    import math
+    rejected=invalid=0
+    for area in ('interview','spec'):
+        batch=_rows(Path(root)/area/'usage.jsonl');rejected+=batch.rejected_rows
+        for row in batch:
+            bad=False
+            for key in ('prompt_tokens','completion_tokens','latency_s','price_per_mtok_prompt_usd','price_per_mtok_completion_usd'):
+                value=row.get(key)
+                if value is None:continue
+                try:
+                    number=float(value)
+                    if isinstance(value,bool) or not math.isfinite(number) or number<0 or (key.endswith('tokens') and not number.is_integer()):bad=True
+                except (ValueError,TypeError,OverflowError):bad=True
+            invalid+=int(bad)
+    return {'complete':not (rejected or invalid),'rejected_rows':rejected,
+            'invalid_numeric_rows':invalid,'scope':'local usage evidence only'}
 
 def line_count(path:Path)->int:
     return len(read_bound_text(path,errors="replace").splitlines()) if path.is_file() else 0

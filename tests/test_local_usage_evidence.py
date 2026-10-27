@@ -23,3 +23,11 @@ def test_rollup_marks_incomplete_even_when_no_valid_rows(tmp_path):
     assert report['evidence']['complete'] is False
     assert report['evidence']['rejected_rows'] == 1
     assert json.loads((tmp_path/'cost.json').read_text())['evidence'] == report['evidence']
+
+
+def test_numeric_evidence_status_does_not_change_pricing_rows(tmp_path):
+    root=tmp_path/'interview';root.mkdir();path=root/'usage.jsonl'
+    path.write_text('{"prompt_tokens":"bad"}\n')
+    assert pricing._rows(path)==[{'prompt_tokens':'bad'}]
+    assert pricing.usage_evidence(tmp_path)['complete'] is False
+    assert pricing.usage_evidence(tmp_path)['invalid_numeric_rows']==1
