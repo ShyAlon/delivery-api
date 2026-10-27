@@ -138,3 +138,15 @@ def test_a_smoke_failure_prints_the_containers_own_reason(env):
                FAKE_SMOKE_OUT="RuntimeError: entry exited early: [fail] engine-compatible: create_app is missing")
     assert "entry exited early" in out.stdout, out.stdout
     assert "exit code 1" in out.stdout, out.stdout
+
+
+def test_the_preview_exec_caller_is_not_asked_a_second_yes(env):
+    """2026-10-27 approved drop: preview-exec already collected the one typed
+    yes; it invokes the build with REQUI_BUILD_YES=1 and the build must not
+    prompt again - and must not read any tty at all (no BUILD_TTY here)."""
+    api, e, log, _ = env
+    e = {k: v for k, v in e.items() if k != "BUILD_TTY"}
+    out = _run(api, e, REQUI_BUILD_YES="1")
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "Type yes to continue" not in out.stdout
+    assert "docker build" in log.read_text()

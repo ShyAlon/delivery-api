@@ -32,8 +32,14 @@ if [ "$ARCH" != "$NATIVE" ]; then
   docker buildx version >/dev/null 2>&1 || abort NO-BUILDX "an emulated $ARCH build needs docker buildx" "unset PREVIEW_ARCH to build natively ($NATIVE)"
   echo "== PREVIEW_ARCH=$ARCH: emulated build, the first one can take a long time"
 fi
-printf 'This builds the four source trees (no keys, a few MB) into a local image. Type yes to continue: '
-read -r A < "${BUILD_TTY:-/dev/tty}" || A=no; [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "run again and type yes"
+# preview-exec collects the one typed yes itself and passes REQUI_BUILD_YES=1: asking a second
+# yes here trained operators to answer a prompt they had already answered (2026-10-27 approved drop).
+if [ "${REQUI_BUILD_YES:-}" = 1 ]; then
+  echo "== the calling preview run already confirmed this build (REQUI_BUILD_YES=1); not asking again"
+else
+  printf 'This builds the four source trees (no keys, a few MB) into a local image. Type yes to continue: '
+  read -r A < "${BUILD_TTY:-/dev/tty}" || A=no; [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "run again and type yes"
+fi
 docker build --build-arg REQUI_BUILD_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" --platform "$PLATFORM" --build-arg REQUI_BUILD_ID="local-$STAMP" --build-arg REQUI_BUILD_REPOS="$REPOS" -f "$CTX/delivery-api/Dockerfile.full" -t "$CAND" "$CTX" || abort BUILD "the local build did not finish" "Nothing was tagged. The output above names the failing step."
 echo "== smoke inside the image $CAND (no network, no provider key, not root)"
 rc=0
