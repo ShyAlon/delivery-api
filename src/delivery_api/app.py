@@ -1598,33 +1598,40 @@ def task_artifact_download(task_id:str,phase:str,name:str):
 
 _ARTIFACT_TITLES={"srs.semantic-review.json":"Requirements Semantic Review","architecture.decisions.json":"Architecture Stack Decisions","intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification","validation.json":"Validation"}
 
-def _checkpoint_interview_turns(task_id:str)->list[tuple[str,str]]:
+def _checkpoint_interview_turns(task_id:str,status=None)->list[tuple[str,str]]:
     """Recover historical turns when old API events stored only answer lengths."""
-    if config.CLOUD_TENANTS:return []  # Never deserialize legacy local checkpoint blobs from a customer read.
+    def mark(availability,reason):
+        if status is not None:status['checkpoint_transcript']={'availability':availability,'reason':reason}
+    mark('available','saved_checkpoint')
+    if config.CLOUD_TENANTS:
+        mark('policy_excluded','cloud_legacy_checkpoint_excluded');return []  # Never deserialize legacy local checkpoint blobs from a customer read.
     session=_recorded_engine_session(task_id)
-    if not session:return []
+    if not session:mark('absent','no_recorded_session');return []
     from vmodel_contracts.runtime import artifacts_root
     db=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"checkpoints.sqlite"
-    if not db.is_file():return []
+    if not db.is_file():mark('absent','no_saved_checkpoint');return []
     built=os.environ.get("REQUI_RE_DIST")=="1"
     engine_dir=(Path.cwd() if built else Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve())
     python=Path(os.environ.get("INTERVIEW_ENGINE_PYTHON",sys.executable if built else str(engine_dir/".venv/bin/python")))
-    if not python.is_file():return []
+    if not python.is_file():mark('unavailable','recovery_runtime_missing');return []
     script="import json,sqlite3,sys\nfrom langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\nfrom interview_engine.contracts import AppArchetype\nrow=sqlite3.connect(sys.argv[1]).execute('select type,checkpoint from checkpoints order by checkpoint_id desc limit 1').fetchone()\nif not row: print('[]');raise SystemExit\nobj=JsonPlusSerializer(allowed_msgpack_modules=[AppArchetype]).loads_typed((row[0],row[1]))\nmessages=(obj.get('channel_values') or {}).get('messages') or []\nout=[]\nfor m in messages:\n role=getattr(m,'type',None) or (m.get('type') if isinstance(m,dict) else None)\n content=getattr(m,'content',None) or (m.get('content') if isinstance(m,dict) else None)\n if role in ('ai','human') and isinstance(content,str):out.append([role,content])\nprint(json.dumps(out))"
     try:
         env={**os.environ,**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})}
         result=subprocess.run([str(python),"-c",script,str(db)],capture_output=True,text=True,timeout=8,env=env)
-        if result.returncode:return []
+        if result.returncode:mark('unavailable','recovery_failed');return []
         messages=json.loads(result.stdout);turns=[];question=None
         for role,content in messages:
             if role=="ai":question=content.replace("[INTERVIEW COMPLETE]","").strip()
             elif role=="human" and question:turns.append((question,content.strip()));question=None
         return turns
-    except Exception:return []
+    except Exception:mark('unavailable','recovery_failed');return []
 
-def _interview_model_provenance(task_id:str)->list[str]:
+def _interview_model_provenance(task_id:str,status=None)->list[str]:
     """Usage is per-call truth; never collapse a switched stage to its first model."""
-    if config.CLOUD_TENANTS:return []
+    def mark(availability,reason):
+        if status is not None:status['model_usage']={'availability':availability,'reason':reason}
+    mark('absent','no_saved_usage')
+    if config.CLOUD_TENANTS:mark('policy_excluded','cloud_local_usage_excluded');return []
     session=_recorded_engine_session(task_id)
     rows=[]
     if session:
@@ -1633,7 +1640,9 @@ def _interview_model_provenance(task_id:str)->list[str]:
             usage=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"usage.jsonl"
             if usage.is_file():
                 rows=[json.loads(line) for line in usage.read_text().splitlines() if line.strip()]
-        except (ValueError,OSError):pass
+                if any(not isinstance(row,dict) for row in rows):raise ValueError('invalid usage row')
+                mark('available','saved_usage')
+        except (ValueError,OSError):mark('unavailable','invalid_or_unreadable');rows=[]
     segments=_model_usage_segments(rows)
     if segments:
         return [f"Model segment {x['route_version'] if x['route_version'] is not None else 'unassigned'}: {x['provider']}:{x['model']} ({x['calls']} calls)" for x in segments]
@@ -1669,11 +1678,14 @@ def _interview_transcript_markdown(task_id:str)->str:
             answer=str(payload.get("answer") or (message.removeprefix("You: ") if message.startswith("You: ") else "")).strip()
             if answer and turns and turns[-1][1] is None:turns[-1][1]=answer
     complete=[tuple(turn) for turn in turns if turn[1]]
-    checkpoint_turns=_checkpoint_interview_turns(task_id)
+    supplemental={}
+    checkpoint_turns=_checkpoint_interview_turns(task_id,supplemental)
     if checkpoint_turns:complete=checkpoint_turns
     route_changes=[e for e in _customer_events(store.events(task_id)) if e.get("kind")=="model_route" and (e.get("payload") or {}).get("scope")=="switch"]
-    if not complete and not route_changes:return ""
-    lines=_interview_model_provenance(task_id)+["","## Interview questions and answers"]
+    models=_interview_model_provenance(task_id,supplemental)
+    notes=[f"Supplemental {name}: {row['availability']} ({row['reason']}). Primary artifact and recorded events are preserved." for name,row in supplemental.items() if row['availability'] in ('unavailable','absent')]
+    if not complete and not route_changes and not notes:return ""
+    lines=models+notes+["","## Interview questions and answers"]
     # Keep switch markers in event order, between the questions and answers
     # they actually separate. Checkpoint-only legacy transcripts fall back to
     # the reconstructed complete turns.
@@ -1707,15 +1719,17 @@ def _decision_provenance(task_id:str,architecture:dict)->list[dict]:
     from vmodel_contracts.runtime import artifacts_root
     root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview" if session else None
     preferences=[]
+    preference_status={'availability':'absent','reason':'no_saved_intent'}
     if root:
         path=root/"intent_model.json"
         if path.is_file():
             try:
                 from vmodel_contracts.interview import IntentModel
                 intent=IntentModel.model_validate_json(path.read_text())
+                preference_status={'availability':'available','reason':'saved_intent'}
                 preferences=[{"area":p.area.value,"preference":p.preference,"strength":p.strength.value,
                               "source_turns":p.source_turns} for p in intent.tech_preferences]
-            except (OSError,ValueError):pass
+            except (OSError,ValueError):preference_status={'availability':'unavailable','reason':'invalid_or_unreadable'}
     result=[]
     for decision in architecture.get("decisions",[]):
         if not isinstance(decision,dict):continue
@@ -1732,15 +1746,21 @@ def _decision_provenance(task_id:str,architecture:dict)->list[dict]:
                                       "source_turns":pref["source_turns"],"strength":pref["strength"]})
         label="Founder-sourced preference" if supported else "Model-proposed decision"
         result.append({"decision_id":decision.get("decision_id"),"title":decision.get("title"),
-                       "label":label,"founder_evidence":supported,"baseline_refs":refs})
+                       "label":label,"founder_evidence":supported,"baseline_refs":refs,"evidence_status":preference_status})
     return result
 
 def _validation_panel_for(task_id:str,raw:str)->dict|None:
     """Validation items grouped by need, built from the session's own artifacts."""
     from .validation_panel import validation_panel
+    availability={}
     def load(phase,name):
-        try:return json.loads(_task_artifact(task_id,phase,name).read_text())
-        except (HTTPException,OSError,ValueError):return None
+        try:
+            value=json.loads(_task_artifact(task_id,phase,name).read_text())
+            availability[phase]={'availability':'available'};return value
+        except HTTPException:
+            availability[phase]={'availability':'absent','reason':'no_saved_artifact'};return None
+        except (OSError,ValueError):
+            availability[phase]={'availability':'unavailable','reason':'invalid_or_unreadable'};return None
     try:validation=json.loads(raw)
     except ValueError:return None
     ledger=None
@@ -1748,8 +1768,11 @@ def _validation_panel_for(task_id:str,raw:str)->dict|None:
     if session:
         from vmodel_contracts.runtime import artifacts_root
         try:ledger=json.loads((authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"spec"/"findings-ledger.json").read_text())
-        except (OSError,ValueError):ledger=None
-    return validation_panel(validation,load("needs","needs.json"),load("tests","tests.json"),ledger)
+        except FileNotFoundError:availability['findings_ledger']={'availability':'absent','reason':'no_saved_ledger'};ledger=None
+        except (OSError,ValueError):availability['findings_ledger']={'availability':'unavailable','reason':'invalid_or_unreadable'};ledger=None
+    panel=validation_panel(validation,load("needs","needs.json"),load("tests","tests.json"),ledger)
+    if isinstance(panel,dict):panel['supplemental_availability']=availability
+    return panel
 
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}/view")
 def task_artifact_view(task_id:str,phase:str,name:str):

@@ -127,3 +127,10 @@ def test_copy_summary_uses_the_repository_build_identity(page, ui):
     copied = page.evaluate("navigator.clipboard.readText()")
     assert f"build: {LABEL}" in copied
     page.locator(".debug-dialog .dialog-x").click()
+
+
+def test_supplemental_validation_status_is_visible(page,ui):
+    page.goto(ui+'/tasks/dbg/view');page.locator('.detail-head').wait_for();page.wait_for_timeout(300)
+    page.evaluate('''async()=>{const {validationPanelHtml}=await import('/assets/validation-panel.js');const host=document.createElement('div');host.innerHTML=validationPanelHtml({groups:[],supplemental_availability:{needs:{availability:'unavailable',reason:'invalid_or_unreadable'}}});document.querySelector('#app').prepend(host)}''')
+    assert 'Primary validation artifact preserved' in page.locator('.supplemental-status').inner_text()
+    page.screenshot(path='/downloads/row12-11-provenance.png',full_page=True)

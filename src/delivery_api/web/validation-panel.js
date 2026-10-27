@@ -18,8 +18,10 @@ function itemHtml(item){
 
 export function validationPanelHtml(panel){
   const groups=panel?.groups||[];
-  if(!groups.length)return '<p class="validation-empty">No Validation Items</p>';
-  return `<div class="validation-panel">${groups.map(g=>{
+  const unavailable=Object.entries(panel?.supplemental_availability||{}).filter(([,r])=>r.availability!=='available');
+  const notice=unavailable.length?`<p class="notice supplemental-status">Supplemental validation history incomplete: ${unavailable.map(([name,row])=>esc(name)+': '+esc(row.availability)+' ('+esc(row.reason||'unknown')+')').join('; ')}. Primary validation artifact preserved.</p>`:'';
+  if(!groups.length)return notice+'<p class="validation-empty">No Validation Items</p>';
+  return notice+`<div class="validation-panel">${groups.map(g=>{
     const n=g.items.length;
     const badge=g.uncovered?'<span class="validation-flag">Not Covered</span>':`<span class="validation-count">${n} ${n===1?'Item':'Items'}</span>`;
     return `<details class="validation-need"><summary><span>${esc(g.need)}</span>${badge}</summary>${g.items.map(itemHtml).join('')}</details>`;
