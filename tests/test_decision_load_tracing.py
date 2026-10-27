@@ -13,6 +13,10 @@ import time
 import test_crosshost_interview_acceptance as X
 from test_crosshost_interview_acceptance import dsn, keys  # reuse module fixtures
 
+# Same prerequisites as the acceptance module it reuses: without the engine and
+# generator source checkouts it must skip, not crash on a None path.
+pytestmark = X.pytestmark
+
 CANARY_BRIEF = 'A SaaS web app for surf schools. CANARYBRIEF-ZQXWV must never appear in logs.'
 ALLOWED_DETAIL_KEYS = {'wait_id', 'revision', 'step', 'epoch', 'outcome', 'duration_ms',
                        'request_ref', 'error_kind', 'form_present', 'radios', 'branch',

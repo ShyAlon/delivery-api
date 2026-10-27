@@ -91,17 +91,21 @@ def test_everything_zip_reports_per_section_progress_and_honest_counts(page, ui,
     _open_debug(page, ui)
     with page.expect_download(timeout=15000) as dl:
         page.locator("#downloadeverything").click()
-        # Per-section progress while collecting.
+        # Per-section progress while collecting. The section INDEX is not pinned:
+        # sections come and go (Request Timing joined 2026-10-26) - pin the name.
         page.wait_for_function(
-            "() => document.querySelector('#debugstatus').textContent.includes('Collecting section 6 of 7: Server logs (last 30 min)')",
+            "() => {const t=document.querySelector('#debugstatus').textContent;return t.includes('Collecting section')&&t.includes('Server logs (last 30 min)')}",
             timeout=10000)
     status = page.locator("#debugstatus")
     page.wait_for_function(
         "() => document.querySelector('#debugstatus').textContent.startsWith('Downloaded requi-everything.zip')",
         timeout=10000)
     text = status.inner_text()
-    assert "6 of 7 sections collected" in text
-    assert "unavailable: Server logs (last 30 min)" in text
+    # This fixture collects 8 sections; exactly two fail honestly: the fixture task
+    # never ran an engine (its diagnostics section reports unavailable) and the
+    # server-logs route is held to a 500 above. Section titles contain commas, so
+    # pin the whole unavailable clause instead of splitting it.
+    assert "Downloaded requi-everything.zip: 6 of 8 sections collected; unavailable: Task diagnostics (question, control state, engine state), Server logs (last 30 min)." in text, text
     download = dl.value
     target = tmp_path / "everything.zip"
     download.save_as(target)
