@@ -182,7 +182,7 @@ if(!m.shouldPollNow(false,100000,100000))throw new Error('a dead stream must pol
 let esUrl=null,polls=0;
 globalThis.EventSource=class{constructor(url){esUrl=url;setTimeout(()=>this.onopen&&this.onopen(),0)}addEventListener(k,f){if(k==='progress')this.onprogress=f}close(){this.closed=true}};
 globalThis.fetch=async()=>{polls++;return {ok:true,json:async()=>({events:[{id:1,kind:'progress',message:'working',payload:{}}]})}};
-const host={isConnected:true,set innerHTML(v){},get innerHTML(){return ''}};
+const host={isConnected:true,querySelector(){return null},set innerHTML(v){},get innerHTML(){return ''}};
 const stop=m.watchReviewProgress('task-9',host);
 await new Promise(r=>setTimeout(r,80));
 if(esUrl!=='/api/tasks/task-9/stream')throw new Error('no stream opened: '+esUrl);
