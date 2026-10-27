@@ -252,10 +252,12 @@ def test_key_never_written_or_printed(tmp_path):
         if f.is_file() and f.stat().st_size < 1024 * 1024:
             assert KEY not in f.read_text(errors='replace'), f
 
-def test_preview_sh_untouched():
-    proc = subprocess.run(['git', '-C', str(REPO), 'diff', '--exit-code', 'HEAD', '--', 'scripts/ops/preview.sh'],
-                          capture_output=True, text=True)
-    assert proc.returncode == 0, 'preview.sh must stay exactly as it is'
+def test_preview_sh_pins_the_expected_build():
+    """preview.sh is no longer frozen: 2026-10-27 it gained the REQUI_EXPECTED_REPOS pin
+    (both preview paths) so the container's staleness check can compare the running image
+    against the build the launcher expected. Keep both pins, after the build_env calls."""
+    src = (REPO / 'scripts' / 'ops' / 'preview.sh').read_text()
+    assert src.count("printf 'REQUI_EXPECTED_REPOS=%s\\n' \"$REPOS\" >> \"$WORK/preview.env\"") == 2
 
 def test_launcher_structure_guards():
     """Static invariants: key passed via -e only, never appended to an env file;

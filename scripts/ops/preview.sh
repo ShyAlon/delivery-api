@@ -86,6 +86,7 @@ local_flow(){
 
   # 3. settings: saved file to a private temp file, never printed, execution off, local-preview flag on
   build_env "$STORE" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"
+  printf 'REQUI_EXPECTED_REPOS=%s\n' "$REPOS" >> "$WORK/preview.env"
   printf 'DELIVERY_LOCAL_PREVIEW=1\n' >> "$WORK/preview.env"; chmod 600 "$WORK/preview.env"
   grep -q -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|API_KEY)' "$WORK/preview.env" && abort MODEL-KEY "a model key is still in the preview settings" "" "send me this output (not the file)"
   [ "$(grep -c '^DELIVERY_CLOUD_EXECUTION=' "$WORK/preview.env")" = 1 ] && grep -q '^DELIVERY_CLOUD_EXECUTION=0$' "$WORK/preview.env" || abort EXEC-ON "execution is not forced off in the preview settings" "" "send me this output"
@@ -221,6 +222,7 @@ server_flow(){
   ART_DEF=no; ART_DIFF=no
   if [ -n "$CHK" ] && grep -q '^VMODEL_ARTIFACTS_DIR=' "$WORK/live.env"; then ART_DEF=yes; [ "$(grep '^VMODEL_ARTIFACTS_DIR=' "$WORK/live.env" | tail -1 | cut -d= -f2- | tr -d "\"'")" = /data/artifacts ] || ART_DIFF=yes; fi
   build_env "$WORK/live.env" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"; rm -f "$WORK/live.env"
+  printf 'REQUI_EXPECTED_REPOS=%s\n' "$REPOS" >> "$WORK/preview.env"
   grep -q -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|API_KEY)' "$WORK/preview.env" && abort MODEL-KEY "a model key is still in the preview settings" "" "send me this output (not the file)"
   [ "$(grep -c '^DELIVERY_CLOUD_EXECUTION=' "$WORK/preview.env")" = 1 ] && grep -q '^DELIVERY_CLOUD_EXECUTION=0$' "$WORK/preview.env" || abort EXEC-ON "execution is not forced off in the preview settings" "" "send me this output"
   [ "$(grep -c '^DELIVERY_PUBLIC_ORIGIN=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT\$" "$WORK/preview.env" || abort ORIGIN "the preview's sign-in address is not set to its own local address" "" "send me this output"
