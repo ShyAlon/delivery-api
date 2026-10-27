@@ -171,6 +171,7 @@ def test_local_usage_refuses_unknown_or_inconsistent_shapes(raw):
 # --- fixed local origin -------------------------------------------------------
 
 @pytest.mark.producer_integration  # factory imports the owner engine's provider_transport (cross-repo); full local release check covers it
+@pytest.mark.engine_integration  # the owner_module seam imports interview_engine.provider_transport
 def test_local_clients_are_pinned_to_the_configured_origin(monkeypatch):
     from delivery_api.provider_network import ollama_client_factory
     monkeypatch.setenv('OLLAMA_BASE_URL', 'http://localhost:11434/v1')
@@ -241,6 +242,32 @@ def test_local_preview_route_list_adds_managed_ollama(monkeypatch):
     ollama = result['routes'][1]
     assert ollama['managed'] is True and ollama['available'] is True and ollama['model'] == 'ollama:' + LOCAL_MODEL
     assert result['default_route'] == {'route': 'ollama'}
+
+
+def test_a_keyless_deepseek_route_shows_unavailable_missing_key(monkeypatch):
+    """2026-10-27: availability was open_now alone, so an ollama-mode preview
+    (no key ever reaches the container) offered a selectable DeepSeek route
+    that failed at start. A dead route must say so, naming the missing key -
+    never its value."""
+    module = _cloud_app(monkeypatch, flag=True)
+    monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
+    monkeypatch.setattr(module.engine_client, 'preview_route', lambda route: {
+        'model_map': {stage: ['ollama', LOCAL_MODEL] for stage in ('probing', 'distillation')}})
+    result = module.model_routes(a=None)
+    deepseek = result['routes'][0]
+    assert deepseek['available'] is False
+    assert 'missing key' in deepseek['error'] and 'DEEPSEEK_API_KEY' in deepseek['error']
+    assert result['routes'][1]['available'] is True, 'the local route is untouched'
+
+
+def test_a_present_deepseek_key_keeps_the_route_available(monkeypatch):
+    module = _cloud_app(monkeypatch, flag=True)
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'sk-test-0123456789abcdef')
+    monkeypatch.setattr(module.engine_client, 'preview_route', lambda route: {
+        'model_map': {stage: ['ollama', LOCAL_MODEL] for stage in ('probing', 'distillation')}})
+    result = module.model_routes(a=None)
+    deepseek = result['routes'][0]
+    assert deepseek['available'] is True and 'error' not in deepseek
 
 
 def test_local_preview_route_list_fails_closed_when_the_engine_cannot_resolve(monkeypatch):
