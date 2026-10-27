@@ -33,7 +33,7 @@ cleanup(){
   exit $rc
 }
 
-STEPS_TOTAL=8; STEP_N=0; STEP_NAME=''; STEP_START=0
+STEPS_TOTAL=9; STEP_N=0; STEP_NAME=''; STEP_START=0
 step(){ STEP_N=$((STEP_N+1)); STEP_NAME=$1; STEP_START=$SECONDS; echo "== [$STEP_N/$STEPS_TOTAL] $STEP_NAME"; }
 step_ok(){ echo "   ok ($((SECONDS-STEP_START))s)"; STEP_NAME=''; }
 # Local abort: lib.sh's format, plus the step and elapsed time when a step is running.
@@ -90,6 +90,7 @@ Plan (8 steps, fail fast - cheapest and most likely first; every step prints its
   6 image smoke (~30s): the image's own full smoke - no network, no provider key, not root
   7 database + startability (~20s): this Mac opens the database; the image would start with these settings
   8 start + readiness (~1 min): container up, healthy, execution and provider key verified from inside
+  9 browser smoke (~10s): the real page loads in a browser - any console error or a boot stuck on "Loading workspace…" fails the preview (anonymous, read-only: no sign-in against the live database)
 PLAN
 
 step "inputs and environment"
@@ -378,6 +379,52 @@ PROBE='import os,re;print("EXEC="+os.environ.get("DELIVERY_CLOUD_EXECUTION","uns
 EXECOUT=$(docker exec "$NAME" python -c "$PROBE" 2>/dev/null || true)
 EXPECTED_KEYS=1; [ "$PROVIDER" = ollama ] && EXPECTED_KEYS=0
 echo "$EXECOUT" | grep -qx 'EXEC=1' && echo "$EXECOUT" | grep -qx "KEYS=$EXPECTED_KEYS" || abort EXEC-UNVERIFIED "the running container's environment does not confirm execution on with the expected provider key count ($EXPECTED_KEYS)" "" "send me this output"
+step_ok
+
+step "browser smoke: the real page boots with zero console errors"
+# Anonymous and read-only BY CONSTRUCTION: the preview runs on the live database with real
+# sign-in, so this step never submits a form and never signs in - it only loads / exactly
+# like a visitor and fails the preview on any browser error or a boot stuck on
+# "Loading workspace…". The fake-login half lives in the hermetic pytest
+# (tests/test_ui_playwright.py::test_boot_smoke_zero_console_errors_anonymous_and_after_fake_login),
+# which runs against a throwaway test database, never the live one.
+if .venv/bin/python -c "import playwright.sync_api" 2>/dev/null; then
+  rc=0; .venv/bin/python - "http://127.0.0.1:$PORT" <<'PYEOF' || rc=$?
+import sys
+from playwright.sync_api import sync_playwright
+base=sys.argv[1];errors=[]
+with sync_playwright() as p:
+    try:
+        browser=p.chromium.launch(headless=True)
+    except Exception as e:
+        if 'Executable' in str(e):sys.exit(2)
+        raise
+    page=browser.new_page()
+    page.on('console',lambda m:errors.append('console: '+m.text) if m.type=='error' else None)
+    page.on('pageerror',lambda e:errors.append('pageerror: '+str(e)))
+    page.goto(base+'/')
+    try:
+        page.wait_for_function("!document.body.innerText.includes('Loading workspace')",timeout=20000)
+    except Exception:
+        print('boot never left "Loading workspace..."')
+        for e in errors:print(' ',e)
+        sys.exit(1)
+    if not page.locator('#app').inner_text().strip():
+        print('boot left the loading state but rendered nothing');sys.exit(1)
+    browser.close()
+if errors:
+    print('browser errors during boot:')
+    for e in errors:print(' ',e)
+    sys.exit(1)
+print('browser smoke: page boots clean, zero console errors')
+PYEOF
+  case "$rc" in
+    0) ;;
+    2) echo "   NOTE: chromium is not installed for the checkout venv - boot NOT browser-verified; run: .venv/bin/python -m playwright install chromium";;
+    *) abort BROWSER-SMOKE "the preview page does not boot clean in a real browser (the errors are named above)" "The preview stays up for inspection; its UI may be broken." "send me this output";; esac
+else
+  echo "   NOTE: playwright is not in the checkout venv - boot NOT browser-verified; run: .venv/bin/python -m pip install -e '.[dev]' && .venv/bin/python -m playwright install chromium"
+fi
 step_ok
 echo
 echo "PREVIEW-EXEC READY: http://127.0.0.1:$PORT   (execution OPEN, live database, real sign-in, provider: $PROVIDER)"
