@@ -213,7 +213,7 @@ console.log(JSON.stringify({none,one:previewBannerText({preview:true})}));
     r = subprocess.run(["node", "--input-type=module", "-e", src], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
-    assert out == {"none": [None, None, None], "one": "Preview: real data, execution off"}
+    assert out == {"none": [None, None, None], "one": "Preview: real data, execution off - changes here can affect live data"}
 
 
 def test_only_the_preview_container_reports_preview(monkeypatch):
@@ -514,3 +514,13 @@ def test_the_session_check_says_whether_the_live_settings_move_the_artifacts_fol
     assert out.returncode == 0, out.stdout + out.stderr
     assert _check_lines(out)[2] == "live settings define VMODEL_ARTIFACTS_DIR: %s; differs from the image default /data/artifacts: %s" % (defined, differs)
     assert "/data/other" not in out.stdout
+
+
+def test_preview_banner_does_not_call_execution_preview_read_only_or_off():
+    import json
+    uri=(WEB/'chrome.js').as_uri()
+    source=f"import {{previewBannerText}} from '{uri}'; console.log(previewBannerText({{preview:true,execution_enabled:true}}))"
+    result=subprocess.run(['node','--input-type=module','-e',source],capture_output=True,text=True)
+    assert result.returncode==0,result.stderr
+    assert 'enabled by server setting' in result.stdout and 'changes here can affect live data' in result.stdout
+    assert 'execution off' not in result.stdout and 'read-only' not in result.stdout

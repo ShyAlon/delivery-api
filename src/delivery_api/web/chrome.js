@@ -8,4 +8,4 @@ export const OPERATOR_PAGES=[
 ];
 
 // The preview banner wording and its one gate: only a server-issued preview config shows it.
-export function previewBannerText(config){return config&&config.preview?'Preview: real data, execution off':null}
+export function previewBannerText(config){return config&&config.preview?`Preview: real data, execution ${config.execution_enabled?'enabled by server setting':'off'} - changes here can affect live data`:null}

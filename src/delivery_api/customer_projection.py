@@ -27,3 +27,15 @@ def without_model_pricing(value):
         return projected
     if isinstance(value,list):return [without_model_pricing(item) for item in value]
     return value
+
+
+def audit_credits_only(value):
+    """Audit data keeps credit values, not USD or provider expense fields.
+
+    This is a projection only; internal ledger/audit rows stay unchanged.
+    """
+    if isinstance(value,dict):
+        return {key:audit_credits_only(item) for key,item in value.items()
+                if not (str(key).lower().endswith('_usd') or str(key).lower().startswith(('expense_','interview_cost','interview_calls','interview_unpriced')))}
+    if isinstance(value,list):return [audit_credits_only(item) for item in value]
+    return value
