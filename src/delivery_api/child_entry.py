@@ -53,7 +53,7 @@ def main():
                 from interview_engine.pg_pool import build_pool
                 from interview_engine.tenant_worker import pg_session_store
                 from interview_engine.child_operations import execute_operation
-                from vmodel_contracts.interactive import StartSessionRequest,InputResponse
+                from vmodel_contracts.interactive import StartSessionRequest,InputResponse,ModelRouteSwitchRequest
                 pool=build_pool(cfg['dsn'],max_size=4,name='child-operation')
                 store=pg_session_store(pool,str(binding.owner_id),str(binding.auth_session_id))
                 from interview_engine import question_config
@@ -64,7 +64,7 @@ def main():
                 token=_check.set(check)
                 try:
                     execute_operation(op,trusted_binding=binding,store=store,broker=broker,
-                        load_request=lambda ref:StartSessionRequest.model_validate(cfg['input']) if ref==cfg['input_ref'] else None,
+                        load_request=lambda ref:(ModelRouteSwitchRequest.model_validate(cfg['input']) if op.operation.kind=='interview.route' else StartSessionRequest.model_validate(cfg['input'])) if ref==cfg['input_ref'] else None,
                         load_answer=lambda ref:InputResponse.model_validate(cfg['input']) if ref==cfg['input_ref'] else None)
                 finally:_check.reset(token)
             else:

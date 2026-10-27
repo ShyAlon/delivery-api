@@ -37,6 +37,14 @@ def test_actual_interview_start_runs_in_child_with_parent_broker(store,tmp_path,
                 def _attempt(self,a):return {'state':self.states[a]}
             client=ChildInterviewClient(store,tmp_path,gateway_factory=lambda cap,job:Gateway(job),
                 command=[__import__('sys').executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(__import__('pathlib').Path(__file__).parents[2]/'interview-engine/src'),str(__import__('pathlib').Path(__file__).parents[2]/'spec-generator/src')],dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint=f'http://127.0.0.1:{server.server_port}/v1/chat/completions')
+            from interview_engine import question_config
+            cfg=question_config.defaults();cfg['retrieval']['max_words']=81
+            client.save_question_quality_config(cfg)
+            original_run=client.supervisor.run
+            async def checked_run(*args,**kw):
+                assert kw['private_config']['question_quality']['retrieval']['max_words']==81
+                return await original_run(*args,**kw)
+            client.supervisor.run=checked_run
             from vmodel_contracts.interactive import StartSessionRequest
             result=client.start(StartSessionRequest(session_id=sid,task_id=tid,idea='A test app',model_route='ollama',initial_model='fake'))
             assert result.snapshot.sequence>0
@@ -58,7 +66,29 @@ def test_actual_interview_start_runs_in_child_with_parent_broker(store,tmp_path,
             count=len(calls)
             recovery=ChildInterviewClient(store,tmp_path,gateway_factory=lambda *a:(_ for _ in ()).throw(AssertionError('no dispatch')),dsn=client.dsn,endpoint=client.endpoint)
             assert recovery.resume(job).sequence==answered.snapshot.sequence
+            from vmodel_contracts.interactive import ModelRouteSwitchRequest
+            current=answered.snapshot
+            request=ModelRouteSwitchRequest(model_route='ollama',model='other-fake',actor_id='fake',
+                expected_sequence=current.sequence,expected_input_id=current.open_input.input_id,idempotency_key=uuid.uuid4())
+            switched=client.switch_route(sid,request)
+            assert switched.snapshot.sequence==current.sequence+1
+            assert switched.snapshot.open_input.input_id==current.open_input.input_id
+            assert switched.snapshot.model_map['probing'][1]=='other-fake'
+
             assert store.worker_job(job)['state']=='done' and len(calls)==count
+            route_pid=client.supervisor.last_result.pid
+            assert route_pid!=old_pid and client.supervisor.last_result.reaped
+            # Durable idempotent replay is claimless and cannot spawn another graph.
+            assert recovery.switch_route(sid,request).snapshot.sequence==switched.snapshot.sequence
+            from delivery_api.engine_client import EngineClientError
+            with pytest.raises(EngineClientError) as conflict:
+                client.switch_route(sid,request.model_copy(update={'model':'bad-reuse'}))
+            assert conflict.value.http_status==409
+            with pytest.raises(EngineClientError):client.switch_route(sid,request.model_copy(update={'idempotency_key':uuid.uuid4()}))
+            after_route=client.submit(sid,InputResponse(input_id=switched.snapshot.open_input.input_id,
+                value='Customer chooses an available slot',actor_id='fake',expected_sequence=switched.snapshot.sequence))
+            assert after_route.snapshot.sequence>switched.snapshot.sequence
+            assert calls[-1]['model']=='other-fake'
             assert calls,'fresh child never reached the parent provider broker'
     finally:server.shutdown();server.server_close()
 
@@ -69,3 +99,14 @@ def test_paid_route_refused_before_mutations_or_launch(tmp_path):
         def __getattr__(self,name):raise AssertionError('paid refusal must precede store mutation')
     client=ChildInterviewClient(Store(),tmp_path,gateway_factory=None,dsn='unused',endpoint='http://127.0.0.1:1')
     with pytest.raises(PermissionError,match='paid'):client.start(StartSessionRequest(task_id='fake',idea='fake',model_route='deepseek'))
+
+
+def test_quality_config_write_is_validated_and_persisted_for_child_snapshot(tmp_path):
+    from interview_engine import question_config
+    from delivery_api.engine_client import QualityConfigRejected
+    client=ChildInterviewClient(object(),tmp_path,gateway_factory=None,dsn='unused',endpoint='http://127.0.0.1:1')
+    cfg=question_config.defaults();cfg['retrieval']['max_words']=81
+    assert client.save_question_quality_config(cfg)['config']['retrieval']['max_words']==81
+    restarted=ChildInterviewClient(object(),tmp_path,gateway_factory=None,dsn='unused',endpoint='http://127.0.0.1:1')
+    assert restarted.question_quality_config()['config']['retrieval']['max_words']==81
+    with pytest.raises(QualityConfigRejected):client.save_question_quality_config({'invented':'field'})

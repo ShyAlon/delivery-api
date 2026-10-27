@@ -7,7 +7,7 @@ import zipfile
 import requi_child_contract
 
 ROOT=Path(__file__).parents[1]
-WHEEL=ROOT/'vendor/requi_child_contract-0.2.0-py3-none-any.whl'
+WHEEL=ROOT/'vendor/requi_child_contract-0.3.0-py3-none-any.whl'
 
 
 def test_wheel_source_and_installed_contract_are_identical():
@@ -25,7 +25,7 @@ def test_full_image_does_not_try_to_fetch_private_schema_from_pypi():
     spec=importlib.util.spec_from_file_location('deps',ROOT/'scripts/docker/wheel_deps.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     assert not any('requi-child-contract' in req for req in module.requirements(str(ROOT/'vendor')))
-    assert 'requi_child_contract-0.2.0-py3-none-any.whl /wheels/' in (ROOT/'Dockerfile.full').read_text()
+    assert 'requi_child_contract-0.3.0-py3-none-any.whl /wheels/' in (ROOT/'Dockerfile.full').read_text()
 
 
 def test_lifecycle_contract_rejects_unknown_identity_or_coercion():

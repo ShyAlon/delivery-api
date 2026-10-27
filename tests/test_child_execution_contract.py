@@ -141,3 +141,9 @@ def test_encoder_revalidates_constructed_models_and_refuses_unknown_fields():
 def test_binding_never_coerces_bad_values(field,value):
     body=operation();body['binding'][field]=value
     with pytest.raises(ValidationError):decode_operation(frame(body))
+
+
+def test_route_change_is_typed_not_an_answer_payload():
+    value=operation();value['operation']={'kind':'interview.route','checkpoint_sha256':'a'*64,
+        'expected_sequence':2,'wait_id':'wait-1','request_ref':'route-1'}
+    assert decode_operation(frame(value)).operation.kind=='interview.route'

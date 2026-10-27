@@ -31,6 +31,8 @@ class LocalComputeEvidence:
 class ChildInterviewClient(EngineClient):
     def __init__(self,store,artifacts_base,*,gateway_factory,dsn,endpoint,command=None):
         self.store=store;self.base=Path(artifacts_base);self.gateway_factory=gateway_factory;self.dsn=dsn;self.endpoint=endpoint
+        from interview_engine.question_config import ConfigStore
+        self.quality_store=ConfigStore(__import__('os').environ.get('INTERVIEW_ENGINE_QUESTION_QUALITY_CONFIG') or self.base/'question_quality.json')
         self.supervisor=ChildSupervisor(command or [sys.executable,'-m','delivery_api.child_entry'])
     @contextmanager
     def _registry(self):
@@ -62,9 +64,13 @@ class ChildInterviewClient(EngineClient):
         return {'route':route,'model_map':models}
     def question_quality_config(self):
         from interview_engine import question_config
-        return {'config_version':question_config.CONFIG_VERSION,'config':question_config.current(),'defaults':question_config.defaults()}
+        return {'config_version':question_config.CONFIG_VERSION,'config':self.quality_store.get(),'defaults':question_config.defaults()}
     def save_question_quality_config(self,config):
-        raise PermissionError('quality-config mutation is not installed in local child mode')
+        from interview_engine import question_config
+        from .engine_client import QualityConfigRejected
+        try:saved=self.quality_store.put(config)
+        except question_config.ConfigError as exc:raise QualityConfigRejected(str(exc)) from exc
+        return {'config_version':question_config.CONFIG_VERSION,'config':saved}
     def snapshot(self,sid):
         with self._registry() as registry:return registry.get(sid,serve=False).snapshot()
     def progress(self,sid,after=0):
@@ -74,10 +80,46 @@ class ChildInterviewClient(EngineClient):
     def reconcile_stop(self,sid):
         with self._registry() as registry:return registry.reconcile_stopped(sid)
     def switch_route(self,sid,request):
+        from .child_operation_refs import ChildOperationRefs
+        from requi_child_contract import decode_operation
+        from interview_engine.child_step import published_digest
+        from vmodel_contracts.interactive import ModelRouteSwitchResponse,EventType,ProtocolError,ProtocolErrorCode,ProcessStatus,NextStep
         from .engine_client import EngineClientError
-        from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
-        raise EngineClientError(409,ProtocolError(code=ProtocolErrorCode.ROUTE_SWITCH_CONFLICT,
-            detail='Local child mode requires a new interview for a model change; the current input is preserved.'))
+        def conflict(message):raise EngineClientError(409,ProtocolError(code=ProtocolErrorCode.ROUTE_SWITCH_CONFLICT,detail=message))
+        if request.model_route!='ollama':raise PermissionError('paid child route remains refused')
+        from .tenancy import current_scope
+        scope=current_scope()
+        with self._registry() as registry:
+            row=registry._store.load_published(sid,scope.owner_id)
+            session=registry.get(sid,serve=False);snapshot=session.snapshot()
+            if (row.get('control') or {}).get('stopped'):conflict('stopped session route changes disabled')
+            for item in session.route_history:
+                if item.idempotency_key==request.idempotency_key:
+                    if (item.to_route!=request.model_route or item.to_model_map['probing'][1]!=request.model or item.actor_id!=request.actor_id):
+                        conflict('idempotency key reused with different request')
+                    return ModelRouteSwitchResponse(snapshot=snapshot,accepted_event=registry._event(session,EventType.ROUTE_CHANGED,route_change=item,sequence=item.session_sequence))
+        if session.status!=ProcessStatus.WAITING_INPUT or snapshot.open_input is None or snapshot.next_step!=NextStep.WAIT_INPUT:
+            conflict('session is not at a stable input boundary')
+        if snapshot.sequence!=request.expected_sequence or snapshot.open_input.input_id!=request.expected_input_id:
+            conflict('input or session sequence changed; refresh and retry')
+        source={tuple(pair) for pair in (snapshot.model_map or {}).values()}
+        if len(source)!=1 or next(iter(source))[0]!='ollama':raise PermissionError('local source route required')
+        provider,model=next(iter(source));tid=snapshot.task_id
+        if request.model==model:conflict('session already uses this model')
+        refs=ChildOperationRefs(self.store,tid);ref=refs.put('route',request.model_dump(mode='json'))
+        job=self.store.enqueue_worker(tid,'phase:intent',execution_options={'model_route':provider+':'+model})
+        binding=self.store.session_binding(sid)
+        value={'version':1,'operation_id':job,'binding':{'owner_id':scope.owner_id,'auth_session_id':scope.session_id,
+            'task_id':tid,'session_id':sid,'job_id':job,'generation':binding['generation'],'lease_epoch':binding['lease_epoch'],
+            'provider':provider,'model':model},'operation':{'kind':'interview.route','checkpoint_sha256':published_digest(row),
+                'expected_sequence':snapshot.sequence,'wait_id':str(snapshot.open_input.input_id),'request_ref':ref}}
+        if binding['generation']>1:value['binding']['execution_anchor_sha256']=self.store.installed_execution_anchor(sid)['anchor_sha256']
+        op=decode_operation(json.dumps(value).encode()+b'\n')
+        self.store.retain_decision_review(tid,'child-job:'+job,'child-operation-v1',value)
+        self._launch(op,ref,'route')
+        with self._registry() as registry:
+            session=registry.get(sid,serve=False);payload=session.route_history[-1]
+            return ModelRouteSwitchResponse(snapshot=session.snapshot(),accepted_event=registry._event(session,EventType.ROUTE_CHANGED,route_change=payload))
     def close(self):pass
     def start(self,request):
         from vmodel_contracts.interactive import StartSessionResponse
@@ -146,7 +188,7 @@ class ChildInterviewClient(EngineClient):
         row=self.store.session_binding(job['session_id']);control=row.get('control') or {}
         if row['lease_expires_at']>__import__('time').time():raise PermissionError('prior child lease still live; wait for expiry')
         if control.get('stopped') or row['generation']!=job['generation']:raise PermissionError('stopped or changed generation cannot resume')
-        body=value['operation'];kind='start' if body['kind']=='interview.start' else 'answer'
+        body=value['operation'];kind={'interview.start':'start','interview.route':'route'}.get(body['kind'],'answer')
         ref=body.get('request_ref') or body.get('answer_ref')
         self.store.reauthorize_worker(job_id)
         # A committed answer/start is completion recovery, not graph replay.
