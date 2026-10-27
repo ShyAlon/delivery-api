@@ -372,6 +372,70 @@ def test_create_task_dialog_keyboard_submit_textarea_and_cancel(page,ui):
     assert page.locator('#newform').count()==0 and page.locator('.task').count()==before
 
 
+def test_create_task_button_disables_until_the_server_returns(page,ui):
+    page.goto(ui)
+    page.get_by_role('button',name='+ New task').click()
+    page.locator('#newform input[name="title"]').fill('Guarded create')
+    held=[]
+    def guard(route):
+        if route.request.method=='POST':held.append(route)
+        else:route.continue_()
+    page.route('**/api/tasks',guard)
+    create=page.locator('#newform button.primary')
+    create.click()
+    # A fast second click while the call is in flight is a no-op on the disabled
+    # button: exactly one POST may reach the server.
+    create.evaluate('e=>e.click()')
+    assert create.is_disabled() and create.inner_text()=='Creating\u2026'
+    assert create.get_attribute('aria-busy')=='true' and create.get_attribute('title')=='Creating the task - one moment'
+    assert len(held)==1
+    page.screenshot(path=str(_screenshots_dir / 'create-task-button-busy.png'),full_page=False)
+    held[0].fulfill(json={'task_id':'guard-created'})
+    page.wait_for_url('**/tasks/guard-created/view')
+
+
+def test_start_interview_button_disables_until_the_server_returns(page,ui):
+    routes={'routes':[{'id':'ollama','available':True,'model':'ollama:phi4'}]}
+    page.route('**/api/model-routes',lambda route:route.fulfill(json=routes))
+    held=[]
+    page.route('**/api/tasks/empty/start',lambda route:held.append(route))
+    page.goto(ui+'/tasks/empty/view')
+    start=page.locator('#startengine');start.wait_for()
+    assert start.inner_text()=='Start interview'
+    start.click()
+    start.evaluate('e=>e.click()')
+    assert start.is_disabled() and start.inner_text()=='Starting interview\u2026'
+    assert start.get_attribute('aria-busy')=='true' and start.get_attribute('title')=='Starting the interview - one moment'
+    assert len(held)==1
+    page.screenshot(path=str(_screenshots_dir / 'start-interview-button-busy.png'),full_page=False)
+    held[0].fulfill(json={'session_id':'guard-session'})
+    # The acknowledged start re-renders the task page from the server snapshot;
+    # the re-rendered button is usable again.
+    page.wait_for_function("document.querySelector('#startengine')&&!document.querySelector('#startengine').disabled")
+
+
+def test_confirm_rerun_button_disables_until_the_server_returns(page,ui):
+    page.goto(ui+'/tasks/done/view');page.get_by_role('button',name='Rerun stage').click()
+    page.locator('#rerunform').wait_for()
+    held=[]
+    def guard(route):
+        if (route.request.post_data_json or {}).get('confirm'):held.append(route)
+        else:route.fulfill(json={'downstream':['architecture','specs','tests'],'message':'Earlier generation remains archived.'})
+    page.route('**/api/tasks/done/rerun',guard)
+    page.get_by_role('button',name='Review impact').click()
+    confirm=page.get_by_role('dialog',name='Confirm rerun');confirm.wait_for()
+    button=confirm.locator('#confirm')
+    assert button.inner_text()=='Confirm rerun'
+    button.click()
+    button.evaluate('e=>e.click()')
+    assert button.is_disabled() and button.inner_text()=='Starting rerun\u2026'
+    assert button.get_attribute('aria-busy')=='true' and button.get_attribute('title')=='Starting the rerun - one moment'
+    assert len(held)==1
+    page.screenshot(path=str(_screenshots_dir / 'confirm-rerun-button-busy.png'),full_page=False)
+    held[0].fulfill(json={'ok':True})
+    confirm.wait_for(state='detached')
+
+
 def test_user_progress_and_composer_have_no_raw_console(page,ui):
     page.add_init_script("class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource")
     live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
