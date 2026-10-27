@@ -1075,7 +1075,7 @@ def test_greenfield_confirmation_is_single_flight(page,ui):
 def test_progress_slot_keys_render_as_title_case(page,ui):
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'stack:pwa_offline_runtime · 12 tok','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');feed=page.locator('#stageprogress .progress-item');feed.wait_for()
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('#stageprogress > details > summary').click();feed=page.locator('#stageprogress .progress-item');feed.wait_for()
     assert feed.locator('span').all_inner_texts()==['stack:PWA Offline Runtime · 12 tok']
     assert feed.locator('span').get_attribute('title')=='stack:PWA Offline Runtime · 12 tok'
     got=page.evaluate("""async()=>{const m=await import('/assets/format.js');return ['ui_framework','build_tooling','client_persistence','audio_engine','stack:ui_framework','plan: stack slots','R-12 statement','SPEC-3'].map(m.humanizeSnakeCase)}""")
@@ -1116,7 +1116,7 @@ def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_t
     page.set_viewport_size(viewport)
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'A very long progress update that must remain on precisely one line while the full wording stays available on hover','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');feed=page.locator('#stageprogress .progress-item');feed.wait_for();span=feed.locator('span');assert span.bounding_box()['width']>0;assert span.bounding_box()['x']+span.bounding_box()['width']<=page.viewport_size['width'];assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('#stageprogress > details > summary').click();feed=page.locator('#stageprogress .progress-item');feed.wait_for();span=feed.locator('span');assert span.bounding_box()['width']>0;assert span.bounding_box()['x']+span.bounding_box()['width']<=page.viewport_size['width'];assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
     phase=page.locator('.phase-list-primary .phase').filter(has_text='Requirements');phase.hover();tip=phase.get_by_role('tooltip');tip.wait_for();assert tip.get_by_text('Artifacts: srs.json',exact=True).is_visible();assert tip.get_by_text('missing acceptance criterion',exact=False).is_visible()
     page.screenshot(path=str(_screenshots_dir / f'progress-phase-tooltips-{viewport["width"]}.png'),full_page=True)
 
@@ -2207,6 +2207,7 @@ def test_live_heartbeat_wraps_without_clipping(page, ui, width):
                       {"id": 2, "kind": "heartbeat", "phase_key": "intent", "message": text, "ts": time.time(), "payload": {}}]
     page.route("**/api/tasks/live", lambda route: route.fulfill(json=_promote_control(live)))
     page.goto(ui + "/tasks/live/view")
+    page.locator("#stageprogress > details > summary").click()
     line = page.locator("#stageprogress .heartbeat span")
     expect(line).to_have_text(text)
     assert line.evaluate("e => getComputedStyle(e).whiteSpace") == "normal"
@@ -2347,3 +2348,61 @@ def test_idle_stream_reads_only_at_60s_safety_then_refreshes_on_events(page,ui):
         page.clock.run_for(100);time.sleep(.1)
     assert counts['/api/tasks/live/cost']==before['/api/tasks/live/cost']+2
     assert counts['/api/tasks/live']==before['/api/tasks/live']+1, 'model call completion must not fetch task state'
+
+@pytest.mark.parametrize('phase',['intent','needs'])
+@pytest.mark.parametrize('width',[1365,390])
+def test_active_phase_line_replaces_and_progress_stays_collapsed_until_expanded(page,ui,phase,width):
+    page.set_viewport_size({'width':width,'height':844})
+    live=page.request.get(ui+'/api/tasks/live').json()
+    live['state']='running';live['active_phase']=phase
+    live['ui_state']={'mode':'executing','active_phase':phase,'process_live':True,'decision':None,'gate':None}
+    for row in live['phases']:
+        row['state']='running' if row['phase_key']==phase else 'pending'
+    live['events']=[{'id':100,'kind':'command','phase_key':phase,'message':'Started','ts':time.time()-20},
+        {'id':101,'kind':'progress','phase_key':phase,'message':'Reading source inputs','ts':time.time()-5,
+         'payload':{'stage':'inputs','label':'Reading source inputs','status':'started'}}]
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.add_init_script("""window.EventSource=class{constructor(){window.liveSource=this;this.listeners={};setTimeout(()=>this.onopen?.(),0)}addEventListener(k,f){this.listeners[k]=f}close(){}emit(e){this.listeners.progress({data:JSON.stringify(e)})}}""")
+    page.goto(ui+'/tasks/live/view')
+    line=page.locator('.phase.running .phase-current-progress')
+    expect(line).to_have_text('Reading source inputs')
+    box=page.locator('#stageprogress > details')
+    expect(box).not_to_have_attribute('open','')
+    expect(box.locator(':scope > summary')).to_contain_text('Connected to progress')
+    expect(box.locator('.progress-history')).not_to_be_visible()
+    page.evaluate('liveSource.onerror()')
+    expect(box.locator(':scope > summary')).to_contain_text('Progress connection lost')
+    page.evaluate('liveSource.onopen()')
+    expect(box.locator(':scope > summary')).to_contain_text('Connected to progress')
+    page.evaluate("liveSource.emit({id:102,kind:'progress',phase_key:"+json.dumps(phase)+",message:'Drafting the next item',payload:{stage:'draft',status:'started'},ts:Date.now()/1000})")
+    expect(line).to_have_text('Drafting the next item')
+    expect(box).not_to_have_attribute('open','')
+    box.locator(':scope > summary').click()
+    expect(box.locator('.progress-history')).to_be_visible()
+    page.evaluate("liveSource.emit({id:103,kind:'progress',phase_key:"+json.dumps(phase)+",message:'Checking the result',payload:{stage:'check',status:'started'},ts:Date.now()/1000})")
+    expect(line).to_have_text('Checking the result')
+    expect(box).to_have_attribute('open','')
+    page.screenshot(path=str(_screenshots_dir / ('compact-progress-'+phase+'-'+str(width)+'-expanded.png')),full_page=True)
+    # A state event that changes a sibling phase forces a full snapshot render.
+    sibling=next(row for row in live['phases'] if row['phase_key']!=phase)
+    sibling['state']='approved'
+    page.evaluate("liveSource.emit({id:104,kind:'command',phase_key:"+json.dumps(phase)+",message:'Refresh state',payload:{},ts:Date.now()/1000})")
+    expect(page.locator('.phase.approved')).to_have_count(1)
+    expect(box).to_have_attribute('open','')
+    page.evaluate("liveSource.emit({id:104,kind:'progress',phase_key:"+json.dumps(phase)+",message:'Another result',payload:{stage:'check',status:'completed'},ts:Date.now()/1000})")
+    expect(box).to_have_attribute('open','')
+    box.locator(':scope > summary').click()
+    page.screenshot(path=str(_screenshots_dir / ('compact-progress-'+phase+'-'+str(width)+'-collapsed.png')),full_page=True)
+
+def test_waiting_phase_status_is_not_overwritten_by_late_heartbeat(page,ui):
+    live=page.request.get(ui+'/api/tasks/live').json()
+    live['active_phase']='intent';live['state']='running';live['control_snapshot']={'kind':'text'}
+    live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'question':'What should it do?','decision':None,'gate':None,'show_question':True,'show_answer_composer':True}
+    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.add_init_script("window.EventSource=class{constructor(){window.liveSource=this;this.listeners={}}addEventListener(k,f){this.listeners[k]=f}close(){}emit(e){this.listeners.progress({data:JSON.stringify(e)})}}")
+    page.goto(ui+'/tasks/live/view')
+    line=page.locator('.phase-current-progress')
+    expect(line).to_have_text('Waiting for your answer')
+    page.evaluate("liveSource.emit({id:10001,kind:'heartbeat',phase_key:'intent',message:'Old working heartbeat',payload:{stage:'probe',status:'heartbeat'},ts:Date.now()/1000})")
+    expect(line).to_have_text('Waiting for your answer')
+    expect(page.locator('#stageprogress > details > summary')).to_contain_text('Waiting for your answer')

@@ -371,3 +371,13 @@ header{z-index:6}
 .route-pill span,.route-pill small{font:var(--fs-xs)/1.5 Manrope}
 .route-unavailable{margin-top:8px;font:var(--fs-xs)/1.5 Manrope;color:#a33;overflow-wrap:anywhere}
 .start-route-option:has(.route-unavailable) .route-pill{height:auto}
+/* One current signal per phase; history is opt-in and never pushes the answer away. */
+details.review-progress{border:1px solid var(--line);border-radius:12px;margin:6px 0;padding:10px 12px}
+details.review-progress>summary{cursor:pointer;font-size:var(--fs-sm);line-height:1.5;overflow-wrap:anywhere}
+details.review-progress>summary>span{display:block;color:var(--muted)}
+details.review-progress>summary>.progress-current{color:var(--ink);margin-top:3px}
+.progress-history{border-top:1px solid var(--line);margin-top:10px;padding-top:6px}
+.phase-current-progress{overflow-wrap:anywhere}
+.signal-updated{animation:signal-reveal .18s ease-out}
+@keyframes signal-reveal{from{opacity:.5;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){.signal-updated{animation:none}}
