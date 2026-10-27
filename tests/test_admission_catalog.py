@@ -88,3 +88,10 @@ def test_reviewed_full_context_ceiling_covers_tools_and_preserves_exact_bytes():
     for cap in [0,101,True]:
         raw=json.dumps({'model':'fake','max_tokens':cap}).encode()
         with pytest.raises(AdmissionDenied):bounder(stage='needs',serialized_request=raw,max_output_tokens=cap)
+
+def test_an_unreviewed_serialized_bound_names_the_route_and_stage():
+    # 2026-10-27: a preview died on this denial and the message named neither the
+    # route nor the stage - the debug evidence could not say which key was missed.
+    catalog=ReviewedCatalog()
+    with pytest.raises(AdmissionDenied,match=r"unreviewed for ollama/qwen2\.5-coder:14b \(stage scope_tiebreak\)"):
+        catalog.resolve_serialized(stage='scope_tiebreak',provider='ollama',model='qwen2.5-coder:14b',serialized_request=b'{}',max_output_tokens=1)
