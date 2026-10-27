@@ -10,8 +10,10 @@ COPY interview-engine/ interview-engine/
 COPY spec-generator/ spec-generator/
 COPY verification-loop/ verification-loop/
 RUN echo "bc8cb30c63719e106451d514532b28a30d8e69fbcce8a771121eab2369f0391e  delivery-api/vendor/vmodel_contracts-0.28.0-py3-none-any.whl" | sha256sum --check - \
+    && echo "e9ddf0dda1451d5fde73dd226363790e94a28f9602775ddc95d6baa722f0de9c  delivery-api/vendor/requi_child_contract-0.1.0-py3-none-any.whl" | sha256sum --check - \
+    && cmp delivery-api/vendor/requi_child_contract-0.1.0-py3-none-any.whl interview-engine/vendor/requi_child_contract-0.1.0-py3-none-any.whl \
     && pip wheel --no-cache-dir --no-deps --wheel-dir /wheels ./delivery-api ./interview-engine ./spec-generator ./verification-loop \
-    && cp delivery-api/vendor/vmodel_contracts-0.28.0-py3-none-any.whl /wheels/ \
+    && cp delivery-api/vendor/vmodel_contracts-0.28.0-py3-none-any.whl delivery-api/vendor/requi_child_contract-0.1.0-py3-none-any.whl /wheels/ \
     && python delivery-api/scripts/docker/wheel_deps.py /wheels > /wheels/requirements.txt
 
 FROM python:3.12-slim

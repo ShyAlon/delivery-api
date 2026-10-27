@@ -14,8 +14,8 @@ def validate_context(context):
     context = Path(context).resolve()
     manifest = json.loads((context / 'source-manifest.json').read_text())
     wheels = sorted((context / 'wheels').glob('*.whl'))
-    if len(wheels) != 4:
-        raise ValueError('exact four-package wheel context required')
+    if len(wheels) != 5:
+        raise ValueError('exact five-package wheel context required')
     expected = {name for name in manifest if name.endswith('.whl')}
     if {wheel.name for wheel in wheels} != expected:
         raise ValueError('wheel names differ from source manifest')
@@ -24,7 +24,7 @@ def validate_context(context):
             raise ValueError('wheel content differs from source manifest')
     hash_lines=(context / 'wheel-sha256.txt').read_text().splitlines()
     expected_lines={manifest[wheel.name]['sha256']+'  /wheels/'+wheel.name for wheel in wheels}
-    if len(hash_lines)!=4 or set(hash_lines)!=expected_lines:
+    if len(hash_lines)!=5 or set(hash_lines)!=expected_lines:
         raise ValueError('Docker wheel hashes differ from source manifest')
     for name in ('constraints.txt', 'ui-smoke.py', 'Dockerfile'):
         if not (context / name).is_file():
@@ -34,8 +34,8 @@ def validate_context(context):
     # extras or pip freeze from a working development environment.
     legacy='pip install --no-cache-dir -c /app/constraints.txt /wheels/*.whl playwright==1.62.0' in docker
     if not legacy:
-        packages=('vmodel_contracts','interview_engine','spec_generator','delivery_api')
-        roles=('contracts','engine','generator','delivery')
+        packages=('vmodel_contracts','requi_child_contract','interview_engine','spec_generator','delivery_api')
+        roles=('contracts','child-contract','engine','generator','delivery')
         expected=['RUN pip install --no-cache-dir -c /app/constraints.txt playwright==1.62.0 && python -m playwright install --with-deps chromium']
         for package,role in zip(packages,roles):
             selected=[w for w in wheels if w.name.startswith(package+'-')]
@@ -72,7 +72,7 @@ def verify(context, *, browser_path=None):
         docker=(context/'Dockerfile').read_text()
         if 'wheel-sha256-contracts.txt' in docker:
             subprocess.run(install+['playwright==1.62.0'],check=True,cwd=root,env=env)
-            for package in ('vmodel_contracts','interview_engine','spec_generator','delivery_api'):
+            for package in ('vmodel_contracts','requi_child_contract','interview_engine','spec_generator','delivery_api'):
                 wheel=next(w for w in wheels if w.name.startswith(package+'-'))
                 subprocess.run(install+[str(wheel)],check=True,cwd=root,env=env)
         else:

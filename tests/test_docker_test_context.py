@@ -92,7 +92,7 @@ def test_clean_install_does_not_inherit_credentials_dev_sources_or_site_packages
 def test_clean_install_checks_exact_wheels_before_creating_environment(tmp_path):
     import hashlib,json,pytest
     module=_clean_verifier();(tmp_path/'wheels').mkdir();manifest={}
-    for name,role in (('delivery_api','delivery'),('interview_engine','engine'),('spec_generator','generator'),('vmodel_contracts','contracts')):
+    for name,role in (('delivery_api','delivery'),('interview_engine','engine'),('spec_generator','generator'),('vmodel_contracts','contracts'),('requi_child_contract','child-contract')):
         wheel=tmp_path/'wheels'/f'{name}-1.0-py3-none-any.whl';wheel.write_bytes(name.encode())
         manifest[wheel.name]={'sha256':hashlib.sha256(wheel.read_bytes()).hexdigest()}
         (tmp_path/('wheel-sha256-'+role+'.txt')).write_text(manifest[wheel.name]['sha256']+'  /wheels/'+wheel.name+'\n')
@@ -101,7 +101,7 @@ def test_clean_install_checks_exact_wheels_before_creating_environment(tmp_path)
     (tmp_path/'constraints.txt').write_text('')
     (tmp_path/'ui-smoke.py').write_text('')
     (tmp_path/'Dockerfile').write_text((ROOT/'scripts/docker/Dockerfile.ui-test').read_text())
-    assert len(module.validate_context(tmp_path)[1])==4
+    assert len(module.validate_context(tmp_path)[1])==5
     wheel.write_bytes(b'changed')
     with pytest.raises(ValueError,match='manifest'):module.validate_context(tmp_path)
     wheel.write_bytes(name.encode())
@@ -145,10 +145,10 @@ elif args[0]=='build':(cache/args[2].replace(':','_')).touch()
 def test_ui_layer_order_and_checksums_keep_unrelated_wheels_out_of_early_layers():
     docker=(ROOT/'scripts/docker/Dockerfile.ui-test').read_text()
     assert 'COPY wheels/ /wheels/' not in docker
-    packages=('vmodel_contracts','interview_engine','spec_generator','delivery_api')
+    packages=('vmodel_contracts','requi_child_contract','interview_engine','spec_generator','delivery_api')
     positions=[docker.index('COPY wheels/'+p+'-*.whl') for p in packages]
     assert positions==sorted(positions)
     assert docker.index('install --with-deps chromium')<positions[0]
     assert docker.index('COPY wheel-sha256.txt')>positions[-1]
-    for package,role in zip(packages,('contracts','engine','generator','delivery')):
+    for package,role in zip(packages,('contracts','child-contract','engine','generator','delivery')):
         assert 'sha256sum --check /app/wheel-sha256-'+role+'.txt && pip install --no-cache-dir -c /app/constraints.txt /wheels/'+package+'-*.whl' in docker

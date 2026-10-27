@@ -5,7 +5,7 @@ verification-loop still pins an old vmodel-contracts commit by git URL, which ca
 image. vmodel-contracts is installed from the vendored wheel instead. Optional extras are skipped."""
 import glob,os,re,sys,zipfile
 
-SKIP={'vmodel-contracts'}
+SKIP={'vmodel-contracts','requi-child-contract'}
 
 
 def norm(name):

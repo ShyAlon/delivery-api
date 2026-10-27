@@ -12,6 +12,7 @@ authors = [{ name = "Shy Alon" }]
 dynamic = ["version"]
 dependencies = [
   "vmodel-contracts==0.28.0",
+  "requi-child-contract==0.1.0",
   "fastapi>=0.110",
   "uvicorn>=0.29",
   "pydantic>=2.6,<3",
@@ -50,4 +51,5 @@ markers = [
 ]
 
 [tool.uv.sources]
+requi-child-contract = { path = "vendor/requi_child_contract-0.1.0-py3-none-any.whl" }
 vmodel-contracts = { path = "vendor/vmodel_contracts-0.28.0-py3-none-any.whl" }
