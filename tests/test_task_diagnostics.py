@@ -72,3 +72,94 @@ def test_worker_state_section_shapes_rows_and_renders_times():
 def test_worker_state_omitted_when_not_passed_and_unavailable_when_none():
     out=td.build({"task_id":"t","title":"x","state":"running"},[],{}, {}, td.engine_summary(None))
     assert "worker_state" not in out
+
+
+def _llm_lines(path, rows):
+    import json
+    (path/"llm-calls.jsonl").write_text("\n".join(json.dumps(r) for r in rows)+"\n")
+
+
+def test_model_calls_projects_each_call_and_aggregates_by_stage(tmp_path):
+    rows=[
+        {"event":"llm_call_start","stage":"probing","provider":"ollama","model":"phi4"},
+        {"event":"llm_call_end","ts":"2026-10-27T09:00:00","stage":"probing","item":"IT-1","provider":"ollama","model":"phi4",
+         "latency_s":14.2,"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15},"keep_alive":"30m","tokens_per_s":18.1},
+        {"event":"llm_call_end","ts":"2026-10-27T09:05:00","stage":"probing","item":"IT-2","provider":"ollama","model":"phi4",
+         "latency_s":15.8,"usage":{"input_tokens":12,"output_tokens":6,"total_tokens":18},"keep_alive":"30m","tokens_per_s":17.0},
+        {"event":"llm_call_end","ts":"2026-10-27T09:40:00","stage":"categorization","provider":"ollama","model":"phi4",
+         "latency_s":66.7,"usage":{"input_tokens":900,"output_tokens":400,"total_tokens":1300},"keep_alive":"30m","tokens_per_s":6.0,
+         "timing":{"total_ms":66700,"load_ms":800,"prompt_eval_ms":2100,"prompt_eval_count":900,"eval_ms":11300,"eval_count":400}},
+    ]
+    _llm_lines(tmp_path, rows)
+    out=td.model_calls(tmp_path,cloud=False)
+    assert len(out["calls"])==3  # start events are not calls
+    first=out["calls"][0]
+    assert first=={"ts":"2026-10-27T09:00:00","stage":"probing","item":"IT-1","provider":"ollama","model":"phi4",
+                   "latency_s":14.2,"keep_alive":"30m","tokens_per_s":18.1,
+                   "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}
+    (agg,)= [a for a in out["by_stage"] if a["stage"]=="probing"]
+    assert agg["calls"]==2 and agg["total_s"]==30.0 and agg["mean_s"]==15.0
+    assert agg["input_tokens"]==22 and agg["output_tokens"]==11
+    cat=[a for a in out["by_stage"] if a["stage"]=="categorization"][0]
+    assert cat["load_ms"]==800 and cat["prompt_eval_ms"]==2100 and cat["eval_ms"]==11300
+
+
+def test_model_calls_cloud_drops_token_counts_and_rates(tmp_path):
+    rows=[{"event":"llm_call_end","ts":"t","stage":"probing","provider":"ollama","model":"phi4",
+           "latency_s":14.2,"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15},
+           "keep_alive":"30m","tokens_per_s":18.1,
+           "timing":{"total_ms":14200,"load_ms":800,"prompt_eval_ms":2100,"prompt_eval_count":10,"eval_ms":11300,"eval_count":5}}]
+    _llm_lines(tmp_path, rows)
+    out=td.model_calls(tmp_path,cloud=True)
+    call=out["calls"][0]
+    assert "usage" not in call and "tokens_per_s" not in call
+    assert call["timing"]=={"total_ms":14200,"load_ms":800,"prompt_eval_ms":2100,"eval_ms":11300}  # durations stay, counts go
+    agg=out["by_stage"][0]
+    assert "input_tokens" not in agg and "output_tokens" not in agg
+    assert agg["calls"]==1 and agg["total_s"]==14.2
+
+
+def test_model_calls_without_recording_is_empty(tmp_path):
+    assert td.model_calls(tmp_path,cloud=False)=={"calls":[],"by_stage":[]}
+
+
+def test_diagnostics_route_includes_model_calls_when_session_recorded(monkeypatch,tmp_path):
+    import json
+    from fastapi.testclient import TestClient
+    from delivery_api.app import app
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'d.db'))
+    monkeypatch.setattr('delivery_api.app.store',store)
+    # task_worker_state is cloud-only today (pre-existing: the route 500s locally
+    # without it); not under test here.
+    monkeypatch.setattr(store,'task_worker_state',lambda task_id:None,raising=False)
+    task=store.create_task('demo task')
+    store._db.execute("UPDATE tasks SET engine_session_id=? WHERE task_id=?",('sess-1',task['task_id']))
+    artifacts=tmp_path/'artifacts'
+    (artifacts/'sess-1'/'interview').mkdir(parents=True)
+    (artifacts/'sess-1'/'interview'/'llm-calls.jsonl').write_text(json.dumps(
+        {"event":"llm_call_end","ts":"t","stage":"probing","provider":"ollama","model":"phi4",
+         "latency_s":14.2,"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15},
+         "keep_alive":"30m","tokens_per_s":18.1})+"\n")
+    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
+    reply=TestClient(app).get(f"/api/tasks/{task['task_id']}/diagnostics")
+    assert reply.status_code==200,reply.text[:400]
+    out=reply.json()["model_calls"]
+    assert out["calls"][0]["stage"]=="probing" and out["calls"][0]["keep_alive"]=="30m"
+    assert out["by_stage"]==[{"provider":"ollama","model":"phi4","stage":"probing","calls":1,
+                              "total_s":14.2,"input_tokens":10,"output_tokens":5,"mean_s":14.2}]
+
+
+def test_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_path):
+    from fastapi.testclient import TestClient
+    from delivery_api.app import app
+    from delivery_api.store import SQLiteStore
+    store=SQLiteStore(str(tmp_path/'d.db'))
+    monkeypatch.setattr('delivery_api.app.store',store)
+    # task_worker_state is cloud-only today (pre-existing: the route 500s locally
+    # without it); not under test here.
+    monkeypatch.setattr(store,'task_worker_state',lambda task_id:None,raising=False)
+    task=store.create_task('demo task')
+    reply=TestClient(app).get(f"/api/tasks/{task['task_id']}/diagnostics")
+    assert reply.status_code==200,reply.text[:400]
+    assert "model_calls" not in reply.json()

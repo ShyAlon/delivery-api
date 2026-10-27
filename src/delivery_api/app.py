@@ -1828,8 +1828,13 @@ def task_diagnostics(task_id:str):
         try:snapshot=engine_client.snapshot(session_id)
         except EngineClientError as exc:error=f"engine answered HTTP {exc.http_status}: {exc.error.detail}"
         except EngineUnreachableError:error="the interview engine is not reachable"
+    model_calls=None
+    if session_id:
+        from vmodel_contracts.runtime import artifacts_root
+        root=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session_id,store)
+        model_calls=diagnostics.model_calls(root/"interview",cloud=config.CLOUD_TENANTS)
     return diagnostics.build(detail,detail.get("events") or [],detail.get("control_snapshot"),detail.get("input_state"),
-                             diagnostics.engine_summary(snapshot,error),worker_state=store.task_worker_state(task_id))
+                             diagnostics.engine_summary(snapshot,error),worker_state=store.task_worker_state(task_id),model_calls=model_calls)
 
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str, background_tasks: BackgroundTasks = None):
