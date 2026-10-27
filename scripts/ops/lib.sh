@@ -12,7 +12,7 @@ ops_venv(){
     # old venv untouched - it still works for everything that does not need the extras.
     .venv/bin/python -c 'import psycopg_pool' 2>/dev/null && return 0
     echo "== refreshing .venv with the declared extras (the dev tools and psycopg-pool)"
-    .venv/bin/python -m pip install -q vendor/vmodel_contracts-0.28.0-py3-none-any.whl vendor/requi_child_contract-0.1.0-py3-none-any.whl && .venv/bin/python -m pip install -q -e '.[dev,supabase]' && return 0
+    .venv/bin/python -m pip install -q vendor/vmodel_contracts-0.28.0-py3-none-any.whl vendor/requi_child_contract-0.2.0-py3-none-any.whl && .venv/bin/python -m pip install -q -e '.[dev,supabase]' && return 0
     abort VENV-INSTALL "pip could not install the declared extras into the existing .venv" "The venv was left as it was; nothing else changed." "check your network, then run it again"
   fi
   echo "== building .venv (first run only)"
@@ -22,7 +22,7 @@ ops_venv(){
   done
   [ -n "$c" ] || abort NO-PYTHON "no Python 3.12 or newer on PATH" "" "brew install python@3.12"
   "$c" -m venv .venv || abort VENV "cannot create .venv" "" "rm -rf $PWD/.venv"
-  .venv/bin/python -m pip install -q vendor/vmodel_contracts-0.28.0-py3-none-any.whl vendor/requi_child_contract-0.1.0-py3-none-any.whl && .venv/bin/python -m pip install -q -e '.[dev,supabase]' || { rm -rf .venv; abort VENV-INSTALL "pip could not install the project" "The half-built .venv was removed." "check your network, then run it again"; }
+  .venv/bin/python -m pip install -q vendor/vmodel_contracts-0.28.0-py3-none-any.whl vendor/requi_child_contract-0.2.0-py3-none-any.whl && .venv/bin/python -m pip install -q -e '.[dev,supabase]' || { rm -rf .venv; abort VENV-INSTALL "pip could not install the project" "The half-built .venv was removed." "check your network, then run it again"; }
 }
 # The ollama-mode preview settings: the local-preview flag, the Mac's Ollama address,
 # AND the reviewed model for the ENGINE. The reviewed $0 row names exactly one model;

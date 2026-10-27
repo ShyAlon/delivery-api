@@ -11,13 +11,15 @@ from pathlib import Path
 import zipfile
 
 root=Path(__file__).resolve().parents[1]
-output=root.parents[1]/'vendor'/'requi_child_contract-0.1.0-py3-none-any.whl'
-info='requi_child_contract-0.1.0.dist-info'
+output=root.parents[1]/'vendor'/'requi_child_contract-0.2.0-py3-none-any.whl'
+info='requi_child_contract-0.2.0.dist-info'
 files={
     'requi_child_contract/__init__.py':(root/'src/requi_child_contract/__init__.py').read_bytes(),
-    f'{info}/METADATA':b'Metadata-Version: 2.1\nName: requi-child-contract\nVersion: 0.1.0\nRequires-Python: >=3.10\nRequires-Dist: pydantic>=2.6,<3\n\n',
+    f'{info}/METADATA':b'Metadata-Version: 2.1\nName: requi-child-contract\nVersion: 0.2.0\nRequires-Python: >=3.10\nRequires-Dist: pydantic>=2.6,<3\nRequires-Dist: httpx>=0.27\n\n',
     f'{info}/WHEEL':b'Wheel-Version: 1.0\nGenerator: requi-offline-contract-builder\nRoot-Is-Purelib: true\nTag: py3-none-any\n',
 }
+for module in ('broker','compute'):
+    files['requi_child_contract/'+module+'.py']=(root/('src/requi_child_contract/'+module+'.py')).read_bytes()
 record=io.StringIO(newline='');writer=csv.writer(record,lineterminator='\n')
 for name,data in sorted(files.items()):
     digest=base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b'=').decode()
