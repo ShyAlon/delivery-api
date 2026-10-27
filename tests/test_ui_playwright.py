@@ -171,13 +171,13 @@ def test_require_brand_is_consistent(page, ui):
 
 def test_not_started_panel_layout(page,ui):
     page.goto(ui+'/tasks/empty/view')
-    page.locator('#defaultroute').wait_for()
+    page.get_by_role('group',name='Default model route').wait_for()
     start=page.get_by_role('button',name='Start interview')
-    panel=page.locator('.not-started');route=panel.locator('#defaultroute');label=panel.locator('.start-route');
+    panel=page.locator('.not-started');route=panel.get_by_role('group',name='Default model route');label=panel.locator('.start-route');
     assert panel.evaluate("e=>getComputedStyle(e).borderRadius")=='28px'
     assert panel.locator('.start-controls').count()==1
     assert label.inner_text().startswith('DEFAULT MODEL ROUTE')
-    control=route.bounding_box();action=start.bounding_box();assert control['x']+control['width']+12<action['x']
+    control=route.bounding_box();action=start.bounding_box();assert control['y']+control['height']+12<action['y']
     assert control['y']>=label.bounding_box()['y']+12
     assert start.is_visible() and not start.is_enabled()
     assert 'cannot start:' in panel.locator('#startstatus').inner_text()
@@ -188,11 +188,12 @@ def test_start_screen_displays_engine_resolved_model_and_conflict(page, ui):
                       {'id':'deepseek','available':False,'error':"selected route 'deepseek' conflicts with INTERVIEW_ENGINE_MODEL_PROBING='ollama:phi4'"}]}
     page.route('**/api/model-routes',lambda route:route.fulfill(json=routes))
     page.goto(ui+'/tasks/empty/view')
-    selector=page.locator('#defaultroute');selector.wait_for()
-    assert 'ollama:phi4' in selector.locator('option[value=ollama]').inner_text()
-    assert not page.get_by_role('button',name='Start interview').is_enabled()
-    assert 'INTERVIEW_ENGINE_MODEL_PROBING' in page.locator('#startstatus').inner_text()
-    selector.select_option('ollama')
+    selector=page.get_by_role('group',name='Default model route');selector.wait_for()
+    assert 'ollama:phi4' in selector.locator('[data-start-route=ollama]').inner_text()
+    assert selector.locator('[data-start-route=deepseek]').is_disabled()
+    assert 'INTERVIEW_ENGINE_MODEL_PROBING' in selector.inner_text()
+    assert selector.locator('[data-start-route=ollama]').get_attribute('aria-pressed')=='true'
+    selector.locator('[data-start-route=ollama]').click()
     assert page.get_by_role('button',name='Start interview').is_enabled()
     page.screenshot(path=str(_screenshots_dir / "interview-model-preview.png"),full_page=True)
 
@@ -1145,10 +1146,10 @@ def test_audit_uses_shared_dialog_sortable_filterable_sticky_table(page,ui):
 
 def test_model_route_default_and_phase_override_controls(page,ui):
     page.goto(ui+'/tasks/empty/view')
-    picker=page.locator('#defaultroute');picker.wait_for()
-    assert picker.locator('option').count()==2
-    assert picker.input_value()=='deepseek'
-    deepseek=picker.locator('option[value="deepseek"]')
+    picker=page.get_by_role('group',name='Default model route');picker.wait_for()
+    assert picker.locator('[data-start-route]').count()==2
+    assert not page.get_by_role('button',name='Start interview').is_enabled()
+    deepseek=picker.locator('[data-start-route=deepseek]')
     assert 'DeepSeek' in deepseek.inner_text()
     mock_gate_review(page,ui,'sim')
     page.goto(ui+'/tasks/sim/gates/gate-conops')
@@ -1577,7 +1578,7 @@ def test_every_generator_gate_uses_same_page_and_configured_model_picker(page,ui
 
 def test_cross_ui_waiting_banner_during_slow_write(page,ui):
     page.goto(ui+'/tasks/empty/view')
-    page.locator('#defaultroute').wait_for()
+    page.get_by_role('group',name='Default model route').wait_for()
     page.evaluate("""() => {
       const original=window.fetch;
       window.fetch=(url,opts={})=>String(url).endsWith('/feedback')&&opts.method==='POST'
@@ -1709,7 +1710,7 @@ def test_error_states_render_instantly_without_fade(page, ui):
 def test_browser_session_refresh_single_flight_before_expiry(page,ui):
     import threading,time
     page.goto(ui+'/tasks/empty/view')
-    page.locator('#defaultroute').wait_for()
+    page.get_by_role('group',name='Default model route').wait_for()
     calls=[]
     def refresh(route):
         calls.append(time.time())
@@ -2286,3 +2287,28 @@ def test_everything_zip_downloads_with_the_manifest_first(page,ui,tmp_path):
     assert "Debug info" in text and "Client logs" in text and len(text)>200
     expect(page.locator("#debugstatus")).to_contain_text("requi-everything.zip")
     page.screenshot(path=str(_screenshots_dir / "everything-zip.png"),full_page=True)
+
+
+def test_start_route_pills_show_all_choices_and_disabled_reasons(page,ui):
+    routes={'managed':True,'default_route':{'route':'ollama'},'routes':[
+        {'id':'deepseek','managed':True,'available':False,'error':'missing key: DEEPSEEK_API_KEY is not set on this server'},
+        {'id':'ollama','managed':True,'available':True,'model':'ollama:phi4'}]}
+    page.route('**/api/model-routes',lambda route:route.fulfill(json=routes))
+    page.goto(ui+'/tasks/empty/view')
+    choices=page.get_by_role('group',name='Default model route');choices.wait_for()
+    assert choices.get_by_role('button',name='DeepSeek').is_disabled()
+    assert 'DEEPSEEK_API_KEY' in choices.inner_text()
+    assert 'Billed to your credits' in choices.inner_text()
+    ollama=choices.get_by_role('button',name='Ollama');assert ollama.get_attribute('aria-pressed')=='true'
+    assert 'ollama:phi4' in choices.inner_text()
+    assert page.get_by_role('button',name='Start interview').is_enabled()
+    page.screenshot(path='/downloads/start-route-options.png',full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    assert choices.evaluate('e=>e.scrollWidth<=e.clientWidth')
+    page.screenshot(path='/downloads/start-route-options-mobile.png',full_page=True)
+    routes['routes'][1]={'id':'ollama','managed':True,'available':False,'error':'DELIVERY_LOCAL_PREVIEW is not enabled on this server'};routes['default_route']={'route':'deepseek'}
+    page.reload();choices.wait_for()
+    assert choices.get_by_role('button').count()==2
+    assert 'DELIVERY_LOCAL_PREVIEW' in choices.inner_text()
+    assert choices.locator('[aria-pressed=true]').count()==0
+    assert not page.get_by_role('button',name='Start interview').is_enabled()

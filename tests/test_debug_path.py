@@ -37,9 +37,14 @@ def test_cloud_model_routes_are_managed_and_start_only_when_execution_is_open(mo
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
     monkeypatch.setattr(module,'cloud_execution_admitted',lambda:open_now)
     monkeypatch.setenv('DEEPSEEK_API_KEY','test-key')   # availability also needs the key (2026-10-27)
+    from types import SimpleNamespace
+    from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(local=False,model='deepseek-flash'))
+    monkeypatch.setattr(module.engine_client,'preview_route',lambda route:{'model_map':{'probing':['deepseek','deepseek-flash']}})
     reply=module.model_routes(None)
-    assert reply['managed'] is True and reply['default_route']=={'route':'deepseek'}
-    (route,)=reply['routes']
+    assert reply['managed'] is True and reply['default_route']==({'route':'deepseek'} if open_now else None)
+    route=reply['routes'][0]
+    assert [r['id'] for r in reply['routes']]==['deepseek','ollama']
     assert route['id']=='deepseek' and route['managed'] is True and route['available'] is open_now
     assert ('error' in route)==(not open_now)
 
@@ -69,7 +74,8 @@ def test_cloud_model_routes_keyless_deepseek_is_unavailable_with_the_reason(monk
     monkeypatch.setattr(module,'cloud_execution_admitted',lambda:True)
     monkeypatch.delenv('DEEPSEEK_API_KEY',raising=False)
     reply=module.model_routes(None)
-    (route,)=reply['routes']
+    route=reply['routes'][0]
+    assert [r['id'] for r in reply['routes']]==['deepseek','ollama']
     assert route['available'] is False
-    assert route['error']=="missing key: DEEPSEEK_API_KEY is not set on this server"
+    assert 'missing key: DEEPSEEK_API_KEY is not set on this server' in route['error']
     assert 'test-key' not in str(route)   # presence boolean only, never a value
