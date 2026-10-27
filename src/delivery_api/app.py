@@ -2466,6 +2466,10 @@ def task_cost(task_id:str,request:Request):
     if not store.task(task_id):raise HTTPException(404,"task not found")
     session=_recorded_engine_session(task_id)
     if session and not config.CLOUD_TENANTS:
+        from vmodel_contracts.runtime import artifacts_root
+        from .pricing import usage_evidence
+        evidence=usage_evidence(authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store))
+        if not evidence['complete']:return {'price':None,'price_usd':None,'evidence':evidence}
         try:
             from vmodel_contracts.runtime import artifacts_root
             from .pricing import write_cost_json

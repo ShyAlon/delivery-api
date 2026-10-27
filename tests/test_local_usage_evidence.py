@@ -31,3 +31,16 @@ def test_numeric_evidence_status_does_not_change_pricing_rows(tmp_path):
     assert pricing._rows(path)==[{'prompt_tokens':'bad'}]
     assert pricing.usage_evidence(tmp_path)['complete'] is False
     assert pricing.usage_evidence(tmp_path)['invalid_numeric_rows']==1
+
+
+def test_cost_endpoint_does_not_compute_unknown_numeric_total(tmp_path,monkeypatch):
+    from delivery_api import app as module
+    from types import SimpleNamespace
+    monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+    monkeypatch.setattr(module,'store',SimpleNamespace(task=lambda task:True))
+    monkeypatch.setattr(module,'_recorded_engine_session',lambda task:'session')
+    monkeypatch.setattr(module,'authorized_session',lambda *args:tmp_path)
+    monkeypatch.setattr(module,'_task_cost',lambda task: (_ for _ in ()).throw(AssertionError('must not price unknown evidence')))
+    (tmp_path/'interview').mkdir();(tmp_path/'interview/usage.jsonl').write_text('{"prompt_tokens":"bad"}')
+    result=module.task_cost('task',None)
+    assert result['price'] is None and result['evidence']['complete'] is False
