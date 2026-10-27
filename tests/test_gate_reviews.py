@@ -5,7 +5,7 @@ def test_gate_content_revision_comments_drafts_and_history(tmp_path,monkeypatch)
  store,tid,engine,c=setup(tmp_path,monkeypatch)
  store.wait_at_gate(tid,'intent')
  path=tmp_path/'intent_model.json';path.write_text('{"problem_statement":"First evidence"}')
- monkeypatch.setattr(__import__('delivery_api.app',fromlist=['x']),'_task_artifact_snapshot',lambda task:[{'phase_key':'intent','name':'intent_model.json','ref':str(path),'present':True,'valid':True,'stale':False,'generation':1}])
+ monkeypatch.setattr(__import__('delivery_api.app',fromlist=['x']),'_task_artifact_snapshot',lambda snapshot_task_id, **kwargs:[{'phase_key':'intent','name':'intent_model.json','ref':str(path),'present':True,'valid':True,'stale':False,'generation':1}])
  first=c.get(f'/api/tasks/{tid}/gates/gate-intent/review').json();revision=first['review']['revision']
  assert first['actionable'];assert 'First evidence' in first['review']['documents'][0]['view']['content']
  c.post(f'/api/tasks/{tid}/gates/gate-intent/comments',json={'revision':revision,'comment':'Keep the source'}).raise_for_status()
@@ -32,7 +32,7 @@ def test_semantic_srs_choices_block_approval_then_structurally_validate(tmp_path
  path=artifacts_root(str(tmp_path/'artifacts'))/'session-one'/'spec';path.mkdir(parents=True);artifact=path/'srs.json';artifact.write_text(json.dumps(body));artifact.with_suffix('.md').write_text('STALE MARKDOWN')
  semantic=make_review('session-one','srs',body,[{'finding_id':'f1','item_id':'R-1','path':['functional',0],'rule':'solution_language','reason':'Specifies a widget','original':body['functional'][0]}])
  (path/'srs.semantic-review.json').write_text(semantic.model_dump_json())
- monkeypatch.setattr(module,'_task_artifact_snapshot',lambda task:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
+ monkeypatch.setattr(module,'_task_artifact_snapshot',lambda snapshot_task_id, **kwargs:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
  pending=c.get(f'/api/tasks/{tid}/gates/gate-srs/review').json();assert pending['review']['semantic_review']['findings']
  denied=c.post(f'/api/tasks/{tid}/gates/gate-srs/decide',json={'action':'approve','selected_option':'Proceed'});assert denied.status_code==400
  invalid=c.post(f'/api/tasks/{tid}/gates/gate-srs/semantic-review',json={'revision':semantic.revision,'decisions':[{'item_id':'R-1','action':'replace','replacement':{'statement':'missing IDs'}}]});assert invalid.status_code==422
@@ -53,7 +53,7 @@ def test_interrupted_semantic_write_blocks_approval_and_same_choices_repair(tmp_
  r=make_review('session-one','srs',body,[{'finding_id':'f1','item_id':'R-1','path':['functional',0],'rule':'solution_language','reason':'Widget','original':body['functional'][0]}]);replacement={**body['functional'][0],'statement':'The system shall display the saved status.'}
  decisions=[{'item_id':'R-1','action':'replace','replacement':replacement,'actor':'local user'}]
  recorded={**r.model_dump(),'decisions':decisions};(path/'srs.semantic-review.json').write_text(json.dumps(recorded))
- monkeypatch.setattr(module,'_task_artifact_snapshot',lambda task:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
+ monkeypatch.setattr(module,'_task_artifact_snapshot',lambda snapshot_task_id, **kwargs:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
  denied=c.post(f'/api/tasks/{tid}/gates/gate-srs/decide',json={'action':'approve','selected_option':'Proceed'});assert denied.status_code==400 and 'incomplete' in denied.text
  repaired=c.post(f'/api/tasks/{tid}/gates/gate-srs/semantic-review',json={'revision':r.revision,'decisions':decisions});assert repaired.status_code==200,repaired.text
  assert json.loads(artifact.read_text())['functional'][0]['statement']==replacement['statement']
@@ -62,7 +62,7 @@ def test_gate_semantic_draft_restores_exact_saved_fields(tmp_path,monkeypatch):
  store,tid,engine,c=setup(tmp_path,monkeypatch);store.wait_at_gate(tid,'intent')
  path=tmp_path/'intent_model.json';path.write_text('{"problem_statement":"Exact evidence"}')
  import delivery_api.app as module
- monkeypatch.setattr(module,'_task_artifact_snapshot',lambda task:[{'phase_key':'intent','name':'intent_model.json','ref':str(path),'present':True,'valid':True,'stale':False,'generation':1}])
+ monkeypatch.setattr(module,'_task_artifact_snapshot',lambda snapshot_task_id, **kwargs:[{'phase_key':'intent','name':'intent_model.json','ref':str(path),'present':True,'valid':True,'stale':False,'generation':1}])
  first=c.get(f'/api/tasks/{tid}/gates/gate-intent/review').json()['review']
  revision=first['revision']
  draft={'revision':revision,'choice':'Proceed','comment':'Review this','semantic_decisions':[{'item_id':'R-1','action':'replace','replacement_text':'{"statement":"saved"}'}]}
@@ -104,7 +104,7 @@ def test_missing_semantic_review_fails_closed_and_restore_recovers(tmp_path,monk
  store.wait_at_gate(tid,'srs')
  body=SRSDocument.model_validate({'session_id':'session-one','intent_model_ref':'session-one','purpose':'Test','scope_summary':'Test','functional':[{'requirement_id':'R-1','title':'Button','statement':'The system shall show a button.','priority':'must','kind':'functional','acceptance':[{'criterion_id':'AC-1','statement':'Click button'}],'need_ids':['N-1'],'intent_fields':['problem_statement']}],'non_functional':[]}).model_dump(mode='json')
  path=artifacts_root(str(tmp_path/'artifacts'))/'session-one'/'spec';path.mkdir(parents=True);artifact=path/'srs.json';artifact.write_text(json.dumps(body))
- monkeypatch.setattr(module,'_task_artifact_snapshot',lambda task:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
+ monkeypatch.setattr(module,'_task_artifact_snapshot',lambda snapshot_task_id, **kwargs:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
  denied=c.post(f'/api/tasks/{tid}/gates/gate-srs/decide',json={'action':'approve','selected_option':'Proceed'})
  assert denied.status_code==400 and 'Required approval evidence is missing' in denied.text,denied.text
  # Recovery: the companion lands (restore/backfill); approval proceeds.
@@ -130,7 +130,7 @@ def _seed_srs_gate(tmp_path, monkeypatch):
  path=artifacts_root(str(tmp_path/'artifacts'))/'session-one'/'spec';path.mkdir(parents=True)
  artifact=path/'srs.json';artifact.write_text(json.dumps(body))
  semantic=make_review('session-one','srs',body,[]);(path/'srs.semantic-review.json').write_text(semantic.model_dump_json())
- monkeypatch.setattr(module,'_task_artifact_snapshot',lambda task:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
+ monkeypatch.setattr(module,'_task_artifact_snapshot',lambda snapshot_task_id, **kwargs:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
  store.set_model_default(tid,'deepseek:deepseek-flash')
  async def no_continue(*args,**kwargs): pass
  monkeypatch.setattr(module.orchestrator,'continue_after',no_continue)

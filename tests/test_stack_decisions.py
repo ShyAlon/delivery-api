@@ -20,7 +20,7 @@ def _arch_setup(tmp_path, monkeypatch, slots=2):
     artifact.with_suffix('.md').write_text('STALE')
     (spec / 'architecture.decisions.json').write_text(json.dumps({'revision': REV, 'slots': [
         {'key': n, 'brief': f'Which {n}?', 'options': ['A', 'B'], 'founder_decision': None, 'prefill': None} for n in names]}))
-    monkeypatch.setattr(module, '_task_artifact_snapshot', lambda task: [
+    monkeypatch.setattr(module, '_task_artifact_snapshot', lambda snapshot_task_id, **kwargs: [
         {'phase_key': 'architecture', 'name': 'architecture.json', 'ref': str(artifact), 'present': True,
          'valid': True, 'stale': False, 'generation': 1}])
     return store, tid, c, spec, artifact

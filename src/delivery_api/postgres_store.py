@@ -39,7 +39,7 @@ class _Cursor:
 
 
 class _Connection:
-    def __init__(self, state): self.state = state
+    def __init__(self, state, owner): self.state,self.owner = state,owner
 
     def execute(self, sql, parameters=()):
         connection = self.state.get()
@@ -53,6 +53,13 @@ class _Connection:
                           'cursor=GREATEST(progress_ingest.cursor,excluded.cursor)')
         returning = bool(re.match(r'INSERT INTO (events|audit_log|review_comments|operator_failure_diagnostics)\b',sql))
         if returning: sql += ' RETURNING id'
+        if re.match(r"\s*(INSERT|UPDATE|DELETE|REPLACE|TRUNCATE|WITH)\b",sql,re.I):
+            from . import task_read_cache
+            from .postgres_scope import _request_tx
+            task_read_cache.invalidate(self.owner)
+            self.owner._cache_dirty.set(True)
+            shared=_request_tx.get()
+            if shared is not None:shared.cache_invalidations.add(self.owner)
         started=time.monotonic()
         try:
             return _Cursor(connection.execute(sql,parameters),returning=returning)
@@ -63,7 +70,7 @@ class _Connection:
             raise
         finally:
             elapsed=time.monotonic()-started
-            note_query(elapsed);note_statement(statement_label(sql),elapsed)
+            note_query(elapsed)  # TimingConnection owns statement labels exactly once
 
     def executemany(self,sql,parameters):
         for row in parameters: self.execute(sql,row)
@@ -80,7 +87,16 @@ def _transactional(method):
     def call(self,*args,**kwargs):
         if self._connection.get() is not None:
             return method(self,*args,**kwargs)
-        with self._postgres.transaction() as connection:
+        with contextlib.ExitStack() as cleanup:
+            dirty_token=self._cache_dirty.set(False)
+            def invalidate_after_transaction():
+                dirty=self._cache_dirty.get()
+                self._cache_dirty.reset(dirty_token)
+                if dirty:
+                    from . import task_read_cache
+                    task_read_cache.invalidate(self)
+            cleanup.callback(invalidate_after_transaction)
+            connection=cleanup.enter_context(self._postgres.transaction())
             connection.execute('SAVEPOINT operation_start')
             token = self._connection.set(connection)
             try:
@@ -127,7 +143,8 @@ class PostgresStore(SQLiteStore):
     def __init__(self,dsn):
         self._postgres = ScopedPostgres(dsn)
         self._connection = ContextVar('postgres_operation',default=None)
-        self._db = _Connection(self._connection)
+        self._cache_dirty = ContextVar('postgres_cache_dirty',default=False)
+        self._db = _Connection(self._connection,self)
         # No store-level mutex on Postgres. The SQLiteStore lock serializes a
         # single shared native connection; here every store call runs on the
         # calling thread's own scoped connection (ContextVar) inside a scoped
@@ -238,6 +255,25 @@ SELECT t.*,
      SELECT g.* FROM gates g WHERE g.task_id=t.task_id ORDER BY g.position) r) AS gates_json,
   (SELECT count(*) FROM task_artifacts a WHERE a.task_id=t.task_id AND a.stale=0) AS artifact_count
 FROM tasks t"""
+
+    # Dialect twin of SQLiteStore._EVENTS_SUBQUERY (jsonb_agg).
+    _EVENTS_SUBQUERY = """
+  (SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.id DESC)::text,'[]') FROM (
+     SELECT e.id,e.task_id,e.phase_key,e.kind,e.message,e.payload,e.ts
+     FROM events e WHERE e.task_id=t.task_id ORDER BY e.id DESC LIMIT ?) r) AS events_json"""
+    _TASK_WHERE = " WHERE t.task_id=? AND t.deleted_at IS NULL"
+    _ARTIFACTS_SUBQUERY = """
+  (SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.generation DESC,a.id)::text,'[]')
+     FROM task_artifacts a WHERE a.task_id=t.task_id) AS artifacts_json"""
+    _MANIFEST_SUBQUERY = """
+  (SELECT jsonb_build_object('revision_id',m.revision_id,'revision_hash',m.revision_hash,
+     'rows',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.phase_key,a.name,a.id),'[]'::jsonb)
+       FROM task_artifacts a WHERE a.task_id=t.task_id AND a.generation=t.generation AND a.publication_state='published'))::text
+   FROM artifact_manifest_ready m WHERE m.task_id=t.task_id AND m.generation=t.generation) AS manifest_json"""
+
+    def _snapshot_artifacts_sql(self):
+        from . import config
+        return self._ARTIFACTS_SUBQUERY + (",\n" + self._MANIFEST_SUBQUERY if config.ARTIFACT_MANIFEST_READS else "")
 
     def list_tasks(self):
         rows=self._db.execute(self._TASK_PROJECTION+' WHERE t.deleted_at IS NULL ORDER BY t.updated_at DESC').fetchall()
@@ -1471,14 +1507,11 @@ FROM tasks t"""
         A marker whose hash no longer matches the members in the same snapshot is
         corruption - raise, never serve against it."""
         import json as _json
-        task=self.task(task_id)
-        if not task:return None
-        if generation is None:generation=task['generation']
         row=self._db.execute(
-            "WITH m AS (SELECT revision_id,revision_hash FROM artifact_manifest_ready WHERE task_id=? AND generation=?) "
+            "WITH m AS (SELECT revision_id,revision_hash FROM artifact_manifest_ready WHERE task_id=? AND generation=coalesce(?,(SELECT generation FROM tasks WHERE task_id=?))) "
             "SELECT m.revision_id,m.revision_hash,"
-            "(SELECT json_agg(row_to_json(t)) FROM (SELECT * FROM task_artifacts WHERE task_id=? AND generation=? AND publication_state='published' ORDER BY phase_key,name,id) t) AS members FROM m",
-            (task_id,generation,task_id,generation)).fetchone()
+            "(SELECT json_agg(row_to_json(t)) FROM (SELECT * FROM task_artifacts WHERE task_id=? AND generation=coalesce(?,(SELECT generation FROM tasks WHERE task_id=?)) AND publication_state='published' ORDER BY phase_key,name,id) t) AS members FROM m",
+            (task_id,generation,task_id,task_id,generation,task_id)).fetchone()
         if row is None:return None
         members=row['members']
         if isinstance(members,str):members=_json.loads(members)

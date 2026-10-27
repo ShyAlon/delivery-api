@@ -35,6 +35,7 @@ class FakeConnection:
     def __init__(self,world,dead=False):
         self.world,self.closed,self.dead,self.log=world,False,dead,[]
         self.info=types.SimpleNamespace(transaction_status=Status.IDLE)
+    def pipeline(self):return __import__("contextlib").nullcontext()
     def transaction(self):return FakeTransaction(self)
     def execute(self,sql,params=()):
         if self.dead:raise self.world.OperationalError('server closed the connection')
@@ -74,6 +75,7 @@ class FakePool:
 def world(monkeypatch):
     w=types.SimpleNamespace(made=[],OperationalError=type('OperationalError',(Exception,),{}))
     fake=types.ModuleType('psycopg');fake.OperationalError=w.OperationalError
+    fake.Transaction=FakeTransaction
     fake.pq=types.SimpleNamespace(TransactionStatus=Status)
     rows=types.ModuleType('psycopg.rows');rows.dict_row=object();fake.rows=rows
     monkeypatch.setitem(sys.modules,'psycopg',fake);monkeypatch.setitem(sys.modules,'psycopg.rows',rows)

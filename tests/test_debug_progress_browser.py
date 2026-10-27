@@ -101,11 +101,9 @@ def test_everything_zip_reports_per_section_progress_and_honest_counts(page, ui,
         "() => document.querySelector('#debugstatus').textContent.startsWith('Downloaded requi-everything.zip')",
         timeout=10000)
     text = status.inner_text()
-    # This fixture collects 8 sections; exactly two fail honestly: the fixture task
-    # never ran an engine (its diagnostics section reports unavailable) and the
-    # server-logs route is held to a 500 above. Section titles contain commas, so
-    # pin the whole unavailable clause instead of splitting it.
-    assert "Downloaded requi-everything.zip: 6 of 8 sections collected; unavailable: Task diagnostics (question, control state, engine state), Server logs (last 30 min)." in text, text
+    # SQLite diagnostics now works without a worker. Only the deliberately
+    # offline server-log section fails; the other seven must be collected.
+    assert "Downloaded requi-everything.zip: 7 of 8 sections collected; unavailable: Server logs (last 30 min)." in text, text
     download = dl.value
     target = tmp_path / "everything.zip"
     download.save_as(target)

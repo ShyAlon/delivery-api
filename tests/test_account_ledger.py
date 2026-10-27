@@ -146,7 +146,7 @@ def test_store_method_runs_in_a_scoped_transaction():
         @contextmanager
         def transaction(self,**kw):yield conn
     store=PostgresStore.__new__(PostgresStore)
-    store._connection=ContextVar('scoped_transaction',default=None);store._db=_Connection(store._connection);store._postgres=Postgres()
+    store._connection=ContextVar('scoped_transaction',default=None);store._db=_Connection(store._connection,store);store._postgres=Postgres();store._cache_dirty=ContextVar('cache_dirty',default=False)
     with pytest.raises(TenantAccessDenied):store._db.execute('SELECT 1',())
     with tenant_context(TenantScope(A)):
         out=store.own_ledger(Decimal('1'))
