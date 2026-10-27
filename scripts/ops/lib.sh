@@ -24,6 +24,19 @@ ops_venv(){
   "$c" -m venv .venv || abort VENV "cannot create .venv" "" "rm -rf $PWD/.venv"
   .venv/bin/python -m pip install -q vendor/vmodel_contracts-0.28.0-py3-none-any.whl && .venv/bin/python -m pip install -q -e '.[dev,supabase]' || { rm -rf .venv; abort VENV-INSTALL "pip could not install the project" "The half-built .venv was removed." "check your network, then run it again"; }
 }
+# The ollama-mode preview settings: the local-preview flag, the Mac's Ollama address,
+# AND the reviewed model for the ENGINE. The reviewed $0 row names exactly one model;
+# a session started without an explicit initial model pins DELIVERY_OLLAMA_MODEL, so
+# without this line it falls back to the engine's built-in default (qwen2.5-coder:14b)
+# and dies at its first model call: that model's request bound is unreviewed.
+# $1 = destination env file, $2 = reviewed ollama model, $3 = ollama host URL
+preview_ollama_env(){
+  printf 'DELIVERY_LOCAL_PREVIEW=1\n' >> "$1"
+  printf 'DELIVERY_OLLAMA_MODEL=%s\n' "$2" >> "$1"
+  local oport; oport=$(printf '%s' "$3" | sed -E 's#^[a-z]+://([^:/]+):?([0-9]*).*#\2#'); oport=${oport:-11434}
+  printf 'OLLAMA_BASE_URL=%s\n' "http://host.docker.internal:$oport/v1" >> "$1"
+  [ -z "${VMODEL_OLLAMA_NUM_CTX:-}" ] || printf 'VMODEL_OLLAMA_NUM_CTX=%s\n' "$VMODEL_OLLAMA_NUM_CTX" >> "$1"
+}
 ops_start(){
   OPS_NAME=$1; OPS_SELF=$2; local want_venv=${3:-}
   local repo; repo=$(cd "$(dirname "$OPS_SELF")/../.." 2>/dev/null && pwd) && git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || abort NO-REPO "$OPS_SELF is not inside a git checkout" "Nothing changed." "git clone https://github.com/ShyAlon/delivery-api ~/development/require/delivery-api   (then run its scripts/ops/$OPS_NAME.sh)"

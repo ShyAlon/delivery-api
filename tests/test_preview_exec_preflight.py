@@ -10,6 +10,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / 'scripts' / 'ops' / 'preview-exec.sh'
+LIB = REPO / 'scripts' / 'ops' / 'lib.sh'
 KEY = 'sk-testkey-0123456789abcdef'
 
 STAGE_MODEL_CONFIG = """from collections import namedtuple
@@ -116,16 +117,24 @@ def test_deepseek_only_mode_carries_no_ollama_settings():
     """DeepSeek-only means no Ollama dependency: the settings handed to the
     container must contain no OLLAMA_* and no DELIVERY_LOCAL_PREVIEW line,
     and the mode must abort OLLAMA-LEAK if one ever appears. Asserted on the
-    source: the Ollama writes stay inside the ollama branch, and the guard
+    source: the Ollama writes live in lib.sh's preview_ollama_env, the
+    launcher's only call to it sits inside the ollama branch, and the guard
     runs in the deepseek branch after the settings file is built."""
     src = SCRIPT.read_text()
-    ollama_write = src.split("if [ \"$PROVIDER\" = ollama ]; then\n  printf 'DELIVERY_LOCAL_PREVIEW=1", 1)
-    assert len(ollama_write) == 2 and 'OLLAMA_BASE_URL' in ollama_write[1].split('fi', 1)[0], \
-        'the Ollama settings writes must stay inside the ollama branch'
+    lib = LIB.read_text()
+    call = 'preview_ollama_env "$WORK/preview.env" "$OLLAMA_MODEL" "$OLLAMA_HOST"'
+    assert src.count(call) == 1, 'preview_ollama_env is called exactly once'
+    ollama_write = src.split('if [ "$PROVIDER" = ollama ]; then\n  ' + call, 1)
+    assert len(ollama_write) == 2, 'the only Ollama settings write path must stay inside the ollama branch'
+    assert 'OLLAMA_BASE_URL=' not in src, 'the launcher writes no Ollama settings itself'
+    fn = lib.split('preview_ollama_env(){', 1)[1].split('\n}', 1)[0]
+    assert 'OLLAMA_BASE_URL=' in fn and 'DELIVERY_OLLAMA_MODEL=' in fn, \
+        'preview_ollama_env must write the host AND the reviewed model the pin prices'
     guard_block = src.split('if [ "$PROVIDER" = deepseek ]; then\n  grep -q -E', 1)
     assert len(guard_block) == 2 and 'OLLAMA-LEAK' in guard_block[1].split('fi', 1)[0], \
         'the no-Ollama guard must run in the deepseek branch'
     assert src.index('MODEL-KEY') < src.index('OLLAMA-LEAK'), 'the guard runs after the env file is built'
+
 
 def test_unprovisioned_settings_abort(tmp_path):
     p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY, 'PREVIEW_EXEC_PROVIDER': 'ollama'}, settings=tmp_path / 'absent.env')
@@ -236,11 +245,17 @@ def test_provider_env_skips_the_prompt(tmp_path):
 def test_local_preview_flag_only_in_ollama_mode():
     """DELIVERY_LOCAL_PREVIEW=1 offers the ollama route; without OLLAMA_BASE_URL
     (deepseek mode) that route is dead and fails task starts with a connection
-    error. The flag must be written exactly once, inside the ollama branch."""
+    error. The flag must be written exactly once: by lib.sh's preview_ollama_env,
+    which the launcher calls only inside the ollama branch."""
     src = SCRIPT.read_text()
-    assert src.count('DELIVERY_LOCAL_PREVIEW=1') == 1
-    block = 'if [ "$PROVIDER" = ollama ]; then\n  printf \'DELIVERY_LOCAL_PREVIEW=1\\n\' >> "$WORK/preview.env"'
+    lib = LIB.read_text()
+    assert lib.count('DELIVERY_LOCAL_PREVIEW=1') == 1, 'the flag is written exactly once, in preview_ollama_env'
+    fn = lib.split('preview_ollama_env(){', 1)[1].split('\n}', 1)[0]
+    assert 'DELIVERY_LOCAL_PREVIEW=1' in fn
+    assert 'DELIVERY_LOCAL_PREVIEW=1' not in src, 'the launcher never writes the flag itself'
+    block = 'if [ "$PROVIDER" = ollama ]; then\n  preview_ollama_env "$WORK/preview.env" "$OLLAMA_MODEL" "$OLLAMA_HOST"'
     assert block in src, 'the flag must be written inside the ollama provider branch'
+
 
 def test_key_never_written_or_printed(tmp_path):
     """Every abort path: the key value appears nowhere in output, and no file

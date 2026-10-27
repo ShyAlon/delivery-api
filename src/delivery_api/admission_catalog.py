@@ -86,7 +86,7 @@ class ReviewedCatalog:
             raise AdmissionDenied('serialized SDK request required')
         # Serialized adapters are distinct from legacy messages-only adapters.
         adapter=self.bounders.get(('serialized',provider,model))
-        if adapter is None:raise AdmissionDenied('serialized request bound is unreviewed')
+        if adapter is None:raise AdmissionDenied('serialized request bound is unreviewed for '+provider+'/'+model+' (stage '+stage+')')
         bound=adapter(stage=stage,serialized_request=serialized_request,max_output_tokens=max_output_tokens)
         if not isinstance(bound,RequestBound) or bound.serialized_request!=serialized_request:
             raise AdmissionDenied('bound must cover exact SDK bytes')

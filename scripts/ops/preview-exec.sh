@@ -262,10 +262,7 @@ umask 077; WORK=$(mktemp -d "${TMPDIR:-/tmp}/requi-preview-exec.XXXXXXXXXX"); ch
 # and a selectable dead route fails the task start with a connection error instead of being absent.
 build_exec_env "$STORE" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"
 if [ "$PROVIDER" = ollama ]; then
-  printf 'DELIVERY_LOCAL_PREVIEW=1\n' >> "$WORK/preview.env"
-  OPORT=$(printf '%s' "$OLLAMA_HOST" | sed -E 's#^[a-z]+://([^:/]+):?([0-9]*).*#\2#'); OPORT=${OPORT:-11434}
-  printf 'OLLAMA_BASE_URL=%s\n' "http://host.docker.internal:$OPORT/v1" >> "$WORK/preview.env"
-  [ -z "${VMODEL_OLLAMA_NUM_CTX:-}" ] || printf 'VMODEL_OLLAMA_NUM_CTX=%s\n' "$VMODEL_OLLAMA_NUM_CTX" >> "$WORK/preview.env"
+  preview_ollama_env "$WORK/preview.env" "$OLLAMA_MODEL" "$OLLAMA_HOST"
 fi
 chmod 600 "$WORK/preview.env"
 grep -q -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|API_KEY)' "$WORK/preview.env" && abort MODEL-KEY "a model key is in the saved settings file; the key must come from this shell's environment only" "" "remove it from $STORE (it does not belong there)"
