@@ -777,11 +777,10 @@ def test_startup_recovers_approved_interview_handoff_to_needs(monkeypatch,tmp_pa
     assert calls==[(tid,'conops')]
 
 
-def test_next_phase_launch_failure_is_visible_and_preserves_completed_boundary(tmp_path):
+def test_next_phase_launch_failure_is_visible_and_preserves_completed_boundary(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'handoff-fail.db'));tid=store.create_task('Visible handoff failure')['task_id'];runner=ProcessRunner(store)
+    store=pg_scoped_workspace.store;tid=store.create_task('Visible handoff failure')['task_id'];runner=ProcessRunner(store)
     async def fail(task_id,phase):raise RuntimeError('missing intent_model.json')
     runner.on_complete=fail
     try:asyncio.run(runner.run(tid,[sys.executable,'-c','print("session: s")'],cwd=tmp_path,completion_phases=('intent','conops')))
@@ -792,11 +791,10 @@ def test_next_phase_launch_failure_is_visible_and_preserves_completed_boundary(t
     assert states['intent']=='approved' and states['conops']=='approved'
 
 
-def test_startup_handoff_recovery_is_shared_across_phase_boundaries(monkeypatch,tmp_path):
+def test_startup_handoff_recovery_is_shared_across_phase_boundaries(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'shared-handoff.db'));tid=store.create_task('Shared recovery')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Shared recovery')['task_id']
     for phase in ('intent','conops','needs'):store.update_phase(tid,phase,'approved')
     monkeypatch.setattr(app_module,'store',store);monkeypatch.setitem(app_module.app.state._state,'store',store)
     calls=[]
@@ -807,12 +805,11 @@ def test_startup_handoff_recovery_is_shared_across_phase_boundaries(monkeypatch,
     assert calls==[(tid,'needs')]
 
 
-def test_typed_answer_requires_current_matching_decision(tmp_path):
+def test_typed_answer_requires_current_matching_decision(tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
     decision={'type':'founder_decision','decision_id':'live-choice','title':'Choose','prompt':'Choose?','options':[{'value':'y','label':'Yes'}]}
-    store=SQLiteStore(str(tmp_path/'match.db'));tid=store.create_task('Match decision')['task_id'];runner=ProcessRunner(store)
+    store=pg_scoped_workspace.store;tid=store.create_task('Match decision')['task_id'];runner=ProcessRunner(store)
     async def go():
         job=asyncio.create_task(runner.request_decision(tid,'intent',decision))
         await asyncio.sleep(0)
@@ -916,11 +913,12 @@ def test_startup_reconciles_contradictory_prefix_before_downstream_handoff(monke
     assert states['intent']=='approved' and states['conops']=='approved' and states['needs']=='approved'
     assert calls==[(tid,'needs')]
 
-def test_orchestrator_owned_decision_is_live_without_subprocess(tmp_path):
+def test_orchestrator_owned_decision_is_live_without_subprocess(tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'decision-live.db'));tid=store.create_task('Baseline')['task_id'];runner=ProcessRunner(store)
+    store=pg_scoped_workspace.store;tid=store.create_task('Baseline')['task_id'];runner=ProcessRunner(store)
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     decision={'type':'founder_decision','decision_id':'system-baseline','title':'Choose baseline','prompt':'Which baseline?','options':[{'value':'greenfield','label':'Greenfield'}]}
     async def go():
         job=asyncio.create_task(runner.request_decision(tid,'architecture',decision))
@@ -938,11 +936,10 @@ def test_phase_configuration_is_canonical_and_complete():
     assert PHASE_BY_KEY['architecture'].prerequisite=='system-baseline'
     assert [successor(p.key).key if successor(p.key) else None for p in PHASE_DEFINITIONS]==['conops','needs','srs','architecture','specs','tests','validation',None]
 
-def test_active_work_is_one_standard_projection_for_subprocess_and_decision(tmp_path):
+def test_active_work_is_one_standard_projection_for_subprocess_and_decision(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'active-work.db'));tid=store.create_task('Work')['task_id'];runner=ProcessRunner(store)
+    store=pg_scoped_workspace.store;tid=store.create_task('Work')['task_id'];runner=ProcessRunner(store)
     decision={'type':'founder_decision','decision_id':'choice','title':'Choose','prompt':'Choose?','options':[{'value':'y','label':'Yes'}]}
     async def go():
         process=asyncio.create_task(runner.run(tid,[sys.executable,'-c','import time;time.sleep(.2)'],cwd=tmp_path))
@@ -985,10 +982,9 @@ def test_configured_phase_executor_rejects_wrong_owner_and_maps_redo(monkeypatch
     except ValueError as error:assert 'owned by interview' in str(error)
     else:assert False
 
-def test_external_requirement_is_standard_live_work_with_actionable_input(tmp_path):
+def test_external_requirement_is_standard_live_work_with_actionable_input(tmp_path,pg_scoped_workspace):
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'requirement.db'));tid=store.create_task('Existing system')['task_id'];runner=ProcessRunner(store)
+    store=pg_scoped_workspace.store;tid=store.create_task('Existing system')['task_id'];runner=ProcessRunner(store)
     requirement={'kind':'external_input','title':'Baseline required','path':'/tmp/system-baseline.json','format':'SystemBaseline JSON'}
     runner.pause_for_requirement(tid,'architecture',requirement);work=runner.work_state(tid)
     assert work.owner=='requirement' and work.status=='waiting' and work.requirement==requirement
@@ -1049,12 +1045,11 @@ def test_recovery_migrates_legacy_baseline_pause_to_requirement_owner(monkeypatc
     assert len(migrated)==1
 
 
-def test_snapshot_events_keep_newest_durable_facts_and_recovery_sees_requirement(monkeypatch,tmp_path):
+def test_snapshot_events_keep_newest_durable_facts_and_recovery_sees_requirement(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'long-history.db'));tid=store.create_task('Long history')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Long history')['task_id']
     for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'architecture','awaiting_approval',detail='Baseline required')
     for index in range(510):store.add_event(tid,'output',f'old line {index}',phase_key='srs')
