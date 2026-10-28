@@ -771,7 +771,7 @@ def test_startup_recovers_approved_interview_handoff_to_needs(monkeypatch,tmp_pa
     from delivery_api.store import SQLiteStore
     store=SQLiteStore(str(tmp_path/'handoff-recovery.db'));tid=store.create_task('Approved but stuck')['task_id']
     store.update_phase(tid,'intent','approved');store.update_phase(tid,'conops','approved')
-    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
+    monkeypatch.setattr(app_module,'store',store);monkeypatch.setitem(app_module.app.state._state,'store',store)
     calls=[]
     async def continue_after(task_id,phase):calls.append((task_id,phase))
     monkeypatch.setattr(app_module.orchestrator,'continue_after',continue_after)
@@ -802,7 +802,7 @@ def test_startup_handoff_recovery_is_shared_across_phase_boundaries(monkeypatch,
     from delivery_api.store import SQLiteStore
     store=SQLiteStore(str(tmp_path/'shared-handoff.db'));tid=store.create_task('Shared recovery')['task_id']
     for phase in ('intent','conops','needs'):store.update_phase(tid,phase,'approved')
-    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
+    monkeypatch.setattr(app_module,'store',store);monkeypatch.setitem(app_module.app.state._state,'store',store)
     calls=[]
     async def continue_after(task_id,phase):calls.append((task_id,phase))
     monkeypatch.setattr(app_module.orchestrator,'continue_after',continue_after)
@@ -900,7 +900,7 @@ def test_startup_resume_skips_historical_interview_after_durable_approval(monkey
     store=SQLiteStore(str(tmp_path/'completed-interview.db'));tid=store.create_task('Downstream already active')['task_id']
     store.update_phase(tid,'intent','approved');store.update_phase(tid,'conops','approved');store.update_phase(tid,'needs','running')
     store.add_event(tid,'progress','session: completed-interview-checkpoint',phase_key='intent')
-    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
+    monkeypatch.setattr(app_module,'store',store);monkeypatch.setitem(app_module.app.state._state,'store',store)
     captured=[]
     async def run(*args,**kwargs):captured.append((args,kwargs));return 0
     monkeypatch.setattr(app_module.runner,'run',run)
@@ -915,7 +915,7 @@ def test_startup_reconciles_contradictory_prefix_before_downstream_handoff(monke
     store=SQLiteStore(str(tmp_path/'reconcile.db'));tid=store.create_task('Corrupt recovered task')['task_id']
     store.update_phase(tid,'intent','running',detail='Waiting for founder answer')
     store.update_phase(tid,'needs','approved',detail='Approved by explicit open-gate policy')
-    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module.app.state,'store',store)
+    monkeypatch.setattr(app_module,'store',store);monkeypatch.setitem(app_module.app.state._state,'store',store)
     calls=[]
     async def continue_after(task_id,phase):calls.append((task_id,phase))
     monkeypatch.setattr(app_module.orchestrator,'continue_after',continue_after)
