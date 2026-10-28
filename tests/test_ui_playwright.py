@@ -880,23 +880,27 @@ def test_orphaned_running_task_renders_visible_recovery_error(page,ui):
     notice=page.locator('.task-error-state');notice.wait_for();assert notice.get_by_text('Task needs attention',exact=True).is_visible()
     assert page.locator('.live-indicator').get_by_text('Task needs attention',exact=True).is_visible()
 
-def test_gate_checkbox_updates_in_place_without_navigation(page,ui):
-    live=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in live['gates'] if g['state']=='waiting');live['ui_state']={'mode':'phase_gate','active_phase':live['active_phase'],'process_live':False,'decision':None,'gate':gate};calls=[]
-    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=_promote_control(live)))
-    page.route('**/api/tasks/sim/gates/*/toggle',lambda route:(calls.append(route.request.post_data_json),route.fulfill(json={**gate,'is_open':route.request.post_data_json['is_open']})))
+def test_gate_checkbox_updates_in_place_without_navigation(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();gate=next(g for g in live['gates'] if g['state']=='waiting');live['ui_state']={'mode':'phase_gate','active_phase':live['active_phase'],'process_live':False,'decision':None,'gate':gate};calls=[]
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}/gates/*/toggle',lambda route:(calls.append(route.request.post_data_json),route.fulfill(json={**gate,'is_open':route.request.post_data_json['is_open']})))
     navigations=[];page.on('framenavigated',lambda frame:navigations.append(frame.url) if frame==page.main_frame else None)
-    mock_gate_review(page,ui,'sim')
-    page.goto(ui+'/tasks/sim/gates/gate-intent');page.locator('#gateform').wait_for();page.locator('.model-panel summary').click();before=len(navigations);box=page.locator('#gateopen');box.check()
+    mock_gate_review(page,ui,tid)
+    page.goto(ui+f'/tasks/{tid}/gates/gate-intent');page.locator('#gateform').wait_for();page.locator('.model-panel summary').click();before=len(navigations);box=page.locator('#gateopen');box.check()
     page.get_by_text('Gate opened.',exact=True).wait_for();assert box.is_checked() and calls==[{'is_open':True}]
     assert len(navigations)==before and page.locator('#gateform').is_visible()
 
-def test_gate_page_shows_requirements_evidence_and_full_content(page,ui):
-    task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate.update({'state':'waiting','is_open':0})
+def test_gate_page_shows_requirements_evidence_and_full_content(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
+    task=page.request.get(ui+f'/api/tasks/{tid}').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate.update({'state':'waiting','is_open':0})
     task['artifacts']=[{'phase_key':'srs','name':'srs.json','title':'Requirements','stale':False,'present':True,'generation':1}]
-    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=task))
-    page.route('**/api/tasks/sim/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Software Requirements Specification - 2b045c5f-9df1-4bc0-afb9-32ac915185b4\n\n## Visible status\n\nThe system shall show status.'}))
-    mock_gate_review(page,ui,'sim')
-    page.goto(ui+'/tasks/sim/gates/gate-srs')
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=task))
+    page.route(f'**/api/tasks/{tid}/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Software Requirements Specification - 2b045c5f-9df1-4bc0-afb9-32ac915185b4\n\n## Visible status\n\nThe system shall show status.'}))
+    mock_gate_review(page,ui,tid)
+    page.goto(ui+f'/tasks/{tid}/gates/gate-srs')
     evidence=page.locator('.gate-evidence');evidence.locator('.artifact-readable').wait_for()
     assert evidence.locator('.gate-artifact-summary').count()==0  # no raw duplicate above the formatted document
     assert evidence.locator('.artifact-readable h2').inner_text()=='Visible status'
@@ -912,9 +916,11 @@ def test_gate_page_shows_requirements_evidence_and_full_content(page,ui):
     page.screenshot(path=str(_screenshots_dir / 'full-gate-requirements-phone.png'),full_page=True)
 
 
-def test_gate_transition_reconciles_delayed_next_phase(page,ui):
+def test_gate_transition_reconciles_delayed_next_phase(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}close(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/sim').json();gate=live['gates'][0]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();gate=live['gates'][0]
     gate.update({'state':'waiting','is_open':0})
     live.update({'state':'waiting_gate','active_phase':gate['after_phase'],
                  'control_snapshot':{'version':2,'mode':'waiting_gate','owner':'delivery','wait_id':gate['gate_key'],'gate':gate,'phase_key':gate['after_phase']}})
@@ -925,11 +931,11 @@ def test_gate_transition_reconciles_delayed_next_phase(page,ui):
     def task(route):
         reads['count']+=1
         route.fulfill(json=_promote_control(progressed if reads['count']>3 else live))
-    page.route('**/api/tasks/sim',task)
-    page.route('**/api/tasks/sim/artifacts/intent/intent_model.json/view',lambda route:route.fulfill(json={'title':'Needs and Scope','format':'json','content':'{}'}))
-    page.route('**/api/tasks/sim/gates/*/decide',lambda route:route.fulfill(json={**gate,'state':'decided'}))
-    mock_gate_review(page,ui,'sim')
-    page.goto(ui+'/tasks/sim/gates/gate-intent')
+    page.route(f'**/api/tasks/{tid}',task)
+    page.route(f'**/api/tasks/{tid}/artifacts/intent/intent_model.json/view',lambda route:route.fulfill(json={'title':'Needs and Scope','format':'json','content':'{}'}))
+    page.route(f'**/api/tasks/{tid}/gates/*/decide',lambda route:route.fulfill(json={**gate,'state':'decided'}))
+    mock_gate_review(page,ui,tid)
+    page.goto(ui+f'/tasks/{tid}/gates/gate-intent')
     page.locator('[data-action="approve"]').click()
     notice=page.locator('#phase-transition-status')
     notice.wait_for()
@@ -947,16 +953,18 @@ def test_gate_transition_reconciles_delayed_next_phase(page,ui):
     expect(notice).to_have_count(0,timeout=12000)
     assert reads['count']>3
 
-def test_architecture_gate_identifies_model_proposed_decision(page,ui):
-    task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='architecture');gate['state']='waiting'
+def test_architecture_gate_identifies_model_proposed_decision(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
+    task=page.request.get(ui+f'/api/tasks/{tid}').json();gate=next(g for g in task['gates'] if g['after_phase']=='architecture');gate['state']='waiting'
     task['artifacts']=[{'phase_key':'architecture','name':'architecture.json','title':'Architecture','stale':False,'present':True,'valid':True,'generation':1}]
-    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=_promote_control(task)))
-    page.route('**/api/tasks/sim/artifacts/architecture/architecture.json/view',lambda route:route.fulfill(json={
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(task)))
+    page.route(f'**/api/tasks/{tid}/artifacts/architecture/architecture.json/view',lambda route:route.fulfill(json={
         'name':'architecture.json','title':'Architecture','phase':'architecture','format':'json','content':'{"decisions":[]}',
         'decision_provenance':[{'decision_id':'ADR-4','title':'SQLite storage','label':'Model-proposed decision',
                                 'founder_evidence':[],'baseline_refs':[]}]}))
-    mock_gate_review(page,ui,'sim')
-    page.goto(ui+'/tasks/sim/gates/gate-architecture')
+    mock_gate_review(page,ui,tid)
+    page.goto(ui+f'/tasks/{tid}/gates/gate-architecture')
     panel=page.locator('.decision-provenance');panel.wait_for()
     assert panel.get_by_text('ADR-4').is_visible()
     assert panel.get_by_text('Model-proposed decision').is_visible()
@@ -964,12 +972,14 @@ def test_architecture_gate_identifies_model_proposed_decision(page,ui):
     page.set_viewport_size({'width':390,'height':844})
     page.screenshot(path=str(_screenshots_dir / 'jev-d7-architecture-provenance-phone.png'),full_page=True)
 
-def test_gate_page_missing_artifact_blocks_approval(page,ui):
-    task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate['state']='waiting'
+def test_gate_page_missing_artifact_blocks_approval(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
+    task=page.request.get(ui+f'/api/tasks/{tid}').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate['state']='waiting'
     task['artifacts']=[]
-    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=task))
-    mock_gate_review(page,ui,'sim')
-    page.goto(ui+'/tasks/sim/gates/gate-srs')
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=task))
+    mock_gate_review(page,ui,tid)
+    page.goto(ui+f'/tasks/{tid}/gates/gate-srs')
     page.locator('#gateform').wait_for()
     assert page.locator('#gate-artifacts').get_by_text('No current valid artifact is available',exact=False).is_visible()
     assert not page.locator('#gateform').locator('[data-action="approve"]').is_enabled()
@@ -979,19 +989,21 @@ def test_gate_page_missing_artifact_blocks_approval(page,ui):
     page.screenshot(path=str(_screenshots_dir / 'gate-blocked-checklist.png'),full_page=True)
 
 
-def test_gate_page_refreshes_arriving_artifact_without_losing_form_input(page,ui):
+def test_gate_page_refreshes_arriving_artifact_without_losing_form_input(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
     page.add_init_script("""class FakeEventSource{constructor(){window.gateSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}close(){this.closed=true}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
-    task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate['state']='waiting'
+    task=page.request.get(ui+f'/api/tasks/{tid}').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate['state']='waiting'
     task['artifacts']=[]
     task['control_snapshot']={'mode':'waiting_gate','wait_id':'gate-srs'}
     changed={'ready':False}
     def snapshot(route):
         data={**task,'artifacts':([{'phase_key':'srs','name':'srs.json','title':'Requirements','stale':False,'present':True,'generation':1}] if changed['ready'] else [])}
         route.fulfill(json=data)
-    page.route('**/api/tasks/sim',snapshot)
-    page.route('**/api/tasks/sim/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Requirements\n\nThe system works.'}))
-    mock_gate_review(page,ui,'sim')
-    page.goto(ui+'/tasks/sim/gates/gate-srs');page.locator('#gate-artifacts').get_by_text('No current valid artifact',exact=False).wait_for()
+    page.route(f'**/api/tasks/{tid}',snapshot)
+    page.route(f'**/api/tasks/{tid}/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Requirements\n\nThe system works.'}))
+    mock_gate_review(page,ui,tid)
+    page.goto(ui+f'/tasks/{tid}/gates/gate-srs');page.locator('#gate-artifacts').get_by_text('No current valid artifact',exact=False).wait_for()
     page.locator('[name="edited_text"]').fill('Keep this review note')
     assert not page.locator('[data-action="approve"]').is_enabled()
     changed['ready']=True
@@ -1002,17 +1014,19 @@ def test_gate_page_refreshes_arriving_artifact_without_losing_form_input(page,ui
     page.screenshot(path=str(_screenshots_dir / 'jev-d6-live-gate-evidence.png'),full_page=True)
 
 
-def test_gate_page_explains_controls_and_tooltips_desktop_and_phone(page,ui):
-    live=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in live['gates'] if g['state']=='waiting');live['ui_state']={'mode':'phase_gate','active_phase':live['active_phase'],'process_live':False,'decision':None,'gate':gate}
-    mock_gate_review(page,ui,'sim')
-    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/sim/gates/gate-intent');dialog=page.locator('#gateform');dialog.wait_for()
+def test_gate_page_explains_controls_and_tooltips_desktop_and_phone(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();gate=next(g for g in live['gates'] if g['state']=='waiting');live['ui_state']={'mode':'phase_gate','active_phase':live['active_phase'],'process_live':False,'decision':None,'gate':gate}
+    mock_gate_review(page,ui,tid)
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/gates/gate-intent');dialog=page.locator('#gateform');dialog.wait_for()
     for text in ['Approve moves on','Save edit records your wording','Ask for changes regenerates this phase']:
         assert dialog.get_by_text(text,exact=False).is_visible()
     page.locator('.model-panel summary').click()
     help_button=dialog.get_by_role('button',name='What does opening a gate do?');help_button.focus();tip=dialog.get_by_role('tooltip').filter(has_text='auto-approves when the phase arrives');expect(tip).to_be_visible()
     page.screenshot(path=str(_screenshots_dir / 'gate-help-desktop.png'),full_page=True)
-    mock_gate_review(page,ui,'sim')
-    page.set_viewport_size({'width':390,'height':844});page.goto(ui+'/tasks/sim/gates/gate-intent');dialog=page.locator('#gateform');dialog.wait_for();page.locator('.model-panel summary').click();dialog.get_by_role('button',name='What does opening a gate do?').focus()
+    mock_gate_review(page,ui,tid)
+    page.set_viewport_size({'width':390,'height':844});page.goto(ui+f'/tasks/{tid}/gates/gate-intent');dialog=page.locator('#gateform');dialog.wait_for();page.locator('.model-panel summary').click();dialog.get_by_role('button',name='What does opening a gate do?').focus()
     tip=dialog.get_by_role('tooltip').filter(has_text='auto-approves when the phase arrives');expect(tip).to_be_visible();box=tip.bounding_box();assert box['x']>=0 and box['x']+box['width']<=390
     page.screenshot(path=str(_screenshots_dir / 'gate-help-phone.png'),full_page=True)
 
@@ -2641,4 +2655,16 @@ def test_answer_browser_group_requires_signed_pg_fixture():
                  test_answer_enter_sends_and_control_enter_inserts_newline,
                  test_submitted_answer_stays_visible_as_shadow_copy_while_processing,
                  test_shadow_copy_not_shown_when_send_fails):
+        assert "pg_page" in inspect.signature(case).parameters
+
+
+def test_gate_browser_group_requires_signed_pg_fixture():
+    import inspect
+    for case in (test_gate_checkbox_updates_in_place_without_navigation,
+                 test_gate_page_shows_requirements_evidence_and_full_content,
+                 test_gate_transition_reconciles_delayed_next_phase,
+                 test_architecture_gate_identifies_model_proposed_decision,
+                 test_gate_page_missing_artifact_blocks_approval,
+                 test_gate_page_refreshes_arriving_artifact_without_losing_form_input,
+                 test_gate_page_explains_controls_and_tooltips_desktop_and_phone):
         assert "pg_page" in inspect.signature(case).parameters
