@@ -15,6 +15,7 @@ import time
 import contextlib,sqlite3
 from .store import SQLiteStore, PHASES
 from . import event_bus
+from .phases import followers, predecessors, PHASE_POSITIONS
 from vmodel_contracts import RunState
 from .postgres_scope import ScopedPostgres, note_query, note_statement, statement_label
 from .tenancy import current_scope, TenantAccessDenied
@@ -406,6 +407,239 @@ class PostgresStore(SQLiteStore):
         self._execute_native('DELETE FROM answer_feedback WHERE id=%s', (feedback_id,), write=True)
         self.audit(actor, 'feedback.delete', task_id, {'feedback_id': feedback_id, 'target': row['target']})
 
+    def configure_simulation(self, task_id: str, source_dir: str, model_route: str) -> None:
+        self._execute_native('UPDATE tasks SET simulated=1,source_dir=%s,model_route=%s,updated_at=%s WHERE task_id=%s', (source_dir, model_route, time.time(), task_id), write=True)
+
+    def set_gate_open(self, task_id: str, gate_key: str, is_open: bool, actor: str='local user') -> dict:
+        self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE', (task_id,)).fetchone()
+        self._execute_native('UPDATE gates SET is_open=%s,revision=revision+1 WHERE task_id=%s AND gate_key=%s', (int(is_open), task_id, gate_key), write=True)
+        self.audit(actor, 'gate.toggled', task_id, {'gate': gate_key, 'open': is_open, 'provenance': 'interactive V gate'})
+        row = self._execute_native('SELECT * FROM gates WHERE task_id=%s AND gate_key=%s', (task_id, gate_key)).fetchone()
+        if not row:
+            raise KeyError(gate_key)
+        return self._gate_record(row)
+
+    def wait_at_gate(self, task_id: str, after_phase: str) -> dict | None:
+        self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE', (task_id,)).fetchone()
+        row = self._execute_native('SELECT * FROM gates WHERE task_id=%s AND after_phase=%s', (task_id, after_phase)).fetchone()
+        if not row:
+            return None
+        now = time.time()
+        if row['is_open']:
+            self._execute_native("UPDATE gates SET state='bypassed',revision=revision+1 WHERE task_id=%s AND gate_key=%s", (task_id, row['gate_key']), write=True)
+            self._execute_native("UPDATE phases SET state='approved',detail='Approved by explicit open-gate policy',completed_at=%s WHERE task_id=%s AND phase_key=%s", (now, task_id, after_phase), write=True)
+            self.audit('policy', 'gate.bypassed', task_id, {'gate': row['gate_key'], 'after_phase': after_phase, 'approved_at': now, 'provenance': 'explicit open-gate policy'})
+            return None
+        self._execute_native("UPDATE phases SET state='awaiting_approval',detail='Generated; waiting for founder approval' WHERE task_id=%s AND phase_key=%s", (task_id, after_phase), write=True)
+        self._execute_native("UPDATE gates SET state='waiting',revision=revision+1 WHERE task_id=%s AND gate_key=%s", (task_id, row['gate_key']), write=True)
+        self._execute_native("UPDATE tasks SET state='waiting_gate',active_phase=%s,updated_at=%s WHERE task_id=%s", (after_phase, now, task_id), write=True)
+        return self._gate_record(self._execute_native('SELECT * FROM gates WHERE task_id=%s AND gate_key=%s', (task_id, row['gate_key'])).fetchone())
+
+    def decide_gate(self, task_id: str, gate_key: str, action: str, *, selected_option: str | None=None, edited_text: str | None=None, steer: str | None=None, actor: str='local user', expected_revision: int | None=None) -> dict:
+        self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE', (task_id,)).fetchone()
+        if action not in {'approve', 'edit', 'redo'}:
+            raise ValueError('action must be approve, edit, or redo')
+        row = self._execute_native('SELECT * FROM gates WHERE task_id=%s AND gate_key=%s', (task_id, gate_key)).fetchone()
+        if not row:
+            raise KeyError(gate_key)
+        if expected_revision is not None and row['revision'] != expected_revision:
+            raise ValueError('gate changed; refresh before deciding')
+        if row['state'] != 'waiting':
+            raise ValueError('gate is not waiting for a decision')
+        if action == 'approve' and (not selected_option):
+            raise ValueError('choose an option to approve')
+        if action == 'edit' and (not edited_text):
+            raise ValueError('edited option text is required')
+        if action == 'redo' and (not steer):
+            raise ValueError('a redo needs a reason so it is a steer, not a reroll')
+        state = 'redo' if action == 'redo' else 'decided'
+        now = time.time()
+        phase = row['after_phase']
+        self._execute_native('UPDATE gates SET state=%s,selected_option=%s,edited_text=%s,steer=%s,revision=revision+1 WHERE task_id=%s AND gate_key=%s', (state, selected_option, edited_text, steer, task_id, gate_key), write=True)
+        if action == 'redo':
+            self._execute_native("UPDATE phases SET state='running',detail=%s,completed=0,total=NULL,started_at=%s,completed_at=NULL WHERE task_id=%s AND phase_key=%s", (f'Redo requested: {steer}', now, task_id, phase), write=True)
+            downstream = [definition.key for definition in followers(phase)]
+            if downstream:
+                marks = ','.join(('%s' for _ in downstream))
+                self._execute_native(f"UPDATE phases SET state='pending',detail='',completed=0,total=NULL,started_at=NULL,completed_at=NULL WHERE task_id=%s AND phase_key IN ({marks})", (task_id, *downstream), write=True)
+        else:
+            detail = 'Founder approved edited artifact' if action == 'edit' else 'Founder approved'
+            self._execute_native("UPDATE phases SET state='approved',detail=%s,completed_at=%s WHERE task_id=%s AND phase_key=%s", (detail, now, task_id, phase), write=True)
+        self.audit(actor, f'gate.{action}', task_id, {'gate': gate_key, 'phase': phase, 'selected_option': selected_option, 'edited_text': edited_text, 'steer': steer, 'approved_at': now if action != 'redo' else None, 'provenance': 'interactive V gate'})
+        task_state = 'done' if action != 'redo' and phase == PHASES[-1][0] else 'running'
+        self._execute_native('UPDATE tasks SET state=%s,active_phase=%s,updated_at=%s WHERE task_id=%s', (task_state, phase, now, task_id), write=True)
+        return self._gate_record(self._execute_native('SELECT * FROM gates WHERE task_id=%s AND gate_key=%s', (task_id, gate_key)).fetchone())
+
+    def update_phase(self, task_id: str, phase_key: str, state: str, *, detail: str='', completed: int=0, total: int | None=None) -> None:
+        self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE', (task_id,)).fetchone()
+        now = time.time()
+        current = self._execute_native('SELECT state,started_at FROM phases WHERE task_id=%s AND phase_key=%s', (task_id, phase_key)).fetchone()
+        if not current:
+            raise KeyError(phase_key)
+        started = current['started_at'] or (now if state == 'running' else None)
+        ended = now if state in ('done', 'approved', 'awaiting_approval') else None
+        if state == 'running':
+            earlier = [phase.key for phase in predecessors(phase_key)]
+            later = [phase.key for phase in followers(phase_key)]
+            if earlier:
+                marks = ','.join(('%s' for _ in earlier))
+                self._execute_native(f"UPDATE phases SET state='awaiting_approval',detail=CASE WHEN detail='' THEN 'Generated; waiting for founder approval' ELSE detail END,completed_at=%s WHERE task_id=%s AND phase_key IN ({marks}) AND state='running'", (now, task_id, *earlier), write=True)
+            if later:
+                marks = ','.join(('%s' for _ in later))
+                self._execute_native(f"UPDATE phases SET state='pending',detail='Blocked on upstream approval',completed=0,total=NULL,started_at=NULL,completed_at=NULL WHERE task_id=%s AND phase_key IN ({marks}) AND state IN ('running','awaiting_approval')", (task_id, *later), write=True)
+        self._execute_native('UPDATE phases SET state=%s,detail=%s,completed=%s,total=%s,started_at=%s,completed_at=%s WHERE task_id=%s AND phase_key=%s', (state, detail, completed, total, started, ended, task_id, phase_key), write=True)
+        task_state = 'running' if state == 'running' else 'failed' if state == 'failed' else None
+        if state in ('done', 'approved') and phase_key == PHASES[-1][0]:
+            task_state = 'done'
+        if task_state:
+            self._execute_native('UPDATE tasks SET state=%s,active_phase=%s,updated_at=%s WHERE task_id=%s', (task_state, phase_key, now, task_id), write=True)
+        else:
+            self._execute_native('UPDATE tasks SET updated_at=%s WHERE task_id=%s', (now, task_id), write=True)
+
+    def reconcile_completed_interview(self, task_id: str, session_id: str, sequence: int) -> bool:
+        """Commit the missing HTTP interview boundary once; preserve downstream work."""
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE', (task_id,)).fetchone():
+            return False
+        row = self._execute_native('SELECT engine_session_id,state,active_phase FROM tasks WHERE task_id=%s', (task_id,)).fetchone()
+        if not row or row['engine_session_id'] != session_id:
+            return False
+        phases = self._execute_native("SELECT phase_key,state FROM phases WHERE task_id=%s AND phase_key IN ('intent','conops')", (task_id,)).fetchall()
+        states = {phase['phase_key']: phase['state'] for phase in phases}
+        if states.keys() != {'intent', 'conops'}:
+            return False
+        if row['active_phase'] not in ('intent', 'conops') or row['state'] not in ('running', 'failed'):
+            return False
+        if states['conops'] in ('approved', 'done'):
+            return False
+        if any((value not in ('pending', 'running', 'failed', 'awaiting_approval') for value in states.values())):
+            return False
+        now = time.time()
+        for phase in ('intent', 'conops'):
+            self._execute_native("UPDATE phases SET state='approved',detail='Founder approved in the completed interview',started_at=COALESCE(started_at,%s),completed_at=%s WHERE task_id=%s AND phase_key=%s", (now, now, task_id, phase), write=True)
+        self._execute_native("UPDATE tasks SET state='running',active_phase='conops',updated_at=%s WHERE task_id=%s", (now, task_id), write=True)
+        self._execute_native('INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s)', (task_id, 'conops', 'progress', 'Completed HTTP interview reconciled with V-process', json.dumps({'session_id': session_id, 'sequence': sequence, 'source': 'terminal_engine_snapshot', 'handoff': 'needs'}), now), write=True)
+        self.audit('engine', 'interview.reconciled', task_id, {'session_id': session_id, 'sequence': sequence, 'next_phase': 'needs'})
+        event_bus.notify(task_id)
+        return True
+
+    def claim_failed_needs_retry(self, task_id: str, actor: str) -> bool:
+        """Atomically claim only a failed Needs run with approved interview inputs."""
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE', (task_id,)).fetchone():
+            return False
+        row = self._execute_native('SELECT state,active_phase,engine_session_id FROM tasks WHERE task_id=%s', (task_id,)).fetchone()
+        if not row or row['state'] != 'failed' or row['active_phase'] != 'needs' or (not row['engine_session_id']):
+            return False
+        states = {p['phase_key']: p['state'] for p in self._execute_native('SELECT phase_key,state FROM phases WHERE task_id=%s', (task_id,))}
+        if any((states.get(phase) not in ('approved', 'done') for phase in ('intent', 'conops'))) or states.get('needs') != 'failed':
+            return False
+        if any((states.get(phase) not in ('pending', 'failed') for phase in ('srs', 'architecture', 'specs', 'tests', 'validation'))):
+            return False
+        now = time.time()
+        self._execute_native("UPDATE phases SET state='running',detail='Retrying failed Stakeholder needs',completed=0,total=NULL,started_at=%s,completed_at=NULL WHERE task_id=%s AND phase_key='needs'", (now, task_id), write=True)
+        self._execute_native("UPDATE tasks SET state='running',active_phase='needs',updated_at=%s WHERE task_id=%s", (now, task_id), write=True)
+        self._execute_native('INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s)', (task_id, 'needs', 'retry', 'Founder confirmed retry of failed Stakeholder needs', json.dumps({'actor': actor, 'session_id': row['engine_session_id']}), now), write=True)
+        self.audit(actor, 'phase.retry', task_id, {'phase': 'needs', 'session_id': row['engine_session_id']})
+        event_bus.notify(task_id)
+        return True
+
+    def claim_next_phase(self, task_id: str, phase: str, actor: str) -> bool:
+        """Atomically move a task whose interview is approved into its first generator phase.
+
+            A second click finds the phase already running and gets False, so one click starts one job."""
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE', (task_id,)).fetchone():
+            return False
+        from .phases import PHASE_KEYS, PHASE_BY_KEY
+        if phase != 'needs' or phase not in PHASE_BY_KEY:
+            return False
+        row = self._execute_native('SELECT state,active_phase,engine_session_id FROM tasks WHERE task_id=%s', (task_id,)).fetchone()
+        if not row or row['state'] != 'running' or row['active_phase'] != 'conops' or (not row['engine_session_id']):
+            return False
+        states = {p['phase_key']: p['state'] for p in self._execute_native('SELECT phase_key,state FROM phases WHERE task_id=%s', (task_id,))}
+        if any((states.get(key) not in ('approved', 'done') for key in ('intent', 'conops'))) or states.get(phase) != 'pending':
+            return False
+        if any((states.get(key) != 'pending' for key in PHASE_KEYS[PHASE_KEYS.index(phase) + 1:])):
+            return False
+        now = time.time()
+        self._execute_native("UPDATE phases SET state='running',detail=%s,completed=0,total=NULL,started_at=%s,completed_at=NULL WHERE task_id=%s AND phase_key=%s", (f'Starting {PHASE_BY_KEY[phase].label}', now, task_id, phase), write=True)
+        self._execute_native("UPDATE tasks SET state='running',active_phase=%s,updated_at=%s WHERE task_id=%s", (phase, now, task_id), write=True)
+        self._execute_native('INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s)', (task_id, phase, 'progress', f'You started {PHASE_BY_KEY[phase].label}', json.dumps({'actor': actor, 'session_id': row['engine_session_id'], 'started': True}), now), write=True)
+        self.audit(actor, 'phase.start', task_id, {'phase': phase, 'session_id': row['engine_session_id']})
+        event_bus.notify(task_id)
+        return True
+
+    def claim_failed_phase_retry(self, task_id: str, phase: str, actor: str) -> bool:
+        """Atomically claim a failed generator phase whose upstream phases are approved.
+
+            Later phases may only be pending or failed, so a retry never overwrites finished work."""
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE', (task_id,)).fetchone():
+            return False
+        from .phases import PHASE_KEYS, PHASE_BY_KEY
+        if phase not in PHASE_BY_KEY or PHASE_BY_KEY[phase].executor != 'generator':
+            return False
+        row = self._execute_native('SELECT state,active_phase,engine_session_id FROM tasks WHERE task_id=%s', (task_id,)).fetchone()
+        if not row or row['state'] != 'failed' or row['active_phase'] != phase or (not row['engine_session_id']):
+            return False
+        states = {p['phase_key']: p['state'] for p in self._execute_native('SELECT phase_key,state FROM phases WHERE task_id=%s', (task_id,))}
+        index = PHASE_KEYS.index(phase)
+        if states.get(phase) != 'failed':
+            return False
+        if any((states.get(key) not in ('approved', 'done') for key in PHASE_KEYS[:index])):
+            return False
+        if any((states.get(key) not in ('pending', 'failed') for key in PHASE_KEYS[index + 1:])):
+            return False
+        now = time.time()
+        self._execute_native("UPDATE phases SET state='running',detail=%s,completed=0,total=NULL,started_at=%s,completed_at=NULL WHERE task_id=%s AND phase_key=%s", (f'Retrying failed {PHASE_BY_KEY[phase].label}', now, task_id, phase), write=True)
+        self._execute_native("UPDATE tasks SET state='running',active_phase=%s,updated_at=%s WHERE task_id=%s", (phase, now, task_id), write=True)
+        self._execute_native('INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s)', (task_id, phase, 'retry', f'Founder confirmed retry of failed {PHASE_BY_KEY[phase].label}', json.dumps({'actor': actor, 'session_id': row['engine_session_id']}), now), write=True)
+        self.audit(actor, 'phase.retry', task_id, {'phase': phase, 'session_id': row['engine_session_id']})
+        event_bus.notify(task_id)
+        return True
+
+    def set_model_route(self, task_id: str, model_route: str) -> None:
+        self._execute_native('UPDATE tasks SET model_route=%s,updated_at=%s WHERE task_id=%s', (model_route, time.time(), task_id), write=True)
+
+    def set_model_default(self, task_id: str, model: str) -> None:
+        """Persist the exact model selected by the founder for subsequent phases."""
+        self._execute_native('UPDATE tasks SET model_default=%s,updated_at=%s WHERE task_id=%s', (model, time.time(), task_id), write=True)
+
+    def engine_session(self, task_id: str) -> str | None:
+        row = self._execute_native('SELECT engine_session_id FROM tasks WHERE task_id=%s', (task_id,)).fetchone()
+        return row['engine_session_id'] if row else None
+
+    def bind_interview_schema(self, task_id: str, schema_id: str, schema_version: str) -> dict:
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE', (task_id,)).fetchone():
+            raise KeyError(task_id)
+        row = self._execute_native('SELECT interview_schema_id,interview_schema_version FROM tasks WHERE task_id=%s', (task_id,)).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        existing = (row['interview_schema_id'], row['interview_schema_version'])
+        requested = (schema_id, schema_version)
+        if existing != (None, None) and existing != requested:
+            raise ValueError('interview schema binding is immutable for a task generation')
+        self._execute_native('UPDATE tasks SET interview_schema_id=%s,interview_schema_version=%s,updated_at=%s WHERE task_id=%s', (schema_id, schema_version, time.time(), task_id), write=True)
+        return {'task_id': task_id, 'schema_id': schema_id, 'schema_version': schema_version}
+
+    def interview_schema_binding(self, task_id: str) -> dict | None:
+        row = self._execute_native('SELECT interview_schema_id,interview_schema_version FROM tasks WHERE task_id=%s', (task_id,)).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        if row['interview_schema_id'] is None:
+            return None
+        return {'task_id': task_id, 'schema_id': row['interview_schema_id'], 'schema_version': row['interview_schema_version']}
+
+    def rerun_prerequisite(self, task_id: str, from_phase: str) -> dict | None:
+        """Return the first unfulfilled upstream phase, or None when rerun is valid."""
+        positions = PHASE_POSITIONS
+        if from_phase not in positions:
+            raise KeyError(from_phase)
+        phases = self._execute_native('SELECT phase_key,label,state FROM phases WHERE task_id=%s ORDER BY position', (task_id,)).fetchall()
+        if not phases:
+            raise KeyError(task_id)
+        for phase in phases[:positions[from_phase]]:
+            if phase['state'] not in ('approved', 'done'):
+                return dict(phase)
+        return None
+
     def create_task(self,title,brief='',*,task_id=None):
         title=title.strip()
         if not title: raise ValueError('task name cannot be empty')
@@ -625,7 +859,17 @@ FROM tasks t"""
         self._db.execute('UPDATE tasks SET engine_session_id=?,updated_at=? WHERE task_id=?',(session_id,time.time(),task_id))
 
     def begin_interview_start(self,task_id,session_id,route):
-        if not super().begin_interview_start(task_id,session_id,route): return False
+        now = time.time()
+        result = self._execute_native(
+            "UPDATE tasks SET state='running',active_phase='intent',engine_session_id=%s,model_route=%s,updated_at=%s "
+            "WHERE task_id=%s AND state='not_started' AND engine_session_id IS NULL",
+            (session_id,route,now,task_id), write=True)
+        if result.rowcount != 1:
+            self._connection.get().execute('ROLLBACK TO SAVEPOINT operation_start')
+            return False
+        self._execute_native("UPDATE phases SET state='running',detail='Starting interview',started_at=%s WHERE task_id=%s AND phase_key='intent'",
+                             (now,task_id), write=True)
+        self.add_event(task_id,'command','Interview starting',phase_key='intent',payload={'session_id':session_id,'route':route})
         self.set_engine_session(task_id,session_id)
         return True
 

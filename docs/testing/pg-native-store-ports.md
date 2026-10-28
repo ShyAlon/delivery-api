@@ -69,3 +69,25 @@ payload and raises conflict for the other;failed feedback audit rolls back inser
 its explicit correction is in separate332. Evidence cold/warm:SQLite1.624s/0.321s,
 PG1.494s/0.269s,all green. Single samples,not fullsuite/deploy claims. Hosted CI and
 deployed topology unverified. No schema/data/activation changes.
+
+## Phase/gate/rerun/session family
+
+PG now owns simulation config,gate toggle/wait/decide,phase update,completed-interview
+reconciliation,next/retry claims,model route/default,engine session read,immutable
+interview schema binding/read,and rerun prerequisite. begin_interview_start uses a
+PG-owned CAS implementation instead of super(),then the existing PG binding write.
+Native placeholders/RETURNING/savepoint ownership;all predecessor/follower/state
+checks,gate revisions,scope/owner guard and cloud rerun refusal remain.
+
+Task-row locks serialize read/check/write for gates,phase changes,claims,
+reconciliation and schema binding. Real concurrent next-phase red test now proves
+oneTrue/oneFalse,one audit. A poisoned parent/family-bridge test proves independent
+SQL. Gate audit fault proves state+revision rollback. No paid engine invoked.
+
+163combined source-enabled tests passed0skips84.49s on latest environment.
+Includes all prior native,store/revision,cloud/operator,API/browser,evidence,
+request/query-count suites. Hosted CI/deployed topology unverified.
+No schema/data migration/destruction,activation,deploy,restart or spend.
+Evidence fast-scope single sample:SQLite cold1.532s/warm0.285s;PG
+cold1.573s/warm0.264s,all passed. Same3contracts,scope/setup caveats retained;
+no fullsuite/deploy speed claim. Missing-task/phase return/error shapes retained.
