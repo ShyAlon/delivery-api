@@ -701,3 +701,19 @@ controls,selected Responsive web and last Hybrid option visible. Earlier cards
 are outside scroll viewport by design. Production unchanged;V diagram cosmetic
 debt remains. Hosted CI/full mixed UI/full repo/deployed topology unrun.
 A incomplete;B/C/D not started.
+
+## A54: answer composer browser group
+
+Five failure/text recovery,16s no-timeout/cancel,keyboard submission,processing
+shadow persistence and failed-send/no-shadow cases now use signed PG. Shared
+_answer_page accepts task ID with legacy default for remaining callers. All
+original assertions retained;slow-send explicitly sets no-preference motion
+because its existing spinner-animation check cannot run under shared fixture's
+reduced-motion default. Signature guard failed first;first migration run caught
+that motion mismatch (43pass1fail),then five cases+guard+cloud API+bootstrap
+44passed0skips32.41s. Snapshot/SSE/answer-response mocks remain presentation
+contracts,not proof of engine input delivery. Pixels inspected:disabled answer
+with spinner/cancel and submitting indicator;processing shadow preserves question
+and answer. Sticky headings clip some upper content in scrolled screenshot;
+not claimed fixed. Production unchanged;V diagram debt remains. Hosted CI/full
+mixed UI/full repo/deployed topology unrun. A incomplete;B/C/D not started.

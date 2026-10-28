@@ -530,14 +530,16 @@ def test_user_progress_and_composer_have_no_raw_console(page,ui):
     assert page.locator('#stageprogress').get_by_text('Still working',exact=False).is_visible()
 
 
-def test_answer_failure_preserves_text_and_recovers_button(page,ui):
+def test_answer_failure_preserves_text_and_recovers_button(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['active_phase']='intent'
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'test-input','precondition':{'session_sequence':1}}
     live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None,'question':'What matters most?'}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
-    page.route('**/api/tasks/live/answer',lambda route:route.fulfill(status=503,json={'detail':{'error':'Answer could not be sent.','cause':'Engine input is unavailable.','next':'Retry when the engine is waiting.'}}))
-    page.goto(ui+'/tasks/live/view');answer=page.locator('#answerform textarea');button=page.locator('#answerform button[type=submit]')
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}/answer',lambda route:route.fulfill(status=503,json={'detail':{'error':'Answer could not be sent.','cause':'Engine input is unavailable.','next':'Retry when the engine is waiting.'}}))
+    page.goto(ui+f'/tasks/{tid}/view');answer=page.locator('#answerform textarea');button=page.locator('#answerform button[type=submit]')
     answer.fill('Do not lose this answer');button.click()
     page.get_by_text('Answer could not be sent.',exact=False).wait_for()
     assert answer.input_value()=='Do not lose this answer' and answer.is_enabled() and button.is_enabled() and button.inner_text()=='Send answer'
@@ -557,16 +559,19 @@ def test_rerun_review_opens_top_dialog_and_escape_restores_flow(page,ui):
     assert form.is_visible() and form.locator('select').input_value()==selected
     assert form.locator('select').evaluate('e=>document.activeElement===e')
 
-def test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled(page,ui):
+def test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    page.emulate_media(reduced_motion="no-preference")
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['active_phase']='intent'
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'test-input','precondition':{'session_sequence':1}}
     live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None,'question':'What matters most?'}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     pending=[]
     def hold(route):pending.append(route)
-    page.route('**/api/tasks/live/answer',hold)
-    page.goto(ui+'/tasks/live/view');answer=page.locator('#answerform textarea');send=page.locator('#answerform button[type=submit]');cancel=page.get_by_role('button',name='Cancel send')
+    page.route(f'**/api/tasks/{tid}/answer',hold)
+    page.goto(ui+f'/tasks/{tid}/view');answer=page.locator('#answerform textarea');send=page.locator('#answerform button[type=submit]');cancel=page.get_by_role('button',name='Cancel send')
     answer.fill('A careful answer still in flight');send.click();cancel.wait_for()
     page.wait_for_timeout(16000)
     spinner=page.locator('#answerspinner')
@@ -580,15 +585,17 @@ def test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled(page,ui):
     assert spinner.is_hidden()
     if pending:pending[0].abort()
 
-def test_answer_enter_sends_and_control_enter_inserts_newline(page,ui):
+def test_answer_enter_sends_and_control_enter_inserts_newline(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['active_phase']='intent'
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'test-input','precondition':{'session_sequence':1}}
     live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None,'question':'What matters most?'}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     sent=[]
-    page.route('**/api/tasks/live/answer',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
-    page.goto(ui+'/tasks/live/view');answer=page.locator('#answerform textarea')
+    page.route(f'**/api/tasks/{tid}/answer',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
+    page.goto(ui+f'/tasks/{tid}/view');answer=page.locator('#answerform textarea')
     answer.fill('Line one');answer.press('Control+Enter');answer.type('Line two')
     assert answer.input_value()=='Line one\nLine two' and sent==[]
     answer.press('Enter');page.get_by_text('Answer sent.',exact=False).wait_for()
@@ -1935,18 +1942,20 @@ def test_completion_screen_summary_download_and_package(page,ui):
     assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
 
 
-def _answer_page(page, ui):
+def _answer_page(page, ui, tid="live"):
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live = page.request.get(ui + '/api/tasks/live').json(); live['active_phase'] = 'intent'
+    live = page.request.get(ui + f'/api/tasks/{tid}').json(); live['active_phase'] = 'intent'
     live['control_snapshot'] = {'mode': 'waiting_input', 'owner': 'engine', 'kind': 'text', 'wait_id': 'test-input', 'precondition': {'session_sequence': 1}}
     live['ui_state'] = {'mode': 'engine_question', 'active_phase': 'intent', 'process_live': True, 'decision': None, 'gate': None, 'question': 'What matters most?'}
-    page.route('**/api/tasks/live', lambda route: route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}', lambda route: route.fulfill(json=_promote_control(live)))
 
 
-def test_submitted_answer_stays_visible_as_shadow_copy_while_processing(page, ui):
-    _answer_page(page, ui)
-    page.route('**/api/tasks/live/answer', lambda route: route.fulfill(json={'status': 'accepted'}))
-    page.goto(ui + '/tasks/live/view'); answer = page.locator('#answerform textarea')
+def test_submitted_answer_stays_visible_as_shadow_copy_while_processing(pg_page, pg_ui, pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    _answer_page(page, ui, tid)
+    page.route(f'**/api/tasks/{tid}/answer', lambda route: route.fulfill(json={'status': 'accepted'}))
+    page.goto(ui + f'/tasks/{tid}/view'); answer = page.locator('#answerform textarea')
     answer.fill('Speed, then cost'); answer.press('Enter')
     page.get_by_text('Processing your answer', exact=False).wait_for()
     shadow = page.locator('#shadowcopy')
@@ -1960,10 +1969,12 @@ def test_submitted_answer_stays_visible_as_shadow_copy_while_processing(page, ui
     assert page.locator('#shadowa').inner_text() == 'Speed, then cost' and page.locator('#answerform textarea').is_hidden()
 
 
-def test_shadow_copy_not_shown_when_send_fails(page, ui):
-    _answer_page(page, ui)
-    page.route('**/api/tasks/live/answer', lambda route: route.fulfill(status=503, json={'detail': {'error': 'Answer could not be sent.', 'cause': 'x', 'next': 'y'}}))
-    page.goto(ui + '/tasks/live/view'); answer = page.locator('#answerform textarea')
+def test_shadow_copy_not_shown_when_send_fails(pg_page, pg_ui, pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    _answer_page(page, ui, tid)
+    page.route(f'**/api/tasks/{tid}/answer', lambda route: route.fulfill(status=503, json={'detail': {'error': 'Answer could not be sent.', 'cause': 'x', 'next': 'y'}}))
+    page.goto(ui + f'/tasks/{tid}/view'); answer = page.locator('#answerform textarea')
     answer.fill('Keep me'); page.locator('#answerform button[type=submit]').click()
     page.get_by_text('Answer could not be sent.', exact=False).wait_for()
     assert page.locator('#shadowcopy').is_hidden() and page.locator('#answerform').is_visible()
@@ -2620,4 +2631,14 @@ def test_founder_browser_group_requires_signed_pg_fixture():
                  test_founder_decision_outside_click_dismisses_and_persistent_bar_reopens,
                  test_decision_ready_bar_is_first_and_sticky_during_page_scroll,
                  test_answered_decision_clears_and_binary_approval_uses_same_dialog):
+        assert "pg_page" in inspect.signature(case).parameters
+
+
+def test_answer_browser_group_requires_signed_pg_fixture():
+    import inspect
+    for case in (test_answer_failure_preserves_text_and_recovers_button,
+                 test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled,
+                 test_answer_enter_sends_and_control_enter_inserts_newline,
+                 test_submitted_answer_stays_visible_as_shadow_copy_while_processing,
+                 test_shadow_copy_not_shown_when_send_fails):
         assert "pg_page" in inspect.signature(case).parameters
