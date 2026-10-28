@@ -776,3 +776,17 @@ item uses human fields and blocked checklist. Full-page sticky-header crossing
 partly covers scrolled gate heading,existing capture/layout debt not fixed.
 Production unchanged;other cosmetic debt unchanged. Hosted CI/full mixed UI/
 full repo/deployed topology unrun. A incomplete;B/C/D not started.
+
+## A59: start and model-route browser group
+
+Five start resolved-model/conflict,single-flight start,gate override defaults,
+disabled route reasons and two admitted choices cases use signed regular-owner
+PG. Original assertions retained. Signature guard failed first. Five cases+
+guard+cloud API+bootstrap44passed0skips16.64s. Model/start/review responses are
+presentation mocks;no real interview/model execution. Desktop and390px route
+pixels inspected:two selectable choices,selected outline,disabled DeepSeek
+reason and start button readable,no route-card overflow. Production unchanged;
+existing cosmetic debt unchanged. Shared module now60PGfunctions/65expanded
+cases,67legacy functions/72expanded cases,plus three standalone legacy-auth
+browser cases. Refreshed inventory/forecast in receiver document. Hosted CI/full
+mixed UI/full repo/deployed topology unrun. A incomplete;B/C/D not started.
