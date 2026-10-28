@@ -369,3 +369,15 @@ model routes,native events/gate,cloud execution,bootstrap. Expanded135passed2kno
 baseline failures15.21s (checkpoint intent view/session-cost metadata),not full
 module green. Production/UI unchanged;hosted CI/full suite/deployed topology not
 run. A incomplete;B/C/D not started.
+
+## A30: interruption and legacy-checkpoint refusal fixtures
+
+Six cases use scoped PG:unbound pre-HTTP checkpoint incompatibility,shutdown
+preserves resumable running state,legacy SIGTERM checkpoint refusal,parked-gate
+no text replay,approved phase completion,and interview-preview downstream
+isolation. Original assertions unchanged. Fail-first shutdown PG assertion failed
+on SQLite. Focused19passed0skips2.97s with producer sources:six cases,native
+lifecycle,protocol,native run,bootstrap. Expanded121passed2known baseline failures
+16.84s (checkpoint intent view/session-cost metadata),not full-module green.
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.
