@@ -98,3 +98,9 @@ PG-only negative/publication extras in both scopes. Local cold/warm wall time:
 SQLite1.722s/0.283s;PG1.691s/0.272s, all passed. Both cold runs include global PG
 startup and factory construction. Separate harness-only sample:0.915s,43migrations.
 Single samples, no significance claim;hosted CI/full-suite/deploy time unverified.
+
+Pytest9 compatibility repair:patch app.state._state with monkeypatch.setitem,
+not its dynamic attribute with setattr. Existing multi-fixture sequence reproduced
+missing app.state.store before the fix;7workspace/browser tests passed afterward,
+then16including evidence passed on pytest9.2.0/FastAPI0.162.0/Starlette1.10.0.
+No runtime change or assertion weakening. Hosted CI remains unverified.
