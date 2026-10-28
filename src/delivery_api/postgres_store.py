@@ -280,8 +280,8 @@ FROM tasks t"""
     _EVENTS_SUBQUERY = """
   (SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.id DESC)::text,'[]') FROM (
      SELECT e.id,e.task_id,e.phase_key,e.kind,e.message,e.payload,e.ts
-     FROM events e WHERE e.task_id=t.task_id ORDER BY e.id DESC LIMIT ?) r) AS events_json"""
-    _TASK_WHERE = " WHERE t.task_id=? AND t.deleted_at IS NULL"
+     FROM events e WHERE e.task_id=t.task_id ORDER BY e.id DESC LIMIT %s) r) AS events_json"""
+    _TASK_WHERE = " WHERE t.task_id=%s AND t.deleted_at IS NULL"
     _ARTIFACTS_SUBQUERY = """
   (SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.generation DESC,a.id)::text,'[]')
      FROM task_artifacts a WHERE a.task_id=t.task_id) AS artifacts_json"""
@@ -300,8 +300,75 @@ FROM tasks t"""
         return [self._task_record(row) for row in rows]
 
     def task(self,task_id):
-        row=self._db.execute(self._TASK_PROJECTION+' WHERE t.task_id=? AND t.deleted_at IS NULL',(task_id,)).fetchone()
+        row=self._db.execute(self._TASK_PROJECTION+' WHERE t.task_id=%s AND t.deleted_at IS NULL',(task_id,)).fetchone()
         return self._task_record(row) if row else None
+
+    def _execute_native(self, sql, parameters=(), *, write=False):
+        """PG-native statement under the owning operation transaction, no dialect shim."""
+        connection = self._connection.get()
+        if connection is None:
+            raise TenantAccessDenied('scoped transaction required')
+        if write:
+            from . import task_read_cache
+            from .postgres_scope import _request_tx
+            task_read_cache.invalidate(self)
+            self._cache_dirty.set(True)
+            shared = _request_tx.get()
+            if shared is not None:
+                shared.cache_invalidations.add(self)
+        started = time.monotonic()
+        try:
+            return connection.execute(sql, parameters)
+        finally:
+            note_query(time.monotonic()-started)
+
+    def task_snapshot(self, task_id, event_limit=500):
+        """One PG statement for task, ordered bounded events and artifact evidence."""
+        artifact_sql = self._snapshot_artifacts_sql()
+        sql = self._TASK_PROJECTION.replace("\nFROM tasks t", ",\n" + self._EVENTS_SUBQUERY
+            + (",\n" + artifact_sql if artifact_sql else "") + "\nFROM tasks t") + self._TASK_WHERE
+        row = self._execute_native(sql, (event_limit, task_id)).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        events_json = item.pop('events_json', '[]')
+        artifacts = json.loads(item.pop('artifacts_json', '[]') or '[]')
+        manifest = json.loads(item.pop('manifest_json', None) or 'null')
+        if manifest is not None and self._revision_hash(manifest['rows']) != manifest['revision_hash']:
+            raise ValueError('readiness marker does not match the published manifest revision')
+        return {'task':self._task_record(item),
+                'events':[self._event_record(e) for e in reversed(json.loads(events_json or '[]'))],
+                'artifacts':artifacts, 'manifest':manifest}
+
+    def rename_task(self, task_id, title, actor='local user'):
+        import psycopg
+        title = title.strip()
+        if not title:
+            raise ValueError('task name cannot be empty')
+        if not self.task(task_id):
+            raise KeyError(task_id)
+        try:
+            self._execute_native('UPDATE tasks SET title=%s,updated_at=%s WHERE task_id=%s',
+                                 (title,time.time(),task_id), write=True)
+            self.audit(actor,'task.renamed',task_id,{'title':title})
+        except psycopg.errors.UniqueViolation as error:
+            raise ValueError(f'a task named {title!r} already exists') from error
+        return self.task(task_id)
+
+    def task_artifacts(self, task_id, *, include_stale=True):
+        where = 'task_id=%s' if include_stale else 'task_id=%s AND stale=0'
+        return [dict(row) for row in self._execute_native(
+            'SELECT * FROM task_artifacts WHERE '+where+' ORDER BY generation DESC,id', (task_id,))]
+
+    def _gate_record(self, row):
+        item = dict(row)
+        item['options'] = json.loads(item['options'])
+        return item
+
+    def _event_record(self, item):
+        item = dict(item)
+        item['payload'] = json.loads(item['payload']) if isinstance(item.get('payload'),str) else item.get('payload',{})
+        return item
 
     def request_task_stop(self,task_id):
         task=self._db.execute('SELECT * FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone()
@@ -403,8 +470,11 @@ FROM tasks t"""
         return {'anchor':anchor,'anchor_sha256':row['anchor_sha256']}
 
     def _task_record(self,row):
-        result=super()._task_record(row)
-        result['owner_id']=str(result['owner_id'])
+        result = dict(row)
+        result['phases'] = json.loads(result.pop('phases_json'))
+        result['gates'] = [self._gate_record(g) for g in json.loads(result.pop('gates_json'))]
+        result['artifact_count'] = int(result['artifact_count'])
+        result['owner_id'] = str(result['owner_id'])
         return result
 
     def enqueue_worker(self,task_id,kind,*,execution_options=None):
