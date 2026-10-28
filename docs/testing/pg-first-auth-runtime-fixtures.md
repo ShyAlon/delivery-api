@@ -309,3 +309,15 @@ Fail-first live-decision PG assertion failed on SQLite. Focused52passed0skips
 API,bootstrap. Expanded153passed2known baseline failures17.03s (checkpoint intent
 view/session-cost metadata),not full-module green. Production/UI unchanged;
 hosted CI/full suite/deployed topology not run. A incomplete;B/C/D not started.
+
+## A25: task/input projection and stale answer fixtures
+
+Five cases use scoped PG:stale-answer conflict/error evidence,live-input
+projection,same-snapshot external owner restoration,rejected answer transcript
+absence,and generated phase approval/audit provenance. Original assertions
+unchanged;direct route helpers keep existing local policy. Fail-first projection
+PG assertion failed on global SQLite. Focused55passed0skips5.42s with producer
+sources:five cases,native projection/gate,decision pages,cloud API,bootstrap.
+Expanded158passed2known baseline failures17.10s (checkpoint intent view/session
+cost metadata),not full-module green. Production/UI unchanged;hosted CI/full
+suite/deployed topology not run. A incomplete;B/C/D not started.
