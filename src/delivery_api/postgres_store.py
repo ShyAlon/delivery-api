@@ -14,6 +14,7 @@ import secrets
 import time
 import contextlib,sqlite3
 from .store import SQLiteStore, PHASES
+from . import event_bus
 from vmodel_contracts import RunState
 from .postgres_scope import ScopedPostgres, note_query, note_statement, statement_label
 from .tenancy import current_scope, TenantAccessDenied
@@ -177,7 +178,7 @@ class PostgresStore(SQLiteStore):
         # Lock before checking. Under READ COMMITTED, a waiter then sees the
         # winner's committed event. This is a database row lock, never a Python
         # mutex held across a request's transaction or another PG lock wait.
-        if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone():
             raise KeyError(task_id)
         return self._ensure_waiting_input_locked(task_id,message,phase_key=phase_key,payload=payload)
 
@@ -211,16 +212,126 @@ class PostgresStore(SQLiteStore):
         write policy checks owner_id against the session claim."""
         block = self._validated_diagnostics_block(block)
         owner = current_scope().owner_id
-        task = self.task(task_id)
+        task = self._execute_native('SELECT generation FROM tasks WHERE task_id=%s AND deleted_at IS NULL',(task_id,)).fetchone()
         if not task:
             raise KeyError('task not found')
-        row = self._db.execute(
+        row = self._execute_native(
             "INSERT INTO operator_failure_diagnostics(owner_id,task_id,generation,source,http_status,error_class,sqlstate,stage,role,"
-            "sub_present,session_id_present,session_active_for_sub,message,block,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "sub_present,session_id_present,session_active_for_sub,message,block,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
             (owner, task_id, task['generation'], source, http_status, block['error_class'], block.get('sqlstate'),
              block.get('stage'), block['role'], str(block['sub_present']), str(block['session_id_present']),
-             str(block['session_active_for_sub']), block['message'], json.dumps(block), time.time()))
-        return row.lastrowid
+             str(block['session_active_for_sub']), block['message'], json.dumps(block), time.time()), write=True)
+        return row.fetchone()['id']
+
+    def add_event(self, task_id: str, kind: str, message: str, *, phase_key: str | None=None, payload: dict | None=None) -> int:
+        cur = self._execute_native('INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id', (task_id, phase_key, kind, message, json.dumps(payload or {}), time.time()), write=True)
+        self._execute_native('UPDATE tasks SET updated_at=%s WHERE task_id=%s', (time.time(), task_id), write=True)
+        event_bus.notify(task_id)
+        return cur.fetchone()['id']
+
+    def events(self, task_id: str, after: int=0, limit: int=500) -> list[dict]:
+        if after:
+            rows = self._execute_native('SELECT * FROM events WHERE task_id=%s AND id>%s ORDER BY id LIMIT %s', (task_id, after, limit)).fetchall()
+        else:
+            rows = list(reversed(self._execute_native('SELECT * FROM events WHERE task_id=%s ORDER BY id DESC LIMIT %s', (task_id, limit)).fetchall()))
+        result = []
+        for row in rows:
+            item = dict(row)
+            item['payload'] = json.loads(item['payload'])
+            result.append(item)
+        return result
+
+    def progress_cursor(self, task_id: str, source: str, session_id: str) -> int:
+        row = self._execute_native('SELECT cursor FROM progress_ingest WHERE task_id=%s AND source=%s AND session_id=%s', (task_id, source, session_id)).fetchone()
+        return int(row['cursor']) if row else 0
+
+    def ingest_progress(self, signal, source: str) -> bool:
+        """Deduplicate and commit task event + source cursor as one transaction."""
+        from vmodel_contracts.progress_signal import ProgressSignal
+        signal = ProgressSignal.model_validate(signal)
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE', (signal.task_id,)).fetchone():
+            raise KeyError(signal.task_id)
+        row = self._execute_native('SELECT cursor FROM progress_ingest WHERE task_id=%s AND source=%s AND session_id=%s', (signal.task_id, source, signal.session_id)).fetchone()
+        cursor = int(row['cursor']) if row else 0
+        if source == 'interview' and signal.cursor <= cursor:
+            return False
+        if source == 'interview' and signal.cursor != cursor + 1:
+            raise ValueError('interview progress cursor gap')
+        if self._execute_native('SELECT 1 FROM progress_seen WHERE task_id=%s AND source=%s AND event_id=%s', (signal.task_id, source, signal.event_id)).fetchone():
+            return False
+        message = signal.detail or signal.label
+        payload = {**signal.model_dump(mode='json'), 'source': source}
+        try:
+            self._execute_native('INSERT INTO progress_seen VALUES (%s,%s,%s)', (signal.task_id, source, signal.event_id), write=True)
+            self._execute_native('INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s)', (signal.task_id, signal.phase_key, 'progress', message, json.dumps(payload), time.time()), write=True)
+            self._execute_native('INSERT INTO progress_ingest(task_id,source,session_id,cursor) VALUES (%s,%s,%s,%s) ON CONFLICT(task_id,source,session_id) DO UPDATE SET cursor=GREATEST(progress_ingest.cursor,excluded.cursor)', (signal.task_id, source, signal.session_id, signal.cursor), write=True)
+            self._execute_native("UPDATE phases SET detail=%s,completed=COALESCE(%s,completed),total=COALESCE(%s,total) WHERE task_id=%s AND phase_key=%s AND state='running'", (message, signal.completed, signal.total, signal.task_id, signal.phase_key), write=True)
+            self._execute_native('UPDATE tasks SET updated_at=%s WHERE task_id=%s', (time.time(), signal.task_id), write=True)
+            event_bus.notify(signal.task_id)
+        except Exception:
+            self._connection.get().execute('ROLLBACK TO SAVEPOINT operation_start')
+            raise
+        return True
+
+    def audit(self, actor: str, action: str, task_id: str | None=None, detail: dict | None=None) -> int:
+        cur = self._execute_native('INSERT INTO audit_log(actor,action,task_id,detail,ts) VALUES (%s,%s,%s,%s,%s) RETURNING id', (actor, action, task_id, json.dumps(detail or {}), time.time()), write=True)
+        return cur.fetchone()['id']
+
+    def audit_entries(self, task_id: str | None=None, limit: int=500) -> list[dict]:
+        if task_id:
+            rows = self._execute_native('SELECT * FROM audit_log WHERE task_id=%s ORDER BY id DESC LIMIT %s', (task_id, limit))
+        else:
+            rows = self._execute_native('SELECT * FROM audit_log ORDER BY id DESC LIMIT %s', (limit,))
+        result = []
+        for row in rows:
+            item = dict(row)
+            item['detail'] = json.loads(item['detail'])
+            result.append(item)
+        return result
+
+    def _ensure_waiting_input_locked(self, task_id, message, *, phase_key, payload):
+        input_id = payload.get('input_id')
+        if not isinstance(input_id, str) or not input_id:
+            raise ValueError('waiting input identity required')
+        rows = self._execute_native("SELECT id,payload FROM events WHERE task_id=%s AND kind='waiting_input'", (task_id,)).fetchall()
+        for event in rows:
+            if str(json.loads(event['payload']).get('input_id')) == input_id:
+                return event['id']
+        return self.add_event(task_id, 'waiting_input', message, phase_key=phase_key, payload=payload)
+
+    @staticmethod
+    def _validated_diagnostics_block(block: dict) -> dict:
+        """The operator block is presence-only by contract: booleans or the
+            honest UNKNOWN, never claim values, bounded sanitized message."""
+        if not isinstance(block, dict):
+            raise ValueError('operator diagnostics block required')
+        out = dict(block)
+        for key in ('sub_present', 'session_id_present', 'session_active_for_sub'):
+            if out.get(key) not in (True, False, 'UNKNOWN'):
+                raise ValueError(f'operator diagnostics {key} must be a presence boolean or UNKNOWN')
+        out['error_class'] = str(out.get('error_class') or 'UNKNOWN')[:120]
+        out['role'] = str(out.get('role') or 'UNKNOWN')[:120]
+        out['message'] = str(out.get('message') or '')[:300]
+        if out.get('sqlstate') is not None:
+            sqlstate = str(out['sqlstate'])
+            if len(sqlstate) != 5:
+                raise ValueError('operator diagnostics sqlstate is the five-character class code')
+            out['sqlstate'] = sqlstate
+        if out.get('stage') is not None:
+            out['stage'] = str(out['stage'])[:80]
+        return out
+
+    def failure_diagnostics(self, task_id: str, limit: int=20) -> list[dict]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError('bounded diagnostics page required')
+        rows = self._execute_native('SELECT id,task_id,source,http_status,error_class,sqlstate,stage,role,sub_present,session_id_present,session_active_for_sub,message,block,created_at AS ts FROM operator_failure_diagnostics WHERE task_id=%s ORDER BY id DESC LIMIT %s', (task_id, limit)).fetchall()
+        out = []
+        for row in rows:
+            row = dict(row)
+            if isinstance(row['block'],str):
+                row['block'] = json.loads(row['block'])
+            out.append(row)
+        return out
 
     def create_task(self,title,brief='',*,task_id=None):
         title=title.strip()

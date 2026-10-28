@@ -28,3 +28,30 @@ Validation:81focused passed,0skips9.54s. Existing two-test fast-scope sample:
 SQLite cold5.518s/warm3.628s;PG cold3.187s/warm1.873s,all passed. Same scope
 caveats as postgres-workspaces.md;not an equal-work speedup or fullsuite/deploy
 claim. Hosted CI and deployed topology remain unverified.
+
+## Events/progress/audit family
+
+PG owns add_event,events,progress_cursor,ingest_progress,audit,audit_entries,
+waiting-input lookup,diagnostic block validation and bounded failure diagnostics.
+Native RETURNING id replaces lastrowid;named cursor fields replace positional rows.
+Existing tenant/generation diagnostics write now uses native SQL too. PG jsonb
+blocks stay dictionaries;created_at is exposed under the existing ts read shape.
+
+A poisoned-parent/bridge regression fails before the port. A concurrent replay
+regression also exposed/fixed a pre-existing PG race with task-row serialization.
+A fault after event/seen insertion proves cursor/event rollback and retry success.
+No schema/migration or customer/operator grant change. Existing transaction timing,
+cache invalidation,event notifications and outer savepoint ownership remain.
+
+Focused API/browser/read-scope set48passed0skips8.56s. Restored crossrepo source
+sweep is reported separately;no unavailable-source skip is called full acceptance.
+Evidence fast scope (same3contracts):SQLite cold1.319s/warm0.269s;PG
+cold1.270s/warm0.215s,all green. Single local samples,not fullsuite/deploy proof.
+
+Old cloud fixture still uses dynamic State setattr and fails on pytest9 between
+route tests;new pg_workspace fixture is fixed by328. This separate test-only
+compatibility debt is not suppressed or mixed into the runtime port.
+Restored engine/spec sources:81passed plus one missing bundled-Chromium failure
+(no source skips);after installing the required bundled browser,the exact failed
+revision/ask_changes case passed3.91s. Full combined rerun pending. Two old cloud
+route tests intentionally excluded here due to separately reported fixture debt.
