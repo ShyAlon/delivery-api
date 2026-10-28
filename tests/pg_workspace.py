@@ -75,7 +75,16 @@ def pg_workspace_factory():
             try:
                 with tenant_context(scope):
                     for task in store.list_tasks():
-                        store.delete_task(task['task_id'])
+                        try:
+                            store.delete_task(task['task_id'])
+                        except ValueError as exc:
+                            # Preserve production refusal, never mutate running/accounted
+                            # state just to clean a fixture. Server exit removes it.
+                            if str(exc) not in {
+                                'a running or paused task cannot be deleted',
+                                'Stop is pending; worker and provider quiescence must be confirmed before Delete',
+                                'task has provider ledger history; preserve it for reconciliation'}:
+                                raise
             finally:
                 with workspace.admin() as connection:
                     connection.execute('DELETE FROM auth.sessions WHERE id=%s', (scope.session_id,))

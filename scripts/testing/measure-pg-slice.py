@@ -11,6 +11,11 @@ if '--task-browser' in sys.argv:
   'sqlite_browser_reference':['tests/test_ui_playwright.py::test_task_filter_sort_rename_and_delete','tests/test_ui_playwright.py::test_create_task_dialog_keyboard_submit_textarea_and_cancel'],
   'postgres_browser_parity':['tests/test_postgres_task_browser.py'],
  }
+if '--evidence' in sys.argv:
+ scopes={
+  'sqlite_evidence_reference':['tests/test_store_evidence_parity.py','-k','sqlite'],
+  'postgres_evidence_parity':['tests/test_store_evidence_parity.py','-k','postgres'],
+ }
 results=[]
 for name, tests in scopes.items():
  code='''import json,time,pytest\nresults=[]\nfor label in ('cold','warm'):\n start=time.monotonic();rc=pytest.main(%r);results.append({'mode':label,'elapsed_s':round(time.monotonic()-start,3),'exit_code':int(rc)})\nprint('MEASURE_JSON='+json.dumps(results))\n'''%(['-q','-s']+tests)
