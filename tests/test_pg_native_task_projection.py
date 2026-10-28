@@ -3,8 +3,8 @@ import pytest
 from delivery_api.tenancy import tenant_context
 
 
-def test_native_snapshot_rename_and_artifact_reads_do_not_use_bridge(pg_workspace_factory, monkeypatch):
-    from delivery_api.postgres_store import _Connection
+def test_native_snapshot_rename_and_artifact_reads_do_not_use_bridge(pg_workspace_factory, monkeypatch, pg_bridge_poison):
+    _Connection = pg_bridge_poison
     with pg_workspace_factory() as workspace, tenant_context(workspace.scope):
         store = workspace.store
         first = store.create_task('Native task')

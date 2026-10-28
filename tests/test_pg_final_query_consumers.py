@@ -17,8 +17,8 @@ def test_no_production_store_bridge_consumers_remain():
     assert found==[]
 
 
-def test_entire_pg_bridge_can_be_disabled_for_user_work(pg_workspace_factory,monkeypatch):
-    from delivery_api.postgres_store import _Connection
+def test_entire_pg_bridge_can_be_disabled_for_user_work(pg_workspace_factory,monkeypatch, pg_bridge_poison):
+    _Connection = pg_bridge_poison
     with pg_workspace_factory() as w,tenant_context(w.scope):
         s=w.store
         def reject(*args,**kw):raise AssertionError('PG query bridge called')
@@ -37,3 +37,16 @@ def test_entire_pg_bridge_can_be_disabled_for_user_work(pg_workspace_factory,mon
             job=s.enqueue_worker(tid,'fixture');assert s.claim_worker(job)
             s.finish_worker(job);s.delete_task(tid)
             assert s.task(tid) is None
+
+
+def test_pg_query_bridge_class_and_assignment_are_gone():
+    import delivery_api.postgres_store as module
+    assert not hasattr(module,'_Connection')
+    source=Path(module.__file__).read_text()
+    assert not any(isinstance(n,ast.Attribute) and n.attr=='_db' for n in ast.walk(ast.parse(source)))
+
+
+def test_retired_bridge_test_tripwire_is_fail_closed(pg_bridge_poison):
+    from delivery_api.postgres_store import PostgresStore
+    with pytest.raises(AssertionError,match='retired PG query bridge called'):
+        PostgresStore.__new__(PostgresStore)._db.execute('SELECT 1')

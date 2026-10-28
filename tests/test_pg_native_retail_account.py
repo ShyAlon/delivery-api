@@ -6,8 +6,8 @@ from delivery_api.tenancy import tenant_context
 from delivery_api.attempt_ledger import AdmissionDenied
 
 
-def test_native_retail_account_queries(pg_workspace_factory,monkeypatch):
-    from delivery_api.postgres_store import _Connection
+def test_native_retail_account_queries(pg_workspace_factory,monkeypatch, pg_bridge_poison):
+    _Connection = pg_bridge_poison
     from delivery_api.retail_pricing import RetailRates,UNITS_PER_CREDIT
     with pg_workspace_factory() as a,pg_workspace_factory() as b:
         s=a.store

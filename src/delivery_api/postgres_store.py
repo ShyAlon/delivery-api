@@ -9,7 +9,6 @@ from __future__ import annotations
 from contextvars import ContextVar
 from functools import wraps
 import json
-import re
 import secrets
 import time
 import contextlib
@@ -22,35 +21,6 @@ from .phases import followers, predecessors, PHASE_POSITIONS
 from vmodel_contracts import RunState
 from .postgres_scope import ScopedPostgres, note_query, note_statement, statement_label
 from .tenancy import current_scope, TenantAccessDenied
-
-
-class _Connection:
-    def __init__(self, state, owner): self.state,self.owner = state,owner
-
-    def execute(self, sql, parameters=()):
-        connection = self.state.get()
-        if connection is None: raise TenantAccessDenied('scoped transaction required')
-        # All input SQL is application code, never request-supplied SQL. No literal
-        # question marks exist in this fixed query surface.
-        sql = sql.replace('?', '%s')
-        if sql.startswith('INSERT OR IGNORE '):
-            sql = sql.replace('INSERT OR IGNORE ', 'INSERT ',1)+' ON CONFLICT DO NOTHING'
-        sql = sql.replace('cursor=max(cursor,excluded.cursor)',
-                          'cursor=GREATEST(progress_ingest.cursor,excluded.cursor)')
-        if re.match(r"\s*(INSERT|UPDATE|DELETE|REPLACE|TRUNCATE|WITH)\b",sql,re.I):
-            from . import task_read_cache
-            from .postgres_scope import _request_tx
-            task_read_cache.invalidate(self.owner)
-            self.owner._cache_dirty.set(True)
-            shared=_request_tx.get()
-            if shared is not None:shared.cache_invalidations.add(self.owner)
-        started=time.monotonic()
-        try:
-            return connection.execute(sql,parameters)
-        finally:
-            elapsed=time.monotonic()-started
-            note_query(elapsed)  # TimingConnection owns statement labels exactly once
-
 
 
 def _transactional(method):
@@ -127,7 +97,6 @@ class PostgresStore:
         self._postgres = ScopedPostgres(dsn)
         self._connection = ContextVar('postgres_operation',default=None)
         self._cache_dirty = ContextVar('postgres_cache_dirty',default=False)
-        self._db = _Connection(self._connection,self)
 
     def ensure_waiting_input_event(self,task_id:str,message:str,*,phase_key:str,payload:dict)->int:
         # Lock before checking. Under READ COMMITTED, a waiter then sees the

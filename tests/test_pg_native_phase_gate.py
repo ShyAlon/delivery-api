@@ -3,8 +3,8 @@ import pytest
 from delivery_api.tenancy import tenant_context
 
 
-def test_native_phase_gate_and_session_boundary(pg_workspace_factory,monkeypatch):
-    from delivery_api.postgres_store import _Connection
+def test_native_phase_gate_and_session_boundary(pg_workspace_factory,monkeypatch, pg_bridge_poison):
+    _Connection = pg_bridge_poison
     from delivery_api.store import SQLiteStore
     with pg_workspace_factory() as workspace,tenant_context(workspace.scope):
         s=workspace.store;tid=s.create_task('Native phase gate')['task_id']

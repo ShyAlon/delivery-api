@@ -5,8 +5,8 @@ import pytest
 from delivery_api.tenancy import TenantScope,TenantAccessDenied,tenant_context
 
 
-def test_native_worker_claim_resume_stop_and_owner_fences(pg_workspace_factory,monkeypatch):
-    from delivery_api.postgres_store import _Connection
+def test_native_worker_claim_resume_stop_and_owner_fences(pg_workspace_factory,monkeypatch, pg_bridge_poison):
+    _Connection = pg_bridge_poison
     with pg_workspace_factory() as a,pg_workspace_factory() as b:
         s=a.store
         with tenant_context(a.scope):
