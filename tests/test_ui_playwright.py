@@ -1226,20 +1226,24 @@ def test_progress_slot_keys_render_as_title_case(pg_page,pg_ui,pg_ids):
     html=page.evaluate("""async()=>{const m=await import('/assets/phase-output.js');return m.phaseOutputHtml({phase_key:'architecture',status:'ready',items:[{name:'pwa_offline_runtime',statement:'keep_this_detail_as_is'},{name:'Existing Title'}]})}""")
     assert '<b>PWA Offline Runtime</b>' in html and '<b>Existing Title</b>' in html and 'keep_this_detail_as_is' in html
 
-def test_phase_rows_link_to_their_gate_page_once_the_gate_has_opened(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json()
+def test_phase_rows_link_to_their_gate_page_once_the_gate_has_opened(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     for n,gate in enumerate(live['gates']):gate['state']='approved' if n==0 else 'idle'
     first=live['gates'][0]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
-    page.goto(ui+'/tasks/live/view')
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.goto(ui+f'/tasks/{tid}/view')
     links=page.locator('.phase-list-primary .phase-gate-link')
     links.first.wait_for()
     assert links.count()==1
-    assert links.first.get_attribute('href')=='/tasks/live/gates/'+first['gate_key']
+    assert links.first.get_attribute('href')==f'/tasks/{tid}/gates/'+first['gate_key']
     assert links.first.inner_text()=='Gate'
 
-def test_spec_items_render_as_closed_collapsible_panels_with_formatted_markdown(page,ui):
-    page.goto(ui+'/tasks/empty/view')
+def test_spec_items_render_as_closed_collapsible_panels_with_formatted_markdown(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    page.goto(ui+f'/tasks/{pg_ids["empty"]}/view')
     body='# SPEC-1 - Course Content Model\n\nKind: data_model. Covers R-1.\n\n## 1. Scope and boundaries\nIn scope:\n- The authored content document shape\n- Identifiers and ordering\n\n## 2. Interface\n1. load()\n2. validate()\n\n| Name | Type |\n|---|---|\n| id | string |\n\nUse `loadCourse` here.'
     html=page.evaluate("""async(body)=>{const m=await import('/assets/gate-presenters.js');const host=document.createElement('div');host.id='spec-host';host.className='gate-structured';host.innerHTML=m.gateStructured({items:[{spec_id:'SPEC-1',kind:'data_model',body_markdown:body},{spec_id:'SPEC-2',title:'Second Spec',body_markdown:'No heading here.'}]});document.body.prepend(host);return host.innerHTML}""",body)
     panels=page.locator('#spec-host details.spec-item')
@@ -1255,11 +1259,13 @@ def test_spec_items_render_as_closed_collapsible_panels_with_formatted_markdown(
     assert '# SPEC-1' not in first.inner_text() and '## 1.' not in first.inner_text()
 
 @pytest.mark.parametrize("viewport", [{"width":1365,"height":850},{"width":390,"height":844}])
-def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips(page,ui,viewport):
+def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips(pg_page,pg_ui,pg_ids,viewport):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.set_viewport_size(viewport)
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
-    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'A very long progress update that must remain on precisely one line while the full wording stays available on hover','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('#stageprogress > details > summary').click();feed=page.locator('#stageprogress .progress-item');feed.wait_for();span=feed.locator('span');assert span.bounding_box()['width']>0;assert span.bounding_box()['x']+span.bounding_box()['width']<=page.viewport_size['width'];assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'A very long progress update that must remain on precisely one line while the full wording stays available on hover','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');page.locator('#stageprogress > details > summary').click();feed=page.locator('#stageprogress .progress-item');feed.wait_for();span=feed.locator('span');assert span.bounding_box()['width']>0;assert span.bounding_box()['x']+span.bounding_box()['width']<=page.viewport_size['width'];assert feed.locator('small').count()==0;assert span.get_attribute('title').startswith('A very long progress');assert span.evaluate('(e)=>getComputedStyle(e).whiteSpace')=='nowrap';assert span.evaluate('(e)=>getComputedStyle(e).textOverflow')=='ellipsis'
     phase=page.locator('.phase-list-primary .phase').filter(has_text='Requirements');phase.hover();tip=phase.get_by_role('tooltip');tip.wait_for();assert tip.get_by_text('Artifacts: srs.json',exact=True).is_visible();assert tip.get_by_text('missing acceptance criterion',exact=False).is_visible()
     page.screenshot(path=str(_screenshots_dir / f'progress-phase-tooltips-{viewport["width"]}.png'),full_page=True)
 
@@ -1647,13 +1653,15 @@ def test_failed_needs_has_retry_not_generation_rerun(pg_page,pg_ui,pg_ids):
     page.screenshot(path=str(_screenshots_dir / 'failed-needs-retry.png'),full_page=True)
 
 
-def test_audit_dialog_scrolls_on_short_viewport(page,ui):
+def test_audit_dialog_scrolls_on_short_viewport(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.set_viewport_size({'width':900,'height':460})
-    live=page.request.get(ui+'/api/tasks/live').json()
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     entries=[{'ts':1720000000+i,'actor':'Founder','action':f'event.{i}','detail':{'index':i,'note':'long audit detail '*8}} for i in range(75)]
-    page.route('**/api/tasks/live/audit',lambda route:route.fulfill(json={'actor_mode':'local','entries':entries,'totals':{'tokens':2300,'price':0,'interview_calls':14,'interview_cost_usd':0.0037,'interview_unpriced_calls':0}}))
-    page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='Audit').click()
+    page.route(f'**/api/tasks/{tid}/audit',lambda route:route.fulfill(json={'actor_mode':'local','entries':entries,'totals':{'tokens':2300,'price':0,'interview_calls':14,'interview_cost_usd':0.0037,'interview_unpriced_calls':0}}))
+    page.goto(ui+f'/tasks/{tid}/view');page.get_by_role('button',name='Audit').click()
     dialog=page.get_by_role('dialog',name='Task audit');dialog.wait_for()
     assert 'auto' in dialog.evaluate('(e)=>getComputedStyle(e).overflowY')
     assert dialog.evaluate('(e)=>e.scrollHeight>e.clientHeight')
@@ -2888,3 +2896,12 @@ def test_debug_account_cases_require_signed_pg_browser():
     ):
         assert 'pg_page' in inspect.signature(case).parameters
         assert 'ui' not in inspect.signature(case).parameters
+
+
+def test_phase_evidence_cases_require_signed_pg_browser():
+    import inspect
+    for case in (test_phase_rows_link_to_their_gate_page_once_the_gate_has_opened,
+                 test_spec_items_render_as_closed_collapsible_panels_with_formatted_markdown,
+                 test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips,
+                 test_audit_dialog_scrolls_on_short_viewport):
+        assert 'pg_page' in inspect.signature(case).parameters
