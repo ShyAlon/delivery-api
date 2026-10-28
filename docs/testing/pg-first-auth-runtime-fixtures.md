@@ -284,3 +284,16 @@ producer sources:six cases,protocol/SSE,native run,bootstrap. Expanded128passed
 2known baseline failures18.48s (checkpoint intent view/session-cost metadata),not
 full-module green. Production/UI unchanged;hosted CI/full suite/deployed topology
 not run. A incomplete;B/C/D not started.
+
+## A23: startup recovery ownership fixtures
+
+Six startup/recovery cases use scoped PG:durable approved interview skip,
+contradictory prefix repair,approved handoff to needs,durable external wait,
+external wait over obsolete process noise,and legacy baseline pause ownership.
+Existing exact recovered states,owner and no-spurious-launch assertions retained.
+Continuation callbacks remain mocked;no real execution enabled. Fail-first skip
+PG assertion failed on SQLite. Focused50passed0skips4.68s with producer sources:
+six cases,native lifecycle/gate,parity,cloud API,bootstrap. Expanded152passed
+2known baseline failures16.86s (checkpoint intent view/session-cost metadata),not
+full-module green. Production/UI unchanged;hosted CI/full suite/deployed topology
+not run. A incomplete;B/C/D not started.
