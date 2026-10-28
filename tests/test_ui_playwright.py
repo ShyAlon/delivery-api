@@ -124,7 +124,7 @@ def pg_ui(pg_browser,pg_ids):
         s.update_phase(pg_ids["sim"], "intent", "done", detail="Recorded phase complete")
         s.set_gate_open(pg_ids["sim"], "gate-conops", True)
         s.wait_at_gate(pg_ids["sim"], "intent")
-    page.add_init_script('for(const id of '+json.dumps(list(pg_ids.values()))+")sessionStorage.setItem('complete-shown:'+id,'1')")
+    page.add_init_script("if(!localStorage.getItem('allow-complete-redirect')){for(const id of "+json.dumps(list(pg_ids.values()))+")sessionStorage.setItem('complete-shown:'+id,'1')}")
     return base
 
 
@@ -290,9 +290,11 @@ def test_gate_redo_requires_steer_in_browser(page, ui):
     page.get_by_role("button", name="Ask for changes").click()
     page.get_by_text("a redo needs a reason", exact=False).wait_for()
 
-def test_an_unavailable_artifact_shows_a_notice_instead_of_a_dead_click(page, ui):
-    page.route('**/api/tasks/done/artifacts/**/view', lambda route: route.fulfill(status=404, json={'detail': 'Artifact files are not part of a local preview'}))
-    page.goto(ui + '/tasks/done/view')
+def test_an_unavailable_artifact_shows_a_notice_instead_of_a_dead_click(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["done"]
+    page.route(f'**/api/tasks/{tid}/artifacts/**/view', lambda route: route.fulfill(status=404, json={'detail': 'Artifact files are not part of a local preview'}))
+    page.goto(ui + f'/tasks/{tid}/view')
     button = page.locator('[data-view-artifact]').first
     button.wait_for()
     button.click()
@@ -2003,40 +2005,45 @@ def test_gate_model_picker_shows_exact_sticky_default(page,ui):
     assert picker.locator('option').first.inner_text()=='Use current task default'
     page.screenshot(path=str(_screenshots_dir / 'sticky-model-gate.png'),full_page=True)
 
-def _done_task(page,ui):
-    task=page.request.get(ui+'/api/tasks/done').json();task=_promote_control(task)
+def _done_task(page,ui,tid="done"):
+    task=page.request.get(ui+f'/api/tasks/{tid}').json();task=_promote_control(task)
     base=1791127000.0
     for i,p in enumerate(task['phases']):p['started_at']=base+i*60;p['completed_at']=base+i*60+50
     task['artifacts']=[{'phase_key':'srs','name':'srs.json','present':True,'stale':0},{'phase_key':'specs','name':'items.json','present':True,'stale':0}]
     task['events']=[{'kind':'price','phase_key':'needs','payload':{'price':0.625,'price_usd':0.63,'tokens':50000,'rates':{'scale':'credits'}}},{'kind':'price','phase_key':'srs','payload':{'price':900000,'tokens':450000,'rates':{'price_per_token':2.0}}}]
-    page.route('**/api/tasks/done',lambda route:route.fulfill(json=task))
-    page.route('**/api/tasks/done/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':[],'totals':{'tokens':50000,'price':0.625,'price_usd':0.63,'legacy_priced_phases':1}}))
-    page.route('**/api/tasks/done/artifacts/srs/srs.json',lambda route:route.fulfill(json={'functional':[{'requirement_id':'R1'},{'requirement_id':'R2'}],'non_functional':[{'requirement_id':'N1'}]}))
-    page.route('**/api/tasks/done/artifacts/specs/items.json',lambda route:route.fulfill(json=[{'spec_id':'S1'}]))
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=task))
+    page.route(f'**/api/tasks/{tid}/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':[],'totals':{'tokens':50000,'price':0.625,'price_usd':0.63,'legacy_priced_phases':1}}))
+    page.route(f'**/api/tasks/{tid}/artifacts/srs/srs.json',lambda route:route.fulfill(json={'functional':[{'requirement_id':'R1'},{'requirement_id':'R2'}],'non_functional':[{'requirement_id':'N1'}]}))
+    page.route(f'**/api/tasks/{tid}/artifacts/specs/items.json',lambda route:route.fulfill(json=[{'spec_id':'S1'}]))
     return task
 
 
-def test_done_task_redirects_once_to_completion_screen(page,ui):
-    _done_task(page,ui)
+def test_done_task_redirects_once_to_completion_screen(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["done"]
+    _done_task(page,ui,tid)
     page.goto(ui+'/about');page.evaluate("localStorage.setItem('allow-complete-redirect','1');sessionStorage.clear()")
-    page.goto(ui+'/tasks/done/view');page.wait_for_url('**/tasks/done/complete')
-    page.get_by_role('link',name='Back to task').click();page.wait_for_url('**/tasks/done/view')
+    page.goto(ui+f'/tasks/{tid}/view');page.wait_for_url(f'**/tasks/{tid}/complete')
+    page.get_by_role('link',name='Back to task').click();page.wait_for_url(f'**/tasks/{tid}/view')
     page.get_by_role('heading',name='Project complete').wait_for()
-    assert page.url.endswith('/tasks/done/view')
+    assert page.url.endswith(f'/tasks/{tid}/view')
 
 
-def test_completion_screen_summary_download_and_package(page,ui):
-    _done_task(page,ui)
-    page.route('**/api/tasks/done/packages',lambda route:route.fulfill(json={'status':'ready','generation':1,'package_id':'a'*64,'url':'/api/tasks/done/packages/'+'a'*64+'?generation=1','contents':['README.md','spec/AGENTS.md']}))
-    page.goto(ui+'/tasks/done/complete')
+def test_completion_screen_summary_download_and_package(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    page.emulate_media(reduced_motion="no-preference")
+    tid=pg_ids["done"]
+    _done_task(page,ui,tid)
+    page.route(f'**/api/tasks/{tid}/packages',lambda route:route.fulfill(json={'status':'ready','generation':1,'package_id':'a'*64,'url':f'/api/tasks/{tid}/packages/'+'a'*64+'?generation=1','contents':['README.md','spec/AGENTS.md']}))
+    page.goto(ui+f'/tasks/{tid}/complete')
     page.get_by_role('heading',name='Congratulations',exact=False).wait_for()
     assert page.locator('.confetti i').count()==60
     body=page.locator('.complete-page').inner_text()
     assert '0.63 credits · $0.63' in body and 'legacy scale' in body and 'tokens' not in body.lower()
     counts=page.locator('.complete-counts')
     assert counts.locator('div').nth(0).inner_text().replace('\n',' ').lower()=='requirements 3' and counts.locator('div').nth(1).inner_text().replace('\n',' ').lower()=='specs 1' and counts.locator('div').nth(2).inner_text().replace('\n',' ').lower()=='tests -'
-    assert counts.get_by_role('link',name='3').get_attribute('href')=='/tasks/done/gates/gate-srs'
-    assert page.get_by_role('link',name='Download artifacts').get_attribute('href')=='/api/tasks/done/artifacts.zip'
+    assert counts.get_by_role('link',name='3').get_attribute('href')==f'/tasks/{tid}/gates/gate-srs'
+    assert page.get_by_role('link',name='Download artifacts').get_attribute('href')==f'/api/tasks/{tid}/artifacts.zip'
     page.get_by_role('button',name='Prepare final package').click()
     link=page.get_by_role('link',name='Download coding-agent package');expect(link).to_be_visible();assert '?generation=1' in link.get_attribute('href')
     page.screenshot(path=str(_screenshots_dir / 'completion-desktop.png'),full_page=True)
@@ -2904,4 +2911,12 @@ def test_phase_evidence_cases_require_signed_pg_browser():
                  test_spec_items_render_as_closed_collapsible_panels_with_formatted_markdown,
                  test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_tooltips,
                  test_audit_dialog_scrolls_on_short_viewport):
+        assert 'pg_page' in inspect.signature(case).parameters
+
+
+def test_completion_cases_require_signed_pg_browser():
+    import inspect
+    for case in (test_done_task_redirects_once_to_completion_screen,
+                 test_completion_screen_summary_download_and_package,
+                 test_an_unavailable_artifact_shows_a_notice_instead_of_a_dead_click):
         assert 'pg_page' in inspect.signature(case).parameters
