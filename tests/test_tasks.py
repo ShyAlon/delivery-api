@@ -649,16 +649,17 @@ def test_runner_can_close_engine_approved_phases(tmp_path):
     assert phases['intent']['state']=='approved' and phases['conops']['state']=='approved'
 
 
-def test_orchestrator_phase_plan_launches_next_bounded_process(monkeypatch,tmp_path):
+def test_orchestrator_phase_plan_launches_next_bounded_process(monkeypatch,tmp_path,pg_scoped_workspace):
     generator=tmp_path/"generator";python=generator/".venv/bin/python";python.parent.mkdir(parents=True);python.touch()
     monkeypatch.setenv("SPEC_GENERATOR_DIR",str(generator))
     import asyncio,json
     from delivery_api.orchestrator import PhaseOrchestrator
     from delivery_api.phases import PHASE_DEFINITIONS
-    from delivery_api.store import SQLiteStore
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     assert tuple((phase.key,phase.generator_stage) for phase in PHASE_DEFINITIONS if phase.executor=="generator")==(("needs","needs"),("srs","srs"),("architecture","architecture"),("specs","items"),("tests","tests"),("validation","validation"))
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
-    store=SQLiteStore(str(tmp_path/'plan.db'));tid=store.create_task('Planned product')['task_id'];store.add_event(tid,'progress','session: session-1',phase_key='intent')
+    store=pg_scoped_workspace.store;tid=store.create_task('Planned product')['task_id'];store.add_event(tid,'progress','session: session-1',phase_key='intent')
     interview=tmp_path/'artifacts'/'session-1'/'interview';interview.mkdir(parents=True)
     (interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}));(interview/'conops.json').write_text('{}')
     class Runner:
@@ -671,14 +672,15 @@ def test_orchestrator_phase_plan_launches_next_bounded_process(monkeypatch,tmp_p
     assert str(interview/'intent_model.json') in cmd and str(interview/'conops.json') in cmd
 
 
-def test_orchestrator_architecture_is_greenfield_without_decision(monkeypatch,tmp_path):
+def test_orchestrator_architecture_is_greenfield_without_decision(monkeypatch,tmp_path,pg_scoped_workspace):
     generator=tmp_path/"generator";python=generator/".venv/bin/python";python.parent.mkdir(parents=True);python.touch()
     monkeypatch.setenv("SPEC_GENERATOR_DIR",str(generator))
     import asyncio,json
     from delivery_api.orchestrator import PhaseOrchestrator
-    from delivery_api.store import SQLiteStore
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
-    store=SQLiteStore(str(tmp_path/'baseline.db'));tid=store.create_task('New Product')['task_id'];store.add_event(tid,'progress','session: s2',phase_key='intent')
+    store=pg_scoped_workspace.store;tid=store.create_task('New Product')['task_id'];store.add_event(tid,'progress','session: s2',phase_key='intent')
     interview=tmp_path/'artifacts'/'s2'/'interview';interview.mkdir(parents=True);(interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}));(interview/'conops.json').write_text('{}')
     class Runner:
         calls=[]
@@ -965,11 +967,12 @@ def test_recovery_planner_assigns_exactly_one_action_per_task():
     for p in phases:p['state']='pending'
     assert plan_recovery(task,has_session=True).action=='resume'
 
-def test_configured_phase_executor_rejects_wrong_owner_and_maps_redo(monkeypatch,tmp_path):
+def test_configured_phase_executor_rejects_wrong_owner_and_maps_redo(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio,json
     from delivery_api.orchestrator import ExecutionMode,PhaseOrchestrator
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'executor.db'));tid=store.create_task('Executor')['task_id']
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+    store=pg_scoped_workspace.store;tid=store.create_task('Executor')['task_id']
     store.add_event(tid,'progress','session: configured-executor',phase_key='intent')
     root=tmp_path/'artifacts'/'configured-executor';(root/'interview').mkdir(parents=True);(root/'interview'/'intent_model.json').write_text(json.dumps({'contract_version':'1'}));(root/'interview'/'conops.json').write_text('{}')
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'));monkeypatch.setenv('REQUI_RE_DIST','1')
@@ -1197,14 +1200,15 @@ def test_legacy_artifact_projection_recovers_session_from_requirement_path(monke
     assert app_module._recorded_engine_session(tid)==session
     records=app_module._task_artifact_snapshot(tid);assert len(records)==1 and records[0]['name']=='architecture.json' and records[0]['validator']=='ArchitectureOverview'
 
-def test_orchestrator_phase_override_reaches_engine_and_is_durable(monkeypatch,tmp_path):
+def test_orchestrator_phase_override_reaches_engine_and_is_durable(monkeypatch,tmp_path,pg_scoped_workspace):
     generator=tmp_path/"generator";python=generator/".venv/bin/python";python.parent.mkdir(parents=True);python.touch()
     monkeypatch.setenv("SPEC_GENERATOR_DIR",str(generator))
     import asyncio,json
     from delivery_api.orchestrator import PhaseOrchestrator,ExecutionMode
-    from delivery_api.store import SQLiteStore
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
-    store=SQLiteStore(str(tmp_path/'route.db'));tid=store.create_task('Routed')['task_id'];store.set_model_route(tid,'ollama');store.add_event(tid,'progress','session: routed',phase_key='intent')
+    store=pg_scoped_workspace.store;tid=store.create_task('Routed')['task_id'];store.set_model_route(tid,'ollama');store.add_event(tid,'progress','session: routed',phase_key='intent')
     interview=tmp_path/'artifacts'/'routed'/'interview';interview.mkdir(parents=True);(interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}));(interview/'conops.json').write_text('{}')
     class Runner:
         calls=[]
@@ -1503,15 +1507,18 @@ def test_item_stage_list_artifact_validates_for_parked_gate(monkeypatch,tmp_path
     assert invalid['valid'] is False and invalid['validation_errors']
 
 
-def test_orchestrator_sticky_exact_model_across_phases_and_switch(monkeypatch,tmp_path):
+def test_orchestrator_sticky_exact_model_across_phases_and_switch(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio,json
     from delivery_api.orchestrator import PhaseOrchestrator
-    from delivery_api.store import SQLiteStore
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
     monkeypatch.setenv('REQUI_RE_DIST','1')
     monkeypatch.setenv('SPEC_GENERATOR_MODEL_NEEDS','ollama:phi4')
     monkeypatch.setenv('SPEC_GENERATOR_MODEL_SRS','ollama:qwen')
-    store=SQLiteStore(str(tmp_path/'route.db'));tid=store.create_task('Sticky')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Sticky')['task_id']
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     store.set_engine_session(tid,'session-sticky')
     interview=tmp_path/'artifacts'/'session-sticky'/'interview';interview.mkdir(parents=True)
     (interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}))

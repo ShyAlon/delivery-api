@@ -357,3 +357,15 @@ cases,native artifacts,phase output,provenance,cloud API,bootstrap. Expanded
 155passed2known baseline failures16.78s (checkpoint intent view/session-cost
 metadata),not full-module green. Production/UI unchanged;hosted CI/full suite/
 deployed topology not run. A incomplete;B/C/D not started.
+
+## A29: orchestrator phase/model planning fixtures
+
+Five orchestrator cases use scoped PG:bounded phase plan,greenfield architecture,
+executor ownership/redo mapping,phase route override durability,and sticky exact
+model/switch. Local policy explicit,runner calls still mocked. Every original
+command/env/model/event assertion unchanged. Fail-first sticky-model PG assertion
+failed on SQLite. Focused32passed0skips2.38s with producer sources:five cases,
+model routes,native events/gate,cloud execution,bootstrap. Expanded135passed2known
+baseline failures15.21s (checkpoint intent view/session-cost metadata),not full
+module green. Production/UI unchanged;hosted CI/full suite/deployed topology not
+run. A incomplete;B/C/D not started.
