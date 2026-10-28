@@ -159,3 +159,19 @@ def pg_browser(pg_workspace_factory, pg_task_app, tmp_path):
             server.should_exit = True
             thread.join(timeout=10)
             assert not thread.is_alive(), 'test server did not stop'
+
+
+@pytest.fixture
+def pg_scoped_workspace(pg_workspace_factory,monkeypatch):
+    """Direct-helper PG tests; HTTP authentication is covered by pg_task_app."""
+    from delivery_api import app as module
+    from delivery_api.store import SQLiteStore
+    with pg_workspace_factory() as workspace:
+        monkeypatch.setattr(module,'store',workspace.store)
+        monkeypatch.setitem(module.app.state._state,'store',workspace.store)
+        monkeypatch.setattr(module.orchestrator,'store',workspace.store)
+        def no_sqlite(*args,**kwargs):
+            raise AssertionError('SQLite forbidden in scoped PG fixtures')
+        monkeypatch.setattr(SQLiteStore,'__init__',no_sqlite)
+        with tenant_context(workspace.scope):
+            yield workspace

@@ -54,7 +54,7 @@ def _no_compute_segments_left_for_the_test_owners():
     except Exception:pass
 
 # Additive SQLite-retirement phase 1: isolated tenants on the session PG server.
-from pg_workspace import pg_workspace_factory, pg_task_app  # noqa: E402,F401
+from pg_workspace import pg_scoped_workspace, pg_workspace_factory, pg_task_app  # noqa: E402,F401
 from pg_workspace import pg_browser  # noqa: E402,F401
 
 @pytest.fixture(params=['sqlite','postgres'])

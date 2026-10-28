@@ -10,10 +10,9 @@ import threading
 import pytest
 
 
-def test_stream_events_reads_run_off_the_event_loop(monkeypatch, tmp_path):
+def test_stream_events_reads_run_off_the_event_loop(monkeypatch, tmp_path, pg_scoped_workspace):
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    store = SQLiteStore(str(tmp_path / 'off-loop.db'))
+    store = pg_scoped_workspace.store
     task_id = store.create_task('Off loop reads', '')['task_id']
     monkeypatch.setattr(app_module, 'store', store)
     loop_thread = threading.get_ident()  # asyncio.run below drives the loop on this thread
@@ -49,12 +48,11 @@ def test_bus_wait_wakes_on_notify_and_times_out():
     assert woke == [True]
 
 
-def test_add_event_wakes_the_stream_without_the_safety_wait(monkeypatch, tmp_path):
+def test_add_event_wakes_the_stream_without_the_safety_wait(monkeypatch, tmp_path, pg_scoped_workspace):
     """With heartbeats and the safety refresh effectively disabled, a chunk can only
     arrive because the write woke the stream."""
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    store = SQLiteStore(str(tmp_path / 'wake.db'))
+    store = pg_scoped_workspace.store
     task_id = store.create_task('Wake on write', '')['task_id']
     monkeypatch.setattr(app_module, 'store', store)
     monkeypatch.setattr(app_module, 'STREAM_HEARTBEAT_SECONDS', 3600.0)
@@ -74,10 +72,9 @@ def test_add_event_wakes_the_stream_without_the_safety_wait(monkeypatch, tmp_pat
     asyncio.run(read())
 
 
-def test_stream_reads_only_on_writes_and_the_minute_safety(monkeypatch, tmp_path):
+def test_stream_reads_only_on_writes_and_the_minute_safety(monkeypatch, tmp_path, pg_scoped_workspace):
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    store = SQLiteStore(str(tmp_path / 'safety.db'))
+    store = pg_scoped_workspace.store
     task_id = store.create_task('Safety cadence', '')['task_id']
     monkeypatch.setattr(app_module, 'store', store)
     monkeypatch.setattr(app_module, 'STREAM_HEARTBEAT_SECONDS', 0.05)
@@ -141,17 +138,18 @@ def test_session_check_cache_stores_revocation_and_never_caches_errors():
     assert len(calls) == 2, 'an error was cached, or revocation was not'
 
 
-def test_notify_fires_only_after_the_row_is_committed(tmp_path):
+def test_notify_fires_only_after_the_row_is_committed(tmp_path, pg_scoped_workspace):
     """A stream woken by the write must see the row: notify happens after commit."""
     import threading as _t
     from delivery_api import event_bus
-    from delivery_api.store import SQLiteStore
-    store = SQLiteStore(str(tmp_path / 'commit-order.db'))
+    store = pg_scoped_workspace.store
     task_id = store.create_task('Commit order', '')['task_id']
     seen = []
     def waiter():
-        if event_bus.wait(task_id, 2.0):
-            seen.append(any('committed event' in e['message'] for e in store.events(task_id)))
+        from delivery_api.tenancy import tenant_context
+        with tenant_context(pg_scoped_workspace.scope):
+            if event_bus.wait(task_id, 2.0):
+                seen.append(any('committed event' in e['message'] for e in store.events(task_id)))
     thread = _t.Thread(target=waiter)
     thread.start()
     import time as _time
@@ -194,3 +192,13 @@ console.log('ok');
 """ % uri
     out = subprocess.run(['node', '--input-type=module', '-e', src], capture_output=True, text=True, timeout=30)
     assert out.returncode == 0 and out.stdout.strip() == 'ok', out.stderr or out.stdout
+
+
+def test_stream_fixture_is_restricted_pg(pg_scoped_workspace):
+    from delivery_api.postgres_store import PostgresStore
+    from delivery_api.store import SQLiteStore
+    assert isinstance(pg_scoped_workspace.store,PostgresStore)
+    with pytest.raises(AssertionError,match='SQLite forbidden'):
+        SQLiteStore(':memory:')
+    with pg_scoped_workspace.store._postgres.transaction() as connection:
+        assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
