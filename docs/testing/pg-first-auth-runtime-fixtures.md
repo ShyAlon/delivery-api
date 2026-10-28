@@ -462,3 +462,17 @@ events,bootstrap. Expanded119passed2known baseline failures(checkpoint intent
 view/session-cost metadata),not full-module green. SQLiteStore inventory37 files:
 primary migrate10,guard16,reference5,retired6. Production/UI unchanged;hosted CI/
 full suite/deployed topology not run. A incomplete;B/C/D not started.
+
+## A37: immutable interview schema binding fixture
+
+Binding/idempotency/conflicting-version receiver now scoped PG,all original
+assertions retained. Added independent-adapter persistence and foreign-owner/
+missing-task refusal,owner unchanged after denied write. Legacy SQLite additive
+binding-column contract remains explicitly unchanged,not silently removed.
+Fail-first concrete PG assertion failed on SQLite. Focused43passed0skips:binding,
+native projection,bootstrap,cloud API. Expanded151passed2known baseline failures
+(checkpoint intent view/session-cost metadata),not full-module green. Inventory
+37 SQLiteStore files unchanged because schema file retains legacy contract;
+its primary bucket is now retired-contract,not migrate (9/16/5/7).
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.
