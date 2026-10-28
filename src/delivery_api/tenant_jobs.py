@@ -13,38 +13,39 @@ async def execute_job(store,job_id,handler,*,verify_stopped_quiescence=None,veri
     with tenant_context(scope):
         capability=store.claim_worker(job_id)
         if capability is None:return False
-        try:
-            capability.validate(store)
-            await handler(capability)
-            task=store.task(capability.task_id)
-            if task and task.get('stop_requested_at') is not None:
-                # Handler return, cancellation, timeout or an engine snapshot
-                # alone is not proof that its provider threads exited.
-                if verify_stopped_quiescence is not None and verify_stopped_quiescence(capability) is True:
-                    store.finish_stopped_worker(job_id,worker_quiescent=True)
-                return True
-            capability.validate(store)
-        except Exception:
-            # Preserve original failure even if sign-out removed DB authority.
-            # The row remains running and requires owner reauthorization/review.
+        from .diagnostic_evidence import bound
+        with bound(task_id=capability.task_id,session_id=capability.session_id,job_id=job_id):
             try:
+                capability.validate(store)
+                await handler(capability)
                 task=store.task(capability.task_id)
                 if task and task.get('stop_requested_at') is not None:
+                    # Handler return, cancellation, timeout or an engine snapshot
+                    # alone is not proof that its provider threads exited.
                     if verify_stopped_quiescence is not None and verify_stopped_quiescence(capability) is True:
                         store.finish_stopped_worker(job_id,worker_quiescent=True)
-                elif verify_completion_quiescence is None or verify_completion_quiescence(capability) is True:
-                    store.finish_worker(job_id,failed=True)
-            except Exception as record_exc:
-                from .observability import event as activity
-                activity("job.failure_record_failed","A worker job failed AND its failure record could not be written; the job may look stuck",task_id=capability.task_id,job_id=job_id,error=type(record_exc).__name__)
-            raise
-        # A returned handler can leave deadline/provider writer threads alive.
-        # The private persistent runner supplies its same-host lock verifier.
-        if verify_completion_quiescence is not None and verify_completion_quiescence(capability) is not True:
+                    return True
+                capability.validate(store)
+            except Exception:
+                # Preserve original failure even if sign-out removed DB authority.
+                # The row remains running and requires owner reauthorization/review.
+                try:
+                    task=store.task(capability.task_id)
+                    if task and task.get('stop_requested_at') is not None:
+                        if verify_stopped_quiescence is not None and verify_stopped_quiescence(capability) is True:
+                            store.finish_stopped_worker(job_id,worker_quiescent=True)
+                    elif verify_completion_quiescence is None or verify_completion_quiescence(capability) is True:
+                        store.finish_worker(job_id,failed=True)
+                except Exception as record_exc:
+                    from .observability import event as activity
+                    activity("job.failure_record_failed","A worker job failed AND its failure record could not be written; the job may look stuck",task_id=capability.task_id,job_id=job_id,error=type(record_exc).__name__)
+                raise
+            # A returned handler can leave deadline/provider writer threads alive.
+            # The private persistent runner supplies its same-host lock verifier.
+            if verify_completion_quiescence is not None and verify_completion_quiescence(capability) is not True:
+                return True
+            store.finish_worker(job_id)
             return True
-        store.finish_worker(job_id)
-        return True
-
 
 async def dispatch_phase(store,orchestrator,task_id,phase,*,resume_job_id=None,queued_job_id=None,mode=None,model_route=None):
     """Reviewed cloud phase seam. Caller owns rate/spend admission before dispatch.
