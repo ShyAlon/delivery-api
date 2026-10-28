@@ -38,7 +38,7 @@ class PrivateRevisionAcceptanceAdapter:
                 raise ValueError('exact retained same-phase change submission required')
             options=submitted['options']
             # Serialize against competing queue calls and reject ambiguous replay.
-            self.store._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(self.task_id,)).fetchone()
+            self.store._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(self.task_id,)).fetchone()
             marker='revision-change-job:'+submission_id
             prior=self.store.decision_review(self.task_id,marker,review['review_sha256'])
             if prior:

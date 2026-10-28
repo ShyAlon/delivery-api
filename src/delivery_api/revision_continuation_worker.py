@@ -14,7 +14,7 @@ KIND='continuation:approved-revision'
 
 def queue_private_approved_continuation(store,task_id,*,installation_id,artifacts_base):
     with store._task_operation_guard('task.rerun'):
-        store._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone()
+        store._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone()
         marker='revision-continuation-job:'+installation_id
         prior=store.decision_review(task_id,marker,'queue')
         if prior:
@@ -179,7 +179,7 @@ async def _execute_continuation(store,worker,job_id,*,installation_id,artifacts_
                     os.fsync(destination_fd)
                 # No result becomes reviewable while accepted provider work is unsettled.
                 with store._task_operation_guard('task.rerun'):
-                    if store._db.execute("SELECT 1 FROM provider_attempts WHERE job_id=? AND state IN ('reserved','dispatched','uncertain') LIMIT 1",(job_id,)).fetchone():
+                    if store._execute_native("SELECT 1 FROM provider_attempts WHERE job_id=%s AND state IN ('reserved','dispatched','uncertain') LIMIT 1",(job_id,)).fetchone():
                         raise ValueError('continuation provider settlement unresolved')
                 def preparation_unchanged():
                     current=_open_directory(prepared.parent)

@@ -658,9 +658,9 @@ class PostgresStore:
 
     def create_link(self,founder_label):
         token,run_id,now=secrets.token_urlsafe(24),secrets.token_hex(8),time.time()
-        self._db.execute('INSERT INTO runs(run_id,state,budget_usd,created_at,updated_at,owner_id) VALUES (?,?,?,?,?,?)',
-                         (run_id,RunState.CREATED.value,6.,now,now,current_scope().owner_id))
-        self._db.execute('INSERT INTO links VALUES (?,?,?,1,?)',(token,run_id,founder_label,now))
+        self._execute_native('INSERT INTO runs(run_id,state,budget_usd,created_at,updated_at,owner_id) VALUES (%s,%s,%s,%s,%s,%s)',
+                         (run_id,RunState.CREATED.value,6.,now,now,current_scope().owner_id), write=True)
+        self._execute_native('INSERT INTO links VALUES (%s,%s,%s,1,%s)',(token,run_id,founder_label,now), write=True)
         return {'token':token,'run_id':run_id}
 
     def add_usage(self,run_id,record_json,cost_usd):
@@ -923,7 +923,7 @@ FROM tasks t"""
         Lock the owned task before checking eligibility so concurrent confirms
         cannot each reserve a job. Public operation wrapper owns commit/rollback.
         """
-        row=self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone()
+        row=self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone()
         if not row:return None
         claimed=(self.claim_failed_needs_retry(task_id,actor) if phase=='needs'
                  else self.claim_failed_phase_retry(task_id,phase,actor))
@@ -937,7 +937,7 @@ FROM tasks t"""
 
     def prepare_next_phase(self,task_id,phase,actor,model):
         """One durable transaction for the first start of a generator phase: claim, model and pending job."""
-        row=self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone()
+        row=self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone()
         if not row:return None
         if not self.claim_next_phase(task_id,phase,actor):return None
         self.set_model_default(task_id,model)
@@ -1628,7 +1628,7 @@ FROM tasks t"""
     def prepare_gate_dispatch(self,task_id,gate_key,action,*,actor,model=None,comment='',review_revision=None,**decision):
         """Commit the reviewed gate and its exact next generator job together."""
         from .phases import PHASE_BY_KEY,successor
-        if not self._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone():
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone():
             raise KeyError(task_id)
         task=self.task(task_id)
         pending=next((g for g in task['gates'] if g['gate_key']==gate_key),None)
@@ -1864,9 +1864,9 @@ FROM tasks t"""
     def operator_workspace_snapshot(self):
         """Read-only current-owner operations, never cross-tenant privilege."""
         owner=current_scope().owner_id
-        account=self._db.execute('SELECT balance_units,units_per_credit,updated_at FROM credit_accounts WHERE owner_id=?',(owner,)).fetchone()
-        sessions=self._db.execute('SELECT session_id,task_id,generation FROM engine_sessions WHERE owner_id=? ORDER BY session_id',(owner,)).fetchall()
-        jobs=self._db.execute('SELECT job_id,task_id,session_id,generation,kind,state FROM worker_jobs WHERE owner_id=? ORDER BY updated_at DESC LIMIT 100',(owner,)).fetchall()
+        account=self._execute_native('SELECT balance_units,units_per_credit,updated_at FROM credit_accounts WHERE owner_id=%s',(owner,)).fetchone()
+        sessions=self._execute_native('SELECT session_id,task_id,generation FROM engine_sessions WHERE owner_id=%s ORDER BY session_id',(owner,)).fetchall()
+        jobs=self._execute_native('SELECT job_id,task_id,session_id,generation,kind,state FROM worker_jobs WHERE owner_id=%s ORDER BY updated_at DESC LIMIT 100',(owner,)).fetchall()
         return {'scope':'current_authorized_workspace','owner_id':owner,
             'credits':dict(account) if account else None,'sessions':[dict(row) for row in sessions],
             'worker_jobs':[dict(row) for row in jobs],'credit_adjustment_available':False,
