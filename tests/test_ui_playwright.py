@@ -1064,8 +1064,10 @@ def test_decision_dialog_rationale_help_is_real_and_keyboard_accessible(pg_page,
     page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');dialog=page.locator('.decision-dialog');dialog.wait_for();button=dialog.get_by_role('button',name='Why a rationale is requested');button.focus();expect(dialog.get_by_role('tooltip')).to_be_visible()
     expect(dialog.get_by_role('tooltip').get_by_text('stored with the selected option',exact=False)).to_be_visible()
 
-def test_debug_dialog_contains_run_events_desktop_and_phone(page,ui):
-    page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
+def test_debug_dialog_contains_run_events_desktop_and_phone(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    page.goto(ui+f'/tasks/{tid}/view');page.locator('.detail-layout').wait_for()
     assert page.locator('#console').count()==0
     page.locator('#accountbutton').click();page.locator('#opendebug').click()
     pane=page.locator('#debugexecution details',has=page.locator('summary',has_text='Run events'))
@@ -1099,12 +1101,14 @@ def test_mutation_flows_refresh_in_place_without_document_navigation(pg_page,pg_
     assert not page.locator('[data-action="approve"]').is_enabled()
     assert page.get_by_text('No current valid artifact is available',exact=False).is_visible()
 
-def test_live_progress_scope_and_account_menu_desktop_and_phone(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json();phase=next(p for p in live['phases'] if p['phase_key']==live['active_phase']);phase.update({'completed':8,'total':20,'started_at':time.time()-12*60})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+def test_live_progress_scope_and_account_menu_desktop_and_phone(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();phase=next(p for p in live['phases'] if p['phase_key']==live['active_phase']);phase.update({'completed':8,'total':20,'started_at':time.time()-12*60})
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     page.route('**/health',lambda route:route.fulfill(json={'ok':True,'runtime_id':'abcdef123456','repositories':{}}))
     page.route('**/api/auth',lambda route:route.fulfill(json={'mode':'basic','authenticated':True,'actor':'shy@example.com','admin':True,'providers':[]}))
-    page.set_viewport_size({'width':1365,'height':800});page.goto(ui+'/tasks/live/view')
+    page.set_viewport_size({'width':1365,'height':800});page.goto(ui+f'/tasks/{tid}/view')
     scope=page.locator('.progress-scope');scope.wait_for();assert scope.locator('b').all_inner_texts()==['8','20','12'];assert 'out of' in scope.inner_text() and 'minutes so far' in scope.inner_text()
     page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for();assert menu.get_by_text('shy@example.com',exact=True).is_visible();assert menu.get_by_role('menuitem',name='Debug',exact=True).is_visible();assert menu.get_by_role('menuitem',name='Sign out').is_visible()
     page.screenshot(path=str(_screenshots_dir / 'live-scope-account-desktop.png'),full_page=True);page.keyboard.press('Escape');assert menu.is_hidden()
@@ -1133,7 +1137,9 @@ def test_live_elapsed_uses_latest_phase_command_not_parked_phase_start(pg_page,p
     assert '12 minutes so far' in scope.inner_text();assert '22 hours' not in scope.inner_text()
 
 @pytest.mark.ui_cosmetic
-def test_avatar_menu_does_not_emit_native_runtime_tooltip(page,ui):
+def test_avatar_menu_does_not_emit_native_runtime_tooltip(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.goto(ui+'/');button=page.locator('#accountbutton');button.wait_for();assert page.locator('#identity').get_attribute('title') is None
 
 def test_orchestrator_baseline_decision_renders_without_engine_process(pg_page,pg_ui,pg_ids):
@@ -1144,7 +1150,9 @@ def test_orchestrator_baseline_decision_renders_without_engine_process(pg_page,p
     page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');dialog=page.locator('.decision-dialog');dialog.wait_for()
     assert dialog.get_by_text('Greenfield',exact=True).is_visible();assert page.locator('.task-error-state').count()==0
 
-def test_account_menu_is_plain_list_with_explicit_actions(page,ui):
+def test_account_menu_is_plain_list_with_explicit_actions(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.goto(ui+'/');page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for()
     assert menu.locator(':scope > li').count()==3;assert menu.locator('button').all_inner_texts()==['Debug','Sign out']
 
@@ -1179,9 +1187,11 @@ def test_everything_zip_includes_runtime_snapshot_and_resource_decision(page,ui,
     assert debug_section['task_id']=='live';assert '"owner": "requirement"' in text and '"detected": true' in text and '"task_id": "live"' in text
     assert text.startswith('===== Known omissions =====')
 
-def test_copy_diagnostic_summary_copies_a_bounded_digest(page,ui):
+def test_copy_diagnostic_summary_copies_a_bounded_digest(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""window.__copied='';Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>window.__copied=text}})""")
-    page.goto(ui+'/tasks/live/view');page.locator('.detail-head').wait_for()
+    page.goto(ui+f'/tasks/{tid}/view');page.locator('.detail-head').wait_for()
     page.locator('#accountbutton').click();page.get_by_role('menuitem',name='Debug',exact=True).click()
     page.get_by_role('button',name='Copy diagnostic summary',exact=True).click();page.wait_for_function("window.__copied.length>0",timeout=30000)
     copied=page.evaluate('window.__copied')
@@ -2865,3 +2875,16 @@ def test_interview_layout_browser_group_requires_signed_pg_fixture():
                  test_phase_change_dialog_explains_pauses_input_and_keeps_progress_underneath,
                  test_phase_change_dialog_closes_when_the_founder_can_act_again_and_never_shows_for_a_question):
         assert "pg_page" in inspect.signature(case).parameters
+
+
+def test_debug_account_cases_require_signed_pg_browser():
+    import inspect
+    for case in (
+        test_debug_dialog_contains_run_events_desktop_and_phone,
+        test_live_progress_scope_and_account_menu_desktop_and_phone,
+        test_avatar_menu_does_not_emit_native_runtime_tooltip,
+        test_account_menu_is_plain_list_with_explicit_actions,
+        test_copy_diagnostic_summary_copies_a_bounded_digest,
+    ):
+        assert 'pg_page' in inspect.signature(case).parameters
+        assert 'ui' not in inspect.signature(case).parameters

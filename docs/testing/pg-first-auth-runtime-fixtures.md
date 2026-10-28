@@ -854,3 +854,24 @@ view remains,not fixed. Production/cosmetic debt unchanged. Shared84PGfunctions/
 89expanded cases,43legacyfunctions/48expanded cases,plus three standalone
 legacy-auth browser cases. Hosted CI/full mixed UI/full repo/deployed topology
 unrun. A incomplete;B/C/D not started.
+
+## A64: debug/account browser group
+
+Five run-events desktop/phone,progress scope/account desktop/phone,avatar native
+ tooltip,plain account actions,and copied diagnostic digest cases now use signed
+regular-owner PG. Task URLs use isolated owner-qualified IDs. Existing auth
+presentation mock remains in the progress/account case;it is not auth proof.
+All original assertions retained. Signature guard failed first (1failure0.70s).
+Five cases+guard+cloud API+bootstrap44passed0skips15.17s. Inspected phone account
+menu and desktop copied Debug dialog. Full-page capture extends beyond viewport;
+not a claim that every lower section was in the viewport at once.
+
+Two attempted ports intentionally remain legacy:everything-ZIP's exact task-ID
+assertion conflicts with UUID-like IDs being scrubbed to [token];classifications
+is deliberately unavailable under cloud auth in identity.js. Initial seven-case
+attempt6passed2failed46.87s. Neither assertion nor security policy was weakened.
+These require separate contract/product resolution before migration.
+Shared mixed browser89PG/38legacy functions out of127;three standalone local-auth
+browser cases remain. Global conftest still bootstraps SQLite. A incomplete;
+B/C/D not started. No production changes. Hosted CI/full suite/deployed topology
+unrun. Presentation snapshots are not live engine execution proof.
