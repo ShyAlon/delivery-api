@@ -1014,3 +1014,17 @@ boundaries for separate retirement/contract work,not fake a PG port. A incomplet
 global bootstrap and non-browser runtime consumers remain. B/C/D unstarted.
 Hosted CI/full mixed UI/full repo/deployed topology unrun. Production unchanged;
 no deploy/live DB/model calls.
+
+## A74: task projection receiver isolation
+
+Two mixed-task state/progress and classifications-join backend tests now use
+pg_scoped_workspace. Constructor poison prevents a SQLite receiver;app.store,
+app.state.store and orchestrator.store are isolated and restored by the fixture.
+Local HTTP/direct-helper mode is retained explicitly (CLOUD_TENANTS=False),not
+claimed signed-cloud proof. Classifications joins test backend mapping only;
+the pending cloud browser disclosure policy is untouched. Artifacts env now
+restores via monkeypatch instead of leaking across tests. All assertions retained.
+Guard failed first1 in0.70s;two cases+guard+cloud API+bootstrap41passed0skips4.31s.
+No browser change. Global SQLite bootstrap still exists;A incomplete;B/C/D
+unstarted. Production unchanged;hosted CI/full task/full repo/deployed topology
+unrun. No deploy/live DB/model execution.

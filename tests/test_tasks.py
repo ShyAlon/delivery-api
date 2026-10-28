@@ -6,7 +6,10 @@ from fastapi.testclient import TestClient
 from delivery_api.app import app, store
 
 
-def test_task_three_states_and_phase_progress():
+def test_task_three_states_and_phase_progress(pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,"CLOUD_TENANTS",False)
+    store=pg_scoped_workspace.store
     with TestClient(app) as client:
         made = client.post("/api/tasks", json={"title": "Astronomy explorer", "brief": "Kids learn through play"})
         assert made.status_code == 201
@@ -1378,13 +1381,15 @@ def test_answer_feedback_crud_and_audit(pg_workspace_factory,pg_task_app):
         assert "feedback.upsert" in actions and "feedback.update" in actions and "feedback.delete" in actions
 
 
-def test_task_classifications_join_shadow_to_answers(tmp_path):
+def test_task_classifications_join_shadow_to_answers(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,"CLOUD_TENANTS",False)
     import json as _json
     from delivery_api.app import store as app_store
     session = "chip-session"
     root = tmp_path / session / "interview"
     root.mkdir(parents=True)
-    os.environ["VMODEL_ARTIFACTS_DIR"] = str(tmp_path)
+    monkeypatch.setenv("VMODEL_ARTIFACTS_DIR",str(tmp_path))
     with TestClient(app) as client:
         task_id = client.post("/api/tasks", json={"title": "Chip join"}).json()["task_id"]
         app_store.set_engine_session(task_id, session)
@@ -1614,3 +1619,10 @@ def test_session_cost_rejects_nonexistent_session(monkeypatch,tmp_path):
     monkeypatch.setattr(app_module.bundles,'root',lambda:tmp_path)
     with TestClient(app) as client:
         assert client.get('/api/sessions/no-such-session/cost').status_code==404
+
+
+def test_task_projection_receivers_require_scoped_postgres():
+    import inspect
+    for case in (test_task_three_states_and_phase_progress,
+                 test_task_classifications_join_shadow_to_answers):
+        assert 'pg_scoped_workspace' in inspect.signature(case).parameters
