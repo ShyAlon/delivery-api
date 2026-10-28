@@ -419,3 +419,17 @@ with producer sources:task/operator diagnostics,cloud API,bootstrap. Expanded
 not full-module green. SQLiteStore inventory falls41 to40 files,migrate14 to13;
 other buckets unchanged. Production/UI unchanged;hosted CI/full suite/deployed
 topology not run. A incomplete;B/C/D not started.
+
+## A34: operator capacity/run-metrics auth fixtures
+
+Two API cases now use signed cloud PG with real verifier,live auth session and
+request DB instead of SQLite OAuth user/admin rows. Operator email claim is
+signed by the hermetic fixture key;regular owner remains403,operator200. Added
+anonymous401. All original capacity/metrics response assertions retained. Metrics
+sample storage remains its separate SQLite module,not falsely claimed migrated.
+Fail-first concrete PG assertion failed on SQLite. Focused46passed0skips4.11s:
+capacity,cloud API,bootstrap. Expanded167passed2known baseline failures19.90s
+with metrics and mixed tasks(checkpoint intent view/session-cost metadata).
+SQLiteStore inventory39 files;primary migrate12,guard16,reference5,retired6.
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.

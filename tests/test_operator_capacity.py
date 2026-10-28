@@ -4,9 +4,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from delivery_api import auth, config, run_slots
-from delivery_api.app import app
-from delivery_api.store import SQLiteStore
+from delivery_api import config, run_slots
 
 
 @pytest.fixture(autouse=True)
@@ -59,47 +57,46 @@ def test_no_cost_or_vendor_wording_appears_in_the_capacity_text():
         assert word not in text
 
 
-def _oauth(monkeypatch, tmp_path):
-    store = SQLiteStore(str(tmp_path / "cap.db")); app.state.store = store
-    monkeypatch.setattr("delivery_api.app.store", store)
-    monkeypatch.setattr(config, "SESSION_SECRET", "test-secret")
-    monkeypatch.setattr(config, "COOKIE_SECURE", False)
-    monkeypatch.setattr(config, "GOOGLE_CLIENT_ID", "google-id")
-    monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", "google-secret")
-    auth.limiter = auth.RateLimiter()
-    return store, TestClient(app)
+@pytest.fixture
+def capacity_client(pg_workspace_factory,pg_task_app):
+    import jwt
+    from pg_workspace import KEY
+    with pg_workspace_factory() as workspace:
+        claims=jwt.decode(workspace.token,options={'verify_signature':False})
+        claims['email']=config.OPERATOR_EMAIL
+        operator=jwt.encode(claims,KEY,algorithm='ES256',headers={'kid':'fixture'})
+        with TestClient(pg_task_app(workspace)) as client:
+            yield workspace,client,{'Authorization':'Bearer '+operator}
 
 
-def test_only_an_admin_can_read_capacity(monkeypatch, tmp_path):
-    store, c = _oauth(monkeypatch, tmp_path)
-    user = store.upsert_user("github", "9", "u@example.com", "u", 100, False)
-    admin = store.upsert_user("google", "1", "admin@example.com", "admin", 100, True)
-    store.create_session("usersid", user["user_id"], time.time() + 1000)
-    store.create_session("adminsid", admin["user_id"], time.time() + 1000)
-    c.cookies.set(config.SESSION_COOKIE, "usersid")
+def test_only_an_admin_can_read_capacity(capacity_client):
+    workspace,c,operator_headers=capacity_client
+    store=workspace.store
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
+    assert c.get('/api/admin/operations/capacity').status_code==401
+    c.headers.update(workspace.headers)
     assert c.get("/api/admin/operations/capacity").status_code == 403
-    c.cookies.set(config.SESSION_COOKIE, "adminsid")
+    c.headers.update(operator_headers)
     r = c.get("/api/admin/operations/capacity")
     assert r.status_code == 200 and r.json()["max_concurrent_runs"] == config.MAX_CONCURRENT_RUNS and "Capacity:" in r.json()["text"]
 
 
-def test_only_an_admin_can_read_run_metrics_and_the_capacity_text_carries_them(monkeypatch, tmp_path):
+def test_only_an_admin_can_read_run_metrics_and_the_capacity_text_carries_them(monkeypatch,tmp_path,capacity_client):
     from delivery_api import run_metrics
     monkeypatch.setenv("DELIVERY_METRICS_DB", str(tmp_path / "metrics.db"))
     run_metrics.reset()
-    store, c = _oauth(monkeypatch, tmp_path)
-    user = store.upsert_user("github", "9", "u@example.com", "u", 100, False)
-    admin = store.upsert_user("google", "1", "admin@example.com", "admin", 100, True)
-    store.create_session("usersid", user["user_id"], time.time() + 1000)
-    store.create_session("adminsid", admin["user_id"], time.time() + 1000)
+    workspace,c,operator_headers=capacity_client
+    store=workspace.store
     conn = run_metrics._open()
     with conn:
         conn.execute("INSERT INTO run_samples(ts,run_key,task_id,session_id,phase,pid,procs,rss_mb,peak_rss_mb,cpu_seconds,cpu_pct) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                      (time.time(), "t1:needs:1", "t1", "sess1", "needs", 1, 1, 123.0, 123.0, 1.0, 5.0))
-    c.cookies.set(config.SESSION_COOKIE, "usersid")
+    assert c.get("/api/admin/operations/run-metrics").status_code==401
+    c.headers.update(workspace.headers)
     assert c.get("/api/admin/operations/run-metrics").status_code == 403
     assert c.get("/api/admin/operations/run-metrics?task_id=t1").status_code == 403
-    c.cookies.set(config.SESSION_COOKIE, "adminsid")
+    c.headers.update(operator_headers)
     one = c.get("/api/admin/operations/run-metrics?task_id=t1").json()
     assert one["samples"][0]["session_id"] == "sess1" and one["samples"][0]["rss_mb"] == 123.0
     assert "Resource samples" in c.get("/api/admin/operations/capacity").json()["text"]
