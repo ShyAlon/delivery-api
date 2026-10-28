@@ -581,3 +581,18 @@ literal inventory35 files,but API file still has implicit shared-bootstrap
 receivers,so primary migrate remains8 rather than falsely marking API complete.
 Production/UI unchanged;hosted CI/full repository/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A46: remaining API settings/session/preflight fixtures
+
+Shared settings/session fixture and explicit unreachable-engine preflight cases
+now scoped PG with concrete store assertion. All original assertions retained.
+Local policy explicit,no real engine/model execution. Per-owner unique context
+makes fixed task IDs safe;removed SQLite-specific absent-task pre-delete probes
+(PG missing-task lookup raises). Four local link/budget cases stay on explicitly
+named unchanged legacy fixture:local actor attribution is correctly rejected by
+PG owner guard,two cases404 under a naive port. Reconcile in C,not bypass owner
+checks. Fail-first shared client PG assertion failed on SQLite. Full mixed API,
+cloud API,bootstrap56passed0skips4.39s with producer sources. API still incomplete
+only for named legacy local contracts. Literal inventory unchanged35 files.
+Production/UI unchanged;hosted CI/full repository/deployed topology not run.
+A incomplete;B/C/D not started.

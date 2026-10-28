@@ -8,11 +8,22 @@ from delivery_api import config
 
 
 @pytest.fixture()
-def client():
+def legacy_link_client():
+    # Local actor attribution is a retired contract,not a PG fixture bypass.
     return TestClient(app)
 
 
-def test_link_lifecycle_and_one_active_run(client):
+@pytest.fixture()
+def client(pg_scoped_workspace,monkeypatch):
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+    from delivery_api.app import store
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
+    return TestClient(app)
+
+
+def test_link_lifecycle_and_one_active_run(legacy_link_client):
+    client=legacy_link_client
     r = client.post("/links", json={"founder_label": "tester-1"},
                     headers={"x-admin-token": config.ADMIN_TOKEN})
     assert r.status_code == 200
@@ -24,15 +35,18 @@ def test_link_lifecycle_and_one_active_run(client):
     assert r.status_code == 409
 
 
-def test_links_are_admin_only(client):
+def test_links_are_admin_only(legacy_link_client):
+    client=legacy_link_client
     assert client.post("/links", json={"founder_label": "x"}).status_code == 403
 
 
-def test_unknown_link_rejected(client):
+def test_unknown_link_rejected(legacy_link_client):
+    client=legacy_link_client
     assert client.post("/runs", json={"token": "nope", "free_text": "x"}).status_code == 403
 
 
-def test_budget_hard_stop(client):
+def test_budget_hard_stop(legacy_link_client):
+    client=legacy_link_client
     r = client.post("/links", json={"founder_label": "tester-2"},
                     headers={"x-admin-token": config.ADMIN_TOKEN})
     run_id = r.json()["run_id"]
@@ -112,11 +126,12 @@ def test_artifacts_root_accepts_interview_only_spec_only_and_combined(client,tmp
  r=client.post('/api/settings/artifacts-root',json={'path':str(tmp_path/'missing')})
  assert r.status_code==400 and set(r.json()['detail'])=={'error','cause','next'}
 
-def test_start_task_requires_typed_http_engine_not_subprocess(monkeypatch,tmp_path):
-    from delivery_api.app import app,store
+def test_start_task_requires_typed_http_engine_not_subprocess(monkeypatch,tmp_path,pg_scoped_workspace):
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+    from delivery_api.app import app
+    store=pg_scoped_workspace.store
     from fastapi.testclient import TestClient
     tid='start-engine-test'
-    if store.task(tid):store.delete_task(tid)
     store.create_task('Start engine test','A calm family task app',task_id=tid)
     calls=[]
     async def fake_run(*args,**kwargs):calls.append((args,kwargs));return 0
@@ -126,11 +141,12 @@ def test_start_task_requires_typed_http_engine_not_subprocess(monkeypatch,tmp_pa
     assert store.task(tid)['state']=='not_started'
 
 
-def test_start_task_unreachable_http_engine_is_human_readable(monkeypatch,tmp_path):
-    from delivery_api.app import app,store
+def test_start_task_unreachable_http_engine_is_human_readable(monkeypatch,tmp_path,pg_scoped_workspace):
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+    from delivery_api.app import app
+    store=pg_scoped_workspace.store
     from fastapi.testclient import TestClient
     tid='preflight-failure-test'
-    if store.task(tid):store.delete_task(tid)
     store.create_task('Preflight failure','A product idea',task_id=tid)
     r=TestClient(app).post(f'/api/tasks/{tid}/start')
     assert r.status_code==503 and set(r.json()['detail'])=={'error','cause','next'}
@@ -151,7 +167,8 @@ def test_engine_python_settings_show_candidates_and_persist(monkeypatch,tmp_path
     response=client.post('/api/settings/engine-python',json={'path':str(good)})
     assert response.status_code==200 and response.json()['path']==str(good)
 
-def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch):
+def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch,pg_scoped_workspace):
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import app
     from fastapi.testclient import TestClient
     monkeypatch.setenv('DEEPSEEK_API_KEY','super-secret')
@@ -160,11 +177,12 @@ def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch)
     assert 'super-secret' not in str(body)
 
 
-def test_start_task_deepseek_requires_engine_preflight(monkeypatch,tmp_path):
-    from delivery_api.app import app,store
+def test_start_task_deepseek_requires_engine_preflight(monkeypatch,tmp_path,pg_scoped_workspace):
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+    from delivery_api.app import app
+    store=pg_scoped_workspace.store
     from fastapi.testclient import TestClient
     tid='deepseek-start-test'
-    if store.task(tid):store.delete_task(tid)
     store.create_task('DeepSeek start','An idea',task_id=tid)
     monkeypatch.setenv('DEEPSEEK_API_KEY','secret')
     response=TestClient(app).post(f'/api/tasks/{tid}/start',json={'model_route':'deepseek'})
