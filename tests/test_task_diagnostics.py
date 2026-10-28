@@ -123,15 +123,18 @@ def test_model_calls_without_recording_is_empty(tmp_path):
     assert td.model_calls(tmp_path,cloud=False)=={"calls":[],"by_stage":[]}
 
 
-def test_diagnostics_route_includes_model_calls_when_session_recorded(monkeypatch,tmp_path):
+def test_diagnostics_route_includes_model_calls_when_session_recorded(monkeypatch,tmp_path,pg_scoped_workspace):
     import json
     from fastapi.testclient import TestClient
     from delivery_api.app import app
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'d.db'))
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+    store=pg_scoped_workspace.store
     monkeypatch.setattr('delivery_api.app.store',store)
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     task=store.create_task('demo task')
-    store._db.execute("UPDATE tasks SET engine_session_id=? WHERE task_id=?",('sess-1',task['task_id']))
+    store.set_engine_session(task['task_id'],'sess-1')
     artifacts=tmp_path/'artifacts'
     (artifacts/'sess-1'/'interview').mkdir(parents=True)
     (artifacts/'sess-1'/'interview'/'llm-calls.jsonl').write_text(json.dumps(
@@ -147,11 +150,12 @@ def test_diagnostics_route_includes_model_calls_when_session_recorded(monkeypatc
                               "total_s":14.2,"input_tokens":10,"output_tokens":5,"mean_s":14.2}]
 
 
-def test_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_path):
+def test_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_path,pg_scoped_workspace):
     from fastapi.testclient import TestClient
     from delivery_api.app import app
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'d.db'))
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+    store=pg_scoped_workspace.store
     monkeypatch.setattr('delivery_api.app.store',store)
     task=store.create_task('demo task')
     reply=TestClient(app).get(f"/api/tasks/{task['task_id']}/diagnostics")
