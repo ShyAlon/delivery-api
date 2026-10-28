@@ -559,12 +559,13 @@ def test_startup_does_not_replay_unbound_legacy_sigterm_checkpoint(monkeypatch,t
     assert store.task(tid)['state']=='failed'
 
 
-def test_runner_preserves_structured_founder_decision_options(tmp_path):
+def test_runner_preserves_structured_founder_decision_options(tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
     payload={"type":"founder_decision","decision_id":"concept","title":"Choose one","prompt":"Which concept?","options":[{"value":"1","label":"Native","summary":"Installed","advantages":["Fast"],"disadvantages":["Stores"]},{"value":"2","label":"PWA","summary":"Browser","advantages":["Deploy"],"disadvantages":["APIs"]}],"rationale_required":True,"rationale_label":"Why?","answer_format":"<value> - <rationale>"}
-    store=SQLiteStore(str(tmp_path/'decision.db'));tid=store.create_task('Decision')['task_id'];runner=ProcessRunner(store)
+    store=pg_scoped_workspace.store;tid=store.create_task('Decision')['task_id'];runner=ProcessRunner(store)
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     async def go():
         job=asyncio.create_task(runner.request_decision(tid,'intent',payload))
         await asyncio.sleep(0)
@@ -574,17 +575,16 @@ def test_runner_preserves_structured_founder_decision_options(tmp_path):
     event=next(e for e in store.events(tid) if e['kind']=='founder_decision')
     assert event['payload']['decision']['options'][1]['label']=='PWA'
 
-def test_fragmented_envelope_bytes_never_become_a_decision(tmp_path):
+def test_fragmented_envelope_bytes_never_become_a_decision(tmp_path,pg_scoped_workspace):
     import asyncio,json,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
     options=[{"value":str(i),"label":f"Option {i}","summary":"Long description "*20,"advantages":["A"*90],"disadvantages":["D"*90]} for i in range(1,5)]
     payload={"type":"founder_decision","decision_id":"large","title":"Choose","prompt":"Pick one","options":options}
     encoded="REQUIRE_EVENT "+json.dumps(payload,separators=(',',':'))
     assert len(encoded)>512
     # Deliberately split inside JSON independently of stdout chunk behavior.
     script=f'import sys,time;data={encoded!r};sys.stdout.write(data[:300]);sys.stdout.flush();time.sleep(.05);sys.stdout.write(data[300:]+"\\nYou: ");sys.stdout.flush()'
-    store=SQLiteStore(str(tmp_path/'fragment.db'));tid=store.create_task('Large decision')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Large decision')['task_id']
     assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))==0
     events=store.events(tid)
     # Envelope bytes on stdout are diagnostics; they can never assemble into a question.
@@ -604,11 +604,10 @@ def test_every_phase_has_a_stable_data_log_path():
     assert list(STAGE_LOG_PATHS)==[key for key,_ in PHASES]
     assert all(str(path).endswith(f'/logs/stages/{phase}.log') for phase,path in STAGE_LOG_PATHS.items())
 
-def test_only_active_phase_pulses_blue(tmp_path):
+def test_only_active_phase_pulses_blue(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'states.db'));tid=store.create_task('Truthful states')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Truthful states')['task_id']
     store.update_phase(tid,'intent','running',detail='Intent work')
     store.update_phase(tid,'conops','running',detail='CONOPS work')
     task=store.task(tid)
@@ -617,22 +616,20 @@ def test_only_active_phase_pulses_blue(tmp_path):
     script='print("Building CONOPS",flush=True)'
     assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path,phase='conops'))==0
 
-def test_active_upstream_phase_resets_false_downstream_waiting_state(tmp_path):
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'downstream.db'));tid=store.create_task('Reset false downstream')['task_id']
+def test_active_upstream_phase_resets_false_downstream_waiting_state(tmp_path,pg_scoped_workspace):
+    store=pg_scoped_workspace.store;tid=store.create_task('Reset false downstream')['task_id']
     store.update_phase(tid,'specs','running',detail='You:')
     store.update_phase(tid,'specs','awaiting_approval',detail='You:')
     store.update_phase(tid,'intent','running',detail='Waiting for founder approval')
     task=store.task(tid);specs=next(p for p in task['phases'] if p['phase_key']=='specs')
     assert specs['state']=='pending' and specs['detail']=='Blocked on upstream approval'
 
-def test_protocol_envelope_never_reappears_in_following_you_question(tmp_path):
+def test_protocol_envelope_never_reappears_in_following_you_question(tmp_path,pg_scoped_workspace):
     import asyncio,json,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
     payload={"type":"founder_decision","decision_id":"safe","title":"Safe","prompt":"Approve the clean intent?","options":[{"value":"y","label":"Yes"},{"value":"n","label":"No"}]}
     script=f'import json;print("REQUIRE_EVENT "+json.dumps({payload!r}),flush=True);print("You: ",end="",flush=True)'
-    store=SQLiteStore(str(tmp_path/'clean.db'));tid=store.create_task('Clean protocol')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Clean protocol')['task_id']
     assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))==0
     # Subprocess output is diagnostics only: protocol bytes can never become a question.
     assert not any(e['kind'] in ('founder_decision','waiting_input') for e in store.events(tid))

@@ -381,3 +381,14 @@ lifecycle,protocol,native run,bootstrap. Expanded121passed2known baseline failur
 16.84s (checkpoint intent view/session-cost metadata),not full-module green.
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A31: runner decision/envelope and active-phase state fixtures
+
+Five cases use scoped PG:structured founder options,fragmented stdout envelope
+refusal,single active phase,downstream waiting reset,and following-You envelope
+refusal. Every original assertion retained. Fail-first structured-options PG
+assertion failed on SQLite. Focused21passed0skips3.55s with producer sources:
+five cases,native projection/gate,protocol,seven-phase parity,bootstrap. Expanded
+124passed2known baseline failures17.25s (checkpoint intent view/session-cost
+metadata),not full-module green. Production/UI unchanged;hosted CI/full suite/
+deployed topology not run. A incomplete;B/C/D not started.
