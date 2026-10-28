@@ -249,3 +249,15 @@ lifecycle/gate,bootstrap. Expanded mixed-module slice151passed2same known baseli
 failures16.20s (legacy checkpoint intent view and session-cost evidence metadata).
 Not a full module green. Production/UI unchanged;hosted CI/full suite/deployed
 topology not run. A incomplete;B/C/D not started.
+
+## A20: gate ownership/final approval fixtures
+
+Five gate/final-approval cases now scoped PG:explicit audited open-gate bypass,
+final validation approval,recovery of final gate owner,parked gate precedence
+and live engine decision precedence. Existing assertions unchanged. SQLite
+schema-migration fixture remains backend-specific debt. Fail-first final-approval
+PG assertion failed on SQLite. Focused56passed0skips5.43s with producer sources:
+five cases,native gate/lifecycle,parity/protocol,cloud API,bootstrap. Expanded
+159passed2known baseline failures17.39s (checkpoint intent view/session-cost
+metadata);not full-module green. Production/UI unchanged;hosted CI/full suite/
+deployed topology not run. A incomplete;B/C/D not started.

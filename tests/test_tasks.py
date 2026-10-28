@@ -489,9 +489,8 @@ def test_generated_phase_waits_yellow_until_founder_approval(tmp_path):
     assert audit['actor']=='founder@example.com' and audit['detail']['phase']=='conops' and audit['detail']['approved_at']
 
 
-def test_open_gate_is_explicit_audited_bypass(tmp_path):
-    from delivery_api.store import SQLiteStore
-    s=SQLiteStore(str(tmp_path/'bypass.db'));tid=s.create_task('Policy bypass')['task_id']
+def test_open_gate_is_explicit_audited_bypass(tmp_path,pg_scoped_workspace):
+    s=pg_scoped_workspace.store;tid=s.create_task('Policy bypass')['task_id']
     s.update_phase(tid,'intent','awaiting_approval',detail='Generated')
     s.set_gate_open(tid,'gate-intent',True,actor='admin@example.com')
     assert s.wait_at_gate(tid,'intent') is None
@@ -825,20 +824,18 @@ def test_typed_answer_requires_current_matching_decision(tmp_path):
         await runner.send_input(tid,'y','live-choice');return await job
     assert asyncio.run(go())=='y'
 
-def test_ui_state_doctrine_phase_gate_supersedes_stale_engine_prompt(tmp_path):
+def test_ui_state_doctrine_phase_gate_supersedes_stale_engine_prompt(tmp_path,pg_scoped_workspace):
     from delivery_api.control_snapshot import project
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'ui-state.db'));tid=store.create_task('Needs gate')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Needs gate')['task_id']
     store.update_phase(tid,'intent','approved');store.update_phase(tid,'conops','approved');store.update_phase(tid,'needs','awaiting_approval');store.wait_at_gate(tid,'needs')
     task=store.task(tid);state=project(task,{'waiting':False,'process_live':False,'decision':None,'requirement':None})
     assert state.mode=='waiting_gate' and state.gate['after_phase']=='needs'
     assert state.mode=='waiting_gate' and state.gate is not None and state.decision is None
 
 
-def test_ui_state_doctrine_live_decision_owns_input_over_waiting_delivery_gate(tmp_path):
+def test_ui_state_doctrine_live_decision_owns_input_over_waiting_delivery_gate(tmp_path,pg_scoped_workspace):
     from delivery_api.control_snapshot import project
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'live-decision-owner.db'));tid=store.create_task('Overlapping input owners')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Overlapping input owners')['task_id']
     store.update_phase(tid,'intent','awaiting_approval');store.wait_at_gate(tid,'intent')
     task=store.task(tid)
     decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve this intent model?','options':[{'value':'y','label':'Yes'}]}
@@ -1151,9 +1148,10 @@ def test_requirement_resolution_restores_owner_from_same_durable_snapshot(monkey
     assert observed==[('requirement','architecture',requirement,'greenfield')]
 
 
-def test_final_verification_waits_for_approval_and_finishes_task(tmp_path):
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'final-gate.db'));tid=store.create_task('Final approval')['task_id']
+def test_final_verification_waits_for_approval_and_finishes_task(tmp_path,pg_scoped_workspace):
+    store=pg_scoped_workspace.store;tid=store.create_task('Final approval')['task_id']
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     store.update_phase(tid,'validation','awaiting_approval',detail='Generated; waiting for founder approval')
     gate=store.wait_at_gate(tid,'validation')
     assert gate and gate['gate_key']=='gate-validation'
@@ -1171,12 +1169,11 @@ def test_existing_database_migrates_missing_final_verification_gate(tmp_path):
     assert any(g['after_phase']=='tests' and g['gate_key']=='gate-tests' for g in task['gates'])
 
 
-def test_recovery_restores_final_approval_gate_owner(monkeypatch,tmp_path):
+def test_recovery_restores_final_approval_gate_owner(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'final-gate-recovery.db'));tid=store.create_task('Final recovery')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Final recovery')['task_id']
     for phase in ('intent','conops','needs','srs','architecture','specs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'tests','running',detail='Generating tests')
     store.update_phase(tid,'tests','awaiting_approval',detail='Generated; waiting for founder approval')
