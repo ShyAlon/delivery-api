@@ -1080,22 +1080,26 @@ def test_live_progress_scope_and_account_menu_desktop_and_phone(page,ui):
     page.screenshot(path=str(_screenshots_dir / 'live-scope-account-desktop.png'),full_page=True);page.keyboard.press('Escape');assert menu.is_hidden()
     page.set_viewport_size({'width':390,'height':844});page.reload();scope.wait_for();page.locator('#accountbutton').click();menu.wait_for();page.screenshot(path=str(_screenshots_dir / 'live-scope-account-phone.png'),full_page=True)
 
-def test_recovered_run_hides_stale_sigterm_error_from_live_console(page,ui):
+def test_recovered_run_hides_stale_sigterm_error_from_live_console(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='intent';live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'intent','process_live':True,'decision':None,'gate':None}
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['state']='running';live['active_phase']='intent';live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'intent','process_live':True,'decision':None,'gate':None}
     live['events']=[
       {'id':1,'kind':'error','message':'Error: interview engine stopped with exit code -15.','phase_key':'intent','payload':{'exit_code':-15},'ts':1720000000},
       {'id':2,'kind':'command','message':'Engine process started','phase_key':'intent','payload':{},'ts':1720000100},
       {'id':3,'kind':'progress','message':'Recovered checkpoint is running','phase_key':'intent','payload':{},'ts':1720000101},
     ]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.live-indicator').wait_for()
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');page.locator('.live-indicator').wait_for()
     assert page.locator('#console').count()==0;assert page.locator('.task-error-state').count()==0
 
-def test_live_elapsed_uses_latest_phase_command_not_parked_phase_start(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json();phase=next(p for p in live['phases'] if p['phase_key']==live['active_phase']);phase.update({'started_at':time.time()-22*3600,'completed':None,'total':None})
+def test_live_elapsed_uses_latest_phase_command_not_parked_phase_start(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();phase=next(p for p in live['phases'] if p['phase_key']==live['active_phase']);phase.update({'started_at':time.time()-22*3600,'completed':None,'total':None})
     live['events'].append({'id':999,'kind':'command','message':'Engine process started','phase_key':live['active_phase'],'payload':{},'ts':time.time()-12*60})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');scope=page.locator('.progress-scope');scope.wait_for()
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');scope=page.locator('.progress-scope');scope.wait_for()
     assert '12 minutes so far' in scope.inner_text();assert '22 hours' not in scope.inner_text()
 
 @pytest.mark.ui_cosmetic
@@ -1161,10 +1165,12 @@ def test_greenfield_confirmation_is_single_flight(page,ui):
     assert len(calls)==1
 
 @pytest.mark.ui_cosmetic
-def test_progress_slot_keys_render_as_title_case(page,ui):
+def test_progress_slot_keys_render_as_title_case(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
-    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'stack:pwa_offline_runtime · 12 tok','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('#stageprogress > details > summary').click();feed=page.locator('#stageprogress .progress-item');feed.wait_for()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['state']='running';live['active_phase']='srs';live['events'].extend([{'id':980,'kind':'progress','message':'stack:pwa_offline_runtime · 12 tok','phase_key':'srs','payload':{},'ts':1720004000},{'id':981,'kind':'error','message':'Schema check found a missing acceptance criterion','phase_key':'srs','payload':{},'ts':1720004001}]);live['artifacts'].append({'phase_key':'srs','name':'srs.json','stale':0,'generation':1});live['ui_state']={'mode':'executing','active_phase':'srs','process_live':True,'decision':None,'gate':None}
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');page.locator('#stageprogress > details > summary').click();feed=page.locator('#stageprogress .progress-item');feed.wait_for()
     assert feed.locator('span').all_inner_texts()==['stack:PWA Offline Runtime · 12 tok']
     assert feed.locator('span').get_attribute('title')=='stack:PWA Offline Runtime · 12 tok'
     got=page.evaluate("""async()=>{const m=await import('/assets/format.js');return ['ui_framework','build_tooling','client_persistence','audio_engine','stack:ui_framework','plan: stack slots','R-12 statement','SPEC-3'].map(m.humanizeSnakeCase)}""")
@@ -1624,8 +1630,10 @@ def test_failed_needs_retry_selects_env_default_model_not_interview_model(page,u
     assert 'qwen' not in dialog.locator('p').all_inner_texts()[0]
     page.screenshot(path=str(_screenshots_dir / 'needs-retry-model-selector.png'),full_page=True)
 
-def test_phase_tooltip_does_not_present_old_errors_as_current_issues(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json()
+def test_phase_tooltip_does_not_present_old_errors_as_current_issues(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     live['state']='running';live['active_phase']='architecture'
     for phase in live['phases']:
         if phase['phase_key']=='needs':phase['state']='approved'
@@ -1637,8 +1645,8 @@ def test_phase_tooltip_does_not_present_old_errors_as_current_issues(page,ui):
         {'id':983,'kind':'founder_decision','message':'Choose architecture baseline','phase_key':'architecture','payload':{},'ts':1720004003},
     ])
     live['ui_state']={'mode':'error','active_phase':'architecture','process_live':False}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
-    page.goto(ui+'/tasks/live/view')
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.goto(ui+f'/tasks/{tid}/view')
     needs=page.locator('.phase-list-primary .phase').filter(has_text='Stakeholder needs');needs.hover()
     expect(needs.get_by_role('tooltip')).to_contain_text('No issues recorded.')
     architecture=page.locator('.phase-list-primary .phase').filter(has_text='Architecture');architecture.hover()
@@ -1648,17 +1656,19 @@ def test_phase_tooltip_does_not_present_old_errors_as_current_issues(page,ui):
     page.screenshot(path=str(_screenshots_dir / 'architecture-stale-issues-fixed.png'),full_page=True)
 
 
-def test_normal_mode_shows_live_architecture_stage_and_stall_heartbeat(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json()
+def test_normal_mode_shows_live_architecture_stage_and_stall_heartbeat(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     live['state']='running';live['active_phase']='architecture';live['phases'][4].update({'state':'running','started_at':1720004000,'detail':'Drafting architecture overview'})
     live['events'].append({'id':990,'kind':'command','message':'Engine process started','phase_key':'architecture','payload':{},'ts':1720004000})
     live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
-    page.goto(ui+'/tasks/live/view')
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.goto(ui+f'/tasks/{tid}/view')
     expect(page.locator('#stageprogress')).to_contain_text('Waiting for stage progress')
     assert page.locator('#progressfeed').count()==0
     progress={'id':991,'kind':'progress','message':'Drafting architecture overview (stage 3/6)','phase_key':'architecture','payload':{'completed':3,'total':6},'ts':1720004001}
-    page.route('**/api/tasks/live/stream',lambda route:route.fulfill(status=200,headers={'Content-Type':'text/event-stream'},body='event: progress\ndata: '+__import__('json').dumps(progress)+'\n\n'+'event: progress\ndata: '+__import__('json').dumps({'id':992,'kind':'progress','message':"still working - stage 'architecture' call, 30s elapsed",'phase_key':'architecture','payload':{'completed':0,'total':None},'ts':1720004002})+'\n\n'))
+    page.route(f'**/api/tasks/{tid}/stream',lambda route:route.fulfill(status=200,headers={'Content-Type':'text/event-stream'},body='event: progress\ndata: '+__import__('json').dumps(progress)+'\n\n'+'event: progress\ndata: '+__import__('json').dumps({'id':992,'kind':'progress','message':"still working - stage 'architecture' call, 30s elapsed",'phase_key':'architecture','payload':{'completed':0,'total':None},'ts':1720004002})+'\n\n'))
     page.reload()
     expect(page.locator('#stageprogress')).to_contain_text('still working')
     expect(page.locator('.progress-scope')).to_contain_text('3 out of 6')
@@ -2269,13 +2279,15 @@ def test_running_cost_header_shows_credits_and_usd_and_grows_while_running(page,
     with page.expect_response("**/api/tasks/live/cost-phases"):
         page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
     expect(header).to_have_text("3.75 credits · $3.75",timeout=10000)
-def test_live_headline_names_latest_stage_and_stage_line_ignores_phase_tag(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json()
+def test_live_headline_names_latest_stage_and_stage_line_ignores_phase_tag(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     live['state']='running';live['active_phase']='intent'
     live['ui_state']={'mode':'executing','active_phase':'intent','process_live':True,'decision':None,'gate':None}
     live['events']=[{'id':1,'kind':'command','message':'Engine process started','phase_key':'intent','payload':{},'ts':time.time()-60}]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
-    page.goto(ui+'/tasks/live/view')
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.goto(ui+f'/tasks/{tid}/view')
     expect(page.locator('.live-indicator')).to_contain_text('Working · Start')
     expect(page.locator('#stageprogress')).to_contain_text('Waiting for stage progress')
     live['events'].append({'id':2,'kind':'progress','message':'Building CONOPS concept option 2/2 field disadvantages','phase_key':'conops','payload':{'label':'Building CONOPS concept option 2/2','stage':'conops'},'ts':time.time()-5})
@@ -2317,9 +2329,11 @@ def test_interview_feed_shows_flagged_item_review_as_words_not_json(page, ui):
 
 
 @pytest.mark.parametrize("width", [1365, 390])
-def test_live_heartbeat_wraps_without_clipping(page, ui, width):
+def test_live_heartbeat_wraps_without_clipping(pg_page,pg_ui,pg_ids, width):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.set_viewport_size({"width": width, "height": 900})
-    live = page.request.get(ui + "/api/tasks/live").json()
+    live = page.request.get(ui + f"/api/tasks/{tid}").json()
     live["state"] = "running"
     live["active_phase"] = "intent"
     live["ui_state"] = {"mode": "executing", "active_phase": "intent", "process_live": True,
@@ -2327,8 +2341,8 @@ def test_live_heartbeat_wraps_without_clipping(page, ui, width):
     text = "Model call still running, 340s elapsed. Waiting for the current response before continuing to the next stage."
     live["events"] = [{"id": 1, "kind": "command", "phase_key": "intent", "message": "Started", "ts": time.time()-60, "payload": {}},
                       {"id": 2, "kind": "heartbeat", "phase_key": "intent", "message": text, "ts": time.time(), "payload": {}}]
-    page.route("**/api/tasks/live", lambda route: route.fulfill(json=_promote_control(live)))
-    page.goto(ui + "/tasks/live/view")
+    page.route(f"**/api/tasks/{tid}", lambda route: route.fulfill(json=_promote_control(live)))
+    page.goto(ui + f"/tasks/{tid}/view")
     page.locator("#stageprogress > details > summary").click()
     line = page.locator("#stageprogress .heartbeat span")
     expect(line).to_have_text(text)
@@ -2474,9 +2488,11 @@ def test_idle_stream_reads_only_at_60s_safety_then_refreshes_on_events(page,ui):
 
 @pytest.mark.parametrize('phase',['intent','needs'])
 @pytest.mark.parametrize('width',[1365,390])
-def test_active_phase_line_replaces_and_progress_stays_collapsed_until_expanded(page,ui,phase,width):
+def test_active_phase_line_replaces_and_progress_stays_collapsed_until_expanded(pg_page,pg_ui,pg_ids,phase,width):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.set_viewport_size({'width':width,'height':844})
-    live=page.request.get(ui+'/api/tasks/live').json()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     live['state']='running';live['active_phase']=phase
     live['ui_state']={'mode':'executing','active_phase':phase,'process_live':True,'decision':None,'gate':None}
     for row in live['phases']:
@@ -2484,9 +2500,9 @@ def test_active_phase_line_replaces_and_progress_stays_collapsed_until_expanded(
     live['events']=[{'id':100,'kind':'command','phase_key':phase,'message':'Started','ts':time.time()-20},
         {'id':101,'kind':'progress','phase_key':phase,'message':'Reading source inputs','ts':time.time()-5,
          'payload':{'stage':'inputs','label':'Reading source inputs','status':'started'}}]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     page.add_init_script("""window.EventSource=class{constructor(){window.liveSource=this;this.listeners={};setTimeout(()=>this.onopen?.(),0)}addEventListener(k,f){this.listeners[k]=f}close(){}emit(e){this.listeners.progress({data:JSON.stringify(e)})}}""")
-    page.goto(ui+'/tasks/live/view')
+    page.goto(ui+f'/tasks/{tid}/view')
     line=page.locator('.phase.running .phase-current-progress')
     expect(line).to_have_text('Reading source inputs')
     box=page.locator('#stageprogress > details')
@@ -2517,13 +2533,15 @@ def test_active_phase_line_replaces_and_progress_stays_collapsed_until_expanded(
     box.locator(':scope > summary').click()
     page.screenshot(path=str(_screenshots_dir / ('compact-progress-'+phase+'-'+str(width)+'-collapsed.png')),full_page=True)
 
-def test_waiting_phase_status_is_not_overwritten_by_late_heartbeat(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json()
+def test_waiting_phase_status_is_not_overwritten_by_late_heartbeat(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     live['active_phase']='intent';live['state']='running';live['control_snapshot']={'kind':'text'}
     live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'question':'What should it do?','decision':None,'gate':None,'show_question':True,'show_answer_composer':True}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     page.add_init_script("window.EventSource=class{constructor(){window.liveSource=this;this.listeners={}}addEventListener(k,f){this.listeners[k]=f}close(){}emit(e){this.listeners.progress({data:JSON.stringify(e)})}}")
-    page.goto(ui+'/tasks/live/view')
+    page.goto(ui+f'/tasks/{tid}/view')
     line=page.locator('.phase-current-progress')
     expect(line).to_have_text('Waiting for your answer')
     page.evaluate("liveSource.emit({id:10001,kind:'heartbeat',phase_key:'intent',message:'Old working heartbeat',payload:{stage:'probe',status:'heartbeat'},ts:Date.now()/1000})")
@@ -2667,4 +2685,18 @@ def test_gate_browser_group_requires_signed_pg_fixture():
                  test_gate_page_missing_artifact_blocks_approval,
                  test_gate_page_refreshes_arriving_artifact_without_losing_form_input,
                  test_gate_page_explains_controls_and_tooltips_desktop_and_phone):
+        assert "pg_page" in inspect.signature(case).parameters
+
+
+def test_progress_browser_group_requires_signed_pg_fixture():
+    import inspect
+    for case in (test_recovered_run_hides_stale_sigterm_error_from_live_console,
+                 test_live_elapsed_uses_latest_phase_command_not_parked_phase_start,
+                 test_progress_slot_keys_render_as_title_case,
+                 test_phase_tooltip_does_not_present_old_errors_as_current_issues,
+                 test_normal_mode_shows_live_architecture_stage_and_stall_heartbeat,
+                 test_live_headline_names_latest_stage_and_stage_line_ignores_phase_tag,
+                 test_live_heartbeat_wraps_without_clipping,
+                 test_active_phase_line_replaces_and_progress_stays_collapsed_until_expanded,
+                 test_waiting_phase_status_is_not_overwritten_by_late_heartbeat):
         assert "pg_page" in inspect.signature(case).parameters
