@@ -447,3 +447,18 @@ Expanded165passed2known baseline failures(checkpoint intent view/session-cost
 metadata),not full-module green. SQLiteStore inventory38 files:primary migrate11,
 guard16,reference5,retired6. Production/UI unchanged;hosted CI/full suite/deployed
 topology not run. A incomplete;B/C/D not started.
+
+## A36: waiting-input dedupe fixtures
+
+Three remaining SQLite cases use scoped PG:two distinct adapters with concurrent
+request transactions both receive the same durable event,duplicate preserves
+original and invalid write leaves no changes,and input identity lookup past501
+progress events. Existing PG foreign-owner/no-wakeup/updated-at assertions stay.
+SQLite connection-specific transaction check translates to no retained operation
+connection plus successful subsequent distinct write;durable original unchanged.
+First-page bypass query uses scoped PG transaction,not SQLite SQL.
+Fail-first PG assertion failed on SQLite. Focused11passed0skips2.70s:dedupe,native
+events,bootstrap. Expanded119passed2known baseline failures(checkpoint intent
+view/session-cost metadata),not full-module green. SQLiteStore inventory37 files:
+primary migrate10,guard16,reference5,retired6. Production/UI unchanged;hosted CI/
+full suite/deployed topology not run. A incomplete;B/C/D not started.

@@ -1,7 +1,6 @@
 """Rank 14a: stale HTTP snapshots must not duplicate durable question evidence."""
 import threading,uuid
 from concurrent.futures import ThreadPoolExecutor
-from delivery_api.store import SQLiteStore
 from delivery_api.tenancy import tenant_context
 from test_postgres_store import A,B
 from vmodel_contracts.interactive import InputRequest,InputKind
@@ -32,10 +31,13 @@ def sync_pair(stores,tid,pending,monkeypatch,scope=None):
         return list(pool.map(run,stores))
 
 
-def test_sqlite_two_adapters_stale_snapshot_has_one_durable_event(tmp_path,monkeypatch):
-    path=str(tmp_path/'waiting.db');one=SQLiteStore(path);two=SQLiteStore(path)
+def test_pg_workspace_two_adapters_stale_snapshot_has_one_durable_event(pg_scoped_workspace,monkeypatch):
+    from delivery_api.postgres_store import PostgresStore
+    one=pg_scoped_workspace.store;two=PostgresStore(one._postgres.dsn)
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(one,PostgresStore)
     tid=one.create_task('dedupe')['task_id'];pending=InputRequest(input_id=uuid.uuid4(),kind=InputKind.TEXT,prompt='Question?')
-    replies=sync_pair([one,two],tid,pending,monkeypatch)
+    replies=sync_pair([one,two],tid,pending,monkeypatch,pg_scoped_workspace.scope)
     rows=one.events(tid)
     assert len(rows)==1
     assert all(len(reply)==1 and reply[0]['id']==rows[0]['id'] for reply in replies)
@@ -73,23 +75,27 @@ def test_postgres_duplicate_keeps_original_and_foreign_owner_cannot_write(store)
     with tenant_context(A):assert len(store.events(tid))==2
 
 
-def test_sqlite_duplicate_keeps_original_and_invalid_write_rolls_back(tmp_path):
+def test_pg_workspace_duplicate_keeps_original_and_invalid_write_rolls_back(pg_scoped_workspace):
     import pytest
-    store=SQLiteStore(str(tmp_path/'atomic.db'));tid=store.create_task('identity')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('identity')['task_id']
     payload={'input_id':str(uuid.uuid4()),'waiting_input':True}
     first=store.ensure_waiting_input_event(tid,'Original',phase_key='intent',payload=payload)
     row=store.events(tid)[0]
     assert store.ensure_waiting_input_event(tid,'Changed',phase_key='conops',payload=payload)==first
     assert store.events(tid)==[row]
     with pytest.raises(ValueError):store.ensure_waiting_input_event(tid,'invalid',phase_key='intent',payload={})
-    assert not store._db.in_transaction and store.events(tid)==[row]
+    assert store._connection.get() is None and store.events(tid)==[row]
+    # A subsequent valid write proves the failed transaction did not poison the pool.
+    next_id=store.ensure_waiting_input_event(tid,'Next',phase_key='intent',payload={'input_id':str(uuid.uuid4())})
+    assert next_id!=first and len(store.events(tid))==2
 
 
-def test_input_identity_is_checked_beyond_first_event_page(tmp_path):
-    store=SQLiteStore(str(tmp_path/'history.db'));tid=store.create_task('history')['task_id']
+def test_input_identity_is_checked_beyond_first_event_page(pg_scoped_workspace):
+    store=pg_scoped_workspace.store;tid=store.create_task('history')['task_id']
     for i in range(501):store.add_event(tid,'progress',str(i))
     payload={'input_id':str(uuid.uuid4()),'waiting_input':True}
     first=store.ensure_waiting_input_event(tid,'Question',phase_key='intent',payload=payload)
     assert store.ensure_waiting_input_event(tid,'Question',phase_key='intent',payload=payload)==first
-    rows=store._db.execute("SELECT id FROM events WHERE task_id=? AND kind='waiting_input'",(tid,)).fetchall()
+    with store._postgres.transaction() as connection:
+        rows=connection.execute("SELECT id FROM events WHERE task_id=%s AND kind='waiting_input'",(tid,)).fetchall()
     assert len(rows)==1 and rows[0]['id']==first
