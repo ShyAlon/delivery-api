@@ -433,3 +433,17 @@ with metrics and mixed tasks(checkpoint intent view/session-cost metadata).
 SQLiteStore inventory39 files;primary migrate12,guard16,reference5,retired6.
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A35: admin stop-run authorization fixture
+
+Normal-user stop refusal uses signed cloud PG instead of SQLite OAuth rows.
+Original403/no-stop-side-effect assertion retained;anonymous401 added. New signed
+operator HTTP preview/confirm test checks preview changes nothing and confirmed
+stop marks the synthetic in-memory run with operator attribution. No real
+process/model execution. Existing direct local/thread/idle refusal and owner
+notification tests unchanged. Fail-first PG assertion failed on SQLite.
+Focused57passed0skips4.65s:admin stop,capacity,run slots,cloud API,bootstrap.
+Expanded165passed2known baseline failures(checkpoint intent view/session-cost
+metadata),not full-module green. SQLiteStore inventory38 files:primary migrate11,
+guard16,reference5,retired6. Production/UI unchanged;hosted CI/full suite/deployed
+topology not run. A incomplete;B/C/D not started.
