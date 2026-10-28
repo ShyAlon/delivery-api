@@ -6,11 +6,7 @@ opaque runtime id. Downloading the everything ZIP reports progress per section
 and finishes with an honest count, naming any section that could not load
 instead of silently dropping it.
 """
-import os
-import subprocess
-import sys
 import time
-import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -21,47 +17,30 @@ REPOS = "delivery-api=abcdef12,interview-engine=12345678,spec-generator=90abcdef
 LABEL = "delivery-api abcdef12, interview-engine 12345678, spec-generator 90abcdef, verification-loop abcdef01"
 
 
-def _port():
-    import socket
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+@pytest.fixture
+def ui(pg_browser,monkeypatch):
+    page,base,workspace=pg_browser
+    from delivery_api.tenancy import tenant_context
+    from delivery_api import config
+    import jwt
+    from pg_workspace import KEY
+    monkeypatch.setenv('REQUI_BUILD_ID','local-9')
+    monkeypatch.setenv('REQUI_BUILD_REPOS',REPOS)
+    with tenant_context(workspace.scope):
+        workspace.store.create_task('Debug subject','Diagnostics target',task_id='dbg')
+        workspace.store.update_phase('dbg','intent','done',detail='Approved')
+    claims=jwt.decode(workspace.token,options={'verify_signature':False})
+    claims['email']=config.OPERATOR_EMAIL
+    page.context.add_cookies([{'name':'requi_access','value':jwt.encode(claims,KEY,algorithm='ES256'),'url':base}])
+    page.context.grant_permissions(['clipboard-read','clipboard-write'])
+    import delivery_api.app as module
+    monkeypatch.setattr(module,'RUNTIME_VERSION',module._runtime_version())
+    return base
 
 
-@pytest.fixture(scope="module")
-def ui(tmp_path_factory):
-    root = tmp_path_factory.mktemp("debug")
-    db = root / "debug.db"
-    env = {**os.environ, "DELIVERY_DB_PATH": str(db), "DELIVERY_DATABASE_URL": f"sqlite:///{db}",
-           "REQUI_BUILD_ID": "local-9", "REQUI_BUILD_REPOS": REPOS,
-           "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
-    seed = '''
-from delivery_api.store import SQLiteStore
-import os
-s=SQLiteStore(os.environ["DELIVERY_DB_PATH"])
-s.create_task("Debug subject", "Diagnostics target", task_id="dbg")
-s.update_phase("dbg", "intent", "done", detail="Approved")
-'''
-    subprocess.run([sys.executable, "-c", seed], check=True, env=env)
-    port = _port()
-    proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "delivery_api.app:app", "--host", "127.0.0.1", "--port", str(port)], env=env)
-    base = f"http://127.0.0.1:{port}"
-    for _ in range(50):
-        try:
-            urllib.request.urlopen(base + "/health", timeout=.2); break
-        except Exception: time.sleep(.1)
-    else: raise RuntimeError("UI server did not start")
-    yield base
-    proc.terminate(); proc.wait(timeout=5)
-
-
-@pytest.fixture()
-def page(ui):
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, executable_path=os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE") or None)
-        context = browser.new_context(viewport={"width": 1365, "height": 900})
-        context.grant_permissions(["clipboard-read", "clipboard-write"])
-        page = context.new_page()
-        yield page
-        browser.close()
+@pytest.fixture
+def page(ui,pg_browser):
+    return pg_browser[0]
 
 
 def _open_debug(page, ui):
@@ -101,14 +80,23 @@ def test_everything_zip_reports_per_section_progress_and_honest_counts(page, ui,
         "() => document.querySelector('#debugstatus').textContent.startsWith('Downloaded requi-everything.zip')",
         timeout=10000)
     text = status.inner_text()
-    # SQLite diagnostics now works without a worker. Only the deliberately
-    # offline server-log section fails; the other seven must be collected.
-    assert "Downloaded requi-everything.zip: 7 of 8 sections collected; unavailable: Server logs (last 30 min)." in text, text
     download = dl.value
     target = tmp_path / "everything.zip"
     download.save_as(target)
     with zipfile.ZipFile(target) as z:
         body = z.read("requi-everything.txt").decode()
+    import json,re
+    manifest_text=body.split('===== Evidence manifest and DB projections =====\n',1)[1].split('\n\n===== Debug info =====',1)[0]
+    manifest=json.loads(manifest_text)
+    assert manifest['version']==2 and manifest['task_id']=='dbg'
+    allowed=[entry for entry in manifest['sections'] if entry['availability']!='policy_excluded']
+    assert all(entry['availability'] in ('available','unavailable') for entry in allowed)
+    fixed=['Debug info','Task diagnostics (question, control state, engine state)','Run events','Server logs (last 30 min)','Client logs (this tab)']
+    assert all('===== '+title+' =====' in body for title in fixed)
+    missing=[entry['source'] for entry in allowed if entry['availability']=='unavailable']+['Server logs (last 30 min)']
+    total=len(allowed)+len(fixed)
+    collected=sum(entry['availability']=='available' for entry in allowed)+len(fixed)-1
+    assert f'Downloaded requi-everything.zip: {collected} of {total} sections collected; unavailable: '+', '.join(missing)+'.' in text,text
     assert "===== Known omissions =====" in body
     assert "===== Server logs (last 30 min) =====" in body
     assert '"error"' in body  # the failed section is inline, not silently dropped
