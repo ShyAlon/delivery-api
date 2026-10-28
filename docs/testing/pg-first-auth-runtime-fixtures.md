@@ -69,3 +69,21 @@ both producer sources enabled (protocol,event-driven stream,seven-phase parity,
 native event/gate/run/projection,model routes,bootstrap). Production unchanged;
 no UI change. Hosted CI/full suite/deployed topology not run. A still incomplete;
 B/C/D not started.
+
+## A7: event-driven SSE and complete phase parity
+
+A shared pg_scoped_workspace direct-helper fixture aligns module/app-state/
+orchestrator stores, enters the tenant scope and poisons SQLite opens. SSE tests
+now exercise PG for off-loop reads, write notification, post-commit visibility
+and unchanged bounded read/heartbeat cadence. The raw-thread commit observer
+explicitly enters the same tenant scope because OS threads do not inherit
+ContextVars; no production bypass or unscoped role is used. Complete phase parity
+keeps every progress dedupe, gate revision/approval and final done assertion.
+Pure event-bus/cache/Node cases do not acquire a database unnecessarily.
+
+Fail-first fixture contract errored before the fixture existed; focused10passed.
+Expanded acceptance81passed0skips16.70s with both producer sources enabled:
+protocol,SSE,phase parity,native event/gate/run/projection,model routes,bootstrap,
+cloud API,delete/task browser. No UI or production changes. Hosted CI/full suite/
+deployed topology not run. A remains incomplete;global SQLite bootstrap and other
+legacy fixtures still need reconciliation. B/C/D not started.

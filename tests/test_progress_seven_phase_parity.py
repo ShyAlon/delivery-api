@@ -7,12 +7,11 @@ from delivery_api.control_snapshot import project
 from delivery_api.phases import PHASE_DEFINITIONS
 from delivery_api.progress_adapter import ingest_interview_page, PREFIX
 from delivery_api.runner import ProcessRunner
-from delivery_api.store import SQLiteStore
 from vmodel_contracts.progress_signal import ProgressPage, ProgressSignal
 
 
-def test_all_seven_phases_share_progress_and_gate_boundary(tmp_path):
-    store = SQLiteStore(str(tmp_path / "parity.db"))
+def test_all_seven_phases_share_progress_and_gate_boundary(tmp_path,pg_scoped_workspace):
+    store = pg_scoped_workspace.store
     task_id = store.create_task("Seven-phase parity")["task_id"]
     session_id = str(uuid4())
     cursor = 0
