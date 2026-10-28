@@ -112,6 +112,11 @@ class ChildSupervisor:
                 try:await asyncio.wait_for(asyncio.shield(receive_task),self.grace)
                 except asyncio.TimeoutError:raise ChildRunError('child did not stop cooperatively')
             else:await receive_task
+        except Exception:
+            from .diagnostic_evidence import bound,failure
+            with bound(task_id=operation.binding.task_id,session_id=operation.binding.session_id,job_id=operation.binding.job_id):
+                failure('child.lifecycle.failed')
+            raise
         finally:
             for task in (receive_task,stop_task):
                 if task is not None:

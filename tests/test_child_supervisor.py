@@ -141,3 +141,15 @@ for i,state in enumerate(('ready','running','completed'),1):
             private_config={'dsn':'private-not-env'},descriptors={'broker':b.fileno()}))
         assert result.reaped and a.recv(100)==b'broker-separate'
     finally:a.close();b.close()
+
+
+def test_terminal_child_failure_has_safe_parent_evidence(tmp_path):
+ import logging
+ from delivery_api import diagnostic_evidence as d
+ path=tmp_path/'evidence';h=d.EvidenceHandler(path);log=logging.getLogger('delivery_api.diagnostic');log.addHandler(h)
+ op=decode_operation(frame(operation()));s=supervisor('crash')
+ try:
+  with pytest.raises(ChildRunError):run(s.run(op,authorize=lambda op:None,timeout_seconds=.3))
+ finally:log.removeHandler(h);h.close()
+ text=d.read(path,task_id=op.binding.task_id)['text']
+ assert 'child.lifecycle.failed' in text and op.binding.job_id in text
