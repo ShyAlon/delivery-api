@@ -47,6 +47,8 @@ from . import model_routes as model_route_lib
 from .observability import event as activity
 from . import engine_log,server_log_buffer
 server_log_buffer.install()
+from . import diagnostic_evidence
+diagnostic_evidence.install()
 
 def _runtime_version() -> dict:
     # The full image has no MANIFEST.txt; the build script passes the four commit ids as REQUI_BUILD_ID.
@@ -510,6 +512,14 @@ CONTROL_PLANE_AUTH_ROUTES=frozenset({"/auth/signup","/auth/signin","/auth/refres
 
 SLOW_REQUEST_MS=1000  # a request slower than this keeps its line on the console (with its DB cost)
 
+def _log_request(method,path,status,duration_ms):
+    # Successful health/static/telemetry and polling reads are not incident
+    # evidence. Failures and slow requests remain, regardless of endpoint.
+    if status>=400 or duration_ms>=SLOW_REQUEST_MS:return True
+    return not (path in ('/health','/favicon.ico','/api/client-log') or path.startswith('/assets/') or
+                (method=='GET' and (path in ('/api/auth','/api/account/credits') or
+                  re.fullmatch(r'/api/tasks/[^/]+(?:/(?:stream|diagnostics|execution|phase-output|feedback))?',path))))
+
 @app.middleware("http")
 async def request_log(request, call_next):
     if control_plane_only() and request.method not in ('GET','HEAD','OPTIONS') and not (config.CLOUD_TENANTS and request.method=='POST' and request.url.path in CONTROL_PLANE_AUTH_ROUTES):
@@ -524,12 +534,16 @@ async def request_log(request, call_next):
     ref=uuid4().hex[:8]    # shown in the browser (X-Request-Id), written on every log line of this request
     request.state.ref=ref
     stats=RequestStats();stats_token=request_stats.set(stats)
+    match=re.fullmatch(r'/api/tasks/([^/]+)(?:/.*)?',request.url.path)
+    diagnostic_token=diagnostic_evidence.context.set({'request_id':ref,**({'task_id':match.group(1)} if match else {})})
     try:
         response = await call_next(request)
     except Exception:
         log.exception("request failed ref=%s method=%s path=%s", ref, request.method, request.url.path)
         raise
-    finally:request_stats.reset(stats_token)
+    finally:
+        request_stats.reset(stats_token)
+        diagnostic_evidence.context.reset(diagnostic_token)
     who = auth.actor(request).label
     duration_ms=int((time.monotonic()-started)*1000)
     from . import request_costs
@@ -540,7 +554,7 @@ async def request_log(request, call_next):
     # Routine successes go to the file log only (still in Debug evidence/ZIP);
     # the console keeps non-2xx, slow and error lines. The per-request DB cost
     # rides every line so a slow request carries its own evidence.
-    activity("http.request","Request completed",level=_logging.WARNING if _noteworthy else _logging.INFO,console=_noteworthy,ref=ref,method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,db_queries=stats.queries,db_ms=int(stats.db_seconds*1000),engine_calls=stats.engine_calls,engine_ms=int(stats.engine_seconds*1000),checkout_ms=int(stats.checkout_seconds*1000),auth_ms=int(stats.auth_seconds*1000),held_ms=int(stats.tx_held_seconds*1000),actor=who,client=request.client.host if request.client else "unknown")
+    if _log_request(request.method,request.url.path,response.status_code,duration_ms):activity("http.request","Request completed",level=_logging.WARNING if _noteworthy else _logging.INFO,console=_noteworthy,ref=ref,method=request.method,path=request.url.path,status=response.status_code,duration_ms=duration_ms,db_queries=stats.queries,db_ms=int(stats.db_seconds*1000),engine_calls=stats.engine_calls,engine_ms=int(stats.engine_seconds*1000),checkout_ms=int(stats.checkout_seconds*1000),auth_ms=int(stats.auth_seconds*1000),held_ms=int(stats.tx_held_seconds*1000),actor=who,client=request.client.host if request.client else "unknown")
     if response.status_code >= 400:
         activity("http.error","API request returned an error",ref=ref,endpoint=request.url.path,method=request.method,status=response.status_code,duration_ms=duration_ms,actor=who,client=request.client.host if request.client else "unknown")
     if request.url.path.startswith("/api/operator/"):
@@ -3249,6 +3263,13 @@ def admin_operations_workspace(a:auth.Actor=Depends(auth.require_admin)):
                      'state':t['state'],'generation':t.get('generation',1)} for t in tasks if store.engine_session(t['task_id'])],
         'worker_jobs':[],'credit_adjustment_available':False,'global_operator_access':False,
         'reason':'Local legacy quota is not a prepaid credit account.'}
+
+
+@app.get('/api/debug/evidence')
+def debug_evidence(task_id:str|None=Query(None,max_length=240),a:auth.Actor=Depends(auth.require_actor)):
+    if not a.admin:raise HTTPException(403,'operator access required')
+    if config.CLOUD_TENANTS:_operator_reader()
+    return diagnostic_evidence.read(task_id=task_id)
 
 
 @app.get('/api/debug/log-durability')
