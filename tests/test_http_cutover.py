@@ -3,7 +3,6 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from vmodel_contracts.interactive import *
 import delivery_api.app as module
-from delivery_api.store import SQLiteStore
 
 def wait_for_start_event(store,task_id):
  import time
@@ -217,11 +216,12 @@ def test_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch,pg
  asyncio.run(exercise())
 
 
-def test_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch):
+def test_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio,threading
  import httpx
- store=SQLiteStore(str(tmp_path/'concurrent-answer.db'));task=store.create_task('Slow answer','brief')
- store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ store=pg_scoped_workspace.store;task=store.create_task('Slow answer','brief')
+ sid=str(uuid4());store.set_engine_session(task['task_id'],sid);store.update_phase(task['task_id'],'intent','running')
  entered=threading.Event();release=threading.Event();engine=FakeEngine()
  def slow_submit(sid,response):
   entered.set()
@@ -328,19 +328,22 @@ def test_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path
 
 class SwitchEngine(FakeEngine):
  def __init__(self):super().__init__();self.switches=[]
- def snapshot(self,sid):return EngineSnapshot(session_id='s',task_id=self.task_id,sequence=2+len(self.switches),process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending,model_route='deepseek' if self.switches else 'ollama')
+ def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=self.task_id,sequence=2+len(self.switches),process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending,model_route='deepseek' if self.switches else 'ollama')
  def switch_route(self,sid,request):
   self.switches.append(request)
   payload=RouteChangePayload(actor_id=request.actor_id,from_route='ollama',to_route='deepseek',
    from_model_map={'probing':('ollama','phi4')},to_model_map={'probing':('deepseek','deepseek-flash')},
    route_version=1,session_sequence=3,idempotency_key=request.idempotency_key)
-  event=InteractiveEvent(event_id=uuid4(),session_id='s',task_id=self.task_id,phase_id=1,sequence=3,
+  event=InteractiveEvent(event_id=uuid4(),session_id=sid,task_id=self.task_id,phase_id=1,sequence=3,
    event_type=EventType.ROUTE_CHANGED,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,route_change=payload)
   return ModelRouteSwitchResponse(accepted_event=event,snapshot=self.snapshot(sid))
 
-def test_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch):
- store=SQLiteStore(str(tmp_path/'switch.db'));task=store.create_task('Switch task','brief');engine=SwitchEngine();engine.task_id=task['task_id']
- store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+def test_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store;task=store.create_task('Switch task','brief');engine=SwitchEngine();engine.task_id=task['task_id']
+ from delivery_api.postgres_store import PostgresStore
+ assert isinstance(store,PostgresStore)
+ sid=str(uuid4());store.set_engine_session(task['task_id'],sid);store.update_phase(task['task_id'],'intent','running')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  client=TestClient(module.app);snapshot=client.get(f"/api/tasks/{task['task_id']}/engine-snapshot").json()
  assert snapshot['open_input']['input_id']==str(engine.pending.input_id)
@@ -929,7 +932,8 @@ def test_interrupted_start_recovers_exact_session_without_second_start(tmp_path,
 
 
 @pytest.mark.engine_integration
-def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tmp_path,monkeypatch):
+def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  from concurrent.futures import ThreadPoolExecutor
  from threading import Event
  from interview_engine.http_service import SessionRegistry
@@ -951,7 +955,7 @@ def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tm
   def submit(self,sid,response):
    event,state=registry.respond(sid,response)
    return SubmitInputResponse(accepted_event=event,snapshot=state)
- store=SQLiteStore(str(tmp_path/'concurrent.db'))
+ store=pg_scoped_workspace.store
  task=store.create_task('Slow model','brief');sid=str(uuid4())
  session,_=registry.start(StartSessionRequest(task_id=task['task_id'],session_id=sid,idea='brief',model_route='deepseek'))
  store.set_engine_session(task['task_id'],sid);store.update_phase(task['task_id'],'intent','running')
@@ -961,7 +965,10 @@ def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tm
   work=pool.submit(registry.respond,sid,response)
   try:
    assert entered.wait(2)
-   def get_task():return TestClient(module.app).get(f"/api/tasks/{task['task_id']}")
+   def get_task():
+    from delivery_api.tenancy import tenant_context
+    with tenant_context(pg_scoped_workspace.scope):
+     return TestClient(module.app).get(f"/api/tasks/{task['task_id']}")
    reply=pool.submit(get_task).result(timeout=.75)
    assert reply.status_code==200 and reply.json()['control_snapshot']['mode']=='working'
    assert reply.json()['control_snapshot']['prompt'] is None

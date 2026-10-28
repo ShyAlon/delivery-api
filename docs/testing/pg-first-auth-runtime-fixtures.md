@@ -553,3 +553,17 @@ fake engine unchanged. Fail-first PG assertion failed on SQLite. Focused
 sources. Three remaining cutover SQLite receivers:slow submit,live switch,real
 registry blocked-advance concurrency. Production/UI unchanged;hosted CI/full
 suite/deployed topology not run. A incomplete;B/C/D not started.
+
+## A44: HTTP submit/switch/concurrency fixture closure
+
+Last three HTTP-cutover SQLite receivers now scoped PG:slow submit stays
+responsive,live model switch emits one durable event on repeat,and blocked real
+engine registry advance leaves task/snapshot/progress readable. All original
+assertions and .75s/1s/2s timing limits retained. Worker-thread task read enters
+explicit tenant scope;switch double returns requested session. No SQLiteStore
+reference remains in the module. Fail-first concrete PG assertion failed on
+SQLite. Focused6passed0skips1.60s;full mixed cutover,dedupe,bootstrap60passed0skips
+with producer sources. Inventory36 SQLiteStore files:primary migrate8,guard16,
+reference5,retired7. Engine registry Program is synthetic,no model call.
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.
