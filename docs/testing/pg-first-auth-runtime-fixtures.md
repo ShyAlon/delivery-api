@@ -638,3 +638,22 @@ identity and intact header. Product UI unchanged. Literal inventory35 unchanged
 (source guard token);primary migrate5,guard19,reference5,retired7 including
 implicit API. Hosted CI/full repo/deployed topology not run. A incomplete;
 B/C/D not started.
+
+## A50: shared task-browser dashboard/layout group
+
+Six dashboard/brand/not-started/sticky-header/legacy-navigation/final-gate cases
+use new signed PG fixture;remaining mixed UI callers retain explicit old fixture.
+Five seeded task IDs are owner-qualified because PG IDs are globally unique.
+All original assertions retained. Fail-first fixture signature guard failed.
+Six cases+guard+cloud API+bootstrap45passed0skips17.17s. Pixels inspected:five
+cards show waiting/complete/running/not-started states,regular-owner header,no
+operator links. Existing V label/diamond overlap remains cosmetic debt below.
+Production/UI unchanged;hosted CI/full mixed UI/full repo/deployed topology not
+run. A incomplete;B/C/D not started.
+
+### Existing cosmetic debt: V diagram label placement
+
+Concept,Stakeholder,Verification and Validation labels overlap diamond markers
+in dashboard screenshots. Confirmed visually in A49/A50 evidence and reported
+by main. Existing product UI issue,not caused or fixed by fixture migrations.
+Keep separate from fixture acceptance;do not claim diagram layout clean.

@@ -95,6 +95,43 @@ def screenshot_directory(tmp_path_factory):
     global _screenshots_dir
     _screenshots_dir = tmp_path_factory.mktemp("ui-screenshots")
 
+
+
+@pytest.fixture
+def pg_ids(pg_browser):
+    return {key:pg_browser[2].scope.owner_id+'-'+key for key in ('empty','disposable','live','done','sim')}
+
+
+@pytest.fixture
+def pg_ui(pg_browser,pg_ids):
+    from delivery_api.tenancy import tenant_context
+    page,base,workspace=pg_browser
+    with tenant_context(workspace.scope):
+        s=workspace.store
+        s.create_task("Empty definition", "Awaiting its first run", task_id=pg_ids["empty"])
+        s.create_task("Disposable definition", "Renamed and deleted by one test", task_id=pg_ids["disposable"])
+        s.create_task("Live definition", "Detailed progress", task_id=pg_ids["live"])
+        s.set_model_route(pg_ids["live"], "ollama/phi4")
+        s.update_phase(pg_ids["live"], "intent", "done", detail="Approved")
+        s.update_phase(pg_ids["live"], "conops", "running", detail="Option 2/3", completed=2, total=3)
+        s.add_event(pg_ids["live"], "progress", "Generating CONOPS option 2/3", phase_key="conops")
+        s.add_event(pg_ids["live"], "price", "Price 1.25 credits", phase_key="intent", payload={"tokens":100000,"price":1.25,"price_usd":1.25,"rates":{"scale":"credits"}})
+        s.create_task("Finished definition", "Artifacts ready", task_id=pg_ids["done"])
+        for key,_ in __import__("delivery_api.store", fromlist=["PHASES"]).PHASES: s.update_phase(pg_ids["done"], key, "done")
+        s.add_task_artifact(pg_ids["done"], "architecture", "Architecture overview", "/architecture.json")
+        s.create_task("Interactive simulation", "Recorded run, no process load", task_id=pg_ids["sim"])
+        s.configure_simulation(pg_ids["sim"], "/tmp/recorded", "ollama/phi4")
+        s.update_phase(pg_ids["sim"], "intent", "done", detail="Recorded phase complete")
+        s.set_gate_open(pg_ids["sim"], "gate-conops", True)
+        s.wait_at_gate(pg_ids["sim"], "intent")
+    page.add_init_script('for(const id of '+json.dumps(list(pg_ids.values()))+")sessionStorage.setItem('complete-shown:'+id,'1')")
+    return base
+
+
+@pytest.fixture
+def pg_page(pg_ui,pg_browser):
+    return pg_browser[0]
+
 def _promote_control(snapshot):
     legacy=snapshot.get('ui_state') or {}
     c=snapshot.setdefault('control_snapshot',{})
@@ -145,7 +182,8 @@ def waiting_gate_snapshot(snapshot):
     snapshot['ui_state']={'mode':'phase_gate','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':gate}
 
 
-def test_dashboard_draws_v_and_all_task_states(page, ui):
+def test_dashboard_draws_v_and_all_task_states(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
     page.goto(ui)
     page.locator(".task").first.wait_for()
     assert page.locator(".task").count() == 5
@@ -157,7 +195,8 @@ def test_dashboard_draws_v_and_all_task_states(page, ui):
 
 
 @pytest.mark.ui_cosmetic
-def test_require_brand_is_consistent(page, ui):
+def test_require_brand_is_consistent(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
     page.goto(ui)
     assert page.title() == "Requi.re / Product definition workspace"
     brand=page.locator('.brand-name')
@@ -169,8 +208,9 @@ def test_require_brand_is_consistent(page, ui):
     assert page.locator('body').inner_text().lower().find('vector') == -1
 
 
-def test_not_started_panel_layout(page,ui):
-    page.goto(ui+'/tasks/empty/view')
+def test_not_started_panel_layout(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    page.goto(ui+f'/tasks/{pg_ids["empty"]}/view')
     page.get_by_role('group',name='Default model route').wait_for()
     start=page.get_by_role('button',name='Start interview')
     panel=page.locator('.not-started');route=panel.get_by_role('group',name='Default model route');label=panel.locator('.start-route');
@@ -366,7 +406,8 @@ def test_task_filter_sort_rename_and_delete(page,ui):
     assert page.get_by_text('Renamed disposable definition',exact=True).count()==0
 
 
-def test_dashboard_routes_local_loading_to_session_folder_not_file_picker(page,ui):
+def test_dashboard_routes_local_loading_to_session_folder_not_file_picker(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
     page.goto(ui)
     page.get_by_role("navigation").get_by_role("link",name="Add Credits").wait_for();assert page.get_by_role("link",name="All sessions").count()==0
     assert page.get_by_role("button",name="Import run").count()==0
@@ -374,12 +415,13 @@ def test_dashboard_routes_local_loading_to_session_folder_not_file_picker(page,u
         page.goto(ui+old);page.locator(".task").first.wait_for();assert page.url==ui+"/" or page.url==ui
     assert page.get_by_role("button",name="Artifacts folder").count()==0
 
-def test_page_headers_stay_sticky_and_home_has_no_evidence_vault_hero(page,ui):
+def test_page_headers_stay_sticky_and_home_has_no_evidence_vault_hero(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
     page.goto(ui+"/")
     page.locator(".task").first.wait_for()
     assert page.get_by_text("Evidence vault / completed sessions",exact=True).count()==0
     assert page.get_by_text("Every decision,",exact=False).count()==0
-    page.goto(ui+"/tasks/done/view")
+    page.goto(ui+f'/tasks/{pg_ids["done"]}/view')
     head=page.locator('.detail-head.page-head');head.wait_for()
     assert head.evaluate("e=>getComputedStyle(e).position")=="sticky"
 
@@ -1133,8 +1175,9 @@ def test_progress_is_one_line_without_redundant_phase_and_phases_show_evidence_t
     page.screenshot(path=str(_screenshots_dir / f'progress-phase-tooltips-{viewport["width"]}.png'),full_page=True)
 
 
-def test_dashboard_renders_existing_task_with_final_verification_gate(page,ui):
-    base=page.request.get(ui+'/api/tasks/live').json();base['task_id']='daily';base['title']='Daily Habit';base['state']='waiting_gate';base['active_phase']='tests';base['phases'][-1]['state']='awaiting_approval';base['gates']=[g for g in base['gates'] if g.get('after_phase')!='tests'];base['gates'].append({'task_id':'daily','gate_key':'gate-tests','after_phase':'tests','label':'Verification gate','position':6,'is_open':0,'state':'waiting','options':['Approve Verification','Choose another option']})
+def test_dashboard_renders_existing_task_with_final_verification_gate(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    base=page.request.get(ui+f'/api/tasks/{pg_ids["live"]}').json();base['task_id']='daily';base['title']='Daily Habit';base['state']='waiting_gate';base['active_phase']='tests';base['phases'][-1]['state']='awaiting_approval';base['gates']=[g for g in base['gates'] if g.get('after_phase')!='tests'];base['gates'].append({'task_id':'daily','gate_key':'gate-tests','after_phase':'tests','label':'Verification gate','position':6,'is_open':0,'state':'waiting','options':['Approve Verification','Choose another option']})
     page.route('**/api/tasks',lambda route:route.fulfill(json={'tasks':[base]}))
     page.route('**/api/sessions',lambda route:route.fulfill(json={'sessions':[]}))
     page.goto(ui+'/');card=page.locator('.task',has_text='Daily Habit');card.wait_for();assert card.is_visible();assert card.locator('[data-gate="gate-tests"]').count()==1;assert page.get_by_text('Cannot read properties').count()==0
@@ -2509,3 +2552,8 @@ def test_gate_approval_shared_guard_ignores_second_action_and_preserves_retry(pa
     pending.pop().fulfill(status=409,json={'detail':'stale review fixture'})
     expect(page.locator('#gate-decision-status')).to_contain_text('stale review fixture')
     expect(page.locator('[data-action="approve"]')).to_be_disabled()
+
+
+def test_pg_dashboard_fixture_requires_signed_workspace():
+    import inspect
+    assert 'pg_browser' in inspect.signature(pg_ui).parameters
