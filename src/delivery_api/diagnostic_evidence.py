@@ -91,7 +91,7 @@ def read(path=PATH,*,task_id=None,max_lines=500):
     rows.append(row)
     if len(rows)>max_lines:rows.pop(0);truncated=True
   except OSError as error:unreadable.append(type(error).__name__)
- return {'available':available,'text':'\n'.join(json.dumps(r,ensure_ascii=False) for r in rows),
+ return {'available':available and not unreadable,'availability':'unreadable' if unreadable else 'available' if available else 'missing','text':'\n'.join(json.dumps(r,ensure_ascii=False) for r in rows),
          'count':len(rows),'truncated':truncated,'unreadable':unreadable,'task_id':task_id,
          'scope':'operator diagnostic evidence','storage':'rotating files, up to 8 MiB diagnostics within 32 MiB managed global logs; oldest overwritten'}
 

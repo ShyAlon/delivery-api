@@ -36,7 +36,8 @@ def _tail(path):
             handle.seek(0,2);size=handle.tell()
             handle.seek(max(0,size-TAIL_BYTES))
             data=handle.read()
-    except OSError:return None
+    except FileNotFoundError:return None
+    except OSError as error:return error
     return data.decode('utf-8',errors='replace').splitlines()[-MAX_LINES:]
 
 
@@ -53,6 +54,7 @@ def read(owner_id,admin,minutes,resolve_owner,path=None,now=None):
     path=path or default_path()
     lines=_tail(path)
     if lines is None:return {'available':False,'text':'','count':0,'path':str(path)}
+    if isinstance(lines,OSError):return {'available':False,'availability':'unreadable','category':type(lines).__name__,'text':'','count':0,'path':str(path)}
     owners={}
     out=[]
     for line in lines:
@@ -75,8 +77,8 @@ def read(owner_id,admin,minutes,resolve_owner,path=None,now=None):
         when=datetime.fromtimestamp(stamp if stamp is not None else now,timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         who=('' if not admin else ' [you]' if owner==owner_id else ' [other:%s]'%owner[:8] if owner else ' [system]')
         out.append('%s engine%s: %s'%(when,who,text))
-    if not out:return {'available':True,'text':'','count':0,'path':str(path)}
-    return {'available':True,'text':HEADER+'\n'+'\n'.join(out),'count':len(out),'path':str(path)}
+    if not out:return {'available':True,'availability':'available','text':'','count':0,'path':str(path)}
+    return {'available':True,'availability':'available','text':HEADER+'\n'+'\n'.join(out),'count':len(out),'path':str(path)}
 
 
 from .log_budget import BUDGET

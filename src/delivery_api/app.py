@@ -3177,7 +3177,7 @@ def server_log(minutes:int=Query(30,ge=1,le=240),a:auth.Actor=Depends(auth.requi
     engine=engine_log.read(a.id,bool(a.admin),minutes,_engine_log_owner)
     if engine['available'] and engine['text']:
         result['text']=result['text']+('\n' if result['text'] else '')+engine['text']
-    result['engine_log']={'available':engine['available'],'lines':engine['count'],'path':engine['path']}
+    result['engine_log']={'available':engine['available'],'availability':engine.get('availability','available' if engine['available'] else 'missing'),'category':engine.get('category'),'lines':engine['count'],'path':engine['path']}
     if isinstance(task_id,str) and task_id:
         from .debug_export import _owned_log_line
         task=store.task(task_id)
