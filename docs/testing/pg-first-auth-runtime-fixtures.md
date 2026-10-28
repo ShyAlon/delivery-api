@@ -195,3 +195,16 @@ revision,cloud API,bootstrap. Initial invocation without repo-root PYTHONPATH
 failed existing tests.* imports;corrected command includes root explicitly.
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A16: closed-gate draft/preflight fixtures
+
+Database-backed gate-revision draft/preflight cases now use explicit scoped PG,
+including the shared decision-page API helper caller. Pure producer-plan tests
+stay DB-free. Every existing non-effectful/state/event/audit invariant,stale
+approval/generation rejection,artifact digest validation and immutable conflict
+assertion remains. No commit/restart execution or new adapter enabled. Fail-first
+PG assertion failed on original SQLite preflight helper. Acceptance95passed
+0skips6.74s with PYTHONPATH=.:src and producer sources:gate/decision pages,evidence,
+native review/revision,closed revision jobs,cloud API,bootstrap. Production/UI
+unchanged;hosted CI/full suite/deployed topology not run. A incomplete;B/C/D not
+started.

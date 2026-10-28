@@ -3,8 +3,8 @@ from delivery_api.store import SQLiteStore
 from delivery_api.gate_revision import save_closed_revision
 
 
-def test_save_closed_revision_is_only_draft_no_state_or_artifact_mutation(tmp_path):
-    s=SQLiteStore(str(tmp_path/'test.db'));t=s.create_task('fake');tid=t['task_id']
+def test_save_closed_revision_is_only_draft_no_state_or_artifact_mutation(tmp_path,pg_scoped_workspace):
+    s=pg_scoped_workspace.store;t=s.create_task('fake');tid=t['task_id']
     s.wait_at_gate(tid,'needs');waiting=s.task(tid);s.decide_gate(tid,'gate-needs','approve',selected_option='Proceed')
     revision='a'*64;s.retain_decision_review(tid,'gate:gate-needs',revision,{'task':waiting})
     before=s.task(tid);events=s.events(tid);audit=s.audit_entries(tid)
@@ -17,25 +17,25 @@ def test_save_closed_revision_is_only_draft_no_state_or_artifact_mutation(tmp_pa
     with pytest.raises(ValueError):save_closed_revision(s,tid,'gate-needs','b'*64,'different')
 
 
-def test_old_gate_basis_cannot_save_revision_after_second_approval(tmp_path):
-    s=SQLiteStore(str(tmp_path/'test.db'));tid=s.create_task('fake')['task_id']
+def test_old_gate_basis_cannot_save_revision_after_second_approval(tmp_path,pg_scoped_workspace):
+    s=pg_scoped_workspace.store;tid=s.create_task('fake')['task_id']
     s.wait_at_gate(tid,'needs');waiting=s.task(tid);s.retain_decision_review(tid,'gate:gate-needs','a'*64,{'task':waiting})
     s.decide_gate(tid,'gate-needs','approve',selected_option='Proceed')
     s.wait_at_gate(tid,'needs');s.decide_gate(tid,'gate-needs','approve',selected_option='Proceed')
     with pytest.raises(ValueError):save_closed_revision(s,tid,'gate-needs','a'*64,'outdated proposal')
 
 
-def test_closed_revision_rejects_different_generation_and_stop(tmp_path):
-    s=SQLiteStore(str(tmp_path/'test.db'));tid=s.create_task('fake')['task_id']
+def test_closed_revision_rejects_different_generation_and_stop(tmp_path,pg_scoped_workspace):
+    s=pg_scoped_workspace.store;tid=s.create_task('fake')['task_id']
     s.wait_at_gate(tid,'needs');waiting=s.task(tid);s.decide_gate(tid,'gate-needs','approve',selected_option='Proceed')
     old={**waiting,'generation':waiting['generation']-1}
     s.retain_decision_review(tid,'gate:gate-needs','old',{'task':old})
     with pytest.raises(ValueError,match='generation'):save_closed_revision(s,tid,'gate-needs','old','wrong generation')
 
 
-def test_closed_revision_route_saves_only_owner_review_draft(tmp_path,monkeypatch):
+def test_closed_revision_route_saves_only_owner_review_draft(tmp_path,monkeypatch,pg_scoped_workspace):
     from tests.test_decision_pages import setup
-    s,tid,engine,c=setup(tmp_path,monkeypatch)
+    s,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace)
     s.wait_at_gate(tid,'needs');waiting=s.task(tid);rev='gate:approved-test'
     s.retain_decision_review(tid,'gate:gate-needs',rev,{'task':waiting})
     s.decide_gate(tid,'gate-needs','approve',selected_option='Proceed')
@@ -47,9 +47,9 @@ def test_closed_revision_route_saves_only_owner_review_draft(tmp_path,monkeypatc
     assert c.post(f'/api/tasks/{tid}/gates/gate-needs/revision-drafts',json={'review_revision':'missing','edited_text':'invalid'}).status_code==409
 
 
-def _closed_preflight_fixture(tmp_path):
+def _closed_preflight_fixture(tmp_path,workspace):
     from delivery_api.gate_revision import closed_revision_preflight
-    s=SQLiteStore(str(tmp_path/'review.db'));tid=s.create_task('preflight')['task_id']
+    s=workspace.store;tid=s.create_task('preflight')['task_id']
     s.wait_at_gate(tid,'needs');waiting=s.task(tid);revision='basis'
     s.retain_decision_review(tid,'gate:gate-needs',revision,{'task':waiting})
     s.decide_gate(tid,'gate-needs','approve',selected_option='Proceed')
@@ -58,8 +58,8 @@ def _closed_preflight_fixture(tmp_path):
     return s,tid,revision,draft,evidence,closed_revision_preflight
 
 
-def test_preflight_is_non_effectful_binds_proposal_and_current_artifact_digest(tmp_path):
-    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path)
+def test_preflight_is_non_effectful_binds_proposal_and_current_artifact_digest(tmp_path,pg_scoped_workspace):
+    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path,pg_scoped_workspace)
     before=s.task(tid);events=s.events(tid);audit=s.audit_entries(tid)
     result=preflight(s,tid,'gate-needs',rev,draft,artifact_snapshot=evidence)
     assert not result['commit_available'] and not result['effect_executed'] and not result['dispatch_started']
@@ -73,13 +73,13 @@ def test_preflight_is_non_effectful_binds_proposal_and_current_artifact_digest(t
 
 @pytest.mark.parametrize('change',[{'phase':'srs'},{'generation':True},{'generation':99},
     {'name':'../needs.json'},{'sha256':'bad'},{'extra':True}])
-def test_preflight_rejects_bad_artifact_basis(tmp_path,change):
-    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path)
+def test_preflight_rejects_bad_artifact_basis(tmp_path,change,pg_scoped_workspace):
+    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path,pg_scoped_workspace)
     with pytest.raises(ValueError):preflight(s,tid,'gate-needs',rev,draft,artifact_snapshot=[evidence[0]|change])
 
 
-def test_preflight_rejects_missing_duplicate_and_other_draft(tmp_path):
-    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path)
+def test_preflight_rejects_missing_duplicate_and_other_draft(tmp_path,pg_scoped_workspace):
+    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path,pg_scoped_workspace)
     for supplied in ([],evidence+evidence):
         with pytest.raises(ValueError):preflight(s,tid,'gate-needs',rev,draft,artifact_snapshot=supplied)
     with pytest.raises(ValueError):preflight(s,tid,'gate-needs',rev,'missing',artifact_snapshot=evidence)
@@ -87,14 +87,14 @@ def test_preflight_rejects_missing_duplicate_and_other_draft(tmp_path):
     with pytest.raises(ValueError):preflight(s,tid,'gate-needs',rev,other,artifact_snapshot=evidence)
 
 
-def test_preflight_rejects_digest_of_unrelated_file_in_place_of_canonical_artifact(tmp_path):
-    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path)
+def test_preflight_rejects_digest_of_unrelated_file_in_place_of_canonical_artifact(tmp_path,pg_scoped_workspace):
+    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path,pg_scoped_workspace)
     with pytest.raises(ValueError,match='canonical'):
         preflight(s,tid,'gate-needs',rev,draft,artifact_snapshot=[evidence[0]|{'name':'notes.txt'}])
 
 
-def test_preflight_rejects_task_change_during_snapshot_read(tmp_path,monkeypatch):
-    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path)
+def test_preflight_rejects_task_change_during_snapshot_read(tmp_path,monkeypatch,pg_scoped_workspace):
+    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path,pg_scoped_workspace)
     original=s.task;reads=[]
     def task(task_id):
         result=original(task_id);reads.append(True)
@@ -105,10 +105,10 @@ def test_preflight_rejects_task_change_during_snapshot_read(tmp_path,monkeypatch
 
 
 @pytest.mark.parametrize('phase,expected_executor',[('intent','interview'),('conops','interview'),('needs','generator'),('validation','generator')])
-def test_closed_commit_preflight_regenerates_edited_phase_with_cost_review_not_replacement(tmp_path,phase,expected_executor):
+def test_closed_commit_preflight_regenerates_edited_phase_with_cost_review_not_replacement(tmp_path,phase,expected_executor,pg_scoped_workspace):
     from delivery_api.gate_revision import closed_revision_preflight
     from delivery_api.phases import PHASE_BY_KEY,followers
-    s=SQLiteStore(str(tmp_path/'regen.db'));tid=s.create_task('regeneration')['task_id']
+    s=pg_scoped_workspace.store;tid=s.create_task('regeneration')['task_id']
     s.wait_at_gate(tid,phase);waiting=s.task(tid);gate='gate-'+phase
     s.retain_decision_review(tid,'gate:'+gate,'review',{'task':waiting})
     s.decide_gate(tid,gate,'approve',selected_option='Proceed')
@@ -126,8 +126,8 @@ def test_closed_commit_preflight_regenerates_edited_phase_with_cost_review_not_r
     assert s.decision_draft(tid,'gate:'+gate,'review',saved['draft_id'])==saved['preview']
 
 
-def test_needs_change_preparation_does_not_claim_plain_rerun_consumes_guidance(tmp_path):
-    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path)
+def test_needs_change_preparation_does_not_claim_plain_rerun_consumes_guidance(tmp_path,pg_scoped_workspace):
+    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path,pg_scoped_workspace)
     result=preflight(s,tid,'gate-needs',rev,draft,artifact_snapshot=evidence)
     plan=result['producer_change_plan']
     assert plan['generation_kind']=='deterministic_from_intent'
@@ -153,8 +153,8 @@ def test_phase_change_plan_rejects_unowned_stage_aliases():
         with pytest.raises(ValueError):phase_change_plan(phase)
 
 
-def test_retained_review_exact_replay_is_idempotent_conflicting_revision_rejected(tmp_path):
-    s=SQLiteStore(str(tmp_path/'immutable.db'));tid=s.create_task('immutable')['task_id']
+def test_retained_review_exact_replay_is_idempotent_conflicting_revision_rejected(tmp_path,pg_scoped_workspace):
+    s=pg_scoped_workspace.store;tid=s.create_task('immutable')['task_id']
     payload={'task':s.task(tid),'documents':[{'name':'needs.json','view':{'content':'original'}}]}
     s.retain_decision_review(tid,'gate:gate-needs','same',payload)
     s.retain_decision_review(tid,'gate:gate-needs','same',payload)
@@ -164,3 +164,13 @@ def test_retained_review_exact_replay_is_idempotent_conflicting_revision_rejecte
     assert s.decision_review(tid,'gate:gate-needs','same')==payload
     s.retain_decision_review(tid,'gate:gate-needs','new',changed)
     assert s.decision_review(tid,'gate:gate-needs','new')==changed
+
+
+def test_closed_review_fixture_is_restricted_pg(tmp_path,pg_scoped_workspace):
+    from delivery_api.postgres_store import PostgresStore
+    s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path,pg_scoped_workspace)
+    assert isinstance(s,PostgresStore)
+    with pytest.raises(AssertionError,match='SQLite forbidden'):
+        SQLiteStore(':memory:')
+    with s._postgres.transaction() as connection:
+        assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
