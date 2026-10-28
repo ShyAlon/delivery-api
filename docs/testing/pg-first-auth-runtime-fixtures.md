@@ -924,3 +924,17 @@ not all simultaneously visible. Shared101PG/26legacy functions out of127,plus
 three standalone local-auth/browser cases. Pending debug conflicts untouched.
 A incomplete;global SQLite bootstrap remains;B/C/D unstarted. Production
 unchanged;hosted CI/full mixed UI/full repo/deployed topology unrun.
+
+## A68: gate controls browser group
+
+Six waiting-halo/full-page,redo steer error,sticky model default,closed revision
+proposal,comment single-flight/retry,and approval single-flight/retry/stale
+review cases use signed PG/isolated simulation IDs. All assertions retained.
+Task/review/artifact/action mocks remain presentation contracts,not actual gate
+execution. Guard failed first1 in0.72s;cases+guard+cloud API+bootstrap45passed
+0skips19.68s. Inspected approval busy/disabled controls and configured model
+default. Full-page sticky header crosses content;existing visual debt unchanged.
+Shared107PG/20legacy functions out of127,plus three standalone local-auth/browser
+cases. Pending debug contract cases untouched. A incomplete;global SQLite
+bootstrap remains;B/C/D unstarted. Hosted CI/full mixed UI/full repo/deployed
+topology unrun. Production unchanged;no deploy/live DB/model execution.

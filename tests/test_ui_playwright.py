@@ -268,25 +268,29 @@ def test_rerun_preview_explains_archive_and_audit_has_local_actor(page, ui):
     assert "local user" in page.locator(".dialog").inner_text()
 
 
-def test_gate_open_waiting_halo_and_full_page(page, ui):
-    route_task_snapshot(page,ui,'sim',waiting_gate_snapshot)
-    page.goto(ui + "/tasks/sim/view")
+def test_gate_open_waiting_halo_and_full_page(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
+    route_task_snapshot(page,ui,tid,waiting_gate_snapshot)
+    page.goto(ui + f"/tasks/{tid}/view")
     waiting=page.locator('#openphasegate');waiting.wait_for()
     assert waiting.count()==1 and waiting.is_visible()
     awaiting=page.locator('.phase.awaiting_approval');assert awaiting.count()==1
     palette=awaiting.locator('.dot').evaluate("e=>({background:getComputedStyle(e).backgroundColor,border:getComputedStyle(e).borderTopColor})")
     assert palette['background']=='rgb(229, 182, 61)' and palette['border']=='rgb(229, 182, 61)'
     waiting.click();page.locator("#gateform").wait_for()
-    assert "/tasks/sim/gates/" in page.url
+    assert f"/tasks/{tid}/gates/" in page.url
     assert page.get_by_text("Waiting here · approval paused").is_visible()
     assert page.get_by_text("actor: local user", exact=False).count()==0  # actor line removed from gate header (debug data)
     assert page.get_by_role("button", name="Ask for changes").is_visible()
 
-def test_gate_redo_requires_steer_in_browser(page, ui):
-    route_task_snapshot(page,ui,'sim',waiting_gate_snapshot)
-    page.route('**/api/tasks/sim/gates/*/decide',lambda route:route.fulfill(status=409,json={'detail':{'error':'a redo needs a reason','cause':'Redo without a steer is a reroll.','next':'Describe what should change.'}}))
-    mock_gate_review(page,ui,'sim')
-    page.goto(ui + "/tasks/sim/gates/gate-intent");page.locator('#gateform').wait_for()
+def test_gate_redo_requires_steer_in_browser(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
+    route_task_snapshot(page,ui,tid,waiting_gate_snapshot)
+    page.route(f'**/api/tasks/{tid}/gates/*/decide',lambda route:route.fulfill(status=409,json={'detail':{'error':'a redo needs a reason','cause':'Redo without a steer is a reroll.','next':'Describe what should change.'}}))
+    mock_gate_review(page,ui,tid)
+    page.goto(ui + f"/tasks/{tid}/gates/gate-intent");page.locator('#gateform').wait_for()
     page.get_by_role("button", name="Ask for changes").click()
     page.get_by_text("a redo needs a reason", exact=False).wait_for()
 
@@ -2007,10 +2011,12 @@ def test_accepted_answer_disarms_old_question_until_new_control_arrives(pg_page,
     assert page.locator('#answerform textarea').is_enabled() and page.locator('#answerform button[type=submit]').is_enabled()
 
 
-def test_gate_model_picker_shows_exact_sticky_default(page,ui):
-    page.route('**/api/tasks/sim/generator-default/needs',lambda route:route.fulfill(json={'phase':'needs','model':'deepseek:deepseek-flash','source':'selected'}))
-    mock_gate_review(page,ui,'sim')
-    page.goto(ui+'/tasks/sim/gates/gate-conops')
+def test_gate_model_picker_shows_exact_sticky_default(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
+    page.route(f'**/api/tasks/{tid}/generator-default/needs',lambda route:route.fulfill(json={'phase':'needs','model':'deepseek:deepseek-flash','source':'selected'}))
+    mock_gate_review(page,ui,tid)
+    page.goto(ui+f'/tasks/{tid}/gates/gate-conops')
     page.locator('.model-panel summary').click()
     picker=page.locator('select[name="next_model"]');picker.wait_for()
     expect(page.locator('[data-model-for="next_model"]')).to_contain_text('Current task default: deepseek:deepseek-flash')
@@ -2493,12 +2499,14 @@ def test_global_cost_header_on_all_route_families(page,ui,path):
   page.screenshot(path=f'/tmp/cost-route-{name}-{width}.png')
 
 
-def test_closed_gate_can_save_revision_proposal_without_restarting(page,ui):
-    task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['gate_key']=='gate-needs');gate['state']='decided'
+def test_closed_gate_can_save_revision_proposal_without_restarting(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
+    task=page.request.get(ui+f'/api/tasks/{tid}').json();gate=next(g for g in task['gates'] if g['gate_key']=='gate-needs');gate['state']='decided'
     data={'review':{'revision':'gate:approved','task':task,'documents':[]},'actionable':False,'draft':None,'comments':[],'closed_revision_draft':True}
-    page.route('**/api/tasks/sim/gates/gate-needs/review*',lambda r:r.fulfill(json=data));sent=[]
-    page.route('**/api/tasks/sim/gates/gate-needs/revision-drafts',lambda r:(sent.append(r.request.post_data_json),r.fulfill(json={'draft_id':'fake','committed':False,'dispatch_started':False})))
-    page.goto(ui+'/tasks/sim/gates/gate-needs');page.locator('#closedrevisiontext').fill('Proposed new requirement wording')
+    page.route(f'**/api/tasks/{tid}/gates/gate-needs/review*',lambda r:r.fulfill(json=data));sent=[]
+    page.route(f'**/api/tasks/{tid}/gates/gate-needs/revision-drafts',lambda r:(sent.append(r.request.post_data_json),r.fulfill(json={'draft_id':'fake','committed':False,'dispatch_started':False})))
+    page.goto(ui+f'/tasks/{tid}/gates/gate-needs');page.locator('#closedrevisiontext').fill('Proposed new requirement wording')
     page.locator('#saveclosedrevision').click()
     expect(page.locator('#closedrevisionstatus')).to_contain_text('unchanged')
     assert sent==[{'review_revision':'gate:approved','edited_text':'Proposed new requirement wording'}]
@@ -2707,12 +2715,14 @@ def test_customer_audit_summary_is_credits_only_even_with_legacy_provider_totals
     page.screenshot(path='/downloads/audit-credits-only.png',full_page=True)
 
 
-def test_gate_comment_shared_guard_prevents_duplicate_and_allows_retry(page,ui):
-    route_task_snapshot(page,ui,'sim',waiting_gate_snapshot)
-    mock_gate_review(page,ui,'sim')
+def test_gate_comment_shared_guard_prevents_duplicate_and_allows_retry(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
+    route_task_snapshot(page,ui,tid,waiting_gate_snapshot)
+    mock_gate_review(page,ui,tid)
     pending=[]
-    page.route('**/api/tasks/sim/gates/*/comments',lambda route:pending.append(route))
-    page.goto(ui+'/tasks/sim/gates/gate-intent');page.locator('#gateform').wait_for()
+    page.route(f'**/api/tasks/{tid}/gates/*/comments',lambda route:pending.append(route))
+    page.goto(ui+f'/tasks/{tid}/gates/gate-intent');page.locator('#gateform').wait_for()
     page.locator('#gateform [name=comment]').fill('Only one comment')
     page.locator('#gate-save-comment').click()
     page.wait_for_timeout(100)
@@ -2730,16 +2740,18 @@ def test_gate_comment_shared_guard_prevents_duplicate_and_allows_retry(page,ui):
     assert page.locator('#gate-save-comment').get_attribute('aria-busy') is None
 
 
-def test_gate_approval_shared_guard_ignores_second_action_and_preserves_retry(page,ui):
+def test_gate_approval_shared_guard_ignores_second_action_and_preserves_retry(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
     def with_evidence(task):
         waiting_gate_snapshot(task)
         task['artifacts']=[{'phase_key':'intent','name':'intent_model.json','title':'Needs and Scope','stale':False,'present':True,'valid':True,'generation':1}]
-    route_task_snapshot(page,ui,'sim',with_evidence)
-    page.route('**/api/tasks/sim/artifacts/intent/intent_model.json/view',lambda route:route.fulfill(json={'title':'Needs and Scope','format':'json','content':'{}'}))
-    mock_gate_review(page,ui,'sim')
+    route_task_snapshot(page,ui,tid,with_evidence)
+    page.route(f'**/api/tasks/{tid}/artifacts/intent/intent_model.json/view',lambda route:route.fulfill(json={'title':'Needs and Scope','format':'json','content':'{}'}))
+    mock_gate_review(page,ui,tid)
     pending=[]
-    page.route('**/api/tasks/sim/gates/*/decide',lambda route:pending.append(route))
-    page.goto(ui+'/tasks/sim/gates/gate-intent');page.locator('#gateform').wait_for()
+    page.route(f'**/api/tasks/{tid}/gates/*/decide',lambda route:pending.append(route))
+    page.goto(ui+f'/tasks/{tid}/gates/gate-intent');page.locator('#gateform').wait_for()
     page.locator('[data-action="approve"]').click();page.wait_for_timeout(100)
     assert len(pending)==1
     assert page.locator('[data-action="approve"]').get_attribute('aria-busy')=='true'
@@ -2941,4 +2953,15 @@ def test_runtime_identity_cases_require_signed_pg_browser():
                  test_runtime_badge_survives_identity_render,
                  test_detail_uses_one_large_v_process_without_duplicate_path_map,
                  test_user_progress_and_composer_have_no_raw_console):
+        assert 'pg_page' in inspect.signature(case).parameters
+
+
+def test_gate_controls_cases_require_signed_pg_browser():
+    import inspect
+    for case in (test_gate_open_waiting_halo_and_full_page,
+                 test_gate_redo_requires_steer_in_browser,
+                 test_gate_model_picker_shows_exact_sticky_default,
+                 test_closed_gate_can_save_revision_proposal_without_restarting,
+                 test_gate_comment_shared_guard_prevents_duplicate_and_allows_retry,
+                 test_gate_approval_shared_guard_ignores_second_action_and_preserves_retry):
         assert 'pg_page' in inspect.signature(case).parameters
