@@ -1930,20 +1930,20 @@ FROM tasks t"""
         task=self.task(task_id)
         if not task: raise KeyError(task_id)
         scope=current_scope();now=time.time()
-        self._db.execute('INSERT INTO artifact_bytes(owner_id,sha256,bytes,byte_size) VALUES (?,?,?,?) ON CONFLICT (owner_id,sha256) DO NOTHING',
-            (scope.owner_id,digest,data,size))
-        existing=self._db.execute('SELECT bytes FROM artifact_bytes WHERE owner_id=? AND sha256=?',(scope.owner_id,digest)).fetchone()
+        self._execute_native('INSERT INTO artifact_bytes(owner_id,sha256,bytes,byte_size) VALUES (%s,%s,%s,%s) ON CONFLICT (owner_id,sha256) DO NOTHING',
+            (scope.owner_id,digest,data,size), write=True)
+        existing=self._execute_native('SELECT bytes FROM artifact_bytes WHERE owner_id=%s AND sha256=%s',(scope.owner_id,digest)).fetchone()
         if existing is None or bytes(existing['bytes'])!=data:
             raise ValueError('stored artifact bytes do not match the recorded content hash')
-        self._db.execute(
-            "INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,mime_type,created_at,byte_size,sha256,publication_state,writer_instance,validator,valid,validation_error,validator_version) VALUES (?,?,?,?,?,?,?,?,?,'staged',?,?,?,?,?)",
-            (task_id,task['generation'],phase_key,name,str(ref),mime_type,now,size,digest,writer_instance,validator,valid,validation_error,validator_version))
-        self._db.execute("UPDATE task_artifacts SET publication_state='superseded' WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='published'",
-            (task_id,task['generation'],phase_key,name))
-        changed=self._db.execute("UPDATE task_artifacts SET publication_state='published',published_at=? WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='staged' AND sha256=?",
-            (now,task_id,task['generation'],phase_key,name,digest))
+        self._execute_native(
+            "INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,mime_type,created_at,byte_size,sha256,publication_state,writer_instance,validator,valid,validation_error,validator_version) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'staged',%s,%s,%s,%s,%s)",
+            (task_id,task['generation'],phase_key,name,str(ref),mime_type,now,size,digest,writer_instance,validator,valid,validation_error,validator_version), write=True)
+        self._execute_native("UPDATE task_artifacts SET publication_state='superseded' WHERE task_id=%s AND generation=%s AND phase_key=%s AND name=%s AND publication_state='published'",
+            (task_id,task['generation'],phase_key,name), write=True)
+        changed=self._execute_native("UPDATE task_artifacts SET publication_state='published',published_at=%s WHERE task_id=%s AND generation=%s AND phase_key=%s AND name=%s AND publication_state='staged' AND sha256=%s",
+            (now,task_id,task['generation'],phase_key,name,digest), write=True)
         if changed.rowcount!=1: raise ValueError('artifact publication CAS failed')
-        return dict(self._db.execute("SELECT * FROM task_artifacts WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='published'",
+        return dict(self._execute_native("SELECT * FROM task_artifacts WHERE task_id=%s AND generation=%s AND phase_key=%s AND name=%s AND publication_state='published'",
             (task_id,task['generation'],phase_key,name)).fetchone())
 
     def manifest_artifacts(self,task_id,*,generation=None):
@@ -1951,8 +1951,8 @@ FROM tasks t"""
         task=self.task(task_id)
         if not task: return []  # foreign or missing task: no existence oracle
         if generation is None: generation=task['generation']
-        return [dict(r) for r in self._db.execute(
-            'SELECT * FROM task_artifacts WHERE task_id=? AND generation=? ORDER BY phase_key,name,id',
+        return [dict(r) for r in self._execute_native(
+            'SELECT * FROM task_artifacts WHERE task_id=%s AND generation=%s ORDER BY phase_key,name,id',
             (task_id,generation)).fetchall()]
 
     def manifest_ready(self,task_id,generation=None):
@@ -1976,13 +1976,13 @@ FROM tasks t"""
         manifest mixing two producers' members."""
         scope=current_scope()
         if expected_revision_id is None:
-            changed=self._db.execute(
-                'INSERT INTO artifact_manifest_ready(owner_id,task_id,generation,revision_id,revision_hash,marked_at,writer_instance) VALUES (?,?,?,?,?,?,?) ON CONFLICT (task_id,generation) DO NOTHING',
-                (scope.owner_id,task['task_id'],task['generation'],revision_id,revision_hash,now,writer_instance))
+            changed=self._execute_native(
+                'INSERT INTO artifact_manifest_ready(owner_id,task_id,generation,revision_id,revision_hash,marked_at,writer_instance) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (task_id,generation) DO NOTHING',
+                (scope.owner_id,task['task_id'],task['generation'],revision_id,revision_hash,now,writer_instance), write=True)
         else:
-            changed=self._db.execute(
-                'UPDATE artifact_manifest_ready SET revision_id=?,revision_hash=?,marked_at=?,writer_instance=? WHERE task_id=? AND generation=? AND revision_id=?',
-                (revision_id,revision_hash,now,writer_instance,task['task_id'],task['generation'],expected_revision_id))
+            changed=self._execute_native(
+                'UPDATE artifact_manifest_ready SET revision_id=%s,revision_hash=%s,marked_at=%s,writer_instance=%s WHERE task_id=%s AND generation=%s AND revision_id=%s',
+                (revision_id,revision_hash,now,writer_instance,task['task_id'],task['generation'],expected_revision_id), write=True)
         if changed.rowcount!=1: raise ValueError('readiness CAS failed: a concurrent producer published a revision')
 
     def publish_task_revision(self,task_id,artifacts,*,writer_instance):
@@ -1996,7 +1996,7 @@ FROM tasks t"""
         import uuid as _uuid
         task=self.task(task_id)
         if not task: raise KeyError(task_id)
-        marker=self._db.execute('SELECT revision_id FROM artifact_manifest_ready WHERE task_id=? AND generation=?',
+        marker=self._execute_native('SELECT revision_id FROM artifact_manifest_ready WHERE task_id=%s AND generation=%s',
             (task_id,task['generation'])).fetchone()
         expected=marker['revision_id'] if marker else None
         revision_id=_uuid.uuid4().hex
@@ -2004,12 +2004,12 @@ FROM tasks t"""
             mime_type=a.get('mime_type','application/json'),writer_instance=writer_instance,
             validation_report=a.get('validation_report')) for a in artifacts]
         keep={(a['phase_key'],a['name']) for a in artifacts}
-        for row in self._db.execute("SELECT phase_key,name FROM task_artifacts WHERE task_id=? AND generation=? AND publication_state='published'",
+        for row in self._execute_native("SELECT phase_key,name FROM task_artifacts WHERE task_id=%s AND generation=%s AND publication_state='published'",
             (task_id,task['generation'])).fetchall():
             if (row['phase_key'],row['name']) not in keep:
-                self._db.execute("UPDATE task_artifacts SET publication_state='superseded' WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='published'",
-                    (task_id,task['generation'],row['phase_key'],row['name']))
-        members=self._db.execute("SELECT phase_key,name,sha256 FROM task_artifacts WHERE task_id=? AND generation=? AND publication_state='published'",
+                self._execute_native("UPDATE task_artifacts SET publication_state='superseded' WHERE task_id=%s AND generation=%s AND phase_key=%s AND name=%s AND publication_state='published'",
+                    (task_id,task['generation'],row['phase_key'],row['name']), write=True)
+        members=self._execute_native("SELECT phase_key,name,sha256 FROM task_artifacts WHERE task_id=%s AND generation=%s AND publication_state='published'",
             (task_id,task['generation'])).fetchall()
         self._mark_revision_ready(task,revision_id,self._revision_hash(members),expected,writer_instance,time.time())
         return published
@@ -2021,10 +2021,8 @@ FROM tasks t"""
         A marker whose hash no longer matches the members in the same snapshot is
         corruption - raise, never serve against it."""
         import json as _json
-        row=self._db.execute(
-            "WITH m AS (SELECT revision_id,revision_hash FROM artifact_manifest_ready WHERE task_id=? AND generation=coalesce(?,(SELECT generation FROM tasks WHERE task_id=?))) "
-            "SELECT m.revision_id,m.revision_hash,"
-            "(SELECT json_agg(row_to_json(t)) FROM (SELECT * FROM task_artifacts WHERE task_id=? AND generation=coalesce(?,(SELECT generation FROM tasks WHERE task_id=?)) AND publication_state='published' ORDER BY phase_key,name,id) t) AS members FROM m",
+        row=self._execute_native(
+            "WITH m AS (SELECT revision_id,revision_hash FROM artifact_manifest_ready WHERE task_id=%s AND generation=coalesce(%s,(SELECT generation FROM tasks WHERE task_id=%s))) SELECT m.revision_id,m.revision_hash,(SELECT json_agg(row_to_json(t)) FROM (SELECT * FROM task_artifacts WHERE task_id=%s AND generation=coalesce(%s,(SELECT generation FROM tasks WHERE task_id=%s)) AND publication_state='published' ORDER BY phase_key,name,id) t) AS members FROM m",
             (task_id,generation,task_id,task_id,generation,task_id)).fetchone()
         if row is None:return None
         members=row['members']
@@ -2042,10 +2040,10 @@ FROM tasks t"""
         task=self.task(task_id)
         if not task:return None
         if generation is None:generation=task['generation']
-        marker=self._db.execute('SELECT revision_id,revision_hash FROM artifact_manifest_ready WHERE task_id=? AND generation=?',
+        marker=self._execute_native('SELECT revision_id,revision_hash FROM artifact_manifest_ready WHERE task_id=%s AND generation=%s',
             (task_id,generation)).fetchone()
         if marker is None:return None
-        members=self._db.execute("SELECT phase_key,name,sha256 FROM task_artifacts WHERE task_id=? AND generation=? AND publication_state='published'",
+        members=self._execute_native("SELECT phase_key,name,sha256 FROM task_artifacts WHERE task_id=%s AND generation=%s AND publication_state='published'",
             (task_id,generation)).fetchall()
         if self._revision_hash(members)!=marker['revision_hash']:
             raise ValueError('readiness marker does not match the published manifest revision')
@@ -2053,35 +2051,33 @@ FROM tasks t"""
 
     def producer_result(self,job_id):
         """Durable produced-awaiting-publication state for a worker job, or None."""
-        row=self._db.execute('SELECT * FROM producer_results WHERE job_id=?',(job_id,)).fetchone()
+        row=self._execute_native('SELECT * FROM producer_results WHERE job_id=%s',(job_id,)).fetchone()
         return dict(row) if row else None
 
     def record_producer_result(self,job_id,task_id,generation,session_root,content_hash):
         """Persist that the paid producer completed: its bytes are at session_root
         (pinned by content_hash) and only publication remains."""
         import time as _time
-        self._db.execute(
-            'INSERT INTO producer_results(owner_id,job_id,task_id,generation,session_root,content_hash,produced_at) VALUES (?,?,?,?,?,?,?) '
-            'ON CONFLICT (job_id) DO UPDATE SET task_id=EXCLUDED.task_id,generation=EXCLUDED.generation,'
-            'session_root=EXCLUDED.session_root,content_hash=EXCLUDED.content_hash,produced_at=EXCLUDED.produced_at,published_at=NULL',
-            (current_scope().owner_id,job_id,task_id,generation,session_root,content_hash,_time.time()))
+        self._execute_native(
+            'INSERT INTO producer_results(owner_id,job_id,task_id,generation,session_root,content_hash,produced_at) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (job_id) DO UPDATE SET task_id=EXCLUDED.task_id,generation=EXCLUDED.generation,session_root=EXCLUDED.session_root,content_hash=EXCLUDED.content_hash,produced_at=EXCLUDED.produced_at,published_at=NULL',
+            (current_scope().owner_id,job_id,task_id,generation,session_root,content_hash,_time.time()), write=True)
 
     def producer_paid_evidence(self,job_id):
         """Count of provider attempt rows recorded for a job: evidence that paid work
         may already have happened when no produced marker exists."""
-        row=self._db.execute('SELECT count(*) AS n FROM provider_attempts WHERE job_id=?',(job_id,)).fetchone()
+        row=self._execute_native('SELECT count(*) AS n FROM provider_attempts WHERE job_id=%s',(job_id,)).fetchone()
         return row['n'] if row else 0
 
     def mark_producer_published(self,job_id):
         import time as _time
-        changed=self._db.execute('UPDATE producer_results SET published_at=? WHERE job_id=? AND published_at IS NULL',
-            (_time.time(),job_id))
+        changed=self._execute_native('UPDATE producer_results SET published_at=%s WHERE job_id=%s AND published_at IS NULL',
+            (_time.time(),job_id), write=True)
         if changed.rowcount!=1: raise ValueError('producer result was already marked published')
 
     def read_artifact_bytes_sha(self,sha256):
         """Read immutable bytes by content hash - one exact published revision, safe to
         combine with a previously taken manifest snapshot under concurrent republish."""
-        row=self._db.execute('SELECT bytes FROM artifact_bytes WHERE owner_id=? AND sha256=?',(current_scope().owner_id,sha256)).fetchone()
+        row=self._execute_native('SELECT bytes FROM artifact_bytes WHERE owner_id=%s AND sha256=%s',(current_scope().owner_id,sha256)).fetchone()
         if row is None: raise KeyError(f'no stored bytes for hash {sha256[:12]}')
         data=bytes(row['bytes'])
         import hashlib
@@ -2095,10 +2091,10 @@ FROM tasks t"""
         task=self.task(task_id)
         if not task: raise KeyError(f'no published artifact {phase_key}/{name}')
         if generation is None: generation=task['generation']
-        row=self._db.execute("SELECT * FROM task_artifacts WHERE task_id=? AND generation=? AND phase_key=? AND name=? AND publication_state='published'",
+        row=self._execute_native("SELECT * FROM task_artifacts WHERE task_id=%s AND generation=%s AND phase_key=%s AND name=%s AND publication_state='published'",
             (task_id,generation,phase_key,name)).fetchone()
         if row is None: raise KeyError(f'no published artifact {phase_key}/{name}')
-        stored=self._db.execute('SELECT bytes FROM artifact_bytes WHERE owner_id=? AND sha256=?',
+        stored=self._execute_native('SELECT bytes FROM artifact_bytes WHERE owner_id=%s AND sha256=%s',
             (current_scope().owner_id,row['sha256'])).fetchone()
         if stored is None: raise ValueError(f'manifest row without stored bytes for {phase_key}/{name}')
         data=bytes(stored['bytes'])
