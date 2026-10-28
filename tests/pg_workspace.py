@@ -107,6 +107,7 @@ patches only the store/config and test signing key, never auth or scope function
         # State stores values in its mapping, not __dict__. Patch that mapping
         # so pytest restores rather than deletes the dynamic attribute.
         monkeypatch.setitem(module.app.state._state, 'store', workspace.store)
+        monkeypatch.setattr(module.orchestrator, 'store', workspace.store)
         return TenantMiddleware(module.app,
             verifier=SupabaseIdentityVerifier(URL, key_provider=Keys()),
             session_check=workspace.store.auth_session_active,
