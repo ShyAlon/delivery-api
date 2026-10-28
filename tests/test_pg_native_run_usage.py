@@ -4,8 +4,8 @@ from delivery_api.tenancy import tenant_context,TenantAccessDenied
 from vmodel_contracts import RunState
 
 
-def test_native_run_usage_artifacts_and_owner_isolation(pg_workspace_factory,monkeypatch):
-    from delivery_api.postgres_store import _Connection
+def test_native_run_usage_artifacts_and_owner_isolation(pg_workspace_factory,monkeypatch, pg_bridge_poison):
+    _Connection = pg_bridge_poison
     from delivery_api.store import SQLiteStore
     with pg_workspace_factory() as a,pg_workspace_factory() as b:
         s=a.store

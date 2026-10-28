@@ -23,8 +23,8 @@ def test_all_revision_method_queries_are_native():
         assert not any(isinstance(n,ast.Attribute) and n.attr=='_db' for n in ast.walk(tree)),name
 
 
-def test_native_held_lineage_and_journal_runtime(pg_workspace_factory,monkeypatch):
-    from delivery_api.postgres_store import _Connection
+def test_native_held_lineage_and_journal_runtime(pg_workspace_factory,monkeypatch, pg_bridge_poison):
+    _Connection = pg_bridge_poison
     from test_postgres_store import _held_lineage_fixture
     with pg_workspace_factory() as w,tenant_context(w.scope):
         s=w.store;original=_Connection.execute

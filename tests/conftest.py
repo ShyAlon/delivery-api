@@ -71,3 +71,5 @@ def evidence_store(request, tmp_path, pg_workspace_factory):
         from delivery_api.tenancy import tenant_context
         with pg_workspace_factory() as workspace, tenant_context(workspace.scope):
             yield workspace.store
+
+from pg_bridge_guard import pg_bridge_poison  # noqa: E402,F401

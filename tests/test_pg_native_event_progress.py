@@ -6,8 +6,8 @@ from delivery_api.tenancy import tenant_context
 from vmodel_contracts.progress_signal import ProgressSignal
 
 
-def test_event_progress_audit_and_diagnostic_native_boundary(pg_workspace_factory,monkeypatch):
-    from delivery_api.postgres_store import _Connection
+def test_event_progress_audit_and_diagnostic_native_boundary(pg_workspace_factory,monkeypatch, pg_bridge_poison):
+    _Connection = pg_bridge_poison
     from delivery_api.store import SQLiteStore
     with pg_workspace_factory() as workspace, tenant_context(workspace.scope):
         store = workspace.store

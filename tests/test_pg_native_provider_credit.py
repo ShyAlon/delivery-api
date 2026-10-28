@@ -17,8 +17,8 @@ def test_provider_prepaid_queries_do_not_consume_bridge():
         assert not any(isinstance(n,ast.Attribute) and n.attr=='_db' for n in ast.walk(ast.parse(source)))
 
 
-def test_native_prepaid_settlement_outbox_and_owner_fences(pg_workspace_factory,monkeypatch):
-    from delivery_api.postgres_store import _Connection
+def test_native_prepaid_settlement_outbox_and_owner_fences(pg_workspace_factory,monkeypatch, pg_bridge_poison):
+    _Connection = pg_bridge_poison
     from delivery_api.expense_alert import prepare_alert
     from test_attempt_ledger import Q
     with pg_workspace_factory() as w,pg_workspace_factory() as other:

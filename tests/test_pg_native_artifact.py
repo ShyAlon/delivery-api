@@ -5,8 +5,8 @@ import pytest
 from delivery_api.tenancy import tenant_context
 
 
-def test_native_manifest_and_producer_consumers(pg_workspace_factory,tmp_path,monkeypatch):
-    from delivery_api.postgres_store import _Connection
+def test_native_manifest_and_producer_consumers(pg_workspace_factory,tmp_path,monkeypatch, pg_bridge_poison):
+    _Connection = pg_bridge_poison
     with pg_workspace_factory() as a,pg_workspace_factory() as b:
         s=a.store
         with tenant_context(a.scope):

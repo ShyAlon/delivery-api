@@ -5,8 +5,8 @@ from delivery_api.tenancy import tenant_context,TenantAccessDenied
 from delivery_api.attempt_ledger import AdmissionDenied
 
 
-def test_native_task_lifecycle_and_session_bindings(pg_workspace_factory,monkeypatch):
-    from delivery_api.postgres_store import _Connection
+def test_native_task_lifecycle_and_session_bindings(pg_workspace_factory,monkeypatch, pg_bridge_poison):
+    _Connection = pg_bridge_poison
     with pg_workspace_factory() as a,pg_workspace_factory() as b:
         s=a.store;original=_Connection.execute
         def reject(self,sql,parameters=()):

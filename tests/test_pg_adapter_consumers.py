@@ -9,9 +9,7 @@ def test_no_sqlite_row_cursor_or_error_conversion_remains():
     assert not hasattr(module,'_Row')
     assert not hasattr(module,'_Cursor')
     assert 'sqlite3' not in Path(module.__file__).read_text()
-    assert not hasattr(module._Connection,'executemany')
-    assert not hasattr(module._Connection,'commit')
-    assert not hasattr(module._Connection,'rollback')
+    assert not hasattr(module,'_Connection')
 
 
 def test_native_create_collision_keeps_shape_and_transaction(pg_workspace_factory):
