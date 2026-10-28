@@ -57,7 +57,8 @@ def test_create_textarea_keyboard_cancel_and_collision(pg_browser):
     page.get_by_text("This task hasn't started.").wait_for()
     assert page.get_by_role('heading', name='PG multiline task').is_visible()
     page.goto(base)
-    page.locator('.task').first.wait_for()
+    # Loading skeletons also use .task; wait for actual task data before baseline.
+    expect(page.locator('.task h2',has_text='PG multiline task')).to_be_visible()
     before = page.locator('.task').count()
     page.get_by_role('button', name='+ New task').click()
     page.locator('#newform input[name="title"]').fill('Must not be created')
