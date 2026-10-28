@@ -821,3 +821,20 @@ existing cosmetic debt unchanged. Shared69PGfunctions/74expanded cases,
 58legacyfunctions/63expanded cases,plus three standalone legacy-auth cases.
 Hosted CI/full mixed UI/full repo/deployed topology unrun. A incomplete;
 B/C/D not started.
+
+## A62: stale/accepted decision browser state group
+
+Eight stale-load/conflict,selected-concept context,accepted-event closure,
+Needs-gate stale prompt suppression,rationale keyboard help,orchestrator
+baseline and accepted-answer disarm cases use signed regular-owner PG. All
+original assertions retained. Signature guard failed first. Eight cases+guard+
+cloud API+bootstrap47passed0skips23.30s. Task/SSE/answer mocks remain browser
+state contracts,not proof of actual engine/orchestrator acceptance. Inspected
+selected PWA/concept reason and Approve/Reject pixels:readable and contained.
+Production/cosmetic debt unchanged. Shared77PGfunctions/82expanded cases,
+50legacyfunctions/55expanded cases,plus three standalone legacy-auth cases.
+Repository size at base c839891:317test modules,2296test functions/methods by AST,
+not collected/parameter-expanded tests. Literal inventory35files unchanged,
+4migrate/19guard/5reference/7retired;implicit API adds one migrate file.
+Hosted CI/full mixed UI/full repo/deployed topology unrun. A incomplete;
+B/C/D not started.
