@@ -502,3 +502,16 @@ failed on SQLite. Focused16passed0skips3.08s;expanded full mixed HTTP-cutover,
 dedupe,bootstrap60passed0skips5.41s with producer sources. Remaining SQLite
 receivers in HTTP-cutover retained. Production/UI unchanged;hosted CI/full suite/
 deployed topology not run. A incomplete;B/C/D not started.
+
+## A40: HTTP-engine terminal recovery fixtures
+
+Eight terminal recovery cases now scoped PG:completed-session no replay,
+independent-adapter restore/one-time handoff,missing/mismatched artifact refusal,
+read repair,real orchestrator command planning with mocked runner,final answer
+single submission,exact diagnostic disposition and legacy unpinned refusal.
+Every original assertion retained. Unique fixture engine sessions preserve
+ownership. Local orchestration policy explicit,no process/provider execution.
+Fail-first PG assertion failed on SQLite. Focused11passed0skips2.04s;expanded
+full mixed HTTP-cutover,dedupe,bootstrap60passed0skips with producer sources.
+Remaining cutover SQLite receivers retained. Production/UI unchanged;hosted CI/
+full suite/deployed topology not run. A incomplete;B/C/D not started.
