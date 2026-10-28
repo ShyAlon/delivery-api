@@ -164,3 +164,19 @@ Acceptance67passed0skips4.37s with both producer sources:engine failure,operator
 diagnostics,cloud API/execution,bootstrap,native projection/events,observability.
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A14: phase-output freshness fixtures (partial migration)
+
+Five independent previous/current/empty/invalid/redo freshness cases use scoped
+restricted PG;local file-backed HTTP policy retained,all original assertions
+unchanged. SQLite opens poisoned. Fail-first PG store assertion failed on SQLite.
+The attempted sixth rerun case fails because PG deliberately rejects legacy
+prepare_rerun until immutable generation/session copy policy is implemented.
+That original test is moved verbatim into test_phase_output_legacy_rerun.py,
+clearly labeled SQLite-only debt,not removed/skipped/emulated. This is not proof
+of complete phase-output migration or cloud file-output API support.
+
+Acceptance72passed0skips5.43s with producer sources:output plus retained legacy
+rerun,protocol/parity,native projection/gate,cloud API,bootstrap,model routes.
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started. Legacy rerun needs explicit contract reconciliation.

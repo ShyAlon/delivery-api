@@ -1,12 +1,19 @@
 import json
+import pytest
 from fastapi.testclient import TestClient
 from delivery_api import app as module
-from delivery_api.store import SQLiteStore
+
+@pytest.fixture(autouse=True)
+def output_workspace(pg_scoped_workspace,monkeypatch):
+    # File-backed output projection is an existing local HTTP contract.
+    monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+    return pg_scoped_workspace
 
 
-def test_partial_current_phase_and_labeled_previous_result(tmp_path,monkeypatch):
+
+def test_partial_current_phase_and_labeled_previous_result(tmp_path,monkeypatch,output_workspace):
     root=tmp_path/'artifacts';folder=root/'session-1'/'spec';folder.mkdir(parents=True)
-    store=SQLiteStore(str(tmp_path/'output.db'));tid=store.create_task('Output display','brief')['task_id']
+    store=output_workspace.store;tid=store.create_task('Output display','brief')['task_id']
     store.set_engine_session(tid,'session-1')
     for phase in ('intent','conops','needs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'srs','running')
@@ -23,9 +30,9 @@ def test_partial_current_phase_and_labeled_previous_result(tmp_path,monkeypatch)
     assert current['items']==[{'id':'R-1','statement':'Show progress'}]
 
 
-def test_architecture_partial_uses_generator_keys(tmp_path,monkeypatch):
+def test_architecture_partial_uses_generator_keys(tmp_path,monkeypatch,output_workspace):
     root=tmp_path/'artifacts';folder=root/'session-2'/'spec';folder.mkdir(parents=True)
-    store=SQLiteStore(str(tmp_path/'architecture.db'));tid=store.create_task('Architecture partial','brief')['task_id']
+    store=output_workspace.store;tid=store.create_task('Architecture partial','brief')['task_id']
     store.set_engine_session(tid,'session-2')
     for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'architecture','running')
@@ -38,28 +45,9 @@ def test_architecture_partial_uses_generator_keys(tmp_path,monkeypatch):
     assert {item['id'] for item in data['items']}=={'database','API','ADR-1'}
 
 
-def test_rerun_does_not_relabel_old_canonical_or_partial_as_current(tmp_path,monkeypatch):
-    root=tmp_path/'artifacts';folder=root/'session-3'/'spec';folder.mkdir(parents=True)
-    store=SQLiteStore(str(tmp_path/'rerun.db'));tid=store.create_task('Rerun freshness','brief')['task_id']
-    store.set_engine_session(tid,'session-3')
-    for phase in ('intent','conops','needs'):store.update_phase(tid,phase,'approved')
-    store.update_phase(tid,'srs','running')
-    (folder/'srs.json').write_text(json.dumps({'functional':[]}))
-    (folder/'srs_fills.partial.json').write_text(json.dumps({'R-old':{'statement':'Stale'}}))
-    store.update_phase(tid,'srs','awaiting_approval')
-    # A new generation begins, but the old files remain under the same session.
-    store.prepare_rerun(tid,'srs')
-    import time
-    time.sleep(.02)
-    store.update_phase(tid,'srs','running')
-    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));monkeypatch.setattr(module,'store',store)
-    data=TestClient(module.app).get(f'/api/tasks/{tid}/phase-output').json()
-    assert data['status']=='waiting' and data['items']==[]
-
-
-def test_empty_current_partial_keeps_labeled_previous_phase(tmp_path,monkeypatch):
+def test_empty_current_partial_keeps_labeled_previous_phase(tmp_path,monkeypatch,output_workspace):
     root=tmp_path/'artifacts';folder=root/'session-4'/'spec';folder.mkdir(parents=True)
-    store=SQLiteStore(str(tmp_path/'empty.db'));tid=store.create_task('Empty partial','brief')['task_id']
+    store=output_workspace.store;tid=store.create_task('Empty partial','brief')['task_id']
     store.set_engine_session(tid,'session-4')
     for phase in ('intent','conops','needs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'srs','running')
@@ -72,9 +60,9 @@ def test_empty_current_partial_keeps_labeled_previous_phase(tmp_path,monkeypatch
     assert data['status']=='previous_phase' and data['display_phase']=='needs'
 
 
-def test_gate_redo_resets_phase_start_and_rejects_old_output(tmp_path,monkeypatch):
+def test_gate_redo_resets_phase_start_and_rejects_old_output(tmp_path,monkeypatch,output_workspace):
     root=tmp_path/'artifacts';folder=root/'session-5'/'spec';folder.mkdir(parents=True)
-    store=SQLiteStore(str(tmp_path/'redo.db'));tid=store.create_task('Redo freshness','brief')['task_id']
+    store=output_workspace.store;tid=store.create_task('Redo freshness','brief')['task_id']
     store.set_engine_session(tid,'session-5')
     for phase in ('intent','conops','needs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'srs','running')
@@ -89,9 +77,9 @@ def test_gate_redo_resets_phase_start_and_rejects_old_output(tmp_path,monkeypatc
     assert data['status']=='waiting' and data['items']==[]
 
 
-def test_invalid_current_artifact_is_unavailable_not_previous(tmp_path,monkeypatch):
+def test_invalid_current_artifact_is_unavailable_not_previous(tmp_path,monkeypatch,output_workspace):
     root=tmp_path/'artifacts';folder=root/'session-6'/'spec';folder.mkdir(parents=True)
-    store=SQLiteStore(str(tmp_path/'invalid.db'));tid=store.create_task('Invalid current','brief')['task_id']
+    store=output_workspace.store;tid=store.create_task('Invalid current','brief')['task_id']
     store.set_engine_session(tid,'session-6')
     for phase in ('intent','conops','needs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'srs','running')
@@ -101,3 +89,13 @@ def test_invalid_current_artifact_is_unavailable_not_previous(tmp_path,monkeypat
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));monkeypatch.setattr(module,'store',store)
     data=TestClient(module.app).get(f'/api/tasks/{tid}/phase-output').json()
     assert data['status']=='unavailable' and data['items']==[]
+
+
+def test_output_fixture_uses_restricted_pg():
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(module.store,PostgresStore)
+    from delivery_api.store import SQLiteStore
+    with pytest.raises(AssertionError,match='SQLite forbidden'):
+        SQLiteStore(':memory:')
+    with module.store._postgres.transaction() as connection:
+        assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
