@@ -938,3 +938,19 @@ Shared107PG/20legacy functions out of127,plus three standalone local-auth/browse
 cases. Pending debug contract cases untouched. A incomplete;global SQLite
 bootstrap remains;B/C/D unstarted. Hosted CI/full mixed UI/full repo/deployed
 topology unrun. Production unchanged;no deploy/live DB/model execution.
+
+## A69: request timing browser group
+
+Three slow-write foreground banner,quiet background refresh/terminal output,
+and idle/safety/event refresh cases use signed PG/isolated IDs. All assertions
+retained,including explicit local_preview terminal-output presentation fixture
+(not the real PG output state). Real signed task requests still pass middleware.
+Guard failed first1 in0.75s;cases+guard+cloud API+bootstrap42passed0skips21.10s.
+Count recheck1passed7.87s:five tracked endpoints each0reads over57s simulated
+idle,each1read at61s safety;call completion adds cost read without task snapshot.
+Inspected viewport Saving feedback banner. Injected delayed feedback and clock/
+SSE/output mocks are presentation/timing contracts,not real elapsed61s or engine
+execution proof. Shared110PG/17legacy functions out of127,plus three standalone
+local-auth/browser cases. Pending debug conflicts untouched. A incomplete;
+global SQLite bootstrap remains;B/C/D unstarted. Hosted CI/full mixed UI/full
+repo/deployed topology unrun. Production unchanged;no deploy/live DB/model calls.

@@ -1782,31 +1782,35 @@ def test_every_generator_gate_uses_same_page_and_configured_model_picker(page,ui
         expect(page.locator('select[name="redo_model"]')).to_have_count(0)
 
 
-def test_cross_ui_waiting_banner_during_slow_write(page,ui):
-    page.goto(ui+'/tasks/empty/view')
+def test_cross_ui_waiting_banner_during_slow_write(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["empty"]
+    page.goto(ui+f'/tasks/{tid}/view')
     page.get_by_role('group',name='Default model route').wait_for()
-    page.evaluate("""() => {
+    page.evaluate("""(taskId) => {
       const original=window.fetch;
       window.fetch=(url,opts={})=>String(url).endsWith('/feedback')&&opts.method==='POST'
         ? new Promise(resolve=>setTimeout(()=>resolve(new Response('{}',{status:200,headers:{'content-type':'application/json'}})),1000))
         : original(url,opts);
-      import('/assets/client-core.js').then(m=>m.api('/api/tasks/empty/feedback',{method:'POST',body:'{}'}));
-    }""")
+      import('/assets/client-core.js').then(m=>m.api('/api/tasks/'+taskId+'/feedback',{method:'POST',body:'{}'}));
+    }""",tid)
     page.locator('#server-wait:not(.hidden)').wait_for(timeout=3000)
     assert 'Saving feedback' in page.locator('#server-wait').inner_text()
     page.screenshot(path=str(_screenshots_dir / 'fast-follow-waiting-banner.png'),full_page=False)
     page.locator('#server-wait').wait_for(state='hidden',timeout=3000)
 
 
-def test_background_refresh_stays_quiet_and_terminal_output_poll_stops(page, ui):
+def test_background_refresh_stays_quiet_and_terminal_output_poll_stops(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     # Drive the approved 60s safety callbacks explicitly; state events are the normal refresh path.
     # The background read must not flash the global wait banner, and once the environment
     # reports phase output as unavailable here (local preview), that poll leg must stop
     # while the snapshot liveness leg keeps running. Foreground reads must still show progress.
     page.add_init_script("""const originalInterval=window.setInterval;window.__safety=[];window.setInterval=(fn,ms,...args)=>{if(ms===60000)window.__safety.push(()=>fn(...args));return originalInterval(fn,ms,...args)}""")
-    page.goto(ui + '/tasks/live/view')
+    page.goto(ui + f'/tasks/{tid}/view')
     page.locator('.detail-head').wait_for()
-    real = page.request.get(ui + '/api/tasks/live/phase-output').json()
+    real = page.request.get(ui + f'/api/tasks/{tid}/phase-output').json()
     terminal = {**real, 'status': 'local_preview', 'items': []}
     hits = {'task': 0, 'output': 0}
     def slow_task(route):
@@ -1823,8 +1827,8 @@ def test_background_refresh_stays_quiet_and_terminal_output_poll_stops(page, ui)
         if (!banner.classList.contains('hidden')) window.__bannerShows++;
       }).observe(banner, {attributes: true, attributeFilter: ['class']});
     }""")
-    page.route('**/api/tasks/live', slow_task)
-    page.route('**/api/tasks/live/phase-output', terminal_output)
+    page.route(f'**/api/tasks/{tid}', slow_task)
+    page.route(f'**/api/tasks/{tid}/phase-output', terminal_output)
     assert page.evaluate('window.__safety.length')>=1
     for cycle in range(2):
         page.evaluate('window.__safety.forEach(fn=>fn())')
@@ -1839,8 +1843,8 @@ def test_background_refresh_stays_quiet_and_terminal_output_poll_stops(page, ui)
     page.reload()
     page.wait_for_function("document.querySelector('#server-wait') && !document.querySelector('#server-wait').classList.contains('hidden')", timeout=5000)
     page.locator('.detail-head').wait_for()
-    page.unroute('**/api/tasks/live', slow_task)
-    page.unroute('**/api/tasks/live/phase-output', terminal_output)
+    page.unroute(f'**/api/tasks/{tid}', slow_task)
+    page.unroute(f'**/api/tasks/{tid}/phase-output', terminal_output)
 
 
 
@@ -2583,22 +2587,24 @@ def test_start_route_pills_show_all_choices_and_disabled_reasons(pg_page,pg_ui,p
     assert not page.get_by_role('button',name='Start interview').is_enabled()
 
 
-def test_idle_stream_reads_only_at_60s_safety_then_refreshes_on_events(page,ui):
+def test_idle_stream_reads_only_at_60s_safety_then_refreshes_on_events(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     from collections import Counter
     page.clock.install()
     page.add_init_script("""window.__stream=null;window.EventSource=class {constructor(){this.readyState=1;this.listeners={};window.__stream=this}addEventListener(k,f){this.listeners[k]=f}close(){this.readyState=2}}""")
     counts=Counter()
     page.on('request',lambda request:counts.update([__import__('urllib.parse',fromlist=['urlparse']).urlparse(request.url).path]))
     page.route('**/api/account/credits',lambda r:r.fulfill(json={'credits':10}))
-    page.route('**/api/tasks/live/cost',lambda r:r.fulfill(json={'price':1.25,'price_usd':1.25}))
-    page.route('**/api/tasks/live/cost-phases',lambda r:r.fulfill(json={'phases':[{'phase':'intent','credits':1.25}]}))
-    page.goto(ui+'/tasks/live/view');page.locator('#stageprogress').wait_for();expect(page.locator('#sessioncost')).to_have_text('1.25 credits · $1.25');page.wait_for_timeout(1500)
+    page.route(f'**/api/tasks/{tid}/cost',lambda r:r.fulfill(json={'price':1.25,'price_usd':1.25}))
+    page.route(f'**/api/tasks/{tid}/cost-phases',lambda r:r.fulfill(json={'phases':[{'phase':'intent','credits':1.25}]}))
+    page.goto(ui+f'/tasks/{tid}/view');page.locator('#stageprogress').wait_for();expect(page.locator('#sessioncost')).to_have_text('1.25 credits · $1.25');page.wait_for_timeout(1500)
     for _ in range(10):
         page.clock.run_for(100);time.sleep(.1)
         if page.locator('#sessioncost').get_attribute('title').endswith('Total: 1.25 credits'):break
     assert page.locator('#sessioncost').get_attribute('title').endswith('Total: 1.25 credits')
     page.clock.pause_at(page.evaluate('Date.now()'))
-    keys=['/api/account/credits','/api/tasks/live/cost','/api/tasks/live/cost-phases','/api/tasks/live','/api/tasks/live/phase-output']
+    keys=['/api/account/credits',f'/api/tasks/{tid}/cost',f'/api/tasks/{tid}/cost-phases',f'/api/tasks/{tid}',f'/api/tasks/{tid}/phase-output']
     for _ in range(20):page.clock.run_for(100);time.sleep(.05)
     before={k:counts[k] for k in keys}
     page.clock.run_for(57000);time.sleep(.5);page.clock.run_for(100)
@@ -2612,10 +2618,10 @@ def test_idle_stream_reads_only_at_60s_safety_then_refreshes_on_events(page,ui):
     page.evaluate("window.__stream.listeners.progress({data:JSON.stringify({id:999,kind:'progress',phase_key:'conops',message:'call done',payload:{stage:'llm_call:probing',status:'completed'}})})")
     page.clock.run_for(500);time.sleep(.5);page.clock.run_for(100);time.sleep(.5);page.clock.run_for(100)
     for _ in range(20):
-        if counts['/api/tasks/live/cost']==before['/api/tasks/live/cost']+2:break
+        if counts[f'/api/tasks/{tid}/cost']==before[f'/api/tasks/{tid}/cost']+2:break
         page.clock.run_for(100);time.sleep(.1)
-    assert counts['/api/tasks/live/cost']==before['/api/tasks/live/cost']+2
-    assert counts['/api/tasks/live']==before['/api/tasks/live']+1, 'model call completion must not fetch task state'
+    assert counts[f'/api/tasks/{tid}/cost']==before[f'/api/tasks/{tid}/cost']+2
+    assert counts[f'/api/tasks/{tid}']==before[f'/api/tasks/{tid}']+1, 'model call completion must not fetch task state'
 
 @pytest.mark.parametrize('phase',['intent','needs'])
 @pytest.mark.parametrize('width',[1365,390])
@@ -2964,4 +2970,12 @@ def test_gate_controls_cases_require_signed_pg_browser():
                  test_closed_gate_can_save_revision_proposal_without_restarting,
                  test_gate_comment_shared_guard_prevents_duplicate_and_allows_retry,
                  test_gate_approval_shared_guard_ignores_second_action_and_preserves_retry):
+        assert 'pg_page' in inspect.signature(case).parameters
+
+
+def test_request_timing_cases_require_signed_pg_browser():
+    import inspect
+    for case in (test_cross_ui_waiting_banner_during_slow_write,
+                 test_background_refresh_stays_quiet_and_terminal_output_poll_stops,
+                 test_idle_stream_reads_only_at_60s_safety_then_refreshes_on_events):
         assert 'pg_page' in inspect.signature(case).parameters
