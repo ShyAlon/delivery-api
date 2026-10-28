@@ -321,3 +321,15 @@ sources:five cases,native projection/gate,decision pages,cloud API,bootstrap.
 Expanded158passed2known baseline failures17.10s (checkpoint intent view/session
 cost metadata),not full-module green. Production/UI unchanged;hosted CI/full
 suite/deployed topology not run. A incomplete;B/C/D not started.
+
+## A26: runner pricing durability fixtures
+
+Durable phase price,incremental interview price before process exit,and
+interviewer-prefix diagnostic cases now scoped PG. Exact token/price/audit and
+no fabricated input-wait assertions retained. Synthetic usage and child scripts
+only,no provider spend. Fail-first phase-price PG assertion failed on SQLite.
+Focused30passed0skips3.98s with producer sources:three cases,native usage/provider
+credit,model routes,protocol,bootstrap. Expanded135passed2known baseline failures
+15.23s (checkpoint intent view/session-cost metadata),not full-module green.
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.

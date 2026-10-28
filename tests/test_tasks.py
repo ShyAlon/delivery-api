@@ -1260,15 +1260,16 @@ def test_default_rates_put_a_full_run_near_five_credits(monkeypatch,tmp_path):
     row=pricing.price_execution(usage,llm,0)[0]
     assert row['token_price']==5.0 and row['price']==5.0 and row['price_usd']==5.0
 
-def test_runner_emits_durable_phase_price(monkeypatch,tmp_path):
+def test_runner_emits_durable_phase_price(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio,json,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
     monkeypatch.setenv('PRICE_PER_TOKEN','2');monkeypatch.setenv('PRICE_PER_10MS','0')
     from delivery_api import pricing
     monkeypatch.setattr(pricing,'PRICE_PER_TOKEN',2.0);monkeypatch.setattr(pricing,'PRICE_PER_10MS',0.0)
     out=tmp_path/'spec';out.mkdir();script="import json,sys,pathlib;p=pathlib.Path(sys.argv[1]);(p/'usage.jsonl').write_text(json.dumps({'stage':'needs','prompt_tokens':3,'completion_tokens':2})+'\\n')"
-    store=SQLiteStore(str(tmp_path/'priced.db'));tid=store.create_task('Priced')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Priced')['task_id']
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     code=asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script,str(out),'--out',str(out)],cwd=tmp_path,phase='needs',infer_phase=False))
     assert code!=0  # Pricing remains durable, but missing evidence blocks the gate.
     event=[e for e in store.events(tid) if e['kind']=='price'][-1]
@@ -1298,15 +1299,14 @@ def test_artifact_snapshot_exposes_content_owned_titles(monkeypatch,tmp_path):
     rows={r['name']:r['title'] for r in app_module._task_artifact_snapshot(tid)}
     assert rows=={'intent_model.json':'Needs and Scope','conops.json':'Concept of Operations'}
 
-def test_runner_emits_incremental_interview_price_before_process_exit(monkeypatch,tmp_path):
+def test_runner_emits_incremental_interview_price_before_process_exit(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio,json,sys,time
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
     from delivery_api import pricing
     monkeypatch.setattr(pricing,'PRICE_PER_TOKEN',2.0);monkeypatch.setattr(pricing,'PRICE_PER_10MS',0.0);monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
     session='live-price';folder=tmp_path/'artifacts'/session/'interview';folder.mkdir(parents=True)
     script="import json,pathlib,time; p=pathlib.Path(%r); print('session: %s',flush=True); time.sleep(.05); (p/'usage.jsonl').write_text(json.dumps({'stage':'probing','prompt_tokens':3,'completion_tokens':2})+'\\n'); print('Question?\\nYou:',end='',flush=True); input(); print('done',flush=True)"%(str(folder),session)
-    store=SQLiteStore(str(tmp_path/'live-price.db'));tid=store.create_task('Live price')['task_id'];runner=ProcessRunner(store)
+    store=pg_scoped_workspace.store;tid=store.create_task('Live price')['task_id'];runner=ProcessRunner(store)
     async def scenario():
         work=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path,phase='intent'))
         for _ in range(100):
@@ -1318,11 +1318,10 @@ def test_runner_emits_incremental_interview_price_before_process_exit(monkeypatc
         return await work
     assert asyncio.run(scenario())==0
 
-def test_interviewer_prefix_lines_are_diagnostics_not_questions(tmp_path):
+def test_interviewer_prefix_lines_are_diagnostics_not_questions(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'prefix.db'));tid=store.create_task('Prefix')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Prefix')['task_id']
     script="print('Interviewer: What change matters?\\nYou:',end='',flush=True)"
     assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))==0
     assert not any(e['kind']=='waiting_input' for e in store.events(tid))
