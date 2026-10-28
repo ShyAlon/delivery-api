@@ -717,3 +717,19 @@ with spinner/cancel and submitting indicator;processing shadow preserves questio
 and answer. Sticky headings clip some upper content in scrolled screenshot;
 not claimed fixed. Production unchanged;V diagram debt remains. Hosted CI/full
 mixed UI/full repo/deployed topology unrun. A incomplete;B/C/D not started.
+
+## A55: gate evidence and transition browser group
+
+Seven checkbox in-place,evidence formatting,delayed transition,architecture
+provenance,missing-artifact approval block,arriving evidence/input preservation
+and desktop/phone help cases now use signed regular-owner PG with unique IDs.
+All original assertions retained. Signature guard failed first. Seven cases+
+guard+cloud API+bootstrap46passed0skips22.17s. Task/artifact/review/decision/SSE
+mocks remain explicit presentation contracts,not real gate commitment proof.
+Pixels inspected:desktop evidence/decision columns readable,formatted title
+without visible UUID;phone stacks evidence and form,missing-artifact warning
+and disabled approval visible. Phone help tooltip stays within viewport but is
+translucent over checklist/buttons;sticky header crossing in full-page capture
+also remains,not claimed fixed. Production unchanged;V diagram debt unchanged.
+Hosted CI/full mixed UI/full repo/deployed topology unrun. A incomplete;
+B/C/D not started.
