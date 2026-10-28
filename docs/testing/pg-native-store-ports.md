@@ -162,3 +162,17 @@ Twelve query-bearing artifact/manifest/producer methods (including private readi
 Failing first: a real manifest publication with artifact/producer-table bridge calls blocked fails before port, then passes unchanged. The fence exempts the still-unported common task projection only. It covers manifest readiness/snapshot/revision, hash-verified bytes, durable producer state and published CAS, foreign-owner invisibility and byte refusal. A readiness failure injected after real artifact writes leaves the exact previous snapshot and no partial manifest member. Successful replacement omits/supersedes the old member while keeping its immutable bytes readable by hash.
 
 Expanded source-enabled acceptance including manifest reads and publication recovery: 201 passed, 0 skipped in 86.50s. Same three evidence contracts cold/warm single local samples: SQLite 1.718/0.284s; PG 1.703/0.272s. Not full-suite/deploy predictions. Hosted CI/deployed topology unverified; no flags activated. Revision installation, task lifecycle, credit and external helper consumers remain before query-bridge retirement.
+
+## Native task lifecycle/projection/session queries (2026-10-28)
+
+Nine methods now own 23 native statement sites (including fixed-table DELETE loop): auth-session probe, task/list projections, request/confirm stop, tombstone, delete, engine-session binding and binding read. Writes retain explicit invalidation. No stop/accounting authority changes. Installed-execution anchor is left with revision-journal work; create_link is a remaining run-family query consumer, not hidden as completed.
+
+Failing-first: real lifecycle query fence and injected post-delete failure tests both fail before port. After port they preserve idempotent generation fencing, quiescence requirements, running-worker refusal, stop pending delete refusal, durable stopped tombstones, retained jobs/session binding, ordinary hard delete, immutable session binding, owner isolation and rollback after actual DELETE. Existing worker/artifact tests now traverse native task projections too.
+
+Same three evidence contracts local cold/warm samples: SQLite 1.564/0.263s; PG 1.544/0.281s. Local scoped samples, not deploy predictions. Hosted CI/deployed topology remain unverified; no deploy/restart/live database/spend/destruction/phase5 activation.
+
+### Expanded ledger acceptance debt discovered (not waived)
+
+Adding test_attempt_ledger.py exposed order-dependent confirmed-expense tests: test_confirmed_guard_ignores_holds_and_inflight_calls_finish expects two alert episodes but finds one; test_confirmed_guard_platform_counts_other_owner_and_rolls_off expects platform denial but gets allowed. Both pass isolated on main and current. Same-order expanded comparison on fresh main: 274 passed/2 failed; current including two new lifecycle tests: 276 passed/2 failed. Both sources enabled: zero skips. Exact cause remains unresolved, no assertions changed, no green expanded-suite claim. Earlier seven engine-source skips are exercised and pass once DELIVERY_TEST_ENGINE_SOURCE is set. Track expense-guard isolation/order investigation separately.
+
+Task/store/cloud/operator/API/browser/manifest acceptance without the separately disclosed expanded ledger suite: 203 passed, 0 skipped in 85.70s (both sources enabled).
