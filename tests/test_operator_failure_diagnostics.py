@@ -6,7 +6,6 @@ import time
 
 import pytest
 
-from delivery_api.store import SQLiteStore
 
 BLOCK = {'error_class': 'InsufficientPrivilege', 'sqlstate': '42501', 'stage': 'session insert',
          'message': 'new row violates row-level security policy for table "[identifier]"',
@@ -15,8 +14,8 @@ BLOCK = {'error_class': 'InsufficientPrivilege', 'sqlstate': '42501', 'stage': '
 
 
 @pytest.fixture
-def store(tmp_path):
-    return SQLiteStore(str(tmp_path / 'test.db'))
+def store(pg_scoped_workspace):
+    return pg_scoped_workspace.store
 
 
 def test_record_and_read_roundtrip(store):
@@ -59,3 +58,13 @@ def test_bounded_page(store):
     store.create_task('t1', task_id='task1')
     with pytest.raises(ValueError):
         store.failure_diagnostics('task1', limit=0)
+
+
+def test_diagnostics_fixture_uses_restricted_pg(store):
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
+    from delivery_api.store import SQLiteStore
+    with pytest.raises(AssertionError,match='SQLite forbidden'):
+        SQLiteStore(':memory:')
+    with store._postgres.transaction() as connection:
+        assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'

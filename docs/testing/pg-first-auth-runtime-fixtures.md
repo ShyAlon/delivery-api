@@ -151,3 +151,16 @@ Fail-first store contract failed on original global SQLite. Acceptance77passed
 0skips9.93s with both producer sources:simulation/restart,cloud API/execution,
 protocol/SSE/parity,native lifecycle/run,bootstrap. Production/UI unchanged.
 Hosted CI/full suite/deployed topology not run. A incomplete;B/C/D not started.
+
+## A13: engine failure and operator diagnostics fixtures
+
+Engine-unreachable local route tests and operator diagnostic roundtrip/validation/
+customer-surface exclusion use scoped restricted PG. Engine mocks remain failing
+transports;the route tests explicitly retain local policy,not cloud admission.
+Existing actionable503/error guidance,no-event-before-preview,view fallback,
+presence-only blocks and bounded-page assertions unchanged. Engine session IDs
+unique per owner. Fail-first diagnostic-store PG assertion failed on SQLite.
+Acceptance67passed0skips4.37s with both producer sources:engine failure,operator
+diagnostics,cloud API/execution,bootstrap,native projection/events,observability.
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.
