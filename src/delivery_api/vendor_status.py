@@ -34,6 +34,8 @@ def warn(kind,text,*,log=None):
         due=kind not in _LOGGED or (now-_LOGGED[kind]).total_seconds()>=600
         if due:_LOGGED[kind]=now
     if due:
+        from .diagnostic_evidence import record
+        record('vendor.terms.warning',kind=kind)
         line=_iso(now)+' WARNING vendor terms ('+kind+'): '+text
         (log or (lambda t:print(t,file=sys.stderr,flush=True)))(line)
 
