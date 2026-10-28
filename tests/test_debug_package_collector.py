@@ -42,3 +42,26 @@ def test_server_log_task_filter_never_includes_neighboring_task(monkeypatch):
  got=m.server_log(30,SimpleNamespace(id='operator',admin=True),'task-a')
  assert got['text']=='INFO task=task-a own' and got['count']==1
  assert got['task_id']=='task-a' and 'unattributed' in got['task_filter']
+
+
+def test_package_fresh_reads_do_not_depend_on_dialog_loading_state():
+ source=f"""
+import {{collectDebugEvidence}} from '{WEB/'debug-package.js'}';
+const calls=[];
+const out=await collectDebugEvidence({{taskId:'live',operator:true,cloud:true,api:async url=>{{calls.push(url);await new Promise(r=>setTimeout(r,5));if(url.includes('credit-history'))throw new Error('sensitive');return {{text:'fresh '+url}}}}}});
+console.log(JSON.stringify({{calls,out}}));
+"""
+ r=subprocess.run(['node','--input-type=module','-e',source],capture_output=True,text=True)
+ assert r.returncode==0,r.stderr
+ result=json.loads(r.stdout)
+ required=['/api/account/ledger','/api/account/credit-history','/api/debug/preflight','/api/admin/operations/request-costs','/api/admin/operations/capacity']
+ assert all(p in result['calls'] for p in required)
+ sections={s['source']:s for s in result['out']['sections']}
+ assert sections['credits']['data']['text']=='fresh /api/account/ledger'
+ assert sections['credit-history']['availability']=='unavailable'
+ assert 'sensitive' not in str(result['out'])
+ # Package must never scrape placeholders or stale globals from the dialog.
+ identity=(WEB/'identity.js').read_text()
+ handler=identity.split("document.querySelector('#downloadeverything').onclick=",1)[1].split("{const lh=document.querySelector('#ledgerhost')",1)[0]
+ assert "document.querySelector('#ledgerhost').textContent" not in handler
+ assert 'window.__preflightText' not in handler and 'window.__requestCostsText' not in handler
