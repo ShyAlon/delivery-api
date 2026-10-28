@@ -158,10 +158,9 @@ def test_http_layer_contains_no_database_calls():
     assert not any(isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr=='execute' for node in ast.walk(module))
     assert not any(isinstance(node,ast.Import) and any(alias.name=='sqlite3' for alias in node.names) for node in ast.walk(module))
 
-def test_simulation_import_pause_decide_and_complete_without_process(tmp_path):
+def test_simulation_import_pause_decide_and_complete_without_process(tmp_path,pg_scoped_workspace):
     import asyncio, json
     from delivery_api.simulation import Simulation
-    from delivery_api.store import SQLiteStore
     source=tmp_path/'recorded'; source.mkdir()
     rows=[
       {'session_id':'s-1','stage':'intent','provider':'ollama','model':'phi4','prompt_tokens':3,'completion_tokens':4,'ts':'2026-09-12T10:00:00Z'},
@@ -170,7 +169,9 @@ def test_simulation_import_pause_decide_and_complete_without_process(tmp_path):
     ]
     (source/'usage.jsonl').write_text('\n'.join(json.dumps(x) for x in rows))
     (source/'tests.json').write_text('[]')
-    isolated=SQLiteStore(str(tmp_path/'sim.db')); sim=Simulation(isolated)
+    isolated=pg_scoped_workspace.store; sim=Simulation(isolated)
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(isolated,PostgresStore)
     task=sim.import_run(source)
     assert task['simulated'] and task['state']=='not_started' and len(task['gates'])==8
     isolated.set_gate_open(task['task_id'],'gate-conops',True)
