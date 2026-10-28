@@ -72,14 +72,15 @@ def test_static_ui_and_deep_link_are_served():
         assert b"<link rel=\"icon\" href=\"/favicon.ico\"" in client.get("/").content
 
 
-def test_process_runner_streams_cli_output_and_known_count(tmp_path):
+def test_process_runner_streams_cli_output_and_known_count(tmp_path,pg_scoped_workspace):
     import asyncio
     import sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
 
-    isolated = SQLiteStore(str(tmp_path / "runner.db"))
+    isolated = pg_scoped_workspace.store
     task_id = isolated.create_task("Runner")['task_id']
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(isolated,PostgresStore)
     runner = ProcessRunner(isolated)
 
     async def go():
@@ -94,11 +95,10 @@ def test_process_runner_streams_cli_output_and_known_count(tmp_path):
     assert event["payload"] == {"completed": 4, "total": 9}
 
 
-def test_process_runner_uses_child_stage_aware_heartbeat_without_generic_noise(tmp_path):
+def test_process_runner_uses_child_stage_aware_heartbeat_without_generic_noise(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'heartbeat.db'));task_id=store.create_task('Useful heartbeat')['task_id']
+    store=pg_scoped_workspace.store;task_id=store.create_task('Useful heartbeat')['task_id']
     script='print("[17:01:25] ... still working - stage \'conops\' call, 30s elapsed",flush=True)'
     assert asyncio.run(ProcessRunner(store).run(task_id,[sys.executable,'-c',script],cwd=tmp_path))==0
     events=store.events(task_id)
@@ -108,11 +108,10 @@ def test_process_runner_uses_child_stage_aware_heartbeat_without_generic_noise(t
     assert not any(e['message']=='Engine is still working' for e in events)
 
 
-def test_subprocess_prompt_lines_are_diagnostics_not_input_waits(tmp_path):
+def test_subprocess_prompt_lines_are_diagnostics_not_input_waits(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'waiting.db'));task_id=store.create_task('Waiting prompt')['task_id']
+    store=pg_scoped_workspace.store;task_id=store.create_task('Waiting prompt')['task_id']
     script="print('Generating interview question',flush=True);print('What matters?\\nYou:',end='',flush=True)"
     assert asyncio.run(ProcessRunner(store).run(task_id,[sys.executable,'-c',script],cwd=tmp_path))==0
     events=store.events(task_id)
@@ -264,11 +263,10 @@ def test_engine_runtime_missing_dependency_reports_all_interpreters(tmp_path,mon
     else:assert False,'missing dependency preflight should fail'
 
 
-def test_process_runner_hides_traceback_and_classifies_missing_module(tmp_path):
+def test_process_runner_hides_traceback_and_classifies_missing_module(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    isolated=SQLiteStore(str(tmp_path/'failure.db'));task_id=isolated.create_task('Failure')['task_id']
+    isolated=pg_scoped_workspace.store;task_id=isolated.create_task('Failure')['task_id']
     script="import sys; print('Traceback (most recent call last):'); print('  File \\\"x.py\\\", line 1'); print(\\\"ModuleNotFoundError: No module named 'langchain_core'\\\"); sys.exit(1)"
     assert asyncio.run(ProcessRunner(isolated).run(task_id,[sys.executable,'-c',script],cwd=tmp_path))==1
     events=isolated.events(task_id);visible=' '.join(e['message'] for e in events)
