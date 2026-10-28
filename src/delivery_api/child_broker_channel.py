@@ -1,4 +1,5 @@
 """Private parent provider channel, opt-in constructor seam only."""
+from .diagnostic_evidence import thread_target
 import contextvars
 from contextlib import contextmanager
 import json
@@ -21,13 +22,15 @@ def provider_broker_channel(broker):
                 reply=broker.dispatch(value)
                 stream.write(json.dumps(reply,separators=(',',':')).encode()+b'\n');stream.flush()
         except BaseException as exc:
+            from .diagnostic_evidence import failure
+            failure('child.broker.failed')
             failures.append(type(exc).__name__)
             # Close instead of leaking private SQL/credential/exception text.
         finally:
             try:parent.shutdown(socket.SHUT_RDWR)
             except OSError:pass
             stream.close();parent.close()
-    thread=threading.Thread(target=lambda:scope.run(serve),daemon=True,name='child-provider-broker');thread.start()
+    thread=threading.Thread(target=thread_target(lambda:scope.run(serve)),daemon=True,name='child-provider-broker');thread.start()
     try:yield child
     finally:
         child.close()

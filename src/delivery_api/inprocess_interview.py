@@ -12,6 +12,7 @@ Limits, by design of running in one process:
     own writer-lock use is replaced, its short marker checks stay.
   * Stop is cooperative; a pending answer survives a restart through the engine's session file.
 """
+from .diagnostic_evidence import thread_target
 import asyncio,secrets,threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -28,7 +29,7 @@ class _HostedEngineTransport(httpx.BaseTransport):
     def __init__(self,app):
         self._asgi=httpx.ASGITransport(app=app)
         self._loop=asyncio.new_event_loop()
-        self._thread=threading.Thread(target=self._loop.run_forever,name='interview-engine-host',daemon=True)
+        self._thread=threading.Thread(target=thread_target(self._loop.run_forever),name='interview-engine-host',daemon=True)
         self._thread.start()
 
     def handle_request(self,request):

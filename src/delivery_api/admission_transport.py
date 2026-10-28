@@ -4,6 +4,7 @@ One connection belongs to one trusted child process. A production runner must
 pass only this descriptor to that child; wiring is still pending. Bounded JSON,
 not pickle, crosses the boundary. No reconnect/retry of ambiguous starts.
 """
+from .diagnostic_evidence import thread_target
 import contextvars,json,socket,threading
 from contextlib import contextmanager
 
@@ -55,7 +56,7 @@ def worker_admission_channel(gateway):
                     reply={'ok':False,'error':'worker attempt admission denied','reason':reason}
                 stream.write(json.dumps(reply).encode()+b'\n');stream.flush()
         finally:stream.close();parent.close()
-    thread=threading.Thread(target=lambda:scope.run(serve),daemon=True);thread.start()
+    thread=threading.Thread(target=thread_target(lambda:scope.run(serve)),daemon=True);thread.start()
     try:yield child
     finally:
         child.close()

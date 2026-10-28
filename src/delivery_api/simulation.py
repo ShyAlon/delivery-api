@@ -1,5 +1,6 @@
 """Validated, zero-process replay of recorded V-model runs."""
 from __future__ import annotations
+from .diagnostic_evidence import spawn
 import asyncio,json,re,os
 from datetime import datetime
 from pathlib import Path
@@ -133,4 +134,4 @@ class Simulation:
 
     def start(self,task_id:str,speed:float|None):
         if task_id in self.running and not self.running[task_id].done():raise ValueError("simulation already running")
-        self.running[task_id]=asyncio.create_task(self.replay(task_id,speed))
+        self.running[task_id]=spawn(self.replay(task_id,speed))

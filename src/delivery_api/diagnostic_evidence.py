@@ -105,3 +105,32 @@ def bound(**fields):
 
 def failure(code):
  logging.getLogger('delivery_api.diagnostic').exception(code)
+
+
+_background=set()
+
+def spawn(coro):
+ """Own a detached service task; log retrieved failure without changing awaiters."""
+ import asyncio
+ task=asyncio.create_task(coro)
+ _background.add(task)
+ def completed(done):
+  _background.discard(done)
+  if done.cancelled():return
+  error=done.exception()
+  if error is not None:
+   logging.getLogger('delivery_api.diagnostic').error('background.task.failed',exc_info=(type(error),error,error.__traceback__))
+ task.add_done_callback(completed)
+ return task
+
+
+def thread_target(fn):
+ """Carry diagnostic context into an owned thread; preserve original failure."""
+ scope=contextvars.copy_context()
+ def guarded(*args,**kwargs):
+  try:return fn(*args,**kwargs)
+  except BaseException:
+   failure('background.thread.failed')
+   raise
+ def run(*args,**kwargs):return scope.run(guarded,*args,**kwargs)
+ return run

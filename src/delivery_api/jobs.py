@@ -10,6 +10,7 @@ across repo boundaries in production - the skeleton allows optional in-process
 wiring for the all-in-one demo box, behind explicit flags.
 """
 from __future__ import annotations
+from .diagnostic_evidence import spawn
 
 import asyncio
 import time
@@ -38,7 +39,7 @@ class JobQueue:
     async def start(self) -> None:
         from .execution_fence import require_engine_execution
         require_engine_execution()
-        self._worker = asyncio.create_task(self._loop())
+        self._worker = spawn(self._loop())
 
     async def stop(self) -> None:
         if self._worker:
@@ -64,6 +65,8 @@ class JobQueue:
                 # module wired in-process already translated the pain; keep it human
                 self.store.add_artifact(run_id, f"{kind}:error", e.render())
             except Exception as e:  # a failed job is a visible fact, not a silent drop
+                from .diagnostic_evidence import bound,failure
+                with bound(job_id=run_id):failure('queue.job.failed')
                 self.store.add_artifact(
                     run_id, f"{kind}:error",
                     f"{type(e).__name__}: {e} - this is a bug or an unhandled environment failure, "

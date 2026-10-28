@@ -1,5 +1,6 @@
 """Thin job-control API plus the V-model web console, served on one port."""
 from __future__ import annotations
+from .diagnostic_evidence import spawn
 
 import asyncio
 import hashlib
@@ -171,7 +172,7 @@ async def _resume_orphaned_handoffs()->None:
                 message=f"Error: completed {source} could not launch {target}. Likely cause: {type(exc).__name__}: {exc}. Next: fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved."
                 store.add_event(task_id,"error",message,phase_key=target,payload={"cause":f"{type(exc).__name__}: {exc}","next":"Fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved.","completed_phase":source,"next_phase":target})
                 activity("orchestrator.recover.failed","Orphaned completed handoff still blocked",task_id=task_id,completed_phase=source,next_phase=target,error=f"{type(exc).__name__}: {exc}")
-        asyncio.create_task(recover())
+        spawn(recover())
 
 
 async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=False)->None:
@@ -332,14 +333,14 @@ async def _recover_tasks()->None:
                                         and event.get("kind") in ("founder_decision","answer","baseline","requirement","command")),None)
                     if latest_choice and latest_choice["kind"]=="founder_decision" and (latest_choice.get("payload") or {}).get("decision",{}).get("decision_id")=="system-baseline":
                         activity("architecture.recovery.decision","Continuing interrupted baseline choice as greenfield",task_id=task_id,session_id=session)
-                        asyncio.create_task(orchestrator.execute_phase(task_id,"architecture"))
+                        spawn(orchestrator.execute_phase(task_id,"architecture"))
                         continue
                 if repaired or (phases["conops"] in ("approved","done") and phases["needs"] in ("pending","running")
                                 and current["active_phase"]=="conops"
                                 and any(event["kind"]=="progress" and (event.get("payload") or {}).get("source")=="terminal_engine_snapshot"
                                         and (event.get("payload") or {}).get("session_id")==session for event in events)):
                     if not repaired:activity("engine.recovery.handoff_retry","Retrying reconciled interview handoff",task_id=task_id,session_id=session,next_phase="needs")
-                    asyncio.create_task(_continue_reconciled_interview(task_id))
+                    spawn(_continue_reconciled_interview(task_id))
                 else:
                     now=store.task(task_id)
                     phase_states={phase["phase_key"]:phase["state"] for phase in now["phases"]}
@@ -378,7 +379,7 @@ async def _recover_tasks()->None:
                 except Exception as exc:
                     message=f"Error: completed {phase} could not launch {plan.target}. Likely cause: {type(exc).__name__}: {exc}. Next: fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved."
                     store.add_event(task_id,"error",message,phase_key=plan.target,payload={"cause":f"{type(exc).__name__}: {exc}","next":"Fix the named runtime/artifact issue and restart Requi.re; the completed phase is preserved.","completed_phase":phase,"next_phase":plan.target})
-            asyncio.create_task(launch())
+            spawn(launch())
         elif plan.action=="restore_gate":
             gate=store.wait_at_gate(task_id,plan.phase or task.get("active_phase"))
             activity("gate.owner.restored","Restored founder approval gate",task_id=task_id,phase=plan.phase,gate_key=(gate or {}).get("gate_key"))
@@ -435,7 +436,7 @@ async def lifespan(application:FastAPI):
     print("Build: "+(", ".join(f"{k} {v}" for k,v in RUNTIME_VERSION["repositories"].items()) or RUNTIME_VERSION["runtime_id"]),file=sys.stderr)
     from . import run_metrics
     run_metrics.start_idle_sampler()     # CPU and memory are read on a timer, so the operator page has numbers when no run is active
-    loop_lag_task=asyncio.create_task(_loop_lag_monitor())
+    loop_lag_task=spawn(_loop_lag_monitor())
     from .observability import LOG_PATH,stage_log_paths
     print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
@@ -1072,14 +1073,14 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
     proposed_session=str(uuid4())
     if not store.begin_interview_start(task_id,proposed_session,selected_route):
         raise HTTPException(409,"task already started")
-    asyncio.create_task(_complete_interview_start(task_id,proposed_session,selected_route,initial_model,idea,effective_models,a.label))
+    spawn(_complete_interview_start(task_id,proposed_session,selected_route,initial_model,idea,effective_models,a.label))
     return JSONResponse({"status":"starting","task_id":task_id,"session_id":proposed_session,
                          "next":f"/tasks/{task_id}/view"},status_code=202)
 
 async def _complete_interview_start(task_id:str,proposed_session:str,selected_route:str,
                                     initial_model:str|None,idea:str,effective_models:dict,actor_label:str):
     progress_stop=asyncio.Event()
-    progress_watch=asyncio.create_task(_watch_engine_advance(task_id,proposed_session,progress_stop))
+    progress_watch=spawn(_watch_engine_advance(task_id,proposed_session,progress_stop))
     engine_started_at=time.monotonic()
     try:
         started=await run_in_threadpool(engine_client.start,StartSessionRequest(task_id=task_id,session_id=UUID(proposed_session),idea=idea,model_route=selected_route,initial_model=initial_model))
@@ -1299,7 +1300,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
                 answer_display=semantic_answer_display(review,decisions)
             if pending.rationale_required and not rationale:raise RuntimeError("typed input requires a rationale")
             progress_stop=asyncio.Event()
-            progress_watch=asyncio.create_task(_watch_engine_advance(task_id,session_id,progress_stop))
+            progress_watch=spawn(_watch_engine_advance(task_id,session_id,progress_stop))
             try:
                 submitted=await run_in_threadpool(engine_client.submit,session_id,InputResponse(input_id=pending.input_id,expected_sequence=body.expected_sequence,value=typed_value,
                     rationale=rationale or None,actor_id=a.label,founder_inputs=body.founder_inputs))
@@ -1338,7 +1339,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
     if source=="http_interview":
         if config.CLOUD_TENANTS:_finish_cloud_interview(task_id,submitted.snapshot)
         elif _reconcile_terminal_http_interview(task_id,submitted.snapshot):
-            asyncio.create_task(_continue_reconciled_interview(task_id))
+            spawn(_continue_reconciled_interview(task_id))
     return {"status":"accepted"}
 
 def _read_task_text(task_id:str,path:Path,*,errors='strict')->str:
@@ -2293,7 +2294,7 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
     store.add_event(task_id,"model_route",f"Needs retry model selected: {effective}",phase_key="needs",payload={"route":route,"resolved":effective,"source":"explicit_retry_choice"})
     store.audit(a.label,"phase.retry_model",task_id,{"phase":"needs","model":effective,"checkpoint":checkpoint})
     activity("phase.retry","Founder confirmed retry of Stakeholder needs",task_id=task_id,session_id=session,actor=a.label,model_route=effective,checkpoint=checkpoint)
-    asyncio.create_task(_run_failed_phase_retry(task_id,"needs","Stakeholder needs",effective,checkpoint))
+    spawn(_run_failed_phase_retry(task_id,"needs","Stakeholder needs",effective,checkpoint))
     return {"status":"started","phase":"needs","session_id":session}
 
 async def _dispatch_failed_retry(task_id:str,phase:str,model_route:str,checkpoint:bool,*,queued_job_id=None)->None:
@@ -2376,7 +2377,7 @@ async def retry_failed_phase(task_id:str,body:FailedPhaseRetryRequest,a:auth.Act
     store.add_event(task_id,"model_route",f"{label} retry model selected: {effective}",phase_key=body.phase,payload={"route":route,"resolved":effective,"source":"explicit_retry_choice"})
     store.audit(a.label,"phase.retry_model",task_id,{"phase":body.phase,"model":effective,"checkpoint":checkpoint})
     activity("phase.retry",f"Founder confirmed retry of {label}",task_id=task_id,session_id=session,actor=a.label,model_route=effective,checkpoint=checkpoint)
-    asyncio.create_task(_run_failed_phase_retry(task_id,body.phase,label,effective,checkpoint))
+    spawn(_run_failed_phase_retry(task_id,body.phase,label,effective,checkpoint))
     return {"status":"started","phase":body.phase,"session_id":session}
 
 async def _run_failed_phase_retry(task_id:str,phase:str,label:str,model_route:str,checkpoint:bool,*,queued_job_id=None)->None:
@@ -2421,7 +2422,7 @@ async def start_next_phase(task_id:str,body:StartNextPhaseRequest,a:auth.Actor=D
     job_id=store.prepare_next_phase(task_id,phase,a.label,model)
     if not job_id:raise HTTPException(409,{"error":"This phase was already started.","cause":"A start for it is already recorded.","next":"Refresh the page."})
     activity("phase.start.queued","Next phase job queued",task_id=task_id,phase=phase,job_id=job_id,actor=a.label)
-    runner_task=asyncio.create_task(_run_next_phase(task_id,phase,label,job_id))
+    runner_task=spawn(_run_next_phase(task_id,phase,label,job_id))
     _phase_jobs.add(runner_task);runner_task.add_done_callback(_phase_jobs.discard)
     return {"status":"started","phase":phase,"job_id":job_id}
 
@@ -3034,8 +3035,8 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
         if selected:
             store.set_model_default(task_id,selected)
             store.add_event(task_id,"model_route",f"{target} override uses {selected}",phase_key=target,payload={"route":req.model_route,"resolved":selected,"scope":"phase_override","actor":a.label})
-        if req.action=="redo":asyncio.create_task(orchestrator.execute_phase(task_id,phase,mode=ExecutionMode.REDO,model_route=selected))
-        else:asyncio.create_task(orchestrator.continue_after(task_id,phase,model_route=selected))
+        if req.action=="redo":spawn(orchestrator.execute_phase(task_id,phase,mode=ExecutionMode.REDO,model_route=selected))
+        else:spawn(orchestrator.continue_after(task_id,phase,model_route=selected))
         return gate
     except KeyError:raise HTTPException(404,"gate not found")
     except ValueError as e:raise HTTPException(400,{"error":str(e),"cause":"The gate decision is incomplete.","next":"Choose, edit, or explain what the redo should change."})
