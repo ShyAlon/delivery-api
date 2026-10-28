@@ -180,3 +180,18 @@ Acceptance72passed0skips5.43s with producer sources:output plus retained legacy
 rerun,protocol/parity,native projection/gate,cloud API,bootstrap,model routes.
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started. Legacy rerun needs explicit contract reconciliation.
+
+## A15: retained decision-review API fixtures
+
+Decision-review API cases pass a scoped PG workspace explicitly to their shared
+setup helper. Unmigrated helper consumers keep SQLite,not silently converted.
+Existing local HTTP policy remains explicit. Unique session IDs stay bound in
+input/semantic evidence;all retained-review,draft/comment,stale submit,explicit
+purpose and same-sequence conflict assertions unchanged. PG contract checks role
+and poisoned SQLite. Fail-first type assertion failed on old SQLite helper.
+Acceptance82passed0skips5.77s with PYTHONPATH=.:src and both producer sources:
+decision pages,legacy gate revision callers,provenance/immutable,native review/
+revision,cloud API,bootstrap. Initial invocation without repo-root PYTHONPATH
+failed existing tests.* imports;corrected command includes root explicitly.
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.
