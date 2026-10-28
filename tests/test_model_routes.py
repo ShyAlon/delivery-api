@@ -1,5 +1,23 @@
 
 import json
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def model_workspace(pg_workspace_factory,monkeypatch):
+    """Direct helper contracts keep their policy mode; storage is real tenant PG."""
+    from delivery_api import app as module
+    from delivery_api.store import SQLiteStore
+    from delivery_api.tenancy import tenant_context
+    with pg_workspace_factory() as workspace:
+        monkeypatch.setattr(module,'store',workspace.store)
+        monkeypatch.setitem(module.app.state._state,'store',workspace.store)
+        monkeypatch.setattr(module.orchestrator,'store',workspace.store)
+        def no_sqlite(*args,**kwargs):
+            raise AssertionError('SQLite is forbidden in model-route fixtures')
+        monkeypatch.setattr(SQLiteStore,'__init__',no_sqlite)
+        with tenant_context(workspace.scope):
+            yield workspace
 
 
 def test_route_value_default_and_env_override(monkeypatch):
@@ -143,25 +161,24 @@ def test_generator_phase_default_ignores_interview_route(monkeypatch,tmp_path):
     assert model_routes.phase_initial_model('srs')=='deepseek:deepseek-chat'
 
 
-def test_task_default_exact_selection_overrides_each_stage_environment(monkeypatch,tmp_path):
+def test_task_default_exact_selection_overrides_each_stage_environment(monkeypatch,tmp_path,model_workspace):
     from delivery_api import model_routes
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'models.db'));tid=store.create_task('Exact route')['task_id']
+    from delivery_api.postgres_store import PostgresStore
+    store=model_workspace.store;tid=store.create_task('Exact route')['task_id']
     monkeypatch.setenv('SPEC_GENERATOR_MODEL_NEEDS','ollama:phi4')
     monkeypatch.setenv('SPEC_GENERATOR_MODEL_ARCHITECTURE','ollama:qwen2.5-coder:14b')
     store.set_model_default(tid,'deepseek:deepseek-flash')
     assert model_routes.task_default_model(store,tid,'needs')==('deepseek:deepseek-flash','selected')
     assert model_routes.task_default_model(store,tid,'architecture')==('deepseek:deepseek-flash','selected')
-    reopened=SQLiteStore(str(tmp_path/'models.db'))
+    reopened=PostgresStore(model_workspace.dsn.replace('user=sandbox','user=delivery_app'))
     assert model_routes.task_default_model(reopened,tid,'srs')[0]=='deepseek:deepseek-flash'
     reopened.set_model_default(tid,'ollama:phi4')
     assert model_routes.task_default_model(reopened,tid,'architecture')[0]=='ollama:phi4'
 
 
-def test_legacy_default_uses_recorded_selection_but_not_phase_execution(monkeypatch,tmp_path):
+def test_legacy_default_uses_recorded_selection_but_not_phase_execution(monkeypatch,tmp_path,model_workspace):
     from delivery_api import model_routes
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'legacy-model.db'));tid=store.create_task('Legacy route')['task_id']
+    store=model_workspace.store;tid=store.create_task('Legacy route')['task_id']
     monkeypatch.setenv('SPEC_GENERATOR_MODEL_SRS','ollama:qwen')
     store.add_event(tid,'model_route','old generator ran',phase_key='needs',payload={'resolved':'ollama:phi4','mode':'start'})
     assert model_routes.task_default_model(store,tid,'srs')==('ollama:qwen','legacy generator configuration (no recorded exact selection)')
@@ -169,11 +186,10 @@ def test_legacy_default_uses_recorded_selection_but_not_phase_execution(monkeypa
     assert model_routes.task_default_model(store,tid,'srs')==('deepseek:deepseek-flash','previous selection')
 
 
-def test_bound_legacy_session_without_exact_selection_requires_a_choice(tmp_path):
+def test_bound_legacy_session_without_exact_selection_requires_a_choice(tmp_path,model_workspace):
     import pytest
     from delivery_api import model_routes
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'unbound.db'));tid=store.create_task('Old session')['task_id']
+    store=model_workspace.store;tid=store.create_task('Old session')['task_id']
     store.set_engine_session(tid,'old-session')
     store.add_event(tid,'model_route','generator used legacy configured model',phase_key='needs',payload={'resolved':'ollama:qwen','mode':'start'})
     with pytest.raises(ValueError,match='choose a model'):
@@ -193,3 +209,16 @@ def test_installed_model_failure_preserves_pinned_route_but_discloses_list_statu
     assert route['model_list']['availability']=='unavailable'
     assert route['model_list']['reason']=='installed_lookup_failed'
     assert 'private-error' not in str(result)
+
+
+def test_model_route_fixture_uses_restricted_pg_and_rejects_sqlite():
+    import pytest
+    from delivery_api import app as module
+    from delivery_api.postgres_store import PostgresStore
+    from delivery_api.store import SQLiteStore
+    assert isinstance(module.store,PostgresStore)
+    with module.store._postgres.transaction() as connection:
+        role=connection.execute('SELECT current_user').fetchone()['current_user']
+    assert role=='requi_backend'
+    with pytest.raises(AssertionError,match='SQLite'):
+        SQLiteStore(':memory:')
