@@ -673,3 +673,17 @@ audit pixels inspected:readable headings/transcript,local close and download,
 credit summary and one approve row. V diagram cosmetic debt remains. Production
 unchanged;hosted CI/full mixed UI/full repo/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A52: interview history and feedback browser group
+
+Four truncation,thumb/comment persistence/deletion,save single-flight/error
+recovery and responsive comment-column cases use signed regular-owner PG.
+History payloads remain explicit presentation snapshots;feedback writes,reads
+and deletion hit the real PG-backed HTTP endpoints. Original assertions intact.
+Signature guard failed first. Four cases+guard+cloud API+bootstrap43passed0skips
+14.95s;final repeat43passed0skips14.63s. Pixels inspected:full question feedback
+dialog,side-by-side desktop annotation and stacked600px annotation. Explicitly
+scroll row into view before mobile screenshot (first capture was offscreen).
+Debug/operator-menu history case remains separate for its authority contract.
+Production unchanged;hosted CI/full mixed UI/full repo/deployed topology not
+run. A incomplete;B/C/D not started. V diagram cosmetic debt unchanged.

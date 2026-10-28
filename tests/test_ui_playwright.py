@@ -1264,9 +1264,11 @@ def long_history_snapshot(snapshot):
     ]
 
 
-def test_interview_history_truncates_questions_and_answers_after_32_words(page, ui):
-    route_task_snapshot(page, ui, "live", long_history_snapshot)
-    page.goto(ui + "/tasks/live/view")
+def test_interview_history_truncates_questions_and_answers_after_32_words(pg_page, pg_ui, pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    route_task_snapshot(page, ui, tid, long_history_snapshot)
+    page.goto(ui + f"/tasks/{tid}/view")
     page.get_by_text("Interview so far").wait_for()
     # newest first: the 40-word/33-word pair is the older one, so it is listed second
     first, second = page.locator(".qa-item").nth(1), page.locator(".qa-item").nth(0)
@@ -1301,9 +1303,11 @@ def test_interview_history_cards_and_debug_toggle_persist(page, ui):
     assert page.locator('#console').count()==0 and page.locator('.qa-item').count()==2
 
 
-def test_feedback_thumbs_comment_persist_and_delete(page, ui):
-    route_task_snapshot(page, ui, "live", interview_history_snapshot)
-    page.goto(ui + "/tasks/live/view")
+def test_feedback_thumbs_comment_persist_and_delete(pg_page, pg_ui, pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    route_task_snapshot(page, ui, tid, interview_history_snapshot)
+    page.goto(ui + f"/tasks/{tid}/view")
     page.get_by_text("Interview so far").wait_for()
     first_q = page.locator(".qa-item").nth(0).locator(".qa-question .qa-actions")
     first_q.locator('[data-thumb="-1"]').click()
@@ -1337,9 +1341,11 @@ def test_feedback_thumbs_comment_persist_and_delete(page, ui):
     assert page.locator(".qa-question .qa-thumb.active").count() == 0
 
 
-def test_feedback_save_disables_while_pending_and_closes_only_on_success(page, ui):
-    route_task_snapshot(page, ui, "live", interview_history_snapshot)
-    page.goto(ui + "/tasks/live/view")
+def test_feedback_save_disables_while_pending_and_closes_only_on_success(pg_page, pg_ui, pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    route_task_snapshot(page, ui, tid, interview_history_snapshot)
+    page.goto(ui + f"/tasks/{tid}/view")
     page.get_by_text("Interview so far").wait_for()
     page.locator(".qa-answer .qa-comment-btn").first.click()
     dialog = page.get_by_role("dialog", name="Comment on this answer")
@@ -1375,14 +1381,16 @@ def test_feedback_save_disables_while_pending_and_closes_only_on_success(page, u
 
 
 @pytest.mark.ui_cosmetic
-def test_question_comment_columns_follow_character_ratio(page, ui):
+def test_question_comment_columns_follow_character_ratio(pg_page, pg_ui, pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     long_question = "What strategies will you implement to ensure data caching prevents downtime during peak usage?"
     def snapshot(data):
         interview_history_snapshot(data)
         data["events"][0]["message"] = long_question
         data["events"][0]["payload"]["question"] = long_question
-    route_task_snapshot(page, ui, "live", snapshot)
-    page.goto(ui + "/tasks/live/view")
+    route_task_snapshot(page, ui, tid, snapshot)
+    page.goto(ui + f"/tasks/{tid}/view")
     row = page.locator(".qa-question").last   # Q1 (edited above) is the oldest, listed last now that newest is first
     row.wait_for()
     assert row.locator(".qa-notes").count() == 0
@@ -1411,6 +1419,7 @@ def test_question_comment_columns_follow_character_ratio(page, ui):
     page.set_viewport_size({"width": 600, "height": 850})
     assert row.locator(".qa-main").bounding_box()["width"] > 220
     assert row.locator(".qa-notes").bounding_box()["y"] >= row.locator(".qa-main").bounding_box()["y"]
+    row.scroll_into_view_if_needed()
     row.screenshot(path=str(_screenshots_dir / "qa-column-balance-mobile-row.png"))
     # A short question still gets five twelfths instead of collapsing to a word-wide strip.
     second = page.locator(".qa-question").first
@@ -2576,4 +2585,13 @@ def test_artifact_browser_group_requires_signed_pg_fixture():
                  test_artifact_viewer_shows_json_artifacts_readably,
                  test_audit_uses_shared_dialog_sortable_filterable_sticky_table,
                  test_artifact_viewer_renders_content_title_bold_and_transcript):
+        assert 'pg_page' in inspect.signature(case).parameters
+
+
+def test_history_feedback_browser_group_requires_signed_pg_fixture():
+    import inspect
+    for case in (test_interview_history_truncates_questions_and_answers_after_32_words,
+                 test_feedback_thumbs_comment_persist_and_delete,
+                 test_feedback_save_disables_while_pending_and_closes_only_on_success,
+                 test_question_comment_columns_follow_character_ratio):
         assert 'pg_page' in inspect.signature(case).parameters
