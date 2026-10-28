@@ -733,3 +733,18 @@ translucent over checklist/buttons;sticky header crossing in full-page capture
 also remains,not claimed fixed. Production unchanged;V diagram debt unchanged.
 Hosted CI/full mixed UI/full repo/deployed topology unrun. A incomplete;
 B/C/D not started.
+
+## A56: live progress and heartbeat browser group
+
+Nine functions (13 parameterized cases) now use signed regular-owner PG: stale
+SIGTERM suppression,latest-command elapsed,title-case slots,old issue tooltips,
+architecture stream progress,latest-stage headline,desktop/phone heartbeat wrap,
+intent/needs collapsed/expanded progress and waiting authority over late
+heartbeat. Original assertions retained;task/SSE mocks remain presentation
+contracts,not real engine liveness proof. Signature guard failed first. Corrected
+an edit spill into a neighboring decorator before collection;final13cases+guard+
+cloud API+bootstrap52passed0skips36.39s. Pixels inspected:phone heartbeat wraps
+within card;desktop active Stakeholder needs line matches expanded progress,
+history and connection summary readable. Production unchanged;V diagram and
+previous cosmetic debt remain. Hosted CI/full mixed UI/full repo/deployed
+topology unrun. A incomplete;B/C/D not started.
