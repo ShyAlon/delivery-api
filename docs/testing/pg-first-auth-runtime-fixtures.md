@@ -515,3 +515,17 @@ Fail-first PG assertion failed on SQLite. Focused11passed0skips2.04s;expanded
 full mixed HTTP-cutover,dedupe,bootstrap60passed0skips with producer sources.
 Remaining cutover SQLite receivers retained. Production/UI unchanged;hosted CI/
 full suite/deployed topology not run. A incomplete;B/C/D not started.
+
+## A41: failed-phase retry shared fixtures
+
+Shared failed-Needs fixture and its architecture derivative now scoped PG with
+unique session:12 callers cover preview/confirm,duplicate/ineligible/missing
+artifact refusal,audit/old failure,generation/model selection,usage/cost dedupe
+and failed launch. All original test assertions retained. Architecture helper
+no longer overwrites task state with SQL:assert normal phase updates already
+establish failed/architecture. Local policy explicit,mocked execution unchanged.
+Fail-first concrete PG assertion failed on SQLite. Nine direct callers plus
+bootstrap12passed0skips2.09s;full mixed cutover,dedupe,bootstrap60passed0skips6.06s
+including all12 callers. Remaining cutover SQLite receivers retained.
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.

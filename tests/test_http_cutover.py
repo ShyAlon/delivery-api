@@ -581,10 +581,13 @@ def test_unpinned_legacy_snapshot_is_classified_once_without_handoff(tmp_path,mo
  assert not launched and store.task(tid)['phases'][0]['state']=='running'
 
 
-def _failed_needs_task(tmp_path,monkeypatch):
- session='completed-for-needs';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+def _failed_needs_task(tmp_path,monkeypatch,workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ session='completed-for-needs-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
- store=SQLiteStore(str(tmp_path/'failed-needs.db'));tid=store.create_task('Retry needs','brief')['task_id']
+ store=workspace.store;tid=store.create_task('Retry needs','brief')['task_id']
+ from delivery_api.postgres_store import PostgresStore
+ assert isinstance(store,PostgresStore)
  store.set_engine_session(tid,session)
  store.update_phase(tid,'intent','approved');store.update_phase(tid,'conops','approved')
  store.update_phase(tid,'needs','failed',detail='Prior engine error')
@@ -593,10 +596,10 @@ def _failed_needs_task(tmp_path,monkeypatch):
  return store,tid,session
 
 
-def test_failed_needs_retry_preserves_interview_and_starts_only_needs(tmp_path,monkeypatch):
+def test_failed_needs_retry_preserves_interview_and_starts_only_needs(tmp_path,monkeypatch,pg_scoped_workspace):
  import asyncio
  from delivery_api.auth import Actor
- store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
  calls=[]
  async def run(task_id,phase,*,mode,model_route):calls.append((task_id,phase,mode.value,model_route));store.update_phase(task_id,'needs','running',detail='Building needs')
  monkeypatch.setattr(module.orchestrator,'execute_phase',run)
@@ -616,11 +619,11 @@ def test_failed_needs_retry_preserves_interview_and_starts_only_needs(tmp_path,m
  assert len([e for e in store.events(tid) if e['kind']=='retry'])==1
 
 
-def test_failed_needs_retry_is_not_automatic_and_duplicate_confirm_is_rejected(tmp_path,monkeypatch):
+def test_failed_needs_retry_is_not_automatic_and_duplicate_confirm_is_rejected(tmp_path,monkeypatch,pg_scoped_workspace):
  import asyncio
  from fastapi import HTTPException
  from delivery_api.auth import Actor
- store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
  class Complete:
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
  monkeypatch.setattr(module,'engine_client',Complete())
@@ -639,11 +642,11 @@ def test_failed_needs_retry_is_not_automatic_and_duplicate_confirm_is_rejected(t
  assert called==['needs']
 
 
-def test_retry_needs_keeps_generation_and_rejects_missing_artifact(tmp_path,monkeypatch):
+def test_retry_needs_keeps_generation_and_rejects_missing_artifact(tmp_path,monkeypatch,pg_scoped_workspace):
  import asyncio
  from fastapi import HTTPException
  from delivery_api.auth import Actor
- store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
  start=store.task(tid)['generation']
  (tmp_path/'artifacts'/session/'interview'/'conops.json').unlink()
  try:asyncio.run(module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder')))
@@ -652,11 +655,11 @@ def test_retry_needs_keeps_generation_and_rejects_missing_artifact(tmp_path,monk
  assert store.task(tid)['generation']==start and store.task(tid)['state']=='failed'
 
 
-def test_rejected_confirmed_needs_retry_is_audited_and_keeps_old_failure(tmp_path,monkeypatch):
+def test_rejected_confirmed_needs_retry_is_audited_and_keeps_old_failure(tmp_path,monkeypatch,pg_scoped_workspace):
  import asyncio
  from fastapi import HTTPException
  from delivery_api.auth import Actor
- store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
  (tmp_path/'artifacts'/session/'interview'/'conops.json').unlink()
  try:asyncio.run(module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder')))
  except HTTPException as exc:
@@ -668,10 +671,10 @@ def test_rejected_confirmed_needs_retry_is_audited_and_keeps_old_failure(tmp_pat
  assert any(e['action']=='phase.retry_rejected' for e in store.audit_entries(tid))
 
 
-def test_audit_rolls_up_http_interview_usage_without_double_counting(tmp_path,monkeypatch):
+def test_audit_rolls_up_http_interview_usage_without_double_counting(tmp_path,monkeypatch,pg_scoped_workspace):
  import json
  from fastapi.testclient import TestClient
- store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
  usage=tmp_path/'artifacts'/session/'interview'/'usage.jsonl'
  usage.write_text('\n'.join(json.dumps(x) for x in [
   {'stage':'probing','provider':'deepseek','model':'deepseek-chat','prompt_tokens':110,'completion_tokens':20,'price_per_mtok_prompt_usd':1,'price_per_mtok_completion_usd':2},
@@ -688,9 +691,9 @@ def test_audit_rolls_up_http_interview_usage_without_double_counting(tmp_path,mo
  assert round(totals['interview_cost_usd'],6)==0.00023
 
 
-def test_running_cost_includes_interview_and_unpriced_downstream_tokens_and_writes_cost_json(tmp_path,monkeypatch):
+def test_running_cost_includes_interview_and_unpriced_downstream_tokens_and_writes_cost_json(tmp_path,monkeypatch,pg_scoped_workspace):
  import json
- store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
  root=tmp_path/'artifacts'/session
  row=lambda stage,p,c,pin=1,pout=2:{'stage':stage,'provider':'deepseek','model':'deepseek-flash','prompt_tokens':p,'completion_tokens':c,'price_per_mtok_prompt_usd':pin,'price_per_mtok_completion_usd':pout}
  (root/'interview'/'usage.jsonl').write_text(json.dumps(row('probing',1000,0))+'\n')
@@ -712,10 +715,10 @@ def test_running_cost_includes_interview_and_unpriced_downstream_tokens_and_writ
  assert not any('cost.json' in json.dumps(a) for a in store.task_artifacts(tid))
 
 
-def test_retry_requires_exact_choice_if_no_recorded_selection_and_starts_fresh(tmp_path,monkeypatch):
+def test_retry_requires_exact_choice_if_no_recorded_selection_and_starts_fresh(tmp_path,monkeypatch,pg_scoped_workspace):
  import asyncio
  from delivery_api.auth import Actor
- store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
  store.set_model_route(tid,'ollama:qwen2.5-coder:14b')
  store.add_event(tid,'model_route','Old Needs route',phase_key='needs',payload={'route':'ollama','model':'qwen2.5-coder:14b'})
  shared=tmp_path/'.env';shared.write_text('SPEC_GENERATOR_MODEL_NEEDS=ollama:phi4\n')
@@ -735,10 +738,10 @@ def test_retry_requires_exact_choice_if_no_recorded_selection_and_starts_fresh(t
  assert any(e['kind']=='model_route' and e['payload'].get('resolved')=='ollama:phi4' for e in store.events(tid))
 
 
-def test_retry_with_generator_checkpoint_resumes_without_from(tmp_path,monkeypatch):
+def test_retry_with_generator_checkpoint_resumes_without_from(tmp_path,monkeypatch,pg_scoped_workspace):
  import asyncio
  from delivery_api.auth import Actor
- store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
  spec=tmp_path/'artifacts'/session/'spec';spec.mkdir();(spec/'checkpoints.sqlite').write_bytes(b'checkpoint-placeholder')
  calls=[]
  async def execute(task_id,phase,*,mode,model_route):calls.append((mode.value,model_route))
@@ -964,10 +967,10 @@ def test_generator_default_api_follows_exact_sticky_selection(tmp_path,monkeypat
  assert client.get(f'/api/tasks/{tid}/generator-default/specs').json()['model']=='ollama:phi4'
 
 
-def test_failed_needs_without_exact_model_previews_selection_required(tmp_path,monkeypatch):
+def test_failed_needs_without_exact_model_previews_selection_required(tmp_path,monkeypatch,pg_scoped_workspace):
  import asyncio
  from delivery_api.auth import Actor
- store,tid,_=_failed_needs_task(tmp_path,monkeypatch)
+ store,tid,_=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
  async def exercise():
   preview=await module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(),Actor('test','Founder'))
   assert preview['default_model'] is None and preview['default_source']=='selection required'
@@ -978,19 +981,19 @@ def test_failed_needs_without_exact_model_previews_selection_required(tmp_path,m
  assert store.task(tid)['model_default'] is None
 
 
-def _failed_architecture_task(tmp_path,monkeypatch):
- store,tid,session=_failed_needs_task(tmp_path,monkeypatch)
+def _failed_architecture_task(tmp_path,monkeypatch,workspace):
+ store,tid,session=_failed_needs_task(tmp_path,monkeypatch,workspace)
  store.update_phase(tid,'needs','approved');store.update_phase(tid,'srs','approved')
  store.update_phase(tid,'architecture','failed',detail='SRS candidate review is not ready.')
  store.add_event(tid,'error','architecture subprocess stopped with exit code 1',phase_key='architecture',payload={'exit_code':1})
- store._db.execute("UPDATE tasks SET state='failed',active_phase='architecture' WHERE task_id=?",(tid,));store._db.commit()
+ assert store.task(tid)['state']=='failed' and store.task(tid)['active_phase']=='architecture'
  return store,tid,session
 
 
-def test_failed_architecture_retry_resumes_only_that_phase(tmp_path,monkeypatch):
+def test_failed_architecture_retry_resumes_only_that_phase(tmp_path,monkeypatch,pg_scoped_workspace):
  import asyncio
  from delivery_api.auth import Actor
- store,tid,session=_failed_architecture_task(tmp_path,monkeypatch)
+ store,tid,session=_failed_architecture_task(tmp_path,monkeypatch,pg_scoped_workspace)
  calls=[]
  async def run(task_id,phase,*,mode,model_route):calls.append((task_id,phase,mode.value,model_route))
  monkeypatch.setattr(module.orchestrator,'execute_phase',run)
@@ -1009,11 +1012,11 @@ def test_failed_architecture_retry_resumes_only_that_phase(tmp_path,monkeypatch)
  assert len([e for e in store.events(tid) if e['kind']=='retry'])==1
 
 
-def test_failed_phase_retry_rejects_ineligible_and_duplicate_requests(tmp_path,monkeypatch):
+def test_failed_phase_retry_rejects_ineligible_and_duplicate_requests(tmp_path,monkeypatch,pg_scoped_workspace):
  import asyncio
  from fastapi import HTTPException
  from delivery_api.auth import Actor
- store,tid,session=_failed_architecture_task(tmp_path,monkeypatch)
+ store,tid,session=_failed_architecture_task(tmp_path,monkeypatch,pg_scoped_workspace)
  calls=[]
  async def run(task_id,phase,*,mode,model_route):calls.append(phase)
  monkeypatch.setattr(module.orchestrator,'execute_phase',run)
@@ -1033,10 +1036,10 @@ def test_failed_phase_retry_rejects_ineligible_and_duplicate_requests(tmp_path,m
  assert calls==['architecture']
 
 
-def test_failed_phase_retry_that_cannot_launch_marks_the_phase_failed_again(tmp_path,monkeypatch):
+def test_failed_phase_retry_that_cannot_launch_marks_the_phase_failed_again(tmp_path,monkeypatch,pg_scoped_workspace):
  import asyncio
  from delivery_api.auth import Actor
- store,tid,session=_failed_architecture_task(tmp_path,monkeypatch)
+ store,tid,session=_failed_architecture_task(tmp_path,monkeypatch,pg_scoped_workspace)
  async def run(*args,**kw):raise RuntimeError('spec-generator environment is missing')
  monkeypatch.setattr(module.orchestrator,'execute_phase',run)
  async def exercise():
