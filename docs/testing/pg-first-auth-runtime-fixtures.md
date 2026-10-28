@@ -333,3 +333,14 @@ credit,model routes,protocol,bootstrap. Expanded135passed2known baseline failure
 15.23s (checkpoint intent view/session-cost metadata),not full-module green.
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A27: signed feedback CRUD/audit fixture
+
+Full feedback create/upsert/target separation/list/update/missing/delete/audit
+flow now uses real signed cloud PG. Every original assertion retained. Added
+foreign-owner list/update/delete404 before the owner's successful update/delete.
+Fail-first PG assertion failed on global SQLite. Focused49passed0skips4.99s with
+producer sources:feedback flow,native review,cloud API,decision pages,bootstrap.
+Expanded156passed2known baseline failures17.32s (checkpoint intent view/session
+cost metadata),not full-module green. Production/UI unchanged;hosted CI/full
+suite/deployed topology not run. A incomplete;B/C/D not started.

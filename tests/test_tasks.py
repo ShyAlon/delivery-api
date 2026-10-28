@@ -1326,8 +1326,13 @@ def test_interviewer_prefix_lines_are_diagnostics_not_questions(tmp_path,pg_scop
     assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))==0
     assert not any(e['kind']=='waiting_input' for e in store.events(tid))
 
-def test_answer_feedback_crud_and_audit():
-    with TestClient(app) as client:
+def test_answer_feedback_crud_and_audit(pg_workspace_factory,pg_task_app):
+    from delivery_api import app as module
+    from delivery_api.postgres_store import PostgresStore
+    with pg_workspace_factory() as workspace,pg_workspace_factory() as other:
+        api=pg_task_app(workspace)
+        assert isinstance(module.store,PostgresStore)
+        client=TestClient(api,headers=workspace.headers)
         task_id = client.post("/api/tasks", json={"title": "Feedback flow"}).json()["task_id"]
 
         empty = client.post(f"/api/tasks/{task_id}/feedback", json={"input_ref": "abc123", "target": "question"})
@@ -1340,6 +1345,10 @@ def test_answer_feedback_crud_and_audit():
         row = made.json()
         assert row["thumb"] == -1 and row["comment"] == "Too vague" and row["actor"]
         fid = row["id"]
+        foreign=TestClient(api,headers=other.headers)
+        assert foreign.get(f'/api/tasks/{task_id}/feedback').status_code==404
+        assert foreign.patch(f'/api/tasks/{task_id}/feedback/{fid}',json={'thumb':1}).status_code==404
+        assert foreign.delete(f'/api/tasks/{task_id}/feedback/{fid}').status_code==404
 
         upsert = client.post(f"/api/tasks/{task_id}/feedback", json={
             "input_ref": "abc123", "target": "question", "content": "What should the family see first?", "thumb": 1})
