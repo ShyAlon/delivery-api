@@ -33,9 +33,13 @@ def test_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch):
  assert engine.submitted[0].input_id==engine.pending.input_id
  assert engine.submitted[0].value==1
 
-def test_task_snapshot_projects_http_open_input(tmp_path,monkeypatch):
- store=SQLiteStore(str(tmp_path/'snap.db'));task=store.create_task('Dungeon master','brief');engine=FakeEngine()
- monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine);store.set_engine_session(task['task_id'],'s')
+def test_task_snapshot_projects_http_open_input(tmp_path,monkeypatch,pg_scoped_workspace):
+ session=str(uuid4())
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store;task=store.create_task('Dungeon master','brief');engine=FakeEngine()
+ from delivery_api.postgres_store import PostgresStore
+ assert isinstance(store,PostgresStore)
+ monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine);engine.started_sid=session;store.set_engine_session(task['task_id'],session)
  store.update_phase(task['task_id'],'intent','running')
  body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
  assert body['input_state']['waiting'] is True
@@ -62,8 +66,10 @@ class FailingEngine(FakeEngine):
   from delivery_api.engine_client import EngineClientError
   raise EngineClientError(503,ProtocolError(code=ProtocolErrorCode.INTERNAL_ERROR,detail='model failed',retryable=True))
 
-def test_engine_failure_is_not_misreported_as_dead_subprocess(tmp_path,monkeypatch):
- store=SQLiteStore(str(tmp_path/'failure.db'));task=store.create_task('Failure truth','brief');engine=FailingEngine();store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+def test_engine_failure_is_not_misreported_as_dead_subprocess(tmp_path,monkeypatch,pg_scoped_workspace):
+ session=str(uuid4())
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store;task=store.create_task('Failure truth','brief');engine=FailingEngine();engine.started_sid=session;store.set_engine_session(task['task_id'],session);store.update_phase(task['task_id'],'intent','running')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  response=TestClient(module.app).post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1','decision_id':str(engine.pending.input_id)})
  assert response.status_code==503 and response.json()['detail']['retryable'] is True
@@ -86,19 +92,23 @@ def test_smoke_answers_key_off_numeric_input_kind():
  assert typed_smoke_answer({'kind':1,'options':[]}).startswith('Two adults')
 
 
-def test_rationale_is_preserved_as_typed_field(tmp_path,monkeypatch):
- store=SQLiteStore(str(tmp_path/'rationale.db'));task=store.create_task('Rationale typed','brief');engine=FakeEngine()
+def test_rationale_is_preserved_as_typed_field(tmp_path,monkeypatch,pg_scoped_workspace):
+ session=str(uuid4())
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store;task=store.create_task('Rationale typed','brief');engine=FakeEngine()
  engine.pending=InputRequest(input_id=uuid4(),kind=InputKind.CHOICE,prompt='Choose',options=[InputOption(value='1',label='One')],rationale_required=True)
- store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ engine.started_sid=session;store.set_engine_session(task['task_id'],session);store.update_phase(task['task_id'],'intent','running')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  response=TestClient(module.app).post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1 - because it fits','decision_id':str(engine.pending.input_id)})
  assert response.status_code==200
  assert engine.submitted[-1].value=='1' and engine.submitted[-1].rationale=='because it fits'
 
-def test_required_rationale_cannot_be_dropped(tmp_path,monkeypatch):
- store=SQLiteStore(str(tmp_path/'missing-rationale.db'));task=store.create_task('Rationale required','brief');engine=FakeEngine()
+def test_required_rationale_cannot_be_dropped(tmp_path,monkeypatch,pg_scoped_workspace):
+ session=str(uuid4())
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store;task=store.create_task('Rationale required','brief');engine=FakeEngine()
  engine.pending=InputRequest(input_id=uuid4(),kind=InputKind.CHOICE,prompt='Choose',options=[InputOption(value='1',label='One')],rationale_required=True)
- store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ engine.started_sid=session;store.set_engine_session(task['task_id'],session);store.update_phase(task['task_id'],'intent','running')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  response=TestClient(module.app).post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1','decision_id':str(engine.pending.input_id)})
  assert response.status_code==409 and not engine.submitted
@@ -118,9 +128,11 @@ class TextEngine(FakeEngine):
   super().__init__()
   self.pending=InputRequest(input_id=uuid4(),kind=InputKind.TEXT,prompt=prompt)
 
-def test_text_question_yields_answer_composer_mode_not_an_empty_decision(tmp_path,monkeypatch):
- store=SQLiteStore(str(tmp_path/'text.db'));task=store.create_task('Text question','brief');engine=TextEngine()
- store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+def test_text_question_yields_answer_composer_mode_not_an_empty_decision(tmp_path,monkeypatch,pg_scoped_workspace):
+ session=str(uuid4())
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store;task=store.create_task('Text question','brief');engine=TextEngine()
+ engine.started_sid=session;store.set_engine_session(task['task_id'],session);store.update_phase(task['task_id'],'intent','running')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
  assert body['control_snapshot']['mode']=='waiting_input' and body['control_snapshot']['kind']=='text'
@@ -128,19 +140,23 @@ def test_text_question_yields_answer_composer_mode_not_an_empty_decision(tmp_pat
  assert body['control_snapshot']['prompt']=='What is the goal and core value?'
  assert body['control_snapshot']['input_id']==str(engine.pending.input_id)
 
-def test_choice_input_still_projects_a_structured_decision(tmp_path,monkeypatch):
- store=SQLiteStore(str(tmp_path/'choice.db'));task=store.create_task('Choice question','brief');engine=FakeEngine()
+def test_choice_input_still_projects_a_structured_decision(tmp_path,monkeypatch,pg_scoped_workspace):
+ session=str(uuid4())
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store;task=store.create_task('Choice question','brief');engine=FakeEngine()
  engine.pending=InputRequest(input_id=uuid4(),kind=InputKind.CHOICE,prompt='Pick one',options=[InputOption(value='1',label='One'),InputOption(value='2',label='Two')])
- store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+ engine.started_sid=session;store.set_engine_session(task['task_id'],session);store.update_phase(task['task_id'],'intent','running')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
  assert body['control_snapshot']['mode']=='waiting_input' and body['control_snapshot']['kind']=='choice'
  assert body['control_snapshot']['decision']['input_id']==str(engine.pending.input_id)
  assert len(body['control_snapshot']['decision']['options'])==2
 
-def test_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch):
- store=SQLiteStore(str(tmp_path/'sync.db'));task=store.create_task('Sync','brief');engine=TextEngine()
- store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+def test_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch,pg_scoped_workspace):
+ session=str(uuid4())
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store;task=store.create_task('Sync','brief');engine=TextEngine()
+ engine.started_sid=session;store.set_engine_session(task['task_id'],session);store.update_phase(task['task_id'],'intent','running')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  client=TestClient(module.app)
  first=client.get(f"/api/tasks/{task['task_id']}").json()
@@ -156,11 +172,13 @@ def test_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch):
  assert third['control_snapshot']['prompt']=='Second question'
  assert third['control_snapshot']['input_id']!=first['control_snapshot']['input_id']
 
-def test_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch):
- store=SQLiteStore(str(tmp_path/'noinput.db'));task=store.create_task('No input','brief');engine=TextEngine()
- store.set_engine_session(task['task_id'],'s');store.update_phase(task['task_id'],'intent','running')
+def test_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch,pg_scoped_workspace):
+ session=str(uuid4())
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store;task=store.create_task('No input','brief');engine=TextEngine()
+ engine.started_sid=session;store.set_engine_session(task['task_id'],session);store.update_phase(task['task_id'],'intent','running')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
- engine.snapshot=lambda sid:EngineSnapshot(session_id='s',task_id='t',sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=None)
+ engine.snapshot=lambda sid:EngineSnapshot(session_id=session,task_id='t',sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=None)
  body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
  assert body['control_snapshot']['mode']=='working'
  assert body['input_state']['waiting'] is False

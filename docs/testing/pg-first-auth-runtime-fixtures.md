@@ -489,3 +489,16 @@ session-cost metadata),not full-module green. SQLiteStore inventory37 files
 unchanged because mixed tasks retains factory/legacy contracts. Production/UI
 unchanged;hosted CI/full suite/deployed topology not run. A incomplete;B/C/D not
 started.
+
+## A39: HTTP-engine snapshot and typed-input fixtures
+
+Eight cases now scoped PG:open-input snapshot,engine failure503,rationale
+preservation/required refusal,text composer,structured choice,event dedupe and
+waiting-without-input executing state. All original assertions retained. Local
+HTTP-engine policy explicit,engine still fake. PG revealed fixed session 's'
+collisions across owners:seed unique engine session per case and align fake
+snapshot with it;do not bypass global session ownership. Fail-first PG assertion
+failed on SQLite. Focused16passed0skips3.08s;expanded full mixed HTTP-cutover,
+dedupe,bootstrap60passed0skips5.41s with producer sources. Remaining SQLite
+receivers in HTTP-cutover retained. Production/UI unchanged;hosted CI/full suite/
+deployed topology not run. A incomplete;B/C/D not started.
