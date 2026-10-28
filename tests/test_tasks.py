@@ -762,11 +762,10 @@ def test_health_exposes_runtime_revision(monkeypatch):
     result=app_module.health()
     assert result['runtime_id']=='delivery-sha' and result['repositories']['interview-engine']=='engine-sha'
 
-def test_startup_recovers_approved_interview_handoff_to_needs(monkeypatch,tmp_path):
+def test_startup_recovers_approved_interview_handoff_to_needs(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'handoff-recovery.db'));tid=store.create_task('Approved but stuck')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Approved but stuck')['task_id']
     store.update_phase(tid,'intent','approved');store.update_phase(tid,'conops','approved')
     monkeypatch.setattr(app_module,'store',store);monkeypatch.setitem(app_module.app.state._state,'store',store)
     calls=[]
@@ -885,11 +884,12 @@ def test_untyped_console_prompt_cannot_create_control_wait(monkeypatch,tmp_path,
     assert not any(e['kind']=='waiting_input' for e in store.events(tid))
 
 
-def test_startup_resume_skips_historical_interview_after_durable_approval(monkeypatch,tmp_path):
+def test_startup_resume_skips_historical_interview_after_durable_approval(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'completed-interview.db'));tid=store.create_task('Downstream already active')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Downstream already active')['task_id']
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     store.update_phase(tid,'intent','approved');store.update_phase(tid,'conops','approved');store.update_phase(tid,'needs','running')
     store.add_event(tid,'progress','session: completed-interview-checkpoint',phase_key='intent')
     monkeypatch.setattr(app_module,'store',store);monkeypatch.setitem(app_module.app.state._state,'store',store)
@@ -900,11 +900,10 @@ def test_startup_resume_skips_historical_interview_after_durable_approval(monkey
     asyncio.run(go())
     assert captured==[]
 
-def test_startup_reconciles_contradictory_prefix_before_downstream_handoff(monkeypatch,tmp_path):
+def test_startup_reconciles_contradictory_prefix_before_downstream_handoff(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'reconcile.db'));tid=store.create_task('Corrupt recovered task')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Corrupt recovered task')['task_id']
     store.update_phase(tid,'intent','running',detail='Waiting for founder answer')
     store.update_phase(tid,'needs','approved',detail='Approved by explicit open-gate policy')
     monkeypatch.setattr(app_module,'store',store);monkeypatch.setitem(app_module.app.state._state,'store',store)
@@ -995,12 +994,11 @@ def test_external_requirement_is_standard_live_work_with_actionable_input(tmp_pa
     assert work.owner=='requirement' and work.status=='waiting' and work.requirement==requirement
     assert runner.input_state(tid)=={'waiting':True,'process_live':True,'decision':None,'requirement':requirement}
 
-def test_recovery_restores_durable_external_input_wait(monkeypatch,tmp_path):
+def test_recovery_restores_durable_external_input_wait(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
     from delivery_api.runner import ProcessRunner
-    store=SQLiteStore(str(tmp_path/'restore-input.db'));tid=store.create_task('Existing')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Existing')['task_id']
     for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'architecture','awaiting_approval',detail='Baseline required')
     requirement={'kind':'external_input','title':'Existing baseline','path':'/tmp/system-baseline.json','format':'SystemBaseline JSON'}
@@ -1010,12 +1008,11 @@ def test_recovery_restores_durable_external_input_wait(monkeypatch,tmp_path):
     asyncio.run(go());work=runner.work_state(tid)
     assert work and work.owner=='requirement' and work.phase=='architecture' and work.requirement==requirement
 
-def test_recovery_requirement_owns_task_despite_later_obsolete_process_noise(monkeypatch,tmp_path):
+def test_recovery_requirement_owns_task_despite_later_obsolete_process_noise(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'one-owner.db'));tid=store.create_task('One owner')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('One owner')['task_id']
     for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'architecture','awaiting_approval',detail='Baseline required')
     requirement={'kind':'external_input','title':'Baseline required','path':str(tmp_path/'missing-system-baseline.json'),'format':'SystemBaseline JSON'}
@@ -1031,12 +1028,11 @@ def test_recovery_requirement_owns_task_despite_later_obsolete_process_noise(mon
     assert work and work.owner=='requirement' and work.requirement==requirement
     assert launched==[] and tid not in runner.processes
 
-def test_recovery_migrates_legacy_baseline_pause_to_requirement_owner(monkeypatch,tmp_path):
+def test_recovery_migrates_legacy_baseline_pause_to_requirement_owner(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'legacy-requirement.db'));tid=store.create_task('Legacy existing')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Legacy existing')['task_id']
     for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'architecture','awaiting_approval',detail='Existing-system baseline required before architecture')
     store.add_event(tid,'gate','Architecture paused for an existing SystemBaseline file',phase_key='architecture',payload={'cause':'old bespoke pause'})
