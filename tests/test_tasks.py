@@ -498,11 +498,10 @@ def test_open_gate_is_explicit_audited_bypass(tmp_path,pg_scoped_workspace):
     assert any(a['action']=='gate.bypassed' and a['detail']['provenance']=='explicit open-gate policy' for a in s.audit_entries(tid))
 
 
-def test_interview_preview_does_not_color_downstream_requirements(tmp_path):
+def test_interview_preview_does_not_color_downstream_requirements(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    s=SQLiteStore(str(tmp_path/'routing.db'));tid=s.create_task('No premature requirements')['task_id']
+    s=pg_scoped_workspace.store;tid=s.create_task('No premature requirements')['task_id']
     script="print('[17:00:00] -> Building scope and framing (phase 2/4)',flush=True);print('[17:00:01] ok Drafting requirement preview (phase 3/4)',flush=True)"
     asyncio.run(ProcessRunner(s).run(tid,[sys.executable,'-c',script],cwd=tmp_path))
     task=s.task(tid)
@@ -520,11 +519,10 @@ def test_plain_sqlite_in_turso_mode_falls_back_before_native_metadata_error(monk
     assert sqlite3.connect(db).execute("select name from sqlite_master where name='preserved'").fetchone()
 
 
-def test_startup_marks_unbound_pre_http_checkpoint_incompatible(monkeypatch,tmp_path):
+def test_startup_marks_unbound_pre_http_checkpoint_incompatible(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'resume.db'));tid=store.create_task('Interrupted')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Interrupted')['task_id']
     store.update_phase(tid,'intent','running',detail='Interviewing')
     store.add_event(tid,'progress','session: 20260919-163600-abcd',phase_key='intent')
     monkeypatch.setattr(app_module,'store',store)
@@ -533,11 +531,12 @@ def test_startup_marks_unbound_pre_http_checkpoint_incompatible(monkeypatch,tmp_
     assert store.engine_session(tid) is None
 
 
-def test_shutdown_interruption_preserves_running_state_for_resume(tmp_path):
+def test_shutdown_interruption_preserves_running_state_for_resume(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'shutdown.db'));tid=store.create_task('Restart me')['task_id'];runner=ProcessRunner(store)
+    store=pg_scoped_workspace.store;tid=store.create_task('Restart me')['task_id'];runner=ProcessRunner(store)
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     async def go():
         job=asyncio.create_task(runner.run(tid,[sys.executable,'-c','import time;print("session: checkpoint-1",flush=True);time.sleep(30)'],cwd=tmp_path))
         for _ in range(100):
@@ -548,11 +547,10 @@ def test_shutdown_interruption_preserves_running_state_for_resume(tmp_path):
     assert store.task(tid)['state']=='running'
     assert any(e['kind']=='interrupted' for e in store.events(tid))
 
-def test_startup_does_not_replay_unbound_legacy_sigterm_checkpoint(monkeypatch,tmp_path):
+def test_startup_does_not_replay_unbound_legacy_sigterm_checkpoint(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'legacy-resume.db'));tid=store.create_task('Upgrade interrupted')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Upgrade interrupted')['task_id']
     store.update_phase(tid,'intent','running');store.add_event(tid,'progress','session: legacy-checkpoint',phase_key='intent')
     store.update_phase(tid,'intent','failed');store.add_event(tid,'error','old shutdown',phase_key='intent',payload={'exit_code':-15})
     monkeypatch.setattr(app_module,'store',store)
@@ -639,11 +637,10 @@ def test_protocol_envelope_never_reappears_in_following_you_question(tmp_path):
     # Subprocess output is diagnostics only: protocol bytes can never become a question.
     assert not any(e['kind'] in ('founder_decision','waiting_input') for e in store.events(tid))
 
-def test_runner_can_close_engine_approved_phases(tmp_path):
+def test_runner_can_close_engine_approved_phases(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'complete.db'));tid=store.create_task('Complete start')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Complete start')['task_id']
     asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c','print("done")'],cwd=tmp_path,completion_phases=('intent','conops')))
     phases={p['phase_key']:p for p in store.task(tid)['phases']}
     assert phases['intent']['state']=='approved' and phases['conops']['state']=='approved'
@@ -746,11 +743,10 @@ def test_task_projection_exposes_live_input_truth(monkeypatch,pg_scoped_workspac
     assert result['input_state']=={'waiting':False,'process_live':False,'decision':None,'requirement':None}
 
 
-def test_restart_does_not_text_replay_gate_parked_pre_http_interview(monkeypatch,tmp_path):
+def test_restart_does_not_text_replay_gate_parked_pre_http_interview(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'gate-parked.db'));tid=store.create_task('Resume orphaned gate')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Resume orphaned gate')['task_id']
     store.update_phase(tid,'conops','running');store.update_phase(tid,'conops','awaiting_approval');store.wait_at_gate(tid,'conops')
     store.add_event(tid,'progress','session: orphaned-session',phase_key='conops')
     monkeypatch.setattr(app_module,'store',store)
