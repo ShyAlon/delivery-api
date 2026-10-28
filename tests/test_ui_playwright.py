@@ -837,10 +837,12 @@ def test_needs_gate_state_hides_stale_intent_prompt_and_opens_needs_gate(page,ui
     assert page.get_by_role('heading',name='Stakeholder needs gate').is_visible()
 
 
-def test_managed_task_state_reducer_is_exhaustive_and_atomic(page,ui):
+def test_managed_task_state_reducer_is_exhaustive_and_atomic(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}close(){this.closed=true}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve the intent model','prompt':'Approve this intent model?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
     calls={'n':0}
     def route(request):
@@ -849,7 +851,7 @@ def test_managed_task_state_reducer_is_exhaustive_and_atomic(page,ui):
             live['input_state']={'waiting':True,'process_live':True,'decision':decision};live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'}
             live['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':decision,'gate':None}
         request.fulfill(json=_promote_control(live))
-    page.route('**/api/tasks/live',route);page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
+    page.route(f'**/api/tasks/{tid}',route);page.goto(ui+f'/tasks/{tid}/view');page.locator('.detail-layout').wait_for()
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"intent",payload:{waiting_input:true,decision},ts:1720000500})',decision)
     dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.get_by_text('Approve',exact=True).is_visible()
     assert page.locator('#answerform').is_hidden() and page.locator('#opendecision').is_visible()
@@ -862,12 +864,14 @@ def test_runtime_build_identity_is_visible(page,ui):
     page.goto(ui+'/');page.locator('#accountbutton').click();page.locator('#opendebug').click();badge=page.locator('.debug-dialog .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD develop'
 
 
-def test_sse_snapshot_refresh_is_filtered_and_coalesced(page,ui):
+def test_sse_snapshot_refresh_is_filtered_and_coalesced(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}close(){this.closed=true}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();calls={'n':0}
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();calls={'n':0}
     def route(request):calls.__setitem__('n',calls['n']+1);request.fulfill(json=_promote_control(live))
-    page.route('**/api/tasks/live',route);page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for();baseline=calls['n']
+    page.route(f'**/api/tasks/{tid}',route);page.goto(ui+f'/tasks/{tid}/view');page.locator('.detail-layout').wait_for();baseline=calls['n']
     page.evaluate("""for(let i=0;i<100;i++)liveSource.emit({kind:'progress',message:'line '+i,phase_key:'intent',payload:{},ts:1720001000+i})""")
     page.wait_for_timeout(200);assert calls['n']==baseline
     page.evaluate("""for(let i=0;i<50;i++)liveSource.emit({kind:'founder_decision',message:'decision '+i,phase_key:'intent',payload:{waiting_input:true},ts:1720002000+i})""")
@@ -1790,7 +1794,10 @@ def test_background_refresh_stays_quiet_and_terminal_output_poll_stops(page, ui)
 
 
 
-def test_route_placeholder_holds_geometry_then_reveals_without_shell_shift(page, ui):
+def test_route_placeholder_holds_geometry_then_reveals_without_shell_shift(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    page.emulate_media(reduced_motion="no-preference")
     # Delayed dashboard data: a labeled skeleton with reserved geometry fills the outlet
     # immediately, then real data reveals in place; the shell never moves.
     def slow(route):
@@ -1820,16 +1827,18 @@ def test_route_placeholder_holds_geometry_then_reveals_without_shell_shift(page,
     page.unroute('**/api/tasks', slow)
 
 
-def test_awaiting_mount_shows_labeled_placeholder_not_blank(page, ui):
+def test_awaiting_mount_shows_labeled_placeholder_not_blank(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     # A route whose mount awaits before rendering (task detail) must show the labeled
     # router placeholder with reserved geometry, never a blank outlet.
     def slow(route):
         page.wait_for_timeout(1200)
         route.continue_()
-    page.route('**/api/tasks/live', slow)
+    page.route(f'**/api/tasks/{tid}', slow)
     page.goto(ui + '/about')
     page.locator('#app h1').wait_for()
-    page.evaluate("location.href='/tasks/live/view'")
+    page.evaluate("url=>location.href=url",f"/tasks/{tid}/view")
     placeholder = page.locator('.route-loading[role="status"]')
     placeholder.wait_for()
     assert placeholder.inner_text().strip() != ''
@@ -1838,30 +1847,32 @@ def test_awaiting_mount_shows_labeled_placeholder_not_blank(page, ui):
     page.screenshot(path=str(_screenshots_dir / 'route-loading-placeholder.png'), full_page=False)
     page.locator('.detail-head').wait_for()
     assert page.locator('.route-loading').count() == 0
-    page.unroute('**/api/tasks/live', slow)
+    page.unroute(f'**/api/tasks/{tid}', slow)
 
 
-def test_error_states_render_instantly_without_fade(page, ui):
+def test_error_states_render_instantly_without_fade(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     # Mount failure: the error modal appears immediately and the outlet does not fade.
-    page.route('**/api/tasks/live', lambda route: route.fulfill(status=500, json={'error': 'boom'}))
-    page.goto(ui + '/tasks/live/view')
+    page.route(f'**/api/tasks/{tid}', lambda route: route.fulfill(status=500, json={'error': 'boom'}))
+    page.goto(ui + f'/tasks/{tid}/view')
     page.locator('#modal:not(.hidden)').wait_for()
     assert page.evaluate("document.querySelector('#app').classList.contains('view-in')") is False
-    page.unroute('**/api/tasks/live')
+    page.unroute(f'**/api/tasks/{tid}')
     # In-view error state: the warning is committed at full opacity, never animated in.
-    live = page.request.get(ui + '/api/tasks/live').json()
+    live = page.request.get(ui + f'/api/tasks/{tid}').json()
     live['state'] = 'running'; live['active_phase'] = 'intent'
     live['input_state'] = {'waiting': False, 'process_live': False, 'decision': None}
     live['ui_state'] = {'mode': 'error', 'active_phase': 'intent', 'process_live': False, 'decision': None, 'gate': None}
     live['events'].append({'id': 999, 'kind': 'error', 'message': 'Error: engine stream handling stopped.', 'phase_key': 'intent', 'payload': {}, 'ts': 1720003000})
-    page.route('**/api/tasks/live', lambda route: route.fulfill(json=_promote_control(live)))
-    page.goto(ui + '/tasks/live/view')
+    page.route(f'**/api/tasks/{tid}', lambda route: route.fulfill(json=_promote_control(live)))
+    page.goto(ui + f'/tasks/{tid}/view')
     notice = page.locator('.task-error-state')
     notice.wait_for()
     assert page.evaluate("document.querySelector('#app').classList.contains('view-in')") is False
     assert page.evaluate("getComputedStyle(document.querySelector('#app')).animationName") == 'none'
     assert notice.evaluate('e=>getComputedStyle(e).opacity') == '1'
-    page.unroute('**/api/tasks/live')
+    page.unroute(f'**/api/tasks/{tid}')
 
 
 def test_browser_session_refresh_single_flight_before_expiry(page,ui):
@@ -2785,4 +2796,14 @@ def test_task_mutation_browser_group_requires_signed_pg_fixture():
                  test_create_task_dialog_keyboard_submit_textarea_and_cancel,
                  test_create_task_button_disables_until_the_server_returns,
                  test_mutation_flows_refresh_in_place_without_document_navigation):
+        assert "pg_page" in inspect.signature(case).parameters
+
+
+def test_runtime_browser_group_requires_signed_pg_fixture():
+    import inspect
+    for case in (test_managed_task_state_reducer_is_exhaustive_and_atomic,
+                 test_sse_snapshot_refresh_is_filtered_and_coalesced,
+                 test_route_placeholder_holds_geometry_then_reveals_without_shell_shift,
+                 test_awaiting_mount_shows_labeled_placeholder_not_blank,
+                 test_error_states_render_instantly_without_fade):
         assert "pg_page" in inspect.signature(case).parameters

@@ -804,3 +804,20 @@ and sticky-header crossing in full-page capture remain,not fixed. Production
 unchanged. Shared module64PGfunctions/69expanded cases,63shared legacy functions/
 68expanded cases,plus three standalone legacy-auth browser cases. Hosted CI/full
 mixed UI/full repo/deployed topology unrun. A incomplete;B/C/D not started.
+
+## A61: state/refresh/loading browser group
+
+Five state reducer,SSE filter/coalescing,dashboard skeleton geometry,awaiting
+route placeholder and immediate-error cases use signed regular-owner PG.
+Original assertions retained. Reveal-animation case explicitly sets normal
+motion;others keep reduced-motion default. Signature guard failed first.
+Corrected malformed location.href JavaScript introduced during path rewrite;
+final five cases+guard+cloud API+bootstrap44passed0skips19.34s. Snapshot/SSE/error
+mocks remain presentation inputs;real delayed dashboard/task reads hit PG.
+Pixels inspected:labeled skeleton and fixed shell visible;binary decision
+heading/options readable. Loading screenshot retains About active navigation
+while Home data loads,existing transient state not changed. Production unchanged;
+existing cosmetic debt unchanged. Shared69PGfunctions/74expanded cases,
+58legacyfunctions/63expanded cases,plus three standalone legacy-auth cases.
+Hosted CI/full mixed UI/full repo/deployed topology unrun. A incomplete;
+B/C/D not started.
