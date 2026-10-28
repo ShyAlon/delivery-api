@@ -22,22 +22,23 @@ SESSION_CHECK_TTL_SECONDS=30.0
 
 class SessionCheckCache:
     """The session-liveness check is one remote round trip per request. Cached per
-    verified session for a short TTL: sign-out or revocation takes effect up to
+    verified owner/session pair for a short TTL: sign-out or revocation takes effect up to
     SESSION_CHECK_TTL_SECONDS late (approved tradeoff, 2026-10-27). Failures to
     reach the database raise and are never cached; a False (expired/revoked) is
     cached too - a fresh sign-in is a new session id, never blocked by it."""
     def __init__(self,check,ttl=SESSION_CHECK_TTL_SECONDS):
         import threading,time
         self._check=check;self._ttl=ttl;self._time=time.monotonic;self._lock=threading.Lock();self._entries={}
-    def active(self,session_id):
+    def active(self,owner_id,session_id):
+        key=(owner_id,session_id)
         now=self._time()
         with self._lock:
-            hit=self._entries.get(session_id)
+            hit=self._entries.get(key)
             if hit is not None and hit[0]>now:return hit[1]
         active=self._check()
         with self._lock:
             if len(self._entries)>=1000:self._entries={key:entry for key,entry in self._entries.items() if entry[0]>now}
-            self._entries[session_id]=(now+self._ttl,active)
+            self._entries[key]=(now+self._ttl,active)
         return active
 
 
@@ -138,7 +139,7 @@ class TenantMiddleware:
                     import time as _time
                     from .postgres_scope import note_auth
                     _t_check=_time.monotonic()
-                    active=await run_in_threadpool(self.session_check.active,identity.session_id)
+                    active=await run_in_threadpool(self.session_check.active,identity.owner_id,identity.session_id)
                     note_auth(_time.monotonic()-_t_check)
                     if not active:
                         scope['state'].pop('supabase_actor',None)

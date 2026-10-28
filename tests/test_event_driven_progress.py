@@ -116,12 +116,12 @@ def test_session_check_is_cached_per_session_and_expires():
     cache = SessionCheckCache(lambda: calls.append(1) or True, ttl=30.0)
     clock = [1000.0]
     cache._time = lambda: clock[0]
-    assert cache.active('sess-1') is True and cache.active('sess-1') is True
+    assert cache.active('owner-1','sess-1') is True and cache.active('owner-1','sess-1') is True
     assert len(calls) == 1, 'a second request in the TTL window re-checked the session'
-    assert cache.active('sess-2') is True
+    assert cache.active('owner-1','sess-2') is True
     assert len(calls) == 2, 'a different session shared the first session\'s result'
     clock[0] += 31.0
-    assert cache.active('sess-1') is True
+    assert cache.active('owner-1','sess-1') is True
     assert len(calls) == 3, 'an expired entry was still served'
 
 
@@ -136,8 +136,8 @@ def test_session_check_cache_stores_revocation_and_never_caches_errors():
     cache = SessionCheckCache(check, ttl=30.0)
     import pytest as _pytest
     with _pytest.raises(RuntimeError):
-        cache.active('sess-1')
-    assert cache.active('sess-1') is False and cache.active('sess-1') is False
+        cache.active('owner-1','sess-1')
+    assert cache.active('owner-1','sess-1') is False and cache.active('owner-1','sess-1') is False
     assert len(calls) == 2, 'an error was cached, or revocation was not'
 
 
