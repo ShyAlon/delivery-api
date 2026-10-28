@@ -388,7 +388,8 @@ def test_oauth_identity_and_logout_in_browser(tmp_path):
         proc.terminate();proc.wait(timeout=5)
 
 
-def test_task_filter_sort_rename_and_delete(page,ui):
+def test_task_filter_sort_rename_and_delete(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
     page.goto(ui);page.locator('.task').first.wait_for()
     page.locator('#taskfilter').fill('Finished definition')
     assert page.locator('.task').count()==1
@@ -428,7 +429,8 @@ def test_page_headers_stay_sticky_and_home_has_no_evidence_vault_hero(pg_page,pg
     head=page.locator('.detail-head.page-head');head.wait_for()
     assert head.evaluate("e=>getComputedStyle(e).position")=="sticky"
 
-def test_create_task_dialog_keyboard_submit_textarea_and_cancel(page,ui):
+def test_create_task_dialog_keyboard_submit_textarea_and_cancel(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
     page.goto(ui)
     page.get_by_role('button',name='+ New task').click()
     title=page.locator('#newform input[name="title"]')
@@ -450,7 +452,8 @@ def test_create_task_dialog_keyboard_submit_textarea_and_cancel(page,ui):
     assert page.locator('#newform').count()==0 and page.locator('.task').count()==before
 
 
-def test_create_task_button_disables_until_the_server_returns(page,ui):
+def test_create_task_button_disables_until_the_server_returns(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
     page.goto(ui)
     page.get_by_role('button',name='+ New task').click()
     page.locator('#newform input[name="title"]').fill('Guarded create')
@@ -1056,9 +1059,12 @@ def test_debug_dialog_contains_run_events_desktop_and_phone(page,ui):
     assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
 
 
-def test_mutation_flows_refresh_in_place_without_document_navigation(page,ui):
+def test_mutation_flows_refresh_in_place_without_document_navigation(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    sim=pg_ids["sim"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}close(){}}window.EventSource=FakeEventSource""")
-    base=page.request.get(ui+'/api/tasks/live').json();base.update({'task_id':'mutation-test','title':'Mutation test','state':'not_started','active_phase':None,'ui_state':{'mode':'not_started','active_phase':None,'process_live':False,'decision':None,'gate':None}});renamed={**base,'title':'Renamed in place'};reads=0
+    base=page.request.get(ui+f'/api/tasks/{tid}').json();base.update({'task_id':'mutation-test','title':'Mutation test','state':'not_started','active_phase':None,'ui_state':{'mode':'not_started','active_phase':None,'process_live':False,'decision':None,'gate':None}});renamed={**base,'title':'Renamed in place'};reads=0
     def mutation_task(route):
         nonlocal reads
         if route.request.method=='PATCH':route.fulfill(json={'status':'renamed'})
@@ -1067,13 +1073,13 @@ def test_mutation_flows_refresh_in_place_without_document_navigation(page,ui):
     nav=[];page.on('framenavigated',lambda frame:nav.append(frame.url) if frame==page.main_frame else None);before=len(nav)
     page.locator('#renameform').get_by_role('button',name='Save name').click();page.get_by_role('heading',name='Renamed in place').wait_for();assert len(nav)==before
 
-    live=page.request.get(ui+'/api/tasks/sim').json();gate=live['gates'][0];gate.update({'state':'waiting','is_open':0});live.update({'state':'waiting_gate','active_phase':gate['after_phase'],'ui_state':{'mode':'phase_gate','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':gate},'control_snapshot':{'mode':'waiting_gate','owner':'delivery','wait_id':gate['gate_key']}})
+    live=page.request.get(ui+f'/api/tasks/{sim}').json();gate=live['gates'][0];gate.update({'state':'waiting','is_open':0});live.update({'state':'waiting_gate','active_phase':gate['after_phase'],'ui_state':{'mode':'phase_gate','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':gate},'control_snapshot':{'mode':'waiting_gate','owner':'delivery','wait_id':gate['gate_key']}})
     decided={**live,'state':'running','ui_state':{'mode':'error','active_phase':gate['after_phase'],'process_live':False,'decision':None,'gate':None}};calls=0
     def task(route):
         nonlocal calls;calls+=1;route.fulfill(json=_promote_control(live if calls==1 else decided))
-    page.route('**/api/tasks/sim',task);page.route('**/api/tasks/sim/gates/*/decide',lambda route:route.fulfill(json={**gate,'state':'decided'}))
-    page.goto(ui+'/tasks/sim/view');page.locator('#openphasegate').click();page.locator('#gateform').wait_for()
-    assert '/tasks/sim/gates/gate-intent' in page.url
+    page.route(f'**/api/tasks/{sim}',task);page.route(f'**/api/tasks/{sim}/gates/*/decide',lambda route:route.fulfill(json={**gate,'state':'decided'}))
+    page.goto(ui+f'/tasks/{sim}/view');page.locator('#openphasegate').click();page.locator('#gateform').wait_for()
+    assert f'/tasks/{sim}/gates/gate-intent' in page.url
     assert not page.locator('[data-action="approve"]').is_enabled()
     assert page.get_by_text('No current valid artifact is available',exact=False).is_visible()
 
@@ -2770,4 +2776,13 @@ def test_start_browser_group_requires_signed_pg_fixture():
                  test_model_route_default_and_phase_override_controls,
                  test_start_route_pills_show_all_choices_and_disabled_reasons,
                  test_both_admitted_routes_can_be_selected_without_hiding_either):
+        assert "pg_page" in inspect.signature(case).parameters
+
+
+def test_task_mutation_browser_group_requires_signed_pg_fixture():
+    import inspect
+    for case in (test_task_filter_sort_rename_and_delete,
+                 test_create_task_dialog_keyboard_submit_textarea_and_cancel,
+                 test_create_task_button_disables_until_the_server_returns,
+                 test_mutation_flows_refresh_in_place_without_document_navigation):
         assert "pg_page" in inspect.signature(case).parameters

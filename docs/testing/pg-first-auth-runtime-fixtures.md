@@ -790,3 +790,17 @@ existing cosmetic debt unchanged. Shared module now60PGfunctions/65expanded
 cases,67legacy functions/72expanded cases,plus three standalone legacy-auth
 browser cases. Refreshed inventory/forecast in receiver document. Hosted CI/full
 mixed UI/full repo/deployed topology unrun. A incomplete;B/C/D not started.
+
+## A60: task mutation browser group
+
+Four filter/sort/rename/delete,keyboard create/cancel,pending-create single-flight
+and mutation-without-navigation cases use signed regular-owner PG. Original
+assertions retained. Real keyboard creation and rename/delete use disposable
+tenant HTTP writes;pending-create and in-place snapshots/gate responses remain
+presentation mocks. Signature guard failed first. Four cases+guard+cloud API+
+bootstrap43passed0skips15.42s. Inspected create dialog:readable fields and disabled
+Creating button;post-delete dashboard has four remaining cards. V-label overlap
+and sticky-header crossing in full-page capture remain,not fixed. Production
+unchanged. Shared module64PGfunctions/69expanded cases,63shared legacy functions/
+68expanded cases,plus three standalone legacy-auth browser cases. Hosted CI/full
+mixed UI/full repo/deployed topology unrun. A incomplete;B/C/D not started.
