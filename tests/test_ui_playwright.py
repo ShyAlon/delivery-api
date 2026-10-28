@@ -1118,16 +1118,20 @@ def test_account_menu_is_plain_list_with_explicit_actions(page,ui):
     page.goto(ui+'/');page.locator('#accountbutton').click();menu=page.locator('#accountmenu');menu.wait_for()
     assert menu.locator(':scope > li').count()==3;assert menu.locator('button').all_inner_texts()==['Debug','Sign out']
 
-def test_existing_system_requirement_names_file_format_path_and_next_step(page,ui):
+def test_existing_system_requirement_names_file_format_path_and_next_step(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture is paused until real system facts are supplied.','path':'/artifacts/session/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':['baseline_id','system_name','mode: existing','repositories (at least one)'],'next':'Save the file, then restart Requi.re; recovery will launch Architecture.'}
-    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');card=page.locator('.requirement-dialog');card.wait_for()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');card=page.locator('.requirement-dialog');card.wait_for()
     assert card.get_by_text('SystemBaseline JSON',exact=True).is_visible();assert card.get_by_text(requirement['path'],exact=True).is_visible();assert card.get_by_text('repositories (at least one)',exact=True).is_visible();assert page.locator('.task-error-state').count()==0
 
-def test_missing_resource_dialog_has_recovery_paths_and_greenfield_confirmation(page,ui):
+def test_missing_resource_dialog_has_recovery_paths_and_greenfield_confirmation(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture needs real system facts.','path':'/artifacts/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':['baseline_id','system_name','mode: existing','repositories (at least one)'],'next':'Save then continue.'}
-    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');dialog=page.locator('.requirement-dialog');dialog.wait_for()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');dialog=page.locator('.requirement-dialog');dialog.wait_for()
     assert dialog.get_by_text(requirement['path'],exact=True).is_visible();assert dialog.get_by_role('button',name="I've added the file · check it").is_visible();assert dialog.get_by_role('button',name='Copy fact checklist').is_visible();dialog.get_by_role('button',name='I chose Existing by mistake').click();confirm=page.get_by_role('dialog',name='Confirm Greenfield correction');confirm.wait_for();assert confirm.get_by_role('button',name='Switch & continue').is_visible()
     page.screenshot(path=str(_screenshots_dir / 'missing-resource-recovery.png'),full_page=True)
 
@@ -1154,15 +1158,17 @@ def test_copy_diagnostic_summary_copies_a_bounded_digest(page,ui):
     assert copied.startswith('Requi.re diagnostic summary') and '== Current state ==' in copied and 'Event coverage:' in copied
     page.screenshot(path=str(_screenshots_dir / 'debug-dialog.png'),full_page=True)
 
-def test_greenfield_confirmation_is_single_flight(page,ui):
+def test_greenfield_confirmation_is_single_flight(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     requirement={'kind':'external_input','title':'Existing-system baseline required','summary':'Architecture needs facts.','path':'/artifacts/session/spec/system-baseline.json','format':'SystemBaseline JSON','required_fields':[]}
-    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
     calls=[]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     def resolve(route):
         calls.append(route.request.post_data);time.sleep(.15);route.fulfill(json={'status':'resolved','action':'greenfield'})
-    page.route('**/api/tasks/live/requirements/architecture/resolve',resolve)
-    page.goto(ui+'/tasks/live/view');page.locator('.requirement-dialog').wait_for();page.get_by_role('button',name='I chose Existing by mistake').click();confirm=page.get_by_role('button',name='Switch & continue');confirm.dblclick()
+    page.route(f'**/api/tasks/{tid}/requirements/architecture/resolve',resolve)
+    page.goto(ui+f'/tasks/{tid}/view');page.locator('.requirement-dialog').wait_for();page.get_by_role('button',name='I chose Existing by mistake').click();confirm=page.get_by_role('button',name='Switch & continue');confirm.dblclick()
     page.wait_for_timeout(250)
     assert len(calls)==1
 
@@ -2207,15 +2213,17 @@ def test_phase_change_dialog_closes_when_the_founder_can_act_again_and_never_sho
     assert page.locator(".phase-change-dialog").count() == 0
 
 
-def test_flagged_inputs_show_readable_item_and_no_circular_link(page,ui):
-    task=page.request.get(ui+'/api/tasks/sim').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate.update({'state':'waiting','is_open':0})
+def test_flagged_inputs_show_readable_item_and_no_circular_link(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
+    task=page.request.get(ui+f'/api/tasks/{tid}').json();gate=next(g for g in task['gates'] if g['after_phase']=='srs');gate.update({'state':'waiting','is_open':0})
     task['artifacts']=[{'phase_key':'srs','name':'srs.json','title':'Requirements','stale':False,'present':True,'generation':1}]
-    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=task))
-    page.route('**/api/tasks/sim/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Requirements\n\nText.'}))
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=task))
+    page.route(f'**/api/tasks/{tid}/artifacts/srs/srs.json/view',lambda route:route.fulfill(json={'name':'srs.json','title':'Requirements','phase':'srs','format':'markdown','content':'# Requirements\n\nText.'}))
     orig={'requirement_id':'R-11','title':'Ear training','statement':'The app shall play a clip.','priority':'must','acceptance':[{'criterion_id':'AC-54','statement':'A clip is played.'}]}
     sem={'findings':[{'item_id':'R-11','kind':'semantic','reason':'Found: Ear-training, a name the interview never used.','original':orig}],'decisions':[],'items':[{'item_id':'R-11','original':orig}]}
-    mock_gate_review(page,ui,'sim',semantic=sem)
-    page.goto(ui+'/tasks/sim/gates/gate-srs')
+    mock_gate_review(page,ui,tid,semantic=sem)
+    page.goto(ui+f'/tasks/{tid}/gates/gate-srs')
     panel=page.locator('#semantic-panel');panel.locator('article').wait_for()
     assert panel.locator('article h3 a').count()==0
     expect(page.locator('#decision-checklist')).to_contain_text('1 flagged input still needs a decision')
@@ -2331,9 +2339,11 @@ def review_answer_snapshot(snapshot):
     ]
 
 
-def test_interview_feed_shows_flagged_item_review_as_words_not_json(page, ui):
-    route_task_snapshot(page, ui, "live", review_answer_snapshot)
-    page.goto(ui + "/tasks/live/view")
+def test_interview_feed_shows_flagged_item_review_as_words_not_json(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    route_task_snapshot(page, ui, tid, review_answer_snapshot)
+    page.goto(ui + f"/tasks/{tid}/view")
     page.get_by_text("Interview so far").wait_for()
     joined = "\n".join(page.locator(".qa-answer").all_inner_texts())
     page.locator(".qa-item").first.screenshot(path="/tmp/review-bubble.png")
@@ -2725,4 +2735,14 @@ def test_retry_browser_group_requires_signed_pg_fixture():
                  test_failed_needs_has_retry_not_generation_rerun,
                  test_failed_needs_retry_selects_env_default_model_not_interview_model,
                  test_failed_architecture_has_a_retry_that_resumes_the_phase):
+        assert "pg_page" in inspect.signature(case).parameters
+
+
+def test_resource_browser_group_requires_signed_pg_fixture():
+    import inspect
+    for case in (test_existing_system_requirement_names_file_format_path_and_next_step,
+                 test_missing_resource_dialog_has_recovery_paths_and_greenfield_confirmation,
+                 test_greenfield_confirmation_is_single_flight,
+                 test_flagged_inputs_show_readable_item_and_no_circular_link,
+                 test_interview_feed_shows_flagged_item_review_as_words_not_json):
         assert "pg_page" in inspect.signature(case).parameters

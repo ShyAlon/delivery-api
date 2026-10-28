@@ -762,3 +762,17 @@ Needs/Architecture dialog pixels:readable last failure,model choice,cost warning
 fresh versus checkpoint explanation and cancel/retry controls. Production
 unchanged;existing cosmetic debt unchanged. Hosted CI/full mixed UI/full repo/
 deployed topology unrun. A incomplete;B/C/D not started.
+
+## A58: missing resources and flagged review browser group
+
+Five resource file/path/format,recovery/Greenfield confirmation,single-flight,
+flagged-input readable fields/blocked approval and interview review-summary
+cases now use signed regular-owner PG. Original assertions retained. Signature
+guard failed first. Five cases+guard+cloud API+bootstrap44passed0skips16.03s.
+Task/artifact/semantic-review/resolve mocks remain presentation inputs;Greenfield
+confirm is intercepted,not actual baseline mutation or paid execution. Pixels
+inspected:layered Greenfield warning and Back/Switch controls readable;flagged
+item uses human fields and blocked checklist. Full-page sticky-header crossing
+partly covers scrolled gate heading,existing capture/layout debt not fixed.
+Production unchanged;other cosmetic debt unchanged. Hosted CI/full mixed UI/
+full repo/deployed topology unrun. A incomplete;B/C/D not started.
