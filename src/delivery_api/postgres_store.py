@@ -333,6 +333,79 @@ class PostgresStore(SQLiteStore):
             out.append(row)
         return out
 
+    def add_review_comment(self, task_id: str, wait_id: str, revision: str, actor: str, comment: str) -> int:
+        cursor = self._execute_native('INSERT INTO review_comments(task_id,wait_id,revision,actor,comment,created_at) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id', (task_id, wait_id, revision, actor, comment, time.time()), write=True)
+        return cursor.fetchone()['id']
+
+    def review_comments(self, task_id: str, wait_id: str, revision: str) -> list[dict]:
+        rows = self._execute_native('SELECT id,actor,comment,created_at FROM review_comments WHERE task_id=%s AND wait_id=%s AND revision=%s ORDER BY id', (task_id, wait_id, revision)).fetchall()
+        return [dict(row) for row in rows]
+
+    def retain_decision_review(self, task_id: str, wait_id: str, revision: str, payload: dict) -> None:
+        retained = self._execute_native('SELECT payload FROM decision_reviews WHERE task_id=%s AND wait_id=%s AND revision=%s', (task_id, wait_id, revision)).fetchone()
+        if retained is not None:
+            if json.loads(retained['payload']) != json.loads(json.dumps(payload)):
+                raise ValueError('conflicting retained decision review revision')
+            return
+        self._execute_native('INSERT INTO decision_reviews VALUES (%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING', (task_id, wait_id, revision, json.dumps(payload), time.time()), write=True)
+        retained = self._execute_native('SELECT payload FROM decision_reviews WHERE task_id=%s AND wait_id=%s AND revision=%s', (task_id, wait_id, revision)).fetchone()
+        if retained is None or json.loads(retained['payload']) != json.loads(json.dumps(payload)):
+            raise ValueError('conflicting retained decision review revision')
+
+    def decision_review(self, task_id: str, wait_id: str, revision: str | None=None) -> dict | None:
+        if revision:
+            row = self._execute_native('SELECT payload FROM decision_reviews WHERE task_id=%s AND wait_id=%s AND revision=%s', (task_id, wait_id, revision)).fetchone()
+        else:
+            row = self._execute_native('SELECT payload FROM decision_reviews WHERE task_id=%s AND wait_id=%s ORDER BY created_at DESC LIMIT 1', (task_id, wait_id)).fetchone()
+        return json.loads(row['payload']) if row else None
+
+    def save_decision_draft(self, task_id: str, wait_id: str, revision: str, payload: dict) -> str:
+        draft_id = secrets.token_urlsafe(18)
+        self._execute_native('INSERT INTO decision_drafts VALUES (%s,%s,%s,%s,%s,%s)', (task_id, wait_id, revision, draft_id, json.dumps(payload), time.time()), write=True)
+        return draft_id
+
+    def decision_draft(self, task_id: str, wait_id: str, revision: str, draft_id: str) -> dict | None:
+        row = self._execute_native('SELECT payload FROM decision_drafts WHERE task_id=%s AND wait_id=%s AND revision=%s AND draft_id=%s', (task_id, wait_id, revision, draft_id)).fetchone()
+        return json.loads(row['payload']) if row else None
+
+    def list_feedback(self, task_id: str) -> list[dict]:
+        return [dict(r) for r in self._execute_native('SELECT * FROM answer_feedback WHERE task_id=%s ORDER BY id', (task_id,))]
+
+    def upsert_feedback(self, task_id: str, input_ref: str, target: str, content: str, thumb: int | None, comment: str | None, actor: str) -> dict:
+        if target not in ('question', 'answer'):
+            raise ValueError('target must be question or answer')
+        if thumb not in (None, 1, -1):
+            raise ValueError('thumb must be 1, -1, or null')
+        session_row = self._execute_native('SELECT engine_session_id FROM tasks WHERE task_id=%s',(task_id,)).fetchone()
+        session = session_row['engine_session_id'] if session_row else None
+        now = time.time()
+        self._execute_native('INSERT INTO answer_feedback(task_id,session_id,input_ref,target,content,thumb,comment,actor,created_at,updated_at)\n                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)\n                   ON CONFLICT(task_id,input_ref,target,actor)\n                   DO UPDATE SET session_id=excluded.session_id, content=excluded.content,\n                                 thumb=excluded.thumb, comment=excluded.comment, updated_at=excluded.updated_at', (task_id, session, input_ref, target, content, thumb, comment, actor, now, now), write=True)
+        row = self._execute_native('SELECT * FROM answer_feedback WHERE task_id=%s AND input_ref=%s AND target=%s AND actor=%s', (task_id, input_ref, target, actor)).fetchone()
+        self.audit(actor, 'feedback.upsert', task_id, {'feedback_id': row['id'], 'target': target, 'thumb': thumb, 'has_comment': bool(comment)})
+        return dict(row)
+
+    def _feedback_row(self, task_id: str, feedback_id: int, actor: str, admin: bool) -> dict:
+        row = self._execute_native('SELECT * FROM answer_feedback WHERE id=%s AND task_id=%s', (feedback_id, task_id)).fetchone()
+        if row is None:
+            raise KeyError('feedback not found')
+        if row['actor'] != actor and (not admin):
+            raise PermissionError('feedback belongs to another actor')
+        return row
+
+    def update_feedback(self, task_id: str, feedback_id: int, actor: str, *, thumb: int | None=None, comment: str | None=None, admin: bool=False) -> dict:
+        if thumb not in (None, 1, -1):
+            raise ValueError('thumb must be 1, -1, or null')
+        self._feedback_row(task_id, feedback_id, actor, admin)
+        self._execute_native('UPDATE answer_feedback SET thumb=%s, comment=%s, updated_at=%s WHERE id=%s', (thumb, comment, time.time(), feedback_id), write=True)
+        row = self._execute_native('SELECT * FROM answer_feedback WHERE id=%s', (feedback_id,)).fetchone()
+        self.audit(actor, 'feedback.update', task_id, {'feedback_id': feedback_id, 'target': row['target'], 'thumb': thumb, 'has_comment': bool(comment)})
+        return dict(row)
+
+    def delete_feedback(self, task_id: str, feedback_id: int, actor: str, *, admin: bool=False) -> None:
+        row = self._feedback_row(task_id, feedback_id, actor, admin)
+        self._execute_native('DELETE FROM answer_feedback WHERE id=%s', (feedback_id,), write=True)
+        self.audit(actor, 'feedback.delete', task_id, {'feedback_id': feedback_id, 'target': row['target']})
+
     def create_task(self,title,brief='',*,task_id=None):
         title=title.strip()
         if not title: raise ValueError('task name cannot be empty')
