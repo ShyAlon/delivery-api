@@ -25,7 +25,7 @@ def cloud(monkeypatch,tmp_path):
     from delivery_api import config
     store=PostgresStore(DSN.replace('user=sandbox','user=delivery_app'))
     monkeypatch.setattr(module,'store',store)
-    monkeypatch.setattr(module.app.state,'store',store)
+    monkeypatch.setitem(module.app.state._state,'store',store)
     monkeypatch.setattr(module.orchestrator,'store',store)
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
     monkeypatch.setattr(module.bundles,'root',lambda:tmp_path)
@@ -460,7 +460,7 @@ def test_operator_session_route_rechecks_sole_principal_and_registry(cloud,monke
         c.execute('GRANT requi_operator_read TO delivery_app')
         c.execute('INSERT INTO operator_principals VALUES (%s,%s,%s,true)',(A.owner_id,'route-fake-v1',['sessions.read']))
     reader=OperatorReadStore(DSN.replace('user=sandbox','user=delivery_app'),OperatorPrincipal(A.owner_id,'route-fake-v1',frozenset({'sessions.read'})))
-    monkeypatch.setattr(module.app.state,'operator_read_store',reader,raising=False)
+    monkeypatch.setitem(module.app.state._state,'operator_read_store',reader)
     try:
         got=client.get('/api/operator/sessions',headers=header('a'))
         assert got.status_code==200 and any(row['session_id']==sid for row in got.json()['sessions'])
@@ -485,7 +485,7 @@ def test_operator_task_debug_route_rechecks_scope_and_never_exports_content(clou
         c.execute('GRANT requi_operator_read TO delivery_app')
         c.execute('INSERT INTO operator_principals VALUES (%s,%s,%s,true)',(A.owner_id,'route-debug',['debug.read']))
     reader=OperatorReadStore(DSN.replace('user=sandbox','user=delivery_app'),OperatorPrincipal(A.owner_id,'route-debug',frozenset({'debug.read'})))
-    monkeypatch.setattr(module.app.state,'operator_read_store',reader,raising=False)
+    monkeypatch.setitem(module.app.state._state,'operator_read_store',reader)
     try:
         path='/api/operator/task-debug?task_id='+tid
         got=client.get(path,headers=header('a'))
@@ -511,7 +511,7 @@ def test_curated_operator_log_route_is_read_only_and_revocable(cloud,monkeypatch
     with psycopg.connect(DSN) as c:
         c.execute('GRANT requi_operator_read TO delivery_app')
         c.execute('INSERT INTO operator_principals VALUES (%s,%s,%s,true)',(A.owner_id,'route-logs',['logs.read']))
-    monkeypatch.setattr(module.app.state,'operator_read_store',OperatorReadStore(DSN.replace('user=sandbox','user=delivery_app'),OperatorPrincipal(A.owner_id,'route-logs',frozenset({'logs.read'}))),raising=False)
+    monkeypatch.setitem(module.app.state._state,'operator_read_store',OperatorReadStore(DSN.replace('user=sandbox','user=delivery_app'),OperatorPrincipal(A.owner_id,'route-logs',frozenset({'logs.read'}))))
     try:
         path='/api/operator/task-logs?task_id='+tid
         got=client.get(path,headers=header('a'))
@@ -536,7 +536,7 @@ def test_usage_route_has_own_capability_and_registry_revocation(cloud,monkeypatc
     with psycopg.connect(DSN) as c:
         c.execute('GRANT requi_operator_usage TO delivery_app')
         c.execute('INSERT INTO operator_principals VALUES (%s,%s,%s,true)',(A.owner_id,'route-usage',['usage.read']))
-    monkeypatch.setattr(module.app.state,'operator_read_store',OperatorReadStore(DSN.replace('user=sandbox','user=delivery_app'),OperatorPrincipal(A.owner_id,'route-usage',frozenset({'usage.read'}))),raising=False)
+    monkeypatch.setitem(module.app.state._state,'operator_read_store',OperatorReadStore(DSN.replace('user=sandbox','user=delivery_app'),OperatorPrincipal(A.owner_id,'route-usage',frozenset({'usage.read'}))))
     try:
         path='/api/operator/task-usage?task_id='+tid
         got=client.get(path,headers=header('a'))
