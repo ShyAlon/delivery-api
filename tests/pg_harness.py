@@ -62,6 +62,10 @@ def _numbered(path):
 
 
 def start():
+    # Repeated in-process pytest runs reuse our own migrated server. Do not
+    # relabel it external merely because start() published its DSN last time.
+    if STATE['status']=='running' and os.environ.get('DELIVERY_TEST_POSTGRES_DSN')==STATE['dsn']:
+        return
     if os.environ.get('DELIVERY_TEST_NO_POSTGRES')=='1':
         STATE.update(status='off',reason='DELIVERY_TEST_NO_POSTGRES=1');return
     if os.environ.get('DELIVERY_TEST_POSTGRES_DSN'):

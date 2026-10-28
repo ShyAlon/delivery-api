@@ -24,3 +24,11 @@ def test_every_migration_was_applied_and_the_tests_can_connect():
         assert c.execute("SELECT count(*) FROM auth.sessions").fetchone()[0]>=2
     with psycopg.connect(state['dsn'].replace('user=sandbox','user=delivery_app')) as c:
         assert c.execute('SELECT current_user').fetchone()[0]=='delivery_app'
+
+
+def test_repeated_start_preserves_owned_server_for_warm_runs():
+    if pg_harness.STATE['status'] != 'running':
+        pytest.skip('requires the disposable harness')
+    before = dict(pg_harness.STATE)
+    pg_harness.start()
+    assert pg_harness.STATE == before
