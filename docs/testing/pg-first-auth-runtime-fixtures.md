@@ -392,3 +392,17 @@ five cases,native projection/gate,protocol,seven-phase parity,bootstrap. Expande
 124passed2known baseline failures17.25s (checkpoint intent view/session-cost
 metadata),not full-module green. Production/UI unchanged;hosted CI/full suite/
 deployed topology not run. A incomplete;B/C/D not started.
+
+## A32: session recovery and founder-reference artifact fixtures
+
+Two cases use scoped PG:greenfield baseline correction recovers session from
+recent requirement path after510 output events,and architecture founder refs
+survive artifact validation/view. Every original assertion retained. Local
+filesystem/orchestrator policy explicit,runner mocked as before. Fail-first
+PG assertion failed on SQLite. Focused11passed0skips3.85s with producer sources:
+two cases,legacy path recovery,native projection/gate,bootstrap. Expanded
+116passed2known baseline failures16.40s(checkpoint intent view/session-cost
+metadata),not full-module green. Dated receiver inventory classifies41 files:
+14 migrate,16 guard,5 reference,6 retired-contract (mixed cases noted).
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.

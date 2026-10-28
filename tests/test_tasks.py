@@ -1067,14 +1067,17 @@ def test_orphaned_running_ui_state_explains_missing_owner():
     assert state.diagnostic=={'reason':'task has no live ActiveWork owner','task_state':'running','active_phase':'architecture'}
 
 
-def test_greenfield_correction_recovers_session_from_recent_requirement_path(monkeypatch,tmp_path):
+def test_greenfield_correction_recovers_session_from_recent_requirement_path(monkeypatch,tmp_path,pg_scoped_workspace):
     generator=tmp_path/"generator";python=generator/".venv/bin/python";python.parent.mkdir(parents=True);python.touch()
     monkeypatch.setenv("SPEC_GENERATOR_DIR",str(generator))
     import asyncio,json
     from delivery_api.orchestrator import PhaseOrchestrator
-    from delivery_api.store import SQLiteStore
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     artifacts=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
-    store=SQLiteStore(str(tmp_path/'greenfield-correction.db'));tid=store.create_task('Daily Habit')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Daily Habit')['task_id']
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     session='20260919-163614-adc4';interview=artifacts/session/'interview';interview.mkdir(parents=True)
     (interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}));(interview/'conops.json').write_text('{}')
     store.add_event(tid,'progress',f'session: {session}',phase_key='intent')
@@ -1532,12 +1535,13 @@ def test_orchestrator_sticky_exact_model_across_phases_and_switch(monkeypatch,tm
     assert r.calls[3]['env']['SPEC_GENERATOR_MODEL_ITEMS']=='ollama:phi4'
 
 
-def test_architecture_founder_refs_validate_in_delivery_snapshot_and_gate(monkeypatch,tmp_path):
+def test_architecture_founder_refs_validate_in_delivery_snapshot_and_gate(monkeypatch,tmp_path,pg_scoped_workspace):
     import json
     import delivery_api.app as app_module
-    from delivery_api.store import SQLiteStore
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root))
-    local=SQLiteStore(str(tmp_path/'refs.db'));tid=local.create_task('Founder source')['task_id']
+    local=pg_scoped_workspace.store;tid=local.create_task('Founder source')['task_id']
     local.set_engine_session(tid,'founder-ref-session');monkeypatch.setattr(app_module,'store',local)
     folder=root/'founder-ref-session'/'spec';folder.mkdir(parents=True)
     payload={'contract_version':'0.27.0','session_id':'founder-ref-session','baseline_id':'baseline:test','stack_entries':[],'components':[],
