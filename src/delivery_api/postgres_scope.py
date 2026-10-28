@@ -83,6 +83,10 @@ class TimingConnection:
     def execute(self,sql,params=()):
         started=time.monotonic()
         try:return self._inner.execute(sql,params)
+        except Exception as error:
+            from .diagnostic_evidence import query_failure
+            query_failure(error)
+            raise
         finally:note_statement(statement_label(sql),time.monotonic()-started)
     def __getattr__(self,name):return getattr(self._inner,name)
 
