@@ -623,3 +623,18 @@ the token but no SQLite receiver. Primary migrate6,guard18,reference5,retired7
 including implicit API contracts. Production/UI
 unchanged;hosted CI/full repo/deployed topology not run. A incomplete;B/C/D not
 started.
+
+## A49: persistent SPA shell parity fixture
+
+SPA shell suite now signed PG operator shell instead of SQLite subprocess.
+Original navigation/header-node identity,delayed auth/fonts/cost/balance geometry,
+mobile overflow,back/forward/deep link,unknown route,poll disposal,60s cost polling,
+hidden-tab/debounce recovery and operator mount assertions unchanged. Existing
+frontend auth mocks remain frontend contracts,not local auth activation.
+Fail-first source guard rejected SQLite bootstrap. Full shell19passed0skips60.78s;
+combined shell,stale mounts,cloud API,bootstrap60passed0skips83.00s. Dashboard
+pixels inspected:readable task card/filter/new button,active Home,signed operator
+identity and intact header. Product UI unchanged. Literal inventory35 unchanged
+(source guard token);primary migrate5,guard19,reference5,retired7 including
+implicit API. Hosted CI/full repo/deployed topology not run. A incomplete;
+B/C/D not started.
