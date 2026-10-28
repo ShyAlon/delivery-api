@@ -875,3 +875,18 @@ Shared mixed browser89PG/38legacy functions out of127;three standalone local-aut
 browser cases remain. Global conftest still bootstraps SQLite. A incomplete;
 B/C/D not started. No production changes. Hosted CI/full suite/deployed topology
 unrun. Presentation snapshots are not live engine execution proof.
+
+## A65: phase evidence browser group
+
+Four functions/five expanded cases (gate links,SPEC markdown panels,one-line
+progress/evidence tooltips desktop+phone,short audit scrolling) use signed PG
+and owner-qualified IDs. All assertions retained;task/audit snapshots remain
+presentation contracts. Guard failed first1 in0.73s;cases+guard+cloud API+
+bootstrap44passed0skips15.58s. Inspected phone Requirements evidence tooltip
+and scrolled audit bottom rows. Full-page capture has sticky header crossing
+content;unchanged visual debt. The large signal age in tooltip capture is from
+an explicit valid July2024 event timestamp1720004000,not missing-time bug#410.
+No production fix claimed. Shared93PG/34legacy functions out of127,plus three
+standalone local-auth/browser cases. Two debug contract conflicts remain legacy.
+A incomplete,global SQLite bootstrap remains,B/C/D not started. Hosted CI/full
+mixed UI/full suite/deployed topology unrun. No deploy/live DB/model execution.
