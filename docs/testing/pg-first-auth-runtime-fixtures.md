@@ -838,3 +838,19 @@ not collected/parameter-expanded tests. Literal inventory35files unchanged,
 4migrate/19guard/5reference/7retired;implicit API adds one migrate file.
 Hosted CI/full mixed UI/full repo/deployed topology unrun. A incomplete;
 B/C/D not started.
+
+## A63: interview layout and phase-change browser group
+
+Seven Start-output visibility,internal history scroll/sticky Live process,
+newest-first numbering,submitting normal/reduced motion and phase-change
+pause/close cases use signed regular-owner PG. _long_interview_page accepts
+unique task ID,legacy default preserved. Existing motion checks explicitly
+start normal then test reduced mode. All assertions retained. Signature guard
+failed first. Seven cases+guard+cloud API+bootstrap46passed0skips29.52s.
+Task/answer/phase-output/SSE mocks remain browser contracts,not live execution.
+Inspected phase transition heading/latest progress/background button and pinned
+Live process/newest history. Upper content clipped by sticky header in scrolled
+view remains,not fixed. Production/cosmetic debt unchanged. Shared84PGfunctions/
+89expanded cases,43legacyfunctions/48expanded cases,plus three standalone
+legacy-auth browser cases. Hosted CI/full mixed UI/full repo/deployed topology
+unrun. A incomplete;B/C/D not started.
