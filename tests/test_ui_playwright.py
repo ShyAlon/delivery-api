@@ -762,36 +762,42 @@ def test_answered_decision_clears_and_binary_approval_uses_same_dialog(pg_page,p
     assert page.locator('#opendecision').count()==0 and page.locator('.live-indicator').get_by_text('Decision received',exact=False).is_visible()
 
 
-def test_stale_structured_decision_is_not_actionable_on_load(page,ui):
+def test_stale_structured_decision_is_not_actionable_on_load(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'old-intent','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();decision={'type':'founder_decision','decision_id':'old-intent','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
     live['events']=[{'id':91,'kind':'founder_decision','message':'Approve?','phase_key':'intent','payload':{'waiting_input':True,'decision':decision},'ts':1720000300}]
     live['input_state']={'waiting':False,'process_live':False,'decision':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');page.locator('.detail-layout').wait_for()
     assert page.locator('#opendecision').count()==0 and page.locator('.decision-dialog').count()==0
 
 
-def test_stale_decision_conflict_closes_and_refreshes_dialog(page,ui):
+def test_stale_decision_conflict_closes_and_refreshes_dialog(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
     live['events']=[];live['input_state']={'waiting':True,'process_live':True,'decision':decision};live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':decision,'gate':None};calls={'get':0}
     def task(route):
         calls['get']+=1
         if calls['get']>1:live['input_state']={'waiting':False,'process_live':False,'decision':None};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'needs','process_live':True,'decision':None,'gate':None}
         route.fulfill(json=_promote_control(live))
-    page.route('**/api/tasks/live',task)
-    page.route('**/api/tasks/live/answer',lambda route:route.fulfill(status=409,json={'detail':{'error':'Stale founder decision was not submitted.','cause':'The submitted decision is no longer open.','next':'Refresh shows the current state.','stale':True,'current_state':'running','active_phase':'needs'}}))
-    page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for();dialog.get_by_text('Reject',exact=True).click()
+    page.route(f'**/api/tasks/{tid}',task)
+    page.route(f'**/api/tasks/{tid}/answer',lambda route:route.fulfill(status=409,json={'detail':{'error':'Stale founder decision was not submitted.','cause':'The submitted decision is no longer open.','next':'Refresh shows the current state.','stale':True,'current_state':'running','active_phase':'needs'}}))
+    page.goto(ui+f'/tasks/{tid}/view');dialog=page.locator('.decision-dialog');dialog.wait_for();dialog.get_by_text('Reject',exact=True).click()
     page.get_by_text('Stale founder decision was not submitted.',exact=False).wait_for();page.wait_for_timeout(900)
     assert page.locator('.decision-dialog').count()==0 and page.locator('#opendecision').count()==0 and calls['get']>=2
 
-def test_intent_approval_shows_selected_concept_and_founder_reason(page,ui):
+def test_intent_approval_shows_selected_concept_and_founder_reason(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve the intent model','prompt':'Approve this intent model?','rationale_required':False,'context':{'label':'Selected concept','value':'PWA','reason':'You stated you chose this concept because one deployment fits our team'},'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve the intent model','prompt':'Approve this intent model?','rationale_required':False,'context':{'label':'Selected concept','value':'PWA','reason':'You stated you chose this concept because one deployment fits our team'},'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
     live['events']=[{'id':91,'kind':'founder_decision','message':'Approve?','phase_key':'intent','payload':{'waiting_input':True,'decision':decision},'ts':1720000300}];live['input_state']={'waiting':True,'process_live':True,'decision':decision}
     live['ui_state']={'mode':'engine_decision','active_phase':live['active_phase'],'process_live':True,'decision':decision,'gate':None}
-    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view')
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view')
     context=page.locator('.decision-context');context.wait_for();assert context.get_by_text('PWA',exact=True).is_visible()
     assert context.get_by_text('You stated you chose this concept because one deployment fits our team',exact=True).is_visible()
     page.screenshot(path=str(_screenshots_dir / 'intent-approval-with-concept-reason.png'),full_page=True)
@@ -811,26 +817,30 @@ def test_detail_uses_one_large_v_process_without_duplicate_path_map(page,ui):
     assert phases.count()==8 and page.locator('.detail-layout .v-map').count()==0 and page.locator('.detail-layout .gate-legend').count()==0
     first=phases.first.bounding_box();assert first['height']>=70
 
-def test_server_accepted_decision_event_closes_founder_box(page,ui):
+def test_server_accepted_decision_event_closes_founder_box(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
     live['input_state']={'waiting':True,'process_live':True,'decision':decision};live['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':decision,'gate':None,'show_start':False,'show_progress':True,'show_engine_decision':True,'show_question':False,'show_answer_composer':False,'show_phase_gate':False,'show_artifacts':False,'show_console':True};live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};calls={'n':0}
     def snapshot(route):
         calls['n']+=1
         route.fulfill(json=_promote_control(live))
-    page.route('**/api/tasks/live',snapshot)
-    page.goto(ui+'/tasks/live/view');page.locator('.decision-dialog').wait_for()
+    page.route(f'**/api/tasks/{tid}',snapshot)
+    page.goto(ui+f'/tasks/{tid}/view');page.locator('.decision-dialog').wait_for()
     live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'intent','process_live':True,'decision':None,'gate':None}
     page.evaluate("liveSource.emit({kind:'answer',message:'You: y',phase_key:'intent',payload:{decision_id:'intent-approval',answer:'y'},ts:1720000400})")
     page.locator('.decision-dialog').wait_for(state='detached');assert page.locator('#opendecision').count()==0 and calls['n']>=2
 
-def test_needs_gate_state_hides_stale_intent_prompt_and_opens_needs_gate(page,ui):
+def test_needs_gate_state_hides_stale_intent_prompt_and_opens_needs_gate(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();gate=next(g for g in live['gates'] if g['after_phase']=='needs');gate['state']='waiting'
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();gate=next(g for g in live['gates'] if g['after_phase']=='needs');gate['state']='waiting'
     live['control_snapshot']={'mode':'waiting_gate','wait_id':gate['gate_key']};live.update({'state':'waiting_gate','active_phase':'needs','input_state':{'waiting':False,'process_live':False,'decision':None},
                  'ui_state':{'mode':'phase_gate','active_phase':'needs','process_live':False,'decision':None,'gate':gate,'show_start':False,'show_progress':False,'show_engine_decision':False,'show_question':False,'show_answer_composer':False,'show_phase_gate':True,'show_artifacts':False,'show_console':True}})
     live['events']=[{'id':1,'kind':'waiting_input','message':'Approve this intent model? [y/N]','phase_key':'intent','payload':{'waiting_input':True,'question':'Approve this intent model? [y/N]'},'ts':1720000000}]
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view')
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view')
     page.locator('#openphasegate').wait_for();assert page.locator('.current-question').is_hidden() and page.locator('#answerform').is_hidden()
     page.locator('#openphasegate').click();page.locator('#gateform').wait_for()
     assert page.locator('.decision-dialog').count()==0 and page.locator('#opendecision').count()==0
@@ -1046,10 +1056,12 @@ def test_gate_page_explains_controls_and_tooltips_desktop_and_phone(pg_page,pg_u
     page.screenshot(path=str(_screenshots_dir / 'gate-help-phone.png'),full_page=True)
 
 
-def test_decision_dialog_rationale_help_is_real_and_keyboard_accessible(page,ui):
+def test_decision_dialog_rationale_help_is_real_and_keyboard_accessible(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','decision_id':'concept','title':'Choose one','prompt':'Which concept?','rationale_required':True,'options':[{'value':'1','label':'Native'},{'value':'2','label':'PWA'}]};live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None};live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for();button=dialog.get_by_role('button',name='Why a rationale is requested');button.focus();expect(dialog.get_by_role('tooltip')).to_be_visible()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();decision={'type':'founder_decision','decision_id':'concept','title':'Choose one','prompt':'Which concept?','rationale_required':True,'options':[{'value':'1','label':'Native'},{'value':'2','label':'PWA'}]};live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None};live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'}
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');dialog=page.locator('.decision-dialog');dialog.wait_for();button=dialog.get_by_role('button',name='Why a rationale is requested');button.focus();expect(dialog.get_by_role('tooltip')).to_be_visible()
     expect(dialog.get_by_role('tooltip').get_by_text('stored with the selected option',exact=False)).to_be_visible()
 
 def test_debug_dialog_contains_run_events_desktop_and_phone(page,ui):
@@ -1124,10 +1136,12 @@ def test_live_elapsed_uses_latest_phase_command_not_parked_phase_start(pg_page,p
 def test_avatar_menu_does_not_emit_native_runtime_tooltip(page,ui):
     page.goto(ui+'/');button=page.locator('#accountbutton');button.wait_for();assert page.locator('#identity').get_attribute('title') is None
 
-def test_orchestrator_baseline_decision_renders_without_engine_process(page,ui):
+def test_orchestrator_baseline_decision_renders_without_engine_process(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     decision={'type':'founder_decision','decision_id':'system-baseline','title':'Choose the architecture baseline','prompt':'Greenfield or existing?','rationale_required':False,'options':[{'value':'greenfield','label':'Greenfield'},{'value':'existing','label':'Existing system'}]}
-    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['input_state']={'waiting':True,'process_live':True,'decision':decision};live['control_snapshot']={'mode':'waiting_input','owner':'orchestrator','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'architecture','process_live':True,'decision':decision,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');dialog=page.locator('.decision-dialog');dialog.wait_for()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['state']='running';live['active_phase']='architecture';live['input_state']={'waiting':True,'process_live':True,'decision':decision};live['control_snapshot']={'mode':'waiting_input','owner':'orchestrator','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'architecture','process_live':True,'decision':decision,'gate':None}
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');dialog=page.locator('.decision-dialog');dialog.wait_for()
     assert dialog.get_by_text('Greenfield',exact=True).is_visible();assert page.locator('.task-error-state').count()==0
 
 def test_account_menu_is_plain_list_with_explicit_actions(page,ui):
@@ -1939,14 +1953,16 @@ def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(page,ui):
     assert float(choose.evaluate('(b)=>getComputedStyle(b).opacity')) < 1
 
 
-def test_accepted_answer_disarms_old_question_until_new_control_arrives(page,ui):
+def test_accepted_answer_disarms_old_question_until_new_control_arrives(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['active_phase']='intent'
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'old-input','precondition':{'session_sequence':7},'prompt':'Old question?'}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     sent=[]
-    page.route('**/api/tasks/live/answer',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
-    page.goto(ui+'/tasks/live/view');form=page.locator('#answerform');box=form.locator('textarea');button=form.locator('button[type=submit]')
+    page.route(f'**/api/tasks/{tid}/answer',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
+    page.goto(ui+f'/tasks/{tid}/view');form=page.locator('#answerform');box=form.locator('textarea');button=form.locator('button[type=submit]')
     box.fill('The accepted answer');button.click()
     page.get_by_text('Answer sent. Waiting for the next interview step',exact=False).wait_for()
     assert box.is_disabled() and button.is_disabled() and page.locator('#currentquestion').is_hidden()
@@ -2806,4 +2822,17 @@ def test_runtime_browser_group_requires_signed_pg_fixture():
                  test_route_placeholder_holds_geometry_then_reveals_without_shell_shift,
                  test_awaiting_mount_shows_labeled_placeholder_not_blank,
                  test_error_states_render_instantly_without_fade):
+        assert "pg_page" in inspect.signature(case).parameters
+
+
+def test_decision_state_browser_group_requires_signed_pg_fixture():
+    import inspect
+    for case in (test_stale_structured_decision_is_not_actionable_on_load,
+                 test_stale_decision_conflict_closes_and_refreshes_dialog,
+                 test_intent_approval_shows_selected_concept_and_founder_reason,
+                 test_server_accepted_decision_event_closes_founder_box,
+                 test_needs_gate_state_hides_stale_intent_prompt_and_opens_needs_gate,
+                 test_decision_dialog_rationale_help_is_real_and_keyboard_accessible,
+                 test_orchestrator_baseline_decision_renders_without_engine_process,
+                 test_accepted_answer_disarms_old_question_until_new_control_arrives):
         assert "pg_page" in inspect.signature(case).parameters
