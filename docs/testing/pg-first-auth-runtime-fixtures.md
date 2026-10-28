@@ -908,3 +908,19 @@ Full-page sticky-header crossing remains existing visual debt. Shared96PG/
 Pending debug contract cases untouched. A incomplete;global SQLite bootstrap
 remains;B/C/D unstarted. Hosted CI/full mixed UI/full repo/deployed topology
 unrun. Production unchanged;no deploy/live DB/model execution.
+
+## A67: runtime identity browser group
+
+Five runtime console/version watcher,visible build badge,delayed auth badge
+preservation,single V-process,and user composer/no-raw-console cases use signed
+PG/isolated IDs. All assertions retained. Delayed auth case retains its basic+
+admin response mock:operator menu is presentation-only,not cloud authorization
+proof. Version watcher still checks emitted initial log plus source wiring,
+not an actual server-change/reload experiment. Guard failed first1 in0.68s;
+five cases+guard+cloud API+bootstrap44passed0skips14.96s. Inspected viewport
+screenshots:BUILD7d6647f after delayed identity render and single V-process with
+no duplicate map/legend. Lower phases below screenshot are assertion-covered,
+not all simultaneously visible. Shared101PG/26legacy functions out of127,plus
+three standalone local-auth/browser cases. Pending debug conflicts untouched.
+A incomplete;global SQLite bootstrap remains;B/C/D unstarted. Production
+unchanged;hosted CI/full mixed UI/full repo/deployed topology unrun.
