@@ -1937,9 +1937,10 @@ def test_error_states_render_instantly_without_fade(pg_page,pg_ui,pg_ids):
     page.unroute(f'**/api/tasks/{tid}')
 
 
-def test_browser_session_refresh_single_flight_before_expiry(page,ui):
+def test_browser_session_refresh_single_flight_before_expiry(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
     import threading,time
-    page.goto(ui+'/tasks/empty/view')
+    page.goto(ui+f'/tasks/{pg_ids["empty"]}/view')
     page.get_by_role('group',name='Default model route').wait_for()
     calls=[]
     def refresh(route):
@@ -3022,3 +3023,8 @@ def test_cost_layout_cases_require_signed_pg_browser():
                  test_global_cost_header_on_all_route_families,
                  test_detail_layout_never_crushes_or_overlaps_at_user_viewport):
         assert 'pg_page' in inspect.signature(case).parameters
+
+
+def test_session_refresh_case_requires_signed_pg_browser():
+    import inspect
+    assert 'pg_page' in inspect.signature(test_browser_session_refresh_single_flight_before_expiry).parameters

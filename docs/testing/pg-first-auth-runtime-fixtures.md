@@ -999,3 +999,18 @@ out of127,plus three standalone local-auth/browser cases. Pending debug conflict
 untouched. A incomplete;global SQLite bootstrap remains;B/C/D unstarted.
 Hosted CI/full mixed UI/full repo/deployed topology unrun. Production unchanged;
 no deploy/live DB/model execution.
+
+## A73: session refresh browser contract
+
+Single-flight pre-expiry session refresh uses signed PG/isolated empty task ID.
+Refresh response remains mocked;assertion proves client coalescing,not actual
+Supabase renewal. Guard failed first1 in0.68s;case+guard+cloud API+bootstrap
+40passed0skips6.27s. Shared120PG/7legacy functions out of127,plus three standalone
+local-auth/browser cases. Browser tail:three local-rerun contracts;exact-ID ZIP
+and classifications pending decisions;editable question-quality config explicitly
+refused in cloud mode (service-managed);session-unavailable case requires local
+Rerun stage button absent on tenant tasks. Preserve these assertions/security
+boundaries for separate retirement/contract work,not fake a PG port. A incomplete;
+global bootstrap and non-browser runtime consumers remain. B/C/D unstarted.
+Hosted CI/full mixed UI/full repo/deployed topology unrun. Production unchanged;
+no deploy/live DB/model calls.
