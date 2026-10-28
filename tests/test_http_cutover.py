@@ -367,10 +367,11 @@ def test_retired_ollama_default_still_lists_installed_switch_targets(monkeypatch
  routes=module.model_routes(a=None)['routes']
  assert routes[0]['id']=='ollama' and routes[0]['available'] and routes[0]['models']==['phi4']
 
-def test_recovery_does_not_reexecute_completed_http_interview(tmp_path,monkeypatch):
+def test_recovery_does_not_reexecute_completed_http_interview(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
- store=SQLiteStore(str(tmp_path/'completed.db'));task=store.create_task('Already complete','brief');tid=task['task_id']
- store.set_engine_session(tid,'complete-session');store.update_phase(tid,'intent','running')
+ store=pg_scoped_workspace.store;task=store.create_task('Already complete','brief');tid=task['task_id']
+ session='complete-'+str(uuid4());store.set_engine_session(tid,session);store.update_phase(tid,'intent','running')
  monkeypatch.setattr(module,'store',store)
  class Complete:
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE,open_input=None)
@@ -380,7 +381,7 @@ def test_recovery_does_not_reexecute_completed_http_interview(tmp_path,monkeypat
  monkeypatch.setattr(module,'_resume_one_interview',unexpected)
  asyncio.run(module._recover_tasks())
  assert not calls
- assert store.engine_session(tid)=='complete-session'
+ assert store.engine_session(tid)==session
  assert store.task(tid)['state']=='running'
 
 
@@ -399,14 +400,16 @@ def _completed_files(root, session):
  return interview
 
 
-def test_restored_terminal_session_reconciles_phase_handoff_once(tmp_path,monkeypatch):
+def test_restored_terminal_session_reconciles_phase_handoff_once(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
- session='restored-session';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ session='restored-session-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
- path=tmp_path/'restored.db';first=SQLiteStore(str(path));tid=first.create_task('Terminal restore','brief')['task_id']
+ first=pg_scoped_workspace.store;tid=first.create_task('Terminal restore','brief')['task_id']
  first.set_engine_session(tid,session);first.update_phase(tid,'intent','running',detail='Waiting for founder input')
  first.add_event(tid,'error','Old model failure',phase_key='intent')
- restored=SQLiteStore(str(path));monkeypatch.setattr(module,'store',restored)
+ from delivery_api.postgres_store import PostgresStore
+ restored=PostgresStore(first._postgres.dsn);monkeypatch.setattr(module,'store',restored)
  class Complete:
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
  monkeypatch.setattr(module,'engine_client',Complete())
@@ -431,10 +434,13 @@ def test_restored_terminal_session_reconciles_phase_handoff_once(tmp_path,monkey
  assert len([e for e in restored.events(tid) if e['kind']=='progress'])==1
 
 
-def test_terminal_reconcile_refuses_missing_or_mismatched_artifacts(tmp_path,monkeypatch):
+def test_terminal_reconcile_refuses_missing_or_mismatched_artifacts(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
- session='other-session';artifacts=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
- store=SQLiteStore(str(tmp_path/'missing.db'));tid=store.create_task('Incomplete','brief')['task_id']
+ session='other-session-'+str(uuid4());artifacts=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
+ store=pg_scoped_workspace.store;tid=store.create_task('Incomplete','brief')['task_id']
+ from delivery_api.postgres_store import PostgresStore
+ assert isinstance(store,PostgresStore)
  store.set_engine_session(tid,session);store.update_phase(tid,'intent','running')
  monkeypatch.setattr(module,'store',store)
  class Complete:
@@ -449,10 +455,11 @@ def test_terminal_reconcile_refuses_missing_or_mismatched_artifacts(tmp_path,mon
  asyncio.run(module._recover_tasks());assert store.task(tid)['phases'][0]['state']=='running' and not launched
 
 
-def test_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,monkeypatch):
- session='read-recovery';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+def test_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ session='read-recovery-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
- store=SQLiteStore(str(tmp_path/'read.db'));tid=store.create_task('Read repair','brief')['task_id']
+ store=pg_scoped_workspace.store;tid=store.create_task('Read repair','brief')['task_id']
  store.set_engine_session(tid,session);store.set_model_default(tid,'deepseek:deepseek-flash');store.update_phase(tid,'intent','running',detail='Waiting for founder input')
  monkeypatch.setattr(module,'store',store)
  class Complete:
@@ -468,14 +475,15 @@ def test_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,m
  assert len([e for e in store.events(tid) if e['kind']=='progress'])==1
 
 
-def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path,monkeypatch):
+def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
  from delivery_api.orchestrator import PhaseOrchestrator
- session='bound-session';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ session='bound-session-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
  generator=tmp_path/'spec-generator';(generator/'.venv/bin').mkdir(parents=True);(generator/'.venv/bin/python').write_text('')
  monkeypatch.setenv('SPEC_GENERATOR_DIR',str(generator))
- store=SQLiteStore(str(tmp_path/'handoff.db'));tid=store.create_task('Bound recovery','brief')['task_id']
+ store=pg_scoped_workspace.store;tid=store.create_task('Bound recovery','brief')['task_id']
  store.set_engine_session(tid,session);store.set_model_default(tid,'deepseek:deepseek-flash');store.update_phase(tid,'intent','running',detail='Waiting for founder input')
  monkeypatch.setattr(module,'store',store)
  class Complete:
@@ -500,12 +508,13 @@ def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path
  assert command[0]==str(generator/'.venv/bin/python')
 
 
-def test_final_typed_answer_reconciles_without_resubmission(tmp_path,monkeypatch):
+def test_final_typed_answer_reconciles_without_resubmission(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
  from delivery_api.auth import Actor
- session='final-answer';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ session='final-answer-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
- store=SQLiteStore(str(tmp_path/'answer.db'));tid=store.create_task('Final answer','brief')['task_id']
+ store=pg_scoped_workspace.store;tid=store.create_task('Final answer','brief')['task_id']
  store.set_engine_session(tid,session);store.update_phase(tid,'intent','running',detail='Waiting for founder input')
  monkeypatch.setattr(module,'store',store)
  pending=InputRequest(input_id=uuid4(),kind=InputKind.APPROVAL,prompt='Approve?',options=[InputOption(value=1,label='Approve')])
@@ -529,11 +538,12 @@ def test_final_typed_answer_reconciles_without_resubmission(tmp_path,monkeypatch
  assert len([e for e in store.events(tid) if e['kind']=='answer'])==1
 
 
-def test_terminal_recovery_logs_exact_phase_disposition(tmp_path,monkeypatch):
+def test_terminal_recovery_logs_exact_phase_disposition(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
- session='diagnostic-session';artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ session='diagnostic-session-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
- store=SQLiteStore(str(tmp_path/'diagnostic.db'));tid=store.create_task('Terminal','brief')['task_id']
+ store=pg_scoped_workspace.store;tid=store.create_task('Terminal','brief')['task_id']
  store.set_engine_session(tid,session);store.update_phase(tid,'intent','running')
  monkeypatch.setattr(module,'store',store)
  class Complete:
@@ -552,11 +562,12 @@ def test_terminal_recovery_logs_exact_phase_disposition(tmp_path,monkeypatch):
  assert next(fields for kind,fields in reversed(notes) if kind=='engine.recovery.completed')['reason']=='downstream_already_active'
 
 
-def test_unpinned_legacy_snapshot_is_classified_once_without_handoff(tmp_path,monkeypatch):
+def test_unpinned_legacy_snapshot_is_classified_once_without_handoff(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
  from delivery_api.engine_client import EngineClientError
- store=SQLiteStore(str(tmp_path/'legacy.db'));tid=store.create_task('Old route','brief')['task_id']
- store.set_engine_session(tid,'old-session');store.update_phase(tid,'intent','running')
+ store=pg_scoped_workspace.store;tid=store.create_task('Old route','brief')['task_id']
+ store.set_engine_session(tid,'old-'+str(uuid4()));store.update_phase(tid,'intent','running')
  monkeypatch.setattr(module,'store',store)
  class Old:
   def snapshot(self,sid):raise EngineClientError(422,ProtocolError(code=ProtocolErrorCode.INVALID_RESPONSE,detail='legacy session has no pinned model route. It predates per-session routing.'))
