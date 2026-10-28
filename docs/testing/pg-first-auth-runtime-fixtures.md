@@ -138,3 +138,16 @@ Fail-first retained-review PG assertion failed on original SQLite. Acceptance
 47passed0skips3.97s with both producer sources:provenance/immutable reviews,native
 review/revision journal,cloud API,bootstrap. No UI/production change;hosted CI/
 full suite/deployed topology not run. A incomplete;B/C/D not started.
+
+## A12: simulation import/validation fixtures
+
+Simulation validation uses scoped restricted PG for module/app-state/orchestrator
+and a fresh Simulation instance per test. Existing local replay HTTP contracts
+remain explicitly local;cloud policy unchanged. Direct import tests use the same
+PG store. All title override/fallback,canonical intent resolution,upload errors,
+ASGI replay startup and structured failure assertions retained. SQLite opens
+poisoned;new contract checks real backend role and shared Simulation store.
+Fail-first store contract failed on original global SQLite. Acceptance77passed
+0skips9.93s with both producer sources:simulation/restart,cloud API/execution,
+protocol/SSE/parity,native lifecycle/run,bootstrap. Production/UI unchanged.
+Hosted CI/full suite/deployed topology not run. A incomplete;B/C/D not started.

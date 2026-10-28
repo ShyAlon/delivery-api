@@ -1,7 +1,18 @@
 import json
+import pytest
 from fastapi.testclient import TestClient
 from delivery_api.app import app
 from delivery_api.simulation import validate_recorded_run
+
+@pytest.fixture(autouse=True)
+def simulation_workspace(pg_scoped_workspace,monkeypatch):
+    from delivery_api import app as module
+    from delivery_api.simulation import Simulation
+    # Preserve these local route contracts, not cloud replay API availability.
+    monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+    monkeypatch.setattr(module,'simulation',Simulation(pg_scoped_workspace.store))
+    yield pg_scoped_workspace
+
 
 def test_file_picker_upload_validates_and_imports():
     c=TestClient(app);rows=[{"session_id":"s","stage":"srs","provider":"ollama","model":"phi4","prompt_tokens":1,"completion_tokens":2,"ts":"2026-09-15T00:00:00Z"}]
@@ -49,36 +60,45 @@ def test_simulate_start_failure_is_structured(monkeypatch):
         assert set(detail)=={'error','cause','next'} and 'RuntimeError' in detail['cause']
 
 
-def test_unified_session_import_infers_title_from_intent(tmp_path):
+def test_unified_session_import_infers_title_from_intent(tmp_path,simulation_workspace):
     from delivery_api.simulation import Simulation
-    from delivery_api.store import SQLiteStore
     root=tmp_path/'meaningful-session'; interview=root/'interview';interview.mkdir(parents=True)
     row={"stage":"probing","provider":"ollama","model":"phi4","ts":"2026-09-15T10:00:00+03:00","prompt_tokens":1,"completion_tokens":1,"session_id":"meaningful-session"}
     (interview/'usage.jsonl').write_text(json.dumps(row)+'\n')
     (interview/'intent_model.json').write_text(json.dumps({"problem_statement":"Help supply teams spot inventory risks"}))
-    task=Simulation(SQLiteStore(str(tmp_path/'name.db'))).import_run(root)
+    task=Simulation(simulation_workspace.store).import_run(root)
     assert task['title']=='Help supply teams spot inventory risks'
 
 
-def test_import_title_override_and_session_fallback(tmp_path):
+def test_import_title_override_and_session_fallback(tmp_path,simulation_workspace):
     from delivery_api.simulation import Simulation
-    from delivery_api.store import SQLiteStore
     source=tmp_path/'uploaded';source.mkdir()
     row={"stage":"probing","provider":"ollama","model":"phi4","ts":"2026-09-15T10:00:00+03:00","prompt_tokens":1,"completion_tokens":1,"session_id":"s-42"}
     (source/'usage.jsonl').write_text(json.dumps(row)+'\n')
-    sim=Simulation(SQLiteStore(str(tmp_path/'fallback.db')))
+    sim=Simulation(simulation_workspace.store)
     assert sim.import_run(source)['title']=='Recorded run s-42'
     assert sim.import_run(source,'My replay')['title']=='My replay'
 
 
-def test_uploaded_jsonl_resolves_local_canonical_intent(monkeypatch,tmp_path):
+def test_uploaded_jsonl_resolves_local_canonical_intent(monkeypatch,tmp_path,simulation_workspace):
     from delivery_api.simulation import Simulation
-    from delivery_api.store import SQLiteStore
     root=tmp_path/'artifacts';interview=root/'local-session'/'interview';interview.mkdir(parents=True)
     (interview/'intent_model.json').write_text(json.dumps({"problem_statement":"Track Pokémon collection goals"}))
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root))
     upload=tmp_path/'private-upload';upload.mkdir()
     row={"stage":"probing","provider":"ollama","model":"phi4","ts":"2026-09-15T10:00:00+03:00","prompt_tokens":1,"completion_tokens":1,"session_id":"local-session"}
     (upload/'usage.jsonl').write_text(json.dumps(row)+'\n')
-    task=Simulation(SQLiteStore(str(tmp_path/'local.db'))).import_run(upload)
+    task=Simulation(simulation_workspace.store).import_run(upload)
     assert task['title']=='Track Pokémon collection goals'
+
+
+def test_simulation_fixture_uses_pg_for_http_and_replay():
+    from delivery_api import app as module
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(module.store,PostgresStore)
+    assert module.simulation.store is module.store
+    from delivery_api.store import SQLiteStore
+    with pytest.raises(AssertionError,match='SQLite forbidden'):
+        SQLiteStore(':memory:')
+    with module.store._postgres.transaction() as connection:
+        assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
