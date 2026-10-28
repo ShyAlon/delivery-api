@@ -594,14 +594,16 @@ def test_answer_enter_sends_and_control_enter_inserts_newline(page,ui):
     answer.press('Enter');page.get_by_text('Answer sent.',exact=False).wait_for()
     assert sent==[{'answer':'Line one\nLine two','decision_id':'test-input','expected_sequence':1}]
 
-def test_structured_founder_decision_opens_large_card_dialog_and_formats_answer(page,ui):
+def test_structured_founder_decision_opens_large_card_dialog_and_formats_answer(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();live['events']=[];live['active_phase']='conops'
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['events']=[];live['active_phase']='conops'
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     submitted=[]
-    page.route('**/api/tasks/live/answer',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
-    page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
+    page.route(f'**/api/tasks/{tid}/answer',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
+    page.goto(ui+f'/tasks/{tid}/view');page.locator('.detail-layout').wait_for()
     decision={'type':'founder_decision','decision_id':'concept','title':'Choose the operating concept','prompt':'Which concept should the architecture execute?','rationale_required':True,'rationale_label':'Why is this right?','answer_format':'<value> - <rationale>','options':[{'value':'1','label':'Native app','summary':'Installed experience','advantages':['Fast offline'],'disadvantages':['App stores']},{'value':'2','label':'PWA','summary':'Browser first','advantages':['One deploy'],'disadvantages':['Limited APIs']}]}
     live['input_state']={'waiting':True,'process_live':True,'decision':decision}
     live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None}
@@ -617,23 +619,27 @@ def test_structured_founder_decision_opens_large_card_dialog_and_formats_answer(
     assert submitted==[{'answer':'2 - One deployment fits our team','decision_id':'concept','expected_sequence':1}]
 
 
-def test_structured_founder_decision_escape_closes_without_answer(page,ui):
+def test_structured_founder_decision_escape_closes_without_answer(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();live['events']=[]
-    live['control_snapshot']={'mode':'working'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['events']=[]
+    live['control_snapshot']={'mode':'working'};page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');page.locator('.detail-layout').wait_for()
     decision={'type':'founder_decision','title':'Choose','prompt':'Pick','options':[{'value':'1','label':'A','summary':'First'},{'value':'2','label':'B','summary':'Second'}]}
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None}
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:"Pick",phase_key:"conops",payload:{waiting_input:true,decision},ts:1720000300})',decision)
     page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape');assert page.locator('.decision-dialog').count()==0
     assert page.locator('#opendecision').is_visible()
 
-def test_stored_pending_decision_reopens_on_page_load_and_panels_align(page,ui):
+def test_stored_pending_decision_reopens_on_page_load_and_panels_align(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='conops'
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['active_phase']='conops'
     decision={'type':'founder_decision','decision_id':'concept','title':'Choose after restart','prompt':'Which concept?','options':[{'value':'1','label':'Native','summary':'Installed'},{'value':'2','label':'PWA','summary':'Browser'}]}
     live['events']=[{'id':900,'kind':'founder_decision','message':'Which concept?','phase_key':'conops','payload':{'waiting_input':True,'question':'Which concept?','decision':decision},'ts':1720000300},{'id':901,'kind':'waiting_input','message':'You:','phase_key':'conops','payload':{'waiting_input':True,'question':'Which concept?'},'ts':1720000301}]
     live['ui_state']={'mode':'engine_decision','active_phase':live['active_phase'],'process_live':True,'decision':decision,'gate':None}
-    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.set_viewport_size({'width':1365,'height':900});page.goto(ui+'/tasks/live/view')
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.set_viewport_size({'width':1365,'height':900});page.goto(ui+f'/tasks/{tid}/view')
     page.locator('.decision-dialog').wait_for();assert page.get_by_role('heading',name='Choose after restart').is_visible()
     page.keyboard.press('Escape');assert page.locator('#opendecision').is_visible()
     panels=page.locator('.detail-layout>.panel, .detail-layout>div>.panel');assert panels.count()==2
@@ -664,11 +670,13 @@ def test_detail_layout_never_crushes_or_overlaps_at_user_viewport(page,ui):
     assert page.locator('.live-console').count()==0
     page.screenshot(path=str(_screenshots_dir / 'detail-layout-clean-1390x827.png'),full_page=True)
 
-def test_founder_dialog_fixed_controls_and_vertical_four_options(page,ui):
+def test_founder_dialog_fixed_controls_and_vertical_four_options(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();live['events']=[]
-    live['control_snapshot']={'mode':'working'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.route('**/api/tasks/live/answer',lambda route:route.fulfill(json={'status':'accepted'}))
-    page.set_viewport_size({'width':1390,'height':827});page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['events']=[]
+    live['control_snapshot']={'mode':'working'};page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.route(f'**/api/tasks/{tid}/answer',lambda route:route.fulfill(json={'status':'accepted'}))
+    page.set_viewport_size({'width':1390,'height':827});page.goto(ui+f'/tasks/{tid}/view');page.locator('.detail-layout').wait_for()
     options=[{'value':str(i),'label':name,'summary':'A deliberately detailed option summary.','advantages':['Clear advantage'],'disadvantages':['Known tradeoff']} for i,name in enumerate(['Native mobile','Progressive web app','Responsive web','Hybrid shell'],1)]
     decision={'type':'founder_decision','title':'Choose the operating concept','prompt':'Which concept should the architecture execute?','rationale_label':'Why is this the right concept?','options':options}
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None}
@@ -686,10 +694,12 @@ def test_founder_dialog_fixed_controls_and_vertical_four_options(page,ui):
     assert int(style['weight'])>=700 and style['bg']!='rgba(0, 0, 0, 0)'
     page.screenshot(path=str(_screenshots_dir / 'founder-dialog-vertical-four-options.png'),full_page=True)
 
-def test_founder_decision_outside_click_dismisses_and_persistent_bar_reopens(page,ui):
+def test_founder_decision_outside_click_dismisses_and_persistent_bar_reopens(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();live['events']=[]
-    live['control_snapshot']={'mode':'working'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['events']=[]
+    live['control_snapshot']={'mode':'working'};page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');page.locator('.detail-layout').wait_for()
     decision={'type':'founder_decision','title':'Choose one','prompt':'Choose to continue','options':[{'value':'1','label':'A','summary':'First'},{'value':'2','label':'B','summary':'Second'}]}
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'conops','process_live':True,'decision':decision,'gate':None}
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"conops",payload:{waiting_input:true,decision},ts:1720000300})',decision)
@@ -700,12 +710,14 @@ def test_founder_decision_outside_click_dismisses_and_persistent_bar_reopens(pag
     assert page.locator('.live-indicator').get_by_text('Waiting for your decision').is_visible()
     launch.click();assert page.locator('.decision-dialog').is_visible()
 
-def test_decision_ready_bar_is_first_and_sticky_during_page_scroll(page,ui):
+def test_decision_ready_bar_is_first_and_sticky_during_page_scroll(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();decision={'type':'founder_decision','title':'Choose the operating concept','prompt':'Choose','options':[{'value':'1','label':'A'},{'value':'2','label':'B'}]}
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();decision={'type':'founder_decision','title':'Choose the operating concept','prompt':'Choose','options':[{'value':'1','label':'A'},{'value':'2','label':'B'}]}
     live['events']=[{'id':1,'kind':'founder_decision','message':'Choose','phase_key':'conops','payload':{'waiting_input':True,'question':'Choose','decision':decision},'ts':1720000300}]
     live['ui_state']={'mode':'engine_decision','active_phase':live['active_phase'],'process_live':True,'decision':decision,'gate':None}
-    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.set_viewport_size({'width':1390,'height':620});page.goto(ui+'/tasks/live/view');page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape')
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.set_viewport_size({'width':1390,'height':620});page.goto(ui+f'/tasks/{tid}/view');page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape')
     launch=page.locator('#opendecision');panel=page.locator('.detail-layout>div>.panel');assert launch.is_visible()
     assert panel.evaluate("e=>e.firstElementChild.nextElementSibling?.id==='opendecision'")
     assert launch.evaluate("e=>getComputedStyle(e).position")=='sticky'
@@ -715,16 +727,18 @@ def test_decision_ready_bar_is_first_and_sticky_during_page_scroll(page,ui):
     launch.click();assert page.locator('.decision-dialog').is_visible()
     page.screenshot(path=str(_screenshots_dir / 'decision-ready-sticky.png'),full_page=False)
 
-def test_answered_decision_clears_and_binary_approval_uses_same_dialog(page,ui):
+def test_answered_decision_clears_and_binary_approval_uses_same_dialog(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();concept={'type':'founder_decision','title':'Old concept decision','prompt':'Choose','options':[{'value':'1','label':'A'},{'value':'2','label':'B'}]}
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();concept={'type':'founder_decision','title':'Old concept decision','prompt':'Choose','options':[{'value':'1','label':'A'},{'value':'2','label':'B'}]}
     live['events']=[{'id':10,'kind':'founder_decision','message':'Choose','phase_key':'conops','payload':{'waiting_input':True,'decision':concept},'ts':1720000000},{'id':11,'kind':'answer','message':'You: 1 - reason','phase_key':'conops','payload':{'transcript':True},'ts':1720000001}]
-    submitted=[];page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.route('**/api/tasks/live/answer',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
-    page.goto(ui+'/tasks/live/view');page.locator('.detail-layout').wait_for();assert page.locator('#opendecision').count()==0 and page.locator('.decision-dialog').count()==0
+    submitted=[];page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.route(f'**/api/tasks/{tid}/answer',lambda route:(submitted.append(route.request.post_data_json),route.fulfill(json={'status':'accepted'})))
+    page.goto(ui+f'/tasks/{tid}/view');page.locator('.detail-layout').wait_for();assert page.locator('#opendecision').count()==0 and page.locator('.decision-dialog').count()==0
     approval={'type':'founder_decision','decision_id':'intent-approval','title':'Approve the intent model','prompt':'Approve this intent model?','rationale_required':False,'answer_format':'<value>','options':[{'value':'y','label':'Approve','summary':'Continue'},{'value':'n','label':'Reject','summary':'Stop'}]}
     live['input_state']={'waiting':True,'process_live':True,'decision':approval};live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':approval,'gate':None}
-    page.unroute('**/api/tasks/live');page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.unroute(f'**/api/tasks/{tid}');page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     page.evaluate('(decision)=>liveSource.emit({kind:"founder_decision",message:decision.prompt,phase_key:"intent",payload:{waiting_input:true,decision},ts:1720000300})',approval)
     dialog=page.locator('.decision-dialog');dialog.wait_for();assert dialog.get_by_text('Approve',exact=True).is_visible() and dialog.get_by_text('Reject',exact=True).is_visible();assert dialog.locator('.decision-why').is_hidden()
     page.screenshot(path=str(_screenshots_dir / 'typed-intent-approval.png'),full_page=True)
@@ -2595,3 +2609,15 @@ def test_history_feedback_browser_group_requires_signed_pg_fixture():
                  test_feedback_save_disables_while_pending_and_closes_only_on_success,
                  test_question_comment_columns_follow_character_ratio):
         assert 'pg_page' in inspect.signature(case).parameters
+
+
+def test_founder_browser_group_requires_signed_pg_fixture():
+    import inspect
+    for case in (test_structured_founder_decision_opens_large_card_dialog_and_formats_answer,
+                 test_structured_founder_decision_escape_closes_without_answer,
+                 test_stored_pending_decision_reopens_on_page_load_and_panels_align,
+                 test_founder_dialog_fixed_controls_and_vertical_four_options,
+                 test_founder_decision_outside_click_dismisses_and_persistent_bar_reopens,
+                 test_decision_ready_bar_is_first_and_sticky_during_page_scroll,
+                 test_answered_decision_clears_and_binary_approval_uses_same_dialog):
+        assert "pg_page" in inspect.signature(case).parameters
