@@ -3160,13 +3160,23 @@ def _engine_log_owner(session_id:str):
 
 
 @app.get("/api/server-log")
-def server_log(minutes:int=Query(30,ge=1,le=240),a:auth.Actor=Depends(auth.require_actor)):
+def server_log(minutes:int=Query(30,ge=1,le=240),a:auth.Actor=Depends(auth.require_actor),task_id:str|None=Query(None,max_length=240)):
     # Scrubbed, bounded, in-memory. A customer gets only lines made while serving their own requests; the operator also gets system lines.
     result=server_log_buffer.read(a.id,bool(a.admin),minutes)
     engine=engine_log.read(a.id,bool(a.admin),minutes,_engine_log_owner)
     if engine['available'] and engine['text']:
         result['text']=result['text']+('\n' if result['text'] else '')+engine['text']
     result['engine_log']={'available':engine['available'],'lines':engine['count'],'path':engine['path']}
+    if isinstance(task_id,str) and task_id:
+        from .debug_export import _owned_log_line
+        task=store.task(task_id)
+        if not task:raise HTTPException(404,'task not found')
+        session=task.get('engine_session_id') or ''
+        result['text']='\n'.join(line for line in result['text'].splitlines() if _owned_log_line(line,task_id,session))
+        result['count']=len(result['text'].splitlines())
+        result['task_id']=task_id
+        result['task_filter']='exact attributed task/session fields only; unattributed system/continuation lines omitted'
+
     return result
 
 @app.get("/health")

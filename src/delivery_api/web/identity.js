@@ -1,3 +1,4 @@
+import {collectDebugEvidence} from './debug-package.js';
 import {readSection} from './debug-sections.js';
 import {returnPage} from './return-page.js';
 import {api,clientLog,esc,setSessionExpiry,renewSessionIfDue,downloadDebug,browserDiagnostics,requestTable,clientReport,serverReport,deliverText,deliverTextZip,downloadTextZip} from './client-core.js';
@@ -41,7 +42,7 @@ async function loadIdentity(){authState=await api('/api/auth');setSessionExpiry(
    e.target.disabled=true;st.textContent='Saving…';try{const r=await api('/api/question-quality-config',{method:'PUT',body:JSON.stringify({config:out})});qq.config=r.config;st.textContent='Saved. New interview sessions use these settings.'}catch(err){st.textContent=err.message}finally{e.target.disabled=false}}};
  (authState.mode==='supabase'?Promise.reject(new Error('Question quality settings are managed by the service.')):api('/api/question-quality-config')).then(r=>{qq=r;draw(r.config)}).catch(err=>{host.innerHTML='<p role="alert"></p>';host.firstChild.textContent=err.message})}
  {const loaded={server:false,client:false},blockHost=id=>document.querySelector(id);
-const serverText=()=>serverReport(30),clientText=async()=>clientReport(buildLabel(runtimeIdentity));
+const serverText=()=>serverReport(30,taskId),clientText=async()=>clientReport(buildLabel(runtimeIdentity));
 const lazy=(wrap,host,build,key)=>wrap.addEventListener('toggle',async()=>{if(!wrap.open||loaded[key])return;loaded[key]=true;host.textContent='Loading…';try{host.textContent=(await build()).text}catch(err){loaded[key]=false;host.textContent='Could not load: '+err.message}});
 lazy(blockHost('#serverlogwrap'),blockHost('#serverloghost'),serverText,'server');
 lazy(blockHost('#clientlogwrap'),blockHost('#clientloghost'),clientText,'client');
@@ -52,8 +53,10 @@ document.querySelector('#copysummary').onclick=async e=>{const btn=e.currentTarg
 }catch(err){ok=false;btn.textContent='Failed';status.textContent='Copy summary failed: '+err.message}finally{btn.disabled=false;setTimeout(()=>{btn.textContent=idle},ok?2500:6000)}};
 document.querySelector('#downloadeverything').onclick=async e=>{const btn=e.currentTarget,idle=btn.textContent;btn.disabled=true;btn.textContent='Preparing…';let ok=true;try{
  const parts=[],add=(title,text)=>parts.push(`===== ${title} =====\n${scrubPart(text)}`);
- parts.push(`===== Known omissions =====\n${['Known omissions and capture scope:','- Engine process logs are included only as a bounded, scrubbed recent tail (newest 400 lines) when the full service records them; earlier engine output is NOT in this ZIP. On a local preview, collect the full log read-only with: docker logs requi-preview-exec 2>&1 | grep -A 40 \"interview session start failed\"','- Provider audit internals (raw LLM call and usage files) stay server-side by policy and are not in this ZIP.','- Browser capture covers only this tab since '+browserDiagnostics().started_at+'.','- Server logs cover only the window named in their section below.','- A section that failed to load appears inline as {\"error\": ...}.'].join('\n')}`);
- const diag=taskId?await api(`/api/tasks/${encodeURIComponent(taskId)}/diagnostics`).catch(err=>({__unavailable:String(err.message||err)})):null;
+ parts.push(`===== Known omissions =====\n${['Known omissions and capture scope:','- Engine process logs are included only as a bounded, scrubbed recent tail (newest 400 lines) when the full service records them; earlier engine output is NOT in this ZIP.','- Provider audit internals (raw LLM call and usage files) stay server-side by policy and are not in this ZIP.','- Browser capture covers only this tab since '+browserDiagnostics().started_at+'.','- Server logs cover only the window named in their section below.','- A section that failed to load appears inline as {\"error\": ...}.'].join('\n')}`);
+ const diag=taskId?await api(`/api/tasks/${encodeURIComponent(taskId)}/diagnostics`).catch(()=>({__unavailable:'Task diagnostics unavailable'})):null;
+ const evidence=await collectDebugEvidence({taskId,operator:!!authState.admin,cloud:authState.mode==='supabase',api});
+ parts.push('===== Evidence manifest and DB projections =====\n'+scrubPart(JSON.stringify(evidence,null,2)));
  const sections=[['Debug info',()=>debugInfoText(diag?.__unavailable?{error:diag.__unavailable}:diag)],
   ['Credits and provider calls',()=>document.querySelector('#ledgerhost').textContent],
   ['Credit history',()=>document.querySelector('#historyhost').textContent]];
