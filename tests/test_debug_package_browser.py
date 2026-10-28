@@ -21,3 +21,15 @@ def test_operator_everything_zip_has_manifest_and_unavailable_sections(page,ui):
   assert 'durable-diagnostics' in content and 'synthetic diagnostic' in content
   assert 'policy_excluded' in content
   assert 'docker logs' not in content
+
+
+def test_operator_can_read_durable_evidence_in_dialog_without_script(page,ui):
+ page.route('**/api/debug/evidence*',lambda r:r.fulfill(json={'available':True,'availability':'available','text':'WARNING synthetic restart-readable evidence','count':1,'task_id':'live','truncated':True,'unreadable':[],'storage':'bounded files'}))
+ page.goto(ui+'/tasks/live/view')
+ page.get_by_role('button',name='Account menu for local user').click()
+ page.get_by_role('menuitem',name='Debug',exact=True).click()
+ page.get_by_text('Durable warnings and errors (operator only)',exact=True).click()
+ expect(page.locator('#durableevidencehost')).to_contain_text('synthetic restart-readable evidence')
+ expect(page.locator('#durableevidencehost')).to_contain_text('truncated')
+ page.locator('#durableevidencehost').scroll_into_view_if_needed()
+ page.screenshot(path='/downloads/durable-evidence-dialog.png',full_page=False)
