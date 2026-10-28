@@ -50,3 +50,22 @@ shell in cloud middleware to reproduce three anonymous 401 probes. The actual
 signed-out cloud PG shell issues none of those probes. The exact-probe assertion
 cannot simply be migrated without deciding the intended contract. No preview
 code or assertions changed in A5.
+
+## A6: progress protocol and runner fixtures
+
+Progress protocol tests now use restricted PG with per-test tenant scope and
+SQLite opens poisoned. Module/app-state/orchestrator stores stay aligned. The
+restart-dedupe test still constructs an independent second store against the same
+database. Existing cursor/control isolation, stale gate rejection, successful
+child without artifact failing closed, live engine-start progress ingestion,
+every generator phase's artifact/gate boundary and measured ingest timing
+assertions are unchanged. Synthetic child scripts and temporary artifact files
+remain test fixtures, not provider execution or paid subprocess activation.
+
+Fail-first contract errored because the PG fixture was absent. Migration first
+caught a late app import trying to open SQLite under poison; app import and store
+patching now occur before poisoning. Acceptance:42 passed,zero skips in7.23s,
+both producer sources enabled (protocol,event-driven stream,seven-phase parity,
+native event/gate/run/projection,model routes,bootstrap). Production unchanged;
+no UI change. Hosted CI/full suite/deployed topology not run. A still incomplete;
+B/C/D not started.
