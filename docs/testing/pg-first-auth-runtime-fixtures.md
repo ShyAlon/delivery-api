@@ -208,3 +208,18 @@ PG assertion failed on original SQLite preflight helper. Acceptance95passed
 native review/revision,closed revision jobs,cloud API,bootstrap. Production/UI
 unchanged;hosted CI/full suite/deployed topology not run. A incomplete;B/C/D not
 started.
+
+## A17: closed-revision proposal queue fixture state
+
+Queue cost-ack/draft retention and conditional-artifact preflight cases use scoped
+PG. Existing mocked enqueue/capability/operation-guard boundary remains a unit
+contract,not real dispatch authority or worker execution. Replace direct instance
+assignment with monkeypatch so shared-store methods restore after each case.
+All original cost-ack/no-source-mutation/guard/action/artifact assertions remain.
+Phase-loop task titles are distinct because PG enforces per-owner uniqueness.
+Fail-first PG type assertions failed on original queue SQLite. Initial PG run
+caught repeated-title fixture collision;fixed inputs,not constraints.
+Acceptance93passed0skips6.69s with root PYTHONPATH and producer sources:queue,
+gate/decision pages,native review/revision/worker,cloud API,bootstrap. Production/
+UI unchanged;hosted CI/full suite/deployed topology not run. A incomplete;
+B/C/D not started.

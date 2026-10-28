@@ -50,13 +50,15 @@ def test_stale_evidence_never_calls_producer(monkeypatch):
 
 
 @pytest.mark.parametrize('ack',[True,False])
-def test_queue_retains_cost_ack_exact_draft_and_never_commits_source(tmp_path,monkeypatch,ack):
+def test_queue_retains_cost_ack_exact_draft_and_never_commits_source(tmp_path,monkeypatch,ack,pg_scoped_workspace):
     from contextlib import contextmanager
     from delivery_api import closed_revision_job as module
-    from delivery_api.store import SQLiteStore
     from delivery_api.gate_revision import save_closed_revision,closed_revision_preflight
     from delivery_api.phases import PHASE_BY_KEY
-    store=SQLiteStore(str(tmp_path/'queue.db'));tid=store.create_task('revision')['task_id']
+    store=pg_scoped_workspace.store;
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
+    tid=store.create_task('revision')['task_id']
     store.wait_at_gate(tid,'srs');waiting=store.task(tid)
     store.retain_decision_review(tid,'gate:gate-srs','review',{'task':waiting})
     store.decide_gate(tid,'gate-srs','approve',selected_option='Proceed')
@@ -67,8 +69,8 @@ def test_queue_retains_cost_ack_exact_draft_and_never_commits_source(tmp_path,mo
     @contextmanager
     def guarded(action):
         guard.append(action);yield
-    store._task_operation_guard=guarded
-    store.enqueue_worker=lambda task,kind,execution_options:jobs.append((task,kind,execution_options)) or 'job'
+    monkeypatch.setattr(store,'_task_operation_guard',guarded)
+    monkeypatch.setattr(store,'enqueue_worker',lambda task,kind,execution_options:jobs.append((task,kind,execution_options)) or 'job')
     monkeypatch.setattr(module.WorkerCapability,'capture',lambda *args:SimpleNamespace(validate=lambda s:s.task(tid)))
     kwargs=dict(gate_key='gate-srs',review_revision='review',draft_id=saved['draft_id'],
         reviewed_preflight_digest=prepared['review_digest'],source_checkpoint_id='checkpoint',artifact_snapshot=evidence,
@@ -82,15 +84,14 @@ def test_queue_retains_cost_ack_exact_draft_and_never_commits_source(tmp_path,mo
     assert store.task(tid)==before and guard==['task.rerun']
 
 
-def test_preflight_requires_core_artifacts_but_not_conditional_companions(tmp_path, monkeypatch):
+def test_preflight_requires_core_artifacts_but_not_conditional_companions(tmp_path, monkeypatch,pg_scoped_workspace):
     """Companions exist only when the phase produced them (semantic review ran /
     research_required slots exist): evidence without them is complete; evidence
     missing a core artifact still refuses."""
-    from delivery_api.store import SQLiteStore
     from delivery_api.gate_revision import save_closed_revision, closed_revision_preflight
     for phase, gate, core, companion in (('srs', 'gate-srs', 'srs.json', 'srs.semantic-review.json'),
                                          ('architecture', 'gate-architecture', 'architecture.json', 'architecture.decisions.json')):
-        store = SQLiteStore(str(tmp_path / f'{phase}.db')); tid = store.create_task('revision')['task_id']
+        store = pg_scoped_workspace.store; tid = store.create_task('revision '+phase)['task_id']
         store.wait_at_gate(tid, phase); waiting = store.task(tid)
         store.retain_decision_review(tid, f'gate:{gate}', 'review', {'task': waiting})
         store.decide_gate(tid, gate, 'approve', selected_option='Proceed')
