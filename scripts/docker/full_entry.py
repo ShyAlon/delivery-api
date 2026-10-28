@@ -40,7 +40,9 @@ def tee_engine_output(engine,path,max_bytes=ENGINE_LOG_MAX_BYTES,out=None):
         path.parent.mkdir(parents=True,exist_ok=True)
         if path.exists() and path.stat().st_size>max_bytes:os.replace(path,path.with_suffix('.log.1'))
         sink=open(path,'a',encoding='utf-8',buffering=1)
-    except OSError:sink=None
+    except OSError as error:
+        print('WARNING diagnostic.evidence.degraded source=engine-tee category='+type(error).__name__,file=sys.stderr,flush=True)
+        sink=None
     def pump():
         nonlocal sink
         for line in engine.stdout:
@@ -52,7 +54,8 @@ def tee_engine_output(engine,path,max_bytes=ENGINE_LOG_MAX_BYTES,out=None):
                         sink=open(path,'a',encoding='utf-8',buffering=1)
                     stamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
                     sink.write(stamp+' '+line)
-                except OSError:
+                except OSError as error:
+                    print('WARNING diagnostic.evidence.degraded source=engine-tee category='+type(error).__name__,file=sys.stderr,flush=True)
                     try:sink.close()
                     except OSError:pass
                     sink=None

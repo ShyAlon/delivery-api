@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from .config import default_data_dir
 from .log_durability import degraded
+from .log_budget import BUDGET
 
 LOG_PATH=Path(__file__).resolve().parents[2]/"run.log"
 STAGE_LOG_DIR=default_data_dir()/"logs"/"stages"
@@ -31,7 +32,7 @@ if not logger.handlers:
         def filter(self,record):return getattr(record,'console',True)
     stream.addFilter(_ConsoleFilter());logger.addHandler(stream)
     try:
-        file=_EvidenceFileHandler(LOG_PATH,maxBytes=5*1024*1024,backupCount=3,encoding="utf-8");file.setFormatter(formatter);logger.addHandler(file)
+        file=_EvidenceFileHandler(LOG_PATH,maxBytes=BUDGET['activity'][0],backupCount=BUDGET['activity'][1]-1,encoding="utf-8");file.setFormatter(formatter);logger.addHandler(file)
     except OSError as error:degraded('activity-file',error)
 
 _stage_log_lock=threading.RLock()
@@ -50,6 +51,8 @@ def stage_log_paths()->dict[str,Path]:
 
 
 def event(kind:str,message:str,*,level:int=logging.INFO,console:bool=True,**fields)->None:
+    from .diagnostic_evidence import context
+    fields={**context.get(),**fields}
     line=_line(kind,message,fields)
     logger.log(level,line,extra={'console':console})
     phase=fields.get("phase_key") or fields.get("phase") or fields.get("stage")
@@ -59,7 +62,7 @@ def event(kind:str,message:str,*,level:int=logging.INFO,console:bool=True,**fiel
             path.parent.mkdir(parents=True,exist_ok=True)
             # No persistent handler cache across stage changes. Bounded files.
             with _stage_log_lock:
-                handler=_StageFileHandler(path,maxBytes=2*1024*1024,backupCount=2,encoding='utf-8')
+                handler=_StageFileHandler(path,maxBytes=BUDGET['stages'][0],backupCount=BUDGET['stages'][1]//len(STAGE_KEYS)-1,encoding='utf-8')
                 try:handler.emit(logging.LogRecord('stage',logging.INFO,'',0,line,(),None))
                 finally:handler.close()
         except OSError as error:degraded('stage-file:'+str(phase),error)

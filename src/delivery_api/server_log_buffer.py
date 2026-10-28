@@ -56,8 +56,9 @@ class _Buffer(logging.Handler):
             with self._lock:
                 for row in rows:
                     self._lines.append((stamp,owner,record.levelname,record.name,row))
-        except Exception:
-            pass
+        except Exception as error:
+            from .log_durability import degraded
+            degraded('server-buffer',error)
 
 
 _lines=collections.deque(maxlen=MAX_LINES)
