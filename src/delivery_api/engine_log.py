@@ -79,7 +79,8 @@ def read(owner_id,admin,minutes,resolve_owner,path=None,now=None):
     return {'available':True,'text':HEADER+'\n'+'\n'.join(out),'count':len(out),'path':str(path)}
 
 
-MIRROR_MAX_BYTES=2*1024*1024   # same bound as scripts/docker/full_entry.py's tee
+from .log_budget import BUDGET
+MIRROR_MAX_BYTES=BUDGET['engine'][0]   # same bound as scripts/docker/full_entry.py's tee
 
 
 class _MirrorHandler(logging.Handler):

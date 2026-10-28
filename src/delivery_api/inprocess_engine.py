@@ -184,6 +184,8 @@ class InProcessEngine:
             except SystemExit as exc:
                 code=exc.code if isinstance(exc.code,int) else (0 if exc.code is None else 1)
             except BaseException:
+                from .diagnostic_evidence import failure
+                failure('generator.worker.failed')
                 from .user_messages import scrub_failure_text
                 trace=traceback.format_exc()
                 if scrub_failure_text(trace)!=trace:print(trace,file=sys.stderr,flush=True)   # raw detail: server log only
@@ -206,7 +208,9 @@ class InProcessEngine:
             phase_task=asyncio.ensure_future(lifecycle())
             failure=None;claimed=False
             try:
-                claimed=await self._worker(store,proc).execute(job_id,self._produce(proc))
+                from .diagnostic_evidence import bound
+                with bound(task_id=task_id,job_id=job_id):
+                    claimed=await self._worker(store,proc).execute(job_id,self._produce(proc))
             except BaseException as exc:
                 failure=exc;proc.kill()
             try:

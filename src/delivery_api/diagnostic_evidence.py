@@ -1,13 +1,14 @@
 """Operator-only restart-readable diagnostics, no database or raw payloads.
 
-32 MiB ceiling for this stream: eight files of 4 MiB. Other existing engine,
-activity and stage logs have their own bounds; this is not a global disk quota.
+8 MiB for this stream within32 MiB managed global logs. Per-run provider
+audit artifacts are separate and are never customer diagnostic exports.
 """
 import contextvars
 import json
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from contextlib import contextmanager
 from datetime import datetime,timezone
 from .config import default_data_dir
 from .log_safety import safe_text
@@ -15,8 +16,9 @@ from .log_durability import degraded
 
 context=contextvars.ContextVar('diagnostic_context',default={})
 PATH=default_data_dir()/'logs'/'diagnostics.jsonl'
-MAX_BYTES=4*1024*1024
-BACKUPS=7
+from .log_budget import BUDGET
+MAX_BYTES,FILES=BUDGET['diagnostics']
+BACKUPS=FILES-1
 _installed=None
 
 
@@ -91,4 +93,15 @@ def read(path=PATH,*,task_id=None,max_lines=500):
   except OSError as error:unreadable.append(type(error).__name__)
  return {'available':available,'text':'\n'.join(json.dumps(r,ensure_ascii=False) for r in rows),
          'count':len(rows),'truncated':truncated,'unreadable':unreadable,'task_id':task_id,
-         'scope':'operator diagnostic evidence','storage':'rotating files, up to 32 MiB for this stream; oldest overwritten'}
+         'scope':'operator diagnostic evidence','storage':'rotating files, up to 8 MiB diagnostics within 32 MiB managed global logs; oldest overwritten'}
+
+
+@contextmanager
+def bound(**fields):
+ token=context.set({**context.get(),**{k:v for k,v in fields.items() if v is not None}})
+ try:yield
+ finally:context.reset(token)
+
+
+def failure(code):
+ logging.getLogger('delivery_api.diagnostic').exception(code)

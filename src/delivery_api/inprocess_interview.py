@@ -179,8 +179,14 @@ class InProcessInterviewHost:
             with tenant_context(scope):
                 job_id=self.store.enqueue_worker(session.task_id,'phase:intent',execution_options=self._execution_options(session))
                 def producer(capability,root):
-                    with self._bound(capability,job_id):
-                        box['result']=call()
+                    from .diagnostic_evidence import bound,failure
+                    with bound(task_id=session.task_id,session_id=getattr(session,'session_id',None),job_id=job_id):
+                        try:
+                            with self._bound(capability,job_id):box['result']=call()
+                        except StopRequested:raise
+                        except Exception:
+                            failure('interview.worker.failed')
+                            raise
                 if not await self._worker().execute(job_id,producer):
                     raise RuntimeError('interview job was already claimed; no step ran')
         asyncio.run(go())
