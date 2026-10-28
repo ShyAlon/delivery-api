@@ -890,3 +890,21 @@ No production fix claimed. Shared93PG/34legacy functions out of127,plus three
 standalone local-auth/browser cases. Two debug contract conflicts remain legacy.
 A incomplete,global SQLite bootstrap remains,B/C/D not started. Hosted CI/full
 mixed UI/full suite/deployed topology unrun. No deploy/live DB/model execution.
+
+## A66: completion and unavailable artifact browser group
+
+Three completion redirect-once,completion summary/package presentation,and
+unavailable artifact cases use signed PG/isolated IDs. _done_task accepts ID
+with legacy default. pg_ui's completion init script now honors the same explicit
+allow-complete-redirect switch as legacy page;otherwise it still marks seeded
+IDs shown. Confetti case explicitly uses normal motion,preserving60-particle
+assertion despite reduced-motion PG default. All assertions retained. Signature
+guard failed first1 in0.70s;initial migration2failed40passed40.84s isolated
+those fixture mismatches;final42passed0skips11.46s including cloud API/bootstrap.
+Inspected completion desktop/phone:summary counts,legacy-price warning,ready
+package/download. Package/artifact snapshots mocked;not real package generation.
+Full-page sticky-header crossing remains existing visual debt. Shared96PG/
+31legacy functions out of127,plus three standalone local-auth/browser cases.
+Pending debug contract cases untouched. A incomplete;global SQLite bootstrap
+remains;B/C/D unstarted. Hosted CI/full mixed UI/full repo/deployed topology
+unrun. Production unchanged;no deploy/live DB/model execution.
