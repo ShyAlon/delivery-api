@@ -14,11 +14,6 @@ pytestmark=pytest.mark.skipif(not DSN,reason='requires isolated migrated Postgre
 A=TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000a1')
 B=TenantScope('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-0000000000a2')
 
-class Verifier:
-    def verify(self,token):
-        if token not in ('a','b'):raise TenantAccessDenied('bad')
-        return A if token=='a' else B
-
 @pytest.fixture
 def cloud(monkeypatch,tmp_path):
     import delivery_api.app as module
@@ -39,13 +34,22 @@ def cloud(monkeypatch,tmp_path):
                                                              measure_usage=lambda response:None,
                                                              resolve_serialized=None,measure_raw_usage=None)))
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path))
-    app=TenantMiddleware(module.app,verifier=Verifier())
+    from delivery_api.supabase_auth import SupabaseIdentityVerifier
+    from pg_workspace import URL,Keys
+    app=TenantMiddleware(module.app,verifier=SupabaseIdentityVerifier(URL,key_provider=Keys()),
+        session_check=store.auth_session_active,request_database=store._postgres)
     # Don't start local legacy worker lifespan. Cloud mode must have no shared
     # startup data scans or automatic resume until scoped engine support lands.
     with TestClient(app) as client:yield client,store,tmp_path
 
 
-def header(user):return {'Authorization':'Bearer '+user}
+def header(user):
+    import time,jwt
+    from pg_workspace import KEY,URL
+    scope={'a':A,'b':B}[user];now=int(time.time())
+    token=jwt.encode(dict(sub=scope.owner_id,session_id=scope.session_id,iat=now,
+        exp=now+3600,iss=URL+'/auth/v1',aud='authenticated',role='authenticated'),KEY,algorithm='ES256')
+    return {'Authorization':'Bearer '+token}
 
 
 def test_task_api_cross_tenant_ids_events_feedback_cost(cloud):
@@ -110,7 +114,7 @@ def test_opened_gate_stack_decisions_keeps_auth_tenant_and_csrf_walls(cloud):
     url='/api/tasks/'+task+'/gates/gate-architecture/stack-decisions'
     body={'revision':'0'*64,'decisions':[{'key':'language','text':'python'}]}
     # Cookie-authenticated POST without a matching Origin: CSRF wall first.
-    client.cookies.set('requi_access','a')
+    client.cookies.set('requi_access',header('a')['Authorization'][7:])
     assert client.post(url,json=body).status_code==403
     client.cookies.clear()
     # No identity at all: 401, never the handler.
@@ -125,7 +129,7 @@ def test_opened_gate_stack_decisions_keeps_auth_tenant_and_csrf_walls(cloud):
 def test_cloud_cookie_csrf_and_revoked_session(cloud):
     import psycopg
     client,store,root=cloud
-    client.cookies.set('requi_access','a')
+    client.cookies.set('requi_access',header('a')['Authorization'][7:])
     assert client.get('/api/tasks').status_code==200
     assert client.post('/api/tasks',json={'title':'csrf-'+uuid.uuid4().hex}).status_code==403
     assert client.post('/api/tasks',json={'title':'csrf-'+uuid.uuid4().hex},headers={'Origin':'http://testserver'}).status_code==201
