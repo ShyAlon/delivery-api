@@ -2065,9 +2065,10 @@ def test_shadow_copy_not_shown_when_send_fails(pg_page, pg_ui, pg_ids):
     assert answer.input_value() == 'Keep me' and page.locator('#currentquestion').is_visible()
 
 
-def _long_interview_page(page, ui, answered=True):
+def _long_interview_page(page, ui, answered=True, task_id="live"):
+    tid=task_id
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live = page.request.get(ui + '/api/tasks/live').json(); live['active_phase'] = 'intent'; live['state'] = 'running'
+    live = page.request.get(ui + f'/api/tasks/{tid}').json(); live['active_phase'] = 'intent'; live['state'] = 'running'
     events = list(live.get('events') or [])
     if answered:
         for i in range(14):
@@ -2076,27 +2077,33 @@ def _long_interview_page(page, ui, answered=True):
     live['events'] = events
     live['control_snapshot'] = {'mode': 'waiting_input', 'owner': 'engine', 'kind': 'text', 'wait_id': 'test-input', 'precondition': {'session_sequence': 1}}
     live['ui_state'] = {'mode': 'engine_question', 'active_phase': 'intent', 'process_live': True, 'decision': None, 'gate': None, 'question': 'What next?'}
-    page.route('**/api/tasks/live', lambda route: route.fulfill(json=_promote_control(live)))
-    page.route('**/api/tasks/live/phase-output', lambda route: route.fulfill(json={'phase_key': 'intent', 'display_phase': 'intent', 'generation': live['generation'], 'status': 'waiting', 'items': [], 'source': 'intent'}))
+    page.route(f'**/api/tasks/{tid}', lambda route: route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}/phase-output', lambda route: route.fulfill(json={'phase_key': 'intent', 'display_phase': 'intent', 'generation': live['generation'], 'status': 'waiting', 'items': [], 'source': 'intent'}))
     page.set_viewport_size({'width': 1400, 'height': 800})
-    page.goto(ui + '/tasks/live/view')
+    page.goto(ui + f'/tasks/{tid}/view')
 
 
-def test_start_outputs_box_hidden_once_first_answer_exists(page, ui):
-    _long_interview_page(page, ui, answered=True)
+def test_start_outputs_box_hidden_once_first_answer_exists(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    _long_interview_page(page, ui, answered=True, task_id=tid)
     page.locator('#phase-output-slot').wait_for(state='attached')
     page.wait_for_timeout(500)
     assert page.get_by_text('Start outputs').count() == 0 or page.get_by_text('Start outputs').first.is_hidden()
     assert page.locator('#phase-output-slot').get_attribute('data-hide-start') == '1'
 
 
-def test_start_outputs_box_shown_before_first_answer(page, ui):
-    _long_interview_page(page, ui, answered=False)
+def test_start_outputs_box_shown_before_first_answer(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    _long_interview_page(page, ui, answered=False, task_id=tid)
     page.get_by_text('Start outputs').first.wait_for(state='visible')
 
 
-def test_interview_scrolls_inside_its_section_and_live_process_stays_visible(page, ui):
-    _long_interview_page(page, ui, answered=True)
+def test_interview_scrolls_inside_its_section_and_live_process_stays_visible(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    _long_interview_page(page, ui, answered=True, task_id=tid)
     left = page.locator('section.qa-history'); left.wait_for(); page.wait_for_timeout(500)
     assert left.evaluate('e=>e.scrollHeight>e.clientHeight') and left.evaluate('e=>getComputedStyle(e).overflowY') == 'auto'
     assert left.evaluate('e=>e.scrollTop')==0  # newest exchange is first, so it opens at the top
@@ -2145,9 +2152,11 @@ def test_debug_dialog_edits_question_quality_settings(page, ui):
     page.get_by_role("button",name="Close debug").click()
 
 
-def test_interview_history_lists_newest_exchange_first_keeping_original_numbers(page, ui):
-    route_task_snapshot(page, ui, "live", interview_history_snapshot)
-    page.goto(ui + "/tasks/live/view")
+def test_interview_history_lists_newest_exchange_first_keeping_original_numbers(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    route_task_snapshot(page, ui, tid, interview_history_snapshot)
+    page.goto(ui + f"/tasks/{tid}/view")
     page.get_by_text("Interview so far").wait_for()
     items = page.locator(".qa-item")
     assert items.count() == 2
@@ -2159,12 +2168,15 @@ def test_interview_history_lists_newest_exchange_first_keeping_original_numbers(
     assert items.nth(0).locator(".qa-answer p").inner_text() == "My co-founder, next week"
 
 
-def test_submitting_answer_is_prominent_and_pulses_unless_reduced_motion(page, ui):
-    _answer_page(page, ui)
+def test_submitting_answer_is_prominent_and_pulses_unless_reduced_motion(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    page.emulate_media(reduced_motion="no-preference")
+    _answer_page(page, ui, tid)
     def slow(route):
         page.wait_for_timeout(1500); route.fulfill(json={'status': 'accepted'})
-    page.route('**/api/tasks/live/answer', slow)
-    page.goto(ui + '/tasks/live/view'); answer = page.locator('#answerform textarea')
+    page.route(f'**/api/tasks/{tid}/answer', slow)
+    page.goto(ui + f'/tasks/{tid}/view'); answer = page.locator('#answerform textarea')
     answer.fill('Speed, then cost'); answer.press('Enter')
     banner = page.locator('#server-wait')
     page.wait_for_function("document.querySelector('#server-wait') && !document.querySelector('#server-wait').classList.contains('hidden')")
@@ -2203,14 +2215,17 @@ FAKE_SSE = """class FakeEventSource{constructor(){window.__es=this;this.h={}}add
 window.EventSource=FakeEventSource;window.__emit=e=>window.__es.h.progress({data:JSON.stringify(e)})"""
 
 
-def test_phase_change_dialog_explains_pauses_input_and_keeps_progress_underneath(page, ui):
+def test_phase_change_dialog_explains_pauses_input_and_keeps_progress_underneath(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    page.emulate_media(reduced_motion="no-preference")
     import json as _j
     page.add_init_script(FAKE_SSE)
-    snap = _phase_snapshots(page, ui)
+    snap = _phase_snapshots(page, ui, tid)
     cur = {"s": snap("conops", "executing")}
-    page.route("**/api/tasks/live", lambda route: route.fulfill(json=cur["s"]))
+    page.route(f"**/api/tasks/{tid}", lambda route: route.fulfill(json=cur["s"]))
     page.set_viewport_size({"width": 1320, "height": 870})
-    page.goto(ui + "/tasks/live/view")
+    page.goto(ui + f"/tasks/{tid}/view")
     page.get_by_text("Live process").first.wait_for()
     assert page.locator(".phase-change-dialog").count() == 0          # first look at a phase is not a change
     cur["s"] = snap("needs", "executing")                              # the engine moves to the next phase
@@ -2235,12 +2250,14 @@ def test_phase_change_dialog_explains_pauses_input_and_keeps_progress_underneath
     assert "Drafting need 2 of 6" in page.locator("#stageprogress").inner_text()
 
 
-def test_phase_change_dialog_closes_when_the_founder_can_act_again_and_never_shows_for_a_question(page, ui):
+def test_phase_change_dialog_closes_when_the_founder_can_act_again_and_never_shows_for_a_question(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script(FAKE_SSE)
-    snap = _phase_snapshots(page, ui)
+    snap = _phase_snapshots(page, ui, tid)
     cur = {"s": snap("conops", "executing")}
-    page.route("**/api/tasks/live", lambda route: route.fulfill(json=cur["s"]))
-    page.goto(ui + "/tasks/live/view")
+    page.route(f"**/api/tasks/{tid}", lambda route: route.fulfill(json=cur["s"]))
+    page.goto(ui + f"/tasks/{tid}/view")
     page.get_by_text("Live process").first.wait_for()
     cur["s"] = snap("needs", "executing")
     page.evaluate("window.__emit({id:2147483647,kind:'command',phase_key:'needs',message:'Snapshot changed'})")
@@ -2835,4 +2852,16 @@ def test_decision_state_browser_group_requires_signed_pg_fixture():
                  test_decision_dialog_rationale_help_is_real_and_keyboard_accessible,
                  test_orchestrator_baseline_decision_renders_without_engine_process,
                  test_accepted_answer_disarms_old_question_until_new_control_arrives):
+        assert "pg_page" in inspect.signature(case).parameters
+
+
+def test_interview_layout_browser_group_requires_signed_pg_fixture():
+    import inspect
+    for case in (test_start_outputs_box_hidden_once_first_answer_exists,
+                 test_start_outputs_box_shown_before_first_answer,
+                 test_interview_scrolls_inside_its_section_and_live_process_stays_visible,
+                 test_interview_history_lists_newest_exchange_first_keeping_original_numbers,
+                 test_submitting_answer_is_prominent_and_pulses_unless_reduced_motion,
+                 test_phase_change_dialog_explains_pauses_input_and_keeps_progress_underneath,
+                 test_phase_change_dialog_closes_when_the_founder_can_act_again_and_never_shows_for_a_question):
         assert "pg_page" in inspect.signature(case).parameters
