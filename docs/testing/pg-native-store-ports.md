@@ -55,3 +55,17 @@ Restored engine/spec sources:81passed plus one missing bundled-Chromium failure
 (no source skips);after installing the required bundled browser,the exact failed
 revision/ask_changes case passed3.91s. Full combined rerun pending. Two old cloud
 route tests intentionally excluded here due to separately reported fixture debt.
+
+## Review/draft/feedback family
+
+PG owns11methods:comment add/read,review retain/read,draft save/read,feedback
+list/upsert/private row/update/delete. Native%s,RETURNING,named payload columns and
+ON CONFLICT DO NOTHING replace SQLite adaptation. Existing guards/owner locks stay.
+Feedback reads its engine session through native tasks query. Same tenant/actor
+checks and atomic audit ownership. Concurrent conflicting review pin keeps one
+payload and raises conflict for the other;failed feedback audit rolls back insert.
+
+60focused tests passed0skips10.85s,one stale rerun contract test excluded because
+its explicit correction is in separate332. Evidence cold/warm:SQLite1.624s/0.321s,
+PG1.494s/0.269s,all green. Single samples,not fullsuite/deploy claims. Hosted CI and
+deployed topology unverified. No schema/data/activation changes.
