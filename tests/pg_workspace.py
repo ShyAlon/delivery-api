@@ -101,3 +101,49 @@ patches only the store/config and test signing key, never auth or scope function
             session_check=workspace.store.auth_session_active,
             request_database=workspace.store._postgres)
     return build
+
+
+@pytest.fixture
+def pg_browser(pg_workspace_factory, pg_task_app, tmp_path):
+    """Fresh browser and authenticated workspace, real local ASGI HTTP server."""
+    import os
+    import socket
+    import threading
+    import uvicorn
+    from playwright.sync_api import sync_playwright
+
+    with pg_workspace_factory() as workspace:
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            port = listener.getsockname()[1]
+        base = f'http://127.0.0.1:{port}'
+        server = uvicorn.Server(uvicorn.Config(pg_task_app(workspace), host='127.0.0.1',
+            port=port, lifespan='off', log_level='warning'))
+        thread = threading.Thread(target=server.run)
+        thread.start()
+        try:
+            for _ in range(100):
+                if server.started:
+                    break
+                time.sleep(.02)
+            assert server.started, 'test server did not start'
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True,
+                    executable_path=os.getenv('PLAYWRIGHT_CHROMIUM_EXECUTABLE'))
+                try:
+                    context = browser.new_context(viewport={'width':1365,'height':900},
+                                                  reduced_motion='reduce')
+                    context.add_cookies([{'name':'requi_access','value':workspace.token,'url':base}])
+                    page = context.new_page()
+                    try:
+                        yield page, base, workspace
+                    finally:
+                        screenshot = tmp_path/'pg-browser-parity.png'
+                        page.screenshot(path=str(screenshot), full_page=True)
+                        print('PG_BROWSER_PARITY_SCREENSHOT='+str(screenshot))
+                finally:
+                    browser.close()
+        finally:
+            server.should_exit = True
+            thread.join(timeout=10)
+            assert not thread.is_alive(), 'test server did not stop'

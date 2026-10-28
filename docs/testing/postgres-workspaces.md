@@ -52,3 +52,19 @@ No cache dropping was done. Hosted CI and deployed topology remain unverified.
 A first warm measurement failed because repeated pg_harness.start relabeled its
 own server external. A failing regression now proves owned-server start is
 idempotent. External DSNs are still refused by this new factory.
+
+## Phase 2A task-browser parity
+
+`tests/test_postgres_task_browser.py` adds real browser task create, focused Enter,
+textarea Ctrl+Enter, Escape cancellation, rename, reload, delete and missing-task
+checks. Duplicate-title errors must retain error/cause/next and show the actionable
+next step. The error dialog replaces the create form by current production design.
+No production code or original SQLite assertion is changed.
+
+Run the expanded timing with `--task-browser`. Local one-sample timings:
+SQLite browser reference cold8.452s/warm7.250s; PG browser parity
+cold7.655s/warm5.993s, all passed. The old fixture seeds many states and uses a
+subprocess server; PG starts a fresh authenticated in-process server/browser per
+test. These remain scoped feasibility measurements, not identical workload or a
+full-suite speed claim. Cold includes harness setup; warm excludes initial migrations.
+Combined PG+unchanged SQLite selected contracts:10passed,0skips,17.22s.
