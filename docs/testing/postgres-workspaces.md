@@ -68,3 +68,33 @@ subprocess server; PG starts a fresh authenticated in-process server/browser per
 test. These remain scoped feasibility measurements, not identical workload or a
 full-suite speed claim. Cold includes harness setup; warm excludes initial migrations.
 Combined PG+unchanged SQLite selected contracts:10passed,0skips,17.22s.
+
+## Phase 2A progress/evidence contracts
+
+`test_store_evidence_parity.py` runs identical contracts on both backends for:
+- phase detail/count updates, atomic progress/event cursor replay, cursor-gap
+  refusal and recovery, ordered event snapshot/incremental reads;
+- review comments, immutable revision-pinned review evidence, draft revision
+  binding and structured audit details;
+- feedback upsert/update/delete, validation, actor checks and audit records.
+
+Additional PG-only tests cover cross-owner evidence invisibility/write refusal,
+immutable byte/manifest publication, reads after local source deletion, and session
+revocation without bypassing running-task delete refusal. Intentional differences:
+SQLite is shared/local and has no tenant RLS; PG publication uses complete immutable
+manifest revisions rather than treating an arbitrary local file ref as authority.
+The existing manifest regression suite runs alongside this slice. No new runtime
+storage behavior or original assertion is changed.
+
+Factory cleanup now respects production running/paused/accounted task deletion
+refusals and revokes the auth session anyway. Those tasks and FK history remain
+only until the disposable process server is destroyed. The fixture must not force
+state to stopped, erase accounting, or weaken delete guards for cleanup convenience.
+Unknown cleanup errors still fail loudly. A regression proves the running record
+remains running and its auth session is revoked.
+
+`--evidence` measures the same three parameterized contracts per backend, excluding
+PG-only negative/publication extras in both scopes. Local cold/warm wall time:
+SQLite1.722s/0.283s;PG1.691s/0.272s, all passed. Both cold runs include global PG
+startup and factory construction. Separate harness-only sample:0.915s,43migrations.
+Single samples, no significance claim;hosted CI/full-suite/deploy time unverified.
