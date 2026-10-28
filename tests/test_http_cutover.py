@@ -295,13 +295,14 @@ def test_route_preview_shows_conflict_without_switching(monkeypatch):
  assert 'INTERVIEW_ENGINE_MODEL_PROBING' in routes[1]['error']
 
 
-def test_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path,monkeypatch):
+def test_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  from delivery_api.engine_client import EngineClientError,EngineUnreachableError
  from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
  import httpx
- store=SQLiteStore(str(tmp_path/'snapshot-error.db'))
+ store=pg_scoped_workspace.store
  task=store.create_task('Snapshot errors','A brief')
- store.set_engine_session(task['task_id'],'s-protocol')
+ store.set_engine_session(task['task_id'],'s-protocol-'+str(uuid4()))
  store.update_phase(task['task_id'],'intent','running')
  class Rejected(FakeEngine):
   def snapshot(self,sid):
@@ -754,12 +755,13 @@ def test_retry_with_generator_checkpoint_resumes_without_from(tmp_path,monkeypat
  asyncio.run(exercise())
  assert calls==[('resume','ollama:phi4')]
 
-def test_architecture_baseline_decision_routes_to_local_owner_not_completed_http(monkeypatch,tmp_path):
+def test_architecture_baseline_decision_routes_to_local_owner_not_completed_http(monkeypatch,tmp_path,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
  from delivery_api.runner import ProcessRunner
  from delivery_api.auth import Actor
- store=SQLiteStore(str(tmp_path/'architecture-decision.db'));task=store.create_task('Architecture choice','brief');tid=task['task_id']
- store.set_engine_session(tid,'completed-interview');store.update_phase(tid,'architecture','running')
+ store=pg_scoped_workspace.store;task=store.create_task('Architecture choice','brief');tid=task['task_id']
+ store.set_engine_session(tid,'completed-interview-'+str(uuid4()));store.update_phase(tid,'architecture','running')
  runner=ProcessRunner(store)
  class CompletedEngine:
   calls=0
@@ -778,13 +780,14 @@ def test_architecture_baseline_decision_routes_to_local_owner_not_completed_http
  assert any(e['kind']=='answer' and e['phase_key']=='architecture' and e['payload']['decision_id']=='system-baseline' for e in store.events(tid))
 
 
-def test_architecture_baseline_rejects_stale_decision_without_http_fallback(monkeypatch,tmp_path):
+def test_architecture_baseline_rejects_stale_decision_without_http_fallback(monkeypatch,tmp_path,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
  from delivery_api.runner import ProcessRunner
  from delivery_api.auth import Actor
  from fastapi import HTTPException
- store=SQLiteStore(str(tmp_path/'stale-architecture.db'));task=store.create_task('Architecture choice','brief');tid=task['task_id']
- store.set_engine_session(tid,'completed-interview');store.update_phase(tid,'architecture','running')
+ store=pg_scoped_workspace.store;task=store.create_task('Architecture choice','brief');tid=task['task_id']
+ store.set_engine_session(tid,'completed-interview-'+str(uuid4()));store.update_phase(tid,'architecture','running')
  runner=ProcessRunner(store)
  class Engine:
   calls=0
@@ -804,11 +807,12 @@ def test_architecture_baseline_rejects_stale_decision_without_http_fallback(monk
  assert engine.calls==0
  assert not any(e['kind']=='answer' for e in store.events(tid))
 
-def test_completed_http_recovery_continues_orphaned_architecture_as_greenfield(tmp_path,monkeypatch):
+def test_completed_http_recovery_continues_orphaned_architecture_as_greenfield(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
  from delivery_api.runner import ProcessRunner
  from delivery_api.orchestrator import PhaseOrchestrator
- session='architecture-recovery';store=SQLiteStore(str(tmp_path/'architecture-recovery.db'))
+ session='architecture-recovery-'+str(uuid4());store=pg_scoped_workspace.store
  tid=store.create_task('Architecture recovery','brief')['task_id'];store.set_engine_session(tid,session)
  for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
  store.update_phase(tid,'architecture','running',detail='Waiting for architecture baseline')
@@ -830,9 +834,12 @@ def test_completed_http_recovery_continues_orphaned_architecture_as_greenfield(t
  asyncio.run(recover())
 
 
-def test_task_snapshot_exposes_one_shared_phase_configuration(tmp_path,monkeypatch):
+def test_task_snapshot_exposes_one_shared_phase_configuration(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  from delivery_api.phases import PHASE_DEFINITIONS
- store=SQLiteStore(str(tmp_path/'phase-config.db'));tid=store.create_task('All phases','brief')['task_id']
+ store=pg_scoped_workspace.store;tid=store.create_task('All phases','brief')['task_id']
+ from delivery_api.postgres_store import PostgresStore
+ assert isinstance(store,PostgresStore)
  monkeypatch.setattr(module,'store',store)
  result=module.get_task(tid)
  assert list(result['phase_config'])==[phase.key for phase in PHASE_DEFINITIONS]
@@ -955,8 +962,9 @@ def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tm
   assert work.result(timeout=2)[1].process_status==ProcessStatus.COMPLETED
 
 
-def test_generator_default_api_follows_exact_sticky_selection(tmp_path,monkeypatch):
- store=SQLiteStore(str(tmp_path/'sticky-api.db'));task=store.create_task('Sticky preview','brief');tid=task['task_id']
+def test_generator_default_api_follows_exact_sticky_selection(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store;task=store.create_task('Sticky preview','brief');tid=task['task_id']
  monkeypatch.setattr(module,'store',store)
  monkeypatch.setenv('SPEC_GENERATOR_MODEL_ARCHITECTURE','ollama:qwen2.5-coder:14b')
  store.set_model_default(tid,'deepseek:deepseek-flash')

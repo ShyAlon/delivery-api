@@ -529,3 +529,15 @@ bootstrap12passed0skips2.09s;full mixed cutover,dedupe,bootstrap60passed0skips6.
 including all12 callers. Remaining cutover SQLite receivers retained.
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A42: HTTP architecture ownership and phase-planning fixtures
+
+Six cases now scoped PG:protocol422 versus transport diagnostic,architecture
+local decision ownership/stale refusal,orphaned architecture recovery,canonical
+phase configuration and sticky exact generator default. Every original assertion
+retained. Unique session IDs/local policy explicit,runner/execution mocks remain.
+Fail-first concrete PG assertion failed on SQLite. Focused9passed0skips1.83s;
+full mixed HTTP-cutover,dedupe,bootstrap60passed0skips with producer sources.
+Remaining cutover start/concurrency/switch SQLite receivers retained.
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.
