@@ -13,6 +13,7 @@ import re
 import secrets
 import time
 import contextlib
+from types import SimpleNamespace
 from .phases import PHASE_DEFINITIONS
 
 PHASES = tuple((phase.key, phase.label) for phase in PHASE_DEFINITIONS)
@@ -1833,7 +1834,7 @@ FROM tasks t"""
         return task_phase_totals(self,task_id)
 
     def retail_compute_status(self,task_id):
-        rows=self._db.execute("SELECT r.state,count(*) AS count FROM retail_compute_segments r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=? GROUP BY r.state",(task_id,)).fetchall()
+        rows=self._execute_native("SELECT r.state,count(*) AS count FROM retail_compute_segments r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=%s GROUP BY r.state",(task_id,)).fetchall()
         return {r['state']:r['count'] for r in rows}
 
     def begin_retail_compute(self,key,job_id,phase,rates):
@@ -1874,22 +1875,22 @@ FROM tasks t"""
     def own_credit_balance(self,usd_per_credit):
         """Read-only: the signed-in owner's own prepaid balance. Public, so it runs inside a scoped transaction like every store operation."""
         from .account_balance import read
-        return read(self._db,current_scope().owner_id,usd_per_credit)
+        return read(SimpleNamespace(execute=self._execute_native),current_scope().owner_id,usd_per_credit,marker='%s')
 
     def own_credit_history(self):
         """Read-only: every recorded change to the signed-in owner's credit balance."""
         from . import credit_history
-        return credit_history.read(self._db)
+        return credit_history.read(SimpleNamespace(execute=self._execute_native))
 
     def own_last_topup(self):
         """Read-only: the latest top-up or grant to the signed-in owner, or None."""
         from . import credit_history
-        return credit_history.last_topup(self._db)
+        return credit_history.last_topup(SimpleNamespace(execute=self._execute_native))
 
     def own_ledger(self,usd_per_credit):
         """Read-only: the signed-in owner's credit balance and provider-call ledger, as text for the Debug dialog."""
         from .account_ledger import read
-        return read(self._db,current_scope().owner_id,usd_per_credit)
+        return read(SimpleNamespace(execute=self._execute_native),current_scope().owner_id,usd_per_credit,marker='%s')
 
     def _unsupported(self,*args,**kwargs):
         raise TenantAccessDenied('local authentication or quota provisioning unavailable on user connection')

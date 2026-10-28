@@ -31,11 +31,11 @@ def post(store,*,key,job_id,phase,kind,input_tokens=0,output_tokens=0,determinis
         raise AdmissionDenied('same-owner contribution job required')
     payload={'job':job_id,'phase':phase,'kind':kind,'input':input_tokens,'output':output_tokens,'ms':str(ms),'rates':rates.snapshot()}
     fingerprint=hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()
-    old=store._db.execute('SELECT * FROM retail_contributions WHERE contribution_key=?',(key,)).fetchone()
+    old=store._execute_native('SELECT * FROM retail_contributions WHERE contribution_key=%s',(key,)).fetchone()
     if old:
         if old['fingerprint']!=fingerprint:raise AdmissionDenied('conflicting retail contribution replay')
         return dict(old)
-    account=store._db.execute('SELECT * FROM credit_accounts WHERE owner_id=? FOR UPDATE',(current_scope().owner_id,)).fetchone()
+    account=store._execute_native('SELECT * FROM credit_accounts WHERE owner_id=%s FOR UPDATE',(current_scope().owner_id,)).fetchone()
     if not account or account['units_per_credit']!=UNITS_PER_CREDIT:
         raise AdmissionDenied('exact prepaid scale migration required')
     units,remainder=rates.split_units(input_tokens+output_tokens,ms,account['fractional_debit_units'])
@@ -43,17 +43,17 @@ def post(store,*,key,job_id,phase,kind,input_tokens=0,output_tokens=0,determinis
         raise AdmissionDenied('retail amount outside account integer range')
     exact=rates.credits(input_tokens+output_tokens,ms)*UNITS_PER_CREDIT
     now=time.time()
-    store._db.execute('INSERT INTO retail_contributions VALUES (?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?)',
-        (key,current_scope().owner_id,job_id,phase,kind,input_tokens,output_tokens,ms,json.dumps(rates.snapshot()),exact,units,UNITS_PER_CREDIT,fingerprint,now))
-    credit_audit.attribute(store._db.execute,'debit','system:retail_ledger',None,key)
-    store._db.execute('UPDATE credit_accounts SET balance_units=balance_units-?,fractional_debit_units=?,updated_at=? WHERE owner_id=?',
-        (units,remainder,now,current_scope().owner_id))
-    return dict(store._db.execute('SELECT * FROM retail_contributions WHERE contribution_key=?',(key,)).fetchone())
+    store._execute_native('INSERT INTO retail_contributions VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s)',
+        (key,current_scope().owner_id,job_id,phase,kind,input_tokens,output_tokens,ms,json.dumps(rates.snapshot()),exact,units,UNITS_PER_CREDIT,fingerprint,now), write=True)
+    credit_audit.attribute(store._execute_native,'debit','system:retail_ledger',None,key,marker='%s')
+    store._execute_native('UPDATE credit_accounts SET balance_units=balance_units-%s,fractional_debit_units=%s,updated_at=%s WHERE owner_id=%s',
+        (units,remainder,now,current_scope().owner_id), write=True)
+    return dict(store._execute_native('SELECT * FROM retail_contributions WHERE contribution_key=%s',(key,)).fetchone())
 
 
 def phase_totals(store,job_id):
     """Display reads the debit evidence; it does not charge phases again."""
-    rows=store._db.execute('SELECT * FROM retail_contributions WHERE job_id=? ORDER BY contribution_key',(job_id,)).fetchall()
+    rows=store._execute_native('SELECT * FROM retail_contributions WHERE job_id=%s ORDER BY contribution_key',(job_id,)).fetchall()
     totals={}
     for r in rows:
         rates=rates_from_snapshot(r['rates']); phase=totals.setdefault(r['phase_key'],{'credits':Decimal(0),'usd':Decimal(0),'posted_units':0})
@@ -88,24 +88,24 @@ def begin_compute(store,key,job_id,phase,rates):
     rates=rates_from_snapshot(rates).snapshot();owner_lock(store)
     job=store.worker_job(job_id)
     if not job or job['state']!='running':raise AdmissionDenied('running compute job required')
-    if store._db.execute('SELECT 1 FROM retail_compute_segments WHERE segment_key=?',(key,)).fetchone():
+    if store._execute_native('SELECT 1 FROM retail_compute_segments WHERE segment_key=%s',(key,)).fetchone():
         raise AdmissionDenied('compute segment already begun; explicit recovery required')
-    store._db.execute("INSERT INTO retail_compute_segments(segment_key,owner_id,job_id,phase_key,rates,state,started_at) VALUES (?,?,?,?,?::jsonb,'pending',?)",(key,current_scope().owner_id,job_id,phase,json.dumps(rates),time.time()))
+    store._execute_native("INSERT INTO retail_compute_segments(segment_key,owner_id,job_id,phase_key,rates,state,started_at) VALUES (%s,%s,%s,%s,%s::jsonb,'pending',%s)",(key,current_scope().owner_id,job_id,phase,json.dumps(rates),time.time()), write=True)
 
 
 def finish_compute(store,key,deterministic_ms):
     owner_lock(store)
-    segment=store._db.execute('SELECT * FROM retail_compute_segments WHERE segment_key=? FOR UPDATE',(key,)).fetchone()
+    segment=store._execute_native('SELECT * FROM retail_compute_segments WHERE segment_key=%s FOR UPDATE',(key,)).fetchone()
     if not segment:raise AdmissionDenied('compute segment missing')
     if deterministic_ms is None:
-        if segment['state']!='settled':store._db.execute("UPDATE retail_compute_segments SET state='unresolved' WHERE segment_key=?",(key,))
+        if segment['state']!='settled':store._execute_native("UPDATE retail_compute_segments SET state='unresolved' WHERE segment_key=%s",(key,), write=True)
         return None
     ms=decimal_value(deterministic_ms,'deterministic_ms')
     if segment['state']=='settled':
         if ms!=segment['deterministic_ms']:raise AdmissionDenied('conflicting compute replay')
         return dict(segment)
     if segment['state']=='unresolved':raise AdmissionDenied('unresolved compute needs explicit reconciliation')
-    counts=store._db.execute("SELECT phase_key,count(*) AS calls FROM retail_contributions WHERE job_id=? AND kind='tokens' GROUP BY phase_key ORDER BY phase_key",(segment['job_id'],)).fetchall()
+    counts=store._execute_native("SELECT phase_key,count(*) AS calls FROM retail_contributions WHERE job_id=%s AND kind='tokens' GROUP BY phase_key ORDER BY phase_key",(segment['job_id'],)).fetchall()
     if not counts:counts=[{'phase_key':segment['phase_key'],'calls':1}]
     total=sum(r['calls'] for r in counts);remaining=ms;contributions=[]
     for i,row in enumerate(counts):
@@ -113,12 +113,12 @@ def finish_compute(store,key,deterministic_ms):
         remaining-=share
         contributions.append(post(store,key='compute:'+key+':'+row['phase_key'],job_id=segment['job_id'],phase=row['phase_key'],kind='compute',deterministic_ms=share,rates=segment['rates']))
     contribution={'contributions':contributions,'deterministic_ms':ms}
-    store._db.execute("UPDATE retail_compute_segments SET state='settled',deterministic_ms=?,settled_at=? WHERE segment_key=?",(ms,time.time(),key))
+    store._execute_native("UPDATE retail_compute_segments SET state='settled',deterministic_ms=%s,settled_at=%s WHERE segment_key=%s",(ms,time.time(),key), write=True)
     return contribution
 
 
 def task_totals(store,task_id):
-    rows=store._db.execute('SELECT r.* FROM retail_contributions r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=?',(task_id,)).fetchall()
+    rows=store._execute_native('SELECT r.* FROM retail_contributions r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=%s',(task_id,)).fetchall()
     if not rows:return None
     credits=Decimal(0);usd=Decimal(0)
     for row in rows:
@@ -129,20 +129,20 @@ def task_totals(store,task_id):
 
 def task_phase_totals(store,task_id):
     """Credits per phase for one task, largest first. Credits only: no price, vendor cost or rate leaves this function."""
-    rows=store._db.execute('SELECT r.phase_key,r.exact_units FROM retail_contributions r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=?',(task_id,)).fetchall()
+    rows=store._execute_native('SELECT r.phase_key,r.exact_units FROM retail_contributions r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=%s',(task_id,)).fetchall()
     by={}
     for row in rows:by[row['phase_key']]=by.get(row['phase_key'],Decimal(0))+Decimal(row['exact_units'])/UNITS_PER_CREDIT
     return [{'phase':k,'credits':float(round(v,6))} for k,v in sorted(by.items(),key=lambda kv:(-kv[1],kv[0]))]
 
 
 def _job_evidence(store,job_id):
-    row=store._db.execute("SELECT count(*) AS n, COALESCE(sum(CASE WHEN state IN ('reserved','dispatched','uncertain','held') THEN 1 ELSE 0 END),0) AS nonterminal FROM provider_attempts WHERE job_id=?",(job_id,)).fetchone()
-    tokens=store._db.execute("SELECT count(*) AS n FROM retail_contributions WHERE job_id=? AND kind='tokens'",(job_id,)).fetchone()['n']
+    row=store._execute_native("SELECT count(*) AS n, COALESCE(sum(CASE WHEN state IN ('reserved','dispatched','uncertain','held') THEN 1 ELSE 0 END),0) AS nonterminal FROM provider_attempts WHERE job_id=%s",(job_id,)).fetchone()
+    tokens=store._execute_native("SELECT count(*) AS n FROM retail_contributions WHERE job_id=%s AND kind='tokens'",(job_id,)).fetchone()['n']
     return int(row['n']),int(tokens),int(row['nonterminal'])
 
 
 def _close_without_charge(store,segment,action,attempts):
-    store._db.execute("UPDATE retail_compute_segments SET state='settled',deterministic_ms=?,settled_at=? WHERE segment_key=?",(Decimal(0),time.time(),segment['segment_key']))
+    store._execute_native("UPDATE retail_compute_segments SET state='settled',deterministic_ms=%s,settled_at=%s WHERE segment_key=%s",(Decimal(0),time.time(),segment['segment_key']), write=True)
     store.audit(current_scope().owner_id,action,None,{'segment_key':str(segment['segment_key']),'job_id':str(segment['job_id']),'phase':segment['phase_key'],
         'previous_state':segment['state'],'provider_attempts':attempts,'charged':False})
 
@@ -151,14 +151,14 @@ def close_failed_compute(store,key):
     """A job failed after its compute segment began. With no provider call and no token charge there is nothing to price, so close the
     segment without a charge (audited). Otherwise keep it unresolved for review, as before."""
     owner_lock(store)
-    segment=store._db.execute('SELECT * FROM retail_compute_segments WHERE segment_key=? FOR UPDATE',(key,)).fetchone()
+    segment=store._execute_native('SELECT * FROM retail_compute_segments WHERE segment_key=%s FOR UPDATE',(key,)).fetchone()
     if not segment:return 'missing'
     if segment['state']=='settled':return 'settled'
     attempts,tokens,_=_job_evidence(store,segment['job_id'])
     if close_decision(attempts,tokens)=='void':
         _close_without_charge(store,segment,'compute.segment_closed_no_provider_call',attempts)
         return 'closed'
-    store._db.execute("UPDATE retail_compute_segments SET state='unresolved' WHERE segment_key=?",(key,))
+    store._execute_native("UPDATE retail_compute_segments SET state='unresolved' WHERE segment_key=%s",(key,), write=True)
     return 'held'
 
 
@@ -166,10 +166,10 @@ def release_compute(store,owner_id,confirm):
     """The owner's own explicit release of segments that block new work. Only segments whose job is not running and never reached a
     provider are released, each with an audit record; anything else is listed and left alone. confirm=False only reports."""
     if confirm:owner_lock(store)
-    rows=store._db.execute("SELECT * FROM retail_compute_segments WHERE owner_id=? AND state<>'settled' ORDER BY started_at"+(' FOR UPDATE' if confirm else ''),(owner_id,)).fetchall()
+    rows=store._execute_native("SELECT * FROM retail_compute_segments WHERE owner_id=%s AND state<>'settled' ORDER BY started_at"+(' FOR UPDATE' if confirm else ''),(owner_id,)).fetchall()
     closable=[];kept=[]
     for row in rows:
-        job=store._db.execute('SELECT state FROM worker_jobs WHERE job_id=?',(row['job_id'],)).fetchone()
+        job=store._execute_native('SELECT state FROM worker_jobs WHERE job_id=%s',(row['job_id'],)).fetchone()
         job_state=job['state'] if job else None
         attempts,tokens,nonterminal=_job_evidence(store,row['job_id'])
         item={'segment':str(row['segment_key'])[:8],'job':str(row['job_id'])[:8],'state':row['state'],'provider_calls':attempts}

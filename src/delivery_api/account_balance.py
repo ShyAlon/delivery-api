@@ -2,9 +2,9 @@
 from decimal import Decimal
 
 
-def read(db,owner_id,usd_per_credit):
+def read(db,owner_id,usd_per_credit,*,marker='?'):
     """Credits and USD for this owner. An owner with no credit account has zero credits."""
-    row=db.execute('SELECT balance_units,units_per_credit FROM credit_accounts WHERE owner_id=?',(owner_id,)).fetchone()
+    row=db.execute('SELECT balance_units,units_per_credit FROM credit_accounts WHERE owner_id=%s'%marker,(owner_id,)).fetchone()
     if row is None:return {'credits':0.0,'usd':0.0}
     per=int(row['units_per_credit'])
     if per<=0:raise ValueError('credit account has an invalid unit scale')
