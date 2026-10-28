@@ -954,3 +954,18 @@ execution proof. Shared110PG/17legacy functions out of127,plus three standalone
 local-auth/browser cases. Pending debug conflicts untouched. A incomplete;
 global SQLite bootstrap remains;B/C/D unstarted. Hosted CI/full mixed UI/full
 repo/deployed topology unrun. Production unchanged;no deploy/live DB/model calls.
+
+## A70: generator gate/list artifact browser group
+
+Two all-generator model-picker and list-artifact valid/invalid evidence cases
+use signed PG/isolated IDs. All assertions retained,including configured phase
+list,model picker absence on interview gates,revision-qualified approval,and
+validation failure disabling approval. Task/review/artifact/decide mocks remain
+presentation contracts,not real validation/generator dispatch. Guard failed
+first1 in0.74s;cases+guard+cloud API+bootstrap41passed0skips14.12s. Inspected
+SPEC-1 Status screen/ready approval and invalid list error/disabled approval.
+Full-page sticky-header clipping unchanged. Shared112PG/15legacy functions out
+of127,plus three standalone local-auth/browser cases. Pending debug contracts
+untouched. A incomplete;global SQLite bootstrap remains;B/C/D unstarted.
+Hosted CI/full mixed UI/full repo/deployed topology unrun. Production unchanged;
+no deploy/live DB/model execution.

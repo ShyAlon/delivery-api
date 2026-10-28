@@ -1762,21 +1762,23 @@ def test_normal_mode_shows_live_architecture_stage_and_stall_heartbeat(pg_page,p
     page.screenshot(path=str(_screenshots_dir / 'architecture-progress-normal.png'),full_page=True)
 
 
-def test_every_generator_gate_uses_same_page_and_configured_model_picker(page,ui):
+def test_every_generator_gate_uses_same_page_and_configured_model_picker(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
     from delivery_api.phases import PHASE_DEFINITIONS
-    live=page.request.get(ui+'/api/tasks/sim').json()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     expected=[phase.key for phase in PHASE_DEFINITIONS if phase.executor=='generator']
     assert [key for key,value in live['phase_config'].items() if value['executor']=='generator']==expected
-    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     for phase in expected:
-        page.goto(f'{ui}/tasks/sim/gates/gate-{phase}')
+        page.goto(f'{ui}/tasks/{tid}/gates/gate-{phase}')
         expect(page.locator('.gate-page')).to_be_visible()
         expect(page.locator('#gate-artifacts')).to_be_visible()
         expect(page.locator('#gateform')).to_be_visible()
         page.locator('.model-panel summary').click()
         expect(page.locator('select[name="redo_model"]')).to_be_visible()
     for phase in ('intent','conops'):
-        page.goto(f'{ui}/tasks/sim/gates/gate-{phase}')
+        page.goto(f'{ui}/tasks/{tid}/gates/gate-{phase}')
         expect(page.locator('.gate-page')).to_be_visible()
         expect(page.locator('#gateform')).to_be_visible()
         expect(page.locator('select[name="redo_model"]')).to_have_count(0)
@@ -1949,20 +1951,22 @@ def test_browser_session_refresh_single_flight_before_expiry(page,ui):
 
 
 
-def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(page,ui):
-    task=page.request.get(ui+'/api/tasks/sim').json()
+def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["sim"]
+    task=page.request.get(ui+f'/api/tasks/{tid}').json()
     gate=next(g for g in task['gates'] if g['after_phase']=='specs')
     gate.update({'state':'waiting','is_open':0})
     task['active_phase']='specs';task['state']='waiting_gate'
     item={'phase_key':'specs','name':'items.json','title':'Item Specifications','stale':False,
           'present':True,'valid':True,'validator':'ItemSpec[]','generation':1}
     task['artifacts']=[item]
-    page.route('**/api/tasks/sim',lambda route:route.fulfill(json=task))
-    page.route('**/api/tasks/sim/artifacts/specs/items.json/view',lambda route:route.fulfill(json={
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=task))
+    page.route(f'**/api/tasks/{tid}/artifacts/specs/items.json/view',lambda route:route.fulfill(json={
         'name':'items.json','title':'Item Specifications','phase':'specs','format':'json',
         'content':'[{"spec_id":"SPEC-1","title":"Status screen"}]'}))
-    mock_gate_review(page,ui,'sim')
-    page.goto(ui+'/tasks/sim/gates/gate-specs')
+    mock_gate_review(page,ui,tid)
+    page.goto(ui+f'/tasks/{tid}/gates/gate-specs')
     page.locator('#gate-artifacts .gate-structured').wait_for()
     assert page.locator('#gate-artifacts .gate-artifact-summary').count()==0
     assert 'Status screen' in page.locator('#gate-artifacts .gate-structured').inner_text()
@@ -1976,14 +1980,14 @@ def test_items_gate_accepts_list_artifact_and_reports_invalid_evidence(page,ui):
     page.locator('.model-panel summary').click();page.locator('#gateform').screenshot(path=str(_screenshots_dir / 'decision-panel-model-open.png'))
     page.screenshot(path=str(_screenshots_dir / 'specs-gate-ready.png'),full_page=True)
     sent=[]
-    page.route('**/api/tasks/sim/gates/gate-specs/decide',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'state':'decided'})))
+    page.route(f'**/api/tasks/{tid}/gates/gate-specs/decide',lambda route:(sent.append(route.request.post_data_json),route.fulfill(json={'state':'decided'})))
     choose.click()
-    page.wait_for_url('**/tasks/sim/view')
+    page.wait_for_url(f'**/tasks/{tid}/view')
     assert len(sent)==1 and sent[0]['action']=='approve' and sent[0]['expected_revision']==gate['revision']
     # The same real artifact must not be silently hidden if it fails validation.
     item['valid']=False;item['validation_errors']=['1 validation error for list[ItemSpec]: invalid item']
-    mock_gate_review(page,ui,'sim')
-    page.goto(ui+'/tasks/sim/gates/gate-specs')
+    mock_gate_review(page,ui,tid)
+    page.goto(ui+f'/tasks/{tid}/gates/gate-specs')
     notice=page.locator('.gate-evidence-error');notice.wait_for()
     page.screenshot(path=str(_screenshots_dir / 'specs-gate-invalid.png'),full_page=True)
     assert 'Error: The current artifact failed validation.' in notice.inner_text()
@@ -2978,4 +2982,11 @@ def test_request_timing_cases_require_signed_pg_browser():
     for case in (test_cross_ui_waiting_banner_during_slow_write,
                  test_background_refresh_stays_quiet_and_terminal_output_poll_stops,
                  test_idle_stream_reads_only_at_60s_safety_then_refreshes_on_events):
+        assert 'pg_page' in inspect.signature(case).parameters
+
+
+def test_generator_gate_cases_require_signed_pg_browser():
+    import inspect
+    for case in (test_every_generator_gate_uses_same_page_and_configured_model_picker,
+                 test_items_gate_accepts_list_artifact_and_reports_invalid_evidence):
         assert 'pg_page' in inspect.signature(case).parameters
