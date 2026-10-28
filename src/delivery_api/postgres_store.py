@@ -911,9 +911,9 @@ FROM tasks t"""
         capability.validate(self)
         if not capability.scope.session_id:raise TenantAccessDenied('worker auth session required')
         job_id=secrets.token_hex(16);now=time.time()
-        self._db.execute("INSERT INTO worker_jobs (job_id,owner_id,auth_session_id,task_id,session_id,generation,kind,state,attempt,created_at,updated_at,execution_options) VALUES (?,?,?,?,?,?,?,'pending',0,?,?,?::jsonb)",
+        self._execute_native("INSERT INTO worker_jobs (job_id,owner_id,auth_session_id,task_id,session_id,generation,kind,state,attempt,created_at,updated_at,execution_options) VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',0,%s,%s,%s::jsonb)",
            (job_id,capability.scope.owner_id,capability.scope.session_id,task_id,
-            capability.session_id,capability.generation,kind,now,now,json.dumps(execution_options or {})))
+            capability.session_id,capability.generation,kind,now,now,json.dumps(execution_options or {})), write=True)
         return job_id
 
     def prepare_phase_retry(self,task_id,phase,actor,model,checkpoint):
@@ -1654,7 +1654,7 @@ FROM tasks t"""
 
     def recoverable_worker_jobs(self):
         # Authenticated owner view only. Startup never calls this without scope.
-        return [dict(row) for row in self._db.execute("SELECT * FROM worker_jobs WHERE state IN ('pending','running','paused','failed') ORDER BY updated_at,job_id")]
+        return [dict(row) for row in self._execute_native("SELECT * FROM worker_jobs WHERE state IN ('pending','running','paused','failed') ORDER BY updated_at,job_id")]
 
     def task_worker_state(self,task_id,limit=20):
         """Read-only worker_jobs + provider_attempts state for one task's diagnostics.
@@ -1665,15 +1665,14 @@ FROM tasks t"""
         is the same authenticated owner view as recoverable_worker_jobs, scoped to one
         task, newest first, with only the columns a diagnosis needs (no execution
         options, quotes, fingerprints or usage payloads)."""
-        jobs=[dict(row) for row in self._db.execute(
-            "SELECT job_id,kind,state,attempt,session_id,generation,created_at,updated_at FROM worker_jobs WHERE task_id=? ORDER BY updated_at DESC LIMIT ?",(task_id,limit)).fetchall()]
-        attempts=[dict(row) for row in self._db.execute(
-            "SELECT p.attempt_id,p.job_id,p.state,p.expense_reserved,p.retail_reserved,p.expense_actual,p.retail_actual,p.created_at,p.updated_at "
-            "FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=? ORDER BY p.updated_at DESC LIMIT ?",(task_id,limit)).fetchall()]
+        jobs=[dict(row) for row in self._execute_native(
+            'SELECT job_id,kind,state,attempt,session_id,generation,created_at,updated_at FROM worker_jobs WHERE task_id=%s ORDER BY updated_at DESC LIMIT %s',(task_id,limit)).fetchall()]
+        attempts=[dict(row) for row in self._execute_native(
+            'SELECT p.attempt_id,p.job_id,p.state,p.expense_reserved,p.retail_reserved,p.expense_actual,p.retail_actual,p.created_at,p.updated_at FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=%s ORDER BY p.updated_at DESC LIMIT %s',(task_id,limit)).fetchall()]
         return {'worker_jobs':jobs,'provider_attempts':attempts}
 
     def worker_job(self,job_id):
-        row=self._db.execute('SELECT * FROM worker_jobs WHERE job_id=?',(job_id,)).fetchone()
+        row=self._execute_native('SELECT * FROM worker_jobs WHERE job_id=%s',(job_id,)).fetchone()
         return dict(row) if row else None
 
     def claim_worker(self,job_id):
@@ -1685,19 +1684,19 @@ FROM tasks t"""
         if (job['generation']!=capability.generation or job['session_id']!=capability.session_id
             or str(job['auth_session_id'])!=capability.scope.session_id):
             raise TenantAccessDenied('worker job authority changed')
-        changed=self._db.execute("UPDATE worker_jobs SET state='running',attempt=attempt+1,updated_at=? WHERE job_id=? AND state IN ('pending','paused')",
-                                (time.time(),job_id))
+        changed=self._execute_native("UPDATE worker_jobs SET state='running',attempt=attempt+1,updated_at=%s WHERE job_id=%s AND state IN ('pending','paused')",
+                                (time.time(),job_id), write=True)
         return capability if changed.rowcount==1 else None
 
     def pause_interrupted_worker(self,job_id):
         # A live owner explicitly resumes this durable job; no global scan or
         # service-role worker guesses which user's authority to restore.
-        self._db.execute("UPDATE worker_jobs SET state='paused',updated_at=? WHERE job_id=? AND state='running'",(time.time(),job_id))
+        self._execute_native("UPDATE worker_jobs SET state='paused',updated_at=%s WHERE job_id=%s AND state='running'",(time.time(),job_id), write=True)
 
     def reauthorize_worker(self,job_id):
         from .worker_capability import WorkerCapability
         # Serialize owner resume against worker claims and competing resumes.
-        self._db.execute('SELECT job_id FROM worker_jobs WHERE job_id=? FOR UPDATE',(job_id,)).fetchone()
+        self._execute_native('SELECT job_id FROM worker_jobs WHERE job_id=%s FOR UPDATE',(job_id,)).fetchone()
         job=self.worker_job(job_id)
         if not job:raise KeyError(job_id)
         capability=WorkerCapability.capture(self,job['task_id'])
@@ -1706,8 +1705,8 @@ FROM tasks t"""
             raise ValueError('only queued/interrupted/failed work can be explicitly resumed')
         if job['generation']!=capability.generation or job['session_id']!=capability.session_id:
             raise TenantAccessDenied('cannot resume another generation/session')
-        self._db.execute("UPDATE worker_jobs SET auth_session_id=?,state='paused',updated_at=? WHERE job_id=? AND state IN ('pending','paused','failed')",
-                         (capability.scope.session_id,time.time(),job_id))
+        self._execute_native("UPDATE worker_jobs SET auth_session_id=%s,state='paused',updated_at=%s WHERE job_id=%s AND state IN ('pending','paused','failed')",
+                         (capability.scope.session_id,time.time(),job_id), write=True)
 
     def finish_stopped_worker(self,job_id,*,worker_quiescent):
         from .attempt_ledger import AdmissionDenied
@@ -1717,7 +1716,7 @@ FROM tasks t"""
         task=self.task(job['task_id'])
         if not task or task['stop_requested_at'] is None or str(job['auth_session_id'])!=current_scope().session_id:
             raise AdmissionDenied('original owner stop authority required')
-        self._db.execute("UPDATE worker_jobs SET state='done',updated_at=? WHERE job_id=? AND state='running'",(time.time(),job_id))
+        self._execute_native("UPDATE worker_jobs SET state='done',updated_at=%s WHERE job_id=%s AND state='running'",(time.time(),job_id), write=True)
 
     def finish_worker(self,job_id,failed=False):
         job=self.worker_job(job_id)
@@ -1725,8 +1724,8 @@ FROM tasks t"""
         if job['state']=='done':return
         from .worker_capability import WorkerCapability
         WorkerCapability.capture(self,job['task_id']).validate(self)
-        self._db.execute("UPDATE worker_jobs SET state=?,updated_at=? WHERE job_id=? AND state='running'",
-                         ('failed' if failed else 'done',time.time(),job_id))
+        self._execute_native("UPDATE worker_jobs SET state=%s,updated_at=%s WHERE job_id=%s AND state='running'",
+                         ('failed' if failed else 'done',time.time(),job_id), write=True)
 
     @_transactional
     def staged_response_ledger_join(self,session_id,generation):
