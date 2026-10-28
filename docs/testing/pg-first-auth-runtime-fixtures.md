@@ -297,3 +297,15 @@ six cases,native lifecycle/gate,parity,cloud API,bootstrap. Expanded152passed
 2known baseline failures16.86s (checkpoint intent view/session-cost metadata),not
 full-module green. Production/UI unchanged;hosted CI/full suite/deployed topology
 not run. A incomplete;B/C/D not started.
+
+## A24: active-work and typed-input fixtures
+
+Seven cases use scoped PG:live orchestrator decision,subprocess/decision work
+projection,external requirement projection,matching typed answer identity,visible
+handoff failure preserving approval,shared handoff recovery,and long-history
+requirement recovery. Exact owner/state/identity/event assertions unchanged.
+Fail-first live-decision PG assertion failed on SQLite. Focused52passed0skips
+5.69s with producer sources:seven cases,native events/projection/lifecycle,cloud
+API,bootstrap. Expanded153passed2known baseline failures17.03s (checkpoint intent
+view/session-cost metadata),not full-module green. Production/UI unchanged;
+hosted CI/full suite/deployed topology not run. A incomplete;B/C/D not started.
