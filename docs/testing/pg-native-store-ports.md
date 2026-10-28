@@ -110,3 +110,25 @@ all green. Same3contracts/single sample,not fullsuite/deploy speed proof.
 Static closure after this port:only SQLite schema/init commit helper methods and
 10runtime-refused local-auth methods remain inherited;all4query constants have
 PG overrides. Helper access/dynamic wrapping closure must be tested before removal.
+
+## Base and transaction registry closure
+
+PG no longer inherits/imports SQLiteStore. Its PHASES tuple comes directly from
+neutral canonical phase definitions. Removed unused no-op _lock compatibility.
+All4projection constants and everyself method/helper reference are owned. The only
+formerly inherited names left were unused SQLite schema/commit/session-key helpers
+and10local-auth names now explicitly installed as scoped unsupported operations.
+
+PG_OPERATIONS explicitly enumerates133public operation declarations;coverage proves
+actual public callables match that registry plus10auth refusals,and every callable
+is transaction-wrapped. Storage protocol public methods remain available. AST
+proof rejects unresolved self references or super() delegation in PostgresStore.
+This is static consumer closure plus runtime focused coverage,not full dynamic
+program reachability. Runtime SQLite backend,its tests,module API and data remain.
+
+Bridge/_Row/_Cursor/sqlite3 exception conversion remain because PG-owned methods
+still consume them. Base deletion is not evidence that those adapters are unused.
+No premature removal.167source-enabled combined tests passed0skips82.54s.
+Hosted CI/deployed topology unverified. No schema/data/backend deletion or activation.
+Evidence same3contract single sample:SQLite cold1.477s/warm0.215s;PG
+1.595s/0.248s,all passed. Scope/setup caveats retained,no fullsuite/deploy claim.

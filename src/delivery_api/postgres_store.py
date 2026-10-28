@@ -13,7 +13,9 @@ import re
 import secrets
 import time
 import contextlib,sqlite3
-from .store import SQLiteStore, PHASES
+from .phases import PHASE_DEFINITIONS
+
+PHASES = tuple((phase.key, phase.label) for phase in PHASE_DEFINITIONS)
 from . import event_bus
 from .phases import followers, predecessors, PHASE_POSITIONS
 from vmodel_contracts import RunState
@@ -153,27 +155,12 @@ def validator_provenance(module_path,model=None):
     return f'{parts};source={source}'
 
 
-class PostgresStore(SQLiteStore):
+class PostgresStore:
     def __init__(self,dsn):
         self._postgres = ScopedPostgres(dsn)
         self._connection = ContextVar('postgres_operation',default=None)
         self._cache_dirty = ContextVar('postgres_cache_dirty',default=False)
         self._db = _Connection(self._connection,self)
-        # No store-level mutex on Postgres. The SQLiteStore lock serializes a
-        # single shared native connection; here every store call runs on the
-        # calling thread's own scoped connection (ContextVar) inside a scoped
-        # transaction, so PG row locks and READ COMMITTED provide the
-        # serialization - exactly the semantics the multi-host topology
-        # requires anyway. A process-wide mutex held across a blocking PG
-        # statement inverts lock order against request-scoped transactions,
-        # which hold their row locks for the whole request: one request holds
-        # the mutex and waits on another's row lock while that request holds
-        # the row lock and waits on the mutex - a deadlock PG cannot detect.
-        # Inherited SQLiteStore methods still say `with self._lock:`; the
-        # no-op keeps them unchanged. Cross-call atomicity never came from
-        # this mutex (it is released between calls): read-modify-write paths
-        # use SELECT ... FOR UPDATE, CAS upserts and the advisory owner lock.
-        self._lock = contextlib.nullcontext()
 
     def ensure_waiting_input_event(self,task_id:str,message:str,*,phase_key:str,payload:dict)->int:
         # Lock before checking. Under READ COMMITTED, a waiter then sees the
@@ -737,7 +724,7 @@ SELECT t.*,
   (SELECT count(*) FROM task_artifacts a WHERE a.task_id=t.task_id AND a.stale=0) AS artifact_count
 FROM tasks t"""
 
-    # Dialect twin of SQLiteStore._EVENTS_SUBQUERY (jsonb_agg).
+    # PG-native ordered bounded event projection.
     _EVENTS_SUBQUERY = """
   (SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.id DESC)::text,'[]') FROM (
      SELECT e.id,e.task_id,e.phase_key,e.kind,e.message,e.payload,e.ts
@@ -2166,12 +2153,146 @@ _TASK_ENTRY_OPERATIONS={
  'claim_failed_phase_retry':'task.retry','prepare_rerun':'task.rerun',
  'upsert_feedback':'task.edit','update_feedback':'task.edit','delete_feedback':'task.edit'}
 
-# Only explicit public operations wrap, not helpers. A newly added inherited
-# method also gets a transaction by default; no unsafe unscoped SQL pathway.
+# Public surface is reviewed explicitly. A coverage test rejects an unregistered
+# public method, so adding one cannot silently miss scoped transaction wrapping.
 _LOCAL_AUTH = {'create_oauth_state','consume_oauth_state','upsert_user','create_basic_user',
  'basic_user','create_session','session','rotate_session','delete_session','set_user_quota'}
-for _name in set(vars(SQLiteStore)) | set(vars(PostgresStore)):
-    if _name.startswith('_'): continue
-    _method=getattr(PostgresStore,_name,None)
-    if callable(_method):
-        setattr(PostgresStore,_name,_transactional(PostgresStore._unsupported if _name in _LOCAL_AUTH else _method))
+PG_OPERATIONS = (
+    'activate_private_revision_installation',
+    'add_artifact',
+    'add_event',
+    'add_review_comment',
+    'add_task_artifact',
+    'add_usage',
+    'add_user_usage',
+    'append_closed_revision_preparation_event',
+    'append_private_installation_event',
+    'artifacts',
+    'attribute_run',
+    'audit',
+    'audit_entries',
+    'auth_session_active',
+    'begin_interview_start',
+    'begin_retail_compute',
+    'bind_interview_schema',
+    'claim_expense_alert',
+    'claim_failed_needs_retry',
+    'claim_failed_phase_retry',
+    'claim_next_phase',
+    'claim_worker',
+    'close_failed_retail_compute',
+    'configure_simulation',
+    'confirm_task_stopped',
+    'confirmed_expense_admission',
+    'create_link',
+    'create_task',
+    'deactivate_link',
+    'decide_gate',
+    'decision_draft',
+    'decision_review',
+    'delete_feedback',
+    'delete_task',
+    'engine_session',
+    'enqueue_expense_alert',
+    'enqueue_worker',
+    'ensure_waiting_input_event',
+    'events',
+    'failure_diagnostics',
+    'finish_expense_alert',
+    'finish_retail_compute',
+    'finish_stopped_worker',
+    'finish_worker',
+    'ingest_progress',
+    'inspect_revision_install_safety',
+    'installed_execution_anchor',
+    'interview_schema_binding',
+    'link',
+    'list_feedback',
+    'list_tasks',
+    'manifest_artifacts',
+    'manifest_ready',
+    'manifest_revision',
+    'manifest_snapshot',
+    'mark_producer_published',
+    'operator_workspace_snapshot',
+    'own_credit_balance',
+    'own_credit_history',
+    'own_last_topup',
+    'own_ledger',
+    'pause_interrupted_worker',
+    'post_retail_contribution',
+    'prepare_gate_dispatch',
+    'prepare_next_phase',
+    'prepare_phase_retry',
+    'prepare_private_revision_changes',
+    'prepare_rerun',
+    'prepare_revision_staging',
+    'private_approved_continuation_basis',
+    'producer_paid_evidence',
+    'producer_result',
+    'progress_cursor',
+    'provider_attempt',
+    'publish_task_artifact',
+    'publish_task_revision',
+    'quota_allows',
+    'read_artifact_bytes',
+    'read_artifact_bytes_sha',
+    'read_promoted_installation_evidence',
+    'reauthorize_worker',
+    'reconcile_completed_interview',
+    'reconcile_private_revision_installation',
+    'record_failure_diagnostics',
+    'record_private_revision_acceptance',
+    'record_producer_result',
+    'record_provider_balance_check',
+    'record_raw_provider_usage',
+    'record_validated_revision_staging',
+    'recover_uncertain_expense_alert',
+    'recoverable_worker_jobs',
+    'release_own_compute',
+    'rename_task',
+    'request_task_stop',
+    'rerun_prerequisite',
+    'reserve_provider_attempt',
+    'retail_compute_status',
+    'retail_phase_totals',
+    'retain_closed_revision_lineage_plan',
+    'retain_closed_revision_restart_intent',
+    'retain_decision_review',
+    'retain_private_installation_intent',
+    'retain_revision_installation_review',
+    'retain_revision_source_review',
+    'review_comments',
+    'revoke_private_revision_acceptance',
+    'run',
+    'save_decision_draft',
+    'session_binding',
+    'set_engine_session',
+    'set_gate_open',
+    'set_model_default',
+    'set_model_route',
+    'set_state',
+    'set_submission',
+    'staged_response_ledger_join',
+    'start_launch_provider_attempt',
+    'task',
+    'task_artifacts',
+    'task_phase_credits',
+    'task_retail_totals',
+    'task_snapshot',
+    'task_worker_state',
+    'tombstone_stopped_task',
+    'total_spend',
+    'transition_provider_attempt',
+    'update_feedback',
+    'update_phase',
+    'upsert_feedback',
+    'user_quota',
+    'verify_private_revision_acceptance',
+    'wait_at_gate',
+    'worker_job',
+)
+for _name in PG_OPERATIONS:
+    setattr(PostgresStore,_name,_transactional(getattr(PostgresStore,_name)))
+for _name in _LOCAL_AUTH:
+    setattr(PostgresStore,_name,_transactional(PostgresStore._unsupported))
