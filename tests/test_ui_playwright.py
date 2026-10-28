@@ -522,13 +522,15 @@ def test_confirm_rerun_button_disables_until_the_server_returns(page,ui):
     confirm.wait_for(state='detached')
 
 
-def test_user_progress_and_composer_have_no_raw_console(page,ui):
+def test_user_progress_and_composer_have_no_raw_console(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource")
-    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='intent'
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['active_phase']='intent'
     live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'test-input','precondition':{'session_sequence':1}}
     live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None,'question':'Who uses it?'}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
-    page.goto(ui+'/tasks/live/view');page.locator('#answerform').wait_for()
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.goto(ui+f'/tasks/{tid}/view');page.locator('#answerform').wait_for()
     assert page.locator('#console').count()==0 and page.locator('.execution-data').count()==0
     page.locator('.avatar').click();page.locator('#opendebug').click();page.locator('.debug-dialog').wait_for()
     assert page.locator('#console').count()==0
@@ -804,7 +806,9 @@ def test_intent_approval_shows_selected_concept_and_founder_reason(pg_page,pg_ui
     assert context.get_by_text('You stated you chose this concept because one deployment fits our team',exact=True).is_visible()
     page.screenshot(path=str(_screenshots_dir / 'intent-approval-with-concept-reason.png'),full_page=True)
 
-def test_browser_logs_runtime_version_and_reloads_when_server_changes(page,ui):
+def test_browser_logs_runtime_version_and_reloads_when_server_changes(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
     console=[];page.on('console',lambda msg:console.append(msg.text))
     page.goto(ui+'/');page.wait_for_timeout(300)
@@ -813,12 +817,15 @@ def test_browser_logs_runtime_version_and_reloads_when_server_changes(page,ui):
     source=(Path(__file__).parents[1]/'src/delivery_api/web/identity.js').read_text()
     assert "live.runtime_id!==runtimeVersion" in source and 'location.reload()' in source
 
-def test_detail_uses_one_large_v_process_without_duplicate_path_map(page,ui):
+def test_detail_uses_one_large_v_process_without_duplicate_path_map(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    page.goto(ui+'/tasks/live/view');phases=page.locator('.phase-list-primary .phase');phases.first.wait_for()
+    page.goto(ui+f'/tasks/{tid}/view');phases=page.locator('.phase-list-primary .phase');phases.first.wait_for()
     assert phases.count()==8 and page.locator('.detail-layout .v-map').count()==0 and page.locator('.detail-layout .gate-legend').count()==0
     first=phases.first.bounding_box();assert first['height']>=70
 
+    page.screenshot(path=str(_screenshots_dir / "runtime-detail-pg.png"),full_page=False)
 def test_server_accepted_decision_event_closes_founder_box(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     tid=pg_ids["live"]
@@ -872,7 +879,9 @@ def test_managed_task_state_reducer_is_exhaustive_and_atomic(pg_page,pg_ui,pg_id
     assert 'reduceTaskSnapshot' in app_source and 'next.mode!==view.mode' in app_source and 'TASK_UI_ACTIONS' in state_source
 
 
-def test_runtime_build_identity_is_visible(page,ui):
+def test_runtime_build_identity_is_visible(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.goto(ui+'/');page.locator('#accountbutton').click();page.locator('#opendebug').click();badge=page.locator('.debug-dialog .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD develop'
 
 
@@ -892,12 +901,15 @@ def test_sse_snapshot_refresh_is_filtered_and_coalesced(pg_page,pg_ui,pg_ids):
     assert "stateEvents=new Set" in source and 'snapshotPending' in source and 'setTimeout(snapshotRefresh,75)' in source
 
 
-def test_runtime_badge_survives_identity_render(page,ui):
+def test_runtime_badge_survives_identity_render(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.route('**/health',lambda route:route.fulfill(json={'ok':True,'runtime_id':'7d6647f123456','repositories':{}}))
     page.route('**/api/auth',lambda route:(page.wait_for_timeout(150),route.fulfill(json={'mode':'basic','authenticated':True,'actor':'shy@example.com','admin':True,'providers':[]})))
     page.goto(ui+'/');page.locator('#accountbutton').click();page.locator('#opendebug').click();badge=page.locator('.debug-dialog .runtime-id');badge.wait_for();assert badge.inner_text()=='BUILD 7d6647f'
     assert page.locator('#accountbutton').get_attribute('aria-label')=='Account menu for shy@example.com';assert page.locator('.debug-dialog .runtime-id').inner_text()=='BUILD 7d6647f'
 
+    page.screenshot(path=str(_screenshots_dir / "runtime-identity-pg.png"),full_page=False)
 
 def test_orphaned_running_task_renders_visible_recovery_error(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
@@ -2919,4 +2931,14 @@ def test_completion_cases_require_signed_pg_browser():
     for case in (test_done_task_redirects_once_to_completion_screen,
                  test_completion_screen_summary_download_and_package,
                  test_an_unavailable_artifact_shows_a_notice_instead_of_a_dead_click):
+        assert 'pg_page' in inspect.signature(case).parameters
+
+
+def test_runtime_identity_cases_require_signed_pg_browser():
+    import inspect
+    for case in (test_browser_logs_runtime_version_and_reloads_when_server_changes,
+                 test_runtime_build_identity_is_visible,
+                 test_runtime_badge_survives_identity_render,
+                 test_detail_uses_one_large_v_process_without_duplicate_path_map,
+                 test_user_progress_and_composer_have_no_raw_console):
         assert 'pg_page' in inspect.signature(case).parameters
