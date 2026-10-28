@@ -657,3 +657,19 @@ Concept,Stakeholder,Verification and Validation labels overlap diamond markers
 in dashboard screenshots. Confirmed visually in A49/A50 evidence and reported
 by main. Existing product UI issue,not caused or fixed by fixture migrations.
 Keep separate from fixture acceptance;do not claim diagram layout clean.
+
+## A51: artifact viewer and audit browser group
+
+Five artifact/viewer/audit cases now use signed PG browser fixtures and unique
+owner-qualified task IDs. Existing UI payload routes remain presentation mocks;
+these cases do not prove real artifact download content. Original behavior
+assertions retained;tooltip visibility now waits for the CSS transition before
+asserting. Signature guard failed first. Audit exposed a fixture teardown red:
+lifespan-off uvicorn never notified active stream shutdown events. The fixture
+now notifies them on its server loop before graceful drain;the thread-stop
+assertion remains intact. Combined five cases+guard+cloud API+bootstrap passed
+44 tests,0 skips in15.85s;repeat44passed,0skips15.08s. Viewer and open filtered
+audit pixels inspected:readable headings/transcript,local close and download,
+credit summary and one approve row. V diagram cosmetic debt remains. Production
+unchanged;hosted CI/full mixed UI/full repo/deployed topology not run.
+A incomplete;B/C/D not started.
