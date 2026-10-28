@@ -521,8 +521,7 @@ def _log_request(method,path,status,duration_ms):
                 (method=='GET' and (path in ('/api/auth','/api/account/credits') or
                   re.fullmatch(r'/api/tasks/[^/]+(?:/(?:stream|diagnostics|execution|phase-output|feedback))?',path))))
 
-@app.middleware("http")
-async def request_log(request, call_next):
+async def _request_log(request, call_next):
     if control_plane_only() and request.method not in ('GET','HEAD','OPTIONS') and not (config.CLOUD_TENANTS and request.method=='POST' and request.url.path in CONTROL_PLANE_AUTH_ROUTES):
         return JSONResponse({'detail':'Delivery-only runtime: mutations and execution remain fenced'},status_code=503,headers={'Cache-Control':'no-store'})
     if request.url.path.startswith('/api/operator/') and not config.CLOUD_TENANTS:
@@ -531,20 +530,13 @@ async def request_log(request, call_next):
         auth.csrf_guard(request)
     except HTTPException as e:
         return JSONResponse({"detail": e.detail}, status_code=e.status_code)
-    started = time.monotonic()
-    ref=uuid4().hex[:8]    # shown in the browser (X-Request-Id), written on every log line of this request
-    request.state.ref=ref
-    stats=RequestStats();stats_token=request_stats.set(stats)
-    match=re.fullmatch(r'/api/tasks/([^/]+)(?:/.*)?',request.url.path)
-    diagnostic_token=diagnostic_evidence.context.set({'request_id':ref,**({'task_id':match.group(1)} if match else {})})
-    try:
-        response = await call_next(request)
+    started=request.state.diagnostic_started
+    ref=request.state.ref
+    stats=request_stats.get()
+    try:response=await call_next(request)
     except Exception:
-        log.exception("request failed ref=%s method=%s path=%s", ref, request.method, request.url.path)
+        log.exception("request failed ref=%s method=%s path=%s",ref,request.method,request.url.path)
         raise
-    finally:
-        request_stats.reset(stats_token)
-        diagnostic_evidence.context.reset(diagnostic_token)
     who = auth.actor(request).label
     duration_ms=int((time.monotonic()-started)*1000)
     from . import request_costs
@@ -566,6 +558,24 @@ async def request_log(request, call_next):
         response.headers["Cache-Control"]="no-store, max-age=0"
     if response.status_code in (401,403):activity("access.blocked","Unauthorized or forbidden request",method=request.method,path=request.url.path,status=response.status_code,actor=who)
     return response
+
+@app.middleware("http")
+async def request_log(request,call_next):
+    ref=uuid4().hex[:8]
+    request.state.ref=ref
+    request.state.diagnostic_started=time.monotonic()
+    stats_token=request_stats.set(RequestStats())
+    match=re.fullmatch(r'/api/tasks/([^/]+)(?:/.*)?',request.url.path)
+    token=diagnostic_evidence.context.set({'request_id':ref,**({'task_id':match.group(1)} if match else {})})
+    try:
+        response=await _request_log(request,call_next)
+        if 'X-Request-Id' not in response.headers:
+            activity('http.refused','Request refused before endpoint',level=logging.WARNING,method=request.method,path=request.url.path,status=response.status_code)
+            response.headers['X-Request-Id']=ref
+        return response
+    finally:
+        request_stats.reset(stats_token)
+        diagnostic_evidence.context.reset(token)
 
 def _page(name,headers=None):
     """Every HTML page is the app page: the persistent SPA shell (web/spa-shell.js) provides the one header at runtime, so no page carries its own copy. The boot config is injected at <!--REQUI_CONFIG--> so the preview row has its space from the first paint."""
