@@ -459,11 +459,12 @@ def test_sse_stream_reads_events_from_turso_tuple_backend(monkeypatch,tmp_path):
         assert data['message']=='libSQL event' and data['payload']=={'completed':1}
     asyncio.run(read())
 
-def test_process_runner_emits_every_question_line_as_progress(tmp_path):
+def test_process_runner_emits_every_question_line_as_progress(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'questions.db'));task_id=store.create_task('Three questions')['task_id']
+    store=pg_scoped_workspace.store;task_id=store.create_task('Three questions')['task_id']
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     questions=['First question?','Second question?','Third question?']
     script="".join(f"print({q!r},flush=True)\n" for q in questions)
     assert asyncio.run(ProcessRunner(store).run(task_id,[sys.executable,'-c',script],cwd=tmp_path))==0
@@ -702,11 +703,10 @@ def test_runner_releases_process_before_completion_callback(tmp_path):
     assert observed==[(True,'conops')]
 
 
-def test_open_gate_uses_same_automatic_continuation_path(tmp_path):
+def test_open_gate_uses_same_automatic_continuation_path(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'open.db'));tid=store.create_task('Open gate')['task_id'];store.set_gate_open(tid,'gate-needs',True)
+    store=pg_scoped_workspace.store;tid=store.create_task('Open gate')['task_id'];store.set_gate_open(tid,'gate-needs',True)
     runner=ProcessRunner(store);observed=[]
     async def continue_after(task_id,phase):observed.append(phase)
     runner.on_complete=continue_after
@@ -854,11 +854,10 @@ def test_ui_state_doctrine_only_live_input_can_show_engine_decision():
     assert live.mode=='waiting_input' and live.decision==decision
     assert stale.mode=='failed' and stale.decision is None and stale.gate is None
 
-def test_untyped_blocking_console_prompt_fails_visibly(tmp_path):
+def test_untyped_blocking_console_prompt_fails_visibly(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'untyped.db'));tid=store.create_task('Untyped prompt')['task_id'];runner=ProcessRunner(store)
+    store=pg_scoped_workspace.store;tid=store.create_task('Untyped prompt')['task_id'];runner=ProcessRunner(store)
     # An untyped child blocking on stdin must not wait invisibly: the stall
     # bound stops it and fails the phase with a named cause.
     code=asyncio.run(runner.run(tid,[sys.executable,'-c','print("Continue? [y/N]",flush=True);input()'],cwd=tmp_path,stall_timeout=0.5))
@@ -867,23 +866,21 @@ def test_untyped_blocking_console_prompt_fails_visibly(tmp_path):
     assert phase['state']=='failed'
     assert any(e['kind']=='error' and 'no output' in e['message'] for e in store.events(tid))
 
-def test_split_envelope_chunks_stay_diagnostics(tmp_path):
+def test_split_envelope_chunks_stay_diagnostics(tmp_path,pg_scoped_workspace):
     import asyncio,json,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
     decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve this intent model?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
     # Flush and pause force the envelope and console prompt into separate reads.
     script=f'''import json,time\nprint("REQUIRE_EVENT "+json.dumps({decision!r}),flush=True)\ntime.sleep(.15)\nprint("Approve this intent model? [y/N] ",end="",flush=True)'''
-    store=SQLiteStore(str(tmp_path/'split-envelope.db'));tid=store.create_task('Split envelope')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Split envelope')['task_id']
     assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path))==0
     events=store.events(tid)
     assert not any(e['kind'] in ('founder_decision','waiting_input','error') for e in events)
 
-def test_untyped_console_prompt_cannot_create_control_wait(monkeypatch,tmp_path):
+def test_untyped_console_prompt_cannot_create_control_wait(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'parser-fail.db'));tid=store.create_task('Parser fail')['task_id'];runner=ProcessRunner(store)
+    store=pg_scoped_workspace.store;tid=store.create_task('Parser fail')['task_id'];runner=ProcessRunner(store)
     code=asyncio.run(runner.run(tid,[sys.executable,'-c','import time;print("Approve this? [y/N]",flush=True);time.sleep(30)'],cwd=tmp_path,stall_timeout=0.5))
     assert code!=0 and store.task(tid)['state']=='failed' and tid not in runner.processes
     assert not any(e['kind']=='waiting_input' for e in store.events(tid))

@@ -261,3 +261,14 @@ five cases,native gate/lifecycle,parity/protocol,cloud API,bootstrap. Expanded
 159passed2known baseline failures17.39s (checkpoint intent view/session-cost
 metadata);not full-module green. Production/UI unchanged;hosted CI/full suite/
 deployed topology not run. A incomplete;B/C/D not started.
+
+## A21: runner prompt/control boundaries
+
+Five runner cases use scoped PG:question-line progress,open-gate missing-artifact
+refusal,untyped blocking prompt stall failure,split envelope diagnostics and
+untyped prompt refusal to create a control wait. Original assertions unchanged.
+Fail-first question-runner PG assertion failed on SQLite. Focused29passed0skips
+8.25s with producer sources:five cases,protocol/SSE/parity,native gate/run,
+bootstrap. Expanded132passed2known baseline failures23.12s (checkpoint intent
+view/session-cost metadata);not full-module green. Production/UI unchanged;
+hosted CI/full suite/deployed topology not run. A incomplete;B/C/D not started.
