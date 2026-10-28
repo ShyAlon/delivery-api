@@ -1732,14 +1732,11 @@ FROM tasks t"""
         """PR B reconciliation read: one session generation's engine-staged
         provider calls LEFT JOINed to their ledger attempts, in logical-call
         order. Read-only; the gateway classifies the rows."""
-        rows=self._db.execute('SELECT r.*, a.state AS attempt_state, a.usage AS attempt_usage '
-                              'FROM staged_provider_responses r LEFT JOIN provider_attempts a ON a.attempt_id=r.attempt_id '
-                              'WHERE r.session_id=? AND r.generation=? '
-                              'ORDER BY r.execution_point,r.node,r.stage,r.item,r.ordinal',(session_id,generation)).fetchall()
+        rows=self._execute_native('SELECT r.*, a.state AS attempt_state, a.usage AS attempt_usage FROM staged_provider_responses r LEFT JOIN provider_attempts a ON a.attempt_id=r.attempt_id WHERE r.session_id=%s AND r.generation=%s ORDER BY r.execution_point,r.node,r.stage,r.item,r.ordinal',(session_id,generation)).fetchall()
         return [dict(r) for r in rows]
 
     def provider_attempt(self,attempt_id):
-        row=self._db.execute('SELECT * FROM provider_attempts WHERE attempt_id=?',(attempt_id,)).fetchone()
+        row=self._execute_native('SELECT * FROM provider_attempts WHERE attempt_id=%s',(attempt_id,)).fetchone()
         return dict(row) if row else None
 
     def reserve_provider_attempt(self,job_id,attempt_id,quote,request_digest,*,require_prepaid=False):
@@ -1753,62 +1750,62 @@ FROM tasks t"""
         if not isinstance(alert,ExpenseAlert) or not _integer(max_attempts) or not max_attempts:
             raise AdmissionDenied('prepared alert and bounded delivery policy required')
         now=time.time()
-        self._db.execute("INSERT INTO expense_alert_outbox VALUES (?,?,?::jsonb,'pending',0,?,?,?) ON CONFLICT(alert_key) DO NOTHING",
-            (alert.key,current_scope().owner_id,json.dumps(alert.payload),max_attempts,now,now))
-        row=self._db.execute('SELECT * FROM expense_alert_outbox WHERE alert_key=?',(alert.key,)).fetchone()
+        self._execute_native("INSERT INTO expense_alert_outbox VALUES (%s,%s,%s::jsonb,'pending',0,%s,%s,%s) ON CONFLICT(alert_key) DO NOTHING",
+            (alert.key,current_scope().owner_id,json.dumps(alert.payload),max_attempts,now,now), write=True)
+        row=self._execute_native('SELECT * FROM expense_alert_outbox WHERE alert_key=%s',(alert.key,)).fetchone()
         if not row:raise AdmissionDenied('alert key unavailable for this owner')
         # Episode payload is first-occurrence evidence, never overwritten by retry.
         return dict(row)
 
     def claim_expense_alert(self,alert_key):
-        row=self._db.execute('SELECT * FROM expense_alert_outbox WHERE alert_key=? FOR UPDATE',(alert_key,)).fetchone()
+        row=self._execute_native('SELECT * FROM expense_alert_outbox WHERE alert_key=%s FOR UPDATE',(alert_key,)).fetchone()
         if not row:raise KeyError(alert_key)
         if row['state'] not in ('pending','retry_pending'):return None
-        self._db.execute("UPDATE expense_alert_outbox SET state='sending',attempts=attempts+1,updated_at=? WHERE alert_key=?",(time.time(),alert_key))
-        return dict(self._db.execute('SELECT * FROM expense_alert_outbox WHERE alert_key=?',(alert_key,)).fetchone())
+        self._execute_native("UPDATE expense_alert_outbox SET state='sending',attempts=attempts+1,updated_at=%s WHERE alert_key=%s",(time.time(),alert_key), write=True)
+        return dict(self._execute_native('SELECT * FROM expense_alert_outbox WHERE alert_key=%s',(alert_key,)).fetchone())
 
     def finish_expense_alert(self,alert_key,outcome):
         from .expense_alert import delivery_outcome
         from .attempt_ledger import AdmissionDenied
-        row=self._db.execute('SELECT * FROM expense_alert_outbox WHERE alert_key=? FOR UPDATE',(alert_key,)).fetchone()
+        row=self._execute_native('SELECT * FROM expense_alert_outbox WHERE alert_key=%s FOR UPDATE',(alert_key,)).fetchone()
         if not row:raise KeyError(alert_key)
         if row['state']!='sending':raise AdmissionDenied('claimed alert required')
         state=delivery_outcome(outcome=outcome,attempts=row['attempts'],max_attempts=row['max_attempts'])
-        self._db.execute('UPDATE expense_alert_outbox SET state=?,updated_at=? WHERE alert_key=?',(state,time.time(),alert_key))
+        self._execute_native('UPDATE expense_alert_outbox SET state=%s,updated_at=%s WHERE alert_key=%s',(state,time.time(),alert_key), write=True)
         return state
 
     def recover_uncertain_expense_alert(self,alert_key):
         # A crash after SMTP acceptance may have sent the email. No blind retry.
-        self._db.execute("UPDATE expense_alert_outbox SET state='operator_review',updated_at=? WHERE alert_key=? AND state='sending'",(time.time(),alert_key))
+        self._execute_native("UPDATE expense_alert_outbox SET state='operator_review',updated_at=%s WHERE alert_key=%s AND state='sending'",(time.time(),alert_key), write=True)
 
     def record_raw_provider_usage(self,attempt_id,raw_usage):
         from .attempt_ledger import AdmissionDenied
         import json,time
         if not isinstance(raw_usage,dict) or len(json.dumps(raw_usage,allow_nan=False).encode())>65536:
             raise AdmissionDenied('bounded raw provider usage object required')
-        row=self._db.execute('SELECT * FROM provider_attempts WHERE attempt_id=? FOR UPDATE',(attempt_id,)).fetchone()
+        row=self._execute_native('SELECT * FROM provider_attempts WHERE attempt_id=%s FOR UPDATE',(attempt_id,)).fetchone()
         if not row or row['state'] not in ('dispatched','uncertain','settled'):
             raise AdmissionDenied('dispatched owner attempt required for raw evidence')
         if row['raw_usage'] is not None:
             if row['raw_usage']!=raw_usage:raise AdmissionDenied('conflicting raw usage replay')
             return dict(row)
-        self._db.execute('UPDATE provider_attempts SET raw_usage=?::jsonb,raw_usage_received_at=? WHERE attempt_id=?',
-            (json.dumps(raw_usage,allow_nan=False),time.time(),attempt_id))
+        self._execute_native('UPDATE provider_attempts SET raw_usage=%s::jsonb,raw_usage_received_at=%s WHERE attempt_id=%s',
+            (json.dumps(raw_usage,allow_nan=False),time.time(),attempt_id), write=True)
         return self.provider_attempt(attempt_id)
 
     def confirmed_expense_admission(self,job_id,expense_scale=None):
         # Returning a denial commits its durable episode/outbox. Raising here
         # would roll it back and lose the alert on every denied call.
-        row=self._db.execute('SELECT public.requi_confirmed_expense_guard(?,?) AS reason',(job_id,expense_scale)).fetchone()
+        row=self._execute_native('SELECT public.requi_confirmed_expense_guard(%s,%s) AS reason',(job_id,expense_scale), write=True).fetchone()
         return row['reason']
 
     def start_launch_provider_attempt(self,attempt_id):
         from .launch_admission_policy import validate_owner_limits,validate_launch_quote
         from .attempt_ledger import AdmissionDenied
-        self._db.execute('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
+        self._execute_native('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
         row=self.provider_attempt(attempt_id)
         if not row:raise AdmissionDenied('owned attempt required')
-        limits=self._db.execute('SELECT * FROM admission_limits WHERE owner_id=?',(current_scope().owner_id,)).fetchone()
+        limits=self._execute_native('SELECT * FROM admission_limits WHERE owner_id=%s',(current_scope().owner_id,)).fetchone()
         validate_owner_limits(dict(limits) if limits else None);validate_launch_quote(row['quote'])
         reason=self.confirmed_expense_admission(row['job_id'],row['quote']['expense_units_per_usd'])
         if reason!='allowed':return {'started':False,'reason':reason}
@@ -1824,7 +1821,7 @@ FROM tasks t"""
         row=self.provider_attempt(attempt_id)
         if not row or row['state']!='reserved':raise ValueError('reserved owner attempt required for balance evidence')
         checked=validate_balance(evidence,row['expense_reserved'],row['quote']['expense_units_per_usd'])
-        self._db.execute('UPDATE provider_attempts SET provider_balance_evidence=?::jsonb WHERE attempt_id=?',(json.dumps(checked),attempt_id))
+        self._execute_native('UPDATE provider_attempts SET provider_balance_evidence=%s::jsonb WHERE attempt_id=%s',(json.dumps(checked),attempt_id), write=True)
         return checked
 
     def task_retail_totals(self,task_id):
