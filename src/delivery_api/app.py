@@ -3256,7 +3256,9 @@ def debug_log_durability(a:auth.Actor=Depends(auth.require_actor)):
 def debug_preflight(a:auth.Actor=Depends(auth.require_actor)):
     # The signed-in user's own container startup report (checked/expected/found/where). No secrets: paths, table names and build ids only.
     from . import preflight_read
-    return {'startup': preflight_read.startup_report()}
+    result={'startup': preflight_read.startup_report()}
+    if os.environ.get('REQUI_PREFLIGHT_GENERATED_AT'):result['persistence']=preflight_read.persistence_status()
+    return result
 
 
 @app.get('/api/admin/operations/request-costs')

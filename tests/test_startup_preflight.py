@@ -402,6 +402,16 @@ def test_unknown_optional_role_does_not_crash_the_table_probe():
     finally:preflight.TABLE_ACCESS.clear();preflight.TABLE_ACCESS.update(policy)
 
 
+def test_report_write_failure_warns_and_retains_stdout_authority(tmp_path,capsys):
+    blocker=tmp_path/'blocked';blocker.write_text('file')
+    report=preflight.Report(generated_at='now')
+    assert preflight.write_report(report,blocker/'report.json') is False
+    text=capsys.readouterr().err
+    assert 'cached Debug report was not updated' in text and 'FileExistsError' in text
+    assert str(blocker) not in text
+    assert preflight.write_report(report,tmp_path/'ok.json') is True
+
+
 @pytest.mark.parametrize('builder,name,level', [
     ('_check_artifacts', 'artifacts-root-writable', 'refuse'),
     ('_check_database', 'database-role-claims', 'refuse'),

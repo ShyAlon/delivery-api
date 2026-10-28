@@ -136,7 +136,9 @@ def main():
         return 2
     report=preflight.run(os.environ)
     print(report.render_text(),flush=True)
-    preflight.write_report(report,preflight.report_path(os.environ))
+    saved=preflight.write_report(report,preflight.report_path(os.environ))
+    os.environ['REQUI_PREFLIGHT_GENERATED_AT']=report.generated_at
+    os.environ['REQUI_PREFLIGHT_REPORT_SAVED']='1' if saved else '0'
     if report.refused:
         print('full service not started: the startup preflight found blocking problems (above)',file=sys.stderr)
         return 2

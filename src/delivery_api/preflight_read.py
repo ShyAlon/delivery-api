@@ -23,3 +23,15 @@ def startup_report():
     except (OSError, ValueError):
         pass
     return None
+
+
+def persistence_status():
+    import os
+    expected=os.environ.get('REQUI_PREFLIGHT_GENERATED_AT')
+    saved=os.environ.get('REQUI_PREFLIGHT_REPORT_SAVED')
+    report=startup_report()
+    actual=report.get('generated_at') if isinstance(report,dict) else None
+    return {'availability':'unavailable' if report is None else 'stale' if expected and actual!=expected else 'current' if expected else 'unverified',
+            'write_status':'saved' if saved=='1' else 'failed' if saved=='0' else 'unknown',
+            'expected_generated_at':expected,'cached_generated_at':actual,
+            'authority':'startup stdout report'}
