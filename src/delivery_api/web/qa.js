@@ -6,8 +6,9 @@ const debugOn=(...args)=>ctx.debugOn(...args);
 const closeModal=(...args)=>ctx.closeModal(...args);
 const openDialog=(...args)=>ctx.openDialog(...args);
 const showError=(...args)=>ctx.showError(...args);
+let feedbackAvailable=true;
 let feedbackState=new Map(),qaContext={taskId:null,turns:[]};
-const setFeedbackState=rows=>{feedbackState=new Map(rows.map(r=>[fbKey(r.target,r.input_ref),r]))};
+const setFeedbackState=(rows,available=true,refresh=false)=>{feedbackAvailable=available;feedbackState=new Map(rows.map(r=>[fbKey(r.target,r.input_ref),r]));if(refresh)app.querySelectorAll('.qa-actions').forEach(refreshQaRow)};
 const setClassificationState=value=>{classificationState=value};
 const setQaContext=(taskId,turns)=>{qaContext={taskId,turns}};
 function fbKey(target,ref){return `${target}:${ref}`}
@@ -43,9 +44,10 @@ function qaChipsHtml(aref){
  return chips.filter(Boolean).length?`<div class="qa-chips">${chips.join('')}</div>`:'';
 }
 function wireQaNotes(scope){
- scope.querySelectorAll('.qa-note').forEach(b=>b.onclick=()=>{const row=[...feedbackState.values()].find(r=>r.id===Number(b.dataset.fid));if(row)openFeedbackDialog(row.target,row.input_ref,row.content)});
+ scope.querySelectorAll('.qa-note').forEach(b=>{b.disabled=!feedbackAvailable;b.onclick=()=>{const row=[...feedbackState.values()].find(r=>r.id===Number(b.dataset.fid));if(row)openFeedbackDialog(row.target,row.input_ref,row.content)};});
 }
 function wireQaActions(el){
+ if(!feedbackAvailable){el.querySelectorAll('button').forEach(b=>b.disabled=true);return}
  const target=el.dataset.target,ref=el.dataset.ref,turn=qaContext.turns.find(t=>(target==='question'?t.qref:t.aref)===ref),content=target==='question'?turn?.q:turn?.a;
  el.querySelectorAll('.qa-thumb').forEach(b=>b.onclick=()=>sendThumb(el,target,ref,content,Number(b.dataset.thumb)));
  el.querySelector('.qa-comment-btn').onclick=()=>openFeedbackDialog(target,ref,content);
@@ -67,6 +69,7 @@ function refreshQaRow(el){
 }
 async function sendThumb(el,target,ref,content,value){return runAction(`feedback:${qaContext.taskId}:${target}:${ref}`,Array.from(el.querySelectorAll('button')),()=>saveThumb(el,target,ref,content,value))}
 async function saveThumb(el,target,ref,content,value){
+ if(!feedbackAvailable)return;
  const key=fbKey(target,ref),existing=feedbackState.get(key);
  try{
   if(existing&&existing.thumb===value){
@@ -80,6 +83,7 @@ async function saveThumb(el,target,ref,content,value){
  }catch(e){showError(e)}
 }
 function openFeedbackDialog(target,ref,content){
+ if(!feedbackAvailable)return;
  const key=fbKey(target,ref),existing=feedbackState.get(key),q=target==='question';
  const dialog=openDialog(`<div class="dialog feedback-dialog" role="dialog" aria-label="${q?'Comment on this question':'Comment on this answer'}"><button class="dialog-x" aria-label="Close comment">×</button><div class="eyebrow">${q?'QUESTION FEEDBACK':'ANSWER FEEDBACK'} · ANNOTATION ONLY</div><h3>${q?'What should we learn from this question?':'What did the engine misread?'}</h3><p class="feedback-context">${esc(content||'')}</p><textarea id="feedbacktext" rows="4" maxlength="4000" placeholder="A note for the team - it does not steer the interview">${esc(existing?.comment||'')}</textarea><div class="dialog-actions"><button class="primary" id="savefeedback">Save comment</button>${existing?'<button class="secondary danger" id="deletefeedback">Delete feedback</button>':''}</div><div id="feedbackstatus" aria-live="polite"></div></div>`);
  if(!dialog)return;
