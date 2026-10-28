@@ -30,7 +30,7 @@ class EvidenceHandler(RotatingFileHandler):
  def emit(self,record):
   if record.levelno<logging.WARNING:return
   try:
-   fields=context.get()
+   fields={**context.get(),**getattr(record,'diagnostic_fields',{})}
    row={'at':datetime.fromtimestamp(record.created,timezone.utc).isoformat(),
         'level':record.levelname,'logger':safe_text(record.name,120),
         'message':safe_text(record.getMessage(),2000),

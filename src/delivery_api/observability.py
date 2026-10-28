@@ -50,11 +50,25 @@ def stage_log_paths()->dict[str,Path]:
     return STAGE_LOG_PATHS
 
 
+# Reviewed handled runtime failures. Do not infer severity from arbitrary names:
+# normal user/domain refusals remain informational.
+HANDLED_FAILURES=frozenset((
+ 'metrics.unavailable','run.audit_failed','engine.stream.failure','orchestrator.failure',
+ 'orchestrator.recover.failed','progress.ingest.failed','progress.drain.failed',
+ 'engine.recovery.artifacts_invalid','engine.cloud_finish.failed','engine.recovery.snapshot_unavailable',
+ 'progress.recovery.failed','engine.start.diagnostics_unrecorded','engine.start.failed',
+ 'requirement.resolve.failed','task.stop.failed','settings.save_failed','task.export.failed',
+ 'phase.retry.failed','phase.start.failed','ops.stops_unavailable','ops.attempt_releases_unavailable',
+ 'ops.spend_unavailable','ops.grant_unavailable','ops.failure_diagnostics_unavailable',
+ 'database.replica.offline','database.sync.failed','job.failure_record_failed','run.compute_unsettled',
+))
+
 def event(kind:str,message:str,*,level:int=logging.INFO,console:bool=True,**fields)->None:
     from .diagnostic_evidence import context
     fields={**context.get(),**fields}
+    if kind in HANDLED_FAILURES:level=max(level,logging.WARNING)
     line=_line(kind,message,fields)
-    logger.log(level,line,extra={'console':console})
+    logger.log(level,line,extra={'console':console,'diagnostic_fields':fields})
     phase=fields.get("phase_key") or fields.get("phase") or fields.get("stage")
     path=STAGE_LOG_PATHS.get(str(phase)) if phase else None
     if path:
