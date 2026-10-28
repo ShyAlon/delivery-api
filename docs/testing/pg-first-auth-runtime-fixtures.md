@@ -272,3 +272,15 @@ Fail-first question-runner PG assertion failed on SQLite. Focused29passed0skips
 bootstrap. Expanded132passed2known baseline failures23.12s (checkpoint intent
 view/session-cost metadata);not full-module green. Production/UI unchanged;
 hosted CI/full suite/deployed topology not run. A incomplete;B/C/D not started.
+
+## A22: runner lifecycle/stall/failure framing
+
+Six runner cases use scoped PG:release-before-completion callback,silent child
+stall failure,heartbeats reset stall window,split exception framing,correct
+phase failure name and preserved contract-error cause. Every original assertion
+unchanged. Synthetic children remain hermetic,no provider execution. Fail-first
+silent-runner PG assertion failed on SQLite. Focused26passed0skips8.25s with
+producer sources:six cases,protocol/SSE,native run,bootstrap. Expanded128passed
+2known baseline failures18.48s (checkpoint intent view/session-cost metadata),not
+full-module green. Production/UI unchanged;hosted CI/full suite/deployed topology
+not run. A incomplete;B/C/D not started.

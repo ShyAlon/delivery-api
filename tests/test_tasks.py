@@ -692,11 +692,10 @@ def test_orchestrator_architecture_is_greenfield_without_decision(monkeypatch,tm
     assert runner.calls[0][1]['phase']=='architecture'
 
 
-def test_runner_releases_process_before_completion_callback(tmp_path):
+def test_runner_releases_process_before_completion_callback(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'handoff.db'));tid=store.create_task('Handoff')['task_id'];runner=ProcessRunner(store);observed=[]
+    store=pg_scoped_workspace.store;tid=store.create_task('Handoff')['task_id'];runner=ProcessRunner(store);observed=[]
     async def next_stage(task_id,phase):observed.append((task_id not in runner.processes,phase))
     runner.on_complete=next_stage
     asyncio.run(runner.run(tid,[sys.executable,'-c','print("session: handoff")'],cwd=tmp_path,completion_phases=('intent','conops')))
@@ -1408,11 +1407,12 @@ def test_task_classifications_join_shadow_to_answers(tmp_path):
         no_session = client.post("/api/tasks", json={"title": "No session"}).json()["task_id"]
         assert client.get(f"/api/tasks/{no_session}/classifications").json()["answers"] == {}
 
-def test_silent_engine_run_is_stopped_and_marked_failed(tmp_path):
+def test_silent_engine_run_is_stopped_and_marked_failed(tmp_path,pg_scoped_workspace):
     import asyncio, sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store = SQLiteStore(str(tmp_path / 'stall.db')); tid = store.create_task('Silent engine')['task_id']
+    store = pg_scoped_workspace.store; tid = store.create_task('Silent engine')['task_id']
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     code = asyncio.run(ProcessRunner(store).run(
         tid, [sys.executable, '-c', 'import time;print("starting",flush=True);time.sleep(30)'],
         cwd=tmp_path, stall_timeout=0.5))
@@ -1423,21 +1423,19 @@ def test_silent_engine_run_is_stopped_and_marked_failed(tmp_path):
     assert errors and 'no output' in errors[-1]['message'] and 'stopped' in errors[-1]['message']
 
 
-def test_engine_heartbeats_reset_the_stall_window(tmp_path):
+def test_engine_heartbeats_reset_the_stall_window(tmp_path,pg_scoped_workspace):
     import asyncio, sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store = SQLiteStore(str(tmp_path / 'chatty.db')); tid = store.create_task('Chatty engine')['task_id']
+    store = pg_scoped_workspace.store; tid = store.create_task('Chatty engine')['task_id']
     script = 'import time\nfor i in range(4):\n print("tick", i, flush=True)\n time.sleep(0.3)'
     code = asyncio.run(ProcessRunner(store).run(tid, [sys.executable, '-c', script], cwd=tmp_path, stall_timeout=1))
     assert code == 0
 
 
-def test_runner_preserves_module_name_when_subprocess_read_splits_mid_word(tmp_path,monkeypatch):
+def test_runner_preserves_module_name_when_subprocess_read_splits_mid_word(tmp_path,monkeypatch,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'framing.db'));tid=store.create_task('Framing')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Framing')['task_id']
     logs=[];monkeypatch.setattr('delivery_api.runner.activity',lambda kind,message,**fields:logs.append((kind,fields)))
     # The first write is larger than the runner's read window and deliberately
     # ends in an unfinished exception line. Both fragments must be one record.
@@ -1454,11 +1452,10 @@ sys.stdout.write("aph\'\\n");sys.stdout.flush();sys.exit(1)'''
     assert error['payload']['module']=='langgraph'
 
 
-def test_generator_failure_names_needs_not_interview_engine(tmp_path):
+def test_generator_failure_names_needs_not_interview_engine(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'generator-error.db'))
+    store=pg_scoped_workspace.store
     tid=store.create_task('Generator error label')['task_id']
     command=[sys.executable,'-c','print("Error: incompatible contract",flush=True);raise SystemExit(1)']
     assert asyncio.run(ProcessRunner(store).run(tid,command,cwd=tmp_path,phase='needs',infer_phase=False))==1
@@ -1467,11 +1464,10 @@ def test_generator_failure_names_needs_not_interview_engine(tmp_path):
     assert 'interview engine' not in error['message'].lower()
 
 
-def test_generator_failure_preserves_reported_contract_error(tmp_path):
+def test_generator_failure_preserves_reported_contract_error(tmp_path,pg_scoped_workspace):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'contract-error.db'))
+    store=pg_scoped_workspace.store
     tid=store.create_task('Contract error')['task_id']
     script='print("Error: intent contract 0.19.0 cannot be read by generator contract 0.16.x",flush=True);raise SystemExit(1)'
     assert asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script],cwd=tmp_path,phase='needs',infer_phase=False))==1
