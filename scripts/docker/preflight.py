@@ -433,21 +433,23 @@ def run(env, *, connect=None, import_module=importlib.import_module, required_ta
     connect = connect or _real_connect
     report = Report(generated_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'))
     connection_holder = []
-    builders = [('artifacts-root-writable', lambda: _check_artifacts(env)),
-                ('database-role-claims', lambda: _check_database(env, connect, connection_holder)),
-                ('required-tables', lambda: _check_tables(env, connection_holder, required_tables)),
-                ('feature-tables', lambda: _check_feature_tables(env, connection_holder, required_tables)),
-                ('pool-budget', lambda: _check_pool_budget(env, import_module)),
-                ('provider-key', lambda: _check_provider_key(env, import_module)),
-                ('engine-compatible', lambda: _check_engine(env, import_module)),
-                ('unsettled-compute-segments', lambda: _check_segments(env)),
-                ('build-staleness', lambda: _check_staleness(env))]
-    for name, build in builders:
+    builders = [('artifacts-root-writable', 'refuse', lambda: _check_artifacts(env)),
+                ('database-role-claims', 'refuse', lambda: _check_database(env, connect, connection_holder)),
+                ('required-tables', 'refuse', lambda: _check_tables(env, connection_holder, required_tables)),
+                ('feature-tables', 'warn', lambda: _check_feature_tables(env, connection_holder, required_tables)),
+                ('pool-budget', 'warn', lambda: _check_pool_budget(env, import_module)),
+                ('provider-key', 'warn', lambda: _check_provider_key(env, import_module)),
+                ('engine-compatible', 'refuse', lambda: _check_engine(env, import_module)),
+                ('unsettled-compute-segments', 'warn', lambda: _check_segments(env)),
+                ('build-staleness', 'warn', lambda: _check_staleness(env))]
+    for name, level, build in builders:
         try:
             report.checks.append(build())
         except Exception as error:
-            report.checks.append(Check(name, 'warn', 'warn', 'the %s preflight check' % name, 'a clean evaluation',
-                                       'the check itself failed: %s: %s' % (type(error).__name__, str(error)[:160]),
+            report.checks.append(Check(name, level, 'fail' if level == 'refuse' else 'warn',
+                                       'the %s preflight check' % name, 'a clean evaluation',
+                                       # Exception text can contain DSNs, credentials or user data.
+                                       'the check itself failed: %s (details suppressed)' % type(error).__name__,
                                        'scripts/docker/preflight.py (%s)' % name,
                                        'a preflight check must never crash - report this'))
     for connection in connection_holder:

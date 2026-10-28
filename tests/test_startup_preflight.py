@@ -400,3 +400,66 @@ def test_unknown_optional_role_does_not_crash_the_table_probe():
         assert result.status=='warn' and 'nonexistent_preflight_role' in result.found
         assert 'payment_events' in result.found and 'operator_principals' not in result.found
     finally:preflight.TABLE_ACCESS.clear();preflight.TABLE_ACCESS.update(policy)
+
+
+@pytest.mark.parametrize('builder,name,level', [
+    ('_check_artifacts', 'artifacts-root-writable', 'refuse'),
+    ('_check_database', 'database-role-claims', 'refuse'),
+    ('_check_tables', 'required-tables', 'refuse'),
+    ('_check_feature_tables', 'feature-tables', 'warn'),
+    ('_check_pool_budget', 'pool-budget', 'warn'),
+    ('_check_provider_key', 'provider-key', 'warn'),
+    ('_check_engine', 'engine-compatible', 'refuse'),
+    ('_check_segments', 'unsettled-compute-segments', 'warn'),
+    ('_check_staleness', 'build-staleness', 'warn'),
+])
+def test_check_crashes_preserve_safety_level_and_finish_report(tmp_path, monkeypatch, builder, name, level):
+    """Row 12-01: unverified foundations refuse; optional checks still only warn."""
+    class TrackedConn(FakeConn):
+        closed = False
+        def close(self): self.closed = True
+    conn = TrackedConn(healthy_pg()('ignored').script)
+    def crash(*args): raise RuntimeError('injected check failure')
+    monkeypatch.setattr(preflight, builder, crash)
+    report = preflight.run(healthy_env(tmp_path), connect=lambda dsn: conn,
+                           import_module=fake_import(engine_modules()))
+    assert len(report.checks) == 9
+    check = next(c for c in report.checks if c.name == name)
+    assert check.level == level
+    assert check.status == ('fail' if level == 'refuse' else 'warn')
+    assert report.refused == (level == 'refuse')
+    assert report.status == ('fail' if level == 'refuse' else 'warn')
+    assert 'the check itself failed: RuntimeError' in check.found
+    assert 'injected check failure' not in check.found
+    assert check.checked and check.expected and check.where and check.remedy
+    serialized = next(c for c in report.to_dict()['checks'] if c['name'] == name)
+    assert serialized['level'] == level and serialized['status'] == check.status
+    assert ('REFUSING TO START' if level == 'refuse' else 'PASS WITH WARNINGS') in report.render_text()
+    assert next(c for c in report.checks if c.name == 'build-staleness')
+    if builder != '_check_database': assert conn.closed
+
+
+def test_crash_report_never_echoes_untrusted_exception_details(tmp_path, monkeypatch):
+    secret = 'postgresql://user:fake-password@db/example?token=fake-token'
+    def crash(*args): raise ValueError(secret)
+    monkeypatch.setattr(preflight, '_check_engine', crash)
+    report = preflight.run(healthy_env(tmp_path), connect=healthy_pg(),
+                           import_module=fake_import(engine_modules()))
+    assert secret not in report.render_text()
+    assert secret not in json.dumps(report.to_dict())
+    check = next(c for c in report.checks if c.name == 'engine-compatible')
+    assert 'ValueError' in check.found and check.level == 'refuse' and check.status == 'fail'
+
+
+@pytest.mark.parametrize('builder,exit_code', [('_check_engine', 2), ('_check_feature_tables', 0)])
+def test_main_exit_code_and_persisted_report_follow_crash_level(tmp_path, monkeypatch, capsys, builder, exit_code):
+    real_run = preflight.run
+    def crash(*args): raise RuntimeError('injected')
+    monkeypatch.setattr(preflight, builder, crash)
+    monkeypatch.setattr(preflight, 'run', lambda env: real_run(healthy_env(tmp_path),
+                        connect=healthy_pg(), import_module=fake_import(engine_modules())))
+    path = tmp_path / 'report.json'
+    monkeypatch.setattr(preflight, 'report_path', lambda env: path)
+    assert preflight.main() == exit_code
+    assert json.loads(path.read_text())['status'] == ('fail' if exit_code else 'warn')
+    assert ('REFUSING TO START' if exit_code else 'PASS WITH WARNINGS') in capsys.readouterr().out
