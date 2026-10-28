@@ -223,3 +223,17 @@ Acceptance93passed0skips6.69s with root PYTHONPATH and producer sources:queue,
 gate/decision pages,native review/revision/worker,cloud API,bootstrap. Production/
 UI unchanged;hosted CI/full suite/deployed topology not run. A incomplete;
 B/C/D not started.
+
+## A18: remaining ProcessRunner contracts
+
+Four mixed-module runner cases now use scoped PG:known progress count/missing
+artifact fail-closed,stage-aware heartbeat,prompt output as diagnostics rather
+than input wait,and traceback sanitization/missing-module classification. All
+assertions unchanged. Local auth/rerun/factory cases in test_tasks remain legacy.
+Fail-first PG assertion failed on SQLite. Focused25passed0skips6.63s with root
+PYTHONPATH and producer sources (four runner cases,protocol/SSE/parity,native run,
+bootstrap). Expanded mixed slice129passed2failed19.01s. Unchanged fresh main
+mixed module108passed2failed12.85s,with the same legacy checkpoint-view and session
+cost exact-response failures. Neither hidden nor weakened;separate debt.
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.
