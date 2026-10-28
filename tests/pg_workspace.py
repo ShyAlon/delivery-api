@@ -118,6 +118,7 @@ patches only the store/config and test signing key, never auth or scope function
 @pytest.fixture
 def pg_browser(pg_workspace_factory, pg_task_app, tmp_path):
     """Fresh browser and authenticated workspace, real local ASGI HTTP server."""
+    import asyncio
     import os
     import socket
     import threading
@@ -131,7 +132,11 @@ def pg_browser(pg_workspace_factory, pg_task_app, tmp_path):
         base = f'http://127.0.0.1:{port}'
         server = uvicorn.Server(uvicorn.Config(pg_task_app(workspace), host='127.0.0.1',
             port=port, lifespan='off', log_level='warning'))
-        thread = threading.Thread(target=server.run)
+        loops = []
+        async def serve():
+            loops.append(asyncio.get_running_loop())
+            await server.serve()
+        thread = threading.Thread(target=lambda: asyncio.run(serve()))
         thread.start()
         try:
             for _ in range(100):
@@ -156,6 +161,14 @@ def pg_browser(pg_workspace_factory, pg_task_app, tmp_path):
                 finally:
                     browser.close()
         finally:
+            # Lifespan is disabled here, so mirror its stream-stop notification
+            # on the server loop before waiting for uvicorn's graceful drain.
+            from delivery_api import app as app_module
+            def stop_streams():
+                for stop in tuple(app_module._stream_shutdown_events):
+                    stop.set()
+            if loops:
+                loops[0].call_soon_threadsafe(stop_streams)
             server.should_exit = True
             thread.join(timeout=10)
             assert not thread.is_alive(), 'test server did not stop'
