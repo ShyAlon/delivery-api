@@ -567,3 +567,17 @@ with producer sources. Inventory36 SQLiteStore files:primary migrate8,guard16,
 reference5,retired7. Engine registry Program is synthetic,no model call.
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A45: API audit and queued human-error fixtures
+
+Four cases now scoped PG:queued generation failure records actionable human
+artifact,cross-phase totals,legacy-scale price exclusion with tokens retained,
+and latest cumulative phase price wins. Every original assertion retained.
+Local audit policy explicit;queue handler only raises a fixture UserFacingError,
+no provider/process work. Fail-first concrete PG assertion failed on SQLite.
+Focused8passed0skips1.69s:native run/usage,bootstrap and four cases. Full mixed
+API,native run/usage,bootstrap,cloud API suite measured separately. SQLiteStore
+literal inventory35 files,but API file still has implicit shared-bootstrap
+receivers,so primary migrate remains8 rather than falsely marking API complete.
+Production/UI unchanged;hosted CI/full repository/deployed topology not run.
+A incomplete;B/C/D not started.
