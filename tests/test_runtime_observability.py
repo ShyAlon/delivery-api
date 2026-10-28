@@ -76,34 +76,32 @@ def test_image_build_time_baked_and_surfaced():
 
 # --- one events read per task GET -----------------------------------------
 
-def test_task_get_reads_events_once(monkeypatch, tmp_path):
+def test_task_get_reads_events_once(monkeypatch,pg_workspace_factory,pg_task_app):
     from fastapi.testclient import TestClient
-    from delivery_api import config
-    from delivery_api.app import app
-    from delivery_api.store import SQLiteStore
-    store = SQLiteStore(str(tmp_path / 'tasks.db'))
-    app.state.store = store
-    monkeypatch.setattr('delivery_api.app.store', store)
-    monkeypatch.setattr(config, 'SESSION_SECRET', 's' * 40)
-    monkeypatch.setattr(config, 'COOKIE_SECURE', False)
-    # Cloud profile: the polled path his UI takes (no engine session -> no snapshot call).
-    monkeypatch.setattr(config, 'CLOUD_TENANTS', True)
-    task = store.create_task('Observed task')
-    calls = {"n": 0}
-    real_snapshot = store.task_snapshot
-    def counting(task_id):
-        calls["n"] += 1
-        return real_snapshot(task_id)
-    monkeypatch.setattr(store, 'task_snapshot', counting)
-    # This SQLite fixture has no verified cloud middleware identity. Test the
-    # local HTTP projection; real PostgreSQL owner isolation has its own test.
-    monkeypatch.setattr(config, 'CLOUD_TENANTS', False)
-    client = TestClient(app)
-    reply = client.get(f"/api/tasks/{task['task_id']}")
-    assert reply.status_code == 200, reply.text
-    assert calls["n"] == 1, f"expected one combined task/events read, got {calls['n']}"
-    assert reply.json()["events"] == []
-
+    from delivery_api.postgres_store import PostgresStore
+    from delivery_api.tenancy import tenant_context
+    with pg_workspace_factory() as workspace,pg_workspace_factory() as other:
+        store=workspace.store
+        assert isinstance(store,PostgresStore)
+        with tenant_context(workspace.scope):
+            task=store.create_task('Observed task')
+        calls=[]
+        real_snapshot=store.task_snapshot
+        def counting(task_id):
+            calls.append(task_id)
+            return real_snapshot(task_id)
+        monkeypatch.setattr(store,'task_snapshot',counting)
+        client=TestClient(pg_task_app(workspace))
+        path=f"/api/tasks/{task['task_id']}"
+        reply=client.get(path,headers=workspace.headers)
+        assert reply.status_code==200,reply.text
+        assert calls==[task['task_id']],f'expected one combined task/events read, got {calls}'
+        assert reply.json()['events']==[]
+        calls.clear()
+        assert client.get(path).status_code==401
+        assert calls==[],'anonymous request reached the task snapshot'
+        assert client.get(path,headers=other.headers).status_code==404
+        assert calls==[task['task_id']],'foreign request must still use the scoped snapshot'
 
 
 # --- UI action logging ------------------------------------------------------
