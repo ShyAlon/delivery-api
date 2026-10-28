@@ -120,7 +120,7 @@ def test_subprocess_prompt_lines_are_diagnostics_not_input_waits(tmp_path,pg_sco
     # diagnostic output, never an input wait (protocol retired in 8bfda8d).
     assert not any(e['kind']=='waiting_input' for e in events)
 
-def test_answer_endpoint_appends_visible_transcript_line(monkeypatch):
+def test_answer_endpoint_appends_visible_transcript_line(monkeypatch,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
     from delivery_api.auth import Actor
@@ -472,9 +472,8 @@ def test_process_runner_emits_every_question_line_as_progress(tmp_path,pg_scoped
     assert [q for q in lines if q in questions]==questions
     assert not any(e['kind']=='waiting_input' for e in store.events(task_id))
 
-def test_generated_phase_waits_yellow_until_founder_approval(tmp_path):
-    from delivery_api.store import SQLiteStore
-    s=SQLiteStore(str(tmp_path/'approval.db'));tid=s.create_task('Approval boundary')['task_id']
+def test_generated_phase_waits_yellow_until_founder_approval(tmp_path,pg_scoped_workspace):
+    s=pg_scoped_workspace.store;tid=s.create_task('Approval boundary')['task_id']
     s.update_phase(tid,'conops','running',detail='Generating concept options')
     s.update_phase(tid,'conops','awaiting_approval',detail='Generated; waiting for founder approval')
     gate=s.wait_at_gate(tid,'conops');task=s.task(tid)
@@ -714,7 +713,7 @@ def test_open_gate_uses_same_automatic_continuation_path(tmp_path,pg_scoped_work
     assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='needs')['state']=='idle'
 
 
-def test_stale_answer_reports_actual_runtime_state_and_records_error(monkeypatch):
+def test_stale_answer_reports_actual_runtime_state_and_records_error(monkeypatch,pg_scoped_workspace):
     import asyncio
     from fastapi import HTTPException
     from delivery_api import app as app_module
@@ -735,8 +734,10 @@ def test_stale_answer_reports_actual_runtime_state_and_records_error(monkeypatch
     assert event['payload']['http_status']==409 and event['payload']['task_state']=='not_started'
 
 
-def test_task_projection_exposes_live_input_truth(monkeypatch):
+def test_task_projection_exposes_live_input_truth(monkeypatch,pg_scoped_workspace):
     from delivery_api import app as app_module
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(app_module.store,PostgresStore)
     tid=app_module.store.create_task('Input truth projection')['task_id']
     monkeypatch.setattr(app_module.runner,'input_state',lambda task:{'waiting':False,'process_live':False,'decision':None,'requirement':None})
     result=app_module.get_task(tid)
@@ -1114,13 +1115,12 @@ def test_requirement_resolution_logs_and_returns_actionable_unexpected_failure(m
     assert 'RuntimeError: generator launch exploded' in caplog.text
 
 
-def test_requirement_resolution_restores_owner_from_same_durable_snapshot(monkeypatch,tmp_path):
+def test_requirement_resolution_restores_owner_from_same_durable_snapshot(monkeypatch,tmp_path,pg_scoped_workspace):
     import asyncio
     from delivery_api import app as app_module
     from delivery_api.auth import Actor
     from delivery_api.runner import ProcessRunner
-    from delivery_api.store import SQLiteStore
-    store=SQLiteStore(str(tmp_path/'resolve-migrated.db'));tid=store.create_task('Migrated')['task_id']
+    store=pg_scoped_workspace.store;tid=store.create_task('Migrated')['task_id']
     for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'architecture','awaiting_approval',detail='Existing-system baseline required before architecture')
     requirement={'kind':'external_input','title':'Baseline required','path':str(tmp_path/'artifacts'/'session-x'/'spec'/'system-baseline.json'),'format':'SystemBaseline JSON'}
