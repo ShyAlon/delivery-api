@@ -158,7 +158,7 @@ class PostgresStore:
         return guard()
 
     def auth_session_active(self):
-        return bool(self._db.execute('SELECT public.requi_session_active() AS active').fetchone()['active'])
+        return bool(self._execute_native('SELECT public.requi_session_active() AS active').fetchone()['active'])
 
     def record_failure_diagnostics(self, task_id: str, source: str, http_status: int, block: dict) -> int:
         """Tenant-scoped operator-only failure evidence on Postgres: the row
@@ -711,11 +711,11 @@ FROM tasks t"""
         return self._ARTIFACTS_SUBQUERY + (",\n" + self._MANIFEST_SUBQUERY if config.ARTIFACT_MANIFEST_READS else "")
 
     def list_tasks(self):
-        rows=self._db.execute(self._TASK_PROJECTION+' WHERE t.deleted_at IS NULL ORDER BY t.updated_at DESC').fetchall()
+        rows=self._execute_native(self._TASK_PROJECTION+' WHERE t.deleted_at IS NULL ORDER BY t.updated_at DESC').fetchall()
         return [self._task_record(row) for row in rows]
 
     def task(self,task_id):
-        row=self._db.execute(self._TASK_PROJECTION+' WHERE t.task_id=%s AND t.deleted_at IS NULL',(task_id,)).fetchone()
+        row=self._execute_native(self._TASK_PROJECTION+' WHERE t.task_id=%s AND t.deleted_at IS NULL',(task_id,)).fetchone()
         return self._task_record(row) if row else None
 
     def _execute_native(self, sql, parameters=(), *, write=False):
@@ -786,36 +786,36 @@ FROM tasks t"""
         return item
 
     def request_task_stop(self,task_id):
-        task=self._db.execute('SELECT * FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone()
+        task=self._execute_native('SELECT * FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone()
         if not task or task['deleted_at'] is not None:raise KeyError(task_id)
         if task['stop_requested_at'] is None:
-            self._db.execute("UPDATE tasks SET state='stop_requested',generation=generation+1,stop_requested_at=?,updated_at=? WHERE task_id=?",(time.time(),time.time(),task_id))
+            self._execute_native("UPDATE tasks SET state='stop_requested',generation=generation+1,stop_requested_at=%s,updated_at=%s WHERE task_id=%s",(time.time(),time.time(),task_id), write=True)
         return self.task(task_id)
 
     def confirm_task_stopped(self,task_id,*,engine_quiescent):
         from .attempt_ledger import AdmissionDenied
         if engine_quiescent is not True:raise AdmissionDenied('engine quiescence required')
-        task=self._db.execute('SELECT * FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone()
+        task=self._execute_native('SELECT * FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone()
         if not task or task['stop_requested_at'] is None:raise AdmissionDenied('durable stop request required')
-        if self._db.execute("SELECT 1 FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=? AND p.state IN ('dispatched','uncertain','reserved') LIMIT 1",(task_id,)).fetchone():
+        if self._execute_native("SELECT 1 FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=%s AND p.state IN ('dispatched','uncertain','reserved') LIMIT 1",(task_id,)).fetchone():
             raise AdmissionDenied('provider attempt is not reconciled')
         # Closed work stays for accounting. Pending dispatch is fenced.
-        self._db.execute("UPDATE worker_jobs SET state='done',updated_at=? WHERE task_id=? AND state IN ('pending','paused')",(time.time(),task_id))
-        if self._db.execute("SELECT 1 FROM worker_jobs WHERE task_id=? AND state='running' LIMIT 1",(task_id,)).fetchone():
+        self._execute_native("UPDATE worker_jobs SET state='done',updated_at=%s WHERE task_id=%s AND state IN ('pending','paused')",(time.time(),task_id), write=True)
+        if self._execute_native("SELECT 1 FROM worker_jobs WHERE task_id=%s AND state='running' LIMIT 1",(task_id,)).fetchone():
             raise AdmissionDenied('worker remains active')
         if task['stopped_at'] is None:
-            self._db.execute("UPDATE tasks SET state='stopped',stopped_at=?,updated_at=? WHERE task_id=?",(time.time(),time.time(),task_id))
+            self._execute_native("UPDATE tasks SET state='stopped',stopped_at=%s,updated_at=%s WHERE task_id=%s",(time.time(),time.time(),task_id), write=True)
         return self.task(task_id)
 
     def tombstone_stopped_task(self,task_id):
         from .attempt_ledger import AdmissionDenied
-        task=self._db.execute('SELECT * FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone()
+        task=self._execute_native('SELECT * FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone()
         if not task or task['state']!='stopped' or task['stopped_at'] is None:
             raise AdmissionDenied('confirmed stopped task required')
         # Preserve FK chain, raw usage, charges and existing source artifacts.
         if task['deleted_at'] is None:
-            self._db.execute('UPDATE tasks SET deleted_at=?,updated_at=? WHERE task_id=?',(time.time(),time.time(),task_id))
-        return self._task_record(self._db.execute(self._TASK_PROJECTION+' WHERE t.task_id=?',(task_id,)).fetchone())
+            self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s',(time.time(),time.time(),task_id), write=True)
+        return self._task_record(self._execute_native(self._TASK_PROJECTION+' WHERE t.task_id=%s',(task_id,)).fetchone())
 
     def delete_task(self,task_id,actor='local user'):
         task=self.task(task_id)
@@ -826,34 +826,34 @@ FROM tasks t"""
             return
         if task['stop_requested_at'] is not None:
             raise ValueError('Stop is pending; worker and provider quiescence must be confirmed before Delete')
-        if self._db.execute('SELECT 1 FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=? LIMIT 1',(task_id,)).fetchone():
+        if self._execute_native('SELECT 1 FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=%s LIMIT 1',(task_id,)).fetchone():
             raise ValueError('task has provider ledger history; preserve it for reconciliation')
         task=self.task(task_id)
         if not task: raise KeyError(task_id)
         if task['state'] in ('running','waiting_gate'):
             raise ValueError('a running or paused task cannot be deleted')
-        if (self._db.execute('SELECT 1 FROM retail_compute_segments r JOIN worker_jobs j ON j.job_id=r.job_id WHERE j.task_id=? LIMIT 1',(task_id,)).fetchone()
-                or self._db.execute('SELECT 1 FROM retail_contributions r JOIN worker_jobs j ON j.job_id=r.job_id WHERE j.task_id=? LIMIT 1',(task_id,)).fetchone()):
+        if (self._execute_native('SELECT 1 FROM retail_compute_segments r JOIN worker_jobs j ON j.job_id=r.job_id WHERE j.task_id=%s LIMIT 1',(task_id,)).fetchone()
+                or self._execute_native('SELECT 1 FROM retail_contributions r JOIN worker_jobs j ON j.job_id=r.job_id WHERE j.task_id=%s LIMIT 1',(task_id,)).fetchone()):
             # Compute and token accounting rows reference the task's jobs: hide the task, keep the rows.
-            self._db.execute('UPDATE tasks SET deleted_at=?,updated_at=? WHERE task_id=? AND deleted_at IS NULL',(time.time(),time.time(),task_id))
+            self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s AND deleted_at IS NULL',(time.time(),time.time(),task_id), write=True)
             self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False,'accounting_retained':True})
             return
         self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False})
         for table in ('worker_jobs','engine_sessions','review_comments','decision_reviews','decision_drafts',
                       'answer_feedback','phases','gates','events','progress_ingest','progress_seen','task_artifacts'):
-            self._db.execute(f'DELETE FROM {table} WHERE task_id=?',(task_id,))
-        self._db.execute('DELETE FROM tasks WHERE task_id=?',(task_id,))
+            self._execute_native(f'DELETE FROM {table} WHERE task_id=%s',(task_id,), write=True)
+        self._execute_native('DELETE FROM tasks WHERE task_id=%s',(task_id,), write=True)
 
     def set_engine_session(self,task_id,session_id):
         task=self.task(task_id)
         if not task: raise KeyError(task_id)
-        existing=self._db.execute('SELECT * FROM engine_sessions WHERE session_id=?',(session_id,)).fetchone()
+        existing=self._execute_native('SELECT * FROM engine_sessions WHERE session_id=%s',(session_id,)).fetchone()
         if existing and (existing['task_id'] != task_id or existing['generation'] != task['generation']):
             raise TenantAccessDenied('engine session binding is immutable')
         if not existing:
-            self._db.execute('INSERT INTO engine_sessions VALUES (?,?,?,?,?)',
-                (session_id,current_scope().owner_id,task_id,task['generation'],time.time()))
-        self._db.execute('UPDATE tasks SET engine_session_id=?,updated_at=? WHERE task_id=?',(session_id,time.time(),task_id))
+            self._execute_native('INSERT INTO engine_sessions VALUES (%s,%s,%s,%s,%s)',
+                (session_id,current_scope().owner_id,task_id,task['generation'],time.time()), write=True)
+        self._execute_native('UPDATE tasks SET engine_session_id=%s,updated_at=%s WHERE task_id=%s',(session_id,time.time(),task_id), write=True)
 
     def begin_interview_start(self,task_id,session_id,route):
         now = time.time()
@@ -871,7 +871,7 @@ FROM tasks t"""
         return True
 
     def session_binding(self,session_id):
-        row=self._db.execute('SELECT * FROM engine_sessions WHERE session_id=?',(session_id,)).fetchone()
+        row=self._execute_native('SELECT * FROM engine_sessions WHERE session_id=%s',(session_id,)).fetchone()
         if not row:return None
         result=dict(row);result['owner_id']=str(result['owner_id']);return result
 
