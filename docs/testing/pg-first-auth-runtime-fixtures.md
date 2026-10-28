@@ -406,3 +406,16 @@ metadata),not full-module green. Dated receiver inventory classifies41 files:
 14 migrate,16 guard,5 reference,6 retired-contract (mixed cases noted).
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A33: task diagnostics route fixtures
+
+Model-call diagnostics with/without a recorded engine session use scoped PG.
+Session binding uses the store method instead of direct SQLite SQL. Original
+call fields,aggregate token/count/timing and absent-section assertions unchanged.
+Explicit local diagnostics policy retained;not cloud execution-detail exposure.
+Fail-first concrete PG assertion failed on SQLite. Focused55passed0skips4.23s
+with producer sources:task/operator diagnostics,cloud API,bootstrap. Expanded
+163passed2known baseline failures(checkpoint intent view/session-cost metadata),
+not full-module green. SQLiteStore inventory falls41 to40 files,migrate14 to13;
+other buckets unchanged. Production/UI unchanged;hosted CI/full suite/deployed
+topology not run. A incomplete;B/C/D not started.
