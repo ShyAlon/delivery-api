@@ -596,3 +596,15 @@ cloud API,bootstrap56passed0skips4.39s with producer sources. API still incomple
 only for named legacy local contracts. Literal inventory unchanged35 files.
 Production/UI unchanged;hosted CI/full repository/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A47: decision-review helper fallback closure
+
+All seven decision-page helper callers already supply scoped PG. Remove the
+unused optional workspace/default SQLite constructor so a future caller cannot
+silently restore SQLite. Existing behavior assertions unchanged;poison test still
+imports SQLiteStore deliberately. Failing-first source/signature guard rejected
+the optional fallback. Decision pages,native review,cloud API,bootstrap49passed
+0skips5.53s with producer sources. Literal inventory35 unchanged,but decision
+pages is guard-only now (primary migrate7,guard17,reference5,retired7 across36
+tracked receiver files including implicit API). Production/UI unchanged;hosted
+CI/full repository/deployed topology not run. A incomplete;B/C/D not started.

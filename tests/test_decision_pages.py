@@ -6,10 +6,9 @@ from vmodel_contracts.interactive import *
 from delivery_api.store import SQLiteStore
 import delivery_api.app as module
 
-def setup(tmp_path,monkeypatch,workspace=None):
- # Unmigrated callers retain the original local SQLite fixture explicitly.
- store=workspace.store if workspace else SQLiteStore(str(tmp_path/'reviews.db'));
- sid='review-'+workspace.scope.owner_id if workspace else 'session-one'
+def setup(tmp_path,monkeypatch,workspace):
+ store=workspace.store
+ sid='review-'+workspace.scope.owner_id
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  task=store.create_task('Operating concept','brief');tid=task['task_id'];store.set_engine_session(tid,sid);store.update_phase(tid,'conops','running')
  from tests.test_decision_pages_data import draft
@@ -98,3 +97,10 @@ def test_review_api_fixture_uses_restricted_pg(tmp_path,monkeypatch,pg_scoped_wo
   SQLiteStore(':memory:')
  with store._postgres.transaction() as connection:
   assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
+
+
+def test_review_setup_requires_pg_workspace_without_sqlite_fallback():
+ import inspect
+ parameters=inspect.signature(setup).parameters
+ assert parameters['workspace'].default is inspect.Parameter.empty
+ assert 'SQLiteStore' not in inspect.getsource(setup)
