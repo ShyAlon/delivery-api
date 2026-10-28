@@ -2,7 +2,7 @@
 from pathlib import Path
 import pytest
 
-@pytest.mark.parametrize('filename',['test_decision_pages_browser.py','test_validation_panel_browser.py','test_login_layout_browser.py','test_remember_signin_browser.py'])
+@pytest.mark.parametrize('filename',['test_decision_pages_browser.py','test_validation_panel_browser.py','test_login_layout_browser.py','test_remember_signin_browser.py','test_debug_progress_browser.py'])
 def test_typed_browser_suite_has_no_local_database_bootstrap(filename):
     source=(Path(__file__).parent/filename).read_text()
     assert 'pg_browser' in source
