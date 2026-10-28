@@ -223,11 +223,14 @@ def test_not_started_panel_layout(pg_page,pg_ui,pg_ids):
     assert 'cannot start:' in panel.locator('#startstatus').inner_text()
 
 
-def test_start_screen_displays_engine_resolved_model_and_conflict(page, ui):
+def test_start_screen_displays_engine_resolved_model_and_conflict(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["empty"]
+    sim=pg_ids["sim"]
     routes={'routes':[{'id':'ollama','available':True,'model':'ollama:phi4'},
                       {'id':'deepseek','available':False,'error':"selected route 'deepseek' conflicts with INTERVIEW_ENGINE_MODEL_PROBING='ollama:phi4'"}]}
     page.route('**/api/model-routes',lambda route:route.fulfill(json=routes))
-    page.goto(ui+'/tasks/empty/view')
+    page.goto(ui+f'/tasks/{tid}/view')
     selector=page.get_by_role('group',name='Default model route');selector.wait_for()
     assert 'ollama:phi4' in selector.locator('[data-start-route=ollama]').inner_text()
     assert selector.locator('[data-start-route=deepseek]').is_disabled()
@@ -469,12 +472,15 @@ def test_create_task_button_disables_until_the_server_returns(page,ui):
     page.wait_for_url('**/tasks/guard-created/view')
 
 
-def test_start_interview_button_disables_until_the_server_returns(page,ui):
+def test_start_interview_button_disables_until_the_server_returns(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["empty"]
+    sim=pg_ids["sim"]
     routes={'routes':[{'id':'ollama','available':True,'model':'ollama:phi4'}]}
     page.route('**/api/model-routes',lambda route:route.fulfill(json=routes))
     held=[]
-    page.route('**/api/tasks/empty/start',lambda route:held.append(route))
-    page.goto(ui+'/tasks/empty/view')
+    page.route(f'**/api/tasks/{tid}/start',lambda route:held.append(route))
+    page.goto(ui+f'/tasks/{tid}/view')
     start=page.locator('#startengine');start.wait_for()
     assert start.inner_text()=='Start interview'
     start.click()
@@ -1256,15 +1262,18 @@ def test_audit_uses_shared_dialog_sortable_filterable_sticky_table(pg_page,pg_ui
     tid=pg_ids["live"]
     live=page.request.get(ui+f'/api/tasks/{tid}').json();page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));entries=[{'ts':1720000200,'actor':'Shy','action':'gate.approve','detail':{'phase':'srs'}},{'ts':1720000100,'actor':'policy','action':'gate.bypassed','detail':{'phase':'needs'}}];page.route(f'**/api/tasks/{tid}/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':entries,'totals':{'tokens':1234,'price':2.5,'price_usd':2.5,'phases_priced':2}}));page.goto(ui+f'/tasks/{tid}/view');page.get_by_role('button',name='Audit').click();dialog=page.get_by_role('dialog',name='Task audit');dialog.wait_for();assert dialog.get_by_text('1,234').count()==0 and dialog.get_by_text('2.50 credits').is_visible();headers=dialog.locator('thead');assert headers.evaluate('(e)=>getComputedStyle(e).position')=='sticky';rows=dialog.locator('tbody tr');assert rows.count()==2;dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='Shy';dialog.get_by_role('button',name='Actor').click();assert rows.first.locator('td').nth(1).inner_text()=='policy';dialog.get_by_label('Filter audit entries').fill('approve');assert rows.count()==1;assert rows.first.get_by_text('gate.approve').is_visible();close=dialog.get_by_role('button',name='Close task audit');vb=dialog.bounding_box();cb=close.bounding_box();assert cb['x']>=vb['x'] and cb['x']+cb['width']<=vb['x']+vb['width'];page.screenshot(path=str(_screenshots_dir / 'shared-audit-dialog.png'),full_page=True);page.keyboard.press('Escape');assert dialog.count()==0
 
-def test_model_route_default_and_phase_override_controls(page,ui):
-    page.goto(ui+'/tasks/empty/view')
+def test_model_route_default_and_phase_override_controls(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["empty"]
+    sim=pg_ids["sim"]
+    page.goto(ui+f'/tasks/{tid}/view')
     picker=page.get_by_role('group',name='Default model route');picker.wait_for()
     assert picker.locator('[data-start-route]').count()==2
     assert not page.get_by_role('button',name='Start interview').is_enabled()
     deepseek=picker.locator('[data-start-route=deepseek]')
     assert 'DeepSeek' in deepseek.inner_text()
-    mock_gate_review(page,ui,'sim')
-    page.goto(ui+'/tasks/sim/gates/gate-conops')
+    mock_gate_review(page,ui,sim)
+    page.goto(ui+f'/tasks/{sim}/gates/gate-conops')
     page.locator('.model-panel summary').click()
     override=page.locator('select[name="next_model"]');override.wait_for()
     assert override.locator('option').first.inner_text()=='Use current task default'
@@ -2451,12 +2460,15 @@ def test_everything_zip_downloads_with_the_manifest_first(page,ui,tmp_path):
     page.screenshot(path=str(_screenshots_dir / "everything-zip.png"),full_page=True)
 
 
-def test_start_route_pills_show_all_choices_and_disabled_reasons(page,ui):
+def test_start_route_pills_show_all_choices_and_disabled_reasons(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["empty"]
+    sim=pg_ids["sim"]
     routes={'managed':True,'default_route':{'route':'ollama'},'routes':[
         {'id':'deepseek','managed':True,'available':False,'error':'missing key: DEEPSEEK_API_KEY is not set on this server'},
         {'id':'ollama','managed':True,'available':True,'model':'ollama:phi4'}]}
     page.route('**/api/model-routes',lambda route:route.fulfill(json=routes))
-    page.goto(ui+'/tasks/empty/view')
+    page.goto(ui+f'/tasks/{tid}/view')
     choices=page.get_by_role('group',name='Default model route');choices.wait_for()
     assert choices.get_by_role('button',name='DeepSeek').is_disabled()
     assert 'DEEPSEEK_API_KEY' in choices.inner_text()
@@ -2573,12 +2585,15 @@ def test_waiting_phase_status_is_not_overwritten_by_late_heartbeat(pg_page,pg_ui
     expect(page.locator('#stageprogress > details > summary')).to_contain_text('Waiting for your answer')
 
 
-def test_both_admitted_routes_can_be_selected_without_hiding_either(page,ui):
+def test_both_admitted_routes_can_be_selected_without_hiding_either(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["empty"]
+    sim=pg_ids["sim"]
     routes={'managed':True,'default_route':{'route':'deepseek'},'routes':[
         {'id':'deepseek','managed':True,'available':True,'model':'deepseek:deepseek-flash'},
         {'id':'ollama','managed':True,'available':True,'model':'ollama:phi4'}]}
     page.route('**/api/model-routes',lambda route:route.fulfill(json=routes))
-    page.goto(ui+'/tasks/empty/view')
+    page.goto(ui+f'/tasks/{tid}/view')
     choices=page.get_by_role('group',name='Default model route')
     for name in ['DeepSeek','Ollama','DeepSeek']:
         button=choices.get_by_role('button',name=name)
@@ -2745,4 +2760,14 @@ def test_resource_browser_group_requires_signed_pg_fixture():
                  test_greenfield_confirmation_is_single_flight,
                  test_flagged_inputs_show_readable_item_and_no_circular_link,
                  test_interview_feed_shows_flagged_item_review_as_words_not_json):
+        assert "pg_page" in inspect.signature(case).parameters
+
+
+def test_start_browser_group_requires_signed_pg_fixture():
+    import inspect
+    for case in (test_start_screen_displays_engine_resolved_model_and_conflict,
+                 test_start_interview_button_disables_until_the_server_returns,
+                 test_model_route_default_and_phase_override_controls,
+                 test_start_route_pills_show_all_choices_and_disabled_reasons,
+                 test_both_admitted_routes_can_be_selected_without_hiding_either):
         assert "pg_page" in inspect.signature(case).parameters

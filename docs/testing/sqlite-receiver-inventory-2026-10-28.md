@@ -63,3 +63,29 @@ at current small-theme size. This is a guess,not a schedule. Shared global
 bootstrap can expose order coupling after individual ports;reference and retired
 contracts remain explicit B/C/D responsibilities. A32 does not remove a file
 from this inventory because test_tasks.py retains other SQLite receivers.
+
+## Refreshed A status at main d444f57 (after A58)
+
+Measured35 literal SQLiteStore files:4 migrate,19 guard-only,5 reference,
+7 retired-contract. Literal migrate files:auth_quota,package_integration,tasks,
+ui_playwright. API is an implicit legacy receiver (four local link/budget cases)
+without token:including it36tracked/5migrate. Global conftest is primarily
+reference but still owns global SQLite bootstrap migration. No token-file
+reduction during browser ports,so token count alone hides the work.
+
+Shared browser module:55 PG functions/60 expanded cases;72 legacy page/ui
+functions/77expanded cases;three additional standalone legacy auth/bootstrap
+browser functions. Two separate SPA browser modules already PG. Planning
+classification of72remaining:task/layout/completion16,operator/debug/audit14,
+gate/rerun12,runtime/refresh11,decision/state9,start/model-route5,
+interview/composer5. Categories are a planning judgment,counts measured by AST.
+
+Remaining non-browser work:producer package integration,global bootstrap,
+task legacy/factory reconciliation,auth quota/security separation,and four API
+local contracts. Some boundaries belong to C,not bypassing PG owner guards.
+Guess,not schedule:10-16 more A PRs at current small-theme size,roughly8-12
+browser themes+2-4 other closures. B1-2,C2-4,D1-2 PRs are fresh cautious guesses,
+not measured estimates or permission to widen scope. Metrics/checkpoint
+retirement after D excluded. A59 below migrates the five start/model-route
+functions,leaving67shared legacy functions/72expanded cases and60PGfunctions/
+65expanded cases after that PR,assuming no other changes.
