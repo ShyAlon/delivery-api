@@ -687,3 +687,17 @@ scroll row into view before mobile screenshot (first capture was offscreen).
 Debug/operator-menu history case remains separate for its authority contract.
 Production unchanged;hosted CI/full mixed UI/full repo/deployed topology not
 run. A incomplete;B/C/D not started. V diagram cosmetic debt unchanged.
+
+## A53: founder decision dialog browser group
+
+Seven structured-decision,Escape,outside-click/reopen,restart panel alignment,
+four-option fixed controls,sticky ready-bar and answered/binary-approval cases
+use signed regular-owner PG. SSE,task snapshots and submitted-answer responses
+remain explicit presentation mocks,not proof of engine acceptance. All original
+assertions retained. Signature guard failed first. Seven cases+guard+cloud API+
+bootstrap46passed0skips24.18s. Pixels inspected:readable two-option decision,
+selected PWA and rationale;scrolled four-option dialog retains title/compose
+controls,selected Responsive web and last Hybrid option visible. Earlier cards
+are outside scroll viewport by design. Production unchanged;V diagram cosmetic
+debt remains. Hosted CI/full mixed UI/full repo/deployed topology unrun.
+A incomplete;B/C/D not started.
