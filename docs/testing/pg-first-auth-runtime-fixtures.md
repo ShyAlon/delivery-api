@@ -476,3 +476,16 @@ native projection,bootstrap,cloud API. Expanded151passed2known baseline failures
 its primary bucket is now retired-contract,not migrate (9/16/5/7).
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A38: recorded simulation gate replay fixture
+
+The remaining mixed-task recorded replay case uses scoped PG:imports bounded
+usage,pauses at intent,records redo steer,continues past open CONOPS gate and
+completes with artifact/audit/event evidence. Every original assertion retained.
+No subprocess or provider execution. Fail-first concrete PG assertion failed on
+SQLite. Focused17passed0skips2.32s:replay,simulation validation,native gate,
+bootstrap. Expanded124passed2known baseline failures(checkpoint intent view/
+session-cost metadata),not full-module green. SQLiteStore inventory37 files
+unchanged because mixed tasks retains factory/legacy contracts. Production/UI
+unchanged;hosted CI/full suite/deployed topology not run. A incomplete;B/C/D not
+started.
