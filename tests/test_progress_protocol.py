@@ -2,9 +2,26 @@ import pytest
 from uuid import uuid4
 from vmodel_contracts.progress_signal import ProgressSignal,ProgressPage
 from vmodel_contracts.interactive import EngineSnapshot,InputRequest,InputKind,ProcessStatus,NextStep
-from delivery_api.store import SQLiteStore
+from delivery_api.postgres_store import PostgresStore
 from delivery_api.progress_adapter import ingest_interview_page,ingest_generator_line,PREFIX
 from delivery_api.control_snapshot import project
+
+
+@pytest.fixture
+def progress_store(pg_workspace_factory,monkeypatch):
+    from delivery_api import app as module
+    from delivery_api.tenancy import tenant_context
+    from delivery_api.store import SQLiteStore
+    with pg_workspace_factory() as workspace:
+        monkeypatch.setattr(module,'store',workspace.store)
+        monkeypatch.setitem(module.app.state._state,'store',workspace.store)
+        monkeypatch.setattr(module.orchestrator,'store',workspace.store)
+        def no_sqlite(*args,**kwargs):
+            raise AssertionError('SQLite forbidden')
+        monkeypatch.setattr(SQLiteStore,'__init__',no_sqlite)
+        with tenant_context(workspace.scope):
+            workspace.store._fixture_dsn=workspace.dsn
+            yield workspace.store
 
 
 def signal(task_id,session_id,phase,cursor=1,event_id=None):
@@ -12,13 +29,13 @@ def signal(task_id,session_id,phase,cursor=1,event_id=None):
         phase_key=phase,stage='stage',label='Working',status='started')
 
 
-def test_cursor_dedupe_restart_and_control_isolation(tmp_path):
-    path=tmp_path/'tasks.db';store=SQLiteStore(str(path));task=store.create_task('Protocol isolated')
+def test_cursor_dedupe_restart_and_control_isolation(tmp_path,progress_store):
+    store=progress_store;task=store.create_task('Protocol isolated')
     sid=str(uuid4());row=signal(task['task_id'],sid,'intent')
     ingest_interview_page(store,task['task_id'],sid,ProgressPage(events=[row],next_cursor=1))
     assert store.progress_cursor(task['task_id'],'interview',sid)==1
     assert len([e for e in store.events(task['task_id']) if e['kind']=='progress'])==1
-    store=SQLiteStore(str(path))
+    store=PostgresStore(progress_store._fixture_dsn.replace('user=sandbox','user=delivery_app'))
     ingest_interview_page(store,task['task_id'],sid,ProgressPage(events=[row],next_cursor=1))
     assert len([e for e in store.events(task['task_id']) if e['kind']=='progress'])==1
     assert ingest_generator_line(store,task['task_id'],PREFIX+signal(task['task_id'],sid,'tests').model_dump_json(),'tests')
@@ -28,8 +45,8 @@ def test_cursor_dedupe_restart_and_control_isolation(tmp_path):
     assert store.task(task['task_id'])['state']=='not_started'
 
 
-def test_engine_and_gate_have_same_shape_not_shared_sequence(tmp_path):
-    store=SQLiteStore(str(tmp_path/'tasks.db'));task=store.create_task('Control isolated')
+def test_engine_and_gate_have_same_shape_not_shared_sequence(tmp_path,progress_store):
+    store=progress_store;task=store.create_task('Control isolated')
     store.update_phase(task['task_id'],'intent','running');task=store.task(task['task_id'])
     pending=InputRequest(input_id=uuid4(),kind=InputKind.TEXT,prompt='Question?')
     engine=EngineSnapshot(session_id='s',task_id=task['task_id'],sequence=7,process_status=ProcessStatus.WAITING_INPUT,
@@ -45,10 +62,10 @@ def test_engine_and_gate_have_same_shape_not_shared_sequence(tmp_path):
     with __import__('pytest').raises(ValueError):store.decide_gate(task['task_id'],gate.wait_id,'approve',selected_option='Approve Start',expected_revision=0)
 
 
-def test_successful_subprocess_without_configured_artifact_fails_without_gate(tmp_path):
+def test_successful_subprocess_without_configured_artifact_fails_without_gate(tmp_path,progress_store):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    store=SQLiteStore(str(tmp_path/'tasks.db'));task=store.create_task('No false gate')
+    store=progress_store;task=store.create_task('No false gate')
     runner=ProcessRunner(store)
     result=asyncio.run(runner.run(task['task_id'],[sys.executable,'-c','print("finished")'],cwd=tmp_path,phase='tests',env={'VMODEL_PROGRESS_TASK_ID':task['task_id'],'VMODEL_PROGRESS_SESSION_ID':'fake-session'},infer_phase=False))
     assert result!=0
@@ -58,14 +75,14 @@ def test_successful_subprocess_without_configured_artifact_fails_without_gate(tm
 
 
 @pytest.mark.engine_integration
-def test_http_client_and_delivery_ingest_read_during_engine_start(tmp_path):
+def test_http_client_and_delivery_ingest_read_during_engine_start(tmp_path,progress_store):
     import threading
     from interview_engine.http_service import SessionRegistry,create_app
     from interview_engine.progress_journal import ProgressJournal
     from vmodel_contracts.interactive import StartSessionRequest
     from concurrent.futures import ThreadPoolExecutor
     entered=threading.Event();release=threading.Event();session=str(uuid4())
-    store=SQLiteStore(str(tmp_path/'delivery.db'));task=store.create_task('Start progress')
+    store=progress_store;task=store.create_task('Start progress')
     class Program:
         model_map=None
         def advance(self):
@@ -85,7 +102,7 @@ def test_http_client_and_delivery_ingest_read_during_engine_start(tmp_path):
         release.set();assert reply.result(timeout=3).status_code==201
 
 
-def test_every_generator_phase_uses_one_progress_and_gate_boundary(tmp_path):
+def test_every_generator_phase_uses_one_progress_and_gate_boundary(tmp_path,progress_store):
     """Installed-style subprocess path: framed signal and real artifact precede each gate."""
     import asyncio
     import sys
@@ -95,10 +112,9 @@ def test_every_generator_phase_uses_one_progress_and_gate_boundary(tmp_path):
     for definition in PHASE_DEFINITIONS:
         if definition.executor != "generator":
             continue
-        db = tmp_path / f"{definition.key}.db"
         out = tmp_path / definition.key
         out.mkdir()
-        store = SQLiteStore(str(db))
+        store = progress_store
         task_id = store.create_task(f"Progress {definition.key}")["task_id"]
         sid = str(uuid4())
         progress = signal(task_id, sid, definition.key).model_dump_json()
@@ -124,10 +140,10 @@ def test_every_generator_phase_uses_one_progress_and_gate_boundary(tmp_path):
                        "ref": str(out / artifact), "present": True, "valid": True}]).mode == "waiting_gate"
 
 
-def test_progress_page_timing_measures_fetch_ingest_and_source_age(tmp_path,monkeypatch):
+def test_progress_page_timing_measures_fetch_ingest_and_source_age(tmp_path,monkeypatch,progress_store):
     import asyncio
     from delivery_api import app as module
-    store=SQLiteStore(str(tmp_path/'timing.db'));task=store.create_task('Timing');sid=str(uuid4())
+    store=progress_store;task=store.create_task('Timing');sid=str(uuid4())
     row=signal(task['task_id'],sid,'intent');reports=[]
     monkeypatch.setattr(module,'store',store)
     class Engine:
@@ -139,3 +155,13 @@ def test_progress_page_timing_measures_fetch_ingest_and_source_age(tmp_path,monk
     assert len(timing)==1 and timing[0]['events']==1
     assert all(timing[0][key]>=0 for key in ('fetch_ms','ingest_ms','source_age_max_ms','source_age_min_ms'))
     assert timing[0]['next_cursor']==1
+
+
+def test_progress_fixture_is_restricted_postgres(progress_store):
+    from delivery_api.postgres_store import PostgresStore
+    from delivery_api.store import SQLiteStore
+    assert isinstance(progress_store,PostgresStore)
+    with pytest.raises(AssertionError,match='SQLite forbidden'):
+        SQLiteStore(':memory:')
+    with progress_store._postgres.transaction() as connection:
+        assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
