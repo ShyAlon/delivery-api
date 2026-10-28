@@ -6,6 +6,11 @@ scopes={
  'sqlite_reference':['tests/test_tasks.py::test_task_management_api_structured_collisions_and_delete','tests/test_ui_playwright.py::test_task_filter_sort_rename_and_delete'],
  'postgres_slice':['tests/test_postgres_workspace.py::test_task_api_lifecycle_and_owner_isolation','tests/test_postgres_workspace.py::test_pg_dashboard_real_browser'],
 }
+if '--task-browser' in sys.argv:
+ scopes={
+  'sqlite_browser_reference':['tests/test_ui_playwright.py::test_task_filter_sort_rename_and_delete','tests/test_ui_playwright.py::test_create_task_dialog_keyboard_submit_textarea_and_cancel'],
+  'postgres_browser_parity':['tests/test_postgres_task_browser.py'],
+ }
 results=[]
 for name, tests in scopes.items():
  code='''import json,time,pytest\nresults=[]\nfor label in ('cold','warm'):\n start=time.monotonic();rc=pytest.main(%r);results.append({'mode':label,'elapsed_s':round(time.monotonic()-start,3),'exit_code':int(rc)})\nprint('MEASURE_JSON='+json.dumps(results))\n'''%(['-q','-s']+tests)
