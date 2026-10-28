@@ -146,3 +146,11 @@ After the PG base removal, the remaining PG operations and prepaid/credit helper
 The remaining query dialect bridge cannot yet be deleted: revision installation, worker jobs, expense/credit helpers, artifacts and external prepaid/credit helpers still consume it. Runtime SQLite/auth/backend removal and deployed topology remain later work. Hosted CI is unverified.
 
 Final slice with AST production guard: 170 passed, 0 skipped in 88.81s. Same three evidence contracts per backend, cold/warm local samples: SQLite 1.586/0.404s; PG 1.727/0.303s. These are single-run scoped timings, not full-suite or deploy predictions.
+
+## Native worker query consumers (2026-10-28)
+
+Nine worker operations now own eleven PG-native statements: enqueue, recoverable listing, task diagnostics, lookup, claim, interrupted pause, explicit reauthorization, stopped completion and ordinary completion. Writes use native cache invalidation; transaction wrappers, RLS, capability checks, claim CAS and session binding are unchanged.
+
+Failing first: the real worker lifecycle failed on enqueue with the worker-table query bridge blocked. After porting, that same fence permits concurrency (four contenders, one winner), pause/reclaim, failure, new live-session explicit reauthorization, cross-owner invisibility/refusal, idempotent completion, and stopped-worker quiescence checks. A second test injects failure after a real native INSERT and proves no durable job survives. Scope caveat: lifecycle stop itself and the common task projection are separate bridge consumers; the test explicitly exempts setup/stop and that task projection, rather than claiming the whole transitive graph is bridge-free.
+
+Source-enabled combined slice: 172 passed, 0 skipped in 93.41s. Same three evidence contracts, local cold/warm single samples: SQLite 1.606/0.296s, PG 1.610/0.286s. Not full-suite or deploy predictions. Hosted CI and deployed topology remain unverified. Revision/artifact/credit/external helper and task-lifecycle query consumers still require later ports; the bridge stays until their last use is proven gone.
