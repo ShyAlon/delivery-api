@@ -100,3 +100,15 @@ Acceptance86passed0skips9.47s with producer sources enabled:phase start,cloud
 execution/API,protocol/SSE/phase parity,native lifecycle/gate/worker,bootstrap.
 Production/UI unchanged. Hosted CI/full suite/deployed topology not run.
 A remains incomplete;B/C/D not started.
+
+## A9: signed task-poll observability
+
+The one-combined-snapshot task GET regression now uses real signed cloud PG
+requests instead of opening SQLite then disabling cloud mode to avoid auth.
+Original 200/one-read/empty-events assertions retained; added anonymous401 before
+any snapshot and foreign-owner404 through the same scoped snapshot. Other
+observability/Node/static wiring tests unchanged. Fail-first PG type assertion
+failed on the original SQLite fixture. Acceptance60passed0skips7.74s with both
+producer sources enabled:observability,bootstrap,cloud API,SSE,native projection.
+Production/UI unchanged. Hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.
