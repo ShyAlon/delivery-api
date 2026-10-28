@@ -112,3 +112,17 @@ failed on the original SQLite fixture. Acceptance60passed0skips7.74s with both
 producer sources enabled:observability,bootstrap,cloud API,SSE,native projection.
 Production/UI unchanged. Hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A10: recorded replay restart fixtures
+
+Recorded replay restart uses a second independent restricted PG store,not the
+original object. Original interruption/failure/idempotency/delete,regular-task
+preservation and partial-recording terminal-state assertions remain. SQLite
+opens poisoned through the scoped fixture. Added proof that reconciliation in
+one owner scope cannot stop another owner's running replay. Local recording
+files/synthetic replay remain hermetic;no provider calls or cloud replay API
+activation implied. Fail-first restart PG assertion failed on original SQLite.
+Acceptance74passed0skips9.51s with both producer sources:restart,simulation
+validation,protocol/SSE/parity,native lifecycle/run/projection,cloud API,bootstrap.
+Production/UI unchanged;hosted CI/full suite/deployed topology not run.
+A incomplete;B/C/D not started.
