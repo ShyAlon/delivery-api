@@ -75,13 +75,13 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
     _job(store,job_id);owner=current_scope().owner_id
     # Shared owner lock serializes independent processes, not just one API worker.
     lock_key=int.from_bytes(hashlib.sha256(owner.encode()).digest()[:8],'big',signed=True)
-    store._db.execute('SELECT pg_advisory_xact_lock(?)',(lock_key,)).fetchone()
+    store._execute_native('SELECT pg_advisory_xact_lock(%s)',(lock_key,)).fetchone()
     # Authority can change while waiting on the shared Stop/admission lock.
     # READ COMMITTED re-read after the lock, before replay or any new hold.
     _job(store,job_id)
     from .suspension_policy import require_task_operation
     require_task_operation(store,'provider.reserve')
-    limits=store._db.execute('SELECT * FROM admission_limits WHERE owner_id=?',(owner,)).fetchone()
+    limits=store._execute_native('SELECT * FROM admission_limits WHERE owner_id=%s',(owner,)).fetchone()
     if not limits:raise AdmissionDenied('reviewed owner admission configuration missing')
     fingerprint=hashlib.sha256(json.dumps({'job':job_id,'quote':quote,'request':request_digest},sort_keys=True).encode()).hexdigest()
     existing=store.provider_attempt(attempt_id)
@@ -89,10 +89,10 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
         if existing['fingerprint']!=fingerprint:raise AdmissionDenied('conflicting admission replay')
         return existing
     now=time.time()
-    rows=store._db.execute('SELECT * FROM provider_attempts WHERE owner_id=?',(owner,)).fetchall()
+    rows=store._execute_native('SELECT * FROM provider_attempts WHERE owner_id=%s',(owner,)).fetchall()
     if any(r.get('input_estimate_overrun') for r in rows):raise AdmissionDenied('actual input exceeded estimate; new admission held for review')
     held=[r for r in rows if r['state'] in ('reserved','dispatched','uncertain')]
-    if 'retail_formula' in quote and store._db.execute("SELECT 1 FROM retail_compute_segments r JOIN worker_jobs w ON r.job_id=w.job_id WHERE r.owner_id=? AND (r.state='unresolved' OR (r.state='pending' AND w.state<>'running')) LIMIT 1",(owner,)).fetchone():raise AdmissionDenied('unresolved compute accounting requires review')
+    if 'retail_formula' in quote and store._execute_native("SELECT 1 FROM retail_compute_segments r JOIN worker_jobs w ON r.job_id=w.job_id WHERE r.owner_id=%s AND (r.state='unresolved' OR (r.state='pending' AND w.state<>'running')) LIMIT 1",(owner,)).fetchone():raise AdmissionDenied('unresolved compute accounting requires review')
     if any(r['state']=='uncertain' for r in held):raise AdmissionDenied('uncertain provider usage requires review')
     if len(held)>=limits['concurrency_max']:raise AdmissionDenied('owner attempt concurrency exhausted')
     if limits['rate_max'] is not None and sum(r['created_at']>now-limits['rate_window_seconds'] for r in rows)>=limits['rate_max']:
@@ -105,8 +105,8 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
         raise AdmissionDenied('attempt exceeds reviewed maximum')
     if (limits['expense_limit'] is not None and used_expense+expense>limits['expense_limit']) or (not require_prepaid and limits['retail_limit'] is not None and used_retail+retail>limits['retail_limit']):
         raise AdmissionDenied('owner spend allowance exhausted')
-    store._db.execute('INSERT INTO provider_attempts (attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,expense_actual,retail_actual,usage,created_at,updated_at) VALUES (?,?,?,?,?, ?,\'reserved\',?,?,NULL,NULL,NULL,?,?)',
-      (attempt_id,owner,job_id,limits['config_version'],json.dumps(quote),fingerprint,expense,retail,now,now))
+    store._execute_native("INSERT INTO provider_attempts (attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,expense_actual,retail_actual,usage,created_at,updated_at) VALUES (%s,%s,%s,%s,%s, %s,'reserved',%s,%s,NULL,NULL,NULL,%s,%s)",
+      (attempt_id,owner,job_id,limits['config_version'],json.dumps(quote),fingerprint,expense,retail,now,now), write=True)
     return store.provider_attempt(attempt_id)
 
 def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
@@ -114,9 +114,9 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
     from .prepaid import owner_lock
     # Same global-first ordering as launch dispatch. Accepted settlements never
     # consult admission limits and always finish, including after a tripwire.
-    store._db.execute('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
+    store._execute_native('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
     owner_lock(store)
-    row=store._db.execute('SELECT * FROM provider_attempts WHERE attempt_id=? FOR UPDATE',(attempt_id,)).fetchone()
+    row=store._execute_native('SELECT * FROM provider_attempts WHERE attempt_id=%s FOR UPDATE',(attempt_id,)).fetchone()
     if not row:raise AdmissionDenied('owner attempt not found')
     if action=='start':
         if 'estimate_policy' in row['quote']:
@@ -135,11 +135,11 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         if require_prepaid:
             from .prepaid import authorize
             authorize(store,dict(row))
-        store._db.execute("UPDATE provider_attempts SET state='dispatched',updated_at=?,provider_started_at=? WHERE attempt_id=?",(time.time(),time.time(),attempt_id))
+        store._execute_native("UPDATE provider_attempts SET state='dispatched',updated_at=%s,provider_started_at=%s WHERE attempt_id=%s",(time.time(),time.time(),attempt_id), write=True)
     elif action=='cancel':
         if row['state']=='cancelled':return dict(row)
         if row['state']!='reserved':raise AdmissionDenied('dispatched or uncertain funds cannot be released')
-        store._db.execute("UPDATE provider_attempts SET state='cancelled',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))
+        store._execute_native("UPDATE provider_attempts SET state='cancelled',updated_at=%s WHERE attempt_id=%s",(time.time(),attempt_id), write=True)
         # Audited in the same scoped transaction as the state change (the
         # outermost operation commits), mirroring the release audit below:
         # releasing a reservation frees money-relevant holds, so the release
@@ -155,7 +155,7 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         store.audit(str(row['owner_id']),'provider.attempt.cancelled',store.worker_job(row['job_id'])['task_id'],detail)
     elif action=='uncertain':
         if row['state'] not in ('dispatched','uncertain'):raise AdmissionDenied('only dispatched attempts can be uncertain')
-        store._db.execute("UPDATE provider_attempts SET state='uncertain',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))
+        store._execute_native("UPDATE provider_attempts SET state='uncertain',updated_at=%s WHERE attempt_id=%s",(time.time(),attempt_id), write=True)
     elif action=='settle':
         if row['state']=='settled':
             if row['usage']!=usage:raise AdmissionDenied('conflicting settlement replay')
@@ -168,10 +168,10 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         if valid and 'cache_hit_tokens' in usage:valid=usage['cache_hit_tokens']+usage['cache_miss_tokens']==usage['input_tokens']
         if not valid or (usage['input_tokens']>quote['input_max'] and 'estimate_policy' not in quote) or usage['output_tokens']>quote['output_max']:
             # Return the durable hold, not an exception that rolls it back.
-            store._db.execute("UPDATE provider_attempts SET state='uncertain',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))
+            store._execute_native("UPDATE provider_attempts SET state='uncertain',updated_at=%s WHERE attempt_id=%s",(time.time(),attempt_id), write=True)
             return store.provider_attempt(attempt_id)
         if 'estimate_policy' in quote and usage['input_tokens']>quote['input_max']:
-            store._db.execute('UPDATE provider_attempts SET input_estimate_overrun=true WHERE attempt_id=?',(attempt_id,))
+            store._execute_native('UPDATE provider_attempts SET input_estimate_overrun=true WHERE attempt_id=%s',(attempt_id,), write=True)
         settled_quote=quote
         if 'provider_evidence' in quote:
             from .provider_snapshot import ProviderSnapshot
@@ -180,10 +180,10 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
                 snapshot=ProviderSnapshot(quote['provider_evidence']['snapshot'])
                 band,rates=snapshot.billed_rates(datetime.fromtimestamp(row['provider_started_at'],timezone.utc),datetime.now(timezone.utc))
             except (AdmissionDenied,TypeError):
-                store._db.execute("UPDATE provider_attempts SET state='uncertain',updated_at=? WHERE attempt_id=?",(time.time(),attempt_id))
+                store._execute_native("UPDATE provider_attempts SET state='uncertain',updated_at=%s WHERE attempt_id=%s",(time.time(),attempt_id), write=True)
                 return store.provider_attempt(attempt_id)
             settled_quote=dict(quote,expense_cache_hit=rates['cache_hit'],expense_cache_miss=rates['cache_miss'],expense_output=rates['output'])
-            store._db.execute('UPDATE provider_attempts SET billed_rate_evidence=?::jsonb WHERE attempt_id=?',(json.dumps({'snapshot_sha256':snapshot.id,'band':band,'rates':rates,'basis':'uniform UTC start-to-settlement interval','settlement_observed_at':datetime.now(timezone.utc).isoformat()}),attempt_id))
+            store._execute_native('UPDATE provider_attempts SET billed_rate_evidence=%s::jsonb WHERE attempt_id=%s',(json.dumps({'snapshot_sha256':snapshot.id,'band':band,'rates':rates,'basis':'uniform UTC start-to-settlement interval','settlement_observed_at':datetime.now(timezone.utc).isoformat()}),attempt_id), write=True)
         expense=(usage['cache_hit_tokens']*settled_quote['expense_cache_hit']+usage['cache_miss_tokens']*settled_quote['expense_cache_miss'] if 'expense_cache_hit' in quote else usage['input_tokens']*quote['expense_input'])+usage['output_tokens']*settled_quote['expense_output']
         retail=usage['input_tokens']*quote['retail_input']+usage['output_tokens']*quote['retail_output']
         if 'retail_formula' in quote:
@@ -193,7 +193,7 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
             retail=contribution['posted_units']
         from .prepaid import debit
         debit(store,dict(row),retail,already_posted='retail_formula' in quote)
-        store._db.execute("UPDATE provider_attempts SET state='settled',expense_actual=?,retail_actual=?,usage=?::jsonb,updated_at=?,settled_at=? WHERE attempt_id=?",(expense,retail,json.dumps(usage),time.time(),time.time(),attempt_id))
+        store._execute_native("UPDATE provider_attempts SET state='settled',expense_actual=%s,retail_actual=%s,usage=%s::jsonb,updated_at=%s,settled_at=%s WHERE attempt_id=%s",(expense,retail,json.dumps(usage),time.time(),time.time(),attempt_id), write=True)
         if 'expense_units_per_usd' in quote:
             # Atomically retain breach evidence with confirmed settlement. A
             # guard denial never rejects or undoes this accepted call's debit.
@@ -203,12 +203,12 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         if row['state']=='released':return dict(row)
         evidence=release_proof(row,usage)
         now=time.time()
-        per_job=store._db.execute("SELECT count(*) AS n FROM provider_attempts WHERE job_id=? AND state='released'",(row['job_id'],)).fetchone()['n']
-        per_owner=store._db.execute("SELECT count(*) AS n FROM provider_attempts WHERE owner_id=? AND state='released' AND updated_at>?",(row['owner_id'],now-86400)).fetchone()['n']
+        per_job=store._execute_native("SELECT count(*) AS n FROM provider_attempts WHERE job_id=%s AND state='released'",(row['job_id'],)).fetchone()['n']
+        per_owner=store._execute_native("SELECT count(*) AS n FROM provider_attempts WHERE owner_id=%s AND state='released' AND updated_at>%s",(row['owner_id'],now-86400)).fetchone()['n']
         if per_job>=RELEASE_MAX_PER_JOB or per_owner>=RELEASE_MAX_PER_OWNER_DAY:
             raise AdmissionDenied('release limit reached; the attempt stays held for review')
-        store._db.execute("UPDATE provider_attempts SET state='released',updated_at=? WHERE attempt_id=? AND state='dispatched'",(now,attempt_id))
-        store._db.execute("UPDATE credit_charges SET state='released' WHERE attempt_id=? AND state='pending'",(attempt_id,))
+        store._execute_native("UPDATE provider_attempts SET state='released',updated_at=%s WHERE attempt_id=%s AND state='dispatched'",(now,attempt_id), write=True)
+        store._execute_native("UPDATE credit_charges SET state='released' WHERE attempt_id=%s AND state='pending'",(attempt_id,), write=True)
         store.audit(str(row['owner_id']),'provider.attempt.released',store.worker_job(row['job_id'])['task_id'],
                     {'attempt_id':attempt_id,'job_id':row['job_id'],'evidence':evidence,'expense_reserved':row['expense_reserved'],'billed_units':0})
     else:raise AdmissionDenied('unsupported attempt transition')
