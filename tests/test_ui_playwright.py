@@ -674,17 +674,19 @@ def test_stored_pending_decision_reopens_on_page_load_and_panels_align(pg_page,p
     assert page.locator('.live-status-row').is_visible()
     page.screenshot(path=str(_screenshots_dir / 'restart-decision-aligned-panels.png'),full_page=True)
 
-def test_detail_layout_never_crushes_or_overlaps_at_user_viewport(page,ui):
+def test_detail_layout_never_crushes_or_overlaps_at_user_viewport(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+'/api/tasks/live').json();live['active_phase']='conops';long='Reply with the option number or exact concept name, then ` - ` and why you chose it. This is an explicit founder decision.'
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['active_phase']='conops';long='Reply with the option number or exact concept name, then ` - ` and why you chose it. This is an explicit founder decision.'
     decision={'type':'founder_decision','title':'Choose the operating concept','prompt':long,'options':[{'value':'1','label':'Native','summary':'Installed'},{'value':'2','label':'PWA','summary':'Browser'}]}
     live['events']=[{'id':1,'kind':'founder_decision','message':long,'phase_key':'conops','payload':{'waiting_input':True,'question':long,'decision':decision},'ts':1720000300}]
     # Doctrine colors: approved green, generated yellow, active blue, pending gray.
     states=['approved','awaiting_approval','running','pending','pending','pending','pending']
     for phase,state in zip(live['phases'],states):phase['state']=state;phase['detail']='Waiting for founder approval' if state=='awaiting_approval' else ''
     live['ui_state']={'mode':'engine_decision','active_phase':live['active_phase'],'process_live':True,'decision':decision,'gate':None}
-    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.set_viewport_size({'width':1390,'height':827});page.goto(ui+'/tasks/live/view');page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape')
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.set_viewport_size({'width':1390,'height':827});page.goto(ui+f'/tasks/{tid}/view');page.locator('.decision-dialog').wait_for();page.keyboard.press('Escape')
     left=page.locator('.detail-layout>.panel');right=page.locator('.detail-layout>div>.panel')
     lb,rb=left.bounding_box(),right.bounding_box();assert abs((lb['y']+lb['height'])-(rb['y']+rb['height']))<2
     indicator=page.locator('.live-indicator');assert indicator.evaluate('e=>e.scrollWidth<=e.clientWidth')
@@ -2391,8 +2393,10 @@ def test_failed_architecture_has_a_retry_that_resumes_the_phase(pg_page,pg_ui,pg
 
 
 
-def test_running_cost_header_shows_credits_and_usd_and_grows_while_running(page,ui):
-    page.goto(ui+"/tasks/live/view")
+def test_running_cost_header_shows_credits_and_usd_and_grows_while_running(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    page.goto(ui+f"/tasks/{tid}/view")
     header=page.locator("#sessioncost")
     header.wait_for(state="attached")
     # the header can restart (Loading again) while sibling widgets settle; expect() polls to the
@@ -2405,14 +2409,14 @@ def test_running_cost_header_shows_credits_and_usd_and_grows_while_running(page,
     # so extra refreshes are harmless; each dispatch is wrapped in the phase-breakdown response and
     # a short settle so the next one cannot land inside refresh()'s pending window and be dropped.
     stage={"price":2.5}
-    page.route("**/api/tasks/live/cost",lambda route:route.fulfill(json={"price":stage["price"],"price_usd":stage["price"]}))
+    page.route(f"**/api/tasks/{tid}/cost",lambda route:route.fulfill(json={"price":stage["price"],"price_usd":stage["price"]}))
     page.wait_for_timeout(500)   # let the initial refresh clear its pending flag first
-    with page.expect_response("**/api/tasks/live/cost-phases"):
+    with page.expect_response(f"**/api/tasks/{tid}/cost-phases"):
         page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
     expect(header).to_have_text("2.50 credits · $2.50",timeout=10000)
     page.wait_for_timeout(200)
     stage["price"]=3.75
-    with page.expect_response("**/api/tasks/live/cost-phases"):
+    with page.expect_response(f"**/api/tasks/{tid}/cost-phases"):
         page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
     expect(header).to_have_text("3.75 credits · $3.75",timeout=10000)
 def test_live_headline_names_latest_stage_and_stage_line_ignores_phase_tag(pg_page,pg_ui,pg_ids):
@@ -2491,7 +2495,10 @@ def test_live_heartbeat_wraps_without_clipping(pg_page,pg_ui,pg_ids, width):
 
 
 @pytest.mark.parametrize('path', ['/tasks/live/view','/tasks/live/gates/gate-conops','/tasks/done/complete','/','/about'])
-def test_global_cost_header_on_all_route_families(page,ui,path):
+def test_global_cost_header_on_all_route_families(pg_page,pg_ui,pg_ids,path):
+ page,ui=pg_page,pg_ui
+ tid=pg_ids["live"]
+ path=path.replace("/tasks/live/",f"/tasks/{tid}/").replace("/tasks/done/",f"/tasks/{pg_ids['done']}/")
  base=ui
  task=path.startswith('/tasks/')
  page.route('**/api/tasks/*/cost',lambda r:r.fulfill(json={'price':.73,'price_usd':.73}))
@@ -3006,4 +3013,12 @@ def test_customer_diagnostic_cases_require_signed_pg_browser():
                  test_everything_zip_downloads_with_the_manifest_first,
                  test_customer_audit_summary_is_credits_only_even_with_legacy_provider_totals,
                  test_not_started_running_and_done_pages):
+        assert 'pg_page' in inspect.signature(case).parameters
+
+
+def test_cost_layout_cases_require_signed_pg_browser():
+    import inspect
+    for case in (test_running_cost_header_shows_credits_and_usd_and_grows_while_running,
+                 test_global_cost_header_on_all_route_families,
+                 test_detail_layout_never_crushes_or_overlaps_at_user_viewport):
         assert 'pg_page' in inspect.signature(case).parameters
