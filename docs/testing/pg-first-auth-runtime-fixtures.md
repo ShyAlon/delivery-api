@@ -344,3 +344,16 @@ producer sources:feedback flow,native review,cloud API,decision pages,bootstrap.
 Expanded156passed2known baseline failures17.32s (checkpoint intent view/session
 cost metadata),not full-module green. Production/UI unchanged;hosted CI/full
 suite/deployed topology not run. A incomplete;B/C/D not started.
+
+## A28: artifact projection/view fixtures
+
+Five real-file artifact cases use scoped PG:session projection/ZIP,legacy
+requirement-path session recovery,intent markdown/transcript,content-owned titles
+and valid/invalid item-list evidence. Original assertions unchanged. Local file
+HTTP policy explicitly retained;not cloud artifact access activation. Known
+failing legacy checkpoint-transcript case untouched. Fail-first snapshot PG
+assertion failed on SQLite. Focused52passed0skips with producer sources:five
+cases,native artifacts,phase output,provenance,cloud API,bootstrap. Expanded
+155passed2known baseline failures16.78s (checkpoint intent view/session-cost
+metadata),not full-module green. Production/UI unchanged;hosted CI/full suite/
+deployed topology not run. A incomplete;B/C/D not started.

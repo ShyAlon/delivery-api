@@ -1170,24 +1170,26 @@ def test_recovery_restores_final_approval_gate_owner(monkeypatch,tmp_path,pg_sco
     task=store.task(tid);gate=next(g for g in task['gates'] if g['after_phase']=='tests')
     assert task['state']=='waiting_gate' and gate['state']=='waiting'
 
-def test_task_artifacts_project_real_session_files_and_download_zip(monkeypatch,tmp_path):
+def test_task_artifacts_project_real_session_files_and_download_zip(monkeypatch,tmp_path,pg_scoped_workspace):
     import json
     from fastapi.testclient import TestClient
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=SQLiteStore(str(tmp_path/'artifacts.db'));tid=store.create_task('Verified product')['task_id'];store.add_event(tid,'progress','session: session-a',phase_key='intent')
+    monkeypatch.setattr(app_module.config,'CLOUD_TENANTS',False)
+    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=pg_scoped_workspace.store;tid=store.create_task('Verified product')['task_id'];store.add_event(tid,'progress','session: session-a',phase_key='intent')
     (root/'session-a'/'interview').mkdir(parents=True);(root/'session-a'/'spec').mkdir();(root/'session-a'/'interview'/'intent_model.json').write_text('{}');(root/'session-a'/'spec'/'architecture.json').write_text(json.dumps({'contract_version':'0.16.0'}));(root/'session-a'/'spec'/'architecture.md').write_text('# Architecture\n\n- Web app')
     monkeypatch.setattr(app_module,'store',store)
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     records=app_module._task_artifact_snapshot(tid);assert {(x['phase_key'],x['name']) for x in records}=={('intent','intent_model.json'),('architecture','architecture.json')};assert all(x['present'] for x in records);assert all(x['validator'] for x in records);assert all(isinstance(x['validation_errors'],list) for x in records)
     client=TestClient(app_module.app);view=client.get(f'/api/tasks/{tid}/artifacts/architecture/architecture.json/view');assert view.status_code==200 and view.json()['format']=='markdown' and view.json()['display_name']=='architecture.md' and view.json()['raw_format']=='json'
     archive=client.get(f'/api/tasks/{tid}/artifacts.zip');assert archive.status_code==200 and archive.headers['content-type']=='application/zip'
 
 
-def test_legacy_artifact_projection_recovers_session_from_requirement_path(monkeypatch,tmp_path):
+def test_legacy_artifact_projection_recovers_session_from_requirement_path(monkeypatch,tmp_path,pg_scoped_workspace):
     import json
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=SQLiteStore(str(tmp_path/'legacy-artifacts.db'));tid=store.create_task('Daily Habit')['task_id'];session='20260919-163614-adc4'
+    monkeypatch.setattr(app_module.config,'CLOUD_TENANTS',False)
+    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=pg_scoped_workspace.store;tid=store.create_task('Daily Habit')['task_id'];session='20260919-163614-adc4'
     for index in range(510):store.add_event(tid,'output',f'line {index}',phase_key='srs')
     store.add_event(tid,'requirement','baseline',phase_key='architecture',payload={'kind':'external_input','path':str(root/session/'spec'/'system-baseline.json')})
     (root/session/'spec').mkdir(parents=True);(root/session/'spec'/'architecture.json').write_text(json.dumps({'contract_version':'0.16.0'}))
@@ -1212,12 +1214,12 @@ def test_orchestrator_phase_override_reaches_engine_and_is_durable(monkeypatch,t
     event=[e for e in store.events(tid) if e['kind']=='model_route'][-1]
     assert event['payload']=={'route':'deepseek','resolved':'deepseek:deepseek-flash','provider':'deepseek','model':'deepseek-flash','mode':'redo','source':'phase selection'}
 
-def test_intent_artifact_view_has_content_title_and_interview_transcript(monkeypatch,tmp_path):
+def test_intent_artifact_view_has_content_title_and_interview_transcript(monkeypatch,tmp_path,pg_scoped_workspace):
     import json
     from fastapi.testclient import TestClient
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=SQLiteStore(str(tmp_path/'intent-view.db'));tid=store.create_task('Habit app')['task_id'];store.add_event(tid,'progress','session: interview-view',phase_key='intent')
+    monkeypatch.setattr(app_module.config,'CLOUD_TENANTS',False)
+    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=pg_scoped_workspace.store;tid=store.create_task('Habit app')['task_id'];store.add_event(tid,'progress','session: interview-view',phase_key='intent')
     folder=root/'interview-view'/'interview';folder.mkdir(parents=True);(folder/'intent_model.json').write_text(json.dumps({'problem_statement':'Build habits'}));(folder/'intent_model.md').write_text('# What we understood\n\n**Problem:** Build habits')
     store.add_event(tid,'waiting_input','You:',phase_key='intent',payload={'question':'Who needs this?','waiting_input':True});store.add_event(tid,'answer','You: Busy adults',phase_key='intent',payload={'answer':'Busy adults','transcript':True})
     monkeypatch.setattr(app_module,'store',store)
@@ -1289,11 +1291,11 @@ def test_legacy_intent_view_recovers_full_transcript_from_checkpoint(monkeypatch
     body=TestClient(app_module.app).get(f'/api/tasks/{tid}/artifacts/intent/intent_model.json/view').json()
     assert 'Who needs this?' in body['content'] and 'Busy adults' in body['content'] and 'Old question?' not in body['content']
 
-def test_artifact_snapshot_exposes_content_owned_titles(monkeypatch,tmp_path):
+def test_artifact_snapshot_exposes_content_owned_titles(monkeypatch,tmp_path,pg_scoped_workspace):
     import json
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
-    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=SQLiteStore(str(tmp_path/'titles.db'));tid=store.create_task('Titles')['task_id'];store.add_event(tid,'progress','session: titles',phase_key='intent')
+    monkeypatch.setattr(app_module.config,'CLOUD_TENANTS',False)
+    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=pg_scoped_workspace.store;tid=store.create_task('Titles')['task_id'];store.add_event(tid,'progress','session: titles',phase_key='intent')
     folder=root/'titles'/'interview';folder.mkdir(parents=True);(folder/'intent_model.json').write_text('{}');(folder/'conops.json').write_text('{}')
     monkeypatch.setattr(app_module,'store',store)
     rows={r['name']:r['title'] for r in app_module._task_artifact_snapshot(tid)}
@@ -1475,14 +1477,14 @@ def test_generator_failure_preserves_reported_contract_error(tmp_path,pg_scoped_
     assert error['payload']['cause']=='Error: intent contract 0.19.0 cannot be read by generator contract 0.16.x'
 
 
-def test_item_stage_list_artifact_validates_for_parked_gate(monkeypatch,tmp_path):
+def test_item_stage_list_artifact_validates_for_parked_gate(monkeypatch,tmp_path,pg_scoped_workspace):
     """The generator writes items.json as a list of ItemSpec, not SpecBundle."""
     import json
     from fastapi.testclient import TestClient
     from delivery_api import app as app_module
-    from delivery_api.store import SQLiteStore
+    monkeypatch.setattr(app_module.config,'CLOUD_TENANTS',False)
     root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root))
-    store=SQLiteStore(str(tmp_path/'items.db'));task_id=store.create_task('Item gate')['task_id']
+    store=pg_scoped_workspace.store;task_id=store.create_task('Item gate')['task_id']
     store.set_engine_session(task_id,'session-items')
     spec=root/'session-items'/'spec';spec.mkdir(parents=True)
     artifact=spec/'items.json'
