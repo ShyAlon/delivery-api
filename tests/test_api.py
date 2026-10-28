@@ -52,15 +52,16 @@ def test_budget_stop_message_is_actionable():
     assert "budget guard" in msg and "mint a new link" in msg and "no further llm calls" in msg.lower()
 
 
-def test_job_failure_records_human_artifact(tmp_path):
+def test_job_failure_records_human_artifact(tmp_path,pg_scoped_workspace):
     import asyncio
     import time
 
     from delivery_api.errors import UserFacingError
     from delivery_api.jobs import JobQueue
-    from delivery_api.store import SQLiteStore
 
-    store = SQLiteStore(str(tmp_path / "t.db"))
+    store = pg_scoped_workspace.store
+    from delivery_api.postgres_store import PostgresStore
+    assert isinstance(store,PostgresStore)
     run_id = store.create_link("t")["run_id"]
     q = JobQueue(store)
 
@@ -171,8 +172,10 @@ def test_start_task_deepseek_requires_engine_preflight(monkeypatch,tmp_path):
     assert 'secret' not in str(response.json())
 
 
-def test_task_audit_accumulates_tokens_and_price(client):
-    from delivery_api.app import store
+def test_task_audit_accumulates_tokens_and_price(pg_scoped_workspace,monkeypatch):
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+    client=TestClient(app)
+    store=pg_scoped_workspace.store
     task=store.create_task('Priced audit totals');tid=task['task_id']
     store.add_event(tid,'price','Price 25 units',phase_key='intent',payload={'tokens':10,'price':25,'rates':{'scale':'credits'}})
     store.add_event(tid,'price','Price 50 units',phase_key='needs',payload={'tokens':20,'price':50,'price_usd':50.0,'rates':{'scale':'credits'}})
@@ -180,16 +183,20 @@ def test_task_audit_accumulates_tokens_and_price(client):
     assert {k:body['totals'][k] for k in ('tokens','price','phases_priced')}=={'tokens':30,'price':75.0,'phases_priced':2}
     assert body['totals']['interview_calls']==0 and body['totals']['price_usd']==75.0
 
-def test_task_audit_excludes_legacy_scale_price_but_counts_tokens(client):
-    from delivery_api.app import store
+def test_task_audit_excludes_legacy_scale_price_but_counts_tokens(pg_scoped_workspace,monkeypatch):
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+    client=TestClient(app)
+    store=pg_scoped_workspace.store
     tid=store.create_task('Legacy scale')['task_id']
     store.add_event(tid,'price','Price 1,000,000 units',phase_key='intent',payload={'tokens':500000,'price':1000000,'rates':{'price_per_token':2.0}})
     store.add_event(tid,'price','Price 2.50 credits',phase_key='needs',payload={'tokens':200000,'price':2.5,'rates':{'scale':'credits'}})
     t=client.get(f'/api/tasks/{tid}/audit').json()['totals']
     assert t['tokens']==700000 and t['price']==2.5 and t['legacy_priced_phases']==1
 
-def test_task_audit_uses_latest_cumulative_price_per_phase(client):
-    from delivery_api.app import store
+def test_task_audit_uses_latest_cumulative_price_per_phase(pg_scoped_workspace,monkeypatch):
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+    client=TestClient(app)
+    store=pg_scoped_workspace.store
     tid=store.create_task('Incremental price totals')['task_id']
     store.add_event(tid,'price','Price 10',phase_key='intent',payload={'tokens':5,'price':10,'incremental':True,'rates':{'scale':'credits'}})
     store.add_event(tid,'price','Price 30',phase_key='intent',payload={'tokens':15,'price':30,'incremental':True,'rates':{'scale':'credits'}})
