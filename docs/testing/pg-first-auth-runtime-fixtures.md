@@ -748,3 +748,17 @@ within card;desktop active Stakeholder needs line matches expanded progress,
 history and connection summary readable. Production unchanged;V diagram and
 previous cosmetic debt remain. Hosted CI/full mixed UI/full repo/deployed
 topology unrun. A incomplete;B/C/D not started.
+
+## A57: browser error and retry recovery group
+
+Seven functions (eight cases) now use signed regular-owner PG:orphan error,
+protocol422 wording,legacy Ollama switch (running/failed),completed-session
+switch suppression,failed Needs retry,environment-default retry model and
+Architecture checkpoint retry. All original assertions retained. Signature
+guard failed first. Eight cases+guard+cloud API+bootstrap47passed0skips21.92s.
+Task/model/execution/retry responses remain presentation mocks;confirm submission
+is intercepted,not paid execution or real checkpoint-resume proof. Inspected
+Needs/Architecture dialog pixels:readable last failure,model choice,cost warning,
+fresh versus checkpoint explanation and cancel/retry controls. Production
+unchanged;existing cosmetic debt unchanged. Hosted CI/full mixed UI/full repo/
+deployed topology unrun. A incomplete;B/C/D not started.
