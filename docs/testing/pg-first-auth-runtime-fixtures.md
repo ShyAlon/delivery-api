@@ -87,3 +87,16 @@ protocol,SSE,phase parity,native event/gate/run/projection,model routes,bootstra
 cloud API,delete/task browser. No UI or production changes. Hosted CI/full suite/
 deployed topology not run. A remains incomplete;global SQLite bootstrap and other
 legacy fixtures still need reconciliation. B/C/D not started.
+
+## A8: next-phase admission fixtures
+
+The completed-interview fixture and unfinished-interview rejection use the shared
+restricted PG scope. All existing claim-once, next-state, event and rejection
+assertions remain. Pure eligibility/credit checks and mocked admission/route
+contracts stay unchanged. The new fixture contract failed first on SQLite.
+PG then exposed the fixture's reused engine-session primary key across tenants;
+use an owner-derived unique session, retaining actual begin/reconcile operations.
+Acceptance86passed0skips9.47s with producer sources enabled:phase start,cloud
+execution/API,protocol/SSE/phase parity,native lifecycle/gate/worker,bootstrap.
+Production/UI unchanged. Hosted CI/full suite/deployed topology not run.
+A remains incomplete;B/C/D not started.

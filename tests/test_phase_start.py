@@ -10,7 +10,6 @@ from fastapi import HTTPException
 import delivery_api.app as module
 from delivery_api import config, phase_start
 from delivery_api.control_snapshot import project
-from delivery_api.store import create_store
 
 WEB = Path(__file__).resolve().parents[1] / "src" / "delivery_api" / "web"
 ACTOR = NS(label="owner@example.com")
@@ -29,12 +28,13 @@ def _task(**over):
 
 
 @pytest.fixture()
-def finished(tmp_path):
-    store = create_store("sqlite:///" + str(tmp_path / "d.db"))
+def finished(pg_scoped_workspace):
+    store = pg_scoped_workspace.store
     task = store.create_task("idea", "brief")
     tid = task["task_id"]
-    assert store.begin_interview_start(tid, "s-1", "deepseek")
-    assert store.reconcile_completed_interview(tid, "s-1", 7)
+    session="phase-start-"+pg_scoped_workspace.scope.owner_id
+    assert store.begin_interview_start(tid, session, "deepseek")
+    assert store.reconcile_completed_interview(tid, session, 7)
     return store, tid
 
 
@@ -72,8 +72,8 @@ def test_one_click_claims_the_phase_once(finished):
     assert any(e["kind"] == "progress" and "You started" in e["message"] for e in store.events(tid))
 
 
-def test_a_task_whose_interview_is_not_done_cannot_be_claimed(tmp_path):
-    store = create_store("sqlite:///" + str(tmp_path / "d.db"))
+def test_a_task_whose_interview_is_not_done_cannot_be_claimed(pg_scoped_workspace):
+    store = pg_scoped_workspace.store
     tid = store.create_task("idea", "brief")["task_id"]
     assert store.claim_next_phase(tid, "needs", "owner") is False
     assert store.claim_next_phase(tid, "srs", "owner") is False
@@ -202,3 +202,14 @@ def test_unknown_or_malformed_pins_are_denied(monkeypatch):
         with pytest.raises(HTTPException) as caught:
             _call(True)
         assert caught.value.status_code == 409 and "no recorded model" in caught.value.detail["cause"], bad
+
+
+def test_finished_fixture_uses_restricted_pg_and_forbids_sqlite(finished):
+    from delivery_api.postgres_store import PostgresStore
+    from delivery_api.store import SQLiteStore
+    store,tid=finished
+    assert isinstance(store,PostgresStore)
+    with store._postgres.transaction() as connection:
+        assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
+    with pytest.raises(AssertionError,match='SQLite forbidden'):
+        SQLiteStore(':memory:')
