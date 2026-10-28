@@ -27,3 +27,26 @@ Login layout (six viewport sizes) and remember-email tests use the signed-out re
 Shared debug-progress and row12 suites use PG browser plus a hermetically signed operator-email token, not local-admin SQLite. Build identity is test-local app state from the same environment parser. Original fixture-ownership guard failed first. PG exposed a local-only row12_06 execution-read assumption: approved switch now asserts cloud execution/classification sections are policy_excluded without requests, and a separate permitted diagnostics failure asserts unavailable/read_failed with no raw private error. No operator execution-detail feature added.
 
 The ZIP count assertion was already stale on main (actual9/10 vs pinned7/8). Approved fix derives available/unavailable counts from the downloaded evidence manifest plus the bounded five rendered sections, retains inline-error/known-omissions assertions, and requires the deliberately offline server-log section in missing outcomes. It does not call policy exclusions read failures. Focused 10 passed in12.21s; debug/row12/login/runtime/browser slice34passed0skips53.80s. Pixels inspected show sanitized unavailable/read_failed JSON and no private error. Production unchanged; full suite/hosted CI/deployed topology not run. Remaining A/shared UI/runner fixtures and prior debt unresolved.
+
+## A5: model-route helper fixtures
+
+Model-route tests now use a per-test restricted PG workspace and tenant context,
+with module/app-state/orchestrator stores patched together. SQLite opens raise.
+Exact-selection persistence is still checked through a separately constructed
+store, now a second restricted PG store rather than a reopened SQLite file.
+All existing transcript/model/fallback/pinned-state/error-disclosure assertions
+remain. These direct-helper tests retain their original local policy mode; this
+is storage migration, not a claim of cloud execution-detail access or new auth.
+
+Fail-first storage/role contract failed on the old module SQLite store. Acceptance:
+60 passed, zero skips in 4.48s with both producer sources enabled (model routes,
+PG bootstrap, projections, run usage, event progress, provider credit, cloud API).
+No visual product or UI change. Hosted CI, full suite and deployed topology not
+run. Global conftest and remaining shared local fixtures still need A work.
+B/C/D not started.
+
+Preview-smoke inspection is parked separately: its old fixture wraps a local
+shell in cloud middleware to reproduce three anonymous 401 probes. The actual
+signed-out cloud PG shell issues none of those probes. The exact-probe assertion
+cannot simply be migrated without deciding the intended contract. No preview
+code or assertions changed in A5.
