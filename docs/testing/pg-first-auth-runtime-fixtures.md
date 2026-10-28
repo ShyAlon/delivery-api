@@ -608,3 +608,18 @@ the optional fallback. Decision pages,native review,cloud API,bootstrap49passed
 pages is guard-only now (primary migrate7,guard17,reference5,retired7 across36
 tracked receiver files including implicit API). Production/UI unchanged;hosted
 CI/full repository/deployed topology not run. A incomplete;B/C/D not started.
+
+## A48: stale SPA mount browser fixtures
+
+Both real browser stale-mount cases now signed PG operator shell,not anonymous
+SQLite subprocess. Seeded task and operator claim use existing hermetic PG key,
+real middleware/session/request DB. Original stale operator/dashboard DOM,polling,
+header identity and crash assertions unchanged. Failing-first source guard
+rejected SQLite bootstrap. Focused stale mounts/bootstrap6passed0skips21.87s;
+expanded stale mounts,decision pages,cloud API,bootstrap49passed0skips25.54s.
+Final About pixels inspected:signed operator header intact,About active,readable
+content,no stale dashboard underneath. Inventory35 literal SQLiteStore files unchanged:stale-mount source guard keeps
+the token but no SQLite receiver. Primary migrate6,guard18,reference5,retired7
+including implicit API contracts. Production/UI
+unchanged;hosted CI/full repo/deployed topology not run. A incomplete;B/C/D not
+started.
