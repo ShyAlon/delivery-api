@@ -25,8 +25,9 @@ class FakeEngine:
  def snapshot(self,sid):return EngineSnapshot(session_id=self.started_sid or 's',task_id=self.started_task or 't',sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending)
  def submit(self,sid,response):self.submitted.append(response);return SubmitInputResponse(accepted_event=InteractiveEvent(event_id=uuid4(),session_id='s',task_id='t',phase_id=1,sequence=3,event_type=EventType.INPUT_ACCEPTED,process_status=ProcessStatus.RUNNING,next_step=NextStep.RUN),snapshot=EngineSnapshot(session_id='s',task_id='t',sequence=3,process_status=ProcessStatus.RUNNING,next_step=NextStep.RUN))
 
-def test_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch):
- store=SQLiteStore(str(tmp_path/'x.db'));task=store.create_task('Dungeon master','A virtual dungeon master');engine=FakeEngine()
+def test_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store;task=store.create_task('Dungeon master','A virtual dungeon master');engine=FakeEngine()
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  client=TestClient(module.app);client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'}).raise_for_status()
  client.post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1'}).raise_for_status()
@@ -46,14 +47,16 @@ def test_task_snapshot_projects_http_open_input(tmp_path,monkeypatch,pg_scoped_w
  assert body['input_state']['decision']['input_id']==str(engine.pending.input_id)
 
 
-def test_http_engine_session_survives_delivery_restart(tmp_path,monkeypatch):
- path=tmp_path/'restart.db';first=SQLiteStore(str(path));task=first.create_task('Restart safe','brief');engine=FakeEngine()
+def test_http_engine_session_survives_delivery_restart(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ first=pg_scoped_workspace.store;task=first.create_task('Restart safe','brief');engine=FakeEngine()
  monkeypatch.setattr(module,'store',first);monkeypatch.setattr(module,'engine_client',engine)
  with TestClient(module.app) as client:
   client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'}).raise_for_status()
   assert wait_for_start_event(first,task['task_id'])
  assert first.engine_session(task['task_id'])==engine.started_sid
- reopened=SQLiteStore(str(path));monkeypatch.setattr(module,'store',reopened)
+ from delivery_api.postgres_store import PostgresStore
+ reopened=PostgresStore(first._postgres.dsn);monkeypatch.setattr(module,'store',reopened)
  body=client.get(f"/api/tasks/{task['task_id']}").json()
  assert body['input_state']['waiting'] is True
  client.post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1'}).raise_for_status()
@@ -184,10 +187,11 @@ def test_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch,
  assert body['input_state']['waiting'] is False
 
 
-def test_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch):
+def test_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio,threading
  import httpx
- store=SQLiteStore(str(tmp_path/'concurrent-start.db'));task=store.create_task('Slow engine','brief')
+ store=pg_scoped_workspace.store;task=store.create_task('Slow engine','brief')
  entered=threading.Event();release=threading.Event();engine=FakeEngine()
  def slow_start(request):
   entered.set()
@@ -239,8 +243,9 @@ def test_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch):
  asyncio.run(exercise())
 
 
-def test_start_records_interview_flash_not_downstream_chat(tmp_path, monkeypatch):
- store=SQLiteStore(str(tmp_path/'flash-provenance.db'))
+def test_start_records_interview_flash_not_downstream_chat(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store
  task=store.create_task('Flash provenance', 'An idea')
  engine=FakeEngine()
  requests=[]
@@ -261,8 +266,9 @@ def test_start_records_interview_flash_not_downstream_chat(tmp_path, monkeypatch
  assert store.task(task['task_id'])['model_default']=='deepseek:deepseek-flash'
 
 
-def test_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path, monkeypatch):
- store=SQLiteStore(str(tmp_path/'phi4-provenance.db'))
+def test_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+ store=pg_scoped_workspace.store
  task=store.create_task('Phi4 provenance', 'An idea')
  class Phi4Engine(FakeEngine):
   def preview_route(self,route):
@@ -849,10 +855,11 @@ def test_task_snapshot_exposes_one_shared_phase_configuration(tmp_path,monkeypat
                   'prerequisite':phase.prerequisite,'artifacts':list(phase.artifacts)}
 
 
-def test_async_start_reserves_identity_shows_progress_and_rejects_duplicate(tmp_path,monkeypatch):
+def test_async_start_reserves_identity_shows_progress_and_rejects_duplicate(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio,threading
  import httpx
- store=SQLiteStore(str(tmp_path/'async-start.db'));task=store.create_task('Async Start','brief')
+ store=pg_scoped_workspace.store;task=store.create_task('Async Start','brief')
  entered=threading.Event();release=threading.Event();engine=FakeEngine()
  def slow_start(request):
   entered.set()
@@ -885,9 +892,12 @@ def test_async_start_reserves_identity_shows_progress_and_rejects_duplicate(tmp_
  asyncio.run(exercise())
 
 
-def test_interrupted_start_is_classified_without_restarting_engine(tmp_path,monkeypatch):
+def test_interrupted_start_is_classified_without_restarting_engine(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
- store=SQLiteStore(str(tmp_path/'interrupted-start.db'));task=store.create_task('Interrupted Start','brief')
+ store=pg_scoped_workspace.store;task=store.create_task('Interrupted Start','brief')
+ from delivery_api.postgres_store import PostgresStore
+ assert isinstance(store,PostgresStore)
  sid=str(uuid4());assert store.begin_interview_start(task['task_id'],sid,'ollama')
  calls=[]
  class MissingEngine(FakeEngine):
@@ -901,9 +911,10 @@ def test_interrupted_start_is_classified_without_restarting_engine(tmp_path,monk
  assert any(e['kind']=='error' and e['message']=='Interrupted interview Start needs review' for e in store.events(task['task_id']))
 
 
-def test_interrupted_start_recovers_exact_session_without_second_start(tmp_path,monkeypatch):
+def test_interrupted_start_recovers_exact_session_without_second_start(tmp_path,monkeypatch,pg_scoped_workspace):
+ monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
- store=SQLiteStore(str(tmp_path/'recover-start.db'));task=store.create_task('Recover Start','brief')
+ store=pg_scoped_workspace.store;task=store.create_task('Recover Start','brief')
  sid=str(uuid4());assert store.begin_interview_start(task['task_id'],sid,'ollama')
  calls=[];engine=FakeEngine();engine.started_sid=sid;engine.started_task=task['task_id']
  def forbid_start(request):calls.append('start');raise AssertionError('must not replay Start')

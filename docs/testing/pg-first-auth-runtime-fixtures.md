@@ -541,3 +541,15 @@ full mixed HTTP-cutover,dedupe,bootstrap60passed0skips with producer sources.
 Remaining cutover start/concurrency/switch SQLite receivers retained.
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A43: HTTP Start and interruption fixtures
+
+Eight Start cases now scoped PG:typed answer path,independent-adapter restart,
+slow Start responsiveness,exact Flash/Phi4 provenance,async reserved identity/
+duplicate refusal,interrupted Start classification and exact-session recovery
+without second Start. Every original assertion retained. Local policy explicit,
+fake engine unchanged. Fail-first PG assertion failed on SQLite. Focused
+11passed0skips2.06s;full mixed cutover,dedupe,bootstrap60passed0skips with producer
+sources. Three remaining cutover SQLite receivers:slow submit,live switch,real
+registry blocked-advance concurrency. Production/UI unchanged;hosted CI/full
+suite/deployed topology not run. A incomplete;B/C/D not started.
