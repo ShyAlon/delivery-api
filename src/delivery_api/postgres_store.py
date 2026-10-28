@@ -12,7 +12,7 @@ import json
 import re
 import secrets
 import time
-import contextlib,sqlite3
+import contextlib
 from .phases import PHASE_DEFINITIONS
 
 PHASES = tuple((phase.key, phase.label) for phase in PHASE_DEFINITIONS)
@@ -21,25 +21,6 @@ from .phases import followers, predecessors, PHASE_POSITIONS
 from vmodel_contracts import RunState
 from .postgres_scope import ScopedPostgres, note_query, note_statement, statement_label
 from .tenancy import current_scope, TenantAccessDenied
-
-
-class _Row(dict):
-    def __getitem__(self, key):
-        return list(self.values())[key] if isinstance(key, int) else super().__getitem__(key)
-
-
-class _Cursor:
-    def __init__(self, cursor, *, returning=False):
-        self.cursor = cursor
-        self.lastrowid = cursor.fetchone()['id'] if returning else None
-        self.rowcount = cursor.rowcount
-
-    def fetchone(self):
-        row = self.cursor.fetchone()
-        return _Row(row) if row is not None else None
-
-    def fetchall(self): return [_Row(row) for row in self.cursor.fetchall()]
-    def __iter__(self): return iter(self.fetchall())
 
 
 class _Connection:
@@ -55,8 +36,6 @@ class _Connection:
             sql = sql.replace('INSERT OR IGNORE ', 'INSERT ',1)+' ON CONFLICT DO NOTHING'
         sql = sql.replace('cursor=max(cursor,excluded.cursor)',
                           'cursor=GREATEST(progress_ingest.cursor,excluded.cursor)')
-        returning = bool(re.match(r'INSERT INTO (events|audit_log|review_comments|operator_failure_diagnostics)\b',sql))
-        if returning: sql += ' RETURNING id'
         if re.match(r"\s*(INSERT|UPDATE|DELETE|REPLACE|TRUNCATE|WITH)\b",sql,re.I):
             from . import task_read_cache
             from .postgres_scope import _request_tx
@@ -66,24 +45,11 @@ class _Connection:
             if shared is not None:shared.cache_invalidations.add(self.owner)
         started=time.monotonic()
         try:
-            return _Cursor(connection.execute(sql,parameters),returning=returning)
-        except Exception as exc:
-            import psycopg
-            if isinstance(exc,psycopg.errors.UniqueViolation):
-                raise sqlite3.IntegrityError(str(exc)) from exc
-            raise
+            return connection.execute(sql,parameters)
         finally:
             elapsed=time.monotonic()-started
             note_query(elapsed)  # TimingConnection owns statement labels exactly once
 
-    def executemany(self,sql,parameters):
-        for row in parameters: self.execute(sql,row)
-
-    def commit(self): pass  # outermost operation commits
-    def rollback(self):
-        # Failed compare-and-swap operations return False without durable writes.
-        # Roll back to the outer savepoint so the connection remains usable.
-        self.state.get().execute('ROLLBACK TO SAVEPOINT operation_start')
 
 
 def _transactional(method):
@@ -671,20 +637,21 @@ class PostgresStore:
         return self.run(run_id)['cost_usd']
 
     def create_task(self,title,brief='',*,task_id=None):
+        import psycopg
         title=title.strip()
         if not title: raise ValueError('task name cannot be empty')
         task_id,now=task_id or secrets.token_hex(6),time.time()
         owner=current_scope().owner_id
         try:
-            self._db.execute('INSERT INTO tasks(task_id,title,brief,state,model_route,generation,created_at,updated_at,owner_id) VALUES (?,?,?,?,?,?,?,?,?)',
-                             (task_id,title,brief,'not_started','deepseek',1,now,now,owner))
-        except sqlite3.IntegrityError as exc:
+            self._execute_native('INSERT INTO tasks(task_id,title,brief,state,model_route,generation,created_at,updated_at,owner_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                             (task_id,title,brief,'not_started','deepseek',1,now,now,owner), write=True)
+        except psycopg.errors.UniqueViolation as exc:
             raise ValueError(f'a task named {title!r} already exists') from exc
-        self._db.executemany("INSERT INTO phases(task_id,phase_key,label,position,state) VALUES (?,?,?,?,'pending')",
-                             [(task_id,key,label,i) for i,(key,label) in enumerate(PHASES)])
-        self._db.executemany("INSERT INTO gates(task_id,gate_key,after_phase,label,position,is_open,state,options) VALUES (?,?,?,?,?,0,'idle',?)",
-            [(task_id,f'gate-{key}',key,f'{label} gate',i,json.dumps([f'Approve {label}','Choose another option']))
-             for i,(key,label) in enumerate(PHASES)])
+        for i,(key,label) in enumerate(PHASES):
+            self._execute_native("INSERT INTO phases(task_id,phase_key,label,position,state) VALUES (%s,%s,%s,%s,'pending')",
+                                 (task_id,key,label,i), write=True)
+            self._execute_native("INSERT INTO gates(task_id,gate_key,after_phase,label,position,is_open,state,options) VALUES (%s,%s,%s,%s,%s,0,'idle',%s)",
+                                 (task_id,f'gate-{key}',key,f'{label} gate',i,json.dumps([f'Approve {label}','Choose another option'])), write=True)
         self.audit(owner,'task.created',task_id,{'title':title})
         return self.task(task_id)
 

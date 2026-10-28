@@ -132,3 +132,17 @@ No premature removal.167source-enabled combined tests passed0skips82.54s.
 Hosted CI/deployed topology unverified. No schema/data/backend deletion or activation.
 Evidence same3contract single sample:SQLite cold1.477s/warm0.215s;PG
 1.595s/0.248s,all passed. Scope/setup caveats retained,no fullsuite/deploy claim.
+
+## SQLite row/cursor/exception adapters: last-use proof (2026-10-28)
+
+After the PG base removal, the remaining PG operations and prepaid/credit helpers still use `_db.execute` with question-mark SQL. That placeholder/dialect bridge is retained, not declared unused. The row/cursor and SQLite exception adapters are a separate, proven dead layer:
+
+- Native event/audit/review/diagnostic ports already own RETURNING. Production search found no non-SQLite lastrowid consumers; an AST guard covers every delivery production module except the deliberately retained SQLite implementations.
+- Raw psycopg dict rows and cursors replace `_Row`/`_Cursor`. The same 169-test slice passes without positional-row compatibility, implicit RETURNING, or SQLite exception translation (0 skipped).
+- create_task was the final exception-conversion/executemany consumer. It now uses native SQL, native UniqueViolation and explicit phase/gate writes. Collision tests preserve eight phases/eight gates, case-insensitive error shape, rollback, and a subsequent successful create.
+- No `_db.commit`, `_db.rollback`, or `_db.executemany` consumers remain outside SQLite; AST guards retain that proof. The scoped transaction owner remains unchanged.
+- Failing-first proof: adapter-removal contract failed while native collision behavior passed. After removal both passed, followed by the acceptance slice. This is scoped static/runtime evidence, not a claim about arbitrary future dynamic code.
+
+The remaining query dialect bridge cannot yet be deleted: revision installation, worker jobs, expense/credit helpers, artifacts and external prepaid/credit helpers still consume it. Runtime SQLite/auth/backend removal and deployed topology remain later work. Hosted CI is unverified.
+
+Final slice with AST production guard: 170 passed, 0 skipped in 88.81s. Same three evidence contracts per backend, cold/warm local samples: SQLite 1.586/0.404s; PG 1.727/0.303s. These are single-run scoped timings, not full-suite or deploy predictions.
