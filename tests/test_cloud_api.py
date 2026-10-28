@@ -280,10 +280,14 @@ def test_cloud_rerun_preview_and_confirm_do_not_stale_session_generation(cloud,m
         before=store.task(tid);binding=store.session_binding(sid);audit=store.audit_entries(tid)
     url='/api/tasks/'+tid+'/rerun'
     preview=client.post(url,json={'from_phase':'needs','confirm':False},headers=header('a'))
-    assert preview.status_code==200,preview.text
-    assert preview.json()['status']=='preview'
+    assert preview.status_code==409,preview.text
+    assert preview.json()['detail']['code']=='tenant_rerun_unavailable'
+    assert set(preview.json()['detail'])=={'code','error','cause','next'}
+    assert 'No work changed' in preview.json()['detail']['next']
     assert client.post(url,json={'from_phase':'needs','confirm':False},headers=header('b')).status_code==404
-    assert client.post(url,json={'from_phase':'needs','confirm':True},headers=header('a')).status_code==503
+    confirmed=client.post(url,json={'from_phase':'needs','confirm':True},headers=header('a'))
+    assert confirmed.status_code==409
+    assert confirmed.json()['detail']['code']=='tenant_rerun_unavailable'
     monkeypatch.setattr(module,'cloud_execution_admitted',lambda:True)
     assert client.post(url,json={'from_phase':'needs','confirm':True},headers=header('a')).status_code==409
     with tenant_context(A):
