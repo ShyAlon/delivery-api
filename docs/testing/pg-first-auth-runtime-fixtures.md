@@ -126,3 +126,15 @@ Acceptance74passed0skips9.51s with both producer sources:restart,simulation
 validation,protocol/SSE/parity,native lifecycle/run/projection,cloud API,bootstrap.
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A11: decision evidence fixtures
+
+Founder/model provenance and immutable retained-review helper regressions now
+use scoped restricted PG with SQLite opens poisoned. Exact founder source turns,
+model-only empty evidence,idempotent replay and conflicting-revision rejection
+assertions unchanged. Provenance files use per-owner session IDs. Added independent
+store reopen and foreign-owner invisibility checks for retained evidence.
+Fail-first retained-review PG assertion failed on original SQLite. Acceptance
+47passed0skips3.97s with both producer sources:provenance/immutable reviews,native
+review/revision journal,cloud API,bootstrap. No UI/production change;hosted CI/
+full suite/deployed topology not run. A incomplete;B/C/D not started.
