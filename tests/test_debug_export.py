@@ -71,3 +71,47 @@ def test_absent_engine_log_is_an_omission_not_a_failure(tmp_path):
  with zipfile.ZipFile(io.BytesIO(raw)) as z:
   omissions=json.loads(z.read('manifest.json'))['omissions']
   assert any(x['source']=='engine.log' and x['reason']=='not recorded' for x in omissions)
+
+
+def test_log_scope_requires_exact_field_and_value_not_prefix_or_message(tmp_path):
+ root=tmp_path/'run';root.mkdir()
+ source=tmp_path/'engine.log'
+ accepted=["ERROR task=task-a failure", "ERROR task_id='task-a' failure", 'ERROR task="task-a" failure',
+           "ERROR session_id=sid-a failed", "ERROR session='sid-a' failed"]
+ rejected=["ERROR task=task-a-other neighboring", "ERROR task=task-a/other neighboring",
+           "ERROR task='task-a-other' neighboring", "ERROR other_task=task-a neighboring",
+           "ERROR session=sid-a-other neighboring", "ERROR task=other message='task=task-a' neighboring",
+           "ERROR task=other\n    task=task-a neighboring continuation"]
+ source.write_text('\n'.join(accepted+rejected)+'\n')
+ raw=diagnostic_zip(root,'task-a','sid-a',1,{}, {},[],source,source)
+ with zipfile.ZipFile(io.BytesIO(raw)) as z:
+  for name in ['run.log','engine.log']:
+   text=z.read(name).decode()
+   assert all(line in text for line in accepted)
+   assert 'neighboring' not in text
+
+
+def test_log_scope_treats_ids_as_literals(tmp_path):
+ root=tmp_path/'run';root.mkdir();source=tmp_path/'engine.log'
+ source.write_text('INFO task=other no-match\nERROR task=a.b-1 own\nERROR task=axb-1 neighboring\n')
+ raw=diagnostic_zip(root,'a.b-1','s',1,{}, {},[],source)
+ with zipfile.ZipFile(io.BytesIO(raw)) as z:
+  assert 'own' in z.read('run.log').decode() and 'neighboring' not in z.read('run.log').decode()
+
+
+def test_log_scope_refuses_conflicting_and_malformed_fields():
+ from delivery_api.debug_export import _owned_log_line
+ assert not _owned_log_line("task=task-a task_id=other",'task-a','s')
+ assert not _owned_log_line("task=task-a session=other",'task-a','s')
+ assert not _owned_log_line("task='task-a",'task-a','s')
+ assert not _owned_log_line("    task=task-a",'task-a','s')
+ assert _owned_log_line("ERROR task=task-a session=s",'task-a','s')
+
+
+def test_bounded_tail_never_promotes_partial_record(tmp_path):
+ root=tmp_path/'run';root.mkdir();source=tmp_path/'engine.log'
+ source.write_text('x'*100+" task=task-a neighboring\n"+'x'*1_999_950+"\nERROR task=task-a own\n")
+ raw=diagnostic_zip(root,'task-a','s',1,{}, {},[],source)
+ with zipfile.ZipFile(io.BytesIO(raw)) as z:
+  assert 'own' in z.read('run.log').decode()
+  assert 'neighboring' not in z.read('run.log').decode()

@@ -1,6 +1,6 @@
 """Bounded diagnostic export. No user-selected filesystem paths or uploads."""
 from __future__ import annotations
-import io,json,re,zipfile,os
+import io,json,re,zipfile,os,shlex
 from pathlib import Path
 from datetime import datetime,timezone
 
@@ -17,6 +17,21 @@ def redact(value):
    if SENSITIVE.search(name) and len(secret)>=8:text=text.replace(secret,'[REDACTED]')
   return text
  return value
+
+def _owned_log_line(line: str, task_id: str, session_id: str) -> bool:
+ # Parse complete fields, not substrings inside another id, field or quoted
+ # message. Unattributed/continuation/malformed records fail closed.
+ if not line or len(line)>16_000 or line[0].isspace():return False
+ try:tokens=shlex.split(line,comments=False,posix=True)
+ except ValueError:return False
+ expected={"task":task_id,"task_id":task_id,"session":session_id,"session_id":session_id}
+ matched=False
+ for token in tokens:
+  key,sep,value=token.partition('=')
+  if sep and key in expected:
+   if value!=expected[key]:return False
+   matched=True
+ return matched
 
 def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:dict,control:dict,events:list,log_path:Path,engine_log_path:Path=None)->bytes:
  files={};omissions=[];limit=2_000_000;total_limit=12_000_000
@@ -54,10 +69,12 @@ def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:d
  def add_log_tail(path,name,scope):
   if not path or not path.is_file():omissions.append({'source':name,'reason':'not recorded'});return
   with path.open('rb') as stream:
-   stream.seek(max(0,path.stat().st_size-limit));tail=stream.read(limit).decode(errors='replace')
-  ids=[f"task_id={task_id!r}",f"task={task_id!r}",f"session_id={session_id!r}",f"session={session_id!r}",
-       f"task_id={task_id}",f"task={task_id}",f"session_id={session_id}",f"session={session_id}"]
-  lines=[line for line in tail.splitlines() if any(x in line for x in ids)]
+   offset=max(0,path.stat().st_size-limit)
+   stream.seek(offset);tail=stream.read(limit).decode(errors='replace')
+  # A bounded tail may start inside another record. Never promote that
+  # fragment into a complete attributed line.
+  if offset:tail=tail.partition('\n')[2]
+  lines=[line for line in tail.splitlines() if _owned_log_line(line,task_id,session_id)]
   if lines:add(name,'\n'.join(lines)+'\n',scope)
   else:omissions.append({'source':name,'reason':'no task/session-matched lines in bounded tail'})
  add_log_tail(log_path,'run.log','scoped server run log tail')
