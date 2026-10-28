@@ -67,8 +67,35 @@ def note_auth(seconds):
     if stats is not None:stats.auth_seconds+=seconds
 
 def statement_label(sql):
-    """A stable per-statement label: whitespace-collapsed SQL prefix, no parameter values."""
-    return ' '.join(str(sql).split())[:64]
+    """SQL shape only: redact literals, quoted identifiers and comments."""
+    import re
+    text=str(sql);out=[];i=0
+    while i<len(text):
+        if text.startswith('--',i):
+            end=text.find('\n',i+2);i=len(text) if end<0 else end+1;out.append(' ')
+        elif text.startswith('/*',i):
+            depth=1;i+=2
+            while i<len(text) and depth:
+                if text.startswith('/*',i):depth+=1;i+=2
+                elif text.startswith('*/',i):depth-=1;i+=2
+                else:i+=1
+            out.append(' ')
+        elif text[i] in ("'",'"'):
+            quote=text[i];i+=1
+            while i<len(text):
+                if text[i]=='\\':i+=2
+                elif text[i]==quote:
+                    i+=1
+                    if i<len(text) and text[i]==quote:i+=1
+                    else:break
+                else:i+=1
+            out.append('?')
+        elif text[i]=='$' and (m:=re.match(r'\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$',text[i:])):
+            tag=m.group();end=text.find(tag,i+len(tag));i=len(text) if end<0 else end+len(tag);out.append('?')
+        elif text[i].isdigit() and (i==0 or not (text[i-1].isalnum() or text[i-1]=='_')):
+            m=re.match(r'[0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?',text[i:]);i+=len(m.group());out.append('?')
+        else:out.append(text[i]);i+=1
+    return ' '.join(''.join(out).split())[:64] or 'statement'
 
 def note_statement(label,seconds):
     """One timed statement with its label. No request context: a no-op."""
