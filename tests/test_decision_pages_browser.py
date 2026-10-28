@@ -2,23 +2,10 @@
 import tempfile
 from pathlib import Path as _ScreenshotPath
 SCREENSHOTS = _ScreenshotPath(tempfile.mkdtemp(prefix='delivery-browser-evidence-'))
-import json,os,socket,subprocess,sys,time
+import json
 from pathlib import Path
 import pytest
-from playwright.sync_api import sync_playwright,expect
-
-@pytest.fixture(scope='module')
-def server(tmp_path_factory):
- root=tmp_path_factory.mktemp('decision-ui')
- with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
- env={**os.environ,'DELIVERY_DB_PATH':str(root/'ui.db'),'VMODEL_ARTIFACTS_DIR':str(root/'artifacts'),'PYTHONPATH':str(Path(__file__).parents[1]/'src')}
- p=subprocess.Popen([sys.executable,'-m','uvicorn','delivery_api.app:app','--host','127.0.0.1','--port',str(port)],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
- base=f'http://127.0.0.1:{port}'
- for _ in range(60):
-  try:__import__('urllib.request',fromlist=['urlopen']).urlopen(base+'/health',timeout=.3);break
-  except Exception:time.sleep(.1)
- yield base,root
- p.terminate();p.wait(5)
+from playwright.sync_api import expect
 
 def review(wait='wait-concept',purpose='conops_concept'):
  evidence={'conops_draft':{'stakeholder_context':[{'stakeholder':'Runner','goals':['Fast habit capture'],'operating_environment':'Phone, often offline'}],'operational_scenarios':[{'name':'Log a habit','operational_flow':['Open the app','Record points'],'success_outcome':'Points sync when online'}],'concept_options':[]}}
@@ -28,10 +15,10 @@ def review(wait='wait-concept',purpose='conops_concept'):
  return {'version':2,'task_id':'concept','phase_key':'conops','owner':'engine','mode':'waiting_input','kind':'choice' if purpose=='conops_concept' else 'approval','wait_id':wait,'revision':'engine:s:3' if purpose=='conops_concept' else 'engine:s:5','precondition':{'session_id':'s','session_sequence':3 if purpose=='conops_concept' else 5},'options':options,'prompt':'Choose which concept should execute your intent.' if purpose=='conops_concept' else 'Review your intent and ConOps.','decision':{'rationale_required':purpose=='conops_concept','context':{'decision_purpose':purpose,'evidence':evidence}}}
 
 @pytest.fixture
-def page(server):
- base,root=server
- with sync_playwright() as p:
-  browser=p.chromium.launch(headless=True);page=browser.new_page(viewport={'width':1365,'height':1000});yield page,base,root;browser.close()
+def page(pg_browser,tmp_path):
+ browser_page,base,workspace=pg_browser
+ browser_page.set_viewport_size({'width':1365,'height':1000})
+ yield browser_page,base,tmp_path
 
 def fake(page,actionable=True):
  state={'current':review(),'drafts':{},'posts':[]}
