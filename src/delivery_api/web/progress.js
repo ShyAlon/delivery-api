@@ -31,12 +31,18 @@ export function renderStageProgress(host,events,options){
 }
 // Same renderer for task and blocking review-apply progress. Counts are source
 // values only; no percent or guessed hard-coded completion time.
+// Unknown event time is not epoch zero or the run start. Keep signal age
+// absent until a source timestamp supports it; stage timing may use run start.
+function signalTime(event){
+ const values=[Date.parse(event.payload?.timestamp)/1000,Number(event.ts)];
+ return values.find(value=>Number.isFinite(value)&&value>0)??null;
+}
 export function stageProgressHtml(events,{startedAt=Date.now()/1000,connected=true,nextStep='choose the operating concept when the engine requests it',unavailable='',scopeKey='review',currentLine=''}={}){
  // A session that is unavailable in this environment has no live counters, no estimate and no next step to promise: only what was last recorded.
  if(unavailable)return `<details class="review-progress" data-progress-key="${esc(scopeKey)}" ${expandedProgress.get(scopeKey)?'open':''} aria-label="Run progress"><summary><b>Run progress</b><span>${esc(unavailable)}</span></summary><div class="progress-history"><p>No live counters or next step can be confirmed in this environment.</p></div></details>`;
  const stages=new Map(),measurements=new Map();let lastSignal=null;
  for(const e of events||[]){const p=e.payload||{};if(!p.stage||!p.status)continue;const key=p.stage+'|'+(p.label||'');
-  const ts=Date.parse(p.timestamp)/1000||Number(e.ts)||startedAt;lastSignal=Math.max(lastSignal||0,ts);
+  const observed=signalTime(e),ts=observed??startedAt;if(observed!==null)lastSignal=Math.max(lastSignal??0,observed);
   const old=stages.get(key)||{label:p.label||p.stage,start:ts};
   if(p.status==='item_completed'&&old.status==='item_started'&&ts>old.start&&p.completed===Number(old.completed||0)+1){
    const samples=measurements.get(key)||[];samples.push(ts-old.start);measurements.set(key,samples);
@@ -45,7 +51,7 @@ export function stageProgressHtml(events,{startedAt=Date.now()/1000,connected=tr
   stages.set(key,{...old,stage:p.stage,label:p.label||old.label,status:p.status,completed:p.completed??old.completed,total:p.total??old.total,detail:p.detail||old.detail,end:p.status==='completed'||p.status==='item_completed'&&p.completed===p.total?ts:old.end});
  }
  const latest=(events||[]).findLast(isProgressEvent);
- if(latest)lastSignal=Math.max(lastSignal||0,Date.parse(latest.payload?.timestamp)/1000||Number(latest.ts)||0);
+ if(latest){const observed=signalTime(latest);if(observed!==null)lastSignal=Math.max(lastSignal??0,observed);}
  const rows=[...stages.values()],now=Date.now()/1000,active=rows.findLast(s=>!['completed','failed'].includes(s.status)&&!(s.status==='item_completed'&&s.completed===s.total));
  // Only item-level paired observations support an ETA. Field calls may
  // complete multiple times for one item; dividing by total would undercount.
