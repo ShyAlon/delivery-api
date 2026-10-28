@@ -14,9 +14,9 @@ def apply_private_installation(store,task_id,*,installation_id,expected_authoriz
     import os,fcntl
     from .producer_inputs import _open_directory
     with store._task_operation_guard('task.rerun'):
-        row=store._db.execute('SELECT * FROM closed_revision_installations WHERE installation_id=? AND task_id=?',(installation_id,task_id)).fetchone()
+        row=store._execute_native('SELECT * FROM closed_revision_installations WHERE installation_id=%s AND task_id=%s',(installation_id,task_id)).fetchone()
         if not row:raise KeyError(installation_id)
-        latest=store._db.execute('SELECT * FROM closed_revision_install_events WHERE installation_id=? ORDER BY sequence DESC LIMIT 1',(installation_id,)).fetchone()
+        latest=store._execute_native('SELECT * FROM closed_revision_install_events WHERE installation_id=%s ORDER BY sequence DESC LIMIT 1',(installation_id,)).fetchone()
         if not latest or latest['state']!='authorized' or latest['event_sha256']!=expected_authorized_event_sha256:
             raise ValueError('fresh authorized installation required; explicit reconciliation otherwise')
         plan=json.loads(row['payload']);sid=plan['destination_anchor']['execution_session_id']
@@ -40,10 +40,10 @@ def _apply_locked_installation(store,task_id,*,installation_id,expected_authoriz
     # This private seam uses the owner-scoped transaction rather than accepting
     # a request-supplied plan, file path or review body.
     with store._task_operation_guard('task.rerun'):
-        row=store._db.execute('SELECT * FROM closed_revision_installations WHERE installation_id=? AND task_id=?',(installation_id,task_id)).fetchone()
+        row=store._execute_native('SELECT * FROM closed_revision_installations WHERE installation_id=%s AND task_id=%s',(installation_id,task_id)).fetchone()
         if not row:raise KeyError(installation_id)
-        lineage_row=store._db.execute('SELECT * FROM closed_revision_lineage_plans WHERE lineage_id=?',(row['lineage_id'],)).fetchone()
-        latest=store._db.execute('SELECT * FROM closed_revision_install_events WHERE installation_id=? ORDER BY sequence DESC LIMIT 1',(installation_id,)).fetchone()
+        lineage_row=store._execute_native('SELECT * FROM closed_revision_lineage_plans WHERE lineage_id=%s',(row['lineage_id'],)).fetchone()
+        latest=store._execute_native('SELECT * FROM closed_revision_install_events WHERE installation_id=%s ORDER BY sequence DESC LIMIT 1',(installation_id,)).fetchone()
         if not latest or latest['state']!='authorized' or latest['event_sha256']!=expected_authorized_event_sha256:
             raise ValueError('fresh authorized installation required; explicit reconciliation otherwise')
         lineage=json.loads(lineage_row['payload']);plan=json.loads(row['payload'])

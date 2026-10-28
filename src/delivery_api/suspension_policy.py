@@ -51,7 +51,7 @@ def suspension_proposal(*,account,suspend,reason):
 def require_task_operation(store,action):
     """Call under the owner admission transaction lock, never during settlement."""
     from .tenancy import current_scope,TenantAccessDenied
-    row=store._db.execute('SELECT suspended FROM user_task_policy WHERE owner_id=?',
+    row=store._execute_native('SELECT suspended FROM user_task_policy WHERE owner_id=%s',
         (current_scope().owner_id,)).fetchone()
     if not action_allowed(suspended=row['suspended'] if row else False,action=action):
         raise TenantAccessDenied('Task operations suspended; sign-in, communication and read/export remain available')

@@ -218,7 +218,7 @@ def prepare_private_successor(store,task_id,*,installation_id,artifacts_base,rev
 def queue_private_successor(store,task_id,*,installation_id,artifacts_base,review_sha256):
     from .revision_continuation_worker import KIND
     with store._task_operation_guard('task.rerun'):
-        store._db.execute('SELECT task_id FROM tasks WHERE task_id=? FOR UPDATE',(task_id,)).fetchone()
+        store._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone()
         marker='revision-chain-job:'+installation_id+':'+review_sha256
         prior=store.decision_review(task_id,marker,'queue')
         if prior:
