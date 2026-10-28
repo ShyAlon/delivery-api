@@ -984,3 +984,18 @@ Shared116PG/11legacy functions out of127,plus three standalone local-auth/browse
 cases. Pending exact-ID ZIP/classifications untouched. A incomplete;global
 SQLite bootstrap remains;B/C/D unstarted. Hosted CI/full mixed UI/full repo/
 deployed topology unrun. Production unchanged;no deploy/live DB/model execution.
+
+## A72: cost header and detail layout browser group
+
+Three functions/seven expanded cases (growing running cost,five route-family
+cost headers each desktop+phone,detail geometry/colors) use signed PG/isolated
+IDs. Assertions retained,including initial real seeded1.25cost,refresh mocks
+2.50/3.75,fixed visible header,no horizontal overflow,panel alignment and palette.
+Guard failed first1 in0.67s;cases+guard+cloud API+bootstrap46passed0skips24.18s.
+Inspected detail panels and scrolled phone About header. About title clips under
+fixed header after scroll;existing visual debt,not fixed. Cost/task mocks remain
+presentation contracts,not billing/metering proof. Shared119PG/8legacy functions
+out of127,plus three standalone local-auth/browser cases. Pending debug conflicts
+untouched. A incomplete;global SQLite bootstrap remains;B/C/D unstarted.
+Hosted CI/full mixed UI/full repo/deployed topology unrun. Production unchanged;
+no deploy/live DB/model execution.
