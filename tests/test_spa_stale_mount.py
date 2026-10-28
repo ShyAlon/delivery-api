@@ -6,56 +6,30 @@ Before the fix, the stale mount overwrote the live page, its error path crashed 
 missing elements (unhandled rejection) and its interval kept polling the server.
 """
 import json
-import os
-import re
-import subprocess
-import sys
 import time
-import urllib.request
-from pathlib import Path
 
 import pytest
-from playwright.sync_api import sync_playwright
 
 
-def _port():
-    import socket
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+@pytest.fixture
+def ui(pg_browser):
+    import jwt
+    from delivery_api import config
+    from pg_workspace import KEY
+    from delivery_api.tenancy import tenant_context
+    page,base,workspace=pg_browser
+    with tenant_context(workspace.scope):
+        workspace.store.create_task('Live definition','Detailed progress',task_id='live')
+        workspace.store.update_phase('live','intent','done',detail='Approved')
+    claims=jwt.decode(workspace.token,options={'verify_signature':False})
+    claims['email']=config.OPERATOR_EMAIL
+    page.context.add_cookies([{'name':'requi_access','value':jwt.encode(claims,KEY,algorithm='ES256',headers={'kid':'fixture'}),'url':base}])
+    return base
 
 
-@pytest.fixture(scope="module")
-def ui(tmp_path_factory):
-    root = tmp_path_factory.mktemp("stale")
-    db = root / "stale.db"
-    env = {**os.environ, "DELIVERY_DB_PATH": str(db), "DELIVERY_DATABASE_URL": f"sqlite:///{db}",
-           "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
-    seed = '''
-from delivery_api.store import SQLiteStore
-import os
-s=SQLiteStore(os.environ["DELIVERY_DB_PATH"])
-s.create_task("Live definition", "Detailed progress", task_id="live")
-s.update_phase("live", "intent", "done", detail="Approved")
-'''
-    subprocess.run([sys.executable, "-c", seed], check=True, env=env)
-    port = _port()
-    proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "delivery_api.app:app", "--host", "127.0.0.1", "--port", str(port)], env=env)
-    base = f"http://127.0.0.1:{port}"
-    for _ in range(50):
-        try:
-            urllib.request.urlopen(base + "/health", timeout=.2); break
-        except Exception: time.sleep(.1)
-    else: raise RuntimeError("UI server did not start")
-    yield base
-    proc.terminate(); proc.wait(timeout=5)
-
-
-@pytest.fixture()
-def page(ui):
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, executable_path=os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE") or None)
-        page = browser.new_page(viewport={"width": 1365, "height": 900})
-        yield page
-        browser.close()
+@pytest.fixture
+def page(ui,pg_browser):
+    return pg_browser[0]
 
 
 def _park(page, pattern):
@@ -128,3 +102,9 @@ def test_a_stale_dashboard_mount_never_overwrites_the_page_you_moved_to(page, ui
 
     assert "about" in page.locator("#app").inner_text().lower(), "the stale dashboard overwrote the About page"
     assert page.locator("#new").count() == 0, "stale dashboard DOM is visible under the About page"
+
+
+def test_stale_mount_fixture_has_no_sqlite_bootstrap():
+    import inspect
+    assert 'SQLiteStore' not in inspect.getsource(ui)
+    assert 'pg_browser' in inspect.signature(ui).parameters
