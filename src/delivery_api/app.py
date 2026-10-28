@@ -996,11 +996,14 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
             if len(pairs)!=1:raise ValueError("engine preview returned divergent stage models")
             provider,model=next(iter(pairs))
             if provider!=route:raise ValueError(f"engine preview returned {provider} for selected {route}")
-            options=[model]
+            options=[model];list_status={'availability':'available','scope':'pinned_route'}
             if route=="ollama":
-                try:options=engine_client.local_models()
-                except (EngineClientError,EngineUnreachableError,AttributeError):pass
-            routes.append({"id":route,"available":True,"model":f"{provider}:{model}","model_map":models,"models":options})
+                try:
+                    options=engine_client.local_models()
+                    list_status={'availability':'available','scope':'installed_models'}
+                except (EngineClientError,EngineUnreachableError,AttributeError):
+                    list_status={'availability':'unavailable','reason':'installed_lookup_failed','scope':'pinned_route_only'}
+            routes.append({"id":route,"available":True,"model":f"{provider}:{model}","model_map":models,"models":options,"model_list":list_status})
         except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
             reason=exc.error.detail if isinstance(exc,EngineClientError) else str(exc)
             if route=="ollama":
