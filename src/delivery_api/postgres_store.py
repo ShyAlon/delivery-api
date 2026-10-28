@@ -640,6 +640,49 @@ class PostgresStore(SQLiteStore):
                 return dict(phase)
         return None
 
+    def link(self, token: str) -> dict | None:
+        row = self._execute_native('SELECT * FROM links WHERE token=%s AND active=1', (token,)).fetchone()
+        return dict(row) if row else None
+
+    def deactivate_link(self, token: str) -> None:
+        self._execute_native('UPDATE links SET active=0 WHERE token=%s', (token,), write=True)
+
+    def set_state(self, run_id: str, state: RunState) -> None:
+        self._execute_native('UPDATE runs SET state=%s, updated_at=%s WHERE run_id=%s', (state.value, time.time(), run_id), write=True)
+
+    def run(self, run_id: str) -> dict | None:
+        row = self._execute_native('SELECT * FROM runs WHERE run_id=%s', (run_id,)).fetchone()
+        return dict(row) if row else None
+
+    def set_submission(self, run_id: str, submission: str) -> None:
+        self._execute_native('UPDATE runs SET submission=%s,updated_at=%s WHERE run_id=%s', (submission, time.time(), run_id), write=True)
+
+    def total_spend(self) -> float:
+        return self._execute_native('SELECT COALESCE(SUM(cost_usd),0) t FROM runs').fetchone()['t']
+
+    def add_artifact(self, run_id: str, kind: str, ref: str) -> None:
+        self._execute_native('INSERT INTO artifacts VALUES (%s,%s,%s,%s)', (run_id, kind, ref, time.time()), write=True)
+
+    def artifacts(self, run_id: str) -> list[dict]:
+        return [dict(r) for r in self._execute_native('SELECT * FROM artifacts WHERE run_id=%s', (run_id,))]
+
+    def add_task_artifact(self, task_id: str, phase_key: str, name: str, ref: str, mime_type: str='application/json') -> None:
+        task = self.task(task_id)
+        self._execute_native('INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,mime_type,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)', (task_id, task['generation'], phase_key, name, ref, mime_type, time.time()), write=True)
+
+    def quota_allows(self, user_id: str) -> tuple[bool, dict]:
+        q = self.user_quota(user_id)
+        if not q:
+            return (False, {'user_id': user_id, 'token_quota': 0, 'tokens_used': 0})
+        return (q['tokens_used'] < q['token_quota'], q)
+
+    def add_user_usage(self, run_id: str, user_id: str, record_json: str, cost_usd: float, input_tokens: int, output_tokens: int) -> float:
+        if user_id != current_scope().owner_id:
+            raise TenantAccessDenied('cannot attribute usage to another owner')
+        self._execute_native('INSERT INTO usage(run_id,record,ts,user_id,input_tokens,output_tokens) VALUES(%s,%s,%s,%s,%s,%s)', (run_id, record_json, time.time(), user_id, input_tokens, output_tokens), write=True)
+        self._execute_native('UPDATE runs SET cost_usd=cost_usd+%s,updated_at=%s WHERE run_id=%s', (cost_usd, time.time(), run_id), write=True)
+        return self.run(run_id)['cost_usd']
+
     def create_task(self,title,brief='',*,task_id=None):
         title=title.strip()
         if not title: raise ValueError('task name cannot be empty')
@@ -674,11 +717,11 @@ class PostgresStore(SQLiteStore):
 
     def user_quota(self,user_id):
         if user_id != current_scope().owner_id: return None
-        row=self._db.execute('SELECT user_id,label,token_quota FROM users WHERE user_id=?',(user_id,)).fetchone()
+        row=self._execute_native('SELECT user_id,label,token_quota FROM users WHERE user_id=%s',(user_id,)).fetchone()
         if row is None: return None
         out=dict(row)
         out['user_id']=str(out['user_id'])
-        out['tokens_used']=self._db.execute('SELECT COALESCE(SUM(input_tokens+output_tokens),0) n FROM usage WHERE user_id=?',(user_id,)).fetchone()['n']
+        out['tokens_used']=self._execute_native('SELECT COALESCE(SUM(input_tokens+output_tokens),0) n FROM usage WHERE user_id=%s',(user_id,)).fetchone()['n']
         out['email']=None;out['is_admin']=0
         return out
 

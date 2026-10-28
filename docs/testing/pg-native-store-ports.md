@@ -91,3 +91,22 @@ No schema/data migration/destruction,activation,deploy,restart or spend.
 Evidence fast-scope single sample:SQLite cold1.532s/warm0.285s;PG
 cold1.573s/warm0.264s,all passed. Same3contracts,scope/setup caveats retained;
 no fullsuite/deploy speed claim. Missing-task/phase return/error shapes retained.
+
+## Remaining run/usage/artifact family
+
+PG owns link/deactivate,state/run/submission,total_spend,run artifact add/read,
+task artifact reference add,quota_allows and add_user_usage. Existing PG quota
+reader uses native SQL too. PG usage explicitly rejects a different owner before
+write;RLS still protects run+usage rows. Legacy cloud execution route blocks and
+local-auth refusal stay. Runtime callers include status/artifact routes,health
+spend,job budget state and existing add_usage/attribute_run PG overrides.
+
+Poisoned parent/family bridge test red first;now real run accounting,artifact,
+quota,submission/state and cross-owner isolation pass.164source-enabled combined
+tests passed0skips86.43s. Hosted CI/topology unverified. No runtime backend removal,
+base removal,data migration/destruction,deploy/restart,activation or spend.
+Evidence fast-scope sample:SQLite cold1.588s/warm0.272s;PG1.662s/0.392s,
+all green. Same3contracts/single sample,not fullsuite/deploy speed proof.
+Static closure after this port:only SQLite schema/init commit helper methods and
+10runtime-refused local-auth methods remain inherited;all4query constants have
+PG overrides. Helper access/dynamic wrapping closure must be tested before removal.
