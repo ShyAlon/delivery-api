@@ -1,4 +1,5 @@
 """Private compute transcript receiver. Missing finish never becomes a charge."""
+from .diagnostic_evidence import thread_target
 import contextvars
 from contextlib import contextmanager
 import json
@@ -60,12 +61,15 @@ def child_compute_channel(accounting):
                 accounting.accept(event)
                 if event['kind']=='finish':accounting.finish()
                 stream.write(str(event['sequence']).encode()+b'\n');stream.flush()
-        except BaseException as exc:failures.append(type(exc).__name__)
+        except BaseException as exc:
+            from .diagnostic_evidence import failure
+            failure('child.compute.failed')
+            failures.append(type(exc).__name__)
         finally:
             try:parent.shutdown(socket.SHUT_RDWR)
             except OSError:pass
             stream.close();parent.close()
-    thread=threading.Thread(target=lambda:scope.run(serve),daemon=True,name='child-compute-accounting');thread.start()
+    thread=threading.Thread(target=thread_target(lambda:scope.run(serve)),daemon=True,name='child-compute-accounting');thread.start()
     try:yield child
     finally:
         child.close()

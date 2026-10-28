@@ -3,6 +3,7 @@
 Builds the money gateway from reviewed server configuration, then installs the generator-phase engine and the interview
 host, and points the service's engine client at the hosted interview. Nothing runs until a user starts work. If any step
 fails, nothing is installed, the reason is kept and execution stays closed (cloud_execution reports it)."""
+from .diagnostic_evidence import thread_target
 _state=None
 _failure=None
 _checked=set()
@@ -94,7 +95,7 @@ def install(store,environ,set_engine_client,watch_vendor=False):
     if watch_vendor and gateways.verify_vendor is not None:
         import threading
         stop=threading.Event()
-        threading.Thread(target=_watch,args=(gateways,stop,VENDOR_WATCH_SECONDS),name='vendor-terms-watch',daemon=True).start()
+        threading.Thread(target=thread_target(_watch),args=(gateways,stop,VENDOR_WATCH_SECONDS),name='vendor-terms-watch',daemon=True).start()
         _watcher=stop
 
 

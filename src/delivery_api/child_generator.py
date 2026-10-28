@@ -3,6 +3,7 @@
 The runner still consumes its existing line protocol. Only private fixed child
 execution receives a validated CLI manifest; no shell or executable in payload.
 """
+from .diagnostic_evidence import thread_target
 import asyncio,hashlib,json,socket,sys,threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -57,9 +58,12 @@ def output_channel(proc,gates):
                 if set(value)=={'kind','text'} and value['kind']=='log' and isinstance(value['text'],str):proc.feed(value['text'].encode())
                 elif set(value)=={'kind','key','decision'} and value['kind']=='gate':gates.append(value)
                 else:raise ValueError('unknown child output')
-        except BaseException as exc:errors.append(type(exc).__name__)
+        except BaseException as exc:
+            from .diagnostic_evidence import failure
+            failure('child.output.failed')
+            errors.append(type(exc).__name__)
         finally:stream.close();parent.close()
-    thread=threading.Thread(target=read,daemon=True);thread.start()
+    thread=threading.Thread(target=thread_target(read),daemon=True);thread.start()
     try:yield child
     finally:
         child.close();thread.join(timeout=2)
