@@ -237,3 +237,15 @@ mixed module108passed2failed12.85s,with the same legacy checkpoint-view and sess
 cost exact-response failures. Neither hidden nor weakened;separate debt.
 Production/UI unchanged;hosted CI/full suite/deployed topology not run.
 A incomplete;B/C/D not started.
+
+## A19: task management and gate provenance fixtures
+
+Gate explicit-provenance and unique-name/rename/delete-cascade regressions use
+scoped restricted PG. Management HTTP collision/rename/delete now uses real signed
+cloud PG requests. Every original status/structured-error/audit/event/artifact
+cascade assertion unchanged. Fail-first cascade PG assertion failed on SQLite.
+Focused46passed0skips4.06s with producer sources:three cases,cloud API,native
+lifecycle/gate,bootstrap. Expanded mixed-module slice151passed2same known baseline
+failures16.20s (legacy checkpoint intent view and session-cost evidence metadata).
+Not a full module green. Production/UI unchanged;hosted CI/full suite/deployed
+topology not run. A incomplete;B/C/D not started.
