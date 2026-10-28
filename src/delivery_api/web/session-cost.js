@@ -32,6 +32,7 @@ export function startSessionCostHeader(){
   pending=true;try{
   const value=await api(route);if(stopped)return;
   if(!stillHere()){empty();return}
+  if(value.evidence?.complete===false){host.textContent='Session Cost Incomplete';host.dataset.state='unavailable';host.title=`Local usage evidence incomplete: ${value.evidence.rejected_rows} rejected rows; ${value.evidence.invalid_numeric_rows||0} invalid numeric rows. Source preserved; missing amounts unknown.`;hasValue=false;return}
   if(!Number.isFinite(value.price)||!Number.isFinite(value.price_usd))throw new Error('Cost unavailable');
   host.textContent=`${value.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} credits · $${value.price_usd.toFixed(2)}`;
   host.dataset.state='current';hasValue=true;host.title='Rolling Session Cost';

@@ -2455,18 +2455,27 @@ def _task_cost(task_id:str)->dict:
     event_price=sum(float((e.get("payload") or {}).get("price") or 0) for e in counted)
     event_tokens=sum(int((e.get("payload") or {}).get("tokens") or 0) for e in counted if e.get("phase_key") not in ("intent","conops"))
     price=event_price+token_credits(interview_tokens)+token_credits(max(0,spec_tokens-event_tokens))
-    return {"price":round(price,6),"price_usd":round(credits_to_usd(price),6)}
+    result={"price":round(price,6),"price_usd":round(credits_to_usd(price),6)}
+    if session and not config.CLOUD_TENANTS:
+        from .pricing import usage_evidence
+        result['evidence']=usage_evidence(root)
+    return result
 
 @app.get("/api/tasks/{task_id}/cost")
 def task_cost(task_id:str,request:Request):
     if not store.task(task_id):raise HTTPException(404,"task not found")
     session=_recorded_engine_session(task_id)
     if session and not config.CLOUD_TENANTS:
+        from vmodel_contracts.runtime import artifacts_root
+        from .pricing import usage_evidence
+        evidence=usage_evidence(authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store))
+        if not evidence['complete']:return {'price':None,'price_usd':None,'evidence':evidence}
         try:
             from vmodel_contracts.runtime import artifacts_root
             from .pricing import write_cost_json
             write_cost_json(authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store))
-        except (OSError,ValueError):pass
+        except (OSError,ValueError) as error:
+            activity('local.cost_rollup.unavailable','Local cost evidence rollup was not updated',level=logging.WARNING,category=type(error).__name__)
     return _task_cost(task_id)
 
 @app.get("/api/tasks/{task_id}/cost-phases")
