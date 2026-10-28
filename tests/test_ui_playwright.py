@@ -874,9 +874,11 @@ def test_runtime_badge_survives_identity_render(page,ui):
     assert page.locator('#accountbutton').get_attribute('aria-label')=='Account menu for shy@example.com';assert page.locator('.debug-dialog .runtime-id').inner_text()=='BUILD 7d6647f'
 
 
-def test_orphaned_running_task_renders_visible_recovery_error(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='intent';live['input_state']={'waiting':False,'process_live':False,'decision':None};live['ui_state']={'mode':'error','active_phase':'intent','process_live':False,'decision':None,'gate':None};live['events'].append({'id':999,'kind':'error','message':'Error: engine stream handling stopped. Likely cause: protocol failure. Next: restart Requi.re.','phase_key':'intent','payload':{},'ts':1720003000})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view')
+def test_orphaned_running_task_renders_visible_recovery_error(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['state']='running';live['active_phase']='intent';live['input_state']={'waiting':False,'process_live':False,'decision':None};live['ui_state']={'mode':'error','active_phase':'intent','process_live':False,'decision':None,'gate':None};live['events'].append({'id':999,'kind':'error','message':'Error: engine stream handling stopped. Likely cause: protocol failure. Next: restart Requi.re.','phase_key':'intent','payload':{},'ts':1720003000})
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view')
     notice=page.locator('.task-error-state');notice.wait_for();assert notice.get_by_text('Task needs attention',exact=True).is_visible()
     assert page.locator('.live-indicator').get_by_text('Task needs attention',exact=True).is_visible()
 
@@ -1506,13 +1508,15 @@ def test_debug_chips_show_intent_relevance_and_differed_tooltip(page, ui):
 
 
 
-def test_protocol_422_is_not_mislabeled_engine_down(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json()
+def test_protocol_422_is_not_mislabeled_engine_down(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     detail="Error: stage 'probing': model ignored the structured interview-turn contract twice."
     live['state']='running';live['active_phase']='intent'
     live['ui_state']={'mode':'error','active_phase':'intent','process_live':False,'diagnostic':{'reason':'engine protocol rejected the snapshot','http_status':422,'code':130,'detail':detail}}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
-    page.goto(ui+'/tasks/live/view')
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.goto(ui+f'/tasks/{tid}/view')
     notice=page.locator('.task-error-state');notice.wait_for()
     assert notice.get_by_text('Engine returned an error',exact=True).is_visible()
     assert 'structured interview-turn contract' in notice.inner_text()
@@ -1520,19 +1524,21 @@ def test_protocol_422_is_not_mislabeled_engine_down(page,ui):
     page.screenshot(path=str(_screenshots_dir / 'protocol-error-state.png'),full_page=True)
 
 @pytest.mark.parametrize("failed",[False,True])
-def test_legacy_ollama_model_switch_dialog(page,ui,failed):
-    live=page.request.get(ui+'/api/tasks/live').json()
+def test_legacy_ollama_model_switch_dialog(pg_page,pg_ui,pg_ids,failed):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     live.update({'state':'failed' if failed else 'running','active_phase':'intent','model_route':'ollama/qwen2.5-coder:14b',
         'simulated':False,'input_state':{'waiting':True,'input_id':'legacy-input','process_live':True},
         'ui_state':{'mode':'error' if failed else 'engine_question','active_phase':'intent','question':'Continue?','process_live':True}})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
-    page.route('**/api/tasks/live/execution*',lambda route:route.fulfill(json={
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}/execution*',lambda route:route.fulfill(json={
         'session_id':'legacy','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[],
         'effective_models':{'probing':['ollama','qwen2.5-coder:14b']}}))
     page.route('**/api/model-routes',lambda route:route.fulfill(json={'routes':[
         {'id':'ollama','available':True,'model':'ollama:qwen2.5-coder:14b','models':['qwen2.5-coder:14b','phi4']},
         {'id':'deepseek','available':False,'error':'no key'}]}))
-    page.goto(ui+'/tasks/live/view')
+    page.goto(ui+f'/tasks/{tid}/view')
     assert page.locator('.execution-data').count()==0
     if failed:expect(page.locator('.task-error-state #switchmodel')).to_be_visible()
     page.locator('#switchmodel').click()
@@ -1543,18 +1549,20 @@ def test_legacy_ollama_model_switch_dialog(page,ui,failed):
     page.keyboard.press('Escape')
     expect(dialog).to_have_count(0)
 
-def test_completed_engine_session_in_error_view_does_not_offer_switch(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json()
+def test_completed_engine_session_in_error_view_does_not_offer_switch(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     live.update({'state':'failed','active_phase':'intent','simulated':False,
         'input_state':{'waiting':False,'input_id':None,'process_live':False,'engine_process_status':40},
         'ui_state':{'mode':'error','active_phase':'intent','process_live':False}})
     live['events'].append({'id':9999,'kind':'error','message':'old template literal failure','phase_key':'intent','payload':{},'ts':1720004001})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
-    page.route('**/api/tasks/live/execution*',lambda route:route.fulfill(json={
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}/execution*',lambda route:route.fulfill(json={
         'session_id':'completed','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[],
         'effective_models':{'probing':['ollama','qwen2.5-coder:14b']}}))
     page.route('**/api/model-routes',lambda route:route.fulfill(json={'routes':[]}))
-    page.goto(ui+'/tasks/live/view')
+    page.goto(ui+f'/tasks/{tid}/view')
     expect(page.locator('.task-error-state')).to_be_visible()
     expect(page.locator('.task-error-state')).to_contain_text('Any earlier model error is historical')
     expect(page.locator('.task-error-state')).not_to_contain_text('template literal')
@@ -1563,20 +1571,22 @@ def test_completed_engine_session_in_error_view_does_not_offer_switch(page,ui):
     expect(page.get_by_text('The linked interview session has no open input and is complete.',exact=False)).to_be_visible()
 
 
-def test_failed_needs_has_retry_not_generation_rerun(page,ui):
+def test_failed_needs_has_retry_not_generation_rerun(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     from playwright.sync_api import expect
-    live=page.request.get(ui+'/api/tasks/live').json()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     for phase in live['phases']:
         if phase['phase_key'] in ('intent','conops'):phase['state']='approved'
         elif phase['phase_key']=='needs':phase.update({'state':'failed','detail':'Generator failed before producing needs'})
         else:phase['state']='pending'
     live.update({'state':'failed','active_phase':'needs','input_state':{'waiting':False,'process_live':False,'engine_process_status':40},
         'ui_state':{'mode':'error','active_phase':'needs','process_live':False}})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     page.route('**/api/model-routes',lambda route:route.fulfill(json={'routes':[]}))
-    page.route('**/api/tasks/live/execution*',lambda route:route.fulfill(json={'session_id':'complete-session','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[]}))
-    page.route('**/api/tasks/live/retry-needs',lambda route:route.fulfill(json={'status':'preview','phase':'needs','session_id':'complete-session','retains':['intent','conops'],'message':'Retry Stakeholder needs from the approved interview. This may make new model calls and incur cost.'}))
-    page.goto(ui+'/tasks/live/view')
+    page.route(f'**/api/tasks/{tid}/execution*',lambda route:route.fulfill(json={'session_id':'complete-session','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[]}))
+    page.route(f'**/api/tasks/{tid}/retry-needs',lambda route:route.fulfill(json={'status':'preview','phase':'needs','session_id':'complete-session','retains':['intent','conops'],'message':'Retry Stakeholder needs from the approved interview. This may make new model calls and incur cost.'}))
+    page.goto(ui+f'/tasks/{tid}/view')
     expect(page.locator('#retryneeds')).to_be_visible()
     expect(page.locator('#rerun')).to_have_count(0)
     expect(page.locator('.phase-list-primary .phase').nth(2)).to_contain_text('Generator failed')
@@ -1608,22 +1618,24 @@ def test_audit_dialog_scrolls_on_short_viewport(page,ui):
     page.screenshot(path=str(_screenshots_dir / 'audit-scroll-verified.png'),full_page=True)
 
 
-def test_failed_needs_retry_selects_env_default_model_not_interview_model(page,ui):
-    live=page.request.get(ui+'/api/tasks/live').json()
+def test_failed_needs_retry_selects_env_default_model_not_interview_model(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     live['state']='failed';live['active_phase']='needs';live['model_route']='ollama:qwen2.5-coder:14b'
     for phase in live['phases']:
         if phase['phase_key'] in ('intent','conops'):phase['state']='approved'
         elif phase['phase_key']=='needs':phase.update({'state':'failed','detail':'Old generator failure'})
     live['input_state']={'waiting':False,'process_live':False,'engine_process_status':40}
     live['ui_state']={'mode':'error','active_phase':'needs','process_live':False}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
-    page.route('**/api/tasks/live/retry-needs',lambda route:route.fulfill(json={
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}/retry-needs',lambda route:route.fulfill(json={
         'status':'preview','phase':'needs','session_id':'complete-session','default_model':'ollama:phi4',
         'checkpoint':False,'last_failure':'Old generator failure','message':'Retry only Needs'}))
     page.route('**/api/model-routes',lambda route:route.fulfill(json={'routes':[
         {'id':'ollama','available':True,'models':['qwen2.5-coder:14b','phi4']},
         {'id':'deepseek','available':True,'models':['deepseek-chat']}],'default_route':{'route':'ollama','model':'phi4'}}))
-    page.goto(ui+'/tasks/live/view');page.locator('#retryneeds').click()
+    page.goto(ui+f'/tasks/{tid}/view');page.locator('#retryneeds').click()
     dialog=page.get_by_role('dialog',name='Retry Stakeholder needs');dialog.wait_for()
     assert dialog.locator('#retrymodel').input_value()=='ollama:phi4'
     assert dialog.get_by_text('No generator checkpoint exists; Needs starts fresh.',exact=False).is_visible()
@@ -2223,24 +2235,26 @@ def test_flagged_inputs_show_readable_item_and_no_circular_link(page,ui):
     assert page.locator('#semantic-panel .replace-fields input[readonly]').count()==0
 
 
-def test_failed_architecture_has_a_retry_that_resumes_the_phase(page,ui):
+def test_failed_architecture_has_a_retry_that_resumes_the_phase(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     from playwright.sync_api import expect
-    live=page.request.get(ui+'/api/tasks/live').json()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
     for phase in live['phases']:
         if phase['phase_key'] in ('intent','conops','needs','srs'):phase['state']='approved'
         elif phase['phase_key']=='architecture':phase.update({'state':'failed','detail':'SRS candidate review is not ready.'})
         else:phase['state']='pending'
     live.update({'state':'failed','active_phase':'architecture','input_state':{'waiting':False,'process_live':False,'engine_process_status':40},
         'ui_state':{'mode':'error','active_phase':'architecture','process_live':False}})
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)))
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
     page.route('**/api/model-routes',lambda route:route.fulfill(json={'routes':[{'id':'deepseek','models':['deepseek-flash'],'available':True}]}))
-    page.route('**/api/tasks/live/execution*',lambda route:route.fulfill(json={'session_id':'complete-session','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[]}))
+    page.route(f'**/api/tasks/{tid}/execution*',lambda route:route.fulfill(json={'session_id':'complete-session','route':'ollama','usage':[],'calls':[],'usage_segments':[],'raw':[]}))
     sent=[]
     def retry(route):
         body=route.request.post_data_json;sent.append(body)
         route.fulfill(json={'status':'preview','phase':'architecture','label':'Architecture','session_id':'complete-session','retains':['intent','conops','needs','srs'],'default_model':'deepseek:deepseek-flash','default_source':'selected','checkpoint':True,'last_failure':'SRS candidate review is not ready.','message':'Retry Architecture from the approved earlier phases. This may make new model calls and incur cost.'} if not body['confirm'] else {'status':'started','phase':'architecture','session_id':'complete-session'})
-    page.route('**/api/tasks/live/retry-phase',retry)
-    page.goto(ui+'/tasks/live/view')
+    page.route(f'**/api/tasks/{tid}/retry-phase',retry)
+    page.goto(ui+f'/tasks/{tid}/view')
     expect(page.locator('#retryphase')).to_have_text('Retry Architecture')
     expect(page.locator('#retryneeds')).to_have_count(0)
     page.locator('#retryphase').click()
@@ -2699,4 +2713,16 @@ def test_progress_browser_group_requires_signed_pg_fixture():
                  test_live_heartbeat_wraps_without_clipping,
                  test_active_phase_line_replaces_and_progress_stays_collapsed_until_expanded,
                  test_waiting_phase_status_is_not_overwritten_by_late_heartbeat):
+        assert "pg_page" in inspect.signature(case).parameters
+
+
+def test_retry_browser_group_requires_signed_pg_fixture():
+    import inspect
+    for case in (test_orphaned_running_task_renders_visible_recovery_error,
+                 test_protocol_422_is_not_mislabeled_engine_down,
+                 test_legacy_ollama_model_switch_dialog,
+                 test_completed_engine_session_in_error_view_does_not_offer_switch,
+                 test_failed_needs_has_retry_not_generation_rerun,
+                 test_failed_needs_retry_selects_env_default_model_not_interview_model,
+                 test_failed_architecture_has_a_retry_that_resumes_the_phase):
         assert "pg_page" in inspect.signature(case).parameters
