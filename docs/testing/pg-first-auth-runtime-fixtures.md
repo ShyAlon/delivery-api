@@ -969,3 +969,18 @@ of127,plus three standalone local-auth/browser cases. Pending debug contracts
 untouched. A incomplete;global SQLite bootstrap remains;B/C/D unstarted.
 Hosted CI/full mixed UI/full repo/deployed topology unrun. Production unchanged;
 no deploy/live DB/model execution.
+
+## A71: customer diagnostics/history browser group
+
+Four history/debug reopen+reload,multi-state task pages,manifest-first ZIP,and
+customer credits-only audit cases use signed PG/isolated IDs. All assertions
+retained. History and audit presentation snapshots remain;ZIP creation/download
+and actual seeded task reads run against the signed test server. Manifest-first
+ZIP does not assert exact UUID task IDs and is distinct from the pending exact-ID
+ZIP conflict. Guard failed first1 in0.72s;cases+guard+cloud API+bootstrap43passed
+0skips14.26s. Inspected 2.50credits-only audit and downloaded8/8sections Debug
+status. Full-page modal capture extends beyond viewport,not a layout fix.
+Shared116PG/11legacy functions out of127,plus three standalone local-auth/browser
+cases. Pending exact-ID ZIP/classifications untouched. A incomplete;global
+SQLite bootstrap remains;B/C/D unstarted. Hosted CI/full mixed UI/full repo/
+deployed topology unrun. Production unchanged;no deploy/live DB/model execution.

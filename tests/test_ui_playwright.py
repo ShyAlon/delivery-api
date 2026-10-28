@@ -241,19 +241,21 @@ def test_start_screen_displays_engine_resolved_model_and_conflict(pg_page,pg_ui,
     page.screenshot(path=str(_screenshots_dir / "interview-model-preview.png"),full_page=True)
 
 
-def test_not_started_running_and_done_pages(page, ui):
-    page.goto(ui + "/tasks/empty/view")
+def test_not_started_running_and_done_pages(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    page.goto(ui + f'/tasks/{pg_ids["empty"]}/view')
     page.get_by_text("This task hasn't started.").wait_for();assert page.get_by_text("This task hasn't started.").is_visible()
     start=page.get_by_role("button",name="Start interview");assert start.is_visible() and not start.is_enabled()
     assert page.get_by_text("Start engine · wiring next").count()==0
-    page.goto(ui + "/tasks/live/view")
+    page.goto(ui + f"/tasks/{tid}/view")
     page.locator(".live-indicator").wait_for()
     assert page.get_by_text("Live engine output").count() == 0
     assert page.locator("#console").count() == 0 and page.locator("#progressfeed").count() == 0
     page.locator(".avatar").click();page.locator("#opendebug").click()
     page.locator(".debug-dialog").wait_for();assert page.locator("#console").count()==0
     page.get_by_role("button",name="Close debug").click()
-    page.goto(ui + "/tasks/done/view")
+    page.goto(ui + f'/tasks/{pg_ids["done"]}/view')
     page.get_by_text("Artifacts", exact=True).wait_for();assert page.get_by_text("Artifacts", exact=True).is_visible()
     assert page.get_by_role("button",name="Architecture overview").is_visible()
 
@@ -1403,9 +1405,11 @@ def test_interview_history_truncates_questions_and_answers_after_32_words(pg_pag
     assert "q40" in page.locator(".feedback-context").inner_text()
 
 
-def test_interview_history_cards_and_debug_toggle_persist(page, ui):
-    route_task_snapshot(page, ui, "live", interview_history_snapshot)
-    page.goto(ui + "/tasks/live/view")
+def test_interview_history_cards_and_debug_toggle_persist(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    route_task_snapshot(page, ui, tid, interview_history_snapshot)
+    page.goto(ui + f"/tasks/{tid}/view")
     page.get_by_text("Interview so far").wait_for()
     assert page.locator(".qa-item").count() == 2
     assert page.locator(".qa-item").nth(1).locator(".qa-question p").inner_text() == "What should the family see first?"
@@ -2545,9 +2549,11 @@ def test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_
     page.screenshot(path=str(_screenshots_dir / "session-unavailable.png"),full_page=True)
 
 
-def test_everything_zip_downloads_with_the_manifest_first(page,ui,tmp_path):
+def test_everything_zip_downloads_with_the_manifest_first(pg_page,pg_ui,pg_ids,tmp_path):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     import zipfile
-    page.goto(ui+"/tasks/live/view");page.locator(".detail-head").wait_for()
+    page.goto(ui+f"/tasks/{tid}/view");page.locator(".detail-head").wait_for()
     page.locator(".avatar").click();page.locator("#opendebug").click();page.locator(".debug-dialog").wait_for()
     with page.expect_download() as info:
         page.locator("#downloadeverything").click()
@@ -2713,10 +2719,12 @@ def test_both_admitted_routes_can_be_selected_without_hiding_either(pg_page,pg_u
     page.screenshot(path='/downloads/both-provider-options-mobile.png',full_page=True)
 
 
-def test_customer_audit_summary_is_credits_only_even_with_legacy_provider_totals(page,ui):
-    page.route('**/api/tasks/live/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':[],
+def test_customer_audit_summary_is_credits_only_even_with_legacy_provider_totals(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    page.route(f'**/api/tasks/{tid}/audit',lambda route:route.fulfill(json={'actor_mode':'basic','entries':[],
         'totals':{'price':2.5,'price_usd':2.5,'interview_calls':14,'interview_cost_usd':.0037}}))
-    page.goto(ui+'/tasks/live/view');page.get_by_role('button',name='Audit').click()
+    page.goto(ui+f'/tasks/{tid}/view');page.get_by_role('button',name='Audit').click()
     dialog=page.get_by_role('dialog',name='Task audit')
     expect(dialog).to_contain_text('Credits Used')
     expect(dialog).to_contain_text('2.50 credits')
@@ -2989,4 +2997,13 @@ def test_generator_gate_cases_require_signed_pg_browser():
     import inspect
     for case in (test_every_generator_gate_uses_same_page_and_configured_model_picker,
                  test_items_gate_accepts_list_artifact_and_reports_invalid_evidence):
+        assert 'pg_page' in inspect.signature(case).parameters
+
+
+def test_customer_diagnostic_cases_require_signed_pg_browser():
+    import inspect
+    for case in (test_interview_history_cards_and_debug_toggle_persist,
+                 test_everything_zip_downloads_with_the_manifest_first,
+                 test_customer_audit_summary_is_credits_only_even_with_legacy_provider_totals,
+                 test_not_started_running_and_done_pages):
         assert 'pg_page' in inspect.signature(case).parameters
