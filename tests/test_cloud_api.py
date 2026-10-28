@@ -721,3 +721,27 @@ def test_cloud_gate_artifact_reference_never_exposes_host_path(cloud):
     assert response.status_code==200,response.text
     assert response.json()['control_snapshot']['artifact_ref'] is None
     assert str(base) not in response.text
+
+
+def test_owner_classifications_expose_differences_without_cross_tenant_access(cloud):
+    client,store,root=cloud
+    sid=str(uuid.uuid4())
+    q,a='Which view?','A calm view'
+    with tenant_context(A):
+        tid=store.create_task('Owner classifications')['task_id']
+        store.set_engine_session(tid,sid)
+        store.add_event(tid,'waiting_input',q,phase_key='intent',payload={'question':q,'waiting_input':True})
+        store.add_event(tid,'answer','You: '+a,phase_key='intent',payload={'answer':a})
+    folder=session_root(root,A,sid)/'interview';folder.mkdir(parents=True)
+    record={'slot':'coverage','timestamp':'test','input':{'state':f'Question: {q}\nAnswer: {a}'},
+            'baseline':{'status':'ok','verdict':{'relevance':'relevant'}},
+            'jev':{'status':'ok','verdict':{'relevance':'thin'}}}
+    (folder/'categorization-shadow.jsonl').write_text(json.dumps(record)+'\n')
+    url=f'/api/tasks/{tid}/classifications'
+    own=client.get(url,headers=header('a'))
+    assert own.status_code==200,own.text
+    answer=next(iter(own.json()['answers'].values()))
+    assert answer['coverage']['differed'] is True
+    assert answer['coverage']['jev']=={'relevance':'thin'}
+    assert client.get(url,headers=header('b')).status_code in (403,404)
+    assert client.get(url).status_code==401
