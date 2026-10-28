@@ -1962,7 +1962,7 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None, request: Re
         control.artifact_ref=None
     if config.CLOUD_TENANTS:
         artifacts=[{key:value for key,value in row.items() if key!='ref'} for row in artifacts]
-    return _customer_events({**task, "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": _customer_events(task_events), "artifacts":artifacts,"artifact_projection":{"session":session,"root":None if config.CLOUD_TENANTS else str((authorized_session(__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"stop_control":{"available":bool(config.CLOUD_TENANTS and cloud_execution_admitted() and session_id),"requested":task.get("state") in ("stop_requested","stopped")},"run_control":_run_control(task_id)})
+    return _customer_events({**task, "rerun_control":_rerun_control(), "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": _customer_events(task_events), "artifacts":artifacts,"artifact_projection":{"session":session,"root":None if config.CLOUD_TENANTS else str((authorized_session(__import__('vmodel_contracts.runtime',fromlist=['artifacts_root']).artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)) if session else ''),"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"stop_control":{"available":bool(config.CLOUD_TENANTS and cloud_execution_admitted() and session_id),"requested":task.get("state") in ("stop_requested","stopped")},"run_control":_run_control(task_id)})
 
 def _retain_decision_control(task_id:str,control:dict)->None:
     decision=control.get('decision') or {};context=decision.get('context') or {}
@@ -2426,6 +2426,10 @@ class RerunRequest(BaseModel):
     from_phase: str
     confirm: bool = False
 
+def _rerun_control():
+    if not config.CLOUD_TENANTS:return {"available":True}
+    return {"available":False,"reason":"Tenant stage rerun is unavailable: new-generation session/checkpoint recovery is not implemented."}
+
 @app.post("/api/tasks/{task_id}/rerun")
 def rerun(task_id: str, req: RerunRequest, request: Request, a: auth.Actor = Depends(auth.require_run_start)):
     task=store.task(task_id)
@@ -2437,13 +2441,15 @@ def rerun(task_id: str, req: RerunRequest, request: Request, a: auth.Actor = Dep
     if missing:
         activity("task.rerun.refused","Rerun refused: prerequisite incomplete",task_id=task_id,actor=a.label,from_phase=req.from_phase,reason="prerequisite")
         raise HTTPException(409,{"error":f"Cannot rerun from {req.from_phase}: prerequisite '{missing['label']}' is not complete.","cause":"Stages are sequential; rerunning a downstream stage without its upstream result would produce ungrounded output.","next":f"Run or rerun '{missing['label']}' first, then retry {req.from_phase}."})
+    if config.CLOUD_TENANTS:
+        raise HTTPException(409,{"code":"tenant_rerun_unavailable",
+            "error":"Stage rerun is unavailable for tenant tasks.",
+            "cause":_rerun_control()["reason"],
+            "next":"No work changed. Check the task Audit. Use a supported failed-phase Retry if shown; otherwise create a new task to start again (new model calls may cost credits)."})
     if not req.confirm:
         downstream = [p["phase_key"] for p in task["phases"] if p["position"] >= next(p["position"] for p in task["phases"] if p["phase_key"] == req.from_phase)]
         return {"status": "preview", "from_phase": req.from_phase, "policy": "archive", "downstream": downstream,
                 "message": "Downstream artifacts will be marked stale and retained under their generation. Their gates will require re-approval."}
-    if config.CLOUD_TENANTS:
-        if not cloud_execution_admitted():raise HTTPException(503,'Cloud admission and lifecycle validation pending')
-        raise HTTPException(409,'Cloud rerun requires a new-generation session/checkpoint policy; no work changed')
     try: generation = store.prepare_rerun(task_id, req.from_phase, "archive", a.label)
     except (ValueError, KeyError) as e:
         activity("task.rerun.refused","Rerun refused: invalid phase",task_id=task_id,actor=a.label,from_phase=req.from_phase,reason="invalid_phase")
