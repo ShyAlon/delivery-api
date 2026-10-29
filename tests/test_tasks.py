@@ -6,11 +6,12 @@ from fastapi.testclient import TestClient
 from delivery_api.app import app, store
 
 
-def test_task_three_states_and_phase_progress(pg_scoped_workspace,monkeypatch):
+def test_task_three_states_and_phase_progress(pg_scoped_workspace,monkeypatch,pg_task_app):
+    signed_app=pg_task_app(pg_scoped_workspace)
     from delivery_api import config
     monkeypatch.setattr(config,"CLOUD_TENANTS",False)
     store=pg_scoped_workspace.store
-    with TestClient(app) as client:
+    with TestClient(signed_app,headers=pg_scoped_workspace.headers) as client:
         made = client.post("/api/tasks", json={"title": "Astronomy explorer", "brief": "Kids learn through play"})
         assert made.status_code == 201
         task_id = made.json()["task_id"]
@@ -1252,7 +1253,8 @@ def test_answer_feedback_crud_and_audit(pg_workspace_factory,pg_task_app):
         assert "feedback.upsert" in actions and "feedback.update" in actions and "feedback.delete" in actions
 
 
-def test_task_classifications_join_shadow_to_answers(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_task_classifications_join_shadow_to_answers(tmp_path,pg_scoped_workspace,monkeypatch,pg_task_app):
+    signed_app=pg_task_app(pg_scoped_workspace)
     from delivery_api import config
     monkeypatch.setattr(config,"CLOUD_TENANTS",False)
     import json as _json
@@ -1261,7 +1263,7 @@ def test_task_classifications_join_shadow_to_answers(tmp_path,pg_scoped_workspac
     root = tmp_path / session / "interview"
     root.mkdir(parents=True)
     monkeypatch.setenv("VMODEL_ARTIFACTS_DIR",str(tmp_path))
-    with TestClient(app) as client:
+    with TestClient(signed_app,headers=pg_scoped_workspace.headers) as client:
         task_id = client.post("/api/tasks", json={"title": "Chip join"}).json()["task_id"]
         app_store.set_engine_session(task_id, session)
         q, a = "What should the family see first?", "A calm shared view"
@@ -1354,8 +1356,9 @@ def test_generator_failure_preserves_reported_contract_error(tmp_path,pg_scoped_
     assert error['payload']['cause']=='Error: intent contract 0.19.0 cannot be read by generator contract 0.16.x'
 
 
-def test_item_stage_list_artifact_validates_for_parked_gate(monkeypatch,tmp_path,pg_scoped_workspace):
+def test_item_stage_list_artifact_validates_for_parked_gate(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
     """The generator writes items.json as a list of ItemSpec, not SpecBundle."""
+    signed_app=pg_task_app(pg_scoped_workspace)
     import json
     from fastapi.testclient import TestClient
     from delivery_api import app as app_module
@@ -1372,7 +1375,7 @@ def test_item_stage_list_artifact_validates_for_parked_gate(monkeypatch,tmp_path
     item=next(a for a in records if a['name']=='items.json')
     assert item['phase_key']=='specs' and item['present'] is True
     assert item['valid'] is True and item['validator']=='ItemSpec[]' and item['validation_errors']==[]
-    client=TestClient(app_module.app)
+    client=TestClient(signed_app,headers=pg_scoped_workspace.headers)
     response=client.get(f'/api/tasks/{task_id}/artifacts/specs/items.json/view')
     assert response.status_code==200 and json.loads(response.json()['content'])[0]['spec_id']=='SPEC-1'
     artifact.write_text(json.dumps([{'spec_id':'BROKEN','kind':'ui_flow','title':'Status screen'}]))
