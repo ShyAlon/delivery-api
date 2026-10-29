@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from delivery_api.app import app
 from delivery_api.simulation import validate_recorded_run
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def simulation_workspace(pg_scoped_workspace,monkeypatch):
     from delivery_api import app as module
     from delivery_api.simulation import Simulation
@@ -14,19 +14,19 @@ def simulation_workspace(pg_scoped_workspace,monkeypatch):
     yield pg_scoped_workspace
 
 
-def test_file_picker_upload_validates_and_imports():
+def _case_file_picker_upload_validates_and_imports():
     c=TestClient(app);rows=[{"session_id":"s","stage":"srs","provider":"ollama","model":"phi4","prompt_tokens":1,"completion_tokens":2,"ts":"2026-09-15T00:00:00Z"}]
     r=c.post('/api/simulations',files={'usage_file':('usage.jsonl',json.dumps(rows[0]).encode(),'application/json')},data={'title':'Replay'})
     assert r.status_code==201 and r.json()['simulated']
 
-def test_import_rejects_wrong_name_and_malformed_event_with_guidance():
+def _case_import_rejects_wrong_name_and_malformed_event_with_guidance():
     c=TestClient(app)
     r=c.post('/api/simulations',files={'usage_file':('notes.txt',b'{}','text/plain')})
     assert r.status_code==400 and r.json()['detail']['next']
     r=c.post('/api/simulations',files={'usage_file':('usage.jsonl',b'{bad','text/plain')})
     d=r.json()['detail'];assert r.status_code==400 and all(d[k] for k in ('error','cause','next'))
 
-def test_import_rejects_unknown_stage_and_mixed_sessions():
+def _case_import_rejects_unknown_stage_and_mixed_sessions():
     c=TestClient(app)
     bad={"stage":"bogus","provider":"p","model":"m","ts":"2026-09-15T00:00:00Z"}
     r=c.post('/api/simulations',files={'usage_file':('usage.jsonl',json.dumps(bad).encode(),'text/plain')})
@@ -41,7 +41,7 @@ def test_interview_stage_vocabulary_and_unified_session_root(tmp_path):
     assert rows==[row] and sid=='session'
 
 
-def test_simulate_endpoint_runs_on_asgi_event_loop(tmp_path):
+def _case_simulate_endpoint_runs_on_asgi_event_loop(tmp_path):
     row={"stage":"scope_tiebreak","provider":"ollama","model":"phi4","ts":"2026-09-15T10:00:00+03:00","prompt_tokens":1,"completion_tokens":1,"session_id":"asgi"}
     with TestClient(app) as c:
         imported=c.post('/api/simulations',files={'usage_file':('usage.jsonl',(json.dumps(row)+'\n').encode(),'application/json')},data={'title':'ASGI replay'})
@@ -51,7 +51,7 @@ def test_simulate_endpoint_runs_on_asgi_event_loop(tmp_path):
         assert r.json()=={'status':'started','simulated':True,'speed':'instant'}
 
 
-def test_simulate_start_failure_is_structured(monkeypatch):
+def _case_simulate_start_failure_is_structured(monkeypatch):
     with TestClient(app) as c:
         monkeypatch.setattr('delivery_api.app.simulation.start',lambda *a,**k: (_ for _ in ()).throw(RuntimeError('loop unavailable')))
         r=c.post('/api/tasks/anything/simulate',json={'speed':0})
@@ -92,7 +92,7 @@ def test_uploaded_jsonl_resolves_local_canonical_intent(monkeypatch,tmp_path,sim
     assert task['title']=='Track Pokémon collection goals'
 
 
-def test_simulation_fixture_uses_pg_for_http_and_replay():
+def test_simulation_fixture_uses_pg_for_http_and_replay(simulation_workspace):
     from delivery_api import app as module
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(module.store,PostgresStore)
@@ -102,3 +102,63 @@ def test_simulation_fixture_uses_pg_for_http_and_replay():
         SQLiteStore(':memory:')
     with module.store._postgres.transaction() as connection:
         assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
+
+
+def _check_file_picker_upload_validates_and_imports(monkeypatch,tmp_path,workspace):
+    from tests.test_simulation_validation import _case_file_picker_upload_validates_and_imports
+    from delivery_api import app as module
+    from delivery_api.simulation import Simulation
+    monkeypatch.setattr(module,'simulation',Simulation(workspace.store))
+    _case_file_picker_upload_validates_and_imports()
+
+
+def test_file_picker_upload_validates_and_imports(pg_local_compat_process):
+    pg_local_compat_process(_check_file_picker_upload_validates_and_imports)
+
+
+def _check_import_rejects_wrong_name_and_malformed_event_with_guidance(monkeypatch,tmp_path,workspace):
+    from tests.test_simulation_validation import _case_import_rejects_wrong_name_and_malformed_event_with_guidance
+    from delivery_api import app as module
+    from delivery_api.simulation import Simulation
+    monkeypatch.setattr(module,'simulation',Simulation(workspace.store))
+    _case_import_rejects_wrong_name_and_malformed_event_with_guidance()
+
+
+def test_import_rejects_wrong_name_and_malformed_event_with_guidance(pg_local_compat_process):
+    pg_local_compat_process(_check_import_rejects_wrong_name_and_malformed_event_with_guidance)
+
+
+def _check_import_rejects_unknown_stage_and_mixed_sessions(monkeypatch,tmp_path,workspace):
+    from tests.test_simulation_validation import _case_import_rejects_unknown_stage_and_mixed_sessions
+    from delivery_api import app as module
+    from delivery_api.simulation import Simulation
+    monkeypatch.setattr(module,'simulation',Simulation(workspace.store))
+    _case_import_rejects_unknown_stage_and_mixed_sessions()
+
+
+def test_import_rejects_unknown_stage_and_mixed_sessions(pg_local_compat_process):
+    pg_local_compat_process(_check_import_rejects_unknown_stage_and_mixed_sessions)
+
+
+def _check_simulate_endpoint_runs_on_asgi_event_loop(monkeypatch,tmp_path,workspace):
+    from tests.test_simulation_validation import _case_simulate_endpoint_runs_on_asgi_event_loop
+    from delivery_api import app as module
+    from delivery_api.simulation import Simulation
+    monkeypatch.setattr(module,'simulation',Simulation(workspace.store))
+    _case_simulate_endpoint_runs_on_asgi_event_loop(tmp_path)
+
+
+def test_simulate_endpoint_runs_on_asgi_event_loop(pg_local_compat_process):
+    pg_local_compat_process(_check_simulate_endpoint_runs_on_asgi_event_loop)
+
+
+def _check_simulate_start_failure_is_structured(monkeypatch,tmp_path,workspace):
+    from tests.test_simulation_validation import _case_simulate_start_failure_is_structured
+    from delivery_api import app as module
+    from delivery_api.simulation import Simulation
+    monkeypatch.setattr(module,'simulation',Simulation(workspace.store))
+    _case_simulate_start_failure_is_structured(monkeypatch)
+
+
+def test_simulate_start_failure_is_structured(pg_local_compat_process):
+    pg_local_compat_process(_check_simulate_start_failure_is_structured)
