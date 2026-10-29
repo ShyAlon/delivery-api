@@ -31,13 +31,13 @@ def test_environment_style_credentials_never_survive_assignment_projection():
 
 def test_stage_rotation_is_bounded_and_scrubs_all_writes(tmp_path,monkeypatch):
     from delivery_api import observability as o
-    from logging.handlers import RotatingFileHandler
+    stage_handler=o._StageFileHandler
     path=tmp_path/'stage.log'
     monkeypatch.setattr(o,'STAGE_LOG_PATHS',{'fixture':path})
     def small(*args,**kwargs):
         kwargs.update(maxBytes=220,backupCount=2)
-        return RotatingFileHandler(*args,**kwargs)
-    monkeypatch.setattr(o,'RotatingFileHandler',small)
+        return stage_handler(*args,**kwargs)
+    monkeypatch.setattr(o,'_StageFileHandler',small)
     for i in range(20):o.event('fixture','API_KEY=must-not-leak '+'x'*80,count=i,phase_key='fixture')
     files=list(tmp_path.glob('stage.log*'))
     assert len(files)==3
