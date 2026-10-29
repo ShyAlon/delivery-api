@@ -88,6 +88,7 @@ def test_a_real_anonymous_boot_tolerates_only_the_named_expected_401s(anon_app):
         "under the old any-console-error gate this boot FAILS - the false positive this test pins"
     failures, tolerated = browser_smoke.classify(events)
     assert failures == [], failures
+    assert events["telemetry_success"], "anonymous client-log POST must succeed"
     named = " ".join(tolerated)
     for _, path in browser_smoke.EXPECTED_ANONYMOUS_401:
         assert path in named, "every tolerated probe must be named in the output"
@@ -149,3 +150,14 @@ def test_the_launcher_delegates_to_the_smoke_module():
     assert '.venv/bin/python scripts/ops/browser_smoke.py "http://127.0.0.1:$PORT"' in src
     assert "abort BROWSER-SMOKE" in src and "playwright install chromium" in src
     assert "page.on(" not in src, "the inline playwright heredoc is gone - the logic lives in the tested module"
+
+
+def test_telemetry_401_is_not_an_expected_anonymous_error():
+    events = _events(responses=[{"method":"POST","url":"http://x/api/client-log","status":401}])
+    assert browser_smoke.classify(events)[0] == ["HTTP 401 POST http://x/api/client-log"]
+
+
+def test_missing_successful_telemetry_fails_collected_boot():
+    events = _events()
+    events["telemetry_success"] = False
+    assert browser_smoke.classify(events)[0] == ["no successful anonymous POST /api/client-log captured"]
