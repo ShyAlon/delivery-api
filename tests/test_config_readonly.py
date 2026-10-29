@@ -26,12 +26,3 @@ import delivery_api.config
     result=subprocess.run([sys.executable,'-c',code],env=env,capture_output=True,text=True)
     assert result.returncode==0,result.stderr
     assert not home.exists()
-
-
-def test_store_open_creates_only_selected_parent(tmp_path):
-    from delivery_api.store import SQLiteStore
-    path=tmp_path/'selected'/'nested'/'delivery.db'
-    assert not path.parent.exists()
-    store=SQLiteStore(str(path))
-    assert path.is_file()
-    store._db.close()

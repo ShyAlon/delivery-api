@@ -109,15 +109,20 @@ def test_answer_endpoint_appends_visible_transcript_line(monkeypatch,pg_scoped_w
     assert not any(event['kind']=='answer' for event in app_module.store.events(task_id))
 
 
-def test_storage_factory_is_the_only_backend_selection_point(tmp_path):
-    from delivery_api.store import SQLiteStore, Storage, create_store
-
-    local = create_store(f"sqlite:///{tmp_path / 'portable.db'}")
-    assert isinstance(local, SQLiteStore)
-    assert isinstance(local, Storage)
-    task_id = local.create_task("Persist me")["task_id"]
-    del local
-    reopened = create_store(f"sqlite:///{tmp_path / 'portable.db'}")
+def test_storage_factory_selects_postgres_and_preserves_scoped_task(pg_scoped_workspace):
+    from delivery_api.store import Storage, create_store
+    from delivery_api.postgres_store import PostgresStore
+    existing = pg_scoped_workspace.store
+    from psycopg.conninfo import conninfo_to_dict
+    from urllib.parse import quote, urlencode
+    fields = conninfo_to_dict(existing._postgres.dsn)
+    database = fields.pop("dbname")
+    url = "postgresql:///" + quote(database, safe="") + "?" + urlencode(fields)
+    selected = create_store(url)
+    assert isinstance(selected, PostgresStore) and isinstance(selected, Storage)
+    task_id = selected.create_task("Persist me")["task_id"]
+    reopened = create_store(url)
+    assert isinstance(reopened, PostgresStore)
     assert reopened.task(task_id)["title"] == "Persist me"
 
 
@@ -319,117 +324,27 @@ def test_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monkeyp
     assert store.task(task_id)['state']=='not_started'
 
 
-def test_default_database_is_stable_user_data_outside_repo_and_dist(monkeypatch,tmp_path):
-    import importlib
-    from pathlib import Path
-    from delivery_api import config
-    monkeypatch.delenv('DELIVERY_DATABASE_URL',raising=False);monkeypatch.setenv('XDG_DATA_HOME',str(tmp_path/'xdg'))
-    assert config.default_data_dir()==tmp_path/'xdg'/'requi-re'
-    assert config.default_data_dir()/'delivery.db' not in (tmp_path/'dist',Path.cwd())
-
-def test_turso_replica_writes_locally_and_syncs_account_session(monkeypatch,tmp_path):
-    import sqlite3
-    from delivery_api.store import TursoReplicaStore
-    class Replica:
-        def __init__(self,path):self.inner=sqlite3.connect(path,check_same_thread=False);self.inner.row_factory=sqlite3.Row;self.syncs=[]
-        def execute(self,*a,**k):return self.inner.execute(*a,**k)
-        def executemany(self,*a,**k):return self.inner.executemany(*a,**k)
-        def executescript(self,*a,**k):return self.inner.executescript(*a,**k)
-        def commit(self):return self.inner.commit()
-        def sync(self):self.syncs.append('attempted')
-    replica=Replica(tmp_path/'replica.db');events=[]
-    monkeypatch.setattr('delivery_api.store.activity',lambda kind,message,**fields:events.append((kind,message,fields)))
-    store=TursoReplicaStore(str(tmp_path/'replica.db'),'libsql://database.example','secret-token',connection=replica)
-    user=store.create_basic_user('cloud@example.com','salt$hash',100)
-    store.create_session('opaque-session',user['user_id'],9999999999)
-    store.delete_session('opaque-session')
-    assert store.basic_user('cloud@example.com')['user_id']==user['user_id']
-    assert len(replica.syncs)==4
-    rendered=repr(events)
-    assert 'secret-token' not in rendered and 'libsql://database.example' not in rendered
+def test_postgres_config_does_not_create_local_database(pg_runtime_process):
+    result = pg_runtime_process('''
+import json
+from pathlib import Path
+from delivery_api import app, config
+from delivery_api.postgres_store import PostgresStore
+assert config.DATABASE_URL.startswith(("postgres://", "postgresql://"))
+assert config.CLOUD_TENANTS is True
+assert isinstance(app.store, PostgresStore)
+assert not config.DEFAULT_DB_PATH.exists()
+print(json.dumps({"postgres": True, "local_database": False}))
+''')
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.strip().splitlines()[-1]) == {"postgres": True, "local_database": False}
 
 
-def test_turso_sync_failure_keeps_local_write_available(monkeypatch,tmp_path):
-    import sqlite3
-    from delivery_api.store import TursoReplicaStore
-    class OfflineReplica:
-        def __init__(self,path):self.inner=sqlite3.connect(path,check_same_thread=False);self.inner.row_factory=sqlite3.Row
-        def execute(self,*a,**k):return self.inner.execute(*a,**k)
-        def executemany(self,*a,**k):return self.inner.executemany(*a,**k)
-        def executescript(self,*a,**k):return self.inner.executescript(*a,**k)
-        def commit(self):return self.inner.commit()
-        def sync(self):raise OSError('network offline')
-    events=[];monkeypatch.setattr('delivery_api.store.activity',lambda kind,message,**fields:events.append((kind,message,fields)))
-    store=TursoReplicaStore(str(tmp_path/'offline.db'),'libsql://database.example','secret-token',connection=OfflineReplica(tmp_path/'offline.db'))
-    user=store.create_basic_user('offline@example.com','salt$hash',100)
-    assert store.basic_user('offline@example.com')['user_id']==user['user_id']
-    assert any(kind=='database.sync.failed' for kind,_,_ in events)
-    assert 'secret-token' not in repr(events)
-
-def test_turso_initial_offline_start_falls_back_to_local_sqlite(monkeypatch,tmp_path):
-    from delivery_api.store import TursoReplicaStore
-    events=[]
-    monkeypatch.setattr('delivery_api.libsql_store.connect_replica',lambda *a,**k:(_ for _ in ()).throw(OSError('offline token must not leak')))
-    monkeypatch.setattr('delivery_api.store.activity',lambda kind,message,**fields:events.append((kind,message,fields)))
-    store=TursoReplicaStore(str(tmp_path/'startup-offline.db'),'libsql://database.example','super-secret-token')
-    user=store.create_basic_user('startup-offline@example.com','salt$hash',100)
-    assert store.basic_user('startup-offline@example.com')['user_id']==user['user_id']
-    rendered=repr(events)
-    assert 'database.replica.offline' in rendered and 'database.sync.failed' in rendered
-    assert 'super-secret-token' not in rendered and 'libsql://database.example' not in rendered
-
-def test_turso_tuple_rows_obey_complete_storage_row_contract(tmp_path):
-    """Real libSQL returns tuples; every storage method must still see mapping rows."""
-    import libsql
-    from delivery_api.store import TursoReplicaStore
-    raw=libsql.connect(str(tmp_path/'tuple-replica.db'))
-    class LocalReplica:
-        def execute(self,*a,**k):return raw.execute(*a,**k)
-        def executemany(self,*a,**k):return raw.executemany(*a,**k)
-        def executescript(self,*a,**k):return raw.executescript(*a,**k)
-        def commit(self):return raw.commit()
-        def sync(self):pass
-    store=TursoReplicaStore(str(tmp_path/'tuple-replica.db'),'libsql://unused.example','token',connection=LocalReplica())
-    link=store.create_link('founder');assert store.link(link['token'])['run_id']==link['run_id']
-    task_id=store.create_task('Tuple row task','Adapter contract')['task_id']
-    store.update_phase(task_id,'intent','running',detail='Interviewing')
-    store.add_event(task_id,'progress','Question ready',phase_key='intent',payload={'completed':1,'total':2})
-    store.audit('tester','adapter.checked',task_id,{'ok':True})
-    store.add_task_artifact(task_id,'intent','Intent','/intent.json')
-    task=store.task(task_id)
-    assert task['title']=='Tuple row task' and task['phases'][0]['detail']=='Interviewing'
-    assert store.events(task_id)[-1]['payload']=={'completed':1,'total':2}
-    assert any(e['detail']=={'ok':True} for e in store.audit_entries(task_id))
-    assert store.task_artifacts(task_id)[0]['name']=='Intent'
 
 
-def test_sse_stream_reads_events_from_turso_tuple_backend(monkeypatch,tmp_path):
-    import asyncio,json,libsql
-    from delivery_api import app as app_module
-    from delivery_api.store import TursoReplicaStore
-    raw=libsql.connect(str(tmp_path/'sse-replica.db'))
-    class LocalReplica:
-        def execute(self,*a,**k):return raw.execute(*a,**k)
-        def executemany(self,*a,**k):return raw.executemany(*a,**k)
-        def executescript(self,*a,**k):return raw.executescript(*a,**k)
-        def commit(self):return raw.commit()
-        def sync(self):pass
-    store=TursoReplicaStore(str(tmp_path/'sse-replica.db'),'libsql://unused.example','token',connection=LocalReplica())
-    task_id=store.create_task('SSE tuple task','')['task_id']
-    monkeypatch.setattr(app_module,'store',store)
-    async def read():
-        class Connected:
-            async def is_disconnected(self):return False
-        response=await app_module.task_stream(task_id,Connected())
-        iterator=response.body_iterator
-        heartbeat=await anext(iterator)
-        assert 'event: heartbeat' in heartbeat
-        store.add_event(task_id,'progress','libSQL event',phase_key='intent',payload={'completed':1})
-        chunk=await asyncio.wait_for(anext(iterator),3)
-        assert 'event: progress' in chunk
-        data=json.loads(chunk.split('data: ',1)[1])
-        assert data['message']=='libSQL event' and data['payload']=={'completed':1}
-    asyncio.run(read())
+
+
+
 
 def test_process_runner_emits_every_question_line_as_progress(tmp_path,pg_scoped_workspace):
     import asyncio,sys
@@ -480,15 +395,6 @@ def test_interview_preview_does_not_color_downstream_requirements(tmp_path,pg_sc
     assert next(p for p in task['phases'] if p['phase_key']=='srs')['state']=='pending'
     assert all(e['phase_key']=='intent' for e in s.events(tid) if e['kind']=='progress')
 
-def test_plain_sqlite_in_turso_mode_falls_back_before_native_metadata_error(monkeypatch,tmp_path):
-    import sqlite3
-    from delivery_api.store import TursoReplicaStore
-    db=tmp_path/'delivery.db';sqlite3.connect(db).execute('create table preserved(value text)').connection.commit()
-    events=[];monkeypatch.setattr('delivery_api.store.activity',lambda kind,message,**fields:events.append((kind,message,fields)))
-    store=TursoReplicaStore(str(db),'libsql://database.example','secret-token')
-    assert store._replica_available is False
-    assert any(k=='database.replica.offline' and 'no embedded-replica metadata' in f['error'] for k,_,f in events)
-    assert sqlite3.connect(db).execute("select name from sqlite_master where name='preserved'").fetchone()
 
 
 def test_startup_marks_unbound_pre_http_checkpoint_incompatible(monkeypatch,tmp_path,pg_scoped_workspace):
@@ -1119,12 +1025,6 @@ def test_final_verification_waits_for_approval_and_finishes_task(tmp_path,pg_sco
     assert task['state']=='done' and next(p for p in task['phases'] if p['phase_key']=='validation')['state']=='approved'
 
 
-def test_existing_database_migrates_missing_final_verification_gate(tmp_path):
-    from delivery_api.store import SQLiteStore
-    path=tmp_path/'legacy-final-gate.db';store=SQLiteStore(str(path));tid=store.create_task('Legacy')['task_id']
-    store._db.execute("DELETE FROM gates WHERE task_id=? AND after_phase='tests'",(tid,));store._db.commit();store._db.close()
-    migrated=SQLiteStore(str(path));task=migrated.task(tid)
-    assert any(g['after_phase']=='tests' and g['gate_key']=='gate-tests' for g in task['gates'])
 
 
 def test_recovery_restores_final_approval_gate_owner(monkeypatch,tmp_path,pg_scoped_workspace):

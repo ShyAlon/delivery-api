@@ -1,6 +1,5 @@
 import pytest
 from vmodel_contracts.facets import COVERAGE_SCHEMA
-from delivery_api.store import SQLiteStore
 
 
 def test_task_schema_binding_is_pinned_and_idempotent(pg_scoped_workspace):
@@ -30,8 +29,3 @@ def test_schema_binding_rejects_foreign_owner_and_missing_task(pg_workspace_fact
             with pytest.raises(KeyError):foreign.store.interview_schema_binding(tid)
             with pytest.raises(KeyError):foreign.store.bind_interview_schema(tid,COVERAGE_SCHEMA.schema_id,COVERAGE_SCHEMA.schema_version)
         with tenant_context(owner.scope):assert owner.store.interview_schema_binding(tid)==expected
-
-
-def test_legacy_database_gets_additive_binding_columns(tmp_path):
-    path=tmp_path/'delivery.db';store=SQLiteStore(str(path));task=store.create_task('Legacy');store._db.close()
-    reopened=SQLiteStore(str(path));assert reopened.interview_schema_binding(task['task_id']) is None
