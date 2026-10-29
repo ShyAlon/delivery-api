@@ -14,7 +14,7 @@ def test_catalog_tracks_reviewed_server_offers_without_operator_data():
  assert set(body)=={'version','currency','offers'}
  for row in body['offers']:assert set(row)=={'offer_id','credits','amount_minor','discount'}
 
-def test_customer_shell_and_payment_mutations_remain_unmounted():
+def _case_customer_shell_and_payment_mutations_remain_unmounted():
  with TestClient(app) as c:
   r=c.get('/credits?view=review&offer=credits-50');assert r.status_code==200
   assert '/assets/purchase.css' in r.text and 'no-store' in r.headers['cache-control']
@@ -22,3 +22,12 @@ def test_customer_shell_and_payment_mutations_remain_unmounted():
    assert c.post(path,json={'offer_id':'credits-5'}).status_code==404
   assert c.get('/api/payments/purchases/arbitrary').status_code==404
   assert cloud_execution_admitted() is False
+
+
+def _check_customer_shell_and_payment_mutations_remain_unmounted(monkeypatch,tmp_path,workspace):
+ from tests.test_purchase_ui import _case_customer_shell_and_payment_mutations_remain_unmounted
+ _case_customer_shell_and_payment_mutations_remain_unmounted()
+
+
+def test_customer_shell_and_payment_mutations_remain_unmounted(pg_local_compat_process):
+ pg_local_compat_process(_check_customer_shell_and_payment_mutations_remain_unmounted)
