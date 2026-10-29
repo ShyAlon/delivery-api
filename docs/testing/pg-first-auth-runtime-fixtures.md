@@ -1110,3 +1110,18 @@ and Save/Reset visible;only mocked API UI semantics,not real engine settings.
 Shared123PG-backed behavioral functions/no shared legacy ui/page consumers;
 local rerun3,local editor1,standalone local-auth3 remain. Hosted CI/full suite
 unrun;no production change/deploy;A incomplete. Dated lesson included.
+
+## A80: auth run-start rate-limit contracts on signed PG
+
+Two auth_quota request contracts now use isolated PG,ES256 JWT/live session and
+real tenant middleware,not local OAuth/session SQLite. Preserve stale answer
+3x409,no429;start missing404 then429/run-start. Isolate limiter with monkeypatch
+instead of leaking process-global state. New source guard red1failed0.55s.
+Initial direct port2failed40passed4.52s exposed closed-runtime503 before auth;
+set installed() only in these admitted dependency tests (no engine/model calls),
+never weaken expected domain responses. Add separate closed-runtime503 and
+admitted unsigned401 assertions. Intermediate42passed0skips4.50s;whole auth
+module14passed2.44s;final auth module/cloud API/bootstrap54passed0skips6.09s.
+No production change. Remaining local OAuth/basic/replica/link quota contracts
+stay explicit local debt;email-availability retirement not addressed by this
+slice. Hosted CI/full suite/deployed topology unrun;A incomplete.
