@@ -22,7 +22,7 @@ export function startSessionCostHeader(){
  const sizing=new ResizeObserver(()=>document.documentElement.style.setProperty('--global-header-height',`${header.getBoundingClientRect().height}px`));sizing.observe(header);
  const task=location.pathname.match(/^\/tasks\/([^/]+)(?:\/|$)/);
  const route=task?`/api/tasks/${task[1]}/cost`:null;
- if(!route){host.textContent='No Session Selected';host.dataset.state='empty';const visible=()=>{if(!document.hidden){noteActivity();balance.refresh()}};const timer=setInterval(visible,60000);document.addEventListener('visibilitychange',visible);window.addEventListener('requi:usage-change',visible);return ()=>{clearInterval(timer);document.removeEventListener('visibilitychange',visible);window.removeEventListener('requi:usage-change',visible);sizing.disconnect();balance.dispose()}}
+ if(!route){host.textContent='No Session Selected';host.dataset.state='empty';const visible=()=>{if(!document.hidden){noteActivity();balance.refresh()}};const timer=setInterval(()=>{if(!document.hidden)balance.refresh()},60000);document.addEventListener('visibilitychange',visible);window.addEventListener('requi:usage-change',visible);return ()=>{clearInterval(timer);document.removeEventListener('visibilitychange',visible);window.removeEventListener('requi:usage-change',visible);sizing.disconnect();balance.dispose()}}
  let stopped=false,pending=false,hasValue=false,eventQueued=false;
  const here=`/tasks/${task[1]}`,stillHere=()=>location.pathname===here||location.pathname.startsWith(here+'/');
  const empty=()=>{host.textContent='No Session Selected';host.dataset.state='empty';host.title='';hasValue=false};
