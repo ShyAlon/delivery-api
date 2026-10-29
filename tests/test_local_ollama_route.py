@@ -289,7 +289,7 @@ def test_local_preview_route_list_fails_closed_when_the_engine_cannot_resolve(mo
     assert result['routes'][1]['available'] is False and 'error' in result['routes'][1]
 
 
-def test_deployed_start_rejects_a_forced_ollama_route(monkeypatch):
+def test_deployed_start_rejects_a_forced_ollama_route(monkeypatch, pg_scoped_workspace):
     module = _cloud_app(monkeypatch, flag=False)
     store = module.store
     task = store.create_task('forced-ollama-start-' + LOCAL_MODEL, 'an idea')
@@ -306,9 +306,9 @@ def test_deployed_start_rejects_a_forced_ollama_route(monkeypatch):
     store.delete_task(task_id)
 
 
-def test_deployed_start_rejects_a_forced_ollama_route_even_when_open(monkeypatch):
+def test_deployed_start_rejects_a_forced_ollama_route_even_when_open(monkeypatch, pg_scoped_workspace):
     # The rejection is route policy, not execution state: it fires while execution is admitted.
-    test_deployed_start_rejects_a_forced_ollama_route(monkeypatch)
+    test_deployed_start_rejects_a_forced_ollama_route(monkeypatch, pg_scoped_workspace)
 
 
 def test_engine_model_must_match_the_installed_gateway(monkeypatch):
