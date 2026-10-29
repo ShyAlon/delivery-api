@@ -396,7 +396,9 @@ def test_open_gate_is_explicit_audited_bypass(tmp_path,pg_scoped_workspace):
     assert any(a['action']=='gate.bypassed' and a['detail']['provenance']=='explicit open-gate policy' for a in s.audit_entries(tid))
 
 
-def test_interview_preview_does_not_color_downstream_requirements(tmp_path,pg_scoped_workspace):
+def test_interview_preview_does_not_color_downstream_requirements(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local recovery/projection contract
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     s=pg_scoped_workspace.store;tid=s.create_task('No premature requirements')['task_id']
@@ -409,6 +411,8 @@ def test_interview_preview_does_not_color_downstream_requirements(tmp_path,pg_sc
 
 
 def test_startup_marks_unbound_pre_http_checkpoint_incompatible(monkeypatch,tmp_path,pg_scoped_workspace):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local recovery/projection contract
     import asyncio
     from delivery_api import app as app_module
     store=pg_scoped_workspace.store;tid=store.create_task('Interrupted')['task_id']
@@ -634,6 +638,8 @@ def test_stale_answer_reports_actual_runtime_state_and_records_error(monkeypatch
 
 
 def test_task_projection_exposes_live_input_truth(monkeypatch,pg_scoped_workspace):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local recovery/projection contract
     from delivery_api import app as app_module
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(app_module.store,PostgresStore)
@@ -644,6 +650,8 @@ def test_task_projection_exposes_live_input_truth(monkeypatch,pg_scoped_workspac
 
 
 def test_restart_does_not_text_replay_gate_parked_pre_http_interview(monkeypatch,tmp_path,pg_scoped_workspace):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local recovery/projection contract
     import asyncio
     from delivery_api import app as app_module
     store=pg_scoped_workspace.store;tid=store.create_task('Resume orphaned gate')['task_id']
