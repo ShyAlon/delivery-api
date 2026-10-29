@@ -218,13 +218,13 @@ def test_execute_job_marks_a_failure_record_that_itself_fails(marks, monkeypatch
     import delivery_api.execution_fence as fence
     from delivery_api.tenancy import TenantScope, tenant_context
     monkeypatch.setattr(fence, "require_engine_execution", lambda: None)
-    capability = NS(task_id="t1", validate=lambda store: None)
+    capability = NS(task_id="t1", session_id="s1", validate=lambda store: None)
     store = NS(claim_worker=lambda jid: capability,
                task=lambda tid: {"task_id": tid},
                finish_worker=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db down")))
     async def handler(cap): raise RuntimeError("the work failed")
     with tenant_context(TenantScope("00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000a")):
-        with pytest.raises(RuntimeError):
+        with pytest.raises(RuntimeError, match="^the work failed$"):
             asyncio.run(tj.execute_job(store, "j1", handler))
     assert "job.failure_record_failed" in _kinds(marks)
 
@@ -234,13 +234,26 @@ def test_a_held_prepaid_settlement_is_marked(marks, monkeypatch):
     from delivery_api.attempt_ledger import AdmissionDenied
     from delivery_api.tenancy import TenantScope, tenant_context
     charge = {"attempt_id": "a1", "state": "pending", "units_per_credit": 5, "charged_units": None}
-    class DB:
-        def execute(self, sql, params=None):
-            if "credit_charges" in sql: return NS(fetchone=lambda: charge)
-            if "credit_accounts" in sql: return NS(fetchone=lambda: None)
+    calls = []
+    def execute_native(sql, params=None, *, write=False):
+        calls.append((sql, params, write))
+        assert write is False, "held settlement must not mutate money"
+        if len(calls) == 1:
+            assert sql == "SELECT pg_advisory_xact_lock(%s)"
+            assert len(params) == 1 and isinstance(params[0], int)
             return NS(fetchone=lambda: None)
-    store = NS(_db=DB())
+        if len(calls) == 2:
+            assert sql == "SELECT * FROM credit_charges WHERE attempt_id=%s FOR UPDATE"
+            assert params == ("a1",)
+            return NS(fetchone=lambda: charge)
+        assert len(calls) == 3
+        assert sql == "SELECT * FROM credit_accounts WHERE owner_id=%s FOR UPDATE"
+        assert params == ("00000000-0000-0000-0000-00000000000a",)
+        return NS(fetchone=lambda: None)
+    store = NS(_execute_native=execute_native)
     with tenant_context(TenantScope("00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000a")):
-        with pytest.raises(AdmissionDenied):
+        with pytest.raises(AdmissionDenied, match="^prepaid account disappeared; settlement held$"):
             prepaid.debit(store, {"attempt_id": "a1", "quote": {}}, 1)
+    assert len(calls) == 3
+    assert charge["state"] == "pending" and charge["charged_units"] is None
     assert "credits.settlement_held" in _kinds(marks)
