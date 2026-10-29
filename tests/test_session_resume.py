@@ -19,11 +19,14 @@ def test_both_visibility_handlers_note_activity_before_they_refresh():
     s=_web('session-cost.js')
     assert "import {api,noteActivity} from './client-core.js'" in s
     handlers=re.findall(r'const visible=\(\)=>\{[^;]*;?[^}]*\}\};',s)
-    assert s.count("const visible=()=>{if(!document.hidden){noteActivity();refresh()}};")==2 and len(handlers)==2
-    for h in handlers:assert h.index('noteActivity()')<h.index('refresh()')
+    assert len(handlers)==2
+    assert "const visible=()=>{if(!document.hidden){noteActivity();balance.refresh()}};" in handlers
+    assert "const visible=()=>{if(!document.hidden){noteActivity();refreshAll()}};" in handlers
+    for h in handlers:
+        assert h.index('noteActivity()')<h.index('refresh')
 
 
 def test_the_background_timer_is_not_activity_so_a_tab_left_open_and_idle_still_expires():
     s=_web('session-cost.js')
-    timers=re.findall(r'setInterval\(\(\)=>\{[^}]*\},30000\)',s)
+    timers=re.findall(r'setInterval\(\(\)=>\{[^}]*\},60000\)',s)
     assert len(timers)==2 and all('noteActivity' not in t for t in timers)
