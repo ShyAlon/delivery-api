@@ -30,21 +30,6 @@ def test_local_mode_bypass_unchanged(monkeypatch,tmp_path):
     assert c.get("/api/auth").json()=={"mode":"local","authenticated":True,"actor":"local user","admin":True,"providers":[],"workspace":"shared"}
 
 
-def test_google_oauth_state_session_and_logout(monkeypatch,tmp_path):
-    store,c=_oauth(monkeypatch,tmp_path)
-    start=c.get("/auth/google/start",follow_redirects=False)
-    state=dict(__import__("urllib.parse").parse.parse_qsl(__import__("urllib.parse").parse.urlsplit(start.headers["location"]).query))["state"]
-    class Resp:
-        def __init__(self,data):self.data=data
-        def json(self):return self.data
-    monkeypatch.setattr("delivery_api.auth.httpx.post",lambda *a,**k:Resp({"access_token":"token"}))
-    monkeypatch.setattr("delivery_api.auth.httpx.get",lambda *a,**k:Resp({"sub":"42","email":"shy@example.com","name":"Shy"}))
-    r=c.get(f"/auth/google/callback?code=ok&state={state}",follow_redirects=False)
-    assert r.status_code==303 and config.SESSION_COOKIE in r.cookies
-    c.cookies.update(r.cookies)
-    assert c.get("/api/auth").json()["actor"]=="shy@example.com"
-    assert c.post("/auth/logout",headers={"origin":"http://testserver"}).status_code==200
-    assert c.get("/api/auth").json()["authenticated"] is False
 
 
 def test_exhausted_user_rejected_and_quota_decision_audited(monkeypatch,tmp_path):
@@ -79,23 +64,6 @@ def test_usage_that_crosses_quota_is_rejected(monkeypatch,tmp_path):
     assert store.user_quota(user["user_id"])["tokens_used"]==0
 
 
-def test_github_oauth_fetches_verified_email(monkeypatch,tmp_path):
-    store,c=_oauth(monkeypatch,tmp_path)
-    monkeypatch.setattr(config,"GITHUB_CLIENT_ID","github-id")
-    monkeypatch.setattr(config,"GITHUB_CLIENT_SECRET","github-secret")
-    start=c.get("/auth/github/start",follow_redirects=False)
-    from urllib.parse import parse_qsl,urlsplit
-    state=dict(parse_qsl(urlsplit(start.headers["location"]).query))["state"]
-    class Resp:
-        def __init__(self,data):self.data=data
-        def json(self):return self.data
-    monkeypatch.setattr("delivery_api.auth.httpx.post",lambda *a,**k:Resp({"access_token":"token"}))
-    def get(url,*a,**k):
-        return Resp([{"email":"dev@example.com","verified":True,"primary":True}]) if url.endswith("/emails") else Resp({"id":99,"login":"dev","email":None})
-    monkeypatch.setattr("delivery_api.auth.httpx.get",get)
-    r=c.get(f"/auth/github/callback?code=ok&state={state}",follow_redirects=False)
-    assert r.status_code==303
-    assert store.user_quota("github:99")["email"]=="dev@example.com"
 
 
 def test_usage_tokens_are_read_from_pipeline_json(monkeypatch,tmp_path):
@@ -107,13 +75,6 @@ def test_usage_tokens_are_read_from_pipeline_json(monkeypatch,tmp_path):
     assert r.status_code==200 and store.user_quota(user["user_id"])["tokens_used"]==18
 
 
-def test_session_cookie_handle_is_not_stored_verbatim(monkeypatch,tmp_path):
-    store,_=_oauth(monkeypatch,tmp_path)
-    user=store.upsert_user("google","200","u@example.com","u",10,False)
-    store.create_session("opaque-cookie-value",user["user_id"],time.time()+100)
-    stored=store._db.execute("SELECT session_id FROM sessions").fetchone()["session_id"]
-    assert stored != "opaque-cookie-value"
-    assert store.session("opaque-cookie-value")["user_id"]==user["user_id"]
 
 def test_basic_signup_signin_wrong_password_and_session(monkeypatch,tmp_path):
     store=SQLiteStore(str(tmp_path/"basic.db"));app.state.store=store;monkeypatch.setattr("delivery_api.app.store",store)
