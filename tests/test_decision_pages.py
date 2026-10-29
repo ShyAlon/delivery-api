@@ -8,9 +8,9 @@ import delivery_api.app as module
 
 def setup(tmp_path,monkeypatch,workspace,*,signed_app=None):
  store=workspace.store
- sid='review-'+workspace.scope.owner_id
+ sid='review-'+workspace.scope.owner_id+'-'+uuid4().hex
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
- task=store.create_task('Operating concept','brief');tid=task['task_id'];store.set_engine_session(tid,sid);store.update_phase(tid,'conops','running')
+ task=store.create_task('Operating concept '+uuid4().hex,'brief');tid=task['task_id'];store.set_engine_session(tid,sid);store.update_phase(tid,'conops','running')
  from tests.test_decision_pages_data import draft
  evidence={'conops_draft':draft()}
  digest=hashlib.sha256(json.dumps(evidence,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()

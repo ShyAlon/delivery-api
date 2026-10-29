@@ -1,8 +1,8 @@
 import pytest
 from tests.test_decision_pages import setup
 
-def test_gate_content_revision_comments_drafts_and_history(tmp_path,monkeypatch):
- store,tid,engine,c=setup(tmp_path,monkeypatch)
+def _case_gate_content_revision_comments_drafts_and_history(tmp_path,monkeypatch,pg_scoped_workspace):
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace)
  store.wait_at_gate(tid,'intent')
  path=tmp_path/'intent_model.json';path.write_text('{"problem_statement":"First evidence"}')
  monkeypatch.setattr(__import__('delivery_api.app',fromlist=['x']),'_task_artifact_snapshot',lambda snapshot_task_id, **kwargs:[{'phase_key':'intent','name':'intent_model.json','ref':str(path),'present':True,'valid':True,'stale':False,'generation':1}])
@@ -18,19 +18,19 @@ def test_gate_content_revision_comments_drafts_and_history(tmp_path,monkeypatch)
  assert reply.status_code==409
  assert not any(e['kind']=='answer' for e in store.events(tid))
 
-def test_semantic_srs_choices_block_approval_then_structurally_validate(tmp_path,monkeypatch):
+def _case_semantic_srs_choices_block_approval_then_structurally_validate(tmp_path,monkeypatch,pg_scoped_workspace):
  import json
  from vmodel_contracts import SRSDocument
  from vmodel_contracts.semantic_review import make_review
  from vmodel_contracts.runtime import artifacts_root
  import delivery_api.app as module
- store,tid,engine,c=setup(tmp_path,monkeypatch)
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace);sid=engine.session_id
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
  store.wait_at_gate(tid,'srs')
- body={'session_id':'session-one','intent_model_ref':'session-one','purpose':'Test','scope_summary':'Test','functional':[{'requirement_id':'R-1','title':'Button','statement':'The system shall show a button.','priority':'must','kind':'functional','acceptance':[{'criterion_id':'AC-1','statement':'Click button'}],'need_ids':['N-1'],'intent_fields':['problem_statement']}],'non_functional':[]}
+ body={'session_id':sid,'intent_model_ref':sid,'purpose':'Test','scope_summary':'Test','functional':[{'requirement_id':'R-1','title':'Button','statement':'The system shall show a button.','priority':'must','kind':'functional','acceptance':[{'criterion_id':'AC-1','statement':'Click button'}],'need_ids':['N-1'],'intent_fields':['problem_statement']}],'non_functional':[]}
  body=SRSDocument.model_validate(body).model_dump(mode='json')
- path=artifacts_root(str(tmp_path/'artifacts'))/'session-one'/'spec';path.mkdir(parents=True);artifact=path/'srs.json';artifact.write_text(json.dumps(body));artifact.with_suffix('.md').write_text('STALE MARKDOWN')
- semantic=make_review('session-one','srs',body,[{'finding_id':'f1','item_id':'R-1','path':['functional',0],'rule':'solution_language','reason':'Specifies a widget','original':body['functional'][0]}])
+ path=artifacts_root(str(tmp_path/'artifacts'))/sid/'spec';path.mkdir(parents=True);artifact=path/'srs.json';artifact.write_text(json.dumps(body));artifact.with_suffix('.md').write_text('STALE MARKDOWN')
+ semantic=make_review(sid,'srs',body,[{'finding_id':'f1','item_id':'R-1','path':['functional',0],'rule':'solution_language','reason':'Specifies a widget','original':body['functional'][0]}])
  (path/'srs.semantic-review.json').write_text(semantic.model_dump_json())
  monkeypatch.setattr(module,'_task_artifact_snapshot',lambda snapshot_task_id, **kwargs:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
  pending=c.get(f'/api/tasks/{tid}/gates/gate-srs/review').json();assert pending['review']['semantic_review']['findings']
@@ -41,16 +41,16 @@ def test_semantic_srs_choices_block_approval_then_structurally_validate(tmp_path
  stored=json.loads((path/'srs.semantic-review.json').read_text());assert stored['decisions'][0]['actor']=='local user'
 
 
-def test_interrupted_semantic_write_blocks_approval_and_same_choices_repair(tmp_path,monkeypatch):
+def _case_interrupted_semantic_write_blocks_approval_and_same_choices_repair(tmp_path,monkeypatch,pg_scoped_workspace):
  import json
  from vmodel_contracts import SRSDocument
  from vmodel_contracts.semantic_review import make_review
  from vmodel_contracts.runtime import artifacts_root
  import delivery_api.app as module
- store,tid,engine,c=setup(tmp_path,monkeypatch);monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'));store.wait_at_gate(tid,'srs')
- body=SRSDocument.model_validate({'session_id':'session-one','intent_model_ref':'session-one','purpose':'Test','scope_summary':'Test','functional':[{'requirement_id':'R-1','title':'Button','statement':'The system shall show a button.','priority':'must','kind':'functional','acceptance':[{'criterion_id':'AC-1','statement':'Click button'}],'need_ids':['N-1'],'intent_fields':['problem_statement']}],'non_functional':[]}).model_dump(mode='json')
- path=artifacts_root(str(tmp_path/'artifacts'))/'session-one'/'spec';path.mkdir(parents=True);artifact=path/'srs.json';artifact.write_text(json.dumps(body))
- r=make_review('session-one','srs',body,[{'finding_id':'f1','item_id':'R-1','path':['functional',0],'rule':'solution_language','reason':'Widget','original':body['functional'][0]}]);replacement={**body['functional'][0],'statement':'The system shall display the saved status.'}
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace);sid=engine.session_id;monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'));store.wait_at_gate(tid,'srs')
+ body=SRSDocument.model_validate({'session_id':sid,'intent_model_ref':sid,'purpose':'Test','scope_summary':'Test','functional':[{'requirement_id':'R-1','title':'Button','statement':'The system shall show a button.','priority':'must','kind':'functional','acceptance':[{'criterion_id':'AC-1','statement':'Click button'}],'need_ids':['N-1'],'intent_fields':['problem_statement']}],'non_functional':[]}).model_dump(mode='json')
+ path=artifacts_root(str(tmp_path/'artifacts'))/sid/'spec';path.mkdir(parents=True);artifact=path/'srs.json';artifact.write_text(json.dumps(body))
+ r=make_review(sid,'srs',body,[{'finding_id':'f1','item_id':'R-1','path':['functional',0],'rule':'solution_language','reason':'Widget','original':body['functional'][0]}]);replacement={**body['functional'][0],'statement':'The system shall display the saved status.'}
  decisions=[{'item_id':'R-1','action':'replace','replacement':replacement,'actor':'local user'}]
  recorded={**r.model_dump(),'decisions':decisions};(path/'srs.semantic-review.json').write_text(json.dumps(recorded))
  monkeypatch.setattr(module,'_task_artifact_snapshot',lambda snapshot_task_id, **kwargs:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
@@ -58,8 +58,8 @@ def test_interrupted_semantic_write_blocks_approval_and_same_choices_repair(tmp_
  repaired=c.post(f'/api/tasks/{tid}/gates/gate-srs/semantic-review',json={'revision':r.revision,'decisions':decisions});assert repaired.status_code==200,repaired.text
  assert json.loads(artifact.read_text())['functional'][0]['statement']==replacement['statement']
 
-def test_gate_semantic_draft_restores_exact_saved_fields(tmp_path,monkeypatch):
- store,tid,engine,c=setup(tmp_path,monkeypatch);store.wait_at_gate(tid,'intent')
+def _case_gate_semantic_draft_restores_exact_saved_fields(tmp_path,monkeypatch,pg_scoped_workspace):
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace)
  path=tmp_path/'intent_model.json';path.write_text('{"problem_statement":"Exact evidence"}')
  import delivery_api.app as module
  monkeypatch.setattr(module,'_task_artifact_snapshot',lambda snapshot_task_id, **kwargs:[{'phase_key':'intent','name':'intent_model.json','ref':str(path),'present':True,'valid':True,'stale':False,'generation':1}])
@@ -73,10 +73,10 @@ def test_gate_semantic_draft_restores_exact_saved_fields(tmp_path,monkeypatch):
  assert restored['semantic_decisions']==draft['semantic_decisions'];assert restored['comment']=='Review this'
 
 
-def test_gate_review_rejects_conflicting_retained_evidence(tmp_path,monkeypatch):
+def _case_gate_review_rejects_conflicting_retained_evidence(tmp_path,monkeypatch,pg_scoped_workspace):
  import copy
  import delivery_api.app as module
- store,tid,engine,c=setup(tmp_path,monkeypatch);store.wait_at_gate(tid,'intent')
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace)
  first=c.get(f'/api/tasks/{tid}/gates/gate-intent/review').json()['review']
  original=store.decision_review
  for field in ('documents','artifacts'):
@@ -89,7 +89,7 @@ def test_gate_review_rejects_conflicting_retained_evidence(tmp_path,monkeypatch)
  monkeypatch.setattr(store,'decision_review',original)
  assert store.decision_review(tid,'gate:gate-intent',first['revision'])==first
 
-def test_missing_semantic_review_fails_closed_and_restore_recovers(tmp_path,monkeypatch):
+def _case_missing_semantic_review_fails_closed_and_restore_recovers(tmp_path,monkeypatch,pg_scoped_workspace):
  # Integrity: every srs run produces its semantic review, so a session-recorded
  # task at gate-srs REQUIRES srs.semantic-review.json locally. A fresh host
  # before restore/backfill must be refused with a recoverable missing-evidence
@@ -99,16 +99,16 @@ def test_missing_semantic_review_fails_closed_and_restore_recovers(tmp_path,monk
  from vmodel_contracts.semantic_review import make_review
  from vmodel_contracts.runtime import artifacts_root
  import delivery_api.app as module
- store,tid,engine,c=setup(tmp_path,monkeypatch)
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace);sid=engine.session_id
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
  store.wait_at_gate(tid,'srs')
- body=SRSDocument.model_validate({'session_id':'session-one','intent_model_ref':'session-one','purpose':'Test','scope_summary':'Test','functional':[{'requirement_id':'R-1','title':'Button','statement':'The system shall show a button.','priority':'must','kind':'functional','acceptance':[{'criterion_id':'AC-1','statement':'Click button'}],'need_ids':['N-1'],'intent_fields':['problem_statement']}],'non_functional':[]}).model_dump(mode='json')
- path=artifacts_root(str(tmp_path/'artifacts'))/'session-one'/'spec';path.mkdir(parents=True);artifact=path/'srs.json';artifact.write_text(json.dumps(body))
+ body=SRSDocument.model_validate({'session_id':sid,'intent_model_ref':sid,'purpose':'Test','scope_summary':'Test','functional':[{'requirement_id':'R-1','title':'Button','statement':'The system shall show a button.','priority':'must','kind':'functional','acceptance':[{'criterion_id':'AC-1','statement':'Click button'}],'need_ids':['N-1'],'intent_fields':['problem_statement']}],'non_functional':[]}).model_dump(mode='json')
+ path=artifacts_root(str(tmp_path/'artifacts'))/sid/'spec';path.mkdir(parents=True);artifact=path/'srs.json';artifact.write_text(json.dumps(body))
  monkeypatch.setattr(module,'_task_artifact_snapshot',lambda snapshot_task_id, **kwargs:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
  denied=c.post(f'/api/tasks/{tid}/gates/gate-srs/decide',json={'action':'approve','selected_option':'Proceed'})
  assert denied.status_code==400 and 'Required approval evidence is missing' in denied.text,denied.text
  # Recovery: the companion lands (restore/backfill); approval proceeds.
- semantic=make_review('session-one','srs',body,[]);(path/'srs.semantic-review.json').write_text(semantic.model_dump_json())
+ semantic=make_review(sid,'srs',body,[]);(path/'srs.semantic-review.json').write_text(semantic.model_dump_json())
  store.set_model_default(tid,'deepseek:deepseek-flash')
  async def no_continue(*args,**kwargs): pass
  monkeypatch.setattr(module.orchestrator,'continue_after',no_continue)
@@ -116,20 +116,20 @@ def test_missing_semantic_review_fails_closed_and_restore_recovers(tmp_path,monk
  assert reply.status_code==200,reply.text
 
 
-def _seed_srs_gate(tmp_path, monkeypatch):
+def _seed_srs_gate(tmp_path, monkeypatch,pg_scoped_workspace):
  """Session-recorded task waiting at gate-srs with canonical artifacts on disk."""
  import json
  from vmodel_contracts import SRSDocument
  from vmodel_contracts.semantic_review import make_review
  from vmodel_contracts.runtime import artifacts_root
  import delivery_api.app as module
- store,tid,engine,c=setup(tmp_path,monkeypatch)
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace);sid=engine.session_id
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
  store.wait_at_gate(tid,'srs')
- body=SRSDocument.model_validate({'session_id':'session-one','intent_model_ref':'session-one','purpose':'Test','scope_summary':'Test','functional':[{'requirement_id':'R-1','title':'Button','statement':'The system shall show a button.','priority':'must','kind':'functional','acceptance':[{'criterion_id':'AC-1','statement':'Click button'}],'need_ids':['N-1'],'intent_fields':['problem_statement']}],'non_functional':[]}).model_dump(mode='json')
- path=artifacts_root(str(tmp_path/'artifacts'))/'session-one'/'spec';path.mkdir(parents=True)
+ body=SRSDocument.model_validate({'session_id':sid,'intent_model_ref':sid,'purpose':'Test','scope_summary':'Test','functional':[{'requirement_id':'R-1','title':'Button','statement':'The system shall show a button.','priority':'must','kind':'functional','acceptance':[{'criterion_id':'AC-1','statement':'Click button'}],'need_ids':['N-1'],'intent_fields':['problem_statement']}],'non_functional':[]}).model_dump(mode='json')
+ path=artifacts_root(str(tmp_path/'artifacts'))/sid/'spec';path.mkdir(parents=True)
  artifact=path/'srs.json';artifact.write_text(json.dumps(body))
- semantic=make_review('session-one','srs',body,[]);(path/'srs.semantic-review.json').write_text(semantic.model_dump_json())
+ semantic=make_review(sid,'srs',body,[]);(path/'srs.semantic-review.json').write_text(semantic.model_dump_json())
  monkeypatch.setattr(module,'_task_artifact_snapshot',lambda snapshot_task_id, **kwargs:[{'phase_key':'srs','name':'srs.json','ref':str(artifact),'present':True,'valid':True,'stale':False,'generation':1}])
  store.set_model_default(tid,'deepseek:deepseek-flash')
  async def no_continue(*args,**kwargs): pass
@@ -137,17 +137,17 @@ def _seed_srs_gate(tmp_path, monkeypatch):
  return store,tid,c,path,body,semantic
 
 def _seed_lineage(tid, store, spec, phase, name, settled):
+ sid=store.task(tid)['engine_session_id']
  from spec_generator import lineage
  generation=store.task(tid)['generation']
- lineage.bind(spec,task_id=tid,session_id='session-one',generation=generation,
+ lineage.bind(spec,task_id=tid,session_id=sid,generation=generation,
               phase=phase,name=name,sha256=lineage.sha256_file(spec/name),
               source='stage-commit',settled=settled)
 
 
-@pytest.mark.producer_integration
-def test_gate_approval_flips_lineage_bindings_settled(tmp_path,monkeypatch):
+def _case_gate_approval_flips_lineage_bindings_settled(tmp_path,monkeypatch,pg_scoped_workspace):
  from spec_generator import lineage
- store,tid,c,spec,body,semantic=_seed_srs_gate(tmp_path,monkeypatch)
+ store,tid,c,spec,body,semantic=_seed_srs_gate(tmp_path,monkeypatch,pg_scoped_workspace)
  _seed_lineage(tid,store,spec,'srs','srs.json',settled=False)
  _seed_lineage(tid,store,spec,'srs','srs.semantic-review.json',settled=False)
  reply=c.post(f'/api/tasks/{tid}/gates/gate-srs/decide',json={'action':'approve','selected_option':'Proceed'})
@@ -157,10 +157,9 @@ def test_gate_approval_flips_lineage_bindings_settled(tmp_path,monkeypatch):
  assert lineage.lookup(record,'srs','srs.semantic-review.json')['settled'] is True
 
 
-@pytest.mark.producer_integration
-def test_gate_redo_invalidates_redone_phase_and_downstream_only(tmp_path,monkeypatch):
+def _case_gate_redo_invalidates_redone_phase_and_downstream_only(tmp_path,monkeypatch,pg_scoped_workspace):
  from spec_generator import lineage
- store,tid,c,spec,body,semantic=_seed_srs_gate(tmp_path,monkeypatch)
+ store,tid,c,spec,body,semantic=_seed_srs_gate(tmp_path,monkeypatch,pg_scoped_workspace)
  (spec/'needs.json').write_text('{"needs":[]}')
  (spec/'architecture.json').write_text('{"session_id":"session-one"}')
  _seed_lineage(tid,store,spec,'needs','needs.json',settled=True)
@@ -174,14 +173,14 @@ def test_gate_redo_invalidates_redone_phase_and_downstream_only(tmp_path,monkeyp
  assert lineage.lookup(record,'needs','needs.json')['settled'] is True,'upstream settled work untouched'
 
 
-@pytest.mark.producer_integration
-def test_semantic_decisions_rebind_the_new_bytes(tmp_path,monkeypatch):
+def _case_semantic_decisions_rebind_the_new_bytes(tmp_path,monkeypatch,pg_scoped_workspace):
  import json
  from vmodel_contracts.semantic_review import make_review
  from spec_generator import lineage
- store,tid,c,spec,body,semantic=_seed_srs_gate(tmp_path,monkeypatch)
+ store,tid,c,spec,body,semantic=_seed_srs_gate(tmp_path,monkeypatch,pg_scoped_workspace)
+ sid=store.task(tid)['engine_session_id']
  # replace the empty review with one carrying a finding so a decision is required
- flagged=make_review('session-one','srs',body,[{'finding_id':'f1','item_id':'R-1','path':['functional',0],'rule':'solution_language','reason':'Specifies a widget','original':body['functional'][0]}])
+ flagged=make_review(sid,'srs',body,[{'finding_id':'f1','item_id':'R-1','path':['functional',0],'rule':'solution_language','reason':'Specifies a widget','original':body['functional'][0]}])
  (spec/'srs.semantic-review.json').write_text(flagged.model_dump_json())
  _seed_lineage(tid,store,spec,'srs','srs.json',settled=False)
  _seed_lineage(tid,store,spec,'srs','srs.semantic-review.json',settled=False)
@@ -195,10 +194,10 @@ def test_semantic_decisions_rebind_the_new_bytes(tmp_path,monkeypatch):
  assert companion['sha256']==lineage.sha256_file(spec/'srs.semantic-review.json')
  # and the re-bound record still verifies for resume hydration
  lineage.verify_file(record,phase='srs',name='srs.json',path=spec/'srs.json',
-                     task_id=tid,session_id='session-one',generation=store.task(tid)['generation'])
+                     task_id=tid,session_id=sid,generation=store.task(tid)['generation'])
 
 
-def test_lineage_rebind_import_rule(tmp_path, monkeypatch):
+def _case_lineage_rebind_import_rule(tmp_path, monkeypatch,pg_scoped_workspace):
     """No authority record on this host: decisions behave as before binding existed.
     Record present but spec-generator absent: the decision refuses clearly, never drifts."""
     import sys
@@ -211,14 +210,14 @@ def test_lineage_rebind_import_rule(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match='authority record'):
         module._lineage_module_or_none(spec)
 
-def test_record_host_without_generator_refuses_before_any_mutation(tmp_path,monkeypatch):
+def _case_record_host_without_generator_refuses_before_any_mutation(tmp_path,monkeypatch,pg_scoped_workspace):
  # A host holding the session authority record (spec/lineage.json) without an
  # importable spec_generator must refuse BEFORE any artifact, manifest or
  # decision-record mutation - otherwise a refused decide would leave published
  # bytes drifted from the record. Assert bytes, gate state and events unchanged.
  import sys
  from vmodel_contracts.semantic_review import make_review
- store,tid,c,path,body,semantic=_seed_srs_gate(tmp_path,monkeypatch)
+ store,tid,c,path,body,semantic=_seed_srs_gate(tmp_path,monkeypatch,pg_scoped_workspace)
  (path/'lineage.json').write_text('{"record_version":1,"session_id":"session-one"}')
  monkeypatch.setitem(sys.modules,'spec_generator',None)
  before=path.joinpath('srs.json').read_bytes()
@@ -228,3 +227,105 @@ def test_record_host_without_generator_refuses_before_any_mutation(tmp_path,monk
  gate=[g for g in store.task(tid)['gates'] if g['gate_key']=='gate-srs'][0]
  assert gate['state']=='waiting'
  assert not any(e['kind']=='semantic_review' for e in store.events(tid))
+
+
+def _check_gate_content_revision_comments_drafts_and_history(monkeypatch,tmp_path,workspace):
+ from tests.test_gate_reviews import _case_gate_content_revision_comments_drafts_and_history
+ _case_gate_content_revision_comments_drafts_and_history(tmp_path,monkeypatch,workspace)
+
+
+def test_gate_content_revision_comments_drafts_and_history(pg_local_compat_process):
+ pg_local_compat_process(_check_gate_content_revision_comments_drafts_and_history)
+
+
+def _check_semantic_srs_choices_block_approval_then_structurally_validate(monkeypatch,tmp_path,workspace):
+ from tests.test_gate_reviews import _case_semantic_srs_choices_block_approval_then_structurally_validate
+ _case_semantic_srs_choices_block_approval_then_structurally_validate(tmp_path,monkeypatch,workspace)
+
+
+def test_semantic_srs_choices_block_approval_then_structurally_validate(pg_local_compat_process):
+ pg_local_compat_process(_check_semantic_srs_choices_block_approval_then_structurally_validate)
+
+
+def _check_interrupted_semantic_write_blocks_approval_and_same_choices_repair(monkeypatch,tmp_path,workspace):
+ from tests.test_gate_reviews import _case_interrupted_semantic_write_blocks_approval_and_same_choices_repair
+ _case_interrupted_semantic_write_blocks_approval_and_same_choices_repair(tmp_path,monkeypatch,workspace)
+
+
+def test_interrupted_semantic_write_blocks_approval_and_same_choices_repair(pg_local_compat_process):
+ pg_local_compat_process(_check_interrupted_semantic_write_blocks_approval_and_same_choices_repair)
+
+
+def _check_gate_semantic_draft_restores_exact_saved_fields(monkeypatch,tmp_path,workspace):
+ from tests.test_gate_reviews import _case_gate_semantic_draft_restores_exact_saved_fields
+ _case_gate_semantic_draft_restores_exact_saved_fields(tmp_path,monkeypatch,workspace)
+
+
+def test_gate_semantic_draft_restores_exact_saved_fields(pg_local_compat_process):
+ pg_local_compat_process(_check_gate_semantic_draft_restores_exact_saved_fields)
+
+
+def _check_gate_review_rejects_conflicting_retained_evidence(monkeypatch,tmp_path,workspace):
+ from tests.test_gate_reviews import _case_gate_review_rejects_conflicting_retained_evidence
+ _case_gate_review_rejects_conflicting_retained_evidence(tmp_path,monkeypatch,workspace)
+
+
+def test_gate_review_rejects_conflicting_retained_evidence(pg_local_compat_process):
+ pg_local_compat_process(_check_gate_review_rejects_conflicting_retained_evidence)
+
+
+def _check_missing_semantic_review_fails_closed_and_restore_recovers(monkeypatch,tmp_path,workspace):
+ from tests.test_gate_reviews import _case_missing_semantic_review_fails_closed_and_restore_recovers
+ _case_missing_semantic_review_fails_closed_and_restore_recovers(tmp_path,monkeypatch,workspace)
+
+
+def test_missing_semantic_review_fails_closed_and_restore_recovers(pg_local_compat_process):
+ pg_local_compat_process(_check_missing_semantic_review_fails_closed_and_restore_recovers)
+
+
+def _check_gate_approval_flips_lineage_bindings_settled(monkeypatch,tmp_path,workspace):
+ from tests.test_gate_reviews import _case_gate_approval_flips_lineage_bindings_settled
+ _case_gate_approval_flips_lineage_bindings_settled(tmp_path,monkeypatch,workspace)
+
+
+@pytest.mark.producer_integration
+def test_gate_approval_flips_lineage_bindings_settled(pg_local_compat_process):
+ pg_local_compat_process(_check_gate_approval_flips_lineage_bindings_settled)
+
+
+def _check_gate_redo_invalidates_redone_phase_and_downstream_only(monkeypatch,tmp_path,workspace):
+ from tests.test_gate_reviews import _case_gate_redo_invalidates_redone_phase_and_downstream_only
+ _case_gate_redo_invalidates_redone_phase_and_downstream_only(tmp_path,monkeypatch,workspace)
+
+
+@pytest.mark.producer_integration
+def test_gate_redo_invalidates_redone_phase_and_downstream_only(pg_local_compat_process):
+ pg_local_compat_process(_check_gate_redo_invalidates_redone_phase_and_downstream_only)
+
+
+def _check_semantic_decisions_rebind_the_new_bytes(monkeypatch,tmp_path,workspace):
+ from tests.test_gate_reviews import _case_semantic_decisions_rebind_the_new_bytes
+ _case_semantic_decisions_rebind_the_new_bytes(tmp_path,monkeypatch,workspace)
+
+
+@pytest.mark.producer_integration
+def test_semantic_decisions_rebind_the_new_bytes(pg_local_compat_process):
+ pg_local_compat_process(_check_semantic_decisions_rebind_the_new_bytes)
+
+
+def _check_lineage_rebind_import_rule(monkeypatch,tmp_path,workspace):
+ from tests.test_gate_reviews import _case_lineage_rebind_import_rule
+ _case_lineage_rebind_import_rule(tmp_path,monkeypatch,workspace)
+
+
+def test_lineage_rebind_import_rule(pg_local_compat_process):
+ pg_local_compat_process(_check_lineage_rebind_import_rule)
+
+
+def _check_record_host_without_generator_refuses_before_any_mutation(monkeypatch,tmp_path,workspace):
+ from tests.test_gate_reviews import _case_record_host_without_generator_refuses_before_any_mutation
+ _case_record_host_without_generator_refuses_before_any_mutation(tmp_path,monkeypatch,workspace)
+
+
+def test_record_host_without_generator_refuses_before_any_mutation(pg_local_compat_process):
+ pg_local_compat_process(_check_record_host_without_generator_refuses_before_any_mutation)
