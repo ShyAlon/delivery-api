@@ -1059,3 +1059,20 @@ Real signed PG ZIP download/open validates no raw ID anywhere. Unit red1 in
 0skips7.69s. Inspected Downloaded status screenshot,not proof by pixels of ZIP
 contents (archive text checked separately). Shared122PG/5legacy browser functions.
 No deploy/live DB/model calls. Hosted CI/full suite/deployed topology unrun.
+
+## A77: local stage-rerun browser contracts have their own suite
+
+Owner Q3 (2026-10-28): retire the three local-rerun contracts from the cloud
+suite,retain only local-mode coverage. Extract to test_local_rerun_browser.py
+with their existing isolated SQLite/subprocess/page fixtures. All three test
+function ASTs matched the originals exactly during extraction. No behavior
+assertion removed or changed;no skip/xfail/selection filter introduced. New
+source-scope guard fails before extraction (1failed0.14s). Original three pass
+before move (3passed7.10s);final scope/local browser/PG fixture/cloud API/bootstrap
+48passed0skips11.27s. Inspected nested rerun confirmation screenshot: archive
+impact readable,Starting rerun disabled above preserved flow. Test route only;
+no real generation/model call. SQLite local fixture is explicit remaining debt,
+not removed globally or reclassified as PG. Shared122PG/2legacy functions out
+of124,plus3standalone local-auth browser cases. Dedicated local rerun3. Hosted
+CI/full suite unrun;no deploy. Tenant unavailable wording and local settings
+remain separate approved themes;A incomplete.

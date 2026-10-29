@@ -260,14 +260,6 @@ def test_not_started_running_and_done_pages(pg_page,pg_ui,pg_ids):
     assert page.get_by_role("button",name="Architecture overview").is_visible()
 
 
-def test_rerun_preview_explains_archive_and_audit_has_local_actor(page, ui):
-    page.goto(ui + "/tasks/done/view")
-    page.get_by_role("button", name="Rerun stage").click()
-    assert page.get_by_text("Downstream artifacts will turn stale immediately", exact=False).is_visible()
-    page.get_by_role("button", name="Cancel").click()
-    page.get_by_role("button", name="Audit").click()
-    page.get_by_text("Task audit").wait_for()
-    assert "local user" in page.locator(".dialog").inner_text()
 
 
 def test_gate_open_waiting_halo_and_full_page(pg_page,pg_ui,pg_ids):
@@ -506,26 +498,6 @@ def test_start_interview_button_disables_until_the_server_returns(pg_page,pg_ui,
     page.wait_for_function("document.querySelector('#startengine')&&!document.querySelector('#startengine').disabled")
 
 
-def test_confirm_rerun_button_disables_until_the_server_returns(page,ui):
-    page.goto(ui+'/tasks/done/view');page.get_by_role('button',name='Rerun stage').click()
-    page.locator('#rerunform').wait_for()
-    held=[]
-    def guard(route):
-        if (route.request.post_data_json or {}).get('confirm'):held.append(route)
-        else:route.fulfill(json={'downstream':['architecture','specs','tests'],'message':'Earlier generation remains archived.'})
-    page.route('**/api/tasks/done/rerun',guard)
-    page.get_by_role('button',name='Review impact').click()
-    confirm=page.get_by_role('dialog',name='Confirm rerun');confirm.wait_for()
-    button=confirm.locator('#confirm')
-    assert button.inner_text()=='Confirm rerun'
-    button.click()
-    button.evaluate('e=>e.click()')
-    assert button.is_disabled() and button.inner_text()=='Starting rerun\u2026'
-    assert button.get_attribute('aria-busy')=='true' and button.get_attribute('title')=='Starting the rerun - one moment'
-    assert len(held)==1
-    page.screenshot(path=str(_screenshots_dir / 'confirm-rerun-button-busy.png'),full_page=False)
-    held[0].fulfill(json={'ok':True})
-    confirm.wait_for(state='detached')
 
 
 def test_user_progress_and_composer_have_no_raw_console(pg_page,pg_ui,pg_ids):
@@ -564,19 +536,6 @@ def test_answer_failure_preserves_text_and_recovers_button(pg_page,pg_ui,pg_ids)
     assert answer.input_value()=='Do not lose this answer' and answer.is_enabled() and button.is_enabled() and button.inner_text()=='Send answer'
     assert page.locator('#answerspinner').is_hidden()
 
-def test_rerun_review_opens_top_dialog_and_escape_restores_flow(page,ui):
-    page.goto(ui+'/tasks/done/view');page.get_by_role('button',name='Rerun stage').click()
-    form=page.locator('#rerunform');form.wait_for();selected=form.locator('select').input_value()
-    page.route('**/api/tasks/done/rerun',lambda route:route.fulfill(json={'downstream':['architecture','specs','tests'],'message':'Earlier generation remains archived.'}))
-    page.get_by_role('button',name='Review impact').click()
-    confirm=page.get_by_role('dialog',name='Confirm rerun');confirm.wait_for()
-    assert confirm.is_visible() and confirm.get_by_role('button',name='Confirm rerun').evaluate('e=>document.activeElement===e')
-    assert form.is_visible() and form.locator('select').input_value()==selected
-    # The nested layer is visually above the preserved flow dialog.
-    assert confirm.evaluate("e=>Number(getComputedStyle(e.closest('.dialog-layer')).zIndex)") >= 1
-    page.keyboard.press('Escape');confirm.wait_for(state='detached')
-    assert form.is_visible() and form.locator('select').input_value()==selected
-    assert form.locator('select').evaluate('e=>document.activeElement===e')
 
 def test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
