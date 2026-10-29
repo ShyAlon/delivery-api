@@ -6,6 +6,7 @@ engine-call time, pool checkout wait, auth time and transaction-held time in
 the activity line and the Server-Timing header, the stream loop reports the
 time it blocks the event loop on DB reads, and a loop-lag monitor names event
 loop stalls. Measurement only: no behavior change."""
+from tests.engine_scope import engine_scope  # noqa: F401
 import time
 
 import httpx
@@ -48,7 +49,7 @@ def _snapshot_body():
     return snap.model_dump(mode='json')
 
 
-def test_engine_client_records_call_time_in_request_stats():
+def test_engine_client_records_call_time_in_request_stats(engine_scope):
     from delivery_api.engine_client import HttpEngineClient
     def handler(request):
         time.sleep(0.02)
@@ -63,7 +64,7 @@ def test_engine_client_records_call_time_in_request_stats():
         request_stats.reset(token)
 
 
-def test_engine_call_outside_a_request_still_works():
+def test_engine_call_outside_a_request_still_works(engine_scope):
     from delivery_api.engine_client import HttpEngineClient
     client = HttpEngineClient('http://engine.test', token='x' * 24,
         transport=httpx.MockTransport(lambda request: httpx.Response(200, json=_snapshot_body())))
