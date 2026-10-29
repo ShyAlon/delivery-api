@@ -79,7 +79,7 @@ def test_connected_real_graph_and_closed_revision_with_retained_approval(tmp_pat
  principal=OperatorPrincipal(scope.owner_id,'item6-hermetic',frozenset({'payments.read'}))
  operator=OperatorAdapter(identity,store=store,read_reviewed_registry=lambda:principal)(cfg,{'identity':receipt})
  purchased=hermetic_purchase(cfg,identity,store,ADMIN,receipt,operator)
- assert purchased['balance_units']==5000
+ assert purchased['balance_units']==12000
  runner=PrivatePipeline(store=store,artifacts_base=cfg.root,model='deepseek-chat',gateway_factory=lambda cap,job:WorkerAdmissionGateway(store,job),
   generator_clients=lambda **kw:None,interview_clients=lambda **kw:None,answer_input=lambda x:None,
   review_gate=lambda review,digest:{'review_sha256':digest,'decision':{'action':'accept'}},progress=lambda *a:None)
@@ -122,7 +122,7 @@ def test_connected_real_graph_and_closed_revision_with_retained_approval(tmp_pat
   with psycopg.connect(ADMIN) as c:
    remaining=c.execute('SELECT balance_units FROM credit_accounts WHERE owner_id=%s',(scope.owner_id,)).fetchone()[0]
    debit=c.execute('SELECT sum(retail_actual) FROM provider_attempts WHERE owner_id=%s',(scope.owner_id,)).fetchone()[0]
-  assert debit>0 and remaining==5000-debit
+  assert debit>0 and remaining==12000-debit
 
   from chain import AcceptanceChain
   stages={'identity':receipt,'operator':operator,'sandbox_purchase':purchased,'pipeline':proved_pipeline,'gate_edit':result,'final_artifacts':exported,'recovery':recovered}

@@ -54,7 +54,7 @@ def hermetic_purchase(cfg,identity,store,ADMIN,receipt,operator):
   def order(self):
    u=dict(self.payload['purchase_units'][0]);u['payments']={'captures':[self.capture()]}
    return {'id':self.oid,'intent':'CAPTURE','status':self.state,'purchase_units':[u],'links':[{'rel':'approve','href':'https://www.sandbox.paypal.com/checkoutnow?token='+self.oid}]}
-  def capture(self):return {'id':self.cid,'status':'COMPLETED','final_capture':True,'amount':{'currency_code':'USD','value':'5.00'},'supplementary_data':{'related_ids':{'order_id':self.oid}}}
+  def capture(self):return {'id':self.cid,'status':'COMPLETED','final_capture':True,'amount':{'currency_code':'USD','value':'11.50'},'supplementary_data':{'related_ids':{'order_id':self.oid}}}
   def request(self,method,path,payload=None,headers=None):
    if path=='/v1/notifications/verify-webhook-signature':return {'verification_status':'SUCCESS'}
    if path=='/v2/checkout/orders' and method=='POST':self.payload=payload;return self.order()
@@ -69,5 +69,5 @@ def hermetic_purchase(cfg,identity,store,ADMIN,receipt,operator):
   from test_paypal_adapter import HEADERS
   return json.dumps({'id':'event-'+cfg.run_id,'event_type':'PAYMENT.CAPTURE.COMPLETED','resource':stub.capture()}).encode(),HEADERS
  purchased=m.SandboxPurchaseAdapter(identity,repository=repo,processor=adapter,approve=approve,webhook_receipt=webhook,read_balance=balance)(cfg,{'identity':receipt,'operator':operator})
- assert purchased['balance_units']==5000 and purchased['posted_count']==1
+ assert purchased['balance_units']==12000 and purchased['posted_count']==1
  return purchased
