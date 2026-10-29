@@ -1,18 +1,15 @@
 """A job that fails before any provider call must not leave compute accounting that blocks the owner's next Start.
-Rules and the close/release functions run against canned rows, no Postgres needed. See test_compute_close_pg.py for the real database."""
+Rules stay pure; close/release contracts use disposable restricted PostgreSQL."""
 import re
-from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from delivery_api import compute_segments as cs
-from delivery_api import retail_ledger
-from delivery_api.tenancy import TenantScope,tenant_context
+from delivery_api.tenancy import tenant_context
 
 ROOT=Path(__file__).resolve().parents[1]/'src'/'delivery_api'
-A='11111111-1111-4111-8111-111111111111'
 
 
 def test_unresolved_always_blocks_and_pending_blocks_only_when_orphaned():
@@ -50,101 +47,102 @@ def test_release_decision_waives_a_crashed_job_whose_provider_calls_are_all_term
     assert cs.releasable('unresolved','failed',2,1,attempts_nonterminal=1) is False
 
 
-class Store:
-    """Rows keyed by what the statement reads; records every write and audit entry."""
-    def __init__(self,segments,job_states,attempts=None,tokens=None,nonterminal=None):
-        self.segments={s['segment_key']:dict(s) for s in segments}
-        self.job_states,self.attempts,self.tokens=job_states,attempts or {},tokens or {}
-        self.nonterminal=nonterminal or {}
-        self.writes,self.audits=[],[]
-        store=self
-        class Db:
-            def execute(self,sql,params=()):
-                class R:
-                    def fetchone(s):
-                        if 'pg_advisory_xact_lock' in sql:return {}
-                        if 'FROM retail_compute_segments WHERE segment_key=?' in sql:return store.segments.get(params[0])
-                        if 'FROM worker_jobs' in sql:
-                            st=store.job_states.get(params[0]);return {'state':st} if st else None
-                        if 'FROM provider_attempts' in sql:return {'n':store.attempts.get(params[0],0),'nonterminal':store.nonterminal.get(params[0],0)}
-                        if "kind='tokens'" in sql:return {'n':store.tokens.get(params[0],0)}
-                    def fetchall(s):
-                        if 'FROM retail_compute_segments WHERE owner_id=?' in sql:
-                            assert params==(A,);return [r for r in store.segments.values() if r['state']!='settled']
-                if sql.lstrip().upper().startswith(('UPDATE','INSERT')):
-                    store.writes.append((sql,params))
-                    if 'SET state=\'settled\'' in sql:store.segments[params[2]].update(state='settled',deterministic_ms=params[0])
-                    if "SET state='unresolved'" in sql:store.segments[params[0]]['state']='unresolved'
-                return R()
-        self._db=Db()
-    def audit(self,actor,action,task_id=None,detail=None):self.audits.append((actor,action,task_id,detail))
+@pytest.fixture
+def compute_workspace(pg_workspace_factory):
+    from uuid import uuid4
+    from delivery_api.retail_pricing import RetailRates
+    with pg_workspace_factory() as workspace,tenant_context(workspace.scope):
+        store=workspace.store
+        tid=store.create_task('Compute close')['task_id'];store.set_engine_session(tid,'compute-'+uuid4().hex)
+        rates=RetailRates.from_environment({}).snapshot()
+        with workspace.admin() as connection:
+            connection.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,100000000000,1000000000,0)',(workspace.scope.owner_id,))
+        def seed(n,state='pending',job_state='failed',attempts=0,nonterminal=0,tokens=0):
+            job=store.enqueue_worker(tid,'fixture:'+str(n))
+            assert store.claim_worker(job)
+            key=job+':compute'
+            store.begin_retail_compute(key,job,'intent',rates)
+            with workspace.admin() as connection:
+                connection.execute('UPDATE worker_jobs SET state=%s WHERE job_id=%s',(job_state,job))
+                connection.execute('UPDATE retail_compute_segments SET state=%s,started_at=%s WHERE segment_key=%s',(state,n,key))
+                for i in range(attempts):
+                    connection.execute("INSERT INTO provider_attempts(attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,created_at,updated_at) VALUES(%s,%s,%s,'fixture','{}','fixture',%s,1,1,0,0)",(uuid4().hex,workspace.scope.owner_id,job,'dispatched' if i<nonterminal else 'cancelled'))
+                for i in range(tokens):
+                    connection.execute("INSERT INTO retail_contributions VALUES(%s,%s,%s,'intent','tokens',1,0,0,'{}',1,1,1000000000,'fixture',0)",(uuid4().hex,workspace.scope.owner_id,job))
+            return job,key
+        def state(key):
+            with workspace.admin() as connection:return connection.execute('SELECT state,deterministic_ms FROM retail_compute_segments WHERE segment_key=%s',(key,)).fetchone()
+        def evidence():
+            with workspace.admin() as connection:
+                return (connection.execute('SELECT count(*),COALESCE(sum(exact_units),0) FROM retail_contributions WHERE owner_id=%s',(workspace.scope.owner_id,)).fetchone(),connection.execute('SELECT * FROM credit_accounts WHERE owner_id=%s',(workspace.scope.owner_id,)).fetchall())
+        yield workspace,seed,state,evidence
 
 
-def seg(n,state='pending'):
-    return {'segment_key':'job%d:compute'%n,'owner_id':A,'job_id':'job%d'%n,'phase_key':'intent','state':state}
+def test_failed_job_with_no_provider_call_is_closed_without_charge_and_audited(compute_workspace):
+    workspace,seed,state,evidence=compute_workspace;job,key=seed(1);before=evidence()
+    assert workspace.store.close_failed_retail_compute(key)=='closed'
+    assert state(key)==('settled',Decimal(0)) and evidence()==before
+    audit=[a for a in workspace.store.audit_entries(None) if a['action']=='compute.segment_closed_no_provider_call'][0]
+    assert audit['action']=='compute.segment_closed_no_provider_call'
+    assert audit['actor']==workspace.scope.owner_id
+    assert audit['detail']['charged'] is False and audit['detail']['provider_attempts']==0
 
 
-def test_failed_job_with_no_provider_call_is_closed_without_charge_and_audited():
-    s=Store([seg(1)],{'job1':'failed'})
-    with tenant_context(TenantScope(A)):
-        assert retail_ledger.close_failed_compute(s,'job1:compute')=='closed'
-    assert s.segments['job1:compute']['state']=='settled' and s.segments['job1:compute']['deterministic_ms']==Decimal(0)
-    assert not [w for w in s.writes if 'INSERT' in w[0].upper()]          # no contribution, so no debit
-    assert s.audits[0][1]=='compute.segment_closed_no_provider_call' and s.audits[0][3]['charged'] is False and s.audits[0][3]['provider_attempts']==0
-    assert s.audits[0][0]==A
+def test_failed_job_that_reached_a_provider_stays_unresolved_for_review(compute_workspace):
+    workspace,seed,state,evidence=compute_workspace;job,key=seed(1,attempts=1);before=workspace.store.audit_entries(None)
+    assert workspace.store.close_failed_retail_compute(key)=='held'
+    assert state(key)[0]=='unresolved' and workspace.store.audit_entries(None)==before
 
 
-def test_failed_job_that_reached_a_provider_stays_unresolved_for_review():
-    s=Store([seg(1)],{'job1':'failed'},attempts={'job1':1})
-    with tenant_context(TenantScope(A)):
-        assert retail_ledger.close_failed_compute(s,'job1:compute')=='held'
-    assert s.segments['job1:compute']['state']=='unresolved' and s.audits==[]
+def test_closing_twice_and_closing_a_settled_or_missing_segment_change_nothing(compute_workspace):
+    workspace,seed,state,evidence=compute_workspace;job,key=seed(1,state='settled',job_state='done');before=(state(key),evidence(),workspace.store.audit_entries(None))
+    assert workspace.store.close_failed_retail_compute(key)=='settled'
+    assert workspace.store.close_failed_retail_compute('nope')=='missing'
+    assert (state(key),evidence(),workspace.store.audit_entries(None))==before
 
 
-def test_closing_twice_and_closing_a_settled_or_missing_segment_change_nothing():
-    s=Store([seg(1,'settled')],{'job1':'done'})
-    with tenant_context(TenantScope(A)):
-        assert retail_ledger.close_failed_compute(s,'job1:compute')=='settled'
-        assert retail_ledger.close_failed_compute(s,'nope')=='missing'
-    assert s.writes==[] and s.audits==[]
+def _release_shape(seed):
+    return [seed(1,'unresolved'),seed(2,'unresolved'),seed(3,'unresolved',attempts=2,nonterminal=1),seed(4,'pending',job_state='running'),seed(5,'unresolved',attempts=2,tokens=1)]
 
 
-def test_release_preview_writes_nothing_and_lists_what_it_would_do():
-    s=Store([seg(1,'unresolved'),seg(2,'unresolved'),seg(3,'unresolved'),seg(4,'pending'),seg(5,'unresolved')],
-            {'job1':'failed','job2':'failed','job3':'failed','job4':'running','job5':'failed'},
-            attempts={'job3':2,'job5':2},nonterminal={'job3':1},tokens={'job5':1})
-    with tenant_context(TenantScope(A)):
-        out=retail_ledger.release_compute(s,A,False)
-    # job5 is the crashed-job case: every provider call terminal, charges already settled - the owner can release it.
-    assert [i['job'] for i in out['releasable']]==['job1','job2','job5'] and out['released']==0 and s.writes==[] and s.audits==[]
+def test_release_preview_writes_nothing_and_lists_what_it_would_do(compute_workspace):
+    workspace,seed,state,evidence=compute_workspace;rows=_release_shape(seed)
+    before=([state(key) for _,key in rows],evidence(),workspace.store.audit_entries(None))
+    out=workspace.store.release_own_compute(False)
+    assert [i['job'] for i in out['releasable']]==[rows[i][0][:8] for i in (0,1,4)] and out['released']==0
     reasons={k['job']:k['reason'] for k in out['kept']}
-    assert 'running' in reasons['job4'] and 'still in flight' in reasons['job3']
+    assert 'running' in reasons[rows[3][0][:8]] and 'still in flight' in reasons[rows[2][0][:8]]
+    assert ([state(key) for _,key in rows],evidence(),workspace.store.audit_entries(None))==before
 
 
-def test_release_closes_only_eligible_segments_each_audited_and_never_charges():
-    s=Store([seg(1,'unresolved'),seg(2,'unresolved'),seg(3,'unresolved'),seg(4,'pending'),seg(5,'unresolved')],
-            {'job1':'failed','job2':'failed','job3':'failed','job4':'running','job5':'failed'},
-            attempts={'job3':2,'job5':2},nonterminal={'job3':1},tokens={'job5':1})
-    with tenant_context(TenantScope(A)):
-        out=retail_ledger.release_compute(s,A,True)
+def test_release_closes_only_eligible_segments_each_audited_and_never_charges(compute_workspace):
+    workspace,seed,state,evidence=compute_workspace;rows=_release_shape(seed);before=evidence();audits=workspace.store.audit_entries(None)
+    out=workspace.store.release_own_compute(True)
     assert out['released']==3 and len(out['kept'])==2
-    assert {k:v['state'] for k,v in s.segments.items()}=={'job1:compute':'settled','job2:compute':'settled','job3:compute':'unresolved','job4:compute':'pending','job5:compute':'settled'}
-    # No-provider-call releases and terminal-call waives audit under distinct actions; neither posts a debit.
-    assert [a[1] for a in s.audits]==['compute.segment_released_by_owner']*2+['compute.segment_reconciled_no_charge']
-    assert all(a[3]['charged'] is False for a in s.audits) and not [w for w in s.writes if 'INSERT' in w[0].upper()]
+    assert [state(key)[0] for _,key in rows]==['settled','settled','unresolved','pending','settled']
+    known={a['id'] for a in audits}
+    added=sorted((a for a in workspace.store.audit_entries(None) if a['id'] not in known),key=lambda a:a['id'])
+    assert [a['action'] for a in added]==['compute.segment_released_by_owner']*2+['compute.segment_reconciled_no_charge']
+    assert all(a['detail']['charged'] is False for a in added) and evidence()==before
 
 
-def test_a_released_segment_no_longer_blocks_the_next_admission():
-    s=Store([seg(1,'unresolved')],{'job1':'failed'})
-    with tenant_context(TenantScope(A)):
-        retail_ledger.release_compute(s,A,True)
-    assert cs.compute_block(s.segments['job1:compute']['state'],'failed') is None
+def test_a_released_segment_no_longer_blocks_the_next_admission(compute_workspace):
+    workspace,seed,state,evidence=compute_workspace;job,key=seed(1,'unresolved')
+    workspace.store.release_own_compute(True)
+    assert cs.compute_block(state(key)[0],'failed') is None
 
 
-def test_a_job_with_no_row_is_not_running_and_is_releasable_when_it_made_no_call():
-    s=Store([seg(1,'unresolved')],{})
-    with tenant_context(TenantScope(A)):
-        assert retail_ledger.release_compute(s,A,False)['releasable'][0]['job']=='job1'
+def test_a_job_with_no_row_is_not_running_and_is_releasable_when_it_made_no_call(compute_workspace):
+    # The real PG FK prevents orphan segment rows. Keep this defensive rule
+    # explicit without disabling constraints just to manufacture corrupt data.
+    workspace,seed,state,evidence=compute_workspace
+    with workspace.admin() as connection:
+        assert connection.execute("SELECT count(*) FROM worker_jobs WHERE job_id='missing-job'").fetchone()[0]==0
+    import psycopg
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        with workspace.admin() as connection:
+            connection.execute("INSERT INTO retail_compute_segments(segment_key,owner_id,job_id,phase_key,rates,state,started_at) VALUES('orphan',%s,'missing-job','intent','{}','unresolved',0)",(workspace.scope.owner_id,))
+    assert cs.release_decision('unresolved',None,0,0,0)=='void'
 
 
 def test_the_producer_closes_by_evidence_instead_of_parking_every_failure():
