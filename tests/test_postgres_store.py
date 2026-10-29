@@ -244,7 +244,10 @@ def test_failed_async_worker_requires_explicit_retry(store):
         store.delete_task(task['task_id'])
 
 
-def test_phase_dispatch_seam_uses_durable_job_and_explicit_matching_resume(store):
+def test_phase_dispatch_seam_uses_durable_job_and_explicit_matching_resume(store,monkeypatch):
+    from delivery_api import config
+    # This seam executes the local orchestrator callback, not a cloud producer.
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     import asyncio
     from delivery_api.tenant_jobs import dispatch_phase
     sid='phase-'+uuid.uuid4().hex
