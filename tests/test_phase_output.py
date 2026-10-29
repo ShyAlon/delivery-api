@@ -3,7 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 from delivery_api import app as module
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def output_workspace(pg_scoped_workspace,monkeypatch):
     # File-backed output projection is an existing local HTTP contract.
     monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
@@ -11,13 +11,15 @@ def output_workspace(pg_scoped_workspace,monkeypatch):
 
 
 
-def test_partial_current_phase_and_labeled_previous_result(tmp_path,monkeypatch,output_workspace):
-    root=tmp_path/'artifacts';folder=root/'session-1'/'spec';folder.mkdir(parents=True)
+def _case_partial_current_phase_and_labeled_previous_result(tmp_path,monkeypatch,output_workspace):
+    from uuid import uuid4
+    sid='output-'+uuid4().hex
+    root=tmp_path/'artifacts';folder=root/sid/'spec';folder.mkdir(parents=True)
     store=output_workspace.store;tid=store.create_task('Output display','brief')['task_id']
-    store.set_engine_session(tid,'session-1')
+    store.set_engine_session(tid,sid)
     for phase in ('intent','conops','needs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'srs','running')
-    (folder/'needs.json').write_text(json.dumps({'session_id':'session-1','needs':[{'need_id':'N-1','stakeholder':'Caregiver','statement':'Visible progress','kind':'functional','intent_fields':['problem_statement']}]}))
+    (folder/'needs.json').write_text(json.dumps({'session_id':sid,'needs':[{'need_id':'N-1','stakeholder':'Caregiver','statement':'Visible progress','kind':'functional','intent_fields':['problem_statement']}]}))
     store.add_task_artifact(tid,'needs','Stakeholder needs',str(folder/'needs.json'))
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));monkeypatch.setattr(module,'store',store)
     client=TestClient(module.app)
@@ -30,10 +32,12 @@ def test_partial_current_phase_and_labeled_previous_result(tmp_path,monkeypatch,
     assert current['items']==[{'id':'R-1','statement':'Show progress'}]
 
 
-def test_architecture_partial_uses_generator_keys(tmp_path,monkeypatch,output_workspace):
-    root=tmp_path/'artifacts';folder=root/'session-2'/'spec';folder.mkdir(parents=True)
+def _case_architecture_partial_uses_generator_keys(tmp_path,monkeypatch,output_workspace):
+    from uuid import uuid4
+    sid='output-'+uuid4().hex
+    root=tmp_path/'artifacts';folder=root/sid/'spec';folder.mkdir(parents=True)
     store=output_workspace.store;tid=store.create_task('Architecture partial','brief')['task_id']
-    store.set_engine_session(tid,'session-2')
+    store.set_engine_session(tid,sid)
     for phase in ('intent','conops','needs','srs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'architecture','running')
     import os,time
@@ -45,13 +49,15 @@ def test_architecture_partial_uses_generator_keys(tmp_path,monkeypatch,output_wo
     assert {item['id'] for item in data['items']}=={'database','API','ADR-1'}
 
 
-def test_empty_current_partial_keeps_labeled_previous_phase(tmp_path,monkeypatch,output_workspace):
-    root=tmp_path/'artifacts';folder=root/'session-4'/'spec';folder.mkdir(parents=True)
+def _case_empty_current_partial_keeps_labeled_previous_phase(tmp_path,monkeypatch,output_workspace):
+    from uuid import uuid4
+    sid='output-'+uuid4().hex
+    root=tmp_path/'artifacts';folder=root/sid/'spec';folder.mkdir(parents=True)
     store=output_workspace.store;tid=store.create_task('Empty partial','brief')['task_id']
-    store.set_engine_session(tid,'session-4')
+    store.set_engine_session(tid,sid)
     for phase in ('intent','conops','needs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'srs','running')
-    (folder/'needs.json').write_text(json.dumps({'session_id':'session-4','needs':[{'need_id':'N-1','stakeholder':'Caregiver','statement':'Visible progress','kind':'functional','intent_fields':['problem_statement']}]}))
+    (folder/'needs.json').write_text(json.dumps({'session_id':sid,'needs':[{'need_id':'N-1','stakeholder':'Caregiver','statement':'Visible progress','kind':'functional','intent_fields':['problem_statement']}]}))
     import time
     time.sleep(.02)
     (folder/'srs_fills.partial.json').write_text('{}')
@@ -60,10 +66,12 @@ def test_empty_current_partial_keeps_labeled_previous_phase(tmp_path,monkeypatch
     assert data['status']=='previous_phase' and data['display_phase']=='needs'
 
 
-def test_gate_redo_resets_phase_start_and_rejects_old_output(tmp_path,monkeypatch,output_workspace):
-    root=tmp_path/'artifacts';folder=root/'session-5'/'spec';folder.mkdir(parents=True)
+def _case_gate_redo_resets_phase_start_and_rejects_old_output(tmp_path,monkeypatch,output_workspace):
+    from uuid import uuid4
+    sid='output-'+uuid4().hex
+    root=tmp_path/'artifacts';folder=root/sid/'spec';folder.mkdir(parents=True)
     store=output_workspace.store;tid=store.create_task('Redo freshness','brief')['task_id']
-    store.set_engine_session(tid,'session-5')
+    store.set_engine_session(tid,sid)
     for phase in ('intent','conops','needs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'srs','running')
     (folder/'srs_fills.partial.json').write_text(json.dumps({'R-old':{'statement':'Old requirement'}}))
@@ -77,10 +85,12 @@ def test_gate_redo_resets_phase_start_and_rejects_old_output(tmp_path,monkeypatc
     assert data['status']=='waiting' and data['items']==[]
 
 
-def test_invalid_current_artifact_is_unavailable_not_previous(tmp_path,monkeypatch,output_workspace):
-    root=tmp_path/'artifacts';folder=root/'session-6'/'spec';folder.mkdir(parents=True)
+def _case_invalid_current_artifact_is_unavailable_not_previous(tmp_path,monkeypatch,output_workspace):
+    from uuid import uuid4
+    sid='output-'+uuid4().hex
+    root=tmp_path/'artifacts';folder=root/sid/'spec';folder.mkdir(parents=True)
     store=output_workspace.store;tid=store.create_task('Invalid current','brief')['task_id']
-    store.set_engine_session(tid,'session-6')
+    store.set_engine_session(tid,sid)
     for phase in ('intent','conops','needs'):store.update_phase(tid,phase,'approved')
     store.update_phase(tid,'srs','running')
     import time
@@ -91,7 +101,7 @@ def test_invalid_current_artifact_is_unavailable_not_previous(tmp_path,monkeypat
     assert data['status']=='unavailable' and data['items']==[]
 
 
-def test_output_fixture_uses_restricted_pg():
+def test_output_fixture_uses_restricted_pg(output_workspace):
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(module.store,PostgresStore)
     from delivery_api.store import SQLiteStore
@@ -99,3 +109,48 @@ def test_output_fixture_uses_restricted_pg():
         SQLiteStore(':memory:')
     with module.store._postgres.transaction() as connection:
         assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
+
+
+def _check_partial_current_phase_and_labeled_previous_result(monkeypatch,tmp_path,workspace):
+    from tests.test_phase_output import _case_partial_current_phase_and_labeled_previous_result
+    _case_partial_current_phase_and_labeled_previous_result(tmp_path,monkeypatch,workspace)
+
+
+def test_partial_current_phase_and_labeled_previous_result(pg_local_compat_process):
+    pg_local_compat_process(_check_partial_current_phase_and_labeled_previous_result)
+
+
+def _check_architecture_partial_uses_generator_keys(monkeypatch,tmp_path,workspace):
+    from tests.test_phase_output import _case_architecture_partial_uses_generator_keys
+    _case_architecture_partial_uses_generator_keys(tmp_path,monkeypatch,workspace)
+
+
+def test_architecture_partial_uses_generator_keys(pg_local_compat_process):
+    pg_local_compat_process(_check_architecture_partial_uses_generator_keys)
+
+
+def _check_empty_current_partial_keeps_labeled_previous_phase(monkeypatch,tmp_path,workspace):
+    from tests.test_phase_output import _case_empty_current_partial_keeps_labeled_previous_phase
+    _case_empty_current_partial_keeps_labeled_previous_phase(tmp_path,monkeypatch,workspace)
+
+
+def test_empty_current_partial_keeps_labeled_previous_phase(pg_local_compat_process):
+    pg_local_compat_process(_check_empty_current_partial_keeps_labeled_previous_phase)
+
+
+def _check_gate_redo_resets_phase_start_and_rejects_old_output(monkeypatch,tmp_path,workspace):
+    from tests.test_phase_output import _case_gate_redo_resets_phase_start_and_rejects_old_output
+    _case_gate_redo_resets_phase_start_and_rejects_old_output(tmp_path,monkeypatch,workspace)
+
+
+def test_gate_redo_resets_phase_start_and_rejects_old_output(pg_local_compat_process):
+    pg_local_compat_process(_check_gate_redo_resets_phase_start_and_rejects_old_output)
+
+
+def _check_invalid_current_artifact_is_unavailable_not_previous(monkeypatch,tmp_path,workspace):
+    from tests.test_phase_output import _case_invalid_current_artifact_is_unavailable_not_previous
+    _case_invalid_current_artifact_is_unavailable_not_previous(tmp_path,monkeypatch,workspace)
+
+
+def test_invalid_current_artifact_is_unavailable_not_previous(pg_local_compat_process):
+    pg_local_compat_process(_check_invalid_current_artifact_is_unavailable_not_previous)
