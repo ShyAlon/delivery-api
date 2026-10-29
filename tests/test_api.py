@@ -14,12 +14,13 @@ def legacy_link_client():
 
 
 @pytest.fixture()
-def client(pg_scoped_workspace,monkeypatch):
+def client(pg_scoped_workspace,monkeypatch,pg_task_app):
+    signed_app=pg_task_app(pg_scoped_workspace)
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import store
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(store,PostgresStore)
-    return TestClient(app)
+    return TestClient(signed_app,headers=pg_scoped_workspace.headers)
 
 
 def test_link_lifecycle_and_one_active_run(legacy_link_client):
@@ -167,12 +168,13 @@ def test_engine_python_settings_show_candidates_and_persist(monkeypatch,tmp_path
     response=client.post('/api/settings/engine-python',json={'path':str(good)})
     assert response.status_code==200 and response.json()['path']==str(good)
 
-def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch,pg_scoped_workspace):
+def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch,pg_scoped_workspace,pg_task_app):
+    signed_app=pg_task_app(pg_scoped_workspace)
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import app
     from fastapi.testclient import TestClient
     monkeypatch.setenv('DEEPSEEK_API_KEY','super-secret')
-    body=TestClient(app).get('/api/model-routes').json()
+    body=TestClient(signed_app,headers=pg_scoped_workspace.headers).get('/api/model-routes').json()
     assert all(route['available'] is False for route in body['routes'])
     assert 'super-secret' not in str(body)
 
