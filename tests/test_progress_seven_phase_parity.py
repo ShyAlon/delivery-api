@@ -10,10 +10,14 @@ from delivery_api.runner import ProcessRunner
 from vmodel_contracts.progress_signal import ProgressPage, ProgressSignal
 
 
-def test_all_seven_phases_share_progress_and_gate_boundary(tmp_path,pg_scoped_workspace):
+def test_all_seven_phases_share_progress_and_gate_boundary(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    # Local subprocess adapter contract, not admitted cloud execution.
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     store = pg_scoped_workspace.store
     task_id = store.create_task("Seven-phase parity")["task_id"]
     session_id = str(uuid4())
+    store.set_engine_session(task_id,session_id)
     cursor = 0
     runner = ProcessRunner(store)
     for phase in PHASE_DEFINITIONS:
