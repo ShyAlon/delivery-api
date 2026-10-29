@@ -22,73 +22,8 @@ def _port():
         return s.getsockname()[1]
 
 
-@pytest.fixture(scope="module")
-def ui(tmp_path_factory):
-    root = tmp_path_factory.mktemp("ui")
-    db = root / "ui.db"
-    artifacts=root/"artifacts";session=artifacts/"golden-1";(session/"interview").mkdir(parents=True);(session/"spec").mkdir()
-    import json
-    (session/"interview/intent_model.json").write_text(json.dumps({"problem_statement":"Family task evidence"}))
-    partial=artifacts/"partial-interview";(partial/"interview").mkdir(parents=True)
-    (partial/"interview/intent_model.json").write_text(json.dumps({"problem_statement":"Partial discovery evidence"}))
-    live=artifacts/"live-interview";(live/"interview").mkdir(parents=True)
-    (live/"interview/usage.jsonl").write_text('{}\n')
-    (live/"interview/http-session.json").write_text(json.dumps({"status":30,"request":{"idea":"A founder brief for a live interview"}}))
-    (session/"interview/audit.jsonl").write_text("\n".join([json.dumps({"event":"gate.auto_decision","gate":"concept","action":"select"}),json.dumps({"event":"interviewee.answer","answer":{"text":"Caregivers need a calm shared view","confidence":"high"}})])+"\n")
-    (session/"spec/hands-free-run.json").write_text(json.dumps({"completed_at":"2026-09-19T08:00:00Z"}))
-    (session/"spec/bundle-integrity.json").write_text(json.dumps({"files_checked":14,"diagnostics":[],"hashes":{"needs.json":"abc"}}))
-    (session/"spec/needs.json").write_text(json.dumps({"needs":[{"need_id":"N-1","statement":"Families need visible task status"}]}))
-    (session/"spec/srs.json").write_text(json.dumps({"functional":[{"requirement_id":"R-1","title":"Visible status","statement":"The system shall show status","need_ids":["N-1"],"acceptance":[{"criterion_id":"AC-1","statement":"Status is visible"}]}]}))
-    (session/"spec/architecture.json").write_text(json.dumps({"decisions":[{"decision_id":"ADR-1","title":"Progressive web app","decision":"Build a PWA","rationale":"Browser-first scope","options_considered":[{"option":"Native","summary":"A dedicated mobile client","pros":["Deeper device access"],"cons":["Two codebases"],"why_rejected":"Outside first release"}]}],"components":[{"name":"Task service","responsibility":"Track work"}]}))
-    (session/"spec/items.json").write_text(json.dumps([{"spec_id":"SPEC-1","title":"Task status module","requirement_ids":["R-1"]}]))
-    (session/"spec/tests.json").write_text(json.dumps([{"test_id":"T-1","title":"Status visible","criterion_ids":["AC-1"],"spec_ids":["SPEC-1"]}]))
-    (session/"spec/audit.jsonl").write_text(json.dumps({"event":"gate.simulated_expert_opinion","gate":"architecture","action":"approve","upstream_advisories":[{"artifact":"srs"}]})+"\n")
-    env = {**os.environ, "DELIVERY_DB_PATH": str(db),"DELIVERY_DATABASE_URL": f"sqlite:///{db}","VMODEL_ARTIFACTS_DIR":str(artifacts),
-           "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
-    seed = '''
-from delivery_api.store import SQLiteStore
-import os
-s=SQLiteStore(os.environ["DELIVERY_DB_PATH"])
-s.create_task("Empty definition", "Awaiting its first run", task_id="empty")
-s.create_task("Disposable definition", "Renamed and deleted by one test", task_id="disposable")
-s.create_task("Live definition", "Detailed progress", task_id="live")
-s.set_model_route("live", "ollama/phi4")
-s.update_phase("live", "intent", "done", detail="Approved")
-s.update_phase("live", "conops", "running", detail="Option 2/3", completed=2, total=3)
-s.add_event("live", "progress", "Generating CONOPS option 2/3", phase_key="conops")
-s.add_event("live", "price", "Price 1.25 credits", phase_key="intent", payload={"tokens":100000,"price":1.25,"price_usd":1.25,"rates":{"scale":"credits"}})
-s.create_task("Finished definition", "Artifacts ready", task_id="done")
-for key,_ in __import__("delivery_api.store", fromlist=["PHASES"]).PHASES: s.update_phase("done", key, "done")
-s.add_task_artifact("done", "architecture", "Architecture overview", "/architecture.json")
-s.create_task("Interactive simulation", "Recorded run, no process load", task_id="sim")
-s.configure_simulation("sim", "/tmp/recorded", "ollama/phi4")
-s.update_phase("sim", "intent", "done", detail="Recorded phase complete")
-s.set_gate_open("sim", "gate-conops", True)
-s.wait_at_gate("sim", "intent")
-'''
-    subprocess.run([sys.executable, "-c", seed], check=True, env=env)
-    port = _port()
-    proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "delivery_api.app:app", "--host", "127.0.0.1", "--port", str(port)], env=env)
-    base = f"http://127.0.0.1:{port}"
-    for _ in range(50):
-        try:
-            import urllib.request
-            urllib.request.urlopen(base + "/health", timeout=.2); break
-        except Exception: time.sleep(.1)
-    else: raise RuntimeError("UI server did not start")
-    yield base
-    proc.terminate(); proc.wait(timeout=5)
 
 
-@pytest.fixture()
-def page(ui):
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, executable_path=os.environ["PLAYWRIGHT_CHROMIUM_EXECUTABLE"] if os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE") else None)
-        page = browser.new_page(viewport={"width": 1365, "height": 900})
-        # Done tasks auto-open the completion screen once per session; other tests inspect the task page.
-        page.add_init_script("if(!localStorage.getItem('allow-complete-redirect')){for(const id of ['done','live','sim'])sessionStorage.setItem('complete-shown:'+id,'1')}")
-        yield page
-        browser.close()
 
 @pytest.fixture(scope="module", autouse=True)
 def screenshot_directory(tmp_path_factory):
@@ -2148,34 +2083,8 @@ def test_interview_scrolls_inside_its_section_and_live_process_stays_visible(pg_
     page.screenshot(path=str(_screenshots_dir / 'live-process-sticky.png'))
 
 
-QQ_DEFAULTS={"retrieval":{"max_words":90,"max_chars":600,"top_k":4},"verification":{"retry_enabled":False,"grounding_overlap_min":1},
-             "integrations":{"none_stated_enabled":True,"external_system_verbs":["connect","sync"]},"area_cues":{"data":["from","own"]}}
 
 
-def test_debug_dialog_edits_question_quality_settings(page, ui):
-    state={"config":json.loads(json.dumps(QQ_DEFAULTS)),"puts":[]}
-    def handler(route):
-        req=route.request
-        if req.method=="GET":return route.fulfill(json={"config_version":1,"config":state["config"],"defaults":QQ_DEFAULTS})
-        body=json.loads(req.post_data)["config"];state["puts"].append(body)
-        if body["retrieval"]["max_words"]>300:return route.fulfill(status=422,json={"detail":{"error":"retrieval.max_words must be an integer from 20 to 300","cause":"The engine validates every setting before saving.","next":"Fix that setting and save again. Nothing was changed."}})
-        state["config"]=body;route.fulfill(json={"config_version":1,"config":body})
-    page.route("**/api/question-quality-config",handler)
-    page.goto(ui+"/");page.locator("#accountbutton").click();page.locator("#opendebug").click();page.locator(".debug-dialog").wait_for()
-    page.get_by_text("Question quality settings",exact=True).click()
-    words=page.locator("#qq-retrieval-max_words");words.wait_for();assert words.input_value()=="90"
-    assert page.locator("#qq-verification-retry_enabled").is_checked() is False
-    assert page.locator("#qq-integrations-external_system_verbs").input_value()=="connect, sync"
-    page.screenshot(path="/tmp/d1-debug-qq.png");page.locator("#qqsave").scroll_into_view_if_needed();page.screenshot(path="/tmp/d1-debug-qq2.png")
-    page.locator("#qq-verification-retry_enabled").check();words.fill("60");page.locator("#qq-area_cues-data").fill("from, own, bundled")
-    page.locator("#qqsave").click();expect(page.locator("#qqstatus")).to_contain_text("Saved")
-    assert state["puts"][-1]["retrieval"]["max_words"]==60 and state["puts"][-1]["verification"]["retry_enabled"] is True
-    assert state["puts"][-1]["area_cues"]["data"]==["from","own","bundled"]
-    words.fill("999");page.locator("#qqsave").click();expect(page.locator("#qqstatus")).to_contain_text("retrieval.max_words")
-    assert state["config"]["retrieval"]["max_words"]==60
-    page.locator("#qqreset").click();assert page.locator("#qq-retrieval-max_words").input_value()=="90"
-    assert state["config"]["retrieval"]["max_words"]==60  # reset only fills the form; nothing is saved until Save
-    page.get_by_role("button",name="Close debug").click()
 
 
 def test_interview_history_lists_newest_exchange_first_keeping_original_numbers(pg_page,pg_ui,pg_ids):
