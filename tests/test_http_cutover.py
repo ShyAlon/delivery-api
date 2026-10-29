@@ -24,7 +24,7 @@ class FakeEngine:
  def snapshot(self,sid):return EngineSnapshot(session_id=self.started_sid or 's',task_id=self.started_task or 't',sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending)
  def submit(self,sid,response):self.submitted.append(response);return SubmitInputResponse(accepted_event=InteractiveEvent(event_id=uuid4(),session_id='s',task_id='t',phase_id=1,sequence=3,event_type=EventType.INPUT_ACCEPTED,process_status=ProcessStatus.RUNNING,next_step=NextStep.RUN),snapshot=EngineSnapshot(session_id='s',task_id='t',sequence=3,process_status=ProcessStatus.RUNNING,next_step=NextStep.RUN))
 
-def test_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store;task=store.create_task('Dungeon master','A virtual dungeon master');engine=FakeEngine()
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
@@ -46,7 +46,7 @@ def test_task_snapshot_projects_http_open_input(tmp_path,monkeypatch,pg_scoped_w
  assert body['input_state']['decision']['input_id']==str(engine.pending.input_id)
 
 
-def test_http_engine_session_survives_delivery_restart(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_http_engine_session_survives_delivery_restart(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  first=pg_scoped_workspace.store;task=first.create_task('Restart safe','brief');engine=FakeEngine()
  monkeypatch.setattr(module,'store',first);monkeypatch.setattr(module,'engine_client',engine)
@@ -186,7 +186,7 @@ def test_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch,
  assert body['input_state']['waiting'] is False
 
 
-def test_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio,threading
  import httpx
@@ -216,7 +216,7 @@ def test_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch,pg
  asyncio.run(exercise())
 
 
-def test_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio,threading
  import httpx
@@ -243,7 +243,7 @@ def test_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch,p
  asyncio.run(exercise())
 
 
-def test_start_records_interview_flash_not_downstream_chat(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_start_records_interview_flash_not_downstream_chat(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store
  task=store.create_task('Flash provenance', 'An idea')
@@ -266,7 +266,7 @@ def test_start_records_interview_flash_not_downstream_chat(tmp_path,monkeypatch,
  assert store.task(task['task_id'])['model_default']=='deepseek:deepseek-flash'
 
 
-def test_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store
  task=store.create_task('Phi4 provenance', 'An idea')
@@ -465,7 +465,7 @@ def test_terminal_reconcile_refuses_missing_or_mismatched_artifacts(tmp_path,mon
  asyncio.run(module._recover_tasks());assert store.task(tid)['phases'][0]['state']=='running' and not launched
 
 
-def test_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  session='read-recovery-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
@@ -858,7 +858,7 @@ def test_task_snapshot_exposes_one_shared_phase_configuration(tmp_path,monkeypat
                   'prerequisite':phase.prerequisite,'artifacts':list(phase.artifacts)}
 
 
-def test_async_start_reserves_identity_shows_progress_and_rejects_duplicate(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_async_start_reserves_identity_shows_progress_and_rejects_duplicate(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio,threading
  import httpx
@@ -914,7 +914,7 @@ def test_interrupted_start_is_classified_without_restarting_engine(tmp_path,monk
  assert any(e['kind']=='error' and e['message']=='Interrupted interview Start needs review' for e in store.events(task['task_id']))
 
 
-def test_interrupted_start_recovers_exact_session_without_second_start(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_interrupted_start_recovers_exact_session_without_second_start(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
  store=pg_scoped_workspace.store;task=store.create_task('Recover Start','brief')
@@ -1085,3 +1085,84 @@ def test_semantic_answer_display_names_items_and_hides_ids():
     assert out.splitlines()[0] == "Reviewed 2 flagged items:"
     assert "Kept as written - Constraint: Must be a web app" in out and "Removed - Constraint: " + "x" * 87 + "..." in out
     assert "constraint:0" not in out
+
+
+def _check_start_and_answer_use_http_engine_not_runner(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_start_and_answer_use_http_engine_not_runner
+ _case_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch,workspace)
+
+
+def test_start_and_answer_use_http_engine_not_runner(pg_local_compat_process):
+ pg_local_compat_process(_check_start_and_answer_use_http_engine_not_runner)
+
+
+def _check_http_engine_session_survives_delivery_restart(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_http_engine_session_survives_delivery_restart
+ _case_http_engine_session_survives_delivery_restart(tmp_path,monkeypatch,workspace)
+
+
+def test_http_engine_session_survives_delivery_restart(pg_local_compat_process):
+ pg_local_compat_process(_check_http_engine_session_survives_delivery_restart)
+
+
+def _check_slow_engine_start_does_not_block_other_requests(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_slow_engine_start_does_not_block_other_requests
+ _case_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch,workspace)
+
+
+def test_slow_engine_start_does_not_block_other_requests(pg_local_compat_process):
+ pg_local_compat_process(_check_slow_engine_start_does_not_block_other_requests)
+
+
+def _check_slow_engine_submit_does_not_block_other_requests(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_slow_engine_submit_does_not_block_other_requests
+ _case_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch,workspace)
+
+
+def test_slow_engine_submit_does_not_block_other_requests(pg_local_compat_process):
+ pg_local_compat_process(_check_slow_engine_submit_does_not_block_other_requests)
+
+
+def _check_start_records_interview_flash_not_downstream_chat(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_start_records_interview_flash_not_downstream_chat
+ _case_start_records_interview_flash_not_downstream_chat(tmp_path,monkeypatch,workspace)
+
+
+def test_start_records_interview_flash_not_downstream_chat(pg_local_compat_process):
+ pg_local_compat_process(_check_start_records_interview_flash_not_downstream_chat)
+
+
+def _check_start_records_env_resolved_phi4_not_catalog_qwen(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_start_records_env_resolved_phi4_not_catalog_qwen
+ _case_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path,monkeypatch,workspace)
+
+
+def test_start_records_env_resolved_phi4_not_catalog_qwen(pg_local_compat_process):
+ pg_local_compat_process(_check_start_records_env_resolved_phi4_not_catalog_qwen)
+
+
+def _check_async_start_reserves_identity_shows_progress_and_rejects_duplicate(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_async_start_reserves_identity_shows_progress_and_rejects_duplicate
+ _case_async_start_reserves_identity_shows_progress_and_rejects_duplicate(tmp_path,monkeypatch,workspace)
+
+
+def test_async_start_reserves_identity_shows_progress_and_rejects_duplicate(pg_local_compat_process):
+ pg_local_compat_process(_check_async_start_reserves_identity_shows_progress_and_rejects_duplicate)
+
+
+def _check_interrupted_start_recovers_exact_session_without_second_start(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_interrupted_start_recovers_exact_session_without_second_start
+ _case_interrupted_start_recovers_exact_session_without_second_start(tmp_path,monkeypatch,workspace)
+
+
+def test_interrupted_start_recovers_exact_session_without_second_start(pg_local_compat_process):
+ pg_local_compat_process(_check_interrupted_start_recovers_exact_session_without_second_start)
+
+
+def _check_task_read_recovers_completed_interview_and_returns_new_phase(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_task_read_recovers_completed_interview_and_returns_new_phase
+ _case_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,monkeypatch,workspace)
+
+
+def test_task_read_recovers_completed_interview_and_returns_new_phase(pg_local_compat_process):
+ pg_local_compat_process(_check_task_read_recovers_completed_interview_and_returns_new_phase)
