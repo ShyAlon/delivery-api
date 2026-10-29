@@ -21,6 +21,7 @@
 set -euo pipefail
 PORT=${PREVIEW_EXEC_PORT:-8001}
 NAME=requi-preview-exec; WORK=""; STARTED=0
+DATA_VOLUME=${PREVIEW_DATA_VOLUME:-requi-preview-data}
 . "$(dirname "$0")/lib.sh"; ops_start preview-exec "$0" --venv
 REPO=$PWD
 
@@ -29,7 +30,7 @@ cleanup(){
   rc=$?; trap - EXIT INT TERM
   if [ "$STARTED" = 1 ]; then docker rm -f "$NAME" >/dev/null 2>&1 || true; fi
   [ -z "$WORK" ] || rm -rf "$WORK"
-  [ "$STARTED" != 1 ] || echo "== preview-exec stopped: container $NAME removed, temp folder deleted (the image stays, it holds no settings)"
+  [ "$STARTED" != 1 ] || echo "== preview-exec stopped: container $NAME removed, temporary settings deleted; persistent data volume retained (the image holds no settings)"
   exit $rc
 }
 
@@ -76,7 +77,7 @@ build_exec_env(){
     # REQUI_EXPECTED_REPOS pins the build this launcher asked for, so the image's own build-staleness
     # check can compare it against the REQUI_BUILD_REPOS the image was built with (preview.sh pins it
     # too, but this script builds its env itself - that pin never covered this path).
-    printf '%s\n' "INTERVIEW_ENGINE_TOKEN=$tok" DELIVERY_CONTROL_PLANE_ONLY=0 DELIVERY_CLOUD_EXECUTION=1 DELIVERY_COOKIE_SECURE=0 DELIVERY_PREVIEW=1 DELIVERY_METRICS_DB=/tmp/run_metrics.db DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 "DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT" "DELIVERY_ALT_ORIGINS=http://localhost:$PORT" "REQUI_EXPECTED_REPOS=$REPOS" >> "$2" ) || return 1
+    printf '%s\n' "INTERVIEW_ENGINE_TOKEN=$tok" DELIVERY_CONTROL_PLANE_ONLY=0 DELIVERY_CLOUD_EXECUTION=1 DELIVERY_COOKIE_SECURE=0 DELIVERY_PREVIEW=1 DELIVERY_METRICS_DB=/data/requi-re/run_metrics.db DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 "DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT" "DELIVERY_ALT_ORIGINS=http://localhost:$PORT" "REQUI_EXPECTED_REPOS=$REPOS" >> "$2" ) || return 1
   chmod 600 "$2"
 }
 
@@ -204,25 +205,13 @@ PYEOF
 step_ok
 
 step "confirmation"
-# Three explicit provider modes. both composes the two independent pins. ollama: the operator's local model at $0 - no key, no vendor pages, the reviewed row
+# Three provider modes. both is the default and composes two independent pins. ollama: the operator's local model at $0 - no key, no vendor pages, the reviewed row
 # and ceiling grounded from this Mac's server; heavy on this Mac while it runs. deepseek: the paid managed
 # route, nothing local, DeepSeek-only. PREVIEW_EXEC_PROVIDER picks one for scripted runs; unset, the operator
-# picks 1, 2 or 3 at the terminal - there is no default and nothing is picked silently.
-if [ -n "${PREVIEW_EXEC_PROVIDER:-}" ]; then
-  PROVIDER=$PREVIEW_EXEC_PROVIDER
-else
-  prompt_open || abort NO-TERMINAL "PREVIEW_EXEC_PROVIDER is unset and there is no terminal to ask which provider to use" "Nothing was started and the database was not touched." "run from a terminal, or set PREVIEW_EXEC_PROVIDER=ollama or =deepseek or =both for a non-interactive run"
-  while true; do
-    printf 'Provider for this preview: 1) ollama (local, $0, heavy on this Mac)  2) deepseek (paid, managed, nothing local)  3) both (choose in UI; local grounding loads model once) - type 1, 2 or 3 and press Enter: '
-    read -r PICK <&9 || abort NO-TERMINAL "the provider prompt reached the end of its input without a choice" "Nothing was started and the database was not touched." "set PREVIEW_EXEC_PROVIDER=ollama or =deepseek or =both for a non-interactive run"
-    case "$PICK" in
-      1) PROVIDER=ollama; break;;
-      2) PROVIDER=deepseek; break;;
-      3) PROVIDER=both; break;;
-      *) echo "  '$PICK' is not 1, 2 or 3 - no default, nothing is picked silently.";;
-    esac
-  done
-fi
+# gets both routes by default; an explicit environment value may narrow them.
+# Local manual runs expose both routes unless an operator explicitly narrows them.
+# The launch confirmation below still describes live data and paid execution.
+PROVIDER=${PREVIEW_EXEC_PROVIDER:-both}
 case "$PROVIDER" in deepseek|ollama|both) ;; *) abort PROVIDER "PREVIEW_EXEC_PROVIDER must be deepseek, ollama or both, not '$PROVIDER'" "" "unset PREVIEW_EXEC_PROVIDER";; esac
 OLLAMA_MODEL=${PREVIEW_EXEC_OLLAMA_MODEL:-phi4}
 OLLAMA_HOST=${OLLAMA_HOST:-http://localhost:11434}
@@ -261,7 +250,7 @@ step_ok
 
 step "settings + grounding"
 trap cleanup EXIT INT TERM
-umask 077; WORK=$(mktemp -d "${TMPDIR:-/tmp}/requi-preview-exec.XXXXXXXXXX"); chmod 700 "$WORK"; mkdir "$WORK/data"
+umask 077; WORK=$(mktemp -d "${TMPDIR:-/tmp}/requi-preview-exec.XXXXXXXXXX"); chmod 700 "$WORK";
 # settings: saved file to a private temp file, never printed, execution ON. The local-preview flag -
 # which offers the ollama route - is written only in ollama mode: the route is dead without OLLAMA_BASE_URL,
 # and a selectable dead route fails the task start with a connection error instead of being absent.
@@ -372,9 +361,10 @@ echo "$COUT" | grep -qx CONTRACT-OK || abort NOT-STARTABLE "the image would not 
 step_ok
 
 step "start + readiness"
-# run it (the data folder is an empty local one: no server copy)
-docker run -d --name "$NAME" --platform "$PLATFORM" --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 2g --memory-swap 2g \
-  --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 -v "$WORK/data":/data --env-file "$WORK/preview.env" --env-file "$WORK/cloud-models.env" \
+# Run with persistent local data. Never remove this volume in cleanup/rebuild.
+# Existing old temporary preview data is not copied or deleted by this change.
+docker run -d --name "$NAME" --platform "$PLATFORM" --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 3g --memory-swap 3g \
+  --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 -v "$DATA_VOLUME":/data --env-file "$WORK/preview.env" --env-file "$WORK/cloud-models.env" \
   ${KEYPASS[@]+"${KEYPASS[@]}"} --add-host host.docker.internal:host-gateway -p "127.0.0.1:$PORT:8000" "$IMAGE" >/dev/null || abort RUN "the container did not start" "" "docker logs $NAME   (send me this output)"
 STARTED=1
 OK=0

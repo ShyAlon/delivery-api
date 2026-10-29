@@ -1471,7 +1471,7 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     task=store.task(task_id)
     if not task:raise HTTPException(404,"task not found")
     phase=task.get("active_phase");generation=task.get("generation")
-    if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1":return {"phase_key":phase,"generation":generation,"status":"local_preview","items":[]}
+    if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1" and os.environ.get("DELIVERY_CLOUD_EXECUTION")!="1":return {"phase_key":phase,"generation":generation,"status":"local_preview","items":[]}
     session=_recorded_engine_session(task_id)
     if not session or not phase:return {"phase_key":phase,"generation":generation,"status":"waiting","items":[]}
     from vmodel_contracts.runtime import artifacts_root
@@ -1823,7 +1823,7 @@ def task_artifact_view(task_id:str,phase:str,name:str):
 
 @app.get("/api/tasks/{task_id}/artifacts.zip")
 def task_artifacts_zip(task_id:str):
-    if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1":raise HTTPException(404,"Artifact downloads are not part of a local preview")
+    if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1" and os.environ.get("DELIVERY_CLOUD_EXECUTION")!="1":raise HTTPException(404,"Artifact downloads are not part of a local preview")
     records=_task_artifact_snapshot(task_id)
     if not records:
         activity("task.export.refused","Artifacts zip refused: no artifacts",task_id=task_id,export="zip",reason="no_artifacts")
