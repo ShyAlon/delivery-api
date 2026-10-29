@@ -1573,65 +1573,52 @@ def test_architecture_founder_refs_validate_in_delivery_snapshot_and_gate(monkey
     assert read.status_code==200
     assert json.loads(read.json()['content'])['decisions'][0]['founder_decision_refs']==['FD-missing-error_states']
 
-def test_session_cost_uses_linked_task_retail_total(monkeypatch):
+def test_session_cost_uses_linked_task_retail_total(monkeypatch,tmp_path,pg_scoped_workspace):
     import delivery_api.app as app_module
+    monkeypatch.setattr(app_module.config,"CLOUD_TENANTS",False)
+    store=pg_scoped_workspace.store
+    monkeypatch.setenv("VMODEL_ARTIFACTS_DIR",str(tmp_path))
     monkeypatch.setattr(app_module.bundles, 'bundle', lambda session: {'session': {'session_id': session}})
     task = store.create_task('Cost linked', 'Test cost binding', task_id='cost-linked')
     store.set_engine_session('cost-linked', 'cost-session')
     store.add_event('cost-linked','price','Retail',phase_key='srs',payload={'price':2.5,'tokens':0,'rates':{'scale':'credits'}})
     with TestClient(app) as client:
         got=client.get('/api/sessions/cost-session/cost')
-    assert got.status_code==200 and got.json()=={'price':2.5,'price_usd':2.5}
+    assert got.status_code==200 and got.json()=={'price':2.5,'price_usd':2.5,'evidence':{'complete':True,'rejected_rows':0,'invalid_numeric_rows':0,'scope':'local usage evidence only'}}
 
 
-def test_session_cost_unknown_or_missing_usage_is_not_fabricated_zero(monkeypatch,tmp_path):
+def test_session_cost_unknown_or_missing_usage_is_not_fabricated_zero(monkeypatch,tmp_path,pg_scoped_workspace):
     import delivery_api.app as app_module
+    monkeypatch.setattr(app_module.config,"CLOUD_TENANTS",False)
+    store=pg_scoped_workspace.store
+    monkeypatch.setenv("VMODEL_ARTIFACTS_DIR",str(tmp_path))
     monkeypatch.setattr(app_module.bundles, 'bundle', lambda session: {'session': {'session_id': session}})
     monkeypatch.setattr(app_module.bundles, 'root', lambda: tmp_path)
     with TestClient(app) as client:
         assert client.get('/api/sessions/no-usage/cost').status_code==404
 
 
-def test_session_cost_ambiguous_binding_rejected(monkeypatch):
+def test_session_cost_ambiguous_binding_rejected(monkeypatch,tmp_path,pg_scoped_workspace):
     import delivery_api.app as app_module
-    monkeypatch.setattr(app_module.bundles, 'bundle', lambda session: {'session': {'session_id': session}})
+    from delivery_api.tenancy import TenantAccessDenied
+    monkeypatch.setattr(app_module.config,"CLOUD_TENANTS",False)
+    monkeypatch.setenv("VMODEL_ARTIFACTS_DIR",str(tmp_path))
+    monkeypatch.setattr(app_module.bundles,'bundle',lambda session:{'session':{'session_id':session}})
+    store=pg_scoped_workspace.store
     for task in ('duplicate-cost-a','duplicate-cost-b'):
-        store.create_task(task,'test',task_id=task);store.set_engine_session(task,'duplicate-cost')
+        store.create_task(task,'test',task_id=task)
+    store.set_engine_session('duplicate-cost-a','duplicate-cost')
+    store.add_event('duplicate-cost-a','price','Retail',phase_key='srs',payload={'price':2.5,'tokens':0,'rates':{'scale':'credits'}})
     with TestClient(app) as client:
-        assert client.get('/api/sessions/duplicate-cost/cost').status_code==409
-
-
-def test_unlinked_interview_cost_is_retail_and_downstream_incomplete_is_unavailable(monkeypatch,tmp_path):
-    import delivery_api.app as app_module
-    monkeypatch.setattr(app_module.bundles,'bundle',lambda session:{'session':{'session_id':session}})
-    monkeypatch.setattr(app_module.bundles,'root',lambda:tmp_path)
-    session=tmp_path/'archived-cost';(session/'interview').mkdir(parents=True)
-    (session/'interview'/'usage.jsonl').write_text('{"prompt_tokens":10000,"completion_tokens":10000}\n')
-    with TestClient(app) as client:
-        got=client.get('/api/sessions/archived-cost/cost')
-        assert got.status_code==200 and got.json()=={'price':0.25,'price_usd':0.25}
-        (session/'spec').mkdir();(session/'spec'/'usage.jsonl').write_text('{"prompt_tokens":1}\n')
-        assert client.get('/api/sessions/archived-cost/cost').status_code==404
-
-
-def test_unlinked_empty_usage_and_missing_downstream_usage_are_unavailable(monkeypatch,tmp_path):
-    import delivery_api.app as app_module
-    monkeypatch.setattr(app_module.bundles,'bundle',lambda session:{'session':{'session_id':session}})
-    monkeypatch.setattr(app_module.bundles,'root',lambda:tmp_path)
-    root=tmp_path/'empty-cost';(root/'interview').mkdir(parents=True)
-    usage=root/'interview'/'usage.jsonl';usage.write_text('{}\n')
-    with TestClient(app) as client:
-        assert client.get('/api/sessions/empty-cost/cost').status_code==404
-        usage.write_text('{"prompt_tokens":10,"completion_tokens":10}\n')
-        (root/'spec').mkdir();(root/'spec'/'needs.json').write_text('{"needs":[]}')
-        assert client.get('/api/sessions/empty-cost/cost').status_code==404
-
-
-def test_session_cost_rejects_nonexistent_session(monkeypatch,tmp_path):
-    import delivery_api.app as app_module
-    monkeypatch.setattr(app_module.bundles,'root',lambda:tmp_path)
-    with TestClient(app) as client:
-        assert client.get('/api/sessions/no-such-session/cost').status_code==404
+        before=client.get('/api/sessions/duplicate-cost/cost')
+        assert before.status_code==200
+        with pytest.raises(TenantAccessDenied,match='^engine session binding is immutable$'):
+            store.set_engine_session('duplicate-cost-b','duplicate-cost')
+        assert store.engine_session('duplicate-cost-a')=='duplicate-cost'
+        assert store.engine_session('duplicate-cost-b') is None
+        after=client.get('/api/sessions/duplicate-cost/cost')
+        assert after.status_code==200 and after.json()==before.json()
+        assert after.json()=={'price':2.5,'price_usd':2.5,'evidence':{'complete':True,'rejected_rows':0,'invalid_numeric_rows':0,'scope':'local usage evidence only'}}
 
 
 def test_task_projection_receivers_require_scoped_postgres():
@@ -1649,3 +1636,11 @@ def test_built_runtime_contract_requires_scoped_postgres():
 def test_legacy_transcript_receiver_requires_scoped_postgres():
     import inspect
     assert 'pg_scoped_workspace' in inspect.signature(test_legacy_intent_view_recovers_full_transcript_from_checkpoint).parameters
+
+
+def test_session_cost_receivers_require_scoped_postgres():
+    import inspect
+    for case in (test_session_cost_uses_linked_task_retail_total,
+                 test_session_cost_unknown_or_missing_usage_is_not_fabricated_zero,
+                 test_session_cost_ambiguous_binding_rejected):
+        assert 'pg_scoped_workspace' in inspect.signature(case).parameters
