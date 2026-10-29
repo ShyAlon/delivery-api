@@ -1092,3 +1092,21 @@ visible,no Rerun button;Phase results still Loading in capture,not validated
 as completed artifact content. Shared123PG/1legacy functions of124,plus3
 standalone local-auth cases;local rerun3 separate. Dated lesson included.
 Hosted CI/full suite/deployed topology unrun;no deploy;A incomplete.
+
+## A79: editable question-quality settings are local-only
+
+Owner Q5 (2026-10-28) retains editable settings test only in local mode because
+cloud configuration is service-managed. Extract to dedicated local question-
+quality browser suite,sharing isolated local ui/page fixtures with local rerun.
+Original editor test AST matches exactly,including GET/PUT validation,failed
+save preserving config,and reset not persisting. No assertion change,skip/xfail
+or filter;default full suite collects it. Remove now-unused SQLite ui/page
+fixture definitions and QQ_DEFAULTS from shared browser suite. Three standalone
+local-auth subprocess tests remain there,not covered by this retirement.
+Scope guard red1failed0.13s;original editor1passed3.91s;final45passed0skips15.04s
+local question-quality/rerun plus cloud API/bootstrap. Shared fixture/wording
+slice26passed135deselected3.76s. Inspected editor screenshot: inputs/defaults
+and Save/Reset visible;only mocked API UI semantics,not real engine settings.
+Shared123PG-backed behavioral functions/no shared legacy ui/page consumers;
+local rerun3,local editor1,standalone local-auth3 remain. Hosted CI/full suite
+unrun;no production change/deploy;A incomplete. Dated lesson included.
