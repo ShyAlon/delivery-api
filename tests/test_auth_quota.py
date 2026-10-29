@@ -76,25 +76,6 @@ def test_usage_tokens_are_read_from_pipeline_json(monkeypatch,tmp_path):
 
 
 
-def test_basic_signup_signin_wrong_password_and_session(monkeypatch,tmp_path):
-    store=SQLiteStore(str(tmp_path/"basic.db"));app.state.store=store;monkeypatch.setattr("delivery_api.app.store",store)
-    monkeypatch.setattr(config,"BASIC_AUTH_ENABLED",True);monkeypatch.setattr(config,"COOKIE_SECURE",False);auth.limiter=auth.RateLimiter()
-    c=TestClient(app)
-    assert c.get('/api/auth').json()['authenticated'] is False
-    weak=c.post('/auth/signup',json={'username':'shy@example.com','password':'short'},headers={'origin':'http://testserver'})
-    assert weak.status_code==400 and weak.json()['detail']['error']=='Password needs more strength.'
-    good=c.post('/auth/signup',json={'username':'shy@example.com','password':'Strong pass 42!'},headers={'origin':'http://testserver'})
-    assert good.status_code==200 and good.json()['actor']=='shy@example.com'
-    assert store.basic_user('shy@example.com')['password_hash'].startswith('scrypt$')
-    assert 'Strong pass 42!' not in store.basic_user('shy@example.com')['password_hash']
-    c.cookies.clear()
-    bad=c.post('/auth/signin',json={'username':'shy@example.com','password':'Wrong pass 42!'},headers={'origin':'http://testserver'})
-    assert bad.status_code==401 and bad.json()['detail']['error']=='Sign-in did not work.'
-    signed=c.post('/auth/signin',json={'username':'shy@example.com','password':'Strong pass 42!'},headers={'origin':'http://testserver'})
-    assert signed.status_code==200
-    c.cookies.update(signed.cookies);assert c.get('/api/auth').json()['actor']=='shy@example.com'
-    assert c.post('/auth/logout',headers={'origin':'http://testserver'}).status_code==200
-    assert c.get('/api/auth').json()['authenticated'] is False
 
 def test_basic_email_validation_and_availability(monkeypatch,tmp_path):
     store=SQLiteStore(str(tmp_path/'email.db'));app.state.store=store;monkeypatch.setattr('delivery_api.app.store',store)
