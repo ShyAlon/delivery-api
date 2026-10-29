@@ -36,7 +36,7 @@ def _case_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch,pg_sc
 def _case_task_snapshot_projects_http_open_input(tmp_path,monkeypatch,pg_scoped_workspace):
  session=str(uuid4())
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
- store=pg_scoped_workspace.store;task=store.create_task('Dungeon master','brief');engine=FakeEngine()
+ store=pg_scoped_workspace.store;task=store.create_task('Dungeon master '+session,'brief');engine=FakeEngine()
  from delivery_api.postgres_store import PostgresStore
  assert isinstance(store,PostgresStore)
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine);engine.started_sid=session;store.set_engine_session(task['task_id'],session)
