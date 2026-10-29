@@ -38,11 +38,11 @@ def _park(page, pattern):
     return held
 
 
-def _wait_for(held, n=1, timeout=8):
+def _wait_for(page, held, n=1, timeout=8):
     deadline = time.time() + timeout
     while time.time() < deadline:
         if len(held) >= n: return True
-        time.sleep(.05)
+        page.wait_for_timeout(50)
     return False
 
 
@@ -60,17 +60,17 @@ def test_a_stale_ops_mount_never_commits_polls_or_crashes(page, ui):
     page.goto(ui + "/")
     page.wait_for_selector("header nav a.nav-link")
     page.evaluate("window.__spaMark={header:document.querySelector('header'),alive:1}")
-    assert _wait_for(tasks), "the dashboard never asked for its tasks"
+    assert _wait_for(page,tasks), "the dashboard never asked for its tasks"
 
     page.locator("header .nav-ops a.nav-link", has_text="Server Health").click()
-    assert _wait_for(template), "the operator page never asked for its template"
+    assert _wait_for(page,template), "the operator page never asked for its template"
 
     page.get_by_role("link", name="Home", exact=True).first.click()
-    assert _wait_for(tasks, 2), "the second dashboard mount never asked for its tasks"
+    assert _wait_for(page,tasks, 2), "the second dashboard mount never asked for its tasks"
 
     # the operator template lands first, while the newer dashboard mount is still waiting
     template[0].fulfill(response=template[0].fetch())
-    assert _wait_for(health, timeout=4) or True
+    assert _wait_for(page,health, timeout=4) or True
     # the newer dashboard mount finishes: this is the view that must survive
     tasks[1].fulfill(response=tasks[1].fetch())
     page.wait_for_selector("#new", timeout=8000)
@@ -93,7 +93,7 @@ def test_a_stale_dashboard_mount_never_overwrites_the_page_you_moved_to(page, ui
     tasks = _park(page, "**/api/tasks")
     page.goto(ui + "/")
     page.wait_for_selector("header nav a.nav-link")
-    assert _wait_for(tasks), "the dashboard never asked for its tasks"
+    assert _wait_for(page,tasks), "the dashboard never asked for its tasks"
 
     page.get_by_role("link", name="About", exact=True).first.click()
     page.wait_for_selector("text=ABOUT REQUI.RE")
