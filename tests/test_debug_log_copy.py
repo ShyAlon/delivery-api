@@ -142,3 +142,15 @@ def test_export_part_scrubber_redacts_nested_urls_and_errors():
     assert 'hunter2secret' not in out and 'abc.def.ghi' not in out
     parsed=json.loads(out)   # stays valid JSON
     assert parsed['error']['chain'][0]['authorization']=='[redacted]'
+
+
+def test_export_scrubs_owner_qualified_task_id_in_urls_and_log_text():
+    out=run_node("""const id='12345678-1234-4123-a123-123456789abc-live';console.log(JSON.stringify([scrubPart(JSON.stringify({task_id:id,url:'https://h/tasks/'+id+'/view',nested:{request:'/api/tasks/'+id+'/events'}})),scrubPart('GET /api/tasks/'+id+'/events task='+id),scrubText('/tasks/12345678-1234-4123-a123-123456789abc/view')]))""")
+    structured,log,bare_path=json.loads(out)
+    assert '12345678-1234-4123-a123-123456789abc' not in structured+log+bare_path
+    parsed=json.loads(structured)
+    assert parsed['task_id']=='[token]'
+    assert parsed['url']=='https://h/tasks/[token]/view'
+    assert parsed['nested']['request']=='/api/tasks/[token]/events'
+    assert log=='GET /api/tasks/[token]/events task=[token]'
+    assert bare_path=='/tasks/[token]/view'
