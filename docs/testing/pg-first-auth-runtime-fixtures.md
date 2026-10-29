@@ -1028,3 +1028,19 @@ Guard failed first1 in0.70s;two cases+guard+cloud API+bootstrap41passed0skips4.3
 No browser change. Global SQLite bootstrap still exists;A incomplete;B/C/D
 unstarted. Production unchanged;hosted CI/full task/full repo/deployed topology
 unrun. No deploy/live DB/model execution.
+
+## A75: owner-visible cloud classification differences
+
+Owner decision2026-10-28 22:00:43,Q2 'differed' changes policy,not a verbatim
+fixture port. Signed PG browser now retains differed=true in Debug. API removes
+blanket cloud404 after existing tenant task lookup;authorized_session still
+constrains shadow file namespace. Real cloud API regression reads A's shadow
+file and denies B/unauthed. Identity explicitly loads owner classifications
+only when Debug opens;raw execution remains excluded and no normal-page chips
+added. Existing row12 exclusion test changes to execution-only exclusion plus
+available classifications (disclosed assertion change). Backend red1 in0.70s;
+browser red1 in33.27s;intermediate old-policy test1failed41passed10.68s;final
+42passed0skips11.36s,visual rerun1passed3.33s. Inspected differed=true JSON.
+Shared121PG/6legacy browser functions;other decisions pending separate themes.
+Production policy changes only owner classification access;no deploy/live DB/
+model execution. Hosted CI/full suite/deployed topology unrun. A incomplete.

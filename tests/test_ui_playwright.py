@@ -1561,11 +1561,13 @@ def test_question_comment_columns_follow_character_ratio(pg_page, pg_ui, pg_ids)
     assert int(row.evaluate("row => getComputedStyle(row).getPropertyValue('--question-parts')")) == 12
 
 
-def test_debug_chips_show_intent_relevance_and_differed_tooltip(page, ui):
-    route_task_snapshot(page, ui, "live", interview_history_snapshot)
+def test_debug_chips_show_intent_relevance_and_differed_tooltip(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    route_task_snapshot(page, ui, tid, interview_history_snapshot)
     classifications = {"session": "s", "answers": {}}
     def classify(route):
-        snapshot = page.request.get(ui + "/api/tasks/live").json()
+        snapshot = page.request.get(ui + f"/api/tasks/{tid}").json()
         interview_history_snapshot(snapshot)
         turns = [(e["payload"]["question"], None) for e in snapshot["events"] if e["kind"] == "waiting_input"]
         answers = {e["payload"]["answer"] for e in snapshot["events"] if e["kind"] == "answer"}
@@ -1576,14 +1578,17 @@ def test_debug_chips_show_intent_relevance_and_differed_tooltip(page, ui):
                 "intent": {"jev": {"intent": "answer"}, "baseline": {"intent": "answer"}, "jev_status": "ok", "differed": False, "ts": "t"},
                 "coverage": {"jev": {"relevance": "thin"}, "baseline": {"relevance": "relevant"}, "jev_status": "ok", "differed": True, "ts": "t"}}
         route.fulfill(json=classifications)
-    page.route("**/api/tasks/live/classifications", classify)
+    page.route(f"**/api/tasks/{tid}/classifications", classify)
     page.add_init_script("try{localStorage.setItem('requi-re.debug','1')}catch(e){}")
-    page.goto(ui + "/tasks/live/view")
+    page.goto(ui + f"/tasks/{tid}/view")
     page.get_by_text("Interview so far").wait_for()
     assert page.locator('.qa-chips').count()==0
     page.locator('.avatar').click();page.locator('#opendebug').click();page.get_by_text('Answer classifications',exact=True).click()
     page.locator('#debugexecution').get_by_text('"differed": true',exact=False).wait_for()
 
+    page.locator('#debugexecution details').nth(0).evaluate("el=>el.open=false")
+    page.locator('#debugexecution details').nth(3).scroll_into_view_if_needed()
+    page.screenshot(path=str(_screenshots_dir / "cloud-classifications-differed.png"),full_page=False)
 
 
 

@@ -3120,7 +3120,6 @@ def _content_ref(text):
 def task_classifications(task_id:str, a:auth.Actor=Depends(auth.require_actor)):
     """Per-answer shadow categorization (Jev vs baseline) for debug-mode chips."""
     if not store.task(task_id): raise HTTPException(404,"task not found")
-    if config.CLOUD_TENANTS:raise HTTPException(404,"classification diagnostics are internal")
     session=store.engine_session(task_id)
     out={"session":session,"answers":{}}
     if not session: return out
