@@ -29,7 +29,7 @@ if [ -n "${stale_repos:-}" ]; then
   echo "Next: $SCRIPT_DIR/pull-all.sh, then rerun scripts/build-dist.sh."
   exit 1
 fi
-command -v "$BOOTSTRAP_PYTHON" >/dev/null || { echo "Error: build Python '$BOOTSTRAP_PYTHON' was not found."; echo "Likely cause: Python 3.10+ is not on PATH."; echo "Next: set REQUI_RE_BUILD_PYTHON=/path/to/python and retry."; exit 1; }
+command -v "$BOOTSTRAP_PYTHON" >/dev/null || { echo "Error: build Python '$BOOTSTRAP_PYTHON' was not found."; echo "Likely cause: Python 3.11+ is not on PATH."; echo "Next: set REQUI_RE_BUILD_PYTHON=/path/to/python and retry."; exit 1; }
 PARENT=$(dirname "$OUTPUT"); mkdir -p "$PARENT"; STAGE="$PARENT/.requi-re-stage-$$"; BACKUP="$PARENT/.requi-re-previous-$$"
 cleanup(){ rm -rf "$STAGE"; }; trap cleanup EXIT
 if [ "$CLEAN" != 1 ] && [ -x "$OUTPUT/runtime/bin/python" ]; then cp -a "$OUTPUT" "$STAGE"; else mkdir -p "$STAGE"; fi

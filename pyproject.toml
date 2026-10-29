@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "delivery-api"
 description = "Orchestration: run links, run state machine, background jobs, storage, budget enforcement, per-stage cost rollup."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "Shy Alon" }]
 dynamic = ["version"]
