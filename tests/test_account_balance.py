@@ -108,6 +108,6 @@ def test_header_refuses_a_non_number():
 def test_session_cost_text_is_untouched_and_balance_is_wired():
     js=(ROOT/'web'/'session-cost.js').read_text()
     assert "${value.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} credits · $${value.price_usd.toFixed(2)}" in js
-    assert "'/api/account/credits'" in js and 'stopBalance()' in js and "No Session Selected" in js
+    assert "'/api/account/credits'" in js and js.count('balance.dispose()')==2 and "No Session Selected" in js
     css=(ROOT/'web'/'style.css').read_text()
     assert '.session-cost.balance:not([hidden])+.session-cost{margin-left:0}' in css and 'content:"Session cost: "' in css
