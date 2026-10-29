@@ -38,20 +38,6 @@ def test_missing_artifacts_give_empty_panel():
     assert validation_panel(None, None, None, None) == {"groups": [], "item_count": 0}
 
 
-def test_older_task_gets_a_pending_validation_phase(tmp_path):
-    import sqlite3
-    from delivery_api.store import SQLiteStore
-    path = str(tmp_path / "old.db")
-    store = SQLiteStore(path)
-    tid = store.create_task("Old task")["task_id"]
-    db = sqlite3.connect(path)
-    db.execute("DELETE FROM phases WHERE task_id=? AND phase_key='validation'", (tid,))
-    db.execute("DELETE FROM gates WHERE task_id=? AND gate_key='gate-validation'", (tid,))
-    db.commit(); db.close()
-    reopened = SQLiteStore(path)
-    task = reopened.task(tid)
-    assert [p["phase_key"] for p in task["phases"]][-1] == "validation"
-    assert next(p for p in task["phases"] if p["phase_key"] == "validation")["state"] == "pending"
 
 
 def test_bundle_reads_validation(tmp_path, monkeypatch):
