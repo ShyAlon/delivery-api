@@ -1195,20 +1195,24 @@ def test_missing_resource_dialog_has_recovery_paths_and_greenfield_confirmation(
     assert dialog.get_by_text(requirement['path'],exact=True).is_visible();assert dialog.get_by_role('button',name="I've added the file · check it").is_visible();assert dialog.get_by_role('button',name='Copy fact checklist').is_visible();dialog.get_by_role('button',name='I chose Existing by mistake').click();confirm=page.get_by_role('dialog',name='Confirm Greenfield correction');confirm.wait_for();assert confirm.get_by_role('button',name='Switch & continue').is_visible()
     page.screenshot(path=str(_screenshots_dir / 'missing-resource-recovery.png'),full_page=True)
 
-def test_everything_zip_includes_runtime_snapshot_and_resource_decision(page,ui,tmp_path):
+def test_everything_zip_includes_runtime_snapshot_and_resource_decision(pg_page,pg_ui,pg_ids,tmp_path):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     import zipfile
     requirement={'kind':'external_input','title':'Baseline required','path':'/tmp/system-baseline.json','format':'SystemBaseline JSON'}
-    live=page.request.get(ui+'/api/tasks/live').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement,'question':None,'input_id':None};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
-    page.route('**/api/tasks/live',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+'/tasks/live/view');page.locator('.requirement-dialog').wait_for();page.keyboard.press('Escape');page.locator('#accountbutton').click();page.get_by_role('menuitem',name='Debug',exact=True).click()
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['state']='running';live['active_phase']='architecture';live['active_work']={'owner':'requirement','phase':'architecture','status':'waiting','started_at':time.time(),'durable_ref':requirement['path'],'requirement':requirement};live['input_state']={'waiting':True,'process_live':True,'decision':None,'requirement':requirement,'question':None,'input_id':None};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'architecture','process_live':True,'decision':None,'gate':None}
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)));page.goto(ui+f'/tasks/{tid}/view');page.locator('.requirement-dialog').wait_for();page.keyboard.press('Escape');page.locator('#accountbutton').click();page.get_by_role('menuitem',name='Debug',exact=True).click()
     with page.expect_download() as info:
         page.get_by_role('button',name='Download everything ZIP',exact=True).click()
     target=tmp_path/'everything.zip';info.value.save_as(str(target))
     with zipfile.ZipFile(target) as z:
         assert z.namelist()==["requi-everything.txt"];text=z.read("requi-everything.txt").decode("utf-8")
     debug_section=json.loads(text.split('===== Debug info =====\n',1)[1].split('\n\n=====',1)[0])
-    assert debug_section['task_id']=='live';assert '"owner": "requirement"' in text and '"detected": true' in text and '"task_id": "live"' in text
+    assert debug_section['task_id']=='[token]';assert '"owner": "requirement"' in text and '"detected": true' in text and '"task_id": "[token]"' in text
     assert text.startswith('===== Known omissions =====')
 
+    assert tid not in text
+    page.screenshot(path="/downloads/resource-zip-redacted.png",full_page=False)
 def test_copy_diagnostic_summary_copies_a_bounded_digest(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     tid=pg_ids["live"]

@@ -1044,3 +1044,18 @@ browser red1 in33.27s;intermediate old-policy test1failed41passed10.68s;final
 Shared121PG/6legacy browser functions;other decisions pending separate themes.
 Production policy changes only owner classification access;no deploy/live DB/
 model execution. Hosted CI/full suite/deployed topology unrun. A incomplete.
+
+## A76: resource ZIP task-ID redaction
+
+Q1 'Redact' (2026-10-28 22:00:43) and explicit throughout-ZIP confirmation
+(2026-10-29 05:38:48) change the exact task-ID assertion to [token],with a new
+no-raw-owner-qualified-ID-anywhere assertion. Existing missing-resource detection,
+owner requirement,single-file ZIP and omissions-first assertions retained.
+Standalone fields previously scrubbed but URLs/log paths leaked the same ID.
+Scrub owner-qualified UUID IDs in free text and UUID task path segments;ordinary
+short task paths and standalone session UUID diagnostics remain unchanged.
+Real signed PG ZIP download/open validates no raw ID anywhere. Unit red1 in
+0.82s;browser red1 in12.21s;final scrubber/browser/cloud API/bootstrap64passed
+0skips7.69s. Inspected Downloaded status screenshot,not proof by pixels of ZIP
+contents (archive text checked separately). Shared122PG/5legacy browser functions.
+No deploy/live DB/model calls. Hosted CI/full suite/deployed topology unrun.

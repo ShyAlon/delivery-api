@@ -2,6 +2,12 @@
 const SECRET_KEY='(?:password|passwd|secret|token|authorization|cookie|api[-_ ]?key|credential|session)';
 export function scrubText(value){
   let s=String(value??'');
+  // Task paths and owner-qualified test/runtime IDs can repeat across JSON,
+  // URLs and free-text logs. Redact every occurrence, not only standalone tokens.
+  // Bare session UUIDs remain diagnostic identifiers outside task paths.
+  const uuid='[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
+  s=s.replace(new RegExp('(/tasks/)'+uuid+'(?:-[a-z0-9_-]+)?(?=[/?#\\s\\"\\x27]|$)','gi'),'$1[token]');
+  s=s.replace(new RegExp('\\b'+uuid+'-[a-z0-9_-]+\\b','gi'),'[token]');
   s=s.replace(/Bearer\s+[A-Za-z0-9._~+\/=-]+/gi,'Bearer [redacted]');
   s=s.replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/g,'[jwt]');
   s=s.replace(/\b(?:sk|pk|rk|sb)[-_][A-Za-z0-9_-]{12,}/g,'[key]');
