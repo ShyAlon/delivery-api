@@ -7,8 +7,10 @@ import pytest
 def pg_local_compat_process(pg_runtime_process):
     def run(check):
         code = '''
-import tempfile
+import tempfile,sys
 from pathlib import Path
+sys.path.insert(0,str(Path.cwd()))
+sys.path.insert(0,str(Path.cwd()/'tests'))
 from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
@@ -24,7 +26,7 @@ assert isinstance(store,PostgresStore)
 with tempfile.TemporaryDirectory() as scratch,pytest.MonkeyPatch.context() as monkeypatch:
     scope=TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000a1')
     with tenant_context(scope):
-        CHECK(monkeypatch,Path(scratch),SimpleNamespace(store=store))
+        CHECK(monkeypatch,Path(scratch),SimpleNamespace(store=store,scope=scope))
 '''.replace('CHECK(',check.__name__+'(')
         result=pg_runtime_process(code)
         assert result.returncode==0,result.stdout+'\n'+result.stderr
