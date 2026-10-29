@@ -15,7 +15,7 @@ const bindGates=(...args)=>ctx.bindGates(...args);
 let taskSort='updated-desc',taskFilter='';
 async function dashboard(){
  const at=pageEpoch();
- app.innerHTML=`<section class="task-tools"><label>Filter tasks<input type="search" disabled aria-hidden="true" tabindex="-1"></label><label>Sort<select disabled aria-hidden="true" tabindex="-1"></select></label><button class="primary" disabled aria-hidden="true" tabindex="-1">+ New task</button></section><section class="task-grid" aria-busy="true"><p class="task-empty loading" role="status">Loading tasks\u2026</p>${'<article class="task task-skeleton" aria-hidden="true"><span class="sk sk-top"></span><span class="sk sk-title"></span><span class="sk sk-meta"></span><span class="sk sk-graph"></span><span class="sk sk-foot"></span></article>'.repeat(3)}</section>`;
+ app.innerHTML=`<section class="task-tools"><label>Filter tasks<input type="search" disabled aria-hidden="true" tabindex="-1"></label><label>Sort<select disabled aria-hidden="true" tabindex="-1"></select></label><button class="primary" disabled aria-hidden="true" tabindex="-1">+ New task</button></section><section class="task-grid" aria-busy="true"><p class="task-empty loading" role="status">Loading tasks\u2026</p>${'<article class="task-skeleton" aria-hidden="true"><span class="sk sk-top"></span><span class="sk sk-title"></span><span class="sk sk-meta"></span><span class="sk sk-graph"></span><span class="sk sk-foot"></span></article>'.repeat(3)}</section>`;
  const {tasks}=await api('/api/tasks');
  if(pageStale(at))return;   // navigated away while loading: never commit
  const render=()=>{
