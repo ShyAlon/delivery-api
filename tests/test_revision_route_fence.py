@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from delivery_api import app as service,config
 
 
-def test_private_acceptance_and_install_not_exposed_as_routes_or_assets(monkeypatch):
+def _case_private_acceptance_and_install_not_exposed_as_routes_or_assets(monkeypatch):
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     client=TestClient(service.app)
     for path in ('/revision-acceptance.html','/revision-acceptance.js','/private-ui/revision-acceptance.html',
@@ -19,3 +19,12 @@ def test_private_acceptance_and_install_not_exposed_as_routes_or_assets(monkeypa
     for node in ast.walk(tree):
         if isinstance(node,ast.ImportFrom):assert not any(name in (node.module or '') for name in forbidden)
         if isinstance(node,ast.Import):assert not any(any(name in alias.name for name in forbidden) for alias in node.names)
+
+
+def _check_private_acceptance_and_install_not_exposed_as_routes_or_assets(monkeypatch,tmp_path,workspace):
+    from tests.test_revision_route_fence import _case_private_acceptance_and_install_not_exposed_as_routes_or_assets
+    _case_private_acceptance_and_install_not_exposed_as_routes_or_assets(monkeypatch)
+
+
+def test_private_acceptance_and_install_not_exposed_as_routes_or_assets(pg_local_compat_process):
+    pg_local_compat_process(_check_private_acceptance_and_install_not_exposed_as_routes_or_assets)

@@ -33,7 +33,7 @@ def test_closed_revision_rejects_different_generation_and_stop(tmp_path,pg_scope
     with pytest.raises(ValueError,match='generation'):save_closed_revision(s,tid,'gate-needs','old','wrong generation')
 
 
-def test_closed_revision_route_saves_only_owner_review_draft(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_closed_revision_route_saves_only_owner_review_draft(tmp_path,monkeypatch,pg_scoped_workspace):
     from tests.test_decision_pages import setup
     s,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace)
     s.wait_at_gate(tid,'needs');waiting=s.task(tid);rev='gate:approved-test'
@@ -174,3 +174,12 @@ def test_closed_review_fixture_is_restricted_pg(tmp_path,pg_scoped_workspace):
         SQLiteStore(':memory:')
     with s._postgres.transaction() as connection:
         assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
+
+
+def _check_closed_revision_route_saves_only_owner_review_draft(monkeypatch,tmp_path,workspace):
+    from tests.test_gate_revision import _case_closed_revision_route_saves_only_owner_review_draft
+    _case_closed_revision_route_saves_only_owner_review_draft(tmp_path,monkeypatch,workspace)
+
+
+def test_closed_revision_route_saves_only_owner_review_draft(pg_local_compat_process):
+    pg_local_compat_process(_check_closed_revision_route_saves_only_owner_review_draft)
