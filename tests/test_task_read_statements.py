@@ -1,44 +1,68 @@
-"""A task read is ONE statement: the task row, its phases, gates and artifact
+"""A task data read is ONE statement: the task row, its phases, gates and artifact
 count arrive together. On the remote pooler every extra statement is a full
 round trip, and the old _task_record fan-out cost 4 statements per task read
 (plus 3 per extra task in list_tasks)."""
-import json
-import sqlite3
-
 import pytest
+from delivery_api.store import PHASES
+from delivery_api.tenancy import tenant_context
 
-from delivery_api.store import SQLiteStore, PHASES
 
+class CountingQueries:
+    """Observe real native PG data queries, excluding the separate auth check.
 
-class CountingConnection:
-    def __init__(self):
-        self.inner = sqlite3.connect(':memory:', check_same_thread=False)
-        self.inner.row_factory = sqlite3.Row
+    Transaction claim setup is outside _execute_native. No results are faked.
+    """
+    def __init__(self, store, monkeypatch):
         self.selects = 0
+        self.auth_queries = 0
+        self.statements = []
+        execute = store._execute_native
+        def counted(sql, parameters=(), *, write=False):
+            self.statements.append(sql)
+            if sql.lstrip().upper().startswith('SELECT'):
+                if 'requi_session_active()' in sql:
+                    self.auth_queries += 1
+                else:
+                    self.selects += 1
+            return execute(sql, parameters, write=write)
+        monkeypatch.setattr(store, '_execute_native', counted)
 
-    def execute(self, sql, *args):
-        if sql.lstrip().upper().startswith('SELECT'):
-            self.selects += 1
-        return self.inner.execute(sql, *args)
 
-    def __getattr__(self, name):
-        return getattr(self.inner, name)
-
-
-def make_store():
-    connection = CountingConnection()
-    return SQLiteStore(':memory:', connection=connection), connection
+@pytest.fixture
+def workspace(pg_workspace_factory, monkeypatch):
+    from delivery_api import config, task_read_cache
+    monkeypatch.setattr(config, 'CLOUD_TENANTS', True)
+    task_read_cache.clear()
+    with pg_workspace_factory() as workspace, tenant_context(workspace.scope):
+        yield workspace
+    task_read_cache.clear()
 
 
-def test_task_read_is_one_statement_with_the_full_record():
+@pytest.fixture
+def make_store(workspace, monkeypatch):
+    from delivery_api.postgres_store import PostgresStore
+    def make():
+        store = PostgresStore(workspace.dsn.replace('user=sandbox', 'user=delivery_app'))
+        return store, CountingQueries(store, monkeypatch)
+    return make
+
+
+@pytest.fixture
+def http_client(workspace, pg_task_app):
+    from dataclasses import replace
+    from fastapi.testclient import TestClient
+    def build(store):
+        return TestClient(pg_task_app(replace(workspace, store=store)), headers=workspace.headers)
+    return build
+
+
+def test_task_read_is_one_statement_with_the_full_record(make_store, workspace):
     store, connection = make_store()
     task = store.create_task('demo task')
-    store._db.execute(
-        "INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,created_at) VALUES (?,?,?,?,?,?)",
-        (task['task_id'], 1, 'intent', 'intent.json', 'ref-1', 1.0))
-    store._db.execute(
-        "INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,created_at,stale) VALUES (?,?,?,?,?,?,1)",
-        (task['task_id'], 1, 'intent', 'old.json', 'ref-0', 0.5))
+    with workspace.admin() as db:
+        for name, stale in [('intent.json', 0), ('old.json', 1)]:
+            db.execute("INSERT INTO task_artifacts(task_id,generation,phase_key,name,ref,created_at,stale) VALUES (%s,1,'intent',%s,'ref',1,%s)",
+                       (task['task_id'], name, stale))
 
     connection.selects = 0
     record = store.task(task['task_id'])
@@ -52,7 +76,7 @@ def test_task_read_is_one_statement_with_the_full_record():
     assert record['artifact_count'] == 1  # the stale one does not count
 
 
-def test_list_tasks_is_one_statement_regardless_of_task_count():
+def test_list_tasks_is_one_statement_regardless_of_task_count(make_store):
     store, connection = make_store()
     for i in range(3):
         store.create_task('task %d' % i)
@@ -82,7 +106,7 @@ def test_recorded_engine_session_legacy_scan_reuses_request_events(monkeypatch):
     assert app._recorded_engine_session('t1', recorded=None, events=events) == 'legacy-9'
 
 
-def test_task_snapshot_is_one_statement_with_task_and_events():
+def test_task_snapshot_is_one_statement_with_task_and_events(make_store):
     """The hot read (GET /api/tasks/<id>) needs the task record AND the newest
     events; they must arrive in ONE statement, not two."""
     store, connection = make_store()
@@ -100,12 +124,12 @@ def test_task_snapshot_is_one_statement_with_task_and_events():
     assert snapshot['task']['engine_session_id'] is None  # column rides the task row
 
 
-def test_task_snapshot_missing_task_returns_none():
+def test_task_snapshot_missing_task_returns_none(make_store):
     store, connection = make_store()
     assert store.task_snapshot('nope') is None
 
 
-def test_task_snapshot_event_limit_keeps_newest_ascending():
+def test_task_snapshot_event_limit_keeps_newest_ascending(make_store):
     store, connection = make_store()
     task = store.create_task('demo task')
     for i in range(5):
@@ -114,43 +138,39 @@ def test_task_snapshot_event_limit_keeps_newest_ascending():
     assert [e['message'] for e in snapshot['events']] == ['m2', 'm3', 'm4']
 
 
-def _http_client(store, monkeypatch):
-    from fastapi.testclient import TestClient
-    from delivery_api import app as app_module
-    monkeypatch.setattr(app_module, 'store', store)
-    return TestClient(app_module.app)
-
-
-def test_get_task_is_one_statement_locally(monkeypatch, tmp_path):
+def test_get_task_is_one_statement_locally(make_store, http_client):
     """GET /api/tasks/<id> fan-out was task + engine_session + events (3
     statements). The snapshot read makes it ONE on a cold cache."""
     store, connection = make_store()
     task = store.create_task('demo task')
-    client = _http_client(store, monkeypatch)
+    client = http_client(store)
 
     connection.selects = 0
     reply = client.get('/api/tasks/%s' % task['task_id'])
     assert reply.status_code == 200
     assert connection.selects == 1, 'cold read must be the single snapshot statement'
+    assert connection.auth_queries == 1, 'signed HTTP also validates the live auth session'
 
 
-def test_get_task_second_read_serves_from_cache_zero_statements(monkeypatch):
+def test_get_task_second_read_serves_from_cache_zero_statements(monkeypatch, make_store, http_client):
     store, connection = make_store()
     task = store.create_task('demo task')
-    client = _http_client(store, monkeypatch)
+    client = http_client(store)
     assert client.get('/api/tasks/%s' % task['task_id']).status_code == 200
 
     connection.selects = 0
+    connection.auth_queries = 0
     reply = client.get('/api/tasks/%s' % task['task_id'])
     assert reply.status_code == 200
-    assert connection.selects == 0, 'warm read must not touch the database'
+    assert connection.auth_queries == 0, 'production session-check cache also serves its warm read'
+    assert connection.selects == 0, 'warm read must not run task data queries'
 
 
-def test_get_task_cache_invalidates_on_write_and_after_safety_ttl(monkeypatch):
+def test_get_task_cache_invalidates_on_write_and_after_safety_ttl(monkeypatch, make_store, http_client):
     from delivery_api import task_read_cache
     store, connection = make_store()
     task = store.create_task('demo task')
-    client = _http_client(store, monkeypatch)
+    client = http_client(store)
     client.get('/api/tasks/%s' % task['task_id'])
 
     store.add_event(task['task_id'], 'progress', 'wrote through this process')
@@ -165,28 +185,20 @@ def test_get_task_cache_invalidates_on_write_and_after_safety_ttl(monkeypatch):
     assert connection.selects == 1, 'the 60s cross-process safety must force a re-read'
 
 
-def test_retain_decision_review_repeated_is_a_noop_without_a_write():
+def test_retain_decision_review_repeated_is_a_noop_without_a_write(make_store):
     """While a decision waits, every poll pinned the same evidence again
     (INSERT + SELECT). Already-pinned evidence must cost one read, no write."""
-    store, _ = make_store()
+    store, connection = make_store()
     task = store.create_task('demo task')
-    writes = []
-    real_execute = store._db.execute
-    def spied(sql, *args):
-        if not sql.lstrip().upper().startswith('SELECT'):
-            writes.append(sql)
-        return real_execute(sql, *args)
-    store._db.execute = spied
-
+    connection.statements.clear()
     payload = {'wait_id': 'w1', 'revision': 'r1', 'options': [1, 2]}
     store.retain_decision_review(task['task_id'], 'w1', 'r1', payload)
-    assert len(writes) == 1  # first pin writes
+    assert sum(not sql.lstrip().upper().startswith('SELECT') for sql in connection.statements) == 1
     store.retain_decision_review(task['task_id'], 'w1', 'r1', payload)
-    assert len(writes) == 1, 're-pinning identical evidence must not write again'
-    store._db.execute = real_execute
+    assert sum(not sql.lstrip().upper().startswith('SELECT') for sql in connection.statements) == 1, 're-pinning identical evidence must not write again'
 
 
-def test_retain_decision_review_conflict_still_raises():
+def test_retain_decision_review_conflict_still_raises(make_store):
     store, _ = make_store()
     task = store.create_task('demo task')
     store.retain_decision_review(task['task_id'], 'w1', 'r1', {'options': [1]})
@@ -195,7 +207,7 @@ def test_retain_decision_review_conflict_still_raises():
         store.retain_decision_review(task['task_id'], 'w1', 'r1', {'options': [2]})
 
 
-def test_cached_read_cannot_cross_store_or_identity(monkeypatch):
+def test_cached_read_cannot_cross_store_or_identity(monkeypatch, make_store):
     from delivery_api import task_read_cache, config
     from delivery_api.tenancy import TenantScope, tenant_context
     store, _ = make_store()
@@ -211,10 +223,10 @@ def test_cached_read_cannot_cross_store_or_identity(monkeypatch):
         assert task_read_cache.get(store,'same') is None
 
 
-def test_local_commit_without_event_invalidates_cached_task(monkeypatch):
+def test_local_commit_without_event_invalidates_cached_task(monkeypatch, make_store, http_client):
     store, connection = make_store()
     task=store.create_task('before')
-    client=_http_client(store,monkeypatch)
+    client=http_client(store)
     client.get('/api/tasks/'+task['task_id'])
     store.rename_task(task['task_id'],'after')
     connection.selects=0
@@ -223,18 +235,18 @@ def test_local_commit_without_event_invalidates_cached_task(monkeypatch):
     assert connection.selects==1
 
 
-def test_internal_task_read_bypasses_warm_cache(monkeypatch):
+def test_internal_task_read_bypasses_warm_cache(monkeypatch, make_store, http_client):
     from delivery_api import app
     store, connection=make_store()
     task=store.create_task('before')
-    client=_http_client(store,monkeypatch)
+    client=http_client(store)
     client.get('/api/tasks/'+task['task_id'])
     connection.selects=0
     assert app.get_task(task['task_id'])['title']=='before'
     assert connection.selects==1
 
 
-def test_cache_rejects_mid_read_write_and_returns_copies(monkeypatch):
+def test_cache_rejects_mid_read_write_and_returns_copies(monkeypatch, make_store):
     from delivery_api import task_read_cache
     store,_=make_store()
     task=store.create_task('cache copies')
@@ -251,7 +263,7 @@ def test_cache_rejects_mid_read_write_and_returns_copies(monkeypatch):
     assert second['task']['title']=='cache copies' and second['events']==[]
 
 
-def test_cache_expires_at_sixty_seconds_with_no_local_event(monkeypatch):
+def test_cache_expires_at_sixty_seconds_with_no_local_event(monkeypatch, make_store):
     from delivery_api import task_read_cache
     store,_=make_store()
     now=[100.0]
