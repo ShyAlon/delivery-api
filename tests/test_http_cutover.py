@@ -286,7 +286,7 @@ def _case_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path,monkeypatch,
  assert store.task(task['task_id'])['model_default']=='ollama:phi4'
 
 
-def test_route_preview_shows_conflict_without_switching(monkeypatch):
+def _case_route_preview_shows_conflict_without_switching(monkeypatch):
  from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
  class ConflictEngine(FakeEngine):
   def preview_route(self,route):
@@ -338,7 +338,7 @@ class SwitchEngine(FakeEngine):
    event_type=EventType.ROUTE_CHANGED,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,route_change=payload)
   return ModelRouteSwitchResponse(accepted_event=event,snapshot=self.snapshot(sid))
 
-def test_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store;task=store.create_task('Switch task','brief');engine=SwitchEngine();engine.task_id=task['task_id']
  from delivery_api.postgres_store import PostgresStore
@@ -365,7 +365,7 @@ def test_cost_segments_preserve_consecutive_route_versions():
  assert [s['route_version'] for s in segments]==[0,1,2]
  assert abs(segments[1]['cost_usd']-(100*.30+20*1.20)/1_000_000)<1e-12
 
-def test_retired_ollama_default_still_lists_installed_switch_targets(monkeypatch):
+def _case_retired_ollama_default_still_lists_installed_switch_targets(monkeypatch):
  from delivery_api.engine_client import EngineClientError
  class Engine:
   def default_route(self):return {'route':'ollama','model':'qwen2.5-coder:14b'}
@@ -980,7 +980,7 @@ def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tm
   assert work.result(timeout=2)[1].process_status==ProcessStatus.COMPLETED
 
 
-def test_generator_default_api_follows_exact_sticky_selection(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_generator_default_api_follows_exact_sticky_selection(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store;task=store.create_task('Sticky preview','brief');tid=task['task_id']
  monkeypatch.setattr(module,'store',store)
@@ -1245,3 +1245,37 @@ def _check_task_snapshot_distinguishes_engine_protocol_422_from_transport(monkey
 
 def test_task_snapshot_distinguishes_engine_protocol_422_from_transport(pg_local_compat_process):
  pg_local_compat_process(_check_task_snapshot_distinguishes_engine_protocol_422_from_transport)
+def _check_route_preview_shows_conflict_without_switching(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_route_preview_shows_conflict_without_switching
+ _case_route_preview_shows_conflict_without_switching(monkeypatch)
+
+
+def test_route_preview_shows_conflict_without_switching(pg_local_compat_process):
+ pg_local_compat_process(_check_route_preview_shows_conflict_without_switching)
+
+
+def _check_retired_ollama_default_still_lists_installed_switch_targets(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_retired_ollama_default_still_lists_installed_switch_targets
+ _case_retired_ollama_default_still_lists_installed_switch_targets(monkeypatch)
+
+
+def test_retired_ollama_default_still_lists_installed_switch_targets(pg_local_compat_process):
+ pg_local_compat_process(_check_retired_ollama_default_still_lists_installed_switch_targets)
+
+
+def _check_switch_via_live_task_endpoint_records_one_event(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_switch_via_live_task_endpoint_records_one_event
+ _case_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch,workspace)
+
+
+def test_switch_via_live_task_endpoint_records_one_event(pg_local_compat_process):
+ pg_local_compat_process(_check_switch_via_live_task_endpoint_records_one_event)
+
+
+def _check_generator_default_api_follows_exact_sticky_selection(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_generator_default_api_follows_exact_sticky_selection
+ _case_generator_default_api_follows_exact_sticky_selection(tmp_path,monkeypatch,workspace)
+
+
+def test_generator_default_api_follows_exact_sticky_selection(pg_local_compat_process):
+ pg_local_compat_process(_check_generator_default_api_follows_exact_sticky_selection)
