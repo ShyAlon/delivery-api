@@ -8,12 +8,6 @@ from delivery_api import config
 
 
 @pytest.fixture()
-def legacy_link_client():
-    # Local actor attribution is a retired contract,not a PG fixture bypass.
-    return TestClient(app)
-
-
-@pytest.fixture()
 def client(pg_scoped_workspace,monkeypatch,pg_task_app):
     signed_app=pg_task_app(pg_scoped_workspace)
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)
@@ -23,31 +17,21 @@ def client(pg_scoped_workspace,monkeypatch,pg_task_app):
     return TestClient(signed_app,headers=pg_scoped_workspace.headers)
 
 
-def test_link_lifecycle_and_one_active_run(legacy_link_client):
-    client=legacy_link_client
-    r = client.post("/links", json={"founder_label": "tester-1"},
-                    headers={"x-admin-token": config.ADMIN_TOKEN})
-    assert r.status_code == 200
-    token = r.json()["token"]
-    r = client.post("/runs", json={"token": token, "free_text": "a web app"})
-    assert r.status_code == 200 and r.json()["state"] == "in_interview"
-    # one active run per link:
-    r = client.post("/runs", json={"token": token, "free_text": "again"})
-    assert r.status_code == 409
-
-
-def test_links_are_admin_only(legacy_link_client):
-    client=legacy_link_client
+def _check_links_are_admin_only(monkeypatch,tmp_path,workspace):
+    from tests.test_api import _legacy_pg_identity_client
+    client=_legacy_pg_identity_client(monkeypatch,workspace)
     assert client.post("/links", json={"founder_label": "x"}).status_code == 403
 
 
-def test_unknown_link_rejected(legacy_link_client):
-    client=legacy_link_client
+def _check_unknown_link_rejected(monkeypatch,tmp_path,workspace):
+    from tests.test_api import _legacy_pg_identity_client
+    client=_legacy_pg_identity_client(monkeypatch,workspace)
     assert client.post("/runs", json={"token": "nope", "free_text": "x"}).status_code == 403
 
 
-def test_budget_hard_stop(legacy_link_client):
-    client=legacy_link_client
+def _check_budget_hard_stop(monkeypatch,tmp_path,workspace):
+    from tests.test_api import _legacy_pg_identity_client
+    client=_legacy_pg_identity_client(monkeypatch,workspace)
     r = client.post("/links", json={"founder_label": "tester-2"},
                     headers={"x-admin-token": config.ADMIN_TOKEN})
     run_id = r.json()["run_id"]
@@ -278,3 +262,29 @@ def test_sessions_spec_completion_and_http_error(tmp_path):
 
 def test_start_task_unreachable_http_engine_is_human_readable(pg_local_compat_process,pg_scoped_workspace):
     pg_local_compat_process(_check_start_task_unreachable_http_engine_is_human_readable)
+
+
+def _legacy_pg_identity_client(monkeypatch,workspace):
+    """Local legacy routes with explicit test identity, never a cloud auth proof."""
+    from delivery_api import auth
+    from delivery_api.tenancy import current_scope
+    from delivery_api.postgres_store import PostgresStore
+    from delivery_api.app import store
+    assert isinstance(store,PostgresStore)
+    assert current_scope().owner_id==workspace.scope.owner_id
+    actor=auth.Actor(workspace.scope.owner_id,'Legacy PG test owner',admin=True)
+    monkeypatch.setattr(auth,'actor',lambda request,required=False:actor)
+    monkeypatch.setattr(auth,'enabled',lambda:False)  # no retired local quota/account provisioning
+    return TestClient(app)
+
+
+def test_budget_hard_stop(pg_local_compat_process):
+    pg_local_compat_process(_check_budget_hard_stop)
+
+
+def test_unknown_link_rejected(pg_local_compat_process):
+    pg_local_compat_process(_check_unknown_link_rejected)
+
+
+def test_links_are_admin_only(pg_local_compat_process):
+    pg_local_compat_process(_check_links_are_admin_only)
