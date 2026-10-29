@@ -5,13 +5,14 @@ from tests.test_decision_pages import setup
 REV = 'a' * 64
 
 
-def _arch_setup(tmp_path, monkeypatch, slots=2):
+def _arch_setup(tmp_path, monkeypatch,pg_scoped_workspace, slots=2):
     from vmodel_contracts.runtime import artifacts_root
     import delivery_api.app as module
-    store, tid, engine, c = setup(tmp_path, monkeypatch)
+    store, tid, engine, c = setup(tmp_path, monkeypatch,pg_scoped_workspace)
+    sid=engine.session_id
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR', str(tmp_path / 'artifacts'))
     store.wait_at_gate(tid, 'architecture')
-    spec = artifacts_root(str(tmp_path / 'artifacts')) / 'session-one' / 'spec'
+    spec = artifacts_root(str(tmp_path / 'artifacts')) / sid / 'spec'
     spec.mkdir(parents=True)
     names = ['database', 'queue'][:slots]
     artifact = spec / 'architecture.json'
@@ -26,8 +27,8 @@ def _arch_setup(tmp_path, monkeypatch, slots=2):
     return store, tid, c, spec, artifact
 
 
-def test_review_carries_open_slots_and_approve_is_refused_until_all_decided(tmp_path, monkeypatch):
-    store, tid, c, spec, artifact = _arch_setup(tmp_path, monkeypatch)
+def _case_review_carries_open_slots_and_approve_is_refused_until_all_decided(tmp_path, monkeypatch,pg_scoped_workspace):
+    store, tid, c, spec, artifact = _arch_setup(tmp_path, monkeypatch,pg_scoped_workspace)
     review = c.get(f'/api/tasks/{tid}/gates/gate-architecture/review').json()['review']
     assert [s['key'] for s in review['stack_decisions']['slots']] == ['database', 'queue']
     denied = c.post(f'/api/tasks/{tid}/gates/gate-architecture/decide', json={'action': 'approve', 'selected_option': 'Proceed'})
@@ -45,8 +46,8 @@ def test_review_carries_open_slots_and_approve_is_refused_until_all_decided(tmp_
     assert companion['slots'][0]['founder_decision']['reason'] == 'One user'
 
 
-def test_blank_unknown_and_stale_are_refused(tmp_path, monkeypatch):
-    store, tid, c, spec, artifact = _arch_setup(tmp_path, monkeypatch, slots=1)
+def _case_blank_unknown_and_stale_are_refused(tmp_path, monkeypatch,pg_scoped_workspace):
+    store, tid, c, spec, artifact = _arch_setup(tmp_path, monkeypatch,pg_scoped_workspace, slots=1)
     url = f'/api/tasks/{tid}/gates/gate-architecture/stack-decisions'
     for bad in ({'key': 'database', 'text': ' ', 'reason': 'r'}, {'key': 'nope', 'text': 'x', 'reason': 'r'}):
         assert c.post(url, json={'revision': REV, 'decisions': [bad]}).status_code == 422
@@ -54,12 +55,13 @@ def test_blank_unknown_and_stale_are_refused(tmp_path, monkeypatch):
     assert 'founder_decision' not in json.loads(artifact.read_text())['stack_entry_dispositions'][0]
 
 
-def test_missing_companion_with_research_required_slots_fails_closed(tmp_path, monkeypatch):
+def _case_missing_companion_with_research_required_slots_fails_closed(tmp_path, monkeypatch,pg_scoped_workspace):
     # Integrity: research_required slots mean the generator wrote the founder-decision
     # companion. A missing companion (e.g. fresh host before restore/backfill) must
     # REFUSE approval with a recoverable missing-evidence error - never silently
     # approve without the required evidence.
-    store, tid, c, spec, artifact = _arch_setup(tmp_path, monkeypatch, slots=1)
+    store, tid, c, spec, artifact = _arch_setup(tmp_path, monkeypatch,pg_scoped_workspace, slots=1)
+    sid=store.task(tid)['engine_session_id']
     (spec / 'architecture.decisions.json').unlink()
     review = c.get(f'/api/tasks/{tid}/gates/gate-architecture/review').json()['review']
     assert review['stack_decisions'] is None
@@ -73,7 +75,7 @@ def test_missing_companion_with_research_required_slots_fails_closed(tmp_path, m
         {'key': 'database', 'brief': 'Which database?', 'founder_decision': {'text': 'SQLite', 'reason': 'One user', 'actor': 'local user', 'at': '2026-10-24T00:00:00+00:00'}}]}))
     decided = {'text': 'SQLite', 'reason': 'One user', 'actor': 'local user', 'at': '2026-10-24T00:00:00+00:00'}
     from vmodel_contracts.architecture import ArchitectureOverview
-    full = {'session_id': 'session-one', 'stack_entries': [], 'components': [], 'decisions': [], 'non_functionals': {},
+    full = {'session_id': sid, 'stack_entries': [], 'components': [], 'decisions': [], 'non_functionals': {},
             'stack_entry_dispositions': [{'key': 'database', 'status': 'research_required', 'research_brief': 'Which database?',
                                           'founder_decision': decided}]}
     ArchitectureOverview.model_validate(full)
@@ -82,10 +84,10 @@ def test_missing_companion_with_research_required_slots_fails_closed(tmp_path, m
     assert reply.status_code == 200, reply.text
 
 
-def test_no_research_required_slots_need_no_companion(tmp_path, monkeypatch):
+def _case_no_research_required_slots_need_no_companion(tmp_path, monkeypatch,pg_scoped_workspace):
     # Genuinely non-applicable: no research_required dispositions, so no companion
     # was ever produced - approval proceeds without it.
-    store, tid, c, spec, artifact = _arch_setup(tmp_path, monkeypatch, slots=1)
+    store, tid, c, spec, artifact = _arch_setup(tmp_path, monkeypatch,pg_scoped_workspace, slots=1)
     artifact.write_text(json.dumps({'stack_entry_dispositions': [{'key': 'database', 'status': 'resolved', 'value': 'SQLite'}]}))
     (spec / 'architecture.decisions.json').unlink()
     store.set_model_default(tid, "deepseek:deepseek-flash")
@@ -107,8 +109,8 @@ def _with_defaults(spec, artifact):
     (spec/'architecture.decisions.json').write_text(json.dumps({"revision":REV,"slots":[{"key":"database","brief":"internal", "technical_choice":FRAMING,"founder_decision":None}]}))
 
 
-def test_approval_uses_displayed_default_without_founder_answer(tmp_path,monkeypatch):
-    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,slots=1)
+def _case_approval_uses_displayed_default_without_founder_answer(tmp_path,monkeypatch,pg_scoped_workspace):
+    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,pg_scoped_workspace,slots=1)
     _with_defaults(spec,artifact)
     store.set_model_default(tid,"deepseek:deepseek-flash")
     async def no_continue(*args,**kwargs): pass
@@ -121,8 +123,8 @@ def test_approval_uses_displayed_default_without_founder_answer(tmp_path,monkeyp
     assert json.loads((spec/'architecture.decisions.json').read_text())['slots'][0]['system_selection']==entry['system_selection']
 
 
-def test_override_reason_optional_and_not_replaced_by_design_reason(tmp_path,monkeypatch):
-    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,slots=1);_with_defaults(spec,artifact)
+def _case_override_reason_optional_and_not_replaced_by_design_reason(tmp_path,monkeypatch,pg_scoped_workspace):
+    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,pg_scoped_workspace,slots=1);_with_defaults(spec,artifact)
     reply=c.post(f'/api/tasks/{tid}/gates/gate-architecture/stack-decisions',json={'revision':REV,'decisions':[{'key':'database','text':'Custom'}]})
     assert reply.status_code==200,reply.text
     entry=json.loads(artifact.read_text())['stack_entry_dispositions'][0]
@@ -133,24 +135,105 @@ def test_override_reason_optional_and_not_replaced_by_design_reason(tmp_path,mon
     assert entry['founder_decision']['text']=='Custom' and not entry.get('system_selection')
 
 
-def test_invalid_artifact_or_mismatched_framing_is_not_approved(tmp_path,monkeypatch):
-    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,slots=1);_with_defaults(spec,artifact)
+def _case_invalid_artifact_or_mismatched_framing_is_not_approved(tmp_path,monkeypatch,pg_scoped_workspace):
+    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,pg_scoped_workspace,slots=1);_with_defaults(spec,artifact)
     data=json.loads(artifact.read_text());data['stack_entry_dispositions'][0]['technical_choice']['default_value']='Redis';artifact.write_text(json.dumps(data))
     reply=c.post(f'/api/tasks/{tid}/gates/gate-architecture/decide',json={'action':'approve','selected_option':'Proceed'})
     assert reply.status_code==400
 
 
-def test_stale_review_refuses_before_default_write(tmp_path,monkeypatch):
-    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,slots=1);_with_defaults(spec,artifact)
+def _case_stale_review_refuses_before_default_write(tmp_path,monkeypatch,pg_scoped_workspace):
+    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,pg_scoped_workspace,slots=1);_with_defaults(spec,artifact)
     before=artifact.read_bytes()
     reply=c.post(f'/api/tasks/{tid}/gates/gate-architecture/decide',json={'action':'approve','review_revision':'stale'})
     assert reply.status_code==409 and artifact.read_bytes()==before
 
 
-def test_companion_mismatch_cannot_supply_a_default(tmp_path,monkeypatch):
-    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,slots=1);_with_defaults(spec,artifact)
+def _case_companion_mismatch_cannot_supply_a_default(tmp_path,monkeypatch,pg_scoped_workspace):
+    store,tid,c,spec,artifact=_arch_setup(tmp_path,monkeypatch,pg_scoped_workspace,slots=1);_with_defaults(spec,artifact)
     path=spec/'architecture.decisions.json';data=json.loads(path.read_text());data['slots'][0]['technical_choice']['reason']='different';path.write_text(json.dumps(data))
     from delivery_api.app import _use_architecture_defaults
     import pytest
     with pytest.raises(ValueError,match='match'): _use_architecture_defaults(tid)
     assert not json.loads(artifact.read_text())['stack_entry_dispositions'][0].get('system_selection')
+
+
+def _check_review_carries_open_slots_and_approve_is_refused_until_all_decided(monkeypatch,tmp_path,workspace):
+ from tests.test_stack_decisions import _case_review_carries_open_slots_and_approve_is_refused_until_all_decided
+ _case_review_carries_open_slots_and_approve_is_refused_until_all_decided(tmp_path,monkeypatch,workspace)
+
+
+def test_review_carries_open_slots_and_approve_is_refused_until_all_decided(pg_local_compat_process):
+ pg_local_compat_process(_check_review_carries_open_slots_and_approve_is_refused_until_all_decided)
+
+
+def _check_blank_unknown_and_stale_are_refused(monkeypatch,tmp_path,workspace):
+ from tests.test_stack_decisions import _case_blank_unknown_and_stale_are_refused
+ _case_blank_unknown_and_stale_are_refused(tmp_path,monkeypatch,workspace)
+
+
+def test_blank_unknown_and_stale_are_refused(pg_local_compat_process):
+ pg_local_compat_process(_check_blank_unknown_and_stale_are_refused)
+
+
+def _check_missing_companion_with_research_required_slots_fails_closed(monkeypatch,tmp_path,workspace):
+ from tests.test_stack_decisions import _case_missing_companion_with_research_required_slots_fails_closed
+ _case_missing_companion_with_research_required_slots_fails_closed(tmp_path,monkeypatch,workspace)
+
+
+def test_missing_companion_with_research_required_slots_fails_closed(pg_local_compat_process):
+ pg_local_compat_process(_check_missing_companion_with_research_required_slots_fails_closed)
+
+
+def _check_no_research_required_slots_need_no_companion(monkeypatch,tmp_path,workspace):
+ from tests.test_stack_decisions import _case_no_research_required_slots_need_no_companion
+ _case_no_research_required_slots_need_no_companion(tmp_path,monkeypatch,workspace)
+
+
+def test_no_research_required_slots_need_no_companion(pg_local_compat_process):
+ pg_local_compat_process(_check_no_research_required_slots_need_no_companion)
+
+
+def _check_approval_uses_displayed_default_without_founder_answer(monkeypatch,tmp_path,workspace):
+ from tests.test_stack_decisions import _case_approval_uses_displayed_default_without_founder_answer
+ _case_approval_uses_displayed_default_without_founder_answer(tmp_path,monkeypatch,workspace)
+
+
+def test_approval_uses_displayed_default_without_founder_answer(pg_local_compat_process):
+ pg_local_compat_process(_check_approval_uses_displayed_default_without_founder_answer)
+
+
+def _check_override_reason_optional_and_not_replaced_by_design_reason(monkeypatch,tmp_path,workspace):
+ from tests.test_stack_decisions import _case_override_reason_optional_and_not_replaced_by_design_reason
+ _case_override_reason_optional_and_not_replaced_by_design_reason(tmp_path,monkeypatch,workspace)
+
+
+def test_override_reason_optional_and_not_replaced_by_design_reason(pg_local_compat_process):
+ pg_local_compat_process(_check_override_reason_optional_and_not_replaced_by_design_reason)
+
+
+def _check_invalid_artifact_or_mismatched_framing_is_not_approved(monkeypatch,tmp_path,workspace):
+ from tests.test_stack_decisions import _case_invalid_artifact_or_mismatched_framing_is_not_approved
+ _case_invalid_artifact_or_mismatched_framing_is_not_approved(tmp_path,monkeypatch,workspace)
+
+
+def test_invalid_artifact_or_mismatched_framing_is_not_approved(pg_local_compat_process):
+ pg_local_compat_process(_check_invalid_artifact_or_mismatched_framing_is_not_approved)
+
+
+def _check_stale_review_refuses_before_default_write(monkeypatch,tmp_path,workspace):
+ from tests.test_stack_decisions import _case_stale_review_refuses_before_default_write
+ _case_stale_review_refuses_before_default_write(tmp_path,monkeypatch,workspace)
+
+
+def test_stale_review_refuses_before_default_write(pg_local_compat_process):
+ pg_local_compat_process(_check_stale_review_refuses_before_default_write)
+
+
+def _check_companion_mismatch_cannot_supply_a_default(monkeypatch,tmp_path,workspace):
+ from tests.test_stack_decisions import _case_companion_mismatch_cannot_supply_a_default
+ _case_companion_mismatch_cannot_supply_a_default(tmp_path,monkeypatch,workspace)
+
+
+def test_companion_mismatch_cannot_supply_a_default(pg_local_compat_process):
+ pg_local_compat_process(_check_companion_mismatch_cannot_supply_a_default)
