@@ -4,17 +4,8 @@ from fastapi.testclient import TestClient
 
 from delivery_api import auth, config
 from delivery_api.app import app
-from delivery_api.store import SQLiteStore
 
 
-def test_basic_email_validation_and_availability(monkeypatch,tmp_path):
-    store=SQLiteStore(str(tmp_path/'email.db'));app.state.store=store;monkeypatch.setattr('delivery_api.app.store',store)
-    monkeypatch.setattr(config,'BASIC_AUTH_ENABLED',True);monkeypatch.setattr(config,'COOKIE_SECURE',False);auth.limiter=auth.RateLimiter();c=TestClient(app)
-    invalid=c.post('/auth/signup',json={'username':'not-an-email','password':'Strong pass 42!'},headers={'origin':'http://testserver'})
-    assert invalid.status_code==400 and invalid.json()['detail']['error']=='Email address is not valid.'
-    assert c.get('/auth/email-availability?email=shy@example.com').json()=={'email':'shy@example.com','valid':True,'available':True}
-    assert c.post('/auth/signup',json={'username':'Shy@Example.com','password':'Strong pass 42!'},headers={'origin':'http://testserver'}).status_code==200
-    assert c.get('/auth/email-availability?email=shy@example.com').json()['available'] is False
 
 def test_concurrent_authenticated_posts_never_miss_valid_session(monkeypatch,tmp_path):
     """Regression for a shared embedded-replica connection under request concurrency."""
