@@ -213,7 +213,7 @@ def test_the_log_download_is_a_valid_zip_holding_the_unchanged_log():
     assert lines == text.count("\n")
 
 
-def test_the_endpoint_serves_the_zip_to_an_admin_and_records_it(monkeypatch):
+def _case_the_endpoint_serves_the_zip_to_an_admin_and_records_it(monkeypatch):
     import delivery_api.app as module
     from delivery_api import auth
     monkeypatch.setattr(config, "CLOUD_TENANTS", False)
@@ -297,3 +297,12 @@ for(const p of OPERATOR_PAGES){if(!p.view||!p.label||!p.tip)throw new Error('bad
 console.log(JSON.stringify({pages:OPERATOR_PAGES.length,views:OPERATOR_PAGES.map(p=>p.view)}));
 """ % ((WEB / "chrome.js").as_uri(), (WEB / "spa-shell.js").as_uri().replace('file://','')))
     assert out["pages"] == 4 and out["views"] == ["health", "stops", "spend", "grant"]
+
+
+def _check_the_endpoint_serves_the_zip_to_an_admin_and_records_it(monkeypatch,tmp_path,workspace):
+    from tests.test_operator_pages import _case_the_endpoint_serves_the_zip_to_an_admin_and_records_it
+    _case_the_endpoint_serves_the_zip_to_an_admin_and_records_it(monkeypatch)
+
+
+def test_the_endpoint_serves_the_zip_to_an_admin_and_records_it(pg_local_compat_process):
+    pg_local_compat_process(_check_the_endpoint_serves_the_zip_to_an_admin_and_records_it)

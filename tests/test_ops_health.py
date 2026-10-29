@@ -78,7 +78,7 @@ def test_the_download_removes_secrets_cuts_library_messages_and_drops_source_lin
     assert body.count('my secret business plan')<=6 and '[cut]' in body   # message cut at 160 characters, not the full 20 repeats
 
 
-def test_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_download(monkeypatch):
+def _case_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_download(monkeypatch):
     import delivery_api.app as module
     from delivery_api import auth, config
     from fastapi.testclient import TestClient
@@ -99,7 +99,7 @@ def test_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_d
         module.app.dependency_overrides.pop(auth.require_admin,None)
 
 
-def test_the_page_and_its_script_are_served_without_data():
+def _case_the_page_and_its_script_are_served_without_data():
     import delivery_api.app as module
     from fastapi.testclient import TestClient
     client=TestClient(module.app)
@@ -107,3 +107,21 @@ def test_the_page_and_its_script_are_served_without_data():
     assert page.status_code==200 and script.status_code==200 and 'fetch(' in script.text
     assert body.status_code==200 and 'Server Health' in body.text   # the view markup the shell mounts at /ops
     assert 'example.com' not in page.text   # a static shell: no user data
+
+
+def _check_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_download(monkeypatch,tmp_path,workspace):
+    from tests.test_ops_health import _case_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_download
+    _case_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_download(monkeypatch)
+
+
+def test_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_download(pg_local_compat_process):
+    pg_local_compat_process(_check_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_download)
+
+
+def _check_the_page_and_its_script_are_served_without_data(monkeypatch,tmp_path,workspace):
+    from tests.test_ops_health import _case_the_page_and_its_script_are_served_without_data
+    _case_the_page_and_its_script_are_served_without_data()
+
+
+def test_the_page_and_its_script_are_served_without_data(pg_local_compat_process):
+    pg_local_compat_process(_check_the_page_and_its_script_are_served_without_data)
