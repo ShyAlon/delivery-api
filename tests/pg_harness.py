@@ -80,7 +80,18 @@ def start():
     except Exception as exc:
         shutil.rmtree(scratch,ignore_errors=True)
         STATE.update(status='failed',reason='the temporary Postgres did not start: %s: %s'%(type(exc).__name__,str(exc)[:300]));return
-    atexit.register(lambda:(server.cleanup(),shutil.rmtree(scratch,ignore_errors=True)))
+    from pg_guardian import protect
+    try:close_guardian = protect(scratch)
+    except BaseException:
+        server.cleanup()
+        shutil.rmtree(scratch,ignore_errors=True)
+        raise
+    def cleanup():
+        try:close_guardian()
+        finally:
+            server.cleanup()
+            shutil.rmtree(scratch,ignore_errors=True)
+    atexit.register(cleanup)
     uri=server.get_uri()
     socket_dir=re.search(r'host=([^&]+)',uri)
     if not socket_dir:
