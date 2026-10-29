@@ -1,84 +1,63 @@
 """A dispatched provider attempt is released (billed 0) only on proof the provider never received the request."""
 import json
+import time
 from pathlib import Path
 
 import pytest
 
 from delivery_api import attempt_ledger as L
 from delivery_api.admission_transport import worker_admission_channel
-from delivery_api.attempt_ledger import AdmissionDenied, transition
+from delivery_api.attempt_ledger import AdmissionDenied
 from delivery_api.producer_admission import WorkerAdmissionGateway
 
 PROOF = {'kind': 'connect-failure', 'error_class': 'ConnectError', 'bytes_sent': 0, 'response_seen': False}
 
 
-def _row(**kw):
-    base = {'attempt_id': 'a1', 'owner_id': 'o1', 'job_id': 'j1', 'state': 'dispatched', 'expense_reserved': 37468200000,
-            'raw_usage': None, 'usage': None, 'expense_actual': None, 'retail_actual': None, 'settled_at': None,
-            'quote': {}}
-    base.update(kw)
-    return base
+@pytest.fixture
+def ledger(pg_workspace_factory):
+    from uuid import uuid4
+    from delivery_api.tenancy import tenant_context
+    with pg_workspace_factory() as workspace,tenant_context(workspace.scope):
+        store=workspace.store
+        task=store.create_task('Attempt release')['task_id']
+        store.set_engine_session(task,'release-'+uuid4().hex)
+        job=store.enqueue_worker(task,'fixture:release');assert store.claim_worker(job)
+        with workspace.admin() as c:
+            c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,100000000000,1000000000,0)',(workspace.scope.owner_id,))
+        def seed(state='dispatched',job_id=None,**fields):
+            attempt=uuid4().hex
+            with workspace.admin() as c:
+                c.execute("INSERT INTO provider_attempts(attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,created_at,updated_at) VALUES(%s,%s,%s,'fixture','{}','fixture',%s,37468200000,1,0,%s)",(attempt,workspace.scope.owner_id,job_id or job,state,time.time()))
+                c.execute("INSERT INTO credit_charges(attempt_id,owner_id,state,created_at) VALUES(%s,%s,%s,0)",(attempt,workspace.scope.owner_id,'released' if state=='released' else 'pending'))
+                for name,value in fields.items():
+                    assert name in ('raw_usage','usage','expense_actual','retail_actual','settled_at')
+                    is_json=name in ('raw_usage','usage')
+                    c.execute('UPDATE provider_attempts SET '+name+'=%s'+('::jsonb' if is_json else '')+' WHERE attempt_id=%s',(json.dumps(value) if is_json else value,attempt))
+            return attempt
+        def snapshot():
+            with workspace.admin() as c:
+                return tuple(c.execute(query,(workspace.scope.owner_id,)).fetchall() for query in (
+                    'SELECT * FROM provider_attempts WHERE owner_id=%s ORDER BY attempt_id',
+                    'SELECT * FROM credit_charges WHERE owner_id=%s ORDER BY attempt_id',
+                    'SELECT * FROM credit_accounts WHERE owner_id=%s',
+                    'SELECT * FROM retail_contributions WHERE owner_id=%s ORDER BY contribution_key'))+(store.audit_entries(None),)
+        yield workspace,store,task,job,seed,snapshot
 
 
-class Cur:
-    def __init__(self, rows):
-        self.rows = rows
-
-    def fetchone(self):
-        return self.rows[0] if self.rows else None
-
-    def fetchall(self):
-        return list(self.rows)
-
-
-class Db:
-    def __init__(self, row, per_job=0, per_owner=0):
-        self.row, self.per_job, self.per_owner, self.writes = row, per_job, per_owner, []
-
-    def execute(self, sql, params=()):
-        s = ' '.join(sql.split())
-        if 'FROM provider_attempts WHERE attempt_id=? FOR UPDATE' in s:
-            return Cur([self.row])
-        if 'count(*)' in s and 'job_id=?' in s:
-            return Cur([{'n': self.per_job}])
-        if 'count(*)' in s and 'owner_id=?' in s:
-            return Cur([{'n': self.per_owner}])
-        if s.startswith(('UPDATE', 'INSERT')):
-            self.writes.append((s, params))
-        return Cur([])
-
-
-class Store:
-    def __init__(self, row, **kw):
-        self._db = Db(row, **kw)
-        self.audits = []
-
-    def audit(self, actor, action, task_id=None, detail=None):
-        self.audits.append((actor, action, task_id, detail))
-
-    def worker_job(self, job_id):
-        return {'task_id': 't1'}
-
-    def provider_attempt(self, attempt_id):
-        return dict(self._db.row)
-
-
-@pytest.fixture(autouse=True)
-def no_locks(monkeypatch):
-    import delivery_api.prepaid as prepaid
-    monkeypatch.setattr(prepaid, 'owner_lock', lambda store: None)
-
-
-def test_valid_connect_failure_releases_with_audit_and_no_debit():
-    store = Store(_row())
-    transition(store, 'a1', 'release', PROOF)
-    sqls = [w[0] for w in store._db.writes]
-    assert any("SET state='released'" in s and "state='dispatched'" in s for s in sqls)
-    assert any("credit_charges SET state='released'" in s and "state='pending'" in s for s in sqls)
-    assert not any('balance_units' in s or "state='settled'" in s for s in sqls)
-    (actor, action, task, detail), = store.audits
-    assert (actor, action, task) == ('o1', 'provider.attempt.released', 't1')
-    assert detail['billed_units'] == 0 and detail['evidence'] == PROOF and detail['attempt_id'] == 'a1'
+def test_valid_connect_failure_releases_with_audit_and_no_debit(ledger):
+    workspace,store,task,job,seed,snapshot=ledger;attempt=seed();before=snapshot()
+    result=store.transition_provider_attempt(attempt,'release',PROOF)
+    assert result['state']=='released'
+    after=snapshot()
+    assert after[2:4]==before[2:4]  # actual balance/remainder and contributions unchanged
+    with workspace.admin() as c:
+        assert c.execute('SELECT state,charged_units,settled_at FROM credit_charges WHERE attempt_id=%s',(attempt,)).fetchone()==('released',None,None)
+    assert all(result[field] is None for field in ('raw_usage','usage','expense_actual','retail_actual','settled_at'))
+    added=[a for a in after[4] if a['id'] not in {b['id'] for b in before[4]}]
+    audit,=added
+    assert (audit['actor'],audit['action'],audit['task_id'])==(workspace.scope.owner_id,'provider.attempt.released',task)
+    detail=audit['detail']
+    assert detail['billed_units']==0 and detail['evidence']==PROOF and detail['attempt_id']==attempt
 
 
 @pytest.mark.parametrize('bad', [
@@ -88,44 +67,52 @@ def test_valid_connect_failure_releases_with_audit_and_no_debit():
     dict(PROOF, response_seen=None), dict(PROOF, kind='http-5xx'),
     {k: v for k, v in PROOF.items() if k != 'bytes_sent'}, dict(PROOF, extra='x'), None, 'connect', [],
 ])
-def test_only_the_exact_proof_releases(bad):
-    store = Store(_row())
+def test_only_the_exact_proof_releases(bad,ledger):
+    workspace,store,task,job,seed,snapshot=ledger;attempt=seed();before=snapshot()
     with pytest.raises(AdmissionDenied):
-        transition(store, 'a1', 'release', bad)
-    assert not store._db.writes and not store.audits
+        store.transition_provider_attempt(attempt,'release',bad)
+    assert snapshot()==before
 
 
 @pytest.mark.parametrize('state', ['reserved', 'settled', 'uncertain', 'cancelled', 'failure_waived'])
-def test_only_a_dispatched_attempt_can_be_released(state):
-    store = Store(_row(state=state))
+def test_only_a_dispatched_attempt_can_be_released(state,ledger):
+    workspace,store,task,job,seed,snapshot=ledger;attempt=seed(state);before=snapshot()
     with pytest.raises(AdmissionDenied):
-        transition(store, 'a1', 'release', PROOF)
-    assert not store._db.writes
+        store.transition_provider_attempt(attempt,'release',PROOF)
+    assert snapshot()==before
 
 
 @pytest.mark.parametrize('field', ['raw_usage', 'usage', 'expense_actual', 'retail_actual', 'settled_at'])
-def test_an_attempt_with_usage_evidence_is_never_released(field):
-    store = Store(_row(**{field: {'x': 1} if field in ('raw_usage', 'usage') else 5}))
+def test_an_attempt_with_usage_evidence_is_never_released(field,ledger):
+    workspace,store,task,job,seed,snapshot=ledger;attempt=seed(**{field:{'x':1} if field in ('raw_usage','usage') else 5});before=snapshot()
     with pytest.raises(AdmissionDenied):
-        transition(store, 'a1', 'release', PROOF)
-    assert not store._db.writes
+        store.transition_provider_attempt(attempt,'release',PROOF)
+    assert snapshot()==before
 
 
-def test_replay_of_a_released_attempt_changes_nothing():
-    store = Store(_row(state='released'))
-    assert transition(store, 'a1', 'release', PROOF)['state'] == 'released'
-    assert not store._db.writes and not store.audits
+def test_replay_of_a_released_attempt_changes_nothing(ledger):
+    workspace,store,task,job,seed,snapshot=ledger;attempt=seed('released');before=snapshot()
+    assert store.transition_provider_attempt(attempt,'release',PROOF)['state']=='released'
+    assert snapshot()==before
 
 
-def test_release_limits_per_job_and_per_owner_per_day():
-    for kw in (dict(per_job=L.RELEASE_MAX_PER_JOB), dict(per_owner=L.RELEASE_MAX_PER_OWNER_DAY)):
-        store = Store(_row(), **kw)
-        with pytest.raises(AdmissionDenied, match='release limit'):
-            transition(store, 'a1', 'release', PROOF)
-        assert not store._db.writes
-    store = Store(_row(), per_job=L.RELEASE_MAX_PER_JOB - 1, per_owner=L.RELEASE_MAX_PER_OWNER_DAY - 1)
-    transition(store, 'a1', 'release', PROOF)
-    assert store._db.writes
+def test_release_limits_per_job_and_per_owner_per_day(ledger):
+    workspace,store,task,job,seed,snapshot=ledger
+    for _ in range(L.RELEASE_MAX_PER_JOB-1):seed('released')
+    attempt=seed()
+    assert store.transition_provider_attempt(attempt,'release',PROOF)['state']=='released'
+    blocked=seed();before=snapshot()
+    with pytest.raises(AdmissionDenied,match='release limit'):store.transition_provider_attempt(blocked,'release',PROOF)
+    assert snapshot()==before
+    other_job=store.enqueue_worker(task,'fixture:other');assert store.claim_worker(other_job)
+    for _ in range(L.RELEASE_MAX_PER_OWNER_DAY-L.RELEASE_MAX_PER_JOB-1):seed('released',job_id=other_job)
+    # Owner is one below cap; a fresh job is below its own cap.
+    fresh=store.enqueue_worker(task,'fixture:fresh');assert store.claim_worker(fresh)
+    candidate=seed(job_id=fresh)
+    assert store.transition_provider_attempt(candidate,'release',PROOF)['state']=='released'
+    blocked=seed(job_id=fresh);before=snapshot()
+    with pytest.raises(AdmissionDenied,match='release limit'):store.transition_provider_attempt(blocked,'release',PROOF)
+    assert snapshot()==before
 
 
 def test_released_never_counts_as_held_or_spent_by_admission():
