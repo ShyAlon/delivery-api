@@ -2,7 +2,6 @@
 import json
 import shutil
 import subprocess
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -10,41 +9,57 @@ import pytest
 ROOT=Path(__file__).resolve().parents[1]/'src'/'delivery_api'
 
 
-class Db:
-    def __init__(self,rows):self.rows,self.asked=rows,[]
-    def execute(self,sql,params):
-        self.asked.append((sql,params))
-        class R:
-            def fetchall(s):return self.rows
-        return R()
+@pytest.fixture
+def phase_cost_workspace(pg_workspace_factory):
+    from delivery_api.tenancy import tenant_context
+    from delivery_api.retail_pricing import RetailRates,UNITS_PER_CREDIT
+    from uuid import uuid4
+    with pg_workspace_factory() as workspace,tenant_context(workspace.scope):
+        store=workspace.store
+        with workspace.admin() as connection:
+            connection.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,%s,%s,0)',(workspace.scope.owner_id,100*UNITS_PER_CREDIT,UNITS_PER_CREDIT))
+        def seed(title,rows):
+            tid=store.create_task(title)['task_id']
+            store.set_engine_session(tid,'phase-cost-'+uuid4().hex)
+            job=store.enqueue_worker(tid,'phase:needs')
+            rates=RetailRates('.5','0','1').snapshot()
+            for phase,credits in rows:
+                store.post_retail_contribution(key=job+':'+uuid4().hex,job_id=job,phase=phase,kind='tokens',input_tokens=int(credits*2),rates=rates)
+            return tid
+        yield workspace,seed
 
 
-class Store:
-    def __init__(self,rows):self._db=Db(rows)
-
-
-def test_phase_totals_sum_each_phase_and_sort_largest_first():
-    rl=pytest.importorskip('delivery_api.retail_ledger')
-    per=rl.UNITS_PER_CREDIT
-    rows=[{'phase_key':'intent','exact_units':per//2},{'phase_key':'spec','exact_units':3*per},{'phase_key':'intent','exact_units':per//2},{'phase_key':'conops','exact_units':per}]
-    out=rl.task_phase_totals(Store(rows),'t1')
+def test_phase_totals_sum_each_phase_and_sort_largest_first(phase_cost_workspace):
+    workspace,seed=phase_cost_workspace
+    # One test token is half a credit; production exact posting computes the rows.
+    tid=seed('Phase totals',[('intent',.5),('spec',3),('intent',.5),('conops',1)])
+    out=workspace.store.task_phase_credits(tid)
     assert out==[{'phase':'spec','credits':3.0},{'phase':'conops','credits':1.0},{'phase':'intent','credits':1.0}]
     assert sum(p['credits'] for p in out)==5.0
 
 
-def test_phase_totals_read_only_this_task_and_return_credits_only():
-    rl=pytest.importorskip('delivery_api.retail_ledger')
-    store=Store([{'phase_key':'spec','exact_units':rl.UNITS_PER_CREDIT}])
-    out=rl.task_phase_totals(store,'t1')
-    sql,params=store._db.asked[0]
-    assert params==('t1',) and sql.strip().upper().startswith('SELECT') and 'task_id=?' in sql
+def test_phase_totals_read_only_this_task_and_return_credits_only(phase_cost_workspace,pg_workspace_factory):
+    from delivery_api.tenancy import tenant_context
+    workspace,seed=phase_cost_workspace
+    tid=seed('Selected task',[('spec',1)])
+    seed('Other task',[('intent',9)])
+    with workspace.admin() as connection:
+        before=connection.execute('SELECT count(*),sum(exact_units) FROM retail_contributions WHERE owner_id=%s',(workspace.scope.owner_id,)).fetchone()
+        balance=connection.execute('SELECT balance_units,fractional_debit_units FROM credit_accounts WHERE owner_id=%s',(workspace.scope.owner_id,)).fetchone()
+    out=workspace.store.task_phase_credits(tid)
+    assert out==[{'phase':'spec','credits':1.0}]
     assert set(out[0])=={'phase','credits'}
-    assert 'rates' not in sql and 'usd' not in sql.lower()
+    assert all('rates' not in row and 'usd' not in row for row in out)
+    with workspace.admin() as connection:
+        assert connection.execute('SELECT count(*),sum(exact_units) FROM retail_contributions WHERE owner_id=%s',(workspace.scope.owner_id,)).fetchone()==before
+        assert connection.execute('SELECT balance_units,fractional_debit_units FROM credit_accounts WHERE owner_id=%s',(workspace.scope.owner_id,)).fetchone()==balance
+    with pg_workspace_factory() as other,tenant_context(other.scope):
+        assert other.store.task_phase_credits(tid)==[]
 
 
-def test_phase_totals_empty_when_nothing_is_posted():
-    rl=pytest.importorskip('delivery_api.retail_ledger')
-    assert rl.task_phase_totals(Store([]),'t1')==[]
+def test_phase_totals_empty_when_nothing_is_posted(phase_cost_workspace):
+    workspace,seed=phase_cost_workspace
+    assert workspace.store.task_phase_credits(seed('No posted phases',[]))==[]
 
 
 def test_route_and_store_are_wired_and_customer_safe():
