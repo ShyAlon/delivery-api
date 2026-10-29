@@ -2,13 +2,15 @@
 import json,os,pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
-from delivery_api.store import SQLiteStore
 import delivery_api.app as module
 
 @pytest.mark.producer_integration
 @pytest.mark.parametrize("reviewed", [False, True])
-def test_package_endpoint_calls_real_zero_model_export_and_downloads(tmp_path,monkeypatch,reviewed):
+def test_package_endpoint_calls_real_zero_model_export_and_downloads(tmp_path,monkeypatch,reviewed,pg_scoped_workspace):
  import shutil,pytest
+ from delivery_api import config
+ monkeypatch.setattr(config,"CLOUD_TENANTS",False)
+ store=pg_scoped_workspace.store
  from vmodel_contracts.runtime import artifacts_root
  producer=Path(os.environ.get('SPEC_GENERATOR_DIR',Path(__file__).parents[2].parent/'spec-generator'))
  if not (producer/'.venv/bin/python').is_file():pytest.skip('requires local spec-generator export environment')
@@ -16,9 +18,9 @@ def test_package_endpoint_calls_real_zero_model_export_and_downloads(tmp_path,mo
  for folder in ('interview','spec'):shutil.copytree(Path(__file__).parent/'fixtures/coding-package'/folder,root/folder)
  interview=root/'interview';spec=root/'spec'
  if not reviewed:(spec/'findings-ledger.json').unlink()
- store=SQLiteStore(str(tmp_path/'db'));t=store.create_task('Ready','',task_id='ready');store.set_engine_session('ready','s')
+ t=store.create_task('Ready','',task_id='ready');store.set_engine_session('ready','s')
  for p in t['phases']:store.update_phase('ready',p['phase_key'],'approved')
- store._db.execute("UPDATE tasks SET state='done' WHERE task_id='ready'");store._db.commit()
+ assert store.task('ready')['state']=='done'
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module.orchestrator,'store',store)
  monkeypatch.setenv('SPEC_GENERATOR_DIR',str(producer));monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
 

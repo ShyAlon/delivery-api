@@ -1137,3 +1137,17 @@ masquerade as proof. Restore limiter via monkeypatch. Source guard red1failed
 0.87s;final41passed0skips4.97s including cloud API/PG bootstrap. No production
 change/deploy/model calls. Package producer env remains missing. Hosted CI/full
 suite/deployed topology unrun;A incomplete.
+
+## A82: real producer package API on isolated PG
+
+Package integration receiver now pg_scoped_workspace with forbidden SQLite
+constructor. Local app mode is explicit because cloud export is still503until
+customer-safe diagnostics contract;cloud API test retains own503/foreign404.
+Create/approve through public PG store methods;final approved phase naturally
+makes task done,removing private SQLite UPDATE. Same real CLI/200/409 findings
+ledger/contents/ZIP/download/repeat-immutable assertions,unchanged. Source guard
+red1failed0.06s;final47passed0skips7.03s package scope,actual producer2cases,
+final-package,cloud API/bootstrap. Producer1b187471fabc6a59a3c530443f79ab5b1340d4f4.
+No model calls,production change,export activation or deployment. Hosted CI/full
+suite/deployed topology unrun. Global bootstrap/local reference receivers remain;
+A incomplete.
