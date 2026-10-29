@@ -123,7 +123,7 @@ def test_model_calls_without_recording_is_empty(tmp_path):
     assert td.model_calls(tmp_path,cloud=False)=={"calls":[],"by_stage":[]}
 
 
-def test_diagnostics_route_includes_model_calls_when_session_recorded(monkeypatch,tmp_path,pg_scoped_workspace):
+def _case_diagnostics_route_includes_model_calls_when_session_recorded(monkeypatch,tmp_path,pg_scoped_workspace):
     import json
     from fastapi.testclient import TestClient
     from delivery_api.app import app
@@ -133,11 +133,13 @@ def test_diagnostics_route_includes_model_calls_when_session_recorded(monkeypatc
     monkeypatch.setattr('delivery_api.app.store',store)
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(store,PostgresStore)
-    task=store.create_task('demo task')
-    store.set_engine_session(task['task_id'],'sess-1')
+    from uuid import uuid4
+    task=store.create_task('demo task '+uuid4().hex)
+    sid='diagnostic-'+uuid4().hex
+    store.set_engine_session(task['task_id'],sid)
     artifacts=tmp_path/'artifacts'
-    (artifacts/'sess-1'/'interview').mkdir(parents=True)
-    (artifacts/'sess-1'/'interview'/'llm-calls.jsonl').write_text(json.dumps(
+    (artifacts/sid/'interview').mkdir(parents=True)
+    (artifacts/sid/'interview'/'llm-calls.jsonl').write_text(json.dumps(
         {"event":"llm_call_end","ts":"t","stage":"probing","provider":"ollama","model":"phi4",
          "latency_s":14.2,"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15},
          "keep_alive":"30m","tokens_per_s":18.1})+"\n")
@@ -150,14 +152,33 @@ def test_diagnostics_route_includes_model_calls_when_session_recorded(monkeypatc
                               "total_s":14.2,"input_tokens":10,"output_tokens":5,"mean_s":14.2}]
 
 
-def test_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_path,pg_scoped_workspace):
+def _case_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_path,pg_scoped_workspace):
     from fastapi.testclient import TestClient
     from delivery_api.app import app
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     store=pg_scoped_workspace.store
     monkeypatch.setattr('delivery_api.app.store',store)
-    task=store.create_task('demo task')
+    from uuid import uuid4
+    task=store.create_task('demo task '+uuid4().hex)
     reply=TestClient(app).get(f"/api/tasks/{task['task_id']}/diagnostics")
     assert reply.status_code==200,reply.text[:400]
     assert "model_calls" not in reply.json()
+
+
+def _check_diagnostics_route_includes_model_calls_when_session_recorded(monkeypatch,tmp_path,workspace):
+    from tests.test_task_diagnostics import _case_diagnostics_route_includes_model_calls_when_session_recorded
+    _case_diagnostics_route_includes_model_calls_when_session_recorded(monkeypatch,tmp_path,workspace)
+
+
+def test_diagnostics_route_includes_model_calls_when_session_recorded(pg_local_compat_process):
+    pg_local_compat_process(_check_diagnostics_route_includes_model_calls_when_session_recorded)
+
+
+def _check_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_path,workspace):
+    from tests.test_task_diagnostics import _case_diagnostics_route_without_session_has_no_model_calls
+    _case_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_path,workspace)
+
+
+def test_diagnostics_route_without_session_has_no_model_calls(pg_local_compat_process):
+    pg_local_compat_process(_check_diagnostics_route_without_session_has_no_model_calls)
