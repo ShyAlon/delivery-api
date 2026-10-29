@@ -2853,7 +2853,7 @@ def get_gate_review(task_id:str,gate_key:str,revision:str|None=None,draft:str|No
     gate=next(g for g in current['task']['gates'] if g['gate_key']==gate_key)
     saved=store.decision_draft(task_id,'gate:'+gate_key,review['revision'],draft) if draft else None
     if draft and saved is None:raise HTTPException(404,'gate draft not found')
-    return {'review':review,'actionable':review['revision']==current['revision'] and gate['state']=='waiting',
+    return {'review':review,'historical':review['revision']!=current['revision'],'actionable':review['revision']==current['revision'] and gate['state']=='waiting',
             'draft':saved,'comments':store.review_comments(task_id,'gate:'+gate_key,review['revision']),'closed_revision_draft':_closed_revision_draft_available(task_id,gate_key,review)}
 
 @app.post('/api/tasks/{task_id}/gates/{gate_key}/comments')
