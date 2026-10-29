@@ -1428,8 +1428,9 @@ def test_architecture_founder_refs_validate_in_delivery_snapshot_and_gate(monkey
     assert read.status_code==200
     assert json.loads(read.json()['content'])['decisions'][0]['founder_decision_refs']==['FD-missing-error_states']
 
-def test_session_cost_uses_linked_task_retail_total(monkeypatch,tmp_path,pg_scoped_workspace):
+def test_session_cost_uses_linked_task_retail_total(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
     import delivery_api.app as app_module
+    signed_app=pg_task_app(pg_scoped_workspace)
     monkeypatch.setattr(app_module.config,"CLOUD_TENANTS",False)
     store=pg_scoped_workspace.store
     monkeypatch.setenv("VMODEL_ARTIFACTS_DIR",str(tmp_path))
@@ -1437,25 +1438,27 @@ def test_session_cost_uses_linked_task_retail_total(monkeypatch,tmp_path,pg_scop
     task = store.create_task('Cost linked', 'Test cost binding', task_id='cost-linked')
     store.set_engine_session('cost-linked', 'cost-session')
     store.add_event('cost-linked','price','Retail',phase_key='srs',payload={'price':2.5,'tokens':0,'rates':{'scale':'credits'}})
-    with TestClient(app) as client:
+    with TestClient(signed_app,headers=pg_scoped_workspace.headers) as client:
         got=client.get('/api/sessions/cost-session/cost')
     assert got.status_code==200 and got.json()=={'price':2.5,'price_usd':2.5,'evidence':{'complete':True,'rejected_rows':0,'invalid_numeric_rows':0,'scope':'local usage evidence only'}}
 
 
-def test_session_cost_unknown_or_missing_usage_is_not_fabricated_zero(monkeypatch,tmp_path,pg_scoped_workspace):
+def test_session_cost_unknown_or_missing_usage_is_not_fabricated_zero(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
     import delivery_api.app as app_module
+    signed_app=pg_task_app(pg_scoped_workspace)
     monkeypatch.setattr(app_module.config,"CLOUD_TENANTS",False)
     store=pg_scoped_workspace.store
     monkeypatch.setenv("VMODEL_ARTIFACTS_DIR",str(tmp_path))
     monkeypatch.setattr(app_module.bundles, 'bundle', lambda session: {'session': {'session_id': session}})
     monkeypatch.setattr(app_module.bundles, 'root', lambda: tmp_path)
-    with TestClient(app) as client:
+    with TestClient(signed_app,headers=pg_scoped_workspace.headers) as client:
         assert client.get('/api/sessions/no-usage/cost').status_code==404
 
 
-def test_session_cost_ambiguous_binding_rejected(monkeypatch,tmp_path,pg_scoped_workspace):
+def test_session_cost_ambiguous_binding_rejected(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
     import delivery_api.app as app_module
     from delivery_api.tenancy import TenantAccessDenied
+    signed_app=pg_task_app(pg_scoped_workspace)
     monkeypatch.setattr(app_module.config,"CLOUD_TENANTS",False)
     monkeypatch.setenv("VMODEL_ARTIFACTS_DIR",str(tmp_path))
     monkeypatch.setattr(app_module.bundles,'bundle',lambda session:{'session':{'session_id':session}})
@@ -1464,7 +1467,7 @@ def test_session_cost_ambiguous_binding_rejected(monkeypatch,tmp_path,pg_scoped_
         store.create_task(task,'test',task_id=task)
     store.set_engine_session('duplicate-cost-a','duplicate-cost')
     store.add_event('duplicate-cost-a','price','Retail',phase_key='srs',payload={'price':2.5,'tokens':0,'rates':{'scale':'credits'}})
-    with TestClient(app) as client:
+    with TestClient(signed_app,headers=pg_scoped_workspace.headers) as client:
         before=client.get('/api/sessions/duplicate-cost/cost')
         assert before.status_code==200
         with pytest.raises(TenantAccessDenied,match='^engine session binding is immutable$'):
