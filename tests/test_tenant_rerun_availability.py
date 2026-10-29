@@ -28,8 +28,17 @@ def test_task_capability_is_explicit_for_tenant_and_local(monkeypatch):
     assert module._rerun_control()=={'available':True}
 
 
-def test_http_task_detail_includes_rerun_capability():
+def _case_http_task_detail_includes_rerun_capability():
     from fastapi.testclient import TestClient
     with TestClient(module.app) as client:
-        tid=client.post('/api/tasks',json={'title':'Rerun capability'}).json()['task_id']
+        tid=client.post('/api/tasks',json={'title':'Rerun capability '+__import__('uuid').uuid4().hex}).json()['task_id']
         assert client.get(f'/api/tasks/{tid}').json()['rerun_control']=={'available':True}
+
+
+def _check_http_task_detail_includes_rerun_capability(monkeypatch,tmp_path,workspace):
+    from tests.test_tenant_rerun_availability import _case_http_task_detail_includes_rerun_capability
+    _case_http_task_detail_includes_rerun_capability()
+
+
+def test_http_task_detail_includes_rerun_capability(pg_local_compat_process):
+    pg_local_compat_process(_check_http_task_detail_includes_rerun_capability)

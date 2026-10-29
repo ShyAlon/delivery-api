@@ -97,8 +97,7 @@ def test_no_page_links_to_all_sessions_any_more():
         assert "All sessions" not in body and 'href="/sessions"' not in body, route
 
 
-@pytest.mark.parametrize("path", ["/sessions", "/sessions/abc", "/sessions/abc/view", "/sessions/abc/needs", "/sessions/abc/interview"])
-def test_the_old_session_pages_send_people_home(path):
+def _case_the_old_session_pages_send_people_home(path):
     import delivery_api.app as module
     from fastapi.testclient import TestClient
     response = TestClient(module.app, follow_redirects=False).get(path, headers={"Accept": "text/html"})
@@ -126,3 +125,15 @@ def test_server_boot_config_carries_preview_execution_setting(monkeypatch):
     body=module._page('index.html').body.decode()
     config=json.loads(body.split('window.__REQUI_CONFIG__=',1)[1].split(';',1)[0])
     assert config['preview'] is True and config['execution_enabled'] is False
+
+
+def _check_the_old_session_pages_send_people_home(monkeypatch,tmp_path,workspace):
+    import os
+    from tests.test_web_diagnostics import _case_the_old_session_pages_send_people_home
+    _case_the_old_session_pages_send_people_home(os.environ['TEST_OLD_SESSION_PAGE'])
+
+
+@pytest.mark.parametrize("path", ["/sessions", "/sessions/abc", "/sessions/abc/view", "/sessions/abc/needs", "/sessions/abc/interview"])
+def test_the_old_session_pages_send_people_home(path,monkeypatch,pg_local_compat_process):
+    monkeypatch.setenv('TEST_OLD_SESSION_PAGE',path)
+    pg_local_compat_process(_check_the_old_session_pages_send_people_home)
