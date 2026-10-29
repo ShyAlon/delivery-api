@@ -420,7 +420,9 @@ def test_startup_marks_unbound_pre_http_checkpoint_incompatible(monkeypatch,tmp_
     assert store.engine_session(tid) is None
 
 
-def test_shutdown_interruption_preserves_running_state_for_resume(tmp_path,pg_scoped_workspace):
+def test_shutdown_interruption_preserves_running_state_for_resume(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;tid=store.create_task('Restart me')['task_id'];runner=ProcessRunner(store)
@@ -523,7 +525,9 @@ def test_protocol_envelope_never_reappears_in_following_you_question(tmp_path,pg
     # Subprocess output is diagnostics only: protocol bytes can never become a question.
     assert not any(e['kind'] in ('founder_decision','waiting_input') for e in store.events(tid))
 
-def test_runner_can_close_engine_approved_phases(tmp_path,pg_scoped_workspace):
+def test_runner_can_close_engine_approved_phases(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;tid=store.create_task('Complete start')['task_id']
@@ -576,7 +580,9 @@ def test_orchestrator_architecture_is_greenfield_without_decision(monkeypatch,tm
     assert runner.calls[0][1]['phase']=='architecture'
 
 
-def test_runner_releases_process_before_completion_callback(tmp_path,pg_scoped_workspace):
+def test_runner_releases_process_before_completion_callback(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;tid=store.create_task('Handoff')['task_id'];runner=ProcessRunner(store);observed=[]
@@ -586,7 +592,9 @@ def test_runner_releases_process_before_completion_callback(tmp_path,pg_scoped_w
     assert observed==[(True,'conops')]
 
 
-def test_open_gate_uses_same_automatic_continuation_path(tmp_path,pg_scoped_workspace):
+def test_open_gate_uses_same_automatic_continuation_path(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;tid=store.create_task('Open gate')['task_id'];store.set_gate_open(tid,'gate-needs',True)
@@ -662,7 +670,9 @@ def test_startup_recovers_approved_interview_handoff_to_needs(monkeypatch,tmp_pa
     assert calls==[(tid,'conops')]
 
 
-def test_next_phase_launch_failure_is_visible_and_preserves_completed_boundary(tmp_path,pg_scoped_workspace):
+def test_next_phase_launch_failure_is_visible_and_preserves_completed_boundary(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;tid=store.create_task('Visible handoff failure')['task_id'];runner=ProcessRunner(store)
@@ -1297,7 +1307,9 @@ def test_task_classifications_join_shadow_to_answers(tmp_path,pg_scoped_workspac
         no_session = client.post("/api/tasks", json={"title": "No session"}).json()["task_id"]
         assert client.get(f"/api/tasks/{no_session}/classifications").json()["answers"] == {}
 
-def test_silent_engine_run_is_stopped_and_marked_failed(tmp_path,pg_scoped_workspace):
+def test_silent_engine_run_is_stopped_and_marked_failed(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio, sys
     from delivery_api.runner import ProcessRunner
     store = pg_scoped_workspace.store; tid = store.create_task('Silent engine')['task_id']
@@ -1313,7 +1325,9 @@ def test_silent_engine_run_is_stopped_and_marked_failed(tmp_path,pg_scoped_works
     assert errors and 'no output' in errors[-1]['message'] and 'stopped' in errors[-1]['message']
 
 
-def test_engine_heartbeats_reset_the_stall_window(tmp_path,pg_scoped_workspace):
+def test_engine_heartbeats_reset_the_stall_window(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio, sys
     from delivery_api.runner import ProcessRunner
     store = pg_scoped_workspace.store; tid = store.create_task('Chatty engine')['task_id']
