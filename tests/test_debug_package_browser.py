@@ -1,12 +1,26 @@
-from test_ui_playwright import ui,page
+from test_ui_playwright import pg_ui,pg_page,pg_ids
 from playwright.sync_api import expect
 
 
-def test_operator_everything_zip_has_manifest_and_unavailable_sections(page,ui):
- page.route('**/api/debug/evidence*',lambda r:r.fulfill(json={'available':True,'text':'ERROR task=live synthetic diagnostic','count':1,'task_id':'live','truncated':False}))
+def _operator_cookie(page,ui,workspace):
+ from delivery_api import config
+ from pg_workspace import KEY
+ import jwt
+ # Preserve real signature/session validation;change only the test actor email.
+ claims=jwt.decode(workspace.token,options={'verify_signature':False})
+ claims['email']=config.OPERATOR_EMAIL
+ page.context.add_cookies([dict(name='requi_access',value=jwt.encode(claims,KEY,algorithm='ES256'),url=ui)])
+ return config.OPERATOR_EMAIL
+
+
+def test_operator_everything_zip_has_manifest_and_unavailable_sections(pg_page,pg_ui,pg_ids,pg_browser):
+ page,ui=pg_page,pg_ui
+ tid=pg_ids["live"]
+ actor=_operator_cookie(page,ui,pg_browser[2])
+ page.route('**/api/debug/evidence*',lambda r:r.fulfill(json={'available':True,'text':'ERROR task=live synthetic diagnostic','count':1,'task_id':tid,'truncated':False}))
  page.route('**/api/debug/log-durability',lambda r:r.fulfill(json={'degraded':False,'sources':[]}))
- page.goto(ui+'/tasks/live/view')
- page.get_by_role('button',name='Account menu for local user').click()
+ page.goto(ui+'/tasks/'+tid+'/view')
+ page.get_by_role('button',name='Account menu for '+actor).click()
  page.get_by_role('menuitem',name='Debug',exact=True).click()
  expect(page.locator('.debug-dialog')).to_be_visible()
  with page.expect_download() as download:
@@ -23,10 +37,13 @@ def test_operator_everything_zip_has_manifest_and_unavailable_sections(page,ui):
   assert 'docker logs' not in content
 
 
-def test_operator_can_read_durable_evidence_in_dialog_without_script(page,ui):
- page.route('**/api/debug/evidence*',lambda r:r.fulfill(json={'available':True,'availability':'available','text':'WARNING synthetic restart-readable evidence','count':1,'task_id':'live','truncated':True,'unreadable':[],'storage':'bounded files'}))
- page.goto(ui+'/tasks/live/view')
- page.get_by_role('button',name='Account menu for local user').click()
+def test_operator_can_read_durable_evidence_in_dialog_without_script(pg_page,pg_ui,pg_ids,pg_browser):
+ page,ui=pg_page,pg_ui
+ tid=pg_ids["live"]
+ actor=_operator_cookie(page,ui,pg_browser[2])
+ page.route('**/api/debug/evidence*',lambda r:r.fulfill(json={'available':True,'availability':'available','text':'WARNING synthetic restart-readable evidence','count':1,'task_id':tid,'truncated':True,'unreadable':[],'storage':'bounded files'}))
+ page.goto(ui+'/tasks/'+tid+'/view')
+ page.get_by_role('button',name='Account menu for '+actor).click()
  page.get_by_role('menuitem',name='Debug',exact=True).click()
  page.get_by_text('Durable warnings and errors (operator only)',exact=True).click()
  expect(page.locator('#durableevidencehost')).to_contain_text('synthetic restart-readable evidence')
