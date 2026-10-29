@@ -1,6 +1,6 @@
 [
   {
-    "contract_version": "0.27.0",
+    "contract_version": "0.28.0",
     "test_id": "T-1",
     "level": "acceptance",
     "criterion_id": "AC-1",
@@ -8,7 +8,7 @@
     "description": "criterion holds",
     "runner": "http",
     "definition": {
-      "contract_version": "0.27.0",
+      "contract_version": "0.28.0",
       "preconditions": [],
       "steps": [
         "GET /"
@@ -19,7 +19,7 @@
       "cleanup": [],
       "cases": [],
       "execution": {
-        "contract_version": "0.27.0",
+        "contract_version": "0.28.0",
         "url": null,
         "method": null,
         "body_json": null,
@@ -34,7 +34,7 @@
     ]
   },
   {
-    "contract_version": "0.27.0",
+    "contract_version": "0.28.0",
     "test_id": "T-2",
     "level": "unit",
     "criterion_id": null,
@@ -42,7 +42,7 @@
     "description": "spec renders",
     "runner": "pytest",
     "definition": {
-      "contract_version": "0.27.0",
+      "contract_version": "0.28.0",
       "preconditions": [],
       "steps": [
         "Run x"
@@ -53,7 +53,7 @@
       "cleanup": [],
       "cases": [],
       "execution": {
-        "contract_version": "0.27.0",
+        "contract_version": "0.28.0",
         "url": null,
         "method": null,
         "body_json": null,

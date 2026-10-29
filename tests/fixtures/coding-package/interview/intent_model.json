@@ -1,5 +1,5 @@
 {
-  "contract_version": "0.27.0",
+  "contract_version": "0.28.0",
   "session_id": "s",
   "problem_statement": "p",
   "target_users": [
@@ -8,7 +8,7 @@
   "core_value_proposition": "v",
   "stakeholder_needs": [
     {
-      "contract_version": "0.27.0",
+      "contract_version": "0.28.0",
       "need_id": "SN-1",
       "statement": "founders need specs",
       "kind": "functional",

@@ -1,9 +1,9 @@
 {
-  "contract_version": "0.27.0",
+  "contract_version": "0.28.0",
   "session_id": "s",
   "stakeholder_context": [
     {
-      "contract_version": "0.27.0",
+      "contract_version": "0.28.0",
       "stakeholder": "Founder",
       "role": "Owner",
       "goals": [
@@ -17,7 +17,7 @@
   ],
   "operational_scenarios": [
     {
-      "contract_version": "0.27.0",
+      "contract_version": "0.28.0",
       "scenario_id": "OS-1",
       "name": "Generate",
       "trigger": "Idea",
@@ -40,7 +40,7 @@
   ],
   "concept_options": [
     {
-      "contract_version": "0.27.0",
+      "contract_version": "0.28.0",
       "concept_id": "concept:pwa",
       "name": "PWA",
       "summary": "Browser",
@@ -52,7 +52,7 @@
       ]
     },
     {
-      "contract_version": "0.27.0",
+      "contract_version": "0.28.0",
       "concept_id": "concept:native",
       "name": "Native",
       "summary": "Installed",
@@ -65,7 +65,7 @@
     }
   ],
   "decision": {
-    "contract_version": "0.27.0",
+    "contract_version": "0.28.0",
     "selected_concept_id": "concept:pwa",
     "selected_concept": "PWA",
     "rationale": "One deployment",
