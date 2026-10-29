@@ -932,12 +932,13 @@ def _case_interrupted_start_recovers_exact_session_without_second_start(tmp_path
 
 
 @pytest.mark.engine_integration
-def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  from concurrent.futures import ThreadPoolExecutor
  from threading import Event
  from interview_engine.http_service import SessionRegistry
- from interview_engine.progress_journal import ProgressJournal
+ from interview_engine.pg_journal import ObservationalJournal
+ from interview_engine.pg_session_store import PgSessionStore
  entered=Event();release=Event()
  class Program:
   def __init__(self):
@@ -947,7 +948,11 @@ def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tm
    entered.set()
    if not release.wait(5):raise RuntimeError('blocked test model timed out')
    self.finished=True;return None
- registry=SessionRegistry(lambda sid,request:Program(),state_dir=tmp_path)
+ store=pg_scoped_workspace.store
+ from delivery_api.db_pool import pool_for
+ engine_store=PgSessionStore(pool_for(store._postgres.dsn),claims=(str(pg_scoped_workspace.scope.owner_id),str(pg_scoped_workspace.scope.session_id)))
+ registry=SessionRegistry(lambda sid,request:Program(),session_store=engine_store,
+     owner_id=str(pg_scoped_workspace.scope.owner_id),progress_mode='observational')
  # Bridge the real engine registry into delivery for an in-process concurrency test.
  class Bridge:
   def snapshot(self,sid):return registry.snapshot(sid)
@@ -974,10 +979,11 @@ def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tm
    assert reply.json()['control_snapshot']['prompt'] is None
    current=pool.submit(registry.snapshot,sid).result(timeout=.75)
    assert current.process_status==ProcessStatus.RUNNING and current.open_input is None
-   ProgressJournal(tmp_path,sid,task['task_id']).append(phase_key='intent',stage='conops',label='Still building',status='heartbeat')
+   ObservationalJournal(engine_store,session.pg_claim,sid,task['task_id']).append(phase_key='intent',stage='conops',label='Still building',status='heartbeat')
    assert pool.submit(registry.progress,sid,0).result(timeout=.75).events
   finally:release.set()
   assert work.result(timeout=2)[1].process_status==ProcessStatus.COMPLETED
+ registry.close()
 
 
 def _case_generator_default_api_follows_exact_sticky_selection(tmp_path,monkeypatch,pg_scoped_workspace):
@@ -1279,3 +1285,16 @@ def _check_generator_default_api_follows_exact_sticky_selection(monkeypatch,tmp_
 
 def test_generator_default_api_follows_exact_sticky_selection(pg_local_compat_process):
  pg_local_compat_process(_check_generator_default_api_follows_exact_sticky_selection)
+
+
+def _check_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(monkeypatch,tmp_path,workspace):
+ import os,sys
+ source=os.environ.get('DELIVERY_TEST_ENGINE_SOURCE')
+ if source:sys.path.insert(0,source)
+ from tests.test_http_cutover import _case_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive
+ _case_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tmp_path,monkeypatch,workspace)
+
+
+@pytest.mark.engine_integration
+def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(pg_local_compat_process):
+ pg_local_compat_process(_check_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive)
