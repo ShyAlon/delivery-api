@@ -142,7 +142,7 @@ def test_start_task_requires_typed_http_engine_not_subprocess(monkeypatch,tmp_pa
     assert store.task(tid)['state']=='not_started'
 
 
-def test_start_task_unreachable_http_engine_is_human_readable(monkeypatch,tmp_path,pg_scoped_workspace):
+def _check_start_task_unreachable_http_engine_is_human_readable(monkeypatch,tmp_path,pg_scoped_workspace):
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import app
     store=pg_scoped_workspace.store
@@ -274,3 +274,7 @@ def test_sessions_spec_completion_and_http_error(tmp_path):
  assert row['phase_status']['interview']=='error'
  assert row['phase_status']['oracle']=='done'
  assert row['oracle_passed'] and row['files_checked']==14
+
+
+def test_start_task_unreachable_http_engine_is_human_readable(pg_local_compat_process,pg_scoped_workspace):
+    pg_local_compat_process(_check_start_task_unreachable_http_engine_is_human_readable)
