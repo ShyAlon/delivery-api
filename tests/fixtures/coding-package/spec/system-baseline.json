@@ -1,12 +1,12 @@
 {
-  "contract_version": "0.27.0",
+  "contract_version": "0.28.0",
   "baseline_version": "1.0",
   "baseline_id": "test-baseline",
   "system_name": "Test system",
   "mode": "existing",
   "repositories": [
     {
-      "contract_version": "0.27.0",
+      "contract_version": "0.28.0",
       "name": "spec-generator",
       "languages": [
         "Python",
