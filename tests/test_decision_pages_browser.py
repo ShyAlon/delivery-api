@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path as _ScreenshotPath
 SCREENSHOTS = _ScreenshotPath(tempfile.mkdtemp(prefix='delivery-browser-evidence-'))
 import json
+import time
 from pathlib import Path
 import pytest
 from playwright.sync_api import expect
