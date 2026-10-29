@@ -807,7 +807,7 @@ def add_usage(run_id: str, rec: UsageRecord, request: Request):
     run = store.run(run_id)
     if not run: raise HTTPException(404)
     a=auth.actor(request, required=auth.enabled())
-    owner=run.get("owner_id") or a.id
+    owner=str(run.get("owner_id") or a.id)
     input_tokens,output_tokens=rec.input_tokens,rec.output_tokens
     if not input_tokens and not output_tokens:
         try:
