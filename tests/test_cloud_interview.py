@@ -10,7 +10,7 @@ def _pending():
 
 
 def _store(added):
-    return NS(events=lambda task_id:[],add_event=lambda *a,**k:added.append((a,k)),task=lambda task_id:{"active_phase":"intent"})
+    return NS(events=lambda task_id:[],add_event=lambda *a,**k:added.append((a,k)),ensure_waiting_input_event=lambda *a,**k:added.append((a,k)),task=lambda task_id:{"active_phase":"intent"})
 
 
 def test_cloud_read_surfaces_the_open_question_from_the_owner_session(monkeypatch):
@@ -20,6 +20,9 @@ def test_cloud_read_surfaces_the_open_question_from_the_owner_session(monkeypatc
     snapshot,state=module._cloud_engine_read("t1",{"active_phase":"intent"},"s1")
     assert state["waiting"] is True and state["question"]=="Who is this really for?" and state["input_id"]=="in-1"
     assert state["process_live"] is True and snapshot is not None
+    assert len(added)==1 and added[0][0]==("t1","Who is this really for?")
+    assert added[0][1]["phase_key"]=="intent"
+    assert added[0][1]["payload"]["input_id"]=="in-1"
 
 
 def test_cloud_read_outside_the_interview_never_touches_the_shared_runner(monkeypatch):
