@@ -33,10 +33,10 @@ def _case_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch,pg_sc
  assert engine.submitted[0].input_id==engine.pending.input_id
  assert engine.submitted[0].value==1
 
-def test_task_snapshot_projects_http_open_input(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_task_snapshot_projects_http_open_input(tmp_path,monkeypatch,pg_scoped_workspace):
  session=str(uuid4())
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
- store=pg_scoped_workspace.store;task=store.create_task('Dungeon master','brief');engine=FakeEngine()
+ store=pg_scoped_workspace.store;task=store.create_task('Dungeon master '+session,'brief');engine=FakeEngine()
  from delivery_api.postgres_store import PostgresStore
  assert isinstance(store,PostgresStore)
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine);engine.started_sid=session;store.set_engine_session(task['task_id'],session)
@@ -68,7 +68,7 @@ class FailingEngine(FakeEngine):
   from delivery_api.engine_client import EngineClientError
   raise EngineClientError(503,ProtocolError(code=ProtocolErrorCode.INTERNAL_ERROR,detail='model failed',retryable=True))
 
-def test_engine_failure_is_not_misreported_as_dead_subprocess(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_engine_failure_is_not_misreported_as_dead_subprocess(tmp_path,monkeypatch,pg_scoped_workspace):
  session=str(uuid4())
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store;task=store.create_task('Failure truth','brief');engine=FailingEngine();engine.started_sid=session;store.set_engine_session(task['task_id'],session);store.update_phase(task['task_id'],'intent','running')
@@ -94,7 +94,7 @@ def test_smoke_answers_key_off_numeric_input_kind():
  assert typed_smoke_answer({'kind':1,'options':[]}).startswith('Two adults')
 
 
-def test_rationale_is_preserved_as_typed_field(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_rationale_is_preserved_as_typed_field(tmp_path,monkeypatch,pg_scoped_workspace):
  session=str(uuid4())
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store;task=store.create_task('Rationale typed','brief');engine=FakeEngine()
@@ -105,7 +105,7 @@ def test_rationale_is_preserved_as_typed_field(tmp_path,monkeypatch,pg_scoped_wo
  assert response.status_code==200
  assert engine.submitted[-1].value=='1' and engine.submitted[-1].rationale=='because it fits'
 
-def test_required_rationale_cannot_be_dropped(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_required_rationale_cannot_be_dropped(tmp_path,monkeypatch,pg_scoped_workspace):
  session=str(uuid4())
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store;task=store.create_task('Rationale required','brief');engine=FakeEngine()
@@ -130,7 +130,7 @@ class TextEngine(FakeEngine):
   super().__init__()
   self.pending=InputRequest(input_id=uuid4(),kind=InputKind.TEXT,prompt=prompt)
 
-def test_text_question_yields_answer_composer_mode_not_an_empty_decision(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_text_question_yields_answer_composer_mode_not_an_empty_decision(tmp_path,monkeypatch,pg_scoped_workspace):
  session=str(uuid4())
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store;task=store.create_task('Text question','brief');engine=TextEngine()
@@ -142,7 +142,7 @@ def test_text_question_yields_answer_composer_mode_not_an_empty_decision(tmp_pat
  assert body['control_snapshot']['prompt']=='What is the goal and core value?'
  assert body['control_snapshot']['input_id']==str(engine.pending.input_id)
 
-def test_choice_input_still_projects_a_structured_decision(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_choice_input_still_projects_a_structured_decision(tmp_path,monkeypatch,pg_scoped_workspace):
  session=str(uuid4())
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store;task=store.create_task('Choice question','brief');engine=FakeEngine()
@@ -154,7 +154,7 @@ def test_choice_input_still_projects_a_structured_decision(tmp_path,monkeypatch,
  assert body['control_snapshot']['decision']['input_id']==str(engine.pending.input_id)
  assert len(body['control_snapshot']['decision']['options'])==2
 
-def test_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch,pg_scoped_workspace):
  session=str(uuid4())
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store;task=store.create_task('Sync','brief');engine=TextEngine()
@@ -174,7 +174,7 @@ def test_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch,p
  assert third['control_snapshot']['prompt']=='Second question'
  assert third['control_snapshot']['input_id']!=first['control_snapshot']['input_id']
 
-def test_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch,pg_scoped_workspace):
  session=str(uuid4())
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store;task=store.create_task('No input','brief');engine=TextEngine()
@@ -301,7 +301,7 @@ def test_route_preview_shows_conflict_without_switching(monkeypatch):
  assert 'INTERVIEW_ENGINE_MODEL_PROBING' in routes[1]['error']
 
 
-def test_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path,monkeypatch,pg_scoped_workspace):
+def _case_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  from delivery_api.engine_client import EngineClientError,EngineUnreachableError
  from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
@@ -1166,3 +1166,82 @@ def _check_task_read_recovers_completed_interview_and_returns_new_phase(monkeypa
 
 def test_task_read_recovers_completed_interview_and_returns_new_phase(pg_local_compat_process):
  pg_local_compat_process(_check_task_read_recovers_completed_interview_and_returns_new_phase)
+def _check_task_snapshot_projects_http_open_input(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_task_snapshot_projects_http_open_input
+ _case_task_snapshot_projects_http_open_input(tmp_path,monkeypatch,workspace)
+
+
+def test_task_snapshot_projects_http_open_input(pg_local_compat_process):
+ pg_local_compat_process(_check_task_snapshot_projects_http_open_input)
+
+
+def _check_engine_failure_is_not_misreported_as_dead_subprocess(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_engine_failure_is_not_misreported_as_dead_subprocess
+ _case_engine_failure_is_not_misreported_as_dead_subprocess(tmp_path,monkeypatch,workspace)
+
+
+def test_engine_failure_is_not_misreported_as_dead_subprocess(pg_local_compat_process):
+ pg_local_compat_process(_check_engine_failure_is_not_misreported_as_dead_subprocess)
+
+
+def _check_rationale_is_preserved_as_typed_field(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_rationale_is_preserved_as_typed_field
+ _case_rationale_is_preserved_as_typed_field(tmp_path,monkeypatch,workspace)
+
+
+def test_rationale_is_preserved_as_typed_field(pg_local_compat_process):
+ pg_local_compat_process(_check_rationale_is_preserved_as_typed_field)
+
+
+def _check_required_rationale_cannot_be_dropped(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_required_rationale_cannot_be_dropped
+ _case_required_rationale_cannot_be_dropped(tmp_path,monkeypatch,workspace)
+
+
+def test_required_rationale_cannot_be_dropped(pg_local_compat_process):
+ pg_local_compat_process(_check_required_rationale_cannot_be_dropped)
+
+
+def _check_text_question_yields_answer_composer_mode_not_an_empty_decision(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_text_question_yields_answer_composer_mode_not_an_empty_decision
+ _case_text_question_yields_answer_composer_mode_not_an_empty_decision(tmp_path,monkeypatch,workspace)
+
+
+def test_text_question_yields_answer_composer_mode_not_an_empty_decision(pg_local_compat_process):
+ pg_local_compat_process(_check_text_question_yields_answer_composer_mode_not_an_empty_decision)
+
+
+def _check_choice_input_still_projects_a_structured_decision(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_choice_input_still_projects_a_structured_decision
+ _case_choice_input_still_projects_a_structured_decision(tmp_path,monkeypatch,workspace)
+
+
+def test_choice_input_still_projects_a_structured_decision(pg_local_compat_process):
+ pg_local_compat_process(_check_choice_input_still_projects_a_structured_decision)
+
+
+def _check_waiting_input_event_synced_once_per_engine_input(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_waiting_input_event_synced_once_per_engine_input
+ _case_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch,workspace)
+
+
+def test_waiting_input_event_synced_once_per_engine_input(pg_local_compat_process):
+ pg_local_compat_process(_check_waiting_input_event_synced_once_per_engine_input)
+
+
+def _check_engine_waiting_without_open_input_stays_executing(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_engine_waiting_without_open_input_stays_executing
+ _case_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch,workspace)
+
+
+def test_engine_waiting_without_open_input_stays_executing(pg_local_compat_process):
+ pg_local_compat_process(_check_engine_waiting_without_open_input_stays_executing)
+
+
+def _check_task_snapshot_distinguishes_engine_protocol_422_from_transport(monkeypatch,tmp_path,workspace):
+ from tests.test_http_cutover import _case_task_snapshot_distinguishes_engine_protocol_422_from_transport
+ _case_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path,monkeypatch,workspace)
+
+
+def test_task_snapshot_distinguishes_engine_protocol_422_from_transport(pg_local_compat_process):
+ pg_local_compat_process(_check_task_snapshot_distinguishes_engine_protocol_422_from_transport)
