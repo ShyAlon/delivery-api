@@ -466,7 +466,9 @@ def test_runner_preserves_structured_founder_decision_options(tmp_path,pg_scoped
     event=next(e for e in store.events(tid) if e['kind']=='founder_decision')
     assert event['payload']['decision']['options'][1]['label']=='PWA'
 
-def test_fragmented_envelope_bytes_never_become_a_decision(tmp_path,pg_scoped_workspace):
+def test_fragmented_envelope_bytes_never_become_a_decision(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,json,sys
     from delivery_api.runner import ProcessRunner
     options=[{"value":str(i),"label":f"Option {i}","summary":"Long description "*20,"advantages":["A"*90],"disadvantages":["D"*90]} for i in range(1,5)]
@@ -495,7 +497,9 @@ def test_every_phase_has_a_stable_data_log_path():
     assert list(STAGE_LOG_PATHS)==[key for key,_ in PHASES]
     assert all(str(path).endswith(f'/logs/stages/{phase}.log') for phase,path in STAGE_LOG_PATHS.items())
 
-def test_only_active_phase_pulses_blue(tmp_path,pg_scoped_workspace):
+def test_only_active_phase_pulses_blue(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;tid=store.create_task('Truthful states')['task_id']
@@ -515,7 +519,9 @@ def test_active_upstream_phase_resets_false_downstream_waiting_state(tmp_path,pg
     task=store.task(tid);specs=next(p for p in task['phases'] if p['phase_key']=='specs')
     assert specs['state']=='pending' and specs['detail']=='Blocked on upstream approval'
 
-def test_protocol_envelope_never_reappears_in_following_you_question(tmp_path,pg_scoped_workspace):
+def test_protocol_envelope_never_reappears_in_following_you_question(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,json,sys
     from delivery_api.runner import ProcessRunner
     payload={"type":"founder_decision","decision_id":"safe","title":"Safe","prompt":"Approve the clean intent?","options":[{"value":"y","label":"Yes"},{"value":"n","label":"No"}]}
@@ -744,7 +750,9 @@ def test_ui_state_doctrine_only_live_input_can_show_engine_decision():
     assert live.mode=='waiting_input' and live.decision==decision
     assert stale.mode=='failed' and stale.decision is None and stale.gate is None
 
-def test_untyped_blocking_console_prompt_fails_visibly(tmp_path,pg_scoped_workspace):
+def test_untyped_blocking_console_prompt_fails_visibly(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;tid=store.create_task('Untyped prompt')['task_id'];runner=ProcessRunner(store)
@@ -756,7 +764,9 @@ def test_untyped_blocking_console_prompt_fails_visibly(tmp_path,pg_scoped_worksp
     assert phase['state']=='failed'
     assert any(e['kind']=='error' and 'no output' in e['message'] for e in store.events(tid))
 
-def test_split_envelope_chunks_stay_diagnostics(tmp_path,pg_scoped_workspace):
+def test_split_envelope_chunks_stay_diagnostics(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,json,sys
     from delivery_api.runner import ProcessRunner
     decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve this intent model?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
@@ -768,6 +778,8 @@ def test_split_envelope_chunks_stay_diagnostics(tmp_path,pg_scoped_workspace):
     assert not any(e['kind'] in ('founder_decision','waiting_input','error') for e in events)
 
 def test_untyped_console_prompt_cannot_create_control_wait(monkeypatch,tmp_path,pg_scoped_workspace):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;tid=store.create_task('Parser fail')['task_id'];runner=ProcessRunner(store)
@@ -831,7 +843,9 @@ def test_phase_configuration_is_canonical_and_complete():
     assert PHASE_BY_KEY['architecture'].prerequisite=='system-baseline'
     assert [successor(p.key).key if successor(p.key) else None for p in PHASE_DEFINITIONS]==['conops','needs','srs','architecture','specs','tests','validation',None]
 
-def test_active_work_is_one_standard_projection_for_subprocess_and_decision(tmp_path,pg_scoped_workspace):
+def test_active_work_is_one_standard_projection_for_subprocess_and_decision(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;tid=store.create_task('Work')['task_id'];runner=ProcessRunner(store)
@@ -1158,6 +1172,8 @@ def test_default_rates_put_a_full_run_near_five_credits(monkeypatch,tmp_path):
     assert row['token_price']==5.0 and row['price']==5.0 and row['price_usd']==5.0
 
 def test_runner_emits_durable_phase_price(monkeypatch,tmp_path,pg_scoped_workspace):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,json,sys
     from delivery_api.runner import ProcessRunner
     monkeypatch.setenv('PRICE_PER_TOKEN','2');monkeypatch.setenv('PRICE_PER_10MS','0')
@@ -1198,6 +1214,8 @@ def test_artifact_snapshot_exposes_content_owned_titles(monkeypatch,tmp_path,pg_
     assert rows=={'intent_model.json':'Needs and Scope','conops.json':'Concept of Operations'}
 
 def test_runner_emits_incremental_interview_price_before_process_exit(monkeypatch,tmp_path,pg_scoped_workspace):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,json,sys,time
     from delivery_api.runner import ProcessRunner
     from delivery_api import pricing
@@ -1216,7 +1234,9 @@ def test_runner_emits_incremental_interview_price_before_process_exit(monkeypatc
         return await work
     assert asyncio.run(scenario())==0
 
-def test_interviewer_prefix_lines_are_diagnostics_not_questions(tmp_path,pg_scoped_workspace):
+def test_interviewer_prefix_lines_are_diagnostics_not_questions(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;tid=store.create_task('Prefix')['task_id']
