@@ -6,7 +6,7 @@ from vmodel_contracts.interactive import *
 from delivery_api.store import SQLiteStore
 import delivery_api.app as module
 
-def setup(tmp_path,monkeypatch,workspace):
+def setup(tmp_path,monkeypatch,workspace,*,signed_app=None):
  store=workspace.store
  sid='review-'+workspace.scope.owner_id
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
@@ -19,10 +19,10 @@ def setup(tmp_path,monkeypatch,workspace):
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=self.sequence,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending)
  engine=Engine();engine.pending=pending;engine.sequence=3;engine.session_id=sid
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
- return store,tid,engine,TestClient(module.app)
+ return store,tid,engine,TestClient(signed_app or module.app,headers=workspace.headers if signed_app is not None else {})
 
-def test_matching_shell_route_and_retained_old_review(tmp_path,monkeypatch,pg_scoped_workspace):
- store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace);wait=str(engine.pending.input_id)
+def test_matching_shell_route_and_retained_old_review(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace,signed_app=pg_task_app(pg_scoped_workspace));wait=str(engine.pending.input_id)
  assert c.get(f'/tasks/{tid}/decisions/{wait}?step=concept').status_code==200
  data=c.get(f'/api/tasks/{tid}/decisions/{wait}').json();assert data['actionable'];revision=data['review']['revision']
  for i in range(510):store.add_event(tid,'progress','another event')
@@ -32,8 +32,8 @@ def test_matching_shell_route_and_retained_old_review(tmp_path,monkeypatch,pg_sc
  assert body['review']['decision']['context']['evidence']==data['review']['decision']['context']['evidence']
  assert c.get(f'/api/tasks/{tid}/decisions/{wait}?revision=missing').status_code==404
 
-def test_draft_identity_and_comment_are_not_answers(tmp_path,monkeypatch,pg_scoped_workspace):
- store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace);wait=str(engine.pending.input_id)
+def test_draft_identity_and_comment_are_not_answers(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace,signed_app=pg_task_app(pg_scoped_workspace));wait=str(engine.pending.input_id)
  revision=c.get(f'/api/tasks/{tid}/decisions/{wait}').json()['review']['revision']
  draft=c.post(f'/api/tasks/{tid}/decisions/{wait}/drafts',json={'revision':revision,'choice':'2','rationale':'native hardware needed','comment':'verify offline'}).json()['draft_id']
  read=c.get(f'/api/tasks/{tid}/decisions/{wait}',params={'revision':revision,'draft':draft}).json()
@@ -45,8 +45,8 @@ def test_draft_identity_and_comment_are_not_answers(tmp_path,monkeypatch,pg_scop
  assert c.get(f'/api/tasks/{tid}/decisions/{wait}').json()['comments'][0]['comment']=='Annotation only'
  assert not any(e['kind']=='answer' for e in store.events(tid));assert any(e['kind']=='artifact_comment' for e in store.events(tid))
 
-def test_purpose_and_evidence_must_be_explicit_and_bound(tmp_path,monkeypatch,pg_scoped_workspace):
- store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace);wait=str(engine.pending.input_id)
+def test_purpose_and_evidence_must_be_explicit_and_bound(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace,signed_app=pg_task_app(pg_scoped_workspace));wait=str(engine.pending.input_id)
  engine.pending=engine.pending.model_copy(update={'context':{}})
  assert c.get(f'/api/tasks/{tid}/decisions/{wait}').status_code==404
  engine.pending=engine.pending.model_copy(update={'context':{'decision_purpose':'conops_concept','evidence_version':1,'session_id':'wrong','evidence_revision':'bad','evidence':{'draft':1}}})
@@ -59,9 +59,9 @@ def test_stale_review_cannot_submit(tmp_path,monkeypatch,pg_scoped_workspace):
  assert reply.status_code==409
  assert not any(e['kind']=='answer' for e in store.events(tid))
 
-def test_semantic_findings_use_structured_page_not_free_text(tmp_path,monkeypatch,pg_scoped_workspace):
+def test_semantic_findings_use_structured_page_not_free_text(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
  from vmodel_contracts.semantic_review import make_review
- store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace)
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace,signed_app=pg_task_app(pg_scoped_workspace))
  candidate={'items':['original']}
  review=make_review(engine.session_id,'intent',candidate,[{'finding_id':'f1','item_id':'i1','path':['items',0],'rule':'meaning','reason':'Not grounded','original':'original'}]).model_dump(mode='json')
  evidence={'semantic_review':review};digest=hashlib.sha256(json.dumps(evidence,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
@@ -70,9 +70,9 @@ def test_semantic_findings_use_structured_page_not_free_text(tmp_path,monkeypatc
  assert result['actionable'];assert result['review']['kind']=='semantic_review';assert result['review']['decision']['context']['evidence']==evidence
 
 
-def test_engine_same_sequence_conflicting_evidence_returns_409_retains_original(tmp_path,monkeypatch,pg_scoped_workspace):
+def test_engine_same_sequence_conflicting_evidence_returns_409_retains_original(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
  import copy
- store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace);wait=str(engine.pending.input_id)
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace,signed_app=pg_task_app(pg_scoped_workspace));wait=str(engine.pending.input_id)
  first=c.get(f'/api/tasks/{tid}/decisions/{wait}').json()['review']
  context=copy.deepcopy(engine.pending.context)
  context['evidence']['conops_draft']['operational_scenarios'][0]['success_outcome']='Changed outcome'
@@ -89,9 +89,9 @@ def test_engine_same_sequence_conflicting_evidence_returns_409_retains_original(
  assert store.decision_review(tid,wait,first['revision'])==first
 
 
-def test_review_api_fixture_uses_restricted_pg(tmp_path,monkeypatch,pg_scoped_workspace):
+def test_review_api_fixture_uses_restricted_pg(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
  from delivery_api.postgres_store import PostgresStore
- store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace)
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace,signed_app=pg_task_app(pg_scoped_workspace))
  assert isinstance(store,PostgresStore)
  with pytest.raises(AssertionError,match='SQLite forbidden'):
   SQLiteStore(':memory:')
