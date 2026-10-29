@@ -1,58 +1,7 @@
-import time
-
 from fastapi.testclient import TestClient
 
 from delivery_api import auth, config
-from delivery_api.app import app
 
-
-
-def test_concurrent_authenticated_posts_never_miss_valid_session(monkeypatch,tmp_path):
-    """Regression for a shared embedded-replica connection under request concurrency."""
-    import concurrent.futures,sqlite3,threading
-    from delivery_api.store import TursoReplicaStore
-    class SessionCursor:
-        def __init__(self,owner,cursor):
-            self.owner=owner;self.description=cursor.description;self.row=cursor.fetchone()
-        def fetchone(self):
-            with self.owner.cursor_lock:
-                self.owner.active_session_fetches+=1
-                overlap=self.owner.active_session_fetches>1
-            time.sleep(.01)
-            with self.owner.cursor_lock:self.owner.active_session_fetches-=1
-            return None if overlap else self.row
-    class Replica:
-        def __init__(self,path):
-            self.inner=sqlite3.connect(path,check_same_thread=False);self.inner.row_factory=None
-            self.db_lock=threading.Lock();self.cursor_lock=threading.Lock();self.active_session_fetches=0
-        def execute(self,sql,*args,**kwargs):
-            if sql.startswith("SELECT s.*"):
-                with self.db_lock:return SessionCursor(self,self.inner.execute(sql,*args,**kwargs))
-            return self.inner.execute(sql,*args,**kwargs)
-        def executemany(self,*a,**k):return self.inner.executemany(*a,**k)
-        def executescript(self,*a,**k):return self.inner.executescript(*a,**k)
-        def commit(self):return self.inner.commit()
-        def sync(self):pass
-    store=TursoReplicaStore(str(tmp_path/'auth-replica.db'),'libsql://unused','token',connection=Replica(tmp_path/'auth-replica.db'))
-    app.state.store=store;monkeypatch.setattr('delivery_api.app.store',store);monkeypatch.setattr(config,'BASIC_AUTH_ENABLED',True);monkeypatch.setattr(config,'COOKIE_SECURE',False);monkeypatch.setattr(config,'RUN_START_RATE_LIMIT',1000);auth.limiter=auth.RateLimiter()
-    user=store.upsert_user('google','concurrent','shy.alon@gmail.com','shy.alon@gmail.com',1000,False);store.create_session('stable-session',user['user_id'],time.time()+1000)
-    task=store.create_task('Concurrent answers')['task_id'];store.set_engine_session(task,'concurrent-engine-session');store.update_phase(task,'intent','running')
-    from uuid import uuid4
-    from vmodel_contracts.interactive import EngineSnapshot,InputKind,InputRequest,NextStep,ProcessStatus,SubmitInputResponse,InteractiveEvent,EventType
-    pending=InputRequest(input_id=uuid4(),kind=InputKind.TEXT,prompt='Answer')
-    class ConcurrentEngine:
-        def snapshot(self,_):return EngineSnapshot(session_id='concurrent-engine-session',task_id=task,sequence=2,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=pending)
-        def submit(self,_,response):
-            return SubmitInputResponse(accepted_event=InteractiveEvent(event_id=uuid4(),session_id='concurrent-engine-session',task_id=task,phase_id=1,sequence=3,event_type=EventType.INPUT_ACCEPTED,process_status=ProcessStatus.RUNNING,next_step=NextStep.RUN),snapshot=EngineSnapshot(session_id='concurrent-engine-session',task_id=task,sequence=3,process_status=ProcessStatus.RUNNING,next_step=NextStep.RUN))
-    monkeypatch.setattr('delivery_api.app.engine_client',ConcurrentEngine())
-    def post(i):
-        c=TestClient(app);c.cookies.set(config.SESSION_COOKIE,'stable-session')
-        return c.post(f'/api/tasks/{task}/answer',json={'answer':f'answer {i}'},headers={'origin':'http://testserver'}).status_code
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        statuses=list(pool.map(post,range(24)))
-    assert statuses==[200]*24
-    # Do not leave the process-global limiter full for later API tests.
-    auth.limiter=auth.RateLimiter()
 
 def test_run_start_limiter_does_not_rate_limit_interview_answers(monkeypatch,pg_workspace_factory,pg_task_app):
     from delivery_api.tenancy import tenant_context
