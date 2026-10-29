@@ -3,7 +3,8 @@
 anonymous visitor - and an anonymous boot is NOT error-free by design.
 
 In cloud mode the tenant boundary answers 401 to the page's own pre-sign-in
-probes (its telemetry POST, the balance widget, the workspace list). Chromium
+probes (the balance widget and the workspace list). Anonymous telemetry POST
+must succeed. Chromium
 echoes each 401 to the console as "Failed to load resource: ... 401" and the
 page's own clientLog echoes each failed api() call as a console error. A gate
 that fails on any console error therefore aborts every healthy anonymous
@@ -34,7 +35,6 @@ from urllib.parse import urlsplit
 # real page boot, pinned by tests/test_preview_browser_smoke.py). 401 only:
 # any other status on these paths is a failure like any other.
 EXPECTED_ANONYMOUS_401 = frozenset({
-    ("POST", "/api/client-log"),      # the page's telemetry: dropped before sign-in (reported separately)
     ("GET", "/api/account/credits"),  # the header balance widget
     ("GET", "/api/tasks"),            # the workspace list probe
 })
@@ -45,6 +45,8 @@ _RESOURCE_LOAD = re.compile(r"Failed to load resource: the server responded with
 def classify(events):
     """-> (failures, tolerated): every entry names what it talks about."""
     failures, tolerated = [], []
+    if events.get("telemetry_success") is False:
+        failures.append("no successful anonymous POST /api/client-log captured")
     statuses = {r["status"] for r in events["responses"]}
     for r in events["responses"]:
         path = urlsplit(r["url"]).path
@@ -87,7 +89,7 @@ def collect(base, boot_timeout_ms=20000, settle_ms=2000):
     """Drive the real page in headless Chromium. Returns None when Chromium is
     not installed (caller prints the install hint instead of failing)."""
     from playwright.sync_api import sync_playwright
-    events = {"responses": [], "console": [], "pageerrors": [], "request_failures": [], "boot": "unknown"}
+    events = {"responses": [], "console": [], "pageerrors": [], "request_failures": [], "boot": "unknown", "telemetry_success": False}
 
     def on_console(m):
         if m.type != "error":
@@ -108,8 +110,12 @@ def collect(base, boot_timeout_ms=20000, settle_ms=2000):
                 return None
             raise
         page = browser.new_page()
-        page.on("response", lambda r: events["responses"].append(
-            {"method": r.request.method, "url": r.url, "status": r.status}) if r.status >= 400 else None)
+        def on_response(r):
+            if r.request.method == "POST" and urlsplit(r.url).path == "/api/client-log" and 200 <= r.status < 300:
+                events["telemetry_success"] = True
+            if r.status >= 400:
+                events["responses"].append({"method": r.request.method, "url": r.url, "status": r.status})
+        page.on("response", on_response)
         page.on("requestfailed", lambda r: events["request_failures"].append(
             {"method": r.method, "url": r.url, "failure": str(r.failure)}))
         page.on("console", on_console)
