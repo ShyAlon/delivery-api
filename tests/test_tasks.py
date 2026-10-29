@@ -334,8 +334,11 @@ def test_venv_python_symlink_is_invoked_literally_for_preflight(tmp_path,monkeyp
     assert runtime.python==python.absolute() and runtime.attempts==((python,True),)
     assert runtime.python!=python.resolve()
 
-def test_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monkeypatch,tmp_path):
-    from delivery_api.app import app,store
+def test_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monkeypatch,tmp_path,pg_scoped_workspace):
+    from delivery_api.app import app
+    from delivery_api import config
+    monkeypatch.setattr(config,"CLOUD_TENANTS",False)
+    store=pg_scoped_workspace.store
     from fastapi.testclient import TestClient
     task_id='dist-runtime-test'
     if store.task(task_id):store.delete_task(task_id)
@@ -343,12 +346,22 @@ def test_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monkeyp
     calls=[]
     async def fake_run(*args,**kwargs):calls.append((args,kwargs));return 0
     from delivery_api import auth
-    auth.limiter=auth.RateLimiter()
+    monkeypatch.setattr(auth,'limiter',auth.RateLimiter())
     monkeypatch.setenv('REQUI_RE_DIST','1')
     monkeypatch.setattr('delivery_api.app.runner.run',fake_run)
+    import httpx
+    from delivery_api.engine_client import EngineUnreachableError
+    checked=[]
+    class UnavailableEngine:
+        def default_route(self):
+            checked.append('typed-default-route')
+            raise EngineUnreachableError('http://unavailable.invalid',httpx.ConnectError('test-only unavailable'))
+    monkeypatch.setattr('delivery_api.app.engine_client',UnavailableEngine())
     # Starting requires the typed HTTP engine, even in a built runtime.
     response=TestClient(app).post(f'/api/tasks/{task_id}/start')
     assert response.status_code==503 and not calls
+    assert checked==['typed-default-route']
+    assert store.task(task_id)['state']=='not_started'
 
 
 def test_default_database_is_stable_user_data_outside_repo_and_dist(monkeypatch,tmp_path):
@@ -1626,3 +1639,8 @@ def test_task_projection_receivers_require_scoped_postgres():
     for case in (test_task_three_states_and_phase_progress,
                  test_task_classifications_join_shadow_to_answers):
         assert 'pg_scoped_workspace' in inspect.signature(case).parameters
+
+
+def test_built_runtime_contract_requires_scoped_postgres():
+    import inspect
+    assert 'pg_scoped_workspace' in inspect.signature(test_built_runtime_does_not_fall_back_to_legacy_interview_subprocess).parameters

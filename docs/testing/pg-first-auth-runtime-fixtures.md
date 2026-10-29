@@ -1125,3 +1125,15 @@ module14passed2.44s;final auth module/cloud API/bootstrap54passed0skips6.09s.
 No production change. Remaining local OAuth/basic/replica/link quota contracts
 stay explicit local debt;email-availability retirement not addressed by this
 slice. Hosted CI/full suite/deployed topology unrun;A incomplete.
+
+## A81: built-runtime typed-engine refusal on PG
+
+Move no-legacy-subprocess contract from import-time global SQLite receiver to
+isolated PG/poison fixture. Preserve503/no runner call. Explicit local app mode
+keeps original built-runtime route semantics;not claimed signed-cloud execution.
+Make typed engine unavailable hermetically and assert preflight called exactly
+once/task remains not_started,so no network outage or middleware refusal can
+masquerade as proof. Restore limiter via monkeypatch. Source guard red1failed
+0.87s;final41passed0skips4.97s including cloud API/PG bootstrap. No production
+change/deploy/model calls. Package producer env remains missing. Hosted CI/full
+suite/deployed topology unrun;A incomplete.
