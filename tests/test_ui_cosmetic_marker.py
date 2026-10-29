@@ -8,6 +8,7 @@ and scripts/ci/test-cosmetic.sh are disjoint and exhaustive by construction
 (-m 'not ui_cosmetic' vs -m ui_cosmetic over the same files); this test pins
 the membership both selections depend on.
 """
+import os
 import re
 import subprocess
 import sys
@@ -31,6 +32,9 @@ DECLARED = {
 def _collect(marker_expr):
     out = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", marker_expr, "-p", "no:cacheprovider", *BROWSER_FILES],
+        # Nested pytest owns its own disposable server; inheriting the outer
+        # fixture DSN incorrectly looks like an external database at bootstrap.
+        env={k:v for k,v in os.environ.items() if k != 'DELIVERY_TEST_POSTGRES_DSN'},
         capture_output=True, text=True, cwd=ROOT, timeout=120,
     )
     assert out.returncode == 0, out.stderr + out.stdout
