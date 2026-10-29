@@ -7,7 +7,7 @@ from delivery_api.runner import ProcessRunner
 from delivery_api.jobs import JobQueue
 
 
-def test_delivery_only_startup_does_not_recover_or_dispatch(monkeypatch):
+def _case_delivery_only_startup_does_not_recover_or_dispatch(monkeypatch):
     monkeypatch.setenv('DELIVERY_CONTROL_PLANE_ONLY','1')
     def fail(*args,**kwargs):raise AssertionError('must not touch engine recovery or queue')
     for name in ('_recover_tasks','_catch_up_interview_progress'):monkeypatch.setattr(service,name,fail)
@@ -100,3 +100,12 @@ def test_auth_posts_stay_fenced_without_cloud_profile(monkeypatch):
     client=TestClient(service.app)
     for path in ('/auth/signup','/auth/signin','/auth/refresh','/auth/logout'):
         assert client.post(path,json={'username':'a@example.com','password':'x'}).status_code==503,path
+
+
+def _check_delivery_only_startup_does_not_recover_or_dispatch(monkeypatch,tmp_path,workspace):
+    from tests.test_control_plane import _case_delivery_only_startup_does_not_recover_or_dispatch
+    _case_delivery_only_startup_does_not_recover_or_dispatch(monkeypatch)
+
+
+def test_delivery_only_startup_does_not_recover_or_dispatch(pg_local_compat_process):
+    pg_local_compat_process(_check_delivery_only_startup_does_not_recover_or_dispatch)
