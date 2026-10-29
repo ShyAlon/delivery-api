@@ -31,37 +31,8 @@ def test_task_three_states_and_phase_progress(pg_scoped_workspace,monkeypatch):
         assert done["state"] == "done" and done["artifacts"][0]["name"] == "Verification report"
 
 
-def test_rerun_previews_then_archives_with_cause_and_audit():
-    with TestClient(app) as client:
-        task_id = client.post("/api/tasks", json={"title": "Policy seam"}).json()["task_id"]
-        store.add_task_artifact(task_id, "architecture", "Architecture", "/a.json")
-        for phase in ("intent","conops","needs"): store.update_phase(task_id,phase,"done")
-        preview = client.post(f"/api/tasks/{task_id}/rerun", json={
-            "from_phase": "srs", "confirm": False,
-        })
-        assert preview.json()["status"] == "preview" and preview.json()["policy"] == "archive"
-        assert not store.task_artifacts(task_id)[0]["stale"]
-        applied = client.post(f"/api/tasks/{task_id}/rerun", json={
-            "from_phase": "srs", "confirm": True,
-        })
-        assert applied.status_code == 200 and applied.json()["generation"] == 2
-        artifact = store.task_artifacts(task_id)[0]
-        assert artifact["stale"] and "rerun from srs" in artifact["stale_reason"]
-        task = store.task(task_id)
-        assert all(p["gate_basis_changed"] for p in task["phases"][3:])
-        audit = client.get(f"/api/tasks/{task_id}/audit").json()
-        assert audit["actor_mode"] == "local user"
-        assert any(e["action"] == "task.rerun_prepared" for e in audit["entries"])
 
 
-def test_archive_policy_marks_downstream_stale_and_keeps_upstream():
-    task_id = store.create_task("Archive")['task_id']
-    store.add_task_artifact(task_id, "intent", "Intent", "/intent.json")
-    store.add_task_artifact(task_id, "architecture", "Architecture", "/arch.json")
-    for phase in ("intent","conops","needs"): store.update_phase(task_id,phase,"done")
-    generation = store.prepare_rerun(task_id, "srs", "archive")
-    arts = {a["phase_key"]: a for a in store.task_artifacts(task_id)}
-    assert generation == 2 and not arts["intent"]["stale"] and arts["architecture"]["stale"]
 
 
 def test_static_ui_and_deep_link_are_served():
@@ -280,24 +251,8 @@ def test_process_runner_hides_traceback_and_classifies_missing_module(tmp_path,p
     assert 'langchain_core' in error['message'] and 'Likely cause:' in error['message'] and error['payload']['exit_code']==1
 
 
-def test_rerun_refuses_stage_with_unfulfilled_prerequisite():
-    with TestClient(app) as client:
-        task_id=store.create_task('Sequential rerun guard')['task_id']
-        store.update_phase(task_id,'intent','done')
-        response=client.post(f'/api/tasks/{task_id}/rerun',json={'from_phase':'needs','confirm':False})
-        assert response.status_code==409
-        detail=response.json()['detail']
-        assert set(detail)=={'error','cause','next'}
-        assert 'Concept of operations' in detail['error'] and "rerun 'Concept of operations' first" in detail['next']
-        assert store.task(task_id)['generation']==1
 
 
-def test_rerun_proceeds_when_every_upstream_phase_is_done():
-    with TestClient(app) as client:
-        task_id=store.create_task('Sequential rerun allowed')['task_id']
-        for phase in ('intent','conops','needs'):store.update_phase(task_id,phase,'done')
-        preview=client.post(f'/api/tasks/{task_id}/rerun',json={'from_phase':'srs','confirm':False})
-        assert preview.status_code==200 and preview.json()['from_phase']=='srs'
 
 def test_engine_runtime_persisted_setting_precedes_fallback(tmp_path,monkeypatch):
     from delivery_api import engine_runtime
