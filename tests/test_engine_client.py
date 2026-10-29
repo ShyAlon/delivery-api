@@ -1,3 +1,4 @@
+from tests.engine_scope import engine_scope  # noqa: F401
 from uuid import uuid4
 import httpx,pytest
 from vmodel_contracts.interactive import *
@@ -13,13 +14,13 @@ def snapshot(status=ProcessStatus.RUNNING,next_step=NextStep.RUN,open_input=None
 def event(kind=EventType.RUN_STARTED,status=ProcessStatus.RUNNING,next_step=NextStep.RUN,input_request=None):
     return InteractiveEvent(event_id=uuid4(),session_id='s',task_id='t',phase_id=1,sequence=1,event_type=kind,process_status=status,next_step=next_step,input_request=input_request)
 
-def test_start_validates_typed_response():
+def test_start_validates_typed_response(engine_scope):
     body=StartSessionResponse(snapshot=snapshot(),accepted_event=event()).model_dump(mode='json')
     client=HttpEngineClient('http://engine',transport=httpx.MockTransport(lambda r:httpx.Response(201,json=body)))
     result=client.start(StartSessionRequest(task_id='t',idea='idea',model_route='m'))
     assert result.snapshot.process_status==ProcessStatus.RUNNING
 
-def test_http_conflict_preserves_protocol_error_enum():
+def test_http_conflict_preserves_protocol_error_enum(engine_scope):
     error=ProtocolError(code=ProtocolErrorCode.STALE_INPUT,detail='stale').model_dump(mode='json')
     client=HttpEngineClient('http://engine',transport=httpx.MockTransport(lambda r:httpx.Response(409,json={'detail':error})))
     response=InputResponse(input_id=uuid4(),value=1,actor_id='founder')
@@ -33,7 +34,7 @@ def test_projection_uses_enums_not_prompt_text():
     assert project(a)==project(b)==UiMode.APPROVAL_INPUT
 
 
-def test_client_sends_service_token_header():
+def test_client_sends_service_token_header(engine_scope):
  seen=[]
  body=StartSessionResponse(snapshot=snapshot(),accepted_event=event()).model_dump(mode='json')
  client=HttpEngineClient('http://engine',token='shared-secret',transport=httpx.MockTransport(lambda r:(seen.append(r.headers['X-Interview-Engine-Token']) or httpx.Response(201,json=body))))
@@ -46,7 +47,7 @@ def test_client_does_not_preempt_long_running_model_request():
  assert client._http.timeout.read is None
 
 
-def test_route_preview_passes_engine_model_map_and_preserves_conflict():
+def test_route_preview_passes_engine_model_map_and_preserves_conflict(engine_scope):
  map={'probing':['ollama','phi4']}
  client=HttpEngineClient('http://engine',transport=httpx.MockTransport(lambda r:httpx.Response(200,json={'route':'ollama','model_map':map})))
  assert client.preview_route('ollama')['model_map']==map
@@ -73,7 +74,7 @@ def test_cloud_engine_calls_carry_verified_scope_not_caller_owner(monkeypatch):
     assert seen[0].headers['X-Interview-Engine-Token']=='test-service'
 
 
-def test_stop_client_validates_stopped_contract_and_uuid_path():
+def test_stop_client_validates_stopped_contract_and_uuid_path(engine_scope):
  sid=str(uuid4());seen=[]
  body=EngineSnapshot(session_id=sid,task_id='fake',sequence=1,process_status=ProcessStatus.STOP_REQUESTED,next_step=NextStep.STOP).model_dump(mode='json')
  client=HttpEngineClient('http://fake',transport=httpx.MockTransport(lambda r:seen.append(r) or httpx.Response(200,json=body)))
@@ -106,7 +107,7 @@ def _diag_response(status, block=None, raw_header=None):
     return httpx.Response(status, json={'detail': error.model_dump(mode='json')}, headers=headers)
 
 
-def test_start_failure_decodes_operator_diagnostics_header():
+def test_start_failure_decodes_operator_diagnostics_header(engine_scope):
     block = {'error_class': 'InsufficientPrivilege', 'sqlstate': '42501', 'stage': 'session insert',
              'message': 'row-level security for table "[identifier]"', 'role': 'delivery_app',
              'sub_present': False, 'session_id_present': False, 'session_active_for_sub': 'UNKNOWN'}
@@ -117,7 +118,7 @@ def test_start_failure_decodes_operator_diagnostics_header():
     assert caught.value.http_status == 503
 
 
-def test_operator_diagnostics_header_absent_or_damaged_yields_none():
+def test_operator_diagnostics_header_absent_or_damaged_yields_none(engine_scope):
     client = HttpEngineClient('http://engine', transport=httpx.MockTransport(lambda r: _diag_response(503)))
     with pytest.raises(EngineClientError) as caught:
         client.start(StartSessionRequest(task_id='t', idea='idea', model_route='m'))
