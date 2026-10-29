@@ -1041,7 +1041,8 @@ def test_recovery_restores_final_approval_gate_owner(monkeypatch,tmp_path,pg_sco
     task=store.task(tid);gate=next(g for g in task['gates'] if g['after_phase']=='tests')
     assert task['state']=='waiting_gate' and gate['state']=='waiting'
 
-def test_task_artifacts_project_real_session_files_and_download_zip(monkeypatch,tmp_path,pg_scoped_workspace):
+def test_task_artifacts_project_real_session_files_and_download_zip(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
+    signed_app=pg_task_app(pg_scoped_workspace)
     import json
     from fastapi.testclient import TestClient
     from delivery_api import app as app_module
@@ -1052,7 +1053,7 @@ def test_task_artifacts_project_real_session_files_and_download_zip(monkeypatch,
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(store,PostgresStore)
     records=app_module._task_artifact_snapshot(tid);assert {(x['phase_key'],x['name']) for x in records}=={('intent','intent_model.json'),('architecture','architecture.json')};assert all(x['present'] for x in records);assert all(x['validator'] for x in records);assert all(isinstance(x['validation_errors'],list) for x in records)
-    client=TestClient(app_module.app);view=client.get(f'/api/tasks/{tid}/artifacts/architecture/architecture.json/view');assert view.status_code==200 and view.json()['format']=='markdown' and view.json()['display_name']=='architecture.md' and view.json()['raw_format']=='json'
+    client=TestClient(signed_app,headers=pg_scoped_workspace.headers);view=client.get(f'/api/tasks/{tid}/artifacts/architecture/architecture.json/view');assert view.status_code==200 and view.json()['format']=='markdown' and view.json()['display_name']=='architecture.md' and view.json()['raw_format']=='json'
     archive=client.get(f'/api/tasks/{tid}/artifacts.zip');assert archive.status_code==200 and archive.headers['content-type']=='application/zip'
 
 
@@ -1086,7 +1087,8 @@ def test_orchestrator_phase_override_reaches_engine_and_is_durable(monkeypatch,t
     event=[e for e in store.events(tid) if e['kind']=='model_route'][-1]
     assert event['payload']=={'route':'deepseek','resolved':'deepseek:deepseek-flash','provider':'deepseek','model':'deepseek-flash','mode':'redo','source':'phase selection'}
 
-def test_intent_artifact_view_has_content_title_and_interview_transcript(monkeypatch,tmp_path,pg_scoped_workspace):
+def test_intent_artifact_view_has_content_title_and_interview_transcript(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
+    signed_app=pg_task_app(pg_scoped_workspace)
     import json
     from fastapi.testclient import TestClient
     from delivery_api import app as app_module
@@ -1095,7 +1097,7 @@ def test_intent_artifact_view_has_content_title_and_interview_transcript(monkeyp
     folder=root/'interview-view'/'interview';folder.mkdir(parents=True);(folder/'intent_model.json').write_text(json.dumps({'problem_statement':'Build habits'}));(folder/'intent_model.md').write_text('# What we understood\n\n**Problem:** Build habits')
     store.add_event(tid,'waiting_input','You:',phase_key='intent',payload={'question':'Who needs this?','waiting_input':True});store.add_event(tid,'answer','You: Busy adults',phase_key='intent',payload={'answer':'Busy adults','transcript':True})
     monkeypatch.setattr(app_module,'store',store)
-    body=TestClient(app_module.app).get(f'/api/tasks/{tid}/artifacts/intent/intent_model.json/view').json()
+    body=TestClient(signed_app,headers=pg_scoped_workspace.headers).get(f'/api/tasks/{tid}/artifacts/intent/intent_model.json/view').json()
     assert body['title']=='Needs and Scope' and body['format']=='markdown'
     assert '**Problem:** Build habits' in body['content']
     assert '## Interview questions and answers' in body['content'] and 'Who needs this?' in body['content'] and '**Answer:** Busy adults' in body['content']
@@ -1151,7 +1153,8 @@ def test_runner_emits_durable_phase_price(monkeypatch,tmp_path,pg_scoped_workspa
     audit=[e for e in store.audit_entries(tid) if e['action']=='phase.priced'][-1]
     assert audit['detail']['phase']=='needs' and audit['detail']['price']==10
 
-def test_legacy_intent_view_recovers_full_transcript_from_checkpoint(monkeypatch,tmp_path,pg_scoped_workspace):
+def test_legacy_intent_view_recovers_full_transcript_from_checkpoint(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
+    signed_app=pg_task_app(pg_scoped_workspace)
     import json
     from fastapi.testclient import TestClient
     from delivery_api import app as app_module
@@ -1160,7 +1163,7 @@ def test_legacy_intent_view_recovers_full_transcript_from_checkpoint(monkeypatch
     folder=root/'legacy-turns'/'interview';folder.mkdir(parents=True);(folder/'intent_model.json').write_text('{}');(folder/'intent_model.md').write_text('# What we understood')
     store.add_event(tid,'waiting_input','You:',phase_key='intent',payload={'question':'Old question?','waiting_input':True});store.add_event(tid,'answer','Interview answer submitted',phase_key='intent',payload={'character_count':9})
     monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module,'_checkpoint_interview_turns',lambda _,supplemental:[('Who needs this?','Busy adults'),('What matters?','Easy scheduling')])
-    body=TestClient(app_module.app).get(f'/api/tasks/{tid}/artifacts/intent/intent_model.json/view').json()
+    body=TestClient(signed_app,headers=pg_scoped_workspace.headers).get(f'/api/tasks/{tid}/artifacts/intent/intent_model.json/view').json()
     assert 'Who needs this?' in body['content'] and 'Busy adults' in body['content'] and 'Old question?' not in body['content']
 
 def test_artifact_snapshot_exposes_content_owned_titles(monkeypatch,tmp_path,pg_scoped_workspace):
@@ -1409,7 +1412,8 @@ def test_orchestrator_sticky_exact_model_across_phases_and_switch(monkeypatch,tm
     assert r.calls[3]['env']['SPEC_GENERATOR_MODEL_ITEMS']=='ollama:phi4'
 
 
-def test_architecture_founder_refs_validate_in_delivery_snapshot_and_gate(monkeypatch,tmp_path,pg_scoped_workspace):
+def test_architecture_founder_refs_validate_in_delivery_snapshot_and_gate(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
+    signed_app=pg_task_app(pg_scoped_workspace)
     import json
     import delivery_api.app as app_module
     from delivery_api import config
@@ -1423,7 +1427,7 @@ def test_architecture_founder_refs_validate_in_delivery_snapshot_and_gate(monkey
     (folder/'architecture.json').write_text(json.dumps(payload))
     artifact=next(a for a in app_module._task_artifact_snapshot(tid) if a['name']=='architecture.json')
     assert artifact['valid'] is True and artifact['validation_errors']==[], artifact['validation_errors']
-    with TestClient(app_module.app) as client:
+    with TestClient(signed_app,headers=pg_scoped_workspace.headers) as client:
         read=client.get(f'/api/tasks/{tid}/artifacts/architecture/architecture.json/view')
     assert read.status_code==200
     assert json.loads(read.json()['content'])['decisions'][0]['founder_decision_refs']==['FD-missing-error_states']
