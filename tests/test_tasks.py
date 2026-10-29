@@ -303,7 +303,7 @@ def test_venv_python_symlink_is_invoked_literally_for_preflight(tmp_path,monkeyp
     assert runtime.python==python.absolute() and runtime.attempts==((python,True),)
     assert runtime.python!=python.resolve()
 
-def test_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monkeypatch,tmp_path,pg_scoped_workspace):
+def _check_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monkeypatch,tmp_path,pg_scoped_workspace):
     from delivery_api.app import app
     from delivery_api import config
     monkeypatch.setattr(config,"CLOUD_TENANTS",False)
@@ -1567,3 +1567,7 @@ def test_session_cost_receivers_require_scoped_postgres():
                  test_session_cost_unknown_or_missing_usage_is_not_fabricated_zero,
                  test_session_cost_ambiguous_binding_rejected):
         assert 'pg_scoped_workspace' in inspect.signature(case).parameters
+
+
+def test_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(pg_local_compat_process,pg_scoped_workspace):
+    pg_local_compat_process(_check_built_runtime_does_not_fall_back_to_legacy_interview_subprocess)

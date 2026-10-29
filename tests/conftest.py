@@ -74,3 +74,4 @@ def evidence_store(request, tmp_path, pg_workspace_factory):
 
 from pg_bridge_guard import pg_bridge_poison  # noqa: E402,F401
 from pg_runtime import pg_runtime_environment, pg_runtime_process  # noqa: E402,F401
+from pg_local_compat import pg_local_compat_process  # noqa: E402,F401
