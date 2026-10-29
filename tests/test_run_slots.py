@@ -34,7 +34,12 @@ def test_defaults_are_process_mode_two_slots_and_thirty_minutes():
     importlib.reload(fresh)
 
 
-def test_at_most_the_cap_runs_at_once_and_the_third_waits_with_one_plain_line():
+def test_at_most_the_cap_runs_at_once_and_the_third_waits_with_one_plain_line(monkeypatch):
+    # This checks slot contention, not admission under the runner's live RAM.
+    # Keep the real memory guard running against an ample capacity fixture;
+    # test_memory_guard.py covers low-memory admission and stopping separately.
+    monkeypatch.setattr(run_slots, "host_capacity", lambda: {
+        "cpus": 2, "mem_total_mb": 8192, "mem_available_mb": 6144})
     events, active, most = [], [0], [0]
     async def work():
         active[0] += 1; most[0] = max(most[0], active[0])
