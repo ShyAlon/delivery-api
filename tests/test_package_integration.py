@@ -24,7 +24,7 @@ def test_package_endpoint_calls_real_zero_model_export_and_downloads(tmp_path,mo
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module.orchestrator,'store',store)
  monkeypatch.setenv('SPEC_GENERATOR_DIR',str(producer));monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
 
- c=TestClient(module.app);reply=c.post('/api/tasks/ready/packages',json={});
+ c=TestClient(module.app,headers=pg_scoped_workspace.headers);reply=c.post('/api/tasks/ready/packages',json={});
  if not reviewed:
   assert reply.status_code==409 and 'findings ledger missing' in reply.text
   return
