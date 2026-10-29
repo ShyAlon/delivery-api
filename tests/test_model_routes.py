@@ -7,6 +7,8 @@ import pytest
 def model_workspace(pg_workspace_factory,monkeypatch):
     """Direct helper contracts keep their policy mode; storage is real tenant PG."""
     from delivery_api import app as module
+    # Direct file-backed provenance/helper contracts select their policy explicitly.
+    monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
     from delivery_api.store import SQLiteStore
     from delivery_api.tenancy import tenant_context
     with pg_workspace_factory() as workspace:
