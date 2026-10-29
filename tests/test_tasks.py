@@ -47,7 +47,9 @@ def test_static_ui_and_deep_link_are_served():
         assert b"<link rel=\"icon\" href=\"/favicon.ico\"" in client.get("/").content
 
 
-def test_process_runner_streams_cli_output_and_known_count(tmp_path,pg_scoped_workspace):
+def test_process_runner_streams_cli_output_and_known_count(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio
     import sys
     from delivery_api.runner import ProcessRunner
@@ -70,7 +72,9 @@ def test_process_runner_streams_cli_output_and_known_count(tmp_path,pg_scoped_wo
     assert event["payload"] == {"completed": 4, "total": 9}
 
 
-def test_process_runner_uses_child_stage_aware_heartbeat_without_generic_noise(tmp_path,pg_scoped_workspace):
+def test_process_runner_uses_child_stage_aware_heartbeat_without_generic_noise(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;task_id=store.create_task('Useful heartbeat')['task_id']
@@ -83,7 +87,9 @@ def test_process_runner_uses_child_stage_aware_heartbeat_without_generic_noise(t
     assert not any(e['message']=='Engine is still working' for e in events)
 
 
-def test_subprocess_prompt_lines_are_diagnostics_not_input_waits(tmp_path,pg_scoped_workspace):
+def test_subprocess_prompt_lines_are_diagnostics_not_input_waits(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;task_id=store.create_task('Waiting prompt')['task_id']
@@ -245,7 +251,9 @@ def test_engine_runtime_missing_dependency_reports_all_interpreters(tmp_path,mon
     else:assert False,'missing dependency preflight should fail'
 
 
-def test_process_runner_hides_traceback_and_classifies_missing_module(tmp_path,pg_scoped_workspace):
+def test_process_runner_hides_traceback_and_classifies_missing_module(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     isolated=pg_scoped_workspace.store;task_id=isolated.create_task('Failure')['task_id']
@@ -347,7 +355,9 @@ print(json.dumps({"postgres": True, "local_database": False}))
 
 
 
-def test_process_runner_emits_every_question_line_as_progress(tmp_path,pg_scoped_workspace):
+def test_process_runner_emits_every_question_line_as_progress(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;task_id=store.create_task('Three questions')['task_id']
@@ -1313,6 +1323,8 @@ def test_engine_heartbeats_reset_the_stall_window(tmp_path,pg_scoped_workspace):
 
 
 def test_runner_preserves_module_name_when_subprocess_read_splits_mid_word(tmp_path,monkeypatch,pg_scoped_workspace):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store;tid=store.create_task('Framing')['task_id']
@@ -1332,7 +1344,9 @@ sys.stdout.write("aph\'\\n");sys.stdout.flush();sys.exit(1)'''
     assert error['payload']['module']=='langgraph'
 
 
-def test_generator_failure_names_needs_not_interview_engine(tmp_path,pg_scoped_workspace):
+def test_generator_failure_names_needs_not_interview_engine(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store
@@ -1344,7 +1358,9 @@ def test_generator_failure_names_needs_not_interview_engine(tmp_path,pg_scoped_w
     assert 'interview engine' not in error['message'].lower()
 
 
-def test_generator_failure_preserves_reported_contract_error(tmp_path,pg_scoped_workspace):
+def test_generator_failure_preserves_reported_contract_error(tmp_path,pg_scoped_workspace,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=pg_scoped_workspace.store
