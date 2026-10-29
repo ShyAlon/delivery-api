@@ -28,16 +28,20 @@ def test_static_files_and_health_are_never_authenticated_but_data_routes_still_a
 
 
 @pytest.fixture
-def boom_route():
+def boom_route(pg_workspace_factory,pg_task_app):
     import delivery_api.app as module
     def boom():raise RuntimeError('secret postgresql://user:pass@host/db')
     module.app.router.add_api_route('/api/_boom',boom,methods=['GET'])
-    yield module.app
-    module.app.router.routes.pop()
+    try:
+        with pg_workspace_factory() as workspace:
+            yield pg_task_app(workspace),{'Authorization':'Bearer '+workspace.token}
+    finally:
+        module.app.router.routes.pop()
 
 
 def test_an_unexpected_error_answers_with_its_reference_and_type_but_not_its_message(boom_route):
-    reply=TestClient(boom_route,raise_server_exceptions=False).get('/api/_boom')
+    app,headers=boom_route
+    reply=TestClient(app,raise_server_exceptions=False).get('/api/_boom',headers=headers)
     assert reply.status_code==500
     detail=reply.json()['detail']
     ref=reply.headers['x-request-id']
@@ -45,4 +49,5 @@ def test_an_unexpected_error_answers_with_its_reference_and_type_but_not_its_mes
 
 
 def test_the_unexpected_error_still_reaches_the_server_and_tests(boom_route):
-    with pytest.raises(RuntimeError):TestClient(boom_route).get('/api/_boom')
+    app,headers=boom_route
+    with pytest.raises(RuntimeError):TestClient(app).get('/api/_boom',headers=headers)
