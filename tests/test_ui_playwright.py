@@ -2502,17 +2502,19 @@ def test_closed_gate_can_save_revision_proposal_without_restarting(pg_page,pg_ui
     page.screenshot(path=str(SCREENSHOTS/'closed-gate-proposal-desktop.png'),full_page=True)
 
 
-def test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_known(page,ui):
+def test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_known(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
     now=time.time()
-    live=page.request.get(ui+"/api/tasks/live").json()
+    live=page.request.get(ui+f"/api/tasks/{tid}").json()
     live["state"]="running";live["active_phase"]="intent"
-    live["control_snapshot"]={"version":2,"task_id":"live","phase_key":"intent","mode":"failed","owner":"none","wait_id":None,"kind":None,"prompt":None,"options":[],
+    live["control_snapshot"]={"version":2,"task_id":tid,"phase_key":"intent","mode":"failed","owner":"none","wait_id":None,"kind":None,"prompt":None,"options":[],
         "artifact_ref":None,"actions":[],"precondition":{},"revision":"task:1","process_live":False,"decision":None,"gate":None,"input_id":None,
         "diagnostic":{"reason":"engine protocol rejected the snapshot","http_status":404,"code":120,"detail":"session not found","task_state":"running","active_phase":"intent"}}
     live["events"]=[{"id":1,"kind":"command","phase_key":"intent","message":"Started","ts":now-170000,"payload":{}},
                     {"id":2,"kind":"waiting_input","phase_key":"intent","message":"Which concept should the architecture execute?","ts":now-123831,"payload":{}}]
-    page.route("**/api/tasks/live",lambda route:route.fulfill(json=live))
-    page.goto(ui+"/tasks/live/view")
+    page.route(f"**/api/tasks/{tid}",lambda route:route.fulfill(json=live))
+    page.goto(ui+f"/tasks/{tid}/view")
     page.locator(".live-status-row").wait_for()
     body=page.locator("main, #app, body").first.inner_text()
     assert "Session unavailable in this environment" in body and "needs attention" in body.lower()
@@ -2521,8 +2523,10 @@ def test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_
     assert "Connected to progress" not in body and "s elapsed" not in body and "so far" not in body and "in progress" not in body.lower() and "Waiting for stage progress" not in body and "Next:" not in body
     for banned in ("earlier stages","cannot resume","lost","nothing running","Engine returned an error"):
         assert banned not in body, banned
-    assert page.get_by_role("button",name="Rerun stage").count()==1          # existing control, wording untouched
-    page.screenshot(path=str(_screenshots_dir / "session-unavailable.png"),full_page=True)
+    assert page.get_by_role("button",name="Rerun stage").count()==0  # owner-approved tenant policy, not a local rerun port
+    assert live["rerun_control"]["available"] is False
+    expect(page.locator("#rerununavailable")).to_contain_text("Tenant stage rerun is unavailable")
+    page.screenshot(path="/downloads/tenant-session-unavailable.png",full_page=True)
 
 
 def test_everything_zip_downloads_with_the_manifest_first(pg_page,pg_ui,pg_ids,tmp_path):
@@ -2996,3 +3000,9 @@ def test_cost_layout_cases_require_signed_pg_browser():
 def test_session_refresh_case_requires_signed_pg_browser():
     import inspect
     assert 'pg_page' in inspect.signature(test_browser_session_refresh_single_flight_before_expiry).parameters
+
+
+def test_session_unavailable_wording_requires_signed_pg_browser():
+    import inspect
+    case = test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_known
+    assert tuple(inspect.signature(case).parameters) == ('pg_page', 'pg_ui', 'pg_ids')

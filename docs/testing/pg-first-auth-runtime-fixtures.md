@@ -1076,3 +1076,19 @@ not removed globally or reclassified as PG. Shared122PG/2legacy functions out
 of124,plus3standalone local-auth browser cases. Dedicated local rerun3. Hosted
 CI/full suite unrun;no deploy. Tenant unavailable wording and local settings
 remain separate approved themes;A incomplete.
+
+## A78: session-unavailable wording under signed tenant policy
+
+Owner Q4 (2026-10-28) explicitly approves changing the legacy Rerun stage
+button count1 to0 for tenant tasks,and disclosing it. Port the wording case to
+signed PG owner-qualified task IDs. All exact historical-state/original-deployment/
+account-action warning assertions and banned misleading phrases retained. Add
+rerun_control.available=False and tenant-unavailable notice assertion. No
+production wording/policy change. Source guard red1 in0.75s;ported old-policy
+button assertion red1 in3.71s (actual0,expected1);final45passed0skips14.46s
+including local rerun scope/three browser cases,cloud API and PG bootstrap.
+Inspected full screenshot: Needs attention,known historical state and warning
+visible,no Rerun button;Phase results still Loading in capture,not validated
+as completed artifact content. Shared123PG/1legacy functions of124,plus3
+standalone local-auth cases;local rerun3 separate. Dated lesson included.
+Hosted CI/full suite/deployed topology unrun;no deploy;A incomplete.
