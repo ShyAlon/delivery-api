@@ -1,4 +1,11 @@
+import pytest
 from delivery_api import app as module
+
+
+@pytest.fixture(autouse=True)
+def local_provenance_policy(monkeypatch):
+    # Direct file-backed helper contract, not an HTTP middleware bypass.
+    monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
 
 
 def test_architecture_gate_labels_model_choice_without_founder_source(tmp_path,monkeypatch,pg_scoped_workspace):
