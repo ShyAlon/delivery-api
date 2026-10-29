@@ -13,7 +13,7 @@ if [ -z "$PYTHON" ]; then
   else
     echo "Error: Python 3 was not found."
     echo "Likely cause: Python is not installed or is not on PATH."
-    echo "Next: install Python 3.10+, then rerun scripts/run-ui.sh."
+    echo "Next: install Python 3.11+, then rerun scripts/run-ui.sh."
     exit 1
   fi
 fi
@@ -28,7 +28,7 @@ if ! "$PYTHON" -c 'import delivery_api,uvicorn,multipart; from vmodel_contracts 
   PYTHON="$ROOT/.venv/bin/python"
   if ! "$PYTHON" -m pip install -e "$ROOT"; then
     echo "Error: delivery-api dependencies could not be installed."
-    echo "Likely cause: package download failed or this Python is older than 3.10."
+    echo "Likely cause: package download failed or this Python is older than 3.11."
     echo "Next: check the network and '$PYTHON --version', then rerun this script."
     exit 1
   fi

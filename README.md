@@ -202,6 +202,8 @@ The build checks this before dependency installation and stops with Error / Like
 
 ### Local CI test
 
+The package requires Python 3.11 or newer. Python 3.10 is unsupported: revision-stage file hashing uses `hashlib.file_digest`. Docker, CI, and the local full-suite runner use Python 3.12. Existing Python 3.10 virtual environments must be recreated with a supported interpreter; installing new code does not upgrade a venv's Python. The local full-suite runner requires 3.12 or newer, even though the package floor is 3.11.
+
 Run `./scripts/test-local.sh` from any directory. It creates a reusable `.venv`, installs the development dependencies and runs the full local suite using Python 3.12. Set DELIVERY_TEST_SCOPE=pr for the bounded PR suite. Install Python 3.12 first, and make sure your Git authentication can read private `ShyAlon/vmodel-contracts` where it is a dependency.
 
 For the local packaged app build, run `./scripts/build-dist.sh` from `delivery-api` with the sibling repositories checked out as described above. This builds the desktop distribution; it does not publish an image or deploy production. For a delivery-only container build, use the fenced Docker section above; no private git clone credential or engines are required.
