@@ -64,6 +64,23 @@ class ProcessRunner:
         lower = text.lower()
         return next((phase for word, phase in sorted(_PHASE_HINTS.items(), key=lambda item: -len(item[0])) if word in lower), fallback)
 
+    async def _record_generator_line(self,task_id,line,phase,launched_phase,session_id):
+        # stdout is consumed on the service event loop. A synchronous task-row
+        # lock here can prevent the HTTP reader holding it from finishing.
+        def record():
+            from .progress_adapter import ingest_generator_line
+            structured=ingest_generator_line(self.store,task_id,line,launched_phase,session_id)
+            if not structured:
+                activity("engine.output","Engine diagnostic output",task_id=task_id,phase=phase,stream="combined",line=line)
+            return structured
+        return await asyncio.to_thread(record)
+
+    async def _record_legacy_progress(self,task_id,phase,line,completed,total):
+        def record():
+            self.store.update_phase(task_id,phase,"running",detail=line,completed=completed,total=total)
+            self.store.add_event(task_id,"progress",line,phase_key=phase,payload={"completed":completed,"total":total})
+        await asyncio.to_thread(record)
+
     async def run(self, task_id: str, command: list[str], *, cwd: Path, phase: str = "intent",
                   env: dict[str,str] | None = None, completion_phases: tuple[str,...] = (),
                   infer_phase: bool = True, stall_timeout: float | None = None) -> int:
@@ -281,10 +298,7 @@ class ProcessRunner:
                             self.pricing_paths[task_id]=(usage_path,llm_path);self.pricing_usage_cursor[task_id]=usage_start;self.pricing_llm_cursor[task_id]=llm_start;self.pricing_wall_cursor[task_id]=time.perf_counter()
                     # Subprocesses are non-interactive executors. Interview control moved to
                     # the typed HTTP service; stdout/stderr are diagnostics only.
-                    from .progress_adapter import ingest_generator_line
-                    structured=ingest_generator_line(self.store,task_id,line,launched_phase,(env or {}).get("VMODEL_PROGRESS_SESSION_ID"))
-                    if not structured:
-                        activity("engine.output","Engine diagnostic output",task_id=task_id,phase=phase,stream="combined",line=line)
+                    structured=await self._record_generator_line(task_id,line,phase,launched_phase,(env or {}).get("VMODEL_PROGRESS_SESSION_ID"))
                     if structured:
                         structured_progress_seen=True
                         continue
@@ -299,9 +313,7 @@ class ProcessRunner:
                     match = _PROGRESS.search(line)
                     completed = int(match.group(3)) if match and match.group(3) else 0
                     total = int(match.group(4)) if match and match.group(4) else None
-                    self.store.update_phase(task_id,phase,"running",detail=line,completed=completed,total=total)
-                    payload={"completed":completed,"total":total}
-                    self.store.add_event(task_id,"progress",line,phase_key=phase,payload=payload)
+                    await self._record_legacy_progress(task_id,phase,line,completed,total)
             # The final diagnostic may not end with a newline. Log it as one
             # intact line instead of dropping it or splitting it by read size.
             final_line=(line_buffer+decoder.decode(b"",final=True)).strip()
