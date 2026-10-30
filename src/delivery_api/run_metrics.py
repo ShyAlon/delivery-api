@@ -2,13 +2,12 @@
 
 A sample is taken every METRICS_INTERVAL_S seconds for the run process group.
 PostgreSQL applications always store metrics in PG, with distinct host sources
-and registry-authorized cross-host operator reads. The explicit legacy SQLite
-profile remains a reference, never a PG failure fallback. Old raw rows become
+and registry-authorized cross-host operator reads. There is no local storage
+fallback. Old raw rows become
 permanent run/day summaries through bounded metrics-only maintenance, including
 retired sources. No history is imported. Sampling failures do not stop a run.
 """
-import os,sqlite3,threading,time
-from pathlib import Path
+import os,threading,time
 from . import config
 from .observability import event as activity
 
@@ -19,26 +18,7 @@ except (ValueError,OSError,AttributeError):CLK_TCK=100
 try:PAGE_BYTES=os.sysconf("SC_PAGE_SIZE")
 except (ValueError,OSError,AttributeError):PAGE_BYTES=4096
 
-SCHEMA="""
-CREATE TABLE IF NOT EXISTS run_samples(
- id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, run_key TEXT NOT NULL, task_id TEXT NOT NULL, session_id TEXT, phase TEXT,
- pid INTEGER, procs INTEGER, rss_mb REAL, peak_rss_mb REAL, cpu_seconds REAL, cpu_pct REAL);
-CREATE INDEX IF NOT EXISTS idx_run_samples_run ON run_samples(run_key,ts);
-CREATE INDEX IF NOT EXISTS idx_run_samples_task ON run_samples(task_id,ts);
-CREATE TABLE IF NOT EXISTS run_summaries(
- run_key TEXT PRIMARY KEY, task_id TEXT NOT NULL, session_id TEXT, phase TEXT, pid INTEGER, started_at REAL, ended_at REAL, samples INTEGER,
- avg_cpu_pct REAL, max_cpu_pct REAL, avg_rss_mb REAL, max_rss_mb REAL, cpu_seconds REAL, rolled_up_at REAL);
-CREATE INDEX IF NOT EXISTS idx_run_summaries_task ON run_summaries(task_id);
-CREATE TABLE IF NOT EXISTS container_samples(
- id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, mem_used_mb REAL, mem_limit_mb REAL, cpu_seconds REAL, cpu_pct REAL);
-CREATE INDEX IF NOT EXISTS idx_container_samples_ts ON container_samples(ts);
-CREATE TABLE IF NOT EXISTS container_summaries(
- day TEXT PRIMARY KEY, samples INTEGER, avg_mem_mb REAL, max_mem_mb REAL, avg_cpu_pct REAL, max_cpu_pct REAL, rolled_up_at REAL);
-"""
-
 _lock=threading.RLock()
-_db=None
-_db_path=None
 _problem=None
 _last_container=None   # (ts, cpu_seconds) of the previous container reading
 _idle_stop=None;_idle_thread=None
@@ -56,11 +36,8 @@ def _pg():
 
 
 def selected_metrics(dsn,env):
-    pg=dsn.startswith(('postgres://','postgresql://','host='))
-    backend=env.get('DELIVERY_METRICS_BACKEND','postgres' if pg else 'sqlite')
-    if pg and backend=='sqlite':raise ValueError('PostgreSQL application requires PostgreSQL metrics')
-    if backend=='sqlite':return None
-    if backend!='postgres':raise ValueError('unknown metrics backend')
+    if not dsn.startswith(('postgres://','postgresql://','host=')) or env.get('DELIVERY_METRICS_BACKEND','postgres')!='postgres':
+        raise ValueError('PostgreSQL application requires PostgreSQL metrics')
     import socket
     from .postgres_metrics import PostgresMetrics
     source=env.get('DELIVERY_METRICS_SOURCE')
@@ -68,40 +45,11 @@ def selected_metrics(dsn,env):
     return PostgresMetrics(dsn,source_id=source)
 
 
-def db_path():
-    """DELIVERY_METRICS_DB when set, else run_metrics.db in the data directory (/data in the server image, so it survives restarts)."""
-    explicit=os.environ.get("DELIVERY_METRICS_DB","").strip()
-    return Path(explicit) if explicit else config.default_data_dir()/"run_metrics.db"
-
-
 def reset():
-    """Close the file and forget in-memory state (tests)."""
-    global _db,_db_path,_problem,_last_container,_last_rollup
+    """Forget sampling state (tests); pools belong to the shared runtime."""
+    global _problem,_last_container,_last_rollup
     with _lock:
-        if _db is not None:
-            try:_db.close()
-            except Exception:pass
-        _db=None;_db_path=None;_problem=None;_last_container=None;_last_rollup=0.0
-
-
-def _open(create=True):
-    global _db,_db_path
-    path=db_path()
-    with _lock:
-        if _db is not None and _db_path==path:return _db
-        if _db is not None:
-            try:_db.close()
-            except Exception:pass
-            _db=None
-        if not create and not path.exists():return None
-        path.parent.mkdir(parents=True,exist_ok=True)
-        conn=sqlite3.connect(str(path),check_same_thread=False,timeout=5)
-        conn.row_factory=sqlite3.Row
-        try:conn.execute("PRAGMA journal_mode=WAL")
-        except sqlite3.DatabaseError:pass
-        conn.executescript(SCHEMA)
-        _db,_db_path=conn,path
-        return conn
+        _problem=None;_last_container=None;_last_rollup=0.0
 
 
 def _failed(exc):
@@ -170,13 +118,7 @@ class RunSampler:
         self._last=(now,group["cpu_seconds"]);self.peak=max(self.peak,group["rss_mb"])
         row=(now,self.run_key,self.task_id,self.session_id,self.phase,int(pid),group["procs"],group["rss_mb"],self.peak,group["cpu_seconds"],pct)
         try:
-            pg=_pg()
-            if pg is not None:
-                pg.append_run(**dict(zip(('ts','run_key','task_id','session_id','phase','pid','procs','rss_mb','peak_rss_mb','cpu_seconds','cpu_pct'),row)))
-            else:
-              with _lock:
-                conn=_open()
-                with conn:conn.execute("INSERT INTO run_samples(ts,run_key,task_id,session_id,phase,pid,procs,rss_mb,peak_rss_mb,cpu_seconds,cpu_pct) VALUES (?,?,?,?,?,?,?,?,?,?,?)",row)
+            _pg().append_run(**dict(zip(('ts','run_key','task_id','session_id','phase','pid','procs','rss_mb','peak_rss_mb','cpu_seconds','cpu_pct'),row)))
             _problem=None
         except Exception as exc:
             _failed(exc);return None
@@ -200,13 +142,7 @@ def sample_container(now=None):
             pct=round(max(0.0,(cpu-_last_container[1])/(now-_last_container[0])*100),1)
         if cpu is not None:_last_container=(now,cpu)
     try:
-        pg=_pg()
-        if pg is not None:
-            pg.append_container(ts=now,mem_used_mb=used,mem_limit_mb=host['mem_total_mb'],cpu_seconds=cpu,cpu_pct=pct)
-        else:
-          with _lock:
-            conn=_open()
-            with conn:conn.execute("INSERT INTO container_samples(ts,mem_used_mb,mem_limit_mb,cpu_seconds,cpu_pct) VALUES (?,?,?,?,?)",(now,used,host["mem_total_mb"],cpu,pct))
+        _pg().append_container(ts=now,mem_used_mb=used,mem_limit_mb=host['mem_total_mb'],cpu_seconds=cpu,cpu_pct=pct)
     except Exception as exc:
         _failed(exc);return None
     return {"mem_used_mb":used,"mem_limit_mb":host["mem_total_mb"],"cpu_pct":pct}
@@ -242,26 +178,7 @@ def rollup(now=None,raw_days=None):
     """Replace raw rows older than the retention with permanent summaries, in one transaction. Only runs and days that are entirely older are rolled. Returns (runs, days) rolled."""
     now=time.time() if now is None else now
     cutoff=now-(config.METRICS_RAW_DAYS if raw_days is None else raw_days)*86400
-    pg=_pg()
-    if pg is not None:return pg.maintain(cutoff=cutoff,now=now)
-    with _lock:
-        conn=_open()
-        with conn:
-            runs=conn.execute("SELECT run_key,task_id,session_id,phase,pid,min(ts) a,max(ts) b,count(*) n,avg(cpu_pct) ac,max(cpu_pct) mc,avg(rss_mb) ar,max(rss_mb) mr,max(cpu_seconds) cs "
-                              "FROM run_samples GROUP BY run_key HAVING max(ts)<?",(cutoff,)).fetchall()
-            for r in runs:
-                conn.execute("INSERT OR REPLACE INTO run_summaries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (r["run_key"],r["task_id"],r["session_id"],r["phase"],r["pid"],r["a"],r["b"],r["n"],_r(r["ac"]),_r(r["mc"]),_r(r["ar"]),_r(r["mr"]),r["cs"],now))
-            if runs:conn.executemany("DELETE FROM run_samples WHERE run_key=?",[(r["run_key"],) for r in runs])
-            days=conn.execute("SELECT strftime('%Y-%m-%d',ts,'unixepoch') d,count(*) n,avg(mem_used_mb) am,max(mem_used_mb) mm,avg(cpu_pct) ac,max(cpu_pct) mc,min(ts) a,max(ts) b "
-                              "FROM container_samples GROUP BY d HAVING max(ts)<?",(cutoff,)).fetchall()
-            for d in days:
-                conn.execute("INSERT OR REPLACE INTO container_summaries VALUES (?,?,?,?,?,?,?)",(d["d"],d["n"],_r(d["am"]),_r(d["mm"]),_r(d["ac"]),_r(d["mc"]),now))
-                conn.execute("DELETE FROM container_samples WHERE strftime('%Y-%m-%d',ts,'unixepoch')=? AND ts<?",(d["d"],cutoff))
-    return len(runs),len(days)
-
-
-def _r(value):return None if value is None else round(value,1)
+    return _pg().maintain(cutoff=cutoff,now=now)
 
 
 def tick(info,task_id,pid,store,now=None):
@@ -282,54 +199,18 @@ def tick(info,task_id,pid,store,now=None):
     except Exception as exc:_failed(exc)
 
 
-def _rows(conn,sql,args=()):return [dict(r) for r in conn.execute(sql,args).fetchall()]
-
-
-def _timeline(conn,run_key,points=12):
-    values=[r["rss_mb"] for r in conn.execute("SELECT rss_mb FROM run_samples WHERE run_key=? ORDER BY ts",(run_key,)).fetchall()]
-    if len(values)>points:values=[values[int(i*(len(values)-1)/(points-1))] for i in range(points)]
-    return [round(v) for v in values if v is not None]
-
-
-def recent_runs(conn,limit=8):
-    live=_rows(conn,"SELECT run_key,task_id,session_id,phase,min(ts) started_at,max(ts) ended_at,count(*) samples,avg(cpu_pct) avg_cpu_pct,max(cpu_pct) max_cpu_pct,avg(rss_mb) avg_rss_mb,max(rss_mb) max_rss_mb,max(cpu_seconds) cpu_seconds "
-                       "FROM run_samples GROUP BY run_key ORDER BY max(ts) DESC LIMIT ?",(limit,))
-    for r in live:r["summary"]=False;r["timeline_mb"]=_timeline(conn,r["run_key"])
-    kept=_rows(conn,"SELECT run_key,task_id,session_id,phase,started_at,ended_at,samples,avg_cpu_pct,max_cpu_pct,avg_rss_mb,max_rss_mb,cpu_seconds FROM run_summaries ORDER BY ended_at DESC LIMIT ?",(limit,))
-    for r in kept:r["summary"]=True;r["timeline_mb"]=[]
-    return sorted(live+kept,key=lambda r:r["ended_at"] or 0,reverse=True)[:limit]
-
-
 def overview(limit=8):
     """Everything the operator Debug section shows: recent runs, the container's latest and 24-hour figures, and whether storing works."""
-    out={"path":str(db_path()),"problem":_problem,"runs":[],"container":None,"raw_days":config.METRICS_RAW_DAYS,"interval_s":config.METRICS_INTERVAL_S}
     try:
-        pg=_pg()
-        if pg is not None:return pg.overview(limit=limit,problem=_problem,raw_days=config.METRICS_RAW_DAYS,interval_s=config.METRICS_INTERVAL_S)
-        with _lock:
-            conn=_open(create=False)
-            if conn is None:return out
-            out["runs"]=recent_runs(conn,limit)
-            last=_rows(conn,"SELECT ts,mem_used_mb,mem_limit_mb,cpu_pct FROM container_samples ORDER BY ts DESC LIMIT 1")
-            if last:
-                day=_rows(conn,"SELECT count(*) n,avg(mem_used_mb) am,max(mem_used_mb) mm,avg(cpu_pct) ac,max(cpu_pct) mc FROM container_samples WHERE ts>=?",(last[0]["ts"]-86400,))[0]
-                out["container"]={"last":last[0],"day":day}
+        return _pg().overview(limit=limit,problem=_problem,raw_days=config.METRICS_RAW_DAYS,interval_s=config.METRICS_INTERVAL_S)
     except Exception as exc:
-        _failed(exc);out["problem"]=_problem
-    return out
+        _failed(exc)
+        return {"path":"postgres:resource_metrics","problem":_problem,"runs":[],"container":None,"raw_days":config.METRICS_RAW_DAYS,"interval_s":config.METRICS_INTERVAL_S}
 
 
 def for_task(task_id,limit=2000):
     """Raw samples and summaries of one task, for the operator."""
-    try:
-        pg=_pg()
-        if pg is not None:return pg.for_task(task_id,limit=limit,problem=_problem)
-        with _lock:
-            conn=_open(create=False)
-            if conn is None:return {"task_id":task_id,"samples":[],"summaries":[],"problem":_problem}
-            return {"task_id":task_id,"problem":_problem,
-                    "samples":_rows(conn,"SELECT ts,run_key,session_id,phase,pid,procs,rss_mb,peak_rss_mb,cpu_seconds,cpu_pct FROM run_samples WHERE task_id=? ORDER BY ts LIMIT ?",(task_id,limit)),
-                    "summaries":_rows(conn,"SELECT * FROM run_summaries WHERE task_id=? ORDER BY started_at",(task_id,))}
+    try:return _pg().for_task(task_id,limit=limit,problem=_problem)
     except Exception as exc:
         _failed(exc);return {"task_id":task_id,"samples":[],"summaries":[],"problem":_problem}
 

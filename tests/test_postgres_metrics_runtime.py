@@ -11,7 +11,7 @@ def metrics(monkeypatch,tmp_path):
     monkeypatch.setenv('DELIVERY_METRICS_SOURCE','runtime-host')
     monkeypatch.setattr(run_metrics.config,'DATABASE_URL',STATE['dsn'].replace('user=sandbox','user=delivery_app'))
     monkeypatch.setenv('DELIVERY_METRICS_DB',str(tmp_path/'forbidden.db'))
-    monkeypatch.setattr(run_metrics.sqlite3,'connect',lambda *a,**k: (_ for _ in ()).throw(AssertionError('SQLite metrics forbidden')))
+    monkeypatch.setattr(__import__('sqlite3'),'connect',lambda *a,**k: (_ for _ in ()).throw(AssertionError('SQLite metrics forbidden')))
     run_metrics.reset()
     yield run_metrics
     run_metrics.reset()
@@ -69,7 +69,7 @@ def test_pg_application_defaults_to_pg_metrics_with_host_identity(monkeypatch,tm
     monkeypatch.setenv('DELIVERY_METRICS_BACKEND','sqlite')
     with pytest.raises(ValueError,match='PostgreSQL'):run_metrics._pg()
     monkeypatch.setattr(config,'DATABASE_URL','sqlite:///'+str(tmp_path/'reference.db'))
-    assert run_metrics._pg() is None
+    with pytest.raises(ValueError,match='PostgreSQL'):run_metrics._pg()
 
 
 def test_operator_metrics_routes_never_use_process_writer_reads(monkeypatch):
@@ -96,7 +96,7 @@ def test_default_pg_sampler_never_materializes_sqlite_and_hides_driver_secrets(m
     monkeypatch.setenv('DELIVERY_METRICS_SOURCE','default-no-file')
     monkeypatch.setenv('DELIVERY_METRICS_DB',str(tmp_path/'forbidden.db'))
     monkeypatch.setattr(run_metrics,'read_group',lambda pid:dict(rss_mb=1.,cpu_seconds=1.,procs=1))
-    monkeypatch.setattr(run_metrics.sqlite3,'connect',lambda *a,**k:(_ for _ in ()).throw(AssertionError('file forbidden')))
+    monkeypatch.setattr(__import__('sqlite3'),'connect',lambda *a,**k:(_ for _ in ()).throw(AssertionError('file forbidden')))
     run_metrics.reset()
     assert run_metrics.RunSampler('default-task',None,'needs',100).sample(1,now=110)
     run_metrics._failed(ConnectionError('postgresql://user:private-password@host/db'))

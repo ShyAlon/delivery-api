@@ -8,13 +8,19 @@ from types import SimpleNamespace as NS
 import pytest
 
 from delivery_api import config, run_metrics, run_slots
+from pg_harness import STATE
+import psycopg
 
 DAY = 86400
 
 
 @pytest.fixture(autouse=True)
 def _fresh(tmp_path, monkeypatch):
-    monkeypatch.setenv("DELIVERY_METRICS_DB", str(tmp_path / "metrics.db"))
+    with psycopg.connect(STATE['dsn'],autocommit=True) as c:
+        c.execute('TRUNCATE resource_run_samples,resource_run_summaries,resource_container_samples,resource_container_summaries')
+    monkeypatch.setenv('DELIVERY_METRICS_BACKEND','postgres')
+    monkeypatch.setenv('DELIVERY_METRICS_SOURCE','ported-metrics-tests')
+    monkeypatch.setattr(config,'DATABASE_URL',STATE['dsn'].replace('user=sandbox','user=delivery_app'))
     monkeypatch.setattr(run_metrics, "CLK_TCK", 100)
     monkeypatch.setattr(run_metrics, "PAGE_BYTES", 4096)
     run_metrics.reset(); run_slots.reset()
@@ -68,10 +74,7 @@ def test_every_raw_row_carries_task_phase_and_session(monkeypatch):
 
 
 def _put(run_key, ts, rss, pct, cpu, task="t1", session="sess1", phase="needs"):
-    conn = run_metrics._open()
-    with conn:
-        conn.execute("INSERT INTO run_samples(ts,run_key,task_id,session_id,phase,pid,procs,rss_mb,peak_rss_mb,cpu_seconds,cpu_pct) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                     (ts, run_key, task, session, phase, 1, 1, rss, rss, cpu, pct))
+    run_metrics._pg().append_run(ts=ts,run_key=run_key,task_id=task,session_id=session,phase=phase,pid=1,procs=1,rss_mb=rss,peak_rss_mb=rss,cpu_seconds=cpu,cpu_pct=pct)
 
 
 def test_stale_raw_rows_become_one_summary_with_average_and_maximum_and_are_deleted():
@@ -98,28 +101,26 @@ def test_recent_rows_and_a_run_that_straddles_the_cutoff_stay_raw_and_rolling_tw
 
 
 def test_container_samples_roll_up_by_whole_stale_day():
-    conn = run_metrics._open()
-    old_day = 90 * DAY
-    with conn:
-        for i, (mem, pct) in enumerate([(1000, 10.0), (2000, 30.0)]):
-            conn.execute("INSERT INTO container_samples(ts,mem_used_mb,mem_limit_mb,cpu_seconds,cpu_pct) VALUES (?,?,?,?,?)", (old_day + i * 60, mem, 3072, 1.0, pct))
-        conn.execute("INSERT INTO container_samples(ts,mem_used_mb,mem_limit_mb,cpu_seconds,cpu_pct) VALUES (?,?,?,?,?)", (99 * DAY, 500, 3072, 1.0, 5.0))
-    assert run_metrics.rollup(100 * DAY, raw_days=3) == (0, 1)
-    assert conn.execute("SELECT count(*) FROM container_samples").fetchone()[0] == 1
-    row = conn.execute("SELECT * FROM container_summaries").fetchone()
-    assert (row["samples"], row["avg_mem_mb"], row["max_mem_mb"], row["avg_cpu_pct"], row["max_cpu_pct"]) == (2, 1500.0, 2000.0, 20.0, 30.0)
+    pg=run_metrics._pg()
+    old_day=90*DAY
+    for i,(mem,pct) in enumerate([(1000,10.0),(2000,30.0)]):
+        pg.append_container(ts=old_day+i*60,mem_used_mb=mem,mem_limit_mb=3072,cpu_seconds=1.0,cpu_pct=pct)
+    pg.append_container(ts=99*DAY,mem_used_mb=500,mem_limit_mb=3072,cpu_seconds=1.0,cpu_pct=5.0)
+    assert run_metrics.rollup(100*DAY,raw_days=3)==(0,1)
+    with psycopg.connect(STATE['dsn'],row_factory=psycopg.rows.dict_row) as conn:
+        assert conn.execute('SELECT count(*) AS n FROM resource_container_samples').fetchone()['n']==1
+        row=conn.execute('SELECT * FROM resource_container_summaries').fetchone()
+    assert (row['samples'],row['avg_mem_mb'],row['max_mem_mb'],row['avg_cpu_pct'],row['max_cpu_pct'])==(2,1500.0,2000.0,20.0,30.0)
 
 
 def test_the_overview_text_shows_runs_the_container_and_a_timeline(monkeypatch):
-    now = time.time()
+    now = time.time()-10*DAY
     for i, rss in enumerate([100, 250, 400]):
         _put("live", now - 30 + i * 10, rss, 40 + i, i)
     _put("kept", now - 2 * DAY, 150, 10, 1, task="t2", phase="design")
     run_metrics.rollup(now + 5 * DAY, raw_days=3)
     _put("live2", now - 5, 321, 12, 1, task="t3")
-    conn = run_metrics._open()
-    with conn:
-        conn.execute("INSERT INTO container_samples(ts,mem_used_mb,mem_limit_mb,cpu_seconds,cpu_pct) VALUES (?,?,?,?,?)", (now, 1200, 3072, 5.0, 75.0))
+    run_metrics._pg().append_container(ts=now,mem_used_mb=1200,mem_limit_mb=3072,cpu_seconds=5.0,cpu_pct=75.0)
     text = run_metrics.metrics_text(run_metrics.overview())
     assert "memory 1200 of 3072 MB" in text and "CPU 75% of a core" in text
     assert "memory MB over time: 321" in text and "(summary)" in text and "session sess1" in text
@@ -131,9 +132,13 @@ def test_nothing_sampled_yet_is_said_plainly_and_creates_no_file(tmp_path):
 
 
 def test_a_store_that_cannot_be_written_is_named_and_does_not_raise(tmp_path, monkeypatch):
-    blocker = tmp_path / "file"
-    blocker.write_text("x")
-    monkeypatch.setenv("DELIVERY_METRICS_DB", str(blocker / "sub" / "metrics.db"))
+    from contextlib import contextmanager
+    from delivery_api.postgres_metrics import PostgresMetrics
+    @contextmanager
+    def unavailable(self):
+        raise ConnectionError('fixture unavailable')
+        yield
+    monkeypatch.setattr(PostgresMetrics,'transaction',unavailable)
     run_metrics.reset()
     info = {"started": time.time()}
     _group(monkeypatch, [{"rss_mb": 10.0, "cpu_seconds": 1.0, "procs": 1}])
