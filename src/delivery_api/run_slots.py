@@ -227,12 +227,12 @@ def _memory_guard(task_id,info):
              runs={t:i.get("peak_rss_mb") for t,i in live.items()})
 
 
-def snapshot():
+def snapshot(*,metrics=None):
     """What the operator needs to size the server: slots, who is running, peak memory of recent runs, machine memory. No cost or vendor figures."""
     now=time.time()
     return {"isolation":config.RUN_ISOLATION,"max_concurrent_runs":config.MAX_CONCURRENT_RUNS,"time_limit_s":config.PHASE_TIME_LIMIT_S,
         "running":[{"task_id":task,"seconds":round(now-info["started"]),"peak_rss_mb":info["peak_rss_mb"],"timed_out":info["timed_out"],"stopping":bool(info.get("stop_by")),"waiting_memory":bool(info.get("waiting_memory"))} for task,info in running.items()],
-        "waiting":waiting,"waiting_memory":waiting_memory,"recent_peaks":[{"task_id":task,"peak_rss_mb":peak} for task,peak in list(peaks.items())[-10:]],"host":host_capacity(),"metrics":run_metrics.overview()}
+        "waiting":waiting,"waiting_memory":waiting_memory,"recent_peaks":[{"task_id":task,"peak_rss_mb":peak} for task,peak in list(peaks.items())[-10:]],"host":host_capacity(),"metrics":run_metrics.overview() if metrics is None else metrics}
 
 
 def snapshot_text(snap):
