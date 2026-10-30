@@ -101,3 +101,31 @@ def test_symlink_target_refused(tmp_path):
     link=tmp_path/'preview.env';link.symlink_to(target)
     with pytest.raises(ValueError):setup.save(setup.settings_module(),link,{},lambda prompt:'yes')
     assert target.read_text()=='OTHER=keep\n'
+
+
+def test_standard_setup_keeps_usage_for_future_sessions():
+    row=(str(uuid4()),'ops-v1',sorted(setup.check.DEBUG_CAPABILITIES|{'usage.read','credits.allocate'}))
+    result=setup.from_rows([row])
+    assert 'usage.read' in json.loads(result['REQUI_OPERATOR_CAPABILITIES'])
+    assert 'credits.allocate' not in json.loads(result['REQUI_OPERATOR_CAPABILITIES'])
+
+
+def test_new_usage_migration_is_narrow_idempotent_and_seeds_future_operator():
+    dsn=os.environ['DELIVERY_TEST_POSTGRES_DSN'];subject=str(uuid4())
+    migration=(ROOT/'supabase/migrations/20261030050000_operator_usage_default.sql').read_text()
+    with psycopg.connect(dsn) as c:
+        c.execute('DELETE FROM operator_principals')
+        c.execute('INSERT INTO auth.users(id) VALUES(%s)',(subject,))
+        c.execute('INSERT INTO operator_principals VALUES(%s,%s,%s,true)',(subject,'keep-version',['logs.read','credits.allocate']))
+        got=c.execute('SELECT registry_version,capabilities FROM operator_principals WHERE subject=%s',(subject,)).fetchone()
+        assert got[0]=='keep-version' and set(got[1])=={'logs.read','credits.allocate','usage.read'}
+        # Capability-only edits can revoke usage. Existing-row migration must add
+        # only usage, preserving other permissions and identity/version.
+        c.execute("UPDATE operator_principals SET capabilities=ARRAY['logs.read','credits.allocate'] WHERE subject=%s",(subject,))
+        c.execute("UPDATE operator_principals SET capabilities=array_append(capabilities,'usage.read') WHERE enabled AND NOT ('usage.read'=ANY(capabilities))")
+        c.execute("UPDATE operator_principals SET capabilities=array_append(capabilities,'usage.read') WHERE enabled AND NOT ('usage.read'=ANY(capabilities))")
+        assert c.execute('SELECT capabilities FROM operator_principals WHERE subject=%s',(subject,)).fetchone()[0].count('usage.read')==1
+        assert 'DELETE FROM' not in migration and 'credits.allocate' not in migration
+        c.execute('DELETE FROM operator_principals WHERE subject=%s',(subject,))
+        c.execute('DELETE FROM public.users WHERE user_id=%s',(subject,))
+        c.execute('DELETE FROM auth.users WHERE id=%s',(subject,))

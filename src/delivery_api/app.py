@@ -3794,7 +3794,22 @@ def operator_credit_account(owner_id:str,a:auth.Actor=Depends(auth.require_actor
 
 @app.get('/api/operator/task-usage')
 def operator_task_usage(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
-    try:return _operator_reader().task_usage(store,task_id)
+    reader=_operator_reader()
+    reason=None
+    if 'debug.read' in reader.principal.capabilities:
+        with reader._read(store,'debug.read') as (connection,authority):
+            if 'usage.read' not in reader.principal.capabilities:reason='operator_settings_missing_usage'
+            elif not connection.execute('SELECT public.requi_operator_read_allowed(%s,%s) AS allowed',('usage.read',authority['registry_version'])).fetchone()['allowed']:
+                reason='operator_registry_missing_usage'
+            else:
+                role=connection.execute("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='requi_operator_usage') AS present").fetchone()['present']
+                if not role or not connection.execute("SELECT pg_has_role(session_user,'requi_operator_usage','SET') AS allowed").fetchone()['allowed']:
+                    reason='app_usage_role_unavailable'
+        if reason:
+            return {'availability':'unavailable','category':'permission_missing','required_capability':'usage.read',
+                'reason':reason,'next':'Apply the reviewed standard operator migration and save standard operator settings; restart after active work is quiescent.'}
+    # No detailed setup disclosures to another user or unverified operator.
+    try:return reader.task_usage(store,task_id)
     except ValueError as exc:raise HTTPException(422,str(exc))
     except KeyError:raise HTTPException(404,'Task usage unavailable')
 

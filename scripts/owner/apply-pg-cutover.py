@@ -155,7 +155,12 @@ def main():
         if not args.apply:print('DRY ONLY. To request changes rerun with --apply; destructive or partial migrations still refuse.');return 0
         if not sys.stdin.isatty():raise ValueError('apply requires interactive terminal')
         conn.execute('SET default_transaction_read_only=off')
-        return apply(conn,reviewed,r,root,app_login,s.terminal_confirm)
+        result=apply(conn,reviewed,r,root,app_login,s.terminal_confirm)
+    if result:return result
+    # Standard operator configuration, not a past-task repair. The existing
+    # setup owns its own explicit private-file confirmation after DB apply.
+    operator_setup=module(root/'scripts/ops/operator-config-setup.py','requi_operator_setup')
+    return operator_setup.run(root,explicit=args.env_file)
 
 if __name__=='__main__':
     try:sys.exit(main())
