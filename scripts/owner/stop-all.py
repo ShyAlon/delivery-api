@@ -47,47 +47,19 @@ def main():
         os.execv(str(python),[str(python),str(Path(__file__).resolve()),*sys.argv[1:]])
     if sys.version_info<(3,11):fail('Python 3.11 or newer is required.')
     required=('DELIVERY_DATABASE_URL','DELIVERY_SUPABASE_URL','DELIVERY_SUPABASE_ANON_KEY')
-    meanings={
-        'DELIVERY_DATABASE_URL':'Postgres connection URL for the existing app DB login, including its DB password. Supabase project > Connect > connection string; reuse the working preview/deploy value, not a new postgres/admin login.',
-        'DELIVERY_SUPABASE_URL':'Your project HTTPS API address. Supabase project > Connect > Project URL.',
-        'DELIVERY_SUPABASE_ANON_KEY':'The public publishable key (or existing legacy anon key), NOT secret/service_role. Supabase project > Connect, or Settings > API Keys.'}
-    configured=os.environ.get('PREVIEW_SETTINGS_FILE')
-    preview=Path(configured).expanduser() if configured else Path(os.environ.get('XDG_CONFIG_HOME',str(Path.home()/'.config')))/'requi/preview.env'
-    settings=Path(args.env_file).expanduser() if args.env_file else (preview if configured or preview.is_file() else root/'.env')
-    settings=settings.resolve()
-    print('Settings file:',settings,'(values will not be printed)',flush=True)
-    if not settings.is_file():
-        for name in required:print(name+' - '+meanings[name],file=sys.stderr)
-        fail('settings file is missing. Put these names in '+str(settings)+' or select your existing file with --env-file PATH. Do not send the file or its values in chat.')
-    if settings.stat().st_mode & 0o077:
-        fail('settings file is readable by other users. Run chmod 600 '+str(settings)+' then retry.')
+    import importlib.util
+    settings_path=root/'scripts/ops/settings.py'
+    if not settings_path.is_file():fail('shared settings loader missing; update main first.')
+    spec=importlib.util.spec_from_file_location('requi_owner_settings',settings_path)
+    settings=importlib.util.module_from_spec(spec);spec.loader.exec_module(settings)
     try:
-        from dotenv.parser import parse_stream
-        with settings.open(encoding='utf-8') as stream:bindings=list(parse_stream(stream))
-    except Exception as exc:fail('cannot read settings file ('+type(exc).__name__+'). No values printed.')
-    for binding in bindings:
-        if binding.error:fail('invalid .env syntax at line '+str(binding.original.line)+'; no values printed.')
-    values={}
-    for binding in bindings:
-        if binding.key in values:fail('duplicate variable name in settings: '+binding.key)
-        if binding.key:values[binding.key]=binding.value
-    missing=[name for name in required if not (values.get(name) or '').strip()]
-    if missing:
-        for name in missing:print(name+' - '+meanings[name],file=sys.stderr)
-        fail('add the missing names to '+str(settings)+'. No database connection was made. Never paste credentials in chat.')
-    # Select one source, never silently mix shell credentials from another project.
-    for name in required:os.environ[name]=values[name].strip()
-    for name in ('RESET_OWNER_ID','RESET_AUTH_SESSION_ID'):
-        os.environ.pop(name,None)
-        if values.get(name):os.environ[name]=values[name].strip()
-    # Same PG-only environment boundary as preview, pin and server config.
+        values=settings.load(root,explicit=args.env_file)
+        before=dict(values)
+        settings.require(values,required)
+        for name in required:os.environ[name]=values[name]
+    except settings.SettingsError as exc:fail(str(exc))
     sys.path.insert(0,str(root/'src'))
-    try:
-        from delivery_api.runtime_environment import neutralize_retired_storage
-    except ImportError:fail('checkout lacks the shared retired-settings fix; update delivery-api main, then retry.')
-    retired={name:value for name,value in values.items() if name.startswith('TURSO_')}
-    for name,value in retired.items():
-        if value:os.environ.setdefault(name,value)
+    from delivery_api.runtime_environment import neutralize_retired_storage
     neutralize_retired_storage()
     if not os.environ['DELIVERY_DATABASE_URL'].startswith(('postgresql://','postgres://')):
         fail('DELIVERY_DATABASE_URL must be an explicit PostgreSQL URL.')
@@ -101,17 +73,23 @@ def main():
     if git(root,'status','--porcelain','--untracked-files=no'):
         fail('tracked files have local changes. Use a clean current-main checkout.')
     def identity(value,label):
-        if not value:value=input(label+' UUID: ').strip()
+        if not value:
+            value=settings.hidden_prompt(label+' UUID').strip()
         try:return str(UUID(value))
         except (ValueError,TypeError):fail(label+' must be a UUID, not an email, password, JWT or project ID.')
     if not sys.stdin.isatty():fail('run interactively in a terminal; confirmation cannot be piped.')
-    if not (args.owner or os.environ.get('RESET_OWNER_ID')) or not (args.auth_session or os.environ.get('RESET_AUTH_SESSION_ID')):
+    if not (args.owner or values.get('RESET_OWNER_ID')) or not (args.auth_session or values.get('RESET_AUTH_SESSION_ID')):
         print('Owner ID: Supabase > Authentication > Users > your signed-in user > User UID. Set RESET_OWNER_ID in the same settings file if desired.')
         print('Auth-session ID: sign in to Requi.re first. In Supabase SQL Editor run this READ-ONLY query, replacing OWNER_UUID with that UID:')
         print("SELECT id AS auth_session_id, user_id AS owner_id, created_at, not_after FROM auth.sessions WHERE user_id = 'OWNER_UUID'::uuid AND (not_after IS NULL OR not_after > now()) ORDER BY created_at DESC;")
         print('Use the session corresponding to your current sign-in. Set RESET_AUTH_SESSION_ID in the same file if desired. The script verifies the owner/session is active. Do not copy a JWT, access token or password.')
-    owner=identity(args.owner or os.environ.get('RESET_OWNER_ID'),'Owner')
-    session=identity(args.auth_session or os.environ.get('RESET_AUTH_SESSION_ID'),'Active auth session')
+    owner=identity(args.owner or values.get('RESET_OWNER_ID'),'Owner')
+    session=identity(args.auth_session or values.get('RESET_AUTH_SESSION_ID'),'Active auth session')
+    values['RESET_OWNER_ID']=owner;values['RESET_AUTH_SESSION_ID']=session
+    if values!=before:
+        try:settings.save_confirmed(Path(args.env_file).expanduser() if args.env_file else settings.target_path(),{k:v for k,v in values.items() if before.get(k)!=v})
+        except settings.SettingsError as exc:fail(str(exc))
+
     os.chdir(root);sys.path.insert(0,str(root/'src'))
     try:
         import importlib.util

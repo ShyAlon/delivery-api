@@ -4,7 +4,7 @@ set -euo pipefail
 HOST=15.235.101.85
 REMOTE_FILE=/etc/requi/cloud-models.env
 OPS_NOTE="Nothing was written on the server."
-. "$(dirname "$0")/lib.sh"; ops_start go-live "$0" --venv; REPO=$PWD
+. "$(dirname "$0")/lib.sh"; ops_start go-live "$0" --venv; REPO=$PWD; ops_settings
 for f in src/delivery_api/vendor_sources.py src/delivery_api/production_gateway.py src/delivery_api/retail_pricing.py; do [ -f "$f" ] || abort NO-FILE "$f is missing on main" "" "git -C $PWD log --oneline -5   (is main pulled?)"; done
 command -v ssh >/dev/null || abort NO-SSH "ssh is not installed" "" "install OpenSSH"
 command -v shasum >/dev/null || abort NO-SHASUM "shasum is not installed" "" "install it (it ships with macOS)"
@@ -27,22 +27,20 @@ echo
 echo "== DeepSeek key"
 HAVEKEY=$("${UBU[@]}" "sudo test -s /etc/requi/deepseek.env && echo yes || echo no")
 KEYFILE="$WORK/deepseek.env"; NEWKEY=no
-if [ "$HAVEKEY" = yes ]; then
-  echo "The server already has a DeepSeek key file. Press Enter to keep it, or paste a new key (typing is hidden)."
-else
-  echo "Paste the DeepSeek API key (typing is hidden; it goes straight to the server file and is never printed or saved on this Mac)."
+KEY=${DEEPSEEK_API_KEY:-}
+if [ -z "$KEY" ] && [ "$HAVEKEY" != yes ]; then
+  printf 'DEEPSEEK_API_KEY missing locally and on server (hidden): '; read -rs KEY < /dev/tty; echo
 fi
-printf 'Key: '; read -rs KEY < /dev/tty; echo
 if [ -n "$KEY" ]; then
-  case "$KEY" in *[[:space:]]*) abort KEY "the key has a space or line break in it" "" "run this command again and paste only the key";; esac
+  case "$KEY" in *[[:space:]]*) abort KEY "the key has a space or line break in it" "" "run this command again and enter only the key";; esac
   [ "${#KEY}" -ge 20 ] || abort KEY "that is too short to be a DeepSeek key" "" "run this command again and paste the whole key"
   printf 'DEEPSEEK_API_KEY=%s\n' "$KEY" > "$KEYFILE"; chmod 600 "$KEYFILE"; NEWKEY=yes
-elif [ "$HAVEKEY" != yes ]; then abort KEY "no key given and the server has none" "" "run this command again and paste the key"; fi
+elif [ "$HAVEKEY" != yes ]; then abort KEY "no key given and the server has none" "" "run this command again and save the key in preview.env or .env"; fi
 unset KEY
 echo
 echo "STEP 1 of 2 - write settings (nothing restarts, execution stays OFF)"
 echo "  prices + ceiling  -> $REMOTE_FILE (shown above; the old copy kept as .prev)"
-echo "  DeepSeek key      -> /etc/requi/deepseek.env ($([ "$NEWKEY" = yes ] && echo 'the key you just pasted' || echo 'kept as it is'); owner deploy, mode 600)"
+echo "  DeepSeek key      -> /etc/requi/deepseek.env ($([ "$NEWKEY" = yes ] && echo 'the locally loaded key' || echo 'kept as it is'); owner deploy, mode 600)"
 read -r -p "Type yes (English keyboard) to write these, anything else changes nothing: " A
 [ "$A" = yes ] || abort DECLINED "You did not type yes." "Nothing was written." "nothing needed"
 EV=$HOME/requi-evidence/price-pin-$(date +%Y%m%d-%H%M%S); mkdir -p "$EV"; chmod 700 "$EV"

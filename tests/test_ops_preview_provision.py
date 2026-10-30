@@ -3,6 +3,7 @@
 Hermetic: throwaway git repository, answers fed from a file. Nothing touches a server.
 """
 import os
+import sys
 import shutil
 import subprocess
 from pathlib import Path
@@ -28,12 +29,14 @@ def env(tmp_path):
     _git(tmp_path, "clone", "-q", str(bare), str(seed))
     (seed / "scripts" / "ops").mkdir(parents=True)
     shutil.copy(OPS / "lib.sh", seed / "scripts" / "ops" / "lib.sh")
+    shutil.copy(OPS / "settings.py", seed / "scripts" / "ops" / "settings.py")
     shutil.copy(OPS / "preview-provision.sh", seed / "scripts" / "ops" / "preview-provision.sh")
     _git(seed, "add", "-A")
     _git(seed, "commit", "-qm", "x")
     _git(seed, "push", "-q", "origin", "main")
     api = tmp_path / "repos" / "delivery-api"
     _git(tmp_path, "clone", "-q", str(bare), str(api))
+    (api / '.venv').symlink_to(Path(sys.executable).resolve().parent.parent, target_is_directory=True)
     store = tmp_path / "cfg" / "requi" / "preview.env"
     answers = tmp_path / "answers"
     e = {**os.environ, "PREVIEW_SETTINGS_FILE": str(store), "PREVIEW_TTY": str(answers), "TMPDIR": str(tmp_path)}

@@ -4,6 +4,7 @@ ops preview-provision, and no server contact happens at all.
 Hermetic: fake docker, curl and ssh on PATH; throwaway git repositories. Nothing touches a server or Docker.
 """
 import os
+import sys
 import platform
 import shutil
 import subprocess
@@ -55,6 +56,7 @@ def _repo(tmp_path, name, with_ops):
         (seed / "scripts" / "ops").mkdir(parents=True)
         (seed / "scripts" / "docker").mkdir(parents=True)
         shutil.copy(OPS / "lib.sh", seed / "scripts" / "ops" / "lib.sh")
+        shutil.copy(OPS / "settings.py", seed / "scripts" / "ops" / "settings.py")
         shutil.copy(OPS / "preview.sh", seed / "scripts" / "ops" / "preview.sh")
         shutil.copy(OPS.parent / "docker" / "build-local-image.sh", seed / "scripts" / "docker" / "build-local-image.sh")
         (seed / "scripts" / "docker" / "build-full-image.sh").write_text("echo SERVER-BUILD-SHOULD-NOT-RUN >> \"$FAKE_LOG\"\n")
@@ -69,6 +71,8 @@ def _repo(tmp_path, name, with_ops):
     root = tmp_path / "repos"
     root.mkdir(exist_ok=True)
     _git(tmp_path, "clone", "-q", str(bare), str(root / name))
+    if with_ops:
+        (root / name / '.venv').symlink_to(Path(sys.executable).resolve().parent.parent, target_is_directory=True)
     return root / name
 
 

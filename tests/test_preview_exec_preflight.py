@@ -2,8 +2,7 @@
 
 The launcher must fail closed with a clear ABORTED code for every missing
 prerequisite, before anything is started or written. docker and git are stubbed
-on PATH; no container, network, or real checkout is involved. The provider key
-must never be written to any file or printed.
+on PATH; no container, network, or real checkout is involved. The provider key must never be printed or written without explicit save approval.
 """
 import os, stat, subprocess, tempfile
 from pathlib import Path
@@ -92,23 +91,23 @@ def _run(tmp_path, env_extra, settings=None, tty_input='yes\n'):
 
 def test_missing_key_aborts_before_anything(tmp_path):
     p = _run(tmp_path, {'PREVIEW_EXEC_PROVIDER': 'deepseek'}, settings=_settings(tmp_path))
-    assert 'ABORTED [NO-KEY]' in p.stdout, p.stdout[-400:]
+    assert 'ABORTED [SETTINGS]'  in p.stdout, p.stdout[-400:]
     assert p.returncode == 1
+    assert 'missing DEEPSEEK_API_KEY' in p.stderr
 
 def test_short_or_spaced_key_aborts(tmp_path):
     for bad in ('sk-short', 'sk-has space init'):
         p = _run(tmp_path, {'DEEPSEEK_API_KEY': bad, 'PREVIEW_EXEC_PROVIDER': 'deepseek'}, settings=_settings(tmp_path))
         assert 'ABORTED [KEY-' in p.stdout, (bad, p.stdout[-300:])
 
-def test_deepseek_without_an_exported_key_aborts_loudly_with_no_prompt(tmp_path):
-    """2026-10-27 approved drop: the hidden key prompt is gone. The key must be
-    exported in the shell that runs the preview; a missing key is a loud NO-KEY
-    immediately - no prompt is shown and no line is read for a key."""
+def test_missing_key_refuses_nonterminal_input_without_echo(tmp_path):
+    """2026-10-30 file-first request supersedes shell-only keys. Missing
+    credentials require a real hidden-input terminal, never a readable answer file."""
     tty = tmp_path / 'tty'
     tty.write_text(KEY + '\n')
     p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'deepseek'},
              settings=_settings(tmp_path))
-    assert 'ABORTED [NO-KEY]' in p.stdout, p.stdout[-500:]
+    assert 'ABORTED [SETTINGS]'  in p.stdout, p.stdout[-500:]
     assert 'Type or paste it here' not in p.stdout
     assert KEY not in p.stdout and KEY not in p.stderr, 'the key must never be echoed or printed'
 
@@ -145,11 +144,11 @@ def test_deepseek_only_mode_carries_no_ollama_settings():
 
 def test_unprovisioned_settings_abort(tmp_path):
     p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY, 'PREVIEW_EXEC_PROVIDER': 'ollama'}, settings=tmp_path / 'absent.env')
-    assert 'ABORTED [NOT-PROVISIONED]' in p.stdout
+    assert 'ABORTED [SETTINGS]'  in p.stdout
 
 def test_settings_mode_must_be_600(tmp_path):
     p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY, 'PREVIEW_EXEC_PROVIDER': 'ollama'}, settings=_settings(tmp_path, mode=0o644))
-    assert 'ABORTED [SETTINGS-PERMS]' in p.stdout
+    assert 'ABORTED [SETTINGS]'  in p.stdout
 
 def test_settings_without_database_aborts(tmp_path):
     p = _run(tmp_path, {'DEEPSEEK_API_KEY': KEY, 'PREVIEW_EXEC_PROVIDER': 'ollama'}, settings=_settings(tmp_path, body='DELIVERY_SUPABASE_URL=https://x\n'))
@@ -176,7 +175,7 @@ def test_confirmed_start_passes_origin_checks(tmp_path):
 def test_provider_default_is_both_and_requires_key(tmp_path):
     p = _run(tmp_path, {}, settings=_settings(tmp_path))
     assert 'Provider for this preview' not in p.stdout
-    assert 'ABORTED [NO-KEY]' in p.stdout
+    assert 'ABORTED [SETTINGS]'  in p.stdout
     assert p.returncode == 1
 
 
@@ -195,7 +194,7 @@ def test_explicit_ollama_needs_no_key_but_preserves_confirmation(tmp_path):
     p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER':'ollama'}, settings=_settings(tmp_path))
     assert 'Provider: local Ollama model' in p.stdout
     assert 'ABORTED [NOT-CONFIRMED]' in p.stdout
-    assert 'ABORTED [NO-KEY]' not in p.stdout
+    assert 'ABORTED [SETTINGS]'  not in p.stdout
 
 
 def test_explicit_deepseek_preserves_key_and_confirmation_guards(tmp_path):
@@ -366,7 +365,7 @@ def test_a_failure_names_the_step_and_how_long_it_ran(tmp_path):
     p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama'},
              settings=tmp_path / 'absent.env')   # unprovisioned: fails inside step 1
     assert '== [1/' in p.stdout
-    assert 'ABORTED [NOT-PROVISIONED]' in p.stdout
+    assert 'ABORTED [SETTINGS]'  in p.stdout
     assert 'Step 1/' in p.stdout and 'failed after' in p.stdout, p.stdout[-400:]
 
 
@@ -509,7 +508,7 @@ def test_the_venv_gate_runs_in_step_1_before_any_pytest():
 
 def test_both_mode_requires_key_and_warns_of_local_grounding_before_confirmation(tmp_path):
     p=_run(tmp_path,{'PREVIEW_EXEC_PROVIDER':'both'},settings=_settings(tmp_path))
-    assert 'ABORTED [NO-KEY]' in p.stdout
+    assert 'ABORTED [SETTINGS]'  in p.stdout
     tty=tmp_path/'both-tty';tty.write_text('3\n')
     p=_run(tmp_path,{'PREVIEW_TTY':str(tty),'DEEPSEEK_API_KEY':KEY},settings=_settings(tmp_path))
     assert 'Providers: both' in p.stdout and 'loads the local model once' in p.stdout

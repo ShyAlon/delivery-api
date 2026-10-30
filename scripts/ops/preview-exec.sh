@@ -7,9 +7,9 @@
 # Settings: the file saved on this Mac by scripts/ops/preview-provision.sh (~/.config/requi/preview.env), plus
 # a fresh pin of the reviewed model row: the local Ollama server in ollama mode (scripts/ops/pin-local.py, $0,
 # nothing paid), or the two public DeepSeek pages in deepseek mode (scripts/ops/pin.py, the exact step
-# ops go-live runs; public GETs only, never a paid call). In deepseek mode the key is read from this shell's
-# environment (DEEPSEEK_API_KEY) and passed straight to the container - it is never written to any file, never
-# printed, never sent anywhere new; a missing key stops the run loudly, before anything is built. Deepseek mode
+# ops go-live runs; public GETs only, never a paid call). DeepSeek keys load from private preview.env, then
+# checkout .env, then the shell. Only missing values ask for hidden terminal input; saving is opt-in. The key
+# passes privately to the container, never in argv, logs or the temporary Docker env file. Deepseek mode
 # is DeepSeek-ONLY: the local Ollama server is never checked, contacted or needed, and no Ollama setting may
 # reach its settings. If any prerequisite is missing this stops with a clear message; it never falls back to
 # another model route. Ctrl-C removes the container and the temp folder.
@@ -104,12 +104,9 @@ MACHINE=$(uname -m); case "$MACHINE" in arm64|aarch64) NATIVE=arm64;; x86_64|amd
 EXPECTED_ARCH=${PREVIEW_ARCH:-$NATIVE}; case "$EXPECTED_ARCH" in arm64|amd64) ;; *) abort ARCH "PREVIEW_ARCH must be arm64 or amd64, not '$EXPECTED_ARCH'" "" "unset PREVIEW_ARCH";; esac
 PLATFORM=linux/$EXPECTED_ARCH
 # the settings saved on this Mac by ops preview-provision (one time), never printed
-STORE=${PREVIEW_SETTINGS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/requi/preview.env}
-[ -f "$STORE" ] || abort NOT-PROVISIONED "no preview settings are saved on this Mac yet" "" "bash scripts/ops/preview-provision.sh   (one time: saves the live settings on this Mac, mode 600)"
-[ -r "$STORE" ] || abort NOT-PROVISIONED "the saved settings file is not readable: $STORE" "" "ls -l $STORE"
-PERM=$(stat -c %a "$STORE" 2>/dev/null || stat -f %Lp "$STORE")
-[ "$PERM" = 600 ] || abort SETTINGS-PERMS "the saved settings file is mode $PERM, not 600; it holds real credentials" "" "chmod 600 $STORE"
-grep -q '^DELIVERY_DATABASE_URL=.' "$STORE" && grep -q '^DELIVERY_SUPABASE_URL=.' "$STORE" || abort SETTINGS "the saved settings file has no database or Supabase address" "" "bash scripts/ops/preview-provision.sh   (save them again)"
+REQUIRED=DELIVERY_DATABASE_URL,DELIVERY_SUPABASE_URL,DELIVERY_SUPABASE_ANON_KEY
+[ "${PREVIEW_EXEC_PROVIDER:-both}" = ollama ] || REQUIRED="$REQUIRED,DEEPSEEK_API_KEY"
+ops_settings "$REQUIRED"
 # the candidate: the four checkouts at origin/main, exactly as deploy-full takes them
 [ -f scripts/docker/build-local-image.sh ] || abort NO-FILE "scripts/docker/build-local-image.sh is missing on main" "" "git -C $PWD log --oneline -5   (is main pulled?)"
 candidate_tag
@@ -215,11 +212,9 @@ PROVIDER=${PREVIEW_EXEC_PROVIDER:-both}
 case "$PROVIDER" in deepseek|ollama|both) ;; *) abort PROVIDER "PREVIEW_EXEC_PROVIDER must be deepseek, ollama or both, not '$PROVIDER'" "" "unset PREVIEW_EXEC_PROVIDER";; esac
 OLLAMA_MODEL=${PREVIEW_EXEC_OLLAMA_MODEL:-phi4}
 OLLAMA_HOST=${OLLAMA_HOST:-http://localhost:11434}
-# The DeepSeek key comes from this shell's own protected environment only. There is no key prompt:
-# a missing key is a loud stop before anything is built (a key typed into a terminal can end up in
-# scrollback). It is passed straight to the container with -e - never written to any file, never printed.
+# File-first key is inherited privately, separately from the filtered container env file.
 if [ "$PROVIDER" != ollama ]; then
-  [ -n "${DEEPSEEK_API_KEY:-}" ] || abort NO-KEY "DEEPSEEK_API_KEY is not in this shell's environment" "Nothing was started and the database was not touched." "export DEEPSEEK_API_KEY=... in this shell (your existing protected local environment), then run ops preview-exec again"
+  [ -n "${DEEPSEEK_API_KEY:-}" ] || abort NO-KEY "DEEPSEEK_API_KEY is missing after file-first settings loading" "Nothing was started and the database was not touched." "save DEEPSEEK_API_KEY in the protected preview.env or checkout .env, then retry"
   case "${DEEPSEEK_API_KEY:-}" in *[[:space:]]*) abort KEY-SPACE "DEEPSEEK_API_KEY has a space or line break in it" "" "export only the key, then run again";; esac
   [ "${#DEEPSEEK_API_KEY}" -ge 20 ] || abort KEY-SHORT "DEEPSEEK_API_KEY is too short to be a DeepSeek key" "" "export the whole key, then run again"
 fi
@@ -254,12 +249,13 @@ umask 077; WORK=$(mktemp -d "${TMPDIR:-/tmp}/requi-preview-exec.XXXXXXXXXX"); ch
 # settings: saved file to a private temp file, never printed, execution ON. The local-preview flag -
 # which offers the ollama route - is written only in ollama mode: the route is dead without OLLAMA_BASE_URL,
 # and a selectable dead route fails the task start with a connection error instead of being absent.
-build_exec_env "$STORE" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"
+.venv/bin/python scripts/ops/settings.py delivery-env "$WORK/loaded.env" || abort SETTINGS "cannot prepare private settings"
+build_exec_env "$WORK/loaded.env" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"
 if [ "$PROVIDER" != deepseek ]; then
   preview_ollama_env "$WORK/preview.env" "$OLLAMA_MODEL" "$OLLAMA_HOST"
 fi
 chmod 600 "$WORK/preview.env"
-grep -q -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|API_KEY)' "$WORK/preview.env" && abort MODEL-KEY "a model key is in the saved settings file; the key must come from this shell's environment only" "" "remove it from $STORE (it does not belong there)"
+grep -q -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|API_KEY)' "$WORK/preview.env" && abort MODEL-KEY "a model key is in the saved settings file; the temporary container settings must exclude model keys" "" "send the failure output, never your settings values"
 # DeepSeek-only means no Ollama dependency anywhere: the local server is never checked, contacted or
 # needed, and no Ollama setting may reach this mode's settings. By construction none can (the saved-file
 # copy admits only DELIVERY_* and the Ollama lines are written in the ollama branch only); this guard

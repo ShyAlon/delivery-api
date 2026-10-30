@@ -65,12 +65,7 @@ local_flow(){
   PLATFORM=linux/$EXPECTED_ARCH
 
   # 2. the settings saved on this Mac by ops preview-provision (one time), never printed
-  STORE=${PREVIEW_SETTINGS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/requi/preview.env}
-  [ -f "$STORE" ] || abort NOT-PROVISIONED "no preview settings are saved on this Mac yet" "" "bash scripts/ops/preview-provision.sh   (one time: saves the live settings on this Mac, mode 600)"
-  [ -r "$STORE" ] || abort NOT-PROVISIONED "the saved settings file is not readable: $STORE" "" "ls -l $STORE"
-  PERM=$(stat -c %a "$STORE" 2>/dev/null || stat -f %Lp "$STORE")
-  [ "$PERM" = 600 ] || abort SETTINGS-PERMS "the saved settings file is mode $PERM, not 600; it holds real credentials" "" "chmod 600 $STORE"
-  grep -q '^DELIVERY_DATABASE_URL=.' "$STORE" && grep -q '^DELIVERY_SUPABASE_URL=.' "$STORE" || abort SETTINGS "the saved settings file has no database or Supabase address" "" "bash scripts/ops/preview-provision.sh   (save them again)"
+  ops_settings DELIVERY_DATABASE_URL,DELIVERY_SUPABASE_URL,DELIVERY_SUPABASE_ANON_KEY
 
   echo "ops preview: candidate $IMAGE (built on this Mac, no server access)"
   echo "  What it does: builds/uses $IMAGE on this Mac from the four checkouts, reads the settings saved on this Mac"
@@ -85,7 +80,8 @@ local_flow(){
   umask 077; WORK=$(mktemp -d "${TMPDIR:-/tmp}/requi-preview.XXXXXXXXXX"); chmod 700 "$WORK"; mkdir "$WORK/data"
 
   # 3. settings: saved file to a private temp file, never printed, execution off, local-preview flag on
-  build_env "$STORE" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"
+  .venv/bin/python scripts/ops/settings.py delivery-env "$WORK/loaded.env" || abort SETTINGS "cannot prepare private settings"
+  build_env "$WORK/loaded.env" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"
   printf 'REQUI_EXPECTED_REPOS=%s\n' "$REPOS" >> "$WORK/preview.env"
   printf 'DELIVERY_LOCAL_PREVIEW=1\n' >> "$WORK/preview.env"; chmod 600 "$WORK/preview.env"
   grep -q -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|API_KEY)' "$WORK/preview.env" && abort MODEL-KEY "a model key is still in the preview settings" "" "send me this output (not the file)"
