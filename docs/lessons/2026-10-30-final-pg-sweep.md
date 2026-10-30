@@ -37,24 +37,42 @@ The runner fixture now supplies the exact authorized root instead of bypassing
 its path checks. No production guard was relaxed.
 
 
-Validation status before publication: targeted combined gate 183 passed, plus
-33 evidence/log/revision checks, and a fresh installed delivery-only wheel
-actually booted with disposable PG, health/UI and mutation fencing intact.
-A broader first-50-file slice produced 515 passed, 9 skipped and 7 failed.
-Four crosshost failures were missing local sibling venv links; all four passed
-with the required environment present. Three unchanged file-evidence diagnostics
-tests reproduced on origin/main (background task, background thread and terminal
-child failure). They expect file reads while the handler writes to PG. They are
-reported as pre-existing debt, not counted green. The attempted 115-file batch
-was interrupted and is not a complete suite result. Hosted CI and Docker build/run
-remain unverified. The full current delivery suite is not claimed green.
+The expanded suite exposed additional file-evidence fixtures. They now read the
+same PG log/report/registry surfaces as production, preserving source, task,
+retention, redaction and degradation assertions. The volume test feeds the real
+bounded buffer handler without generating thousands of unrelated PG diagnostic
+rows. Shutdown uses real PG, signed synthetic auth, SSE and a registered child.
+The full item6 graph seeds a claimed real checkpoint/runtime, not a file store.
+Pool unit tests isolate their registry rather than closing another fixture's
+borrowed pool. The private pipeline no longer closes a pool it does not own.
 
-Continuation status: do not treat this delivery branch as merge-ready. The three
-original diagnostic failures and ten additional diagnostic file fixtures were
-ported to source-isolated real PG evidence; 36 checks passed. The first 49 files
-(excluding separately expensive crosshost acceptance) now pass 522 checks.
-Startup-report fixtures also moved to PG and 15 related checks passed.
-Further stopped batches still expose old fixtures in engine_log, Debug task log
-collection, item6 interview/full graph, log durability and stage log rotation.
-Browser batches were interrupted before completion. File-range logs under /tmp
-carry the exact unfinished coverage. Known reds are not waived or disabled.
+Two integration regressions needed production fixes: delivery still passed the
+removed file-session switch to the engine router, and zero-model final exports
+called the now-retired standalone CLI. Exports now invoke the same pure handoff
+builder in the isolated subprocess. Published journal evidence also exposed a
+Delete FK failure; tasks with that evidence are tombstoned, preserving the
+journal instead of deleting its session. A regression test verifies retention.
+
+## Validation
+
+All 345 top-level test files were exercised in disjoint bounded batches against
+owned disposable PostgreSQL, with explicit sibling source paths. The large UI
+file completed all 159 cases in six disjoint batches. The PG store file completed
+all 84 cases in seven disjoint batches. The nine cross-host cases, including the
+full alternating-host session through validation, passed across bounded runs.
+The decision-load tracing case passed with its full real-browser interview.
+
+The three connected item6 cases and 29 private payment cases were explicitly
+enabled on owned disposable databases, not left as environment skips. Both real
+zero-model package integration cases passed with the sibling export environment.
+Full-smoke now constructs an actual no-engine interpreter and owns its PG
+supervisor, eliminating the old environment-dependent skip while retaining the
+stage/reason/entry-report assertions. Aggregate disjoint coverage: 3,481 passed,
+no skipped cases left unexercised. This is batched coverage, not a single-process
+full-suite run; interrupted attempts and overlapping focused gates are excluded.
+
+A clean installed delivery-only wheel previously booted through the disposable
+PG supervisor, with health/UI and mutation fences verified and no engine/provider
+packages present. Docker build/run and hosted CI remain unverified. No live DB
+mutation, reset, deployment, provider call or spend. Merge the spec cleanup
+companion before delivery, whose integration checks use its directory read API.

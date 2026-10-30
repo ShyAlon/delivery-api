@@ -813,7 +813,8 @@ FROM tasks t"""
             self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s AND deleted_at IS NULL',(time.time(),time.time(),task_id), write=True)
             self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False,'accounting_retained':True})
             return
-        if (self._execute_native('SELECT 1 FROM generator_snapshots WHERE task_id=%s LIMIT 1',(task_id,)).fetchone()
+        if (self._execute_native('SELECT 1 FROM engine_session_journal j JOIN engine_sessions s ON s.session_id=j.session_id WHERE s.task_id=%s LIMIT 1',(task_id,)).fetchone()
+                or self._execute_native('SELECT 1 FROM generator_snapshots WHERE task_id=%s LIMIT 1',(task_id,)).fetchone()
                 or self._execute_native('SELECT 1 FROM generator_documents d JOIN engine_sessions s ON s.session_id=d.execution_session_id WHERE s.task_id=%s LIMIT 1',(task_id,)).fetchone()):
             self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s AND deleted_at IS NULL',(time.time(),time.time(),task_id), write=True)
             self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False,'checkpoint_evidence_retained':True})
