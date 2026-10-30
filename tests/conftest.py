@@ -19,7 +19,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts/item6'))
 
 # A throwaway real Postgres for the database tests (see tests/pg_harness.py). Off with DELIVERY_TEST_NO_POSTGRES=1.
 import pg_harness
-os.environ.pop("DELIVERY_TEST_POSTGRES_DSN",None)
+if pg_harness.STATE['status']!='running' or os.environ.get("DELIVERY_TEST_POSTGRES_DSN")!=pg_harness.STATE['dsn']:
+    os.environ.pop("DELIVERY_TEST_POSTGRES_DSN",None)
 pg_harness.start()
 if pg_harness.STATE['status']!='running':
     raise RuntimeError('test app requires its own disposable PG server: '+str(pg_harness.STATE))
@@ -102,3 +103,26 @@ def pg_log_evidence(monkeypatch):
         return {'text':'\n'.join(row['text'] for row in rows[-max_lines:]),'count':len(rows[-max_lines:]),'available':bool(rows),'truncated':len(rows)>max_lines,'scope':'operator diagnostic evidence'}
     read.repository=repo
     return read
+
+
+@pytest.fixture
+def pg_operator_log_reader(pg_log_evidence):
+    """Real operator registry gate, scoped to the disposable owner's live session."""
+    import psycopg
+    from pg_harness import STATE
+    from test_postgres_store import A
+    from delivery_api import config
+    from delivery_api.operator_reads import OperatorReadStore
+    from delivery_api.operator_authorization import OperatorPrincipal
+    from delivery_api.postgres_store import PostgresStore
+    from delivery_api.tenancy import tenant_context
+    with psycopg.connect(STATE['dsn']) as conn:
+        prior=conn.execute('SELECT registry_version,capabilities,enabled FROM operator_principals WHERE subject=%s',(A.owner_id,)).fetchone()
+        conn.execute("INSERT INTO operator_principals(subject,registry_version,capabilities,enabled) VALUES(%s,'fixture-logs',ARRAY['logs.read'],true) ON CONFLICT(subject) DO UPDATE SET registry_version=excluded.registry_version,capabilities=excluded.capabilities,enabled=true",(A.owner_id,))
+    reader=OperatorReadStore(config.DATABASE_URL,OperatorPrincipal(A.owner_id,'fixture-logs',frozenset({'logs.read'})))
+    try:
+        with tenant_context(A):yield reader,PostgresStore(config.DATABASE_URL)
+    finally:
+        with psycopg.connect(STATE['dsn']) as conn:
+            if prior:conn.execute('UPDATE operator_principals SET registry_version=%s,capabilities=%s,enabled=%s WHERE subject=%s',(*prior,A.owner_id))
+            else:conn.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))

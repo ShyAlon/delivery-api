@@ -6,7 +6,7 @@ never the network. Volatile fields (timestamps) are normalized before the
 byte-for-byte comparison; prices, ceiling, retail formula and source hashes
 must match exactly.
 """
-import hashlib, json, re, subprocess, sys
+import hashlib, json, re, subprocess, sys, os
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -42,7 +42,7 @@ def _run_pin(pin_source, out_dir):
         [str(REPO / '.venv/bin/python'), '-c', RUNNER,
          str(FIXTURES), PRICING, API, str(out_dir), str(pin_path)],
         capture_output=True, text=True, cwd=REPO,
-        env={'PYTHONPATH': str(REPO / 'src'), 'PATH': '/usr/bin:/bin'})
+        env={**os.environ,'PYTHONPATH': str(REPO / 'src'), 'PATH': '/usr/bin:/bin'})
     assert proc.returncode == 0, proc.stderr[-500:] + proc.stdout[-500:]
     return (out_dir / 'cloud-models.env').read_text(), proc.stdout
 
@@ -102,7 +102,7 @@ def test_pin_fails_closed_on_changed_vendor_page(tmp_path):
         [str(REPO / '.venv/bin/python'), '-c', RUNNER,
          str(broken), PRICING, API, str(tmp_path), str(pin_path)],
         capture_output=True, text=True, cwd=REPO,
-        env={'PYTHONPATH': str(REPO / 'src'), 'PATH': '/usr/bin:/bin'})
+        env={**os.environ,'PYTHONPATH': str(REPO / 'src'), 'PATH': '/usr/bin:/bin'})
     assert proc.returncode == 2
     assert 'PIN-FAIL' in proc.stdout
     assert not (tmp_path / 'cloud-models.env').exists()

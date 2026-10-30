@@ -29,16 +29,15 @@ def test_environment_style_credentials_never_survive_assignment_projection():
     assert all(x not in value for x in ('fixture-A','fixture-B','fixture-C'))
 
 
-def test_stage_rotation_is_bounded_and_scrubs_all_writes(tmp_path,monkeypatch):
-    from delivery_api import observability as o
-    stage_handler=o._StageFileHandler
-    path=tmp_path/'stage.log'
-    monkeypatch.setattr(o,'STAGE_LOG_PATHS',{'fixture':path})
-    def small(*args,**kwargs):
-        kwargs.update(maxBytes=220,backupCount=2)
-        return stage_handler(*args,**kwargs)
-    monkeypatch.setattr(o,'_StageFileHandler',small)
-    for i in range(20):o.event('fixture','API_KEY=must-not-leak '+'x'*80,count=i,phase_key='fixture')
-    files=list(tmp_path.glob('stage.log*'))
-    assert len(files)==3
-    assert all('must-not-leak' not in p.read_text() for p in files)
+def test_stage_pg_retention_is_bounded_and_scrubs_all_writes(tmp_path,monkeypatch,pg_log_evidence):
+    from delivery_api import observability as o,postgres_logs
+    path=tmp_path/'stage.log';repo=pg_log_evidence.repository;original=repo.append
+    def bounded(stream,text,**fields):return original(stream,text,max_bytes=1200,max_rows=3,**fields)
+    repo.append=bounded
+    monkeypatch.setattr(postgres_logs,'selected',lambda:repo)
+    monkeypatch.setattr(o,'STAGE_LOG_PATHS',{'needs':path})
+    for i in range(20):o.event('fixture','API_KEY=must-not-leak '+'x'*80,count=i,phase_key='needs')
+    rows=repo.tail('stage:needs')
+    assert len(rows)==3 and sum(len(row['text'].encode()) for row in rows)<=1200
+    assert all('must-not-leak' not in row['text'] for row in rows)
+    assert not list(tmp_path.glob('stage.log*'))

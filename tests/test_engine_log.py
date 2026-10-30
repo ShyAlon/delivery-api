@@ -31,7 +31,7 @@ def _resolver(mapping):
     return lambda session:mapping.get(session)
 
 
-def test_tee_copies_stdout_and_stamped_file(tmp_path):
+def test_tee_copies_stdout_and_timestamped_pg_rows(tmp_path,pg_log_evidence):
     out_path=tmp_path/'logs'/'engine.log'
     proc=subprocess.Popen([sys.executable,'-c','import sys;print("hello engine");print("a warning",file=sys.stderr)'],
                           stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
@@ -44,24 +44,30 @@ def test_tee_copies_stdout_and_stamped_file(tmp_path):
     for _ in range(100):
         if len(sink_lines)>=2:break
         time.sleep(0.05)
-    text=out_path.read_text()
+    rows=pg_log_evidence.repository.tail('engine')
+    text='\n'.join(row['text'] for row in rows)
+    assert not out_path.exists()
     assert 'hello engine' in text and 'a warning' in text
     assert ''.join(sink_lines).count('hello engine')==1  # stdout view unchanged, no prefix
-    for line in text.splitlines():
-        assert engine_log._STAMP.match(line),line
+    assert all(isinstance(row['ts'],(float,int)) and row['ts']>0 for row in rows)
 
 
-def test_tee_rotates_at_bound(tmp_path):
-    out_path=tmp_path/'engine.log'
-    code='for i in range(400):print("x"*120)'
-    proc=subprocess.Popen([sys.executable,'-c',code],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
-    full_entry.tee_engine_output(proc,out_path,max_bytes=4096,out=open('/dev/null','w'))
-    proc.wait()
-    for _ in range(100):
+def test_tee_retention_is_bounded(tmp_path,monkeypatch,pg_log_evidence):
+    from delivery_api import postgres_logs
+    repo=pg_log_evidence.repository;original=repo.append
+    repo.append=lambda stream,text,**fields:original(stream,text,max_bytes=4096,max_rows=30,**fields)
+    monkeypatch.setattr(postgres_logs,'selected',lambda:repo)
+    proc=subprocess.Popen([sys.executable,'-c','for i in range(100):print("x"*120)'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+    sink=open('/dev/null','w')
+    full_entry.tee_engine_output(proc,tmp_path/'engine.log',out=sink);proc.wait()
+    for _ in range(200):
         if proc.stdout.closed:break
-        time.sleep(0.05)
-    assert out_path.with_suffix('.log.1').exists()
-    assert out_path.stat().st_size<6000
+        time.sleep(.02)
+    assert proc.stdout.closed
+    sink.close()
+    rows=repo.tail('engine')
+    assert 0<len(rows)<=30 and sum(len(row['text'].encode()) for row in rows)<=4096
+    assert not (tmp_path/'engine.log').exists()
 
 
 def test_path_parity_with_delivery_config(tmp_path,monkeypatch):
@@ -112,21 +118,19 @@ def test_resolver_failure_keeps_line_operator_only(tmp_path):
     assert SESSION_A in admin['text']
 
 
-def test_route_merges_engine_block(tmp_path,monkeypatch):
+def test_route_merges_engine_block(monkeypatch,pg_log_evidence,pg_operator_log_reader):
     import delivery_api.app as module
-    from delivery_api.store import create_store
-    store=create_store(str(tmp_path/'test.db'))
+    reader,store=pg_operator_log_reader
     monkeypatch.setattr(module,'store',store)
-    monkeypatch.setenv('XDG_DATA_HOME',str(tmp_path))
-    logs=tmp_path/'requi-re'/'logs';logs.mkdir(parents=True)
-    (logs/'engine.log').write_text(_stamp()+' engine marker session=%s\n'%SESSION_A)
+    monkeypatch.setattr(module,'_operator_reader',lambda:reader)
+    pg_log_evidence.repository.append('engine','engine marker session='+SESSION_A,session_id=SESSION_A,task_id=pg_log_evidence.repository.source_id)
     actor=type('A',(),{'id':OWNER_A,'admin':True})
-    result=module.server_log(30,actor())
-    assert engine_log.HEADER in result['text'] and SESSION_A in result['text']
+    result=module.server_log(30,actor(),pg_log_evidence.repository.source_id)
+    assert 'engine:' in result['text'] and SESSION_A in result['text']
     assert result['engine_log']['available'] is True and result['engine_log']['lines']==1
 
 
-def test_mirror_writes_stamped_scrubbed_lines_the_read_side_picks_up(tmp_path):
+def test_mirror_writes_stamped_scrubbed_lines_the_read_side_picks_up(tmp_path,pg_log_evidence):
     """The in-process engine's records land in the same file the Debug tail reads."""
     import logging
     path=tmp_path/'logs'/'engine.log'
@@ -137,7 +141,9 @@ def test_mirror_writes_stamped_scrubbed_lines_the_read_side_picks_up(tmp_path):
         logging.getLogger('interview_engine.http').warning('dsn postgres://user:secretpw@host/db leaked session=%s',SESSION_A)
     finally:
         engine_log.uninstall_mirror()
-    out=engine_log.read(OWNER_A,False,30,_resolver({SESSION_A:OWNER_A}),path=path)
+    rows=pg_log_evidence.repository.tail('engine')
+    out={'available':bool(rows),'count':len(rows),'text':'\n'.join(row['text'] for row in rows)}
+    assert not path.exists()
     assert out['available'] and out['count']==3
     assert 'stop.swallowed' in out['text'] and 'lease heartbeat started' in out['text']
     assert 'secretpw' not in out['text'] and '[redacted]' in out['text']
@@ -157,14 +163,18 @@ def test_mirror_idempotent_and_never_fatal(tmp_path,monkeypatch):
     engine_log.uninstall_mirror()
 
 
-def test_mirror_rotates_at_bound(tmp_path,monkeypatch):
+def test_mirror_retention_at_bound(tmp_path,monkeypatch,pg_log_evidence):
     import logging
-    monkeypatch.setattr(engine_log,'MIRROR_MAX_BYTES',400)
+    from delivery_api import postgres_logs
+    repo=pg_log_evidence.repository;original=repo.append
+    repo.append=lambda stream,text,**fields:original(stream,text,max_bytes=800,max_rows=3,**fields)
+    monkeypatch.setattr(postgres_logs,'selected',lambda:repo)
     path=tmp_path/'engine.log'
     engine_log.install_mirror(path=path)
     try:
         for i in range(30):logging.getLogger('interview_engine.http').warning('fill %d %s',i,'x'*60)
     finally:
         engine_log.uninstall_mirror()
-    assert path.exists() and path.stat().st_size<=400+300   # one in-flight write may cross the bound once
-    assert (tmp_path/'engine.log.1').exists()
+    rows=repo.tail('engine')
+    assert 0<len(rows)<=3 and sum(len(row['text'].encode()) for row in rows)<=800
+    assert not path.exists()

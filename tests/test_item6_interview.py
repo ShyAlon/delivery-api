@@ -31,23 +31,31 @@ def configure_interview_models(monkeypatch):
  return models
 
 
-def test_actual_interview_outputs_under_owned_namespace(tmp_path,monkeypatch):
+def test_actual_interview_outputs_under_owned_namespace(tmp_path,monkeypatch,pg_workspace_factory):
  configure_interview_models(monkeypatch)
- owner='00000000-0000-0000-0000-000000000001';sid='test-interview';base=tmp_path/'tenants'/owner/'sessions'
- fence=StopFence(base/sid/'interview/stop-request.json')
- with fence.running():
-  app=InterviewApplication(sid,'test-task','a saas web app for surf schools, with booking and customer logins',artifact_root=str(base))
-  request=app.advance();inputs=[]
-  for _ in range(8):
-   if request is None:break
-   inputs.append(request.kind)
-   if request.kind==InputKind.CHOICE:response=InputResponse(input_id=request.input_id,actor_id=owner,value=1,rationale='reliable native APIs')
-   elif request.kind==InputKind.APPROVAL:response=InputResponse(input_id=request.input_id,actor_id=owner,value=1)
-   else:raise ValueError('unhandled real input '+request.prompt)
-   request=app.advance(response)
-  assert app.finished
- from vmodel_contracts import IntentModel,ConOpsDocument
- root=base/sid/'interview'
- IntentModel.model_validate_json((root/'intent_model.json').read_bytes());ConOpsDocument.model_validate_json((root/'conops.json').read_bytes())
- assert InputKind.CHOICE in inputs and InputKind.APPROVAL in inputs
- app.checkpointer.conn.close()
+ from delivery_api.tenancy import tenant_context
+ from interview_engine.pg_session_store import PgSessionStore
+ with pg_workspace_factory() as workspace,tenant_context(workspace.scope):
+  owner=workspace.scope.owner_id;sid='test-interview';base=tmp_path/'tenants'/owner/'sessions'
+  task=workspace.store.create_task('Actual interview PG');tid=task['task_id']
+  workspace.store.set_engine_session(tid,sid)
+  store=PgSessionStore(workspace.store._postgres._pool,claims=(owner,workspace.scope.session_id))
+  claim=store.claim(sid,owner,'item6-fixture',120)
+  fence=StopFence(base/sid/'interview/stop-request.json')
+  with fence.running():
+   app=InterviewApplication(sid,tid,'a saas web app for surf schools, with booking and customer logins',artifact_root=str(base),pg_store=store,pg_claim=claim)
+   request=app.advance();inputs=[]
+   for _ in range(8):
+    if request is None:break
+    inputs.append(request.kind)
+    if request.kind==InputKind.CHOICE:response=InputResponse(input_id=request.input_id,actor_id=owner,value=1,rationale='reliable native APIs')
+    elif request.kind==InputKind.APPROVAL:response=InputResponse(input_id=request.input_id,actor_id=owner,value=1)
+    else:raise ValueError('unhandled real input '+request.prompt)
+    request=app.advance(response)
+   assert app.finished
+  from vmodel_contracts import IntentModel,ConOpsDocument
+  IntentModel.model_validate_json(app.documents.read('interview/intent_model.json'))
+  ConOpsDocument.model_validate_json(app.documents.read('interview/conops.json'))
+  assert InputKind.CHOICE in inputs and InputKind.APPROVAL in inputs
+  assert not list(base.rglob('*.sqlite'))
+  assert store.release(claim)

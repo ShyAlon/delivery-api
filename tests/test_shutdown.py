@@ -16,25 +16,39 @@ def _port():
 
 
 @pytest.mark.parametrize('shutdown_signal',[signal.SIGINT,signal.SIGTERM],ids=['sigint','sigterm'])
-def test_shutdown_closes_sse_and_terminates_engine_process(tmp_path,shutdown_signal):
+def test_shutdown_closes_sse_and_terminates_engine_process(tmp_path,shutdown_signal,pg_runtime_environment,pg_workspace_factory):
     port=_port();pidfile=tmp_path/'engine.pid';root=Path(__file__).parents[1]
     engine=tmp_path/'engine.py'
     engine.write_text("import os,sys,time;open(sys.argv[1],'w').write(str(os.getpid()));time.sleep(120)\n")
     launcher=tmp_path/'server.py'
-    launcher.write_text(f'''import asyncio,sys,uvicorn
+    workspace=pg_workspace_factory();w=workspace.__enter__()
+    launcher.write_text(f'''import asyncio,sys,uvicorn,os
+from delivery_api.tenancy import TenantScope,tenant_context
+from pg_workspace import Keys
+from delivery_api.supabase_auth import SupabaseIdentityVerifier
+original=SupabaseIdentityVerifier.__init__
+def init(self,*args,**kwargs):original(self,*args,**kwargs);self.keys=Keys()
+SupabaseIdentityVerifier.__init__=init
+scope=TenantScope({w.scope.owner_id!r},{w.scope.session_id!r})
+from pg_workspace import Workspace
+from pathlib import Path
+Path({str(tmp_path/'token')!r}).write_text(Workspace('',None,scope).token)
 from delivery_api.app import app,store,runner
-TASK=store.create_task("Shutdown test","live child",task_id="shutdown-live")["task_id"]
+with tenant_context(scope):
+ TASK=store.create_task("Shutdown test","live child",task_id="shutdown-live")["task_id"]
 from contextlib import asynccontextmanager
 from delivery_api.app import lifespan as original_lifespan
 @asynccontextmanager
 async def test_lifespan(application):
     async with original_lifespan(application):
-        job=asyncio.create_task(runner.run(TASK,[sys.executable,{str(engine)!r},{str(pidfile)!r}],cwd={str(tmp_path)!r}))
+        child=await asyncio.create_subprocess_exec(sys.executable,{str(engine)!r},{str(pidfile)!r},start_new_session=True)
+        runner.processes[TASK]=child
         yield
 app.router.lifespan_context=test_lifespan
 uvicorn.run(app,host="127.0.0.1",port={port},log_level="warning")
 ''')
-    env={**os.environ,'PYTHONPATH':str(root/'src'),'DELIVERY_DATABASE_URL':f"sqlite:///{tmp_path/'shutdown.db'}"}
+    env=pg_runtime_environment()
+    env['PYTHONPATH']=str(root/'src')+os.pathsep+str(root/'tests')
     server=subprocess.Popen([sys.executable,str(launcher)],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     stream=None
     try:
@@ -43,7 +57,9 @@ uvicorn.run(app,host="127.0.0.1",port={port},log_level="warning")
             if server.poll() is not None:raise AssertionError(server.stderr.read())
             time.sleep(.05)
         assert pidfile.exists()
-        stream=subprocess.Popen([sys.executable,'-c',f"import time,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:{port}/api/tasks/shutdown-live/stream');r.readline();time.sleep(120)"],env=env)
+        token=(tmp_path/'token').read_text()
+        code=f"import time,urllib.request; r=urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:{port}/api/tasks/shutdown-live/stream',headers={{'Authorization':'Bearer {token}'}}));r.readline();time.sleep(120)"
+        stream=subprocess.Popen([sys.executable,'-c',code],env=env)
         time.sleep(.4);assert stream.poll() is None
         started=time.monotonic();server.send_signal(shutdown_signal)
         server.wait(timeout=7)
@@ -57,3 +73,4 @@ uvicorn.run(app,host="127.0.0.1",port={port},log_level="warning")
     finally:
         if stream and stream.poll() is None:stream.kill();stream.wait()
         if server.poll() is None:server.kill();server.wait()
+        workspace.__exit__(None,None,None)

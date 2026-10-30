@@ -44,7 +44,10 @@ def test_pg_quality_app_routes_and_background_thread_read_latest_database_config
     from fastapi.testclient import TestClient
     import asyncio
     backend=PostgresQualityConfig(STATE['dsn'].replace('user=sandbox','user=delivery_app'))
-    app=create_app(SessionRegistry(),service_token='fixture',quality_store=backend)
+    from delivery_api.db_pool import pool_for
+    from interview_engine.pg_session_store import PgSessionStore
+    sessions=PgSessionStore(pool_for(backend.dsn))
+    app=create_app(SessionRegistry(session_store=sessions,program_factory=lambda **kw:None),service_token='fixture',quality_store=backend)
     @app.get('/probe')
     async def probe():return await asyncio.to_thread(lambda:q.current()['retrieval'])
     with TestClient(app) as client:

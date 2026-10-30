@@ -184,4 +184,4 @@ class PrivatePipeline:
                 if label:exc.safe_check=label
             raise
         finally:
-            if not document_io.configured():backend.conn.close()
+            pass  # PG saver borrows the process pool; only process shutdown owns it.

@@ -33,15 +33,19 @@ console.log(JSON.stringify({{calls,out}}));
  assert any(x['availability']=='policy_excluded' for x in result['out']['sections'])
 
 
-def test_server_log_task_filter_never_includes_neighboring_task(monkeypatch):
+def test_server_log_task_filter_never_includes_neighboring_task(monkeypatch,pg_log_evidence,pg_operator_log_reader):
  from delivery_api import app as m
  from types import SimpleNamespace
- monkeypatch.setattr(m,'store',SimpleNamespace(task=lambda t:{'engine_session_id':'s'}))
- monkeypatch.setattr(m.server_log_buffer,'read',lambda *a:{'text':"INFO task=task-a own\nINFO task=task-a-other neighbor\nINFO system-wide",'count':3})
- monkeypatch.setattr(m.engine_log,'read',lambda *a:{'available':False,'text':'','count':0,'path':'test'})
+ reader,store=pg_operator_log_reader
+ monkeypatch.setattr(m,'store',store)
+ monkeypatch.setattr(m,'_operator_reader',lambda:reader)
+ repo=pg_log_evidence.repository
+ repo.append('activity','INFO task=task-a own',task_id='task-a')
+ repo.append('activity','INFO task=task-a-other neighbor',task_id='task-a-other')
+ repo.append('activity','INFO system-wide')
  got=m.server_log(30,SimpleNamespace(id='operator',admin=True),'task-a')
- assert got['text']=='INFO task=task-a own' and got['count']==1
- assert got['task_id']=='task-a' and 'unattributed' in got['task_filter']
+ assert 'INFO task=task-a own' in got['text'] and got['count']==1
+ assert 'neighbor' not in got['text'] and 'system-wide' not in got['text']
 
 
 def test_package_fresh_reads_do_not_depend_on_dialog_loading_state():

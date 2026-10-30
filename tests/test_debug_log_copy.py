@@ -23,9 +23,14 @@ def clean():
 
 
 def emit(owner,text,level=logging.WARNING,name='delivery_api.test'):
-    log=logging.getLogger(name)
-    if owner is None:log.log(level,text);return
-    with tenant_context(TenantScope(owner)):log.log(level,text)
+    # Exercise the actual buffer handler, without emitting 2,000 unrelated PG
+    # diagnostic rows through every process-wide root handler.
+    record=logging.makeLogRecord({'name':name,'msg':text,'levelno':level,'levelname':logging.getLevelName(level)})
+    def send():
+        for handler in logging.getLogger().handlers:
+            if isinstance(handler,slb._Buffer) and level>=handler.level:handler.handle(record)
+    if owner is None:send();return
+    with tenant_context(TenantScope(owner)):send()
 
 
 def read(owner=A,admin=False,minutes=30):

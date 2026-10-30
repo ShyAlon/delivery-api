@@ -85,7 +85,7 @@ class InProcessInterviewHost:
         if self._session_dsn is not None:
             from .pg_execution_fence import InstalledInterviewControlRouter
             installed_resolver=InstalledInterviewControlRouter(self.store,self.artifacts_base).resolve
-        self._engine_router=TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn,allow_file_sessions=self._session_dsn is None,pool=engine_pool,installed_resolver=installed_resolver)
+        self._engine_router=TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn,pool=engine_pool,installed_resolver=installed_resolver)
         quality_store=None
         if self._session_dsn is not None:
             from .pg_quality_config import PostgresQualityConfig
