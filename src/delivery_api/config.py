@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 
 # Shared local configuration; process environment still has precedence.
 load_dotenv(override=False)
+from .runtime_environment import neutralize_retired_storage
+neutralize_retired_storage()
 
 # Abuse protection (scoping doc section 5): global cap.
 GLOBAL_BUDGET_USD = float(os.environ.get("DELIVERY_GLOBAL_BUDGET_USD", "100.00"))
@@ -30,8 +32,6 @@ ARTIFACT_RESTORE = os.environ.get("DELIVERY_ARTIFACT_RESTORE", "").strip() == "1
 CLOUD_TENANTS = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 if CLOUD_TENANTS and (not SUPABASE_URL or not SUPABASE_ANON_KEY):
     raise RuntimeError("Postgres requires Supabase Auth URL and public anon/publishable key; no local-auth fallback.")
-if CLOUD_TENANTS and os.environ.get("TURSO_DATABASE_URL"):
-    raise RuntimeError("Cloud tenant control plane cannot use a Turso replica/fallback.")
 SUPABASE_ADMIN_SUBJECTS = {x.strip() for x in os.environ.get("DELIVERY_SUPABASE_ADMIN_SUBJECTS", "").split(",") if x.strip()}
 # The operator, held in code. Admin when the signed login token carries this email (sign-in refuses unconfirmed emails).
 OPERATOR_EMAIL = "shy.alon@gmail.com"
