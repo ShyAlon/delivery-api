@@ -58,7 +58,7 @@ def test_no_cost_or_vendor_wording_appears_in_the_capacity_text():
 
 
 @pytest.fixture
-def capacity_client(pg_workspace_factory,pg_task_app):
+def capacity_client(pg_workspace_factory,pg_task_app,monkeypatch):
     import jwt
     from pg_workspace import KEY
     with pg_workspace_factory() as workspace:
@@ -73,8 +73,11 @@ def capacity_client(pg_workspace_factory,pg_task_app):
             c.execute("INSERT INTO operator_principals(subject,registry_version,capabilities,enabled) VALUES(%s,'capacity-test',ARRAY['logs.read'],true)",(workspace.scope.owner_id,))
         application=pg_task_app(workspace)
         from delivery_api import app as app_module
-        app_module.app.state.operator_read_store=OperatorReadStore(workspace.store._postgres.dsn,
-            OperatorPrincipal(workspace.scope.owner_id,'capacity-test',frozenset({'logs.read'})))
+        # Exercise production lifespan wiring instead of injecting a reader that
+        # startup must clear to prevent stale authority across lifecycles.
+        monkeypatch.setenv('REQUI_OPERATOR_SUBJECT',workspace.scope.owner_id)
+        monkeypatch.setenv('REQUI_OPERATOR_REGISTRY_VERSION','capacity-test')
+        monkeypatch.setenv('REQUI_OPERATOR_CAPABILITIES','["logs.read"]')
         try:
             with TestClient(application) as client:
                 yield workspace,client,{'Authorization':'Bearer '+operator}

@@ -14,7 +14,8 @@ import tempfile
 from dotenv.parser import parse_stream
 from dotenv import set_key
 
-EXACT={'DEEPSEEK_API_KEY','RESET_OWNER_ID','RESET_AUTH_SESSION_ID','REQUI_ADMIN_DATABASE_URL',
+OPERATOR_SETTINGS={'REQUI_OPERATOR_SUBJECT','REQUI_OPERATOR_REGISTRY_VERSION','REQUI_OPERATOR_CAPABILITIES'}
+EXACT=OPERATOR_SETTINGS|{'DEEPSEEK_API_KEY','RESET_OWNER_ID','RESET_AUTH_SESSION_ID','REQUI_ADMIN_DATABASE_URL',
        'INTERVIEW_ENGINE_MODEL_PROBING','INTERVIEW_ENGINE_MODEL_DISTILLATION',
        'OLLAMA_BASE_URL','OLLAMA_HOST','VMODEL_OLLAMA_NUM_CTX'}
 IDENTITY=('DELIVERY_DATABASE_URL','DELIVERY_SUPABASE_URL')
@@ -156,7 +157,7 @@ def delivery_env(destination):
     with open(destination,'w',opener=lambda p,f:os.open(p,f,0o600)) as stream:
         os.chmod(destination,0o600)
         for name,value in sorted(os.environ.items()):
-            if not name.startswith('DELIVERY_') or name.startswith('DELIVERY_TEST_') or name in excluded:continue
+            if (not name.startswith('DELIVERY_') and name not in OPERATOR_SETTINGS) or name.startswith('DELIVERY_TEST_') or name in excluded:continue
             if re.search('DEEPSEEK|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|MISTRAL|GROQ|COHERE|XAI|PROVIDER|API_KEY|MODEL_KEY',name,re.I):continue
             if any(c in value for c in '\n\r\x00'):raise SettingsError('container setting must be one line: '+name)
             stream.write(name+'='+value+'\n')

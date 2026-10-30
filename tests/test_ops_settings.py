@@ -97,3 +97,16 @@ def test_save_does_not_persist_test_db_settings(tmp_path):
     s=module();path=tmp_path/'saved.env'
     s.save_confirmed(path,{'DEEPSEEK_API_KEY':'key','DELIVERY_TEST_POSTGRES_DSN':'never'},confirm=lambda _:'yes')
     assert 'DELIVERY_TEST_' not in path.read_text()
+
+
+def test_explicit_operator_config_survives_file_first_container_boundary(tmp_path,monkeypatch):
+    s=module();root=tmp_path/'repo';preview=tmp_path/'preview.env'
+    save(preview,"REQUI_OPERATOR_SUBJECT=verified-subject\nREQUI_OPERATOR_REGISTRY_VERSION=reviewed-v1\nREQUI_OPERATOR_CAPABILITIES='[\"logs.read\"]'\nREQUI_OPERATOR_EVIL=not-allowed\n")
+    values=s.load(root,{'PREVIEW_SETTINGS_FILE':str(preview)})
+    assert set(values)==s.OPERATOR_SETTINGS
+    for k,v in values.items():monkeypatch.setenv(k,v)
+    monkeypatch.setenv('REQUI_OPERATOR_EVIL','no')
+    target=tmp_path/'container.env';s.delivery_env(target)
+    text=target.read_text()
+    assert all(k+'='+values[k] in text for k in s.OPERATOR_SETTINGS)
+    assert 'REQUI_OPERATOR_EVIL' not in text
