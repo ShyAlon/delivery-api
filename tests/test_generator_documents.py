@@ -827,3 +827,33 @@ def test_generator_diagnostics_keep_exact_raw_bytes_in_pg_without_local_files(st
         assert reader.read('spec/run.log')==b'exact\n'
         assert json.loads(reader.read('calls.jsonl'))['event']=='diagnostic'
         assert not root.exists()
+
+
+def test_interview_diagnostics_use_real_pg_lease_and_stop_without_outer_task_lock(store,tmp_path,monkeypatch):
+    import json
+    from interview_engine.pg_session_store import PgSessionStore
+    from interview_engine.pg_documents import InterviewDocuments
+    from interview_engine.document_diagnostics import bind
+    from interview_engine.raw_output import RawOutputLog
+    from interview_engine.verification import VerificationLog
+    from interview_engine import stop_fence
+    from delivery_api.generator_documents import GeneratorDocuments
+    with tenant_context(A):
+        tid=store.create_task('interview-diag-'+uuid.uuid4().hex)['task_id'];sid='docs-'+uuid.uuid4().hex;store.set_engine_session(tid,sid)
+        pg=PgSessionStore(store._postgres._pool,claims=(A.owner_id,A.session_id));claim=pg.claim(sid,A.owner_id,'diag-test',60)
+        docs=InterviewDocuments(pg,claim,tid);root=tmp_path/sid
+        monkeypatch.setattr(stop_fence,'guarded_publish',lambda call:(_ for _ in ()).throw(AssertionError('no nested publication lock')))
+        with bind(docs,root):
+            raw=RawOutputLog(root/'interview/debug');path=raw.write('conops','item','exact\n')
+            verification=VerificationLog(root/'interview/verification.jsonl');verification.write({'passed':True})
+            reader=GeneratorDocuments.owner_reader(store,tid)
+            assert reader.read('interview/debug/'+path.name)==b'exact\n'
+            assert json.loads(reader.read('interview/verification.jsonl'))['passed'] is True
+            pg.release(claim)
+            fresh=pg.claim(sid,A.owner_id,'diag-new-lease',60)
+            with pytest.raises(stop_fence.StopRequested):raw.write('conops','item','old lease')
+            with bind(InterviewDocuments(pg,fresh,tid),root):
+                store.request_task_stop(tid)
+                with pytest.raises(stop_fence.StopRequested):verification.write({'late':True})
+            pg.release(fresh)
+        assert not root.exists()

@@ -62,7 +62,9 @@ The generator's default usage sink, per-call metadata, rejected/fitted raw
 outputs and manifests, and plain run log now use bound PG documents as well.
 Exact-byte sink regressions and fresh PG readback cover these paths. Interview
 raw-output, verification, categorization/shadow and per-call diagnostic sinks
-still require the follow-up audit. Do not call the whole product DB-only while
+also use session-bound PG documents, with real lease takeover/Stop tests and
+no nested publication lock. Global operator activity/diagnostic logs still
+require a PG replacement. Do not call the whole product DB-only while
 those paths, standalone legacy adapters and default SQLite metrics remain.
 The coding-handoff package endpoint still has its existing cloud 503; the PG
 artifact ZIP endpoint verified above is separate. This change does not remove

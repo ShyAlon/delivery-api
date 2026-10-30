@@ -101,6 +101,7 @@ def test_connected_real_graph_and_closed_revision_with_retained_approval(tmp_pat
   assert all(p['state'] in ('done','approved') for p in store.task(tid)['phases'])
   assert not (root/'interview/intent_model.json').exists() and not (root/'interview/checkpoints.sqlite').exists()
   assert not (root/'spec/srs.json').exists() and not (root/'spec/checkpoints.sqlite').exists(), 'canonical business data stays in PG'
+  assert not list(root.rglob('*.jsonl')) and not list(root.rglob('*.raw.txt')), 'diagnostics stay in PG too'
   from artifact_receipts import PipelineReceiptAdapter
   from completion_adapters import EvidenceReader
   reader=EvidenceReader(store)
