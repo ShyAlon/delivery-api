@@ -2849,3 +2849,39 @@ def test_interview_history_binds_answer_to_input_when_next_prompt_arrives_first(
     assert page.locator('.qa-item .qa-question p').inner_text()=='Describe customer booking'
     assert page.locator('.qa-item .qa-answer p').inner_text()=='Customers pay online'
     assert page.locator('.qa-item').count()==1
+
+
+def test_answer_response_cannot_pair_previous_answer_with_next_question(pg_page, pg_ui, pg_ids):
+    """Real submit + SSE redraw completes Q2 before Q1 POST response arrives."""
+    page, ui, tid = pg_page, pg_ui, pg_ids['live']
+    page.add_init_script("""class FakeEventSource {
+      constructor(){window.testStream=this;this.listeners={}}
+      addEventListener(name,fn){this.listeners[name]=fn} close(){}
+    } window.EventSource=FakeEventSource;""")
+    live = page.request.get(ui + f'/api/tasks/{tid}').json()
+    live.update(state='running', active_phase='intent', events=[])
+    live['control_snapshot'] = {'version':2,'mode':'waiting_input','owner':'engine','kind':'text',
+        'phase_key':'intent','wait_id':'q1','input_id':'q1','prompt':'How does the session work?',
+        'precondition':{'session_sequence':1},'process_live':True}
+    page.route(f'**/api/tasks/{tid}', lambda route: route.fulfill(json=live))
+    pending=[]
+    page.route(f'**/api/tasks/{tid}/answer', lambda route: pending.append(route))
+    page.goto(ui + f'/tasks/{tid}/view')
+    page.locator('#answerform textarea').fill('The user opens the app and starts the session.')
+    page.locator('#answerform button[type=submit]').click()
+    page.wait_for_timeout(100)
+    assert len(pending)==1
+    sent=pending[0].request.post_data_json
+    assert sent['decision_id']=='q1' and sent['expected_sequence']==1
+    live['control_snapshot'].update(wait_id='q2',input_id='q2',prompt='Where does the content come from?',precondition={'session_sequence':2})
+    page.evaluate("window.testStream.listeners.progress({data:JSON.stringify({id:9,kind:'waiting_input',phase_key:'intent',payload:{}})})")
+    expect(page.locator('#currentquestion')).to_contain_text('Where does the content come from?')
+    pending[0].fulfill(json={'status':'accepted'})
+    page.wait_for_timeout(200)
+    assert page.locator('#shadowcopy').is_hidden()
+    expect(page.locator('#currentquestion')).to_be_visible()
+    assert page.locator('#answerform textarea').is_enabled()
+    page.screenshot(path=str(_screenshots_dir / 'answer-next-question-race.png'),full_page=True)
+    page.reload()
+    expect(page.locator('#currentquestion')).to_contain_text('Where does the content come from?')
+    assert page.locator('#shadowcopy').is_hidden()
