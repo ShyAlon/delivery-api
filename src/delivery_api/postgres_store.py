@@ -29,6 +29,12 @@ def _transactional(method):
         if self._connection.get() is not None:
             return method(self,*args,**kwargs)
         with contextlib.ExitStack() as cleanup:
+            if method.__name__ in ('ensure_waiting_input_event','retain_decision_review'):
+                # Observations made during GET must commit before the read
+                # continues, never pin task/owner locks until HTTP teardown.
+                from .postgres_scope import _request_tx
+                request_token=_request_tx.set(None)
+                cleanup.callback(_request_tx.reset,request_token)
             dirty_token=self._cache_dirty.set(False)
             def invalidate_after_transaction():
                 dirty=self._cache_dirty.get()
@@ -677,8 +683,7 @@ FROM tasks t"""
    FROM artifact_manifest_ready m WHERE m.task_id=t.task_id AND m.generation=t.generation) AS manifest_json"""
 
     def _snapshot_artifacts_sql(self):
-        from . import config
-        return self._ARTIFACTS_SUBQUERY + (",\n" + self._MANIFEST_SUBQUERY if config.ARTIFACT_MANIFEST_READS else "")
+        return self._ARTIFACTS_SUBQUERY + ",\n" + self._MANIFEST_SUBQUERY
 
     def list_tasks(self):
         rows=self._execute_native(self._TASK_PROJECTION+' WHERE t.deleted_at IS NULL ORDER BY t.updated_at DESC').fetchall()
@@ -807,6 +812,11 @@ FROM tasks t"""
             # Compute and token accounting rows reference the task's jobs: hide the task, keep the rows.
             self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s AND deleted_at IS NULL',(time.time(),time.time(),task_id), write=True)
             self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False,'accounting_retained':True})
+            return
+        if (self._execute_native('SELECT 1 FROM generator_snapshots WHERE task_id=%s LIMIT 1',(task_id,)).fetchone()
+                or self._execute_native('SELECT 1 FROM generator_documents d JOIN engine_sessions s ON s.session_id=d.execution_session_id WHERE s.task_id=%s LIMIT 1',(task_id,)).fetchone()):
+            self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s AND deleted_at IS NULL',(time.time(),time.time(),task_id), write=True)
+            self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False,'checkpoint_evidence_retained':True})
             return
         self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False})
         for table in ('worker_jobs','engine_sessions','review_comments','decision_reviews','decision_drafts',
@@ -1039,7 +1049,7 @@ FROM tasks t"""
         from .producer_inputs import _open_directory
         from vmodel_contracts.execution_anchor import read_execution_anchor
         from pathlib import Path
-        from types import SimpleNamespace
+        from .historical_checkpoint import HistoricalCheckpointCapability
         import os
         with self._task_operation_guard('task.rerun'):
             if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone():raise KeyError(task_id)
@@ -1055,40 +1065,29 @@ FROM tasks t"""
             row=self._execute_native('SELECT * FROM closed_revision_lineage_plans WHERE lineage_id=%s',(intent['lineage_id'],)).fetchone()
             held=self._execute_native('SELECT * FROM closed_revision_restart_intents WHERE intent_id=%s',(row['intent_id'],)).fetchone()
             lineage=json.loads(row['payload']);options=json.loads(held['payload'])['options'];scope=current_scope()
-            source=session_root(Path(artifacts_base),scope,lineage['parent_execution_session_id'])
-            stage=source/'spec'/'revision-proposals'/lineage['proposal_id']/'staged'/anchor.execution_session_id
-            destination=session_root(Path(artifacts_base),scope,anchor.execution_session_id)
-            def contained_present(path):
-                try:fd=_open_directory(path)
-                except FileNotFoundError:return False
-                else:os.close(fd);return True
-            errors=[]
-            try:stage_present=contained_present(stage)
-            except (OSError,ValueError):stage_present=False;errors.append('private_stage_namespace_unverified')
-            # Historical binding is read-only evidence, never active worker
-            # authority or a capability that can run models after installation.
-            def historical_check(store):
-                if current_scope()!=scope or not self.auth_session_active():raise TenantAccessDenied('reconciliation owner revoked')
-                binding=self.session_binding(lineage['parent_execution_session_id'])
-                if not binding or binding['task_id']!=task_id or binding['owner_id']!=scope.owner_id or binding['generation']!=lineage['parent_generation']:
-                    raise TenantAccessDenied('historical source binding changed')
-            historical=SimpleNamespace(scope=scope,task_id=task_id,session_id=lineage['parent_execution_session_id'],generation=lineage['parent_generation'],validate=historical_check)
-            files=False
+            errors=[];stage_present=False;files=False
+            historical=HistoricalCheckpointCapability(scope,task_id,lineage['parent_execution_session_id'],lineage['parent_generation'])
+            from .pg_revision_install import read_evidence
+            from .pg_revision_stage import read_stage
             try:
-                if contained_present(destination):
-                    from .revision_source_review import read_source_review_snapshot
-                    retained=self._execute_native('SELECT * FROM closed_revision_source_reviews WHERE lineage_id=%s',(intent['lineage_id'],)).fetchone()
-                    snapshot=read_source_review_snapshot(self,historical,artifacts_base=artifacts_base,lineage=lineage,lineage_sha256=row['fingerprint'])
-                    if not retained or snapshot!={'snapshot':json.loads(retained['payload']),'snapshot_sha256':retained['fingerprint']}:
-                        raise ValueError('reconciliation source differs from retained review')
-                    proof=read_execution_anchor(destination,expected=anchor)
-                    receipt=read_validated_staged_receipt(self,historical,artifacts_base=artifacts_base,lineage=lineage,
-                        lineage_sha256=row['fingerprint'],manifest_sha256=plan['staged_receipt']['manifest_sha256'],options=options,promoted=True)
-                    if receipt!=plan['staged_receipt']:raise ValueError('reconciliation manifest differs')
-                    expected=json.loads(event['payload'])['evidence'].get('anchor_sha256')
-                    if expected!=proof['document_sha256']:raise ValueError('reconciliation anchor differs from journal')
-                    files=True
-            except (OSError,ValueError,KeyError):errors.append('promoted_file_evidence_unverified')
+                read_stage(self,historical,plan['staged_receipt'],lineage=lineage,lineage_sha256=row['fingerprint'])
+                stage_present=True
+                from .revision_source_review import read_source_review_snapshot
+                retained=self._execute_native('SELECT * FROM closed_revision_source_reviews WHERE lineage_id=%s',(intent['lineage_id'],)).fetchone()
+                snapshot=read_source_review_snapshot(self,historical,artifacts_base=artifacts_base,lineage=lineage,lineage_sha256=row['fingerprint'])
+                if not retained or snapshot!={'snapshot':json.loads(retained['payload']),'snapshot_sha256':retained['fingerprint']}:
+                    raise ValueError('reconciliation source differs from retained review')
+                receipt=read_validated_staged_receipt(self,historical,artifacts_base=artifacts_base,lineage=lineage,
+                    lineage_sha256=row['fingerprint'],manifest_sha256=plan['staged_receipt']['manifest_sha256'],options=options,promoted=True)
+                if receipt!=plan['staged_receipt']:raise ValueError('reconciliation stage differs')
+            except (OSError,ValueError,KeyError):errors.append('pg_stage_or_source_evidence_unverified')
+            try:
+                proof=read_evidence(self,task_id,installation_id)
+                if proof!={k:v for k,v in journal['evidence'].items() if k!='execution_session_id'} or errors:
+                    raise ValueError('promoted PG evidence differs from journal')
+                files=True;stage_present=False
+            except (OSError,ValueError,KeyError):
+                if event['state'] not in ('authorized','promotion_pending'):errors.append('promoted_pg_evidence_unverified')
             task=self.task(task_id);installed=False
             if task['generation']==anchor.generation and task['engine_session_id']==anchor.execution_session_id:
                 try:
@@ -1131,8 +1130,8 @@ FROM tasks t"""
         receipt=read_validated_staged_receipt(self,cap,artifacts_base=artifacts_base,lineage=lineage,lineage_sha256=row['fingerprint'],
             manifest_sha256=plan['staged_receipt']['manifest_sha256'],options=options,promoted=True)
         if receipt!=plan['staged_receipt']:raise ValueError('promoted receipt differs from reviewed plan')
-        proof=read_execution_anchor(session_root(Path(artifacts_base),cap.scope,anchor.execution_session_id),expected=anchor)
-        return {'manifest_sha256':receipt['manifest_sha256'],'anchor_sha256':proof['document_sha256']}
+        from .pg_revision_install import read_evidence
+        return read_evidence(self,task_id,installation_id)
 
     def activate_private_revision_installation(self,task_id,*,installation_id,expected_previous_sha256,validate_acceptance,artifacts_base):
         """Private concrete DB CAS after promoted files, never dispatch.
@@ -1173,6 +1172,8 @@ FROM tasks t"""
             self._execute_native('INSERT INTO engine_sessions VALUES (%s,%s,%s,%s,%s)',(anchor.execution_session_id,scope.owner_id,task_id,anchor.generation,now), write=True)
             self._execute_native('INSERT INTO installed_execution_bindings(session_id,owner_id,auth_session_id,task_id,generation,semantic_session_id,installation_id,lineage_sha256,anchor_sha256,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
                 (anchor.execution_session_id,scope.owner_id,scope.session_id,task_id,anchor.generation,anchor.semantic_session_id,installation_id,anchor.lineage_sha256,evidence['anchor_sha256'],now), write=True)
+            from .pg_revision_install import seed_accepted_checkpoint
+            seed_accepted_checkpoint(self,task_id,installation_id,validate_acceptance)
             changed=self._execute_native("UPDATE tasks SET engine_session_id=%s,generation=%s,state='pending',active_phase=%s,updated_at=%s WHERE task_id=%s AND generation=%s AND engine_session_id=%s",
                 (anchor.execution_session_id,anchor.generation,next(iter(followers(review['phase']))).key,now,task_id,parent['generation'],parent['execution_session_id']), write=True)
             if changed.rowcount!=1:raise ValueError('installation parent CAS failed')
@@ -1414,7 +1415,12 @@ FROM tasks t"""
             if (binding is not None and binding[1]==row['parent_generation']
                 and Path(binding[0].path)==root/'interview'/'stop-request.json'):
                 binding[0].check(binding[1])
-                writer=binding[0].active==1 and binding[0]._writer_file is not None
+                from .pg_execution_fence import PostgresExecutionFence
+                if isinstance(binding[0],PostgresExecutionFence):
+                    writer=(binding[0].capability.scope==scope and binding[0].capability.task_id==task_id
+                        and binding[0].capability.session_id==row['parent_execution_session_id']
+                        and binding[0].active==1 and binding[0]._lease is not None)
+                else:writer=binding[0].active==1 and binding[0]._writer_file is not None
             jobs=self._execute_native("SELECT job_id FROM worker_jobs WHERE task_id=%s AND state IN ('pending','running','paused','failed') ORDER BY job_id",(task_id,)).fetchall()
             attempts=self._execute_native("SELECT p.attempt_id FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=%s AND p.state IN ('reserved','dispatched','uncertain') ORDER BY p.attempt_id",(task_id,)).fetchall()
             return installation_safety_snapshot(parent_current=parent_current,source_writer_excluded=writer,
@@ -1882,9 +1888,14 @@ FROM tasks t"""
         version or schema fingerprint from validator_provenance); 'unknown' must be
         explicit. A verdict recorded under one version is never reinterpreted as
         another."""
-        import hashlib
         from pathlib import Path
-        data=Path(ref).read_bytes()
+        return self._publish_artifact_bytes(task_id,phase_key,name,Path(ref).read_bytes(),ref=ref,mime_type=mime_type,
+            writer_instance=writer_instance,validation_report=validation_report)
+
+    def _publish_artifact_bytes(self,task_id,phase_key,name,data,*,ref,mime_type,writer_instance,validation_report=None):
+        import hashlib
+        if type(data) is not bytes or len(data)>64*1024*1024:raise ValueError('bounded artifact bytes required')
+
         digest=hashlib.sha256(data).hexdigest();size=len(data)
         validator=valid=validation_error=validator_version=None
         if validation_report is not None:
@@ -1979,6 +1990,33 @@ FROM tasks t"""
         members=self._execute_native("SELECT phase_key,name,sha256 FROM task_artifacts WHERE task_id=%s AND generation=%s AND publication_state='published'",
             (task_id,task['generation'])).fetchall()
         self._mark_revision_ready(task,revision_id,self._revision_hash(members),expected,writer_instance,time.time())
+        return published
+
+    def publish_task_revision_bytes(self,task_id,artifacts,*,writer_instance):
+        """Complete durable byte revision with the same atomic manifest CAS.
+
+        No path is consulted. Existing file publisher is a temporary adapter to
+        the exact same byte writer until producer sinks have been replaced.
+        """
+        import uuid
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone():raise KeyError(task_id)
+        task=self.task(task_id)
+        if not isinstance(artifacts,list) or len({(a['phase_key'],a['name']) for a in artifacts})!=len(artifacts):raise ValueError('unique complete artifact revision required')
+        marker=self._execute_native('SELECT revision_id FROM artifact_manifest_ready WHERE task_id=%s AND generation=%s',(task_id,task['generation'])).fetchone()
+        published=[]
+        for artifact in artifacts:
+            data=artifact['data'];name=artifact['name'];phase=artifact['phase_key']
+            import hashlib
+            if type(data) is not bytes:raise ValueError('bounded artifact bytes required')
+            ref='pg-artifact:'+hashlib.sha256(data).hexdigest()
+            published.append(self._publish_artifact_bytes(task_id,phase,name,data,ref=ref,mime_type=artifact.get('mime_type','application/json'),
+                writer_instance=writer_instance,validation_report=artifact.get('validation_report')))
+        keep={(a['phase_key'],a['name']) for a in artifacts}
+        for row in self._execute_native("SELECT phase_key,name FROM task_artifacts WHERE task_id=%s AND generation=%s AND publication_state='published'",(task_id,task['generation'])).fetchall():
+            if (row['phase_key'],row['name']) not in keep:
+                self._execute_native("UPDATE task_artifacts SET publication_state='superseded' WHERE task_id=%s AND generation=%s AND phase_key=%s AND name=%s AND publication_state='published'",(task_id,task['generation'],row['phase_key'],row['name']),write=True)
+        members=self._execute_native("SELECT phase_key,name,sha256 FROM task_artifacts WHERE task_id=%s AND generation=%s AND publication_state='published'",(task_id,task['generation'])).fetchall()
+        self._mark_revision_ready(task,uuid.uuid4().hex,self._revision_hash(members),marker['revision_id'] if marker else None,writer_instance,time.time())
         return published
 
     def manifest_snapshot(self,task_id,generation=None):
@@ -2163,6 +2201,7 @@ PG_OPERATIONS = (
     'provider_attempt',
     'publish_task_artifact',
     'publish_task_revision',
+    'publish_task_revision_bytes',
     'quota_allows',
     'read_artifact_bytes',
     'read_artifact_bytes_sha',

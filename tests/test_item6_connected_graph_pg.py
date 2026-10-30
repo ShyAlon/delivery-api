@@ -99,6 +99,9 @@ def test_connected_real_graph_and_closed_revision_with_retained_approval(tmp_pat
   runner.answer=answer
   tid=runner(cfg,scope);sid=store.task(tid)['engine_session_id'];root=session_root(cfg.root,scope,sid)
   assert all(p['state'] in ('done','approved') for p in store.task(tid)['phases'])
+  assert not (root/'interview/intent_model.json').exists() and not (root/'interview/checkpoints.sqlite').exists()
+  assert not (root/'spec/srs.json').exists() and not (root/'spec/checkpoints.sqlite').exists(), 'canonical business data stays in PG'
+  assert not list(root.rglob('*.jsonl')) and not list(root.rglob('*.raw.txt')), 'diagnostics stay in PG too'
   from artifact_receipts import PipelineReceiptAdapter
   from completion_adapters import EvidenceReader
   reader=EvidenceReader(store)
@@ -107,7 +110,7 @@ def test_connected_real_graph_and_closed_revision_with_retained_approval(tmp_pat
    choose_change=lambda review,digest:{'review_sha256':digest,'change_request':'Explain the task board offline behavior in purpose','extra_cost_acknowledged':True},
    accept_fresh_review=lambda review:{'review_sha256':review['review_sha256'],'choice':'approve','change_request':'','extra_cost_acknowledged':True})
   from artifact_receipts import inventory
-  original_files,_=inventory(root)
+  original_files,_=inventory(root,store=store,capability=__import__('delivery_api.worker_capability',fromlist=['WorkerCapability']).WorkerCapability.capture(store,tid))
   pipeline_receipt={'task_id':tid,'session_id':sid,'artifact_sha256':original_files}
   result=adapter(cfg,{'pipeline':pipeline_receipt})
   assert result['installed_lineage_verified'] and result['stale_rejected'] and result['source_preserved']
@@ -115,6 +118,16 @@ def test_connected_real_graph_and_closed_revision_with_retained_approval(tmp_pat
   from completion_adapters import EvidenceReader,FinalArtifactsAdapter,RecoveryAdapter
   identity=SimpleNamespace(scope=scope)
   previous={'pipeline':pipeline_receipt,'gate_edit':result}
+  real_review=store.decision_review
+  def corrupted_review(task_id,wait_id,revision=None):
+   held=real_review(task_id,wait_id,revision)
+   if held and wait_id.startswith('revision-next-review:'):return held|{'artifact_sha256':'0'*64}
+   return held
+  monkeypatch.setattr(store,'decision_review',corrupted_review)
+  with pytest.raises(ValueError,match='approved revision artifact differs'):
+   FinalArtifactsAdapter(identity,store=store,artifacts_base=cfg.root)(cfg,previous)
+  assert not (cfg.root/'reviewed-artifacts.zip').exists(), 'bad evidence exports nothing'
+  monkeypatch.setattr(store,'decision_review',real_review)
   exported=FinalArtifactsAdapter(identity,store=store,artifacts_base=cfg.root)(cfg,previous)
   assert exported['download_verified']
   recovered=RecoveryAdapter(identity,store=store,read_evidence=EvidenceReader(store))(cfg,previous)

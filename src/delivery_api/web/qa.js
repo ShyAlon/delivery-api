@@ -128,10 +128,13 @@ function qaTurns(events){
   let p=e.payload||{};
   if(e.kind==='waiting_input'||e.kind==='founder_decision'||p.waiting_input){
    let q=String(p.question||e.message||'').trim();
-   if(q&&!(turns.length&&turns[turns.length-1].a===null&&turns[turns.length-1].q===q))turns.push({q,a:null});
+   let inputId=p.input_id||p.decision_id||null;
+   if(q&&!turns.some(t=>inputId?t.inputId===inputId:t.a===null&&t.q===q))turns.push({q,a:null,inputId});
   }else if(e.kind==='answer'){
    let m=String(e.message||''),a=readableAnswer(p.answer_display||p.answer||(m.startsWith('You: ')?m.slice(5):''));
-   if(a){if(turns.length&&turns[turns.length-1].a===null)turns[turns.length-1].a=a}
+   let inputId=p.input_id||p.decision_id||null;
+   let target=inputId?[...turns].reverse().find(t=>t.inputId===inputId&&t.a===null):[...turns].reverse().find(t=>t.a===null);
+   if(a&&target)target.a=a;
   }
  }
  return turns.filter(t=>t.q&&t.a);

@@ -6,6 +6,13 @@ from uuid import uuid4
 
 
 def execute(operation,cfg,store,broker,stop,output_fd):
+    claim=store.claim_generator_expected(operation.binding,'generator-child#'+str(uuid4()),150)
+    try:return _execute_claimed(operation,cfg,store,broker,stop,output_fd,claim)
+    finally:
+        if not store.release(claim):raise PermissionError('generator lease release unverified')
+
+
+def _execute_claimed(operation,cfg,store,broker,stop,output_fd,claim):
     from .child_generator import manifest
     from spec_generator.child_execution import DurableGate,GateSuspended
     from spec_generator.wire_binding import broker_clients
@@ -17,7 +24,9 @@ def execute(operation,cfg,store,broker,stop,output_fd):
     from spec_generator.cli_io import RunIO
     from spec_generator import cli,model_config
     b=operation.binding;root=Path(cfg['owner_root'])/b.session_id
-    value=cfg['input'];actual,digest=manifest(value['argv'],root)
+    from .generator_documents import ChildGeneratorDocuments
+    documents=ChildGeneratorDocuments(store,claim,b,expected_attempt=cfg['worker_attempt'])
+    value=cfg['input'];actual,digest=manifest(value['argv'],root,documents)
     if actual!=value or digest!=operation.operation.input_manifest_sha256:raise PermissionError('generator input manifest differs')
     if '--to' in value['argv'] and value['argv'][value['argv'].index('--to')+1]!=operation.operation.phase:
         raise PermissionError('typed generator phase differs from reviewed CLI boundary')
@@ -39,21 +48,18 @@ def execute(operation,cfg,store,broker,stop,output_fd):
             try:
                 if not store.heartbeat(claim,150):lost.set();return
             except Exception:lost.set();return
-    anchor=None
-    if b.generation>1:
-        from vmodel_contracts.execution_anchor import read_execution_anchor,ExecutionAnchor
-        # Parent supplies immutable installed binding, child verifies bytes.
-        anchor=ExecutionAnchor(**cfg['execution_anchor'])
-        if read_execution_anchor(root,expected=anchor)['document_sha256']!=b.execution_anchor_sha256:
-            raise PermissionError('generator installed anchor changed')
-    fence=StopFence(root/'interview'/'stop-request.json',execution_anchor=anchor)
+    from .pg_execution_fence import ChildPostgresExecutionFence
+    fence=ChildPostgresExecutionFence(documents,root=root)
     def check():
         if stop.is_set() or lost.is_set():raise StopRequested('parent stopped or generator lease lost')
         fence.check(b.generation)
     models={stage:StageModel(b.provider,b.model,max_tokens=value.max_tokens) for stage,value in model_config._STAGE_DEFAULTS.items()}
     runtime=JobRuntime(models,str(root/'private-llm-calls.jsonl'),lambda text:None)
     runtime.bind_worker(owner_id=str(b.owner_id),task_id=b.task_id,job_id=b.job_id,generation=b.generation,session_root=root)
-    claim=store.claim_generator_expected(b,'generator-child#'+str(uuid4()),150)
+    runtime.documents=documents
+    runtime.proposal_sink=documents.retain_proposal
+    from .generator_checkpoint import ChildGeneratorCheckpoint
+    runtime.checkpoint_factory=lambda namespace:ChildGeneratorCheckpoint(store,claim,b,namespace,expected_attempt=cfg['worker_attempt'])
     thread=threading.Thread(target=heartbeat,daemon=True);thread.start()
     try:
         with ExitStack() as stack:
@@ -68,5 +74,5 @@ def execute(operation,cfg,store,broker,stop,output_fd):
     finally:
         halt.set();thread.join(timeout=2)
         try:
-            if thread.is_alive() or not store.release(claim):raise PermissionError('generator lease release unverified')
+            if thread.is_alive():raise PermissionError('generator heartbeat termination unverified')
         finally:stream.close();output.close()

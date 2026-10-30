@@ -83,8 +83,15 @@ async def execute_closed_revision_proposal(store,worker,job_id,*,read_artifact_e
             from spec_generator.revision_worker import run_revision_proposal
             runner=run_revision_proposal
         else:runner=prepare
-        proposals.append(runner(capability=capability,session_root=root,checkpoint_id=options['source_checkpoint_id'],
+        result=runner(capability=capability,session_root=root,checkpoint_id=options['source_checkpoint_id'],
             phase=options['phase'],change_request=options['change_request'],validate_authority=authority,
-            log=log_factory(capability,root)))
+            log=log_factory(capability,root))
+        if hasattr(store,'_postgres'):
+            with store._task_operation_guard('task.rerun'):
+                authority()
+                from .revision_intent import validate_retained_proposal
+                validate_retained_proposal(options=options,proposal=result)
+                store.retain_decision_review(capability.task_id,'pg-revision-proposal:'+result['proposal_id'],'result',result)
+        proposals.append(result)
     started=await worker.execute(job_id,producer)
     return {'job_id':job_id,'started':started,'proposals':proposals,'source_committed':False,'restart_dispatched':False}

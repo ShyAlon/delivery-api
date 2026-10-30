@@ -60,3 +60,16 @@ private server settings or sandbox-payment credentials to carry locally.
 The launchers do not verify that a real user has credits until the normal app
 checks, and launching an execution-capable container is not approval to make a
 paid model call. No provider call or DB mutation was made in this verification.
+
+## PG durable runtime follow-up (2026-10-30)
+
+The table above describes the merged launcher baseline, not a completed storage
+retirement. The PG runtime follow-up makes PG documents/checkpoints and exact
+published artifact bytes authoritative for PG tasks, including cross-host
+handoff, downloads and private revisions. No historical file import is needed.
+The owner has since said existing tasks and storage-linked old code may be
+removed. The owner-only reset script is dry by default and is not run by the
+launcher. Legacy adapters and default metrics still remain for later retirement;
+metrics PG selection is explicit. Local PG-first bootstrap stays held pending
+the separate composer reproduction. See [PG runtime checks](testing/pg-durable-runtime.md)
+for verification, merge dependencies and remaining limits.

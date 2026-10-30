@@ -1,7 +1,7 @@
 """Additive, explicitly selected PG resource-metrics repository.
 
-Not wired into the sampler yet: schema/role rollout, historical import and
-activation remain separate. Uses the shared process pool, no SQLite fallback,
+Selected by DELIVERY_METRICS_BACKEND=postgres with a stable source identity.
+Schema/role rollout and activation remain explicit; no history import. Uses the shared process pool, no SQLite fallback,
 DDL or provider calls. The process role is restricted to metrics tables, not
 an ambient request tenant. Read APIs require the existing operator logs.read
 registry policy; none are exposed by this writer.
@@ -79,5 +79,36 @@ class PostgresMetrics:
                     (self.source_id,d['d'],d['n'],_round(d['am']),_round(d['mm']),_round(d['ac']),_round(d['mc']),now))
                 c.execute("DELETE FROM public.resource_container_samples WHERE to_char(to_timestamp(ts) AT TIME ZONE 'UTC','YYYY-MM-DD')=%s AND ts<%s",(d['d'],cutoff))
             return len(runs),len(days)
+
+    def for_task(self,task_id,*,limit=2000,problem=None):
+        if type(limit) is not int or not 1<=limit<=2000:raise ValueError('bounded metrics page required')
+        with self.transaction() as c:
+            samples=c.execute('SELECT ts,run_key,session_id,phase,pid,procs,rss_mb,peak_rss_mb,cpu_seconds,cpu_pct FROM resource_run_samples WHERE task_id=%s ORDER BY ts LIMIT %s',(task_id,limit)).fetchall()
+            summaries=c.execute('SELECT * FROM resource_run_summaries WHERE task_id=%s ORDER BY started_at',(task_id,)).fetchall()
+            return dict(task_id=task_id,problem=problem,samples=samples,summaries=summaries)
+
+    def overview(self,*,limit=8,problem=None,raw_days=3,interval_s=10):
+        if type(limit) is not int or not 1<=limit<=100:raise ValueError('bounded metrics page required')
+        with self.transaction() as c:
+            live=c.execute('''SELECT run_key,min(task_id) task_id,min(session_id) session_id,min(phase) phase,
+                min(ts) started_at,max(ts) ended_at,count(*) samples,avg(cpu_pct) avg_cpu_pct,
+                max(cpu_pct) max_cpu_pct,avg(rss_mb) avg_rss_mb,max(rss_mb) max_rss_mb,max(cpu_seconds) cpu_seconds
+                FROM resource_run_samples GROUP BY run_key ORDER BY max(ts) DESC LIMIT %s''',(limit,)).fetchall()
+            for r in live:
+                r['summary']=False
+                values=c.execute('SELECT rss_mb FROM resource_run_samples WHERE run_key=%s ORDER BY ts',(r['run_key'],)).fetchall()
+                values=[v['rss_mb'] for v in values]
+                if len(values)>12:values=[values[int(i*(len(values)-1)/11)] for i in range(12)]
+                r['timeline_mb']=[round(v) for v in values if v is not None]
+            kept=c.execute('SELECT * FROM resource_run_summaries ORDER BY ended_at DESC LIMIT %s',(limit,)).fetchall()
+            for r in kept:r['summary']=True;r['timeline_mb']=[]
+            runs=sorted(live+kept,key=lambda r:r['ended_at'] or 0,reverse=True)[:limit]
+            last=c.execute('SELECT ts,mem_used_mb,mem_limit_mb,cpu_pct FROM resource_container_samples ORDER BY ts DESC LIMIT 1').fetchone()
+            container=None
+            if last:
+                day=c.execute('SELECT count(*) n,avg(mem_used_mb) am,max(mem_used_mb) mm,avg(cpu_pct) ac,max(cpu_pct) mc FROM resource_container_samples WHERE ts>=%s',(last['ts']-86400,)).fetchone()
+                container=dict(last=last,day=day)
+            return dict(path='postgres:resource_metrics',problem=problem,runs=runs,container=container,raw_days=raw_days,interval_s=interval_s)
+
 
 def _round(value):return None if value is None else round(value,1)

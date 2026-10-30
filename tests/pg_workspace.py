@@ -58,10 +58,12 @@ def pg_workspace_factory():
     if pg_harness.STATE['status'] != 'running':
         pytest.fail('PG workspace requires the local disposable harness: '+str(pg_harness.STATE))
     dsn = pg_harness.STATE['dsn']
-    store = PostgresStore(dsn.replace('user=sandbox', 'user=delivery_app'))
 
     @contextmanager
     def factory():
+        # Pool lifecycle tests deliberately close the shared pool. Each new
+        # workspace borrows the current process pool, not a session-old handle.
+        store=PostgresStore(dsn.replace('user=sandbox','user=delivery_app'))
         scope = TenantScope(str(uuid4()), str(uuid4()))
         workspace = Workspace(dsn, store, scope)
         with workspace.admin() as connection:

@@ -11,7 +11,7 @@ def gate_cli(argv,io):
             'options':[{'value':'a','label':'Accept'}],'context':{'artifact_sha256':'a'*64}}
         answer=read(decision,'unused')
         if answer!='a':raise ValueError('wrong answer')
-        out=Path(argv[argv.index('--out')+1]);out.mkdir(parents=True,exist_ok=True)
-        (out/'needs.json').write_text(json.dumps({'needs':[],'accepted':True}))
+        out=Path(argv[argv.index('--out')+1])
+        cli._atomic_write(out/'needs.json',json.dumps({'needs':[],'accepted':True}))
 cli.main=gate_cli
 runpy.run_module('delivery_api.child_entry',run_name='__main__')

@@ -8,7 +8,7 @@ from delivery_api.tenancy import TenantScope,session_root
 from delivery_api.revision_stage_evidence import read_validated_staged_receipt
 
 
-def build_real_stage_fixture(tmp_path,*,cap=None,options_override=None,lineage_factory=None,semantic_session_id='s',phase='srs'):
+def build_real_stage_fixture(tmp_path,*,cap=None,options_override=None,lineage_factory=None,semantic_session_id='s',phase='srs',pg_store=None):
     pytest.importorskip('spec_generator.revision_checkpoint')
     from spec_generator.graph import build_graph,checkpoint_serde
     from spec_generator.revision_checkpoint import prepare_revision_seed,validate_revision_output,stage_reviewed_lineage_checkpoint
@@ -31,11 +31,27 @@ def build_real_stage_fixture(tmp_path,*,cap=None,options_override=None,lineage_f
             'stack_entries':[],'components':[{'name':'api','responsibility':'serve','requirement_ids':['R-1'],'baseline_refs':['repo:spec-generator']}],
             'decisions':[],'non_functionals':{}}).model_dump(mode='json')
     root=session_root(tmp_path,scope,cap.session_id);(root/'spec').mkdir(parents=True)
-    conn=sqlite3.connect(root/'spec'/'checkpoints.sqlite');saver=SqliteSaver(conn,serde=checkpoint_serde())
     cp=empty_checkpoint();cp['channel_values']=source
-    saved=saver.put({'configurable':{'thread_id':cap.session_id,'checkpoint_ns':''}},cp,{'source':'input','step':0,'parents':{}},{})
-    conn.close();source_id=saved['configurable']['checkpoint_id']
+    if pg_store is None:
+        conn=sqlite3.connect(root/'spec'/'checkpoints.sqlite');saver=SqliteSaver(conn,serde=checkpoint_serde())
+        saved=saver.put({'configurable':{'thread_id':cap.session_id,'checkpoint_ns':''}},cp,{'source':'input','step':0,'parents':{}},{})
+        conn.close()
+    else:
+        # New PG fixture, not a runtime import or historical migration.
+        from delivery_api.generator_checkpoint import GeneratorCheckpoint
+        jid=pg_store.enqueue_worker(cap.task_id,'phase:'+phase);claimed=pg_store.claim_worker(jid)
+        saver=GeneratorCheckpoint(pg_store,claimed,jid,'spec')
+        cp['channel_versions']={key:1 for key in source}
+        saved=saver.put({'configurable':{'thread_id':cap.session_id}},cp,{'source':'input','step':0,'parents':{}},cp['channel_versions'])
+        pg_store.finish_worker(jid)
+    source_id=saved['configurable']['checkpoint_id']
     original=json.dumps(source[phase]).encode();(root/'spec'/(phase+'.json')).write_bytes(original)
+    if pg_store is not None:
+        artifacts=[{'phase_key':phase,'name':phase+'.json','data':original}]
+        for artifact_phase,name,key in [('intent','intent_model.json','intent_model'),('conops','conops.json','conops'),('needs','needs.json','needs'),('baseline','system-baseline.json','system_baseline')]:
+            artifacts.append({'phase_key':artifact_phase,'name':name,'data':json.dumps(source[key]).encode()})
+        if phase=='architecture':artifacts.append({'phase_key':'srs','name':'srs.json','data':json.dumps(source['srs']).encode()})
+        pg_store.publish_task_revision_bytes(cap.task_id,artifacts,writer_instance='constructed-test-only')
     o=options_override or options();o['source_checkpoint_id']=source_id;o['artifact_evidence'][0]['sha256']=hashlib.sha256(original).hexdigest()
     result=prepare_revision_seed(source=source,phase=phase,change_request=o['change_request'],session_id=semantic_session_id)['seed']
     result[phase]=source[phase];result['gate_feedback'].pop(phase)

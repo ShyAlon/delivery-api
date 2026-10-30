@@ -14,6 +14,9 @@ NEXT={'architecture':('specs','items'),'specs':('tests','tests'),'tests':('valid
 def _digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
 def read_private_next_review(store,task_id,*,installation_id,artifacts_base,result_reference=None,expected_job_id=None,allow_approved=False):
+    if hasattr(store,'_postgres'):
+        from .pg_revision_next_review import read
+        return read(store,task_id,installation_id=installation_id,artifacts_base=artifacts_base,result_reference=result_reference,expected_job_id=expected_job_id,allow_approved=allow_approved)
     from .worker_capability import WorkerCapability
     from spec_generator.graph import build_graph,checkpoint_serde
     from langgraph.checkpoint.sqlite import SqliteSaver
@@ -128,11 +131,14 @@ def successor_basis(store,task_id,*,installation_id,artifacts_base,review_sha256
         return {'capability':original['capability'],'phase':reviewed['phase'],'review_sha256':review_sha256,
             'artifact_sha256':reviewed['artifact_sha256'],'checkpoint':reviewed['checkpoint'],
             'checkpoint_sha256':reviewed['checkpoint_sha256'],'source_directory':reviewed['source_directory'],
-            'approval_reference':approval['submission_reference'],'installation_id':installation_id}
+            'approval_reference':approval['submission_reference'],'installation_id':installation_id}|({'snapshot':reviewed['snapshot']} if hasattr(store,'_postgres') else {})
 
 
 def prepare_private_successor(store,task_id,*,installation_id,artifacts_base,review_sha256):
     """Separate exact successor seed under installed writer fence. No invocation."""
+    if hasattr(store,'_postgres'):
+        from .pg_revision_next_review import prepare_successor
+        return prepare_successor(store,task_id,installation_id=installation_id,artifacts_base=artifacts_base,review_sha256=review_sha256)
     from pathlib import Path
     from spec_generator.cooperative_run import cli_stop_binding
     from spec_generator.stop_fence import check_execution,guarded_publish

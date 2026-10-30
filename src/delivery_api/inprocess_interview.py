@@ -83,7 +83,11 @@ class InProcessInterviewHost:
         # Database session persistence is the engine default. On the local SQLite tier
         # there is no Postgres for it to use, so file sessions are chosen explicitly here -
         # never as a silent fallback. On the PG tier the sessions DSN is always set.
-        self._engine_router=TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn,allow_file_sessions=self._session_dsn is None,pool=engine_pool)
+        installed_resolver=None
+        if self._session_dsn is not None:
+            from .pg_execution_fence import InstalledInterviewControlRouter
+            installed_resolver=InstalledInterviewControlRouter(self.store,self.artifacts_base).resolve
+        self._engine_router=TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn,allow_file_sessions=self._session_dsn is None,pool=engine_pool,installed_resolver=installed_resolver)
         app=create_app(self._engine_router,service_token=self._token)
         app.add_middleware(TenantWorkerMiddleware,base=self.artifacts_base,service_token=self._token)
         return app
@@ -124,7 +128,7 @@ class InProcessInterviewHost:
         from spec_generator.telemetry import UsageLog
         return SameHostProducerWorker(self.store,self.artifacts_base,gateway_factory=self.gateway_factory,
             usage_log_factory=lambda capability,root:UsageLog(capability.session_id),
-            wire_client_factory=self.generator_clients)
+            wire_client_factory=self.generator_clients,documents_enabled=hasattr(self.store,'_postgres'))
 
     @contextmanager
     def _bound(self,capability,job_id):

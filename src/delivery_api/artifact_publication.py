@@ -21,9 +21,11 @@ ARTIFACT_VALIDATORS = {
 
 def _validate(path: Path, validator) -> dict:
     """Run the real validator against the exact file bytes and build the bound report."""
+    return validate_artifact_bytes(path.read_bytes(),validator)
+
+def validate_artifact_bytes(data,validator):
     from .postgres_store import validator_provenance
     module_path, cls = validator
-    data = path.read_bytes()
     module = __import__(module_path, fromlist=[cls])
     if cls in ("AcceptanceTest[]", "ItemSpec[]"):
         from pydantic import TypeAdapter
@@ -134,3 +136,53 @@ def publish_committed_session(store, task_id: str, root: Path, *, phase_key: str
             f"Artifact publication failed for the committed {phase_key} output; the settled bytes stay on this host and no model work is rerun. Recovery: run scripts/ops-backfill-artifact-manifest.py for this owner on the producing host - it republishes these durable bytes (it skips tasks that already have a ready revision): {type(exc).__name__}: {str(exc)[:240]}",
             phase_key=phase_key)
         return False
+
+
+def document_artifact_keys():
+    from .phases import PHASE_DEFINITIONS
+    return {(phase.key,name):('interview/' if phase.key in ('intent','conops') else 'spec/')+name
+            for phase in PHASE_DEFINITIONS for name in phase.artifacts}
+
+
+def publish_document_revision(store,task_id,documents,*,writer_instance=None):
+    """Exact captured PG documents and validation in one fenced revision transaction.
+
+    Declared artifacts are exclusively the document set. Non-pipeline manifest
+    members (notably the launch baseline) survive unchanged, never reread from disk.
+    """
+    if documents.capability.task_id!=task_id:raise ValueError('document task differs')
+    keys=document_artifact_keys()
+    with documents.saver._cursor() as cursor:
+        captured=documents._capture_cursor(cursor,list(keys.values()))
+        prior=store.manifest_snapshot(task_id,documents.capability.generation)
+        artifacts=[{'phase_key':r['phase_key'],'name':r['name'],'data':store.read_artifact_bytes_sha(r['sha256']),
+                    'mime_type':r['mime_type'],'validation_report':({'validator':r['validator'],'validator_version':r['validator_version'],'valid':r['valid'],'error':r['validation_error'],'sha256':r['sha256']} if r['validator'] is not None else None)}
+                   for r in (prior or {}).get('rows',[]) if (r['phase_key'],r['name']) not in keys]
+        for (phase,name),key in keys.items():
+            if key not in captured:continue
+            raw=captured[key];validator=ARTIFACT_VALIDATORS.get(name)
+            artifacts.append({'phase_key':phase,'name':name,'data':raw,
+                'mime_type':mimetypes.guess_type(name)[0] or 'application/octet-stream',
+                'validation_report':validate_artifact_bytes(raw,validator) if validator else None})
+        return store.publish_task_revision_bytes(task_id,artifacts,
+            writer_instance=writer_instance or f'{socket.gethostname()}#{os.getpid()}')
+
+
+def publish_preserving_revision(store,task_id,replacements,*,writer_instance='control-plane'):
+    """Replace exact explicit members while retaining the complete ready PG set.
+
+    Caller must hold its authorized task operation transaction and row lock.
+    """
+    if store._connection.get() is None:raise ValueError('authorized artifact transaction required')
+    snapshot=store.manifest_snapshot(task_id)
+    artifacts=[]
+    for row in (snapshot or {}).get('rows',[]):
+        if (row['phase_key'],row['name']) in replacements:continue
+        report=({'validator':row['validator'],'validator_version':row['validator_version'],'valid':row['valid'],
+            'error':row['validation_error'],'sha256':row['sha256']} if row['validator'] is not None else None)
+        artifacts.append({'phase_key':row['phase_key'],'name':row['name'],'data':store.read_artifact_bytes_sha(row['sha256']),
+            'mime_type':row['mime_type'],'validation_report':report})
+    for (phase,name),raw in replacements.items():
+        validator=ARTIFACT_VALIDATORS.get(name)
+        artifacts.append({'phase_key':phase,'name':name,'data':raw,'validation_report':validate_artifact_bytes(raw,validator) if validator else None})
+    return store.publish_task_revision_bytes(task_id,artifacts,writer_instance=writer_instance)

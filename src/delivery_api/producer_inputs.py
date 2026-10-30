@@ -43,6 +43,19 @@ def read_fresh_inputs(store,capability,root,*,artifacts_base):
     root=Path(root)
     if root!=session_root(artifacts_base,capability.scope,capability.session_id):
         raise TenantAccessDenied('producer input root differs from owned session')
+    if hasattr(store,'_postgres'):
+        snapshot=store.manifest_snapshot(capability.task_id,capability.generation)
+        if snapshot is None:raise ValueError('owned ready input manifest required')
+        members={(row['phase_key'],row['name']):row for row in snapshot['rows']};result={}
+        for key,phase,name in [('intent','intent','intent_model.json'),('conops','conops','conops.json'),('baseline','baseline','system-baseline.json')]:
+            member=members.get((phase,name))
+            if member is None:raise ValueError('owned producer input missing')
+            raw=store.read_artifact_bytes_sha(member['sha256'])
+            if len(raw)>MAX_DOCUMENT_BYTES:raise ValueError('bounded producer input required')
+            value=json.loads(raw)
+            if not isinstance(value,dict):raise ValueError('producer input document object required')
+            result[key]=value
+        capability.validate(store);return result
     result={};evidence=[]
     root_fd=_open_directory(root)
     try:

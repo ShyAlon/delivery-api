@@ -34,7 +34,7 @@ def _published(pgstore, tmp_path):
         return task['task_id'], body
 
 
-def test_flag_off_keeps_filesystem_projection(pgstore, tmp_path, monkeypatch):
+def test_flag_off_still_serves_pg_publication(pgstore, tmp_path, monkeypatch):
     from delivery_api import app
     task_id, _ = _published(pgstore, tmp_path)
     monkeypatch.setattr(app, 'store', pgstore)
@@ -42,9 +42,9 @@ def test_flag_off_keeps_filesystem_projection(pgstore, tmp_path, monkeypatch):
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     with tenant_context(A):
         records = app._task_artifact_snapshot(task_id)
-    # Legacy path (no engine session here): raw DB rows, NOT the manifest projection
-    # (no 'present' marker and no publish-time verdict fields added by the projection).
-    assert all('present' not in r for r in records)
+    # PG is sole authority even when an obsolete rollout flag is disabled.
+    assert len(records)==1 and records[0]['present'] is True
+    assert records[0]['valid'] is True and records[0]['name']=='srs.json'
 
 
 def test_flag_on_serves_published_manifest_rows(pgstore, tmp_path, monkeypatch):
@@ -457,7 +457,14 @@ def test_combined_task_snapshot_verifies_manifest_hash(pgstore,tmp_path,monkeypa
             pgstore.task_snapshot(task_id)
 
 
-def test_snapshot_flag_off_does_not_require_manifest_table(pgstore,monkeypatch):
+def test_snapshot_flag_off_still_checks_pg_publication_integrity(pgstore,monkeypatch,tmp_path):
     from delivery_api import config
     monkeypatch.setattr(config,'ARTIFACT_MANIFEST_READS',False)
-    assert 'artifact_manifest_ready' not in pgstore._snapshot_artifacts_sql()
+    task_id,_=_published(pgstore,tmp_path)
+    assert 'artifact_manifest_ready' in pgstore._snapshot_artifacts_sql()
+    with tenant_context(A):
+        assert pgstore.task_snapshot(task_id)['manifest']['rows']
+        with pgstore._postgres.transaction() as connection:
+            connection.execute("UPDATE artifact_manifest_ready SET revision_hash='tampered' WHERE task_id=%s",(task_id,))
+        with pytest.raises(ValueError,match='readiness marker'):
+            pgstore.task_snapshot(task_id)

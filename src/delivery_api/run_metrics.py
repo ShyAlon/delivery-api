@@ -44,6 +44,15 @@ _idle_stop=None;_idle_thread=None
 _last_rollup=0.0
 
 
+def _pg():
+    """Explicit rollout profile; unknown/missing PG inputs never fall back."""
+    backend=os.environ.get('DELIVERY_METRICS_BACKEND','sqlite')
+    if backend=='sqlite':return None
+    if backend!='postgres':raise ValueError('unknown metrics backend')
+    from .postgres_metrics import PostgresMetrics
+    return PostgresMetrics(config.DATABASE_URL,source_id=os.environ.get('DELIVERY_METRICS_SOURCE',''))
+
+
 def db_path():
     """DELIVERY_METRICS_DB when set, else run_metrics.db in the data directory (/data in the server image, so it survives restarts)."""
     explicit=os.environ.get("DELIVERY_METRICS_DB","").strip()
@@ -146,7 +155,11 @@ class RunSampler:
         self._last=(now,group["cpu_seconds"]);self.peak=max(self.peak,group["rss_mb"])
         row=(now,self.run_key,self.task_id,self.session_id,self.phase,int(pid),group["procs"],group["rss_mb"],self.peak,group["cpu_seconds"],pct)
         try:
-            with _lock:
+            pg=_pg()
+            if pg is not None:
+                pg.append_run(**dict(zip(('ts','run_key','task_id','session_id','phase','pid','procs','rss_mb','peak_rss_mb','cpu_seconds','cpu_pct'),row)))
+            else:
+              with _lock:
                 conn=_open()
                 with conn:conn.execute("INSERT INTO run_samples(ts,run_key,task_id,session_id,phase,pid,procs,rss_mb,peak_rss_mb,cpu_seconds,cpu_pct) VALUES (?,?,?,?,?,?,?,?,?,?,?)",row)
             _problem=None
@@ -172,7 +185,11 @@ def sample_container(now=None):
             pct=round(max(0.0,(cpu-_last_container[1])/(now-_last_container[0])*100),1)
         if cpu is not None:_last_container=(now,cpu)
     try:
-        with _lock:
+        pg=_pg()
+        if pg is not None:
+            pg.append_container(ts=now,mem_used_mb=used,mem_limit_mb=host['mem_total_mb'],cpu_seconds=cpu,cpu_pct=pct)
+        else:
+          with _lock:
             conn=_open()
             with conn:conn.execute("INSERT INTO container_samples(ts,mem_used_mb,mem_limit_mb,cpu_seconds,cpu_pct) VALUES (?,?,?,?,?)",(now,used,host["mem_total_mb"],cpu,pct))
     except Exception as exc:
@@ -210,6 +227,8 @@ def rollup(now=None,raw_days=None):
     """Replace raw rows older than the retention with permanent summaries, in one transaction. Only runs and days that are entirely older are rolled. Returns (runs, days) rolled."""
     now=time.time() if now is None else now
     cutoff=now-(config.METRICS_RAW_DAYS if raw_days is None else raw_days)*86400
+    pg=_pg()
+    if pg is not None:return pg.rollup(cutoff=cutoff,now=now)
     with _lock:
         conn=_open()
         with conn:
@@ -270,6 +289,8 @@ def overview(limit=8):
     """Everything the operator Debug section shows: recent runs, the container's latest and 24-hour figures, and whether storing works."""
     out={"path":str(db_path()),"problem":_problem,"runs":[],"container":None,"raw_days":config.METRICS_RAW_DAYS,"interval_s":config.METRICS_INTERVAL_S}
     try:
+        pg=_pg()
+        if pg is not None:return pg.overview(limit=limit,problem=_problem,raw_days=config.METRICS_RAW_DAYS,interval_s=config.METRICS_INTERVAL_S)
         with _lock:
             conn=_open(create=False)
             if conn is None:return out
@@ -286,6 +307,8 @@ def overview(limit=8):
 def for_task(task_id,limit=2000):
     """Raw samples and summaries of one task, for the operator."""
     try:
+        pg=_pg()
+        if pg is not None:return pg.for_task(task_id,limit=limit,problem=_problem)
         with _lock:
             conn=_open(create=False)
             if conn is None:return {"task_id":task_id,"samples":[],"summaries":[],"problem":_problem}

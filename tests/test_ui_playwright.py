@@ -53,7 +53,8 @@ def pg_ui(pg_browser,pg_ids):
         s.add_event(pg_ids["live"], "price", "Price 1.25 credits", phase_key="intent", payload={"tokens":100000,"price":1.25,"price_usd":1.25,"rates":{"scale":"credits"}})
         s.create_task("Finished definition", "Artifacts ready", task_id=pg_ids["done"])
         for key,_ in __import__("delivery_api.store", fromlist=["PHASES"]).PHASES: s.update_phase(pg_ids["done"], key, "done")
-        s.add_task_artifact(pg_ids["done"], "architecture", "Architecture overview", "/architecture.json")
+        from test_tasks import _publish_test_bytes
+        _publish_test_bytes(s,pg_ids["done"],"architecture","architecture.json",json.dumps({"contract_version":"0.27.0","session_id":pg_ids["done"]+"-session","baseline_id":"baseline:test","stack_entries":[],"components":[],"decisions":[],"non_functionals":{}}).encode(),session=pg_ids["done"]+"-session")
         s.create_task("Interactive simulation", "Recorded run, no process load", task_id=pg_ids["sim"])
         s.configure_simulation(pg_ids["sim"], "/tmp/recorded", "ollama/phi4")
         s.update_phase(pg_ids["sim"], "intent", "done", detail="Recorded phase complete")
@@ -192,7 +193,7 @@ def test_not_started_running_and_done_pages(pg_page,pg_ui,pg_ids):
     page.get_by_role("button",name="Close debug").click()
     page.goto(ui + f'/tasks/{pg_ids["done"]}/view')
     page.get_by_text("Artifacts", exact=True).wait_for();assert page.get_by_text("Artifacts", exact=True).is_visible()
-    assert page.get_by_role("button",name="Architecture overview").is_visible()
+    assert page.locator('[data-view-artifact]',has_text="Architecture").is_visible()
 
 
 
@@ -2832,3 +2833,19 @@ def test_session_unavailable_wording_requires_signed_pg_browser():
     import inspect
     case = test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_known
     assert tuple(inspect.signature(case).parameters) == ('pg_page', 'pg_ui', 'pg_ids')
+
+
+def test_interview_history_binds_answer_to_input_when_next_prompt_arrives_first(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    def raced(snapshot):
+        snapshot['events']=[
+            {'id':91001,'kind':'waiting_input','phase_key':'intent','message':'Describe customer booking','payload':{'question':'Describe customer booking','input_id':'input-first'}},
+            {'id':91002,'kind':'waiting_input','phase_key':'conops','message':'Choose a concept','payload':{'question':'Choose a concept','input_id':'input-next'}},
+            {'id':91003,'kind':'answer','phase_key':'intent','message':'You: Customers pay online','payload':{'answer':'Customers pay online','decision_id':'input-first'}},
+        ]
+    route_task_snapshot(page,ui,pg_ids['live'],raced)
+    page.goto(ui+'/tasks/'+pg_ids['live']+'/view')
+    page.locator('.qa-item').wait_for()
+    assert page.locator('.qa-item .qa-question p').inner_text()=='Describe customer booking'
+    assert page.locator('.qa-item .qa-answer p').inner_text()=='Customers pay online'
+    assert page.locator('.qa-item').count()==1

@@ -114,6 +114,11 @@ def bundle(session:str,*,base:Path|None=None)->dict:
    for line in read_text(p).splitlines():
     try: audits.append(json.loads(line))
     except json.JSONDecodeError:pass
+ coverage=_json(interview/"coverage.json",{}) or {}
+ summary=((session_summary(base) or {"session_id":session}) if supplied else next((x for x in discover() if x["session_id"]==session),{"session_id":session}))
+ return _project_bundle(summary,_phase_status(interview,spec,run,integrity)["interview"],intent,conops,needs,srs,arch,items,tests,validation,integrity,run,audits,coverage)
+
+def _project_bundle(summary,interview_status,intent,conops,needs,srs,arch,items,tests,validation,integrity,run,audits,coverage):
  reqs=_rows(srs,"functional","requirements")+_rows(srs,"non_functional")
  nodes=[];edges=[]
  for n in _rows(needs,"needs"):nodes.append({"id":n.get("need_id"),"kind":"need","label":n.get("statement") or n.get("title"),"data":n})
@@ -129,7 +134,6 @@ def bundle(session:str,*,base:Path|None=None)->dict:
   tid=t.get("test_id");nodes.append({"id":tid,"kind":"test","label":t.get("title") or t.get("name"),"data":t})
   for source in (t.get("requirement_ids") or [])+(t.get("criterion_ids") or [])+(t.get("spec_ids") or []):edges.append({"from":source,"to":tid,"kind":"verified-by"})
  nodes=[n for n in nodes if n["id"]]
- coverage=_json(interview/"coverage.json",{}) or {}
  # Status is derived from this session's artifacts, run state and diagnostics - never a UI constant.
  diagnostic_rows=integrity.get("diagnostics",[]) if isinstance(integrity,dict) else []
  phase_values={"interview":intent or conops,"needs":_rows(needs,"needs"),"srs":reqs,"architecture":arch,"specs":items,"tests":tests,"validation":validation,"reviews":audits,"oracle":integrity}
@@ -146,5 +150,44 @@ def bundle(session:str,*,base:Path|None=None)->dict:
   elif value:state="done"
   else:state="not_started"
   phase_status[key]=state
- phase_status["interview"]=_phase_status(interview,spec,run,integrity)["interview"]
- return {"session":((session_summary(base) or {"session_id":session}) if supplied else next((x for x in discover() if x["session_id"]==session),{"session_id":session})),"phase_status":phase_status,"intent":intent,"conops":conops,"coverage":coverage,"needs":_rows(needs,"needs"),"srs":srs,"requirements":reqs,"architecture":arch,"items":items,"tests":tests,"validation":validation,"audits":audits,"integrity":integrity,"run":run,"graph":{"nodes":nodes,"edges":edges}}
+ phase_status["interview"]=interview_status
+ return {"session":summary,"phase_status":phase_status,"intent":intent,"conops":conops,"coverage":coverage,"needs":_rows(needs,"needs"),"srs":srs,"requirements":reqs,"architecture":arch,"items":items,"tests":tests,"validation":validation,"audits":audits,"integrity":integrity,"run":run,"graph":{"nodes":nodes,"edges":edges}}
+
+
+def postgres_bundle(store,session):
+ """Project the current owned execution's immutable publication and PG supplements."""
+ binding=store.session_binding(session)
+ if not binding:raise FileNotFoundError(session)
+ task=store.task(binding['task_id'])
+ if not task or task['engine_session_id']!=session:raise FileNotFoundError(session)
+ snapshot=store.manifest_snapshot(task['task_id'],binding['generation'])
+ documents={}
+ for row in (snapshot or {}).get('rows',[]):
+  if not row['stale']:documents[row['name']]=store.read_artifact_bytes_sha(row['sha256'])
+ def load(name,default):
+  raw=documents.get(name)
+  return json.loads(raw) if raw is not None else default
+ from .generator_documents import GeneratorDocuments
+ reader=GeneratorDocuments.owner_reader(store,task['task_id'])
+ def supplemental(key,default):
+  raw=reader.read(key)
+  return json.loads(raw) if raw is not None else default
+ intent=load('intent_model.json',{});conops=load('conops.json',{})
+ needs=load('needs.json',{});srs=load('srs.json',{});arch=load('architecture.json',{})
+ items=_rows(load('items.json',[]),'items','specs');tests=_rows(load('tests.json',[]),'tests');validation=_rows(load('validation.json',{}),'items')
+ integrity=supplemental('spec/bundle-integrity.json',{});run=supplemental('spec/hands-free-run.json',{})
+ coverage=supplemental('interview/coverage.json',{});audits=[]
+ for area in ('interview','spec'):
+  raw=reader.read(area+'/audit.jsonl')
+  if raw is not None:
+   for line in raw.decode().splitlines():
+    try:audits.append(json.loads(line))
+    except json.JSONDecodeError:pass
+ summary={'session_id':session,'title':intent.get('problem_statement') or task['title'],
+  'completed_at':run.get('completed_at'),'updated_at':datetime.fromtimestamp(task['updated_at'],timezone.utc).isoformat(),
+  'oracle_passed':bool(integrity) and not bool(integrity.get('diagnostics')),'files_checked':integrity.get('files_checked',0),
+  'phases':[area for area,present in (('interview',intent or conops),('spec',needs or srs or arch or items or tests or validation)) if present]}
+ interview_status='done' if intent else 'in_progress' if conops else 'not_started'
+ result=_project_bundle(summary,interview_status,intent,conops,needs,srs,arch,items,tests,validation,integrity,run,audits,coverage)
+ summary['phase_status']=result['phase_status']
+ return result

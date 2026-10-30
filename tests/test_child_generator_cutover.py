@@ -19,8 +19,10 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
         tid=store.create_task('generator child '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)
         root=session_root(tmp_path,A,sid);interview=root/'interview';interview.mkdir(parents=True);out=root/'spec'
         intent={'contract_version':CONTRACT_VERSION,'session_id':sid,'problem_statement':'Record task evidence','constraints':[],'assumptions':[],'glossary':{},'target_users':['People'],'core_value_proposition':'Task evidence','stakeholder_needs':[{'need_id':'SN-1','statement':'People need recorded evidence','kind':'functional','source_turns':[0]}],'in_scope':['Record evidence'],'out_of_scope':[],'source_turns':{}}
-        ip=interview/'intent_model.json';ip.write_text(json.dumps(intent))
-        bp=root/'baseline.json';bp.write_text(json.dumps({'contract_version':CONTRACT_VERSION,'baseline_id':'greenfield','system_name':'Test','mode':'greenfield','repositories':[]}))
+        ip=interview/'intent_model.json'
+        baseline={'contract_version':CONTRACT_VERSION,'baseline_id':'greenfield','system_name':'Test','mode':'greenfield','repositories':[]}
+        bp=out/'system-baseline.json'
+        store.publish_task_revision_bytes(tid,[{'phase_key':'intent','name':'intent_model.json','data':json.dumps(intent).encode()},{'phase_key':'baseline','name':'system-baseline.json','data':json.dumps(baseline).encode()}],writer_instance='test-only')
         job=store.enqueue_worker(tid,'phase:'+stage,execution_options={'model_route':'ollama:fake'})
         from http.server import HTTPServer,BaseHTTPRequestHandler
         import threading
@@ -57,12 +59,12 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
         try:
             if publishing:
                 import delivery_api.artifact_publication as publication
-                real=publication.publish_session_revision
+                real=publication.publish_document_revision
                 def fail(*a,**kw):raise RuntimeError('injected publication outage')
-                monkeypatch.setattr(publication,'publish_session_revision',fail)
+                monkeypatch.setattr(publication,'publish_document_revision',fail)
                 with pytest.raises(RuntimeError,match='publication outage'):asyncio.run(go())
                 assert store.producer_result(job) is not None
-                monkeypatch.setattr(publication,'publish_session_revision',real)
+                monkeypatch.setattr(publication,'publish_document_revision',real)
                 # Recover using a NEW adapter object, no child may be started.
                 recovered=ChildGeneratorEngine(tmp_path,gateway_factory=engine.gateway_factory,dsn=engine.dsn,endpoint=engine.endpoint)
                 def forbidden(*a):raise AssertionError('publication recovery cannot spawn')
@@ -76,9 +78,16 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
                 assert store.producer_result(job)['published_at'] is not None
             else:output=asyncio.run(go())
         finally:server.shutdown();server.server_close()
-        assert (out/'needs.json').is_file() and b'Stopped after stage' in output
+        assert not (out/'checkpoints.sqlite').exists(), 'child generator must persist checkpoints only in PG'
+        assert not (out/'needs.json').exists() and b'Stopped after stage' in output
+        with store._postgres.transaction() as c:
+            needs=c.execute('SELECT payload FROM generator_documents WHERE execution_session_id=%s AND document_key=%s',(sid,'spec/needs.json')).fetchone()
+        assert json.loads(bytes(needs['payload']))['needs']
         assert store.worker_job(job)['state']=='done' and engine._quiescent
-        if stage=='srs':assert calls and (out/'srs.json').is_file()
+        if stage=='srs':
+            assert calls and not (out/'srs.json').exists()
+            with store._postgres.transaction() as c:
+                assert json.loads(bytes(c.execute('SELECT payload FROM generator_documents WHERE execution_session_id=%s AND document_key=%s',(sid,'spec/srs.json')).fetchone()['payload']))['functional']
 
 
 def test_manifest_rejects_foreign_or_changed_inputs(tmp_path):
@@ -95,7 +104,8 @@ def test_durable_gate_answer_survives_parent_crash_without_reasking(store,tmp_pa
     monkeypatch.setattr(config,'ARTIFACT_PUBLISH',False);monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
     with tenant_context(A):
         tid=store.create_task('gate restart '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)
-        root=session_root(tmp_path,A,sid);root.mkdir(parents=True);ip=root/'intent.json';ip.write_text('{}')
+        root=session_root(tmp_path,A,sid);root.mkdir(parents=True);ip=root/'interview/intent_model.json'
+        store.publish_task_revision_bytes(tid,[{'phase_key':'intent','name':'intent_model.json','data':b'{}'}],writer_instance='test-only')
         job=store.enqueue_worker(tid,'phase:needs',execution_options={'model_route':'ollama:fake'})
         class Gateway:
             retail_rates=None
@@ -118,7 +128,9 @@ def test_durable_gate_answer_survives_parent_crash_without_reasking(store,tmp_pa
         with pytest.raises(RuntimeError,match='parent crashed'):asyncio.run(go(engine()))
         monkeypatch.setattr(store,'retain_decision_review',original);store.reauthorize_worker(job)
         asyncio.run(go(engine()))
-        assert len(asked)==1 and json.loads((root/'spec/needs.json').read_text())['accepted'] is True
+        assert len(asked)==1 and not (root/'spec/needs.json').exists()
+        with store._postgres.transaction() as c:
+            assert json.loads(bytes(c.execute('SELECT payload FROM generator_documents WHERE execution_session_id=%s AND document_key=%s',(sid,'spec/needs.json')).fetchone()['payload']))['accepted'] is True
         assert store.worker_job(job)['state']=='done'
 
 

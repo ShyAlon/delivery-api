@@ -319,7 +319,12 @@ def test_private_worker_actual_fresh_needs_graph_checkpoint_is_owner_bound(worke
             assert outputs==[] and not (root/'spec'/'needs.json').exists()
             s.confirm_task_stopped(tid,engine_quiescent=True)
         else:
-            assert len(outputs)==1 and (root/'spec'/'needs.json').is_file()
+            assert len(outputs)==1 and not (root/'spec'/'needs.json').exists()
+            import json
+            with s._postgres.transaction() as c:
+                row=c.execute('SELECT payload FROM generator_documents WHERE execution_session_id=%s AND document_key=%s',(s.engine_session(tid),'spec/needs.json')).fetchone()
+            body=json.loads(bytes(row['payload']))
+            assert body['needs']==outputs[0]['needs']['needs'] and body['session_id']==s.engine_session(tid)
             with s._postgres.transaction() as c:
                 assert c.execute('SELECT count(*) n FROM provider_attempts WHERE job_id=%s',(job,)).fetchone()['n']==0
         assert not (base/'tenants'/B.owner_id/'sessions'/s.engine_session(tid)).exists()
@@ -620,3 +625,144 @@ def test_generation_mismatch_pauses(worker,monkeypatch):
         with pytest.raises(ProducerRecoveryPaused,match='generation'):
             asyncio.run(w.execute(job,_paid_producer(calls)))
     assert len(calls)==1
+
+
+def test_pg_bound_document_worker_retries_publication_without_files_or_rebilling(worker,monkeypatch):
+    from delivery_api import config
+    from delivery_api import artifact_publication as publication
+    from spec_generator.worker_runtime import JobRuntime,current_runtime
+    from spec_generator.model_config import StageModel
+    from spec_generator.cli import _atomic_write
+    from spec_generator.attempt_admission import admitted_invoke
+    w,s,tid,job,base=worker;calls=[]
+    w.runtime_factory=lambda cap,root:JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    def producer(cap,root):
+        assert current_runtime().documents is not None
+        calls.append(1);_atomic_write(root/'spec/srs.json','{"exact":1}')
+        admitted_invoke(lambda:SimpleNamespace(usage_metadata={'input_tokens':2,'output_tokens':3}),**OPTIONS)
+    real=publication.publish_document_revision
+    monkeypatch.setattr(publication,'publish_document_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('injected PG publication failure')))
+    with tenant_context(A):
+        with pytest.raises(RuntimeError,match='injected PG'):asyncio.run(w.execute(job,producer))
+        assert s.producer_result(job)['published_at'] is None
+        monkeypatch.setattr(publication,'publish_document_revision',real)
+        s.reauthorize_worker(job)
+        assert asyncio.run(w.execute(job,producer))
+        assert s.read_artifact_bytes(tid,'srs','srs.json')==b'{"exact":1}'
+        assert s.producer_result(job)['published_at'] is not None
+        with s._postgres.transaction() as c:
+            assert c.execute('SELECT count(*) AS n FROM provider_attempts WHERE job_id=%s',(job,)).fetchone()['n']==1
+        root=session_root(base,A,s.engine_session(tid))
+        assert not (root/'spec/srs.json').exists()
+    assert calls==[1]
+
+
+def test_pg_document_worker_refuses_settled_substitution_before_manifest_publish(worker,monkeypatch):
+    from delivery_api import config
+    from spec_generator.worker_runtime import JobRuntime
+    from spec_generator.model_config import StageModel
+    from spec_generator.cli import _atomic_write
+    w,s,tid,job,base=worker;monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    w.runtime_factory=lambda cap,root:JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
+    with tenant_context(A):
+        # Explicitly make this fixture job SRS. Prior needs must survive unchanged.
+        import psycopg
+        with psycopg.connect(DSN) as admin:admin.execute('UPDATE worker_jobs SET kind=%s WHERE job_id=%s',('phase:srs',job))
+        s.update_phase(tid,'needs','approved')
+        s.publish_task_revision_bytes(tid,[{'phase_key':'needs','name':'needs.json','data':b'{"needs":[]}'}],writer_instance='test-only')
+        before=s.manifest_snapshot(tid)
+        def producer(cap,root):
+            _atomic_write(root/'spec/needs.json','{"substituted":true}')
+            _atomic_write(root/'spec/srs.json','{"current":true}')
+        with pytest.raises(ValueError,match='modified settled work'):asyncio.run(w.execute(job,producer))
+        assert s.manifest_snapshot(tid)==before
+        assert s.producer_result(job) is None
+
+
+def test_pg_document_worker_modified_pending_bytes_pause_without_rerun(worker,monkeypatch):
+    from delivery_api import config
+    from delivery_api import artifact_publication as publication
+    from delivery_api.same_host_producer import ProducerRecoveryPaused
+    from spec_generator.worker_runtime import JobRuntime
+    from spec_generator.model_config import StageModel
+    from spec_generator.cli import _atomic_write
+    w,s,tid,job,base=worker;calls=[];monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    w.runtime_factory=lambda cap,root:JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
+    def producer(cap,root):calls.append(1);_atomic_write(root/'spec/srs.json','{"original":true}')
+    real=publication.publish_document_revision
+    monkeypatch.setattr(publication,'publish_document_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('injected failure')))
+    with tenant_context(A):
+        with pytest.raises(RuntimeError,match='injected'):asyncio.run(w.execute(job,producer))
+        from delivery_api.generator_documents import GeneratorDocuments
+        s.reauthorize_worker(job);cap=s.claim_worker(job)
+        GeneratorDocuments(s,cap,job).write('spec/srs.json',b'{"different":true}')
+        s.pause_interrupted_worker(job)
+        monkeypatch.setattr(publication,'publish_document_revision',real)
+        with pytest.raises(ProducerRecoveryPaused,match='differ'):asyncio.run(w.execute(job,producer))
+        assert calls==[1] and s.manifest_snapshot(tid) is None
+
+
+def test_pg_fresh_graph_refuses_existing_checkpoint_without_directory_dependency(worker,monkeypatch):
+    from spec_generator.worker_runtime import JobRuntime
+    from spec_generator.model_config import StageModel
+    from spec_generator.worker_graph import run_fresh_graph
+    from spec_generator.checkpoint_runtime import checkpoint
+    from langgraph.checkpoint.base import empty_checkpoint
+    from pathlib import Path
+    import json
+    w,s,tid,job,base=worker
+    w.runtime_factory=lambda cap,root:JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
+    original=json.loads((Path(__file__).parent/'fixtures/revision-source.json').read_text())
+    def producer(cap,root):
+        for key in ('intent_model','conops'):original[key]['session_id']=cap.session_id
+        saver=checkpoint(root/'spec');cp=empty_checkpoint();cp['channel_values']={'needs':{'already':'retained'}};cp['channel_versions']={'needs':1};cfg={'configurable':{'thread_id':cap.session_id}}
+        saver.put(cfg,cp,{'source':'input','step':0,'parents':{}},cp['channel_versions'])
+        with pytest.raises(ValueError,match='explicit resume'):run_fresh_graph(capability=cap,session_root=root,intent=original['intent_model'],conops=original['conops'],baseline=original['system_baseline'],log=None,progress=None,stop_after='needs')
+        assert saver.get_tuple(cfg).checkpoint==cp
+    with tenant_context(A):assert asyncio.run(w.execute(job,producer))
+
+
+def test_pg_process_runner_opens_gate_from_durable_output_not_missing_file(worker,tmp_path):
+    from delivery_api.runner import ProcessRunner
+    from delivery_api.inprocess_engine import VirtualProcess
+    from spec_generator.worker_runtime import JobRuntime
+    from spec_generator.model_config import StageModel
+    from spec_generator.cli import _atomic_write
+    w,s,tid,job,base=worker
+    w.runtime_factory=lambda cap,root:JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
+    def producer(cap,root):_atomic_write(root/'spec/needs.json','{"needs":[]}')
+    with tenant_context(A):
+        assert asyncio.run(w.execute(job,producer))
+        root=session_root(base,A,s.engine_session(tid))
+        async def finish():
+            proc=VirtualProcess(asyncio.get_running_loop());proc.feed(b'Stopped after stage needs\n');proc.finish(0)
+            return await ProcessRunner(s)._run(tid,['fake','--out',str(root/'spec')],cwd=tmp_path,phase='needs',infer_phase=False,virtual=proc)
+        assert asyncio.run(finish())==0
+        task=s.task(tid)
+        assert next(p for p in task['phases'] if p['phase_key']=='needs')['state']=='awaiting_approval'
+        assert next(g for g in task['gates'] if g['after_phase']=='needs')['state']=='waiting'
+        assert not (root/'spec/needs.json').exists()
+        s.update_phase(tid,'needs','failed',detail='test cleanup after gate assertions')
+
+
+def test_interview_document_only_worker_publishes_without_generator_runtime_or_files(worker,monkeypatch):
+    import json
+    from pathlib import Path
+    from interview_engine.pg_session_store import PgSessionStore
+    from interview_engine.pg_documents import InterviewDocuments
+    w,s,tid,job,base=worker;w.documents_enabled=True
+    monkeypatch.setattr(__import__('delivery_api.config',fromlist=['x']),'ARTIFACT_PUBLISH',False)
+    produced=[]
+    def producer(cap,root):
+        pg=PgSessionStore(s._postgres._pool,claims=(A.owner_id,A.session_id));claim=pg.claim(cap.session_id,A.owner_id,'host-documents',60)
+        docs=InterviewDocuments(pg,claim,tid)
+        docs.write_many({'interview/intent_model.json':b'{"problem_statement":"PG output"}','interview/conops.json':b'{"concept_options":[]}'})
+        pg.release(claim);produced.append(1)
+        assert not root.exists()
+    with tenant_context(A):
+        assert asyncio.run(w.execute(job,producer))
+        assert s.read_artifact_bytes(tid,'intent','intent_model.json')==b'{"problem_statement":"PG output"}'
+        assert s.read_artifact_bytes(tid,'conops','conops.json')==b'{"concept_options":[]}'
+        assert s.producer_result(job)['published_at'] is not None
+        assert produced==[1] and not session_root(base,A,s.engine_session(tid)).exists()

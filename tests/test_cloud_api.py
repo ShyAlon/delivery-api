@@ -15,7 +15,13 @@ A=TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-00
 B=TenantScope('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-0000000000a2')
 
 @pytest.fixture
-def cloud(monkeypatch,tmp_path):
+def cloud(monkeypatch,tmp_path,pg_workspace_factory,request):
+    from contextlib import ExitStack
+    stack=ExitStack()
+    first=stack.enter_context(pg_workspace_factory());second=stack.enter_context(pg_workspace_factory())
+    if request.module.__name__==__name__:
+        monkeypatch.setattr(__import__(__name__),'A',first.scope)
+        monkeypatch.setattr(__import__(__name__),'B',second.scope)
     import delivery_api.app as module
     from delivery_api import config
     store=PostgresStore(DSN.replace('user=sandbox','user=delivery_app'))
@@ -40,7 +46,9 @@ def cloud(monkeypatch,tmp_path):
         session_check=store.auth_session_active,request_database=store._postgres)
     # Don't start local legacy worker lifespan. Cloud mode must have no shared
     # startup data scans or automatic resume until scoped engine support lands.
-    with TestClient(app) as client:yield client,store,tmp_path
+    try:
+        with TestClient(app) as client:yield client,store,tmp_path
+    finally:stack.close()
 
 
 def header(user):
@@ -75,6 +83,7 @@ def test_session_registry_and_file_namespace(cloud):
     with tenant_context(A):
         task=store.create_task(sid)
         store.set_engine_session(task['task_id'],sid)
+        store.publish_task_revision_bytes(task['task_id'],[{'phase_key':'intent','name':'intent_model.json','data':b'{"problem_statement":"A private bundle"}'}],writer_instance='test-only')
     path=session_root(root,A,sid)
     (path/'interview').mkdir(parents=True)
     (path/'interview'/'intent_model.json').write_text('{"problem_statement":"A private bundle"}')
@@ -90,7 +99,10 @@ def test_session_registry_and_file_namespace(cloud):
     assert client.get('/api/sessions',headers=header('b')).json()['sessions']==[]
     outside=root/'outside.json';outside.write_text('{"secret":true}')
     (path/'interview'/'escape.json').symlink_to(outside)
-    assert client.get('/api/sessions/'+sid,headers=header('a')).status_code in (403,404)
+    # A local symlink cannot affect the immutable PG publication.
+    response=client.get('/api/sessions/'+sid,headers=header('a'))
+    assert response.status_code==200 and 'A private bundle' in response.text
+    assert 'secret' not in response.text
 
 
 def test_unsafe_settings_local_auth_and_worker_routes_denied(cloud):
@@ -150,6 +162,8 @@ def test_downloaded_bytes_never_cross_session_owner_or_unbound_ref(cloud):
     original=b'{"problem_statement":"private-A-bytes"}'
     (root/'interview'/'intent_model.json').write_bytes(original)
     task_id=task['task_id']
+    with tenant_context(A):
+        store.publish_task_revision_bytes(task_id,[{'phase_key':'intent','name':'intent_model.json','data':original}],writer_instance='test-only')
     own=client.get('/api/tasks/'+task_id+'/artifacts/intent/intent_model.json',headers=header('a'))
     assert own.status_code==200,own.text
     assert own.content==original
@@ -617,9 +631,8 @@ def test_cloud_bundle_reads_only_the_registered_session_and_hides_host_paths(clo
     sid='owner-read-'+uuid.uuid4().hex
     with tenant_context(A):
         task=store.create_task(sid);store.set_engine_session(task['task_id'],sid)
+        store.publish_task_revision_bytes(task['task_id'],[{'phase_key':'intent','name':'intent_model.json','data':b'{"problem_statement":"My bundle"}'}],writer_instance='test-only')
     path=session_root(root,A,sid)
-    (path/'interview').mkdir(parents=True)
-    (path/'interview'/'intent_model.json').write_text('{"problem_statement":"My bundle"}')
     def global_scan(*a,**k):raise AssertionError('cloud read scanned a shared or sibling directory')
     monkeypatch.setattr(module.bundles,'discover',global_scan)
     monkeypatch.setattr(module.bundles,'_discover',global_scan)

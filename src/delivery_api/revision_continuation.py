@@ -11,9 +11,12 @@ from .producer_inputs import _open_directory,_identity
 
 
 def prepare_private_approved_continuation(store,task_id,*,installation_id,artifacts_base):
+    if hasattr(store,'_postgres'):
+        from .pg_revision_continuation import prepare
+        return prepare(store,task_id,installation_id=installation_id,artifacts_base=artifacts_base)
     from spec_generator.cooperative_run import cli_stop_binding
     from spec_generator.stop_fence import guarded_publish,check_execution
-    from spec_generator.revision_source import read_closed_checkpoint
+    from .revision_checkpoint_reader import read_source_checkpoint
     from spec_generator.revision_checkpoint import prepare_approved_continuation_checkpoint
     from spec_generator.graph import build_graph,checkpoint_serde
     from spec_generator.stop_publication import FencedCheckpointer,publication_guard
@@ -33,7 +36,7 @@ def prepare_private_approved_continuation(store,task_id,*,installation_id,artifa
         marker='revision-continuation:'+installation_id
         if store.decision_review(task_id,marker,basis['review_sha256']):
             raise ValueError('continuation already prepared or ambiguous; explicit reconciliation required')
-        source=read_closed_checkpoint(root/'spec/checkpoints.sqlite',session_id=cap.session_id,
+        source=read_source_checkpoint(store,cap,root/'spec/checkpoints.sqlite',session_id=cap.session_id,
             expected_checkpoint_id=basis['checkpoint_id'],expected_review_phase=basis['phase'])
         store.retain_decision_review(task_id,marker,basis['review_sha256'],{'state':'preparation_pending',
             'checkpoint_id':basis['checkpoint_id'],'approval_reference':basis['approval_reference'],'dispatch_started':False})
@@ -82,6 +85,9 @@ def prepare_private_approved_continuation(store,task_id,*,installation_id,artifa
 
 def reconcile_private_approved_continuation(store,task_id,*,installation_id,artifacts_base,expected_job_id=None):
     """Read-only private receipt/file/DB comparison. Never retries or dispatches."""
+    if hasattr(store,'_postgres'):
+        from .pg_revision_continuation import reconcile
+        return reconcile(store,task_id,installation_id=installation_id,artifacts_base=artifacts_base,expected_job_id=expected_job_id)
     import stat
     from spec_generator.graph import build_graph,checkpoint_serde
     from langgraph.checkpoint.sqlite import SqliteSaver

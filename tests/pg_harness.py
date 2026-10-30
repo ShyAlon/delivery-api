@@ -61,7 +61,13 @@ def _numbered(path):
     return re.match(r'^\d{14}_',path.name) is not None
 
 
-def start():
+def start(*,database_prefix='test_tenant_',socket_directory=None):
+    # The dedicated item6 runner needs its existing stricter isolation contract.
+    # These are fixture-only choices, never credentials or a caller-supplied DSN.
+    if database_prefix not in ('test_tenant_','requi_item6_'):
+        raise ValueError('known disposable database prefix required')
+    if socket_directory is not None and (database_prefix!='requi_item6_' or socket_directory!=Path('/tmp')):
+        raise ValueError('item6 disposable socket directory required')
     # Repeated in-process pytest runs reuse our own migrated server. Do not
     # relabel it external merely because start() published its DSN last time.
     if STATE['status']=='running' and os.environ.get('DELIVERY_TEST_POSTGRES_DSN')==STATE['dsn']:
@@ -76,7 +82,13 @@ def start():
         STATE.update(status='missing',reason='pgserver or psycopg is not installed (%s); database tests will skip'%exc.name);return
     scratch=tempfile.mkdtemp(prefix='delivery-api-pg-')
     try:
-        server=pgserver.get_server(scratch,cleanup_mode='delete')
+        if socket_directory is None:
+            server=pgserver.get_server(scratch,cleanup_mode='delete')
+        else:
+            # pgserver chooses a free port; only the socket directory is fixed.
+            from unittest.mock import patch
+            with patch('pgserver.postgres_server.find_suitable_socket_dir',return_value=socket_directory):
+                server=pgserver.get_server(scratch,cleanup_mode='delete')
     except Exception as exc:
         shutil.rmtree(scratch,ignore_errors=True)
         STATE.update(status='failed',reason='the temporary Postgres did not start: %s: %s'%(type(exc).__name__,str(exc)[:300]));return
@@ -97,7 +109,7 @@ def start():
     if not socket_dir:
         STATE.update(status='failed',reason='the temporary Postgres has no socket directory in %s'%uri);return
     import uuid
-    dbname='test_tenant_'+uuid.uuid4().hex[:12]   # several tests refuse to run unless the database name starts with test_tenant_
+    dbname=database_prefix+uuid.uuid4().hex[:12]   # several tests refuse to run unless the database name starts with test_tenant_
     dsn='host=%s dbname=%s user=sandbox'%(socket_dir.group(1),dbname)   # the tests swap user=sandbox for user=delivery_app
     try:
         with psycopg.connect(uri,autocommit=True) as admin:

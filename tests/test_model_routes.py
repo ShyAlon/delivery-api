@@ -48,8 +48,8 @@ def test_transcript_header_from_usage_jsonl(monkeypatch, tmp_path):
     task_id = "provenance-usage-test"
     _seed_task(module, store, task_id)
     store.set_engine_session(task_id, "s-prov")
-    usage = tmp_path / "s-prov" / "interview" / "usage.jsonl"
-    usage.parent.mkdir(parents=True)
+    from test_http_cutover import _PGUsage
+    usage=_PGUsage(store,task_id,'interview/usage.jsonl')
     records = [
         {"session_id": "s-prov", "stage": "probing", "provider": "ollama", "model": "phi4",
          "prompt_tokens": 1, "completion_tokens": 1, "seconds": 0.1, "cost_usd": 0.0},
@@ -71,8 +71,8 @@ def test_transcript_header_mixed_models_lists_stages(monkeypatch, tmp_path):
     task_id = "provenance-mixed-test"
     _seed_task(module, store, task_id)
     store.set_engine_session(task_id, "s-mixed")
-    usage = tmp_path / "s-mixed" / "interview" / "usage.jsonl"
-    usage.parent.mkdir(parents=True)
+    from test_http_cutover import _PGUsage
+    usage=_PGUsage(store,task_id,'interview/usage.jsonl')
     records = [
         {"session_id": "s-mixed", "stage": "probing", "provider": "ollama", "model": "phi4",
          "prompt_tokens": 1, "completion_tokens": 1, "seconds": 0.1, "cost_usd": 0.0},

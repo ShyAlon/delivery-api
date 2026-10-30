@@ -39,6 +39,8 @@ REQUIRED_TABLES = frozenset({
     'provider_attempts', 'retail_compute_segments', 'retail_contributions', 'retail_scale_migrations',
     'review_comments', 'runs', 'staged_provider_responses', 'task_artifacts', 'tasks', 'usage',
     'user_task_policy', 'user_task_policy_changes', 'users', 'worker_jobs',
+    'generator_documents','generator_snapshots','resource_run_samples',
+    'resource_container_summaries','resource_run_summaries','resource_container_samples',
 })
 
 # Tables that gate OPTIONAL features only: payments, the operator console, the
