@@ -68,12 +68,8 @@ def check_admin(conn):
         raise ValueError('admin connection lacks CREATE ROLE or CREATE on public; use a DDL-capable admin URL, not the restricted app URL. No migrations or grants applied')
 
 def report_sources(s,root,explicit):
-    paths=[Path(explicit).expanduser()] if explicit else [s.target_path(),root/'.env']
     for name in ('DELIVERY_DATABASE_URL','REQUI_ADMIN_DATABASE_URL'):
-        source='shell fallback or missing'
-        for path in paths:
-            if s.read_file(path).get(name):source=str(path);break
-        print(name+' source: '+source+' (value hidden)')
+        print(s.source_report(root,name,explicit=explicit))
 
 
 def main():

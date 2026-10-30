@@ -5,7 +5,7 @@ Never source dotenv as shell, interpolate values, or print values. Only known
 configuration names cross this boundary. No connection or mutation is made here.
 """
 import argparse
-import getpass
+import termios
 import os
 from pathlib import Path
 import re
@@ -46,12 +46,27 @@ def target_path(env=None):
     env=os.environ if env is None else env
     return Path(env.get('PREVIEW_SETTINGS_FILE') or str(Path(env.get('XDG_CONFIG_HOME',str(Path.home()/'.config')))/'requi/preview.env')).expanduser()
 
+class SettingsValues(dict):
+    pass
+
+def source_report(root,name,env=None,explicit=None):
+    env=os.environ if env is None else env
+    paths=[Path(explicit).expanduser()] if explicit else [target_path(env),Path(root)/'.env']
+    states=[];selected=None
+    for path in paths:
+        values=read_file(path)
+        state='file missing' if not path.exists() else 'name absent' if name not in values else 'name present but empty' if not values[name] else 'name present'
+        states.append(str(path)+' ['+state+']')
+        if values.get(name) and selected is None:selected=str(path)
+    if not selected and env.get(name):selected='shell fallback'
+    return name+' source: '+(selected or 'MISSING')+'; checked: '+'; '.join(states)+'; values hidden'
+
 def load(root,env=None,explicit=None):
     env=os.environ if env is None else env
     paths=[Path(explicit).expanduser()] if explicit else [target_path(env),Path(root)/'.env']
     if explicit and not paths[0].is_file():
         raise SettingsError('explicit settings file is missing: '+str(paths[0]))
-    result={};seen=[]
+    result=SettingsValues();result.context=(root,dict(env),explicit);seen=[]
     for path in paths:
         if path.resolve() in seen:continue
         seen.append(path.resolve());values=read_file(path)
@@ -70,20 +85,43 @@ def load(root,env=None,explicit=None):
             result[name]=value
     return result
 
-def hidden_prompt(name):
-    # Never allow getpass's echoing fallback on a redirected stdin. Tests may
-    # provide a private answer file through PREVIEW_TTY, like other ops prompts.
-    tty=os.environ.get('PREVIEW_TTY','/dev/tty')
+def terminal_line(prompt,hidden=False):
+    # Buffered r+ requires seekability and fails on actual terminal devices.
+    # Use a raw descriptor; never let a secret prompt fall back to echoed stdin.
+    path=os.environ.get('PREVIEW_TTY','/dev/tty');fd=None;original=None
     try:
-        with open(tty,'r+') as stream:
-            if not stream.isatty():raise SettingsError('missing '+name+'; hidden input requires a terminal')
-            return getpass.getpass(name+' (hidden, missing from settings): ',stream=stream)
-    except OSError:raise SettingsError('missing '+name+'; hidden input requires a terminal') from None
+        fd=os.open(path,os.O_RDWR|os.O_NOCTTY)
+        if not os.isatty(fd):raise SettingsError('input requires a terminal: '+path)
+        if hidden:
+            original=termios.tcgetattr(fd);changed=list(original)
+            changed[3]&=~termios.ECHO
+            termios.tcsetattr(fd,termios.TCSAFLUSH,changed)
+        os.write(fd,prompt.encode())
+        raw=bytearray()
+        while True:
+            char=os.read(fd,1)
+            if not char:raise SettingsError('terminal input ended: '+path)
+            if char in (b'\n',b'\r'):break
+            raw.extend(char)
+        return raw.decode('utf-8')
+    except OSError as exc:
+        raise SettingsError('hidden input requires a terminal; cannot open '+path+' ('+type(exc).__name__+'); use a private settings file') from None
+    finally:
+        if fd is not None:
+            if original is not None:
+                termios.tcsetattr(fd,termios.TCSADRAIN,original);os.write(fd,b'\n')
+            os.close(fd)
+
+def hidden_prompt(name):
+    return terminal_line(name+' (hidden, missing from settings): ',hidden=True)
 
 def require(values,names,prompt=None):
     prompt=prompt or hidden_prompt
     for name in names:
         if not values.get(name):
+            if hasattr(values,'context'):
+                root,env,explicit=values.context
+                print(source_report(root,name,env,explicit),file=sys.stderr)
             value=prompt(name).strip()
             if not value:raise SettingsError('required setting is missing: '+name)
             if any(c in value for c in '\n\r\x00'):raise SettingsError('setting must be one line: '+name)
@@ -95,11 +133,7 @@ def require(values,names,prompt=None):
             raise SettingsError(name+' must start with https://')
 
 def terminal_confirm(prompt):
-    try:
-        with open('/dev/tty','r+') as tty:
-            if not tty.isatty():raise SettingsError('saving requires a terminal')
-            tty.write(prompt);tty.flush();return tty.readline().strip()
-    except OSError:raise SettingsError('saving requires a terminal') from None
+    return terminal_line(prompt).strip()
 
 def save_confirmed(path,values,confirm=None):
     confirm=confirm or terminal_confirm
