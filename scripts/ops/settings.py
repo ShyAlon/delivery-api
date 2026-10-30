@@ -94,7 +94,15 @@ def require(values,names,prompt=None):
         if name=='DELIVERY_SUPABASE_URL' and not values[name].startswith('https://'):
             raise SettingsError(name+' must start with https://')
 
-def save_confirmed(path,values,confirm=input):
+def terminal_confirm(prompt):
+    try:
+        with open('/dev/tty','r+') as tty:
+            if not tty.isatty():raise SettingsError('saving requires a terminal')
+            tty.write(prompt);tty.flush();return tty.readline().strip()
+    except OSError:raise SettingsError('saving requires a terminal') from None
+
+def save_confirmed(path,values,confirm=None):
+    confirm=confirm or terminal_confirm
     if confirm('Type yes to save these settings locally at '+str(path)+' (mode 600), Enter to keep them only for this run: ')!='yes':return False
     path=Path(path);existing=read_file(path)
     existing.update({k:v for k,v in values.items() if allowed(k)})
