@@ -288,9 +288,19 @@ from spec_generator.attempt_admission import admitted_invoke
 admitted_invoke(lambda:SimpleNamespace(usage_metadata={'input_tokens':2,'output_tokens':3}),stage='needs',provider='fake',model='fake',messages=['test'],max_output_tokens=10)
 print('fake attempt complete')
 '''
+    # Keep the production fixed-module check and original PG binding. Replace
+    # only the child command after the reviewed launch context accepted it.
+    from contextlib import contextmanager
+    from delivery_api import pg_generator_process
+    original_launch=pg_generator_process.launch_context
+    @contextmanager
+    def fake_child(*args,**kwargs):
+        with original_launch(*args,**kwargs) as (_,env,fd,documents):
+            yield [sys.executable,'-c',script,'--out',args[3][-1]],env,fd,documents
+    monkeypatch.setattr(pg_generator_process,'launch_context',fake_child)
     with tenant_context(A),worker_gateway(gateway):
         sid=s.engine_session(tid);path=session_root(tmp_path,A,sid)
-        code=asyncio.run(ProcessRunner(s).run(tid,[sys.executable,'-c',script,'--out',str(path/'spec')],cwd=tmp_path,phase='needs',env={'VMODEL_ARTIFACTS_DIR':str(path.parent),'VMODEL_TENANT_OWNER':A.owner_id,'PYTHONPATH':root}))
+        code=asyncio.run(ProcessRunner(s).run(tid,[sys.executable,'-m','spec_generator.cli','--out',str(path/'spec')],cwd=tmp_path,phase='needs',env={'VMODEL_ARTIFACTS_DIR':str(path.parent),'VMODEL_TENANT_OWNER':A.owner_id,'PYTHONPATH':root}))
         # Fake subprocess writes no generator artifact. The admission socket
         # settles successfully, while the current runner must reject gate opening.
         assert code==1

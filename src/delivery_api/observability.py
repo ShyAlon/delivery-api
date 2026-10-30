@@ -15,6 +15,15 @@ STAGE_LOG_DIR=default_data_dir()/"logs"/"stages"
 STAGE_KEYS=("intent","conops","needs","srs","architecture","specs","tests","validation")
 STAGE_LOG_PATHS={phase:STAGE_LOG_DIR/f"{phase}.log" for phase in STAGE_KEYS}
 class _EvidenceFileHandler(RotatingFileHandler):
+    def __init__(self,*args,**kwargs):
+        # Delayed open also prevents a file at import in the PG profile.
+        kwargs['delay']=True
+        super().__init__(*args,**kwargs)
+    def emit(self,record):
+        from .postgres_logs import emit
+        fields=getattr(record,'diagnostic_fields',{})
+        if emit('activity',self.format(record),task_id=fields.get('task_id'),session_id=fields.get('session_id'),ts=record.created):return
+        super().emit(record)
     def handleError(self, record):
         import sys
         degraded('activity-file', sys.exc_info()[1] or OSError())
@@ -46,6 +55,8 @@ def _line(kind:str,message:str,fields:dict)->str:
 
 
 def stage_log_paths()->dict[str,Path]:
+    from . import config
+    if config.DATABASE_URL.startswith(('postgres://','postgresql://','host=')):return {}
     STAGE_LOG_DIR.mkdir(parents=True,exist_ok=True)
     return STAGE_LOG_PATHS
 
@@ -72,6 +83,8 @@ def event(kind:str,message:str,*,level:int=logging.INFO,console:bool=True,**fiel
     phase=fields.get("phase_key") or fields.get("phase") or fields.get("stage")
     path=STAGE_LOG_PATHS.get(str(phase)) if phase else None
     if path:
+        from .postgres_logs import emit
+        if emit('stage:'+str(phase),line,task_id=fields.get('task_id'),session_id=fields.get('session_id')):return
         try:
             path.parent.mkdir(parents=True,exist_ok=True)
             # No persistent handler cache across stage changes. Bounded files.

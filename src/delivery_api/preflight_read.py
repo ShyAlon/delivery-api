@@ -17,10 +17,13 @@ def report_path():
 
 def startup_report():
     try:
+        if config.DATABASE_URL.startswith(('postgres://','postgresql://','host=')):
+            from .postgres_logs import selected
+            return selected().startup()
         path = report_path()
         if path.is_file():
             return json.loads(path.read_text(errors='replace'))
-    except (OSError, ValueError):
+    except Exception:
         pass
     return None
 

@@ -39,7 +39,7 @@ REQUIRED_TABLES = frozenset({
     'provider_attempts', 'retail_compute_segments', 'retail_contributions', 'retail_scale_migrations',
     'review_comments', 'runs', 'staged_provider_responses', 'task_artifacts', 'tasks', 'usage',
     'user_task_policy', 'user_task_policy_changes', 'users', 'worker_jobs',
-    'generator_documents','generator_snapshots','resource_run_samples',
+    'operator_startup_reports','operator_log_records','generator_documents','generator_snapshots','resource_run_samples',
     'resource_container_summaries','resource_run_summaries','resource_container_samples',
 })
 
@@ -50,6 +50,8 @@ REQUIRED_TABLES = frozenset({
 # these are warn-level, each named with the migration file that creates it.
 # Pinned by tests: every entry sits in REQUIRED_TABLES and its migration creates it.
 FEATURE_TABLES = {
+    'operator_log_records': ('20261030010000_operator_log_records.sql','PG process logs'),
+    'operator_startup_reports': ('20261030010000_operator_log_records.sql','PG startup reports'),
     'credit_adjustments': ('20261009130000_private_credit_adjustment_evidence.sql',
                            'private credit-adjustment evidence (operator grant credits)'),
     'expense_guard_episodes': ('20261009213000_confirmed_expense_guard.sql', 'the confirmed expense guard'),
@@ -73,6 +75,8 @@ TABLE_ACCESS.update({
     'payment_credits': 'requi_payment',
     'payment_events': 'requi_payment',
     'operator_state_events': 'requi_operator_read',
+    'operator_log_records': 'requi_log_writer',
+    'operator_startup_reports': 'requi_log_writer',
     'credit_adjustments': None,
     'expense_guard_policy': None,
     'expense_guard_episodes': None,
@@ -149,13 +153,18 @@ def report_path(env):
 def write_report(report, path):
     """Best effort: the stdout report is the primary channel; never fail the start on this."""
     try:
+        from delivery_api.postgres_logs import selected
+        from delivery_api import config
+        if config.DATABASE_URL.startswith(('postgres://','postgresql://','host=')):
+            selected().save_startup(report.to_dict())
+            return True
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix('.tmp')
         tmp.write_text(json.dumps(report.to_dict(), indent=2))
         os.replace(tmp, path)
         return True
-    except OSError as error:
+    except Exception as error:
         print('WARNING: cached Debug report was not updated (%s); stdout preflight is authoritative.' % type(error).__name__,file=sys.stderr)
         return False
 
@@ -221,6 +230,28 @@ def _check_database(env, connect, connection_holder):
                      'the role/claims round trip failed: %s: %s' % (type(error).__name__, str(error)[:200]),
                      'SET ROLE requi_backend + request.jwt.claim.* on the app connection',
                      'the app login must be able to SET ROLE requi_backend; row security hides tenant rows without claims')
+
+
+def _check_process_logs(env,connect):
+    dsn=env.get('DELIVERY_DATABASE_URL','')
+    if not dsn.startswith(('postgres://','postgresql://','host=')):
+        return Check('process-log-store','refuse','skip','durable process logs','source-bound PG writer','legacy profile','DELIVERY_DATABASE_URL')
+    try:
+        from delivery_api.postgres_logs import PostgresLogs
+        repo=PostgresLogs(dsn,source_id=env.get('DELIVERY_LOG_SOURCE','delivery-runtime'))
+        connection=_pg_connect(connect,dsn)
+        try:
+            connection.execute('SET LOCAL ROLE requi_log_writer')
+            connection.execute("SET LOCAL statement_timeout='500ms'")
+            connection.execute("SELECT set_config('requi.log_source',%s,true)",(repo.source_id,))
+            connection.execute('SELECT id FROM public.operator_log_records LIMIT 0')
+            connection.execute('SELECT body FROM public.operator_startup_reports LIMIT 0')
+        finally:connection.close()
+        return Check('process-log-store','refuse','pass','durable process logs','stable source and restricted PG read probe','writer role and tables available','DELIVERY_LOG_SOURCE (default delivery-runtime); requi_log_writer')
+    except Exception as error:
+        return Check('process-log-store','refuse','fail','durable process logs','stable source and restricted PG read probe',
+                     'unavailable: '+type(error).__name__,'DELIVERY_LOG_SOURCE; requi_log_writer',
+                     'apply process-log migration; grant the application login SET membership in requi_log_writer; use one stable source across restarts')
 
 
 def _table_visibility(connection_holder):
@@ -439,6 +470,7 @@ def run(env, *, connect=None, import_module=importlib.import_module, required_ta
     connection_holder = []
     builders = [('artifacts-root-writable', 'refuse', lambda: _check_artifacts(env)),
                 ('database-role-claims', 'refuse', lambda: _check_database(env, connect, connection_holder)),
+                ('process-log-store', 'refuse', lambda: _check_process_logs(env,connect)),
                 ('required-tables', 'refuse', lambda: _check_tables(env, connection_holder, required_tables)),
                 ('feature-tables', 'warn', lambda: _check_feature_tables(env, connection_holder, required_tables)),
                 ('pool-budget', 'warn', lambda: _check_pool_budget(env, import_module)),
