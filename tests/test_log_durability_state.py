@@ -1,5 +1,6 @@
 import logging
 from delivery_api import observability, engine_log
+from delivery_api.postgres_logs import flush
 
 
 def test_activity_pg_failure_warns_once_and_is_operator_visible(tmp_path, monkeypatch, capsys):
@@ -12,6 +13,7 @@ def test_activity_pg_failure_warns_once_and_is_operator_visible(tmp_path, monkey
     monkeypatch.setattr(handler, 'stream', None)
     monkeypatch.setattr(handler, '_open', lambda: (_ for _ in ()).throw(OSError('fake-secret')))
     for _ in range(3): handler.emit(logging.makeLogRecord({'msg':'private-payload'}))
+    assert flush(5)
     text = capsys.readouterr().err
     assert text.count('diagnostic evidence degraded') == 1
     assert 'fake-secret' not in text and 'private-payload' not in text
@@ -28,8 +30,10 @@ def test_stage_and_mirror_failures_remain_nonfatal(tmp_path, monkeypatch, capsys
     blocker = tmp_path/'blocked';blocker.write_text('file')
     monkeypatch.setattr(observability, 'STAGE_LOG_PATHS', {'intent':blocker/'intent.log'})
     observability.event('test', 'not secret', console=False, phase='intent')
+    assert flush(5)
     mirror = engine_log._MirrorHandler(blocker/'engine.log', logging.INFO)
     for _ in range(3):mirror.emit(logging.makeLogRecord({'msg':'test'}))
+    assert flush(5)
     assert not mirror._dead  # PG degradation does not kill future retries.
     sources = {r['source'] for r in state.snapshot()['sources']}
     assert sources == {'postgres-logs'}

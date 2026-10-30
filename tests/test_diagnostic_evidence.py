@@ -36,6 +36,7 @@ def test_pg_retention_read_is_bounded_and_reports_truncation(tmp_path,pg_log_evi
  monkeypatch.setattr(postgres_logs,'selected',lambda:pg_log_evidence.repository)
  for i in range(20):h.emit(logging.makeLogRecord({'name':'x','levelno':40,'levelname':'ERROR','msg':'failure '+str(i)}))
  assert not list(tmp_path.glob('diagnostics.jsonl*'))
+ from delivery_api.postgres_logs import flush; assert flush(5)
  with pg_log_evidence.repository.transaction() as conn:
   rows=conn.execute("SELECT text FROM operator_log_records WHERE stream='diagnostics'").fetchall()
  assert len(rows)==3

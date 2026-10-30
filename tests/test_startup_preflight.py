@@ -217,7 +217,7 @@ def test_pool_budget_over_the_pooler_limit_warns():
     report = preflight.run(healthy_env(Path('/tmp/x-preflight-test')), connect=healthy_pg(),
                            import_module=fake_import(engine_modules(engine_pool_max=10)))
     check = {c.name: c for c in report.checks}['pool-budget']
-    assert check.status == 'warn' and '20' in check.found and '15' in check.expected
+    assert check.status == 'warn' and '21' in check.found and '15' in check.expected
 
 
 def test_provider_key_warns_only_when_execution_is_open():

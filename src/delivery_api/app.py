@@ -462,6 +462,8 @@ async def lifespan(application:FastAPI):
         from . import cloud_runtime
         cloud_runtime.uninstall()
         activity("server.shutdown.complete","Server shutdown complete",streams_closed=stream_count)
+        from .postgres_logs import flush as flush_evidence
+        await asyncio.to_thread(flush_evidence,5)
         if threading.current_thread() is threading.main_thread():
             for signum,previous in _previous_shutdown_handlers.items():
                 if signal.getsignal(signum) is _shutdown_signal:signal.signal(signum,previous)
@@ -3467,7 +3469,8 @@ def debug_evidence(task_id:str|None=Query(None,max_length=240),a:auth.Actor=Depe
 def debug_log_durability(a:auth.Actor=Depends(auth.require_actor)):
     if not a.admin:raise HTTPException(403,'operator access required')
     from .log_durability import snapshot
-    return snapshot()
+    from .postgres_logs import writer_status
+    return {**snapshot(),'writer':writer_status()}
 
 
 @app.get('/api/debug/preflight')

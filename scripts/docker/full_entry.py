@@ -147,9 +147,17 @@ def main():
     if problems:
         for p in problems:print('full service not started:',p,file=sys.stderr)
         return 2
+    from delivery_api import db_pool
+    # This process also persists the engine stdout tee. One connection only;
+    # default aggregate is delivery9 + compatibility4 + supervisor1 =14/15.
     report=preflight.run(os.environ)
+    db_pool.PROCESS_POOL_MAX=1
     print(report.render_text(),flush=True)
     saved=preflight.write_report(report,preflight.report_path(os.environ))
+    # Release the startup connection before launch; the engine tee may later
+    # borrow the supervisor's single capped connection.
+    from delivery_api.db_pool import close_all
+    close_all()
     os.environ['REQUI_PREFLIGHT_GENERATED_AT']=report.generated_at
     os.environ['REQUI_PREFLIGHT_REPORT_SAVED']='1' if saved else '0'
     if report.refused:

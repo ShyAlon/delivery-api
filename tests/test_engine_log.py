@@ -44,6 +44,7 @@ def test_tee_copies_stdout_and_timestamped_pg_rows(tmp_path,pg_log_evidence):
     for _ in range(100):
         if len(sink_lines)>=2:break
         time.sleep(0.05)
+    from delivery_api.postgres_logs import flush; assert flush(5)
     rows=pg_log_evidence.repository.tail('engine')
     text='\n'.join(row['text'] for row in rows)
     assert not out_path.exists()
@@ -65,6 +66,7 @@ def test_tee_retention_is_bounded(tmp_path,monkeypatch,pg_log_evidence):
         time.sleep(.02)
     assert proc.stdout.closed
     sink.close()
+    from delivery_api.postgres_logs import flush; assert flush(5)
     rows=repo.tail('engine')
     assert 0<len(rows)<=30 and sum(len(row['text'].encode()) for row in rows)<=4096
     assert not (tmp_path/'engine.log').exists()
@@ -141,6 +143,7 @@ def test_mirror_writes_stamped_scrubbed_lines_the_read_side_picks_up(tmp_path,pg
         logging.getLogger('interview_engine.http').warning('dsn postgres://user:secretpw@host/db leaked session=%s',SESSION_A)
     finally:
         engine_log.uninstall_mirror()
+    from delivery_api.postgres_logs import flush; assert flush(5)
     rows=pg_log_evidence.repository.tail('engine')
     out={'available':bool(rows),'count':len(rows),'text':'\n'.join(row['text'] for row in rows)}
     assert not path.exists()
@@ -175,6 +178,7 @@ def test_mirror_retention_at_bound(tmp_path,monkeypatch,pg_log_evidence):
         for i in range(30):logging.getLogger('interview_engine.http').warning('fill %d %s',i,'x'*60)
     finally:
         engine_log.uninstall_mirror()
+    from delivery_api.postgres_logs import flush; assert flush(5)
     rows=repo.tail('engine')
     assert 0<len(rows)<=3 and sum(len(row['text'].encode()) for row in rows)<=800
     assert not path.exists()
