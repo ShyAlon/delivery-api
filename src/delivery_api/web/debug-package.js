@@ -3,7 +3,7 @@ export async function collectDebugEvidence({taskId,operator,cloud,api}){
  const sections=[],started_at=new Date().toISOString();
  const collect=async(source,url,enabled=true)=>{
   if(!enabled){sections.push({source,availability:'policy_excluded'});return}
-  try{const data=await api(url);const unavailable=data?.availability==='unreadable'||data?.availability==='missing';sections.push({source,availability:unavailable?'unavailable':'available',collected_at:new Date().toISOString(),data})}
+  try{const data=await api(url);const unavailable=['unreadable','missing','unavailable'].includes(data?.availability);sections.push({source,availability:unavailable?'unavailable':'available',collected_at:new Date().toISOString(),data})}
   catch{sections.push({source,availability:'unavailable',category:'read_failed',next:'Retry collection in Debug; missing evidence is not an empty result.'})}
  };
  const task=taskId?encodeURIComponent(taskId):null;

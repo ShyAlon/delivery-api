@@ -33,16 +33,18 @@ console.log(JSON.stringify({{calls,out}}));
  assert any(x['availability']=='policy_excluded' for x in result['out']['sections'])
 
 
-def test_server_log_task_filter_never_includes_neighboring_task(monkeypatch,pg_log_evidence,pg_operator_log_reader):
+def test_server_log_task_filter_never_includes_neighboring_task(monkeypatch,file_log_evidence,pg_operator_log_reader):
  from delivery_api import app as m
  from types import SimpleNamespace
  reader,store=pg_operator_log_reader
  monkeypatch.setattr(m,'store',store)
  monkeypatch.setattr(m,'_operator_reader',lambda:reader)
- repo=pg_log_evidence.repository
+ repo=file_log_evidence.repository
  repo.append('activity','INFO task=task-a own',task_id='task-a')
  repo.append('activity','INFO task=task-a-other neighbor',task_id='task-a-other')
  repo.append('activity','INFO system-wide')
+ from delivery_api.process_logs import flush
+ assert flush(5)
  got=m.server_log(30,SimpleNamespace(id='operator',admin=True),'task-a')
  assert 'INFO task=task-a own' in got['text'] and got['count']==1
  assert 'neighbor' not in got['text'] and 'system-wide' not in got['text']
@@ -69,3 +71,16 @@ console.log(JSON.stringify({{calls,out}}));
  handler=identity.split("document.querySelector('#downloadeverything').onclick=",1)[1].split("{const lh=document.querySelector('#ledgerhost')",1)[0]
  assert "document.querySelector('#ledgerhost').textContent" not in handler
  assert 'window.__preflightText' not in handler and 'window.__requestCostsText' not in handler
+
+
+def test_usage_unavailable_preserves_safe_reason_not_available():
+ source=f"""
+import {{collectDebugEvidence}} from '{WEB/'debug-package.js'}';
+const out=await collectDebugEvidence({{taskId:'a',operator:true,cloud:true,api:async url=>url.includes('task-usage')?{{availability:'unavailable',category:'permission_missing',required_capability:'usage.read',reason:'Usage read is not configured for this operator.',next:'Run the owner-reviewed usage setup.'}}:{{}}}});
+console.log(JSON.stringify(out.sections.find(x=>x.source==='db-usage')));
+"""
+ r=subprocess.run(['node','--input-type=module','-e',source],capture_output=True,text=True)
+ assert r.returncode==0,r.stderr
+ result=json.loads(r.stdout)
+ assert result['availability']=='unavailable'
+ assert result['data']['required_capability']=='usage.read'

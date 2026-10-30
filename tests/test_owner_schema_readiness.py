@@ -8,7 +8,7 @@ m=importlib.util.module_from_spec(SPEC)
 def load():SPEC.loader.exec_module(m);return m
 
 def test_all_seven_rollout_files_have_catalog_probes():
-    s=load();assert len(s.MIGRATIONS)==7
+    s=load();assert len(s.MIGRATIONS)==8
     assert list(s.MIGRATIONS)==sorted(s.MIGRATIONS)
     assert '20261030030000_resource_metrics_maintenance.sql' in s.MIGRATIONS
 
@@ -89,8 +89,16 @@ def test_apply_seven_real_migrations_to_owned_disposable_db():
             for path in sorted((ROOT/'supabase/migrations').glob('*.sql')):
                 if path.name<'20261029203000_resource_metrics.sql' and path.name[:14].isdigit():conn.execute(path.read_text())
             rows=s.plan(conn,r,ROOT)
-            assert len([x for x in rows if x['status']=='pending'])==7
-            assert s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 7 MIGRATIONS TO delivery_app')==0
+            assert len([x for x in rows if x['status']=='pending'])==8
+            assert s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 8 MIGRATIONS TO delivery_app')==0
             assert all(x['status']=='present' for x in r.inventory(conn))
             for role in r.ROLES:assert conn.execute("SELECT pg_has_role('delivery_app',%s,'SET')",(role,)).fetchone()[0]
     finally:server.cleanup();shutil.rmtree(scratch,ignore_errors=True)
+
+
+def test_normal_apply_includes_usage_role_and_standard_settings_save():
+    r=load()
+    assert 'requi_operator_usage' in r.ROLES
+    text=(ROOT/'scripts/owner/apply-pg-cutover.py').read_text()
+    assert 'operator_setup.run(root,explicit=args.env_file)' in text
+    assert text.index('result=apply(')<text.index('operator_setup.run(')

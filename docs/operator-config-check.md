@@ -54,12 +54,12 @@ REQUI_OPERATOR_SUBJECT is the canonical auth.users UUID matching the enabled
 operator_principals.subject. REQUI_OPERATOR_REGISTRY_VERSION must match that
 row's registry_version. REQUI_OPERATOR_CAPABILITIES is an explicit reviewed JSON
 array of allowed names, all of which must already be allowed by the registry.
-The check requires logs.read, debug.read, sessions.read and analytics.read for
+The check requires logs.read, debug.read, sessions.read, analytics.read and usage.read for
 the combined Debug capture. It does not print, generate, copy or save values.
 
 The initial registry migration creates an empty table. The later
 20261020130000_operator_stop_audit.sql conditionally registers the account
-matching its literal email, using ops-v1 and four read permissions. It skips an
+matching its literal email, using ops-v1 and five read permissions. It skips an
 empty auth database and rejects a missing account in a nonempty database or a
 different enabled operator. Its presence in the repository does not prove it
 ran on this database, that the email belongs to the owner, or that settings were
@@ -85,7 +85,7 @@ DSNs and matching host/port/database. It never asks you to paste a DSN.
 
 The admin inspection connection is READ ONLY. The script refuses an unreadable
 registry, zero/multiple enabled rows, invalid identity/version/capabilities or
-missing Debug reads. It copies the row's UUID/version and only the four Debug
+missing Debug reads. It copies the row's UUID/version and only the five Debug
 read capabilities, never credit-allocation or other effect permissions. Before
 saving it asks for yes in the terminal. No values are printed. A refusal makes
 no file change. A successful save atomically replaces the mode-600 target,
@@ -125,3 +125,34 @@ This statement IS a DB authorization change, unlike the setup script. It is
 not run by either operator-config command. If the actual app identity is not
 delivery_app, stop and review it; do not substitute a pooler URI username or add
 broad privileges. Rerun the corrected check after any owner-applied repair.
+
+
+## Standard usage support
+
+Usage is part of normal operator setup, not a past-session repair. After review
+and merge, run the existing owner migration flow:
+
+.venv/bin/python scripts/owner/apply-pg-cutover.py . --apply
+
+The dry inventory includes 20261030050000_operator_usage_default.sql. The normal
+typed APPLY confirmation approves its pending migrations and fixed restricted
+SET memberships, now including the existing requi_operator_usage read role for
+the actual verified app login. The migration adds only usage.read to an already
+enabled operator and supplies that read default on future operator registration
+or enablement. It does not enroll/enable an identity, change registry versions,
+add payment/effect permissions, or modify tasks, checkpoints, jobs or charges.
+The seed trigger does not undo explicit capability-only revocation.
+
+After successful database apply, the same command calls standard operator setup
+and asks separately before saving the five Debug reads to the private settings
+file. Values remain hidden; settings use mode 600. Declining the local save does
+not roll back already-applied DB changes: output reports setup.completed=false.
+Rerunning the normal flow safely handles already-present migration objects and
+can finish the confirmed settings save. No --enable-usage or one-off task repair
+command is needed. Missing/hidden registry still refuses the settings save.
+
+The checker now requires usage.read and actual app membership in both read
+roles. The capture preserves an unavailable usage result and a fixed setup
+reason for a verified Debug operator rather than a misleading missing-task404.
+Other users and revoked operators retain opaque denial. New server settings take
+effect on the next owner-managed restart; do not interrupt active paid work.

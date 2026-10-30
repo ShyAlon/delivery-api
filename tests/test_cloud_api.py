@@ -833,3 +833,28 @@ def test_pg_classifications_reject_excessive_join_work(cloud,monkeypatch):
     got=client.get(f'/api/tasks/{tid}/classifications',headers=header('a'))
     assert got.status_code==503
     assert 'read limits' in got.text
+
+
+def test_usage_missing_permission_explained_only_to_verified_debug_operator(cloud,monkeypatch):
+    import psycopg
+    import delivery_api.app as module
+    from delivery_api.operator_reads import OperatorReadStore
+    from delivery_api.operator_authorization import OperatorPrincipal
+    client,store,_=cloud
+    with tenant_context(A):tid=store.create_task('usage-config-reason')['task_id']
+    with psycopg.connect(DSN) as c:
+        c.execute('GRANT requi_operator_read TO delivery_app')
+        c.execute('INSERT INTO operator_principals VALUES (%s,%s,%s,true)',(A.owner_id,'usage-config',['debug.read']))
+    monkeypatch.setitem(module.app.state._state,'operator_read_store',OperatorReadStore(DSN.replace('user=sandbox','user=delivery_app'),OperatorPrincipal(A.owner_id,'usage-config',frozenset({'debug.read'}))))
+    try:
+        path='/api/operator/task-usage?task_id='+tid
+        got=client.get(path,headers=header('a'))
+        assert got.status_code==200 and got.json()['availability']=='unavailable'
+        assert got.json()['required_capability']=='usage.read'
+        assert got.json()['category']=='permission_missing'
+        assert client.get(path,headers=header('b')).status_code==404
+        with psycopg.connect(DSN) as c:c.execute('UPDATE operator_principals SET enabled=false WHERE subject=%s',(A.owner_id,))
+        assert client.get(path,headers=header('a')).status_code==404
+    finally:
+        with psycopg.connect(DSN) as c:c.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))
+        with tenant_context(A):store.delete_task(tid)

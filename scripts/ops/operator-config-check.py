@@ -19,7 +19,7 @@ sys.path.insert(0,str(ROOT/'src'))
 from delivery_api.operator_authorization import CAPABILITIES
 from delivery_api.operator_startup import SETTINGS
 
-DEBUG_CAPABILITIES=frozenset({'logs.read','debug.read','sessions.read','analytics.read'})
+DEBUG_CAPABILITIES=frozenset({'logs.read','debug.read','sessions.read','analytics.read','usage.read'})
 
 
 def capabilities(value):
@@ -111,12 +111,14 @@ def run(root,*,env=None,explicit=None,connect=read_connection,out=None):
         if values.get('DELIVERY_DATABASE_URL'):
             try:
                 with connect(values['DELIVERY_DATABASE_URL']) as app:
-                    result=app.execute("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='requi_operator_read')").fetchone()[0]
-                    report['app_role.can_set_operator_read']=bool(result and app.execute("SELECT pg_has_role(current_user,'requi_operator_read','SET')").fetchone()[0])
+                    for role,key in (('requi_operator_read','app_role.can_set_operator_read'),('requi_operator_usage','app_role.can_set_operator_usage')):
+                        exists=app.execute('SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=%s)',(role,)).fetchone()[0]
+                        report[key]=bool(exists and app.execute("SELECT pg_has_role(current_user,%s,'SET')",(role,)).fetchone()[0])
                     report['app_role.inspected']=True
             except Exception:
                 report['app_role.inspected']=False
                 report.pop('app_role.can_set_operator_read',None)
+                report.pop('app_role.can_set_operator_usage',None)
     except Exception:
         # Never include exception text, DSN, private file contents or identity.
         # A failed query means unverified, not a confirmed absent registry row.
@@ -126,7 +128,7 @@ def run(root,*,env=None,explicit=None,connect=read_connection,out=None):
               'registry.table_present','registry.enabled_row_present','registry.exactly_one_enabled_row',
               'registry.subject_matches','registry.version_matches','registry.debug_capabilities_present',
               'registry.configured_capabilities_allowed','app_role.inspected','app_role.can_set_operator_read',
-              'DELIVERY_DATABASE_URL.present','debug_capabilities.configured')
+              'app_role.can_set_operator_usage','DELIVERY_DATABASE_URL.present','debug_capabilities.configured')
     report['configuration.ready']=all(report.get(k,False) for k in required) and all(report.get(n+'.valid',False) for n in SETTINGS)
     for key,value in report.items():print(key+'='+str(bool(value)).lower(),file=out)
     return 0 if report['configuration.ready'] else 1

@@ -14,8 +14,9 @@ MIGRATIONS={
  '20261030020000_resource_metrics_bounds.sql':('constraint:resource_run_samples_finite','constraint:resource_container_samples_finite'),
  '20261030030000_resource_metrics_maintenance.sql':('function:requi_maintain_resource_metrics',),
  '20261030040000_engine_quality_config.sql':('table:engine_quality_config',),
+ '20261030050000_operator_usage_default.sql':('function0:requi_operator_usage_default','trigger:operator_usage_default'),
 }
-ROLES=('requi_metrics_writer','requi_engine_config_read')
+ROLES=('requi_metrics_writer','requi_engine_config_read','requi_operator_usage')
 
 def destructive(text):
     # Keep strings/function bodies, including dynamic SQL, but strip comments.
@@ -29,6 +30,8 @@ def destructive(text):
 def object_exists(conn,probe):
     kind,name=probe.split(':',1)
     if kind=='table':return conn.execute('SELECT to_regclass(%s) IS NOT NULL',('public.'+name,)).fetchone()[0]
+    if kind=='function0':return conn.execute('SELECT to_regprocedure(%s) IS NOT NULL',('public.'+name+'()',)).fetchone()[0]
+    if kind=='trigger':return conn.execute("SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.operator_principals'::regclass AND tgname=%s AND NOT tgisinternal)",(name,)).fetchone()[0]
     if kind=='constraint':return conn.execute("SELECT EXISTS(SELECT 1 FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname='public' AND c.conname=%s)",(name,)).fetchone()[0]
     return conn.execute('SELECT to_regprocedure(%s) IS NOT NULL',('public.'+name+'(double precision,double precision)',)).fetchone()[0]
 
