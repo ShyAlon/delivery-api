@@ -7,7 +7,9 @@ from delivery_api import db_pool
 
 
 @pytest.fixture(autouse=True)
-def _clean_pools():
+def _clean_pools(monkeypatch):
+    # Unit pool tests own only their own pool map, never close the app fixture pool.
+    monkeypatch.setattr(db_pool,"_pools",{})
     yield
     db_pool.close_all()
 

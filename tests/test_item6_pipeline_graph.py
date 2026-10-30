@@ -43,9 +43,10 @@ def configure_graph_models(monkeypatch):
  return gp
 
 
-def test_private_real_full_graph_gates_persist_complete_bundle(tmp_path,monkeypatch):
+def test_private_real_full_graph_gates_persist_complete_bundle(tmp_path,monkeypatch,pg_pipeline):
  gp=configure_graph_models(monkeypatch)
- scope=SimpleNamespace(owner_id='00000000-0000-0000-0000-000000000001');cap=SimpleNamespace(task_id='fixture-task',session_id='s',generation=1,scope=scope,validate=lambda s:None)
+ workspace,pg_cap,job=pg_pipeline;scope=pg_cap.scope
+ cap=SimpleNamespace(task_id=pg_cap.task_id,session_id=pg_cap.session_id,generation=pg_cap.generation,scope=scope,validate=lambda store:pg_cap.validate(workspace.store))
  root=tmp_path/'tenants'/scope.owner_id/'sessions'/'s';(root/'interview').mkdir(parents=True)
  from vmodel_contracts import IntentModel
  intent=IntentModel.model_validate(gp.INTENT).model_dump(mode='json')
@@ -62,7 +63,12 @@ def test_private_real_full_graph_gates_persist_complete_bundle(tmp_path,monkeypa
  from spec_generator.stop_fence import StopFence
  from spec_generator.cooperative_run import cli_execution
  from spec_generator.telemetry import UsageLog
- with cli_execution(StopFence(root/'interview/stop-request.json'),UsageLog('s')):
+ from spec_generator.worker_runtime import JobRuntime,job_runtime
+ from spec_generator.model_config import StageModel
+ from delivery_api.generator_checkpoint import GeneratorCheckpoint
+ runtime=JobRuntime({stage:StageModel('ollama','fixture') for stage in ('needs','srs','architecture','items','specs','tests','validation','review','srs_review','architecture_review')},str(root/'calls.jsonl'),lambda text:None,settings={'SPEC_GENERATOR_BULK':'1'},checkpoint_factory=lambda ns:GeneratorCheckpoint(workspace.store,pg_cap,job,ns))
+ runtime.bind_worker(owner_id=scope.owner_id,task_id=cap.task_id,job_id=job,generation=1,session_root=root)
+ with job_runtime(runtime),cli_execution(StopFence(root/'interview/stop-request.json'),UsageLog('s')):
   runner.generate(cap,root)
  assert decisions==['srs','architecture']
  from artifact_receipts import inventory
@@ -71,3 +77,13 @@ def test_private_real_full_graph_gates_persist_complete_bundle(tmp_path,monkeypa
  for name in ('needs.json','srs.json','architecture.json','items.json','tests.json','validation.json','manifest.json','traceability.json','AGENTS.md'):
   assert (root/'spec'/name).is_file(),name
  assert {'needs','srs','architecture','specs','tests','validation'} <= {p for p,s in phases if s=='done'}
+
+
+@pytest.fixture
+def pg_pipeline(pg_workspace_factory):
+ from delivery_api.tenancy import tenant_context
+ with pg_workspace_factory() as workspace,tenant_context(workspace.scope):
+  store=workspace.store;tid=store.create_task('Pipeline PG fixture')['task_id']
+  store.set_engine_session(tid,'s');job=store.enqueue_worker(tid,'phase:needs');cap=store.claim_worker(job)
+  try:yield workspace,cap,job
+  finally:store.finish_worker(job)

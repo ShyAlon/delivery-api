@@ -12,7 +12,7 @@ def request(method='GET',path='/api/tasks/task-a'):
 
 
 @pytest.mark.parametrize('kind',['control','operator','csrf','normal'])
-def test_every_refusal_and_completed_request_has_durable_scope(monkeypatch,tmp_path,kind):
+def test_every_refusal_and_completed_request_has_durable_scope(monkeypatch,tmp_path,kind,pg_log_evidence):
  monkeypatch.setattr(m,'control_plane_only',lambda:kind=='control')
  monkeypatch.setattr(m.config,'CLOUD_TENANTS',False)
  def csrf(r):
@@ -27,7 +27,7 @@ def test_every_refusal_and_completed_request_has_durable_scope(monkeypatch,tmp_p
  finally:root.removeHandler(h);m.activity.__globals__['logger'].removeHandler(h);h.close()
  assert response.status_code in (400,403,404,503)
  ref=response.headers.get('X-Request-Id');assert ref
- records=d.read(p)['text'];assert ref in records
+ records=pg_log_evidence()['text'];assert ref in records
  if kind!='operator':
   import json
   assert any(json.loads(line).get('task_id')=='task-a' for line in records.splitlines())

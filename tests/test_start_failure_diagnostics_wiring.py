@@ -5,7 +5,6 @@ from types import SimpleNamespace as NS
 
 import delivery_api.app as module
 from delivery_api.engine_client import EngineClientError
-from delivery_api.store import create_store
 from vmodel_contracts.interactive import ProtocolError, ProtocolErrorCode
 
 BLOCK = {'error_class': 'InsufficientPrivilege', 'sqlstate': '42501', 'stage': 'session insert',
@@ -13,10 +12,12 @@ BLOCK = {'error_class': 'InsufficientPrivilege', 'sqlstate': '42501', 'stage': '
          'sub_present': False, 'session_id_present': False, 'session_active_for_sub': 'UNKNOWN'}
 
 
-def _run_start_failure(tmp_path, monkeypatch, block):
-    store = create_store(str(tmp_path / 'test.db'))
-    store.create_task('t1', task_id='task1')
-    store.begin_interview_start('task1', '00000000-0000-0000-0000-0000000000aa', 'route')
+def _run_start_failure(tmp_path, monkeypatch, block,store):
+    task_id='start-'+uuid4().hex
+    store._fixture_task_id=task_id
+    store.create_task('t1', task_id=task_id)
+    session_id=str(uuid4())
+    store.begin_interview_start(store._fixture_task_id, session_id, 'route')
     error = ProtocolError(code=ProtocolErrorCode.INTERNAL_ERROR,
                           detail='engine program failed during start: InsufficientPrivilege', retryable=True)
 
@@ -32,29 +33,38 @@ def _run_start_failure(tmp_path, monkeypatch, block):
     monkeypatch.setattr(module, 'store', store)
     monkeypatch.setattr(module, 'engine_client', FailingEngine())
     monkeypatch.setattr(module, '_watch_engine_advance', NoWatch.advance)
-    asyncio.run(module._complete_interview_start('task1', '00000000-0000-0000-0000-0000000000aa',
+    asyncio.run(module._complete_interview_start(store._fixture_task_id, session_id,
                                                  'route', None, 'idea', {}, 'owner'))
     return store
 
 
-def test_start_failure_records_operator_block(tmp_path, monkeypatch):
-    store = _run_start_failure(tmp_path, monkeypatch, BLOCK)
-    rows = store.failure_diagnostics('task1')
+def test_start_failure_records_operator_block(tmp_path, monkeypatch,scoped_start_store):
+    store = _run_start_failure(tmp_path, monkeypatch, BLOCK,scoped_start_store)
+    rows = store.failure_diagnostics(store._fixture_task_id)
     assert len(rows) == 1
     assert rows[0]['sqlstate'] == '42501' and rows[0]['stage'] == 'session insert'
     assert rows[0]['source'] == 'engine.start' and rows[0]['http_status'] == 503
 
 
-def test_start_failure_customer_events_stay_minimal(tmp_path, monkeypatch):
-    store = _run_start_failure(tmp_path, monkeypatch, BLOCK)
-    events = store.events('task1')
+def test_start_failure_customer_events_stay_minimal(tmp_path, monkeypatch,scoped_start_store):
+    store = _run_start_failure(tmp_path, monkeypatch, BLOCK,scoped_start_store)
+    events = store.events(store._fixture_task_id)
     assert events, 'the failure event itself must still be recorded'
     blob = str(events)
     assert 'operator_diagnostics' not in blob
     assert '42501' not in blob and 'delivery_app' not in blob
 
 
-def test_start_failure_without_block_records_nothing(tmp_path, monkeypatch):
-    store = _run_start_failure(tmp_path, monkeypatch, None)
-    assert store.failure_diagnostics('task1') == []
-    assert store.events('task1'), 'the failure event is still recorded'
+def test_start_failure_without_block_records_nothing(tmp_path, monkeypatch,scoped_start_store):
+    store = _run_start_failure(tmp_path, monkeypatch, None,scoped_start_store)
+    assert store.failure_diagnostics(store._fixture_task_id) == []
+    assert store.events(store._fixture_task_id), 'the failure event is still recorded'
+
+
+from uuid import uuid4
+import pytest
+
+@pytest.fixture
+def scoped_start_store(pg_workspace_factory):
+    from delivery_api.tenancy import tenant_context
+    with pg_workspace_factory() as w,tenant_context(w.scope):yield w.store

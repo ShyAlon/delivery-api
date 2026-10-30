@@ -55,10 +55,10 @@ def test_host_checkpoint_factory_avoids_sqlite_for_real_graph(store,tmp_path,mon
             graph=b.compile(checkpointer=saver);cfg={'configurable':{'thread_id':sid}}
             assert graph.invoke({'count':3},cfg)=={'count':4}
             cid=graph.get_state(cfg).config['configurable']['checkpoint_id']
-            assert read_state(root/'spec/checkpoints.sqlite',session_id=sid,expected_checkpoint_id=cid)['count']==4
+            assert read_state(root/'spec',session_id=sid,expected_checkpoint_id=cid)['count']==4
             assert not (root/'spec/checkpoints.sqlite').exists()
             with pytest.raises(ValueError):checkpoint(tmp_path/'outside')
-            with pytest.raises(ValueError):read_state(root/'spec/checkpoints.sqlite',session_id=sid,expected_checkpoint_id='stale')
+            with pytest.raises(ValueError):read_state(root/'spec',session_id=sid,expected_checkpoint_id='stale')
 
 def test_child_saver_requires_live_claim_and_current_worker(store):
     from types import SimpleNamespace

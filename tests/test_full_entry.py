@@ -38,7 +38,7 @@ def test_session_persistence_must_be_chosen_or_startup_refuses():
     good={'INTERVIEW_ENGINE_TOKEN':'x'*32,'DELIVERY_DATABASE_URL':'postgresql://delivery_app:x@db.example:6543/postgres'}
     assert full_entry.check_env(good)==[]
     file_opt_in={'INTERVIEW_ENGINE_TOKEN':'x'*32,'DELIVERY_DATABASE_URL':'sqlite:////tmp/x.db','INTERVIEW_ENGINE_SESSIONS_FILE':'1'}
-    assert full_entry.check_env(file_opt_in)==[]
+    assert any('PostgreSQL' in p for p in full_entry.check_env(file_opt_in))
     no_choice={'INTERVIEW_ENGINE_TOKEN':'x'*32,'DELIVERY_DATABASE_URL':'sqlite:////tmp/x.db'}
     problems=full_entry.check_env(no_choice)
     assert any('INTERVIEW_ENGINE_SESSIONS_DSN' in p and 'INTERVIEW_ENGINE_SESSIONS_FILE' in p for p in problems),problems

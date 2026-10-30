@@ -80,18 +80,24 @@ def test_successful_subprocess_without_configured_artifact_fails_without_gate(tm
 def test_http_client_and_delivery_ingest_read_during_engine_start(tmp_path,progress_store):
     import threading
     from interview_engine.http_service import SessionRegistry,create_app
-    from interview_engine.progress_journal import ProgressJournal
+    from interview_engine.pg_journal import ObservationalJournal
+    from interview_engine.pg_session_store import PgSessionStore
+    from delivery_api.tenancy import current_scope
+    from delivery_api.db_pool import pool_for
     from vmodel_contracts.interactive import StartSessionRequest
     from concurrent.futures import ThreadPoolExecutor
     entered=threading.Event();release=threading.Event();session=str(uuid4())
     store=progress_store;task=store.create_task('Start progress')
+    scope=current_scope()
+    pg_store=PgSessionStore(pool_for(store._fixture_dsn.replace('user=sandbox','user=delivery_app')),claims=(scope.owner_id,scope.session_id))
     class Program:
         model_map=None
         def advance(self):
-            ProgressJournal(tmp_path,session,task['task_id']).append(phase_key='intent',stage='probe',label='Probing',status='started')
+            ObservationalJournal(pg_store,registry._sessions[session].pg_claim,session,task['task_id']).append(phase_key='intent',stage='probe',label='Probing',status='started')
             entered.set();assert release.wait(3)
             return InputRequest(input_id=uuid4(),kind=InputKind.TEXT,prompt='Who?')
-    app=create_app(SessionRegistry(lambda _sid,_req:Program(),state_dir=tmp_path),service_token='test')
+    registry=SessionRegistry(lambda _sid,_req:Program(),session_store=pg_store,owner_id=scope.owner_id,progress_mode='observational')
+    app=create_app(registry,service_token='test')
     from fastapi.testclient import TestClient
     client=TestClient(app,headers={'X-Interview-Engine-Token':'test'})
     with ThreadPoolExecutor() as pool:
@@ -102,6 +108,11 @@ def test_http_client_and_delivery_ingest_read_during_engine_start(tmp_path,progr
         assert store.progress_cursor(task['task_id'],'interview',session)==1
         assert store.events(task['task_id'])[-1]['payload']['stage']=='probe'
         release.set();assert reply.result(timeout=3).status_code==201
+    registry.close()
+    # Retain published journal evidence instead of violating its session FK.
+    store.delete_task(task['task_id'])
+    assert store.task(task['task_id']) is None
+    assert pg_store.read_journal(session,scope.owner_id,0,100)
 
 
 def test_every_generator_phase_uses_one_progress_and_gate_boundary(tmp_path,progress_store,monkeypatch):

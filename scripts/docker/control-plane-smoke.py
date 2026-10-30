@@ -9,8 +9,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix='control-plane-smoke-') as scratch:
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         env={k:v for k,v in os.environ.items() if k in ('PATH','LANG','SYSTEMROOT')}
-        env.update(HOME=scratch,XDG_DATA_HOME=scratch,PYTHONNOUSERSITE='1',DELIVERY_DATABASE_URL='sqlite:///'+scratch+'/empty.db',
+        env.update(HOME=scratch,XDG_DATA_HOME=scratch,PYTHONNOUSERSITE='1',DELIVERY_DATABASE_URL=os.environ.get('DELIVERY_TEST_POSTGRES_URL',''),
+            DELIVERY_SUPABASE_URL='https://isolated-smoke.supabase.co',DELIVERY_SUPABASE_ANON_KEY='hermetic-public-key',
             DELIVERY_HOST='127.0.0.1',DELIVERY_PORT=str(port))
+        if not env['DELIVERY_DATABASE_URL'].startswith(('postgresql://','postgres://')):
+            raise ValueError('explicit disposable DELIVERY_TEST_POSTGRES_URL required; no database default')
         log=open(Path(scratch)/'server.log','w+')
         import sys
         proc=subprocess.Popen([sys.executable,'-m','delivery_api.control_plane'],cwd=scratch,env=env,stdout=log,stderr=log)

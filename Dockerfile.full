@@ -26,7 +26,7 @@ COPY --from=build /wheels/ /wheels/
 # Packages are installed without dependency resolution, as scripts/build-dist.sh does: verification-loop pins an old
 # vmodel-contracts commit by git URL (no git, private repo). vmodel-contracts comes from the vendored wheel instead.
 RUN pip install --no-cache-dir -r /wheels/requirements.txt 'psycopg[binary]>=3.2,<4' fastapi uvicorn pydantic httpx python-multipart \
-      langgraph langgraph-checkpoint-sqlite langchain-core langchain-openai langchain-ollama python-dotenv 'typesafe-sdk==0.7.0' 'pyarrow>=17,<24' \
+      langgraph langchain-core langchain-openai langchain-ollama python-dotenv 'typesafe-sdk==0.7.0' 'pyarrow>=17,<24' \
     && pip install --no-cache-dir --no-deps /wheels/*.whl \
     && ! { pip check || true; } | grep -v 'No broken requirements' | grep -v '^verification-loop ' | grep -q . \
     && python -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core' \

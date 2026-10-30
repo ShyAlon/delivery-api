@@ -4,7 +4,16 @@ from pathlib import Path
 for name in ('OPENAI_API_KEY','DEEPSEEK_API_KEY','SUPABASE_SERVICE_ROLE_KEY','DELIVERY_POSTGRES_DSN'):
     assert not os.environ.get(name),'test must receive no live credentials'
 assert not os.environ.get('PYTHONPATH'),'installed wheels only'
-from delivery_api import app as service,config
+# Fixture-only import construction, before app import. No network/database I/O.
+os.environ['DELIVERY_DATABASE_URL']='postgresql://fixture.invalid/isolated-test'
+os.environ['DELIVERY_SUPABASE_URL']='https://isolated-smoke.supabase.co'
+os.environ['DELIVERY_SUPABASE_ANON_KEY']='hermetic-public-key'
+import delivery_api.store as _store_module
+_original_factory=_store_module.create_store
+_store_module.create_store=lambda dsn:__import__('types').SimpleNamespace(auth_session_active=lambda:False)
+try:
+ from delivery_api import app as service,config
+finally:_store_module.create_store=_original_factory
 from delivery_api.backoffice import create_app
 from delivery_api.tenant_http import TenantMiddleware
 from delivery_api.tenancy import TenantScope,current_scope,TenantAccessDenied

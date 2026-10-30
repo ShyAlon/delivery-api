@@ -82,6 +82,7 @@ def test_artifact_download_marks_success_and_refusal(marks, monkeypatch, tmp_pat
     f = tmp_path / "out.json"; f.write_text("{}")
     monkeypatch.setattr(module, "_task_artifact", lambda *a: f)
     monkeypatch.setattr(config, "CLOUD_TENANTS", False)
+    monkeypatch.setattr(module,"store",NS(read_artifact_bytes=lambda *a:b"{}"))
     assert module.task_artifact_download("t1", "needs", "out.json")
     assert "task.export" in _kinds(marks)
     monkeypatch.setattr(config, "CLOUD_TENANTS", True)

@@ -136,8 +136,8 @@ def test_the_timer_samples_by_itself_and_stops(metrics, monkeypatch):
 def test_an_unreadable_cpu_file_is_not_an_error(metrics, monkeypatch):
     monkeypatch.setattr(run_slots, "host_capacity", lambda: {"mem_total_mb": 3072, "mem_available_mb": 2000, "cpus": 2})
     monkeypatch.setattr(run_metrics, "_container_cpu_seconds", lambda: None)
-    assert run_metrics.sample_container(1000.0)["cpu_pct"] is None
-    assert run_metrics.sample_container(1030.0)["cpu_pct"] is None
+    assert run_metrics.sample_container(time.time())["cpu_pct"] is None
+    assert run_metrics.sample_container(time.time()+30)["cpu_pct"] is None
 
 
 # ---- 3. the signed-in person's email ----

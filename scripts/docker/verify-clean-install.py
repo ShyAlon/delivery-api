@@ -55,7 +55,8 @@ def clean_environment(root):
     # dotenv, provider key, cloud DB setting or account credentials.
     return {'PATH': os.defpath, 'HOME': str(root), 'LANG': 'C.UTF-8',
             'PYTHONNOUSERSITE': '1', 'PYTHONDONTWRITEBYTECODE': '1',
-            'DELIVERY_DATABASE_URL': 'sqlite:///' + str(root / 'fake-ui.db'),
+            'DELIVERY_DATABASE_URL': 'postgresql://fixture.invalid/isolated-test',
+            'DELIVERY_SUPABASE_URL':'https://isolated-smoke.supabase.co', 'DELIVERY_SUPABASE_ANON_KEY':'hermetic-public-key',
             'XDG_DATA_HOME': str(root / 'data'), 'REQUI_RE_DIST': '1'}
 
 

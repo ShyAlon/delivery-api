@@ -81,18 +81,13 @@ def tee_engine_output(engine,path,max_bytes=ENGINE_LOG_MAX_BYTES,out=None):
 
 
 def engine_env(env):
-    """Environment for the engine process. The engine (interview-engine PR #49)
-    refuses to serve until session persistence is chosen explicitly: a sessions
-    DSN, or INTERVIEW_ENGINE_SESSIONS_FILE=1. The full service always has the
-    delivery Postgres, so derive the engine's DSN from it unless the operator
-    already set one. File persistence stays available as an explicit opt-in.
-    Tenant mode (the image default) scopes owners per request, so no owner id
-    is wired here."""
+    """Derive the required PG DSN, never accept a file-session escape hatch."""
     derived=dict(env)
     if not derived.get(SESSIONS_DSN_ENV):
         db=derived.get('DELIVERY_DATABASE_URL','')
         if db.startswith(('postgresql://','postgres://')):
             derived[SESSIONS_DSN_ENV]=db
+    derived[SESSIONS_FILE_ENV]='0'
     return derived
 
 
@@ -110,8 +105,8 @@ def check_env(env):
     if env.get('DELIVERY_CONTROL_PLANE_ONLY','0')!='0':
         problems.append('DELIVERY_CONTROL_PLANE_ONLY must be 0 in the full service')
     resolved=engine_env(env)
-    if not resolved.get(SESSIONS_DSN_ENV) and resolved.get(SESSIONS_FILE_ENV)!='1':
-        problems.append('engine session persistence is not configured: set '+SESSIONS_DSN_ENV+' (a PostgreSQL DELIVERY_DATABASE_URL is used automatically) or explicitly choose file persistence with '+SESSIONS_FILE_ENV+'=1')
+    if not resolved.get(SESSIONS_DSN_ENV,'').startswith(('postgresql://','postgres://')):
+        problems.append('PostgreSQL engine session persistence is required: set '+SESSIONS_DSN_ENV+' or DELIVERY_DATABASE_URL; retired '+SESSIONS_FILE_ENV+' cannot bypass this')
     return problems
 
 

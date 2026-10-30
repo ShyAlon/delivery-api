@@ -42,14 +42,16 @@ scripts/docker and still contain the engines for dry validation.
 
 ```bash
 docker build -t requi-control-plane .
+docker build -f scripts/docker/Dockerfile.pg-smoke \
+  --build-arg SERVICE_IMAGE=requi-control-plane -t requi-control-plane-pg-smoke .
 docker run --rm --network none --read-only --cap-drop ALL \
-  --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
-  requi-control-plane
+  --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 \
+  requi-control-plane-pg-smoke
 ```
 
 Runtime depends on PostgreSQL/Supabase configuration for the tenant control plane;
-the empty temporary SQLite default exists only for network-none packaging smoke.
-Never point a production launcher at a shared SQLite/Turso fallback. No provider
+packaging smoke owns a disposable PostgreSQL server and never uses live credentials.
+There is no local database fallback. No provider
 credentials or existing user database are passed to the smoke run.
 
 ## Private deployment preparation
@@ -139,7 +141,7 @@ OAuth, authenticated-session or email-availability implementations.
 
 Development mode starts `interview-engine` from its sibling folder. Interpreter precedence is: `INTERVIEW_ENGINE_PYTHON`, `VMODEL_PYTHON`, the interpreter saved through **Artifacts folder > Engine Python**, an engine virtual environment, the shared checkout virtual environment, then the active `VIRTUAL_ENV`. The UI validates candidates before saving one. A built distribution does not scan: both the server and engine always use `dist/requi-re/runtime/bin/python`.
 
-Requi.re writes structured, timestamped activity to the console and `run.log`, including navigation, authentication, engine preflight/output, task actions, and replica sync boundaries. User-visible failures stay in `Error / Likely cause / Next` form; raw Python and native-build diagnostics belong in `run.log` and `dist/requi-re-build.log`. Secrets such as Turso tokens are never logged.
+Requi.re writes structured, timestamped activity to the console and `run.log`, including navigation, authentication, engine preflight/output, task actions, and storage boundaries. User-visible failures stay in `Error / Likely cause / Next` form; raw Python and native-build diagnostics belong in `run.log` and `dist/requi-re-build.log`. Database credentials and provider secrets are never logged.
 
 ## Development vs build/deploy
 
@@ -167,38 +169,15 @@ scripts/smoke-packaged-real-model.sh --model-route=ollama
 
 Use `--model-route=deepseek` when `DEEPSEEK_API_KEY` is available. CI or environments without a model can run `--launcher-only` to prove the built launcher, authenticated engine boundary, and static transport KPI without claiming a model result.
 
-## Optional Turso embedded replica
+## PostgreSQL only
 
-Local SQLite remains the default. To keep local-speed reads and writes while syncing accounts and task state to Turso, create one database and token:
-
-```bash
-brew install tursodatabase/tap/turso
-turso auth signup
-turso db create requi-re
-turso db show requi-re --url
-turso db tokens create requi-re
-```
-
-Copy `.env.example` to `.env` in `delivery-api` (or beside `run-require.sh` in a built distribution), then set the values returned above:
-
-```dotenv
-TURSO_DATABASE_URL=libsql://requi-re-YOUR-ORG.turso.io
-TURSO_AUTH_TOKEN=YOUR-GENERATED-TOKEN
-```
-
-Restart Requi.re. With both values present, the stable local database at `~/.local/share/requi-re/delivery.db` becomes an embedded replica: normal operations use the local file; libSQL syncs in the background every 60 seconds; account creation and session create/revoke also attempt an immediate sync. If the network or Turso is unavailable, local reads and writes continue and the deferred sync is recorded in `run.log` without logging the URL or token. Set `TURSO_SYNC_INTERVAL` to change the background interval. If either URL or token is missing, startup stops with a clear configuration error instead of silently running an unintended mode. Remove both variables to return to pure local SQLite.
+Local and server execution use PostgreSQL, Supabase Auth, and the same tenant claims.
+Set DELIVERY_DATABASE_URL, DELIVERY_SUPABASE_URL, and DELIVERY_SUPABASE_ANON_KEY.
+There is no file-store fallback or embedded replica. Backup uses
+`scripts/ops-postgres-backup.py`; deletion uses the reviewed dry-default
+`scripts/ops-reset-existing-tasks.py`, run explicitly by the operator.
 
 The distribution build is incremental by default. It preserves the current runtime, hashes dependency inputs, and compares each repository SHA plus dirty diff hash with `.build-state`. Unchanged dependencies and packages print `boundary=... decision=skip reason=unchanged`; one changed repo rebuilds only that package. Use `scripts/build-dist.sh --clean` or `REQUI_RE_CLEAN=1` for a full rebuild. Every candidate build is validated in a staging folder and atomically promoted, so a missing repository, failed install, or failed import leaves the previous distribution runnable.
-
-### Native build prerequisite for libSQL
-
-Turso sync is optional and is not part of the local Requi.re runtime. To build a runtime that includes Turso support, opt in explicitly. The builder then asks pip for a binary libSQL wheel. If none exists for that Python/platform, the optional Turso build needs CMake plus Rust:
-
-```bash
-brew install cmake rust
-```
-
-The build checks this before dependency installation and stops with Error / Likely cause / Next instead of exposing Cargo/CMake output. Raw native-build output is saved to `dist/requi-re-build.log`. Because all work happens in staging, this failure leaves the last successful `dist/requi-re` launcher and runtime unchanged.
 
 ### Local CI test
 

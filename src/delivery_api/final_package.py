@@ -9,7 +9,12 @@ def producer_handoff(interview,spec,baseline):
     repo=Path.cwd() if built else Path(os.environ.get('SPEC_GENERATOR_DIR',str(Path(__file__).resolve().parents[3]/'spec-generator')))
     python=Path(sys.executable) if built else repo/'.venv/bin/python'
     if not python.is_file():raise PackageBlocked('Spec-generator export environment is unavailable')
-    command=[str(python),'-m','spec_generator.cli',str(interview/'intent_model.json'),'--conops',str(interview/'conops.json'),'--system-baseline',str(baseline),'--out',str(spec),'--export-handoff']
+    # Export is a zero-model validation of delivery's retained projection, not
+    # a generator run. The CLI requires a claimed checkpoint runtime and must
+    # never be invoked here without one.
+    command=[str(python),'-c',
+        'import json,sys; from pathlib import Path; from spec_generator.handoff import build_handoff; print(json.dumps(build_handoff(Path(sys.argv[1]),Path(sys.argv[2]))))',
+        str(interview),str(spec)]
     env={**os.environ,'PYTHONPATH':str(repo/'src')+os.pathsep+os.environ.get('PYTHONPATH','')}
     result=subprocess.run(command,env=env,cwd=repo,capture_output=True,text=True,timeout=30)
     if result.returncode:raise PackageBlocked('Producer export failed: '+result.stderr[-1500:])

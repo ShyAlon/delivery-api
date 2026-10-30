@@ -144,3 +144,36 @@ The host launcher derives a SHA256 image tag from sorted context file names and 
 The UI Dockerfile installs pinned Playwright/Chromium first, then separately copies, verifies and installs contracts, engine, generator and delivery wheels in dependency order. Each repo has its own checksum file. Aggregate wheel-sha256.txt remains unchanged in shape and is checked again after all installs, followed by pip check. Constraints apply to every install. A changed repo wheel invalidates its layer and those below it; changing constraints or the base image invalidates earlier layers too. These are cache design guarantees, not a measured speedup. Actual Docker build timing still needs a host run.
 
 Next UI contexts include the isolated private acceptance HTML/renderer and fictional typed source fixture. Network-none automated image gate runs the existing HTTP smoke then acceptance-smoke.py. The latter imports the built-wheel presenter, renders its exact digest-bound fixture locally, checks stale-review rejection and retained guidance/mobile width. The interactive host app still does not expose this private page. Clean verifier runs both when the acceptance smoke is included. This tests presentation only, not authenticated owner acceptance or installation. No Docker execution is established by preparation.
+
+### PG-only smoke setup
+
+No service image supplies a database default. For installed-wheel delivery-only
+smoke, run the supervisor with a Python that has pgserver and psycopg:
+
+```
+python scripts/docker/owned-pg-smoke.py "$PWD" /path/to/clean-venv/bin/python scripts/docker/control-plane-smoke.py
+```
+
+It rejects inherited database settings, starts its own disposable server, applies
+this checkout's exact migrations, and gives the smoke a restricted app-login DSN.
+The service command remains the installed-wheel interpreter, not this checkout.
+For the network-none container gate, `Dockerfile.pg-smoke` is a test-only derivative
+with the same supervisor, harness, and migrations. Never publish that derivative
+as the runtime service image. Actual Docker build/run remains a separate gate.
+Full-image smoke similarly requires a supervisor-owned DELIVERY_TEST_POSTGRES_URL;
+there is no file persistence opt-in or implicit live database.
+
+`ops/latency_compare.py` was retired: it compared only the removed store with its
+old replica. Use `testing/measure-pg-slice.py` for current PG contract/query slices.
+
+For a full-service candidate, build that same derivative with
+`--build-arg SERVICE_IMAGE=YOUR_LOCAL_FULL_IMAGE` and run it with this override:
+
+```
+docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 \
+  YOUR_LOCAL_TEST_DERIVATIVE python /smoke/owned-pg-smoke.py /smoke python /app/full-smoke.py
+```
+
+This keeps the candidate's actual entry point and installed wheels while adding
+only test dependencies/schema to the derivative. No deployment is performed.

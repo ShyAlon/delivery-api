@@ -29,17 +29,13 @@ def test_incremental_build_has_cache_clean_and_atomic_promotion_contracts():
     assert '.requi-re-stage-' in build and '.requi-re-previous-' in build
     assert build.index('import delivery_api, interview_engine') < build.index('Atomic promotion')
 
-def test_libsql_source_build_preflight_and_friendly_failure_contract():
+def test_dependency_install_is_pg_only_and_errors_remain_actionable():
     build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()
-    assert 'WITH_TURSO=1' in build
-    assert '[ "$WITH_TURSO" = 1 ] && ! "$PYTHON" -m pip download --only-binary=:all: --no-deps libsql' in build
-    assert "DEPS='fastapi uvicorn pydantic httpx python-multipart langgraph langgraph-checkpoint-sqlite langchain-core langchain-openai langchain-ollama python-dotenv typesafe-sdk==0.7.0 pyarrow>=17,<24 libsql>=0.1.11,<0.2'" in build
-    assert 'command -v cmake' in build and 'command -v cargo' in build
-    assert 'brew install cmake rust' in build
-    assert 'Error: libSQL needs a source build' in build
+    assert 'libsql' not in build and 'langgraph-checkpoint-sqlite' not in build
+    assert 'PG_DEPS=' in build and 'psycopg-pool' in build
     assert 'Likely cause:' in build and 'Raw build output:' in build
-    # Native installation occurs in staging, before atomic promotion.
     assert build.index('install_dependencies(){') < build.index('Atomic promotion')
+
 
 def test_launcher_replaces_existing_owned_server_and_rejects_stale_pid_reuse():
     build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()

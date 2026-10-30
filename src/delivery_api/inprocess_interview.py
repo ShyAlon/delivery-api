@@ -80,14 +80,12 @@ class InProcessInterviewHost:
         if self._session_dsn is not None:
             from .db_pool import pool_for
             engine_pool=pool_for(self._session_dsn)
-        # Database session persistence is the engine default. On the local SQLite tier
-        # there is no Postgres for it to use, so file sessions are chosen explicitly here -
-        # never as a silent fallback. On the PG tier the sessions DSN is always set.
+        # The engine receives the same required PostgreSQL session persistence.
         installed_resolver=None
         if self._session_dsn is not None:
             from .pg_execution_fence import InstalledInterviewControlRouter
             installed_resolver=InstalledInterviewControlRouter(self.store,self.artifacts_base).resolve
-        self._engine_router=TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn,allow_file_sessions=self._session_dsn is None,pool=engine_pool,installed_resolver=installed_resolver)
+        self._engine_router=TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn,pool=engine_pool,installed_resolver=installed_resolver)
         quality_store=None
         if self._session_dsn is not None:
             from .pg_quality_config import PostgresQualityConfig

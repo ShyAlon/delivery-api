@@ -1,6 +1,6 @@
 # Integrated built-wheel verification image. Not a deployment image or live run.
 FROM python:3.12-slim
-ENV PYTHONUNBUFFERED=1 REQUI_RE_DIST=1 DELIVERY_DATABASE_URL=sqlite:////tmp/test-delivery.db
+ENV PYTHONUNBUFFERED=1 REQUI_RE_DIST=1
 WORKDIR /app
 COPY wheels/ /wheels/
 COPY constraints.txt wheel-sha256.txt /app/

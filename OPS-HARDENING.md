@@ -21,11 +21,8 @@ ready. Operator identity remains unselected until verified first real signup.
 The fixed ops-rollout-checklist.json records live proof still needed at step6.
 
 ## Backups and recovery
-Both snapshot helpers default dry; execute only against an explicitly approved
+The PostgreSQL snapshot helper defaults dry; execute only against an explicitly approved
 source. They create new private directories/files and never overwrite or upload.
-- ops-backup.py: local/legacy SQLite snapshot uses SQLite backup API including WAL;
-  verifies checksum/size/integrity/FKs. Drill copies into a NEW scratch directory.
-  It does not back up cloud data, managed Auth or artifacts.
 - ops-postgres-backup.py: explicit owner-only PG service file and named service,
   sanitized child environment, no password/DSN in arguments. pg_dump custom archive,
   pg_restore --list and checksum verification. Raw stderr is not surfaced since
@@ -61,12 +58,12 @@ retains exact rollback container, with no pruning or automatic credential setup.
 4. Verify writer/provider quiescence through existing Stop/worker markers before
    cleanup. Handler return, health or elapsed timeout is not quiescence proof.
 5. If deploy fails, restore retained exact original container; validate its health
-   and data/Auth state. Never infer rollback from a recreated default SQLite launch.
+   and data/Auth state. Never infer rollback from an empty or unrelated database launch.
 6. Restore data only under explicit approval, into isolated drill first. Apply
    migrations only after verified backup/restore and exact current schema review.
 
 ## Evidence boundaries
-Unit suites stub external boundaries. Offline SQLite drill uses fixture data only.
+Unit suites stub external boundaries. PostgreSQL drills use fixture data only.
 Local PostgreSQL archive/restore drill, when performed, is disposable fixture data,
 not a managed cloud or production restore certificate. Docker architectures,
 TLS/auth/schema/backup retention/outbox/PayPal sandbox/full clean chain remain
