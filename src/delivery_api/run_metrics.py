@@ -1,11 +1,12 @@
 """CPU and memory of every run, sampled while it runs and kept for the operator.
 
-A sample is taken every METRICS_INTERVAL_S seconds for the whole process group of a run's child process: memory (current and
-peak), CPU seconds and CPU as a percent of one core. Samples go to a small SQLite file in the data directory, so they survive
-a restart. Raw samples are kept METRICS_RAW_DAYS days. After that each run is replaced by one permanent summary row (average and
-maximum CPU and memory) and its raw rows are deleted in the same transaction. Every row carries the task, the phase and the
-engine session id, for later analysis. The container's own memory and CPU are sampled at the same moments.
-Sampling never stops or slows a run: any failure is logged once and shown in Debug. Operator-only: nothing here reaches a user."""
+A sample is taken every METRICS_INTERVAL_S seconds for the run process group.
+PostgreSQL applications always store metrics in PG, with distinct host sources
+and registry-authorized cross-host operator reads. The explicit legacy SQLite
+profile remains a reference, never a PG failure fallback. Old raw rows become
+permanent run/day summaries through bounded metrics-only maintenance, including
+retired sources. No history is imported. Sampling failures do not stop a run.
+"""
 import os,sqlite3,threading,time
 from pathlib import Path
 from . import config
@@ -45,12 +46,26 @@ _last_rollup=0.0
 
 
 def _pg():
-    """Explicit rollout profile; unknown/missing PG inputs never fall back."""
-    backend=os.environ.get('DELIVERY_METRICS_BACKEND','sqlite')
+    """PG application owns metrics; no file fallback, including overrides.
+
+    Container series describe one host, unlike the shared process-log ring.
+    Reuse a deployment-supplied source where stable host names are unavailable.
+    Never blend two hosts' CPU/memory into one time series.
+    """
+    return selected_metrics(config.DATABASE_URL,os.environ)
+
+
+def selected_metrics(dsn,env):
+    pg=dsn.startswith(('postgres://','postgresql://','host='))
+    backend=env.get('DELIVERY_METRICS_BACKEND','postgres' if pg else 'sqlite')
+    if pg and backend=='sqlite':raise ValueError('PostgreSQL application requires PostgreSQL metrics')
     if backend=='sqlite':return None
     if backend!='postgres':raise ValueError('unknown metrics backend')
+    import socket
     from .postgres_metrics import PostgresMetrics
-    return PostgresMetrics(config.DATABASE_URL,source_id=os.environ.get('DELIVERY_METRICS_SOURCE',''))
+    source=env.get('DELIVERY_METRICS_SOURCE')
+    if source is None:source='host:'+socket.gethostname()
+    return PostgresMetrics(dsn,source_id=source)
 
 
 def db_path():
@@ -91,7 +106,7 @@ def _open(create=True):
 
 def _failed(exc):
     global _problem
-    text="%s: %s"%(type(exc).__name__,str(exc)[:160])
+    text=type(exc).__name__+": resource metrics operation failed; private driver detail excluded"
     if _problem is None:activity("metrics.unavailable","Run samples could not be stored",error=text)
     _problem=text
 
@@ -228,7 +243,7 @@ def rollup(now=None,raw_days=None):
     now=time.time() if now is None else now
     cutoff=now-(config.METRICS_RAW_DAYS if raw_days is None else raw_days)*86400
     pg=_pg()
-    if pg is not None:return pg.rollup(cutoff=cutoff,now=now)
+    if pg is not None:return pg.maintain(cutoff=cutoff,now=now)
     with _lock:
         conn=_open()
         with conn:
@@ -324,7 +339,7 @@ def _stamp(ts):return time.strftime("%H:%M",time.localtime(ts)) if ts else "?"
 
 def metrics_text(ov):
     """Plain text for the Debug capacity section. No money wording."""
-    lines=["Resource samples: every %d s while a run is active, raw rows kept %d days, then one summary per run. File: %s"%(ov["interval_s"],ov["raw_days"],ov["path"])]
+    lines=["Resource samples: every %d s while a run is active, raw rows kept %d days, then one summary per run. Storage: %s"%(ov["interval_s"],ov["raw_days"],ov["path"])]
     if ov.get("problem"):lines.append("Samples are NOT being stored: %s"%ov["problem"])
     box=ov.get("container")
     if box:
@@ -333,11 +348,17 @@ def metrics_text(ov):
         lines.append("Container at %s: memory %d of %d MB, %s. Last 24 h of samples: memory average %d, maximum %d MB; CPU average %s, maximum %s%%."%(
             _stamp(last["ts"]),last["mem_used_mb"] or 0,last["mem_limit_mb"] or 0,cpu,day["am"] or 0,day["mm"] or 0,
             "%.0f%%"%day["ac"] if day["ac"] is not None else "n/a","%.0f"%day["mc"] if day["mc"] is not None else "n/a"))
+    for host in ov.get('containers',[]):
+        day=host['day']
+        lines.append('Host %s at %s: memory %d of %d MB, CPU %s%% of a core. Last 24 h: memory average %d, maximum %d MB; CPU average %s%%, maximum %s%%.'%(
+            host['source_id'],_stamp(host['ts']),host['mem_used_mb'] or 0,host['mem_limit_mb'] or 0,round(host['cpu_pct']) if host['cpu_pct'] is not None else 'n/a',
+            day['am'] or 0,day['mm'] or 0,round(day['ac']) if day['ac'] is not None else 'n/a',round(day['mc']) if day['mc'] is not None else 'n/a'))
+    if ov.get('truncated'):lines.append('Metrics page is truncated; older runs or additional hosts may be omitted.')
     if not ov["runs"]:
         lines.append("No run has been sampled yet. Samples appear here once a run has been active for a few seconds.")
     for r in ov["runs"]:
         seconds=int((r["ended_at"] or 0)-(r["started_at"] or 0))
         tail="  (summary)" if r["summary"] else ("  memory MB over time: "+" ".join(str(v) for v in r["timeline_mb"]) if r["timeline_mb"] else "")
         lines.append("Run %s / %s, session %s, %ds, %d samples: CPU average %.0f%% maximum %.0f%% of a core (%.0f CPU seconds), memory average %.0f maximum %.0f MB.%s"%(
-            r["task_id"],r["phase"] or "?",r["session_id"] or "?",seconds,r["samples"],r["avg_cpu_pct"] or 0,r["max_cpu_pct"] or 0,r["cpu_seconds"] or 0,r["avg_rss_mb"] or 0,r["max_rss_mb"] or 0,tail))
+            r["task_id"],r["phase"] or "?",r["session_id"] or "?",seconds,r["samples"],r["avg_cpu_pct"] or 0,r["max_cpu_pct"] or 0,r["cpu_seconds"] or 0,r["avg_rss_mb"] or 0,r["max_rss_mb"] or 0,tail+(" Host: "+r["source_id"] if r.get("source_id") else "")))
     return "\n".join(lines)

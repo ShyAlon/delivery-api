@@ -254,6 +254,29 @@ def _check_process_logs(env,connect):
                      'apply process-log migration; grant the application login SET membership in requi_log_writer; use one stable source across restarts')
 
 
+def _check_resource_metrics(env,connect):
+    dsn=env.get('DELIVERY_DATABASE_URL','')
+    try:
+        from delivery_api.run_metrics import selected_metrics
+        repo=selected_metrics(dsn,env)
+        if repo is None:return Check('resource-metrics-store','refuse','skip','durable resource metrics','source-bound PG writer','legacy profile','DELIVERY_DATABASE_URL')
+        connection=_pg_connect(connect,dsn)
+        try:
+            connection.execute('SET LOCAL ROLE requi_metrics_writer')
+            connection.execute("SET LOCAL statement_timeout='1000ms'")
+            connection.execute("SELECT set_config('requi.metrics_source',%s,true)",(repo.source_id,))
+            if not connection.execute("SELECT has_function_privilege(current_user,'public.requi_maintain_resource_metrics(double precision,double precision)','EXECUTE')").fetchone()[0]:
+                raise ValueError('metrics maintenance unavailable')
+            for table in ('resource_run_samples','resource_run_summaries','resource_container_samples','resource_container_summaries'):
+                connection.execute('SELECT 1 FROM public.'+table+' LIMIT 0')
+        finally:connection.close()
+        return Check('resource-metrics-store','refuse','pass','durable resource metrics','stable host series and restricted PG role/tables','writer read probes passed','DELIVERY_METRICS_SOURCE; requi_metrics_writer')
+    except Exception as error:
+        return Check('resource-metrics-store','refuse','fail','durable resource metrics','stable host series and restricted PG role/tables',
+                     'unavailable: '+type(error).__name__,'DELIVERY_METRICS_SOURCE; requi_metrics_writer',
+                     'use PostgreSQL metrics, apply metrics migration, grant app login SET membership in requi_metrics_writer')
+
+
 def _table_visibility(connection_holder):
     """Catalog existence and intended access, never privilege-filtered existence.
 
@@ -471,6 +494,7 @@ def run(env, *, connect=None, import_module=importlib.import_module, required_ta
     builders = [('artifacts-root-writable', 'refuse', lambda: _check_artifacts(env)),
                 ('database-role-claims', 'refuse', lambda: _check_database(env, connect, connection_holder)),
                 ('process-log-store', 'refuse', lambda: _check_process_logs(env,connect)),
+                ('resource-metrics-store', 'refuse', lambda: _check_resource_metrics(env,connect)),
                 ('required-tables', 'refuse', lambda: _check_tables(env, connection_holder, required_tables)),
                 ('feature-tables', 'warn', lambda: _check_feature_tables(env, connection_holder, required_tables)),
                 ('pool-budget', 'warn', lambda: _check_pool_budget(env, import_module)),
