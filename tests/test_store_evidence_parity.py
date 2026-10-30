@@ -1,4 +1,4 @@
-"""Same evidence contracts against SQLite reference and isolated real PostgreSQL."""
+"""Retained evidence contracts against isolated real PostgreSQL."""
 from uuid import uuid4
 import pytest
 from vmodel_contracts.progress_signal import ProgressSignal

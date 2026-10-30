@@ -9,15 +9,13 @@ def model_workspace(pg_workspace_factory,monkeypatch):
     from delivery_api import app as module
     # Direct file-backed provenance/helper contracts select their policy explicitly.
     monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
-    from delivery_api.store import SQLiteStore
+    from pg_storage_guard import assert_pg_storage_only
     from delivery_api.tenancy import tenant_context
     with pg_workspace_factory() as workspace:
         monkeypatch.setattr(module,'store',workspace.store)
         monkeypatch.setitem(module.app.state._state,'store',workspace.store)
         monkeypatch.setattr(module.orchestrator,'store',workspace.store)
-        def no_sqlite(*args,**kwargs):
-            raise AssertionError('SQLite is forbidden in model-route fixtures')
-        monkeypatch.setattr(SQLiteStore,'__init__',no_sqlite)
+        assert_pg_storage_only()
         with tenant_context(workspace.scope):
             yield workspace
 
@@ -217,10 +215,9 @@ def test_model_route_fixture_uses_restricted_pg_and_rejects_sqlite():
     import pytest
     from delivery_api import app as module
     from delivery_api.postgres_store import PostgresStore
-    from delivery_api.store import SQLiteStore
+    from pg_storage_guard import assert_pg_storage_only
     assert isinstance(module.store,PostgresStore)
     with module.store._postgres.transaction() as connection:
         role=connection.execute('SELECT current_user').fetchone()['current_user']
     assert role=='requi_backend'
-    with pytest.raises(AssertionError,match='SQLite'):
-        SQLiteStore(':memory:')
+    assert_pg_storage_only()

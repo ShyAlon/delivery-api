@@ -6,8 +6,9 @@ import pytest
 
 def test_pg_store_has_no_sqlite_parent_and_explicit_operation_coverage():
     from delivery_api.postgres_store import PostgresStore,PG_OPERATIONS,_LOCAL_AUTH
-    from delivery_api.store import SQLiteStore,Storage
-    assert SQLiteStore not in PostgresStore.__mro__
+    from delivery_api.store import Storage
+    from pg_storage_guard import assert_pg_storage_only
+    assert_pg_storage_only()
     public={name for name,value in vars(PostgresStore).items() if not name.startswith('_') and callable(value)}
     assert public==set(PG_OPERATIONS)|_LOCAL_AUTH
     assert len(PG_OPERATIONS)==len(set(PG_OPERATIONS))

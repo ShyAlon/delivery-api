@@ -3,7 +3,7 @@ import pytest
 from uuid import uuid4
 from fastapi.testclient import TestClient
 from vmodel_contracts.interactive import *
-from delivery_api.store import SQLiteStore
+from pg_storage_guard import assert_pg_storage_only
 import delivery_api.app as module
 
 def setup(tmp_path,monkeypatch,workspace,*,signed_app=None):
@@ -94,8 +94,7 @@ def test_review_api_fixture_uses_restricted_pg(tmp_path,monkeypatch,pg_scoped_wo
  from delivery_api.postgres_store import PostgresStore
  store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace,signed_app=pg_task_app(pg_scoped_workspace))
  assert isinstance(store,PostgresStore)
- with pytest.raises(AssertionError,match='SQLite forbidden'):
-  SQLiteStore(':memory:')
+ assert_pg_storage_only()
  with store._postgres.transaction() as connection:
   assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
 

@@ -180,13 +180,11 @@ def pg_browser(pg_workspace_factory, pg_task_app, tmp_path):
 def pg_scoped_workspace(pg_workspace_factory,monkeypatch):
     """Direct-helper PG tests; HTTP authentication is covered by pg_task_app."""
     from delivery_api import app as module
-    from delivery_api.store import SQLiteStore
     with pg_workspace_factory() as workspace:
         monkeypatch.setattr(module,'store',workspace.store)
         monkeypatch.setitem(module.app.state._state,'store',workspace.store)
         monkeypatch.setattr(module.orchestrator,'store',workspace.store)
-        def no_sqlite(*args,**kwargs):
-            raise AssertionError('SQLite forbidden in scoped PG fixtures')
-        monkeypatch.setattr(SQLiteStore,'__init__',no_sqlite)
+        from pg_storage_guard import assert_pg_storage_only
+        assert_pg_storage_only()
         with tenant_context(workspace.scope):
             yield workspace

@@ -8,16 +8,14 @@ from vmodel_contracts.progress_signal import ProgressSignal
 
 def test_event_progress_audit_and_diagnostic_native_boundary(pg_workspace_factory,monkeypatch, pg_bridge_poison):
     _Connection = pg_bridge_poison
-    from delivery_api.store import SQLiteStore
+    from pg_storage_guard import assert_pg_storage_only
     with pg_workspace_factory() as workspace, tenant_context(workspace.scope):
         store = workspace.store
         task_id = store.create_task('Native evidence')['task_id']
         def forbidden(*args,**kwargs):
             raise AssertionError('evidence still uses SQLite compatibility path')
         monkeypatch.setattr(_Connection,'execute',forbidden)
-        for name in ('add_event','events','progress_cursor','ingest_progress','audit','audit_entries',
-                     '_ensure_waiting_input_locked','_validated_diagnostics_block','failure_diagnostics'):
-            monkeypatch.setattr(SQLiteStore,name,forbidden)
+        assert_pg_storage_only(('add_event', 'events', 'progress_cursor', 'ingest_progress', 'audit', 'audit_entries', '_ensure_waiting_input_locked', '_validated_diagnostics_block', 'failure_diagnostics'))
         event = store.add_event(task_id,'test','Native evidence',payload={'retained':True})
         assert store.events(task_id)[-1]['id'] == event
         audit = store.audit('tester','native.checked',task_id,{'kept':True})

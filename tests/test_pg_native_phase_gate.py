@@ -5,7 +5,7 @@ from delivery_api.tenancy import tenant_context
 
 def test_native_phase_gate_and_session_boundary(pg_workspace_factory,monkeypatch, pg_bridge_poison):
     _Connection = pg_bridge_poison
-    from delivery_api.store import SQLiteStore
+    from pg_storage_guard import assert_pg_storage_only
     with pg_workspace_factory() as workspace,tenant_context(workspace.scope):
         s=workspace.store;tid=s.create_task('Native phase gate')['task_id']
         bridge=_Connection.execute
@@ -15,11 +15,7 @@ def test_native_phase_gate_and_session_boundary(pg_workspace_factory,monkeypatch
             return bridge(self,sql,parameters)
         with monkeypatch.context() as patch:
             patch.setattr(_Connection,'execute',reject_family)
-            for name in ('configure_simulation','set_gate_open','wait_at_gate','decide_gate','update_phase',
-                'reconcile_completed_interview','claim_failed_needs_retry','claim_next_phase','claim_failed_phase_retry',
-                'set_model_route','set_model_default','begin_interview_start','engine_session','bind_interview_schema',
-                'interview_schema_binding','rerun_prerequisite'):
-                patch.setattr(SQLiteStore,name,lambda *a,**k:(_ for _ in ()).throw(AssertionError('SQLite parent called')))
+            assert_pg_storage_only(('configure_simulation', 'set_gate_open', 'wait_at_gate', 'decide_gate', 'update_phase', 'reconcile_completed_interview', 'claim_failed_needs_retry', 'claim_next_phase', 'claim_failed_phase_retry', 'set_model_route', 'set_model_default', 'begin_interview_start', 'engine_session', 'bind_interview_schema', 'interview_schema_binding', 'rerun_prerequisite'))
             s.set_model_route(tid,'ollama:test');s.set_model_default(tid,'test-model')
             assert s.begin_interview_start(tid,'native-session','ollama:test') is True
             assert s.begin_interview_start(tid,'other-session','ollama:test') is False

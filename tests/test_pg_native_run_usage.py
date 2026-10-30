@@ -6,7 +6,7 @@ from vmodel_contracts import RunState
 
 def test_native_run_usage_artifacts_and_owner_isolation(pg_workspace_factory,monkeypatch, pg_bridge_poison):
     _Connection = pg_bridge_poison
-    from delivery_api.store import SQLiteStore
+    from pg_storage_guard import assert_pg_storage_only
     with pg_workspace_factory() as a,pg_workspace_factory() as b:
         s=a.store
         with tenant_context(a.scope):
@@ -18,8 +18,7 @@ def test_native_run_usage_artifacts_and_owner_isolation(pg_workspace_factory,mon
             return bridge(self,sql,parameters)
         with monkeypatch.context() as patch:
             patch.setattr(_Connection,'execute',reject_family)
-            for name in ('link','deactivate_link','set_state','run','set_submission','total_spend','add_artifact','artifacts','add_task_artifact','quota_allows','add_user_usage'):
-                patch.setattr(SQLiteStore,name,lambda *a,**k:(_ for _ in ()).throw(AssertionError('SQLite parent called')))
+            assert_pg_storage_only(('link', 'deactivate_link', 'set_state', 'run', 'set_submission', 'total_spend', 'add_artifact', 'artifacts', 'add_task_artifact', 'quota_allows', 'add_user_usage'))
             with tenant_context(a.scope):
                 assert s.link(link['token'])['run_id']==rid
                 s.set_submission(rid,'A request');s.set_state(rid,RunState.IN_INTERVIEW)
