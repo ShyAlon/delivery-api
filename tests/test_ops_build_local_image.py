@@ -45,6 +45,10 @@ def env(tmp_path):
         if name == "delivery-api":
             (seed / "scripts" / "docker").mkdir(parents=True)
             shutil.copy(REPO / "scripts" / "docker" / "build-local-image.sh", seed / "scripts" / "docker" / "build-local-image.sh")
+            for relative in ('scripts/docker/smoke-local-image.sh','scripts/docker/Dockerfile.pg-smoke','scripts/docker/owned-pg-smoke.py','scripts/docker/system-pg-smoke.py','tests/pg_harness.py','tests/pg_guardian.py','supabase/migrations/20261030000000_test.sql'):
+                target=seed/relative;target.parent.mkdir(parents=True,exist_ok=True)
+                source=Path(__file__).resolve().parents[1]/relative
+                target.write_text(source.read_text() if source.exists() else '-- fixture migration\n')
             (seed / "Dockerfile.full").write_text("FROM scratch\n")
         else:
             (seed / "README").write_text(name)

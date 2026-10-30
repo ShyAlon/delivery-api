@@ -15,7 +15,12 @@ def main():
     root=Path(sys.argv[1]).resolve()
     sys.path.insert(0,str(root/'tests'))
     import pg_harness
-    pg_harness.start()
+    factory=None
+    if os.environ.get('REQUI_SMOKE_PG_BIN'):
+        import importlib.util
+        spec=importlib.util.spec_from_file_location('system_pg_smoke',Path(__file__).with_name('system-pg-smoke.py'))
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);factory=module.Server
+    pg_harness.start(server_factory=factory)
     if pg_harness.STATE['status']!='running':
         raise RuntimeError('disposable PG failed: '+str(pg_harness.STATE))
     from psycopg.conninfo import conninfo_to_dict

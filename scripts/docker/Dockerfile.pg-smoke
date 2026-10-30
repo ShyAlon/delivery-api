@@ -2,9 +2,14 @@
 ARG SERVICE_IMAGE=requi-control-plane-check
 FROM ${SERVICE_IMAGE}
 USER root
-RUN pip install --no-cache-dir pgserver 'psycopg[binary]>=3.2,<4'
+# Debian provides native amd64 AND arm64 PostgreSQL. pgserver's Linux wheels
+# are x86_64-only, so installing it would break Apple Silicon image smoke.
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/lib/postgresql/*/bin /opt/smoke-pg-bin
+ENV REQUI_SMOKE_PG_BIN=/opt/smoke-pg-bin
 COPY tests/pg_harness.py tests/pg_guardian.py /smoke/tests/
 COPY supabase/migrations/ /smoke/supabase/migrations/
-COPY scripts/docker/owned-pg-smoke.py /smoke/owned-pg-smoke.py
+COPY scripts/docker/owned-pg-smoke.py scripts/docker/system-pg-smoke.py /smoke/
 USER 10001:10001
 CMD ["python", "/smoke/owned-pg-smoke.py", "/smoke", "python", "-m", "delivery_api.control_plane"]

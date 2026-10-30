@@ -19,6 +19,9 @@ FAKE_SSH = r'''#!/usr/bin/env bash
 c="${@: -1}"
 echo "ssh $c" >> "$FAKE_LOG"
 case "$c" in
+  *"mktemp -d /tmp/requi-image-smoke"*) echo /tmp/requi-image-smoke.FIXTURE123;;
+  *"tar -x -C"*) cat >/dev/null;;
+  *"smoke-local-image.sh"*) exit "${FAKE_SMOKE_RC:-0}";;
   *full-smoke.py*) exit "${FAKE_SMOKE_RC:-0}";;
   *"docker rmi"*) exit "${FAKE_RMI_RC:-0}";;
   *"--format"*"image"*|*"image inspect --format"*) echo sha256:fake;;
@@ -66,6 +69,10 @@ def _repo(tmp_path, owner, name, with_ops):
         for n in ("lib.sh", "preview.sh"):
             shutil.copy(OPS / n, seed / "scripts" / "ops" / n)
         shutil.copy(OPS.parent / "docker" / "smoke-image.sh", seed / "scripts" / "docker" / "smoke-image.sh")
+        for relative in ('scripts/docker/smoke-local-image.sh','scripts/docker/Dockerfile.pg-smoke','scripts/docker/owned-pg-smoke.py','scripts/docker/system-pg-smoke.py','tests/pg_harness.py','tests/pg_guardian.py','supabase/migrations/20261030000000_test.sql'):
+            target=seed/relative;target.parent.mkdir(parents=True,exist_ok=True)
+            source=Path(__file__).resolve().parents[1]/relative
+            target.write_text(source.read_text() if source.exists() else '-- fixture migration\n')
         (seed / "scripts" / "docker" / "build-full-image.sh").write_text("echo BUILD-SHOULD-NOT-RUN >> \"$FAKE_LOG\"\n")
     else:
         (seed / "README").write_text(name)
@@ -251,7 +258,7 @@ def test_an_existing_image_is_smoke_checked_before_reuse_and_not_rebuilt_when_it
     api, e, log, _ = env
     assert _run(api, e).returncode == 0
     text = log.read_text()
-    assert "full-smoke.py" in text and "BUILD-SHOULD-NOT-RUN" not in text
+    assert "smoke-local-image.sh" in text and "BUILD-SHOULD-NOT-RUN" not in text
 
 
 def test_an_existing_image_that_fails_the_smoke_is_removed_by_exact_tag_and_rebuilt_once(env):

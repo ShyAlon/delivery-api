@@ -61,7 +61,7 @@ def _numbered(path):
     return re.match(r'^\d{14}_',path.name) is not None
 
 
-def start(*,database_prefix='test_tenant_',socket_directory=None):
+def start(*,database_prefix='test_tenant_',socket_directory=None,server_factory=None):
     # The dedicated item6 runner needs its existing stricter isolation contract.
     # These are fixture-only choices, never credentials or a caller-supplied DSN.
     if database_prefix not in ('test_tenant_','requi_item6_'):
@@ -77,12 +77,15 @@ def start(*,database_prefix='test_tenant_',socket_directory=None):
     if os.environ.get('DELIVERY_TEST_POSTGRES_DSN'):
         STATE.update(status='external',reason='DELIVERY_TEST_POSTGRES_DSN was already set',dsn=os.environ['DELIVERY_TEST_POSTGRES_DSN']);return
     try:
-        import pgserver,psycopg
+        import psycopg
+        if server_factory is None:import pgserver
     except ImportError as exc:
         STATE.update(status='missing',reason='pgserver or psycopg is not installed (%s); database tests will skip'%exc.name);return
     scratch=tempfile.mkdtemp(prefix='delivery-api-pg-')
     try:
-        if socket_directory is None:
+        if server_factory is not None:
+            server=server_factory(scratch,cleanup_mode='delete')
+        elif socket_directory is None:
             server=pgserver.get_server(scratch,cleanup_mode='delete')
         else:
             # pgserver chooses a free port; only the socket directory is fixed.
@@ -93,7 +96,7 @@ def start(*,database_prefix='test_tenant_',socket_directory=None):
         shutil.rmtree(scratch,ignore_errors=True)
         STATE.update(status='failed',reason='the temporary Postgres did not start: %s: %s'%(type(exc).__name__,str(exc)[:300]));return
     from pg_guardian import protect
-    try:close_guardian = protect(scratch)
+    try:close_guardian = protect(scratch,ctl=getattr(server,'ctl',None))
     except BaseException:
         server.cleanup()
         shutil.rmtree(scratch,ignore_errors=True)
