@@ -72,6 +72,18 @@ def report_sources(s,root,explicit):
         print(s.source_report(root,name,explicit=explicit))
 
 
+def check_targets(admin,app):
+    differences=[]
+    for key,label,default in (('host','host',''),('port','port','5432'),('dbname','database','')):
+        left=admin.get(key,default);right=app.get(key,default)
+        if left!=right:
+            # Only non-secret endpoint components, never URL/user/password/options.
+            clean=lambda value:str(value).replace('\n','?').replace('\r','?')
+            differences.append(label+': admin='+clean(left)+'; app='+clean(right))
+    if differences:
+        raise ValueError('admin/app targets differ: '+' | '.join(differences)+'. Keep the app URL unchanged. Use its same session-pooler host, port and database for the admin URL; direct db.<ref>.supabase.co or transaction-pooler port6543 may be the wrong connection mode. Login names may differ and are not compared. No database changes')
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('repo');p.add_argument('--apply',action='store_true');p.add_argument('--env-file');p.add_argument('--identify',action='store_true',help='read-only app identity and settings source only; no admin URL required');args=p.parse_args()
     root=Path(args.repo).expanduser().resolve();py=root/'.venv/bin/python'
@@ -94,8 +106,7 @@ def main():
     admin=conninfo_to_dict(values['REQUI_ADMIN_DATABASE_URL']);app=conninfo_to_dict(values['DELIVERY_DATABASE_URL'])
     # Prove the actual app role through its own connection, including pooler
     # usernames such as role.project. Never parse/guess the grant recipient.
-    if (admin.get('host'),admin.get('port','5432'),admin.get('dbname'))!=(app.get('host'),app.get('port','5432'),app.get('dbname')):
-        raise ValueError('admin/app targets differ; use the same endpoint/port/database before proceeding')
+    check_targets(admin,app)
     with psycopg.connect(values['DELIVERY_DATABASE_URL'],connect_timeout=10,autocommit=True) as app_conn:
         app_conn.execute('SET default_transaction_read_only=on')
         app_session,app_login=identity(app_conn)
