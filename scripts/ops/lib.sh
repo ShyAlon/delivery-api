@@ -74,6 +74,6 @@ ops_settings(){
   export REQUI_SETTINGS_SCRIPT="$marker"
   local rc=0
   .venv/bin/python scripts/ops/settings.py --repo "$PWD" --require "$required" exec -- bash "$OPS_SELF" || rc=$?
-  [ "$rc" != 2 ] || abort SETTINGS "file-first settings preflight failed; see the value-free error above" "No changes by this preflight." "check the named setting or private file; never send its values"
+  [ "$rc" != 2 ] || abort SETTINGS "file-first settings preflight failed; see the value-free error above" "No changes by this preflight." "check the named setting or run scripts/ops/preview-provision.sh in a terminal; never send values"
   exit "$rc"
 }

@@ -48,7 +48,7 @@ export DELIVERY_DATABASE_URL="$V_DB" DELIVERY_SUPABASE_URL="$V_URL" DELIVERY_SUP
 import importlib.util,os,sys
 spec=importlib.util.spec_from_file_location('settings','scripts/ops/settings.py');s=importlib.util.module_from_spec(spec);spec.loader.exec_module(s)
 # The owner already typed yes above. Keep unrelated saved keys, atomically.
-s.save_confirmed(sys.argv[1],{k:v for k,v in os.environ.items() if s.allowed(k) and v},confirm=lambda _: 'yes')
+s.save_confirmed(sys.argv[1],{k:os.environ[k] for k in ('DELIVERY_DATABASE_URL','DELIVERY_SUPABASE_URL','DELIVERY_SUPABASE_ANON_KEY','DELIVERY_SUPABASE_ADMIN_SUBJECTS','DELIVERY_ADMIN_TOKEN') if os.environ.get(k)},confirm=lambda _: 'yes')
 PY
 exec 9<&-
 echo

@@ -29,7 +29,17 @@ HAVEKEY=$("${UBU[@]}" "sudo test -s /etc/requi/deepseek.env && echo yes || echo 
 KEYFILE="$WORK/deepseek.env"; NEWKEY=no
 KEY=${DEEPSEEK_API_KEY:-}
 if [ -z "$KEY" ] && [ "$HAVEKEY" != yes ]; then
-  printf 'DEEPSEEK_API_KEY missing locally and on server (hidden): '; read -rs KEY < /dev/tty; echo
+  .venv/bin/python - "$KEYFILE" <<'PYKEY'
+import importlib.util,sys
+spec=importlib.util.spec_from_file_location('settings','scripts/ops/settings.py');s=importlib.util.module_from_spec(spec);spec.loader.exec_module(s)
+try:
+    values={};s.require(values,['DEEPSEEK_API_KEY'])
+    s.save_confirmed(s.target_path(),values)
+    with open(sys.argv[1],'w',opener=lambda p,f:__import__('os').open(p,f,0o600)) as stream:
+        stream.write('DEEPSEEK_API_KEY='+values['DEEPSEEK_API_KEY']+'\n')
+except s.SettingsError as exc:raise SystemExit(str(exc))
+PYKEY
+  KEY=$(sed -n 's/^DEEPSEEK_API_KEY=//p' "$KEYFILE")
 fi
 if [ -n "$KEY" ]; then
   case "$KEY" in *[[:space:]]*) abort KEY "the key has a space or line break in it" "" "run this command again and enter only the key";; esac

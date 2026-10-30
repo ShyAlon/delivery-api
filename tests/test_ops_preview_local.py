@@ -72,7 +72,7 @@ def _repo(tmp_path, name, with_ops):
     root.mkdir(exist_ok=True)
     _git(tmp_path, "clone", "-q", str(bare), str(root / name))
     if with_ops:
-        (root / name / '.venv').symlink_to(Path(sys.executable).resolve().parent.parent, target_is_directory=True)
+        (root / name / '.venv').symlink_to(Path(sys.prefix), target_is_directory=True)
     return root / name
 
 
@@ -95,7 +95,7 @@ def env(tmp_path):
     yes.write_text("yes\n")
     log = tmp_path / "log"
     log.write_text("")
-    e = {**os.environ, "PATH": "%s:%s" % (fake, os.environ["PATH"]), "REQUI_REPOS_ROOT": str(root), "PREVIEW_SETTINGS_FILE": str(store),
+    e = {**{k:v for k,v in os.environ.items() if not k.startswith(("DELIVERY_","RESET_","DEEPSEEK_","PREVIEW_","REQUI_SETTINGS_"))}, "PATH": "%s:%s" % (fake, os.environ["PATH"]), "REQUI_REPOS_ROOT": str(root), "PREVIEW_SETTINGS_FILE": str(store),
          "FAKE_LOG": str(log), "FAKE_STATE": str(tmp_path), "PREVIEW_TTY": str(yes), "BUILD_TTY": str(yes),
          "PREVIEW_PORT": "18766", "PREVIEW_WAIT_TRIES": "2", "PREVIEW_POLL": "0", "TMPDIR": str(tmp_path)}
     return api, e, log, tmp_path
@@ -148,7 +148,7 @@ def test_an_image_of_the_wrong_architecture_is_refused(env):
 def test_without_saved_settings_it_points_to_provisioning_and_starts_nothing(env, tmp_path):
     api, e, log, _ = env
     out = _run(api, e, PREVIEW_SETTINGS_FILE=str(tmp_path / "absent.env"))
-    assert "ABORTED [NOT-PROVISIONED]" in out.stdout and "preview-provision.sh" in out.stdout
+    assert "ABORTED [SETTINGS]" in out.stdout and "preview-provision.sh" in out.stdout
     assert "docker run" not in log.read_text()
 
 
@@ -156,7 +156,7 @@ def test_saved_settings_must_be_mode_600(env):
     api, e, log, _ = env
     Path(e["PREVIEW_SETTINGS_FILE"]).chmod(0o644)
     out = _run(api, e)
-    assert "ABORTED [SETTINGS-PERMS]" in out.stdout and "docker run" not in log.read_text()
+    assert "ABORTED [SETTINGS]" in out.stdout and "docker run" not in log.read_text()
 
 
 def test_a_server_side_session_check_is_refused_in_the_local_flow(env):

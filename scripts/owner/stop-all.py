@@ -85,11 +85,6 @@ def main():
         print('Use the session corresponding to your current sign-in. Set RESET_AUTH_SESSION_ID in the same file if desired. The script verifies the owner/session is active. Do not copy a JWT, access token or password.')
     owner=identity(args.owner or values.get('RESET_OWNER_ID'),'Owner')
     session=identity(args.auth_session or values.get('RESET_AUTH_SESSION_ID'),'Active auth session')
-    values['RESET_OWNER_ID']=owner;values['RESET_AUTH_SESSION_ID']=session
-    if values!=before:
-        try:settings.save_confirmed(Path(args.env_file).expanduser() if args.env_file else settings.target_path(),{k:v for k,v in values.items() if before.get(k)!=v})
-        except settings.SettingsError as exc:fail(str(exc))
-
     os.chdir(root);sys.path.insert(0,str(root/'src'))
     try:
         import importlib.util
@@ -104,6 +99,10 @@ def main():
     print('Stop-only owner batch. Preview must already be running. This script cannot kill workers, release holds or recover old checkpoints.')
     with tenant_context(TenantScope(owner,session)):
         if not store.auth_session_active():fail('owner/auth session is not active; no reset was run.')
+        values['RESET_OWNER_ID']=owner;values['RESET_AUTH_SESSION_ID']=session
+        if values!=before:
+            try:settings.save_confirmed(Path(args.env_file).expanduser() if args.env_file else settings.target_path(),{k:v for k,v in values.items() if before.get(k)!=v})
+            except settings.SettingsError as exc:fail(str(exc))
         stop_path=root/'scripts/ops-stop-existing-tasks.py'
         if not stop_path.is_file():fail('Stop All script missing; merge/update its PR before running. No Stop requested.')
         spec=importlib.util.spec_from_file_location('owner_stop_batch',stop_path)

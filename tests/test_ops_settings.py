@@ -55,3 +55,45 @@ def test_only_allowlisted_names_are_exported(tmp_path):
     s=module();save(tmp_path/'.env','PATH=/evil\nBASH_ENV=/evil\nDEEPSEEK_API_KEY=good\n')
     result=s.load(tmp_path,{'XDG_CONFIG_HOME':str(tmp_path/'none')})
     assert result=={'DEEPSEEK_API_KEY':'good'}
+
+def test_exec_delivers_only_to_child_environment_not_output_or_argv(tmp_path):
+    import subprocess,sys
+    root=tmp_path/'repo';save(root/'.env',"DEEPSEEK_API_KEY='secret-$(touch NEVER)-literal'\nBASH_ENV=NEVER\n")
+    env={'PATH':os.environ['PATH'],'HOME':str(tmp_path),'XDG_CONFIG_HOME':str(tmp_path/'cfg')}
+    command=[sys.executable,str(Path(__file__).parents[1]/'scripts/ops/settings.py'),'--repo',str(root),'exec','--',sys.executable,'-c',"import os,sys; assert os.environ['DEEPSEEK_API_KEY']=='secret-$(touch NEVER)-literal'; assert 'BASH_ENV' not in os.environ; print('CHILD-OK')"]
+    result=subprocess.run(command,env=env,capture_output=True,text=True)
+    assert result.returncode==0,result.stderr
+    assert result.stdout=='CHILD-OK\n' and 'secret-' not in result.stderr
+    assert not (root/'NEVER').exists()
+
+def test_shell_fallback_identity_is_complete_or_not_mixed(tmp_path):
+    s=module();env={'XDG_CONFIG_HOME':str(tmp_path/'cfg'),'DELIVERY_DATABASE_URL':'postgresql://shell','DELIVERY_SUPABASE_URL':'https://shell','DELIVERY_SUPABASE_ANON_KEY':'key'}
+    assert s.load(tmp_path,env)['DELIVERY_SUPABASE_ANON_KEY']=='key'
+    save(tmp_path/'.env','DELIVERY_DATABASE_URL=postgresql://file\n')
+    result=s.load(tmp_path,env)
+    assert 'DELIVERY_SUPABASE_URL' not in result and 'DELIVERY_SUPABASE_ANON_KEY' not in result
+
+def test_missing_secret_without_tty_never_uses_echoing_fallback(tmp_path,monkeypatch):
+    s=module();monkeypatch.setenv('PREVIEW_TTY',str(tmp_path/'absent'))
+    with pytest.raises(s.SettingsError,match='requires a terminal'):s.require({},['DEEPSEEK_API_KEY'])
+
+def test_delivery_container_file_excludes_providers_and_forced_flags(tmp_path,monkeypatch):
+    s=module();monkeypatch.setenv('DEEPSEEK_API_KEY','secret');monkeypatch.setenv('DELIVERY_OPENAI_API_KEY','secret');monkeypatch.setenv('DELIVERY_SUPABASE_ANON_KEY','public');monkeypatch.setenv('DELIVERY_CLOUD_EXECUTION','1')
+    path=tmp_path/'docker.env';s.delivery_env(path)
+    assert 'secret' not in path.read_text() and 'DELIVERY_CLOUD_EXECUTION=' not in path.read_text()
+    assert 'DELIVERY_SUPABASE_ANON_KEY=public' in path.read_text() and path.stat().st_mode & 0o077==0
+
+def test_owner_wrappers_use_one_loader_and_keep_active_session_check():
+    root=Path(__file__).parents[1]
+    for name in ('stop-all','task-reset'):
+        text=(root/'scripts/owner'/f'{name}.py').read_text()
+        assert 'settings.load(root,explicit=args.env_file)' in text and 'parse_stream' not in text
+        assert text.index('if not store.auth_session_active()')<text.index('settings.save_confirmed(')
+        assert "values.get('RESET_AUTH_SESSION_ID')" in text
+        assert "identity(args.owner or values.get('RESET_OWNER_ID')" in text
+
+
+def test_save_does_not_persist_test_db_settings(tmp_path):
+    s=module();path=tmp_path/'saved.env'
+    s.save_confirmed(path,{'DEEPSEEK_API_KEY':'key','DELIVERY_TEST_POSTGRES_DSN':'never'},confirm=lambda _:'yes')
+    assert 'DELIVERY_TEST_' not in path.read_text()

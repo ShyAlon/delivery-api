@@ -6,8 +6,6 @@ configuration names cross this boundary. No connection or mutation is made here.
 """
 import argparse
 import getpass
-import termios
-import contextlib
 import os
 from pathlib import Path
 import re
@@ -25,7 +23,7 @@ class SettingsError(ValueError):
     pass
 
 def allowed(name):
-    return name in EXACT or bool(re.fullmatch(r'DELIVERY_[A-Z0-9_]+',name))
+    return name in EXACT or bool(re.fullmatch(r'DELIVERY_[A-Z0-9_]+',name)) and not name.startswith('DELIVERY_TEST_')
 
 def read_file(path):
     path=Path(path)
@@ -115,10 +113,18 @@ def delivery_env(destination):
     with open(destination,'w',opener=lambda p,f:os.open(p,f,0o600)) as stream:
         os.chmod(destination,0o600)
         for name,value in sorted(os.environ.items()):
-            if not name.startswith('DELIVERY_') or name in excluded:continue
+            if not name.startswith('DELIVERY_') or name.startswith('DELIVERY_TEST_') or name in excluded:continue
             if re.search('DEEPSEEK|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|MISTRAL|GROQ|COHERE|XAI|PROVIDER|API_KEY|MODEL_KEY',name,re.I):continue
             if any(c in value for c in '\n\r\x00'):raise SettingsError('container setting must be one line: '+name)
             stream.write(name+'='+value+'\n')
+
+def apply_environment(root,env=None):
+    env=os.environ if env is None else env
+    values=load(root,env)
+    for name in list(env):
+        if allowed(name):env.pop(name)
+    env.update(values)
+    return values
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('mode',choices=['exec','delivery-env','provision']);p.add_argument('--repo',default=os.getcwd());p.add_argument('--require',default='');p.add_argument('--optional',default='');p.add_argument('--env-file');p.add_argument('command',nargs=argparse.REMAINDER);args=p.parse_args()

@@ -84,11 +84,6 @@ def main():
         print('Use the session corresponding to your current sign-in. Set RESET_AUTH_SESSION_ID in the same file if desired. The script verifies the owner/session is active. Do not copy a JWT, access token or password.')
     owner=identity(args.owner or values.get('RESET_OWNER_ID'),'Owner')
     session=identity(args.auth_session or values.get('RESET_AUTH_SESSION_ID'),'Active auth session')
-    values['RESET_OWNER_ID']=owner;values['RESET_AUTH_SESSION_ID']=session
-    if values!=before:
-        try:settings.save_confirmed(Path(args.env_file).expanduser() if args.env_file else settings.target_path(),{k:v for k,v in values.items() if before.get(k)!=v})
-        except settings.SettingsError as exc:fail(str(exc))
-
     os.chdir(root);sys.path.insert(0,str(root/'src'))
     try:
         import importlib.util
@@ -103,6 +98,10 @@ def main():
     print('Stop producers first. This script cannot Stop workers, prove thread exit, release money holds, change credits, or recover old checkpoints.')
     with tenant_context(TenantScope(owner,session)):
         if not store.auth_session_active():fail('owner/auth session is not active; no reset was run.')
+        values['RESET_OWNER_ID']=owner;values['RESET_AUTH_SESSION_ID']=session
+        if values!=before:
+            try:settings.save_confirmed(Path(args.env_file).expanduser() if args.env_file else settings.target_path(),{k:v for k,v in values.items() if before.get(k)!=v})
+            except settings.SettingsError as exc:fail(str(exc))
         print('\n=== DRY RUN: repository reset script, no deletion ===',flush=True)
         reset.main(['--owner',owner,'--auth-session',session])
         reviewed=reset.plan(store)
