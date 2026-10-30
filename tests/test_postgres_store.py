@@ -823,7 +823,8 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         from delivery_api.pg_execution_fence import PostgresExecutionFence
         from spec_generator.cooperative_run import cli_execution
         if not native_pg:
-            shutil.rmtree(dest)  # Only test-built data; runtime never deletes/retries partial stage.
+            if dest.exists():shutil.rmtree(dest)  # Only test-built data; runtime never deletes/retries partial stage.
+            dest.parent.parent.mkdir(parents=True,exist_ok=True)
             (dest.parent.parent/'proposal.json').write_bytes(json.dumps(saved['proposal'],sort_keys=True,indent=2).encode())
         with cli_execution(PostgresExecutionFence(store,cap,root=root),None):
             staged=store.prepare_revision_staging(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],artifacts_base=tmp_path)

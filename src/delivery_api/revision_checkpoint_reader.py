@@ -1,9 +1,5 @@
 """Owner-scoped PG source review. A path is scratch context, never authority."""
 def read_source_checkpoint(store,capability,path,*,session_id,expected_checkpoint_id,expected_review_phase=None):
-    if not hasattr(store,'_postgres'):
-        # Temporary legacy test/standalone branch; retired with file runtime.
-        from spec_generator.revision_source import read_closed_checkpoint
-        return read_closed_checkpoint(path,session_id=session_id,expected_checkpoint_id=expected_checkpoint_id,expected_review_phase=expected_review_phase)
     from .generator_checkpoint import GeneratorCheckpoint
     if session_id!=capability.session_id:raise ValueError('source review execution identity differs')
     if expected_review_phase is not None and expected_review_phase not in ('srs','architecture'):raise ValueError('implemented staged review phase required')
