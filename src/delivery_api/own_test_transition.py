@@ -26,12 +26,14 @@ def transition(conn,email,*,apply=False):
         raise AdmissionDenied('owner attempts must be reconciled before transition')
     if conn.execute("SELECT 1 FROM worker_jobs WHERE owner_id=%s AND state IN ('pending','running') LIMIT 1",(owner,)).fetchone():
         raise AdmissionDenied('stop and reconcile owner work before transition')
+    if conn.execute("SELECT 1 FROM retail_compute_segments WHERE owner_id=%s AND state IN ('pending','unresolved') LIMIT 1",(owner,)).fetchone():
+        raise AdmissionDenied('owner compute accounting must be reconciled before transition')
     # Do not erase history or guess the unit scale of legacy charges.
     if conn.execute("SELECT 1 FROM provider_attempts WHERE owner_id=%s AND state='settled' AND quote->>'provider'='deepseek' AND (settled_at IS NULL OR settled_at>extract(epoch FROM clock_timestamp()) OR (settled_at>extract(epoch FROM clock_timestamp())-86400 AND (expense_actual IS NULL OR quote->>'expense_units_per_usd' IS DISTINCT FROM %s))) LIMIT 1",(owner,str(SCALE))).fetchone():
         raise AdmissionDenied('recent provider expense history needs explicit scale reconciliation')
     result={'owner':str(owner),'old_expense_limit':old['expense_limit'],'new_expense_limit':None,
         'profile':'own-test $2 confirmed DeepSeek expense / rolling 24h','units_per_usd':SCALE,'already_applied':done}
     if apply and not done:
-        conn.execute('INSERT INTO own_test_expense_profiles VALUES(%s,%s,%s,%s)',(owner,'own-test-2usd-rolling24h-v1',2*SCALE,SCALE))
+        conn.execute('INSERT INTO own_test_expense_profiles VALUES(%s,%s,%s,%s) ON CONFLICT(owner_id) DO NOTHING',(owner,'own-test-2usd-rolling24h-v1',2*SCALE,SCALE))
         conn.execute('UPDATE admission_limits SET expense_limit=NULL,config_version=%s WHERE owner_id=%s',('own-test-2usd-rolling24h-v1',owner))
     return result
