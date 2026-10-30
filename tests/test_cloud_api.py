@@ -749,7 +749,11 @@ def test_owner_classifications_expose_differences_without_cross_tenant_access(cl
     record={'slot':'coverage','timestamp':'test','input':{'state':f'Question: {q}\nAnswer: {a}'},
             'baseline':{'status':'ok','verdict':{'relevance':'relevant'}},
             'jev':{'status':'ok','verdict':{'relevance':'thin'}}}
-    (folder/'categorization-shadow.jsonl').write_text(json.dumps(record)+'\n')
+    from test_http_cutover import _PGUsage
+    with tenant_context(A):
+        _PGUsage(store,tid,'interview/categorization-shadow.jsonl').write_text(json.dumps(record)+'\n')
+    # A conflicting local copy must never win over the owned PG document.
+    (folder/'categorization-shadow.jsonl').write_text('untrusted local residue\n')
     url=f'/api/tasks/{tid}/classifications'
     own=client.get(url,headers=header('a'))
     assert own.status_code==200,own.text
@@ -758,3 +762,74 @@ def test_owner_classifications_expose_differences_without_cross_tenant_access(cl
     assert answer['coverage']['jev']=={'relevance':'thin'}
     assert client.get(url,headers=header('b')).status_code in (403,404)
     assert client.get(url).status_code==401
+
+
+def test_pg_classifications_missing_or_corrupt_never_fall_back_to_local_or_leak(cloud,monkeypatch):
+    client,store,root=cloud
+    from test_http_cutover import _PGUsage
+    from delivery_api.generator_documents import GeneratorDocuments
+    sid=str(uuid.uuid4())
+    with tenant_context(A):
+        tid=store.create_task('Bound classifications')['task_id'];store.set_engine_session(tid,sid)
+    folder=session_root(root,A,sid)/'interview';folder.mkdir(parents=True)
+    (folder/'categorization-shadow.jsonl').write_text('{"private":"local residue"}\n')
+    url=f'/api/tasks/{tid}/classifications'
+    got=client.get(url,headers=header('a'))
+    assert got.status_code==200 and got.json()['answers']=={} and got.json()['reason']=='no shadow evidence'
+    with tenant_context(A):_PGUsage(store,tid,'interview/categorization-shadow.jsonl').write_text('private malformed bytes\n')
+    got=client.get(url,headers=header('a'))
+    assert got.status_code==503 and 'private' not in got.text
+    def broken(*a,**kw):raise ConnectionError('postgresql://private-password@host/db')
+    monkeypatch.setattr(GeneratorDocuments,'read',broken)
+    got=client.get(url,headers=header('a'))
+    assert got.status_code==503 and 'private-password' not in got.text
+    assert client.get(url,headers=header('b')).status_code in (403,404)
+
+
+@pytest.mark.parametrize('record',[
+    {'slot':'coverage','input':[]},
+    {'slot':'coverage','input':{'state':'x'},'baseline':'private'},
+    {'slot':'coverage','input':{'state':'x'},'baseline':{'verdict':'private'}},
+    {'slot':{},'input':{'state':'x'}},
+    {'slot':'coverage','input':{'state':'x'},'jev':{'status':{'private':'bad'}}},
+    {'slot':'coverage','input':{'state':'x'},'jev':{'verdict':{'private':float('nan')}}},
+])
+def test_pg_classification_malformed_nested_records_are_unavailable(cloud,record):
+    client,store,root=cloud
+    from test_http_cutover import _PGUsage
+    with tenant_context(A):
+        tid=store.create_task('Malformed shadow')['task_id'];store.set_engine_session(tid,str(uuid.uuid4()))
+        _PGUsage(store,tid,'interview/categorization-shadow.jsonl').write_text(json.dumps(record)+'\n')
+    got=client.get(f'/api/tasks/{tid}/classifications',headers=header('a'))
+    assert got.status_code==503 and 'unreadable' in got.text
+    assert 'private' not in got.text
+
+
+def test_pg_classifications_reject_response_amplification(cloud,monkeypatch):
+    client,store,root=cloud
+    import importlib
+    from test_http_cutover import _PGUsage
+    turns=[{'q':f'question-{i}', 'a':f'answer-{i}'} for i in range(10)]
+    monkeypatch.setattr(importlib.import_module('delivery_api.app'),'_qa_turns',lambda events:turns)
+    record={'slot':'coverage','input':{'state':'\n'.join(t['q']+'\n'+t['a'] for t in turns)},
+        'jev':{'status':'ok','verdict':{'reason':'x'*(1024*1024)}}}
+    with tenant_context(A):
+        tid=store.create_task('Bounded projection')['task_id'];store.set_engine_session(tid,str(uuid.uuid4()))
+        _PGUsage(store,tid,'interview/categorization-shadow.jsonl').write_text(json.dumps(record)+'\n')
+    got=client.get(f'/api/tasks/{tid}/classifications',headers=header('a'))
+    assert got.status_code==503
+    assert len(got.content)<1024
+
+
+def test_pg_classifications_reject_excessive_join_work(cloud,monkeypatch):
+    client,store,root=cloud
+    import importlib
+    from test_http_cutover import _PGUsage
+    monkeypatch.setattr(importlib.import_module('delivery_api.app'),'_qa_turns',lambda events:[{'q':'q','a':'a'}]*10000)
+    record={'slot':'coverage','input':{'state':'x'*7000}}
+    with tenant_context(A):
+        tid=store.create_task('Bounded join')['task_id'];store.set_engine_session(tid,str(uuid.uuid4()))
+        _PGUsage(store,tid,'interview/categorization-shadow.jsonl').write_text(json.dumps(record)+'\n')
+    got=client.get(f'/api/tasks/{tid}/classifications',headers=header('a'))
+    assert got.status_code==503
+    assert 'read limits' in got.text

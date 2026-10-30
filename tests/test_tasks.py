@@ -1344,7 +1344,9 @@ def test_task_classifications_join_shadow_to_answers(tmp_path,pg_scoped_workspac
         rec2 = {"slot": "intent", "timestamp": "t", "input": {"state": f"Question: {q}\nFounder answer: {a}"},
                 "baseline": {"status": "ok", "verdict": {"intent": "answer"}},
                 "jev": {"status": "ok", "verdict": {"intent": "answer"}}}
-        (root / "categorization-shadow.jsonl").write_text(_json.dumps(rec) + "\n" + _json.dumps(rec2) + "\n")
+        from test_http_cutover import _PGUsage
+        _PGUsage(app_store,task_id,'interview/categorization-shadow.jsonl').write_text(_json.dumps(rec) + "\n" + _json.dumps(rec2) + "\n")
+        (root / "categorization-shadow.jsonl").write_text('local residue must be ignored\n')
 
         data = client.get(f"/api/tasks/{task_id}/classifications").json()
         assert data["session"] == session and len(data["answers"]) == 1
