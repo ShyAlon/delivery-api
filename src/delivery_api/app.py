@@ -544,8 +544,13 @@ async def _request_log(request, call_next):
     ref=request.state.ref
     stats=request_stats.get()
     try:response=await call_next(request)
-    except Exception:
+    except Exception as error:
         log.exception("request failed ref=%s method=%s path=%s",ref,request.method,request.url.path)
+        activity("http.request.failed","Request failed before response",ref=ref,method=request.method,
+                 path=request.url.path,error_class=type(error).__name__,
+                 duration_ms=int((time.monotonic()-started)*1000),db_queries=stats.queries,
+                 db_ms=int(stats.db_seconds*1000),checkout_ms=int(stats.checkout_seconds*1000),
+                 auth_ms=int(stats.auth_seconds*1000),held_ms=int(stats.tx_held_seconds*1000))
         raise
     who = auth.actor(request).label
     duration_ms=int((time.monotonic()-started)*1000)

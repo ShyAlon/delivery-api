@@ -85,11 +85,11 @@ class HttpEngineClient(EngineClient):
             if scope.session_id:headers['X-Requi-Session-Id']=scope.session_id
             kwargs['headers']={**kwargs.get('headers',{}),**headers}
         import time as _time
-        from .postgres_scope import note_engine
+        from .postgres_scope import note_engine,release_read_before_engine
+        release_read_before_engine()
         started=_time.monotonic()
         try:
-            # Engine time inside a request is counted on the request: a slow engine is the
-            # difference between duration_ms and db_ms, and it must be visible per request.
+            # Engine and DB totals can overlap across concurrent request work.
             return self._http.request(method,path,**kwargs)
         except httpx.TransportError as exc:raise EngineUnreachableError(self._http.base_url,exc) from exc
         finally:note_engine(_time.monotonic()-started)

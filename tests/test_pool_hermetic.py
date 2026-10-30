@@ -140,7 +140,7 @@ def test_waiting_too_long_fails_with_a_clear_message(world,monkeypatch):
     monkeypatch.setattr(postgres_scope,'POOL_WAIT_SECONDS',0.2)
     p=pool(world,max_size=1)
     held,_=p._checkout()
-    with pytest.raises(TimeoutError,match='connection limit'):p._checkout()
+    with pytest.raises(TimeoutError,match='checkout unavailable after 0.2 s'):p._checkout()
     p._release(held)
     c,reused=p._checkout()
     assert c is held and reused

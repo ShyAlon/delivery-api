@@ -15,8 +15,47 @@ for the whole process instead of per-actor arithmetic.
 """
 import threading
 import os
+import time
+import contextvars
+from psycopg_pool import PoolTimeout,ConnectionPool
 
-from psycopg_pool import ConnectionPool
+borrower_operation=contextvars.ContextVar("db_borrower_operation",default="engine-or-background")
+
+
+class ObservedPool(ConnectionPool):
+    """Public checkout hooks cover both engine and delivery without proxy sockets."""
+    def __init__(self,*args,**kwargs):
+        self._borrower_lock=threading.Lock();self._borrowers={}
+        super().__init__(*args,**kwargs)
+    def getconn(self,timeout=None):
+        started=time.monotonic()
+        try:conn=super().getconn(timeout=timeout)
+        except PoolTimeout:
+            self._timeout_evidence(time.monotonic()-started)
+            raise
+        with self._borrower_lock:self._borrowers[id(conn)]=(time.monotonic(),borrower_operation.get())
+        return conn
+    def putconn(self,conn):
+        # Remove BEFORE handing to a waiting borrower: otherwise its new entry
+        # can be erased by this borrower's finally block after handoff.
+        with self._borrower_lock:self._borrowers.pop(id(conn),None)
+        return super().putconn(conn)
+    def _timeout_evidence(self,elapsed):
+        # Diagnostic failures must not replace the original checkout exception.
+        try:
+            from .observability import event
+            now=time.monotonic()
+            with self._borrower_lock:rows=list(self._borrowers.values())
+            rows=sorted(rows,key=lambda row:row[0])
+            allowed=("pool_min","pool_max","pool_size","pool_available","requests_waiting",
+                     "requests_num","requests_queued","requests_wait_ms","requests_errors",
+                     "connections_num","connections_errors","connections_lost","connections_ms")
+            stats=self.get_stats()
+            event("db.pool.timeout","Database checkout timed out",elapsed_ms=int(elapsed*1000),
+                  **{key:stats[key] for key in allowed if key in stats},borrowed=len(rows),
+                  borrowers=[dict(operation=op,age_ms=int((now-began)*1000)) for began,op in rows[:10]])
+        except Exception:pass
+
 
 # One number: the entire process - delivery traffic AND the in-process engine -
 # shares this cap, below the Supabase pooler's 15-client limit (session mode).
@@ -44,7 +83,7 @@ def pool_for(dsn: str) -> ConnectionPool:
         if pool is None:
             import psycopg
             import psycopg.rows
-            pool = ConnectionPool(
+            pool = ObservedPool(
                 dsn, min_size=0, max_size=PROCESS_POOL_MAX, max_idle=POOL_IDLE_SECONDS,
                 timeout=POOL_WAIT_SECONDS, open=False, name='delivery-process',
                 configure=_configure,
