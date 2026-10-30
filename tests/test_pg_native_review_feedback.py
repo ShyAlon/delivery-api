@@ -5,7 +5,7 @@ from delivery_api.tenancy import tenant_context
 
 def test_native_review_draft_feedback_boundary(pg_workspace_factory,monkeypatch, pg_bridge_poison):
     _Connection = pg_bridge_poison
-    from delivery_api.store import SQLiteStore
+    from pg_storage_guard import assert_pg_storage_only
     with pg_workspace_factory() as workspace,tenant_context(workspace.scope):
         store=workspace.store
         tid=store.create_task('Native reviews')['task_id']
@@ -19,10 +19,7 @@ def test_native_review_draft_feedback_boundary(pg_workspace_factory,monkeypatch,
         with monkeypatch.context() as patch:
             # Keep real outer operation guard SQL, which is a separate family.
             patch.setattr(_Connection,'execute',reject_family)
-            for name in ('add_review_comment','review_comments','retain_decision_review','decision_review',
-                         'save_decision_draft','decision_draft','list_feedback','upsert_feedback',
-                         '_feedback_row','update_feedback','delete_feedback'):
-                patch.setattr(SQLiteStore,name,forbidden)
+            assert_pg_storage_only(('add_review_comment', 'review_comments', 'retain_decision_review', 'decision_review', 'save_decision_draft', 'decision_draft', 'list_feedback', 'upsert_feedback', '_feedback_row', 'update_feedback', 'delete_feedback'))
             cid=store.add_review_comment(tid,'gate-intent','r1','actor','Keep')
             assert store.review_comments(tid,'gate-intent','r1')[0]['id']==cid
             payload={'choice':'keep'}

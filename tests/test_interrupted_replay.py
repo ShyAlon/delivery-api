@@ -1,6 +1,6 @@
 """A crash cannot leave an in-memory recorded replay blocking deletion forever."""
 from delivery_api.simulation import Simulation
-from delivery_api.store import SQLiteStore
+from pg_storage_guard import assert_pg_storage_only
 from delivery_api.postgres_store import PostgresStore
 
 
@@ -52,8 +52,7 @@ def test_replay_fixture_uses_restricted_pg(pg_scoped_workspace):
     import pytest
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(pg_scoped_workspace.store,PostgresStore)
-    with pytest.raises(AssertionError,match='SQLite forbidden'):
-        SQLiteStore(':memory:')
+    assert_pg_storage_only()
 
 
 def test_restart_reconciliation_cannot_stop_another_owners_replay(pg_scoped_workspace,pg_workspace_factory,tmp_path):

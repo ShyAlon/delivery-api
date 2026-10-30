@@ -363,7 +363,8 @@ from delivery_api.postgres_store import PostgresStore
 assert config.DATABASE_URL.startswith(("postgres://", "postgresql://"))
 assert config.CLOUD_TENANTS is True
 assert isinstance(app.store, PostgresStore)
-assert not config.DEFAULT_DB_PATH.exists()
+assert not hasattr(config,"DEFAULT_DB_PATH")
+assert not (config.default_data_dir()/"delivery.db").exists()
 print(json.dumps({"postgres": True, "local_database": False}))
 ''')
     assert result.returncode == 0, result.stderr

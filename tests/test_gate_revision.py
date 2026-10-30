@@ -1,5 +1,5 @@
 import pytest
-from delivery_api.store import SQLiteStore
+from pg_storage_guard import assert_pg_storage_only
 from delivery_api.gate_revision import save_closed_revision
 
 
@@ -170,8 +170,7 @@ def test_closed_review_fixture_is_restricted_pg(tmp_path,pg_scoped_workspace):
     from delivery_api.postgres_store import PostgresStore
     s,tid,rev,draft,evidence,preflight=_closed_preflight_fixture(tmp_path,pg_scoped_workspace)
     assert isinstance(s,PostgresStore)
-    with pytest.raises(AssertionError,match='SQLite forbidden'):
-        SQLiteStore(':memory:')
+    assert_pg_storage_only()
     with s._postgres.transaction() as connection:
         assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
 

@@ -18,7 +18,6 @@ def default_data_dir() -> Path:
         return Path(os.environ["XDG_DATA_HOME"]).expanduser() / "requi-re"
     return Path.home() / ".local" / "share" / "requi-re"
 
-DEFAULT_DB_PATH = default_data_dir() / "delivery.db"
 # Import validates configuration only, never creates directories or connects.
 DATABASE_URL = os.environ.get("DELIVERY_DATABASE_URL", "").strip()
 if not DATABASE_URL.startswith(("postgres://", "postgresql://")):
@@ -36,16 +35,6 @@ if CLOUD_TENANTS and os.environ.get("TURSO_DATABASE_URL"):
 SUPABASE_ADMIN_SUBJECTS = {x.strip() for x in os.environ.get("DELIVERY_SUPABASE_ADMIN_SUBJECTS", "").split(",") if x.strip()}
 # The operator, held in code. Admin when the signed login token carries this email (sign-in refuses unconfirmed emails).
 OPERATOR_EMAIL = "shy.alon@gmail.com"
-
-def local_database_path() -> Path:
-    if DATABASE_URL.startswith("sqlite:///"): return Path(DATABASE_URL.removeprefix("sqlite:///"))
-    if "://" not in DATABASE_URL:return Path(DATABASE_URL)
-    return DEFAULT_DB_PATH
-TURSO_DATABASE_URL = os.environ.get("TURSO_DATABASE_URL", "").strip()
-TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
-TURSO_SYNC_INTERVAL = int(os.environ.get("TURSO_SYNC_INTERVAL", "60"))
-if bool(TURSO_DATABASE_URL) != bool(TURSO_AUTH_TOKEN):
-    raise RuntimeError("Turso configuration is incomplete: set both TURSO_DATABASE_URL and TURSO_AUTH_TOKEN, or neither.")
 
 SESSION_SECRET = os.environ.get("DELIVERY_SESSION_SECRET", "")
 BASIC_AUTH_ENABLED = os.environ.get("DELIVERY_BASIC_AUTH_ENABLED", "0") != "0"

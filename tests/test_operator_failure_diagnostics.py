@@ -63,8 +63,7 @@ def test_bounded_page(store):
 def test_diagnostics_fixture_uses_restricted_pg(store):
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(store,PostgresStore)
-    from delivery_api.store import SQLiteStore
-    with pytest.raises(AssertionError,match='SQLite forbidden'):
-        SQLiteStore(':memory:')
+    from pg_storage_guard import assert_pg_storage_only
+    assert_pg_storage_only()
     with store._postgres.transaction() as connection:
         assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'

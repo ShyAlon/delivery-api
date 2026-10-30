@@ -16,11 +16,8 @@ def test_native_snapshot_rename_and_artifact_reads_do_not_use_bridge(pg_workspac
                 raise AssertionError('task family still uses SQLite SQL bridge')
             return original(self,sql,parameters)
         monkeypatch.setattr(_Connection,'execute',reject_legacy)
-        from delivery_api.store import SQLiteStore
-        def parent_forbidden(*args, **kwargs):
-            raise AssertionError('PG task family still delegates to SQLite parent')
-        for name in ('task_snapshot','rename_task','task_artifacts','_task_record','_gate_record','_event_record'):
-            monkeypatch.setattr(SQLiteStore,name,parent_forbidden)
+        from pg_storage_guard import assert_pg_storage_only
+        assert_pg_storage_only(('task_snapshot', 'rename_task', 'task_artifacts', '_task_record', '_gate_record', '_event_record'))
         snapshot = store.task_snapshot(first['task_id'])
         assert snapshot['task']['title'] == 'Native task'
         assert snapshot['events'][-1]['payload'] == {'kept':True}

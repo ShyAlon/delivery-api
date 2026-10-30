@@ -196,9 +196,8 @@ console.log('ok');
 
 def test_stream_fixture_is_restricted_pg(pg_scoped_workspace):
     from delivery_api.postgres_store import PostgresStore
-    from delivery_api.store import SQLiteStore
+    from pg_storage_guard import assert_pg_storage_only
     assert isinstance(pg_scoped_workspace.store,PostgresStore)
-    with pytest.raises(AssertionError,match='SQLite forbidden'):
-        SQLiteStore(':memory:')
+    assert_pg_storage_only()
     with pg_scoped_workspace.store._postgres.transaction() as connection:
         assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'

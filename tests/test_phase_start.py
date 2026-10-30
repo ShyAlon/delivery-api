@@ -206,10 +206,9 @@ def test_unknown_or_malformed_pins_are_denied(monkeypatch):
 
 def test_finished_fixture_uses_restricted_pg_and_forbids_sqlite(finished):
     from delivery_api.postgres_store import PostgresStore
-    from delivery_api.store import SQLiteStore
+    from pg_storage_guard import assert_pg_storage_only
     store,tid=finished
     assert isinstance(store,PostgresStore)
     with store._postgres.transaction() as connection:
         assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
-    with pytest.raises(AssertionError,match='SQLite forbidden'):
-        SQLiteStore(':memory:')
+    assert_pg_storage_only()

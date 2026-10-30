@@ -36,11 +36,10 @@ def pg_runtime_process(pg_runtime_environment):
         # config validation and middleware construction real. No network auth calls.
         prefix='''
 import sqlite3
-from delivery_api.store import SQLiteStore,TursoReplicaStore
+from delivery_api import store
+assert not hasattr(store,"SQLiteStore") and not hasattr(store,"TursoReplicaStore")
 def forbidden(*args,**kwargs):
     raise AssertionError('PG runtime attempted a legacy SQLite/Turso open')
-SQLiteStore.__init__=forbidden
-TursoReplicaStore.__init__=forbidden
 sqlite3.connect=forbidden
 '''
         return subprocess.run([sys.executable,'-c',prefix+code],env=pg_runtime_environment(),

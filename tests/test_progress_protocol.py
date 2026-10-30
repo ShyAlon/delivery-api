@@ -11,14 +11,12 @@ from delivery_api.control_snapshot import project
 def progress_store(pg_workspace_factory,monkeypatch):
     from delivery_api import app as module
     from delivery_api.tenancy import tenant_context
-    from delivery_api.store import SQLiteStore
+    from pg_storage_guard import assert_pg_storage_only
     with pg_workspace_factory() as workspace:
         monkeypatch.setattr(module,'store',workspace.store)
         monkeypatch.setitem(module.app.state._state,'store',workspace.store)
         monkeypatch.setattr(module.orchestrator,'store',workspace.store)
-        def no_sqlite(*args,**kwargs):
-            raise AssertionError('SQLite forbidden')
-        monkeypatch.setattr(SQLiteStore,'__init__',no_sqlite)
+        assert_pg_storage_only()
         with tenant_context(workspace.scope):
             workspace.store._fixture_dsn=workspace.dsn
             yield workspace.store
@@ -167,9 +165,8 @@ def test_progress_page_timing_measures_fetch_ingest_and_source_age(tmp_path,monk
 
 def test_progress_fixture_is_restricted_postgres(progress_store):
     from delivery_api.postgres_store import PostgresStore
-    from delivery_api.store import SQLiteStore
+    from pg_storage_guard import assert_pg_storage_only
     assert isinstance(progress_store,PostgresStore)
-    with pytest.raises(AssertionError,match='SQLite forbidden'):
-        SQLiteStore(':memory:')
+    assert_pg_storage_only()
     with progress_store._postgres.transaction() as connection:
         assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'

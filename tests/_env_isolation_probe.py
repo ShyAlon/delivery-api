@@ -2,9 +2,10 @@
 
 def test_probe_turso_is_off_and_database_is_scratch():
     from delivery_api import config
-    assert config.TURSO_DATABASE_URL == "" and config.TURSO_AUTH_TOKEN == ""
-    assert "delivery-api-tests-" in str(config.local_database_path())
-    assert "delivery-api-tests-" in str(config.DEFAULT_DB_PATH)
+    assert not hasattr(config,"TURSO_DATABASE_URL") and not hasattr(config,"TURSO_AUTH_TOKEN")
+    assert not hasattr(config,"local_database_path") and not hasattr(config,"DEFAULT_DB_PATH")
+    assert "delivery-api-tests-" in str(config.default_data_dir())
+    assert not (config.default_data_dir()/"delivery.db").exists()
 
     # The active profile must point only at the newly owned disposable DB.
     assert config.CLOUD_TENANTS is True

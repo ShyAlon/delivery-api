@@ -97,9 +97,8 @@ def test_simulation_fixture_uses_pg_for_http_and_replay(simulation_workspace):
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(module.store,PostgresStore)
     assert module.simulation.store is module.store
-    from delivery_api.store import SQLiteStore
-    with pytest.raises(AssertionError,match='SQLite forbidden'):
-        SQLiteStore(':memory:')
+    from pg_storage_guard import assert_pg_storage_only
+    assert_pg_storage_only()
     with module.store._postgres.transaction() as connection:
         assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
 

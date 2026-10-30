@@ -63,20 +63,12 @@ def _no_compute_segments_left_for_the_test_owners():
 from pg_workspace import pg_scoped_workspace, pg_workspace_factory, pg_task_app  # noqa: E402,F401
 from pg_workspace import pg_browser  # noqa: E402,F401
 
-@pytest.fixture(params=['sqlite','postgres'])
-def evidence_store(request, tmp_path, pg_workspace_factory):
-    """One behavioral contract, SQLite reference and the restricted PG path."""
-    if request.param == 'sqlite':
-        from delivery_api.store import SQLiteStore
-        store = SQLiteStore(str(tmp_path/'evidence.db'))
-        try:
-            yield store
-        finally:
-            store._db.close()
-    else:
-        from delivery_api.tenancy import tenant_context
-        with pg_workspace_factory() as workspace, tenant_context(workspace.scope):
-            yield workspace.store
+@pytest.fixture
+def evidence_store(pg_workspace_factory):
+    """The retained behavioral contract uses restricted PG storage only."""
+    from delivery_api.tenancy import tenant_context
+    with pg_workspace_factory() as workspace,tenant_context(workspace.scope):
+        yield workspace.store
 
 from pg_bridge_guard import pg_bridge_poison  # noqa: E402,F401
 from pg_runtime import pg_runtime_environment, pg_runtime_process  # noqa: E402,F401

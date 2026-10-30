@@ -85,7 +85,7 @@ def _runtime_version() -> dict:
 RUNTIME_VERSION=_runtime_version()
 
 WEB_DIR = Path(__file__).parent / "web"
-store = (__import__('delivery_api.store',fromlist=['TursoReplicaStore']).TursoReplicaStore(str(config.local_database_path()),config.TURSO_DATABASE_URL,config.TURSO_AUTH_TOKEN,config.TURSO_SYNC_INTERVAL) if config.TURSO_DATABASE_URL else create_store(config.DATABASE_URL))
+store = create_store(config.DATABASE_URL)
 jobs = JobQueue(store)
 runner = ProcessRunner(store)
 orchestrator = PhaseOrchestrator(store,runner)

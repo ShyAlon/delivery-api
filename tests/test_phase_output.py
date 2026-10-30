@@ -117,9 +117,8 @@ def _case_invalid_current_artifact_is_unavailable_not_previous(tmp_path,monkeypa
 def test_output_fixture_uses_restricted_pg(output_workspace):
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(module.store,PostgresStore)
-    from delivery_api.store import SQLiteStore
-    with pytest.raises(AssertionError,match='SQLite forbidden'):
-        SQLiteStore(':memory:')
+    from pg_storage_guard import assert_pg_storage_only
+    assert_pg_storage_only()
     with module.store._postgres.transaction() as connection:
         assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
 
