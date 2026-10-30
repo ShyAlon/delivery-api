@@ -426,6 +426,9 @@ async def lifespan(application:FastAPI):
     global _streams_closed_on_signal
     _streams_closed_on_signal=0
     config.validate_auth_config()
+    from .operator_startup import install as install_operator_reads
+    install_operator_reads(application,os.environ,dsn=config.DATABASE_URL,enabled=config.CLOUD_TENANTS)
+    print('Operator reads: '+application.state.operator_read_status,file=sys.stderr)
     from .process_logs import selected as selected_process_logs
     selected_process_logs()  # Ephemeral process logs; no PG writer.
     from .run_metrics import selected_metrics
@@ -3679,7 +3682,7 @@ def _operator_reader():
     reader=getattr(app.state,'operator_read_store',None)
     if not config.CLOUD_TENANTS:raise HTTPException(404,'Operator resource not found')
     if reader is None:
-        raise HTTPException(503,'Verified sole-operator read registry is not configured')
+        raise HTTPException(503,'Verified sole-operator read registry is not configured. Set REQUI_OPERATOR_SUBJECT, REQUI_OPERATOR_REGISTRY_VERSION and REQUI_OPERATOR_CAPABILITIES in protected server settings to match the reviewed database registry; restart is required. No permission is inferred from admin status.')
     return reader
 
 
