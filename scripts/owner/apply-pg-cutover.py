@@ -72,6 +72,34 @@ def report_sources(s,root,explicit):
         print(s.source_report(root,name,explicit=explicit))
 
 
+def parse_database_url(value,label):
+    # Validate RAW authority before libpq/url parsing. A raw password delimiter
+    # can otherwise be reclassified as hostname/path and leak in diagnostics.
+    import re
+    from urllib.parse import urlsplit,parse_qsl
+    from psycopg.conninfo import conninfo_to_dict
+    message=label+' database URL has invalid userinfo. Password special characters must be URL-encoded (@ -> %40, / -> %2F, ? -> %3F, # -> %23, % -> %25). Encode only the password locally, not the whole URL. No URL fragments printed'
+    try:
+        if not value.startswith(('postgresql://','postgres://')):raise ValueError()
+        parsed=urlsplit(value)
+        if parsed.fragment or parsed.netloc.count('@')!=1:raise ValueError()
+        userinfo,hostpart=parsed.netloc.rsplit('@',1)
+        if ':' not in userinfo:raise ValueError()
+        username,password=userinfo.split(':',1)
+        if not username or not password:raise ValueError()
+        # Only RFC unreserved bytes or complete percent escapes are accepted in
+        # userinfo. This deliberately rejects ambiguous raw reserved characters.
+        safe=r'(?:[A-Za-z0-9_.~-]|%[0-9A-Fa-f]{2})+'
+        if not re.fullmatch(safe,username) or not re.fullmatch(safe,password):raise ValueError()
+        if not parsed.hostname or not re.fullmatch(r'[A-Za-z0-9.-]+',parsed.hostname):raise ValueError()
+        if not re.fullmatch(r'/[A-Za-z0-9_.~-]+',parsed.path):raise ValueError()
+        if any(key.lower() in ('host','hostaddr','port','dbname','user','password') for key,_ in parse_qsl(parsed.query)):raise ValueError()
+        result=conninfo_to_dict(value)
+        if '@' in result.get('host','') or any(c in result.get('host','') for c in '/?#'):raise ValueError()
+        return result
+    except Exception:raise ValueError(message) from None
+
+
 def check_targets(admin,app):
     differences=[]
     for key,label,default in (('host','host',''),('port','port','5432'),('dbname','database','')):
@@ -94,6 +122,7 @@ def main():
     report_sources(s,root,args.env_file)
     s.require(values,['DELIVERY_DATABASE_URL'])
     if args.identify:
+        parse_database_url(values['DELIVERY_DATABASE_URL'],'app')
         import psycopg
         with psycopg.connect(values['DELIVERY_DATABASE_URL'],connect_timeout=10,autocommit=True) as conn:
             conn.execute('SET default_transaction_read_only=on')
@@ -103,7 +132,7 @@ def main():
     s.require(values,['REQUI_ADMIN_DATABASE_URL'])
     import psycopg
     from psycopg.conninfo import conninfo_to_dict
-    admin=conninfo_to_dict(values['REQUI_ADMIN_DATABASE_URL']);app=conninfo_to_dict(values['DELIVERY_DATABASE_URL'])
+    admin=parse_database_url(values['REQUI_ADMIN_DATABASE_URL'],'admin');app=parse_database_url(values['DELIVERY_DATABASE_URL'],'app')
     # Prove the actual app role through its own connection, including pooler
     # usernames such as role.project. Never parse/guess the grant recipient.
     check_targets(admin,app)
