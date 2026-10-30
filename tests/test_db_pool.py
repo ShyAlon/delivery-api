@@ -20,6 +20,8 @@ def test_pool_for_memoizes_one_pool_per_dsn(monkeypatch):
         def __init__(self, dsn, **kwargs):
             self.dsn, self.kwargs, self.closed = dsn, kwargs, False
             made.append(self)
+        @staticmethod
+        def check_connection(connection):pass
         def open(self): pass
         def close(self): self.closed = True
     monkeypatch.setattr(db_pool, 'ConnectionPool', FakePool)
@@ -27,6 +29,7 @@ def test_pool_for_memoizes_one_pool_per_dsn(monkeypatch):
     a2 = db_pool.pool_for('postgresql://a')
     b = db_pool.pool_for('postgresql://b')
     assert a1 is a2 and a1 is not b and len(made) == 2
+    assert a1.kwargs["check"] is FakePool.check_connection
     db_pool.close_all()
     assert a1.closed and b.closed
 

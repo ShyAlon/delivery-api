@@ -48,6 +48,11 @@ def pool_for(dsn: str) -> ConnectionPool:
                 dsn, min_size=0, max_size=PROCESS_POOL_MAX, max_idle=POOL_IDLE_SECONDS,
                 timeout=POOL_WAIT_SECONDS, open=False, name='delivery-process',
                 configure=_configure,
+                # A pool-level check covers EVERY borrower, including the engine
+                # before delivery has consumed its diagnostic "new" marker.
+                # Only an empty protocol query runs here, before any caller SQL;
+                # psycopg_pool discards failures within the checkout timeout.
+                check=ConnectionPool.check_connection,
                 kwargs={'row_factory': psycopg.rows.dict_row, 'autocommit': False,
                         'options': '-c client_encoding=UTF8', 'prepare_threshold': None,
                         'keepalives': 1, 'keepalives_idle': 30, 'keepalives_interval': 10,
