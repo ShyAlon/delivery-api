@@ -59,14 +59,40 @@ def apply(conn,reviewed,readiness,root,app_login,confirm):
     print('Restricted SET memberships granted to',app_login)
     print('No Supabase migration ledger was fabricated or updated. Rerun dry inventory and preview schema check.');return 0
 
+def identity(conn):
+    return tuple(conn.execute('SELECT session_user,current_user').fetchone())
+
+def check_admin(conn):
+    create_role,create_schema=conn.execute("SELECT (rolsuper OR rolcreaterole),has_schema_privilege(current_user,'public','CREATE') FROM pg_roles WHERE rolname=current_user").fetchone()
+    if not create_role or not create_schema:
+        raise ValueError('admin connection lacks CREATE ROLE or CREATE on public; use a DDL-capable admin URL, not the restricted app URL. No migrations or grants applied')
+
+def report_sources(s,root,explicit):
+    paths=[Path(explicit).expanduser()] if explicit else [s.target_path(),root/'.env']
+    for name in ('DELIVERY_DATABASE_URL','REQUI_ADMIN_DATABASE_URL'):
+        source='shell fallback or missing'
+        for path in paths:
+            if s.read_file(path).get(name):source=str(path);break
+        print(name+' source: '+source+' (value hidden)')
+
+
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('repo');p.add_argument('--apply',action='store_true');p.add_argument('--env-file');args=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('repo');p.add_argument('--apply',action='store_true');p.add_argument('--env-file');p.add_argument('--identify',action='store_true',help='read-only app identity and settings source only; no admin URL required');args=p.parse_args()
     root=Path(args.repo).expanduser().resolve();py=root/'.venv/bin/python'
     if not py.is_file():raise ValueError('checkout .venv missing')
     if Path(sys.prefix).resolve()!=(root/'.venv').resolve():os.execv(str(py),[str(py),str(Path(__file__).resolve()),*sys.argv[1:]])
     s=module(root/'scripts/ops/settings.py','requi_migration_settings');r=module(root/'scripts/ops/schema-readiness.py','requi_migration_readiness')
     values=s.load(root,explicit=args.env_file);before=dict(values)
-    s.require(values,['REQUI_ADMIN_DATABASE_URL','DELIVERY_DATABASE_URL'])
+    report_sources(s,root,args.env_file)
+    s.require(values,['DELIVERY_DATABASE_URL'])
+    if args.identify:
+        import psycopg
+        with psycopg.connect(values['DELIVERY_DATABASE_URL'],connect_timeout=10,autocommit=True) as conn:
+            conn.execute('SET default_transaction_read_only=on')
+            login,role=identity(conn)
+        print('APP identity before any SET ROLE: session_user='+login+' current_user='+role)
+        print('READ ONLY. No admin URL reused, no settings saved, no migration or grant applied.');return 0
+    s.require(values,['REQUI_ADMIN_DATABASE_URL'])
     import psycopg
     from psycopg.conninfo import conninfo_to_dict
     admin=conninfo_to_dict(values['REQUI_ADMIN_DATABASE_URL']);app=conninfo_to_dict(values['DELIVERY_DATABASE_URL'])
@@ -76,12 +102,16 @@ def main():
         raise ValueError('admin/app targets differ; use the same endpoint/port/database before proceeding')
     with psycopg.connect(values['DELIVERY_DATABASE_URL'],connect_timeout=10,autocommit=True) as app_conn:
         app_conn.execute('SET default_transaction_read_only=on')
-        app_login=app_conn.execute('SELECT current_user').fetchone()[0]
+        app_session,app_login=identity(app_conn)
+        print('APP identity before SET ROLE: session_user='+app_session+' current_user='+app_login)
     if app_login in ('postgres','supabase_admin'):raise ValueError('app connection uses an admin role; refusing broad grants')
     if values!=before:s.save_confirmed(s.target_path(),{k:v for k,v in values.items() if k not in before})
     with psycopg.connect(values['REQUI_ADMIN_DATABASE_URL'],connect_timeout=10,autocommit=True) as conn:
         # No writes occur until apply() passes complete inventory, safety scan and typed confirmation.
         conn.execute('SET default_transaction_read_only=on')
+        admin_session,admin_role=identity(conn)
+        print('ADMIN identity: session_user='+admin_session+' current_user='+admin_role)
+        check_admin(conn)
         reviewed=plan(conn,r,root)
         print('DRY REVIEW, NO DATABASE CHANGES; app login:',app_login)
         for row in reviewed:print(json.dumps(row,sort_keys=True))
