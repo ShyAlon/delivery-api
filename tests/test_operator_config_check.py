@@ -157,3 +157,17 @@ def test_cli_accepts_repository_path(tmp_path):
     assert proc.returncode==1 and not proc.stderr
     assert 'REQUI_OPERATOR_SUBJECT.present=false' in proc.stdout
     assert 'configuration.ready=false' in proc.stdout
+
+
+def test_pooler_username_is_not_used_as_postgres_role(tmp_path):
+    from contextlib import contextmanager
+    dsn=os.environ['DELIVERY_TEST_POSTGRES_DSN']
+    cfg={'DELIVERY_DATABASE_URL':'postgresql://delivery_app.project:private@pooler.invalid/db',
+         'REQUI_ADMIN_DATABASE_URL':dsn}
+    @contextmanager
+    def connect(target):
+        actual=dsn.replace('user=sandbox','user=delivery_app') if target==cfg['DELIVERY_DATABASE_URL'] else target
+        with check.read_connection(actual) as conn:yield conn
+    out=io.StringIO()
+    check.run(tmp_path,env=cfg,connect=connect,out=out)
+    assert 'app_role.can_set_operator_read=true' in out.getvalue()

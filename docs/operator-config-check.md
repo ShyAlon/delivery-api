@@ -28,8 +28,11 @@ No new access is requested or granted. The connection starts with
 `default_transaction_read_only=on` and the transaction explicitly uses READ ONLY.
 Queries have a five-second statement timeout; connection timeout is ten seconds.
 The inspector neither sets a role nor calls business-effect database functions.
-The app login is read from DELIVERY_DATABASE_URL; the check verifies its SET
-membership in requi_operator_read, not the admin login's membership.
+A separate read-only connection using DELIVERY_DATABASE_URL checks the actual
+PostgreSQL current_user's SET membership in requi_operator_read, not the admin
+login or the URI username. Supabase pooler usernames can have a project suffix
+that is not a PostgreSQL role. app_role.inspected=false means this separate
+connection/check failed; it does not prove membership is missing.
 
 registry.table_present=false means the table was confirmed absent.
 registry.inspected=true with registry.enabled_row_present=false means the full
@@ -67,3 +70,58 @@ is active or that every HTTP route works. Runtime reads still enforce the
 signed-in subject, active session, capabilities and enabled registry version.
 The command does not restart a server, interrupt a task, deploy, call a model,
 allocate credits or write database/settings data.
+
+
+## Fill missing settings from the existing registry
+
+Owner-run, after reviewing the PR:
+
+.venv/bin/python scripts/ops/operator-config-setup.py .
+
+An optional --env-file /path/to/private.env selects both the input settings file
+and the save target. Otherwise it saves to the standard private preview.env
+selected by PREVIEW_SETTINGS_FILE or XDG_CONFIG_HOME. It requires both existing
+DSNs and matching host/port/database. It never asks you to paste a DSN.
+
+The admin inspection connection is READ ONLY. The script refuses an unreadable
+registry, zero/multiple enabled rows, invalid identity/version/capabilities or
+missing Debug reads. It copies the row's UUID/version and only the four Debug
+read capabilities, never credit-allocation or other effect permissions. Before
+saving it asks for yes in the terminal. No values are printed. A refusal makes
+no file change. A successful save atomically replaces the mode-600 target,
+preserves unrelated settings, rejects symlinks/nonprivate files and checks for
+changes during confirmation. Only the three operator names are changed. No DB
+writes, grants, restarts or automatic repairs occur.
+
+Rerun the check afterward. This changes only local settings; an already-running
+server will not use them until its next owner-managed restart. Do not interrupt
+an active paid task to pick up settings.
+
+## If operator-read role membership really is missing
+
+The first version of this check used the URI username. With a pooler suffix,
+that could falsely report app_role.can_set_operator_read=false. Run the corrected
+check before changing privileges. It obtains the real identity through the app
+connection and reports whether that identity can SET ROLE.
+
+The existing 20261020130000_operator_stop_audit.sql already includes the narrow
+grant for delivery_app, conditionally on that login existing. Do NOT replay that
+whole migration to repair membership: it also registers an operator and changes
+registry capabilities.
+
+If the corrected check has app_role.inspected=true and
+app_role.can_set_operator_read=false, first verify the actual app login is the
+intended delivery_app. The existing owner identification command can establish
+that without grants:
+
+.venv/bin/python scripts/owner/apply-pg-cutover.py . --identify
+
+Only after the owner reviews and approves that missing role membership, the
+owner can apply this one narrow SQL statement through their admin SQL editor:
+
+GRANT requi_operator_read TO delivery_app WITH INHERIT FALSE, SET TRUE;
+
+This statement IS a DB authorization change, unlike the setup script. It is
+not run by either operator-config command. If the actual app identity is not
+delivery_app, stop and review it; do not substitute a pooler URI username or add
+broad privileges. Rerun the corrected check after any owner-applied repair.

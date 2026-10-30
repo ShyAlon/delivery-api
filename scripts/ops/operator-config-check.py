@@ -103,11 +103,20 @@ def run(root,*,env=None,explicit=None,connect=read_connection,out=None):
         report['REQUI_ADMIN_DATABASE_URL.present']=bool(values.get('REQUI_ADMIN_DATABASE_URL'))
         dsn=values.get('REQUI_ADMIN_DATABASE_URL') or values.get('DELIVERY_DATABASE_URL')
         if dsn:
-            from psycopg.conninfo import conninfo_to_dict
-            app_user=conninfo_to_dict(values['DELIVERY_DATABASE_URL']).get('user') if values.get('DELIVERY_DATABASE_URL') else None
             with connect(dsn) as conn:
                 report['database.connected']=True
-                report.update(database(conn,values,app_user))
+                report.update(database(conn,values,None))
+        # Pooler URI usernames may contain a project suffix; only the live
+        # app connection knows its actual PostgreSQL identity and privileges.
+        if values.get('DELIVERY_DATABASE_URL'):
+            try:
+                with connect(values['DELIVERY_DATABASE_URL']) as app:
+                    result=app.execute("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='requi_operator_read')").fetchone()[0]
+                    report['app_role.can_set_operator_read']=bool(result and app.execute("SELECT pg_has_role(current_user,'requi_operator_read','SET')").fetchone()[0])
+                    report['app_role.inspected']=True
+            except Exception:
+                report['app_role.inspected']=False
+                report.pop('app_role.can_set_operator_read',None)
     except Exception:
         # Never include exception text, DSN, private file contents or identity.
         # A failed query means unverified, not a confirmed absent registry row.
