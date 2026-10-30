@@ -428,6 +428,8 @@ async def lifespan(application:FastAPI):
     config.validate_auth_config()
     from .postgres_logs import selected as selected_process_logs
     selected_process_logs()  # Validate stable source before admitting work; never local fallback.
+    from .run_metrics import selected_metrics
+    selected_metrics(config.DATABASE_URL,os.environ)
     from . import cloud_execution
     if cloud_execution.admitted():
         # Open: start the in-process engines under the money gateway. A failure keeps execution closed (cloud_execution reports it).
@@ -3478,7 +3480,8 @@ def admin_operations_request_costs(a:auth.Actor=Depends(auth.require_admin)):
 def admin_operations_capacity(a:auth.Actor=Depends(auth.require_admin)):
     # Operator only: slots, running phases and memory, to size the server. No cost, vendor or price figures. One server process: the numbers are this process's.
     from . import run_slots
-    snap=run_slots.snapshot();snap['text']=run_slots.snapshot_text(snap)
+    metrics=_operator_metrics(limit=8) if config.CLOUD_TENANTS else None
+    snap=run_slots.snapshot(metrics=metrics);snap['text']=run_slots.snapshot_text(snap)
     return snap
 
 
@@ -3625,6 +3628,7 @@ def admin_operations_grant(body:GrantRequest,a:auth.Actor=Depends(auth.require_a
 def admin_operations_run_metrics(task_id:str='',a:auth.Actor=Depends(auth.require_admin)):
     # Operator only: CPU and memory samples. With task_id, the raw samples and summaries of that task; without, the recent-runs overview shown in Debug.
     from . import run_metrics
+    if config.CLOUD_TENANTS:return _operator_metrics(task_id=task_id or None,limit=2000 if task_id else 100)
     return run_metrics.for_task(task_id) if task_id else run_metrics.overview()
 
 
@@ -3644,6 +3648,14 @@ def admin_stop_run(body:AdminStopRunRequest,a:auth.Actor=Depends(auth.require_ad
         raise HTTPException(409,{'error':'Nothing is running for that task.','cause':'The phase has already finished or has not started.','next':'Reload the capacity view.'})
     activity('run.stop_requested','Operator asked to stop a run',task_id=body.task_id,actor=a.label)
     return {'status':'stopping','message':'Stopping. This takes a few seconds.'}
+
+
+def _operator_metrics(**kwargs):
+    try:return _operator_reader().metrics(store,**kwargs)
+    except (HTTPException,TenantAccessDenied):raise
+    except Exception:
+        raise HTTPException(503,{'error':'Resource metrics are temporarily unavailable.',
+            'next':'Retry after the metrics database and operator registry are available.'}) from None
 
 
 def _operator_reader():

@@ -65,8 +65,24 @@ def capacity_client(pg_workspace_factory,pg_task_app):
         claims=jwt.decode(workspace.token,options={'verify_signature':False})
         claims['email']=config.OPERATOR_EMAIL
         operator=jwt.encode(claims,KEY,algorithm='ES256',headers={'kid':'fixture'})
-        with TestClient(pg_task_app(workspace)) as client:
-            yield workspace,client,{'Authorization':'Bearer '+operator}
+        from delivery_api.operator_reads import OperatorReadStore
+        from delivery_api.operator_authorization import OperatorPrincipal
+        with workspace.admin() as c:
+            previous=[r[0] for r in c.execute('SELECT subject FROM operator_principals WHERE enabled').fetchall()]
+            c.execute('UPDATE operator_principals SET enabled=false WHERE enabled')
+            c.execute("INSERT INTO operator_principals(subject,registry_version,capabilities,enabled) VALUES(%s,'capacity-test',ARRAY['logs.read'],true)",(workspace.scope.owner_id,))
+        application=pg_task_app(workspace)
+        from delivery_api import app as app_module
+        app_module.app.state.operator_read_store=OperatorReadStore(workspace.store._postgres.dsn,
+            OperatorPrincipal(workspace.scope.owner_id,'capacity-test',frozenset({'logs.read'})))
+        try:
+            with TestClient(application) as client:
+                yield workspace,client,{'Authorization':'Bearer '+operator}
+        finally:
+            app_module.app.state.operator_read_store=None
+            with workspace.admin() as c:
+                c.execute('DELETE FROM operator_principals WHERE subject=%s',(workspace.scope.owner_id,))
+                for subject in previous:c.execute('UPDATE operator_principals SET enabled=true WHERE subject=%s',(subject,))
 
 
 def test_only_an_admin_can_read_capacity(capacity_client):
@@ -88,10 +104,10 @@ def test_only_an_admin_can_read_run_metrics_and_the_capacity_text_carries_them(m
     run_metrics.reset()
     workspace,c,operator_headers=capacity_client
     store=workspace.store
-    conn = run_metrics._open()
-    with conn:
-        conn.execute("INSERT INTO run_samples(ts,run_key,task_id,session_id,phase,pid,procs,rss_mb,peak_rss_mb,cpu_seconds,cpu_pct) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                     (time.time(), "t1:needs:1", "t1", "sess1", "needs", 1, 1, 123.0, 123.0, 1.0, 5.0))
+    from delivery_api.postgres_metrics import PostgresMetrics
+    repo=PostgresMetrics(store._postgres.dsn,source_id='capacity-reference')
+    repo.append_run(ts=time.time(),run_key='t1:needs:1',task_id='t1',session_id='sess1',phase='needs',pid=1,procs=1,
+                    rss_mb=123.0,peak_rss_mb=123.0,cpu_seconds=1.0,cpu_pct=5.0)
     assert c.get("/api/admin/operations/run-metrics").status_code==401
     c.headers.update(workspace.headers)
     assert c.get("/api/admin/operations/run-metrics").status_code == 403

@@ -8,15 +8,19 @@ class OperatorReadStore:
         self.db=ScopedPostgres(dsn);self.principal=principal
 
     @contextmanager
-    def _read(self,owner_store,capability,*,role="requi_operator_read"):
+    def _read(self,owner_store,capability,*,role="requi_operator_read",repeatable_read=False):
         authority=self.principal.authorize(owner_store,capability)
-        with self.db.transaction(repeatable_read=role in ('requi_operator_usage','requi_operator_payment_read')) as connection:
+        with self.db.transaction(repeatable_read=repeatable_read or role in ('requi_operator_usage','requi_operator_payment_read')) as connection:
             if role not in ('requi_operator_read','requi_operator_usage','requi_operator_payment_read'):raise ValueError('fixed role required')
             connection.execute('SET LOCAL ROLE '+role)
             allowed=connection.execute('SELECT public.requi_operator_read_allowed(%s,%s) AS allowed',
                 (capability,authority['registry_version'])).fetchone()
             if not allowed or allowed['allowed'] is not True:raise TenantAccessDenied('database operator registry denied')
             yield connection,authority
+
+    def metrics(self,owner_store,*,task_id=None,limit=100):
+        from .postgres_metrics import read_operator
+        return read_operator(self,owner_store,task_id=task_id,limit=limit)
 
     def logs(self,owner_store,*,stream=None,task_id=None,limit=400):
         from .postgres_logs import read_operator
