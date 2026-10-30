@@ -29,7 +29,7 @@ def _transactional(method):
         if self._connection.get() is not None:
             return method(self,*args,**kwargs)
         with contextlib.ExitStack() as cleanup:
-            if method.__name__ in ('ensure_waiting_input_event','retain_decision_review'):
+            if method.__name__ in ('ensure_waiting_input_event','retain_decision_review','ingest_interview_progress_page'):
                 # Observations made during GET must commit before the read
                 # continues, never pin task/owner locks until HTTP teardown.
                 from .postgres_scope import _request_tx
@@ -202,6 +202,65 @@ class PostgresStore:
             self._connection.get().execute('ROLLBACK TO SAVEPOINT operation_start')
             raise
         return True
+
+    def ingest_interview_progress_page(self, task_id, session_id, page):
+        """One atomic ordered page, not one transaction per observational signal.
+
+        Source cursor consumes every signal. Only stage/item history is copied;
+        heartbeats and per-call summaries stay in source diagnostics/accounting.
+        Nothing here publishes engine control, changes a phase state or charges.
+        """
+        from .progress_adapter import validate_interview_page, retain_interview_signal
+        validate_interview_page(task_id,session_id,page)
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone():
+            raise KeyError(task_id)
+        row=self._execute_native('SELECT cursor FROM progress_ingest WHERE task_id=%s AND source=%s AND session_id=%s',
+                                 (task_id,'interview',session_id)).fetchone()
+        cursor=int(row['cursor']) if row else 0
+        if page.next_cursor<cursor:raise ValueError('engine progress cursor moved backwards')
+        fresh=[signal for signal in page.events if signal.cursor>cursor]
+        if not fresh:
+            if page.next_cursor>cursor:raise ValueError('engine returned an advanced cursor with no events')
+            return 0
+        if fresh[0].cursor!=cursor+1:raise ValueError('interview progress cursor gap')
+        kept=[signal for signal in fresh if retain_interview_signal(signal)]
+        records=[dict(event_id=signal.event_id,phase_key=signal.phase_key,message=signal.detail or signal.label,
+                      payload={**signal.model_dump(mode='json'),'source':'interview'}) for signal in kept]
+        # Set-based dedupe/events; only the final retained signal per phase updates
+        # its display projection. Cursor and task timestamp update once per page.
+        self._execute_native("""WITH incoming AS (
+          SELECT value AS item,ordinality AS ord FROM jsonb_array_elements(%s::jsonb) WITH ORDINALITY
+        ), seen AS (
+          INSERT INTO progress_seen(task_id,source,event_id)
+          SELECT %s,'interview',item->>'event_id' FROM incoming
+          ON CONFLICT DO NOTHING RETURNING event_id
+        ), retained AS (
+          SELECT i.* FROM incoming i JOIN seen s ON s.event_id=i.item->>'event_id'
+        ), emitted AS (
+          INSERT INTO events(task_id,phase_key,kind,message,payload,ts)
+          SELECT %s,item->>'phase_key','progress',item->>'message',(item->'payload')::text,%s
+          FROM retained ORDER BY ord RETURNING id
+        ), latest AS (
+          SELECT DISTINCT ON (item->>'phase_key') item,
+            (SELECT r.item->'payload'->>'completed' FROM retained r
+             WHERE r.item->>'phase_key'=x.item->>'phase_key' AND r.item->'payload'->>'completed' IS NOT NULL
+             ORDER BY r.ord DESC LIMIT 1) AS completed,
+            (SELECT r.item->'payload'->>'total' FROM retained r
+             WHERE r.item->>'phase_key'=x.item->>'phase_key' AND r.item->'payload'->>'total' IS NOT NULL
+             ORDER BY r.ord DESC LIMIT 1) AS total
+          FROM retained x ORDER BY item->>'phase_key',ord DESC
+        ), projected AS (
+          UPDATE phases p SET detail=l.item->>'message',
+            completed=COALESCE(l.completed::int,p.completed),
+            total=COALESCE(l.total::int,p.total)
+          FROM latest l WHERE p.task_id=%s AND p.phase_key=l.item->>'phase_key' AND p.state='running'
+        ), touched AS (
+          UPDATE tasks SET updated_at=%s WHERE task_id=%s AND EXISTS(SELECT 1 FROM retained)
+        ) INSERT INTO progress_ingest(task_id,source,session_id,cursor) VALUES (%s,'interview',%s,%s)
+          ON CONFLICT(task_id,source,session_id) DO UPDATE SET cursor=excluded.cursor""",
+          (json.dumps(records),task_id,task_id,time.time(),task_id,time.time(),task_id,task_id,session_id,page.next_cursor),write=True)
+        event_bus.notify(task_id)
+        return len(kept)
 
     def audit(self, actor: str, action: str, task_id: str | None=None, detail: dict | None=None) -> int:
         cur = self._execute_native('INSERT INTO audit_log(actor,action,task_id,detail,ts) VALUES (%s,%s,%s,%s,%s) RETURNING id', (actor, action, task_id, json.dumps(detail or {}), time.time()), write=True)
@@ -2171,6 +2230,7 @@ PG_OPERATIONS = (
     'finish_stopped_worker',
     'finish_worker',
     'ingest_progress',
+    'ingest_interview_progress_page',
     'inspect_revision_install_safety',
     'installed_execution_anchor',
     'interview_schema_binding',

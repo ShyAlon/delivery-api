@@ -179,7 +179,7 @@ async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=
     """Read all committed journal pages; independent of the engine control lock."""
     from .progress_adapter import ingest_interview_page
     while True:
-        cursor=store.progress_cursor(task_id,"interview",session_id)
+        cursor=await run_in_threadpool(store.progress_cursor,task_id,"interview",session_id)
         fetched_at=time.monotonic()
         try:page=await run_in_threadpool(engine_client.progress,session_id,cursor)
         except EngineClientError as exc:
@@ -187,7 +187,7 @@ async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=
             raise
         fetch_ms=int((time.monotonic()-fetched_at)*1000)
         ingest_at=time.monotonic()
-        ingest_interview_page(store,task_id,session_id,page)
+        await run_in_threadpool(ingest_interview_page,store,task_id,session_id,page)
         if page.events:
             from datetime import datetime,timezone
             now=datetime.now(timezone.utc)

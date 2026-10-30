@@ -23,14 +23,28 @@ def ingest_generator_line(store, task_id: str, line: str, launched_phase: str, s
     return True
 
 
-def ingest_interview_page(store,task_id: str,session_id: str,page):
-    if page.next_cursor < store.progress_cursor(task_id,"interview",session_id):
-        raise ValueError("engine progress cursor moved backwards")
-    if not page.events and page.next_cursor>store.progress_cursor(task_id,"interview",session_id):
-        raise ValueError("engine returned an advanced cursor with no events")
+def retain_interview_signal(signal):
+    # Elapsed time is a client clock, not durable state. Finished model calls
+    # already have separate usage/log evidence, not another task-history copy.
+    return signal.status == "failed" or (signal.status != "heartbeat" and not signal.stage.startswith("llm_call:"))
+
+
+def validate_interview_page(task_id,session_id,page):
+    previous=None;seen=set()
     for signal in page.events:
         definition=PHASE_BY_KEY.get(signal.phase_key)
         if (signal.task_id!=task_id or signal.session_id!=session_id or
             definition is None or definition.executor!="interview"):
             raise ValueError("interview progress identity or phase mismatch")
-        store.ingest_progress(signal,"interview")
+        if previous is not None and signal.cursor!=previous+1:
+            raise ValueError("interview progress cursor gap")
+        if signal.event_id in seen:raise ValueError("duplicate event ID in progress page")
+        seen.add(signal.event_id)
+        previous=signal.cursor
+    if previous is not None and page.next_cursor!=previous:
+        raise ValueError("interview progress page tail mismatch")
+
+
+def ingest_interview_page(store,task_id: str,session_id: str,page):
+    validate_interview_page(task_id,session_id,page)
+    return store.ingest_interview_progress_page(task_id,session_id,page)
