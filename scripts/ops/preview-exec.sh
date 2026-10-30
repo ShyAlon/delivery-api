@@ -83,7 +83,7 @@ build_exec_env(){
 
 cat <<'PLAN'
 Plan (8 steps, fail fast - cheapest and most likely first; every step prints its elapsed time, every failure names its step):
-  1 inputs and environment (~5s): tools, Docker, port, saved settings, the four checkouts at origin/main
+  1 inputs and environment (~5s): tools, Docker, port, saved settings, the four checkouts at origin/main, LIVE DB schema + app role readiness
   2 source smoke (~15s): the image's startup checks against the candidate sources - syntax parse, the preflight's own tests, the engine surface
   3 confirmation (you): provider pick if unset, DeepSeek key presence (deepseek only), what will run, one typed yes
   4 settings + grounding (~10s deepseek; ~1-5 min ollama: it loads the model on this Mac)
@@ -117,6 +117,8 @@ for f in $PINFILES src/delivery_api/production_gateway.py; do [ -f "$f" ] || abo
 # here with the exact install line, not inside a step-2 pytest import traceback.
 rc=0; .venv/bin/python scripts/ops/venv_check.py || rc=$?
 [ "$rc" = 0 ] || abort VENV-DEPS "the checkout's .venv is missing declared dependencies" "Nothing was started." "run the exact pip line printed above, then run ops preview-exec again"
+# Cheap read-only schema proof before local model grounding or image build.
+.venv/bin/python scripts/ops/schema-readiness.py || abort SCHEMA-NOT-READY "live schema or app SET memberships are behind this checkout" "No database changes; nothing built or started." "run python3 scripts/owner/apply-pg-cutover.py . for dry review; do not send credentials"
 step_ok
 
 step "source smoke: the image's startup checks against the candidate sources, minutes before the image exists"
