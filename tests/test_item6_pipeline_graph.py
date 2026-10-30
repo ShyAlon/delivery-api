@@ -10,7 +10,9 @@ from pipeline_executor import PrivatePipeline
 
 
 def configure_graph_models(monkeypatch):
- source=Path(__import__('os').environ['DELIVERY_TEST_SPEC_SOURCE']).parent
+ source=Path(__import__('os').environ['DELIVERY_TEST_SPEC_SOURCE'])
+ if source.name=='src':source=source.parent
+ if not (source/'tests/conftest.py').is_file():raise RuntimeError('DELIVERY_TEST_SPEC_SOURCE must name spec-generator checkout or its src directory')
  sys.path.insert(0,str(source/'tests'))
  # Own fixture import explicitly to avoid delivery tests' conftest shadowing.
  cs=importlib.util.spec_from_file_location('generator_fixtures',source/'tests/conftest.py');cf=importlib.util.module_from_spec(cs);cs.loader.exec_module(cf)
