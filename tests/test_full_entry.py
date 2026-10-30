@@ -61,5 +61,5 @@ def test_supervisor_releases_report_pool_even_when_preflight_refuses(monkeypatch
     monkeypatch.setattr(full_entry.preflight,'write_report',lambda *a:calls.append('save') or True)
     monkeypatch.setattr(db_pool,'close_all',lambda:calls.append('close'))
     assert full_entry.main()==2
-    assert calls==['save','close']
-    assert db_pool.PROCESS_POOL_MAX==1
+    assert calls==['save']
+    assert db_pool.PROCESS_POOL_MAX==9

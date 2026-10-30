@@ -1,15 +1,15 @@
 import logging
 from delivery_api import observability, engine_log
-from delivery_api.postgres_logs import flush
+from delivery_api.process_logs import flush
 
 
 def test_activity_pg_failure_warns_once_and_is_operator_visible(tmp_path, monkeypatch, capsys):
     from delivery_api import log_durability as state
     monkeypatch.setattr(state, '_failures', {})
     handler = observability._EvidenceFileHandler(tmp_path/'activity.log', delay=True)
-    from delivery_api import postgres_logs
+    from delivery_api import process_logs as postgres_logs
     def broken(*args,**kwargs):raise OSError('fake-secret')
-    monkeypatch.setattr(postgres_logs.PostgresLogs,'append',broken)
+    monkeypatch.setattr(postgres_logs.FileLogs,'append',broken)
     monkeypatch.setattr(handler, 'stream', None)
     monkeypatch.setattr(handler, '_open', lambda: (_ for _ in ()).throw(OSError('fake-secret')))
     for _ in range(3): handler.emit(logging.makeLogRecord({'msg':'private-payload'}))
@@ -18,15 +18,15 @@ def test_activity_pg_failure_warns_once_and_is_operator_visible(tmp_path, monkey
     assert text.count('diagnostic evidence degraded') == 1
     assert 'fake-secret' not in text and 'private-payload' not in text
     assert state.snapshot()['degraded'] is True
-    assert state.snapshot()['sources'][0]['source'] == 'postgres-logs'
+    assert state.snapshot()['sources'][0]['source'] == 'process-files'
 
 
 def test_stage_and_mirror_failures_remain_nonfatal(tmp_path, monkeypatch, capsys):
     from delivery_api import log_durability as state
     monkeypatch.setattr(state, '_failures', {})
-    from delivery_api import postgres_logs
+    from delivery_api import process_logs as postgres_logs
     def broken(*args,**kwargs):raise OSError('private-payload')
-    monkeypatch.setattr(postgres_logs.PostgresLogs,'append',broken)
+    monkeypatch.setattr(postgres_logs.FileLogs,'append',broken)
     blocker = tmp_path/'blocked';blocker.write_text('file')
     monkeypatch.setattr(observability, 'STAGE_LOG_PATHS', {'intent':blocker/'intent.log'})
     observability.event('test', 'not secret', console=False, phase='intent')
@@ -36,7 +36,7 @@ def test_stage_and_mirror_failures_remain_nonfatal(tmp_path, monkeypatch, capsys
     assert flush(5)
     assert not mirror._dead  # PG degradation does not kill future retries.
     sources = {r['source'] for r in state.snapshot()['sources']}
-    assert sources == {'postgres-logs'}
+    assert sources == {'process-files'}
     assert capsys.readouterr().err.count('diagnostic evidence degraded') == 1
 
 

@@ -31,7 +31,7 @@ def _resolver(mapping):
     return lambda session:mapping.get(session)
 
 
-def test_tee_copies_stdout_and_timestamped_pg_rows(tmp_path,pg_log_evidence):
+def test_tee_copies_stdout_and_timestamped_pg_rows(tmp_path,file_log_evidence):
     out_path=tmp_path/'logs'/'engine.log'
     proc=subprocess.Popen([sys.executable,'-c','import sys;print("hello engine");print("a warning",file=sys.stderr)'],
                           stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
@@ -44,8 +44,8 @@ def test_tee_copies_stdout_and_timestamped_pg_rows(tmp_path,pg_log_evidence):
     for _ in range(100):
         if len(sink_lines)>=2:break
         time.sleep(0.05)
-    from delivery_api.postgres_logs import flush; assert flush(5)
-    rows=pg_log_evidence.repository.tail('engine')
+    from delivery_api.process_logs import flush; assert flush(5)
+    rows=file_log_evidence.repository.tail('engine')
     text='\n'.join(row['text'] for row in rows)
     assert not out_path.exists()
     assert 'hello engine' in text and 'a warning' in text
@@ -53,10 +53,10 @@ def test_tee_copies_stdout_and_timestamped_pg_rows(tmp_path,pg_log_evidence):
     assert all(isinstance(row['ts'],(float,int)) and row['ts']>0 for row in rows)
 
 
-def test_tee_retention_is_bounded(tmp_path,monkeypatch,pg_log_evidence):
-    from delivery_api import postgres_logs
-    repo=pg_log_evidence.repository;original=repo.append
-    repo.append=lambda stream,text,**fields:original(stream,text,max_bytes=4096,max_rows=30,**fields)
+def test_tee_retention_is_bounded(tmp_path,monkeypatch,file_log_evidence):
+    from delivery_api import process_logs as postgres_logs
+    repo=file_log_evidence.repository;original=repo.append
+    monkeypatch.setattr(postgres_logs,'retention',lambda stream:4096)
     monkeypatch.setattr(postgres_logs,'selected',lambda:repo)
     proc=subprocess.Popen([sys.executable,'-c','for i in range(100):print("x"*120)'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
     sink=open('/dev/null','w')
@@ -66,9 +66,9 @@ def test_tee_retention_is_bounded(tmp_path,monkeypatch,pg_log_evidence):
         time.sleep(.02)
     assert proc.stdout.closed
     sink.close()
-    from delivery_api.postgres_logs import flush; assert flush(5)
+    from delivery_api.process_logs import flush; assert flush(5)
     rows=repo.tail('engine')
-    assert 0<len(rows)<=30 and sum(len(row['text'].encode()) for row in rows)<=4096
+    assert 0<len(rows) and sum(len(row['text'].encode()) for row in rows)<=4096
     assert not (tmp_path/'engine.log').exists()
 
 
@@ -120,19 +120,19 @@ def test_resolver_failure_keeps_line_operator_only(tmp_path):
     assert SESSION_A in admin['text']
 
 
-def test_route_merges_engine_block(monkeypatch,pg_log_evidence,pg_operator_log_reader):
+def test_route_merges_engine_block(monkeypatch,file_log_evidence,pg_operator_log_reader):
     import delivery_api.app as module
     reader,store=pg_operator_log_reader
     monkeypatch.setattr(module,'store',store)
     monkeypatch.setattr(module,'_operator_reader',lambda:reader)
-    pg_log_evidence.repository.append('engine','engine marker session='+SESSION_A,session_id=SESSION_A,task_id=pg_log_evidence.repository.source_id)
+    file_log_evidence.repository.append('engine','engine marker session='+SESSION_A,session_id=SESSION_A,task_id=file_log_evidence.repository.source_id)
     actor=type('A',(),{'id':OWNER_A,'admin':True})
-    result=module.server_log(30,actor(),pg_log_evidence.repository.source_id)
+    result=module.server_log(30,actor(),file_log_evidence.repository.source_id)
     assert 'engine:' in result['text'] and SESSION_A in result['text']
     assert result['engine_log']['available'] is True and result['engine_log']['lines']==1
 
 
-def test_mirror_writes_stamped_scrubbed_lines_the_read_side_picks_up(tmp_path,pg_log_evidence):
+def test_mirror_writes_stamped_scrubbed_lines_the_read_side_picks_up(tmp_path,file_log_evidence):
     """The in-process engine's records land in the same file the Debug tail reads."""
     import logging
     path=tmp_path/'logs'/'engine.log'
@@ -143,8 +143,8 @@ def test_mirror_writes_stamped_scrubbed_lines_the_read_side_picks_up(tmp_path,pg
         logging.getLogger('interview_engine.http').warning('dsn postgres://user:secretpw@host/db leaked session=%s',SESSION_A)
     finally:
         engine_log.uninstall_mirror()
-    from delivery_api.postgres_logs import flush; assert flush(5)
-    rows=pg_log_evidence.repository.tail('engine')
+    from delivery_api.process_logs import flush; assert flush(5)
+    rows=file_log_evidence.repository.tail('engine')
     out={'available':bool(rows),'count':len(rows),'text':'\n'.join(row['text'] for row in rows)}
     assert not path.exists()
     assert out['available'] and out['count']==3
@@ -166,11 +166,11 @@ def test_mirror_idempotent_and_never_fatal(tmp_path,monkeypatch):
     engine_log.uninstall_mirror()
 
 
-def test_mirror_retention_at_bound(tmp_path,monkeypatch,pg_log_evidence):
+def test_mirror_retention_at_bound(tmp_path,monkeypatch,file_log_evidence):
     import logging
-    from delivery_api import postgres_logs
-    repo=pg_log_evidence.repository;original=repo.append
-    repo.append=lambda stream,text,**fields:original(stream,text,max_bytes=800,max_rows=3,**fields)
+    from delivery_api import process_logs as postgres_logs
+    repo=file_log_evidence.repository;original=repo.append
+    monkeypatch.setattr(postgres_logs,'retention',lambda stream:1600)
     monkeypatch.setattr(postgres_logs,'selected',lambda:repo)
     path=tmp_path/'engine.log'
     engine_log.install_mirror(path=path)
@@ -178,7 +178,7 @@ def test_mirror_retention_at_bound(tmp_path,monkeypatch,pg_log_evidence):
         for i in range(30):logging.getLogger('interview_engine.http').warning('fill %d %s',i,'x'*60)
     finally:
         engine_log.uninstall_mirror()
-    from delivery_api.postgres_logs import flush; assert flush(5)
+    from delivery_api.process_logs import flush; assert flush(5)
     rows=repo.tail('engine')
-    assert 0<len(rows)<=3 and sum(len(row['text'].encode()) for row in rows)<=800
+    assert 0<len(rows) and sum(len(row['text'].encode()) for row in rows)<=1600
     assert not path.exists()

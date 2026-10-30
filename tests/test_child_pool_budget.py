@@ -4,7 +4,7 @@ from delivery_api.child_pool_budget import child_mode,pool_budget
 
 def test_default_and_optin_budget_include_compatibility_service():
     assert child_mode({}) is False
-    assert pool_budget({})==(9,0,4)
+    assert pool_budget({})==(10,0,4)
     env={'DELIVERY_CHILD_EXECUTION':'local','DELIVERY_LOCAL_PREVIEW':'1'}
     assert child_mode(env) is True and pool_budget(env)==(8,4,0)
     with pytest.raises(ValueError):child_mode({'DELIVERY_CHILD_EXECUTION':'paid'})

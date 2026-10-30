@@ -128,3 +128,20 @@ def pg_operator_log_reader(pg_log_evidence):
         with psycopg.connect(STATE['dsn']) as conn:
             if prior:conn.execute('UPDATE operator_principals SET registry_version=%s,capabilities=%s,enabled=%s WHERE subject=%s',(*prior,A.owner_id))
             else:conn.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))
+
+@pytest.fixture
+def file_log_evidence(monkeypatch,tmp_path):
+    """Fresh ephemeral server files, explicitly drained before durable inspection."""
+    from delivery_api import process_logs
+    assert process_logs.flush(5)
+    monkeypatch.setattr(process_logs,'root',lambda:tmp_path/'process')
+    repo=process_logs.selected();repo.source_id='file-fixture'
+    def read(*,task_id=None,max_lines=500):
+        assert process_logs.flush(5)
+        result=repo.records(stream='diagnostics',task_id=task_id,limit=max_lines)
+        rows=result['records']
+        return {'text':'\n'.join(r['text'] for r in rows),'count':len(rows),'available':bool(rows),
+                'truncated':result['truncated'],'scope':'operator diagnostic evidence'}
+    read.repository=repo
+    yield read
+    assert process_logs.flush(5)

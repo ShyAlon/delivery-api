@@ -39,7 +39,7 @@ REQUIRED_TABLES = frozenset({
     'provider_attempts', 'retail_compute_segments', 'retail_contributions', 'retail_scale_migrations',
     'review_comments', 'runs', 'staged_provider_responses', 'task_artifacts', 'tasks', 'usage',
     'user_task_policy', 'user_task_policy_changes', 'users', 'worker_jobs',
-    'operator_startup_reports','operator_log_records','generator_documents','generator_snapshots','resource_run_samples',
+    'generator_documents','generator_snapshots','resource_run_samples',
     'resource_container_summaries','resource_run_summaries','resource_container_samples','engine_quality_config',
 })
 
@@ -50,8 +50,6 @@ REQUIRED_TABLES = frozenset({
 # these are warn-level, each named with the migration file that creates it.
 # Pinned by tests: every entry sits in REQUIRED_TABLES and its migration creates it.
 FEATURE_TABLES = {
-    'operator_log_records': ('20261030010000_operator_log_records.sql','PG process logs'),
-    'operator_startup_reports': ('20261030010000_operator_log_records.sql','PG startup reports'),
     'credit_adjustments': ('20261009130000_private_credit_adjustment_evidence.sql',
                            'private credit-adjustment evidence (operator grant credits)'),
     'expense_guard_episodes': ('20261009213000_confirmed_expense_guard.sql', 'the confirmed expense guard'),
@@ -80,8 +78,6 @@ TABLE_ACCESS.update({
     'payment_credits': 'requi_payment',
     'payment_events': 'requi_payment',
     'operator_state_events': 'requi_operator_read',
-    'operator_log_records': 'requi_log_writer',
-    'operator_startup_reports': 'requi_log_writer',
     'credit_adjustments': None,
     'expense_guard_policy': None,
     'expense_guard_episodes': None,
@@ -158,11 +154,6 @@ def report_path(env):
 def write_report(report, path):
     """Best effort: the stdout report is the primary channel; never fail the start on this."""
     try:
-        from delivery_api.postgres_logs import selected
-        from delivery_api import config
-        if config.DATABASE_URL.startswith(('postgres://','postgresql://','host=')):
-            selected().save_startup(report.to_dict())
-            return True
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix('.tmp')
@@ -238,25 +229,10 @@ def _check_database(env, connect, connection_holder):
 
 
 def _check_process_logs(env,connect):
-    dsn=env.get('DELIVERY_DATABASE_URL','')
-    if not dsn.startswith(('postgres://','postgresql://','host=')):
-        return Check('process-log-store','refuse','skip','durable process logs','source-bound PG writer','legacy profile','DELIVERY_DATABASE_URL')
-    try:
-        from delivery_api.postgres_logs import PostgresLogs
-        repo=PostgresLogs(dsn,source_id=env.get('DELIVERY_LOG_SOURCE','delivery-runtime'))
-        connection=_pg_connect(connect,dsn)
-        try:
-            connection.execute('SET LOCAL ROLE requi_log_writer')
-            connection.execute("SET LOCAL statement_timeout='500ms'")
-            connection.execute("SELECT set_config('requi.log_source',%s,true)",(repo.source_id,))
-            connection.execute('SELECT id FROM public.operator_log_records LIMIT 0')
-            connection.execute('SELECT body FROM public.operator_startup_reports LIMIT 0')
-        finally:connection.close()
-        return Check('process-log-store','refuse','pass','durable process logs','stable source and restricted PG read probe','writer role and tables available','DELIVERY_LOG_SOURCE (default delivery-runtime); requi_log_writer')
-    except Exception as error:
-        return Check('process-log-store','refuse','fail','durable process logs','stable source and restricted PG read probe',
-                     'unavailable: '+type(error).__name__,'DELIVERY_LOG_SOURCE; requi_log_writer',
-                     'apply process-log migration; grant the application login SET membership in requi_log_writer; use one stable source across restarts')
+    # Local ephemeral evidence is optional, never a PG schema/role dependency.
+    return Check('process-log-store','warn','pass','ephemeral bounded server file logs',
+                 'asynchronous file writer; no database connection','file sink selected',
+                 'Debug dialog / server files')
 
 
 def _check_engine_quality(env,connect):
@@ -406,20 +382,20 @@ def _check_pool_budget(env, import_module):
         except ValueError as error:
             return Check('pool-budget','refuse','fail','valid local child selector',
                          'local opt-in only',str(error),'DELIVERY_CHILD_EXECUTION / DELIVERY_LOCAL_PREVIEW')
-    found = 'delivery pool %d + engine pool %d + supervisor pool 1 = %d clients' % (delivery_max or 0, engine_max or 0, (delivery_max or 0) + (engine_max or 0) + 1)
+    found = 'delivery pool %d + engine pool %d = %d clients' % (delivery_max or 0, engine_max or 0, (delivery_max or 0) + (engine_max or 0))
     if env.get('DELIVERY_CHILD_EXECUTION')=='local':found += ' (8 parent + 4 active child + 0 compatibility)'
     if delivery_max is None or engine_max is None:
         return Check('pool-budget', 'warn', 'warn', 'the configured process pools against the pooler client limit',
-                     'delivery pool + engine pool + supervisor1 <= %d clients (Supabase pooler, session mode)' % budget,
+                     'delivery pool + engine pool <= %d clients (Supabase pooler, session mode)' % budget,
                      'cannot determine one pool size (import failed) - engine compatibility check covers a missing engine',
                      'delivery_api.db_pool.PROCESS_POOL_MAX and interview_engine.pg_pool.ENGINE_POOL_MAX')
-    if delivery_max + engine_max + 1 > budget:
+    if delivery_max + engine_max > budget:
         return Check('pool-budget', 'warn', 'warn', 'the configured process pools against the pooler client limit',
-                     'delivery pool + engine pool + supervisor1 <= %d clients (Supabase pooler, session mode)' % budget,
+                     'delivery pool + engine pool <= %d clients (Supabase pooler, session mode)' % budget,
                      found + ' - over the limit; bursts will queue at checkout', 'db_pool / pg_pool configuration',
                      'lower a pool size or raise the pooler limit')
     return Check('pool-budget', 'warn', 'pass', 'the configured process pools against the pooler client limit',
-                 'delivery pool + engine pool + supervisor1 <= %d clients (Supabase pooler, session mode)' % budget,
+                 'delivery pool + engine pool <= %d clients (Supabase pooler, session mode)' % budget,
                  found, 'db_pool / pg_pool configuration')
 
 
@@ -521,7 +497,7 @@ def run(env, *, connect=None, import_module=importlib.import_module, required_ta
     connection_holder = []
     builders = [('artifacts-root-writable', 'refuse', lambda: _check_artifacts(env)),
                 ('database-role-claims', 'refuse', lambda: _check_database(env, connect, connection_holder)),
-                ('process-log-store', 'refuse', lambda: _check_process_logs(env,connect)),
+                ('process-log-store', 'warn', lambda: _check_process_logs(env,connect)),
                 ('resource-metrics-store', 'refuse', lambda: _check_resource_metrics(env,connect)),
                 ('engine-quality-store', 'refuse', lambda: _check_engine_quality(env,connect)),
                 ('required-tables', 'refuse', lambda: _check_tables(env, connection_holder, required_tables)),

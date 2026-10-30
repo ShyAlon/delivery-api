@@ -53,14 +53,3 @@ def test_main_refuses_to_start_when_the_artifacts_root_is_dead(tmp_path, monkeyp
     spawned = []
     monkeypatch.setattr(full_entry.subprocess, 'Popen', lambda *a, **k: spawned.append(a) or None)
     assert full_entry.main() == 2 and spawned == []
-
-
-# main() runs only in the real supervisor process. Restore its process-local
-# budget and close any created pool between in-process launcher unit tests.
-@pytest.fixture(autouse=True)
-def supervisor_process_isolation(monkeypatch):
-    from delivery_api import db_pool
-    old=db_pool.PROCESS_POOL_MAX
-    yield
-    db_pool.close_all()
-    db_pool.PROCESS_POOL_MAX=old

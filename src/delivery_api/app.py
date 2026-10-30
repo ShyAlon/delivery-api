@@ -426,8 +426,8 @@ async def lifespan(application:FastAPI):
     global _streams_closed_on_signal
     _streams_closed_on_signal=0
     config.validate_auth_config()
-    from .postgres_logs import selected as selected_process_logs
-    selected_process_logs()  # Validate stable source before admitting work; never local fallback.
+    from .process_logs import selected as selected_process_logs
+    selected_process_logs()  # Ephemeral process logs; no PG writer.
     from .run_metrics import selected_metrics
     selected_metrics(config.DATABASE_URL,os.environ)
     from . import cloud_execution
@@ -442,7 +442,7 @@ async def lifespan(application:FastAPI):
     run_metrics.start_idle_sampler()     # CPU and memory are read on a timer, so the operator page has numbers when no run is active
     loop_lag_task=spawn(_loop_lag_monitor())
     from .observability import LOG_PATH,stage_log_paths
-    print("Server log: Postgres operator_log_records" if config.CLOUD_TENANTS else f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
+    print("Server log: bounded ephemeral server files (Debug dialog)",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
     if not config.CLOUD_TENANTS and not control_plane_only():
         simulation.reconcile_interrupted();await jobs.start();await _recover_tasks();await _catch_up_interview_progress()
@@ -462,7 +462,7 @@ async def lifespan(application:FastAPI):
         from . import cloud_runtime
         cloud_runtime.uninstall()
         activity("server.shutdown.complete","Server shutdown complete",streams_closed=stream_count)
-        from .postgres_logs import flush as flush_evidence
+        from .process_logs import flush as flush_evidence
         await asyncio.to_thread(flush_evidence,5)
         if threading.current_thread() is threading.main_thread():
             for signum,previous in _previous_shutdown_handlers.items():
@@ -3337,7 +3337,7 @@ def _engine_log_owner(session_id:str):
 @app.get("/api/server-log")
 def server_log(minutes:int=Query(30,ge=1,le=240),a:auth.Actor=Depends(auth.require_actor),task_id:str|None=Query(None,max_length=240)):
     if config.CLOUD_TENANTS and a.admin:
-        from .postgres_logs import operator_view
+        from .process_logs import operator_view
         return operator_view(_operator_reader(),store,minutes,task_id=task_id if isinstance(task_id,str) else None)
     # Scrubbed, bounded, in-memory. A customer gets only lines made while serving their own requests; the operator also gets system lines.
     result=server_log_buffer.read(a.id,bool(a.admin),minutes)
@@ -3457,11 +3457,14 @@ def admin_operations_workspace(a:auth.Actor=Depends(auth.require_admin)):
 def debug_evidence(task_id:str|None=Query(None,max_length=240),a:auth.Actor=Depends(auth.require_actor)):
     if not a.admin:raise HTTPException(403,'operator access required')
     if config.CLOUD_TENANTS:
-        result=_operator_reader().logs(store,stream='diagnostics',task_id=task_id,limit=500)
+        from .process_logs import selected
+        with _operator_reader()._read(store,'logs.read') as (_,authority):pass
+        result=selected().records(stream='diagnostics',task_id=task_id,limit=500)
         rows=result['records']
-        return {'available':True,'availability':'available','text':'\n'.join(row['text'] for row in rows),
-            'count':len(rows),'truncated':result['truncated'],'unreadable':[],'task_id':task_id,
-            'scope':'operator diagnostic evidence','storage':'Postgres bounded process logs'}
+        return {'available':not result['unreadable'],'availability':'unreadable' if result['unreadable'] else 'available',
+            'text':'\n'.join(row['text'] for row in rows),'count':len(rows),'truncated':result['truncated'],
+            'unreadable':result['unreadable'],'task_id':task_id,'scope':'operator diagnostic evidence',
+            'storage':'ephemeral bounded server files'}
     return diagnostic_evidence.read(task_id=task_id)
 
 
@@ -3469,7 +3472,7 @@ def debug_evidence(task_id:str|None=Query(None,max_length=240),a:auth.Actor=Depe
 def debug_log_durability(a:auth.Actor=Depends(auth.require_actor)):
     if not a.admin:raise HTTPException(403,'operator access required')
     from .log_durability import snapshot
-    from .postgres_logs import writer_status
+    from .process_logs import writer_status
     return {**snapshot(),'writer':writer_status()}
 
 
@@ -3512,12 +3515,12 @@ def admin_operations_log_download(minutes:int=Query(60,ge=1,le=240),a:auth.Actor
     from . import ops_health
     from fastapi.responses import Response
     if config.CLOUD_TENANTS:
-        from .postgres_logs import operator_view
+        from .process_logs import operator_view
         import io,zipfile
         from datetime import datetime,timezone
         result=operator_view(_operator_reader(),store,minutes,download=True)
         name='requi-server-log-'+datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%SZ')+'.zip'
-        body='Requi.re server log\nSource: bounded Postgres cross-host process logs; oldest overwritten.\nScrubbed; exception messages cut; structured frames and unstructured engine stdout omitted.\nTruncated: '+str(result['truncated'])+'\n\n'+result['text']+'\n'
+        body='Requi.re server log\nSource: ephemeral bounded server files; loss on restart is expected.\nScrubbed; exception messages cut; structured frames and unstructured engine stdout omitted.\nTruncated: '+str(result['truncated'])+'\n\n'+result['text']+'\n'
         buffer=io.BytesIO()
         with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as archive:
             archive.writestr(name[:-4]+'.txt',body)
