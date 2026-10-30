@@ -78,8 +78,16 @@ def parse(pricing_html,api_html,model):
     text=' '.join(' '.join(a.article_text).split())
     match=re.search(r'The value must be between 1 and (\d+)K \((\d+)\)',text)
     if not match or output!='MAXIMUM: '+match[1]+'K':raise SourceChanged('output sources disagree or exact integer missing')
-    api_models=re.search(r'model string required Possible values: \[ ([^]]+) \] ID of the model to use',text)
-    if not api_models or {v.strip() for v in api_models[1].split(',')}!=set(models):raise SourceChanged('API model identities disagree')
+    # The OpenAPI renderer used brackets around enum values until October 30.
+    # Match either complete presentation within the model field only. Keep
+    # exact identities, cardinality and paired brackets fail-closed.
+    enum_values=r'deepseek-[a-z0-9-]{1,60}(?: , deepseek-[a-z0-9-]{1,60})*'
+    api_models=re.findall(r'model string required Possible values: (\[ '+enum_values+r' \]|'+enum_values+r') ID of the model to use',text)
+    if len(api_models)!=1:raise SourceChanged('API model identities disagree')
+    identities=api_models[0]
+    if identities.startswith('[ '):identities=identities[2:-2]
+    identities=identities.split(' , ')
+    if len(identities)!=len(models) or set(identities)!=set(models):raise SourceChanged('API model identities disagree')
     if not re.search(r'prices (?:listed below are in|are listed in) units of per 1M tokens',' '.join(' '.join(p.article_text).split())):raise SourceChanged('explicit per-million units required')
     rates={}
     labels={'1M INPUT TOKENS (CACHE HIT)':'cache_hit','1M INPUT TOKENS (CACHE MISS)':'cache_miss','1M OUTPUT TOKENS':'output'}
