@@ -88,8 +88,16 @@ for email,credits in everyone:
         cur.execute('SELECT 1 FROM credit_adjustments WHERE request_key=%s',(key,));already=cur.fetchone() is not None
     limit_action=None
     if email==own:
-        if lim is None:limit_action='create own row with $2.00 / 24h limit'
-        elif lim[1]!=OWN_LIMIT_USD_UNITS or lim[2]!=86400:limit_action='change own row to $2.00 / 24h (was %s)'%('no cap' if lim[1] is None else '%s units / %ss'%(lim[1],lim[2]))
+        # A completed modern transition must not be undone by onboarding.
+        cur.execute("SELECT to_regclass('public.own_test_expense_profiles')");has_profile_table=cur.fetchone()[0] is not None
+        modern=None
+        if has_profile_table:
+            cur.execute('SELECT limit_units,units_per_usd FROM own_test_expense_profiles WHERE owner_id=%s',(oid,));modern=cur.fetchone()
+        if modern:
+            if modern!=(OWN_LIMIT_USD_UNITS,10**12) or lim is None or lim[1] is not None:
+                die('OWN-PROFILE','modern own-test profile or legacy admission row conflicts','review own-test-profile output; never overwrite the profile automatically')
+        elif lim is None:limit_action='create own row with $2.00 / 24h limit'
+        elif not modern and (lim[1]!=OWN_LIMIT_USD_UNITS or lim[2]!=86400):limit_action='change own row to $2.00 / 24h (was %s)'%('no cap' if lim[1] is None else '%s units / %ss'%(lim[1],lim[2]))
     elif lim is None:limit_action='create standard row (3 concurrent, no cap)'
     plan.append(dict(email=email,oid=oid,acc=acc,credits=None if (credits is None or already) else credits,already=already,key=key,limit_action=limit_action,own=(email==own)))
 if not plan or all(p['credits'] is None and not p['limit_action'] for p in plan):
