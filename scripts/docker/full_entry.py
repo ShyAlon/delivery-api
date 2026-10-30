@@ -35,6 +35,21 @@ def tee_engine_output(engine,path,max_bytes=ENGINE_LOG_MAX_BYTES,out=None):
     server log. File lines carry a UTC timestamp so the read side can window them; the file is
     rotated once at max_bytes. Never fatal: without a writable file the output still passes through."""
     out=out or sys.stdout
+    from delivery_api import config as delivery_config
+    if delivery_config.DATABASE_URL.startswith(('postgres://','postgresql://','host=')):
+        # Keep the console live even when durable evidence is degraded. PG
+        # errors are nonrecursive and never invite the legacy file fallback.
+        from delivery_api.postgres_logs import emit
+        import re
+        def pump_pg():
+            try:
+                for line in engine.stdout:
+                    out.write(line);out.flush()
+                    found=re.search(r'\bsession=([0-9a-fA-F-]{36})\b',line)
+                    emit('engine',line.rstrip('\n'),session_id=found.group(1) if found else None)
+            finally:engine.stdout.close()
+        threading.Thread(target=pump_pg,daemon=True).start()
+        return
     sink=None
     try:
         path.parent.mkdir(parents=True,exist_ok=True)

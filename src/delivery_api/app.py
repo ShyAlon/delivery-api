@@ -426,6 +426,8 @@ async def lifespan(application:FastAPI):
     global _streams_closed_on_signal
     _streams_closed_on_signal=0
     config.validate_auth_config()
+    from .postgres_logs import selected as selected_process_logs
+    selected_process_logs()  # Validate stable source before admitting work; never local fallback.
     from . import cloud_execution
     if cloud_execution.admitted():
         # Open: start the in-process engines under the money gateway. A failure keeps execution closed (cloud_execution reports it).
@@ -438,7 +440,7 @@ async def lifespan(application:FastAPI):
     run_metrics.start_idle_sampler()     # CPU and memory are read on a timer, so the operator page has numbers when no run is active
     loop_lag_task=spawn(_loop_lag_monitor())
     from .observability import LOG_PATH,stage_log_paths
-    print(f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
+    print("Server log: Postgres operator_log_records" if config.CLOUD_TENANTS else f"Server log: {LOG_PATH.resolve()}",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
     if not config.CLOUD_TENANTS and not control_plane_only():
         simulation.reconcile_interrupted();await jobs.start();await _recover_tasks();await _catch_up_interview_progress()
@@ -3319,6 +3321,9 @@ def _engine_log_owner(session_id:str):
 
 @app.get("/api/server-log")
 def server_log(minutes:int=Query(30,ge=1,le=240),a:auth.Actor=Depends(auth.require_actor),task_id:str|None=Query(None,max_length=240)):
+    if config.CLOUD_TENANTS and a.admin:
+        from .postgres_logs import operator_view
+        return operator_view(_operator_reader(),store,minutes,task_id=task_id if isinstance(task_id,str) else None)
     # Scrubbed, bounded, in-memory. A customer gets only lines made while serving their own requests; the operator also gets system lines.
     result=server_log_buffer.read(a.id,bool(a.admin),minutes)
     engine=engine_log.read(a.id,bool(a.admin),minutes,_engine_log_owner)
@@ -3436,7 +3441,12 @@ def admin_operations_workspace(a:auth.Actor=Depends(auth.require_admin)):
 @app.get('/api/debug/evidence')
 def debug_evidence(task_id:str|None=Query(None,max_length=240),a:auth.Actor=Depends(auth.require_actor)):
     if not a.admin:raise HTTPException(403,'operator access required')
-    if config.CLOUD_TENANTS:_operator_reader()
+    if config.CLOUD_TENANTS:
+        result=_operator_reader().logs(store,stream='diagnostics',task_id=task_id,limit=500)
+        rows=result['records']
+        return {'available':True,'availability':'available','text':'\n'.join(row['text'] for row in rows),
+            'count':len(rows),'truncated':result['truncated'],'unreadable':[],'task_id':task_id,
+            'scope':'operator diagnostic evidence','storage':'Postgres bounded process logs'}
     return diagnostic_evidence.read(task_id=task_id)
 
 
@@ -3484,7 +3494,18 @@ def admin_operations_log_download(minutes:int=Query(60,ge=1,le=240),a:auth.Actor
     # Operator only: the scrubbed server log as a zip file holding one text file. Each download is recorded in the activity log with who took it.
     from . import ops_health
     from fastapi.responses import Response
-    name,data,lines=ops_health.log_zip(minutes)
+    if config.CLOUD_TENANTS:
+        from .postgres_logs import operator_view
+        import io,zipfile
+        from datetime import datetime,timezone
+        result=operator_view(_operator_reader(),store,minutes,download=True)
+        name='requi-server-log-'+datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%SZ')+'.zip'
+        body='Requi.re server log\nSource: bounded Postgres cross-host process logs; oldest overwritten.\nScrubbed; exception messages cut; structured frames and unstructured engine stdout omitted.\nTruncated: '+str(result['truncated'])+'\n\n'+result['text']+'\n'
+        buffer=io.BytesIO()
+        with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(name[:-4]+'.txt',body)
+        data=buffer.getvalue();lines=result['count']
+    else:name,data,lines=ops_health.log_zip(minutes)
     activity('ops.log_download','Operator downloaded the server log',actor=a.label,minutes=minutes,lines=lines)
     return Response(content=data,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="%s"'%name,'Cache-Control':'no-store'})
 

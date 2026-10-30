@@ -18,6 +18,10 @@ class OperatorReadStore:
             if not allowed or allowed['allowed'] is not True:raise TenantAccessDenied('database operator registry denied')
             yield connection,authority
 
+    def logs(self,owner_store,*,stream=None,task_id=None,limit=400):
+        from .postgres_logs import read_operator
+        return read_operator(self,owner_store,stream=stream,task_id=task_id,limit=limit)
+
     def sessions(self,owner_store,*,limit=100,before=None):
         if type(limit) is not int or not 1<=limit<=100:raise ValueError('bounded operator page required')
         if before is not None:

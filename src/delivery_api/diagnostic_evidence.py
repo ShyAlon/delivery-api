@@ -24,7 +24,8 @@ _installed=None
 
 class EvidenceHandler(RotatingFileHandler):
  def __init__(self,path=PATH,*,max_bytes=MAX_BYTES,backups=BACKUPS):
-  Path(path).parent.mkdir(parents=True,exist_ok=True)
+  from . import config
+  if not config.DATABASE_URL.startswith(('postgres://','postgresql://','host=')):Path(path).parent.mkdir(parents=True,exist_ok=True)
   super().__init__(path,maxBytes=max_bytes,backupCount=backups,encoding='utf-8',delay=True)
   self.setLevel(logging.WARNING)
  def emit(self,record):
@@ -41,6 +42,8 @@ class EvidenceHandler(RotatingFileHandler):
     import traceback
     row['frames']=[{'file':Path(f.filename).name,'function':f.name,'line':f.lineno}
                    for f in traceback.extract_tb(record.exc_info[2])[-30:]]
+   from .postgres_logs import emit
+   if emit('diagnostics',json.dumps(row,ensure_ascii=False),task_id=fields.get('task_id'),session_id=fields.get('session_id'),ts=record.created):return
    projected=logging.makeLogRecord({'msg':json.dumps(row,ensure_ascii=False),'levelno':record.levelno})
    super().emit(projected)
   except Exception as error:degraded('diagnostic-file',error)
