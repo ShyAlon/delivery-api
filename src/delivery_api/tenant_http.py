@@ -28,18 +28,33 @@ class SessionCheckCache:
     cached too - a fresh sign-in is a new session id, never blocked by it."""
     def __init__(self,check,ttl=SESSION_CHECK_TTL_SECONDS):
         import threading,time
-        self._check=check;self._ttl=ttl;self._time=time.monotonic;self._lock=threading.Lock();self._entries={}
+        self._check=check;self._ttl=ttl;self._time=time.monotonic;self._lock=threading.Lock();self._entries={};self._inflight={}
     def active(self,owner_id,session_id):
         key=(owner_id,session_id)
         now=self._time()
+        from concurrent.futures import Future
         with self._lock:
             hit=self._entries.get(key)
             if hit is not None and hit[0]>now:return hit[1]
-        active=self._check()
-        with self._lock:
-            if len(self._entries)>=1000:self._entries={key:entry for key,entry in self._entries.items() if entry[0]>now}
-            self._entries[key]=(now+self._ttl,active)
-        return active
+            pending=self._inflight.get(key)
+            leader=pending is None
+            if leader:
+                pending=Future();self._inflight[key]=pending
+        if not leader:return pending.result()
+        try:
+            active=self._check()
+            with self._lock:
+                if len(self._entries)>=1000:self._entries={key:entry for key,entry in self._entries.items() if entry[0]>now}
+                # TTL remains anchored to check START, never extended by waiting.
+                self._entries[key]=(now+self._ttl,active)
+            pending.set_result(active)
+            return active
+        except BaseException as error:
+            pending.set_exception(error)
+            raise
+        finally:
+            with self._lock:self._inflight.pop(key,None)
+
 
 
 class TenantMiddleware:
@@ -139,8 +154,8 @@ class TenantMiddleware:
                     import time as _time
                     from .postgres_scope import note_auth
                     _t_check=_time.monotonic()
-                    active=await run_in_threadpool(self.session_check.active,identity.owner_id,identity.session_id)
-                    note_auth(_time.monotonic()-_t_check)
+                    try:active=await run_in_threadpool(self.session_check.active,identity.owner_id,identity.session_id)
+                    finally:note_auth(_time.monotonic()-_t_check)
                     if not active:
                         scope['state'].pop('supabase_actor',None)
                         if path=='/api/auth':return await self.app(scope,receive,send)

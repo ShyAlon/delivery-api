@@ -155,6 +155,16 @@ class _RequestTransaction:
                 if self.first_begin is not None:stats.tx_held_seconds+=time.monotonic()-self.first_begin
 
 
+def release_read_before_engine():
+    """End a presentation read's DB batch before an engine needs the same pool.
+
+    Keeps preceding reads batched; future store calls use short transactions.
+    POST/answer/accounting have no shared read handle and are unaffected.
+    """
+    shared=_request_tx.get()
+    if shared is not None:shared.finish(False)
+
+
 _SETUP="SELECT set_config('role','requi_backend',true), set_config('request.jwt.claim.sub',%s,true), set_config('request.jwt.claim.session_id',%s,true)"
 
 
@@ -198,10 +208,12 @@ class ScopedPostgres:
         Returns (connection, reused)."""
         from psycopg_pool import PoolTimeout
         started=time.monotonic()
+        operation_token=db_pool.borrower_operation.set("delivery-scoped-transaction")
         try:connection=self._pool.getconn(timeout=POOL_WAIT_SECONDS)
         except PoolTimeout:
             note_checkout(time.monotonic()-started)
-            raise TimeoutError('the database connection limit (%d) stayed reached for %d s'%(POOL_OPEN_MAX,POOL_WAIT_SECONDS))
+            raise TimeoutError('database checkout unavailable after %g s (pool cap %d); see db.pool.timeout diagnostics'%(POOL_WAIT_SECONDS,POOL_OPEN_MAX))
+        finally:db_pool.borrower_operation.reset(operation_token)
         note_checkout(time.monotonic()-started)
         new=getattr(connection,'_delivery_pool_new',False)
         if new:
