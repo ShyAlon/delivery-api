@@ -34,6 +34,9 @@ preview_ollama_env(){
   printf 'DELIVERY_LOCAL_PREVIEW=1\n' >> "$1"
   printf 'DELIVERY_OLLAMA_MODEL=%s\n' "$2" >> "$1"
   local oport; oport=$(printf '%s' "$3" | sed -E 's#^[a-z]+://([^:/]+):?([0-9]*).*#\2#'); oport=${oport:-11434}
+  # The local preview is not a reason to pin 10GB idle for the engines' 30m default.
+  # Active inference runs normally; idle memory is released shortly after a call.
+  printf 'VMODEL_OLLAMA_KEEP_ALIVE=30s\n' >> "$1"
   printf 'OLLAMA_BASE_URL=%s\n' "http://host.docker.internal:$oport/v1" >> "$1"
   [ -z "${VMODEL_OLLAMA_NUM_CTX:-}" ] || printf 'VMODEL_OLLAMA_NUM_CTX=%s\n' "$VMODEL_OLLAMA_NUM_CTX" >> "$1"
 }

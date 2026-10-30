@@ -25,15 +25,31 @@ try:version=call('GET','/api/version')
 except Exception as exc:die('cannot reach the Ollama server at %s: %s: %s - start it (ollama serve)'%(host,type(exc).__name__,str(exc)[:200]))
 try:call('POST','/api/show',{'model':model})
 except Exception as exc:die('the model %s is not on this server: %s: %s - pull it first: ollama pull %s'%(model,type(exc).__name__,str(exc)[:200],model))
-# Load the model (local, $0) so the server reports the context window it will actually use.
-try:call('POST','/api/generate',{'model':model,'prompt':'','keep_alive':'5m','stream':False},timeout=600)
-except Exception as exc:die('the model did not load: %s: %s'%(type(exc).__name__,str(exc)[:200]))
-try:ps=call('GET','/api/ps')
-except Exception as exc:die('cannot read the loaded models: %s: %s'%(type(exc).__name__,str(exc)[:200]))
-loaded=[m for m in ps.get('models',[]) if str(m.get('model','')).split(':')[0]==model.split(':')[0]]
-if not loaded or not isinstance(loaded[0].get('context_length'),int) or loaded[0]['context_length']<=0:
-    die('the server did not report the loaded context window for %s'%model)
-server_ctx=loaded[0]['context_length']
+# Inspect an already-loaded model without changing its lifetime. It may belong
+# to another active run; never unload someone else's warm model.
+try:before=call('GET','/api/ps')
+except Exception as exc:die('cannot inspect model ownership before grounding: '+type(exc).__name__)
+def matching(ps):
+    return [m for m in ps.get('models',[]) if str(m.get('model','')).split(':')[0]==model.split(':')[0]]
+owned=not matching(before)
+try:
+    if owned:
+        call('POST','/api/generate',{'model':model,'prompt':'','keep_alive':'1m','stream':False},timeout=600)
+    ps=call('GET','/api/ps')
+    loaded=matching(ps)
+    if not loaded or not isinstance(loaded[0].get('context_length'),int) or loaded[0]['context_length']<=0:
+        die('the server did not report the loaded context window for %s'%model)
+    server_ctx=loaded[0]['context_length']
+except Exception as exc:die('model grounding failed: '+type(exc).__name__)
+finally:
+    if owned:
+        try:
+            call('POST','/api/generate',{'model':model,'prompt':'','keep_alive':0,'stream':False},timeout=60)
+            print('GROUNDING  temporary model unload requested (keep_alive=0)')
+        except Exception as exc:
+            die('temporary model unload failed: '+type(exc).__name__+'; run ollama stop '+model+' before retrying')
+    else:
+        print('GROUNDING  model was already loaded; its existing lifetime was not changed')
 try:requested=int(os.environ.get('VMODEL_OLLAMA_NUM_CTX') or '32768')
 except ValueError:die('VMODEL_OLLAMA_NUM_CTX is not a number')
 if requested<=0:die('VMODEL_OLLAMA_NUM_CTX must be positive')
