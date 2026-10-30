@@ -82,6 +82,23 @@ def _run(tmp_path, env_extra, settings=None, tty_input='yes\n'):
     _plant_source_trees(root)
     env = {'PATH': '%s:/usr/bin:/bin' % _stubbin(tmp_path), 'HOME': str(tmp_path),
            'REQUI_REPOS_ROOT': str(root)}
+    # This launcher harness stubs Docker/Git/network. Prove schema readiness
+    # separately; stub only the read-only schema command's psycopg catalog here.
+    hooks=tmp_path/'schema-hooks';hooks.mkdir(exist_ok=True)
+    (hooks/'sitecustomize.py').write_text("""import sys
+if sys.argv[0].endswith('schema-readiness.py'):
+ import psycopg
+ class Result:
+  def fetchone(self):
+   import os
+   return (os.environ.get('FAKE_SCHEMA_MISSING')!='1',)
+ class Conn:
+  def __enter__(self):return self
+  def __exit__(self,*a):pass
+  def execute(self,*a,**kw):return Result()
+ psycopg.connect=lambda *a,**kw:Conn()
+""")
+    env['PYTHONPATH']=str(hooks)
     env.update(env_extra)
     if settings is not None:
         env['PREVIEW_SETTINGS_FILE'] = str(settings)
@@ -514,3 +531,11 @@ def test_both_mode_requires_key_and_warns_of_local_grounding_before_confirmation
     assert 'Providers: both' in p.stdout and 'loads the local model once' in p.stdout
     assert 'ABORTED [NOT-CONFIRMED]' in p.stdout
     assert KEY not in p.stdout+p.stderr
+
+
+def test_missing_live_schema_aborts_before_grounding_or_build(tmp_path):
+    result=_run(tmp_path,{'PREVIEW_EXEC_PROVIDER':'ollama','FAKE_SCHEMA_MISSING':'1'},settings=_settings(tmp_path))
+    assert 'ABORTED [SCHEMA-NOT-READY]' in result.stdout
+    assert 'resource_run_samples' not in result.stderr  # no credential-bearing traceback
+    assert 'settings + grounding' not in result.stdout.split('== [1/9]')[-1]
+    assert '== building' not in result.stdout
