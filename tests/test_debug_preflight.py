@@ -10,7 +10,7 @@ def test_the_startup_report_is_read_back(tmp_path, monkeypatch,pg_log_evidence):
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
     target = tmp_path / 'requi-re' / 'logs' / 'preflight-report.json'
     target.parent.mkdir(parents=True)
-    pg_log_evidence.repository.save_startup({'status':'warn','checks':[{'name':'pool-budget'}]})
+    target.write_text(json.dumps({'status':'warn','checks':[{'name':'pool-budget'}]}))
     assert preflight_read.startup_report()['status'] == 'warn'
 
 
@@ -25,6 +25,7 @@ def test_a_missing_or_corrupt_report_is_none_not_an_error(tmp_path, monkeypatch,
 
 def test_the_endpoint_returns_the_startup_section(tmp_path, monkeypatch,pg_log_evidence):
     import delivery_api.app as module
+    monkeypatch.delenv('REQUI_PREFLIGHT_GENERATED_AT',raising=False)
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
     out = module.debug_preflight(a=type('A', (), {'label': 'u'})())
     assert out == {'startup': None}
@@ -70,7 +71,7 @@ def test_cached_report_freshness_compares_launcher_generation(tmp_path,monkeypat
     monkeypatch.setenv('REQUI_PREFLIGHT_GENERATED_AT','current-generation')
     monkeypatch.setenv('REQUI_PREFLIGHT_REPORT_SAVED','0')
     path=tmp_path/'requi-re/logs/preflight-report.json';path.parent.mkdir(parents=True)
-    pg_log_evidence.repository.save_startup({'generated_at':'old-generation','status':'pass'})
+    path.write_text(json.dumps({'generated_at':'old-generation','status':'pass'}))
     state=preflight_read.persistence_status()
     assert state['availability']=='stale' and state['write_status']=='failed'
     assert state['expected_generated_at']=='current-generation'

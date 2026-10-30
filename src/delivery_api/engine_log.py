@@ -53,12 +53,12 @@ def read(owner_id,admin,minutes,resolve_owner,path=None,now=None):
     minutes=max(1,min(int(minutes),240));since=now-minutes*60
     if path is None and config.DATABASE_URL.startswith(('postgres://','postgresql://','host=')):
         try:
-            from .postgres_logs import selected
+            from .process_logs import selected
             lines=[datetime.fromtimestamp(row['ts'],timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')+' '+row['text'] for row in selected().tail('engine',limit=MAX_LINES)]
-            path='postgres:operator_log_records/engine'
+            path='ephemeral:server-files/engine'
         except Exception as error:
             degraded('postgres-log-read',error)
-            return {'available':False,'availability':'unreadable','category':type(error).__name__,'text':'','count':0,'path':'postgres:operator_log_records/engine'}
+            return {'available':False,'availability':'unreadable','category':type(error).__name__,'text':'','count':0,'path':'ephemeral:server-files/engine'}
     else:
         path=path or default_path()
         lines=_tail(path)
@@ -122,20 +122,14 @@ class _MirrorHandler(logging.Handler):
                        (server_log_buffer.scrub(l) for l in fmt.formatException(record.exc_info).splitlines()[-40:])]
             stamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             text=''.join('%s %-7s %s: %s\n'%(stamp,record.levelname,record.name,row) for row in rows)
-            from .postgres_logs import emit
+            from .process_logs import emit
             found=_SESSION.search(line)
-            if config.DATABASE_URL.startswith(('postgres://','postgresql://','host=')):
-                # Preserve the safe row boundary before scrub flattens newlines.
-                # Traceback continuation rows inherit the originating session.
-                for row in rows:
-                    emit('engine','%s %-7s %s: %s'%(stamp,record.levelname,record.name,row),
-                         session_id=found.group(1) if found else None,ts=record.created)
-                return
-            with self._lock:
-                self._path.parent.mkdir(parents=True,exist_ok=True)
-                if self._path.exists() and self._path.stat().st_size>MIRROR_MAX_BYTES:
-                    os.replace(self._path,self._path.with_suffix('.log.1'))
-                with open(self._path,'a',encoding='utf-8') as handle:handle.write(text)
+            # Preserve the safe row boundary before scrub flattens newlines.
+            # Traceback continuation rows inherit the originating session.
+            for row in rows:
+                emit('engine','%s %-7s %s: %s'%(stamp,record.levelname,record.name,row),
+                     session_id=found.group(1) if found else None,ts=record.created)
+            return
         except Exception as error:
             self._dead=True
             degraded('engine-mirror',error)

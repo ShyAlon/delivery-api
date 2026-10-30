@@ -205,12 +205,12 @@ process.stdout.write('ok');
 def test_pool_budget_leaves_room_for_engine_sessions():
     # Guard for the 2026-10-26 EMAXCONNSESSION incident: the Supabase pooler
     # (session mode) allows 15 clients. After the 2026-10-26 pool redesign the
-    # whole delivery process shares ONE pool of 9 (delivery-api owns it and injects
+    # whole delivery process shares ONE pool of 10 (delivery-api owns it and injects
     # it into the in-process engine), so the budget is the pool alone with
     # headroom for non-pool clients (migrations, ops psql, the engine
     # heartbeat's own bookkeeping on standalone).
     from delivery_api import db_pool, postgres_scope
-    assert db_pool.PROCESS_POOL_MAX == 9
+    assert db_pool.PROCESS_POOL_MAX == 10
     assert postgres_scope.POOL_OPEN_MAX == db_pool.PROCESS_POOL_MAX
     assert db_pool.PROCESS_POOL_MAX <= 15 - 5
 

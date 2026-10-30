@@ -42,7 +42,7 @@ class EvidenceHandler(RotatingFileHandler):
     import traceback
     row['frames']=[{'file':Path(f.filename).name,'function':f.name,'line':f.lineno}
                    for f in traceback.extract_tb(record.exc_info[2])[-30:]]
-   from .postgres_logs import emit
+   from .process_logs import emit
    if emit('diagnostics',json.dumps(row,ensure_ascii=False),task_id=fields.get('task_id'),session_id=fields.get('session_id'),ts=record.created):return
    projected=logging.makeLogRecord({'msg':json.dumps(row,ensure_ascii=False),'levelno':record.levelno})
    super().emit(projected)

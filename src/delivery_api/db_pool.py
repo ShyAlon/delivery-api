@@ -3,7 +3,7 @@
 The 2026-10-26 EMAXCONNSESSION incident: every service pinned connections per
 concurrent actor and a few live sessions exhausted the 15-client Supabase
 pooler. The redesign (interview-engine #62/#63 + this change): one
-psycopg_pool per process (per DSN), bounded at PROCESS_POOL_MAX (default9). Delivery
+psycopg_pool per process (per DSN), bounded at PROCESS_POOL_MAX (default10). Delivery
 traffic (postgres_scope) and the in-process interview engine
 (TenantRegistryRouter pool= injection) both borrow from it.
 

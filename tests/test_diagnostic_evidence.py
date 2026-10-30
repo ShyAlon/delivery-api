@@ -3,19 +3,19 @@ import pytest
 from delivery_api import diagnostic_evidence as d
 
 
-def test_warning_error_survives_new_reader_and_scopes_task(tmp_path,pg_log_evidence):
+def test_warning_error_survives_new_reader_and_scopes_task(tmp_path,file_log_evidence):
  path=tmp_path/'diagnostics.jsonl';handler=d.EvidenceHandler(path,max_bytes=1024,backups=2)
  token=d.context.set({'request_id':'ref1','task_id':'task-a','session_id':'session-a'})
  try:
   handler.emit(logging.makeLogRecord({'name':'fixture','levelno':logging.WARNING,'levelname':'WARNING','msg':'failed password=secret-value'}))
  finally:d.context.reset(token)
- got=pg_log_evidence(task_id='task-a')
+ got=file_log_evidence(task_id='task-a')
  assert got['available'] and got['count']==1 and 'secret-value' not in got['text']
  assert 'ref1' in got['text'] and 'session-a' in got['text']
- assert pg_log_evidence(task_id='task-other')['count']==0
+ assert file_log_evidence(task_id='task-other')['count']==0
 
 
-def test_db_failure_never_records_query_values_or_exception_detail(monkeypatch,pg_log_evidence):
+def test_db_failure_never_records_query_values_or_exception_detail(monkeypatch,file_log_evidence):
  from delivery_api.postgres_scope import TimingConnection
  records=[];monkeypatch.setattr(d,'record',lambda *a,**k:records.append((a,k)))
  class Failure(Exception):sqlstate='23505'
@@ -27,24 +27,22 @@ def test_db_failure_never_records_query_values_or_exception_detail(monkeypatch,p
  assert 'private' not in str(records) and 'secret' not in str(records)
 
 
-def test_pg_retention_read_is_bounded_and_reports_truncation(tmp_path,pg_log_evidence,monkeypatch):
+def test_pg_retention_read_is_bounded_and_reports_truncation(tmp_path,file_log_evidence,monkeypatch):
  path=tmp_path/'diagnostics.jsonl';h=d.EvidenceHandler(path,max_bytes=400,backups=2)
- from delivery_api import postgres_logs
- original=pg_log_evidence.repository.append
- def bounded(stream,text,**fields):return original(stream,text,max_bytes=1200,max_rows=3,**fields)
- pg_log_evidence.repository.append=bounded
- monkeypatch.setattr(postgres_logs,'selected',lambda:pg_log_evidence.repository)
+ from delivery_api import process_logs as postgres_logs
+ original=file_log_evidence.repository.append
+ monkeypatch.setattr(postgres_logs,'retention',lambda stream:1200)
+ monkeypatch.setattr(postgres_logs,'selected',lambda:file_log_evidence.repository)
  for i in range(20):h.emit(logging.makeLogRecord({'name':'x','levelno':40,'levelname':'ERROR','msg':'failure '+str(i)}))
  assert not list(tmp_path.glob('diagnostics.jsonl*'))
- from delivery_api.postgres_logs import flush; assert flush(5)
- with pg_log_evidence.repository.transaction() as conn:
-  rows=conn.execute("SELECT text FROM operator_log_records WHERE stream='diagnostics'").fetchall()
- assert len(rows)==3
- result=pg_log_evidence(max_lines=2)
+ from delivery_api.process_logs import flush; assert flush(5)
+ rows=file_log_evidence.repository.tail('diagnostics')
+ assert 0<len(rows) and sum(len(r['text'].encode()) for r in rows)<=1200
+ result=file_log_evidence(max_lines=2)
  assert result['count']==2 and result['truncated'] and result['scope']=='operator diagnostic evidence'
 
 
-def test_debug_reader_requires_operator(monkeypatch,pg_log_evidence):
+def test_debug_reader_requires_operator(monkeypatch,file_log_evidence):
  from delivery_api import app as m
  from fastapi import HTTPException
  from types import SimpleNamespace
@@ -52,7 +50,7 @@ def test_debug_reader_requires_operator(monkeypatch,pg_log_evidence):
  assert error.value.status_code==403
 
 
-def test_http_noise_policy_keeps_errors_and_slow_requests(pg_log_evidence):
+def test_http_noise_policy_keeps_errors_and_slow_requests(file_log_evidence):
  from delivery_api.app import _log_request
  assert not _log_request('GET','/health',200,12)
  assert not _log_request('GET','/api/tasks/task-a',200,12)
@@ -62,7 +60,7 @@ def test_http_noise_policy_keeps_errors_and_slow_requests(pg_log_evidence):
  assert _log_request('POST','/api/tasks/task-a/answer',200,12)
 
 
-def test_python_warning_is_durably_recorded(tmp_path,pg_log_evidence):
+def test_python_warning_is_durably_recorded(tmp_path,file_log_evidence):
  import warnings
  path=tmp_path/'diagnostics.jsonl';handler=d.EvidenceHandler(path)
  logger=logging.getLogger('py.warnings');logger.addHandler(handler)
@@ -71,4 +69,4 @@ def test_python_warning_is_durably_recorded(tmp_path,pg_log_evidence):
    logging.captureWarnings(False);logging.captureWarnings(True)
    warnings.simplefilter('always');warnings.warn('synthetic warning',UserWarning)
  finally:logger.removeHandler(handler)
- assert 'synthetic warning' in pg_log_evidence()['text']
+ assert 'synthetic warning' in file_log_evidence()['text']

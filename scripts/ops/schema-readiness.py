@@ -15,7 +15,7 @@ MIGRATIONS={
  '20261030030000_resource_metrics_maintenance.sql':('function:requi_maintain_resource_metrics',),
  '20261030040000_engine_quality_config.sql':('table:engine_quality_config',),
 }
-ROLES=('requi_log_writer','requi_metrics_writer','requi_engine_config_read')
+ROLES=('requi_metrics_writer','requi_engine_config_read')
 
 def destructive(text):
     # Keep strings/function bodies, including dynamic SQL, but strip comments.
@@ -61,7 +61,7 @@ def main():
         rows=inventory(conn);missing=grants(conn)
     for row in rows:print(row['status'].upper(),row['file'],('REVIEW REQUIRED '+','.join(row['destructive'])) if row['status']!='present' and row['destructive'] else '')
     for role in missing:print('MISSING SET membership:',role)
-    if any(r['status']!='present' for r in rows) or missing:
+    if any(r['status']!='present' for r in rows if r['file']!='20261030010000_operator_log_records.sql') or missing:
         print('SCHEMA NOT READY: run python3 scripts/owner/apply-pg-cutover.py . for a dry review. No database changes made.');return 1
     print('SCHEMA READY: cutover catalog objects and app SET memberships present (not a full migration checksum proof).');return 0
 

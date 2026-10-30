@@ -217,7 +217,7 @@ def test_pool_budget_over_the_pooler_limit_warns():
     report = preflight.run(healthy_env(Path('/tmp/x-preflight-test')), connect=healthy_pg(),
                            import_module=fake_import(engine_modules(engine_pool_max=10)))
     check = {c.name: c for c in report.checks}['pool-budget']
-    assert check.status == 'warn' and '21' in check.found and '15' in check.expected
+    assert check.status == 'warn' and '20' in check.found and '15' in check.expected
 
 
 def test_provider_key_warns_only_when_execution_is_open():
@@ -269,7 +269,7 @@ def test_the_report_is_one_readable_checked_expected_found_where_document(tmp_pa
 
 def test_required_tables_match_the_migrations_on_disk():
     expected = preflight.expected_tables_from_migrations(ROOT / 'supabase' / 'migrations')
-    assert set(preflight.REQUIRED_TABLES) == expected, 'migration added or renamed a table: update REQUIRED_TABLES'
+    assert set(preflight.REQUIRED_TABLES) == expected-{'operator_log_records','operator_startup_reports'}, 'migration added or renamed a table: update REQUIRED_TABLES'
 
 
 def test_write_report_never_raises(tmp_path,monkeypatch):
@@ -419,7 +419,7 @@ def test_report_write_failure_warns_and_retains_stdout_authority(tmp_path,capsys
 @pytest.mark.parametrize('builder,name,level', [
     ('_check_artifacts', 'artifacts-root-writable', 'refuse'),
     ('_check_database', 'database-role-claims', 'refuse'),
-    ('_check_process_logs', 'process-log-store', 'refuse'),
+    ('_check_process_logs', 'process-log-store', 'warn'),
     ('_check_resource_metrics', 'resource-metrics-store', 'refuse'),
     ('_check_engine_quality', 'engine-quality-store', 'refuse'),
     ('_check_tables', 'required-tables', 'refuse'),
@@ -484,22 +484,12 @@ def test_main_exit_code_and_persisted_report_follow_crash_level(tmp_path, monkey
     assert ('REFUSING TO START' if exit_code else 'PASS WITH WARNINGS') in capsys.readouterr().out
 
 
-def test_pg_process_log_preflight_validates_stable_source_and_writer_access(tmp_path):
-    env=healthy_env(tmp_path)
-    env['DELIVERY_LOG_SOURCE']=''
-    report=preflight.run(env,connect=healthy_pg(),import_module=fake_import(engine_modules()))
-    check={c.name:c for c in report.checks}['process-log-store']
-    assert check.status=='fail' and check.level=='refuse' and report.refused
-    env.pop('DELIVERY_LOG_SOURCE')
-    seen=[]
-    def connect(dsn):
-        c=healthy_pg()(dsn);seen.append(c);return c
-    report=preflight.run(env,connect=connect,import_module=fake_import(engine_modules()))
-    assert {c.name:c for c in report.checks}['process-log-store'].status=='pass'
-    assert any('SET LOCAL ROLE requi_log_writer' in sql for c in seen for sql in c.calls)
-    assert any('operator_startup_reports' in sql for c in seen for sql in c.calls)
-    assert not any('INSERT ' in sql or 'DELETE ' in sql for c in seen for sql in c.calls)
-
+def test_process_log_preflight_never_connects_to_pg(tmp_path):
+    env=healthy_env(tmp_path);env['DELIVERY_LOG_SOURCE']=''
+    def forbidden(*a):raise AssertionError('process logs must not connect')
+    result=preflight._check_process_logs(env,forbidden)
+    assert result.status=='pass' and result.level=='warn'
+    assert 'file' in result.found
 
 def test_pg_metrics_preflight_refuses_file_override_or_invalid_source_and_probes_role(tmp_path):
     env=healthy_env(tmp_path)

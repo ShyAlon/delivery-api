@@ -100,55 +100,10 @@ def test_default_pg_runtime_log_routing_refuses_file_fallback_and_records_degrad
     assert logs.selected() is None and logs.emit('activity','legacy') is False
 
 
-def test_pg_activity_stage_and_diagnostic_handlers_never_create_files(monkeypatch,tmp_path):
-    import logging
-    from delivery_api import config,observability,diagnostic_evidence
-    monkeypatch.setattr(config,'DATABASE_URL',STATE['dsn'].replace('user=sandbox','user=delivery_app'))
-    monkeypatch.setenv('DELIVERY_LOG_SOURCE','runtime-routing')
-    path=tmp_path/'forbidden.log'
-    handler=observability._EvidenceFileHandler(path,delay=True)
-    handler.emit(logging.makeLogRecord({'levelno':20,'msg':'activity password=secret'}))
-    assert flush(5)
-    diagnostic=diagnostic_evidence.EvidenceHandler(tmp_path/'forbidden-diagnostic.jsonl')
-    diagnostic.emit(logging.makeLogRecord({'name':'test','levelno':40,'levelname':'ERROR','msg':'diagnostic'}))
-    assert flush(5)
-    monkeypatch.setattr(observability,'STAGE_LOG_PATHS',{'srs':tmp_path/'stages/srs.log'})
-    observability.event('test','stage row',phase='srs',task_id='owned')
-    assert flush(5)
-    assert not list(tmp_path.iterdir())
-    repo=repository('runtime-routing')
-    with repo.transaction() as c:
-        streams={r['stream'] for r in c.execute('SELECT stream FROM operator_log_records').fetchall()}
-    assert {'activity','diagnostics','stage:srs'}<=streams
 
 
-def test_pg_engine_mirror_never_materializes_file_and_keeps_source_bound_rows(monkeypatch,tmp_path):
-    import logging
-    from delivery_api import config,engine_log
-    monkeypatch.setattr(config,'DATABASE_URL',STATE['dsn'].replace('user=sandbox','user=delivery_app'))
-    monkeypatch.setenv('DELIVERY_LOG_SOURCE','engine-routing')
-    handler=engine_log._MirrorHandler(tmp_path/'engine.log',logging.INFO)
-    handler.emit(logging.makeLogRecord({'name':'interview_engine','levelno':30,'levelname':'WARNING','msg':'lease lost session=11111111-1111-4111-8111-111111111111'}))
-    assert flush(5)
-    assert not list(tmp_path.iterdir())
-    with repository('engine-routing').transaction() as c:
-        row=c.execute("SELECT text,session_id FROM operator_log_records WHERE stream='engine'").fetchone()
-        assert 'lease lost' in row['text'] and row['session_id']=='11111111-1111-4111-8111-111111111111'
 
 
-def test_diagnostic_projection_remains_parseable_without_secret_or_truncated_json(monkeypatch):
-    import logging,json
-    from delivery_api import config,diagnostic_evidence
-    monkeypatch.setattr(config,'DATABASE_URL',STATE['dsn'].replace('user=sandbox','user=delivery_app'))
-    monkeypatch.setenv('DELIVERY_LOG_SOURCE','json-projection')
-    handler=diagnostic_evidence.EvidenceHandler()
-    handler.emit(logging.makeLogRecord({'name':'test','levelno':40,'levelname':'ERROR','msg':'password=secret-value '+'ordinary words '*200}))
-    assert flush(5)
-    with repository('json-projection').transaction() as c:
-        row=c.execute("SELECT text FROM operator_log_records WHERE stream='diagnostics'").fetchone()
-    parsed=json.loads(row['text'])
-    assert parsed['logger']=='test' and parsed['level']=='ERROR'
-    assert 'secret-value' not in parsed['message'] and len(parsed['message'])<=2100
 
 
 def test_log_failure_is_nonrecursive_and_does_not_borrow_while_another_log_is_emitting(monkeypatch):
@@ -176,62 +131,10 @@ def test_per_stream_retention_uses_the_existing_total_budget_and_not_one_budget_
     assert sum(retention(s) for s in ('diagnostics','activity','engine',*('stage:'+p for p in ('intent','conops','needs','srs','architecture','specs','tests','validation'))))==32*1024*1024
 
 
-def test_pg_engine_read_keeps_customer_session_audience_and_operator_system_lines(monkeypatch,tmp_path):
-    from delivery_api import config,engine_log
-    monkeypatch.setattr(config,'DATABASE_URL',STATE['dsn'].replace('user=sandbox','user=delivery_app'))
-    monkeypatch.setenv('DELIVERY_LOG_SOURCE','engine-reader')
-    sid='11111111-1111-4111-8111-111111111111';other='22222222-2222-4222-8222-222222222222'
-    repo=repository('engine-reader')
-    repo.append('engine','session='+sid+' owned line',session_id=sid)
-    repo.append('engine','session='+other+' foreign line',session_id=other)
-    repo.append('engine','system line')
-    monkeypatch.setattr(engine_log,'_tail',lambda path:(_ for _ in ()).throw(AssertionError('file read forbidden')))
-    resolve=lambda session:'owner' if session==sid else 'other'
-    own=engine_log.read('owner',False,30,resolve)
-    assert own['available'] and 'owned line' in own['text'] and 'foreign line' not in own['text'] and 'system line' not in own['text']
-    admin=engine_log.read('owner',True,30,resolve)
-    assert 'foreign line' in admin['text'] and 'system line' in admin['text']
 
 
-def test_debug_evidence_pg_path_uses_registry_reader_not_local_file(monkeypatch):
-    from types import SimpleNamespace
-    from delivery_api import app,config,diagnostic_evidence
-    seen=[]
-    class Reader:
-        def logs(self,store,**kwargs):
-            seen.append(kwargs)
-            return {'records':[{'text':'{"message":"safe"}'}],'truncated':False,'scope':'reviewed_cross_user_operator_read'}
-    monkeypatch.setattr(config,'CLOUD_TENANTS',True)
-    monkeypatch.setattr(app,'_operator_reader',lambda:Reader())
-    monkeypatch.setattr(diagnostic_evidence,'read',lambda **kw:(_ for _ in ()).throw(AssertionError('legacy file read forbidden')))
-    result=app.debug_evidence('task-x',SimpleNamespace(admin=True))
-    assert result['available'] and result['count']==1 and 'safe' in result['text']
-    assert seen==[{'stream':'diagnostics','task_id':'task-x','limit':500}]
 
 
-def test_pg_full_service_engine_tee_preserves_stdout_without_file(monkeypatch,tmp_path):
-    import importlib.util,subprocess,sys,time
-    from pathlib import Path
-    from delivery_api import config
-    root=Path(__file__).resolve().parents[1]
-    spec=importlib.util.spec_from_file_location('pg_full_entry',root/'scripts/docker/full_entry.py')
-    entry=importlib.util.module_from_spec(spec);spec.loader.exec_module(entry)
-    monkeypatch.setattr(config,'DATABASE_URL',STATE['dsn'].replace('user=sandbox','user=delivery_app'))
-    monkeypatch.setenv('DELIVERY_LOG_SOURCE','tee-test')
-    class Output:
-        def __init__(self):self.rows=[]
-        def write(self,line):self.rows.append(line)
-        def flush(self):pass
-    output=Output()
-    process=subprocess.Popen([sys.executable,'-c','print("hello engine")'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
-    entry.tee_engine_output(process,tmp_path/'engine.log',out=output);process.wait()
-    for _ in range(50):
-        if process.stdout.closed:break
-        time.sleep(.02)
-    assert ''.join(output.rows)=='hello engine\n'
-    assert not list(tmp_path.iterdir())
-    with repository('tee-test').transaction() as c:
-        assert c.execute("SELECT text FROM operator_log_records WHERE stream='engine'").fetchone()['text']=='hello engine'
 
 
 def test_pg_log_transaction_has_bounded_statement_and_lock_waits():
@@ -269,66 +172,10 @@ def test_database_rejects_nonfinite_timestamps_even_for_direct_writer():
             c.execute("INSERT INTO operator_log_records(source_id,stream,ts,text,byte_size) VALUES(%s,'activity',%s,'x',1)",(repo.source_id,stamp))
 
 
-def test_pg_operator_server_log_and_download_read_crosshost_registry_rows_only(monkeypatch):
-    from types import SimpleNamespace
-    from delivery_api import app,config,engine_log,server_log_buffer
-    import time,io,zipfile
-    monkeypatch.setattr(config,'CLOUD_TENANTS',True)
-    calls=[]
-    class Reader:
-        def logs(self,store,**kw):
-            calls.append(kw)
-            return {'records':[{'stream':'activity','ts':time.time(),'text':'cross-host activity'},
-                               {'stream':'diagnostics','ts':time.time(),'text':'{"logger":"lib","level":"ERROR","message":"'+'x'*300+'","frames":[{"file":"private.py"}]}'}],
-                    'truncated':True,'registry_version':'v1'}
-    monkeypatch.setattr(app,'_operator_reader',lambda:Reader())
-    monkeypatch.setattr(server_log_buffer,'read',lambda *a:(_ for _ in ()).throw(AssertionError('memory read forbidden')))
-    monkeypatch.setattr(engine_log,'read',lambda *a:(_ for _ in ()).throw(AssertionError('source writer read forbidden')))
-    actor=SimpleNamespace(id='operator',admin=True,label='operator')
-    result=app.server_log(30,actor,None)
-    assert 'cross-host activity' in result['text'] and result['truncated']
-    response=app.admin_operations_log_download(30,actor)
-    with zipfile.ZipFile(io.BytesIO(response.body)) as z:
-        text=z.read(z.namelist()[0]).decode()
-    assert 'cross-host activity' in text and 'private.py' not in text and 'x'*170 not in text
-    assert len(calls)==2
 
 
-def test_pg_engine_mirror_preserves_traceback_rows_instead_of_one_truncated_envelope(monkeypatch,tmp_path):
-    import logging,sys
-    from delivery_api import config,engine_log
-    monkeypatch.setattr(config,'DATABASE_URL',STATE['dsn'].replace('user=sandbox','user=delivery_app'))
-    monkeypatch.setenv('DELIVERY_LOG_SOURCE','traceback-rows')
-    try:raise ValueError('safe failure marker')
-    except ValueError:info=sys.exc_info()
-    handler=engine_log._MirrorHandler(tmp_path/'forbidden.log',logging.INFO)
-    handler.emit(logging.makeLogRecord({'name':'interview_engine','levelno':40,'levelname':'ERROR','msg':'failed session=11111111-1111-4111-8111-111111111111','exc_info':info}))
-    assert flush(5)
-    rows=repository('traceback-rows').tail('engine')
-    assert len(rows)>=3 and any('ValueError: safe failure marker' in r['text'] for r in rows)
-    assert not (tmp_path/'forbidden.log').exists()
 
 
-def test_pg_startup_report_restart_read_without_local_copy(monkeypatch,tmp_path):
-    import importlib.util
-    from pathlib import Path
-    from delivery_api import config,preflight_read
-    path=Path(__file__).resolve().parents[1]/'scripts/docker/preflight.py'
-    spec=importlib.util.spec_from_file_location('startup_pg_report',path)
-    preflight=importlib.util.module_from_spec(spec);__import__('sys').modules[spec.name]=preflight;spec.loader.exec_module(preflight)
-    monkeypatch.setattr(config,'DATABASE_URL',STATE['dsn'].replace('user=sandbox','user=delivery_app'))
-    monkeypatch.setenv('DELIVERY_LOG_SOURCE','startup-report')
-    target=tmp_path/'forbidden.json'
-    report=preflight.Report(generated_at='2026-10-30T01:00:00Z')
-    report.checks.append(preflight.Check('safe-check','warn','pass','check','expected','found','where'))
-    assert preflight.write_report(report,target)
-    assert not target.exists()
-    assert preflight_read.startup_report()==report.to_dict()
-    report.generated_at='2026-10-30T02:00:00Z'
-    assert preflight.write_report(report,target)
-    assert preflight_read.startup_report()['generated_at']==report.generated_at
-    with repository('startup-report').transaction() as c:
-        assert c.execute('SELECT count(*) n FROM operator_startup_reports').fetchone()['n']==1
 
 
 def test_operator_download_excludes_unstructured_engine_trace_source(monkeypatch):

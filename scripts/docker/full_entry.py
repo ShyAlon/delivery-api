@@ -35,49 +35,17 @@ def tee_engine_output(engine,path,max_bytes=ENGINE_LOG_MAX_BYTES,out=None):
     server log. File lines carry a UTC timestamp so the read side can window them; the file is
     rotated once at max_bytes. Never fatal: without a writable file the output still passes through."""
     out=out or sys.stdout
-    from delivery_api import config as delivery_config
-    if delivery_config.DATABASE_URL.startswith(('postgres://','postgresql://','host=')):
-        # Keep the console live even when durable evidence is degraded. PG
-        # errors are nonrecursive and never invite the legacy file fallback.
-        from delivery_api.postgres_logs import emit
-        import re
-        def pump_pg():
-            try:
-                for line in engine.stdout:
-                    out.write(line);out.flush()
-                    found=re.search(r'\bsession=([0-9a-fA-F-]{36})\b',line)
-                    emit('engine',line.rstrip('\n'),session_id=found.group(1) if found else None)
-            finally:engine.stdout.close()
-        threading.Thread(target=pump_pg,daemon=True).start()
-        return
-    sink=None
-    try:
-        path.parent.mkdir(parents=True,exist_ok=True)
-        if path.exists() and path.stat().st_size>max_bytes:os.replace(path,path.with_suffix('.log.1'))
-        sink=open(path,'a',encoding='utf-8',buffering=1)
-    except OSError as error:
-        print('WARNING diagnostic.evidence.degraded source=engine-tee category='+type(error).__name__,file=sys.stderr,flush=True)
-        sink=None
-    def pump():
-        nonlocal sink
-        for line in engine.stdout:
-            out.write(line);out.flush()
-            if sink:
-                try:
-                    if sink.tell()>max_bytes:
-                        sink.close();os.replace(path,path.with_suffix('.log.1'))
-                        sink=open(path,'a',encoding='utf-8',buffering=1)
-                    stamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-                    sink.write(stamp+' '+line)
-                except OSError as error:
-                    print('WARNING diagnostic.evidence.degraded source=engine-tee category='+type(error).__name__,file=sys.stderr,flush=True)
-                    try:sink.close()
-                    except OSError:pass
-                    sink=None
-        if sink:
-            try:sink.close()
-            except OSError:pass
-    threading.Thread(target=pump,daemon=True).start()
+    from delivery_api.process_logs import emit
+    import re
+    def pump_pg():
+        try:
+            for line in engine.stdout:
+                out.write(line);out.flush()
+                found=re.search(r'\bsession=([0-9a-fA-F-]{36})\b',line)
+                emit('engine',line.rstrip('\n'),session_id=found.group(1) if found else None)
+        finally:engine.stdout.close()
+    threading.Thread(target=pump_pg,daemon=True).start()
+    return
 
 
 def engine_env(env):
@@ -147,17 +115,9 @@ def main():
     if problems:
         for p in problems:print('full service not started:',p,file=sys.stderr)
         return 2
-    from delivery_api import db_pool
-    # This process also persists the engine stdout tee. One connection only;
-    # default aggregate is delivery9 + compatibility4 + supervisor1 =14/15.
     report=preflight.run(os.environ)
-    db_pool.PROCESS_POOL_MAX=1
     print(report.render_text(),flush=True)
     saved=preflight.write_report(report,preflight.report_path(os.environ))
-    # Release the startup connection before launch; the engine tee may later
-    # borrow the supervisor's single capped connection.
-    from delivery_api.db_pool import close_all
-    close_all()
     os.environ['REQUI_PREFLIGHT_GENERATED_AT']=report.generated_at
     os.environ['REQUI_PREFLIGHT_REPORT_SAVED']='1' if saved else '0'
     if report.refused:

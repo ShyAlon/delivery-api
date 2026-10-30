@@ -1,10 +1,10 @@
 import asyncio,time,threading
 import pytest
-from delivery_api import postgres_logs
+from delivery_api import process_logs as postgres_logs
 
 def test_slow_log_storage_does_not_block_event_loop(monkeypatch):
     def slow(*a,**kw):time.sleep(.15)
-    monkeypatch.setattr(postgres_logs.PostgresLogs,'append',slow)
+    monkeypatch.setattr(postgres_logs.FileLogs,'append',slow)
     async def measure():
         start=time.perf_counter()
         for i in range(3):postgres_logs.emit('activity','fixture')
@@ -18,7 +18,7 @@ def test_slow_log_storage_does_not_block_event_loop(monkeypatch):
 def test_pending_status_is_not_durability_ack(monkeypatch):
     entered=threading.Event();release=threading.Event()
     def blocked(*a,**kw):entered.set();release.wait(2)
-    monkeypatch.setattr(postgres_logs.PostgresLogs,'append',blocked)
+    monkeypatch.setattr(postgres_logs.FileLogs,'append',blocked)
     try:
         assert postgres_logs.emit('activity','queued')
         assert entered.wait(1)
@@ -44,7 +44,7 @@ def test_handler_contention_cannot_stall_loop_or_anonymous_client_log(monkeypatc
     # A slow writer is already busy when the async middleware logs a second line.
     entered=threading.Event();release=threading.Event()
     def blocked(*a,**kw):entered.set();release.wait(2)
-    monkeypatch.setattr(postgres_logs.PostgresLogs,'append',blocked)
+    monkeypatch.setattr(postgres_logs.FileLogs,'append',blocked)
     observability.event('test.slow','fixture',console=False)
     assert entered.wait(1)
     async def run():
@@ -59,7 +59,7 @@ def test_handler_contention_cannot_stall_loop_or_anonymous_client_log(monkeypatc
 
 def test_enqueue_captures_timestamp_before_delayed_persistence(monkeypatch):
     stamps=[]
-    monkeypatch.setattr(postgres_logs.PostgresLogs,'append',lambda *a,**kw:stamps.append(kw['ts']))
+    monkeypatch.setattr(postgres_logs.FileLogs,'append',lambda *a,**kw:stamps.append(kw['ts']))
     before=time.time()
     assert postgres_logs.emit('activity','timestamp')
     assert postgres_logs.flush(3)
