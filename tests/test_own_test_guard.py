@@ -159,3 +159,17 @@ def test_future_or_mixed_scale_settled_expense_is_not_free(profile):
                 else:c.execute("UPDATE provider_attempts SET settled_at=%s,quote=jsonb_set(quote,'{expense_units_per_usd}','10') WHERE attempt_id=%s",(time.time(),aid))
             with s._postgres.transaction() as c:
                 assert c.execute('SELECT requi_own_test_expense_guard(%s,1) AS reason',(job,)).fetchone()['reason']=='own_test_expense_history_unverifiable'
+
+
+def test_transition_does_not_erase_unresolved_compute(credit_account):
+    import psycopg
+    from delivery_api.own_test_transition import transition,SCALE
+    s,_,job=credit_account
+    with tenant_context(A):s.finish_worker(job)
+    with psycopg.connect(DSN) as c:
+        email=c.execute('SELECT email FROM auth.users WHERE id=%s',(A.owner_id,)).fetchone()[0]
+        c.execute('UPDATE admission_limits SET expense_limit=%s,period_seconds=86400 WHERE owner_id=%s',(2*SCALE,A.owner_id))
+        c.execute("INSERT INTO retail_compute_segments(segment_key,owner_id,job_id,phase_key,rates,state,started_at) VALUES(%s,%s,%s,'needs','{}','unresolved',0)",('profile-compute-'+uuid.uuid4().hex,A.owner_id,job))
+        with pytest.raises(AdmissionDenied,match='compute accounting'):transition(c,email,apply=True)
+        assert c.execute('SELECT * FROM own_test_expense_profiles WHERE owner_id=%s',(A.owner_id,)).fetchone() is None
+        c.rollback()
