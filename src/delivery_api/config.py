@@ -19,9 +19,10 @@ def default_data_dir() -> Path:
     return Path.home() / ".local" / "share" / "requi-re"
 
 DEFAULT_DB_PATH = default_data_dir() / "delivery.db"
-# Configuration import is read-only. The selected SQLiteStore creates only its
-# actual parent when opened; cloud/override users must not touch the default home.
-DATABASE_URL = os.environ.get("DELIVERY_DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH}")
+# Import validates configuration only, never creates directories or connects.
+DATABASE_URL = os.environ.get("DELIVERY_DATABASE_URL", "").strip()
+if not DATABASE_URL.startswith(("postgres://", "postgresql://")):
+    raise RuntimeError("PostgreSQL is required. Set DELIVERY_DATABASE_URL to the approved database DSN; no local storage fallback.")
 SUPABASE_URL = os.environ.get("DELIVERY_SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.environ.get("DELIVERY_SUPABASE_ANON_KEY", "")
 ARTIFACT_PUBLISH = os.environ.get("DELIVERY_ARTIFACT_PUBLISH", "").strip() == "1"  # PR B: publish manifest revisions after produce; default OFF

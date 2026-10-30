@@ -272,7 +272,9 @@ def test_required_tables_match_the_migrations_on_disk():
     assert set(preflight.REQUIRED_TABLES) == expected, 'migration added or renamed a table: update REQUIRED_TABLES'
 
 
-def test_write_report_never_raises(tmp_path):
+def test_write_report_never_raises(tmp_path,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'DATABASE_URL','legacy-reference-only')
     report = preflight.run(healthy_env(tmp_path), connect=healthy_pg(), import_module=fake_import(engine_modules()))
     (tmp_path / 'blocked').write_text('a file, not a directory')
     preflight.write_report(report, tmp_path / 'blocked' / 'preflight-report.json')  # unwritable target: swallowed
@@ -402,7 +404,9 @@ def test_unknown_optional_role_does_not_crash_the_table_probe():
     finally:preflight.TABLE_ACCESS.clear();preflight.TABLE_ACCESS.update(policy)
 
 
-def test_report_write_failure_warns_and_retains_stdout_authority(tmp_path,capsys):
+def test_report_write_failure_warns_and_retains_stdout_authority(tmp_path,capsys,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'DATABASE_URL','legacy-reference-only')
     blocker=tmp_path/'blocked';blocker.write_text('file')
     report=preflight.Report(generated_at='now')
     assert preflight.write_report(report,blocker/'report.json') is False
@@ -466,6 +470,8 @@ def test_crash_report_never_echoes_untrusted_exception_details(tmp_path, monkeyp
 
 @pytest.mark.parametrize('builder,exit_code', [('_check_engine', 2), ('_check_feature_tables', 0)])
 def test_main_exit_code_and_persisted_report_follow_crash_level(tmp_path, monkeypatch, capsys, builder, exit_code):
+    from delivery_api import config
+    monkeypatch.setattr(config,'DATABASE_URL','legacy-reference-only')
     real_run = preflight.run
     def crash(*args): raise RuntimeError('injected')
     monkeypatch.setattr(preflight, builder, crash)
@@ -509,3 +515,8 @@ def test_pg_metrics_preflight_refuses_file_override_or_invalid_source_and_probes
     assert {c.name:c for c in report.checks}['resource-metrics-store'].status=='pass'
     assert any('SET LOCAL ROLE requi_metrics_writer' in sql for c in seen for sql in c.calls)
     assert not any('INSERT ' in sql or 'DELETE ' in sql for c in seen for sql in c.calls)
+
+
+def test_resource_metrics_access_policy_matches_the_restricted_writer_role():
+    for table in ('resource_run_samples','resource_run_summaries','resource_container_samples','resource_container_summaries'):
+        assert preflight.TABLE_ACCESS[table]=='requi_metrics_writer'

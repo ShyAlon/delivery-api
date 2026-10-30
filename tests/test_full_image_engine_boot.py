@@ -32,23 +32,21 @@ def test_entry_refuses_start_without_a_session_persistence_choice(tmp_path):
 
 
 @pytest.mark.engine_integration
-def test_entry_boots_engine_to_token_challenge_with_file_sessions(tmp_path):
-    """With the explicit file choice (the in-image smoke's premise: no database),
-    the real entry must boot both processes and the engine must answer an
-    unauthenticated probe with 401, not 500."""
+def test_entry_boots_engine_to_token_challenge_with_owned_pg(tmp_path,pg_runtime_environment):
+    """The real PG entry boots both services and preserves the token boundary."""
     engine_source=os.environ.get('DELIVERY_TEST_ENGINE_SOURCE')
     if not engine_source:pytest.skip('explicit engine source required')
     import socket
     with socket.socket() as s:
         s.bind(('127.0.0.1',0));delivery_port=s.getsockname()[1]
-    env=_base_env(tmp_path)|{'DELIVERY_PORT':str(delivery_port),'INTERVIEW_ENGINE_SESSIONS_FILE':'1',
+    env=_base_env(tmp_path)|pg_runtime_environment()|{'DELIVERY_PORT':str(delivery_port),'INTERVIEW_ENGINE_SESSIONS_FILE':'0','INTERVIEW_ENGINE_TENANTS':'1',
         'PYTHONPATH':str(Path(engine_source)/'src')+os.pathsep+str(Path(__file__).resolve().parents[1]/'src')}
     proc=subprocess.Popen([sys.executable,str(ENTRY)],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
     try:
         deadline=time.time()+120
         while time.time()<deadline:
             if proc.poll() is not None:
-                raise AssertionError('entry exited early: '+proc.stdout.read()[-2000:])
+                raise AssertionError('entry exited early: '+proc.stdout.read()[-12000:])
             try:
                 with urllib.request.urlopen(f'http://127.0.0.1:{delivery_port}/health',timeout=3) as r:
                     health=json.load(r)

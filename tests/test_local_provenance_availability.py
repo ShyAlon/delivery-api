@@ -3,6 +3,7 @@ from delivery_api import app as module
 
 
 def test_checkpoint_absence_is_explicit_without_invented_turns(tmp_path,monkeypatch):
+    monkeypatch.setattr(module,'store',SimpleNamespace())
     monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
     monkeypatch.setattr(module,'_recorded_engine_session',lambda task:'session')
     monkeypatch.setattr(module,'authorized_session',lambda *args:tmp_path)
@@ -25,6 +26,8 @@ def test_corrupt_model_usage_is_not_empty_provenance(tmp_path,monkeypatch):
 
 
 def test_validation_supplement_status_does_not_hide_corruption(tmp_path,monkeypatch):
+    monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+    monkeypatch.setattr(module,'store',SimpleNamespace())
     from fastapi import HTTPException
     monkeypatch.setattr(module,'_recorded_engine_session',lambda task:None)
     def artifact(*args):raise HTTPException(404,'missing')

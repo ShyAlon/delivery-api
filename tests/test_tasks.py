@@ -509,7 +509,8 @@ def test_fragmented_envelope_bytes_never_become_a_decision(tmp_path,pg_scoped_wo
     assert not any(e['kind'] in ('founder_decision','waiting_input') for e in events)
 
 def test_activity_mirrors_phase_events_to_data_stage_log(monkeypatch,tmp_path):
-    from delivery_api import observability
+    from delivery_api import observability,config
+    monkeypatch.setattr(config,'DATABASE_URL','legacy-reference-only')
     path=tmp_path/'logs'/'stages'/'conops.log';monkeypatch.setitem(observability.STAGE_LOG_PATHS,'conops',path)
     observability.event('engine.output','Structured stage line',task_id='t1',phase='conops')
     assert path.is_file() and 'engine.output' in path.read_text() and 'Structured stage line' in path.read_text()

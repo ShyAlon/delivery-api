@@ -37,6 +37,8 @@ STATE="$STAGE/.build-state"; OLD_STATE="$OUTPUT/.build-state"
 state_get(){ [ -f "$OLD_STATE" ] && awk -F= -v key="$1" '$1==key{print substr($0,index($0,"=")+1);exit}' "$OLD_STATE" || true; }
 repo_fingerprint(){ local repo=$1 status diffhash; status=$(git -C "$REPOS_ROOT/$repo" status --porcelain); diffhash=clean; [ -n "$status" ] && diffhash=$(git -C "$REPOS_ROOT/$repo" diff --binary HEAD | shasum -a 256 | awk '{print $1}'); printf '%s:%s' "$(git -C "$REPOS_ROOT/$repo" rev-parse HEAD)" "$diffhash"; }
 DEPS='fastapi uvicorn pydantic httpx python-multipart langgraph langgraph-checkpoint-sqlite langchain-core langchain-openai langchain-ollama python-dotenv typesafe-sdk==0.7.0 pyarrow>=17,<24 libsql>=0.1.11,<0.2'
+PG_DEPS='psycopg[binary]>=3.2,<4 psycopg-pool>=3.2,<4 PyJWT[crypto]>=2.10,<3'
+DEPS="$DEPS $PG_DEPS"
 WITH_TURSO=1
 DEP_INPUT="$DEPS|$($BOOTSTRAP_PYTHON --version 2>&1)"
 for repo in $PACKAGES; do DEP_INPUT="$DEP_INPUT|$(shasum -a 256 "$REPOS_ROOT/$repo/pyproject.toml" | awk '{print $1}')"; done
@@ -97,8 +99,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; PYTHON="$ROOT/runtime/bin/
 export VMODEL_ARTIFACTS_DIR="${VMODEL_ARTIFACTS_DIR:-$PWD/artifacts}"
 [ -x "$PYTHON" ] || { echo "Error: Requi.re runtime is incomplete."; echo "Likely cause: this launcher was separated from its built runtime."; echo "Next: copy the whole dist/requi-re folder and retry."; exit 1; }
 "$PYTHON" -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core' >/dev/null 2>&1 || { echo "Error: Requi.re runtime validation failed."; echo "Likely cause: the built folder is incomplete or incompatible."; echo "Next: rebuild on this operating system with scripts/build-dist.sh --clean."; exit 1; }
-export REQUI_RE_DIST=1 INTERVIEW_ENGINE_PYTHON="$PYTHON" DELIVERY_BASIC_AUTH_ENABLED="${DELIVERY_BASIC_AUTH_ENABLED:-1}" DELIVERY_COOKIE_SECURE="${DELIVERY_COOKIE_SECURE:-0}" OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}"
-DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/requi-re"; mkdir -p "$DATA_HOME"; export DELIVERY_DATABASE_URL="${DELIVERY_DATABASE_URL:-sqlite:///$DATA_HOME/delivery.db}"
+export REQUI_RE_DIST=1 INTERVIEW_ENGINE_PYTHON="$PYTHON" DELIVERY_COOKIE_SECURE="${DELIVERY_COOKIE_SECURE:-0}" OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}"
+"$PYTHON" -m delivery_api.launch_profile --validate-engine
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/requi-re"; mkdir -p "$DATA_HOME"
 PID_FILE="$DATA_HOME/server.pid"
 # Upgrade path for servers launched before PID ownership existed: discover the
 # listener once, validate it is delivery_api, and adopt the same replacement flow.
@@ -130,10 +133,10 @@ if [ -f "$PID_FILE" ]; then
   fi
 fi
 echo $$ > "$PID_FILE"; trap 'rm -f "$PID_FILE"' EXIT INT TERM
-echo "Data: $DELIVERY_DATABASE_URL"
+echo "Data: PostgreSQL (credentials hidden)"
 echo "Installed Requi.re source revisions:"
 sed -n '/^Repositories:$/,/^Installed packages:$/p' "$ROOT/MANIFEST.txt" 2>/dev/null | sed '1d;$d' || true
-ENGINE_PORT="${INTERVIEW_ENGINE_PORT:-8010}"; export INTERVIEW_ENGINE_URL="${INTERVIEW_ENGINE_URL:-http://127.0.0.1:$ENGINE_PORT}" INTERVIEW_ENGINE_TOKEN="${INTERVIEW_ENGINE_TOKEN:-local-interview-engine-token}"
+ENGINE_PORT="${INTERVIEW_ENGINE_PORT:-8010}"; export INTERVIEW_ENGINE_URL="${INTERVIEW_ENGINE_URL:-http://127.0.0.1:$ENGINE_PORT}"
 if command -v lsof >/dev/null 2>&1; then
   engine_listener=$(lsof -tiTCP:"$ENGINE_PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)
   if [ -n "$engine_listener" ]; then
@@ -147,7 +150,7 @@ if command -v lsof >/dev/null 2>&1; then
     fi
   fi
 fi
-"$PYTHON" -m uvicorn interview_engine.http_service:app --host 127.0.0.1 --port "$ENGINE_PORT" > >(tee "$DATA_HOME/interview-engine.log") 2>&1 & ENGINE_PID=$!
+"$PYTHON" -m delivery_api.launch_profile --engine "$PYTHON" -m uvicorn interview_engine.http_service:app --host 127.0.0.1 --port "$ENGINE_PORT" > >(tee "$DATA_HOME/interview-engine.log") 2>&1 & ENGINE_PID=$!
 cd "$ROOT"; "$PYTHON" -m delivery_api & DELIVERY_PID=$!
 cleanup_all(){
   trap - EXIT INT TERM

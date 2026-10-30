@@ -15,7 +15,9 @@ def test_distribution_database_lives_outside_build_and_survives_rebuild():
     build=(Path(__file__).parents[1]/'scripts/build-dist.sh').read_text()
     assert 'XDG_DATA_HOME' in build and '/requi-re' in build
     launcher=build.split("cat > \"$STAGE/run-require.sh\" <<'EOF'",1)[1].split('\nEOF',1)[0]
-    assert 'DELIVERY_DATABASE_URL' in launcher and '$DATA_HOME/delivery.db' in launcher
+    assert 'delivery_api.launch_profile' in launcher
+    assert '$DATA_HOME/delivery.db' not in launcher
+    assert 'PostgreSQL (credentials hidden)' in launcher
     assert 'delivery.db' not in build[:build.index("cat > \"$STAGE/run-require.sh\"")]
 
 
