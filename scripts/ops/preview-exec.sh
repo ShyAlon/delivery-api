@@ -20,7 +20,7 @@
 # (REQUI_BUILD_YES=1); there is no key prompt - a missing DeepSeek key is a loud stop.
 set -euo pipefail
 PORT=${PREVIEW_EXEC_PORT:-8001}
-NAME=requi-preview-exec; WORK=""; STARTED=0
+NAME=requi-preview-exec; WORK=""; STARTED=0; KEEP_FOR_INSPECTION=0
 DATA_VOLUME=${PREVIEW_DATA_VOLUME:-requi-preview-data}
 . "$(dirname "$0")/lib.sh"; ops_start preview-exec "$0" --venv
 REPO=$PWD
@@ -28,9 +28,14 @@ REPO=$PWD
 scrub(){ sed -E 's#(postgres(ql)?://)[^ ]*#\1[hidden]#g; s#sk-[A-Za-z0-9_-]+#sk-[hidden]#g'; }
 cleanup(){
   rc=$?; trap - EXIT INT TERM
-  if [ "$STARTED" = 1 ]; then docker rm -f "$NAME" >/dev/null 2>&1 || true; fi
+  if [ "$STARTED" = 1 ] && [ "${KEEP_FOR_INSPECTION:-0}" != 1 ]; then docker rm -f "$NAME" >/dev/null 2>&1 || true; fi
   [ -z "$WORK" ] || rm -rf "$WORK"
-  [ "$STARTED" != 1 ] || echo "== preview-exec stopped: container $NAME removed, temporary settings deleted; persistent data volume retained (the image holds no settings)"
+  if [ "${KEEP_FOR_INSPECTION:-0}" = 1 ]; then
+    echo "== preview retained for inspection: $NAME (execution remains ON against the live DB; no interview started by smoke)"
+    echo "Inspect: docker logs --tail 100 $NAME"
+    echo "Stop/remove when done: docker rm -f $NAME"
+  fi
+  [ "$STARTED" != 1 ] || [ "${KEEP_FOR_INSPECTION:-0}" = 1 ] || echo "== preview-exec stopped: container $NAME removed, temporary settings deleted; persistent data volume retained (the image holds no settings)"
   exit $rc
 }
 
@@ -40,6 +45,10 @@ step_ok(){ echo "   ok ($((SECONDS-STEP_START))s)"; STEP_NAME=''; }
 # Local abort: lib.sh's format, plus the step and elapsed time when a step is running.
 abort(){
   echo; echo "ABORTED [$1]: $2"
+  if [ "$1" = BROWSER-SMOKE ]; then
+    echo "browser errors repeated for inspection (anonymous smoke, no sign-in):"
+    [ -z "${BROWSER_OUT:-}" ] || printf '%s\n' "$BROWSER_OUT"
+  fi
   [ -z "$STEP_NAME" ] || echo "Step $STEP_N/$STEPS_TOTAL '$STEP_NAME' failed after $((SECONDS-STEP_START))s."
   echo "${3:-Nothing was started and the database was not touched.}"
   echo "Fix: ${4:-run scripts/ops/$OPS_NAME.sh again; if it repeats, send me this whole output}"
@@ -392,11 +401,12 @@ step "browser smoke: the real page boots clean - only named, expected anonymous 
 # hermetic pytest (tests/test_ui_playwright.py::test_boot_smoke_zero_console_errors_anonymous_and_after_fake_login),
 # which runs against a throwaway test database, never the live one.
 if .venv/bin/python -c "import playwright.sync_api" 2>/dev/null; then
-  rc=0; .venv/bin/python scripts/ops/browser_smoke.py "http://127.0.0.1:$PORT" || rc=$?
+  rc=0; BROWSER_OUT=$(.venv/bin/python scripts/ops/browser_smoke.py "http://127.0.0.1:$PORT" 2>&1 | scrub) || rc=$?
+  [ -z "$BROWSER_OUT" ] || printf '%s\n' "$BROWSER_OUT"
   case "$rc" in
     0) ;;
     2) echo "   NOTE: chromium is not installed for the checkout venv - boot NOT browser-verified; run: .venv/bin/python -m playwright install chromium";;
-    *) abort BROWSER-SMOKE "the preview page does not boot clean in a real browser (the errors are named above)" "The preview stays up for inspection; its UI may be broken." "send me this output";; esac
+    *) KEEP_FOR_INSPECTION=1; abort BROWSER-SMOKE "the preview page does not boot clean in a real browser (the errors are named above)" "The preview stays up for inspection; its UI may be broken." "send me this output";; esac
 else
   echo "   NOTE: playwright is not in the checkout venv - boot NOT browser-verified; run: .venv/bin/python -m pip install -e '.[dev]' && .venv/bin/python -m playwright install chromium"
 fi
