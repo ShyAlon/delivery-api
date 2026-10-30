@@ -35,3 +35,13 @@ was interrupted at 120 seconds and is not a pass claim; missing engine source
 on that invocation was fixed by including the engine source for integration.
 No skips introduced. Hosted CI unverified. No live data reset/write, deploy,
 spend, auth helper retirement or flake-tracing removal.
+
+Post-#514 rebase found a real default-profile regression in child startup:
+child_generator_entry imported the pure manifest validator from the parent
+adapter, eagerly importing required service config despite the child's strict
+no-credential environment. Move the identical validator to generator_manifest,
+re-export from the parent and import directly from the child. No allowlist,
+path/digest assertion or child environment rule changed. Existing child needs
+case failed before the extraction; child/process integration 33 pass after it.
+A subprocess import regression proves no config/parent import without credentials.
+Replacement PR targets main after #514 ancestry, superseding stacked #515.

@@ -13,7 +13,7 @@ def execute(operation,cfg,store,broker,stop,output_fd):
 
 
 def _execute_claimed(operation,cfg,store,broker,stop,output_fd,claim):
-    from .child_generator import manifest
+    from .generator_manifest import manifest
     from spec_generator.child_execution import DurableGate,GateSuspended
     from spec_generator.wire_binding import broker_clients
     from spec_generator.worker_runtime import JobRuntime,job_runtime
