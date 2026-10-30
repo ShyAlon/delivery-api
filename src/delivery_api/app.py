@@ -245,13 +245,13 @@ def _reconcile_terminal_http_interview(task_id:str,state:EngineSnapshot)->bool:
     from vmodel_contracts.runtime import artifacts_root
     from vmodel_contracts.interview import IntentModel
     from vmodel_contracts.conops import ConOpsDocument
-    interview=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),state.session_id,store)/"interview"
+    interview=None if hasattr(store,'_postgres') else authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),state.session_id,store)/"interview"
     try:
-        intent=IntentModel.model_validate_json(_read_task_text(task_id,interview/"intent_model.json"))
-        conops=ConOpsDocument.model_validate_json(_read_task_text(task_id,interview/"conops.json"))
+        intent=IntentModel.model_validate_json(store.read_artifact_bytes(task_id,'intent','intent_model.json') if hasattr(store,'_postgres') else _read_task_text(task_id,interview/"intent_model.json"))
+        conops=ConOpsDocument.model_validate_json(store.read_artifact_bytes(task_id,'conops','conops.json') if hasattr(store,'_postgres') else _read_task_text(task_id,interview/"conops.json"))
         if intent.session_id!=state.session_id or conops.session_id!=state.session_id:
             raise ValueError("interview artifacts belong to a different session")
-    except (OSError,ValueError) as exc:
+    except (OSError,ValueError,KeyError) as exc:
         activity("engine.recovery.artifacts_invalid","Completed interview cannot be handed off without verified artifacts",task_id=task_id,session_id=state.session_id,error=str(exc)[:350])
         return False
     return store.reconcile_completed_interview(task_id,state.session_id,state.sequence)
@@ -497,6 +497,7 @@ async def tenant_access_denied(request,exc):
 
 
 def _session_bundle(session_id):
+    if hasattr(store,'_postgres'):return _customer_events(bundles.postgres_bundle(store,session_id))
     if config.CLOUD_TENANTS:
         with session_reader(bundles.root(),session_id,store) as root:
             result=bundles.bundle(session_id,base=root)
@@ -719,6 +720,12 @@ def old_session_pages_go_home(session_id: str = "", phase: str = ""):
 
 @app.get("/api/sessions")
 def sessions():
+    if hasattr(store,'_postgres'):
+        result=[]
+        for task in store.list_tasks():
+            if task.get('engine_session_id'):
+                result.append(bundles.postgres_bundle(store,task['engine_session_id'])['session'])
+        return {'sessions':result}
     if config.CLOUD_TENANTS:
         result=[]
         for task in store.list_tasks():
@@ -1279,6 +1286,8 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
     recent_answers=[{"event_id":event["id"],"phase_key":event.get("phase_key"),"decision_id":event.get("payload",{}).get("decision_id")} for event in store.events(task_id) if event.get("kind")=="answer"][-10:]
     activity("api.answer.attempt","Founder answer submission received",endpoint=f"/api/tasks/{task_id}/answer",task_id=task_id,task_state=task_before.get("state"),active_phase=task_before.get("active_phase"),submitted_decision_id=body.decision_id,open_decision_id=(input_before.get("decision") or {}).get("decision_id"),process_live=input_before["process_live"],waiting=input_before["waiting"],recent_answer_events=json.dumps(recent_answers,separators=(",",":")))
     answer_display=None
+    answered_input_id=body.decision_id
+    answered_question=None
     try:
         work=runner.work_state(task_id)
         if work and work.owner=="decision" and work.phase==task_before.get("active_phase"):
@@ -1294,6 +1303,8 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
             if not session_id:raise RuntimeError("task has no HTTP engine session")
             state=await run_in_threadpool(engine_client.snapshot,session_id);pending=state.open_input
             if pending is None:raise RuntimeError("task is not waiting for input")
+            answered_input_id=str(pending.input_id)
+            answered_question=pending.prompt
             if body.decision_id and str(pending.input_id)!=body.decision_id:raise RuntimeError("submitted decision does not match live input")
             if body.expected_sequence is not None and state.sequence!=body.expected_sequence:
                 raise RuntimeError("session sequence changed; refresh the open input")
@@ -1341,8 +1352,8 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
         store.add_event(task_id,"error",f"Error: stale founder decision was not submitted. Likely cause: {cause} Next: {next_step}",phase_key=task.get("active_phase"),payload=payload)
         activity("api.answer.stale","Stale founder decision was not submitted",task_id=task_id,phase=task.get("active_phase"),**payload)
         raise HTTPException(409,{"error":"Stale founder decision was not submitted.","cause":cause,"next":next_step,"stale":True,"current_state":task.get("state"),"active_phase":task.get("active_phase")})
-    active_phase=(store.task(task_id) or {}).get("active_phase") or "intent"
-    answer_payload={"actor":a.label,"character_count":len(body.answer),"transcript":True,"decision_id":body.decision_id,"answer":body.answer}
+    active_phase=task_before.get("active_phase") or "intent"
+    answer_payload={"actor":a.label,"character_count":len(body.answer),"transcript":True,"decision_id":answered_input_id,"input_id":answered_input_id,"question":answered_question,"answer":body.answer}
     if answer_display:answer_payload["answer_display"]=answer_display
     store.add_event(task_id,"answer",f"You: {answer_display or body.answer}",phase_key=active_phase,payload=answer_payload)
     activity("engine.answer","Founder answer submitted",task_id=task_id,phase=active_phase,actor=a.label,character_count=len(body.answer))
@@ -1388,7 +1399,16 @@ def artifact_manifest_coverage(task_id:str)->dict:
     return {"task_id":task_id,"published":sorted(manifest_names),"legacy_only":sorted(legacy_names-manifest_names),"ready":not (legacy_names-manifest_names)}
 
 def _task_artifact_snapshot(task_id:str, *, task=None, session=_SESSION_UNSET, events=None, stored_artifacts=None, manifest=_SESSION_UNSET)->list[dict]:
-    """Project real session files into task artifacts; filesystem is source evidence."""
+    """PG publication is authority; legacy adapters retain their file projection."""
+    if hasattr(store,'_postgres'):
+        try:snapshot=store.manifest_snapshot(task_id) if manifest is _SESSION_UNSET else manifest
+        except ValueError:
+            log.exception('artifact manifest integrity failure task=%s',task_id)
+            raise HTTPException(500,'artifact manifest failed its integrity check')
+        if snapshot is not None:return _project_manifest_rows(snapshot['rows'])
+        if (store.task_artifacts(task_id) if stored_artifacts is None else stored_artifacts):
+            raise HTTPException(500,'artifact manifest coverage is incomplete; no ready published revision for this generation')
+        return []
     if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
         # Readiness gate, enforced on the read path: the manifest is authority only for
         # a task+generation whose producer/backfill published a COMPLETE validated
@@ -1471,6 +1491,9 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     task=store.task(task_id)
     if not task:raise HTTPException(404,"task not found")
     phase=task.get("active_phase");generation=task.get("generation")
+    if hasattr(store,'_postgres'):
+        from .pg_phase_output import phase_output
+        return phase_output(store,task)
     if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1" and os.environ.get("DELIVERY_CLOUD_EXECUTION")!="1":return {"phase_key":phase,"generation":generation,"status":"local_preview","items":[]}
     session=_recorded_engine_session(task_id)
     if not session or not phase:return {"phase_key":phase,"generation":generation,"status":"waiting","items":[]}
@@ -1595,8 +1618,7 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}")
 def task_artifact_download(task_id:str,phase:str,name:str):
-    path=_task_artifact(task_id,phase,name)
-    if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
+    if hasattr(store,'_postgres') or config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
         from fastapi.responses import Response
         # Error mapping: genuinely missing or foreign-invisible artifact is 404; a
         # corrupt/unverifiable payload is an explicit 500 (never a plausible missing
@@ -1611,6 +1633,7 @@ def task_artifact_download(task_id:str,phase:str,name:str):
         activity("task.export","Artifact downloaded",task_id=task_id,export="artifact",phase=phase,name=name)
         return Response(data,media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream',
                         headers={'Content-Disposition':f'attachment; filename="{name}"'})
+    path=_task_artifact(task_id,phase,name)
     if config.CLOUD_TENANTS:
         from .tenant_files import read_session_bytes
         from vmodel_contracts.runtime import artifacts_root
@@ -1631,8 +1654,8 @@ def _checkpoint_interview_turns(task_id:str,status=None)->list[tuple[str,str]]:
     def mark(availability,reason):
         if status is not None:status['checkpoint_transcript']={'availability':availability,'reason':reason}
     mark('available','saved_checkpoint')
-    if config.CLOUD_TENANTS:
-        mark('policy_excluded','cloud_legacy_checkpoint_excluded');return []  # Never deserialize legacy local checkpoint blobs from a customer read.
+    if config.CLOUD_TENANTS or hasattr(store,'_postgres'):
+        mark('policy_excluded','legacy_checkpoint_excluded');return []  # Never deserialize legacy local checkpoint blobs from a customer read.
     session=_recorded_engine_session(task_id)
     if not session:mark('absent','no_recorded_session');return []
     from vmodel_contracts.runtime import artifacts_root
@@ -1659,10 +1682,17 @@ def _interview_model_provenance(task_id:str,status=None)->list[str]:
     def mark(availability,reason):
         if status is not None:status['model_usage']={'availability':availability,'reason':reason}
     mark('absent','no_saved_usage')
-    if config.CLOUD_TENANTS:mark('policy_excluded','cloud_local_usage_excluded');return []
+    if config.CLOUD_TENANTS:mark('policy_excluded','local_usage_excluded');return []
     session=_recorded_engine_session(task_id)
     rows=[]
-    if session:
+    if session and hasattr(store,'_postgres'):
+        from .pg_usage import usage_rows
+        batches,evidence=usage_rows(store,task_id)
+        if not evidence['complete']:
+            mark('unavailable','invalid_or_unreadable');return []
+        rows=batches[0]
+        if rows:mark('available','saved_usage')
+    if session and not hasattr(store,'_postgres'):
         try:
             from vmodel_contracts.runtime import artifacts_root
             usage=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"usage.jsonl"
@@ -1695,17 +1725,23 @@ def _model_usage_segments(rows:list[dict])->list[dict]:
 
 def _interview_transcript_markdown(task_id:str)->str:
     turns=[]
+    matched_answers={}
     for event in _customer_events(store.events(task_id)):
         if event.get("phase_key") not in ("intent","conops"):continue
         payload=event.get("payload") or {}
+        identity=payload.get('input_id') or payload.get('decision_id')
         if event.get("kind") in ("waiting_input","founder_decision"):
             question=str(payload.get("question") or event.get("message") or "").strip()
-            if question:turns.append([question,None])
+            if question and not any(identity and turn[2]==identity for turn in turns):
+                turns.append([question,None,identity])
         elif event.get("kind")=="answer":
             message=event.get("message","")
-            answer=str(payload.get("answer") or (message.removeprefix("You: ") if message.startswith("You: ") else "")).strip()
-            if answer and turns and turns[-1][1] is None:turns[-1][1]=answer
-    complete=[tuple(turn) for turn in turns if turn[1]]
+            answer=str(payload.get("answer_display") or payload.get("answer") or (message.removeprefix("You: ") if message.startswith("You: ") else "")).strip()
+            target=next((turn for turn in reversed(turns) if turn[1] is None and (not identity or turn[2]==identity)),None)
+            if answer and target is not None:
+                target[1]=answer
+                matched_answers[event['id']]=(target[0],answer)
+    complete=[tuple(turn[:2]) for turn in turns if turn[1]]
     supplemental={}
     checkpoint_turns=_checkpoint_interview_turns(task_id,supplemental)
     if checkpoint_turns:complete=checkpoint_turns
@@ -1724,14 +1760,10 @@ def _interview_transcript_markdown(task_id:str)->str:
             payload=event.get("payload") or {}
             if event.get("kind")=="model_route" and payload.get("scope")=="switch":
                 lines.extend(["",f"**{event.get('message','Model switched')}** · {payload.get('timestamp','unknown time')} · segment {payload.get('route_version','?')} · actor {payload.get('actor','unknown')}"])
-            elif event.get("kind") in ("waiting_input","founder_decision"):
-                question=str(payload.get("question") or event.get("message") or "").strip()
-                if question:
-                    numbered+=1;lines.extend(["",f"### Question {numbered}",question])
-            elif event.get("kind")=="answer":
-                message=event.get("message","")
-                answer=str(payload.get("answer") or (message.removeprefix("You: ") if message.startswith("You: ") else "")).strip()
-                if answer:lines.extend(["",f"**Answer:** {answer}"])
+            elif event.get('id') in matched_answers:
+                question,answer=matched_answers[event['id']]
+                numbered+=1
+                lines.extend(["",f"### Question {numbered}",question,"",f"**Answer:** {answer}"])
     else:
         for index,(question,answer) in enumerate(complete,1):
             lines.extend(["",f"### Question {index}",question,"",f"**Answer:** {answer}"])
@@ -1745,10 +1777,18 @@ def _decision_provenance(task_id:str,architecture:dict)->list[dict]:
     """Derived, conservative provenance. Empty baseline refs do not prove founder intent."""
     session=_recorded_engine_session(task_id)
     from vmodel_contracts.runtime import artifacts_root
-    root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview" if session else None
+    root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview" if session and not hasattr(store,'_postgres') else None
     preferences=[]
     preference_status={'availability':'absent','reason':'no_saved_intent'}
-    if root:
+    if hasattr(store,'_postgres'):
+        try:
+            from vmodel_contracts.interview import IntentModel
+            intent=IntentModel.model_validate_json(store.read_artifact_bytes(task_id,'intent','intent_model.json'))
+            preference_status={'availability':'available','reason':'saved_intent'}
+            preferences=[{'area':p.area.value,'preference':p.preference,'strength':p.strength.value,'source_turns':p.source_turns} for p in intent.tech_preferences]
+        except KeyError:pass
+        except ValueError:preference_status={'availability':'unavailable','reason':'invalid_or_unreadable'}
+    elif root:
         path=root/"intent_model.json"
         if path.is_file():
             try:
@@ -1783,9 +1823,9 @@ def _validation_panel_for(task_id:str,raw:str)->dict|None:
     availability={}
     def load(phase,name):
         try:
-            value=json.loads(_task_artifact(task_id,phase,name).read_text())
+            value=json.loads(store.read_artifact_bytes(task_id,phase,name) if hasattr(store,'_postgres') else _task_artifact(task_id,phase,name).read_text())
             availability[phase]={'availability':'available'};return value
-        except HTTPException:
+        except (HTTPException,KeyError):
             availability[phase]={'availability':'absent','reason':'no_saved_artifact'};return None
         except (OSError,ValueError):
             availability[phase]={'availability':'unavailable','reason':'invalid_or_unreadable'};return None
@@ -1795,7 +1835,14 @@ def _validation_panel_for(task_id:str,raw:str)->dict|None:
     session=_recorded_engine_session(task_id)
     if session:
         from vmodel_contracts.runtime import artifacts_root
-        try:ledger=json.loads((authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"spec"/"findings-ledger.json").read_text())
+        try:
+            if hasattr(store,'_postgres'):
+                from .generator_documents import GeneratorDocuments
+                from .worker_capability import WorkerCapability
+                raw_ledger=GeneratorDocuments.owner_reader(store,task_id).read('spec/findings-ledger.json')
+                if raw_ledger is None:raise FileNotFoundError('no saved ledger')
+                ledger=json.loads(raw_ledger)
+            else:ledger=json.loads((authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"spec"/"findings-ledger.json").read_text())
         except FileNotFoundError:availability['findings_ledger']={'availability':'absent','reason':'no_saved_ledger'};ledger=None
         except (OSError,ValueError):availability['findings_ledger']={'availability':'unavailable','reason':'invalid_or_unreadable'};ledger=None
     panel=validation_panel(validation,load("needs","needs.json"),load("tests","tests.json"),ledger)
@@ -1804,6 +1851,37 @@ def _validation_panel_for(task_id:str,raw:str)->dict|None:
 
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}/view")
 def task_artifact_view(task_id:str,phase:str,name:str):
+    if hasattr(store,'_postgres'):
+        from .phases import PHASE_BY_KEY
+        if phase not in PHASE_BY_KEY or name not in PHASE_BY_KEY[phase].artifacts:raise HTTPException(404,'artifact not found')
+        task=store.task(task_id)
+        if not task:raise HTTPException(404,'task not found')
+        binding=store.session_binding(task['engine_session_id'])
+        try:data=store.read_artifact_bytes(task_id,phase,name,generation=binding['generation'])
+        except KeyError:raise HTTPException(404,'artifact not found')
+        if len(data)>2_000_000:raise HTTPException(413,'artifact is too large for inline viewing')
+        text=data.decode('utf-8',errors='replace');raw=text;display_name=name;display_format='json' if name.endswith('.json') else 'text'
+        if name.endswith('.json'):
+            from .worker_capability import WorkerCapability
+            from .generator_documents import GeneratorDocuments
+            reader=GeneratorDocuments.owner_reader(store,task_id)
+            sibling=Path(name).with_suffix('.md').name
+            directory='interview/' if phase in ('intent','conops') else 'spec/'
+            companions=reader.capture([directory+name,directory+sibling])
+            readable=companions.get(directory+sibling) if companions.get(directory+name)==data else None
+            if readable is not None:
+                if len(readable)>2_000_000:raise HTTPException(413,'artifact is too large for inline viewing')
+                text=readable.decode('utf-8',errors='replace');display_name=sibling;display_format='markdown'
+            try:raw=json.dumps(json.loads(raw),indent=2)
+            except ValueError:pass
+        transcript=_interview_transcript_markdown(task_id) if name=='intent_model.json' else ''
+        if transcript:
+            if display_format!='markdown':text=f'# {_ARTIFACT_TITLES[name]}\n\n'+text;display_format='markdown'
+            text=text.rstrip()+'\n\n'+transcript+'\n'
+        provenance=_decision_provenance(task_id,json.loads(raw)) if name=='architecture.json' else None
+        panel=_validation_panel_for(task_id,raw) if name=='validation.json' else None
+        return {'name':name,'title':_ARTIFACT_TITLES.get(name,Path(name).stem.replace('_',' ').title()),'phase':phase,'format':display_format,
+            'content':text,'raw_format':'json' if name.endswith('.json') else 'text','raw_content':raw,'display_name':display_name,'decision_provenance':provenance,'validation_panel':panel}
     path=_task_artifact(task_id,phase,name)
     if path.stat().st_size>2_000_000:raise HTTPException(413,"artifact is too large for inline viewing")
     text=_read_task_text(task_id,path,errors="replace");raw=text;display_path=path
@@ -1832,7 +1910,7 @@ def task_artifacts_zip(task_id:str):
     with zipfile.ZipFile(data,"w",zipfile.ZIP_DEFLATED) as archive:
         for artifact in records:
             entry=f"{artifact['phase_key']}/{artifact['name']}"
-            if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
+            if hasattr(store,'_postgres') or config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
                 # Read by the snapshot row's content hash: the whole zip is one
                 # published revision, never a mix of generations under concurrent publish.
                 try: archive.writestr(entry,store.read_artifact_bytes_sha(artifact['sha256']))
@@ -2235,6 +2313,13 @@ async def task_stream(task_id: str, request: Request):
                      loop_blocked_ms=loop_block['blocked_ms'],db_cycles=loop_block['cycles'],max_cycle_ms=loop_block['max_ms'])
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
+def _pg_generator_checkpoint_exists(task_id):
+    from .generator_checkpoint import GeneratorCheckpoint
+    from .worker_capability import WorkerCapability
+    cap=WorkerCapability.capture(store,task_id)
+    reader=GeneratorCheckpoint(store,cap,None,'spec',writable=False)
+    return reader.get_tuple({'configurable':{'thread_id':cap.session_id,'checkpoint_ns':''}}) is not None
+
 class FailedNeedsRetryRequest(BaseModel):
     confirm: bool = False
     model_route: Literal["ollama","deepseek"]|None = None
@@ -2263,12 +2348,12 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
     from vmodel_contracts.runtime import artifacts_root
     from vmodel_contracts.interview import IntentModel
     from vmodel_contracts.conops import ConOpsDocument
-    interview=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"
+    interview=None if hasattr(store,'_postgres') else authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"
     try:
-        intent=IntentModel.model_validate_json((interview/"intent_model.json").read_text())
-        conops=ConOpsDocument.model_validate_json((interview/"conops.json").read_text())
+        intent=IntentModel.model_validate_json(store.read_artifact_bytes(task_id,'intent','intent_model.json') if hasattr(store,'_postgres') else (interview/"intent_model.json").read_text())
+        conops=ConOpsDocument.model_validate_json(store.read_artifact_bytes(task_id,'conops','conops.json') if hasattr(store,'_postgres') else (interview/"conops.json").read_text())
         if intent.session_id!=session or conops.session_id!=session:raise ValueError("interview artifact session IDs do not match")
-    except (OSError,ValueError) as exc:
+    except (OSError,ValueError,KeyError) as exc:
         reject(f"The linked interview artifacts are missing or invalid: {exc}","Restore the named session artifacts before retrying Needs.")
     from . import model_routes as downstream_routes
     try: default,default_source=downstream_routes.task_default_model(store,task_id,"needs")
@@ -2284,11 +2369,11 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
         except ValueError:reject("The selected downstream model is unsupported.","Choose a supported provider and model before retrying.")
     if body.confirm and (not body.model_route or not body.model):
         reject("The retry model was not explicitly confirmed.","Choose a provider and model in the retry dialog.")
-    spec=interview.parent/"spec"
+    spec=None if hasattr(store,'_postgres') else interview.parent/"spec"
     # A first Needs attempt can die on import before LangGraph writes a
     # checkpoint. --from needs rejects that state. An existing checkpoint
     # should be resumed by a normal launch, preserving completed work.
-    checkpoint=(spec/"checkpoints.sqlite").is_file() and (spec/"checkpoints.sqlite").stat().st_size>0
+    checkpoint=_pg_generator_checkpoint_exists(task_id) if hasattr(store,'_postgres') else (spec/"checkpoints.sqlite").is_file() and (spec/"checkpoints.sqlite").stat().st_size>0
     latest_failure=next((event for event in reversed(store.events(task_id)) if event["phase_key"]=="needs" and event["kind"]=="error"),None)
     if not body.confirm:
         return {"status":"preview","phase":"needs","session_id":session,"retains":["intent","conops"],"model_route":effective,"default_model":default,"default_source":default_source,"checkpoint":checkpoint,"mode":"resume" if checkpoint else "start",
@@ -2349,12 +2434,12 @@ async def retry_failed_phase(task_id:str,body:FailedPhaseRetryRequest,a:auth.Act
     from vmodel_contracts.runtime import artifacts_root
     from vmodel_contracts.interview import IntentModel
     from vmodel_contracts.conops import ConOpsDocument
-    interview=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"
+    interview=None if hasattr(store,'_postgres') else authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"
     try:
-        intent=IntentModel.model_validate_json((interview/"intent_model.json").read_text())
-        conops=ConOpsDocument.model_validate_json((interview/"conops.json").read_text())
+        intent=IntentModel.model_validate_json(store.read_artifact_bytes(task_id,'intent','intent_model.json') if hasattr(store,'_postgres') else (interview/"intent_model.json").read_text())
+        conops=ConOpsDocument.model_validate_json(store.read_artifact_bytes(task_id,'conops','conops.json') if hasattr(store,'_postgres') else (interview/"conops.json").read_text())
         if intent.session_id!=session or conops.session_id!=session:raise ValueError("interview artifact session IDs do not match")
-    except (OSError,ValueError) as exc:
+    except (OSError,ValueError,KeyError) as exc:
         reject(f"The linked interview artifacts are missing or invalid: {exc}","Restore the named session artifacts before retrying.")
     from . import model_routes as downstream_routes
     try: default,default_source=downstream_routes.task_default_model(store,task_id,definition.generator_stage)
@@ -2370,8 +2455,8 @@ async def retry_failed_phase(task_id:str,body:FailedPhaseRetryRequest,a:auth.Act
         except ValueError:reject("The selected downstream model is unsupported.","Choose a supported provider and model before retrying.")
     if body.confirm and (not body.model_route or not body.model):
         reject("The retry model was not explicitly confirmed.","Choose a provider and model in the retry dialog.")
-    spec=interview.parent/"spec"
-    checkpoint=(spec/"checkpoints.sqlite").is_file() and (spec/"checkpoints.sqlite").stat().st_size>0
+    spec=None if hasattr(store,'_postgres') else interview.parent/"spec"
+    checkpoint=_pg_generator_checkpoint_exists(task_id) if hasattr(store,'_postgres') else (spec/"checkpoints.sqlite").is_file() and (spec/"checkpoints.sqlite").stat().st_size>0
     latest_failure=next((event for event in reversed(store.events(task_id)) if event["phase_key"]==body.phase and event["kind"]=="error"),None)
     if not body.confirm:
         return {"status":"preview","phase":body.phase,"label":label,"session_id":session,"retains":list(PHASE_KEYS[:index]),"model_route":effective,"default_model":default,"default_source":default_source,"checkpoint":checkpoint,"mode":"resume" if checkpoint else "start",
@@ -2501,7 +2586,13 @@ def _task_cost(task_id:str)->dict:
     for event in store.events(task_id):
         if event.get("kind")=="price":latest[event.get("phase_key")]=event
     session=_recorded_engine_session(task_id);interview_tokens=spec_tokens=0
-    if session:
+    if session and hasattr(store,'_postgres'):
+        from .pg_usage import usage_rows
+        batches,evidence=usage_rows(store,task_id)
+        if not evidence['complete']:return {'price':None,'price_usd':None,'evidence':evidence}
+        interview_tokens=sum(int(r.get('prompt_tokens') or 0)+int(r.get('completion_tokens') or 0) for r in batches[0])
+        spec_tokens=sum(int(r.get('prompt_tokens') or 0)+int(r.get('completion_tokens') or 0) for r in batches[1])
+    elif session:
         from vmodel_contracts.runtime import artifacts_root
         root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
         if config.CLOUD_TENANTS:
@@ -2513,7 +2604,8 @@ def _task_cost(task_id:str)->dict:
     event_tokens=sum(int((e.get("payload") or {}).get("tokens") or 0) for e in counted if e.get("phase_key") not in ("intent","conops"))
     price=event_price+token_credits(interview_tokens)+token_credits(max(0,spec_tokens-event_tokens))
     result={"price":round(price,6),"price_usd":round(credits_to_usd(price),6)}
-    if session and not config.CLOUD_TENANTS:
+    if session and hasattr(store,'_postgres'):result['evidence']=evidence
+    elif session and not config.CLOUD_TENANTS:
         from .pricing import usage_evidence
         result['evidence']=usage_evidence(root)
     return result
@@ -2521,8 +2613,15 @@ def _task_cost(task_id:str)->dict:
 @app.get("/api/tasks/{task_id}/cost")
 def task_cost(task_id:str,request:Request):
     if not store.task(task_id):raise HTTPException(404,"task not found")
+    if hasattr(store,'task_retail_totals'):
+        exact=store.task_retail_totals(task_id)
+        if exact is not None:return exact
     session=_recorded_engine_session(task_id)
-    if session and not config.CLOUD_TENANTS:
+    if session and hasattr(store,'_postgres'):
+        from .pg_usage import update_rollup
+        evidence=update_rollup(store,task_id)
+        if not evidence['complete']:return {'price':None,'price_usd':None,'evidence':evidence}
+    elif session and not config.CLOUD_TENANTS:
         from vmodel_contracts.runtime import artifacts_root
         from .pricing import usage_evidence
         evidence=usage_evidence(authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store))
@@ -2568,7 +2667,11 @@ def task_audit(task_id: str, request: Request):
     priced=list(priced_by_phase.values())
     session=_recorded_engine_session(task_id)
     interview_usage=[]
-    if session:
+    if session and hasattr(store,'_postgres'):
+        from .generator_documents import GeneratorDocuments
+        usage=GeneratorDocuments.owner_reader(store,task_id).read('interview/usage.jsonl')
+        if usage is not None:interview_usage=[json.loads(line) for line in usage.decode().splitlines() if line.strip()]
+    elif session:
         from vmodel_contracts.runtime import artifacts_root
         path=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"usage.jsonl"
         if path.is_file():
@@ -2661,6 +2764,13 @@ def _stack_decisions_path(task_id:str)->Path:
 def _read_stack_decisions(task_id:str):
     """The architecture gate's open research_required slots (written by spec-generator), or None."""
     if not _recorded_engine_session(task_id):return None
+    if hasattr(store,'_postgres'):
+        try:raw=store.read_artifact_bytes(task_id,'architecture','architecture.decisions.json')
+        except KeyError:return None
+        try:data=json.loads(raw)
+        except ValueError:raise HTTPException(409,'architecture decisions are unreadable')
+        if not isinstance(data,dict) or not isinstance(data.get('slots'),list) or not isinstance(data.get('revision'),str):raise HTTPException(409,'architecture decisions are malformed')
+        return data
     path=_stack_decisions_path(task_id)
     if not path.is_file() or path.is_symlink():return None
     try:data=json.loads(path.read_text())
@@ -2700,6 +2810,7 @@ def _lineage_module_or_none(spec):
         return None
 
 def _lineage_decision_preflight(task_id:str)->None:
+    if hasattr(store,'_postgres'):return  # PG gate document boundary owns lineage atomically.
     # Refuse EARLY - before any artifact, manifest or decision-record mutation - when
     # this host holds the session authority record but cannot maintain it. The rebind
     # calls later in the endpoint re-check; this ordering guarantee means a refused
@@ -2710,6 +2821,9 @@ def _lineage_decision_preflight(task_id:str)->None:
     except ValueError as exc:raise HTTPException(409,str(exc))
 
 def _lineage_gate_settled(task_id:str,phase_key:str)->None:
+    if hasattr(store,'_postgres'):
+        from .generator_documents import transition_gate_lineage
+        return transition_gate_lineage(store,task_id,phase_key,settled=True)
     """Gate approval flips the phase's bindings to settled: from here a stage commit
     may not replace those bytes without an explicit rewind (--from or a gate redo)."""
     spec=_lineage_record_root(task_id)
@@ -2719,6 +2833,9 @@ def _lineage_gate_settled(task_id:str,phase_key:str)->None:
     lineage.mark_settled(spec,_LINEAGE_PHASE(phase_key,phase_key))
 
 def _lineage_gate_redo_invalidate(task_id:str,phase_key:str)->None:
+    if hasattr(store,'_postgres'):
+        from .generator_documents import transition_gate_lineage
+        return transition_gate_lineage(store,task_id,phase_key,settled=False)
     """A gate redo is the founder's explicit rewind: drop bindings for the redone
     phase and everything downstream so the regeneration can re-bind; without this
     the settled-overwrite refusal would fail a sanctioned redo closed."""
@@ -2753,7 +2870,7 @@ def _guard_task_file_operation(function):
     from functools import wraps
     @wraps(function)
     def guarded(*args,**kwargs):
-        if not config.CLOUD_TENANTS:return function(*args,**kwargs)
+        if not config.CLOUD_TENANTS and not hasattr(store,'_postgres'):return function(*args,**kwargs)
         with store._task_operation_guard('task.gate.decide'):
             return function(*args,**kwargs)
     return guarded
@@ -2769,8 +2886,8 @@ def _use_architecture_defaults(task_id: str):
     data = _read_stack_decisions(task_id)
     if not data:
         return
-    artifact = _task_artifact(task_id, 'architecture', 'architecture.json')
-    full = json.loads(artifact.read_text())
+    artifact = None if hasattr(store,'_postgres') else _task_artifact(task_id, 'architecture', 'architecture.json')
+    full = json.loads(store.read_artifact_bytes(task_id,'architecture','architecture.json') if hasattr(store,'_postgres') else artifact.read_text())
     from vmodel_contracts.architecture import ArchitectureOverview
     ArchitectureOverview.model_validate(full)
     entries = {e['key']: e for e in full.get('stack_entry_dispositions') or []}
@@ -2790,6 +2907,10 @@ def _use_architecture_defaults(task_id: str):
         slots.append(slot)
     ArchitectureOverview.model_validate(full)
     companion = {**data, 'slots': slots}
+    if hasattr(store,'_postgres'):
+        from .generator_documents import commit_gate_documents
+        commit_gate_documents(store,task_id,'architecture',{'architecture.json':json.dumps(full,indent=2).encode(),'architecture.decisions.json':json.dumps(companion,indent=2).encode()})
+        return
     path = _stack_decisions_path(task_id)
     temporary = path.with_suffix('.tmp'); temporary.write_text(json.dumps(companion, indent=2)); temporary.replace(path)
     temporary = artifact.with_suffix('.tmp'); temporary.write_text(json.dumps(full, indent=2)); temporary.replace(artifact)
@@ -2812,11 +2933,14 @@ def _gate_review(task_id:str,gate_key:str)->dict:
         except HTTPException as exc:documents.append({'name':artifact['name'],'error':str(exc.detail)})
     semantic=None
     if gate['after_phase']=='srs' and _recorded_engine_session(task_id):
-        path=_srs_semantic_path(task_id)
-        if path.is_file():
-            from vmodel_contracts.semantic_review import SemanticReview
-            semantic=SemanticReview.model_validate_json(path.read_text()).model_dump(mode='json')
-            if semantic['session_id']!=_recorded_engine_session(task_id):raise HTTPException(409,'semantic review belongs to another session')
+        from vmodel_contracts.semantic_review import SemanticReview
+        if hasattr(store,'_postgres'):
+            try:semantic=SemanticReview.model_validate_json(store.read_artifact_bytes(task_id,'srs','srs.semantic-review.json')).model_dump(mode='json')
+            except KeyError:pass
+        else:
+            path=_srs_semantic_path(task_id)
+            if path.is_file():semantic=SemanticReview.model_validate_json(path.read_text()).model_dump(mode='json')
+        if semantic and semantic['session_id']!=_recorded_engine_session(task_id):raise HTTPException(409,'semantic review belongs to another session')
     stack_decisions=_read_stack_decisions(task_id) if gate['after_phase']=='architecture' else None
     basis={'generation':task['generation'],'gate':gate,'artifacts':artifacts,'documents':documents,'semantic_review':semantic,'stack_decisions':stack_decisions}
     import hashlib
@@ -2886,6 +3010,7 @@ class SemanticDecisions(BaseModel):
 def decide_semantic_gate(task_id:str,gate_key:str,body:SemanticDecisions,a:auth.Actor=Depends(auth.require_actor)):
     from vmodel_contracts.semantic_review import SemanticReview
     from vmodel_contracts import SRSDocument
+    if hasattr(store,'_postgres'):store._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone()
     live=_gate_review(task_id,gate_key);semantic=live.get('semantic_review')
     gate=next(g for g in live['task']['gates'] if g['gate_key']==gate_key)
     if not semantic or semantic['revision']!=body.revision or gate['state']!='waiting':raise HTTPException(409,'semantic review changed')
@@ -2901,18 +3026,24 @@ def decide_semantic_gate(task_id:str,gate_key:str,body:SemanticDecisions,a:auth.
         resolved=review.resolved_candidate(lambda candidate:SRSDocument.model_validate({**full,**candidate}))
     except ValueError as exc:raise HTTPException(422,str(exc))
     _lineage_decision_preflight(task_id)
-    path=_srs_semantic_path(task_id);artifact=_task_artifact(task_id,'srs','srs.json')
-    # The revision record is consumed into the producer checkpoint on resume.
-    # Never create an artifact without the companion override record.
-    temporary=path.with_suffix('.tmp');temporary.write_text(review.model_dump_json(indent=2));temporary.replace(path)
-    full={**full,**resolved};temporary=artifact.with_suffix('.tmp');temporary.write_text(json.dumps(full,indent=2));temporary.replace(artifact)
-    # A stale readable companion must not mask the reviewed canonical JSON.
-    artifact.with_suffix('.md').unlink(missing_ok=True)
-    # Founder item decisions are durable review evidence; republish so the
-    # manifest matches local bytes and a later restore does not refuse the batch.
-    from .artifact_publication import publish_committed_session
-    publish_committed_session(store,task_id,path.parent.parent,phase_key='srs')
-    _lineage_rebind_decision(task_id,'srs',('srs.json','srs.semantic-review.json'))
+    if hasattr(store,'_postgres'):
+        from .generator_documents import commit_gate_documents
+        full={**full,**resolved}
+        try:commit_gate_documents(store,task_id,'srs',{'srs.semantic-review.json':review.model_dump_json(indent=2).encode(),'srs.json':json.dumps(full,indent=2).encode()})
+        except ValueError as exc:raise HTTPException(409,str(exc))
+    else:
+        path=_srs_semantic_path(task_id);artifact=_task_artifact(task_id,'srs','srs.json')
+        # The revision record is consumed into the producer checkpoint on resume.
+        # Never create an artifact without the companion override record.
+        temporary=path.with_suffix('.tmp');temporary.write_text(review.model_dump_json(indent=2));temporary.replace(path)
+        full={**full,**resolved};temporary=artifact.with_suffix('.tmp');temporary.write_text(json.dumps(full,indent=2));temporary.replace(artifact)
+        # A stale readable companion must not mask the reviewed canonical JSON.
+        artifact.with_suffix('.md').unlink(missing_ok=True)
+        # Founder item decisions are durable review evidence; republish so the
+        # manifest matches local bytes and a later restore does not refuse the batch.
+        from .artifact_publication import publish_committed_session
+        publish_committed_session(store,task_id,path.parent.parent,phase_key='srs')
+        _lineage_rebind_decision(task_id,'srs',('srs.json','srs.semantic-review.json'))
     store.add_event(task_id,'semantic_review','Semantic candidate decisions recorded',phase_key='srs',payload={'revision':review.revision,'decisions':[d.model_dump() for d in review.decisions],'actor':a.label})
     return {'status':'reviewed','revision':review.revision}
 
@@ -2929,6 +3060,7 @@ class StackDecisions(BaseModel):
 @_guard_task_file_operation
 def decide_stack_gate(task_id:str,gate_key:str,body:StackDecisions,a:auth.Actor=Depends(auth.require_actor)):
     """Save a founder override. Reason is optional; system rationale stays separate."""
+    if hasattr(store,'_postgres'):store._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone()
     live=_gate_review(task_id,gate_key);data=live.get('stack_decisions')
     gate=next(g for g in live['task']['gates'] if g['gate_key']==gate_key)
     if not data or data['revision']!=body.revision or gate['state']!='waiting':raise HTTPException(409,'architecture decisions changed')
@@ -2940,22 +3072,26 @@ def decide_stack_gate(task_id:str,gate_key:str,body:StackDecisions,a:auth.Actor=
     at=datetime.now(timezone.utc).isoformat()
     made={d.key:{'text':d.text.strip(),'reason':d.reason.strip(),'actor':a.label,'at':at} for d in body.decisions}
     _lineage_decision_preflight(task_id)
-    artifact=_task_artifact(task_id,'architecture','architecture.json')
-    full=json.loads(artifact.read_text())
+    artifact=None if hasattr(store,'_postgres') else _task_artifact(task_id,'architecture','architecture.json')
+    full=json.loads(store.read_artifact_bytes(task_id,'architecture','architecture.json') if hasattr(store,'_postgres') else artifact.read_text())
     for entry in full.get('stack_entry_dispositions') or []:
         if entry.get('key') in made:entry['founder_decision']=made[entry['key']]
     companion={**data,'slots':[{**s,'founder_decision':made.get(s['key'],s.get('founder_decision')),
                                'prefill':None if s['key'] in made else s.get('prefill')} for s in data['slots']]}
-    # Companion first: spec-generator consumes it on resume; the artifact shows the same decisions.
-    path=_stack_decisions_path(task_id);temporary=path.with_suffix('.tmp');temporary.write_text(json.dumps(companion,indent=2));temporary.replace(path)
-    temporary=artifact.with_suffix('.tmp');temporary.write_text(json.dumps(full,indent=2));temporary.replace(artifact)
-    artifact.with_suffix('.md').unlink(missing_ok=True)
-    # The companion is the durable founder-decision record and must cross hosts:
-    # republish so the manifest matches the local bytes (otherwise a later
-    # completed-phase restore on this or another host refuses the batch).
-    from .artifact_publication import publish_committed_session
-    publish_committed_session(store,task_id,path.parent.parent,phase_key='architecture')
-    _lineage_rebind_decision(task_id,'architecture',('architecture.json','architecture.decisions.json'))
+    if hasattr(store,'_postgres'):
+        from .generator_documents import commit_gate_documents
+        commit_gate_documents(store,task_id,'architecture',{'architecture.decisions.json':json.dumps(companion,indent=2).encode(),'architecture.json':json.dumps(full,indent=2).encode()})
+    else:
+        # Companion first: spec-generator consumes it on resume; the artifact shows the same decisions.
+        path=_stack_decisions_path(task_id);temporary=path.with_suffix('.tmp');temporary.write_text(json.dumps(companion,indent=2));temporary.replace(path)
+        temporary=artifact.with_suffix('.tmp');temporary.write_text(json.dumps(full,indent=2));temporary.replace(artifact)
+        artifact.with_suffix('.md').unlink(missing_ok=True)
+        # The companion is the durable founder-decision record and must cross hosts:
+        # republish so the manifest matches the local bytes (otherwise a later
+        # completed-phase restore on this or another host refuses the batch).
+        from .artifact_publication import publish_committed_session
+        publish_committed_session(store,task_id,path.parent.parent,phase_key='architecture')
+        _lineage_rebind_decision(task_id,'architecture',('architecture.json','architecture.decisions.json'))
     store.add_event(task_id,'stack_decisions','Architecture stack decisions recorded',phase_key='architecture',payload={'decided':sorted(made),'open':_open_stack_slots(companion),'actor':a.label})
     return {'status':'saved','revision':data['revision'],'open':_open_stack_slots(companion)}
 
@@ -2969,13 +3105,15 @@ class GateDecision(BaseModel):
     comment:str=Field(default="",max_length=7000)
     model_route:Literal["ollama","deepseek"]|None=None
     model:str|None=None
-@app.post("/api/tasks/{task_id}/gates/{gate_key}/decide")
-async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,a:auth.Actor=Depends(auth.require_actor)):
+@_guard_task_file_operation
+def _decide_gate_sync(task_id,gate_key,req,a):
     if config.CLOUD_TENANTS:
         if not store.task(task_id):raise HTTPException(404,'task not found')
         if not cloud_execution_admitted():raise HTTPException(503,'Cloud admission and lifecycle validation pending')
 
     try:
+        if hasattr(store,'_postgres'):
+            store._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone()
         if req.review_revision and _gate_review(task_id,gate_key)['revision']!=req.review_revision:
             raise HTTPException(409,'gate evidence changed; review the current artifact before deciding')
         if req.model_route=="deepseek" and not os.environ.get("DEEPSEEK_API_KEY"):raise ValueError("DeepSeek is not configured")
@@ -2986,17 +3124,18 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
             # Runs first: on a restore-enabled host this materializes the committed
             # evidence (companions included) before the enforcement checks below read it.
             evidence=[a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==pending["after_phase"] and not a.get("stale") and a.get("present",True)]
-            if not evidence or not any(Path(a["ref"]).is_file() and a.get("valid") is not False for a in evidence):
+            if not evidence or not any((hasattr(store,'_postgres') or Path(a["ref"]).is_file()) and a.get("valid") is not False for a in evidence):
                 raise ValueError("No current valid artifact is available to review at this gate")
         if pending['after_phase']=='srs' and req.action!='redo' and _recorded_engine_session(task_id):
             # Every srs run produces its semantic review (spec-generator graph node_srs),
             # so the file is required approval evidence for a session-recorded task.
             # Fail closed when it is absent - never skip the reviewed-write check silently.
             semantic_path=_srs_semantic_path(task_id)
-            if not semantic_path.is_file():
+            if not hasattr(store,'_postgres') and not semantic_path.is_file():
                 raise ValueError('Required approval evidence is missing: the semantic review of the SRS produced in this session (srs.semantic-review.json) is not on this host. Restore the published artifacts on this host, or publish them on the producing host (scripts/ops-backfill-artifact-manifest.py), then review again - this gate does not approve without the reviewed-write evidence.')
             from vmodel_contracts.semantic_review import SemanticReview
-            semantic=SemanticReview.model_validate_json(semantic_path.read_text())
+            try:semantic=SemanticReview.model_validate_json(store.read_artifact_bytes(task_id,'srs','srs.semantic-review.json') if hasattr(store,'_postgres') else semantic_path.read_text())
+            except KeyError:raise ValueError('Required approval evidence is missing: srs.semantic-review.json is not published for this execution')
             resolved=semantic.resolved_candidate(lambda candidate:None)
             canonical=json.loads(task_artifact_view(task_id,'srs','srs.json')['raw_content'])
             if any(canonical.get(k)!=v for k,v in resolved.items()):raise ValueError('Reviewed SRS write is incomplete; save the item decisions again before approving')
@@ -3004,7 +3143,7 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
             # research_required slots in the canonical artifact mean the generator
             # wrote the founder-decision companion; it is required approval evidence.
             try:
-                full=json.loads(_task_artifact(task_id,'architecture','architecture.json').read_text())
+                full=json.loads(store.read_artifact_bytes(task_id,'architecture','architecture.json') if hasattr(store,'_postgres') else _task_artifact(task_id,'architecture','architecture.json').read_text())
                 research_required=[d for d in full.get('stack_entry_dispositions') or [] if str(d.get('status'))=='research_required']
             except HTTPException:
                 research_required=[]
@@ -3032,10 +3171,7 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
                 expected_revision=req.expected_revision)
             if req.action=='approve':_lineage_gate_settled(task_id,pending['after_phase'])
             elif req.action=='redo':_lineage_gate_redo_invalidate(task_id,pending['after_phase'])
-            if job_id:
-                from .tenant_jobs import dispatch_phase
-                await dispatch_phase(store,orchestrator,task_id,target_phase,queued_job_id=job_id)
-            return gate
+            return gate,job_id,target_phase,selected
         gate=store.decide_gate(task_id,gate_key,req.action,selected_option=req.selected_option,edited_text=req.edited_text,steer=req.steer,actor=a.label,expected_revision=req.expected_revision)
         phase=gate["after_phase"]
         if req.action=='approve':_lineage_gate_settled(task_id,phase)
@@ -3045,11 +3181,23 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
         if selected:
             store.set_model_default(task_id,selected)
             store.add_event(task_id,"model_route",f"{target} override uses {selected}",phase_key=target,payload={"route":req.model_route,"resolved":selected,"scope":"phase_override","actor":a.label})
-        if req.action=="redo":spawn(orchestrator.execute_phase(task_id,phase,mode=ExecutionMode.REDO,model_route=selected))
-        else:spawn(orchestrator.continue_after(task_id,phase,model_route=selected))
-        return gate
+        return gate,None,phase,selected
     except KeyError:raise HTTPException(404,"gate not found")
     except ValueError as e:raise HTTPException(400,{"error":str(e),"cause":"The gate decision is incomplete.","next":"Choose, edit, or explain what the redo should change."})
+
+
+@app.post("/api/tasks/{task_id}/gates/{gate_key}/decide")
+async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,a:auth.Actor=Depends(auth.require_actor)):
+    # Finish the gate, document defaults, lineage and queue transaction before
+    # dispatch. No transaction or task lock spans a provider/network await.
+    gate,job_id,phase,selected=_decide_gate_sync(task_id,gate_key,req,a)
+    if config.CLOUD_TENANTS:
+        if job_id:
+            from .tenant_jobs import dispatch_phase
+            await dispatch_phase(store,orchestrator,task_id,phase,queued_job_id=job_id)
+    elif req.action=="redo":spawn(orchestrator.execute_phase(task_id,phase,mode=ExecutionMode.REDO,model_route=selected))
+    else:spawn(orchestrator.continue_after(task_id,phase,model_route=selected))
+    return gate
 
 class FeedbackWrite(BaseModel):
     input_ref: str = Field(min_length=1, max_length=64)

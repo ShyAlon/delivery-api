@@ -6,6 +6,27 @@ from fastapi.testclient import TestClient
 from delivery_api.app import app, store
 
 
+def _publish_test_bytes(store,tid,phase,name,raw,*,session=None):
+    from delivery_api.artifact_publication import ARTIFACT_VALIDATORS,validate_artifact_bytes
+    from delivery_api.artifact_publication import publish_preserving_revision
+    if session is not None:store.set_engine_session(tid,session)
+    with store._task_operation_guard('task.rerun'):
+        publish_preserving_revision(store,tid,{(phase,name):raw})
+
+def _test_interview(store,tid,session,contract='0.16.0'):
+    store.set_model_default(tid,'deepseek:deepseek-flash')
+    _publish_test_bytes(store,tid,'intent','intent_model.json',json.dumps({'contract_version':contract}).encode(),session=session)
+    _publish_test_bytes(store,tid,'conops','conops.json',b'{}')
+
+def _test_readable(store,tid,key,text):
+    from test_http_cutover import _PGUsage
+    phase='intent' if key.startswith('interview/intent_model.') else 'conops' if key.startswith('interview/conops.') else 'architecture'
+    name=key.rsplit('/',1)[-1].rsplit('.',1)[0]+'.json'
+    canonical=store.read_artifact_bytes(tid,phase,name).decode()
+    _PGUsage(store,tid,key.rsplit('.',1)[0]+'.json').write_text(canonical)
+    _PGUsage(store,tid,key).write_text(text)
+
+
 def test_task_three_states_and_phase_progress(pg_scoped_workspace,monkeypatch,pg_task_app):
     signed_app=pg_task_app(pg_scoped_workspace)
     from delivery_api import config
@@ -27,7 +48,7 @@ def test_task_three_states_and_phase_progress(pg_scoped_workspace,monkeypatch,pg
 
         for key in ("intent", "conops", "needs", "srs", "architecture", "specs", "tests", "validation"):
             store.update_phase(task_id, key, "done")
-        store.add_task_artifact(task_id, "tests", "Verification report", "/artifacts/report.json")
+        store.publish_task_revision_bytes(task_id,[{"phase_key":"tests","name":"Verification report","data":b"{}"}],writer_instance="test-only")
         done = client.get(f"/api/tasks/{task_id}").json()
         assert done["state"] == "done" and done["artifacts"][0]["name"] == "Verification report"
 
@@ -558,7 +579,7 @@ def test_orchestrator_phase_plan_launches_next_bounded_process(monkeypatch,tmp_p
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
     store=pg_scoped_workspace.store;tid=store.create_task('Planned product')['task_id'];store.add_event(tid,'progress','session: session-1',phase_key='intent')
     interview=tmp_path/'artifacts'/'session-1'/'interview';interview.mkdir(parents=True)
-    (interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}));(interview/'conops.json').write_text('{}')
+    _test_interview(store,tid,interview.parent.name)
     class Runner:
         calls=[]
         async def run(self,*a,**kw):self.calls.append((a,kw));return 0
@@ -578,14 +599,14 @@ def test_orchestrator_architecture_is_greenfield_without_decision(monkeypatch,tm
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
     store=pg_scoped_workspace.store;tid=store.create_task('New Product')['task_id'];store.add_event(tid,'progress','session: s2',phase_key='intent')
-    interview=tmp_path/'artifacts'/'s2'/'interview';interview.mkdir(parents=True);(interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}));(interview/'conops.json').write_text('{}')
+    interview=tmp_path/'artifacts'/'s2'/'interview';interview.mkdir(parents=True);_test_interview(store,tid,interview.parent.name)
     class Runner:
         calls=[]
         async def request_decision(self,task_id,phase,decision):
             raise AssertionError('No baseline decision belongs in the greenfield flow')
         async def run(self,*a,**kw):self.calls.append((a,kw));return 0
     runner=Runner();asyncio.run(PhaseOrchestrator(store,runner).continue_after(tid,'srs'))
-    baseline=json.loads((tmp_path/'artifacts'/'s2'/'spec'/'system-baseline.json').read_text())
+    baseline=json.loads(store.read_artifact_bytes(tid,'baseline','system-baseline.json'))
     assert baseline['mode']=='greenfield' and baseline['baseline_id']!='pending-founder-choice'
     assert runner.calls[0][1]['phase']=='architecture'
 
@@ -888,7 +909,7 @@ def test_configured_phase_executor_rejects_wrong_owner_and_maps_redo(monkeypatch
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     store=pg_scoped_workspace.store;tid=store.create_task('Executor')['task_id']
     store.add_event(tid,'progress','session: configured-executor',phase_key='intent')
-    root=tmp_path/'artifacts'/'configured-executor';(root/'interview').mkdir(parents=True);(root/'interview'/'intent_model.json').write_text(json.dumps({'contract_version':'1'}));(root/'interview'/'conops.json').write_text('{}')
+    root=tmp_path/'artifacts'/'configured-executor';(root/'interview').mkdir(parents=True);_test_interview(store,tid,root.name,'1')
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'));monkeypatch.setenv('REQUI_RE_DIST','1')
     calls=[]
     class Runner:
@@ -1000,7 +1021,7 @@ def test_greenfield_correction_recovers_session_from_recent_requirement_path(mon
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(store,PostgresStore)
     session='20260919-163614-adc4';interview=artifacts/session/'interview';interview.mkdir(parents=True)
-    (interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}));(interview/'conops.json').write_text('{}')
+    _test_interview(store,tid,interview.parent.name)
     store.add_event(tid,'progress',f'session: {session}',phase_key='intent')
     for index in range(510):store.add_event(tid,'output',f'line {index}',phase_key='srs')
     path=artifacts/session/'spec'/'system-baseline.json'
@@ -1011,7 +1032,7 @@ def test_greenfield_correction_recovers_session_from_recent_requirement_path(mon
         async def run(self,*args,**kwargs):self.calls.append((args,kwargs));return 0
     runner=Runner();orch=PhaseOrchestrator(store,runner)
     asyncio.run(orch.resolve_baseline_requirement(tid,'greenfield'))
-    baseline=json.loads(path.read_text())
+    baseline=json.loads(store.read_artifact_bytes(tid,'baseline','system-baseline.json'))
     assert baseline['mode']=='greenfield' and baseline['baseline_id']==session+'-greenfield-v1'
     assert runner.calls and runner.calls[0][1]['phase']=='architecture'
 
@@ -1091,7 +1112,7 @@ def test_task_artifacts_project_real_session_files_and_download_zip(monkeypatch,
     from delivery_api import app as app_module
     monkeypatch.setattr(app_module.config,'CLOUD_TENANTS',False)
     root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=pg_scoped_workspace.store;tid=store.create_task('Verified product')['task_id'];store.add_event(tid,'progress','session: session-a',phase_key='intent')
-    (root/'session-a'/'interview').mkdir(parents=True);(root/'session-a'/'spec').mkdir();(root/'session-a'/'interview'/'intent_model.json').write_text('{}');(root/'session-a'/'spec'/'architecture.json').write_text(json.dumps({'contract_version':'0.16.0'}));(root/'session-a'/'spec'/'architecture.md').write_text('# Architecture\n\n- Web app')
+    (root/'session-a'/'interview').mkdir(parents=True);(root/'session-a'/'spec').mkdir();_publish_test_bytes(store,tid,'intent','intent_model.json',b'{}',session='session-a');_publish_test_bytes(store,tid,'architecture','architecture.json',json.dumps({'contract_version':'0.16.0'}).encode());_test_readable(store,tid,'spec/architecture.md','# Architecture\n\n- Web app')
     monkeypatch.setattr(app_module,'store',store)
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(store,PostgresStore)
@@ -1107,10 +1128,10 @@ def test_legacy_artifact_projection_recovers_session_from_requirement_path(monke
     root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=pg_scoped_workspace.store;tid=store.create_task('Daily Habit')['task_id'];session='20260919-163614-adc4'
     for index in range(510):store.add_event(tid,'output',f'line {index}',phase_key='srs')
     store.add_event(tid,'requirement','baseline',phase_key='architecture',payload={'kind':'external_input','path':str(root/session/'spec'/'system-baseline.json')})
-    (root/session/'spec').mkdir(parents=True);(root/session/'spec'/'architecture.json').write_text(json.dumps({'contract_version':'0.16.0'}))
+    (root/session/'spec').mkdir(parents=True);_publish_test_bytes(store,tid,'architecture','architecture.json',json.dumps({'contract_version':'0.16.0'}).encode(),session=session)
     monkeypatch.setattr(app_module,'store',store)
     assert app_module._recorded_engine_session(tid)==session
-    records=app_module._task_artifact_snapshot(tid);assert len(records)==1 and records[0]['name']=='architecture.json' and records[0]['validator']=='ArchitectureOverview'
+    records=app_module._task_artifact_snapshot(tid);assert len(records)==1 and records[0]['name']=='architecture.json' and records[0]['validator']=='vmodel_contracts.architecture.ArchitectureOverview'
 
 def test_orchestrator_phase_override_reaches_engine_and_is_durable(monkeypatch,tmp_path,pg_scoped_workspace):
     generator=tmp_path/"generator";python=generator/".venv/bin/python";python.parent.mkdir(parents=True);python.touch()
@@ -1121,7 +1142,7 @@ def test_orchestrator_phase_override_reaches_engine_and_is_durable(monkeypatch,t
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
     store=pg_scoped_workspace.store;tid=store.create_task('Routed')['task_id'];store.set_model_route(tid,'ollama');store.add_event(tid,'progress','session: routed',phase_key='intent')
-    interview=tmp_path/'artifacts'/'routed'/'interview';interview.mkdir(parents=True);(interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}));(interview/'conops.json').write_text('{}')
+    interview=tmp_path/'artifacts'/'routed'/'interview';interview.mkdir(parents=True);_test_interview(store,tid,interview.parent.name)
     class Runner:
         calls=[]
         async def run(self,*a,**kw):self.calls.append(kw);return 0
@@ -1137,7 +1158,7 @@ def test_intent_artifact_view_has_content_title_and_interview_transcript(monkeyp
     from delivery_api import app as app_module
     monkeypatch.setattr(app_module.config,'CLOUD_TENANTS',False)
     root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=pg_scoped_workspace.store;tid=store.create_task('Habit app')['task_id'];store.add_event(tid,'progress','session: interview-view',phase_key='intent')
-    folder=root/'interview-view'/'interview';folder.mkdir(parents=True);(folder/'intent_model.json').write_text(json.dumps({'problem_statement':'Build habits'}));(folder/'intent_model.md').write_text('# What we understood\n\n**Problem:** Build habits')
+    folder=root/'interview-view'/'interview';folder.mkdir(parents=True);_publish_test_bytes(store,tid,'intent','intent_model.json',json.dumps({'problem_statement':'Build habits'}).encode(),session='interview-view');_test_readable(store,tid,'interview/intent_model.md','# What we understood\n\n**Problem:** Build habits')
     store.add_event(tid,'waiting_input','You:',phase_key='intent',payload={'question':'Who needs this?','waiting_input':True});store.add_event(tid,'answer','You: Busy adults',phase_key='intent',payload={'answer':'Busy adults','transcript':True})
     monkeypatch.setattr(app_module,'store',store)
     body=TestClient(signed_app,headers=pg_scoped_workspace.headers).get(f'/api/tasks/{tid}/artifacts/intent/intent_model.json/view').json()
@@ -1205,7 +1226,7 @@ def test_legacy_intent_view_recovers_full_transcript_from_checkpoint(monkeypatch
     from delivery_api import app as app_module
     monkeypatch.setattr(app_module.config,"CLOUD_TENANTS",False)
     root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=pg_scoped_workspace.store;tid=store.create_task('Legacy transcript')['task_id'];store.add_event(tid,'progress','session: legacy-turns',phase_key='intent')
-    folder=root/'legacy-turns'/'interview';folder.mkdir(parents=True);(folder/'intent_model.json').write_text('{}');(folder/'intent_model.md').write_text('# What we understood')
+    folder=root/'legacy-turns'/'interview';folder.mkdir(parents=True);_publish_test_bytes(store,tid,'intent','intent_model.json',b'{}',session='legacy-turns');_test_readable(store,tid,'interview/intent_model.md','# What we understood')
     store.add_event(tid,'waiting_input','You:',phase_key='intent',payload={'question':'Old question?','waiting_input':True});store.add_event(tid,'answer','Interview answer submitted',phase_key='intent',payload={'character_count':9})
     monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module,'_checkpoint_interview_turns',lambda _,supplemental:[('Who needs this?','Busy adults'),('What matters?','Easy scheduling')])
     body=TestClient(signed_app,headers=pg_scoped_workspace.headers).get(f'/api/tasks/{tid}/artifacts/intent/intent_model.json/view').json()
@@ -1216,7 +1237,7 @@ def test_artifact_snapshot_exposes_content_owned_titles(monkeypatch,tmp_path,pg_
     from delivery_api import app as app_module
     monkeypatch.setattr(app_module.config,'CLOUD_TENANTS',False)
     root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=pg_scoped_workspace.store;tid=store.create_task('Titles')['task_id'];store.add_event(tid,'progress','session: titles',phase_key='intent')
-    folder=root/'titles'/'interview';folder.mkdir(parents=True);(folder/'intent_model.json').write_text('{}');(folder/'conops.json').write_text('{}')
+    folder=root/'titles'/'interview';folder.mkdir(parents=True);_publish_test_bytes(store,tid,'intent','intent_model.json',b'{}',session='titles');_publish_test_bytes(store,tid,'conops','conops.json',b'{}')
     monkeypatch.setattr(app_module,'store',store)
     rows={r['name']:r['title'] for r in app_module._task_artifact_snapshot(tid)}
     assert rows=={'intent_model.json':'Needs and Scope','conops.json':'Concept of Operations'}
@@ -1425,14 +1446,15 @@ def test_item_stage_list_artifact_validates_for_parked_gate(monkeypatch,tmp_path
     store=pg_scoped_workspace.store;task_id=store.create_task('Item gate')['task_id']
     store.set_engine_session(task_id,'session-items')
     spec=root/'session-items'/'spec';spec.mkdir(parents=True)
-    artifact=spec/'items.json'
+    from test_stack_decisions import _PGArtifact
+    artifact=_PGArtifact(store,task_id,'items.json','specs')
     artifact.write_text(json.dumps([{'spec_id':'SPEC-1','kind':'ui_flow','title':'Status screen',
                                      'body_markdown':'# Status screen\nShow task status.','requirement_ids':['R-1']}]))
     monkeypatch.setattr(app_module,'store',store)
     records=app_module._task_artifact_snapshot(task_id)
     item=next(a for a in records if a['name']=='items.json')
     assert item['phase_key']=='specs' and item['present'] is True
-    assert item['valid'] is True and item['validator']=='ItemSpec[]' and item['validation_errors']==[]
+    assert item['valid'] is True and item['validator']=='vmodel_contracts.spec.ItemSpec[]' and item['validation_errors']==[]
     client=TestClient(signed_app,headers=pg_scoped_workspace.headers)
     response=client.get(f'/api/tasks/{task_id}/artifacts/specs/items.json/view')
     assert response.status_code==200 and json.loads(response.json()['content'])[0]['spec_id']=='SPEC-1'
@@ -1455,7 +1477,7 @@ def test_orchestrator_sticky_exact_model_across_phases_and_switch(monkeypatch,tm
     assert isinstance(store,PostgresStore)
     store.set_engine_session(tid,'session-sticky')
     interview=tmp_path/'artifacts'/'session-sticky'/'interview';interview.mkdir(parents=True)
-    (interview/'intent_model.json').write_text(json.dumps({'contract_version':'0.16.0'}))
+    _test_interview(store,tid,interview.parent.name)
     store.set_model_default(tid,'deepseek:deepseek-flash')
     class Runner:
         def __init__(self):self.calls=[]
@@ -1485,7 +1507,7 @@ def test_architecture_founder_refs_validate_in_delivery_snapshot_and_gate(monkey
     folder=root/'founder-ref-session'/'spec';folder.mkdir(parents=True)
     payload={'contract_version':'0.27.0','session_id':'founder-ref-session','baseline_id':'baseline:test','stack_entries':[],'components':[],
              'decisions':[{'decision_id':'ADR-17','title':'Error surface','decision':'Display an error and reporting action','rationale':'Recorded founder decision','driver':'founder_constraint','options_considered':[],'founder_decision_refs':['FD-missing-error_states']}],'non_functionals':{}}
-    (folder/'architecture.json').write_text(json.dumps(payload))
+    _publish_test_bytes(local,tid,'architecture','architecture.json',json.dumps(payload).encode())
     artifact=next(a for a in app_module._task_artifact_snapshot(tid) if a['name']=='architecture.json')
     assert artifact['valid'] is True and artifact['validation_errors']==[], artifact['validation_errors']
     with TestClient(signed_app,headers=pg_scoped_workspace.headers) as client:
@@ -1505,7 +1527,7 @@ def test_session_cost_uses_linked_task_retail_total(monkeypatch,tmp_path,pg_scop
     store.add_event('cost-linked','price','Retail',phase_key='srs',payload={'price':2.5,'tokens':0,'rates':{'scale':'credits'}})
     with TestClient(signed_app,headers=pg_scoped_workspace.headers) as client:
         got=client.get('/api/sessions/cost-session/cost')
-    assert got.status_code==200 and got.json()=={'price':2.5,'price_usd':2.5,'evidence':{'complete':True,'rejected_rows':0,'invalid_numeric_rows':0,'scope':'local usage evidence only'}}
+    assert got.status_code==200 and got.json()=={'price':2.5,'price_usd':2.5,'evidence':{'complete':True,'rejected_rows':0,'invalid_numeric_rows':0,'scope':'PG usage evidence only'}}
 
 
 def test_session_cost_unknown_or_missing_usage_is_not_fabricated_zero(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
@@ -1541,7 +1563,7 @@ def test_session_cost_ambiguous_binding_rejected(monkeypatch,tmp_path,pg_scoped_
         assert store.engine_session('duplicate-cost-b') is None
         after=client.get('/api/sessions/duplicate-cost/cost')
         assert after.status_code==200 and after.json()==before.json()
-        assert after.json()=={'price':2.5,'price_usd':2.5,'evidence':{'complete':True,'rejected_rows':0,'invalid_numeric_rows':0,'scope':'local usage evidence only'}}
+        assert after.json()=={'price':2.5,'price_usd':2.5,'evidence':{'complete':True,'rejected_rows':0,'invalid_numeric_rows':0,'scope':'PG usage evidence only'}}
 
 
 def test_task_projection_receivers_require_scoped_postgres():
@@ -1571,3 +1593,15 @@ def test_session_cost_receivers_require_scoped_postgres():
 
 def test_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(pg_local_compat_process,pg_scoped_workspace):
     pg_local_compat_process(_check_built_runtime_does_not_fall_back_to_legacy_interview_subprocess)
+
+
+def test_interview_markdown_pairs_input_identity_despite_next_prompt_race(monkeypatch,pg_scoped_workspace):
+    from delivery_api import app as module
+    store=pg_scoped_workspace.store;monkeypatch.setattr(module,'store',store)
+    tid=store.create_task('Raced transcript input')['task_id']
+    store.add_event(tid,'waiting_input','Describe customer booking',phase_key='intent',payload={'input_id':'first','question':'Describe customer booking'})
+    store.add_event(tid,'waiting_input','Choose a concept',phase_key='conops',payload={'input_id':'next','question':'Choose a concept'})
+    store.add_event(tid,'answer','You: Customers pay online',phase_key='intent',payload={'decision_id':'first','answer':'Customers pay online'})
+    text=module._interview_transcript_markdown(tid)
+    assert 'Describe customer booking\n\n**Answer:** Customers pay online' in text
+    assert 'Choose a concept' not in text

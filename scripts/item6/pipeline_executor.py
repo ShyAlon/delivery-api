@@ -1,5 +1,5 @@
 """Private same-owner graph runner. No CLI/global route override or auto answers."""
-import asyncio,hashlib,json,sqlite3,uuid
+import asyncio,hashlib,json,uuid
 from pathlib import Path
 from delivery_api.tenancy import tenant_context
 from delivery_api.same_host_producer import SameHostProducerWorker
@@ -54,21 +54,25 @@ class PrivatePipeline:
                 from vmodel_contracts.interactive import InputResponse
                 gateway=self.gateway(cap,job)
                 with admission_gateway(gateway,required=True),wire_clients(gateway,self.interview_clients),shared_writer():
-                    program=InterviewApplication(cap.session_id,cap.task_id,task['brief'],artifact_root=str(root.parent),model_route='deepseek',initial_model=self.model)
-                    pending=program.advance()
-                    for _ in range(100):
-                        cap.validate(self.store)
-                        if pending is None:
-                            if not program.finished:raise ValueError('interview did not produce typed completion')
-                            break
-                        self.progress('interview.waiting','Waiting for founder input; no timeout')
-                        from delivery_api.compute_meter import excluded_wait
-                        with excluded_wait():response=self.answer(pending)
-                        if not isinstance(response,InputResponse) or response.input_id!=pending.input_id or response.actor_id!=scope.owner_id:
-                            raise ValueError('current exact founder input required')
-                        pending=program.advance(response)
-                    else:raise ValueError('interview bounded input count reached')
-                program.checkpointer.conn.close()
+                    from interview_engine.pg_session_store import PgSessionStore
+                    pg=PgSessionStore(self.store._postgres._pool,claims=(scope.owner_id,scope.session_id))
+                    claim=pg.claim(cap.session_id,scope.owner_id,'item6-private-'+uuid.uuid4().hex,300)
+                    try:
+                        program=InterviewApplication(cap.session_id,cap.task_id,task['brief'],artifact_root=str(root.parent),model_route='deepseek',initial_model=self.model,pg_store=pg,pg_claim=claim)
+                        pending=program.advance()
+                        for _ in range(100):
+                            cap.validate(self.store)
+                            if pending is None:
+                                if not program.finished:raise ValueError('interview did not produce typed completion')
+                                break
+                            self.progress('interview.waiting','Waiting for founder input; no timeout')
+                            from delivery_api.compute_meter import excluded_wait
+                            with excluded_wait():response=self.answer(pending)
+                            if not isinstance(response,InputResponse) or response.input_id!=pending.input_id or response.actor_id!=scope.owner_id:
+                                raise ValueError('current exact founder input required')
+                            pending=program.advance(response)
+                        else:raise ValueError('interview bounded input count reached')
+                    finally:pg.release(claim)
                 for phase in ('intent','conops'):
                     self.store.update_phase(tid,phase,'done')
             if not asyncio.run(worker.execute(job,interview)):raise ValueError('interview job already claimed')
@@ -88,20 +92,24 @@ class PrivatePipeline:
             usage_log_factory=lambda cap,root:UsageLog(cap.session_id),runtime_factory=runtime,wire_client_factory=self.generator_clients)
 
     def generate(self,cap,root):
-        from spec_generator.graph import build_graph,checkpoint_serde
+        from spec_generator.graph import build_graph
         from spec_generator.cli import _make_persist,_atomic_write,_make_partials
         from spec_generator.telemetry import UsageLog
         from spec_generator.progress import ProgressBus
         from spec_generator.stop_publication import FencedCheckpointer,publication_guard
         from spec_generator.cooperative_run import cli_stop_binding
-        from langgraph.checkpoint.sqlite import SqliteSaver
         from langgraph.types import Command
         from vmodel_contracts import SystemBaseline,SpecManifest
-        intent=json.loads((root/'interview/intent_model.json').read_text());conops=json.loads((root/'interview/conops.json').read_text())
+        from spec_generator import document_runtime as document_io
+        intent=json.loads(document_io.read_text(root/'interview/intent_model.json'));conops=json.loads(document_io.read_text(root/'interview/conops.json'))
         baseline=SystemBaseline.model_validate({'baseline_id':cap.session_id+'-greenfield','system_name':'Household Tasks','mode':'greenfield','repositories':[],'immutable_decisions':[]}).model_dump(mode='json')
         out=root/'spec'
-        out.mkdir(exist_ok=False);(out/'specs').mkdir()
+        if not document_io.configured():out.mkdir(exist_ok=False);(out/'specs').mkdir()
         _atomic_write(out/'system-baseline.json',json.dumps(baseline))
+        if hasattr(self.store,'_postgres'):
+            from delivery_api.artifact_publication import publish_preserving_revision
+            with self.store._task_operation_guard('task.rerun'):
+                publish_preserving_revision(self.store,cap.task_id,{('baseline','system-baseline.json'):document_io.read_bytes(out/'system-baseline.json')})
         bus=ProgressBus()
         phase_map={'items':'specs',**{p.generator_stage:p.key for p in PHASE_DEFINITIONS if p.generator_stage}}
         def progress(event):
@@ -112,9 +120,10 @@ class PrivatePipeline:
             # ProgressBus deliberately swallows consumer errors. Durable phase state
             # is written below only after canonical contract validation succeeds.
         bus.subscribe(progress)
-        fence,generation=cli_stop_binding();conn=sqlite3.connect(out/'checkpoints.sqlite',check_same_thread=False)
+        from spec_generator.checkpoint_runtime import checkpoint
+        fence,generation=cli_stop_binding();backend=checkpoint(out)
         try:
-            saver=FencedCheckpointer(SqliteSaver(conn,serde=checkpoint_serde()),publication_guard(fence,generation))
+            saver=FencedCheckpointer(backend,publication_guard(fence,generation))
             log=UsageLog(cap.session_id)
             graph=build_graph(log,checkpointer=saver,progress=bus,review=True,
                 stop_fence=fence,stop_generation=generation,persist=_make_persist(intent,out,greenfield=True,conops_present=True),partials=_make_partials(out))
@@ -158,7 +167,7 @@ class PrivatePipeline:
             _atomic_write(out/'AGENTS.md',render_agents_md(ArchitectureOverview.model_validate(bundle['_architecture']),
                 [ItemSpec.model_validate(i) for i in bundle['items']],manifest,[PunchListItem.model_validate(i) for i in bundle.get('punch_list',[])]))
             from artifact_receipts import inventory
-            _,canonical=inventory(root)
+            _,canonical=inventory(root,store=self.store,capability=cap)
             # The graph channels are intermediate assembly bodies. Close with
             # the validated serialized contracts used by private revision reads.
             graph.update_state(cfg,{key:canonical[name] for key,name in
@@ -174,4 +183,5 @@ class PrivatePipeline:
                 label=stage_failure_label(self.failed_stage,exc)
                 if label:exc.safe_check=label
             raise
-        finally:conn.close()
+        finally:
+            if not document_io.configured():backend.conn.close()

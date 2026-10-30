@@ -12,7 +12,7 @@ ACTOR = NS(label="owner@example.com", id="u1", admin=False)
 
 
 def _pending(input_id="in-1"):
-    return NS(input_id=input_id, options=[], context={}, rationale_required=False)
+    return NS(input_id=input_id, prompt="What does booking look like?", options=[], context={}, rationale_required=False)
 
 
 def _setup(monkeypatch, *, finished, pending=None):

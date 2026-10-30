@@ -31,18 +31,52 @@ class FinalArtifactsAdapter:
         with tenant_context(scope):
             task=self.store.task(tid)
             if not task or task['owner_id']!=scope.owner_id:raise ValueError('current owned task required')
-            root=session_root(self.base,scope,pipeline['session_id']);files,_=inventory(root)
+            root=session_root(self.base,scope,pipeline['session_id'])
+            binding=self.store.session_binding(pipeline['session_id'])
+            from delivery_api.historical_checkpoint import HistoricalCheckpointCapability
+            from delivery_api.generator_documents import GeneratorDocuments
+            historical=HistoricalCheckpointCapability(scope,tid,pipeline['session_id'],binding['generation'])
+            files,_=inventory(root,store=self.store,capability=historical)
             if files!=pipeline['artifact_sha256']:raise ValueError('original completed bundle drift')
-            exports={name:(root/name).read_bytes() for name in files}
-            # Include the new-generation outputs and their DB-retained receipts,
-            # not only the original complete bundle.
-            current=session_root(self.base,scope,task['engine_session_id'])
-            for row in self.store.task_artifacts(tid,include_stale=False):
-                path=Path(row['ref'])
-                if path.is_symlink() or path.resolve()!=path or not path.is_relative_to(current) or not path.is_file():
-                    raise ValueError('current generation artifact must remain in exact owned namespace')
-                name='revised/'+path.relative_to(current).as_posix();exports[name]=path.read_bytes()
-            exports['revised/execution-generation.json']=(current/'execution-generation.json').read_bytes()
+            documents=GeneratorDocuments.reader(self.store,historical)
+            exports={name:documents.read(name) for name in files}
+            # Published revised members use the current ready PG manifest.
+            from delivery_api.worker_capability import WorkerCapability
+            cap=WorkerCapability.capture(self.store,tid)
+            current=self.store.manifest_snapshot(tid,cap.generation)
+            if current is not None:
+                for row in current['rows']:
+                    directory='interview' if row['phase_key'] in ('intent','conops') else 'spec'
+                    exports['revised/'+directory+'/'+row['name']]=self.store.read_artifact_bytes_sha(row['sha256'])
+            # Private continuation results live in immutable snapshots and their
+            # exact accepted receipts, not in the public phase manifest.
+            with self.store._postgres.transaction() as c:
+                accepted=c.execute("SELECT wait_id,payload FROM decision_reviews WHERE task_id=%s AND wait_id LIKE %s",(tid,'revision-next-approval:%')).fetchall()
+            if not accepted:raise ValueError('accepted revision results required')
+            accepted_phases=set()
+            for accepted_row in accepted:
+                approval=json.loads(accepted_row['payload'])
+                iid=accepted_row['wait_id'].removeprefix('revision-next-approval:')
+                review=self.store.decision_review(tid,'revision-next-review:'+iid,approval['review_sha256'])
+                if (not review or approval['decision']!='approve' or approval['phase']!=review['phase']
+                    or review['generation']!=cap.generation or review['execution_session_id']!=cap.session_id):
+                    raise ValueError('approved revision review differs')
+                receipt=self.store.decision_review(tid,'revision-continuation-result:'+iid,review['source_review_sha256'])
+                if not receipt or receipt['artifact_sha256']!=review['artifact_sha256']:
+                    raise ValueError('approved revision artifact differs')
+                from delivery_api.generator_snapshot import GeneratorSnapshots
+                row=GeneratorSnapshots(self.store,cap).read(receipt['snapshot'])
+                if receipt['snapshot']['sha256']!=review['checkpoint_sha256'] or row.config!=review['checkpoint']:
+                    raise ValueError('approved result snapshot differs')
+                from delivery_api.pg_revision_stage import digest
+                if digest(receipt['artifact'])!=review['artifact_sha256']:raise ValueError('approved artifact hash differs')
+                phase=review['phase'];accepted_phases.add(phase);name={'specs':'items'}.get(phase,phase)+'.json'
+                exports['revised/spec/'+name]=json.dumps(receipt['artifact'],sort_keys=True,indent=2).encode()
+            if accepted_phases!={'architecture','specs','tests','validation'}:
+                raise ValueError('complete accepted revision chain required')
+            installed=self.store.installed_execution_anchor(cap.session_id)
+            if not installed:raise ValueError('current installed execution anchor required')
+            exports['revised/execution-generation.json']=json.dumps(installed['anchor'].document(),sort_keys=True,indent=2).encode()
             with self.store._postgres.transaction() as c:
                 rows=c.execute('SELECT installation_id FROM closed_revision_installations WHERE task_id=%s',(tid,)).fetchall()
             for row in rows:

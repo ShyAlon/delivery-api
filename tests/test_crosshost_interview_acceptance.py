@@ -126,7 +126,6 @@ def base_env(root, keys, extra_pythonpath):
         'CROSSHOST_STUB_SESSION': '00000000-0000-0000-0000-0000000000a1',
         'CROSSHOST_STUB_ISSUER': 'https://supabase.crosshost.test/auth/v1',
         'DELIVERY_COOKIE_SECURE': '0',
-        # Temporary hang diagnosis passthrough (remove before final).
     })
     return env
 
@@ -529,8 +528,11 @@ def test_interview_completes_single_host_reference(dsn, keys, tmp_path_factory):
             conn.close()
             session_id = row[0]
             base_dir = host.artifacts / 'tenants' / OWNER / 'sessions' / session_id / 'interview'
-            intent_doc = (base_dir / 'intent_model.json').read_text()
-            conops_doc = (base_dir / 'conops.json').read_text()
+            documents = page.request.get(host.base + '/api/tasks/' + task_id).json()['artifacts']
+            assert {a['name'] for a in documents} >= {'intent_model.json','conops.json'}
+            intent_doc = page.request.get(host.base + '/api/tasks/' + task_id + '/artifacts/intent/intent_model.json').text()
+            conops_doc = page.request.get(host.base + '/api/tasks/' + task_id + '/artifacts/conops/conops.json').text()
+            assert not (base_dir/'intent_model.json').exists() and not (base_dir/'conops.json').exists(), 'no filesystem business copy'
             assert session_id in intent_doc and session_id in conops_doc, \
                 'artifacts are bound to the completing session'
             browser.close()
@@ -631,6 +633,8 @@ def test_interview_survives_local_cloud_local_with_one_lease_holder(dsn, keys, t
             page.wait_for_timeout(1500)
             page.screenshot(path=str(shots / 'complete.png'), full_page=True)
             task = page.request.get(local2.base + '/api/tasks/' + task_id).json()
+            intent_doc=page.request.get(local2.base+'/api/tasks/'+task_id+'/artifacts/intent/intent_model.json').text()
+            conops_doc=page.request.get(local2.base+'/api/tasks/'+task_id+'/artifacts/conops/conops.json').text()
             browser.close()
         third = placement(dsn, sid)
         assert third['placement_instance'] != second['placement_instance'], \
@@ -647,8 +651,8 @@ def test_interview_survives_local_cloud_local_with_one_lease_holder(dsn, keys, t
         # The completing host's artifacts are bound to the one session that
         # travelled across all three placements.
         base_dir = local2.artifacts / 'tenants' / OWNER / 'sessions' / sid / 'interview'
-        assert sid in (base_dir / 'intent_model.json').read_text()
-        assert sid in (base_dir / 'conops.json').read_text()
+        assert sid in intent_doc and sid in conops_doc
+        assert not (base_dir/'intent_model.json').exists() and not (base_dir/'conops.json').exists()
     finally:
         local2.stop()
 
@@ -768,20 +772,11 @@ def test_admitted_host_runs_the_first_interview_turn_through_the_ui(dsn, keys, t
         host.stop()
 
 
-def test_phase_boundary_second_instance_cannot_pick_up_committed_needs(dsn, keys, tmp_path_factory):
-    """Reproduction, not acceptance: a committed phase boundary does NOT cross
-    hosts today. Host A completes the interview and the needs phase; host B
-    (own artifacts root, same database - the Mac/OVH shape) can see the task
-    and the waiting gate but cannot review it: the needs evidence lives only
-    on A's filesystem, nothing publishes committed artifact bytes to the
-    shared store by default (ARTIFACT_PUBLISH is off), and no restore path
-    materializes them on B. Approving the gate on B is refused with "No
-    current valid artifact", so srs - the full-phase successor, no mid-request
-    handoff involved - can never start there.
+def test_phase_boundary_default_flags_keep_pg_evidence_and_require_choice(dsn, keys, tmp_path_factory):
+    """Default-off legacy flags cannot suppress PG cross-host evidence.
 
-    The interview itself does cross hosts (its engine checkpoints to the
-    database); generator phase artifacts have no equivalent seam. This test
-    pins the failure mode as evidence for the restore-seam design."""
+    A gate still refuses a missing founder choice without starting SRS.
+    """
     from playwright.sync_api import sync_playwright
     import psycopg, psycopg.rows
     root = tmp_path_factory.mktemp('crosshost-phases')
@@ -817,14 +812,12 @@ def test_phase_boundary_second_instance_cannot_pick_up_committed_needs(dsn, keys
     finally:
         local.stop()
 
-    # Default configuration publishes nothing: no manifest rows exist at all.
     conn = psycopg.connect(dsn, autocommit=True, row_factory=psycopg.rows.dict_row)
-    published = conn.execute("select count(*) as n from artifact_manifest_ready").fetchone()
-    stored_bytes = conn.execute("select count(*) as n from artifact_bytes").fetchone()
+    published = conn.execute("select count(*) as n from artifact_manifest_ready where task_id=%s", (task_id,)).fetchone()
+    stored_bytes = conn.execute("select count(*) as n from artifact_bytes b where exists(select 1 from task_artifacts a where a.task_id=%s and a.sha256=b.sha256)", (task_id,)).fetchone()
     jobs = conn.execute("select kind, state from worker_jobs where task_id=%s order by created_at", (task_id,)).fetchall()
     conn.close()
-    assert published['n'] == 0 and stored_bytes['n'] == 0, \
-        'committed needs bytes never reached the shared store: %r %r' % (published, stored_bytes)
+    assert published['n'] > 0 and stored_bytes['n'] > 0, 'PG publication is unconditional'
     generator_jobs = [(j['kind'], j['state']) for j in jobs if j['kind'] != 'phase:intent']
     assert generator_jobs == [('phase:needs', 'done')], jobs  # interview steps claim phase:intent jobs
 
@@ -836,32 +829,26 @@ def test_phase_boundary_second_instance_cannot_pick_up_committed_needs(dsn, keys
             sign_in(page, cloud.base)
             page.goto(cloud.base + '/tasks/%s/view' % task_id)
             page.wait_for_timeout(3000)
-            # The task and its waiting gate are visible on B (control state is
-            # in the shared database), but the evidence is not.
+            # B reads the shared task, waiting gate and exact evidence.
             task = page.request.get(cloud.base + '/api/tasks/' + task_id).json()
             phases = {x['phase_key']: x['state'] for x in task['phases']}
             assert phases['needs'] == 'awaiting_approval', phases
             review_b = page.request.get(cloud.base + '/api/tasks/%s/gates/gate-needs/review' % task_id)
             assert review_b.ok, review_b.status
             data_b = review_b.json()
-            # 'actionable' is revision currency + gate state, not evidence presence:
-            # B shows no evidence documents, and the decide path is where missing
-            # evidence is enforced (below).
-            assert not gate_documents(data_b), 'B has no evidence documents without restore: %r' % (list(gate_documents(data_b)),)
-            assert not gate_documents(data_b).get('needs.json'), 'needs.json bytes exist only on host A'
-            # Approving anyway is refused: no valid artifact to review on B,
-            # so the srs successor can never start there.
+            assert gate_documents(data_b).get('needs.json') == needs_docs['needs.json'], 'B reviews the exact committed evidence without legacy flags'
             decision = page.request.post(cloud.base + '/api/tasks/%s/gates/gate-needs/decide' % task_id,
                                          data=json.dumps({'action': 'approve'}),
                                          headers={'content-type': 'application/json', 'origin': cloud.base})
             assert decision.status == 400, (decision.status, decision.text()[:300])
-            assert 'No current valid artifact' in decision.text(), decision.text()[:400]
+            assert 'choose' in decision.text().lower() or 'option' in decision.text().lower(), decision.text()[:400]
             task = page.request.get(cloud.base + '/api/tasks/' + task_id).json()
             phases = {x['phase_key']: x['state'] for x in task['phases']}
             assert phases['srs'] == 'pending', phases
             browser.close()
     finally:
         cloud.stop()
+
 
 
 PUBLISH_RESTORE_ENV = {'DELIVERY_ARTIFACT_PUBLISH': '1', 'DELIVERY_ARTIFACT_RESTORE': '1'}
@@ -879,16 +866,11 @@ def _manifest_state(dsn_value, task_id):
 
 
 def test_phase_boundary_second_instance_picks_up_committed_needs(dsn, keys, tmp_path_factory):
-    """Acceptance: completed-phase artifacts cross hosts as verified published bytes.
+    """Exact PG bytes cross hosts without restoring any local business copy.
 
-    Host A (own artifacts root) completes the interview and the needs phase through
-    the real UI path with publication on. Host B (own root, same database, restore
-    on) never ran anything: the gate review materializes the committed evidence
-    from the published manifest, the founder approves there, and srs runs as a real
-    child process on B over the restored inputs. B's srs publication sits next to
-    A's needs revision (content-addressed, no single-writer assumption), and a
-    restarted A restores B's output back while its identical local bytes stay
-    untouched. Settled work is never regenerated."""
+    Needs, SRS and their review companions keep published hashes across process
+    restarts; founder approval on B starts SRS over PG inputs, never files.
+    """
     from playwright.sync_api import sync_playwright
     import hashlib as _hashlib
     root = tmp_path_factory.mktemp('crosshost-pickup')
@@ -941,8 +923,9 @@ def test_phase_boundary_second_instance_picks_up_committed_needs(dsn, keys, tmp_
             review_b = wait_gate_review(page, cloud.base, task_id, 'gate-needs', timeout=30)
             assert review_b.get('actionable'), 'B reviews the restored evidence: %r' % (str(review_b)[:400],)
             restored = cloud.artifacts / 'tenants' / OWNER / 'sessions' / str(task['engine_session_id']) / 'spec' / 'needs.json'
-            assert restored.is_file(), 'restore materialized needs.json on B: %s' % restored
-            assert _hashlib.sha256(restored.read_bytes()).hexdigest() == needs_sha, 'restored bytes match the published hash'
+            response=page.request.get(cloud.base+'/api/tasks/'+task_id+'/artifacts/needs/needs.json')
+            assert response.ok and _hashlib.sha256(response.body()).hexdigest()==needs_sha, 'PG bytes on B match the published hash'
+            assert not restored.exists(), 'PG evidence is not materialized on B'
             decision = page.request.post(cloud.base + '/api/tasks/%s/gates/gate-needs/decide' % task_id,
                                          data=json.dumps({'action': 'approve', 'selected_option': 'Approve Stakeholder needs'}),
                                          headers=headers(cloud.base))
@@ -977,9 +960,11 @@ def test_phase_boundary_second_instance_picks_up_committed_needs(dsn, keys, tmp_
             review_a2 = wait_gate_review(page, local2.base, task_id, 'gate-srs', timeout=30)
             assert review_a2.get('actionable'), 'A reviews what B produced: %r' % (str(review_a2)[:400],)
             restored_srs = local2.artifacts / 'tenants' / OWNER / 'sessions' / str(session_id) / 'spec' / 'srs.json'
-            assert restored_srs.is_file(), 'A restored srs.json from B''s revision'
-            assert _hashlib.sha256(restored_srs.read_bytes()).hexdigest() == published2[('srs', 'srs.json')]['sha256']
-            assert _hashlib.sha256((local2.artifacts / 'tenants' / OWNER / 'sessions' / str(session_id) / 'spec' / 'needs.json').read_bytes()).hexdigest() == needs_sha
+            response=page.request.get(local2.base+'/api/tasks/'+task_id+'/artifacts/srs/srs.json')
+            assert response.ok and _hashlib.sha256(response.body()).hexdigest()==published2[('srs','srs.json')]['sha256']
+            needs_response=page.request.get(local2.base+'/api/tasks/'+task_id+'/artifacts/needs/needs.json')
+            assert needs_response.ok and _hashlib.sha256(needs_response.body()).hexdigest()==needs_sha
+            assert not restored_srs.exists(), 'PG evidence is not materialized on A'
             browser.close()
     finally:
         local2.stop()
@@ -1028,6 +1013,11 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
     def spec_file(host, session_id, name):
         return host.artifacts / 'tenants' / OWNER / 'sessions' / str(session_id) / 'spec' / name
 
+    def pg_bytes(page,host,phase,name):
+        response=page.request.get(host.base+'/api/tasks/'+task_id+'/artifacts/'+phase+'/'+name)
+        assert response.ok,(response.status,response.text()[:200])
+        return response.body()
+
     # Host A: interview + needs through the real UI child process.
     local = AdmittedHost('local', root, keys, dsn, extra_env=dict(PUBLISH_RESTORE_ENV))
     try:
@@ -1065,7 +1055,7 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
             review_b = wait_gate_review(page, cloud.base, task_id, 'gate-needs', timeout=30)
             assert review_b.get('actionable'), 'B reviews the restored needs: %r' % (str(review_b)[:300],)
             restored = spec_file(cloud, session_id, 'needs.json')
-            assert restored.is_file() and _hashlib.sha256(restored.read_bytes()).hexdigest() == needs_sha
+            assert not restored.exists() and _hashlib.sha256(pg_bytes(page,cloud,'needs','needs.json')).hexdigest()==needs_sha
             decide(page, cloud.base, 'gate-needs', 'Approve Stakeholder needs')
             review_srs = wait_gate_review(page, cloud.base, task_id, 'gate-srs', timeout=180)
             assert gate_documents(review_srs).get('srs.json'), 'srs ran as a real child on B'
@@ -1090,18 +1080,19 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
             review_srs_a = wait_gate_review(page, local2.base, task_id, 'gate-srs', timeout=30)
             assert review_srs_a.get('actionable'), 'A2 reviews B\'s srs: %r' % (str(review_srs_a)[:300],)
             restored_srs = spec_file(local2, session_id, 'srs.json')
-            assert restored_srs.is_file() and _hashlib.sha256(restored_srs.read_bytes()).hexdigest() == srs_sha
+            assert not restored_srs.exists() and _hashlib.sha256(pg_bytes(page,local2,'srs','srs.json')).hexdigest()==srs_sha
             restored_sem = spec_file(local2, session_id, 'srs.semantic-review.json')
-            assert restored_sem.is_file(), 'the semantic-review companion crossed to A2 via the manifest'
+            assert not restored_sem.exists(), 'the semantic-review companion stays in PG'
             _, rows_sem, _, _ = _manifest_state(dsn, task_id)
             sem_row = next(r for r in rows_sem if r['name'] == 'srs.semantic-review.json' and r['publication_state'] == 'published')
-            assert _hashlib.sha256(restored_sem.read_bytes()).hexdigest() == sem_row['sha256'], 'restored companion bytes match the published hash'
+            assert _hashlib.sha256(pg_bytes(page,local2,'srs','srs.semantic-review.json')).hexdigest() == sem_row['sha256'], 'restored companion bytes match the published hash'
             decide(page, local2.base, 'gate-srs', 'Approve Requirements')
             review_arch = wait_gate_review(page, local2.base, task_id, 'gate-architecture', timeout=180)
             assert gate_documents(review_arch).get('architecture.json'), 'architecture ran as a real child on A2'
             stack_a = (review_arch.get('review') or {}).get('stack_decisions') or review_arch.get('stack_decisions')
             assert stack_a and [s for s in stack_a['slots'] if not s.get('founder_decision')], \
                 'the research_required slot surfaces the founder-decision panel on the producer host: %r' % (str(review_arch)[:400],)
+            a2_companion_bytes=pg_bytes(page,local2,'architecture','architecture.decisions.json')
             browser.close()
     finally:
         local2.stop()
@@ -1110,7 +1101,8 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
     published3 = {(r['phase_key'], r['name']): r for r in rows3 if r['publication_state'] == 'published'}
     assert ('architecture', 'architecture.json') in published3 and ('architecture', 'architecture.decisions.json') in published3, \
         'A2 published architecture and its founder-decision companion: %r' % (sorted(published3),)
-    a2_companion_bytes = spec_file(local2, session_id, 'architecture.decisions.json').read_bytes()
+    stale_local=spec_file(local2,session_id,'architecture.decisions.json')
+    stale_local.parent.mkdir(parents=True,exist_ok=True);stale_local.write_bytes(a2_companion_bytes)  # deliberate obsolete replica
     # Producer identity: B's root never saw architecture while B was down.
     assert not spec_file(cloud, session_id, 'architecture.json').exists(), 'architecture was produced on A2, not on B'
 
@@ -1126,8 +1118,8 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
             review_arch_b = wait_gate_review(page, cloud2.base, task_id, 'gate-architecture', timeout=30)
             assert review_arch_b.get('actionable'), 'B2 reviews A2\'s architecture: %r' % (str(review_arch_b)[:300],)
             restored_companion = spec_file(cloud2, session_id, 'architecture.decisions.json')
-            assert restored_companion.is_file(), 'the founder-decision companion crossed to B2 via the manifest'
-            assert _hashlib.sha256(restored_companion.read_bytes()).hexdigest() == published3[('architecture', 'architecture.decisions.json')]['sha256'], \
+            assert not restored_companion.exists(), 'the founder-decision companion stays in PG'
+            assert _hashlib.sha256(pg_bytes(page,cloud2,'architecture','architecture.decisions.json')).hexdigest() == published3[('architecture', 'architecture.decisions.json')]['sha256'], \
                 'restored companion bytes match the published hash'
             stack_b = (review_arch_b.get('review') or {}).get('stack_decisions') or review_arch_b.get('stack_decisions')
             # Slots carry the design proposal (technical_choice/prefill); the founder
@@ -1155,13 +1147,8 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
     # Producer identity: A's root never saw items while A was down.
     assert not spec_file(local2, session_id, 'items.json').exists(), 'items were produced on B2, not on A'
 
-    # Host A3 (A's root): the stale-replica boundary of the APPROVED restore
-    # behavior. A2 produced the open-slots companion on this root; the founder's
-    # decisions were recorded on B2 and republished, so A3's local companion is an
-    # older committed render of the same document. Restore never overwrites
-    # conflicting local bytes: the pickup refuses cleanly and recoverably, and
-    # every local byte is preserved. (A pending founder amendment would let
-    # provably-previously-published bytes fast-forward to the latest revision.)
+    # Host A3 ignores the intentionally obsolete local decision companion.
+    # The current PG manifest stays authoritative and old local bytes stay intact.
     local3 = AdmittedHost('local3', root, keys, dsn, artifacts=local.artifacts, extra_env=dict(PUBLISH_RESTORE_ENV))
     try:
         with sync_playwright() as pw:
@@ -1169,14 +1156,15 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
             page = browser.new_page()
             sign_in(page, local3.base)
             refused = page.request.get(local3.base + '/api/tasks/%s/gates/gate-specs/review' % task_id)
-            assert refused.status == 409 and 'conflicting local bytes' in refused.text(), \
-                'A3 holds the pre-decision companion: restore refuses without overwriting: %r' % ((refused.status, refused.text()[:200]),)
+            assert refused.ok and refused.json().get('actionable'), 'obsolete local replica cannot override PG'
+            latest=pg_bytes(page,local3,'architecture','architecture.decisions.json')
+            assert latest!=a2_companion_bytes and b'deterministic acceptance' in latest, 'latest founder decision crosses hosts'
             browser.close()
     finally:
         local3.stop()
     stale_companion = spec_file(local3, session_id, 'architecture.decisions.json')
     assert stale_companion.is_file() and stale_companion.read_bytes() == a2_companion_bytes, \
-        'the refusal left every local byte intact (conflicting local bytes are never overwritten)'
+        'obsolete local bytes are ignored, never overwritten'
 
     # Host B3 (B's root): restore (the decided companion is identical on this
     # root), approve gate-specs, tests child.
@@ -1189,8 +1177,8 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
             review_specs_b = wait_gate_review(page, cloud3.base, task_id, 'gate-specs', timeout=30)
             assert review_specs_b.get('actionable'), 'B3 reviews B2\'s items: %r' % (str(review_specs_b)[:300],)
             restored_items = spec_file(cloud3, session_id, 'items.json')
-            assert restored_items.is_file() and \
-                _hashlib.sha256(restored_items.read_bytes()).hexdigest() == published4[('specs', 'items.json')]['sha256']
+            assert not restored_items.exists() and \
+                _hashlib.sha256(pg_bytes(page,cloud3,'specs','items.json')).hexdigest() == published4[('specs', 'items.json')]['sha256']
             decide(page, cloud3.base, 'gate-specs', 'Approve Item specifications')
             review_tests = wait_gate_review(page, cloud3.base, task_id, 'gate-tests', timeout=180)
             assert gate_documents(review_tests).get('tests.json'), 'tests ran as a real child on B3'
@@ -1214,8 +1202,8 @@ def test_full_session_alternates_hosts_through_validation(dsn, keys, tmp_path_fa
             review_tests_b = wait_gate_review(page, local3.base, task_id, 'gate-tests', timeout=30)
             assert review_tests_b.get('actionable'), 'B4 reviews B3\'s tests: %r' % (str(review_tests_b)[:300],)
             restored_tests = spec_file(local3, session_id, 'tests.json')
-            assert restored_tests.is_file() and \
-                _hashlib.sha256(restored_tests.read_bytes()).hexdigest() == published5[('tests', 'tests.json')]['sha256']
+            assert not restored_tests.exists() and \
+                _hashlib.sha256(pg_bytes(page,local3,'tests','tests.json')).hexdigest() == published5[('tests', 'tests.json')]['sha256']
             decide(page, local3.base, 'gate-tests', 'Approve Verification')
             review_val = wait_gate_review(page, local3.base, task_id, 'gate-validation', timeout=180)
             assert gate_documents(review_val).get('validation.json'), 'validation ran as a real child on B4'

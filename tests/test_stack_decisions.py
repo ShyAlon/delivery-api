@@ -5,6 +5,43 @@ from tests.test_decision_pages import setup
 REV = 'a' * 64
 
 
+class _PGSpec:
+    def __init__(self,store,tid,phase='architecture'):self.store=store;self.tid=tid;self.phase=phase
+    def __truediv__(self,name):return _PGArtifact(self.store,self.tid,name,self.phase)
+
+class _PGArtifact:
+    def __init__(self,store,tid,name,phase='architecture'):self.store=store;self.tid=tid;self.name=name;self.phase=phase
+    def read_bytes(self):
+        if self.name=='lineage.json':
+            from delivery_api.generator_documents import GeneratorDocuments
+            return GeneratorDocuments.owner_reader(self.store,self.tid).read('spec/'+self.name)
+        return self.store.read_artifact_bytes(self.tid,self.phase,self.name)
+    def read_text(self):return self.read_bytes().decode()
+    def write_text(self,text):
+        from delivery_api.artifact_publication import publish_preserving_revision
+        if self.name.endswith('.md') or self.name=='lineage.json':
+            from delivery_api.generator_documents import GeneratorDocuments
+            from delivery_api.worker_capability import WorkerCapability
+            with self.store._task_operation_guard('task.gate.decide'):
+                reader=GeneratorDocuments.reader(self.store,WorkerCapability.capture(self.store,self.tid))
+                import hashlib
+                reader._put('spec/'+self.name,text.encode(),hashlib.sha256(text.encode()).hexdigest())
+        else:
+            # Seed/rewrite full manifest without weakening runtime gate writer checks.
+            with self.store._task_operation_guard('task.gate.decide'):
+                publish_preserving_revision(self.store,self.tid,{(self.phase,self.name):text.encode()})
+    def unlink(self):
+        from delivery_api.artifact_publication import publish_preserving_revision
+        with self.store._task_operation_guard('task.gate.decide'):
+            snapshot=self.store.manifest_snapshot(self.tid)
+            artifacts=[{'phase_key':row['phase_key'],'name':row['name'],'data':self.store.read_artifact_bytes_sha(row['sha256'])} for row in snapshot['rows'] if (row['phase_key'],row['name'])!=(self.phase,self.name)]
+            self.store.publish_task_revision_bytes(self.tid,artifacts,writer_instance='test-only')
+    def with_suffix(self,suffix):return _PGArtifact(self.store,self.tid,self.name.rsplit('.',1)[0]+suffix,self.phase)
+    def exists(self):
+        from delivery_api.generator_documents import GeneratorDocuments
+        return GeneratorDocuments.owner_reader(self.store,self.tid).read('spec/'+self.name) is not None
+
+
 def _arch_setup(tmp_path, monkeypatch,pg_scoped_workspace, slots=2):
     from vmodel_contracts.runtime import artifacts_root
     import delivery_api.app as module
@@ -12,8 +49,8 @@ def _arch_setup(tmp_path, monkeypatch,pg_scoped_workspace, slots=2):
     sid=engine.session_id
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR', str(tmp_path / 'artifacts'))
     store.wait_at_gate(tid, 'architecture')
-    spec = artifacts_root(str(tmp_path / 'artifacts')) / sid / 'spec'
-    spec.mkdir(parents=True)
+    # Artifact-like test handle backed by exact PG bytes, not filesystem fixtures.
+    spec = _PGSpec(store,tid)
     names = ['database', 'queue'][:slots]
     artifact = spec / 'architecture.json'
     artifact.write_text(json.dumps({'stack_entry_dispositions': [
@@ -21,6 +58,7 @@ def _arch_setup(tmp_path, monkeypatch,pg_scoped_workspace, slots=2):
     artifact.with_suffix('.md').write_text('STALE')
     (spec / 'architecture.decisions.json').write_text(json.dumps({'revision': REV, 'slots': [
         {'key': n, 'brief': f'Which {n}?', 'options': ['A', 'B'], 'founder_decision': None, 'prefill': None} for n in names]}))
+    store.update_phase(tid,'architecture','awaiting_approval')
     monkeypatch.setattr(module, '_task_artifact_snapshot', lambda snapshot_task_id, **kwargs: [
         {'phase_key': 'architecture', 'name': 'architecture.json', 'ref': str(artifact), 'present': True,
          'valid': True, 'stale': False, 'generation': 1}])

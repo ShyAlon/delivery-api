@@ -12,7 +12,7 @@ from .child_interview import LocalComputeEvidence,_slot
 from .child_supervisor import ChildSupervisor
 
 
-def manifest(argv,root):
+def manifest(argv,root,documents=None):
     root=Path(root).resolve();files={}
     if not argv or not isinstance(argv,list) or any(not isinstance(v,str) for v in argv):
         raise PermissionError('typed generator argv required')
@@ -36,9 +36,12 @@ def manifest(argv,root):
     paths=[argv[0]]+[argv[i+1] for i,arg in enumerate(argv[:-1]) if arg in ('--conops','--system-baseline')]
     for path in paths:
         value=Path(path)
-        if not value.is_absolute() or value.resolve()!=value or not value.is_relative_to(root) or not value.is_file():
+        if not value.is_absolute() or value.resolve()!=value or not value.is_relative_to(root):
             raise PermissionError('generator input must be a canonical owned file')
-        files[str(value.relative_to(root))]=hashlib.sha256(value.read_bytes()).hexdigest()
+        key=str(value.relative_to(root))
+        raw=documents.read(key) if documents is not None else value.read_bytes()
+        if raw is None:raise PermissionError('canonical owned generator input missing')
+        files[key]=hashlib.sha256(raw).hexdigest()
     if '--out' not in argv or Path(argv[argv.index('--out')+1])!=root/'spec':raise PermissionError('owned generator output required')
     value={'argv':argv,'files':files}
     return value,hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
@@ -119,7 +122,8 @@ class ChildGeneratorEngine(InProcessEngine):
             from .phases import PHASE_BY_KEY
             generator_stage=PHASE_BY_KEY[phase].generator_stage
             if not generator_stage:raise PermissionError('generator phase required')
-            value,digest=manifest(argv,root);refs=ChildOperationRefs(self.store,capability.task_id)
+            documents=__import__('spec_generator.worker_runtime',fromlist=['current_runtime']).current_runtime().documents
+            value,digest=manifest(argv,root,documents);refs=ChildOperationRefs(self.store,capability.task_id)
             manifest_ref=refs.put('generator-manifest',value)
             self.store.retain_decision_review(capability.task_id,'child-generator:'+job_id,'manifest-v1',
                 {'ref':manifest_ref,'sha256':digest,'provider':provider,'model':model})
@@ -142,7 +146,8 @@ class ChildGeneratorEngine(InProcessEngine):
                 op=decode_operation(json.dumps(body).encode()+b'\n')
                 self.store.retain_decision_review(capability.task_id,'child-job:'+job_id,'child-launch:'+str(row['lease_epoch']),body)
                 cfg={'version':1,'provider':'ollama','binding':binding,'dsn':self.dsn,'owner_root':str(root.parent),
-                    'input_ref':manifest_ref,'input':refs.get(manifest_ref,'generator-manifest'),'answers':answers}
+                    'input_ref':manifest_ref,'input':refs.get(manifest_ref,'generator-manifest'),'answers':answers,
+                    'worker_attempt':self.store.worker_job(job_id)['attempt']}
                 if capability.execution_anchor is not None:cfg['execution_anchor']=capability.execution_anchor.document()
                 gates=[]
                 compute=LocalComputeEvidence(lambda value:self.store.retain_decision_review(capability.task_id,'child-job:'+job_id,'compute:'+str(row['lease_epoch']),value))

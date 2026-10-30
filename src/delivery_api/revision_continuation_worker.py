@@ -72,51 +72,67 @@ async def _execute_continuation(store,worker,job_id,*,installation_id,artifacts_
             authority()
             observed=(reconcile_private_approved_continuation(store,cap.task_id,installation_id=installation_id,artifacts_base=artifacts_base,expected_job_id=job_id) if successor is None else {'state':'continuation_prepared_verified_no_dispatch'})
             if observed['state']!='continuation_prepared_verified_no_dispatch':raise ValueError('continuation preparation differs')
-            prepared=(root/'spec/approved-continuation/checkpoints.sqlite' if successor is None else root/'spec/continuation-chain'/successor/'prepared/checkpoints.sqlite')
-            if prepared.resolve()!=prepared:raise ValueError('unsafe prepared checkpoint')
-            for suffix in ('-wal','-shm','-journal'):
-                if os.path.lexists(str(prepared)+suffix):raise ValueError('prepared checkpoint sidecar unresolved')
-            prepared_dir=_open_directory(prepared.parent);resources.callback(os.close,prepared_dir)
-            prepared_identity=_identity(prepared_dir)
-            fd=os.open(prepared.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=prepared_dir)
-            prepared_stamp=os.fstat(fd)
-            if not stat.S_ISREG(prepared_stamp.st_mode) or prepared_stamp.st_size>64*1024*1024:
-                os.close(fd);raise ValueError('bounded regular prepared checkpoint required')
-            try:
-                with os.fdopen(fd,'rb',closefd=False) as f:raw=f.read(64*1024*1024+1)
-            finally:os.close(fd)
-            if len(raw)>64*1024*1024:raise ValueError('bounded checkpoint required')
-            destination=(root/'spec/continuation-execution' if successor is None else root/'spec/continuation-chain'/successor/'execution')
-            if destination.resolve()!=destination:raise ValueError('unsafe continuation destination')
-            enclosing=_open_directory(destination.parent);resources.callback(os.close,enclosing)
-            guarded_publish(lambda:os.mkdir(destination.name,mode=0o700,dir_fd=enclosing));os.fsync(enclosing)
-            destination_fd=_open_directory(destination)
-            destination_identity=_identity(destination_fd)
-            resources.callback(os.close,destination_fd)
-            def namespace():
-                fd=_open_directory(destination)
-                try:
-                    if _identity(fd)!=destination_identity:raise ValueError('continuation destination changed')
-                finally:os.close(fd)
-            checkpoint=destination/'checkpoints.sqlite'
-            def write():
-                namespace()
-                fd=os.open('checkpoints.sqlite',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=destination_fd)
-                with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
-            guarded_publish(write)
-            os.fsync(destination_fd)
-            authority()
+            pg=hasattr(store,'_postgres')
             prepared_receipt=store.decision_review(cap.task_id,('revision-continuation:'+installation_id+':prepared' if successor is None else 'revision-chain-prepared:'+installation_id),basis['review_sha256'])
-            if (not prepared_receipt or prepared_receipt['review_sha256']!=basis['review_sha256']
-                or (successor is not None and (prepared_receipt['source_checkpoint_sha256']!=basis['checkpoint_sha256']
-                    or prepared_receipt['approval_reference']!=basis['approval_reference']))
-                or hashlib.sha256(raw).hexdigest()!=prepared_receipt['checkpoint_file_sha256']):
-                raise ValueError('prepared checkpoint changed before copy')
-            namespace()
-            conn=sqlite3.connect(f'/proc/self/fd/{destination_fd}/checkpoints.sqlite',check_same_thread=False)
+            if pg:
+                from .generator_checkpoint import GeneratorCheckpoint
+                from .generator_snapshot import GeneratorSnapshots
+                if not prepared_receipt or prepared_receipt['review_sha256']!=basis['review_sha256']:
+                    raise ValueError('prepared checkpoint approval differs')
+                if successor is not None and (prepared_receipt['source_checkpoint_sha256']!=basis['checkpoint_sha256'] or prepared_receipt['approval_reference']!=basis['approval_reference']):
+                    raise ValueError('prepared successor approval differs')
+                snapshot=prepared_receipt['snapshot']
+                saver=GeneratorCheckpoint(store,cap,job_id,'private:continuation:'+job_id+(':'+successor if successor else ''))
+                cfg={'configurable':{'thread_id':cap.session_id}}
+                GeneratorSnapshots(store,cap).fork(snapshot,saver,cfg)
+                def namespace():cap.validate(store)
+                checkpoint=None;conn=None
+            else:
+                prepared=(root/'spec/approved-continuation/checkpoints.sqlite' if successor is None else root/'spec/continuation-chain'/successor/'prepared/checkpoints.sqlite')
+                if prepared.resolve()!=prepared:raise ValueError('unsafe prepared checkpoint')
+                for suffix in ('-wal','-shm','-journal'):
+                    if os.path.lexists(str(prepared)+suffix):raise ValueError('prepared checkpoint sidecar unresolved')
+                prepared_dir=_open_directory(prepared.parent);resources.callback(os.close,prepared_dir)
+                prepared_identity=_identity(prepared_dir)
+                fd=os.open(prepared.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=prepared_dir)
+                prepared_stamp=os.fstat(fd)
+                if not stat.S_ISREG(prepared_stamp.st_mode) or prepared_stamp.st_size>64*1024*1024:
+                    os.close(fd);raise ValueError('bounded regular prepared checkpoint required')
+                try:
+                    with os.fdopen(fd,'rb',closefd=False) as f:raw=f.read(64*1024*1024+1)
+                finally:os.close(fd)
+                if len(raw)>64*1024*1024:raise ValueError('bounded checkpoint required')
+                destination=(root/'spec/continuation-execution' if successor is None else root/'spec/continuation-chain'/successor/'execution')
+                if destination.resolve()!=destination:raise ValueError('unsafe continuation destination')
+                enclosing=_open_directory(destination.parent);resources.callback(os.close,enclosing)
+                guarded_publish(lambda:os.mkdir(destination.name,mode=0o700,dir_fd=enclosing));os.fsync(enclosing)
+                destination_fd=_open_directory(destination)
+                destination_identity=_identity(destination_fd)
+                resources.callback(os.close,destination_fd)
+                def namespace():
+                    fd=_open_directory(destination)
+                    try:
+                        if _identity(fd)!=destination_identity:raise ValueError('continuation destination changed')
+                    finally:os.close(fd)
+                checkpoint=destination/'checkpoints.sqlite'
+                def write():
+                    namespace()
+                    fd=os.open('checkpoints.sqlite',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=destination_fd)
+                    with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
+                guarded_publish(write)
+                os.fsync(destination_fd)
+                authority()
+                prepared_receipt=store.decision_review(cap.task_id,('revision-continuation:'+installation_id+':prepared' if successor is None else 'revision-chain-prepared:'+installation_id),basis['review_sha256'])
+                if (not prepared_receipt or prepared_receipt['review_sha256']!=basis['review_sha256']
+                    or (successor is not None and (prepared_receipt['source_checkpoint_sha256']!=basis['checkpoint_sha256']
+                        or prepared_receipt['approval_reference']!=basis['approval_reference']))
+                    or hashlib.sha256(raw).hexdigest()!=prepared_receipt['checkpoint_file_sha256']):
+                    raise ValueError('prepared checkpoint changed before copy')
+                namespace()
+                conn=sqlite3.connect(f'/proc/self/fd/{destination_fd}/checkpoints.sqlite',check_same_thread=False)
             try:
                 graph=(graph_factory or build_graph)(SimpleNamespace(record=lambda *a:None),review=True,stop_after=stage,require_decisions=True,
-                    checkpointer=FencedCheckpointer(SqliteSaver(conn,serde=checkpoint_serde()),publication_guard(binding[0],binding[1])))
+                    checkpointer=FencedCheckpointer(saver if pg else SqliteSaver(conn,serde=checkpoint_serde()),publication_guard(binding[0],binding[1])))
                 config={'configurable':{'thread_id':cap.session_id}}
                 before=graph.get_state(config)
                 if before.next!=(stage,) or before.config!=prepared_receipt['checkpoint']:
@@ -171,38 +187,56 @@ async def _execute_continuation(store,worker,job_id,*,installation_id,artifacts_
                 receipt={'job_id':job_id,'installation_id':installation_id,'review_sha256':basis['review_sha256'],
                     'phase':next_phase,'artifact_sha256':hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
                     'requires_phase_approval':True,'downstream_dispatched':False}
-                def publish():
-                    for name,value in ((stage+'.json',body),('receipt.json',receipt)):
-                        namespace()
-                        fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=destination_fd)
-                        with os.fdopen(fd,'w') as f:json.dump(value,f,sort_keys=True,indent=2);f.flush();os.fsync(f.fileno())
-                    os.fsync(destination_fd)
-                # No result becomes reviewable while accepted provider work is unsettled.
-                with store._task_operation_guard('task.rerun'):
-                    if store._execute_native("SELECT 1 FROM provider_attempts WHERE job_id=%s AND state IN ('reserved','dispatched','uncertain') LIMIT 1",(job_id,)).fetchone():
-                        raise ValueError('continuation provider settlement unresolved')
-                def preparation_unchanged():
-                    current=_open_directory(prepared.parent)
-                    try:
-                        if _identity(current)!=prepared_identity:raise ValueError('prepared namespace changed')
-                        now=os.stat(prepared.name,dir_fd=current,follow_symlinks=False)
-                        stamp=lambda x:(x.st_dev,x.st_ino,x.st_size,x.st_mtime_ns,x.st_ctime_ns)
-                        if stamp(now)!=stamp(prepared_stamp):raise ValueError('prepared checkpoint changed')
-                        for suffix in ('-wal','-shm','-journal'):
-                            try:os.stat(prepared.name+suffix,dir_fd=current,follow_symlinks=False)
-                            except FileNotFoundError:continue
-                            raise ValueError('prepared sidecar appeared')
-                    finally:os.close(current)
-                authority();namespace();preparation_unchanged();guarded_publish(publish);namespace()
-                with store._task_operation_guard('task.rerun'):
-                    authority();namespace();preparation_unchanged()
-                    gate=next(g for g in store.task(cap.task_id)['gates'] if g['after_phase']==next_phase)
-                    if gate['is_open']:raise ValueError('next phase closed review changed')
-                    store.retain_decision_review(cap.task_id,'revision-continuation-result:'+installation_id,basis['review_sha256'],receipt)
-                    store.add_task_artifact(cap.task_id,next_phase,stage+'.json',str(destination/(stage+'.json')))
-                    store.wait_at_gate(cap.task_id,next_phase)
-                preparation_unchanged()
+                if pg:
+                    with store._task_operation_guard('task.rerun'):
+                        authority()
+                        if store._execute_native("SELECT 1 FROM provider_attempts WHERE job_id=%s AND state IN ('reserved','dispatched','uncertain') LIMIT 1",(job_id,)).fetchone():
+                            raise ValueError('continuation provider settlement unresolved')
+                        if store.decision_review(cap.task_id,('revision-continuation:'+installation_id+':prepared' if successor is None else 'revision-chain-prepared:'+installation_id),basis['review_sha256'])!=prepared_receipt:
+                            raise ValueError('prepared PG checkpoint receipt changed')
+                        from .pg_revision_stage import digest
+                        GeneratorSnapshots(store,cap).read(snapshot)
+                        receipt=receipt|{'snapshot':GeneratorSnapshots(store,cap).capture(saver,config,
+                            expected_checkpoint_id=after.config['configurable']['checkpoint_id'],purpose='continuation-result'),
+                            'artifact':body,'artifact_sha256':digest(body)}
+                        gate=next(g for g in store.task(cap.task_id)['gates'] if g['after_phase']==next_phase)
+                        if gate['is_open']:raise ValueError('next phase closed review changed')
+                        store.retain_decision_review(cap.task_id,'revision-continuation-result:'+installation_id,basis['review_sha256'],receipt)
+                        store.wait_at_gate(cap.task_id,next_phase)
+                else:
+                    def publish():
+                        for name,value in ((stage+'.json',body),('receipt.json',receipt)):
+                            namespace()
+                            fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=destination_fd)
+                            with os.fdopen(fd,'w') as f:json.dump(value,f,sort_keys=True,indent=2);f.flush();os.fsync(f.fileno())
+                        os.fsync(destination_fd)
+                    # No result becomes reviewable while accepted provider work is unsettled.
+                    with store._task_operation_guard('task.rerun'):
+                        if store._execute_native("SELECT 1 FROM provider_attempts WHERE job_id=%s AND state IN ('reserved','dispatched','uncertain') LIMIT 1",(job_id,)).fetchone():
+                            raise ValueError('continuation provider settlement unresolved')
+                    def preparation_unchanged():
+                        current=_open_directory(prepared.parent)
+                        try:
+                            if _identity(current)!=prepared_identity:raise ValueError('prepared namespace changed')
+                            now=os.stat(prepared.name,dir_fd=current,follow_symlinks=False)
+                            stamp=lambda x:(x.st_dev,x.st_ino,x.st_size,x.st_mtime_ns,x.st_ctime_ns)
+                            if stamp(now)!=stamp(prepared_stamp):raise ValueError('prepared checkpoint changed')
+                            for suffix in ('-wal','-shm','-journal'):
+                                try:os.stat(prepared.name+suffix,dir_fd=current,follow_symlinks=False)
+                                except FileNotFoundError:continue
+                                raise ValueError('prepared sidecar appeared')
+                        finally:os.close(current)
+                    authority();namespace();preparation_unchanged();guarded_publish(publish);namespace()
+                    with store._task_operation_guard('task.rerun'):
+                        authority();namespace();preparation_unchanged()
+                        gate=next(g for g in store.task(cap.task_id)['gates'] if g['after_phase']==next_phase)
+                        if gate['is_open']:raise ValueError('next phase closed review changed')
+                        store.retain_decision_review(cap.task_id,'revision-continuation-result:'+installation_id,basis['review_sha256'],receipt)
+                        store.add_task_artifact(cap.task_id,next_phase,stage+'.json',str(destination/(stage+'.json')))
+                        store.wait_at_gate(cap.task_id,next_phase)
+                    preparation_unchanged()
                 outputs.append(receipt)
-            finally:conn.close()
+            finally:
+                if conn is not None:conn.close()
     started=await worker.execute(job_id,producer)
     return {'started':started,'job_id':job_id,'outputs':outputs,'downstream_dispatched':False}

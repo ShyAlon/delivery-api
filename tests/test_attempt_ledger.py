@@ -390,7 +390,7 @@ print('fake isolated engine call settled')
     try:
         with tenant_context(A),worker_gateway(gateway),send_job_gateway(left,s,tid) as binding:
             # Test supervisor supplies the binding independently of the received envelope.
-            result=subprocess.run([sys.executable,'-c',script,str(right.fileno()),json.dumps(binding)],pass_fds=(right.fileno(),),env={**os.environ,'PYTHONPATH':root,'INTERVIEW_ENGINE_TENANTS':'1'},capture_output=True,text=True,timeout=15)
+            result=subprocess.run([sys.executable,'-c',script,str(right.fileno()),json.dumps(binding)],pass_fds=(right.fileno(),),env={**os.environ,'PYTHONPATH':str(__import__('pathlib').Path(root)/'src'),'INTERVIEW_ENGINE_TENANTS':'1'},capture_output=True,text=True,timeout=15)
             assert result.returncode==0,result.stderr
             assert 'fake isolated engine call settled' in result.stdout
             with s._postgres.transaction() as c:
@@ -916,11 +916,18 @@ LAUNCH_USAGE={'input_tokens':2,'output_tokens':3,'cache_hit_tokens':1,'cache_mis
 
 def test_confirmed_guard_ignores_holds_and_inflight_calls_finish(expense_guard):
     s,tid,job=expense_guard
+    import psycopg
+    with psycopg.connect(DSN) as c:
+        user_count=c.execute('SELECT count(*) FROM auth.users').fetchone()[0]
+        c.execute('UPDATE expense_guard_policy SET session_units=%s,per_registered_user_units=20',(10*user_count,))
+    # Scale confirmed expense and its limits together, keeping three in-flight
+    # calls even when other test workspaces retain owner rows for FK history.
+    quote={**LAUNCH_Q,**{key:LAUNCH_Q[key]*user_count for key in ('expense_input','expense_output','expense_cache_hit','expense_cache_miss')}}
     with tenant_context(A):
         attempts=[]
         for i in range(3):
             aid=uuid.uuid4().hex
-            s.reserve_provider_attempt(job,aid,LAUNCH_Q,'large-hold-'+str(i))
+            s.reserve_provider_attempt(job,aid,quote,'large-hold-'+str(i))
             assert s.start_launch_provider_attempt(aid)=={'started':True,'reason':'allowed'}
             attempts.append(aid)
         # Quotes held 30 each against a $10/session test policy. Actual cost
@@ -929,13 +936,13 @@ def test_confirmed_guard_ignores_holds_and_inflight_calls_finish(expense_guard):
         assert s.confirmed_expense_admission(job)=='allowed' # actual=8
         s.transition_provider_attempt(attempts[1],'settle',LAUNCH_USAGE)
         assert s.confirmed_expense_admission(job)=='session_expense_limit'
-        s.transition_provider_attempt(attempts[2],'settle',LAUNCH_USAGE)
+        for attempt in attempts[2:]:s.transition_provider_attempt(attempt,'settle',LAUNCH_USAGE)
         nxt=uuid.uuid4().hex;s.reserve_provider_attempt(job,nxt,LAUNCH_Q,'next')
         result=s.start_launch_provider_attempt(nxt)
         assert result=={'started':False,'reason':'session_expense_limit'}
         assert s.provider_attempt(nxt)['state']=='reserved'
         with s._postgres.transaction() as c:
-            assert c.execute("SELECT count(*) AS n FROM expense_alert_outbox WHERE payload->>'accounting'='confirmed_provider_charges'").fetchone()['n']==2 # session plus platform at 20
+            assert c.execute("SELECT count(*) AS n FROM expense_alert_outbox WHERE payload->>'accounting'='confirmed_provider_charges'").fetchone()['n']==2 # session plus platform at registered-user cap
             assert c.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']==1-3*18
         assert s.confirmed_expense_admission(job)=='session_expense_limit'
         with s._postgres.transaction() as c:assert c.execute("SELECT count(*) AS n FROM expense_alert_outbox WHERE payload->>'accounting'='confirmed_provider_charges'").fetchone()['n']==2
@@ -993,8 +1000,9 @@ def test_confirmed_guard_platform_counts_other_owner_and_rolls_off(expense_guard
         other=s.enqueue_worker(task['task_id'],'phase:needs');s.claim_worker(other)
     with psycopg.connect(DSN) as c:
         c.execute('UPDATE expense_guard_policy SET session_units=100')
-        c.execute("INSERT INTO provider_attempts(attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,expense_actual,retail_actual,usage,created_at,updated_at,settled_at) VALUES (%s,%s,%s,'test-only','{}','test-only','settled',0,0,20,0,'{}',%s,%s,%s)",
-                  ('other-expense',B.owner_id,other,time.time(),time.time(),time.time()))
+        cap=10*c.execute('SELECT count(*) FROM auth.users').fetchone()[0]
+        c.execute("INSERT INTO provider_attempts(attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,expense_actual,retail_actual,usage,created_at,updated_at,settled_at) VALUES (%s,%s,%s,'test-only','{}','test-only','settled',0,0,%s,0,'{}',%s,%s,%s)",
+                  ('other-expense',B.owner_id,other,cap,time.time(),time.time(),time.time()))
     try:
         with tenant_context(A):
             assert s.confirmed_expense_admission(job)=='platform_rolling_24h_expense_limit'

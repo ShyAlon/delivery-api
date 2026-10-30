@@ -16,6 +16,9 @@ def read_revision_artifacts(store,capability,root,phase,*,artifacts_base):
     root=Path(root)
     if root!=session_root(artifacts_base,capability.scope,capability.session_id):
         raise TenantAccessDenied('revision root differs from captured session')
+    if hasattr(store,'_postgres'):
+        from .pg_revision_artifacts import phase_evidence
+        return phase_evidence(store,capability,phase)
     root_fd=_open_directory(root);parent_fd=None
     try:
         parent_fd=os.open('spec',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root_fd)

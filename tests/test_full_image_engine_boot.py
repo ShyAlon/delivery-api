@@ -42,7 +42,7 @@ def test_entry_boots_engine_to_token_challenge_with_file_sessions(tmp_path):
     with socket.socket() as s:
         s.bind(('127.0.0.1',0));delivery_port=s.getsockname()[1]
     env=_base_env(tmp_path)|{'DELIVERY_PORT':str(delivery_port),'INTERVIEW_ENGINE_SESSIONS_FILE':'1',
-        'PYTHONPATH':engine_source+os.pathsep+str(Path(__file__).resolve().parents[1]/'src')}
+        'PYTHONPATH':str(Path(engine_source)/'src')+os.pathsep+str(Path(__file__).resolve().parents[1]/'src')}
     proc=subprocess.Popen([sys.executable,str(ENTRY)],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
     try:
         deadline=time.time()+120

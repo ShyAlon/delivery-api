@@ -17,7 +17,7 @@ from .revision_proposal import read_retained_revision_proposal
 def prepare_private_revision_stage(store,capability,*,artifacts_base,lineage,lineage_sha256,options,review_snapshot):
     from spec_generator.cooperative_run import cli_stop_binding
     from spec_generator.stop_fence import check_execution,guarded_publish
-    from spec_generator.revision_source import read_closed_checkpoint
+    from .revision_checkpoint_reader import read_source_checkpoint
     from spec_generator.revision_checkpoint import prepare_revision_seed,stage_private_lineage_checkpoint
     from spec_generator.graph import build_graph,checkpoint_serde
     from langgraph.checkpoint.sqlite import SqliteSaver
@@ -44,7 +44,7 @@ def prepare_private_revision_stage(store,capability,*,artifacts_base,lineage,lin
     from .revision_evidence import read_revision_artifacts
     if read_revision_artifacts(store,capability,root,lineage['phase'],artifacts_base=artifacts_base)!=options['artifact_evidence']:
         raise ValueError('reviewed phase evidence changed before staging')
-    source=read_closed_checkpoint(root/'spec'/'checkpoints.sqlite',session_id=capability.session_id,expected_checkpoint_id=lineage['source_checkpoint_id'])
+    source=read_source_checkpoint(store,capability,root/'spec'/'checkpoints.sqlite',session_id=capability.session_id,expected_checkpoint_id=lineage['source_checkpoint_id'])
     validate_cloud_revision_conops(source,lineage['semantic_session_id'])
     proposal=read_retained_revision_proposal(store,capability,root,lineage['proposal_id'],artifacts_base=artifacts_base,options=options)
     if proposal['document_sha256']!=lineage['proposal_document_sha256'] or proposal['proposal']['artifact_sha256']!=lineage['regenerated_artifact_sha256']:
@@ -55,12 +55,20 @@ def prepare_private_revision_stage(store,capability,*,artifacts_base,lineage,lin
     expected={'interview/intent_model.json':source['intent_model'],'interview/conops.json':source['conops'],
         'spec/needs.json':source['needs'],'spec/system-baseline.json':source['system_baseline']}
     if lineage['phase']=='architecture':expected['spec/srs.json']=source['srs']
-    upstream=read_approved_upstream_documents(root,expected_documents=expected)
+    if hasattr(store,'_postgres'):
+        from .pg_revision_artifacts import documents as read_documents
+        upstream=read_documents(store,capability,expected)
+    else:upstream=read_approved_upstream_documents(root,expected_documents=expected)
     if {name:hashlib.sha256(raw).hexdigest() for name,raw in upstream.items()}!=review_snapshot['snapshot']['upstream_sha256']:
         raise ValueError('upstream byte inventory differs from retained review')
     prepared=prepare_revision_seed(source=source,phase=lineage['phase'],change_request=options['change_request'],session_id=lineage['semantic_session_id'])
     result=deepcopy(prepared['seed']);result['gate_feedback'].pop(lineage['phase'],None)
     result[lineage['phase']]=deepcopy(proposal['proposal']['artifact'])
+    if hasattr(store,'_postgres'):
+        from .pg_revision_stage import retain_stage
+        receipt=retain_stage(store,capability,source=source,result=result,lineage=lineage,lineage_sha256=lineage_sha256,
+            change_request=options['change_request'],validate_authority=authority,upstream=upstream)
+        return receipt|{'installed':False,'dispatch_started':False,'source_mutated':False}
     parent=root/'spec'/'revision-proposals'/lineage['proposal_id']
     pfd=_open_directory(parent);fds=[]
     try:

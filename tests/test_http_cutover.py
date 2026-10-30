@@ -395,9 +395,30 @@ def test_recovery_does_not_reexecute_completed_http_interview(tmp_path,monkeypat
  assert store.task(tid)['state']=='running'
 
 
-def _completed_files(root, session):
+class _PGUsage:
+ def __init__(self,store,tid,key):self.store,self.tid,self.key=store,tid,key
+ def read_text(self):
+  from delivery_api.generator_documents import GeneratorDocuments
+  return GeneratorDocuments.owner_reader(self.store,self.tid).read(self.key).decode()
+ def write_text(self,text):
+  import hashlib
+  from delivery_api.generator_documents import GeneratorDocuments
+  from delivery_api.worker_capability import WorkerCapability
+  with self.store._task_operation_guard('task.gate.decide'):
+   docs=GeneratorDocuments.reader(self.store,WorkerCapability.capture(self.store,self.tid))
+   docs._put(self.key,text.encode(),hashlib.sha256(text.encode()).hexdigest())
+
+
+class _InterviewArtifacts:
+ def __init__(self,store,tid):self.store=store;self.tid=tid
+ def __truediv__(self,name):
+  from tests.test_stack_decisions import _PGArtifact
+  return _PGArtifact(self.store,self.tid,name,'intent' if name=='intent_model.json' else 'conops')
+
+
+def _completed_files(root, session,store,tid):
  from vmodel_contracts import IntentModel, ConOpsDocument
- interview=root/session/'interview';interview.mkdir(parents=True)
+ interview=_InterviewArtifacts(store,tid)
  intent=IntentModel(session_id=session,problem_statement='p',target_users=['u'],core_value_proposition='v',in_scope=['a'],out_of_scope=['b'],
    stakeholder_needs=[{'need_id':'SN-1','statement':'s','kind':'functional','source_turns':[0]}],
    assumption_items=[{'statement':'a','source_turns':[0]}],scope_exclusions=[{'item':'x','source_turns':[1],'explicit':True}],source_turns={'problem_statement':[0]})
@@ -413,10 +434,10 @@ def _completed_files(root, session):
 def test_restored_terminal_session_reconciles_phase_handoff_once(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
- session='restored-session-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ session='restored-session-'+str(uuid4());artifacts=tmp_path/'artifacts'
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
  first=pg_scoped_workspace.store;tid=first.create_task('Terminal restore','brief')['task_id']
- first.set_engine_session(tid,session);first.update_phase(tid,'intent','running',detail='Waiting for founder input')
+ first.set_engine_session(tid,session);_completed_files(artifacts,session,first,tid);first.update_phase(tid,'intent','running',detail='Waiting for founder input')
  first.add_event(tid,'error','Old model failure',phase_key='intent')
  from delivery_api.postgres_store import PostgresStore
  restored=PostgresStore(first._postgres.dsn);monkeypatch.setattr(module,'store',restored)
@@ -460,17 +481,17 @@ def test_terminal_reconcile_refuses_missing_or_mismatched_artifacts(tmp_path,mon
  async def continue_after(*args):launched.append(args)
  monkeypatch.setattr(module.orchestrator,'continue_after',continue_after)
  asyncio.run(module._recover_tasks());assert store.task(tid)['phases'][0]['state']=='running' and not launched
- interview=_completed_files(artifacts,session)
+ interview=_completed_files(artifacts,session,store,tid)
  body=(interview/'conops.json').read_text().replace(session,'wrong-session');(interview/'conops.json').write_text(body)
  asyncio.run(module._recover_tasks());assert store.task(tid)['phases'][0]['state']=='running' and not launched
 
 
 def _case_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
- session='read-recovery-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ session='read-recovery-'+str(uuid4());artifacts=tmp_path/'artifacts'
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
  store=pg_scoped_workspace.store;tid=store.create_task('Read repair','brief')['task_id']
- store.set_engine_session(tid,session);store.set_model_default(tid,'deepseek:deepseek-flash');store.update_phase(tid,'intent','running',detail='Waiting for founder input')
+ store.set_engine_session(tid,session);_completed_files(artifacts,session,store,tid);store.set_model_default(tid,'deepseek:deepseek-flash');store.update_phase(tid,'intent','running',detail='Waiting for founder input')
  monkeypatch.setattr(module,'store',store)
  class Complete:
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
@@ -489,12 +510,12 @@ def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
  from delivery_api.orchestrator import PhaseOrchestrator
- session='bound-session-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ session='bound-session-'+str(uuid4());artifacts=tmp_path/'artifacts'
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
  generator=tmp_path/'spec-generator';(generator/'.venv/bin').mkdir(parents=True);(generator/'.venv/bin/python').write_text('')
  monkeypatch.setenv('SPEC_GENERATOR_DIR',str(generator))
  store=pg_scoped_workspace.store;tid=store.create_task('Bound recovery','brief')['task_id']
- store.set_engine_session(tid,session);store.set_model_default(tid,'deepseek:deepseek-flash');store.update_phase(tid,'intent','running',detail='Waiting for founder input')
+ store.set_engine_session(tid,session);_completed_files(artifacts,session,store,tid);store.set_model_default(tid,'deepseek:deepseek-flash');store.update_phase(tid,'intent','running',detail='Waiting for founder input')
  monkeypatch.setattr(module,'store',store)
  class Complete:
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
@@ -522,10 +543,10 @@ def test_final_typed_answer_reconciles_without_resubmission(tmp_path,monkeypatch
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
  from delivery_api.auth import Actor
- session='final-answer-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ session='final-answer-'+str(uuid4());artifacts=tmp_path/'artifacts'
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
  store=pg_scoped_workspace.store;tid=store.create_task('Final answer','brief')['task_id']
- store.set_engine_session(tid,session);store.update_phase(tid,'intent','running',detail='Waiting for founder input')
+ store.set_engine_session(tid,session);_completed_files(artifacts,session,store,tid);store.update_phase(tid,'intent','running',detail='Waiting for founder input')
  monkeypatch.setattr(module,'store',store)
  pending=InputRequest(input_id=uuid4(),kind=InputKind.APPROVAL,prompt='Approve?',options=[InputOption(value=1,label='Approve')])
  class Final:
@@ -551,10 +572,10 @@ def test_final_typed_answer_reconciles_without_resubmission(tmp_path,monkeypatch
 def test_terminal_recovery_logs_exact_phase_disposition(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  import asyncio
- session='diagnostic-session-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ session='diagnostic-session-'+str(uuid4());artifacts=tmp_path/'artifacts'
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
  store=pg_scoped_workspace.store;tid=store.create_task('Terminal','brief')['task_id']
- store.set_engine_session(tid,session);store.update_phase(tid,'intent','running')
+ store.set_engine_session(tid,session);_completed_files(artifacts,session,store,tid);store.update_phase(tid,'intent','running')
  monkeypatch.setattr(module,'store',store)
  class Complete:
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=30,process_status=ProcessStatus.COMPLETED,next_step=NextStep.COMPLETE)
@@ -593,12 +614,12 @@ def test_unpinned_legacy_snapshot_is_classified_once_without_handoff(tmp_path,mo
 
 def _failed_needs_task(tmp_path,monkeypatch,workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
- session='completed-for-needs-'+str(uuid4());artifacts=tmp_path/'artifacts';_completed_files(artifacts,session)
+ session='completed-for-needs-'+str(uuid4());artifacts=tmp_path/'artifacts'
  monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
  store=workspace.store;tid=store.create_task('Retry needs','brief')['task_id']
  from delivery_api.postgres_store import PostgresStore
  assert isinstance(store,PostgresStore)
- store.set_engine_session(tid,session)
+ store.set_engine_session(tid,session);_completed_files(artifacts,session,store,tid)
  store.update_phase(tid,'intent','approved');store.update_phase(tid,'conops','approved')
  store.update_phase(tid,'needs','failed',detail='Prior engine error')
  store.add_event(tid,'error','Prior engine error',phase_key='needs',payload={'exit_code':1})
@@ -658,7 +679,7 @@ def test_retry_needs_keeps_generation_and_rejects_missing_artifact(tmp_path,monk
  from delivery_api.auth import Actor
  store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
  start=store.task(tid)['generation']
- (tmp_path/'artifacts'/session/'interview'/'conops.json').unlink()
+ (_InterviewArtifacts(store,tid)/'conops.json').unlink()
  try:asyncio.run(module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder')))
  except HTTPException as exc:assert exc.status_code==409
  else:raise AssertionError('missing conops accepted')
@@ -670,7 +691,7 @@ def test_rejected_confirmed_needs_retry_is_audited_and_keeps_old_failure(tmp_pat
  from fastapi import HTTPException
  from delivery_api.auth import Actor
  store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
- (tmp_path/'artifacts'/session/'interview'/'conops.json').unlink()
+ (_InterviewArtifacts(store,tid)/'conops.json').unlink()
  try:asyncio.run(module.retry_failed_needs(tid,module.FailedNeedsRetryRequest(confirm=True),Actor('test','Founder')))
  except HTTPException as exc:
   assert exc.status_code==409 and 'artifacts' in exc.detail['cause']
@@ -685,7 +706,7 @@ def test_audit_rolls_up_http_interview_usage_without_double_counting(tmp_path,mo
  import json
  from fastapi.testclient import TestClient
  store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
- usage=tmp_path/'artifacts'/session/'interview'/'usage.jsonl'
+ usage=_PGUsage(store,tid,'interview/usage.jsonl')
  usage.write_text('\n'.join(json.dumps(x) for x in [
   {'stage':'probing','provider':'deepseek','model':'deepseek-chat','prompt_tokens':110,'completion_tokens':20,'price_per_mtok_prompt_usd':1,'price_per_mtok_completion_usd':2},
   {'stage':'distillation','provider':'deepseek','model':'deepseek-chat','prompt_tokens':60,'completion_tokens':10,'price_per_mtok_prompt_usd':1,'price_per_mtok_completion_usd':2},
@@ -706,20 +727,20 @@ def test_running_cost_includes_interview_and_unpriced_downstream_tokens_and_writ
  store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
  root=tmp_path/'artifacts'/session
  row=lambda stage,p,c,pin=1,pout=2:{'stage':stage,'provider':'deepseek','model':'deepseek-flash','prompt_tokens':p,'completion_tokens':c,'price_per_mtok_prompt_usd':pin,'price_per_mtok_completion_usd':pout}
- (root/'interview'/'usage.jsonl').write_text(json.dumps(row('probing',1000,0))+'\n')
+ _PGUsage(store,tid,'interview/usage.jsonl').write_text(json.dumps(row('probing',1000,0))+'\n')
  assert module.task_cost(tid,None)['price']==round(1000*0.0000125,6)
  # a running downstream phase: tokens recorded, no price event yet
- (root/'spec').mkdir(exist_ok=True)
- (root/'spec'/'usage.jsonl').write_text(json.dumps(row('needs',2000,0))+'\n')
+
+ _PGUsage(store,tid,'spec/usage.jsonl').write_text(json.dumps(row('needs',2000,0))+'\n')
  live=module.task_cost(tid,None)
  assert live['price']==round(3000*0.0000125,6) and live['price_usd']==live['price']
  # once the phase is priced, its tokens are not counted twice
  store.add_event(tid,'price','Downstream price',phase_key='needs',payload={'tokens':2000,'price':0.026,'rates':{'scale':'credits'}})
  assert module.task_cost(tid,None)['price']==round(0.026+1000*0.0000125,6)
  # a second call lands after the price event
- (root/'spec'/'usage.jsonl').write_text((root/'spec'/'usage.jsonl').read_text()+json.dumps(row('needs',400,100))+'\n')
+ _PGUsage(store,tid,'spec/usage.jsonl').write_text(_PGUsage(store,tid,'spec/usage.jsonl').read_text()+json.dumps(row('needs',400,100))+'\n')
  assert module.task_cost(tid,None)['price']==round(0.026+1000*0.0000125+500*0.0000125,6)
- report=json.loads((root/'cost.json').read_text())
+ report=json.loads(_PGUsage(store,tid,'cost.json').read_text())
  assert report['calls']==3 and report['unpriced_calls']==0 and 'by_stage' in report and 'upper bound' in report['basis']
  # internal only: not a phase artifact, not in any artifact listing
  assert not any('cost.json' in json.dumps(a) for a in store.task_artifacts(tid))
@@ -752,7 +773,12 @@ def test_retry_with_generator_checkpoint_resumes_without_from(tmp_path,monkeypat
  import asyncio
  from delivery_api.auth import Actor
  store,tid,session=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
- spec=tmp_path/'artifacts'/session/'spec';spec.mkdir();(spec/'checkpoints.sqlite').write_bytes(b'checkpoint-placeholder')
+ from delivery_api.generator_checkpoint import GeneratorCheckpoint
+ from langgraph.checkpoint.base import empty_checkpoint
+ job=store.enqueue_worker(tid,'phase:needs');cap=store.claim_worker(job)
+ saver=GeneratorCheckpoint(store,cap,job,'spec')
+ saver.put({'configurable':{'thread_id':session}},empty_checkpoint(),{'source':'input','step':0,'parents':{}},{})
+ store.finish_worker(job)
  calls=[]
  async def execute(task_id,phase,*,mode,model_route):calls.append((mode.value,model_route))
  monkeypatch.setattr(module.orchestrator,'execute_phase',execute)
@@ -1298,3 +1324,55 @@ def _check_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(
 @pytest.mark.engine_integration
 def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(pg_local_compat_process):
  pg_local_compat_process(_check_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive)
+
+
+def test_pg_cost_refuses_corrupt_usage_without_rewriting_source(tmp_path,monkeypatch,pg_scoped_workspace):
+ from delivery_api.pg_usage import usage_rows
+ store,tid,_=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
+ usage=_PGUsage(store,tid,'interview/usage.jsonl')
+ for raw,rejected,invalid in [('bad\n[]\n',2,0),('{"prompt_tokens":"bad"}\n',0,1),('{"prompt_tokens":true}\n',0,1),('{"latency_s":-1}\n',0,1)]:
+  usage.write_text(raw)
+  result=module.task_cost(tid,None)
+  assert result['price'] is None and result['price_usd'] is None
+  assert result['evidence']['rejected_rows']==rejected and result['evidence']['invalid_numeric_rows']==invalid
+  assert usage.read_text()==raw
+  assert module._task_cost(tid)['price'] is None
+  assert usage_rows(store,tid)[1]['complete'] is False
+
+
+def test_pg_cost_paid_ledger_precedes_corrupt_fallback_usage(tmp_path,monkeypatch,pg_scoped_workspace):
+ store,tid,_=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
+ _PGUsage(store,tid,'interview/usage.jsonl').write_text('bad\n')
+ exact={'price':17.25,'price_usd':17.25,'basis':'settled ledger'}
+ monkeypatch.setattr(store,'task_retail_totals',lambda task:exact)
+ assert module.task_cost(tid,None)==exact
+ assert module._task_cost(tid)==exact
+
+
+def test_pg_cost_rollup_never_leaves_stale_complete_evidence(tmp_path,monkeypatch,pg_scoped_workspace):
+ import json
+ store,tid,_=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
+ usage=_PGUsage(store,tid,'interview/usage.jsonl');report=_PGUsage(store,tid,'cost.json')
+ usage.write_text('{"prompt_tokens":100,"completion_tokens":1}\n')
+ module.task_cost(tid,None)
+ assert json.loads(report.read_text())['evidence']['complete'] is True
+ usage.write_text('bad\n')
+ assert module.task_cost(tid,None)['price'] is None
+ recorded=json.loads(report.read_text())
+ assert recorded['evidence']['complete'] is False and 'calls' not in recorded
+ usage.write_text('')
+ module.task_cost(tid,None)
+ assert json.loads(report.read_text())=={'evidence':{'complete':True,'rejected_rows':0,'invalid_numeric_rows':0,'scope':'PG usage evidence only'}}
+
+
+def test_pg_usage_rejects_non_utf8_even_inside_otherwise_valid_json(tmp_path,monkeypatch,pg_scoped_workspace):
+ import hashlib
+ from delivery_api.generator_documents import GeneratorDocuments
+ from delivery_api.pg_usage import usage_rows
+ store,tid,_=_failed_needs_task(tmp_path,monkeypatch,pg_scoped_workspace)
+ raw=b'{"model":"\xff","prompt_tokens":1}\n'
+ GeneratorDocuments.owner_reader(store,tid)._put('interview/usage.jsonl',raw,hashlib.sha256(raw).hexdigest())
+ evidence=usage_rows(store,tid)[1]
+ assert evidence['complete'] is False and evidence['rejected_rows']==1
+ assert module.task_cost(tid,None)['price'] is None
+ assert GeneratorDocuments.owner_reader(store,tid).read('interview/usage.jsonl')==raw

@@ -25,7 +25,7 @@ def pg_runtime_environment(tmp_path):
             'TURSO_DATABASE_URL':'','TURSO_AUTH_TOKEN':'',
             'HOME':str(tmp_path/'uncreated-home'),'XDG_DATA_HOME':str(tmp_path/'uncreated-data'),
             'VMODEL_ARTIFACTS_DIR':str(tmp_path/'artifacts'),
-            'PYTHONPATH':str(Path(__file__).parents[1]/'src')}
+            'PYTHONPATH':os.pathsep.join([str(Path(__file__).parents[1]/'src'),*([os.environ['DELIVERY_TEST_ENGINE_SOURCE']+'/src'] if os.getenv('DELIVERY_TEST_ENGINE_SOURCE') else []),*([os.environ['DELIVERY_TEST_SPEC_SOURCE']] if os.getenv('DELIVERY_TEST_SPEC_SOURCE') else [])])}
     return build
 
 

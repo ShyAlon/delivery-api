@@ -773,8 +773,14 @@ def test_source_change_during_concrete_stage_validation_leaves_only_prepared_eve
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
 
 
-@pytest.mark.parametrize('coordinated',[False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph','architecture_continuation','successor_revoked','successor_expired','successor_swap','successor_prepared_swap','successor_provider_hold'])
+@pytest.mark.parametrize('coordinated',['pg_child_control','pg_control_stop','pg_architecture_continue','pg_real_architecture','pg_anchor_tamper','pg_stage_tamper','pg_source_tamper','pg_continuation_tamper','pg_successor_revoked','pg_successor_expired','pg_successor_snapshot_swap','pg_successor_prepared_swap','pg_successor_provider_hold','pg_install_only','pg_continuation_only','pg_continuation_consume','pg_continuation_consume_revoked','pg_continuation_failure','pg_activation_rollback',False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph','architecture_continuation','successor_revoked','successor_expired','successor_swap','successor_prepared_swap','successor_provider_hold'])
 def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch,coordinated):
+    pg_architecture=coordinated=='pg_architecture_continue'
+    if pg_architecture:coordinated='pg_continuation_only'
+    pg_real=coordinated=='pg_real_architecture'
+    if pg_real:coordinated='pg_continuation_consume'
+    pg_fault=coordinated if isinstance(coordinated,str) and coordinated.startswith('pg_successor_') else None
+    if pg_fault:coordinated='pg_continuation_consume'
     fault=coordinated if isinstance(coordinated,str) and coordinated.startswith('successor_') else None
     if fault:coordinated='continuation_real_graph'
     source_path=os.getenv("DELIVERY_TEST_SPEC_SOURCE")
@@ -784,7 +790,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
     from delivery_api.gate_revision import closed_revision_preflight
     from test_revision_stage_real import build_real_stage_fixture
     with tenant_context(A):
-        phase='architecture' if coordinated=='architecture_continuation' else 'srs'
+        phase='architecture' if coordinated=='architecture_continuation' or pg_architecture else 'srs'
         tid,o,p,_=_restart_intent_fixture(store,phase);before=store.task(tid)
         cap=WorkerCapability.capture(store,tid);saved={}
         def lineage_factory(options,source,result,digest):
@@ -800,8 +806,13 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             saved.update(intent_id=held['intent_id'],lineage_id=planned['lineage_id'],proposal=proposal)
             with store._postgres.transaction() as conn:
                 return json.loads(conn.execute('SELECT payload FROM closed_revision_lineage_plans WHERE lineage_id=%s',(planned['lineage_id'],)).fetchone()['payload'])
-        built=build_real_stage_fixture(tmp_path,cap=cap,options_override=o,lineage_factory=lineage_factory,semantic_session_id=cap.session_id,phase=phase)
+        built=build_real_stage_fixture(tmp_path,cap=cap,options_override=o,lineage_factory=lineage_factory,semantic_session_id=cap.session_id,phase=phase,pg_store=store)
         args,root,dest,documents,files,manifest,md,*_=built
+        before=store.task(tid)  # Native source fixture publication is setup, not a revision effect.
+        native_pg=isinstance(coordinated,str) and coordinated.startswith('pg_')
+        if native_pg:
+            import shutil
+            shutil.rmtree(root)  # No source files may supply review/stage authority.
         lid=saved['lineage_id']
         review=store.retain_revision_source_review(tid,lineage_id=lid,artifacts_base=tmp_path)
         assert review['accepted'] is False
@@ -809,19 +820,24 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             evidence={'intent_id':saved['intent_id'],'lineage_id':lid})
         import shutil
         from spec_generator.stop_fence import StopFence
+        from delivery_api.pg_execution_fence import PostgresExecutionFence
         from spec_generator.cooperative_run import cli_execution
-        shutil.rmtree(dest)  # Only test-built data; runtime never deletes/retries partial stage.
-        (dest.parent.parent/'proposal.json').write_bytes(json.dumps(saved['proposal'],sort_keys=True,indent=2).encode())
-        with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+        if not native_pg:
+            shutil.rmtree(dest)  # Only test-built data; runtime never deletes/retries partial stage.
+            (dest.parent.parent/'proposal.json').write_bytes(json.dumps(saved['proposal'],sort_keys=True,indent=2).encode())
+        with cli_execution(PostgresExecutionFence(store,cap,root=root),None):
             staged=store.prepare_revision_staging(tid,lineage_id=lid,expected_previous_sha256=first['event_sha256'],artifacts_base=tmp_path)
         md=staged['event']['evidence']['manifest_sha256']
+        if isinstance(coordinated,str) and coordinated.startswith('pg_'):
+            import sqlite3
+            monkeypatch.setattr(sqlite3,'connect',lambda *a,**kw:(_ for _ in ()).throw(AssertionError('SQLite forbidden in native PG revision runtime')))
         safety=store.inspect_revision_install_safety(tid,lineage_id=lid,artifacts_base=tmp_path)
         assert safety['blockers']==['source_writer_exclusion_unverified'] and not safety['installation_available']
-        with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+        with cli_execution(PostgresExecutionFence(store,cap,root=root),None):
             safety=store.inspect_revision_install_safety(tid,lineage_id=lid,artifacts_base=tmp_path)
         assert safety['observed_work_quiescent'] and not safety['installation_available']
         pending=store.enqueue_worker(tid,'phase:srs')
-        with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+        with cli_execution(PostgresExecutionFence(store,cap,root=root),None):
             blocked=store.inspect_revision_install_safety(tid,lineage_id=lid,artifacts_base=tmp_path)
         assert blocked['unresolved_job_ids']==[pending] and 'worker_jobs_unresolved' in blocked['blockers']
         with store._postgres.transaction() as conn:conn.execute("UPDATE worker_jobs SET state='done' WHERE job_id=%s",(pending,))
@@ -921,14 +937,15 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             evidence={'artifacts':changed['options']['artifact_evidence'],'checkpoint_id':changed['options']['source_checkpoint_id'],'proposal_sha256':new_proposal['artifact_sha256']}
             held=store.retain_closed_revision_restart_intent(tid,request_key=uuid.uuid4().hex,options=changed['options'],proposal=new_proposal,
                 approval_reference=changed['submission_id'],read_current_evidence=lambda:evidence)
-            proposal_path=root/'spec/revision-proposals'/new_proposal['proposal_id']/'proposal.json'
+            proposal_document=store.decision_review(tid,'pg-revision-proposal:'+new_proposal['proposal_id'],'result')
+            assert proposal_document==new_proposal
             planned=store.retain_closed_revision_lineage_plan(tid,intent_id=held['intent_id'],semantic_session_id=cap.session_id,new_execution_session_id='revised-'+uuid.uuid4().hex,
-                retained_proposal={'proposal':new_proposal,'document_sha256':hashlib.sha256(proposal_path.read_bytes()).hexdigest()})
+                retained_proposal={'proposal':new_proposal,'document_sha256':hashlib.sha256(json.dumps(proposal_document,sort_keys=True,indent=2).encode()).hexdigest()})
             fresh_lid=planned['lineage_id']
             store.retain_revision_source_review(tid,lineage_id=fresh_lid,artifacts_base=tmp_path)
             fresh_prepared=store.append_closed_revision_preparation_event(tid,lineage_id=fresh_lid,expected_previous_sha256=None,state='prepared',
                 evidence={'intent_id':held['intent_id'],'lineage_id':fresh_lid})
-            with cli_execution(StopFence(root/'interview/stop-request.json'),None):
+            with cli_execution(PostgresExecutionFence(store,cap,root=root),None):
                 fresh_staged=store.prepare_revision_staging(tid,lineage_id=fresh_lid,expected_previous_sha256=fresh_prepared['event_sha256'],artifacts_base=tmp_path)
             fresh_review=store.retain_revision_installation_review(tid,lineage_id=fresh_lid,expected_staged_event_sha256=fresh_staged['event_sha256'],artifacts_base=tmp_path)
             assert fresh_review['review']['phase']=='srs' and fresh_review['review_sha256']!=installation_review['review_sha256']
@@ -964,19 +981,20 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             if coordinated=='revoked_before_promotion':
                 store.revoke_private_revision_acceptance(tid,acceptance_reference=receipt['acceptance_reference'])
                 with pytest.raises(TenantAccessDenied,match='revoked'):
-                    with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+                    with cli_execution(PostgresExecutionFence(store,cap,root=root),None):
                         apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=store.verify_private_revision_acceptance)
                 assert not (dest/'execution-generation.json').exists() and store.task(tid)==before
                 return
-            if isinstance(coordinated,str) and coordinated not in ('continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph','architecture_continuation'):
+            if isinstance(coordinated,str) and coordinated not in ('continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph','architecture_continuation','pg_install_only','pg_continuation_only','pg_continuation_consume','pg_continuation_consume_revoked','pg_continuation_failure','pg_activation_rollback','pg_anchor_tamper','pg_stage_tamper','pg_source_tamper','pg_continuation_tamper','pg_control_stop','pg_child_control'):
                 from delivery_api import revision_install_coordinator as coordinator
-                original=coordinator.promote_private_stage
-                def interrupted(**kwargs):
-                    if coordinated=='after_promotion':original(**kwargs)
+                from delivery_api import pg_revision_install as pg_installer
+                original=pg_installer.promote_stage
+                def interrupted(*args,**kwargs):
+                    if coordinated=='after_promotion':original(*args,**kwargs)
                     raise RuntimeError('constructed interruption')
-                monkeypatch.setattr(coordinator,'promote_private_stage',interrupted)
+                monkeypatch.setattr(pg_installer,'promote_stage',interrupted)
                 with pytest.raises(RuntimeError,match='constructed interruption'):
-                    with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+                    with cli_execution(PostgresExecutionFence(store,cap,root=root),None):
                         apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],
                             expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
                 assert store.task(tid)==before and store.session_binding(args['lineage']['execution_session_id']) is None
@@ -984,20 +1002,38 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                 expected='private_stage_requires_review' if coordinated=='before_promotion' else 'files_promoted_database_uninstalled_requires_review'
                 assert reconciled['state']==expected and not reconciled['automatic_retry'] and not reconciled['resume_available']
                 with pytest.raises(ValueError,match='reconciliation'):
-                    with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+                    with cli_execution(PostgresExecutionFence(store,cap,root=root),None):
                         apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
                 return
             # Concurrent destination holder must block before anchor/journal effects.
-            import fcntl
-            # session namespace is original source root's parent, not path inference.
-            lock=root.parent/('.install-'+args['lineage']['execution_session_id']+'.lock')
-            with lock.open('a') as holder:
-                fcntl.flock(holder,fcntl.LOCK_EX|fcntl.LOCK_NB)
-                with pytest.raises(BlockingIOError):
-                    with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+            key='pg-revision-install:'+A.owner_id+':'+args['lineage']['execution_session_id']
+            import psycopg
+            with psycopg.connect(DSN,autocommit=True) as holder:
+                holder.execute('SELECT pg_advisory_lock(hashtextextended(%s,0))',(key,))
+                try:
+                    with pytest.raises(BlockingIOError):
+                        with cli_execution(PostgresExecutionFence(store,cap,root=root),None):
+                            apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
+                    assert not (dest/'execution-generation.json').exists() and store.task(tid)==before
+                finally:holder.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))',(key,))
+            if coordinated=='pg_activation_rollback':
+                from delivery_api import pg_revision_install
+                original_seed=pg_revision_install.seed_accepted_checkpoint
+                def failed_seed(*a,**kw):
+                    original_seed(*a,**kw)
+                    raise RuntimeError('constructed post-seed rollback')
+                monkeypatch.setattr(pg_revision_install,'seed_accepted_checkpoint',failed_seed)
+                with cli_execution(PostgresExecutionFence(store,cap,root=root),None):
+                    with pytest.raises(RuntimeError,match='post-seed rollback'):
                         apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
-                assert not (dest/'execution-generation.json').exists() and store.task(tid)==before
-            with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+                assert store.task(tid)==before and store.session_binding(args['lineage']['execution_session_id']) is None
+                with store._postgres.transaction() as conn:
+                    assert conn.execute('SELECT 1 FROM checkpoints WHERE thread_id=%s',(args['lineage']['execution_session_id'],)).fetchone() is None
+                    assert conn.execute('SELECT 1 FROM installed_execution_bindings WHERE session_id=%s',(args['lineage']['execution_session_id'],)).fetchone() is None
+                observed=store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                assert observed['state']=='files_promoted_database_uninstalled_requires_review' and not observed['automatic_retry']
+                return
+            with cli_execution(PostgresExecutionFence(store,cap,root=root),None):
                 result=apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],
                     expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
             later=WorkerCapability.capture(store,tid);later.validate(store)
@@ -1009,12 +1045,380 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             assert task['active_phase']==('specs' if phase=='architecture' else 'architecture') and result['continuation_prepared'] and not result['dispatch_started']
             reconciled=store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
             assert reconciled['state']=='installed_verified_no_dispatch' and not reconciled['automatic_retry'] and not reconciled['unverified']
+            if coordinated in ('pg_install_only','pg_continuation_only','pg_continuation_consume','pg_continuation_consume_revoked','pg_continuation_failure','pg_anchor_tamper','pg_stage_tamper','pg_source_tamper','pg_continuation_tamper','pg_control_stop','pg_child_control'):
+                from delivery_api.generator_checkpoint import GeneratorCheckpoint
+                from spec_generator.graph import build_graph
+                from types import SimpleNamespace
+                reader=GeneratorCheckpoint(store,later,None,'spec',writable=False)
+                original_installed=reader.get_tuple({'configurable':{'thread_id':later.session_id}})
+                state=build_graph(SimpleNamespace(record=lambda *a:None),review=True,checkpointer=reader).get_state({'configurable':{'thread_id':later.session_id}})
+                assert state.next==('gate_'+phase,) and state.values[phase]==saved['proposal']['artifact']
+                assert not dest.exists() and not list(root.parent.rglob('checkpoints.sqlite'))
+                from interview_engine.installed_execution import load_database_installed_execution_control
+                from delivery_api.tenancy import session_root
+                from delivery_api.pg_execution_fence import PostgresExecutionFence,PostgresControlFence
+                pg_root=session_root(tmp_path,A,later.session_id)
+                def read_installed_db():
+                    PostgresControlFence(store,later)._validate()
+                    return store.installed_execution_anchor(later.session_id)
+                control=load_database_installed_execution_control(pg_root,expected_anchor=later.execution_anchor,expected_anchor_sha256=later.anchor_sha256,
+                    read_binding=read_installed_db,fence_factory=lambda r,a:PostgresExecutionFence(store,later,root=r))
+                assert control.fence.generation==2 and control.validate()['document_sha256']==later.anchor_sha256
+                with pytest.raises(ValueError,match='new interview input'):control.reject_interview_mutation()
+                from interview_engine.installed_execution import InstalledExecutionRegistry
+                from interview_engine.tenant_worker import _owner
+                registry=InstalledExecutionRegistry(tmp_path,read_binding=lambda owner,sid:read_installed_db(),fence_factory=lambda r,a:PostgresControlFence(store,later))
+                token=_owner.set(A.owner_id)
+                try:
+                    assert registry.get(later.session_id).anchor==later.execution_anchor
+                    with pytest.raises(ValueError,match='new interview input'):registry.respond(later.session_id,{})
+                    if coordinated=='pg_control_stop':
+                        with PostgresExecutionFence(store,later,root=pg_root).running():
+                            assert registry.stop(later.session_id)=='STOP_REQUESTED'
+                            assert registry.stop(later.session_id)=='STOP_REQUESTED' and store.task(tid)['generation']==3
+                            with pytest.raises(Exception,match='quiescence'):registry.reconcile_stopped(later.session_id)
+                        assert registry.reconcile_stopped(later.session_id)=='STOPPED'
+                        assert store.confirm_task_stopped(tid,engine_quiescent=True)['state']=='stopped'
+                        assert not pg_root.exists()
+                        return
+                finally:_owner.reset(token)
+                assert not pg_root.exists()
+                if coordinated=='pg_child_control':
+                    from interview_engine.pg_session_store import PgSessionStore
+                    from delivery_api.generator_documents import ChildGeneratorDocuments
+                    from delivery_api.pg_execution_fence import ChildPostgresExecutionFence
+                    from spec_generator.cooperative_run import cli_execution
+                    from spec_generator.stop_fence import guarded_publish,StopRequested
+                    import psycopg
+                    from delivery_api.pg_execution_fence import InstalledInterviewControlRouter
+                    from interview_engine.tenant_worker import TenantRegistryRouter,_session
+                    from interview_engine.http_service import ProtocolFailure
+                    from vmodel_contracts.interactive import ProcessStatus
+                    route=InstalledInterviewControlRouter(store,tmp_path)
+                    class NeverInterviewRegistry:
+                        def __init__(self,*args,**kwargs):raise AssertionError('installed source must not load an interview graph')
+                    router=TenantRegistryRouter(NeverInterviewRegistry,None,tmp_path,session_dsn='unused',installed_resolver=route.resolve)
+                    ot=_owner.set(A.owner_id);st=_session.set(A.session_id)
+                    try:
+                        snapshot=router.snapshot(later.session_id)
+                        assert snapshot.session_id==later.session_id and snapshot.task_id==tid and snapshot.process_status==ProcessStatus.COMPLETED and snapshot.open_input is None
+                        with pytest.raises(ProtocolFailure,match='preserves approved'):router.respond(later.session_id,{})
+                        with pytest.raises(ProtocolFailure,match='preserves approved'):router.switch_route(later.session_id,{})
+                        assert router._registries=={}
+                    finally:_owner.reset(ot);_session.reset(st)
+                    from interview_engine.pg_installed_router import InstalledControlRouter
+                    standalone=InstalledControlRouter(store._postgres._pool,tmp_path)
+                    standalone_router=TenantRegistryRouter(NeverInterviewRegistry,None,tmp_path,session_dsn='unused',pool=store._postgres._pool,route_installed=True)
+                    ot=_owner.set(A.owner_id);st=_session.set(A.session_id)
+                    try:
+                        assert standalone_router.snapshot(later.session_id).process_status==ProcessStatus.COMPLETED
+                        assert standalone_router._registries=={}
+                        from interview_engine.pg_installed_router import ScopedInstalledRegistry
+                        fixed=ScopedInstalledRegistry(router,store._postgres._pool,tmp_path,A.owner_id,A.session_id)
+                        assert fixed.snapshot(later.session_id).process_status==ProcessStatus.COMPLETED
+                        assert standalone.resolve('snapshot',later.session_id)(later.session_id).process_status==ProcessStatus.COMPLETED
+                        with pytest.raises(ProtocolFailure,match='preserves approved'):standalone.resolve('respond',later.session_id)(later.session_id,{})
+                    finally:_owner.reset(ot);_session.reset(st)
+                    from delivery_api.inprocess_interview import InProcessInterviewHost,_HostedEngineTransport
+                    import httpx
+                    host=InProcessInterviewHost(store,tmp_path,gateway_factory=None,generator_clients=None,interview_clients=None,session_dsn=store._postgres.dsn)
+                    host._registry_type=lambda:NeverInterviewRegistry
+                    transport=_HostedEngineTransport(host._app())
+                    client=httpx.Client(transport=transport,base_url='http://hosted',headers={'X-Interview-Engine-Token':host._token,'X-Requi-Owner':A.owner_id,'X-Requi-Session-Id':A.session_id})
+                    try:
+                        response=client.get('/v1/sessions/'+later.session_id)
+                        assert response.status_code==200 and response.json()['session_id']==later.session_id and response.json()['open_input'] is None
+                        from uuid import uuid4
+                        input_id=str(uuid4())
+                        response=client.post('/v1/sessions/'+later.session_id+'/inputs/'+input_id,json={'input_id':input_id,'value':'unexpected new answer','actor_id':'founder'})
+                        assert response.status_code==422 and 'preserves approved' in response.text
+                        response=client.post('/v1/sessions/'+later.session_id+'/model-route',json={'model_route':'ollama','model':'fake','expected_sequence':0,'expected_input_id':input_id,'actor_id':'founder','idempotency_key':str(uuid4())})
+                        assert response.status_code==409 and 'preserves approved' in response.text,response.text
+                        assert host._engine_router._registries=={}
+                    finally:client.close();transport.close();host.close()
+                    pg=PgSessionStore(store._postgres._pool,claims=(A.owner_id,A.session_id))
+                    jid=store.enqueue_worker(tid,'phase:architecture');assert store.claim_worker(jid)==later
+                    b=SimpleNamespace(session_id=later.session_id,owner_id=A.owner_id,task_id=tid,job_id=jid,generation=2,auth_session_id=A.session_id,execution_anchor_sha256=later.anchor_sha256)
+                    claim=pg.claim(later.session_id,A.owner_id,'installed-child-test',60)
+                    docs=ChildGeneratorDocuments(pg,claim,b);fence=ChildPostgresExecutionFence(docs,root=pg_root)
+                    with cli_execution(fence,None):guarded_publish(lambda:docs.write('spec/architecture.partial.json',b'{"progress":1}'))
+                    assert docs.read('spec/architecture.partial.json')==b'{"progress":1}'
+                    with psycopg.connect(DSN) as admin:admin.execute('UPDATE installed_execution_bindings SET anchor_sha256=%s WHERE session_id=%s',('f'*64,later.session_id))
+                    with pytest.raises(TenantAccessDenied,match='installed'):docs.read('spec/architecture.partial.json')
+                    ot=_owner.set(A.owner_id);st=_session.set(A.session_id)
+                    try:
+                        with pytest.raises(PermissionError,match='journal'):standalone_router.snapshot(later.session_id)
+                    finally:_owner.reset(ot);_session.reset(st)
+                    with psycopg.connect(DSN) as admin:admin.execute('UPDATE installed_execution_bindings SET anchor_sha256=%s WHERE session_id=%s',(later.anchor_sha256,later.session_id))
+                    assert docs.read('spec/architecture.partial.json')==b'{"progress":1}'
+                    with cli_execution(fence,None):
+                        store.request_task_stop(tid)
+                        with pytest.raises(StopRequested):guarded_publish(lambda:docs.write('spec/architecture.partial.json',b'late'))
+                    pg.release(claim)
+                    ot=_owner.set(A.owner_id);st=_session.set(A.session_id)
+                    try:
+                        assert router.snapshot(later.session_id).process_status==ProcessStatus.STOPPED
+                        assert router.stop(later.session_id).process_status==ProcessStatus.STOPPED
+                        assert router.reconcile_stopped(later.session_id).process_status==ProcessStatus.STOPPED
+                        assert store.task(tid)['generation']==3 and router._registries=={}
+                        assert standalone.resolve('snapshot',later.session_id)(later.session_id).process_status==ProcessStatus.STOP_REQUESTED
+                        from delivery_api.same_host_producer import SameHostProducerWorker
+                        assert SameHostProducerWorker(store,tmp_path,gateway_factory=None,usage_log_factory=None,isolated_quiescent=lambda:True).reconcile_stopped(jid)
+                        assert standalone.resolve('snapshot',later.session_id)(later.session_id).process_status==ProcessStatus.STOPPED
+                        assert standalone.resolve('stop',later.session_id)(later.session_id).process_status==ProcessStatus.STOPPED
+                        assert standalone.resolve('reconcile_stopped',later.session_id)(later.session_id).process_status==ProcessStatus.STOPPED
+                        assert store.task(tid)['generation']==3
+                    finally:_owner.reset(ot);_session.reset(st)
+                    assert not pg_root.exists()
+                    return
+                if coordinated in ('pg_anchor_tamper','pg_stage_tamper','pg_source_tamper'):
+                    import psycopg
+                    if coordinated=='pg_source_tamper':
+                        published=store.manifest_snapshot(tid,1)
+                        source_row=next(row for row in published['rows'] if row['phase_key']==phase)
+                        with psycopg.connect(DSN) as admin:
+                            admin.execute('UPDATE artifact_bytes SET bytes=%s WHERE owner_id=%s AND sha256=%s',(b'{}',A.owner_id,source_row['sha256']))
+                    else:
+                        marker=('pg-install-anchor:'+intent_kw['installation_id']) if coordinated=='pg_anchor_tamper' else 'pg-revision-stage:'+args['lineage_sha256']
+                        revision=install['plan_sha256'] if coordinated=='pg_anchor_tamper' else 'prepared'
+                        with psycopg.connect(DSN) as admin:
+                            raw=admin.execute('SELECT payload FROM decision_reviews WHERE task_id=%s AND wait_id=%s AND revision=%s',(tid,marker,revision)).fetchone()[0]
+                            value=json.loads(raw)
+                            if coordinated=='pg_anchor_tamper':value['anchor_sha256']='f'*64
+                            else:value['snapshot']['sha256']='f'*64
+                            admin.execute('UPDATE decision_reviews SET payload=%s WHERE task_id=%s AND wait_id=%s AND revision=%s',(json.dumps(value),tid,marker,revision))
+                    broken=store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                    assert broken['state']=='database_installed_requires_review' and broken['unverified'] and not broken['automatic_retry']
+                    with pytest.raises(ValueError,match='unresolved'):
+                        store.private_approved_continuation_basis(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                    return
+                if coordinated!='pg_install_only':
+                    from delivery_api.tenancy import session_root
+                    from delivery_api.pg_execution_fence import PostgresExecutionFence
+                    from delivery_api.generator_snapshot import GeneratorSnapshots
+                    pg_root=session_root(tmp_path,A,later.session_id)
+                    from delivery_api.revision_continuation import prepare_private_approved_continuation,reconcile_private_approved_continuation
+                    if coordinated=='pg_continuation_failure':
+                        from spec_generator import revision_checkpoint
+                        def fail(**kw):raise RuntimeError('constructed PG preparation interruption')
+                        monkeypatch.setattr(revision_checkpoint,'prepare_approved_continuation_checkpoint',fail)
+                        with cli_execution(PostgresExecutionFence(store,later,root=pg_root),None):
+                            with pytest.raises(RuntimeError,match='interruption'):
+                                prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                            with pytest.raises(ValueError,match='reconciliation'):
+                                prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                        observed=reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                        assert observed['state']=='continuation_requires_review' and not observed['automatic_retry']
+                    else:
+                        with cli_execution(PostgresExecutionFence(store,later,root=pg_root),None):
+                            prepared=prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                        observed=reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                        assert observed['state']=='continuation_prepared_verified_no_dispatch' and observed['next_node']==('items' if pg_architecture else 'architecture')
+                        assert not prepared['provider_invoked'] and not prepared['dispatch_started']
+                        if coordinated=='pg_continuation_tamper':
+                            import psycopg
+                            with psycopg.connect(DSN) as admin:
+                                marker='revision-continuation:'+intent_kw['installation_id']+':prepared'
+                                raw=admin.execute('SELECT payload FROM decision_reviews WHERE task_id=%s AND wait_id=%s AND revision=%s',(tid,marker,installation_review['review_sha256'])).fetchone()[0]
+                                altered=json.loads(raw);altered['snapshot']['sha256']='f'*64
+                                admin.execute('UPDATE decision_reviews SET payload=%s WHERE task_id=%s AND wait_id=%s AND revision=%s',(json.dumps(altered),tid,marker,installation_review['review_sha256']))
+                            observed=reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                            assert observed['state']=='continuation_requires_review' and observed['unverified'] and not observed['automatic_retry']
+                            assert reader.get_tuple({'configurable':{'thread_id':later.session_id}})==original_installed
+                            return
+                        if coordinated in ('pg_continuation_consume','pg_continuation_consume_revoked'):
+                            import asyncio
+                            from delivery_api.revision_continuation_worker import queue_private_approved_continuation,execute_private_approved_continuation
+                            from delivery_api.same_host_producer import SameHostProducerWorker
+                            from spec_generator.worker_runtime import JobRuntime
+                            from spec_generator.model_config import StageModel
+                            from langgraph.graph import StateGraph,END
+                            from typing import TypedDict
+                            from vmodel_contracts.architecture import ArchitectureOverview
+                            class PGContinuationState(TypedDict,total=False):
+                                intent_model:dict
+                                conops:dict
+                                needs:dict
+                                system_baseline:dict
+                                srs:dict
+                                architecture:dict
+                            def fake_graph(log,checkpointer,**kwargs):
+                                graph=StateGraph(PGContinuationState);graph.add_node('gate_srs',lambda st:{})
+                                def architecture(st):
+                                    if coordinated=='pg_continuation_consume_revoked':store.revoke_private_revision_acceptance(tid,acceptance_reference=receipt['acceptance_reference'])
+                                    return {'architecture':ArchitectureOverview.model_validate({'session_id':cap.session_id,
+                                        'baseline_id':st['system_baseline']['baseline_id'],'stack_entries':[],
+                                        'components':[{'name':'Offline Review','responsibility':'Show approved result','requirement_ids':['R-1'],'baseline_refs':['repo:spec-generator']}],
+                                        'decisions':[],'non_functionals':{}}).model_dump(mode='json')}
+                                graph.add_node('architecture',architecture);graph.set_entry_point('gate_srs');graph.add_edge('gate_srs','architecture');graph.add_edge('architecture',END)
+                                return graph.compile(checkpointer=checkpointer)
+                            if pg_real:
+                                from spec_generator import graph as real_graph
+                                call_stages=[]
+                                def fake_call(stage,payload,log,progress,**kwargs):
+                                    assert stage=='architecture';call_stages.append(stage)
+                                    schema=kwargs.get('schema') or {};props=set(schema.get('properties',{}))
+                                    if props=={'stack_keys'}:value={'stack_keys':['language']}
+                                    elif props=={'technology','off_list_justification','baseline_refs'}:value={'technology':'python','off_list_justification':None,'baseline_refs':['runtime:spec-generator:1']}
+                                    elif props=={'responsibility'}:value={'responsibility':'serve approved specification'}
+                                    elif props=={'position'}:value={'position':'consistent'}
+                                    elif 'driver' in props:value={'title':'Keep Existing Runtime','decision':'Use Python','rationale':'Preserve current runtime','driver':'simplicity','options_considered':[{'option':'Change runtime','reason':'Unnecessary migration'}],'baseline_refs':['repo:spec-generator'],'evidence':[],'affected_repositories':[],'executes_concept_ids':[]}
+                                    elif schema.get('type')=='array':
+                                        item=set(schema['items'].get('properties',{}))
+                                        value=[{'slug':'runtime'}] if 'slug' in item else [{'name':'api','requirement_ids':['R-1'],'baseline_refs':['repo:spec-generator'],'migration':False}]
+                                    else:raise AssertionError(schema)
+                                    if 'driver' in props:
+                                        slot_text=payload.split('THE ADR SLOT',1)[1].split('\n',1)[1]
+                                        slot,_=json.JSONDecoder().raw_decode(slot_text.lstrip())
+                                        if slot['slug'].startswith('execute-'):
+                                            value['executes_concept_ids']=['concept:native-app']
+                                            value.update(title='Execute Native Concept',decision='Execute the selected native operating concept',rationale='Carry confirmed operating behavior',driver='founder_constraint',options_considered=[{'option':'Remote browser-only operation','reason':'Conflicts with chosen native operating concept'}])
+                                    validator=kwargs.get('validate')
+                                    checked=validator(value) if validator else None
+                                    return checked if checked is not None else value
+                                monkeypatch.setattr(real_graph,'_call_json',fake_call)
+                                fake_graph=None  # Production graph construction/node routing, no model invocation.
+                            queued=queue_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                            assert queue_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)==queued
+                            worker=SameHostProducerWorker(store,tmp_path,gateway_factory=lambda c,j:SimpleNamespace(store=store,job_id=j),usage_log_factory=lambda *a:None,
+                                runtime_factory=lambda c,r:JobRuntime({'architecture':StageModel('fake','fake')},str(r/'calls.jsonl'),lambda text:None))
+                            if coordinated=='pg_continuation_consume_revoked':
+                                with pytest.raises(TenantAccessDenied,match='revoked'):
+                                    asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))
+                                assert store.worker_job(queued)['state']=='failed'
+                                assert store.decision_review(tid,'revision-continuation-result:'+intent_kw['installation_id'],installation_review['review_sha256']) is None
+                                assert store.task(tid)['state']=='pending'
+                                assert not asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))['started']
+                            else:
+                                consumed=asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))
+                                assert consumed['started'] and not consumed['downstream_dispatched'] and store.worker_job(queued)['state']=='done'
+                                assert len(consumed['outputs'])==1 and consumed['outputs'][0]['phase']=='architecture'
+                                assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='architecture')['state']=='waiting'
+                                result=consumed['outputs'][0]
+                                from spec_generator.graph import validated_architecture
+                                assert validated_architecture(GeneratorSnapshots(store,later).read(result['snapshot']).checkpoint['channel_values']['architecture']).model_dump(mode='json')==result['artifact']
+                                from delivery_api.revision_next_review import read_private_next_review,approve_private_next_review,prepare_private_successor,queue_private_successor
+                                shown=read_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
+                                assert shown['artifact']==result['artifact'] and shown['review']['phase']=='architecture'
+                                for acknowledgement in (False,None,1):
+                                    with pytest.raises(ValueError,match='acknowledgement'):
+                                        approve_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'],extra_cost_acknowledged=acknowledgement,selected_option='Approve',validate_submission=lambda *a:'constructed-test-only')
+                                with pytest.raises(ValueError,match='changed'):
+                                    approve_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256='f'*64,extra_cost_acknowledged=True,selected_option='Approve',validate_submission=lambda *a:'constructed-test-only')
+                                approve_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'],extra_cost_acknowledged=True,selected_option='Approve',validate_submission=lambda *a:'constructed-test-only')
+                                with cli_execution(PostgresExecutionFence(store,later,root=pg_root),None):
+                                    successor=prepare_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])
+                                    with pytest.raises(ValueError,match='reconciliation'):
+                                        prepare_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])
+                                assert successor['source_checkpoint_sha256']==shown['review']['checkpoint_sha256']
+                                assert not successor['dispatch_started'] and not successor['provider_invoked']
+                                next_job=queue_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])
+                                assert queue_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])==next_job
+                                assert GeneratorSnapshots(store,later).read(result['snapshot']).config==shown['review']['checkpoint']
+                                from delivery_api.revision_next_review import execute_private_successor
+                                from spec_generator import graph as real_graph
+                                def fake_items(stage,payload,log,progress,**kwargs):
+                                    assert stage=='items'
+                                    if pg_fault and not getattr(fake_items,'faulted',False):
+                                        fake_items.faulted=True
+                                        if pg_fault=='pg_successor_revoked':store.revoke_private_revision_acceptance(tid,acceptance_reference=receipt['acceptance_reference'])
+                                        elif pg_fault=='pg_successor_expired':monkeypatch.setattr(store,'auth_session_active',lambda:False)
+                                        elif pg_fault=='pg_successor_provider_hold':
+                                            import psycopg
+                                            from test_attempt_ledger import Q
+                                            with psycopg.connect(DSN) as admin:
+                                                admin.execute('INSERT INTO admission_limits VALUES (%s,%s,1000,300,700,300,700,60,100,2) ON CONFLICT(owner_id) DO NOTHING',(A.owner_id,'constructed-test-only'))
+                                            fake_items.held=store.reserve_provider_attempt(next_job,uuid.uuid4().hex,Q,'constructed-test-hold')['attempt_id']
+                                        else:
+                                            import psycopg
+                                            marker=('revision-chain-prepared:'+intent_kw['installation_id']) if pg_fault=='pg_successor_prepared_swap' else ('revision-continuation-result:'+intent_kw['installation_id'])
+                                            ref=shown['review_sha256'] if pg_fault=='pg_successor_prepared_swap' else installation_review['review_sha256']
+                                            with psycopg.connect(DSN) as admin:
+                                                old=admin.execute('SELECT payload FROM decision_reviews WHERE task_id=%s AND wait_id=%s AND revision=%s',(tid,marker,ref)).fetchone()[0]
+                                                tampered=json.loads(old);tampered['snapshot']['sha256']='f'*64
+                                                admin.execute('UPDATE decision_reviews SET payload=%s WHERE task_id=%s AND wait_id=%s AND revision=%s',(json.dumps(tampered),tid,marker,ref))
+
+                                    value=[{'slug':'api','kind':'api_surface','title':'API','requirement_ids':['R-1'],'depends_on':[]}] if kwargs['schema'].get('type')=='array' else {'body_markdown':'# Approved Spec\n\nThe API emits the complete approved specification.'}
+                                    checked=kwargs['validate'](value)
+                                    return checked if checked is not None else value
+                                monkeypatch.setattr(real_graph,'_call_json',fake_items)
+                                next_worker=SameHostProducerWorker(store,tmp_path,gateway_factory=lambda c,j:SimpleNamespace(store=store,job_id=j),usage_log_factory=lambda *a:None,
+                                    runtime_factory=lambda c,r:JobRuntime({'items':StageModel('fake','fake')},str(r/'calls.jsonl'),lambda text:None))
+                                if pg_fault:
+                                    with pytest.raises((ValueError,TenantAccessDenied)):
+                                        asyncio.run(execute_private_successor(store,next_worker,next_job,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256']))
+                                    if pg_fault=='pg_successor_expired':monkeypatch.undo()
+                                    assert store.worker_job(next_job)['state']==('running' if pg_fault=='pg_successor_expired' else 'failed')
+                                    assert store.decision_review(tid,'revision-continuation-result:'+intent_kw['installation_id'],shown['review_sha256']) is None
+                                    assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='specs')['state']!='waiting'
+                                    assert reader.get_tuple({'configurable':{'thread_id':later.session_id}})==original_installed
+                                    if pg_fault=='pg_successor_provider_hold':
+                                        assert store.provider_attempt(fake_items.held)['state']=='reserved'
+                                        store.transition_provider_attempt(fake_items.held,'cancel')
+                                    assert not list(root.parent.rglob('checkpoints.sqlite'))
+                                    return
+                                next_result=asyncio.run(execute_private_successor(store,next_worker,next_job,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256']))
+                                assert next_result['started'] and next_result['outputs'][0]['phase']=='specs' and store.worker_job(next_job)['state']=='done'
+                                next_shown=read_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,result_reference=shown['review_sha256'])
+                                assert next_shown['review']['phase']=='specs'
+                                for expected_stage,expected_phase in [('tests','tests'),('validation','validation')]:
+                                    source_reference=next_shown['review']['result_reference'];current_digest=next_shown['review_sha256']
+                                    approve_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=current_digest,extra_cost_acknowledged=True,selected_option='Approve',validate_submission=lambda *a:'constructed-test-only',result_reference=source_reference)
+                                    with cli_execution(PostgresExecutionFence(store,later,root=pg_root),None):
+                                        prepare_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=current_digest)
+                                    def fake_final(stage,payload,log,progress,**kwargs):
+                                        assert stage==expected_stage
+                                        schema=kwargs['schema']
+                                        if stage=='tests':
+                                            ids=schema['properties']['fills']['required']
+                                            value={'fills':{key:{'description':'Confirm approved specification output','runner':'static','components':[('api' if pg_real else 'Offline Review')],'definition':{'preconditions':[],'steps':['Inspect generated API specification'],'expected_outcomes':['The API specification contains the approved requirement content'],'cleanup':[],'cases':[],'execution':{}}} for key in ids}}
+                                        else:
+                                            value={'items':[{'components':[('api' if pg_real else 'Offline Review')],'what_the_human_does':'Read the generated specification','what_to_observe':'The approved user workflow remains clear','pass_when':'The user can identify the intended behavior','evidence':'Record the review outcome','environment':'Local review'}]}
+                                            if 'criterion_id' in schema['properties']['items']['items']['properties']:value['items'][0]['criterion_id']=None
+                                        checked=kwargs['validate'](value)
+                                        return checked if checked is not None else value
+                                    monkeypatch.setattr(real_graph,'_call_json',fake_final)
+                                    final_worker=SameHostProducerWorker(store,tmp_path,gateway_factory=lambda c,j:SimpleNamespace(store=store,job_id=j),usage_log_factory=lambda *a:None,
+                                        runtime_factory=lambda c,r:JobRuntime({expected_stage:StageModel('fake','fake')},str(r/'calls.jsonl'),lambda text:None))
+                                    final_job=queue_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=current_digest)
+                                    final_result=asyncio.run(execute_private_successor(store,final_worker,final_job,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=current_digest))
+                                    assert final_result['outputs'][0]['phase']==expected_phase
+                                    next_shown=read_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,result_reference=current_digest)
+                                    assert next_shown['review']['phase']==expected_phase
+                                terminal=approve_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=next_shown['review_sha256'],extra_cost_acknowledged=True,selected_option='Approve',validate_submission=lambda *a:'constructed-test-only',result_reference=next_shown['review']['result_reference'])
+                                assert terminal['phase']=='validation' and store.task(tid)['state']=='done'
+                                from delivery_api.revision_next_review import successor_basis
+                                with pytest.raises(ValueError,match='terminal'):
+                                    successor_basis(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=next_shown['review_sha256'])
+
+
+                            assert GeneratorSnapshots(store,later).read(prepared['snapshot']).config==prepared['checkpoint']
+
+                        from delivery_api.generator_snapshot import GeneratorSnapshots
+                        with pytest.raises(ValueError,match='digest'):
+                            GeneratorSnapshots(store,later).read(prepared['snapshot']|{'sha256':'f'*64})
+                    unchanged=reader.get_tuple({'configurable':{'thread_id':later.session_id}})
+                    assert unchanged==original_installed
+                    assert not list(root.parent.rglob('checkpoints.sqlite'))
+
+                with tenant_context(B):
+                    with pytest.raises(TenantAccessDenied):reader.get_tuple({'configurable':{'thread_id':later.session_id}})
+                from delivery_api.pg_revision_install import seed_accepted_checkpoint
+                with pytest.raises(ValueError,match='parent CAS'):
+                    with store._task_operation_guard('task.rerun'):seed_accepted_checkpoint(store,tid,intent_kw['installation_id'],test_acceptance)
+                return
             from delivery_api.tenancy import session_root
             promoted_root=session_root(tmp_path,A,later.session_id)
             engine_source=os.getenv('DELIVERY_TEST_ENGINE_SOURCE')
             if engine_source:monkeypatch.syspath_prepend(engine_source)
-            from interview_engine.installed_execution import load_installed_execution_control
-            control=load_installed_execution_control(promoted_root,expected_anchor=later.execution_anchor,expected_anchor_sha256=later.anchor_sha256)
+            from interview_engine.installed_execution import load_database_installed_execution_control
+            from delivery_api.pg_execution_fence import PostgresControlFence
+            def db_binding():
+                PostgresControlFence(store,later)._validate()
+                return store.installed_execution_anchor(later.session_id)
+            def load_control(**kwargs):
+                return load_database_installed_execution_control(promoted_root,read_binding=db_binding,fence_factory=lambda r,a:PostgresControlFence(store,later),**kwargs)
+            control=load_control(expected_anchor=later.execution_anchor,expected_anchor_sha256=later.anchor_sha256)
             assert control.fence.generation==2 and control.validate()['document_sha256']==later.anchor_sha256
             from interview_engine.installed_execution import InstalledExecutionRegistry
             from interview_engine.tenant_worker import _owner
@@ -1022,7 +1426,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                 assert owner==A.owner_id
                 later.validate(store)
                 return store.installed_execution_anchor(sid)
-            registry=InstalledExecutionRegistry(tmp_path,read_binding=read_installed)
+            registry=InstalledExecutionRegistry(tmp_path,read_binding=read_installed,fence_factory=lambda r,a:PostgresControlFence(store,later))
             token=_owner.set(A.owner_id)
             try:
                 registered=registry.get(later.session_id)
@@ -1031,27 +1435,35 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             finally:_owner.reset(token)
             assert not (promoted_root/'interview'/'http-session.json').exists()
             from delivery_api.revision_continuation import prepare_private_approved_continuation
-            original_checkpoint=(promoted_root/'spec/checkpoints.sqlite').read_bytes()
+            from delivery_api.generator_checkpoint import GeneratorCheckpoint
+            from delivery_api.generator_snapshot import GeneratorSnapshots
+            installed_reader=GeneratorCheckpoint(store,later,None,'spec',writable=False)
+            cfg={'configurable':{'thread_id':later.session_id}}
+            def installed_checkpoint():return installed_reader.get_tuple(cfg)
+            original_checkpoint=installed_checkpoint()
+            def prepared_receipt():return store.decision_review(tid,'revision-continuation:'+intent_kw['installation_id']+':prepared',installation_review['review_sha256'])
+            def result_receipt(reference=None):return store.decision_review(tid,'revision-continuation-result:'+intent_kw['installation_id'],reference or installation_review['review_sha256'])
+            def prepared_checkpoint():return GeneratorSnapshots(store,later).read(prepared_receipt()['snapshot'])
             from delivery_api.revision_continuation import reconcile_private_approved_continuation
             if coordinated=='continuation_failure':
                 from spec_generator import revision_checkpoint
                 def fail(**kwargs):raise RuntimeError('constructed continuation interruption')
                 monkeypatch.setattr(revision_checkpoint,'prepare_approved_continuation_checkpoint',fail)
-                with cli_execution(StopFence(promoted_root/'interview/stop-request.json',execution_anchor=later.execution_anchor),None):
+                with cli_execution(PostgresExecutionFence(store,later,root=promoted_root),None):
                     with pytest.raises(RuntimeError,match='interruption'):
                         prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
                     with pytest.raises(ValueError,match='reconciliation'):
                         prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
                 observed=reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
                 assert observed['state']=='continuation_requires_review' and not observed['automatic_retry']
-                assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
+                assert installed_checkpoint()==original_checkpoint
                 return
-            with cli_execution(StopFence(promoted_root/'interview/stop-request.json',execution_anchor=later.execution_anchor),None):
+            with cli_execution(PostgresExecutionFence(store,later,root=promoted_root),None):
                 continuation=prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
                 assert continuation['next_node']==('items' if phase=='architecture' else 'architecture') and not continuation['provider_invoked'] and not continuation['dispatch_started']
                 with pytest.raises(ValueError,match='reconciliation'):
                     prepare_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
-            assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
+            assert installed_checkpoint()==original_checkpoint
             observed=reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
             assert observed['state']=='continuation_prepared_verified_no_dispatch' and not observed['dispatch_available']
             if coordinated in ('continuation_consume','continuation_consume_revoked','continuation_real_graph','architecture_continuation'):
@@ -1085,16 +1497,16 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                     return graph.compile(checkpointer=checkpointer)
                 queued=queue_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
                 assert queue_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)==queued
-                immutable=(promoted_root/'spec/approved-continuation/checkpoints.sqlite').read_bytes()
+                immutable=prepared_checkpoint()
                 def runtime(c,r):return JobRuntime({('items' if phase=='architecture' else 'architecture'):StageModel('fake','fake')},str(r/'calls.jsonl'),lambda text:None)
                 worker=SameHostProducerWorker(store,tmp_path,gateway_factory=lambda c,j:SimpleNamespace(store=store,job_id=j),usage_log_factory=lambda *a:None,runtime_factory=runtime)
                 if coordinated=='continuation_consume_revoked':
                     with pytest.raises(TenantAccessDenied,match='revoked'):
                         asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))
                     assert store.worker_job(queued)['state']=='failed'
-                    assert not (promoted_root/'spec/continuation-execution/receipt.json').exists()
+                    assert result_receipt() is None
                     assert store.task(tid)['state']=='pending'
-                    assert (promoted_root/'spec/approved-continuation/checkpoints.sqlite').read_bytes()==immutable
+                    assert prepared_checkpoint()==immutable
                     assert not asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))['started']
                     return
                 if coordinated=='continuation_real_graph':
@@ -1140,8 +1552,8 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                 assert not consumed['downstream_dispatched'] and store.task(tid)['state']=='waiting_gate'
                 assert next(g for g in store.task(tid)['gates'] if g['after_phase']==('specs' if phase=='architecture' else 'architecture'))['state']=='waiting'
                 assert next(p for p in store.task(tid)['phases'] if p['phase_key']==phase)['state']=='approved'
-                assert (promoted_root/'spec/approved-continuation/checkpoints.sqlite').read_bytes()==immutable
-                assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
+                assert prepared_checkpoint()==immutable
+                assert installed_checkpoint()==original_checkpoint
                 assert not asyncio.run(execute_private_approved_continuation(store,worker,queued,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,graph_factory=fake_graph))['started']
                 if coordinated in ('continuation_real_graph','architecture_continuation'):
                     from delivery_api.revision_next_review import read_private_next_review,approve_private_next_review
@@ -1159,19 +1571,23 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                     assert approved['phase']==shown['review']['phase'] and not approved['dispatch_started']
                     if coordinated=='continuation_real_graph':
                         from delivery_api.revision_next_review import prepare_private_successor,queue_private_successor,execute_private_successor
-                        source_continuation=(promoted_root/'spec/continuation-execution/checkpoints.sqlite').read_bytes()
-                        with cli_execution(StopFence(promoted_root/'interview/stop-request.json',execution_anchor=later.execution_anchor),None):
+                        source_continuation=GeneratorSnapshots(store,later).read(result_receipt()['snapshot'])
+                        with cli_execution(PostgresExecutionFence(store,later,root=promoted_root),None):
                             next_prepared=prepare_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])
                         assert next_prepared['source_checkpoint_sha256']==shown['review']['checkpoint_sha256']
-                        with cli_execution(StopFence(promoted_root/'interview/stop-request.json',execution_anchor=later.execution_anchor),None):
+                        with cli_execution(PostgresExecutionFence(store,later,root=promoted_root),None):
                             with pytest.raises(ValueError,match='reconciliation'):
                                 prepare_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])
-                        source_artifact=promoted_root/'spec/continuation-execution/architecture.json'
-                        source_artifact_raw=source_artifact.read_bytes()
-                        source_artifact.write_text('{}')
+                        original_result=result_receipt()
+                        import psycopg
+                        def replace_review(marker,revision,value):
+                            with psycopg.connect(DSN) as admin:
+                                admin.execute('UPDATE decision_reviews SET payload=%s WHERE task_id=%s AND wait_id=%s AND revision=%s',(json.dumps(value),tid,marker,revision))
+                        result_marker='revision-continuation-result:'+intent_kw['installation_id']
+                        replace_review(result_marker,installation_review['review_sha256'],original_result|{'artifact':{}})
                         with pytest.raises(ValueError,match='differs'):
                             queue_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256'])
-                        source_artifact.write_bytes(source_artifact_raw)
+                        replace_review(result_marker,installation_review['review_sha256'],original_result)
                         def next_runtime(c,r):return JobRuntime({'items':StageModel('fake','fake')},str(r/'calls.jsonl'),lambda text:None)
                         next_worker=SameHostProducerWorker(store,tmp_path,gateway_factory=lambda c,j:SimpleNamespace(store=store,job_id=j),usage_log_factory=lambda *a:None,runtime_factory=next_runtime)
                         def fake_next_items(stage,payload,log,progress,**kwargs):
@@ -1190,9 +1606,13 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                                         fake_next_items.held=attempt['attempt_id']
                                 elif fault=='successor_expired':monkeypatch.setattr(store,'auth_session_active',lambda:False)
                                 else:
-                                    path=promoted_root/'spec/continuation-chain'/shown['review_sha256']/('execution' if fault=='successor_swap' else 'prepared')
-                                    if not path.with_name(path.name+'-detached').exists():
-                                        path.rename(path.with_name(path.name+'-detached'));path.mkdir()
+                                    if not getattr(fake_next_items,'swapped',False):
+                                        fake_next_items.swapped=True
+                                        marker=result_marker if fault=='successor_swap' else 'revision-chain-prepared:'+intent_kw['installation_id']
+                                        ref=installation_review['review_sha256'] if fault=='successor_swap' else shown['review_sha256']
+                                        prior=store.decision_review(tid,marker,ref)
+                                        altered=json.loads(json.dumps(prior));altered['snapshot']['sha256']='f'*64
+                                        replace_review(marker,ref,altered)
                             checked=kwargs['validate'](value)
                             return checked if checked is not None else value
                         monkeypatch.setattr(real_graph,'_call_json',fake_next_items)
@@ -1200,10 +1620,13 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                         if fault:
                             with pytest.raises((ValueError,TenantAccessDenied)):
                                 asyncio.run(execute_private_successor(store,next_worker,next_job,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256']))
+                            if fault=='successor_expired':
+                                with pytest.raises(TenantAccessDenied,match='revoked'):installed_checkpoint()
+                                monkeypatch.setattr(store,'auth_session_active',lambda:True)  # End the deliberate test-only expiry before owned evidence readback.
                             assert store.worker_job(next_job)['state']==('running' if fault=='successor_expired' else 'failed')
-                            assert not (promoted_root/'spec/continuation-chain'/shown['review_sha256']/'execution/receipt.json').exists()
+                            assert result_receipt(shown['review_sha256']) is None
                             assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='specs')['state']!='waiting'
-                            assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
+                            assert installed_checkpoint()==original_checkpoint
                             if fault=='successor_provider_hold':
                                 assert store.provider_attempt(fake_next_items.held)['state']=='reserved'
                                 store.transition_provider_attempt(fake_next_items.held,'cancel')
@@ -1218,7 +1641,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                             source_reference=next_shown['review']['result_reference']
                             next_approved=approve_private_next_review(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=next_shown['review_sha256'],extra_cost_acknowledged=True,selected_option='Approve',validate_submission=lambda *a:'test-only-submission',result_reference=source_reference)
                             current_digest=next_shown['review_sha256']
-                            with cli_execution(StopFence(promoted_root/'interview/stop-request.json',execution_anchor=later.execution_anchor),None):
+                            with cli_execution(PostgresExecutionFence(store,later,root=promoted_root),None):
                                 prepared_successor=prepare_private_successor(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=current_digest)
                             def final_runtime(c,r):return JobRuntime({expected_stage:StageModel('fake','fake')},str(r/'calls.jsonl'),lambda text:None)
                             final_worker=SameHostProducerWorker(store,tmp_path,gateway_factory=lambda c,j:SimpleNamespace(store=store,job_id=j),usage_log_factory=lambda *a:None,runtime_factory=final_runtime)
@@ -1245,10 +1668,12 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                         from delivery_api.revision_next_review import successor_basis
                         with pytest.raises(ValueError,match='terminal'):
                             successor_basis(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=next_shown['review_sha256'])
-                        assert (promoted_root/'spec/continuation-execution/checkpoints.sqlite').read_bytes()==source_continuation
-                    assert (promoted_root/'spec/checkpoints.sqlite').read_bytes()==original_checkpoint
+                        assert GeneratorSnapshots(store,later).read(result_receipt()['snapshot'])==source_continuation
+                    assert installed_checkpoint()==original_checkpoint
                 return
-            (promoted_root/'spec/approved-continuation/receipt.json').write_text('{}')
+            import psycopg
+            with psycopg.connect(DSN) as admin:
+                admin.execute('UPDATE decision_reviews SET payload=%s WHERE task_id=%s AND wait_id=%s AND revision=%s',('{}',tid,'revision-continuation:'+intent_kw['installation_id']+':prepared',installation_review['review_sha256']))
             assert reconcile_private_approved_continuation(store,tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)['state']=='continuation_requires_review'
             assert store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)['state']=='installed_verified_no_dispatch'
 
@@ -1260,18 +1685,22 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
             with pytest.raises(ValueError,match='new interview input'):
                 control.reject_interview_mutation()
             with pytest.raises(ValueError,match='database digest'):
-                load_installed_execution_control(promoted_root,expected_anchor=later.execution_anchor,expected_anchor_sha256='f'*64)
-            (promoted_root/'spec'/'srs.json').write_text('{}')
+                load_control(expected_anchor=later.execution_anchor,expected_anchor_sha256='f'*64)
+            old_manifest=store.manifest_snapshot(tid,1)
+            source_row=next(row for row in old_manifest['rows'] if row['phase_key']==phase)
+            with psycopg.connect(DSN) as admin:
+                admin.execute('UPDATE artifact_bytes SET bytes=%s WHERE owner_id=%s AND sha256=%s',(b'{}',A.owner_id,source_row['sha256']))
             broken=store.reconcile_private_revision_installation(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
-            assert broken['state']=='database_installed_requires_review' and broken['unverified']==['promoted_file_evidence_unverified']
+            assert broken['state']=='database_installed_requires_review' and set(broken['unverified'])=={'pg_stage_or_source_evidence_unverified','promoted_pg_evidence_unverified'}
 
             with pytest.raises(ValueError,match='reconciliation'):
-                with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+                with cli_execution(PostgresExecutionFence(store,later,root=promoted_root),None):
                     apply_private_installation(store,tid,installation_id=intent_kw['installation_id'],expected_authorized_event_sha256=auth['event_sha256'],artifacts_base=tmp_path,validate_acceptance=test_acceptance)
             return
-        from delivery_api.revision_install_files import prepare_execution_anchor,promote_private_stage
+        from delivery_api.pg_revision_install import prepare_anchor,promote_stage
         def test_authority():test_acceptance(installation_review['review'],installation_review['review_sha256'],intent_kw['acceptance_reference'])
-        anchor_receipt=prepare_execution_anchor(stage_root=dest,plan=install['plan'],plan_sha256=install['plan_sha256'],validate_authority=test_authority)
+        with store._task_operation_guard('task.rerun'):
+            anchor_receipt=prepare_anchor(store,tid,intent_kw['installation_id'],test_authority)
         ev={'manifest_sha256':md,'anchor_sha256':anchor_receipt['anchor_sha256']}
         pending=store.append_private_installation_event(tid,installation_id=intent_kw['installation_id'],expected_previous_sha256=auth['event_sha256'],
             state='promotion_pending',evidence=ev,read_current_evidence=lambda:ev)
@@ -1291,8 +1720,12 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
 
         assert staged['event']['state']=='staged' and store.task(tid)==before
         assert store.session_binding(args['lineage']['execution_session_id']) is None
-        # Equal JSON with different raw bytes cannot pass retained review.
-        (root/'spec'/'needs.json').write_text(json.dumps(documents['spec/needs.json'],indent=2))
+        # Equal JSON with different raw bytes in PG cannot pass retained review.
+        original_manifest=store.manifest_snapshot(tid)
+        original_artifacts=[{'phase_key':row['phase_key'],'name':row['name'],'data':store.read_artifact_bytes_sha(row['sha256'])} for row in original_manifest['rows']]
+        changed_artifacts=[dict(item) for item in original_artifacts]
+        next(item for item in changed_artifacts if item['name']=='needs.json')['data']=json.dumps(documents['spec/needs.json'],indent=2).encode()
+        store.publish_task_revision_bytes(tid,changed_artifacts,writer_instance='constructed-test-tamper')
         with pytest.raises(ValueError,match='source differs'):
             store.retain_revision_installation_review(tid,lineage_id=lid,expected_staged_event_sha256=staged['event_sha256'],artifacts_base=tmp_path)
         with pytest.raises(ValueError,match='differs from retained review snapshot'):
@@ -1300,10 +1733,11 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                 manifest_sha256=md,artifacts_base=tmp_path)
         with store._postgres.transaction() as conn:
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==2
-        # Restore exact original bytes, then hermetically exercise private effects.
-        (root/'spec'/'needs.json').write_bytes((dest/'spec'/'needs.json').read_bytes())
-        promote_private_stage(artifacts_base=tmp_path,lineage=args['lineage'],plan=install['plan'],plan_sha256=install['plan_sha256'],validate_authority=test_authority)
-        with cli_execution(StopFence(root/'interview'/'stop-request.json'),None):
+        # Restore the exact byte revision, then explicitly promote its receipt.
+        store.publish_task_revision_bytes(tid,original_artifacts,writer_instance='constructed-test-restore')
+        promote_stage(store,tid,intent_kw['installation_id'],test_authority)
+        before=store.task(tid)  # Explicit test tamper/restore created retained artifact revisions.
+        with cli_execution(PostgresExecutionFence(store,cap,root=root),None):
             current=lambda:store.read_promoted_installation_evidence(tid,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path)
             assert current()==ev
             promoted=store.append_private_installation_event(tid,installation_id=intent_kw['installation_id'],expected_previous_sha256=pending['event_sha256'],
@@ -1325,10 +1759,11 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
         later=WorkerCapability.capture(store,tid);later.validate(store)
         assert later.execution_anchor.semantic_session_id==cap.session_id and later.execution_anchor.generation==2
         with pytest.raises(TenantAccessDenied):cap.validate(store)
-        from vmodel_contracts.execution_anchor import read_execution_anchor
+        from delivery_api.pg_revision_install import read_evidence
+        with store._task_operation_guard('task.rerun'):
+            assert read_evidence(store,tid,intent_kw['installation_id'])['anchor_sha256']==later.anchor_sha256
         from delivery_api.tenancy import session_root
-        owned=session_root(tmp_path,A,later.session_id)
-        assert read_execution_anchor(owned,expected=later.execution_anchor)['document_sha256']==later.anchor_sha256
+        assert not session_root(tmp_path,A,later.session_id).exists()
 
 def test_request_tx_row_lock_never_deadlocks_concurrent_store_call(store):
     """Regression for the cross-host resume hang: a request-scoped transaction
