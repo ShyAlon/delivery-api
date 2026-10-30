@@ -143,7 +143,7 @@ for i,state in enumerate(('ready','running','completed'),1):
     finally:a.close();b.close()
 
 
-def test_terminal_child_failure_has_safe_parent_evidence(tmp_path,pg_log_evidence):
+def test_terminal_child_failure_has_safe_parent_evidence(tmp_path,file_log_evidence):
  import logging
  from delivery_api import diagnostic_evidence as d
  path=tmp_path/'evidence';h=d.EvidenceHandler(path);log=logging.getLogger('delivery_api.diagnostic');log.addHandler(h)
@@ -151,5 +151,5 @@ def test_terminal_child_failure_has_safe_parent_evidence(tmp_path,pg_log_evidenc
  try:
   with pytest.raises(ChildRunError):run(s.run(op,authorize=lambda op:None,timeout_seconds=.3))
  finally:log.removeHandler(h);h.close()
- text=pg_log_evidence(task_id=op.binding.task_id)['text']
+ text=file_log_evidence(task_id=op.binding.task_id)['text']
  assert 'child.lifecycle.failed' in text and op.binding.job_id in text

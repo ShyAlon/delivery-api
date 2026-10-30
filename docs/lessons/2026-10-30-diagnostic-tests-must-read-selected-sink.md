@@ -1,0 +1,7 @@
+# Test the selected diagnostic sink, keep historical adapters explicit
+
+The bounded-file operational-log cutover (ffb3c81) migrated most diagnostic contracts but left background task/thread, handled runtime/vendor failure, context scope and child-terminal evidence tests reading the unselected PG log store. The broad suite exposed six failures in isolation (six failed,20passed). Operational output was still emitted; the stale reader missed it.
+
+Changes: those four test files now use the existing isolated file_log_evidence fixture, retaining original severity, task/session/job identity, exception class, cancellation behavior and private-payload exclusion assertions. No test is deleted. The PG stage-retention test remains a direct historical adapter contract, not a claim that runtime writes PG; it calls repo.append explicitly with identical retention/redaction checks. A new runtime-stage-file contract retains at most two bounded files, checks last-message retention and secret scrubbing. Runtime sink selection is unchanged. The diagnostic module summary now calls the evidence ephemeral rather than implying durable restart storage.
+
+Validation:147diagnostic/logging/supervisor tests pass together. File and PG adapter coverage are separate. Do not switch runtime back to DB logging to make a stale test pass: that would reintroduce request/pool work. A full suite was not claimed green; collection requires repository root on PYTHONPATH for existing tests.* imports. Hosted CI/installed runtime remain unverified.

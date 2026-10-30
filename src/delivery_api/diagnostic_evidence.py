@@ -1,4 +1,4 @@
-"""Operator-only restart-readable diagnostics, no database or raw payloads.
+"""Operator-only bounded ephemeral diagnostics, no database or raw payloads.
 
 8 MiB for this stream within32 MiB managed global logs. Per-run provider
 audit artifacts are separate and are never customer diagnostic exports.
