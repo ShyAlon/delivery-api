@@ -113,7 +113,8 @@ def terminal_line(prompt,hidden=False):
             os.close(fd)
 
 def hidden_prompt(name):
-    return terminal_line(name+' (hidden, missing from settings): ',hidden=True)
+    try:return terminal_line(name+' (hidden, missing from settings): ',hidden=True)
+    except SettingsError as exc:raise SettingsError('missing '+name+'; '+str(exc)) from None
 
 def require(values,names,prompt=None):
     prompt=prompt or hidden_prompt
