@@ -1,3 +1,4 @@
+import pytest
 from test_debug_progress_browser import ui, page, _open_debug
 
 
@@ -22,11 +23,13 @@ def test_cloud_execution_excluded_but_owner_classifications_are_available(page,u
     page.screenshot(path=str(tmp_path/'cloud-excluded-sections.png'),full_page=True)
 
 
-def test_permitted_diagnostics_failure_is_unavailable_not_empty_or_raw(page,ui,tmp_path):
-    page.route('**/api/tasks/dbg/diagnostics',lambda r:r.fulfill(status=503,content_type='application/json',body='{"detail":"private-error"}'))
+@pytest.mark.parametrize('route,index',[('diagnostics',0),('classifications',3)])
+def test_permitted_diagnostics_failure_is_unavailable_not_empty_or_raw(page,ui,tmp_path,route,index):
+    page.route('**/api/tasks/dbg/'+route,lambda r:r.fulfill(status=503,content_type='application/json',body='{"detail":"private-error"}'))
     _open_debug(page,ui)
-    section=page.locator('#debugexecution details').nth(0)
+    section=page.locator('#debugexecution details').nth(index)
     section.wait_for()
+    section.evaluate('el=>el.open=true')
     assert 'unavailable' in section.inner_text()
     assert 'read_failed' in section.inner_text()
     assert 'private-error' not in page.locator('#debugexecution').inner_text()

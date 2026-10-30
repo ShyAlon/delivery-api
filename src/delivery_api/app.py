@@ -3275,29 +3275,63 @@ def task_classifications(task_id:str, a:auth.Actor=Depends(auth.require_actor)):
     session=store.engine_session(task_id)
     out={"session":session,"answers":{}}
     if not session: return out
-    from vmodel_contracts.runtime import artifacts_root
-    root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"categorization-shadow.jsonl"
-    if not root.is_file():
-        out["reason"]="no shadow file";return out
+    if hasattr(store,'_postgres'):
+        from .generator_documents import GeneratorDocuments
+        try:raw=GeneratorDocuments.owner_reader(store,task_id).read('interview/categorization-shadow.jsonl')
+        except TenantAccessDenied:raise
+        except Exception:
+            raise HTTPException(503,'Classification evidence is unavailable') from None
+        if raw is None:
+            out['reason']='no shadow evidence';return out
+    else:
+        from vmodel_contracts.runtime import artifacts_root
+        root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"categorization-shadow.jsonl"
+        if not root.is_file():
+            out['reason']='no shadow evidence';return out
+        try:raw=root.read_bytes()
+        except OSError:
+            raise HTTPException(503,'Classification evidence is unavailable') from None
     turns=_qa_turns(store.events(task_id,limit=10000))
     try:
-        records=[json.loads(line) for line in root.read_text().splitlines() if line.strip()]
-    except Exception as e:
-        out["reason"]=f"shadow file unreadable: {e}";return out
+        if len(raw)>8*1024*1024:raise ValueError('bounded classification evidence required')
+        def invalid_number(value):raise ValueError('finite classification values required')
+        records=[json.loads(line,parse_constant=invalid_number) for line in raw.decode('utf-8').splitlines() if line.strip()]
+        if len(records)>10000 or any(not isinstance(row,dict) for row in records):raise ValueError('bounded classification records required')
+        for record in records:
+            if not isinstance(record.get('slot'),str):raise ValueError('classification slot required')
+            if not isinstance(record.get('input',{}),dict):raise ValueError('classification input required')
+            if not isinstance(record.get('input',{}).get('state',''),str):raise ValueError('classification state required')
+            if record.get('timestamp') is not None and not isinstance(record['timestamp'],str):raise ValueError('classification time required')
+            for side in ('baseline','jev'):
+                value=record.get(side,{})
+                if not isinstance(value,dict) or not isinstance(value.get('verdict',{}),dict):raise ValueError('classification verdict required')
+                if value.get('status') is not None and not isinstance(value['status'],str):raise ValueError('classification status required')
+    except (ValueError,UnicodeError,RecursionError):
+        raise HTTPException(503,'Classification evidence is unreadable') from None
+    scan_bytes=projected_bytes=0
+    entry_sizes={}
     for rec in records:
         slot=rec.get("slot")
         if slot not in ("intent","coverage"): continue
         state=str((rec.get("input") or {}).get("state") or "")
         if not state: continue
+        scan_bytes+=len(state)*len(turns)
+        if scan_bytes>64*1024*1024:raise HTTPException(503,'Classification evidence exceeds read limits')
         for t in turns:
             if t["q"] in state and t["a"] in state:
                 aref=_content_ref(t["q"]+"\n"+t["a"])
                 entry=out["answers"].setdefault(aref,{})
                 base,jev=rec.get("baseline") or {},rec.get("jev") or {}
                 differed=(base.get("status")=="ok" and jev.get("status")=="ok" and base.get("verdict")!=jev.get("verdict"))
-                entry[slot]={"jev":jev.get("verdict") or {},"baseline":base.get("verdict") or {},
+                projection={"jev":jev.get("verdict") or {},"baseline":base.get("verdict") or {},
                              "jev_status":jev.get("status"),"differed":differed,
                              "ts":rec.get("timestamp")}
+                key=(aref,slot)
+                size=len(json.dumps(projection,ensure_ascii=True).encode())+len(aref)+len(slot)+16
+                projected_bytes+=size-entry_sizes.get(key,0)
+                if projected_bytes>8*1024*1024:raise HTTPException(503,'Classification evidence exceeds read limits')
+                entry_sizes[key]=size
+                entry[slot]=projection
     return out
 
 class QuotaUpdate(BaseModel): token_quota: int = Field(ge=0)
