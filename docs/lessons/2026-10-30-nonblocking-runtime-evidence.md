@@ -45,3 +45,8 @@ retention, scrub, recursion, no-file-fallback and diagnostic projection assertio
 Disposable PG and Chromium only. Owner Mac/Supabase latency and hosted CI remain
 unverified; after owner rebuild, compare client-log latency, event-loop lag,
 writer pending age and pool timeout evidence before declaring the incident closed.
+
+Validation:207 tests passed together. Initial expanded run had3 metrics reds
+because in-process supervisor tests left the supervisor cap active in the test
+interpreter; explicit process-isolation teardown fixed the test leak. No metrics
+assertions or lock-timeout expectations were changed. Hosted CI unverified.
