@@ -1,4 +1,4 @@
-"""Helpers shared by ops-backup.py and ops-postgres-backup.py.
+"""Private-directory and checksum helpers for PostgreSQL backups.
 
 Regular-file checks, new private directories that never overwrite or traverse
 symlinks, create-only manifest writes and streamed SHA-256 digests.

@@ -513,7 +513,7 @@ def _session_bundle(session_id):
 app.mount("/assets", StaticFiles(directory=WEB_DIR), name="assets")
 
 # Only these four POSTs talk to Supabase Auth; they write nothing to the app database.
-# Allowed only with a cloud (PostgreSQL) profile; the local SQLite auth path stays fenced.
+# Allowed only with a cloud (PostgreSQL) profile; non-PG auth remains unsupported.
 CONTROL_PLANE_AUTH_ROUTES=frozenset({"/auth/signup","/auth/signin","/auth/refresh","/auth/logout"})
 
 SLOW_REQUEST_MS=1000  # a request slower than this keeps its line on the console (with its DB cost)
@@ -1657,29 +1657,8 @@ def _checkpoint_interview_turns(task_id:str,status=None)->list[tuple[str,str]]:
     """Recover historical turns when old API events stored only answer lengths."""
     def mark(availability,reason):
         if status is not None:status['checkpoint_transcript']={'availability':availability,'reason':reason}
-    mark('available','saved_checkpoint')
-    if config.CLOUD_TENANTS or hasattr(store,'_postgres'):
-        mark('policy_excluded','legacy_checkpoint_excluded');return []  # Never deserialize legacy local checkpoint blobs from a customer read.
-    session=_recorded_engine_session(task_id)
-    if not session:mark('absent','no_recorded_session');return []
-    from vmodel_contracts.runtime import artifacts_root
-    db=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"checkpoints.sqlite"
-    if not db.is_file():mark('absent','no_saved_checkpoint');return []
-    built=os.environ.get("REQUI_RE_DIST")=="1"
-    engine_dir=(Path.cwd() if built else Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve())
-    python=Path(os.environ.get("INTERVIEW_ENGINE_PYTHON",sys.executable if built else str(engine_dir/".venv/bin/python")))
-    if not python.is_file():mark('unavailable','recovery_runtime_missing');return []
-    script="import json,sqlite3,sys\nfrom langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\nfrom interview_engine.contracts import AppArchetype\nrow=sqlite3.connect(sys.argv[1]).execute('select type,checkpoint from checkpoints order by checkpoint_id desc limit 1').fetchone()\nif not row: print('[]');raise SystemExit\nobj=JsonPlusSerializer(allowed_msgpack_modules=[AppArchetype]).loads_typed((row[0],row[1]))\nmessages=(obj.get('channel_values') or {}).get('messages') or []\nout=[]\nfor m in messages:\n role=getattr(m,'type',None) or (m.get('type') if isinstance(m,dict) else None)\n content=getattr(m,'content',None) or (m.get('content') if isinstance(m,dict) else None)\n if role in ('ai','human') and isinstance(content,str):out.append([role,content])\nprint(json.dumps(out))"
-    try:
-        env={**os.environ,**({} if built else {"PYTHONPATH":str(engine_dir/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})}
-        result=subprocess.run([str(python),"-c",script,str(db)],capture_output=True,text=True,timeout=8,env=env)
-        if result.returncode:mark('unavailable','recovery_failed');return []
-        messages=json.loads(result.stdout);turns=[];question=None
-        for role,content in messages:
-            if role=="ai":question=content.replace("[INTERVIEW COMPLETE]","").strip()
-            elif role=="human" and question:turns.append((question,content.strip()));question=None
-        return turns
-    except Exception:mark('unavailable','recovery_failed');return []
+    mark('policy_excluded','legacy_checkpoint_excluded')
+    return []  # Retired file transcript recovery never deserializes old blobs.
 
 def _interview_model_provenance(task_id:str,status=None)->list[str]:
     """Usage is per-call truth; never collapse a switched stage to its first model."""
@@ -2373,11 +2352,10 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
         except ValueError:reject("The selected downstream model is unsupported.","Choose a supported provider and model before retrying.")
     if body.confirm and (not body.model_route or not body.model):
         reject("The retry model was not explicitly confirmed.","Choose a provider and model in the retry dialog.")
-    spec=None if hasattr(store,'_postgres') else interview.parent/"spec"
     # A first Needs attempt can die on import before LangGraph writes a
     # checkpoint. --from needs rejects that state. An existing checkpoint
     # should be resumed by a normal launch, preserving completed work.
-    checkpoint=_pg_generator_checkpoint_exists(task_id) if hasattr(store,'_postgres') else (spec/"checkpoints.sqlite").is_file() and (spec/"checkpoints.sqlite").stat().st_size>0
+    checkpoint=_pg_generator_checkpoint_exists(task_id)
     latest_failure=next((event for event in reversed(store.events(task_id)) if event["phase_key"]=="needs" and event["kind"]=="error"),None)
     if not body.confirm:
         return {"status":"preview","phase":"needs","session_id":session,"retains":["intent","conops"],"model_route":effective,"default_model":default,"default_source":default_source,"checkpoint":checkpoint,"mode":"resume" if checkpoint else "start",
@@ -2459,8 +2437,7 @@ async def retry_failed_phase(task_id:str,body:FailedPhaseRetryRequest,a:auth.Act
         except ValueError:reject("The selected downstream model is unsupported.","Choose a supported provider and model before retrying.")
     if body.confirm and (not body.model_route or not body.model):
         reject("The retry model was not explicitly confirmed.","Choose a provider and model in the retry dialog.")
-    spec=None if hasattr(store,'_postgres') else interview.parent/"spec"
-    checkpoint=_pg_generator_checkpoint_exists(task_id) if hasattr(store,'_postgres') else (spec/"checkpoints.sqlite").is_file() and (spec/"checkpoints.sqlite").stat().st_size>0
+    checkpoint=_pg_generator_checkpoint_exists(task_id)
     latest_failure=next((event for event in reversed(store.events(task_id)) if event["phase_key"]==body.phase and event["kind"]=="error"),None)
     if not body.confirm:
         return {"status":"preview","phase":body.phase,"label":label,"session_id":session,"retains":list(PHASE_KEYS[:index]),"model_route":effective,"default_model":default,"default_source":default_source,"checkpoint":checkpoint,"mode":"resume" if checkpoint else "start",

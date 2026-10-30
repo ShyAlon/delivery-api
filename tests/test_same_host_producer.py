@@ -361,25 +361,27 @@ def test_durable_srs_rework_job_retains_proposal_only_for_same_gate(worker,monke
     from spec_generator.srs_rework import prepare_rework
     from vmodel_contracts.semantic_review import make_review
     from vmodel_contracts import SRSDocument,CONTRACT_VERSION
-    from langgraph.checkpoint.sqlite import SqliteSaver
+    from delivery_api.generator_checkpoint import GeneratorCheckpoint
+    from spec_generator.worker_runtime import JobRuntime
+    from spec_generator.model_config import StageModel
     from langgraph.checkpoint.base import empty_checkpoint
-    from spec_generator.graph import checkpoint_serde
-    import sqlite3
     w,s,tid,old_job,base=worker;calls=[]
+    w.runtime_factory=lambda cap,root:JobRuntime({'srs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
     with tenant_context(A):
-        s.claim_worker(old_job);s.finish_worker(old_job)
+        seed_cap=s.claim_worker(old_job)
         s.wait_at_gate(tid,'srs')
         sid=s.engine_session(tid);root=session_root(base,A,sid);(root/'spec').mkdir(parents=True)
         intent={'contract_version':CONTRACT_VERSION,'session_id':sid,'problem_statement':'Record task evidence','constraints':[],'assumptions':[],'glossary':{},'target_users':['People'],'core_value_proposition':'Task evidence','stakeholder_needs':[{'need_id':'SN-1','statement':'People need recorded evidence','kind':'functional','source_turns':[0]}],'in_scope':['Record evidence'],'out_of_scope':[],'source_turns':{}}
         req={'requirement_id':'R-1','title':'Task evidence','statement':'The system shall use SQLite to record task evidence.','kind':'functional','priority':'must','need_ids':['N-1'],'intent_fields':['problem_statement'],'acceptance':[{'criterion_id':'AC-1','statement':'Task evidence is recorded.'}]}
         candidate=SRSDocument.model_validate({'session_id':sid,'intent_model_ref':sid,'purpose':'Test','scope_summary':'Evidence','functional':[req],'non_functional':[]}).model_dump(mode='json')
         review=make_review(sid,'srs',candidate,[{'finding_id':'f','item_id':'R-1','path':['functional',0],'rule':'solution_language','reason':'Implementation choice','original':candidate['functional'][0]}]).model_dump(mode='json')
-        path=root/'spec'/'checkpoints.sqlite'
-        with sqlite3.connect(path,check_same_thread=False) as conn:
-            cp=empty_checkpoint();cp['channel_values']={'intent_model':intent,'needs':{'needs':[]},'conops':None,'srs':candidate,'semantic_reviews':{'srs':review}}
-            cfg=SqliteSaver(conn,serde=checkpoint_serde()).put({'configurable':{'thread_id':sid,'checkpoint_ns':''}},cp,{'source':'input','step':0,'parents':{}},{})
-            conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-        before=path.read_bytes()
+        saver=GeneratorCheckpoint(s,seed_cap,old_job,'spec')
+        cp=empty_checkpoint();cp['channel_values']={'intent_model':intent,'needs':{'contract_version':CONTRACT_VERSION,'needs':[]},'conops':None,'srs':candidate,'semantic_reviews':{'srs':review}}
+        cp['channel_versions']={key:1 for key in cp['channel_values']}
+        cfg=saver.put({'configurable':{'thread_id':sid,'checkpoint_ns':''}},cp,{'source':'input','step':0,'parents':{}},cp['channel_versions'])
+        before=saver.get_tuple(cfg)
+        s.finish_worker(old_job)
+        reader=GeneratorCheckpoint(s,seed_cap,None,'spec',writable=False)
         job=queue_proposal(s,tid,source_checkpoint_id=cfg['configurable']['checkpoint_id'],source_review_revision=review['revision'],item_ids=['R-1'],guidance='Behavior only')
         assert s.worker_job(job)['execution_options']['item_ids']==['R-1']
     with tenant_context(B):
@@ -401,7 +403,8 @@ def test_durable_srs_rework_job_retains_proposal_only_for_same_gate(worker,monke
             assert result['proposals'][0]['result']['review']['decisions']==[]
             assert s.worker_job(job)['state']=='done'
             assert not asyncio.run(w.execute(job,lambda *args:None))
-        assert path.read_bytes()==before and not (root/'spec'/'srs.json').exists()
+        assert reader.get_tuple(cfg)==before and not (root/'spec'/'srs.json').exists()
+        assert not list(root.rglob('*.sqlite'))
         s.finish_worker(job)
         s.request_task_stop(tid);s.confirm_task_stopped(tid,engine_quiescent=True)
         # Disposable fixture cleanup of a failed proposal row, not live recovery.
@@ -723,13 +726,14 @@ def test_pg_fresh_graph_refuses_existing_checkpoint_without_directory_dependency
     with tenant_context(A):assert asyncio.run(w.execute(job,producer))
 
 
-def test_pg_process_runner_opens_gate_from_durable_output_not_missing_file(worker,tmp_path):
+def test_pg_process_runner_opens_gate_from_durable_output_not_missing_file(worker,tmp_path,monkeypatch):
     from delivery_api.runner import ProcessRunner
     from delivery_api.inprocess_engine import VirtualProcess
     from spec_generator.worker_runtime import JobRuntime
     from spec_generator.model_config import StageModel
     from spec_generator.cli import _atomic_write
     w,s,tid,job,base=worker
+    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(base))
     w.runtime_factory=lambda cap,root:JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
     def producer(cap,root):_atomic_write(root/'spec/needs.json','{"needs":[]}')
     with tenant_context(A):
@@ -737,7 +741,7 @@ def test_pg_process_runner_opens_gate_from_durable_output_not_missing_file(worke
         root=session_root(base,A,s.engine_session(tid))
         async def finish():
             proc=VirtualProcess(asyncio.get_running_loop());proc.feed(b'Stopped after stage needs\n');proc.finish(0)
-            return await ProcessRunner(s)._run(tid,['fake','--out',str(root/'spec')],cwd=tmp_path,phase='needs',infer_phase=False,virtual=proc)
+            return await ProcessRunner(s)._run(tid,['fake','--out',str(root/'spec')],cwd=tmp_path,phase='needs',infer_phase=False,virtual=proc,env={'VMODEL_ARTIFACTS_DIR':str(root.parent)})
         assert asyncio.run(finish())==0
         task=s.task(tid)
         assert next(p for p in task['phases'] if p['phase_key']=='needs')['state']=='awaiting_approval'

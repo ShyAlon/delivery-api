@@ -1,0 +1,10 @@
+# Test-only derivative. Never published as a service image or used for real DBs.
+ARG SERVICE_IMAGE=requi-control-plane-check
+FROM ${SERVICE_IMAGE}
+USER root
+RUN pip install --no-cache-dir pgserver 'psycopg[binary]>=3.2,<4'
+COPY tests/pg_harness.py tests/pg_guardian.py /smoke/tests/
+COPY supabase/migrations/ /smoke/supabase/migrations/
+COPY scripts/docker/owned-pg-smoke.py /smoke/owned-pg-smoke.py
+USER 10001:10001
+CMD ["python", "/smoke/owned-pg-smoke.py", "/smoke", "python", "-m", "delivery_api.control_plane"]

@@ -1,5 +1,5 @@
 """Installed full-image proof. No provider key, no external network, no accounts.
-Run inside the built image:  docker run --rm --network none --read-only --tmpfs /tmp python /app/full-smoke.py"""
+Run the test-only PG derivative under owned-pg-smoke.py; see scripts/docker/README.md."""
 import json,os,socket,subprocess,sys,tempfile,time,urllib.error,urllib.request
 
 
@@ -17,10 +17,12 @@ def main():
     port=free_port()
     env={k:v for k,v in os.environ.items() if k in ('PATH','LANG')}
     env.update(HOME=scratch,XDG_DATA_HOME=scratch,VMODEL_ARTIFACTS_DIR=scratch+'/artifacts',PYTHONNOUSERSITE='1',
-        DELIVERY_DATABASE_URL='sqlite:///'+scratch+'/smoke.db',DELIVERY_HOST='127.0.0.1',DELIVERY_PORT=str(port),
-        DELIVERY_CONTROL_PLANE_ONLY='0',INTERVIEW_ENGINE_TOKEN='smoke-'+os.urandom(16).hex(),INTERVIEW_ENGINE_TENANTS='0',
+        DELIVERY_DATABASE_URL=os.environ.get('DELIVERY_TEST_POSTGRES_URL',''),DELIVERY_HOST='127.0.0.1',DELIVERY_PORT=str(port),
+        DELIVERY_CONTROL_PLANE_ONLY='0',INTERVIEW_ENGINE_TOKEN='smoke-'+os.urandom(16).hex(),INTERVIEW_ENGINE_TENANTS='1',
         DELIVERY_COOKIE_SECURE='0',DELIVERY_ADMIN_TOKEN='smoke-admin-'+os.urandom(8).hex(),
-        INTERVIEW_ENGINE_SESSIONS_FILE='1')
+        INTERVIEW_ENGINE_SESSIONS_FILE='0',DELIVERY_SUPABASE_URL='https://isolated-smoke.supabase.co',DELIVERY_SUPABASE_ANON_KEY='hermetic-public-key')
+    if not env['DELIVERY_DATABASE_URL'].startswith(('postgresql://','postgres://')):
+        raise ValueError('explicit disposable DELIVERY_TEST_POSTGRES_URL required for full-image smoke; no default or live database')
     here=os.path.dirname(os.path.abspath(__file__))
     log=open(scratch+'/entry.log','w+')
     proc=None

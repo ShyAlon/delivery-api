@@ -207,9 +207,9 @@ def _pg_connect(connect, dsn):
 def _check_database(env, connect, connection_holder):
     dsn = env.get('DELIVERY_DATABASE_URL', '')
     if not dsn.startswith(('postgresql://', 'postgres://')):
-        return Check('database-role-claims', 'refuse', 'skip', 'a PostgreSQL DELIVERY_DATABASE_URL with a working role + claims round trip',
+        return Check('database-role-claims', 'refuse', 'fail', 'a PostgreSQL DELIVERY_DATABASE_URL with a working role + claims round trip',
                      'connect, SET ROLE requi_backend, set tenant claims, and probe a tenant table without error',
-                     'skipped: the DSN is not PostgreSQL (sqlite development or smoke run)', 'DELIVERY_DATABASE_URL')
+                     'required PostgreSQL DSN missing or unsupported', 'DELIVERY_DATABASE_URL')
     try:
         connection = _pg_connect(connect, dsn)
         connection_holder.append(connection)

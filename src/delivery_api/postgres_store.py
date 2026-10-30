@@ -1,6 +1,6 @@
 """Postgres control plane sharing the existing relational state machine.
 
-The SQL bridge handles the small SQLite dialect surface in shared operations.
+Shared operations use the PostgreSQL transaction and tenant-claims bridge.
 Every public operation gets one scoped Postgres transaction. Nested operations
 reuse that transaction, and commit/rollback is owned only by its outer boundary.
 Local authentication/token tables have no place in this adapter.
@@ -655,7 +655,7 @@ class PostgresStore:
         out['email']=None;out['is_admin']=0
         return out
 
-    # Same one-statement projection as the sqlite store, in Postgres dialect:
+    # One-statement PostgreSQL projection:
     # jsonb aggregation cast to text so _task_record parses both identically.
     _TASK_PROJECTION = """
 SELECT t.*,

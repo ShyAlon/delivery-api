@@ -3,18 +3,17 @@ import json, os, subprocess, sys, time
 from pathlib import Path
 root=str(Path(__file__).resolve().parents[2])
 scopes={
- 'sqlite_reference':['tests/test_tasks.py::test_task_management_api_structured_collisions_and_delete','tests/test_ui_playwright.py::test_task_filter_sort_rename_and_delete'],
+ 'pg_shared_contract':['tests/test_tasks.py::test_task_management_api_structured_collisions_and_delete','tests/test_ui_playwright.py::test_task_filter_sort_rename_and_delete'],
  'postgres_slice':['tests/test_postgres_workspace.py::test_task_api_lifecycle_and_owner_isolation','tests/test_postgres_workspace.py::test_pg_dashboard_real_browser'],
 }
 if '--task-browser' in sys.argv:
  scopes={
-  'sqlite_browser_reference':['tests/test_ui_playwright.py::test_task_filter_sort_rename_and_delete','tests/test_ui_playwright.py::test_create_task_dialog_keyboard_submit_textarea_and_cancel'],
+  'pg_shared_browser':['tests/test_ui_playwright.py::test_task_filter_sort_rename_and_delete','tests/test_ui_playwright.py::test_create_task_dialog_keyboard_submit_textarea_and_cancel'],
   'postgres_browser_parity':['tests/test_postgres_task_browser.py'],
  }
 if '--evidence' in sys.argv:
  scopes={
-  'sqlite_evidence_reference':['tests/test_store_evidence_parity.py','-k','sqlite'],
-  'postgres_evidence_parity':['tests/test_store_evidence_parity.py','-k','postgres'],
+  'postgres_evidence_parity':['tests/test_store_evidence_parity.py'],
  }
 results=[]
 for name, tests in scopes.items():

@@ -84,3 +84,21 @@ def _default_app_uses_hermetic_jwks(monkeypatch):
     for middleware in module.app.user_middleware:
         if middleware.cls is TenantMiddleware:
             monkeypatch.setattr(middleware.kwargs['verifier'],'keys',Keys())
+
+
+@pytest.fixture
+def pg_log_evidence(monkeypatch):
+    """Read this test's real source-scoped PG diagnostic records after restart."""
+    import uuid
+    from delivery_api.postgres_logs import PostgresLogs
+    from delivery_api import config
+    source=uuid.uuid4().hex
+    repo=PostgresLogs(config.DATABASE_URL,source_id=source)
+    monkeypatch.setenv('DELIVERY_LOG_SOURCE',source)
+    def read(*,task_id=None,max_lines=500):
+        reopened=PostgresLogs(config.DATABASE_URL,source_id=source)
+        with reopened.transaction() as conn:
+            rows=conn.execute("SELECT text FROM operator_log_records WHERE stream='diagnostics' AND (%s::text IS NULL OR task_id=%s) ORDER BY id",(task_id,task_id)).fetchall()
+        return {'text':'\n'.join(row['text'] for row in rows[-max_lines:]),'count':len(rows[-max_lines:]),'available':bool(rows),'truncated':len(rows)>max_lines,'scope':'operator diagnostic evidence'}
+    read.repository=repo
+    return read

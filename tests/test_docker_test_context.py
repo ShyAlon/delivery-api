@@ -35,7 +35,7 @@ def test_image_checks_exact_wheel_hashes_and_does_not_infer_cloud_gate_from_fake
     docker=(ROOT/'scripts/docker/Dockerfile.test').read_text()
     assert 'sha256sum --check /app/wheel-sha256.txt' in docker
     assert 'DELIVERY_CLOUD_TENANTS' not in docker
-    assert 'DELIVERY_DATABASE_URL=sqlite:////tmp/test-delivery.db' in docker
+    assert 'DELIVERY_DATABASE_URL=' not in docker
     prepare=(ROOT/'scripts/docker/prepare-context.py').read_text()
     assert "'ls-files','--others','--exclude-standard','src','pyproject.toml'" in prepare
     assert "'run-test-image.sh'" in prepare and "'README.md'" in prepare
@@ -84,7 +84,7 @@ def test_clean_install_does_not_inherit_credentials_dev_sources_or_site_packages
     env=module.clean_environment(tmp_path)
     assert not any(value=='must-not-inherit' for value in env.values())
     assert env['PYTHONNOUSERSITE']=='1'
-    assert env['DELIVERY_DATABASE_URL']=='sqlite:///'+str(tmp_path/'fake-ui.db')
+    assert env['DELIVERY_DATABASE_URL']=='postgresql://fixture.invalid/isolated-test'
     source=(ROOT/'scripts/docker/verify-clean-install.py').read_text()
     assert 'system_site_packages=False' in source and 'dev]' not in source
 

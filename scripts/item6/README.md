@@ -3,8 +3,8 @@
 This is a test-only path. It does not mount payment or private Gate/Edit routes,
 change the production image, lift the launch fence, or authorize real payments.
 The production `cloud_execution_admitted()` fence stays false. Use Docker Desktop
-on the Mac because the existing pinned SQLite revision readers require Linux
-`/proc/self/fd`. Do not run this entry point with native macOS Python.
+on the Mac for the isolated PostgreSQL test harness and its fixed container contract.
+The retired pinned file reader no longer requires `/proc/self/fd`.
 
 ## What has been proved
 

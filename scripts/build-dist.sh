@@ -36,36 +36,19 @@ if [ "$CLEAN" != 1 ] && [ -x "$OUTPUT/runtime/bin/python" ]; then cp -a "$OUTPUT
 STATE="$STAGE/.build-state"; OLD_STATE="$OUTPUT/.build-state"
 state_get(){ [ -f "$OLD_STATE" ] && awk -F= -v key="$1" '$1==key{print substr($0,index($0,"=")+1);exit}' "$OLD_STATE" || true; }
 repo_fingerprint(){ local repo=$1 status diffhash; status=$(git -C "$REPOS_ROOT/$repo" status --porcelain); diffhash=clean; [ -n "$status" ] && diffhash=$(git -C "$REPOS_ROOT/$repo" diff --binary HEAD | shasum -a 256 | awk '{print $1}'); printf '%s:%s' "$(git -C "$REPOS_ROOT/$repo" rev-parse HEAD)" "$diffhash"; }
-DEPS='fastapi uvicorn pydantic httpx python-multipart langgraph langgraph-checkpoint-sqlite langchain-core langchain-openai langchain-ollama python-dotenv typesafe-sdk==0.7.0 pyarrow>=17,<24 libsql>=0.1.11,<0.2'
+DEPS='fastapi uvicorn pydantic httpx python-multipart langgraph langchain-core langchain-openai langchain-ollama python-dotenv typesafe-sdk==0.7.0 pyarrow>=17,<24'
 PG_DEPS='psycopg[binary]>=3.2,<4 psycopg-pool>=3.2,<4 PyJWT[crypto]>=2.10,<3'
 DEPS="$DEPS $PG_DEPS"
-WITH_TURSO=1
 DEP_INPUT="$DEPS|$($BOOTSTRAP_PYTHON --version 2>&1)"
 for repo in $PACKAGES; do DEP_INPUT="$DEP_INPUT|$(shasum -a 256 "$REPOS_ROOT/$repo/pyproject.toml" | awk '{print $1}')"; done
 DEP_HASH=$(printf '%s' "$DEP_INPUT" | shasum -a 256 | awk '{print $1}')
 PYTHON="$STAGE/runtime/bin/python"
 BUILD_LOG="$PARENT/requi-re-build.log"
 install_dependencies(){
-  local wheel_dir="$STAGE/.wheel-probe"; rm -rf "$wheel_dir"; mkdir -p "$wheel_dir"
-  if [ "$WITH_TURSO" = 1 ] && ! "$PYTHON" -m pip download --only-binary=:all: --no-deps libsql -d "$wheel_dir" >/dev/null 2>&1; then
-    missing=""; command -v cmake >/dev/null 2>&1 || missing="cmake"; command -v cargo >/dev/null 2>&1 || missing="${missing:+$missing and }rust"
-    if [ -n "$missing" ]; then
-      echo "Error: libSQL needs a source build on this Python/platform, but $missing is missing."
-      echo "Likely cause: PyPI has no prebuilt libsql wheel for $($PYTHON -c 'import sys,platform; print(f"Python {sys.version_info.major}.{sys.version_info.minor} {platform.system()} {platform.machine()}")')."
-      echo "Next: run: brew install cmake rust, then rerun scripts/build-dist.sh."
-      return 1
-    fi
-    echo "boundary=dependency package=libsql decision=source-build reason=no-compatible-wheel"
-  elif [ "$WITH_TURSO" = 1 ]; then
-    echo "boundary=dependency package=libsql decision=wheel reason=compatible-wheel-found"
-  else
-    echo "boundary=dependency package=libsql decision=skip reason=optional-turso-disabled"
-  fi
   if ! "$PYTHON" -m pip install $DEPS >"$BUILD_LOG" 2>&1; then
     echo "Error: Requi.re dependencies could not be installed."
-    if grep -qi 'cmake.*not installed\|No such file.*cmake' "$BUILD_LOG"; then echo "Likely cause: libSQL needs cmake for a source build on this Python/platform."; echo "Next: run: brew install cmake, then retry. Raw build output: $BUILD_LOG"
-    elif grep -qi 'cargo.*not found\|rust.*not found' "$BUILD_LOG"; then echo "Likely cause: libSQL needs the Rust toolchain for a source build on this Python/platform."; echo "Next: run: brew install rust, then retry. Raw build output: $BUILD_LOG"
-    else echo "Likely cause: pip or a native dependency build failed."; echo "Next: inspect $BUILD_LOG, fix the named dependency, then retry."; fi
+    echo "Likely cause: pip or a required dependency build failed."
+    echo "Next: inspect $BUILD_LOG, fix the named dependency, then retry. Raw build output: $BUILD_LOG"
     return 1
   fi
 }

@@ -11,7 +11,6 @@ RUN pip wheel --no-cache-dir --no-deps --wheel-dir /wheels .
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 \
     DELIVERY_CONTROL_PLANE_ONLY=1 DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 \
-    DELIVERY_DATABASE_URL=sqlite:////tmp/control-plane/delivery.db \
     XDG_DATA_HOME=/tmp/control-plane HOME=/tmp/control-plane
 WORKDIR /app
 COPY --from=build /wheels/ /wheels/

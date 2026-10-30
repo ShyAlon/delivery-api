@@ -248,13 +248,13 @@ def test_a_stale_build_warns_and_a_missing_expectation_skips():
     assert {c.name: c for c in report.checks}['build-staleness'].status == 'skip'
 
 
-def test_non_postgres_dsn_skips_the_database_checks():
+def test_non_postgres_dsn_refuses_startup_before_database_checks():
     env = healthy_env(Path('/tmp/x-preflight-test')); env['DELIVERY_DATABASE_URL'] = 'sqlite:////tmp/smoke.db'
     report = preflight.run(env, connect=None, import_module=fake_import(engine_modules()))
     by_name = {c.name: c for c in report.checks}
-    assert by_name['database-role-claims'].status == 'skip' and by_name['required-tables'].status == 'skip'
+    assert by_name['database-role-claims'].status == 'fail' and by_name['required-tables'].status == 'skip'
     assert by_name['feature-tables'].status == 'skip'
-    assert not report.refused
+    assert report.refused
 
 
 def test_the_report_is_one_readable_checked_expected_found_where_document(tmp_path):

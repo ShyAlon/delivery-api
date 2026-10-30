@@ -23,7 +23,6 @@ def main():
     if not isinstance(config,dict) or set(config)!=required:raise ValueError('exact reviewed isolated run configuration required')
     isolation=RunIsolation(Path(config['root']),config['database_name'],config['database_host'],args.run_id,mode='mac_acceptance')
     isolation.validate()
-    if not Path('/proc/self/fd').is_dir():raise ValueError('Linux container required for pinned SQLite revision readers')
     for name in ('admin_service','tenant_service','payment_service'):
         path=Path(config['service_file'])
         if path.is_symlink() or path.stat().st_mode&0o077:raise ValueError('private service file required')
