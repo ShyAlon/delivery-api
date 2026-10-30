@@ -1,0 +1,3 @@
+# Keep usage readiness SQL inside its verified reader
+
+The broad audit caught test_http_layer_contains_no_database_calls failing after usage readiness diagnostics added SQL directly to app.py. Move that exact logic to OperatorReadStore.usage_setup_reason: verification still happens under debug.read before any setup detail is returned; the task_usage query keeps its independent usage.read role and owner/registry checks. Do not weaken the architecture assertion or broaden operator access. No SQL, response contract or grant is changed. Existing tasks, backoffice, cloud API and debug-package contracts cover the moved boundary; no test changed or retired. No live writes/deploy/spend.

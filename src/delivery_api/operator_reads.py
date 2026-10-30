@@ -284,6 +284,20 @@ class OperatorReadStore:
             if row is None:raise KeyError('account unavailable')
             return {'scope':'reviewed_cross_user_operator_read','account':{**row,'owner_id':str(row['owner_id'])},'credit_adjustment_available':False}
 
+    def usage_setup_reason(self,owner_store):
+        """Detailed readiness is private to a verified debug operator. No HTTP SQL."""
+        reason=None
+        if 'debug.read' in self.principal.capabilities:
+            with self._read(owner_store,'debug.read') as (connection,authority):
+                if 'usage.read' not in self.principal.capabilities:reason='operator_settings_missing_usage'
+                elif not connection.execute('SELECT public.requi_operator_read_allowed(%s,%s) AS allowed',('usage.read',authority['registry_version'])).fetchone()['allowed']:
+                    reason='operator_registry_missing_usage'
+                else:
+                    role=connection.execute("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='requi_operator_usage') AS present").fetchone()['present']
+                    if not role or not connection.execute("SELECT pg_has_role(session_user,'requi_operator_usage','SET') AS allowed").fetchone()['allowed']:
+                        reason='app_usage_role_unavailable'
+        return reason
+
     def task_usage(self,owner_store,task_id):
         if not isinstance(task_id,str) or not 1<=len(task_id)<=240:raise ValueError('bounded task required')
         with self._read(owner_store,'usage.read',role='requi_operator_usage') as (connection,authority):
