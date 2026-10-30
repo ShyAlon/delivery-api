@@ -417,6 +417,7 @@ def test_report_write_failure_warns_and_retains_stdout_authority(tmp_path,capsys
     ('_check_database', 'database-role-claims', 'refuse'),
     ('_check_process_logs', 'process-log-store', 'refuse'),
     ('_check_resource_metrics', 'resource-metrics-store', 'refuse'),
+    ('_check_engine_quality', 'engine-quality-store', 'refuse'),
     ('_check_tables', 'required-tables', 'refuse'),
     ('_check_feature_tables', 'feature-tables', 'warn'),
     ('_check_pool_budget', 'pool-budget', 'warn'),
@@ -435,7 +436,7 @@ def test_check_crashes_preserve_safety_level_and_finish_report(tmp_path, monkeyp
     monkeypatch.setattr(preflight, builder, crash)
     report = preflight.run(healthy_env(tmp_path), connect=lambda dsn: conn,
                            import_module=fake_import(engine_modules()))
-    assert len(report.checks) == 11
+    assert len(report.checks) == 12
     check = next(c for c in report.checks if c.name == name)
     assert check.level == level
     assert check.status == ('fail' if level == 'refuse' else 'warn')

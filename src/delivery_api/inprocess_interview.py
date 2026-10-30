@@ -88,7 +88,12 @@ class InProcessInterviewHost:
             from .pg_execution_fence import InstalledInterviewControlRouter
             installed_resolver=InstalledInterviewControlRouter(self.store,self.artifacts_base).resolve
         self._engine_router=TenantRegistryRouter(registry_type,default_program_factory,self.artifacts_base,session_dsn=self._session_dsn,allow_file_sessions=self._session_dsn is None,pool=engine_pool,installed_resolver=installed_resolver)
-        app=create_app(self._engine_router,service_token=self._token)
+        quality_store=None
+        if self._session_dsn is not None:
+            from .pg_quality_config import PostgresQualityConfig
+            quality_store=PostgresQualityConfig(self._session_dsn)
+        self._quality_store=quality_store
+        app=create_app(self._engine_router,service_token=self._token,quality_store=quality_store)
         app.add_middleware(TenantWorkerMiddleware,base=self.artifacts_base,service_token=self._token)
         return app
 
@@ -146,6 +151,10 @@ class InProcessInterviewHost:
             (interview_fence._publish,interview_fence._publish.set(generator_fence.guarded_publish))]
         try:
             with ExitStack() as stack:
+                quality_store=getattr(self,'_quality_store',None)
+                if quality_store is not None:
+                    from interview_engine.question_config import bound_store
+                    stack.enter_context(bound_store(quality_store))
                 stack.enter_context(admission_gateway(gateway,required=True))
                 stack.enter_context(wire_clients(gateway,self.interview_clients))
                 yield
