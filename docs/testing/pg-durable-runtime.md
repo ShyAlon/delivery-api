@@ -55,3 +55,15 @@ Hosted CI and a production rollout remain unverified. The local acceptance
 checks use disposable databases and fixture providers. Existing gated/skipped
 integration tests remain separate coverage until explicitly enabled; a default
 suite's skip count is never a green claim for those tests.
+
+### Diagnostic-storage audit status
+
+The generator's default usage sink, per-call metadata, rejected/fitted raw
+outputs and manifests, and plain run log now use bound PG documents as well.
+Exact-byte sink regressions and fresh PG readback cover these paths. Interview
+raw-output, verification, categorization/shadow and per-call diagnostic sinks
+still require the follow-up audit. Do not call the whole product DB-only while
+those paths, standalone legacy adapters and default SQLite metrics remain.
+The coding-handoff package endpoint still has its existing cloud 503; the PG
+artifact ZIP endpoint verified above is separate. This change does not remove
+that restriction or imply feature parity for the blocked coding package.

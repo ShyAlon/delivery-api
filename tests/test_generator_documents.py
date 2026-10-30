@@ -804,3 +804,26 @@ def test_cli_usage_sink_persists_exact_pg_rows_across_readers_without_files(stor
         with job_runtime(runtime):jsonl_sink(root/'spec/usage.jsonl')(SimpleNamespace(model_dump_json=lambda:raw))
         assert GeneratorDocuments.reader(store,cap).read('spec/usage.jsonl')==(raw+'\n').encode()
         assert not root.exists()
+
+
+def test_generator_diagnostics_keep_exact_raw_bytes_in_pg_without_local_files(store,tmp_path):
+    import io,json
+    from spec_generator import model_config as mc
+    from spec_generator.worker_runtime import JobRuntime,job_runtime
+    from spec_generator.model_config import StageModel
+    from spec_generator.document_runtime import read_text,plain_log
+    from delivery_api.generator_documents import GeneratorDocuments
+    with tenant_context(A):
+        tid=store.create_task('diag-pg-'+uuid.uuid4().hex)['task_id'];sid='docs-'+uuid.uuid4().hex;store.set_engine_session(tid,sid)
+        job=store.enqueue_worker(tid,'phase:srs');cap=store.claim_worker(job);root=tmp_path/sid
+        runtime=JobRuntime({'srs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None,documents=GeneratorDocuments(store,cap,job))
+        runtime.bind_worker(owner_id=A.owner_id,task_id=tid,job_id=job,generation=1,session_root=root)
+        with job_runtime(runtime):
+            path=mc.capture_rejected_completion('srs','R-1',1,'  raw\n','shape')
+            assert read_text(path)=='  raw\n'
+            mc._log_llm({'event':'diagnostic'})
+            stream=plain_log(root/'spec/run.log',io.StringIO());stream.write('exact\n');stream.flush()
+        reader=GeneratorDocuments.reader(store,cap)
+        assert reader.read('spec/run.log')==b'exact\n'
+        assert json.loads(reader.read('calls.jsonl'))['event']=='diagnostic'
+        assert not root.exists()
