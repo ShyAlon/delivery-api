@@ -406,20 +406,20 @@ def _check_pool_budget(env, import_module):
         except ValueError as error:
             return Check('pool-budget','refuse','fail','valid local child selector',
                          'local opt-in only',str(error),'DELIVERY_CHILD_EXECUTION / DELIVERY_LOCAL_PREVIEW')
-    found = 'delivery pool %d + engine pool %d = %d clients' % (delivery_max or 0, engine_max or 0, (delivery_max or 0) + (engine_max or 0))
+    found = 'delivery pool %d + engine pool %d + supervisor pool 1 = %d clients' % (delivery_max or 0, engine_max or 0, (delivery_max or 0) + (engine_max or 0) + 1)
     if env.get('DELIVERY_CHILD_EXECUTION')=='local':found += ' (8 parent + 4 active child + 0 compatibility)'
     if delivery_max is None or engine_max is None:
         return Check('pool-budget', 'warn', 'warn', 'the configured process pools against the pooler client limit',
-                     'delivery pool + engine pool <= %d clients (Supabase pooler, session mode)' % budget,
+                     'delivery pool + engine pool + supervisor1 <= %d clients (Supabase pooler, session mode)' % budget,
                      'cannot determine one pool size (import failed) - engine compatibility check covers a missing engine',
                      'delivery_api.db_pool.PROCESS_POOL_MAX and interview_engine.pg_pool.ENGINE_POOL_MAX')
-    if delivery_max + engine_max > budget:
+    if delivery_max + engine_max + 1 > budget:
         return Check('pool-budget', 'warn', 'warn', 'the configured process pools against the pooler client limit',
-                     'delivery pool + engine pool <= %d clients (Supabase pooler, session mode)' % budget,
+                     'delivery pool + engine pool + supervisor1 <= %d clients (Supabase pooler, session mode)' % budget,
                      found + ' - over the limit; bursts will queue at checkout', 'db_pool / pg_pool configuration',
                      'lower a pool size or raise the pooler limit')
     return Check('pool-budget', 'warn', 'pass', 'the configured process pools against the pooler client limit',
-                 'delivery pool + engine pool <= %d clients (Supabase pooler, session mode)' % budget,
+                 'delivery pool + engine pool + supervisor1 <= %d clients (Supabase pooler, session mode)' % budget,
                  found, 'db_pool / pg_pool configuration')
 
 

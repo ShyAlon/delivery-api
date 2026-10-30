@@ -97,6 +97,8 @@ def pg_log_evidence(monkeypatch):
     repo=PostgresLogs(config.DATABASE_URL,source_id=source)
     monkeypatch.setenv('DELIVERY_LOG_SOURCE',source)
     def read(*,task_id=None,max_lines=500):
+        from delivery_api.postgres_logs import flush
+        assert flush(5)
         reopened=PostgresLogs(config.DATABASE_URL,source_id=source)
         with reopened.transaction() as conn:
             rows=conn.execute("SELECT text FROM operator_log_records WHERE stream='diagnostics' AND (%s::text IS NULL OR task_id=%s) ORDER BY id",(task_id,task_id)).fetchall()

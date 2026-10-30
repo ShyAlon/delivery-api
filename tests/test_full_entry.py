@@ -48,3 +48,18 @@ def test_child_optin_omits_compatibility_service_and_health_port(monkeypatch):
     env={'DELIVERY_CHILD_EXECUTION':'local','DELIVERY_LOCAL_PREVIEW':'1'}
     assert full_entry.compatibility_engine_required(env) is False
     assert full_entry.compatibility_engine_required({}) is True
+
+
+def test_supervisor_releases_report_pool_even_when_preflight_refuses(monkeypatch):
+    from types import SimpleNamespace
+    from delivery_api import db_pool
+    calls=[]
+    monkeypatch.setattr(db_pool,'PROCESS_POOL_MAX',9)
+    report=SimpleNamespace(generated_at='fixture',refused=True,render_text=lambda:'fixture report')
+    monkeypatch.setattr(full_entry,'check_env',lambda env:[])
+    monkeypatch.setattr(full_entry.preflight,'run',lambda env:report)
+    monkeypatch.setattr(full_entry.preflight,'write_report',lambda *a:calls.append('save') or True)
+    monkeypatch.setattr(db_pool,'close_all',lambda:calls.append('close'))
+    assert full_entry.main()==2
+    assert calls==['save','close']
+    assert db_pool.PROCESS_POOL_MAX==1

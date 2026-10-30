@@ -25,9 +25,9 @@ class PostgresLogs:
         self.dsn,self.source_id=dsn,source_id
 
     @contextmanager
-    def transaction(self):
+    def transaction(self,*,checkout_timeout=0.25):
         from .db_pool import pool_for
-        with pool_for(self.dsn).connection(timeout=0.25) as c,c.transaction():
+        with pool_for(self.dsn).connection(timeout=checkout_timeout) as c,c.transaction():
             c.execute('SET LOCAL ROLE requi_log_writer')
             c.execute("SET LOCAL statement_timeout='500ms'")
             c.execute("SET LOCAL lock_timeout='100ms'")
@@ -49,7 +49,7 @@ class PostgresLogs:
         body=safe(body)
         if len(json.dumps(body,ensure_ascii=False).encode('utf8'))>32768:
             raise ValueError('bounded startup report required')
-        with self.transaction() as c:
+        with self.transaction(checkout_timeout=10) as c:
             c.execute('INSERT INTO operator_startup_reports(source_id,body) VALUES(%s,%s) ON CONFLICT(source_id) DO UPDATE SET body=excluded.body',
                       (self.source_id,Jsonb(body)))
 
@@ -112,7 +112,7 @@ class PostgresLogs:
             text=raw[:min(32768,max_bytes)-len(b' [truncated]')].decode('utf-8',errors='ignore')+' [truncated]'
         size=len(text.encode('utf-8'))
         if size>max_bytes:raise ValueError('retention too small for log record')
-        with self.transaction() as c:
+        with self.transaction(checkout_timeout=5) as c:
             c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('operator-log:'+self.source_id+':'+stream,))
             c.execute('INSERT INTO operator_log_records(source_id,stream,ts,text,byte_size,task_id,session_id) VALUES(%s,%s,%s,%s,%s,%s,%s)',
                 (self.source_id,stream,stamp,text,size,task_id,session_id))
@@ -151,19 +151,72 @@ import threading
 _emitting=threading.local()
 
 
+# One bounded process writer, sharing the existing process pool. Logging handler
+# locks protect enqueue only, never PG round trips. No separate connection pool.
+import queue
+import time as _clock
+_pending=queue.Queue(maxsize=1024)
+_writer_lock=threading.Lock()
+_writer=None
+_active_since=None
+
+def _write_loop():
+    while True:
+        repo,stream,text,fields,queued_at=_pending.get()
+        global _active_since
+        _active_since=queued_at
+        _emitting.active=True
+        try:repo.append(stream,text,**fields)
+        except Exception as error:
+            from .log_durability import degraded
+            degraded('postgres-logs',error)
+        finally:
+            _emitting.active=False
+            _active_since=None
+            _pending.task_done()
+
+def writer_status():
+    with _pending.mutex:
+        oldest=_active_since or (_pending.queue[0][4] if _pending.queue else None)
+        return {'pending':_pending.unfinished_tasks,'capacity':_pending.maxsize,
+                'oldest_pending_ms':int((_clock.monotonic()-oldest)*1000) if oldest is not None else 0,
+                'acknowledgement':'accepted to bounded memory queue, not durable PG acknowledgement'}
+
+def flush(timeout=5):
+    """Bounded shutdown/test drain. Enqueue is not durable success."""
+    deadline=_clock.monotonic()+timeout
+    while _pending.unfinished_tasks and _clock.monotonic()<deadline:_clock.sleep(.005)
+    if _pending.unfinished_tasks:
+        from .log_durability import degraded
+        degraded('postgres-logs-drain',TimeoutError())
+        return False
+    return True
+
 def emit(stream,text,**fields):
-    """True means PG owns this write, including degraded writes. Never recurse."""
+    """True selects PG (not persisted acknowledgement), never a file fallback.
+
+    Queue overflow/failure is explicit degraded evidence, never silent success.
+    """
+    global _writer
     from . import config
     if not config.DATABASE_URL.startswith(('postgres://','postgresql://','host=')):return False
     if getattr(_emitting,'active',False):return True
-    _emitting.active=True
     try:
         repo=selected()
-        repo.append(stream,text,**fields)
+        # Bound queued data before admission. append performs final projection.
+        text=str(text)
+        if len(text.encode('utf-8'))>32768:
+            if stream=='diagnostics':raise ValueError('bounded diagnostic queue record required')
+            text=text.encode('utf-8')[:32700].decode('utf-8','ignore')+' [truncated]'
+        fields=dict(fields)
+        fields.setdefault('ts',time.time())
+        _pending.put_nowait((repo,stream,text,fields,_clock.monotonic()))
+        with _writer_lock:
+            if _writer is None or not _writer.is_alive():
+                _writer=threading.Thread(target=_write_loop,name='pg-evidence-writer',daemon=True);_writer.start()
     except Exception as error:
         from .log_durability import degraded
         degraded('postgres-logs',error)
-    finally:_emitting.active=False
     return True
 
 
@@ -199,3 +252,7 @@ def operator_view(reader,owner_store,minutes,*,task_id=None,download=False,now=N
         'since':datetime.fromtimestamp(since,timezone.utc).isoformat(),'until':datetime.fromtimestamp(now,timezone.utc).isoformat(),
         'engine_log':{'available':True,'availability':'available','lines':engine_lines,'path':'postgres:operator_log_records/engine'},
         'storage':'Postgres bounded cross-host process logs; oldest overwritten'}
+
+# Supervisor has no ASGI lifespan; retain its final stdout evidence on normal exit.
+import atexit
+atexit.register(flush,5)

@@ -1,6 +1,7 @@
 """Real migrations and restricted roles; no file fallback or customer reads."""
 import uuid
 import pytest
+from delivery_api.postgres_logs import flush
 import psycopg
 from pg_harness import STATE
 from delivery_api.tenancy import tenant_context
@@ -90,8 +91,10 @@ def test_default_pg_runtime_log_routing_refuses_file_fallback_and_records_degrad
     monkeypatch.setenv('DELIVERY_LOG_SOURCE','runtime-test')
     assert logs.selected() is not None
     assert logs.emit('activity','first',task_id='task')
+    assert flush(5)
     monkeypatch.setenv('DELIVERY_LOG_SOURCE','')
     assert logs.emit('activity','lost') is True, 'selected PG failure must never invite a file fallback'
+    assert flush(5)
     assert any(row['source']=='postgres-logs' for row in snapshot()['sources'])
     monkeypatch.setattr(config,'DATABASE_URL','sqlite:///'+str(tmp_path/'legacy.db'))
     assert logs.selected() is None and logs.emit('activity','legacy') is False
@@ -105,10 +108,13 @@ def test_pg_activity_stage_and_diagnostic_handlers_never_create_files(monkeypatc
     path=tmp_path/'forbidden.log'
     handler=observability._EvidenceFileHandler(path,delay=True)
     handler.emit(logging.makeLogRecord({'levelno':20,'msg':'activity password=secret'}))
+    assert flush(5)
     diagnostic=diagnostic_evidence.EvidenceHandler(tmp_path/'forbidden-diagnostic.jsonl')
     diagnostic.emit(logging.makeLogRecord({'name':'test','levelno':40,'levelname':'ERROR','msg':'diagnostic'}))
+    assert flush(5)
     monkeypatch.setattr(observability,'STAGE_LOG_PATHS',{'srs':tmp_path/'stages/srs.log'})
     observability.event('test','stage row',phase='srs',task_id='owned')
+    assert flush(5)
     assert not list(tmp_path.iterdir())
     repo=repository('runtime-routing')
     with repo.transaction() as c:
@@ -123,6 +129,7 @@ def test_pg_engine_mirror_never_materializes_file_and_keeps_source_bound_rows(mo
     monkeypatch.setenv('DELIVERY_LOG_SOURCE','engine-routing')
     handler=engine_log._MirrorHandler(tmp_path/'engine.log',logging.INFO)
     handler.emit(logging.makeLogRecord({'name':'interview_engine','levelno':30,'levelname':'WARNING','msg':'lease lost session=11111111-1111-4111-8111-111111111111'}))
+    assert flush(5)
     assert not list(tmp_path.iterdir())
     with repository('engine-routing').transaction() as c:
         row=c.execute("SELECT text,session_id FROM operator_log_records WHERE stream='engine'").fetchone()
@@ -136,6 +143,7 @@ def test_diagnostic_projection_remains_parseable_without_secret_or_truncated_jso
     monkeypatch.setenv('DELIVERY_LOG_SOURCE','json-projection')
     handler=diagnostic_evidence.EvidenceHandler()
     handler.emit(logging.makeLogRecord({'name':'test','levelno':40,'levelname':'ERROR','msg':'password=secret-value '+'ordinary words '*200}))
+    assert flush(5)
     with repository('json-projection').transaction() as c:
         row=c.execute("SELECT text FROM operator_log_records WHERE stream='diagnostics'").fetchone()
     parsed=json.loads(row['text'])
@@ -154,6 +162,7 @@ def test_log_failure_is_nonrecursive_and_does_not_borrow_while_another_log_is_em
         raise ConnectionError('private database failure')
     monkeypatch.setattr(logs.PostgresLogs,'append',recursive)
     assert logs.emit('activity','first') is True
+    assert flush(5)
     assert len(calls)==1 and not getattr(logs._emitting,'active',False)
 
 
@@ -294,6 +303,7 @@ def test_pg_engine_mirror_preserves_traceback_rows_instead_of_one_truncated_enve
     except ValueError:info=sys.exc_info()
     handler=engine_log._MirrorHandler(tmp_path/'forbidden.log',logging.INFO)
     handler.emit(logging.makeLogRecord({'name':'interview_engine','levelno':40,'levelname':'ERROR','msg':'failed session=11111111-1111-4111-8111-111111111111','exc_info':info}))
+    assert flush(5)
     rows=repository('traceback-rows').tail('engine')
     assert len(rows)>=3 and any('ValueError: safe failure marker' in r['text'] for r in rows)
     assert not (tmp_path/'forbidden.log').exists()
