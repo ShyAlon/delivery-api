@@ -787,3 +787,20 @@ def test_owned_proposals_require_canonical_ids_and_cannot_change_retained_eviden
         assert store.decision_review(tid,'pg-revision-proposal:'+proposal['proposal_id'],'result')==proposal
         store.request_task_stop(tid)
         with pytest.raises(TenantAccessDenied):docs.retain_proposal({**proposal,'proposal_id':uuid.uuid4().hex})
+
+
+def test_cli_usage_sink_persists_exact_pg_rows_across_readers_without_files(store,tmp_path):
+    from types import SimpleNamespace
+    from spec_generator.telemetry import jsonl_sink
+    from spec_generator.worker_runtime import JobRuntime,job_runtime
+    from spec_generator.model_config import StageModel
+    from delivery_api.generator_documents import GeneratorDocuments
+    with tenant_context(A):
+        tid=store.create_task('cli-usage-'+uuid.uuid4().hex)['task_id'];sid='docs-'+uuid.uuid4().hex;store.set_engine_session(tid,sid)
+        job=store.enqueue_worker(tid,'phase:needs');cap=store.claim_worker(job);root=tmp_path/sid
+        runtime=JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None,documents=GeneratorDocuments(store,cap,job))
+        runtime.bind_worker(owner_id=A.owner_id,task_id=tid,job_id=job,generation=1,session_root=root)
+        raw='{"stage":"needs","prompt_tokens":3}'
+        with job_runtime(runtime):jsonl_sink(root/'spec/usage.jsonl')(SimpleNamespace(model_dump_json=lambda:raw))
+        assert GeneratorDocuments.reader(store,cap).read('spec/usage.jsonl')==(raw+'\n').encode()
+        assert not root.exists()
