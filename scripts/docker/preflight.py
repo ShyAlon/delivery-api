@@ -40,7 +40,7 @@ REQUIRED_TABLES = frozenset({
     'review_comments', 'runs', 'staged_provider_responses', 'task_artifacts', 'tasks', 'usage',
     'user_task_policy', 'user_task_policy_changes', 'users', 'worker_jobs',
     'operator_startup_reports','operator_log_records','generator_documents','generator_snapshots','resource_run_samples',
-    'resource_container_summaries','resource_run_summaries','resource_container_samples',
+    'resource_container_summaries','resource_run_summaries','resource_container_samples','engine_quality_config',
 })
 
 # Tables that gate OPTIONAL features only: payments, the operator console, the
@@ -71,6 +71,7 @@ FEATURE_TABLES = {
 # intentional denials with a blanket grant. Other tables use the backend.
 TABLE_ACCESS = {table: 'requi_backend' for table in REQUIRED_TABLES}
 TABLE_ACCESS.update({
+    'engine_quality_config': 'requi_engine_config_read',
     'payment_purchases': 'requi_payment',
     'payment_credits': 'requi_payment',
     'payment_events': 'requi_payment',
@@ -252,6 +253,29 @@ def _check_process_logs(env,connect):
         return Check('process-log-store','refuse','fail','durable process logs','stable source and restricted PG read probe',
                      'unavailable: '+type(error).__name__,'DELIVERY_LOG_SOURCE; requi_log_writer',
                      'apply process-log migration; grant the application login SET membership in requi_log_writer; use one stable source across restarts')
+
+
+def _check_engine_quality(env,connect):
+    if not env.get('DELIVERY_DATABASE_URL','').startswith(('postgres://','postgresql://','host=')):
+        return Check('engine-quality-store','refuse','skip','durable engine quality configuration','PG runtime','legacy reference profile','DELIVERY_DATABASE_URL')
+    try:
+        if env.get('INTERVIEW_ENGINE_QUESTION_QUALITY_CONFIG'):
+            raise ValueError('legacy quality file override is not allowed in PG runtime')
+        connection=_pg_connect(connect,env.get('DELIVERY_DATABASE_URL',''))
+        try:
+            connection.execute('SET LOCAL ROLE requi_engine_config_read')
+            connection.execute("SET LOCAL statement_timeout='1000ms'")
+            row=connection.execute("SELECT body FROM public.engine_quality_config WHERE config_key='question-quality'").fetchone()
+            if row:
+                from interview_engine.question_config import validate
+                validate(row[0])
+        finally:connection.close()
+        return Check('engine-quality-store','refuse','pass','durable engine quality configuration',
+                     'restricted PG read role and fixed settings table','read probe passed','requi_engine_config_read')
+    except Exception as error:
+        return Check('engine-quality-store','refuse','fail','durable engine quality configuration',
+                     'restricted PG read role and fixed settings table','unavailable: '+type(error).__name__,
+                     'requi_engine_config_read','apply engine quality migration and grant app login SET membership; remove legacy file override')
 
 
 def _check_resource_metrics(env,connect):
@@ -495,6 +519,7 @@ def run(env, *, connect=None, import_module=importlib.import_module, required_ta
                 ('database-role-claims', 'refuse', lambda: _check_database(env, connect, connection_holder)),
                 ('process-log-store', 'refuse', lambda: _check_process_logs(env,connect)),
                 ('resource-metrics-store', 'refuse', lambda: _check_resource_metrics(env,connect)),
+                ('engine-quality-store', 'refuse', lambda: _check_engine_quality(env,connect)),
                 ('required-tables', 'refuse', lambda: _check_tables(env, connection_holder, required_tables)),
                 ('feature-tables', 'warn', lambda: _check_feature_tables(env, connection_holder, required_tables)),
                 ('pool-budget', 'warn', lambda: _check_pool_budget(env, import_module)),
