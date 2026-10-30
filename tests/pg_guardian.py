@@ -29,12 +29,13 @@ def watch(read_fd, scratch, pid, ctl):
                    stderr=subprocess.DEVNULL, timeout=8)
 
 
-def protect(scratch):
-    import pgserver
+def protect(scratch,ctl=None):
+    if ctl is None:
+        import pgserver
+        ctl = Path(pgserver.__file__).parent/'pginstall/bin/pg_ctl'
     read_fd, write_fd = os.pipe()
     directory = Path(scratch)
     pid = int((directory/'postmaster.pid').read_text().splitlines()[0])
-    ctl = Path(pgserver.__file__).parent/'pginstall/bin/pg_ctl'
     try:
         guardian = subprocess.Popen([sys.executable, __file__, str(read_fd), scratch,
                                      str(pid), str(ctl)], pass_fds=(read_fd,),

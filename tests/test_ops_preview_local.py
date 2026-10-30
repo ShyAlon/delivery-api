@@ -57,6 +57,10 @@ def _repo(tmp_path, name, with_ops):
         shutil.copy(OPS / "lib.sh", seed / "scripts" / "ops" / "lib.sh")
         shutil.copy(OPS / "preview.sh", seed / "scripts" / "ops" / "preview.sh")
         shutil.copy(OPS.parent / "docker" / "build-local-image.sh", seed / "scripts" / "docker" / "build-local-image.sh")
+        for relative in ('scripts/docker/smoke-local-image.sh','scripts/docker/Dockerfile.pg-smoke','scripts/docker/owned-pg-smoke.py','scripts/docker/system-pg-smoke.py','tests/pg_harness.py','tests/pg_guardian.py','supabase/migrations/20261030000000_test.sql'):
+            target=seed/relative;target.parent.mkdir(parents=True,exist_ok=True)
+            source=Path(__file__).resolve().parents[1]/relative
+            target.write_text(source.read_text() if source.exists() else '-- fixture migration\n')
         (seed / "scripts" / "docker" / "build-full-image.sh").write_text("echo SERVER-BUILD-SHOULD-NOT-RUN >> \"$FAKE_LOG\"\n")
         (seed / "scripts" / "docker" / "smoke-image.sh").write_text("echo SERVER-SMOKE-SHOULD-NOT-RUN >> \"$FAKE_LOG\"\nexit 9\n")
         (seed / "Dockerfile.full").write_text("FROM scratch\n")

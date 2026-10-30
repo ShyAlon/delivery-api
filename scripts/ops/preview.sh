@@ -98,7 +98,7 @@ local_flow(){
   HAVE=1; docker image inspect "$IMAGE" >/dev/null 2>&1 || HAVE=0
   if [ "$HAVE" = 1 ]; then
     echo "== the image is already on this Mac: checking that it passes the smoke check before it is reused"
-    if docker run --rm --platform "$PLATFORM" --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 "$IMAGE" python /app/full-smoke.py; then
+    if bash scripts/docker/smoke-local-image.sh "$IMAGE" "$PLATFORM"; then
       echo "== reuse smoke passed"
     elif docker rmi "$IMAGE" >/dev/null 2>&1; then
       HAVE=0; echo "== that image failed and its tag was removed (that exact tag only); building it again"

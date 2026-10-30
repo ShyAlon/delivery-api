@@ -43,7 +43,7 @@ fi
 docker build --build-arg REQUI_BUILD_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" --platform "$PLATFORM" --build-arg REQUI_BUILD_ID="local-$STAMP" --build-arg REQUI_BUILD_REPOS="$REPOS" -f "$CTX/delivery-api/Dockerfile.full" -t "$CAND" "$CTX" || abort BUILD "the local build did not finish" "Nothing was tagged. The output above names the failing step."
 echo "== smoke inside the image $CAND (no network, no provider key, not root)"
 rc=0
-SMOKE_OUT=$(docker run --rm --platform "$PLATFORM" --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 "$CAND" python /app/full-smoke.py 2>&1) || rc=$?
+SMOKE_OUT=$(bash "$HERE/scripts/docker/smoke-local-image.sh" "$CAND" "$PLATFORM" 2>&1) || rc=$?
 [ -z "$SMOKE_OUT" ] || printf '%s\n' "$SMOKE_OUT"
 if [ "$rc" -ne 0 ]; then
   [ -n "$SMOKE_OUT" ] || echo "== the smoke container produced no output at all (docker exit code $rc): it was killed before it could print - a signal kill, commonly the Docker Desktop VM running out of memory, leaves no output"

@@ -158,7 +158,7 @@ It rejects inherited database settings, starts its own disposable server, applie
 this checkout's exact migrations, and gives the smoke a restricted app-login DSN.
 The service command remains the installed-wheel interpreter, not this checkout.
 For the network-none container gate, `Dockerfile.pg-smoke` is a test-only derivative
-with the same supervisor, harness, and migrations. Never publish that derivative
+with the same supervisor, harness, and migrations, plus Debian-native PostgreSQL. Never publish that derivative
 as the runtime service image. Actual Docker build/run remains a separate gate.
 Full-image smoke similarly requires a supervisor-owned DELIVERY_TEST_POSTGRES_URL;
 there is no file persistence opt-in or implicit live database.
@@ -177,3 +177,20 @@ docker run --rm --network none --read-only --cap-drop ALL \
 
 This keeps the candidate's actual entry point and installed wheels while adding
 only test dependencies/schema to the derivative. No deployment is performed.
+
+### Build and reuse gate (2026-10-30)
+
+Every full-service caller now uses `smoke-local-image.sh IMAGE [PLATFORM]`.
+It builds the test-only derivative from the exact candidate image, adding Debian-native
+PostgreSQL, the owned-PG supervisor and this checkout's migrations. It passes no host settings,
+DSN, env file, provider key or mounted data to the smoke run. The run is non-root,
+read-only, network-none, with only a private 512 MB `/tmp` for the disposable PG
+and runtime scratch. The PG server listens on a Unix socket only. The temporary
+derivative tag is removed afterward, including on failure. Service images are
+unchanged and only published by the existing callers after smoke success.
+
+`smoke-image.sh` stages only those public harness/schema files over SSH and uses
+the same helper with sudo Docker. This also covers server build, server reuse,
+deploy preflight and the remote preview path. Building the test derivative may
+need package-download access, just like building the service image; its actual
+smoke run has no external network. No live database is used to prove an image.

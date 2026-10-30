@@ -321,7 +321,7 @@ step "image smoke"
 if [ "$HAVE" = 1 ]; then
   echo "== the image is already on this Mac: checking that it passes the smoke check before it is reused"
   rc=0
-  SMOKE_OUT=$(docker run --rm --platform "$PLATFORM" --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 "$IMAGE" python /app/full-smoke.py 2>&1) || rc=$?
+  SMOKE_OUT=$(bash scripts/docker/smoke-local-image.sh "$IMAGE" "$PLATFORM" 2>&1) || rc=$?
   [ -z "$SMOKE_OUT" ] || printf '%s\n' "$SMOKE_OUT"
   if [ "$rc" = 0 ]; then
     echo "== reuse smoke passed"
