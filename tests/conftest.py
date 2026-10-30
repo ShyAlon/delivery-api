@@ -1,11 +1,6 @@
-"""Tests must never reach a real database.
+"""Default imports use owned disposable PG, never caller credentials.
 
-delivery_api.config calls load_dotenv() at import, so a TURSO_* or DELIVERY_*
-setting in a .env file (or the shell) would point every test module at the real
-Turso database or the real local database file. load_dotenv(override=False)
-never replaces a variable that is already set, even to an empty string, so set
-these before any test module imports the app. Tests that need a replica pass
-their own fake connection.
+Reference adapters remain explicit test fixtures until separately retired.
 """
 import os
 import tempfile
@@ -15,7 +10,7 @@ for _name in ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"):
     os.environ[_name] = ""
 os.environ["TURSO_SYNC_INTERVAL"] = "60"
 os.environ["XDG_DATA_HOME"] = _scratch
-os.environ["DELIVERY_DATABASE_URL"] = f"sqlite:///{_scratch}/delivery.db"
+os.environ.pop("DELIVERY_DATABASE_URL",None)
 
 # Private item6 scripts are test-only modules, not installed application imports.
 import sys
@@ -24,7 +19,18 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts/item6'))
 
 # A throwaway real Postgres for the database tests (see tests/pg_harness.py). Off with DELIVERY_TEST_NO_POSTGRES=1.
 import pg_harness
+os.environ.pop("DELIVERY_TEST_POSTGRES_DSN",None)
 pg_harness.start()
+if pg_harness.STATE['status']!='running':
+    raise RuntimeError('test app requires its own disposable PG server: '+str(pg_harness.STATE))
+from psycopg.conninfo import conninfo_to_dict
+from urllib.parse import quote,urlencode
+_pg_fields=conninfo_to_dict(pg_harness.STATE['dsn'])
+_pg_database=_pg_fields.pop('dbname');_pg_fields['user']='delivery_app'
+os.environ['DELIVERY_DATABASE_URL']='postgresql:///'+quote(_pg_database,safe='')+'?'+urlencode(_pg_fields)
+os.environ['DELIVERY_SUPABASE_URL']='https://fixture.supabase.co'
+os.environ['DELIVERY_SUPABASE_ANON_KEY']='hermetic-public-key'
+os.environ['DELIVERY_CLOUD_EXECUTION']='0'
 
 # Files that use the `account` or `ledger` fixtures get them from here, not only from the files that define them.
 from test_attempt_ledger import ledger  # noqa: E402,F401
@@ -75,3 +81,14 @@ def evidence_store(request, tmp_path, pg_workspace_factory):
 from pg_bridge_guard import pg_bridge_poison  # noqa: E402,F401
 from pg_runtime import pg_runtime_environment, pg_runtime_process  # noqa: E402,F401
 from pg_local_compat import pg_local_compat_process  # noqa: E402,F401
+
+
+@pytest.fixture(autouse=True)
+def _default_app_uses_hermetic_jwks(monkeypatch):
+    """Keep signature/session checks real; replace only remote JWKS transport."""
+    from delivery_api import app as module
+    from delivery_api.tenant_http import TenantMiddleware
+    from pg_workspace import Keys
+    for middleware in module.app.user_middleware:
+        if middleware.cls is TenantMiddleware:
+            monkeypatch.setattr(middleware.kwargs['verifier'],'keys',Keys())

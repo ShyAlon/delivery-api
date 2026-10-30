@@ -22,7 +22,7 @@ fi
 # dependency is absent. This includes the pinned cross-repo contracts API: an
 # editable delivery-api import alone can succeed while vmodel-contracts in the
 # same venv is stale after a pull.
-if ! "$PYTHON" -c 'import delivery_api,uvicorn,multipart; from vmodel_contracts import CANONICAL_STAGE_IDS; assert \"scope_tiebreak\" in CANONICAL_STAGE_IDS' >/dev/null 2>&1; then
+if ! "$PYTHON" -c 'import delivery_api,uvicorn,multipart,psycopg,psycopg_pool; from vmodel_contracts import CANONICAL_STAGE_IDS; assert \"scope_tiebreak\" in CANONICAL_STAGE_IDS' >/dev/null 2>&1; then
   echo "== syncing delivery-api and UI dependencies into .venv =="
   if [ ! -x "$ROOT/.venv/bin/python" ]; then "$PYTHON" -m venv "$ROOT/.venv"; fi
   PYTHON="$ROOT/.venv/bin/python"
@@ -40,15 +40,15 @@ if [ -z "${INTERVIEW_ENGINE_PYTHON:-}" ] && [ -z "${VIRTUAL_ENV:-}" ] && [ -s "$
   if [ -x "$saved_engine_python" ]; then export INTERVIEW_ENGINE_PYTHON="$saved_engine_python"; fi
 fi
 cd "$ROOT"
-export DELIVERY_BASIC_AUTH_ENABLED="${DELIVERY_BASIC_AUTH_ENABLED:-1}"
+# Validate INTERVIEW_ENGINE_TOKEN without replacing dotenv values with a default.
+"$PYTHON" -m delivery_api.launch_profile --validate-engine
 # The local entry point serves plain http://127.0.0.1. Secure cookies are correct
 # in deployment, but browsers intentionally refuse them on this local origin.
 export DELIVERY_COOKIE_SECURE="${DELIVERY_COOKIE_SECURE:-0}"
 echo "V-model UI: http://$HOST:$PORT"
 DEFAULT_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/requi-re"
 mkdir -p "$DEFAULT_DATA_HOME"
-export DELIVERY_DATABASE_URL="${DELIVERY_DATABASE_URL:-sqlite:///$DEFAULT_DATA_HOME/delivery.db}"
-echo "Data: $DELIVERY_DATABASE_URL"
+echo "Data: PostgreSQL (credentials hidden)"
 
 # Do not launch a task UI that can start a downstream generator in a broken
 # sibling environment. pull-all.sh repairs all six checkouts; this preflight
@@ -73,7 +73,6 @@ fi
 # in development, so run-ui.sh owns it exactly like run-require.sh does.
 ENGINE_PORT="${INTERVIEW_ENGINE_PORT:-8010}"
 export INTERVIEW_ENGINE_URL="${INTERVIEW_ENGINE_URL:-http://127.0.0.1:$ENGINE_PORT}"
-export INTERVIEW_ENGINE_TOKEN="${INTERVIEW_ENGINE_TOKEN:-local-interview-engine-token}"
 ENGINE_DIR="${INTERVIEW_ENGINE_DIR:-$(cd "$ROOT/.." && pwd)/interview-engine}"
 ENGINE_PID=""
 engine_blocked=""
@@ -108,7 +107,7 @@ if [ -z "$engine_blocked" ]; then
     echo "Next: run scripts/pull-all.sh to sync the pinned contract dependency, or install the pinned project dependencies in $ENGINE_DIR/.venv, then rerun scripts/run-ui.sh."
   else
     echo "Interview engine: http://127.0.0.1:$ENGINE_PORT (log: $DEFAULT_DATA_HOME/interview-engine.log)"
-    ( cd "$ENGINE_DIR" && exec "$ENGINE_PYTHON" -m uvicorn interview_engine.http_service:app --host 127.0.0.1 --port "$ENGINE_PORT" ) > >(tee "$DEFAULT_DATA_HOME/interview-engine.log") 2>&1 &
+    ( exec "$PYTHON" -m delivery_api.launch_profile --engine "$ENGINE_PYTHON" -m uvicorn interview_engine.http_service:app --host 127.0.0.1 --port "$ENGINE_PORT" ) > >(tee "$DEFAULT_DATA_HOME/interview-engine.log") 2>&1 &
     ENGINE_PID=$!
   fi
 fi

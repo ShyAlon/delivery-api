@@ -7,6 +7,7 @@ def test_probe_turso_is_off_and_database_is_scratch():
     assert "delivery-api-tests-" in str(config.DEFAULT_DB_PATH)
 
     # The active profile must point only at the newly owned disposable DB.
+    assert config.CLOUD_TENANTS is True
     if config.CLOUD_TENANTS:
         import pg_harness
         import psycopg
@@ -23,6 +24,3 @@ def test_probe_turso_is_off_and_database_is_scratch():
         assert owned['dbname'].startswith('test_tenant_')
         with psycopg.connect(config.DATABASE_URL) as connection:
             assert connection.execute('SELECT current_user,current_database()').fetchone() == ('delivery_app',owned['dbname'])
-    else:
-        assert config.DATABASE_URL.startswith('sqlite:///')
-        assert str(config.local_database_path()).endswith('/delivery.db')

@@ -6,7 +6,7 @@
 
 ## Run locally
 
-The supported local entry point installs or refreshes the editable environment when needed, enables local email/password accounts, selects the engine interpreter, uses one Ollama request at a time, and opens the folder-based session workspace:
+The supported local entry point installs or refreshes the editable environment when needed, validates the approved PG/Supabase Auth profile, selects the engine interpreter, and uses one Ollama request at a time:
 
 ```bash
 cd ~/development/require/delivery-api
@@ -17,17 +17,19 @@ Open http://127.0.0.1:8000. API docs are at http://127.0.0.1:8000/docs. The loca
 
 The UI has a V-shaped process map per task and distinct not-started, running, waiting-for-answer, and completed views. Live events use SSE. Live output has a compact adaptive scrolling viewport so the answer composer remains visible. Visible bundle pages are human-readable; use the item actions to inspect source JSON on demand.
 
-## Local persistence and the cloud seam
+## Durable storage
 
-SQLite is the default, not an API assumption. Both editable development and built distributions use the same stable per-user database by default: `${XDG_DATA_HOME:-~/.local/share}/requi-re/delivery.db` (on macOS without `XDG_DATA_HOME`, `~/.local/share/requi-re/delivery.db`). The database is outside every checkout and distribution, so pulls and repeated builds never copy, replace, or delete accounts. Override it when needed:
+Local execution and the server require an explicit PostgreSQL
+`DELIVERY_DATABASE_URL` and the existing Supabase Auth configuration. Configure
+values privately in the environment or dotenv file. Missing/non-PG settings stop
+launch rather than create a host-local database. No old task history is imported.
+A data reset, migration or deployment requires a separate reviewed operation.
 
-```bash
-export DELIVERY_DATABASE_URL="sqlite:////absolute/path/to/delivery.db"
-```
-
-Existing databases inside an older `dist/requi-re` folder are not migrated automatically. Shy is the sole current user and already recreated his account; leave that old build untouched for audit or remove it after confirming the stable database has the account.
-
-All routes, background jobs and the subprocess runner depend on the `Storage` protocol. Only `SQLiteStore` contains SQL or a database connection, and `create_store(DATABASE_URL)` is the single backend selection point. A Postgres adapter can implement the same protocol and be selected there; the HTTP and CLI job layers do not change. Additive local schema migrations run when SQLite opens, preserving existing task/audit history. Rerun policy is isolated in `Store.prepare_rerun`; archive is implemented as the reversible option, while wipe and overwrite remain blocked until the founder chooses.
+Routes, background jobs and subprocess runners use the `Storage` protocol with
+the PG adapter. Task/session ownership, generation checks and real authenticated
+session claims apply in local execution as on the server. Remaining legacy
+storage implementations are being retired after their PG replacements merge;
+they are not an alternate supported launch profile.
 
 ## Delivery-only container (fenced)
 
@@ -126,14 +128,12 @@ Price events and the audit report usage in **credits** (`tokens * PRICE_PER_TOKE
 - Every view-level page header remains visible while its page scrolls. Use the shared `page-head` class, which sticks below the global navigation and preserves the current translucent surface treatment.
 - Do not add a large promotional/marketing hero above a working collection. Put collection actions, filtering, and current source context in the sticky page header so the managed objects stay primary.
 
-### Local accounts and workspace
+### Accounts and workspace
 
-`scripts/run-ui.sh` enables email/password accounts by default. Passwords require 12+ characters with uppercase, lowercase, number, and symbol, and are stored only as per-user salted scrypt hashes. Browser sessions use random opaque handles in HttpOnly, SameSite=Lax cookies; only their SHA-256 digests are stored. Set `DELIVERY_BASIC_AUTH_ENABLED=0` only when intentionally restoring the unauthenticated local development mode.
-
-Accounts identify actions, while discovered artifact sessions remain one shared local workspace. This fits the single-machine founder-demo workflow and avoids duplicating or moving the source artifact tree per account.
-
-Email addresses are normalized to lowercase and must have a local part, `@`, and a dotted domain. Older pre-email identifiers remain in the local database for audit continuity, but must be recreated with an email address to use the current sign-in UI; OAuth accounts are unaffected.
-
+The PG profile uses the existing Supabase Auth sign-in and owner-scoped task
+workspace. The launcher does not enable local password authentication or an
+unauthenticated fallback. This storage change does not remove or change the
+OAuth, authenticated-session or email-availability implementations.
 
 ### Engine interpreter and logs
 
@@ -246,3 +246,17 @@ browser test, with `./scripts/test-local.sh`. No live model is required. The
 four command-planning tests use a test-owned generator path and fake runners,
 not a sibling generator environment. Nothing is quarantined as an unexplained
 CI-only layout difference.
+
+### PG-only launch profile
+
+The source launcher (`scripts/run-ui.sh`) and built launcher
+(`./dist/requi-re/run-require.sh`) require `DELIVERY_DATABASE_URL` to select an
+approved PostgreSQL database. There is no implicit local database. Use the
+existing environment or private dotenv configuration, together with
+`DELIVERY_SUPABASE_URL`, `DELIVERY_SUPABASE_ANON_KEY`, and a private
+`INTERVIEW_ENGINE_TOKEN` of at least 24 characters. Do not paste secrets into
+chat or commit them. The engine uses the same resolved PG profile in tenant
+mode, never file-session fallback. Existing auth and execution admission rules
+still apply; launch configuration does not authorize model spend or a data reset.
+The launcher validates configuration before starting/replacing services and
+prints no DSN. Missing settings stop with an error rather than create local data.

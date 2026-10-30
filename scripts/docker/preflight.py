@@ -72,6 +72,10 @@ FEATURE_TABLES = {
 TABLE_ACCESS = {table: 'requi_backend' for table in REQUIRED_TABLES}
 TABLE_ACCESS.update({
     'engine_quality_config': 'requi_engine_config_read',
+    'resource_run_samples': 'requi_metrics_writer',
+    'resource_run_summaries': 'requi_metrics_writer',
+    'resource_container_samples': 'requi_metrics_writer',
+    'resource_container_summaries': 'requi_metrics_writer',
     'payment_purchases': 'requi_payment',
     'payment_credits': 'requi_payment',
     'payment_events': 'requi_payment',
