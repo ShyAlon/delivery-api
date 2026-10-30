@@ -22,7 +22,7 @@ def read_source_review_snapshot(store,capability,*,artifacts_base,lineage,lineag
     """Caller holds same-host source writer exclusion; never accepts a review."""
     from pathlib import Path
     from .tenancy import session_root
-    from .revision_stage_evidence import read_approved_upstream_bytes,validate_cloud_revision_conops
+    from .revision_stage_evidence import validate_cloud_revision_conops
     from .revision_checkpoint_reader import read_source_checkpoint
     capability.validate(store)
     if (hashlib.sha256(json.dumps(lineage,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=lineage_sha256
@@ -34,16 +34,14 @@ def read_source_review_snapshot(store,capability,*,artifacts_base,lineage,lineag
         or type(lineage.get('generation')) is not int or lineage['generation']!=capability.generation+1):
         raise ValueError('exact uninstalled next generation required')
     root=session_root(Path(artifacts_base),capability.scope,capability.session_id)
-    source=read_source_checkpoint(store,capability,root/'spec'/'checkpoints.sqlite',session_id=capability.session_id,expected_checkpoint_id=lineage['source_checkpoint_id'])
+    source=read_source_checkpoint(store,capability,None,session_id=capability.session_id,expected_checkpoint_id=lineage['source_checkpoint_id'])
     validate_cloud_revision_conops(source,lineage['semantic_session_id'])
     documents={'interview/intent_model.json':source.get('intent_model'),'interview/conops.json':source.get('conops'),
         'spec/needs.json':source.get('needs'),'spec/system-baseline.json':source.get('system_baseline')}
     if lineage['phase']=='architecture':documents['spec/srs.json']=source.get('srs')
-    if hasattr(store,'_postgres'):
-        from .pg_revision_artifacts import documents as read_documents
-        digests={name:hashlib.sha256(raw).hexdigest() for name,raw in read_documents(store,capability,documents).items()}
-    else:digests=read_approved_upstream_bytes(root,expected_documents=documents)
-    if read_source_checkpoint(store,capability,root/'spec'/'checkpoints.sqlite',session_id=capability.session_id,expected_checkpoint_id=lineage['source_checkpoint_id'])!=source:
+    from .pg_revision_artifacts import documents as read_documents
+    digests={name:hashlib.sha256(raw).hexdigest() for name,raw in read_documents(store,capability,documents).items()}
+    if read_source_checkpoint(store,capability,None,session_id=capability.session_id,expected_checkpoint_id=lineage['source_checkpoint_id'])!=source:
         raise ValueError('source checkpoint changed across review snapshot')
     capability.validate(store)
     return source_review_payload(lineage_sha256=lineage_sha256,checkpoint_id=lineage['source_checkpoint_id'],
