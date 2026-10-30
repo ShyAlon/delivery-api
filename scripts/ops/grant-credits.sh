@@ -2,7 +2,7 @@
 # Requi.re operator onboarding (batch), run as: ops grant-credits: gives a list of signed-up users free credits and the standard admission row (3 concurrent runs, no spend cap, balance only), and sets YOUR own admission row to the $2.00 rolling 24-hour hard limit. Reads and writes the production Supabase database with the admin connection string you type at a hidden prompt (never shown, never stored, never sent anywhere). Shows the whole plan first; nothing is written until you type yes once. Safe to re-run: a grant has a per-person-per-day key, so the same grant is never applied twice in one day.
 set -euo pipefail
 OPS_NOTE="Nothing was written to the database."
-. "$(dirname "$0")/lib.sh"; ops_start grant-credits "$0" --venv; REPO=$PWD; PY=$REPO/.venv/bin/python
+. "$(dirname "$0")/lib.sh"; ops_start grant-credits "$0" --venv; ops_settings REQUI_ADMIN_DATABASE_URL; REPO=$PWD; PY=$REPO/.venv/bin/python
 if ! "$PY" -c 'import psycopg' 2>/dev/null; then
   echo "The Python package psycopg (Postgres driver) is missing in $REPO/.venv. This will run:  $PY -m pip install 'psycopg[binary]>=3.2,<4'"
   printf 'Type yes to install it, anything else to stop: '; read -r A < /dev/tty || A=no
@@ -16,9 +16,7 @@ printf 'Free credits per person when a line has no number [50]: '; read -r DEF <
 echo "Paste one person per line:  email   or   email credits   (blank line when done; leave empty to only set your own limit)"
 echo "OWN=$OWN" > "$IN"; echo "DEFAULT=$DEF" >> "$IN"
 while IFS= read -r L < /dev/tty; do [ -n "$L" ] || break; echo "USER=$L" >> "$IN"; done
-printf 'Admin database connection string for the Requi.re Supabase project (hidden): '
-read -rs CONN < /dev/tty; echo
-[ -n "$CONN" ] || abort NO-CONN "no connection string typed" "Supabase dashboard, project Requi.re, Connect, the 'postgres' role URI (Session pooler if the direct one fails), then run ops grant-credits again"
+CONN=$REQUI_ADMIN_DATABASE_URL
 REQ_CONN=$CONN REQ_INPUT=$IN "$PY" - <<'PYE'
 import datetime,decimal,hashlib,json,os,sys,time,uuid
 import psycopg

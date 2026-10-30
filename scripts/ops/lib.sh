@@ -66,3 +66,17 @@ ops_start(){
   [ "$want_venv" = --venv ] && ops_venv
   return 0
 }
+
+# Re-exec with values in the child environment, never stdout/eval/command arguments.
+# Each entry point names its own missing-only requirements. Remote deploy files
+# remain authoritative; no local setting changes a server destination implicitly.
+ops_settings(){
+  local required=${1:-} marker="${OPS_NAME:-owner}"
+  [ "${REQUI_SETTINGS_SCRIPT:-}" = "$marker" ] && return 0
+  ops_venv
+  export REQUI_SETTINGS_SCRIPT="$marker"
+  local rc=0
+  .venv/bin/python scripts/ops/settings.py --repo "$PWD" --require "$required" exec -- bash "$OPS_SELF" || rc=$?
+  [ "$rc" != 2 ] || abort SETTINGS "file-first settings preflight failed; see the value-free error above" "No changes by this preflight." "check the named setting or run scripts/ops/preview-provision.sh in a terminal; never send values"
+  exit "$rc"
+}

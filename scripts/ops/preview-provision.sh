@@ -6,7 +6,7 @@
 # What it is: a persistent local copy of real credentials on your Mac, so the preview stops needing the server after this.
 # What it is NOT: no server contact, no new copy beyond this Mac, no deploy, nothing else uses this file except ops preview.
 set -euo pipefail
-. "$(dirname "$0")/lib.sh"; ops_start preview-provision "$0"
+. "$(dirname "$0")/lib.sh"; ops_start preview-provision "$0"; ops_settings
 STORE=${PREVIEW_SETTINGS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/requi/preview.env}
 TTY=${PREVIEW_TTY:-/dev/tty}
 exec 9< "$TTY" || abort NO-TTY "input is not a terminal" "Nothing was written." "run this in a real terminal"
@@ -17,12 +17,15 @@ echo "It is a persistent local copy of real credentials. Nothing is sent to any 
 echo "After this one-time step, ops preview runs fully locally (no server access)."
 if [ -s "$STORE" ]; then
   echo
-  echo "A saved settings file already exists. Typing yes REPLACES it."
+  echo "A saved settings file already exists. Typing yes updates missing fields and preserves existing settings."
 fi
 printf 'Type yes to save the settings locally on this Mac: '
 read -r A <&9 || A=no; [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "Nothing was written." "run again and type yes"
 ASK_RESULT=''
-ask(){ local kind=$1 note=$2 allow_empty=${3:-} val; while :; do
+ask(){ local kind=$1 note=$2 allow_empty=${3:-} val name=${2%% *}
+  val=${!name:-}
+  if [ -n "$val" ]; then ASK_RESULT=$val; return; fi
+  while :; do
   printf '%s%s: ' "$note" "$([ -n "$allow_empty" ] && echo ' (optional, Enter to skip)')"
   IFS= read -rs val <&9 || abort NO-TTY "input ended before all settings were entered" "Nothing was written." "run this in a real terminal"
   echo
@@ -40,19 +43,13 @@ ask url "DELIVERY_SUPABASE_URL";          V_URL=$ASK_RESULT
 ask any "DELIVERY_SUPABASE_ANON_KEY";     V_KEY=$ASK_RESULT
 ask any "DELIVERY_SUPABASE_ADMIN_SUBJECTS (comma-separated Supabase user ids that act as admin)"; V_SUB=$ASK_RESULT
 ask any "DELIVERY_ADMIN_TOKEN" optional;  V_TOK=$ASK_RESULT
-umask 077
-mkdir -p "$(dirname "$STORE")"
-TMP=$STORE.tmp.$$; trap 'rm -f "$TMP"' EXIT
-{
-  echo "# Requi.re local preview settings - saved on this Mac by scripts/ops/preview-provision.sh"
-  echo "# Readable only by this user (mode 600). Used only by scripts/ops/preview.sh."
-  echo "DELIVERY_DATABASE_URL=$V_DB"
-  echo "DELIVERY_SUPABASE_URL=$V_URL"
-  echo "DELIVERY_SUPABASE_ANON_KEY=$V_KEY"
-  echo "DELIVERY_SUPABASE_ADMIN_SUBJECTS=$V_SUB"
-  [ -z "$V_TOK" ] || echo "DELIVERY_ADMIN_TOKEN=$V_TOK"
-} > "$TMP"
-chmod 600 "$TMP"; mv "$TMP" "$STORE"; trap - EXIT
+export DELIVERY_DATABASE_URL="$V_DB" DELIVERY_SUPABASE_URL="$V_URL" DELIVERY_SUPABASE_ANON_KEY="$V_KEY" DELIVERY_SUPABASE_ADMIN_SUBJECTS="$V_SUB" DELIVERY_ADMIN_TOKEN="$V_TOK"
+.venv/bin/python - "$STORE" <<'PY'
+import importlib.util,os,sys
+spec=importlib.util.spec_from_file_location('settings','scripts/ops/settings.py');s=importlib.util.module_from_spec(spec);spec.loader.exec_module(s)
+# The owner already typed yes above. Keep unrelated saved keys, atomically.
+s.save_confirmed(sys.argv[1],{k:os.environ[k] for k in ('DELIVERY_DATABASE_URL','DELIVERY_SUPABASE_URL','DELIVERY_SUPABASE_ANON_KEY','DELIVERY_SUPABASE_ADMIN_SUBJECTS','DELIVERY_ADMIN_TOKEN') if os.environ.get(k)},confirm=lambda _: 'yes')
+PY
 exec 9<&-
 echo
 echo "saved (values are never printed):"
