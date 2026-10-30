@@ -51,8 +51,17 @@ def read(owner_id,admin,minutes,resolve_owner,path=None,now=None):
     import time
     now=time.time() if now is None else now
     minutes=max(1,min(int(minutes),240));since=now-minutes*60
-    path=path or default_path()
-    lines=_tail(path)
+    if path is None and config.DATABASE_URL.startswith(('postgres://','postgresql://','host=')):
+        try:
+            from .postgres_logs import selected
+            lines=[datetime.fromtimestamp(row['ts'],timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')+' '+row['text'] for row in selected().tail('engine',limit=MAX_LINES)]
+            path='postgres:operator_log_records/engine'
+        except Exception as error:
+            degraded('postgres-log-read',error)
+            return {'available':False,'availability':'unreadable','category':type(error).__name__,'text':'','count':0,'path':'postgres:operator_log_records/engine'}
+    else:
+        path=path or default_path()
+        lines=_tail(path)
     if lines is None:return {'available':False,'text':'','count':0,'path':str(path)}
     if isinstance(lines,OSError):return {'available':False,'availability':'unreadable','category':type(lines).__name__,'text':'','count':0,'path':str(path)}
     owners={}
@@ -113,6 +122,15 @@ class _MirrorHandler(logging.Handler):
                        (server_log_buffer.scrub(l) for l in fmt.formatException(record.exc_info).splitlines()[-40:])]
             stamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             text=''.join('%s %-7s %s: %s\n'%(stamp,record.levelname,record.name,row) for row in rows)
+            from .postgres_logs import emit
+            found=_SESSION.search(line)
+            if config.DATABASE_URL.startswith(('postgres://','postgresql://','host=')):
+                # Preserve the safe row boundary before scrub flattens newlines.
+                # Traceback continuation rows inherit the originating session.
+                for row in rows:
+                    emit('engine','%s %-7s %s: %s'%(stamp,record.levelname,record.name,row),
+                         session_id=found.group(1) if found else None,ts=record.created)
+                return
             with self._lock:
                 self._path.parent.mkdir(parents=True,exist_ok=True)
                 if self._path.exists() and self._path.stat().st_size>MIRROR_MAX_BYTES:

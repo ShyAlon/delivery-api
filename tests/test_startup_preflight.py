@@ -415,6 +415,7 @@ def test_report_write_failure_warns_and_retains_stdout_authority(tmp_path,capsys
 @pytest.mark.parametrize('builder,name,level', [
     ('_check_artifacts', 'artifacts-root-writable', 'refuse'),
     ('_check_database', 'database-role-claims', 'refuse'),
+    ('_check_process_logs', 'process-log-store', 'refuse'),
     ('_check_tables', 'required-tables', 'refuse'),
     ('_check_feature_tables', 'feature-tables', 'warn'),
     ('_check_pool_budget', 'pool-budget', 'warn'),
@@ -433,7 +434,7 @@ def test_check_crashes_preserve_safety_level_and_finish_report(tmp_path, monkeyp
     monkeypatch.setattr(preflight, builder, crash)
     report = preflight.run(healthy_env(tmp_path), connect=lambda dsn: conn,
                            import_module=fake_import(engine_modules()))
-    assert len(report.checks) == 9
+    assert len(report.checks) == 10
     check = next(c for c in report.checks if c.name == name)
     assert check.level == level
     assert check.status == ('fail' if level == 'refuse' else 'warn')
@@ -473,3 +474,20 @@ def test_main_exit_code_and_persisted_report_follow_crash_level(tmp_path, monkey
     assert preflight.main() == exit_code
     assert json.loads(path.read_text())['status'] == ('fail' if exit_code else 'warn')
     assert ('REFUSING TO START' if exit_code else 'PASS WITH WARNINGS') in capsys.readouterr().out
+
+
+def test_pg_process_log_preflight_validates_stable_source_and_writer_access(tmp_path):
+    env=healthy_env(tmp_path)
+    env['DELIVERY_LOG_SOURCE']=''
+    report=preflight.run(env,connect=healthy_pg(),import_module=fake_import(engine_modules()))
+    check={c.name:c for c in report.checks}['process-log-store']
+    assert check.status=='fail' and check.level=='refuse' and report.refused
+    env.pop('DELIVERY_LOG_SOURCE')
+    seen=[]
+    def connect(dsn):
+        c=healthy_pg()(dsn);seen.append(c);return c
+    report=preflight.run(env,connect=connect,import_module=fake_import(engine_modules()))
+    assert {c.name:c for c in report.checks}['process-log-store'].status=='pass'
+    assert any('SET LOCAL ROLE requi_log_writer' in sql for c in seen for sql in c.calls)
+    assert any('operator_startup_reports' in sql for c in seen for sql in c.calls)
+    assert not any('INSERT ' in sql or 'DELETE ' in sql for c in seen for sql in c.calls)
