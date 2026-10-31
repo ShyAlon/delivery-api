@@ -154,3 +154,40 @@ def test_own_test_table_without_guard_function_is_partial(monkeypatch):
     rows=s.inventory(None)
     own=next(r for r in rows if r['file']=='20261030223000_own_test_expense_profile.sql')
     assert own['status']=='partial' and own['destructive']==[]
+
+
+def test_projection_delete_review_is_exact_hash_and_requires_separate_phrase():
+    s=owner();r=load()
+    name='20261031163000_admission_totals.sql'
+    digest=s.PROJECTION_FUNCTION_REVIEW[name]
+    row={'file':name,'status':'pending','destructive':['DELETE'],'sha256':digest}
+    seen=[]
+    with pytest.raises(ValueError,match='confirmation'):
+        s.review_projection_functions([row],lambda phrase:seen.append(phrase) or 'yes')
+    assert name in seen[0] and digest in seen[0]
+    allowed=s.review_projection_functions([row],lambda _:f'REVIEW FUNCTIONS {name} SHA256 {digest}')
+    assert allowed=={name:digest}
+    for changed in ({**row,'sha256':'0'*64},{**row,'file':'renamed.sql'},{**row,'destructive':['DROP','DELETE']}):
+        with pytest.raises(ValueError,match='refused'):s.review_projection_functions([changed],lambda _:'yes')
+
+
+def test_exact_projection_review_applies_all_pending_and_resumes_disposable_database():
+    import tempfile,shutil,pgserver,psycopg,pg_harness
+    s=owner();r=load();scratch=tempfile.mkdtemp(prefix='projection-rollout-');server=pgserver.get_server(scratch,cleanup_mode='delete')
+    try:
+        with psycopg.connect(server.get_uri(),autocommit=True) as conn:
+            conn.execute(pg_harness.ROLES);conn.execute(pg_harness.SUPABASE_STAND_IN);conn.execute(pg_harness.SUPABASE_DEFAULT_ACL)
+            for path in sorted((ROOT/'supabase/migrations').glob('*.sql')):
+                if path.name<'20261029203000_resource_metrics.sql':conn.execute(path.read_text())
+            prompts=[]
+            def confirm(prompt):
+                prompts.append(prompt)
+                return prompt.removeprefix('Type ').split(': ')[0].split(' to apply')[0]
+            reviewed=s.plan(conn,r,ROOT)
+            assert s.apply(conn,reviewed,r,ROOT,'delivery_app',confirm,review_functions=True)==0
+            assert len([p for p in prompts if 'REVIEW FUNCTIONS' in p])==2
+            assert all(row['status']=='present' for row in s.plan(conn,r,ROOT))
+            prompts.clear()
+            assert s.apply(conn,s.plan(conn,r,ROOT),r,ROOT,'delivery_app',confirm,review_functions=True)==0
+            assert not any('REVIEW FUNCTIONS' in p for p in prompts)
+    finally:server.cleanup();shutil.rmtree(scratch,ignore_errors=True)
