@@ -8,7 +8,10 @@ from .child_compute_events import ChildComputeEvents,ComputeEvidenceError
 class ChildComputeAccounting:
     def __init__(self,store,operation,*,rates,phase,journal):
         self.store=store;self.operation=operation;self.rates=rates;self.phase=phase;self.journal=journal
-        self.events=ChildComputeEvents();self.transcript=[];self.segment=operation.binding.job_id+':child:'+operation.operation_id
+        self.events=ChildComputeEvents();self.transcript=[]
+        invocation=operation.operation_id+':lease:'+str(operation.binding.lease_epoch)
+        self.segment=operation.binding.job_id+':child:'+invocation
+        self.evidence_key=(operation.operation_id,'compute:'+str(operation.binding.lease_epoch),'compute')
         self.started=False;self.settled=False
 
     def begin(self):
@@ -25,7 +28,7 @@ class ChildComputeAccounting:
         value=self.events.milliseconds()
         # Persist complete exact transcript before money. Existing immutable
         # parent staging journal; a failed ack cannot create another segment.
-        key=(self.operation.operation_id,'compute','compute')
+        key=self.evidence_key
         import hashlib
         raw=json.dumps(self.transcript,separators=(',',':')).encode()
         digest=hashlib.sha256(raw).hexdigest()
