@@ -192,3 +192,9 @@ def test_items_phase_uses_generator_stage_not_delivery_specs_alias():
     # neutral contract intentionally rejects.
     import inspect
     assert "'phase':generator_stage" in inspect.getsource(ChildGeneratorEngine._produce)
+
+
+@pytest.mark.parametrize('tail',[['--to','tests'],['--to','validation','--from','srs'],[]])
+def test_final_review_cannot_widen_generator_phase(tmp_path,tail):
+    with pytest.raises(PermissionError,match='bounded validation'):
+        manifest([str(tmp_path/'intent.json'),'--out',str(tmp_path/'spec'),'--final-review',*tail],tmp_path)
