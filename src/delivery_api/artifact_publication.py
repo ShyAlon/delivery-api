@@ -151,7 +151,7 @@ def publish_document_revision(store,task_id,documents,*,writer_instance=None):
     members (notably the launch baseline) survive unchanged, never reread from disk.
     """
     if documents.capability.task_id!=task_id:raise ValueError('document task differs')
-    keys=document_artifact_keys()
+    keys=document_artifact_keys() | handoff_document_keys()
     with documents.saver._cursor() as cursor:
         captured=documents._capture_cursor(cursor,list(keys.values()))
         prior=store.manifest_snapshot(task_id,documents.capability.generation)
@@ -186,3 +186,13 @@ def publish_preserving_revision(store,task_id,replacements,*,writer_instance='co
         validator=ARTIFACT_VALIDATORS.get(name)
         artifacts.append({'phase_key':phase,'name':name,'data':raw,'validation_report':validate_artifact_bytes(raw,validator) if validator else None})
     return store.publish_task_revision_bytes(task_id,artifacts,writer_instance=writer_instance)
+
+
+def handoff_document_keys():
+    """Only export evidence, never logs, checkpoint state or arbitrary documents."""
+    return {('handoff',name):path for name,path in {
+        'findings-ledger.json':'spec/findings-ledger.json',
+        'review-history.json':'spec/review-history.json',
+        'docs-state.json':'spec/docs-state.json',
+        'semantic-review.json':'interview/semantic-review.json',
+    }.items()}

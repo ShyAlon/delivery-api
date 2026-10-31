@@ -872,7 +872,8 @@ FROM tasks t"""
             self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s AND deleted_at IS NULL',(time.time(),time.time(),task_id), write=True)
             self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False,'accounting_retained':True})
             return
-        if (self._execute_native('SELECT 1 FROM engine_session_journal j JOIN engine_sessions s ON s.session_id=j.session_id WHERE s.task_id=%s LIMIT 1',(task_id,)).fetchone()
+        if (self._execute_native('SELECT 1 FROM final_packages WHERE task_id=%s LIMIT 1',(task_id,)).fetchone()
+                or self._execute_native('SELECT 1 FROM engine_session_journal j JOIN engine_sessions s ON s.session_id=j.session_id WHERE s.task_id=%s LIMIT 1',(task_id,)).fetchone()
                 or self._execute_native('SELECT 1 FROM generator_snapshots WHERE task_id=%s LIMIT 1',(task_id,)).fetchone()
                 or self._execute_native('SELECT 1 FROM generator_documents d JOIN engine_sessions s ON s.session_id=d.execution_session_id WHERE s.task_id=%s LIMIT 1',(task_id,)).fetchone()):
             self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s AND deleted_at IS NULL',(time.time(),time.time(),task_id), write=True)
@@ -2188,6 +2189,36 @@ FROM tasks t"""
             (_time.time(),job_id), write=True)
         if changed.rowcount!=1: raise ValueError('producer result was already marked published')
 
+    def create_final_package(self,task_id):
+        """Task row lock pins approval, generation and manifest through export+insert."""
+        from .cloud_package import build
+        from .final_package import PackageBlocked
+        import hashlib
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s AND deleted_at IS NULL FOR UPDATE',(task_id,)).fetchone():raise KeyError(task_id)
+        task=self.task(task_id)
+        if task['state']!='done' or task.get('stop_requested_at') is not None or any(p['state'] not in ('approved','done') for p in task['phases']):raise PackageBlocked('Final approval is required')
+        if self._execute_native("SELECT 1 FROM worker_jobs WHERE task_id=%s AND state IN ('pending','running') LIMIT 1",(task_id,)).fetchone():raise PackageBlocked('Worker must finish before export')
+        snapshot=self.manifest_snapshot(task_id,task['generation'])
+        if snapshot is None:raise PackageBlocked('Published final revision is required')
+        owner=current_scope().owner_id
+        identity,raw,contents=build(self,task,snapshot,owner)
+        if self.manifest_snapshot(task_id,task['generation'])!=snapshot:raise PackageBlocked('Final revision changed')
+        self._execute_native('INSERT INTO final_packages(owner_id,task_id,generation,package_id,execution_session_id,revision_id,revision_hash,payload,sha256,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING',
+            (owner,task_id,task['generation'],identity,task['engine_session_id'],snapshot['revision_id'],snapshot['revision_hash'],raw,hashlib.sha256(raw).hexdigest(),time.time()),write=True)
+        self.final_package(task_id,task['generation'],identity)
+        return {'package_id':identity,'generation':task['generation'],'contents':contents}
+
+    def final_package(self,task_id,generation,package_id):
+        from .cloud_package import verify
+        from .final_package import PackageBlocked
+        import hashlib
+        row=self._execute_native('SELECT * FROM final_packages WHERE task_id=%s AND generation=%s AND package_id=%s',(task_id,generation,package_id)).fetchone()
+        if row is None:raise KeyError(package_id)
+        raw=bytes(row['payload'])
+        if hashlib.sha256(raw).hexdigest()!=row['sha256']:raise PackageBlocked('Stored package checksum differs')
+        verify(raw,package_id=package_id,owner_id=str(row['owner_id']),task_id=task_id,generation=generation,revision_id=row['revision_id'],revision_hash=row['revision_hash'],session_id=row['execution_session_id'])
+        return raw
+
     def read_artifact_bytes_sha(self,sha256):
         """Read immutable bytes by content hash - one exact published revision, safe to
         combine with a previously taken manifest snapshot under concurrent republish."""
@@ -2262,6 +2293,8 @@ PG_OPERATIONS = (
     'confirmed_expense_admission',
     'create_link',
     'create_task',
+    'create_final_package',
+    'final_package',
     'deactivate_link',
     'decide_gate',
     'decision_draft',
