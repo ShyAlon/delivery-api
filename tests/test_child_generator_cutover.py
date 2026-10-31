@@ -6,13 +6,14 @@ from delivery_api.tenancy import tenant_context,session_root
 from test_postgres_store import A,DSN
 
 
-@pytest.mark.parametrize('stage',['needs','srs','publication-recovery','paid-needs'])
+@pytest.mark.parametrize('stage',['needs','srs','publication-recovery','paid-needs','installed-paid-srs'])
 def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkeypatch,stage):
     pytest.importorskip('spec_generator')
     from delivery_api import config
     from vmodel_contracts import CONTRACT_VERSION
-    paid=stage=='paid-needs'
-    if paid:stage='needs'
+    installed=stage=='installed-paid-srs'
+    paid=stage in ('paid-needs','installed-paid-srs')
+    if paid:stage='srs' if installed else 'needs'
     publishing=stage=='publication-recovery'
     stage='needs' if publishing else stage
     monkeypatch.setattr(config,'ARTIFACT_PUBLISH',publishing)
@@ -36,7 +37,11 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
                 if payload.get('stream'):
                     events=[{'id':'fake','model':'fake','choices':[{'index':0,'delta':{'role':'assistant','content':content},'finish_reason':None}]},
                         {'id':'fake','model':'fake','choices':[{'index':0,'delta':{},'finish_reason':'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20,'prompt_cache_hit_tokens':0,'prompt_cache_miss_tokens':10}}]
-                    body=b''.join(b'data: '+json.dumps(e).encode()+b'\n\n' for e in events)+b'data: [DONE]\n\n';ct='text/event-stream'
+                    if payload.get('tools'):
+                        tool=payload['tools'][0]['function']['name']
+                        events[0]['choices'][0]['delta']={'role':'assistant','tool_calls':[{'index':0,'id':'fake-tool','type':'function','function':{'name':tool,'arguments':json.dumps({'payload':json.loads(content)})}}]}
+                        events[1]['choices'][0]['finish_reason']='tool_calls'
+                    body=b''.join(b'data: ' +json.dumps(e).encode()+b'\n\n' for e in events)+b'data: [DONE]\n\n';ct='text/event-stream'
                 else:
                     body=json.dumps({'id':'fake','model':'fake','choices':[{'index':0,'message':{'role':'assistant','content':content},'finish_reason':'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20,'prompt_cache_hit_tokens':0,'prompt_cache_miss_tokens':10}}).encode();ct='application/json'
                 self.send_response(200);self.send_header('Content-Type',ct);self.end_headers();self.wfile.write(body)
@@ -60,6 +65,18 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
             with psycopg.connect(DSN) as conn:conn.execute("UPDATE worker_jobs SET execution_options=%s::jsonb WHERE job_id=%s",(json.dumps({'model_route':route}),job))
         engine=ChildGeneratorEngine(tmp_path,gateway_factory=factory,paid_runtime=paid_runtime,dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint=f'http://127.0.0.1:{server.server_port}/v1/chat/completions',
             command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(__import__('pathlib').Path(__file__).parents[2]/'interview-engine/src'),str(__import__('pathlib').Path(__file__).parents[2]/'spec-generator/src')])
+        if installed:
+            from delivery_api import cloud_runtime,inprocess_engine
+            from delivery_api.production_gateway import ProductionGateways
+            cloud_runtime.uninstall()
+            class Factory:
+                models=paid_runtime.models;verify_vendor=None
+                def __call__(self,*args):return factory(*args)
+                def close(self):pass
+            monkeypatch.setattr('delivery_api.production_gateway.ProductionGateways',lambda *a:Factory())
+            from test_production_gateway import env as gateway_env
+            cloud_runtime.install(store,gateway_env(DELIVERY_CHILD_EXECUTION='local',DELIVERY_LOCAL_PREVIEW='1',DELIVERY_DATABASE_URL=engine.dsn,VMODEL_ARTIFACTS_DIR=str(tmp_path)),lambda c:None,paid_runtime=paid_runtime)
+            installed_engine=inprocess_engine.current();installed_engine.command=engine.command;installed_engine.endpoint=engine.endpoint;engine=installed_engine
         argv=[sys.executable,'-m','spec_generator.cli',str(ip),'--system-baseline',str(bp),'--out',str(out),'--to',stage]
         async def go():
             proc=VirtualProcess(asyncio.get_running_loop());proc.attach(argv,{'SPEC_GENERATOR_MODEL_NEEDS':route})
@@ -94,6 +111,7 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
                     rows=conn.execute("SELECT state,deterministic_ms FROM retail_compute_segments WHERE job_id=%s",(job,)).fetchall()
                     assert len(rows)==1 and rows[0]['state']=='settled' and rows[0]['deterministic_ms']>0
                     assert conn.execute("SELECT count(*) AS n FROM retail_contributions WHERE job_id=%s AND kind='tokens'",(job,)).fetchone()['n']==len(calls)
+            if installed:cloud_runtime.uninstall()
             stack.close()
         assert not (out/'checkpoints.sqlite').exists(), 'child generator must persist checkpoints only in PG'
         assert not (out/'needs.json').exists() and b'Stopped after stage' in output
