@@ -24,7 +24,7 @@ def paid_child(store,endpoint):
         return WorkerAdmissionGateway(store,job,resolve_serialized=resolve,measure_raw_usage=settlement_usage,launch_guard=True,retail_rates=rates)
     class FixtureRuntime(PaidChildRuntime):
         def transport(self,*args):return endpoint,{}
-    try:yield factory,FixtureRuntime(models={'deepseek':'deepseek-flash'},api_key='fixture-only')
+    try:yield factory,FixtureRuntime(models={'deepseek':'deepseek-flash','ollama':'local-test'},api_key='fixture-only')
     finally:
         with psycopg.connect(DSN) as conn:
             conn.execute('DELETE FROM expense_alert_outbox');conn.execute('DELETE FROM expense_guard_episodes');conn.execute('DELETE FROM expense_guard_policy')

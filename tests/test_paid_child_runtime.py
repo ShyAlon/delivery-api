@@ -55,6 +55,21 @@ def test_paid_interview_exact_parent_accounting_reaped_and_recovery_never_rebill
             fresh=ChildInterviewClient(store,tmp_path,gateway_factory=lambda *a:pytest.fail('recovery redispatched'),paid_runtime=runtime,dsn=client.dsn,endpoint=endpoint)
             assert fresh.resume(job).sequence==answered.snapshot.sequence and len(calls)==count
             with store._postgres.transaction() as conn:assert conn.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']==before
+            from vmodel_contracts.interactive import ModelRouteSwitchRequest
+            current=answered.snapshot
+            change=ModelRouteSwitchRequest(model_route='ollama',model='local-test',actor_id='test',
+                expected_sequence=current.sequence,expected_input_id=current.open_input.input_id,idempotency_key=uuid.uuid4())
+            switched=client.switch_route(sid,change)
+            assert switched.snapshot.model_map['probing']==('ollama','local-test')
+            assert client.supervisor.last_result.reaped and len(calls)==count
+            with store._postgres.transaction() as conn:
+                balance=conn.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']
+                segments=conn.execute('SELECT count(*) AS n FROM retail_compute_segments').fetchone()['n']
+            assert fresh.switch_route(sid,change).snapshot.sequence==switched.snapshot.sequence
+            with store._postgres.transaction() as conn:
+                assert conn.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']==balance
+                assert conn.execute('SELECT count(*) AS n FROM retail_compute_segments').fetchone()['n']==segments
+
     finally:server.shutdown();server.server_close()
 
 
