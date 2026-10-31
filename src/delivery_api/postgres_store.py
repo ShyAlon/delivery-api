@@ -1244,8 +1244,8 @@ FROM tasks t"""
                 raise ValueError('exact installed edited phase approval required')
             if expected_job_id is not None:
                 job=self.worker_job(expected_job_id)
-                if (not job or job['task_id']!=task_id or job['session_id']!=cap.session_id
-                    or job['generation']!=cap.generation or job['kind']!='continuation:approved-revision'
+                cap.validate_job(job)
+                if (job['kind']!='continuation:approved-revision'
                     or job['state'] not in ('pending','running') or job['execution_options']!={}):
                     raise ValueError('exact private continuation worker required')
             if (self._execute_native("SELECT 1 FROM worker_jobs WHERE task_id=%s AND state IN ('pending','running','paused','failed') AND job_id<>%s LIMIT 1",(task_id,expected_job_id or '')).fetchone()
@@ -1685,11 +1685,7 @@ FROM tasks t"""
         from .worker_capability import WorkerCapability
         job=self.worker_job(job_id)
         if not job:return None
-        capability=WorkerCapability.capture(self,job['task_id'])
-        capability.validate(self)
-        if (job['generation']!=capability.generation or job['session_id']!=capability.session_id
-            or str(job['auth_session_id'])!=capability.scope.session_id):
-            raise TenantAccessDenied('worker job authority changed')
+        capability=WorkerCapability.require_job(self,job)
         changed=self._execute_native("UPDATE worker_jobs SET state='running',attempt=attempt+1,updated_at=%s WHERE job_id=%s AND state IN ('pending','paused')",
                                 (time.time(),job_id), write=True)
         return capability if changed.rowcount==1 else None

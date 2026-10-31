@@ -19,11 +19,9 @@ class GeneratorCheckpoint(PostgresSaver):
         if isinstance(capability,HistoricalCheckpointCapability) and (writable or job_id is not None):raise TenantAccessDenied('historical checkpoint is read-only')
         capability.validate(store)
         job=store.worker_job(job_id) if job_id is not None else None
-        if job_id is not None and (not job or job['state']!='running' or job['task_id']!=capability.task_id or job['generation']!=capability.generation):
-            raise TenantAccessDenied('claimed generator job required')
+        if job_id is not None:capability.validate_job(job,state='running',attempt=expected_attempt)
         if job_id is None and writable:raise TenantAccessDenied('checkpoint writer requires a claimed job')
         self.writable=writable
-        if expected_attempt is not None and (not job or job['attempt']!=expected_attempt):raise TenantAccessDenied('generator attempt changed')
         self.store=store;self.capability=capability;self.job_id=job_id;self.attempt=job['attempt'] if job else None
         self.namespace='generator:'+namespace
         self.logical_thread_id=logical_thread_id or capability.session_id
@@ -50,16 +48,17 @@ class GeneratorCheckpoint(PostgresSaver):
             # Read capabilities use MVCC and never hold a task lock across an
             # HTTP request which may call the engine on another connection.
             task=c.execute('SELECT generation,stop_requested_at FROM tasks WHERE task_id=%s'+(' FOR UPDATE' if self.writable else ''),(cap.task_id,)).fetchone()
-            job=c.execute('SELECT state,attempt,auth_session_id,generation FROM worker_jobs WHERE job_id=%s FOR UPDATE',(self.job_id,)).fetchone()
+            job=c.execute('SELECT * FROM worker_jobs WHERE job_id=%s FOR UPDATE',(self.job_id,)).fetchone()
             from .historical_checkpoint import HistoricalCheckpointCapability
             historical=isinstance(cap,HistoricalCheckpointCapability)
-            if (not task or (task['generation']!=cap.generation and not historical) or (task['stop_requested_at'] is not None and not historical)
-                or (self.job_id is not None and (not job or job['state']!='running' or job['attempt']!=self.attempt
-                    or job['generation']!=cap.generation or str(job['auth_session_id'])!=cap.scope.session_id))):
+            if (not task or (task['generation']!=cap.generation and not historical) or (task['stop_requested_at'] is not None and not historical)):
                 raise TenantAccessDenied('generator checkpoint authority lost')
             token=self.store._connection.set(c)
             try:
                 cap.validate(self.store)
+                if self.job_id is not None:
+                    try:cap.validate_job(job,state='running',attempt=self.attempt)
+                    except TenantAccessDenied as exc:raise TenantAccessDenied('generator checkpoint authority lost') from exc
                 with self.lock,c.cursor(binary=True) as cursor:yield cursor
             finally:self.store._connection.reset(token)
 

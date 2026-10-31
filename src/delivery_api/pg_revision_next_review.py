@@ -15,8 +15,8 @@ def read(store,task_id,*,installation_id,artifacts_base,result_reference=None,ex
         receipt=store.decision_review(task_id,'revision-continuation-result:'+installation_id,reference)
         if not receipt or receipt['phase'] not in STAGES:raise ValueError('retained generated next-phase result required')
         job=store.worker_job(receipt['job_id'])
-        if (not job or job['state']!='done' or job['task_id']!=task_id or job['session_id']!=cap.session_id or job['generation']!=cap.generation
-            or job['kind']!='continuation:approved-revision' or job['execution_options']!={}):raise ValueError('completed result worker required')
+        cap.validate_job(job,state='done')
+        if (job['kind']!='continuation:approved-revision' or job['execution_options']!={}):raise ValueError('completed result worker required')
         stage=STAGES[receipt['phase']];artifact=receipt['artifact']
         if digest(artifact)!=receipt['artifact_sha256']:raise ValueError('result artifact differs')
         reader=GeneratorSnapshots(store,cap).reader(receipt['snapshot'])
