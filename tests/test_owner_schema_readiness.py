@@ -8,7 +8,7 @@ m=importlib.util.module_from_spec(SPEC)
 def load():SPEC.loader.exec_module(m);return m
 
 def test_all_rollout_files_have_catalog_probes():
-    s=load();assert len(s.MIGRATIONS)==13
+    s=load();assert len(s.MIGRATIONS)==14
     assert list(s.MIGRATIONS)==sorted(s.MIGRATIONS)
     assert '20261030030000_resource_metrics_maintenance.sql' in s.MIGRATIONS
 
@@ -89,16 +89,16 @@ def test_apply_seven_real_migrations_to_owned_disposable_db():
             for path in sorted((ROOT/'supabase/migrations').glob('*.sql')):
                 if path.name<'20261029203000_resource_metrics.sql' and path.name[:14].isdigit():conn.execute(path.read_text())
             rows=s.plan(conn,r,ROOT)
-            assert len([x for x in rows if x['status']=='pending'])==13
+            assert len([x for x in rows if x['status']=='pending'])==14
             # New file has DELETE only inside private projection functions, but
             # does not inherit the owner's exact old retention-file grant.
-            with pytest.raises(ValueError,match='destructive'):s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 13 MIGRATIONS TO delivery_app')
+            with pytest.raises(ValueError,match='destructive'):s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 14 MIGRATIONS TO delivery_app')
             conn.execute((ROOT/'supabase/migrations/20261031163000_admission_totals.sql').read_text())
             conn.execute((ROOT/'supabase/migrations/20261031190000_retail_totals.sql').read_text())
             rows=s.plan(conn,r,ROOT)
             # Apply dependencies only in this owned disposable fixture, then the
             # new cache file directly; the production helper stays refusal-first.
-            with pytest.raises(ValueError,match='destructive'):s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 12 MIGRATIONS TO delivery_app')
+            with pytest.raises(ValueError,match='destructive'):s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 13 MIGRATIONS TO delivery_app')
             for row in rows:
                 if row['status']=='pending':conn.execute((ROOT/'supabase/migrations'/row['file']).read_text())
             rows=s.plan(conn,r,ROOT)

@@ -282,10 +282,8 @@ class PostgresStore:
         input_id = payload.get('input_id')
         if not isinstance(input_id, str) or not input_id:
             raise ValueError('waiting input identity required')
-        rows = self._execute_native("SELECT id,payload FROM events WHERE task_id=%s AND kind='waiting_input'", (task_id,)).fetchall()
-        for event in rows:
-            if str(json.loads(event['payload']).get('input_id')) == input_id:
-                return event['id']
+        event = self._execute_native("SELECT id FROM events WHERE task_id=%s AND kind='waiting_input' AND payload::jsonb->>'input_id'=%s ORDER BY id LIMIT 1", (task_id,input_id)).fetchone()
+        if event:return event['id']
         return self.add_event(task_id, 'waiting_input', message, phase_key=phase_key, payload=payload)
 
     @staticmethod
