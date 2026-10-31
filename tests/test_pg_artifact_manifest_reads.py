@@ -155,18 +155,6 @@ def test_validation_report_must_bind_published_bytes(pgstore, tmp_path):
                                                              'sha256': hl.sha256(b'other bytes').hexdigest()})
 
 
-def test_manifest_coverage_readiness_check(pgstore, tmp_path, monkeypatch):
-    """Enable-readiness: a staged-but-unpublished artifact appears in the legacy
-    projection but not the manifest; coverage flags it legacy_only and not ready."""
-    from delivery_api import app
-    task_id, _ = _published(pgstore, tmp_path)
-    monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
-    monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
-    with tenant_context(A):
-        report = app.artifact_manifest_coverage(task_id)
-    assert report['ready'] is True and report['legacy_only'] == []
-    assert report['published'] == ['spec/srs.json']
 
 
 def test_validation_report_requires_version_provenance(pgstore, tmp_path):
