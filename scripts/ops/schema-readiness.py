@@ -6,6 +6,53 @@ from pathlib import Path
 import sys
 
 ROOT=Path(__file__).resolve().parents[2]
+# Explicit pre-cutover baseline, not automatic discovery/grandfathering.
+# New files must have reviewed probes below; coverage validation rejects omissions.
+BASELINE_MIGRATIONS=frozenset({
+ '20261007150000_tenant_control_plane.sql',
+ '20261008111000_worker_execution_options.sql',
+ '20261008122000_attempt_admission_ledger.sql',
+ '20261008180000_private_admission_role.sql',
+ '20261008181000_optional_admission_limits.sql',
+ '20261008185000_attempt_settlement_timestamp.sql',
+ '20261008190000_prepaid_credit_accounts.sql',
+ '20261009064000_raw_provider_usage.sql',
+ '20261009065500_cooperative_task_stop.sql',
+ '20261009070000_private_expense_alert_outbox.sql',
+ '20261009100000_srs_rework_job_options.sql',
+ '20261009100500_srs_rework_gate_revision.sql',
+ '20261009104000_operator_read_registry.sql',
+ '20261009104500_operator_read_column_bounds.sql',
+ '20261009111000_operator_debug_metadata.sql',
+ '20261009112000_operator_state_event_log.sql',
+ '20261009120000_operator_task_usage.sql',
+ '20261009130000_private_credit_adjustment_evidence.sql',
+ '20261009133000_task_operation_suspension.sql',
+ '20261009150000_closed_revision_restart_intents.sql',
+ '20261009152000_closed_revision_lineage_plans.sql',
+ '20261009153000_closed_revision_journal.sql',
+ '20261009162000_closed_revision_source_reviews.sql',
+ '20261009170000_private_revision_installations.sql',
+ '20261009173500_private_revision_acceptance.sql',
+ '20261009175000_closed_revision_job_options.sql',
+ '20261009213000_confirmed_expense_guard.sql',
+ '20261010090000_private_payment_ledger.sql',
+ '20261010093000_operator_payment_reads.sql',
+ '20261010190000_exact_retail_contributions.sql',
+ '20261011104000_private_unknown_compute_waiver.sql',
+ '20261011183000_private_unknown_provider_failure.sql',
+ '20261017100000_released_provider_attempts.sql',
+ '20261020080000_credit_ledger.sql',
+ '20261020130000_operator_stop_audit.sql',
+ '20261020150000_operator_grant_credits.sql',
+ '20261022090000_session_placement_leases.sql',
+ '20261022120000_session_checkpoint_tables.sql',
+ '20261022140000_artifact_manifest.sql',
+ '20261022160000_staged_provider_responses.sql',
+ '20261023220000_operator_attempt_release_audit.sql',
+ '20261024090000_session_tables_least_privilege.sql',
+ '20261025120000_operator_failure_diagnostics.sql',
+})
 MIGRATIONS={
  '20261029203000_resource_metrics.sql':('table:resource_run_samples','table:resource_run_summaries','table:resource_container_samples','table:resource_container_summaries'),
  '20261029210000_generator_snapshots.sql':('table:generator_snapshots',),
@@ -15,6 +62,7 @@ MIGRATIONS={
  '20261030030000_resource_metrics_maintenance.sql':('function:requi_maintain_resource_metrics',),
  '20261030040000_engine_quality_config.sql':('table:engine_quality_config',),
  '20261030050000_operator_usage_default.sql':('function0:requi_operator_usage_default','trigger:operator_usage_default'),
+ '20261030223000_own_test_expense_profile.sql':('table:own_test_expense_profiles','signature:requi_own_test_expense_guard(text,bigint)'),
 }
 ROLES=('requi_metrics_writer','requi_engine_config_read','requi_operator_usage')
 
@@ -29,13 +77,21 @@ def destructive(text):
 
 def object_exists(conn,probe):
     kind,name=probe.split(':',1)
+    if kind=='signature':return conn.execute('SELECT to_regprocedure(%s) IS NOT NULL',('public.'+name,)).fetchone()[0]
     if kind=='table':return conn.execute('SELECT to_regclass(%s) IS NOT NULL',('public.'+name,)).fetchone()[0]
     if kind=='function0':return conn.execute('SELECT to_regprocedure(%s) IS NOT NULL',('public.'+name+'()',)).fetchone()[0]
     if kind=='trigger':return conn.execute("SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.operator_principals'::regclass AND tgname=%s AND NOT tgisinternal)",(name,)).fetchone()[0]
     if kind=='constraint':return conn.execute("SELECT EXISTS(SELECT 1 FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname='public' AND c.conname=%s)",(name,)).fetchone()[0]
     return conn.execute('SELECT to_regprocedure(%s) IS NOT NULL',('public.'+name+'(double precision,double precision)',)).fetchone()[0]
 
+def validate_coverage(root=ROOT):
+    disk={p.name for p in (root/'supabase/migrations').glob('*.sql')}
+    covered=BASELINE_MIGRATIONS | set(MIGRATIONS)
+    if BASELINE_MIGRATIONS & set(MIGRATIONS) or covered!=disk:
+        raise ValueError('migration inventory coverage mismatch; add reviewed catalog probes for new files: '+','.join(sorted(disk-covered))+'; missing files: '+','.join(sorted(covered-disk)))
+
 def inventory(conn):
+    validate_coverage()
     rows=[]
     for name,probes in MIGRATIONS.items():
         exists=[bool(object_exists(conn,p)) for p in probes]

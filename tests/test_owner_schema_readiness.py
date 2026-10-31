@@ -7,8 +7,8 @@ m=importlib.util.module_from_spec(SPEC)
 
 def load():SPEC.loader.exec_module(m);return m
 
-def test_all_seven_rollout_files_have_catalog_probes():
-    s=load();assert len(s.MIGRATIONS)==8
+def test_all_rollout_files_have_catalog_probes():
+    s=load();assert len(s.MIGRATIONS)==9
     assert list(s.MIGRATIONS)==sorted(s.MIGRATIONS)
     assert '20261030030000_resource_metrics_maintenance.sql' in s.MIGRATIONS
 
@@ -89,8 +89,8 @@ def test_apply_seven_real_migrations_to_owned_disposable_db():
             for path in sorted((ROOT/'supabase/migrations').glob('*.sql')):
                 if path.name<'20261029203000_resource_metrics.sql' and path.name[:14].isdigit():conn.execute(path.read_text())
             rows=s.plan(conn,r,ROOT)
-            assert len([x for x in rows if x['status']=='pending'])==8
-            assert s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 8 MIGRATIONS TO delivery_app')==0
+            assert len([x for x in rows if x['status']=='pending'])==9
+            assert s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 9 MIGRATIONS TO delivery_app')==0
             assert all(x['status']=='present' for x in r.inventory(conn))
             for role in r.ROLES:assert conn.execute("SELECT pg_has_role('delivery_app',%s,'SET')",(role,)).fetchone()[0]
     finally:server.cleanup();shutil.rmtree(scratch,ignore_errors=True)
@@ -102,3 +102,43 @@ def test_normal_apply_includes_usage_role_and_standard_settings_save():
     text=(ROOT/'scripts/owner/apply-pg-cutover.py').read_text()
     assert 'operator_setup.run(root,explicit=args.env_file)' in text
     assert text.index('result=apply(')<text.index('operator_setup.run(')
+
+
+def test_every_checked_in_migration_has_explicit_inventory_coverage():
+    s=load()
+    disk={p.name for p in (ROOT/'supabase/migrations').glob('*.sql')}
+    baseline=set(getattr(s,'BASELINE_MIGRATIONS',()))
+    assert not baseline & set(s.MIGRATIONS)
+    assert baseline | set(s.MIGRATIONS)==disk
+
+
+def test_own_test_guard_requires_table_and_exact_function_signature():
+    s=load()
+    assert s.MIGRATIONS['20261030223000_own_test_expense_profile.sql']==(
+        'table:own_test_expense_profiles','signature:requi_own_test_expense_guard(text,bigint)')
+
+
+def test_unlisted_new_migration_refuses_before_any_database_probe(tmp_path,monkeypatch):
+    s=load();folder=tmp_path/'supabase/migrations';folder.mkdir(parents=True)
+    for name in s.BASELINE_MIGRATIONS | set(s.MIGRATIONS):(folder/name).write_text('-- fixture')
+    s.validate_coverage(tmp_path)
+    (folder/'20261101000000_new.sql').write_text('CREATE TABLE future(x int);')
+    with pytest.raises(ValueError,match='20261101000000_new.sql'):s.validate_coverage(tmp_path)
+
+
+def test_signature_probe_passes_exact_types_and_reports_partial(monkeypatch):
+    s=load();calls=[]
+    class Conn:
+        def execute(self,sql,args):
+            calls.append(args[0]);return self
+        def fetchone(self):return (False,)
+    assert not s.object_exists(Conn(),'signature:requi_own_test_expense_guard(text,bigint)')
+    assert calls==['public.requi_own_test_expense_guard(text,bigint)']
+
+
+def test_own_test_table_without_guard_function_is_partial(monkeypatch):
+    s=load()
+    monkeypatch.setattr(s,'object_exists',lambda conn,probe:not probe.startswith('signature:'))
+    rows=s.inventory(None)
+    own=next(r for r in rows if r['file']=='20261030223000_own_test_expense_profile.sql')
+    assert own['status']=='partial' and own['destructive']==[]

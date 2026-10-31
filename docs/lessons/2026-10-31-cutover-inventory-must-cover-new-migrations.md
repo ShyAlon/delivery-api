@@ -1,0 +1,9 @@
+# Startup schema and owner-run apply must agree
+
+PR541 added a core startup-required table/function but omitted the owner-run cutover inventory. Owner preview404c7814 refused startup on missing own_test_expense_profiles; apply-pg-cutover showed eight present files and zero pending because its input list omitted the new migration. Repeating the command cannot fix an omitted inventory entry.
+
+Add reviewed probes for both the profile table and exact requi_own_test_expense_guard(text,bigint) function. A table without function is partial and refuses automatic replay. Add explicit coverage for all checked-in SQL filenames: the fixed pre-cutover baseline is named, not discovered or silently grandfathered; every later/new file requires reviewed probes. Inventory validates coverage before database probing, so future omitted files fail clearly instead of reporting ready. This does not automatically execute every historical SQL file.
+
+Test changes: old eight-entry count and real-disposable rollout expectation become nine; no assertion weakened or retired. New tests cover all filenames, new unlisted file refusal, exact typed function signature and table-only partial state. Fail-first uncovered44files (baseline plus omitted profile) against old inventory.12 dependency-light contracts pass; three existing PG/psycopg contracts were not run in the fresh environment and are disclosed, not claimed green. No live writes, deploy or spend.
+
+After owner merge/pull: .venv/bin/python scripts/owner/apply-pg-cutover.py . --apply. The same invocation previews then requires exact typed confirmation. It applies pending reviewed cutover entries only; present baseline files are not replayed. Review pending list before confirming. Then rerun preview-exec and check required-tables PASS and actual runtime tuple. Own-test profile transition remains separate after guard runtime is running.
