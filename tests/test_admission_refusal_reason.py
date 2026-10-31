@@ -50,3 +50,14 @@ def test_success_reply_is_unchanged():
         f.write(json.dumps({'action': 'reserve_serialized', 'payload': {'attempt_id': 'a', 'stage': 's', 'provider': 'p', 'model': 'm', 'serialized_request': 'x', 'max_output_tokens': 1}}).encode() + b'\n'); f.flush()
         assert json.loads(f.readline()) == {'ok': True, 'result': 'attempt-1'}
         f.close()
+
+
+def test_duplicate_private_frame_keys_cannot_reach_money_gateway():
+    import socket
+    class Gateway:
+        def start(self,attempt):raise AssertionError('ambiguous frame reached gateway')
+    with worker_admission_channel(Gateway()) as child:
+        child.settimeout(2)
+        child.sendall(b'{"action":"start","action":"start","payload":{"attempt":"x"}}\n')
+        child.shutdown(socket.SHUT_WR)
+        assert child.recv(4096)==b''
