@@ -22,6 +22,8 @@ def ledger(store):
         job=store.enqueue_worker(tid,'phase:needs');store.claim_worker(job)
     yield store,tid,job
     with psycopg.connect(DSN) as c:
+        # Tests have no live worker; hide retains its job, so close only this fake fixture job.
+        c.execute("UPDATE worker_jobs SET state='done' WHERE job_id=%s",(job,))
         c.execute('DELETE FROM provider_attempts WHERE job_id=%s',(job,))
         c.execute('DELETE FROM admission_limits WHERE owner_id=%s',(A.owner_id,))
     with tenant_context(A):
