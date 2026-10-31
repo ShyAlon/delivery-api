@@ -1,22 +1,7 @@
-"""Run a generator phase inside the service, looking to the runner like the child process it replaces.
-
-The runner turns an engine's output lines into task state (progress, typed decisions, errors, completion) and sends
-the founder's answers back on the engine's input. A VirtualProcess carries exactly that, so the runner's state
-handling is unchanged. The generator runs in a worker thread under the money gateway (SameHostProducerWorker): every
-provider call is admitted and measured by the service itself, not by a separate process.
-
-Limits, by design of running in one process:
-  * One phase runs at a time (the slot). The generator reads a few process-wide settings; they are set for the run
-    and restored afterwards, which is only safe with a single run.
-  * A thread cannot be killed. Stop is cooperative; a run that ignores it is released to the runner (exit -9) while
-    the thread finishes on its own, and the slot stays held until then.
-  * A pending gate question lives in memory. After a restart the generator resumes from its checkpoint and asks again.
-"""
-import asyncio,json,os,queue,sys,threading,traceback
-from contextlib import contextmanager
+"""Runner protocol bridge and serialized lifecycle for isolated child phases."""
+import asyncio,json,os,queue,threading
 
 _STAGES=('needs','srs','architecture','items','tests','validation','review','repair','expert_opinion')
-_ENV_PREFIXES=('VMODEL_','SPEC_GENERATOR_')
 _ATTACH_TIMEOUT_S=120.0
 _registry={}
 
@@ -111,20 +96,6 @@ def terminate(proc,sig):
     else:proc.kill() if sig==signal.SIGKILL else proc.terminate()
 
 
-@contextmanager
-def process_settings(env):
-    """Set the generator's process-wide settings for one run and restore them exactly afterwards."""
-    wanted={k:v for k,v in (env or {}).items() if k.startswith(_ENV_PREFIXES)}
-    snapshot={k:v for k,v in os.environ.items() if k.startswith(_ENV_PREFIXES)}
-    try:
-        os.environ.update(wanted)
-        yield
-    finally:
-        # The generator sets some of these itself; whatever it added or changed goes back to what it was.
-        for k in [k for k in os.environ if k.startswith(_ENV_PREFIXES) and k not in snapshot]:os.environ.pop(k,None)
-        os.environ.update(snapshot)
-
-
 def stage_models(env):
     """Every stage uses the one reviewed route the phase selected; managed routes only.
 
@@ -144,55 +115,11 @@ def stage_models(env):
     return {stage:(StageModel(provider,model,max_tokens=caps[stage].max_tokens) if stage in caps else StageModel(provider,model)) for stage in _STAGES}
 
 
-class InProcessEngine:
-    def __init__(self,artifacts_base,*,gateway_factory,wire_client_factory):
+class ChildPhaseLifecycle:
+    def __init__(self,artifacts_base,*,gateway_factory):
         self.artifacts_base=artifacts_base
         self.gateway_factory=gateway_factory
-        self.wire_client_factory=wire_client_factory
         self._slot=None
-
-    def _worker(self,store,proc):
-        from .same_host_producer import SameHostProducerWorker
-        from spec_generator.worker_runtime import JobRuntime
-        from spec_generator.telemetry import UsageLog
-        def runtime(capability,root):
-            # Called in the worker thread once the job is claimed: tell the phase lifecycle to start, then wait
-            # for the runner to hand over the command and settings it built.
-            proc._loop.call_soon_threadsafe(proc.started.set)
-            command,env=proc.wait_command()
-            return JobRuntime(stage_models(env),str(root/'private-llm-calls.jsonl'),lambda text:None)
-        return SameHostProducerWorker(store,self.artifacts_base,gateway_factory=self.gateway_factory,
-            usage_log_factory=lambda capability,root:UsageLog(capability.session_id),
-            runtime_factory=runtime,wire_client_factory=self.wire_client_factory)
-
-    def _produce(self,proc):
-        from spec_generator import cli
-        from spec_generator.cli_io import RunIO
-        from spec_generator.errors import UserFacingError
-        def producer(capability,root):
-            command,env=proc.wait_command()
-            argv=command[command.index('spec_generator.cli')+1:]
-            out=_Sink(proc);code=0
-            try:
-                with process_settings(env):
-                    cli.main(argv,io=RunIO(stdout=out,stderr=out,decide=proc.decide))
-            except EngineStopped:
-                code=130
-            except UserFacingError as exc:
-                from .user_messages import scrub_failure_text
-                out.write('\n'+scrub_failure_text(exc.render())+'\n');code=1
-            except SystemExit as exc:
-                code=exc.code if isinstance(exc.code,int) else (0 if exc.code is None else 1)
-            except BaseException:
-                from .diagnostic_evidence import failure
-                failure('generator.worker.failed')
-                from .user_messages import scrub_failure_text
-                trace=traceback.format_exc()
-                if scrub_failure_text(trace)!=trace:print(trace,file=sys.stderr,flush=True)   # raw detail: server log only
-                out.write(scrub_failure_text(trace));out.flush();proc.finish(1);raise
-            finally:out.flush()
-            proc.finish(code)
-        return producer
 
     async def dispatch(self,store,orchestrator,task_id,phase,job_id,options):
         """Run one phase job: the phase lifecycle on the event loop, the generator in a worker thread.

@@ -12,96 +12,7 @@ import pytest
 
 from delivery_api import tenant_jobs
 from delivery_api.attempt_ledger import AdmissionDenied
-from delivery_api.producer_admission import current_worker_gateway
-
-
-def _patch_dispatch(monkeypatch, factory):
-    """Run dispatch_phase's process branch with the run machinery stubbed to
-    invoke run_child directly against a fake capability."""
-    monkeypatch.setenv('DELIVERY_RUN_ISOLATION', 'process')
-    from delivery_api import config
-    monkeypatch.setattr(config, 'CLOUD_TENANTS', True, raising=False)
-    monkeypatch.setattr(config, 'RUN_ISOLATION', 'process', raising=False)
-    from delivery_api import cloud_runtime
-    monkeypatch.setattr(cloud_runtime, 'gateway_factory', lambda: factory)
-    from delivery_api import child_compute
-    monkeypatch.setattr(child_compute, 'available', lambda store: False)
-
-    captured = {}
-
-    async def fake_run_limited(store, orchestrator, task_id, work, **kw):
-        return await work()
-
-    async def fake_execute_job(store, job_id, handler, **kw):
-        capability = SimpleNamespace(task_id='task-1', session_id='sess-1',
-                                     validate=lambda store: None)
-        await handler(capability)
-        return True
-
-    from delivery_api import run_slots as run_slots_module
-    monkeypatch.setattr(run_slots_module, 'run_limited', fake_run_limited)
-    monkeypatch.setattr(tenant_jobs, 'execute_job', fake_execute_job)
-    store = SimpleNamespace(
-        enqueue_worker=lambda task_id, kind, execution_options=None: 'job-1',
-        worker_job=lambda job_id: {'task_id': 'task-1', 'kind': 'phase:needs', 'state': 'running'},
-    )
-    return captured, store
-
-
-def _gateway(**overrides):
-    base = dict(job_id='job-1', retail_rates=None, resolve_quote=lambda **kw: None,
-                measure_usage=lambda response: None, resolve_serialized=None,
-                measure_raw_usage=None)
-    base.update(overrides)
-    return SimpleNamespace(**base)
-
-
-def test_dispatch_denies_closed_when_execution_not_installed(monkeypatch):
-    captured, store = _patch_dispatch(monkeypatch, factory=None)
-
-    class Orchestrator:
-        async def execute_phase(self, task_id, phase, **options):
-            pytest.fail('the phase must not start without an installed gateway factory')
-
-    with pytest.raises(AdmissionDenied, match='not installed'):
-        import asyncio
-        asyncio.run(tenant_jobs.dispatch_phase(store, Orchestrator(), 'task-1', 'needs'))
-
-
-def test_dispatch_supplies_job_bound_gateway_to_the_runner(monkeypatch):
-    gateway = _gateway()
-    calls = []
-    factory = lambda capability, job_id: (calls.append((capability, job_id)), gateway)[1]
-    captured, store = _patch_dispatch(monkeypatch, factory)
-
-    seen = {}
-
-    class Orchestrator:
-        async def execute_phase(self, task_id, phase, **options):
-            # What runner.run does at src/delivery_api/runner.py:93.
-            seen['gateway'] = current_worker_gateway(store, task_id)
-
-    import asyncio
-    job_id = asyncio.run(tenant_jobs.dispatch_phase(store, Orchestrator(), 'task-1', 'needs'))
-    assert job_id == 'job-1'
-    assert seen['gateway'] is gateway
-    assert calls and calls[0][1] == 'job-1'
-
-
-def test_dispatch_gateway_without_runner_authorization_still_denies(monkeypatch):
-    # The deepseek route's gateway carries retail_rates; the subprocess path
-    # stays held until exact retail compute metering is installed.
-    gateway = _gateway(retail_rates={'unit': 1})
-    factory = lambda capability, job_id: gateway
-    captured, store = _patch_dispatch(monkeypatch, factory)
-
-    class Orchestrator:
-        async def execute_phase(self, task_id, phase, **options):
-            current_worker_gateway(store, task_id)
-
-    import asyncio
-    with pytest.raises(AdmissionDenied, match='retail subprocess compute metering'):
-        asyncio.run(tenant_jobs.dispatch_phase(store, Orchestrator(), 'task-1', 'needs'))
+from delivery_api.producer_admission import current_worker_gateway,WorkerAdmissionGateway
 
 
 def _real_gateway(**kw):
@@ -115,7 +26,7 @@ class _Store:
 
 
 def test_current_worker_gateway_accepts_a_complete_serialized_protocol_pair():
-    from delivery_api.producer_admission import current_worker_gateway, worker_gateway
+    from delivery_api.producer_admission import current_worker_gateway,WorkerAdmissionGateway, worker_gateway
     gw = _real_gateway(resolve_serialized=lambda *a: None, measure_raw_usage=lambda *a: None)
     with worker_gateway(gw):
         assert current_worker_gateway(_Store(), 't1') is gw
@@ -123,7 +34,7 @@ def test_current_worker_gateway_accepts_a_complete_serialized_protocol_pair():
 
 def test_current_worker_gateway_refuses_incomplete_pairs_before_any_provider_contact():
     from delivery_api.attempt_ledger import AdmissionDenied
-    from delivery_api.producer_admission import current_worker_gateway, worker_gateway
+    from delivery_api.producer_admission import current_worker_gateway,WorkerAdmissionGateway, worker_gateway
     for kw in ({'resolve_serialized': lambda *a: None},          # serialized without usage
                {'measure_raw_usage': lambda *a: None},          # usage without resolution
                {'resolve_quote': lambda *a: None},              # message-shaped without usage
@@ -134,7 +45,37 @@ def test_current_worker_gateway_refuses_incomplete_pairs_before_any_provider_con
 
 
 def test_current_worker_gateway_accepts_the_complete_message_shaped_pair():
-    from delivery_api.producer_admission import current_worker_gateway, worker_gateway
+    from delivery_api.producer_admission import current_worker_gateway,WorkerAdmissionGateway, worker_gateway
     gw = _real_gateway(resolve_quote=lambda *a: None, measure_usage=lambda *a: None)
     with worker_gateway(gw):
         assert current_worker_gateway(_Store(), 't1') is gw
+
+
+def test_product_phase_selection_not_env_model_is_the_authority():
+    import pytest
+    from delivery_api.attempt_ledger import AdmissionDenied
+    s=_Store();s.worker_job=lambda j:{'execution_options':{'model_route':'deepseek:selected-phase-model'}}
+    g=WorkerAdmissionGateway(s,'j',resolve_quote=lambda **kw: (_ for _ in ()).throw(AssertionError('must not reach resolver')))
+    with pytest.raises(AdmissionDenied,match='phase selection'):
+        g.reserve(attempt_id='a',stage='needs',provider='deepseek',model='env-model',messages=[],max_output_tokens=1)
+
+
+def test_exact_retail_subprocess_cannot_omit_compute_meter():
+    import pytest
+    from delivery_api.producer_admission import worker_gateway,current_worker_gateway
+    from delivery_api.retail_pricing import RetailRates
+    from delivery_api.attempt_ledger import AdmissionDenied
+    s=_Store();s.worker_job=lambda j:{'task_id':'t','state':'running'}
+    g=WorkerAdmissionGateway(s,'j',retail_rates=RetailRates.from_environment({}))
+    with worker_gateway(g),pytest.raises(AdmissionDenied,match='subprocess compute'):
+        current_worker_gateway(s,'t')
+
+
+def test_removed_dispatch_default_refuses_before_queue_or_work(monkeypatch):
+    import asyncio
+    from delivery_api import config,inprocess_engine
+    monkeypatch.setattr(config,'CLOUD_TENANTS',True);monkeypatch.setattr(inprocess_engine,'_engine',None)
+    def forbidden(*a,**k):pytest.fail('no queue or provider side effect')
+    store=SimpleNamespace(enqueue_worker=forbidden)
+    with pytest.raises(AdmissionDenied,match='child execution is not installed'):
+        asyncio.run(tenant_jobs.dispatch_phase(store,SimpleNamespace(execute_phase=forbidden),'task','needs'))

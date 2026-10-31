@@ -92,7 +92,7 @@ def _jobs_store():
     return NS(worker_job=lambda job_id: None, enqueue_worker=lambda task_id, kind, execution_options=None: "job-1")
 
 
-def test_process_mode_does_not_use_the_in_process_engine_and_thread_mode_does(monkeypatch):
+def test_legacy_isolation_setting_cannot_select_an_alternative_to_child_engine(monkeypatch):
     import delivery_api.inprocess_engine as engine_module
     used = {"engine": 0, "job": 0}
     # The test only needs the phase-mode enum, so it does not load the whole orchestrator (and the generator behind it).
@@ -111,7 +111,7 @@ def test_process_mode_does_not_use_the_in_process_engine_and_thread_mode_does(mo
     monkeypatch.setattr(tenant_jobs, "execute_job", fake_execute_job)
     monkeypatch.setattr(config, "RUN_ISOLATION", "process")
     assert asyncio.run(tenant_jobs.dispatch_phase(NS(**{**_jobs_store().__dict__, **_store([]).__dict__}), _orchestrator(), "t1", "needs")) == "job-1"
-    assert used == {"engine": 0, "job": 1}
+    assert used == {"engine": 1, "job": 0}
     monkeypatch.setattr(config, "RUN_ISOLATION", "thread")
     asyncio.run(tenant_jobs.dispatch_phase(NS(**{**_jobs_store().__dict__, **_store([]).__dict__}), _orchestrator(), "t1", "needs"))
-    assert used == {"engine": 1, "job": 1}
+    assert used == {"engine": 2, "job": 0}

@@ -36,7 +36,6 @@ class WorkerAdmissionGateway:
         self.provider_balance=provider_balance
         self.verify_provider_snapshot=verify_provider_snapshot
         self.retail_rates=retail_rates
-        self.compute_meter=None;self._meter_attempts=set()
         self.launch_guard=launch_guard
         self.store=store;self.job_id=job_id;self.require_prepaid=require_prepaid
         self.resolve_quote=resolve_quote;self.measure_usage=measure_usage
@@ -65,9 +64,8 @@ class WorkerAdmissionGateway:
 
     def _verify_snapshot(self):
         if self.verify_provider_snapshot is not None:
-            from .compute_meter import excluded_wait
             try:
-                with excluded_wait():self.verify_provider_snapshot()
+                self.verify_provider_snapshot()
             except AdmissionDenied:raise
             except Exception as exc:
                 # A plain error would reach the model client as a generic "Connection error"; name it.
@@ -130,16 +128,14 @@ class WorkerAdmissionGateway:
         reason=self.store.admit_provider_attempt(self.job_id,attempt,quote,digest,balance=balance,
             bind_attempt=bind_attempt,authorize=authorize,require_prepaid=self.require_prepaid,launch_guard=self.launch_guard)
         if reason!='allowed':raise AdmissionDenied('service temporarily unavailable: '+reason)
-        self._pause_meter(attempt)
         return attempt
 
     def _prepare_start(self,quote):
         self._verify_snapshot()
         if 'estimate_policy' not in quote:return None
         if self.provider_balance is None:raise AdmissionDenied('pre-call provider balance reader required')
-        from .compute_meter import excluded_wait
         try:
-            with excluded_wait():return self.provider_balance()
+            return self.provider_balance()
         except AdmissionDenied:raise
         except Exception as exc:raise AdmissionDenied('provider balance read failed: '+str(exc)[:300]) from exc
 
@@ -157,13 +153,8 @@ class WorkerAdmissionGateway:
     def _complete_attempt(self,attempt,usage,source):
         # Accepted evidence goes to the ledger, never through new-work authority.
         result=self.store.transition_provider_attempt(attempt,'settle',usage)
-        self._resume_meter(attempt)
         if result['state']!='settled':raise AdmissionDenied(source+' uncertain; reservation held for review')
         return result
-
-    def _resume_meter(self,attempt):
-        if attempt in self._meter_attempts:
-            self._meter_attempts.remove(attempt);self.compute_meter.resume()
 
     def _attempt(self,attempt):
         row=self.store.provider_attempt(attempt)
@@ -208,14 +199,6 @@ class WorkerAdmissionGateway:
                 except Exception:
                     logging.getLogger(__name__).warning('release-failed audit record could not be written',exc_info=True)
             raise denied
-        self._pause_meter(attempt)
-
-    def _pause_meter(self,attempt):
-        from .compute_meter import current
-        meter=self.compute_meter or current()
-        if meter:
-            self.compute_meter=meter
-            self.compute_meter.pause();self._meter_attempts.add(attempt)
 
     def settle(self,attempt,response):
         self._attempt(attempt)
@@ -279,14 +262,12 @@ class WorkerAdmissionGateway:
     def uncertain(self,attempt):
         row=self._attempt(attempt)
         if row['state']=='dispatched':self.store.transition_provider_attempt(attempt,'uncertain')
-        self._resume_meter(attempt)
 
     def release(self,attempt,evidence):
-        # Proven not delivered (connect failure, no request byte): funds are freed and the compute meter resumes.
+        # Proven not delivered (connect failure, no request byte): funds are freed.
         # The ledger checks the proof itself; a refusal raises and the caller marks the attempt uncertain.
         self._attempt(attempt)
         self.store.transition_provider_attempt(attempt,'release',evidence)
-        self._resume_meter(attempt)
 
 
 # Runner boundary: a producer lacking the guarded admission protocol must never

@@ -136,27 +136,14 @@ class GwStore:
             raise AdmissionDenied('nope')
 
 
-class Meter:
-    def __init__(self):
-        self.resumed = 0
-
-    def resume(self):
-        self.resumed += 1
+def test_gateway_release_passes_the_proof():
+    g=WorkerAdmissionGateway(GwStore(),'j1');g.release('a1',PROOF)
+    assert g.store.calls==[('a1','release',PROOF)]
 
 
-def test_gateway_release_passes_the_proof_and_resumes_the_meter():
-    g = WorkerAdmissionGateway(GwStore(), 'j1')
-    g.compute_meter = Meter(); g._meter_attempts.add('a1')
-    g.release('a1', PROOF)
-    assert g.store.calls == [('a1', 'release', PROOF)] and g.compute_meter.resumed == 1
-
-
-def test_gateway_release_refusal_propagates_and_leaves_the_meter_alone():
-    g = WorkerAdmissionGateway(GwStore(fail=True), 'j1')
-    g.compute_meter = Meter(); g._meter_attempts.add('a1')
-    with pytest.raises(AdmissionDenied):
-        g.release('a1', PROOF)
-    assert g.compute_meter.resumed == 0
+def test_gateway_release_refusal_propagates():
+    g=WorkerAdmissionGateway(GwStore(fail=True),'j1')
+    with pytest.raises(AdmissionDenied):g.release('a1',PROOF)
 
 
 # ---- the socket protocol ----
