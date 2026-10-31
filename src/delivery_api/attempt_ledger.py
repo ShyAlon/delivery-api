@@ -87,18 +87,14 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
         if existing['fingerprint']!=fingerprint:raise AdmissionDenied('conflicting admission replay')
         return existing
     now=time.time()
-    rows=store._execute_native('SELECT * FROM provider_attempts WHERE owner_id=%s',(owner,)).fetchall()
-    if any(r.get('input_estimate_overrun') for r in rows):raise AdmissionDenied('actual input exceeded estimate; new admission held for review')
-    held=[r for r in rows if r['state'] in ('reserved','dispatched','uncertain')]
+    totals=store._execute_native('SELECT * FROM public.requi_admission_totals(%s)',(now,)).fetchone()
+    if totals['overruns']:raise AdmissionDenied('actual input exceeded estimate; new admission held for review')
     if 'retail_formula' in quote and store._execute_native("SELECT 1 FROM retail_compute_segments r JOIN worker_jobs w ON r.job_id=w.job_id WHERE r.owner_id=%s AND (r.state='unresolved' OR (r.state='pending' AND w.state<>'running')) LIMIT 1",(owner,)).fetchone():raise AdmissionDenied('unresolved compute accounting requires review')
-    if any(r['state']=='uncertain' for r in held):raise AdmissionDenied('uncertain provider usage requires review')
-    if len(held)>=limits['concurrency_max']:raise AdmissionDenied('owner attempt concurrency exhausted')
-    if limits['rate_max'] is not None and sum(r['created_at']>now-limits['rate_window_seconds'] for r in rows)>=limits['rate_max']:
+    if totals['uncertain']:raise AdmissionDenied('uncertain provider usage requires review')
+    if totals['held']>=limits['concurrency_max']:raise AdmissionDenied('owner attempt concurrency exhausted')
+    if limits['rate_max'] is not None and totals['recent']>=limits['rate_max']:
         raise AdmissionDenied('owner attempt rate exhausted')
-    # Outstanding holds survive period reset; only settled expense ages out.
-    active=held+[r for r in rows if r['state']=='failure_waived' or (r['state']=='settled' and r['created_at']>now-limits['period_seconds'])]
-    used_expense=sum(r['expense_actual'] if r['state']=='settled' else r['expense_reserved'] for r in active)
-    used_retail=sum(r['retail_actual'] if r['state']=='settled' else r['retail_reserved'] for r in active)
+    used_expense=totals['used_expense'];used_retail=totals['used_retail']
     if (limits['attempt_expense_max'] is not None and expense>limits['attempt_expense_max']) or (not require_prepaid and limits['attempt_retail_max'] is not None and retail>limits['attempt_retail_max']):
         raise AdmissionDenied('attempt exceeds reviewed maximum')
     if (limits['expense_limit'] is not None and used_expense+expense>limits['expense_limit']) or (not require_prepaid and limits['retail_limit'] is not None and used_retail+retail>limits['retail_limit']):

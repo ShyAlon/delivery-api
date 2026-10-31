@@ -96,3 +96,5 @@ session=/task= tags and would have been filtered out even if the file had
 been included. Prevention: when a log source is added, wire it into every
 export that filters logs and test the filter against the source's own line
 format, not the format of the sources already there.
+
+- [2026-10-31: incremental admission totals](lessons/2026-10-31-admission-running-totals.md)
