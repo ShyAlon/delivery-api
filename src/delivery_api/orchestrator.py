@@ -134,6 +134,7 @@ class PhaseOrchestrator:
         if not python.is_file() and not built:
             raise RuntimeError(f"spec-generator environment is missing at {python}. Run scripts/pull-all.sh before retrying the phase.")
         cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",definition.generator_stage]
+        if phase=="validation":cmd.append("--final-review")
         if mode is ExecutionMode.REDO:cmd.extend(["--from",definition.generator_stage])
         # Attended run: items may not start while an architecture slot lacks a founder decision.
         if definition.generator_stage=="items":cmd.append("--require-decisions")

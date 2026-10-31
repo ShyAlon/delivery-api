@@ -10,7 +10,7 @@ def manifest(argv,root,documents=None):
     # Match only the reviewed orchestrator command shape. Never allow another
     # CLI mode to add a path, export, replay directory or executable side effect.
     valued={'--conops','--system-baseline','--out','--to','--from'}
-    flags={'--require-decisions','--review'}
+    flags={'--require-decisions','--review','--final-review'}
     seen=set();index=1
     while index<len(argv):
         arg=argv[index]
@@ -23,6 +23,8 @@ def manifest(argv,root,documents=None):
             index+=2
         elif arg in flags:index+=1
         else:raise PermissionError('unreviewed child generator option')
+    if '--final-review' in seen and ('--to' not in argv or argv[argv.index('--to')+1]!='validation' or ('--from' in seen and argv[argv.index('--from')+1]!='validation')):
+        raise PermissionError('final review requires bounded validation without rewind')
     # Only the CLI's explicit inputs, never output/checkpoint files.
     paths=[argv[0]]+[argv[i+1] for i,arg in enumerate(argv[:-1]) if arg in ('--conops','--system-baseline')]
     for path in paths:
