@@ -36,8 +36,24 @@ def test_stage_pg_retention_is_bounded_and_scrubs_all_writes(tmp_path,monkeypatc
     repo.append=bounded
     monkeypatch.setattr(postgres_logs,'selected',lambda:repo)
     monkeypatch.setattr(o,'STAGE_LOG_PATHS',{'needs':path})
-    for i in range(20):o.event('fixture','API_KEY=must-not-leak '+'x'*80,count=i,phase_key='needs')
+    # Retained historical PG adapter contract. Runtime stage logging is tested
+    # separately against the selected file sink below.
+    for i in range(20):repo.append('stage:needs','API_KEY=must-not-leak '+'x'*80)
     rows=repo.tail('stage:needs')
     assert len(rows)==3 and sum(len(row['text'].encode()) for row in rows)<=1200
     assert all('must-not-leak' not in row['text'] for row in rows)
     assert not list(tmp_path.glob('stage.log*'))
+
+
+def test_runtime_stage_files_are_bounded_and_scrubbed(tmp_path,monkeypatch):
+    from delivery_api import observability as o,process_logs
+    monkeypatch.setattr(process_logs,'root',lambda:tmp_path/'runtime')
+    monkeypatch.setattr(process_logs,'retention',lambda stream:1200)
+    for i in range(20):o.event('fixture','API_KEY=must-not-leak '+'x'*80,count=i,phase_key='needs')
+    assert process_logs.flush(5)
+    paths=list((tmp_path/'runtime').glob('stage-needs.jsonl*'))
+    data=[p for p in paths if not p.name.endswith('.lock')]
+    assert 0<len(data)<=2 and sum(p.stat().st_size for p in data)<=1200
+    rows=process_logs.selected().tail('stage:needs')
+    assert rows and all('must-not-leak' not in r['text'] for r in rows)
+    assert "count='19'" in rows[-1]['text']
