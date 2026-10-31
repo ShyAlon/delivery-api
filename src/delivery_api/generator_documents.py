@@ -49,36 +49,34 @@ class GeneratorDocuments:
         if hashlib.sha256(raw).hexdigest()!=row['sha256']:raise ValueError('workflow document hash differs')
         return raw
 
+    def _read_parts(self,cur,key,*,not_before=None):
+        rows=cur.execute('SELECT * FROM public.requi_document_parts(%s,%s,%s)',(self.capability.session_id,self.capability.generation,key)).fetchall()
+        if not rows or (not_before is not None and rows[0]['updated_at']<not_before):return None
+        if len(rows)!=rows[0]['total']+1 or any(r['ordinal']!=i for i,r in enumerate(rows)):raise ValueError('workflow chunk sequence differs')
+        parts=[]
+        for row in rows:
+            if row['payload'] is None:
+                if row['ordinal']==0 and row['total']==0:return None
+                if row['ordinal']==0:continue
+                raise ValueError('workflow chunk payload missing')
+            parts.append(self._verified_bytes(row))
+        return b''.join(parts)
+
     def read(self,key):
         key=self._key(key)
-        with self.saver._cursor() as cur:
-            row=cur.execute('SELECT payload,sha256 FROM generator_documents WHERE execution_session_id=%s AND generation=%s AND document_key=%s',
-                (self.capability.session_id,self.capability.generation,key)).fetchone()
-            if row is None or row['payload'] is None:return None
-            return self._verified_bytes(row)
+        with self.saver._cursor() as cur:return self._read_parts(cur,key)
 
     def read_fresh(self,key,*,not_before):
         key=self._key(key)
-        with self.saver._cursor() as cur:
-            row=cur.execute('SELECT payload,sha256,updated_at FROM generator_documents WHERE execution_session_id=%s AND generation=%s AND document_key=%s',
-                (self.capability.session_id,self.capability.generation,key)).fetchone()
-            if row is None or row['payload'] is None or row['updated_at']<not_before:return None
-            return self._verified_bytes(row)
+        with self.saver._cursor() as cur:return self._read_parts(cur,key,not_before=not_before)
 
     def capture(self,keys):
-        """One original-attempt transaction, no directory enumeration or fallback."""
         keys=[self._key(key) for key in keys]
         if len(keys)!=len(set(keys)):raise ValueError('unique workflow document keys required')
         with self.saver._cursor() as cur:return self._capture_cursor(cur,keys)
 
     def _capture_cursor(self,cur,keys):
-        rows=cur.execute('SELECT document_key,payload,sha256 FROM generator_documents WHERE execution_session_id=%s AND generation=%s AND document_key=ANY(%s)',
-            (self.capability.session_id,self.capability.generation,keys)).fetchall()
-        result={}
-        for row in rows:
-            if row['payload'] is None:continue
-            result[row['document_key']]=self._verified_bytes(row)
-        return result
+        return {key:raw for key in keys if (raw:=self._read_parts(cur,key)) is not None}
 
     def write(self,key,raw):
         self._require_writer()
@@ -96,13 +94,9 @@ class GeneratorDocuments:
         self._require_writer()
         key=self._key(key)
         if type(raw) is not bytes:raise ValueError('workflow append bytes required')
+        cap=self.capability
         with self.saver._cursor() as cur:
-            row=cur.execute('SELECT payload,sha256 FROM generator_documents WHERE execution_session_id=%s AND generation=%s AND document_key=%s',
-                (self.capability.session_id,self.capability.generation,key)).fetchone()
-            prior=b'' if row is None or row['payload'] is None else self._verified_bytes(row)
-            combined=prior+raw
-            if len(combined)>64*1024*1024:raise ValueError('bounded workflow document bytes required')
-            self._put_cursor(cur,key,combined,hashlib.sha256(combined).hexdigest())
+            cur.execute('SELECT public.requi_document_append(%s,%s,%s,%s,%s,%s,%s)',(cap.session_id,cap.generation,key,raw,cap.scope.owner_id,cap.scope.session_id,time.time()))
 
     def _put(self,key,raw,sha):
         with self.saver._cursor() as cur:self._put_cursor(cur,key,raw,sha)
