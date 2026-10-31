@@ -65,6 +65,7 @@ MIGRATIONS={
  '20261030223000_own_test_expense_profile.sql':('table:own_test_expense_profiles','signature:requi_own_test_expense_guard(text,bigint)'),
  '20261031044500_final_packages.sql':('table:final_packages',),
  '20261031163000_admission_totals.sql':('table:admission_totals','table:admission_total_entries','signature:requi_admission_totals(double precision)','signature:requi_admission_project(public.provider_attempts)','signature:requi_admission_changed()'),
+ '20261031180000_expense_totals.sql':('table:expense_totals','table:expense_total_entries','table:expense_total_clock','signature:requi_refresh_expense_totals(double precision)'),
 }
 ROLES=('requi_metrics_writer','requi_engine_config_read','requi_operator_usage')
 

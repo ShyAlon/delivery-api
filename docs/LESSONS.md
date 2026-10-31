@@ -98,3 +98,5 @@ export that filters logs and test the filter against the source's own line
 format, not the format of the sources already there.
 
 - [2026-10-31: incremental admission totals](lessons/2026-10-31-admission-running-totals.md)
+
+- [2026-10-31: exact tripwire projections](lessons/2026-10-31-tripwire-running-totals.md)
