@@ -1896,6 +1896,31 @@ FROM tasks t"""
         from .retail_ledger import phase_totals
         return phase_totals(self,job_id)
 
+    def owner_active_jobs(self,*,limit=50,before=None):
+        """Current owner only. Pending/running/paused are evidence, not proof of liveness."""
+        import math
+        if type(limit) is not int or not 1<=limit<=100:raise ValueError('limit must be between 1 and 100')
+        params=[current_scope().owner_id]
+        cursor=''
+        if before is not None:
+            if (not isinstance(before,dict) or set(before)!={'updated_at','job_id'}
+                or type(before['updated_at']) not in (int,float) or not math.isfinite(before['updated_at'])
+                or before['updated_at']<0 or not isinstance(before['job_id'],str) or not 1<=len(before['job_id'])<=240):
+                raise ValueError('exact bounded jobs cursor required')
+            cursor=' AND (j.updated_at,j.job_id)<(%s,%s)'
+            params.extend((before['updated_at'],before['job_id']))
+        params.append(limit+1)
+        rows=self._execute_native("SELECT j.job_id,j.task_id,j.session_id,j.generation,j.kind,j.state,j.created_at,j.updated_at,"
+            "t.title,t.state AS task_state,t.generation AS task_generation,t.stop_requested_at,t.deleted_at "
+            "FROM worker_jobs j JOIN tasks t ON t.task_id=j.task_id AND t.owner_id=j.owner_id "
+            "WHERE j.owner_id=%s AND j.state IN ('pending','running','paused')"+cursor+
+            " ORDER BY j.updated_at DESC,j.job_id DESC LIMIT %s",tuple(params)).fetchall()
+        page=[dict(row)|{'quiescence_verified':False,'stale_verified':False} for row in rows[:limit]]
+        truncated=len(rows)>limit
+        return {'scope':'current_authorized_workspace','owner_id':current_scope().owner_id,'jobs':page,
+            'truncated':truncated,'limit':limit,'next_before':{'updated_at':page[-1]['updated_at'],'job_id':page[-1]['job_id']} if truncated else None,
+            'states_included':['pending','running','paused'],'mutations_available':False,'quiescence_verified':False}
+
     def operator_workspace_snapshot(self):
         """Read-only current-owner operations, never cross-tenant privilege."""
         owner=current_scope().owner_id
@@ -2242,7 +2267,7 @@ PG_OPERATIONS = (
     'manifest_revision',
     'manifest_snapshot',
     'mark_producer_published',
-    'operator_workspace_snapshot',
+    'operator_workspace_snapshot','owner_active_jobs',
     'own_credit_balance',
     'own_credit_history',
     'own_last_topup',
