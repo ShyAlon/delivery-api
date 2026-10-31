@@ -1,3 +1,6 @@
+from pathlib import Path as _EvidencePath
+import os as _evidence_os
+_EVIDENCE=_EvidencePath(_evidence_os.environ.get('REQUI_TEST_ARTIFACTS','/downloads'));_EVIDENCE.mkdir(parents=True,exist_ok=True)
 """Real account/registry checks, never a deployment-mode permission."""
 import io,json,uuid,zipfile
 import pytest
@@ -95,8 +98,8 @@ def test_operator_debug_zip_button_works_with_real_account_capability(pg_browser
     page.get_by_role('menuitem',name='Debug',exact=True).click()
     button=page.locator('#downloaddebug');expect(button).to_be_enabled()
     with page.expect_download() as download:button.click()
-    download.value.save_as('/downloads/account-debug-enabled.zip')
+    download.value.save_as(str(_EVIDENCE/'account-debug-enabled.zip'))
     expect(page.locator('#debugstatus')).to_contain_text('Download prepared')
-    page.screenshot(path='/downloads/account-debug-enabled.png',full_page=False)
-    with zipfile.ZipFile('/downloads/account-debug-enabled.zip') as z:
+    page.screenshot(path=str(_EVIDENCE/'account-debug-enabled.png'),full_page=False)
+    with zipfile.ZipFile(str(_EVIDENCE/'account-debug-enabled.zip')) as z:
         assert b'project context' in z.read('interview/llm-calls.jsonl')

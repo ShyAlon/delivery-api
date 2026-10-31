@@ -1,3 +1,6 @@
+from pathlib import Path as _EvidencePath
+import os as _evidence_os
+_EVIDENCE=_EvidencePath(_evidence_os.environ.get('REQUI_TEST_ARTIFACTS','/downloads'));_EVIDENCE.mkdir(parents=True,exist_ok=True)
 """Owner-wide job diagnostics, without mutation or inferred stale status."""
 import httpx
 from fastapi.testclient import TestClient
@@ -121,15 +124,15 @@ def test_backoffice_jobs_pixels_filter_pagination_refresh_and_revocation(tmp_pat
             page.get_by_role('menuitem',name='Stop',exact=True).click()
             page.get_by_role('dialog').wait_for()
             assert 'accepted provider call' in page.get_by_role('dialog').inner_text()
-            page.screenshot(path='/downloads/backoffice-worker-jobs-confirm.png',full_page=False)
+            page.screenshot(path=str(_EVIDENCE/'backoffice-worker-jobs-confirm.png'),full_page=False)
             page.get_by_role('button',name='Cancel',exact=True).click()
             page.locator('#active-jobs-filter').fill('no-match')
             assert page.locator('#active-jobs').is_hidden()
             page.locator('#active-jobs-filter').fill('77c30a258523')
             assert page.locator('#active-jobs').is_visible()
-            page.screenshot(path='/downloads/backoffice-owner-jobs-desktop.png',full_page=True)
+            page.screenshot(path=str(_EVIDENCE/'backoffice-owner-jobs-desktop.png'),full_page=True)
             page.set_viewport_size({'width':390,'height':844})
-            page.screenshot(path='/downloads/backoffice-owner-jobs-mobile.png',full_page=True)
+            page.screenshot(path=str(_EVIDENCE/'backoffice-owner-jobs-mobile.png'),full_page=True)
             page.locator('#active-jobs-filter').fill('')
             page.locator('#active-jobs-next').click()
             page.get_by_text('Older pending task / older-task',exact=True).wait_for()
