@@ -2605,11 +2605,10 @@ def _task_cost(task_id:str)->dict:
         if event.get("kind")=="price":latest[event.get("phase_key")]=event
     session=_recorded_engine_session(task_id);interview_tokens=spec_tokens=0
     if session and hasattr(store,'_postgres'):
-        from .pg_usage import usage_rows
-        batches,evidence=usage_rows(store,task_id)
+        from .pg_usage import usage_summary
+        summary=usage_summary(store,task_id);evidence=summary['evidence']
         if not evidence['complete']:return {'price':None,'price_usd':None,'evidence':evidence}
-        interview_tokens=sum(int(r.get('prompt_tokens') or 0)+int(r.get('completion_tokens') or 0) for r in batches[0])
-        spec_tokens=sum(int(r.get('prompt_tokens') or 0)+int(r.get('completion_tokens') or 0) for r in batches[1])
+        interview_tokens,spec_tokens=summary['tokens']
     elif session:
         from vmodel_contracts.runtime import artifacts_root
         root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)

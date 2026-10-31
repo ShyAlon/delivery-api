@@ -103,3 +103,5 @@ format, not the format of the sources already there.
 - [2026-10-31: customer display totals](lessons/2026-10-31-retail-display-totals.md)
 - [2026-10-31: waiting-input identity](lessons/2026-10-31-waiting-input-identity.md)
 - [2026-10-31: append-only document chunks](lessons/2026-10-31-document-chunk-append.md)
+
+- [2026-10-31: incremental usage and lifecycle state](lessons/2026-10-31-usage-lifecycle-cursors.md)

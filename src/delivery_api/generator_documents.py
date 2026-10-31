@@ -66,6 +66,13 @@ class GeneratorDocuments:
         key=self._key(key)
         with self.saver._cursor() as cur:return self._read_parts(cur,key)
 
+    def read_since(self,key,cursor=None):
+        key=self._key(key)
+        with self.saver._cursor() as cur:return document_tail(cur,self.capability.session_id,self.capability.generation,key,cursor)
+
+    def recent_lifecycle_events(self,key,artifact_id):
+        return recent_lifecycle_events(self,key,artifact_id)
+
     def read_fresh(self,key,*,not_before):
         key=self._key(key)
         with self.saver._cursor() as cur:return self._read_parts(cur,key,not_before=not_before)
@@ -249,3 +256,46 @@ def transition_gate_lineage(store,task_id,phase,*,settled):
                 for stage in invalid:
                     if stage in partials:reader._put_cursor(cursor,'spec/'+partials[stage],None,None)
             raw=json.dumps(record,indent=2,sort_keys=True).encode();reader._put_cursor(cursor,'spec/lineage.json',raw,hashlib.sha256(raw).hexdigest())
+
+def document_tail(cur,sid,generation,key,cursor=None):
+    """Exact append delta; overwrite/clear changes epoch and requires one reset."""
+    row=cur.execute('SELECT chunk_epoch,chunk_count FROM generator_documents WHERE execution_session_id=%s AND generation=%s AND document_key=%s FOR SHARE',(sid,generation,key)).fetchone()
+    if row is None:return None,None,True
+    reset=cursor is None or cursor[0]!=row['chunk_epoch'] or cursor[1]>row['chunk_count']
+    after=0 if reset else cursor[1];parts=[]
+    if reset:
+        base=cur.execute('SELECT payload,sha256 FROM generator_documents WHERE execution_session_id=%s AND generation=%s AND document_key=%s',(sid,generation,key)).fetchone()
+        if base['payload'] is not None:parts.append(GeneratorDocuments._verified_bytes(base))
+    chunks=cur.execute('SELECT payload,sha256,ordinal FROM document_chunks WHERE execution_session_id=%s AND document_key=%s AND epoch=%s AND ordinal>%s ORDER BY ordinal',(sid,key,row['chunk_epoch'],after)).fetchall()
+    if len(chunks)!=row['chunk_count']-after or any(c['ordinal']!=after+i+1 for i,c in enumerate(chunks)):raise ValueError('workflow chunk sequence differs')
+    parts.extend(GeneratorDocuments._verified_bytes(c) for c in chunks)
+    return b''.join(parts),[row['chunk_epoch'],row['chunk_count']],reset
+
+
+def recent_lifecycle_events(documents,key,artifact_id):
+    """Durable latest-two lifecycle projection, refreshed from verified new chunks."""
+    import json,copy
+    from psycopg.types.json import Jsonb
+    cap=documents.capability;key=documents._key(key)
+    with documents.saver._cursor() as cur:
+        # Common order with normal worker writes and owner-derived usage updates.
+        cur.execute('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(cap.task_id,)).fetchone()
+        saved=cur.execute('SELECT body FROM document_projections WHERE execution_session_id=%s AND document_key=%s',(cap.session_id,key)).fetchone()
+        state=saved['body'] if saved else {'cursor':None,'pending':'','events':[],'artifact_id':artifact_id}
+        if state.get('artifact_id')!=artifact_id:raise ValueError('lifecycle projection artifact differs')
+        raw,cursor,reset=document_tail(cur,cap.session_id,cap.generation,key,state['cursor'])
+        if reset:state={'cursor':None,'pending':'','events':[],'artifact_id':artifact_id}
+        def consume(target,line):
+            if line.strip():
+                value=json.loads(line)
+                if value.get('artifact_id')==artifact_id:target['events']=(target['events']+[value])[-2:]
+        if raw is not None:
+            data=bytes.fromhex(state['pending'])+raw;state['pending']='';lines=data.splitlines(keepends=True)
+            if lines and not lines[-1].endswith((b'\n',b'\r')):state['pending']=lines.pop().hex()
+            for line in lines:consume(state,line)
+            state['cursor']=cursor
+            if not saved or raw or reset:
+                cur.execute('INSERT INTO document_projections(execution_session_id,document_key,owner_id,generation,body) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(execution_session_id,document_key) DO UPDATE SET body=EXCLUDED.body',(cap.session_id,key,cap.scope.owner_id,cap.generation,Jsonb(state)))
+        transient=copy.deepcopy(state)
+        if transient['pending']:consume(transient,bytes.fromhex(transient['pending']))
+        return transient['events']
