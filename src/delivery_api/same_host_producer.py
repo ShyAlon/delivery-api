@@ -11,17 +11,8 @@ class ProducerRecoveryPaused(Exception):
 
 
 def _produced_set_hash(root):
-    """(sha256 over present phase artifacts as sorted relpath:content-sha lines, count)."""
-    import hashlib
-    from .phases import PHASE_DEFINITIONS
-    lines=[]
-    for phase in PHASE_DEFINITIONS:
-        folder=root/("interview" if phase.key in ("intent","conops") else "spec")
-        for filename in phase.artifacts:
-            path=folder/filename
-            if path.is_file():
-                lines.append(f"{phase.key}/{filename}:{hashlib.sha256(path.read_bytes()).hexdigest()}")
-    return hashlib.sha256('\n'.join(sorted(lines)).encode()).hexdigest(),len(lines)
+    from .artifact_publication import artifact_set_hash,file_artifact_snapshot
+    return artifact_set_hash(file_artifact_snapshot(root))
 
 
 import asyncio,inspect
