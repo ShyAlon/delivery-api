@@ -29,7 +29,7 @@ def _transactional(method):
         if self._connection.get() is not None:
             return method(self,*args,**kwargs)
         with contextlib.ExitStack() as cleanup:
-            if method.__name__ in ('ensure_waiting_input_event','retain_decision_review','ingest_interview_progress_page'):
+            if method.__name__ in ('ensure_waiting_input_event','retain_decision_review','ingest_interview_progress_page','admit_provider_attempt'):
                 # Observations made during GET must commit before the read
                 # continues, never pin task/owner locks until HTTP teardown.
                 from .postgres_scope import _request_tx
@@ -1800,6 +1800,21 @@ FROM tasks t"""
         # would roll it back and lose the alert on every denied call.
         row=self._execute_native('SELECT public.requi_confirmed_expense_guard(%s,%s) AS reason',(job_id,expense_scale), write=True).fetchone()
         return row['reason']
+
+    @_transactional
+    def admit_provider_attempt(self,job_id,attempt_id,quote,digest,*,balance,bind_attempt,authorize,require_prepaid,launch_guard):
+        """Parent-only reservation/binding/start transaction, after external IO."""
+        self._execute_native('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
+        self.reserve_provider_attempt(job_id,attempt_id,quote,digest,require_prepaid=require_prepaid)
+        bind_attempt(attempt_id);authorize()
+        if 'estimate_policy' in quote:self.record_provider_balance_check(attempt_id,balance)
+        if launch_guard:
+            result=self.start_launch_provider_attempt(attempt_id)
+            if not result['started']:
+                self.transition_provider_attempt(attempt_id,'cancel',{'refusal':'service temporarily unavailable'})
+                return result['reason']  # Commit the guard's durable episode before caller raises.
+        else:self.transition_provider_attempt(attempt_id,'start',require_prepaid=require_prepaid)
+        return 'allowed'
 
     def start_launch_provider_attempt(self,attempt_id):
         from .launch_admission_policy import validate_owner_limits,validate_launch_quote
