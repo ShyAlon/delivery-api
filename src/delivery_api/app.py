@@ -1398,24 +1398,6 @@ def _project_manifest_rows(rows:list[dict])->list[dict]:
             "byte_size":row['byte_size'],"sha256":row['sha256']})
     return records
 
-def artifact_manifest_coverage(task_id:str)->dict:
-    """Operator readiness check before enabling manifest reads: compares the legacy
-    projection with the published manifest for one task. Enabling ARTIFACT_MANIFEST_READS
-    while 'legacy_only' is non-empty would make existing artifacts vanish, so enable only
-    after publication (or backfill) covers them. Both flags default OFF; production is
-    unchanged until an approved enable runs this check first."""
-    flag=config.ARTIFACT_MANIFEST_READS
-    try:
-        config.ARTIFACT_MANIFEST_READS=False
-        legacy=_task_artifact_snapshot(task_id)
-    finally:
-        config.ARTIFACT_MANIFEST_READS=flag
-    snapshot=store.manifest_snapshot(task_id) if hasattr(store,'manifest_snapshot') else None
-    manifest=_project_manifest_rows(snapshot['rows']) if snapshot else []
-    legacy_names={f"{r['phase_key']}/{r['name']}" for r in legacy}
-    manifest_names={f"{r['phase_key']}/{r['name']}" for r in manifest}
-    return {"task_id":task_id,"published":sorted(manifest_names),"legacy_only":sorted(legacy_names-manifest_names),"ready":not (legacy_names-manifest_names)}
-
 def _task_artifact_snapshot(task_id:str, *, task=None, session=_SESSION_UNSET, events=None, stored_artifacts=None, manifest=_SESSION_UNSET)->list[dict]:
     """PG publication is authority; legacy adapters retain their file projection."""
     if hasattr(store,'_postgres'):
@@ -1426,30 +1408,6 @@ def _task_artifact_snapshot(task_id:str, *, task=None, session=_SESSION_UNSET, e
         if snapshot is not None:return _project_manifest_rows(snapshot['rows'])
         if (store.task_artifacts(task_id) if stored_artifacts is None else stored_artifacts):
             raise HTTPException(500,'artifact manifest coverage is incomplete; no ready published revision for this generation')
-        return []
-    if config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
-        # Readiness gate, enforced on the read path: the manifest is authority only for
-        # a task+generation whose producer/backfill published a COMPLETE validated
-        # revision and marked it ready in the same transaction. A ready revision is
-        # served purely from the database - no per-request filesystem scan. Without the
-        # marker the task is migration-pending: the legacy projection is consulted once
-        # to distinguish 'no artifacts yet' from 'uncovered legacy', which fails loudly
-        # instead of presenting a partial manifest (even a non-empty one) as complete.
-        try:snapshot=store.manifest_snapshot(task_id) if manifest is _SESSION_UNSET else manifest
-        except ValueError:
-            log.error('manifest readiness marker corrupt task=%s',task_id)
-            raise HTTPException(500,'artifact manifest failed its integrity check; the failure was recorded for diagnostics')
-        if snapshot is not None:
-            return _project_manifest_rows(snapshot['rows'])
-        flag=config.ARTIFACT_MANIFEST_READS
-        try:
-            config.ARTIFACT_MANIFEST_READS=False
-            legacy=_task_artifact_snapshot(task_id,task=task,session=session,events=events,stored_artifacts=stored_artifacts)
-        finally:
-            config.ARTIFACT_MANIFEST_READS=flag
-        if legacy:
-            log.error('manifest coverage incomplete task=%s legacy=%d (no ready marker)',task_id,len(legacy))
-            raise HTTPException(500,'artifact manifest coverage is incomplete for this task; reads stay disabled until publication or backfill covers the legacy artifacts')
         return []
     if task is None:task=store.task(task_id)
     if not task:return []
@@ -1636,7 +1594,7 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}")
 def task_artifact_download(task_id:str,phase:str,name:str):
-    if hasattr(store,'_postgres') or config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
+    if hasattr(store,'_postgres'):
         from fastapi.responses import Response
         # Error mapping: genuinely missing or foreign-invisible artifact is 404; a
         # corrupt/unverifiable payload is an explicit 500 (never a plausible missing
@@ -1887,7 +1845,7 @@ def task_artifacts_zip(task_id:str):
     with zipfile.ZipFile(data,"w",zipfile.ZIP_DEFLATED) as archive:
         for artifact in records:
             entry=f"{artifact['phase_key']}/{artifact['name']}"
-            if hasattr(store,'_postgres') or config.CLOUD_TENANTS and config.ARTIFACT_MANIFEST_READS:
+            if hasattr(store,'_postgres'):
                 # Read by the snapshot row's content hash: the whole zip is one
                 # published revision, never a mix of generations under concurrent publish.
                 try: archive.writestr(entry,store.read_artifact_bytes_sha(artifact['sha256']))
