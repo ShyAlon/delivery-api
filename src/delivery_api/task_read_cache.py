@@ -43,11 +43,9 @@ def version(store, task_id):
 
 
 def invalidate(store):
+    # O(1): version checks reject old entries; bounded put eviction reclaims them.
     with _lock:
         _epochs[store] = _epochs.get(store, 0) + 1
-        for k in list(_entries):
-            if k[0] is store:
-                del _entries[k]
 
 
 def get(store, task_id):
