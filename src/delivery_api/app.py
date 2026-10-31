@@ -427,7 +427,7 @@ async def lifespan(application:FastAPI):
     _streams_closed_on_signal=0
     config.validate_auth_config()
     from .operator_startup import install as install_operator_reads
-    install_operator_reads(application,os.environ,dsn=config.DATABASE_URL,enabled=config.CLOUD_TENANTS)
+    install_operator_reads(application,os.environ,dsn=config.DATABASE_URL,enabled=True)
     print('Operator reads: '+application.state.operator_read_status,file=sys.stderr)
     from .process_logs import selected as selected_process_logs
     selected_process_logs()  # Ephemeral process logs; no PG writer.
@@ -611,6 +611,7 @@ def auth_status(request: Request):
     session=request.app.state.store.session(request.cookies[config.SESSION_COOKIE]) if not config.CLOUD_TENANTS and auth.enabled() and request.cookies.get(config.SESSION_COOKIE) and a.id!="anonymous" else None
     result={"mode":mode,"authenticated":a.id not in {"anonymous"},"actor":a.email or a.label,"admin":a.admin,
             "providers":[p for p,ident in (("google",config.GOOGLE_CLIENT_ID),("github",config.GITHUB_CLIENT_ID)) if ident],"workspace":"private" if config.CLOUD_TENANTS else "shared"}
+    result['debug_features']=_account_debug_available() if a.id!='anonymous' else False
     if os.environ.get("DELIVERY_PREVIEW")=="1":result["preview"]=True
     if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1":result["local_preview"]=True
     if config.CLOUD_TENANTS and a.id!='anonymous':
@@ -973,7 +974,7 @@ def _quality_engine_down(exc):
 @app.get("/api/question-quality-config")
 def get_question_quality_config(a:auth.Actor=Depends(auth.require_actor)):
     """Global interview question-quality settings; the engine owns the schema and defaults."""
-    if config.CLOUD_TENANTS:raise HTTPException(404,"engine configuration is internal")
+    _require_account_debug()
     try:return engine_client.question_quality_config()
     except EngineUnreachableError as exc:raise _quality_engine_down(exc)
     except EngineClientError as exc:raise HTTPException(502,{"error":"The engine could not return the settings.","cause":exc.error.detail,"next":"Retry; if it repeats, check the engine log."})
@@ -1991,7 +1992,7 @@ def task_diagnostics(task_id:str):
     if session_id:
         from vmodel_contracts.runtime import artifacts_root
         root=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session_id,store)
-        model_calls=diagnostics.model_calls(root/"interview",cloud=config.CLOUD_TENANTS)
+        model_calls=diagnostics.model_calls(root/"interview",cloud=not _account_debug_available())
     return diagnostics.build(detail,detail.get("events") or [],detail.get("control_snapshot"),detail.get("input_state"),
                              diagnostics.engine_summary(snapshot,error),worker_state=store.task_worker_state(task_id) if config.CLOUD_TENANTS else None,model_calls=model_calls)
 
@@ -2146,11 +2147,22 @@ class BrowserDiagnostics(BaseModel):
     url:str=Field(default='',max_length=2000)
     records:list[dict]=Field(default_factory=list,max_length=500)
 
+def _require_account_debug():
+    reader=getattr(app.state,'operator_read_store',None)
+    if reader is None:raise HTTPException(404,'Debug resource not found')
+    return reader.authorize_debug(store)
+
+
+def _account_debug_available():
+    try:_require_account_debug();return True
+    except (HTTPException,TenantAccessDenied):return False
+
+
 @app.post("/api/tasks/{task_id}/debug.zip")
 def download_debug_zip(task_id:str,body:BrowserDiagnostics,a:auth.Actor=Depends(auth.require_actor)):
     task=store.task(task_id)
     if not task:raise HTTPException(404,'task not found')
-    if config.CLOUD_TENANTS:raise HTTPException(503,'Provider audit diagnostics are internal-only in cloud mode')
+    _require_account_debug()
     session=_recorded_engine_session(task_id)
     if not session:raise HTTPException(409,{"error":"No run is linked to this task.","cause":"A task/run-scoped diagnostic export needs a recorded session.","next":"Start a run or select a task with a run."})
     if not __import__('re').fullmatch(r'[A-Za-z0-9._-]+',session) or session in ('.','..'):raise HTTPException(409,'invalid recorded session')
@@ -2159,8 +2171,15 @@ def download_debug_zip(task_id:str,body:BrowserDiagnostics,a:auth.Actor=Depends(
     from .debug_export import diagnostic_zip
     from .observability import LOG_PATH
     root=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store)
-    control=get_task(task_id)['control_snapshot']
-    data=diagnostic_zip(root,task_id,session,task['generation'],body.model_dump(),control,store.events(task_id),root/'server-run.log' if config.CLOUD_TENANTS else LOG_PATH,engine_log.default_path())
+    # Diagnostic export must survive a broken live engine/status read.
+    control={'task_id':task_id,'state':task['state'],'generation':task['generation'],
+             'stop_requested_at':task.get('stop_requested_at'),'stopped_at':task.get('stopped_at'),
+             'scope':'retained task state; engine quiescence is not inferred'}
+    document_reader=None
+    if hasattr(store,'_postgres'):
+        from .generator_documents import GeneratorDocuments
+        document_reader=GeneratorDocuments.owner_reader(store,task_id).read
+    data=diagnostic_zip(root,task_id,session,task['generation'],body.model_dump(),control,store.events(task_id),LOG_PATH,engine_log.default_path(),document_reader=document_reader)
     from fastapi.responses import Response
     activity("task.export","Debug zip downloaded",task_id=task_id,export="debug_zip",actor=a.label)
     return Response(data,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{task_id}-debug.zip"'})
@@ -2169,12 +2188,20 @@ def download_debug_zip(task_id:str,body:BrowserDiagnostics,a:auth.Actor=Depends(
 def task_execution(task_id:str,debug:bool=False,a:auth.Actor=Depends(auth.require_actor)):
     """Per-session routing, usage and call diagnostics; raw payloads require debug mode."""
     if not store.task(task_id):raise HTTPException(404,"task not found")
-    if config.CLOUD_TENANTS:raise HTTPException(404,"provider diagnostics are internal")
+    _require_account_debug()
     session=_recorded_engine_session(task_id)
     if not session:return {"session_id":None,"route":None,"usage":[],"calls":[],"raw":[]}
     from vmodel_contracts.runtime import artifacts_root
     root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"
+    document_reader=None
+    if hasattr(store,'_postgres'):
+        from .generator_documents import GeneratorDocuments
+        document_reader=GeneratorDocuments.owner_reader(store,task_id).read
     def lines(path:Path,limit:int=300):
+        if document_reader is not None:
+            raw=document_reader('interview/'+path.name)
+            if raw is None:return []
+            return [value for row in raw.decode(errors='replace').splitlines() if (value:=_execution_json(row)) is not None][-limit:]
         if not path.is_file():return []
         with path.open(errors="replace") as stream:
             return [value for row in stream if (value:=_execution_json(row)) is not None][-limit:]
@@ -2184,14 +2211,11 @@ def task_execution(task_id:str,debug:bool=False,a:auth.Actor=Depends(auth.requir
         try:pinned=json.loads(state.read_text()).get("model_map")
         except (ValueError,OSError):pass
     route=(store.task(task_id) or {}).get("model_route")
-    # Preserve provider audit files privately; no debug flag bypass in cloud.
-    if config.CLOUD_TENANTS:debug=False
-    usage=[] if config.CLOUD_TENANTS else lines(root/"usage.jsonl")
+    usage=lines(root/"usage.jsonl")
     calls=lines(root/"llm-calls.jsonl")
     summary=[]
     for entry in calls:
         item={key:entry.get(key) for key in ("ts","event","stage","provider","model","attempt","latency_s","usage") if key in entry}
-        if config.CLOUD_TENANTS:item.pop("usage",None)
         error=entry.get("error")
         if isinstance(error,dict):
             # The provider error envelope may contain a raw response. The
@@ -3685,7 +3709,6 @@ def _operator_metrics(**kwargs):
 
 def _operator_reader():
     reader=getattr(app.state,'operator_read_store',None)
-    if not config.CLOUD_TENANTS:raise HTTPException(404,'Operator resource not found')
     if reader is None:
         raise HTTPException(503,'Verified sole-operator read registry is not configured. Set REQUI_OPERATOR_SUBJECT, REQUI_OPERATOR_REGISTRY_VERSION and REQUI_OPERATOR_CAPABILITIES in protected server settings to match the reviewed database registry; restart is required. No permission is inferred from admin status.')
     return reader
