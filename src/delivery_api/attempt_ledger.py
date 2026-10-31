@@ -132,6 +132,10 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         require_task_operation(store,'provider.dispatch')
         _job(store,row['job_id'])
         if row['state']!='reserved':raise AdmissionDenied('attempt already dispatched or closed')
+        if row['quote'].get('provider')=='deepseek':
+            reason=store._execute_native('SELECT public.requi_own_test_expense_guard(%s,%s) AS reason',
+                (row['job_id'],row['quote'].get('expense_units_per_usd'))).fetchone()['reason']
+            if reason!='allowed':raise AdmissionDenied(reason)
         if require_prepaid:
             from .prepaid import authorize
             authorize(store,dict(row))
