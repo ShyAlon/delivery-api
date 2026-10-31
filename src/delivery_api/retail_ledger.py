@@ -53,13 +53,8 @@ def post(store,*,key,job_id,phase,kind,input_tokens=0,output_tokens=0,determinis
 
 def phase_totals(store,job_id):
     """Display reads the debit evidence; it does not charge phases again."""
-    rows=store._execute_native('SELECT * FROM retail_contributions WHERE job_id=%s ORDER BY contribution_key',(job_id,)).fetchall()
-    totals={}
-    for r in rows:
-        rates=rates_from_snapshot(r['rates']); phase=totals.setdefault(r['phase_key'],{'credits':Decimal(0),'usd':Decimal(0),'posted_units':0})
-        credits=r['exact_units']/UNITS_PER_CREDIT
-        phase['credits']+=credits;phase['usd']+=credits*rates.usd_per_credit;phase['posted_units']+=r['posted_units']
-    return totals
+    rows=store._execute_native("SELECT phase_key,credits,usd,posted_units FROM retail_totals WHERE scope='job_phase' AND ref=%s AND n>0",(job_id,)).fetchall()
+    return {r['phase_key']:{'credits':r['credits'],'usd':r['usd'],'posted_units':r['posted_units']} for r in rows}
 
 
 def begin_compute(store,key,job_id,phase,rates):
@@ -96,20 +91,14 @@ def finish_compute(store,key,deterministic_ms):
 
 
 def task_totals(store,task_id):
-    rows=store._execute_native('SELECT r.* FROM retail_contributions r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=%s',(task_id,)).fetchall()
-    if not rows:return None
-    credits=Decimal(0);usd=Decimal(0)
-    for row in rows:
-        value=row['exact_units']/UNITS_PER_CREDIT
-        credits+=value;usd+=value*rates_from_snapshot(row['rates']).usd_per_credit
-    return {'price':float(round(credits,6)),'price_usd':float(round(usd,6))}
+    row=store._execute_native("SELECT credits,usd FROM retail_totals WHERE scope='task' AND ref=%s AND n>0",(task_id,)).fetchone()
+    return {'price':float(round(row['credits'],6)),'price_usd':float(round(row['usd'],6))} if row else None
 
 
 def task_phase_totals(store,task_id):
     """Credits per phase for one task, largest first. Credits only: no price, vendor cost or rate leaves this function."""
-    rows=store._execute_native('SELECT r.phase_key,r.exact_units FROM retail_contributions r JOIN worker_jobs w ON r.job_id=w.job_id WHERE w.task_id=%s',(task_id,)).fetchall()
-    by={}
-    for row in rows:by[row['phase_key']]=by.get(row['phase_key'],Decimal(0))+Decimal(row['exact_units'])/UNITS_PER_CREDIT
+    rows=store._execute_native("SELECT phase_key,credits FROM retail_totals WHERE scope='task_phase' AND ref=%s AND n>0",(task_id,)).fetchall()
+    by={r['phase_key']:r['credits'] for r in rows}
     return [{'phase':k,'credits':float(round(v,6))} for k,v in sorted(by.items(),key=lambda kv:(-kv[1],kv[0]))]
 
 

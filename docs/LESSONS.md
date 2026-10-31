@@ -100,3 +100,4 @@ format, not the format of the sources already there.
 - [2026-10-31: incremental admission totals](lessons/2026-10-31-admission-running-totals.md)
 
 - [2026-10-31: exact tripwire projections](lessons/2026-10-31-tripwire-running-totals.md)
+- [2026-10-31: customer display totals](lessons/2026-10-31-retail-display-totals.md)
