@@ -91,15 +91,14 @@ class WorkerAdmissionGateway:
         return self.store.reserve_provider_attempt(self.job_id,attempt_id,quote,digest,require_prepaid=self.require_prepaid)['attempt_id']
 
     def reserve_serialized(self,*,attempt_id,stage,provider,model,serialized_request,max_output_tokens):
-        import base64,hashlib,json
+        import base64,hashlib
         self._phase_model(provider,model)
         if self.resolve_serialized is None:raise AdmissionDenied('serialized request resolver unavailable')
         try:raw=base64.b64decode(serialized_request,validate=True)
         except (ValueError,TypeError) as exc:raise AdmissionDenied('invalid serialized request') from exc
         try:
-            payload=json.loads(raw)
-            caps=[payload[k] for k in ('max_tokens','max_completion_tokens') if k in payload]
-            if payload.get('model')!=model or len(caps)!=1 or type(caps[0]) is not int or caps[0]!=max_output_tokens:raise ValueError()
+            from .provider_request import request_contract
+            request_contract(raw,model,max_output_tokens)
         except (ValueError,TypeError,AttributeError) as exc:raise AdmissionDenied('serialized request identity/cap mismatch') from exc
         existing=self.store.provider_attempt(attempt_id)
         if existing:
