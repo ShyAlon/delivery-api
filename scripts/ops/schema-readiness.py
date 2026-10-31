@@ -69,6 +69,7 @@ MIGRATIONS={
  '20261031190000_retail_totals.sql':('table:retail_totals','signature:requi_retail_total_changed()'),
  '20261031200000_waiting_input_index.sql':('table:events_waiting_input_identity',),
  '20261031210000_document_chunks.sql':('table:document_chunks','signature:requi_document_parts(text,integer,text)','signature:requi_document_append(text,integer,text,bytea,uuid,uuid,double precision)'),
+ '20261031220000_usage_projection.sql':('table:document_projections',),
 }
 ROLES=('requi_metrics_writer','requi_engine_config_read','requi_operator_usage')
 

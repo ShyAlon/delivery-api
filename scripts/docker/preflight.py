@@ -26,7 +26,7 @@ SYNTHETIC_SUB = '00000000-0000-0000-0000-000000000000'
 # tests/test_startup_preflight.py::test_required_tables_match_the_migrations_on_disk:
 # a migration that adds or renames a table fails that test until this set is updated.
 REQUIRED_TABLES = frozenset({
-    'document_chunks','retail_totals','expense_totals','expense_total_entries','expense_total_clock','admission_limits', 'admission_totals', 'admission_total_entries', 'answer_feedback', 'artifact_bytes', 'artifact_manifest_ready', 'artifacts',
+    'document_projections','document_chunks','retail_totals','expense_totals','expense_total_entries','expense_total_clock','admission_limits', 'admission_totals', 'admission_total_entries', 'answer_feedback', 'artifact_bytes', 'artifact_manifest_ready', 'artifacts',
     'audit_log', 'checkpoint_blobs', 'checkpoint_migrations', 'checkpoint_writes', 'checkpoints',
     'closed_revision_acceptance_revocations', 'closed_revision_acceptances',
     'closed_revision_install_events', 'closed_revision_installations', 'closed_revision_lineage_plans',
