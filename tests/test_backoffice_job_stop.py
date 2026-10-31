@@ -127,7 +127,7 @@ def test_browser_confirm_sends_one_scoped_stop_and_refreshes(tmp_path):
         calls.append(request)
         if request.method=='POST':
             assert request.url.path=='/api/operations/worker-jobs/job-one/stop'
-            assert __import__('json').loads(request.content)=={'confirm':True}
+            assert __import__('json').loads(request.content)=={'confirm':True,'hide':True}
             stopped[0]=True;return httpx.Response(200,json={'hidden':True,'stop_requested':True,'accounting_retained':True,'accounting_settled':False,'worker_exit_verified':False})
         if request.url.path=='/api/operations/active-jobs':
             row={'title':'Confirm cleanup','task_id':'task-one','job_id':'job-one','kind':'phase:intent','state':'running','task_state':'running','generation':1,'task_generation':1,'stop_requested_at':None,'updated_at':1}
@@ -143,10 +143,24 @@ def test_browser_confirm_sends_one_scoped_stop_and_refreshes(tmp_path):
         with sync_playwright() as p:
             browser=p.chromium.launch(headless=True,args=['--no-sandbox']);page=browser.new_page(extra_http_headers={'Authorization':'Bearer fake'})
             page.goto(f'http://127.0.0.1:{port}/');page.locator('#active-jobs tbody tr').wait_for()
-            page.locator('#active-jobs button').filter(has_text='Stop').click()
+            page.locator('#active-jobs button').filter(has_text='Delete').click()
             page.get_by_role('button',name='Stop and delete',exact=True).click()
             page.get_by_text('No pending, running or paused jobs returned.',exact=True).wait_for()
             assert len([x for x in calls if x.method=='POST'])==1
             assert not page.get_by_role('dialog').count()
             browser.close()
     finally:server.should_exit=True;thread.join(timeout=10)
+
+
+def test_stop_only_keeps_task_and_saved_work_visible(pg_workspace_factory):
+    with pg_workspace_factory() as workspace,tenant_context(workspace.scope):
+        store=workspace.store;task=store.create_task('Stop without Delete')
+        store.set_engine_session(task['task_id'],str(uuid.uuid4()))
+        job=store.enqueue_worker(task['task_id'],'phase:intent');store.claim_worker(job)
+        result=store.stop_hide_worker_task(job,confirm=True,hide=False)
+        assert result['hidden'] is False and result['stop_requested']
+        assert store.task(task['task_id'])['state']=='stop_requested'
+        assert store.worker_job(job)['state']=='running'
+        assert job in {x['job_id'] for x in store.owner_active_jobs()['jobs']}
+        result=store.stop_hide_worker_task(job,confirm=True,hide=True)
+        assert result['hidden'] and store.task(task['task_id']) is None

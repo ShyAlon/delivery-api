@@ -3482,12 +3482,13 @@ def cloud_execution_admitted()->bool:
 
 class WorkerJobStopRequest(BaseModel):
     confirm:bool=False
+    hide:bool=True
 
 
 @app.post('/api/operations/worker-jobs/{job_id}/stop')
 def operator_worker_job_stop(job_id:str,body:WorkerJobStopRequest,a:auth.Actor=Depends(auth.require_actor)):
     _require_account_debug()
-    try:result=store.stop_hide_worker_task(job_id,confirm=body.confirm,actor=a.label)
+    try:result=store.stop_hide_worker_task(job_id,confirm=body.confirm,actor=a.label,hide=body.hide)
     except KeyError:raise HTTPException(404,'Owned worker job not found')
     except ValueError as exc:raise HTTPException(422,str(exc))
     # Database Stop/generation fencing is authoritative even if the engine is

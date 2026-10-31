@@ -115,7 +115,7 @@ def test_backoffice_jobs_pixels_filter_pagination_refresh_and_revocation(tmp_pat
             page.locator('#active-jobs tbody tr').wait_for()
             assert 'Meditator 7.5' in page.locator('#active-jobs').inner_text()
             assert 'ee89bcb759964a795ed7cf827871eb86' in page.locator('#active-jobs').inner_text()
-            assert page.locator('#active-jobs-panel button').count()==4 # refresh/next plus View/Stop
+            assert page.locator('#active-jobs-panel button').count()==5 # refresh/next plus View/Stop/Delete
             page.locator('#active-jobs button').filter(has_text='Stop').click()
             page.get_by_role('dialog').wait_for()
             assert 'accepted provider call' in page.get_by_role('dialog').inner_text()
