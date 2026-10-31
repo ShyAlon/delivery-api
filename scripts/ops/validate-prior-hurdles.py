@@ -69,6 +69,7 @@ def pytest_sessionfinish(session,exitstatus):
         if not report.exists():
             print('FAIL | fixture suite could not start | '+str(log));return False
         rows=json.loads(report.read_text())['reports']
+        complete=True
         for label,nodes in CASES.items():
             selected=[r for r in rows if any(r['nodeid']==n or r['nodeid'].startswith(n+'::') or r['nodeid'].startswith(n+'[') for n in nodes)]
             failed=any(r['outcome']=='failed' for r in selected)
@@ -76,8 +77,9 @@ def pytest_sessionfinish(session,exitstatus):
             calls=[r for r in selected if r['when']=='call' and r['outcome']=='passed']
             missing=any(not any(r['when']=='call' and r['outcome']=='passed' and (r['nodeid']==n or r['nodeid'].startswith(n+'::') or r['nodeid'].startswith(n+'[')) for r in selected) for n in nodes)
             status='FAIL' if failed else 'NOT CHECKED' if skipped or missing else 'PASS'
+            complete=complete and status=='PASS'
             print(f'{status} | {label} | disposable fixture proof only; {len(calls)} passed; log {log}',flush=True)
-        return result.returncode==0 and not any(r['outcome']=='skipped' for r in rows)
+        return result.returncode==0 and complete and not any(r['outcome']=='skipped' for r in rows)
 
 
 def preview_checks(base,state,output):
