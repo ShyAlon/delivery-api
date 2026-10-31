@@ -25,7 +25,7 @@ def transition(conn,email,*,apply=False):
     attempt=conn.execute("SELECT a.attempt_id,a.job_id,j.task_id,a.state FROM provider_attempts a JOIN worker_jobs j USING(job_id) WHERE a.owner_id=%s AND a.state IN ('reserved','dispatched','uncertain') ORDER BY a.created_at,a.attempt_id LIMIT 1",(owner,)).fetchone()
     if attempt:
         raise AdmissionDenied(f'owner attempts must be reconciled before transition: task={attempt[2]} job={attempt[1]} attempt={attempt[0]} state={attempt[3]}; confirm provider outcome before settling or cancelling; do not erase accounting')
-    job=conn.execute("SELECT task_id,job_id,state FROM worker_jobs WHERE owner_id=%s AND state IN ('pending','running') ORDER BY created_at,job_id LIMIT 1",(owner,)).fetchone()
+    job=conn.execute("SELECT j.task_id,j.job_id,j.state FROM worker_jobs j JOIN tasks t ON t.task_id=j.task_id AND t.owner_id=j.owner_id WHERE j.owner_id=%s AND t.deleted_at IS NULL AND j.state IN ('pending','running') ORDER BY j.created_at,j.job_id LIMIT 1",(owner,)).fetchone()
     if job:
         raise AdmissionDenied(f'stop and reconcile owner work before transition: task={job[0]} job={job[1]} state={job[2]}; Stop this task and wait for confirmed worker quiescence, then retry; a stale job requires reviewed recovery, not row deletion')
     compute=conn.execute("SELECT s.segment_key,s.job_id,j.task_id,s.state FROM retail_compute_segments s JOIN worker_jobs j USING(job_id) WHERE s.owner_id=%s AND s.state IN ('pending','unresolved') ORDER BY s.started_at,s.segment_key LIMIT 1",(owner,)).fetchone()

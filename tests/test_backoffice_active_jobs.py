@@ -23,8 +23,9 @@ def test_active_jobs_proxy_is_read_only_and_preserves_exact_pagination():
     assert len(calls)==1
 
 
-def test_nonterminal_jobs_include_title_and_page_without_hiding_old_blockers(store):
-    with tenant_context(A):
+def test_nonterminal_jobs_include_title_and_page_without_hiding_old_blockers(pg_workspace_factory):
+    with pg_workspace_factory() as workspace,tenant_context(workspace.scope):
+        store=workspace.store
         task=store.create_task('Named maintenance blocker')
         store.set_engine_session(task['task_id'],__import__('uuid').uuid4().hex)
         job=store.enqueue_worker(task['task_id'],'phase:intent')
@@ -114,7 +115,12 @@ def test_backoffice_jobs_pixels_filter_pagination_refresh_and_revocation(tmp_pat
             page.locator('#active-jobs tbody tr').wait_for()
             assert 'Meditator 7.5' in page.locator('#active-jobs').inner_text()
             assert 'ee89bcb759964a795ed7cf827871eb86' in page.locator('#active-jobs').inner_text()
-            assert page.locator('#active-jobs-panel button').count()==2 # no mutation button
+            assert page.locator('#active-jobs-panel button').count()==4 # refresh/next plus View/Stop
+            page.locator('#active-jobs button').filter(has_text='Stop').click()
+            page.get_by_role('dialog').wait_for()
+            assert 'accepted provider call' in page.get_by_role('dialog').inner_text()
+            page.screenshot(path='/downloads/backoffice-worker-jobs-confirm.png',full_page=False)
+            page.get_by_role('button',name='Cancel',exact=True).click()
             page.locator('#active-jobs-filter').fill('no-match')
             assert page.locator('#active-jobs').is_hidden()
             page.locator('#active-jobs-filter').fill('77c30a258523')

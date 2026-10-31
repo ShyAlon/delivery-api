@@ -3468,6 +3468,27 @@ def cloud_execution_admitted()->bool:
     return cloud_execution.admitted()
 
 
+class WorkerJobStopRequest(BaseModel):
+    confirm:bool=False
+
+
+@app.post('/api/operations/worker-jobs/{job_id}/stop')
+def operator_worker_job_stop(job_id:str,body:WorkerJobStopRequest,a:auth.Actor=Depends(auth.require_actor)):
+    _require_account_debug()
+    try:result=store.stop_hide_worker_task(job_id,confirm=body.confirm,actor=a.label)
+    except KeyError:raise HTTPException(404,'Owned worker job not found')
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    # Database Stop/generation fencing is authoritative even if the engine is
+    # gone. Notification is best effort and cannot turn cleanup into a refusal.
+    notified=False
+    try:
+        engine_client.stop(result['session_id'])
+        notified=True
+    except Exception:
+        activity('task.stop.notification_unverified','Task hidden with durable Stop; engine notification unverified',task_id=result['task_id'])
+    return JSONResponse(result|{'engine_notification_verified':notified},headers={'Cache-Control':'no-store'})
+
+
 @app.get('/api/operations/active-jobs')
 def owner_active_jobs(limit:int=50,before_updated_at:float|None=None,before_job_id:str|None=None,a:auth.Actor=Depends(auth.require_actor)):
     _require_account_debug()

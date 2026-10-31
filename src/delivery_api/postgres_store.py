@@ -1896,6 +1896,30 @@ FROM tasks t"""
         from .retail_ledger import phase_totals
         return phase_totals(self,job_id)
 
+    def stop_hide_worker_task(self,job_id,*,confirm=False,actor='operator'):
+        """Fence then tombstone own task. Never manufacture worker/usage completion."""
+        if confirm is not True:raise ValueError('explicit confirmation required')
+        from .prepaid import owner_lock
+        owner_lock(self)
+        job=self.worker_job(job_id)
+        if not job:raise KeyError(job_id)
+        task=self._execute_native('SELECT * FROM tasks WHERE task_id=%s AND owner_id=%s FOR UPDATE',
+            (job['task_id'],current_scope().owner_id)).fetchone()
+        if not task:raise KeyError(job_id)
+        already=task['deleted_at'] is not None
+        if not already:
+            # Stop and tombstone share one transaction. A failed commit exposes
+            # neither a false success nor an unfenced hidden task.
+            self.request_task_stop(task['task_id'])
+            self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s',
+                (time.time(),time.time(),task['task_id']),write=True)
+            self.audit(actor,'task.operator_stop_hidden',task['task_id'],
+                {'job_id':job_id,'title':task['title'],'accounting_retained':True,'worker_exit_verified':False})
+        return {'job_id':job_id,'task_id':task['task_id'],'session_id':job['session_id'],
+            'hidden':True,'stop_requested':True,'already_hidden':already,
+            'worker_exit_verified':False,'accounting_settled':False,'accounting_retained':True,
+            'accepted_calls_may_bill':True}
+
     def owner_active_jobs(self,*,limit=50,before=None):
         """Current owner only. Pending/running/paused are evidence, not proof of liveness."""
         import math
@@ -1913,7 +1937,7 @@ FROM tasks t"""
         rows=self._execute_native("SELECT j.job_id,j.task_id,j.session_id,j.generation,j.kind,j.state,j.created_at,j.updated_at,"
             "t.title,t.state AS task_state,t.generation AS task_generation,t.stop_requested_at,t.deleted_at "
             "FROM worker_jobs j JOIN tasks t ON t.task_id=j.task_id AND t.owner_id=j.owner_id "
-            "WHERE j.owner_id=%s AND j.state IN ('pending','running','paused')"+cursor+
+            "WHERE j.owner_id=%s AND t.deleted_at IS NULL AND j.state IN ('pending','running','paused')"+cursor+
             " ORDER BY j.updated_at DESC,j.job_id DESC LIMIT %s",tuple(params)).fetchall()
         page=[dict(row)|{'quiescence_verified':False,'stale_verified':False} for row in rows[:limit]]
         truncated=len(rows)>limit
@@ -2267,7 +2291,7 @@ PG_OPERATIONS = (
     'manifest_revision',
     'manifest_snapshot',
     'mark_producer_published',
-    'operator_workspace_snapshot','owner_active_jobs',
+    'operator_workspace_snapshot','owner_active_jobs','stop_hide_worker_task',
     'own_credit_balance',
     'own_credit_history',
     'own_last_topup',
