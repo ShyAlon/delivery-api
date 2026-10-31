@@ -1,6 +1,6 @@
 """Trusted constructor seam for paid-child acceptance, not production activation.
 
-Cloud selectors do not construct this object. Keys/transport stay in the parent;
+Only the explicit attended loopback preview constructs this object. Keys/transport stay in the parent;
 child configuration receives only its pinned model and private descriptors.
 """
 from .child_compute_channel import ChildComputeAccounting
