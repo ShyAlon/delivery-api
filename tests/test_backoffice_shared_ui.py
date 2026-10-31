@@ -1,3 +1,6 @@
+from pathlib import Path as _EvidencePath
+import os as _evidence_os
+_EVIDENCE=_EvidencePath(_evidence_os.environ.get('REQUI_TEST_ARTIFACTS','/downloads'));_EVIDENCE.mkdir(parents=True,exist_ok=True)
 """Shared assets, navigation, menus and diagnostics without live accounts or providers."""
 import socket,threading,time
 import httpx,pytest,uvicorn
@@ -64,10 +67,10 @@ def test_tabs_keyboard_context_menu_and_local_debug(ui):
         page.get_by_role('tab',name='Debug',exact=True).click();page.locator('#debug-refresh').click()
         expect(page.locator('#debug-report')).to_contain_text('/api/operations/active-jobs')
         expect(page.locator('#debug-report')).to_contain_text('backoffice.ready')
-        page.screenshot(path='/downloads/backoffice-shared-debug.png',full_page=True)
+        page.screenshot(path=str(_EVIDENCE/'backoffice-shared-debug.png'),full_page=True)
         page.get_by_role('tab',name='Worker Jobs',exact=True).click();page.locator('#active-jobs-refresh').click();row.wait_for()
-        page.get_by_role('button',name='Job actions').click();page.screenshot(path='/downloads/backoffice-shared-menu-desktop.png',full_page=True);page.keyboard.press('Escape')
-        page.set_viewport_size({'width':390,'height':844});page.emulate_media(reduced_motion='reduce');row.scroll_into_view_if_needed();row.click(button='right');page.screenshot(path='/downloads/backoffice-shared-menu-mobile.png',full_page=False)
+        page.get_by_role('button',name='Job actions').click();page.screenshot(path=str(_EVIDENCE/'backoffice-shared-menu-desktop.png'),full_page=True);page.keyboard.press('Escape')
+        page.set_viewport_size({'width':390,'height':844});page.emulate_media(reduced_motion='reduce');row.scroll_into_view_if_needed();row.click(button='right');page.screenshot(path=str(_EVIDENCE/'backoffice-shared-menu-mobile.png'),full_page=False)
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         assert page.evaluate("getComputedStyle(document.querySelector('.panel')).animationName")=='none'
         page.keyboard.press('Escape');page.goto(url+'/#payments');expect(page.locator('#payments-panel')).to_be_visible();assert not errors
