@@ -4,31 +4,31 @@ import httpx
 
 class FixedOriginTransport(httpx.BaseTransport):
     def __init__(self,inner,origin,allowed):self.inner,self.origin,self.allowed=inner,origin,allowed
-    def handle_request(self,request):
+    def validate(self,request):
         u=request.url
         actual=f'{u.scheme}://{u.host}'+(':'+str(u.port) if u.port not in (None,443) else '')
-        if actual!=self.origin or not self.allowed(request.method,u.path) or u.username or u.password:
+        if actual!=self.origin or not self.allowed(request.method,u.path) or u.username or u.password or u.query or u.fragment:
             raise ValueError('fixed reviewed origin/path required')
+    def handle_request(self,request):
+        self.validate(request)
         response=self.inner.handle_request(request)
         if 300<=response.status_code<400:response.close();raise ValueError('redirect forbidden')
         return response
     def close(self):self.inner.close()
 
 
-def deepseek_client_factory(*,inner_sync,inner_async,owner_module):
-    # Parameter selects the interview or generator's own wire wrappers, not a
-    # provider URL. Credentials remain supplied by the local SDK mechanism.
+def _clients(inner_sync,inner_async,owner_module,provider_name,origin,paths):
     from importlib import import_module
     if owner_module not in ('interview_engine','spec_generator'):raise ValueError('known engine module required')
     module=import_module(owner_module+'.provider_transport')
     def factory(*,stage,provider,model,gateway):
-        if provider!='deepseek':raise ValueError('DeepSeek only for this acceptance run')
-        allowed=lambda method,path:method=='POST' and path in ('/chat/completions','/v1/chat/completions')
-        sync=FixedOriginTransport(inner_sync(),'https://api.deepseek.com',allowed)
+        if provider!=provider_name:raise ValueError(provider_name+' only for this acceptance run')
+        allowed=lambda method,path:method=='POST' and path in paths
+        sync=FixedOriginTransport(inner_sync(),origin,allowed)
         class AsyncFixed(httpx.AsyncBaseTransport):
             def __init__(self):self.inner=inner_async()
             async def handle_async_request(self,request):
-                if str(request.url.copy_with(path='',query=None,fragment=None)) not in ('https://api.deepseek.com','https://api.deepseek.com/') or not allowed(request.method,request.url.path):raise ValueError('fixed DeepSeek SDK origin/path required')
+                sync.validate(request)
                 response=await self.inner.handle_async_request(request)
                 if 300<=response.status_code<400:await response.aclose();raise ValueError('redirect forbidden')
                 return response
@@ -36,6 +36,10 @@ def deepseek_client_factory(*,inner_sync,inner_async,owner_module):
         return (httpx.Client(transport=module.AdmittedTransport(sync,gateway,stage=stage,provider=provider,model=model),trust_env=False,follow_redirects=False),
             httpx.AsyncClient(transport=module.AsyncAdmittedTransport(AsyncFixed(),gateway,stage=stage,provider=provider,model=model),trust_env=False,follow_redirects=False))
     return factory
+
+
+def deepseek_client_factory(*,inner_sync,inner_async,owner_module):
+    return _clients(inner_sync,inner_async,owner_module,'deepseek','https://api.deepseek.com',('/chat/completions','/v1/chat/completions'))
 
 
 def deepseek_balance_reader(*,client,api_key):
@@ -56,28 +60,10 @@ def ollama_client_factory(*,inner_sync,inner_async,owner_module):
     setting), never from the request. Credentials remain supplied by the local
     SDK mechanism; the fixed origin forbids redirects and ambient clients.
     """
-    from importlib import import_module
-    if owner_module not in ('interview_engine','spec_generator'):raise ValueError('known engine module required')
-    module=import_module(owner_module+'.provider_transport')
     import os,urllib.parse
     base=(os.environ.get('OLLAMA_BASE_URL') or 'http://localhost:11434/v1').strip().rstrip('/')
     parsed=urllib.parse.urlsplit(base)
     if parsed.scheme not in ('http','https') or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError('plain reviewed Ollama base URL required')
     origin=f'{parsed.scheme}://{parsed.hostname}'+(':'+str(parsed.port) if parsed.port not in (None,443) else '')
-    allowed_paths={parsed.path+'/chat/completions'}
-    def factory(*,stage,provider,model,gateway):
-        if provider!='ollama':raise ValueError('Ollama only for this acceptance run')
-        allowed=lambda method,path:method=='POST' and path in allowed_paths
-        sync=FixedOriginTransport(inner_sync(),origin,allowed)
-        class AsyncFixed(httpx.AsyncBaseTransport):
-            def __init__(self):self.inner=inner_async()
-            async def handle_async_request(self,request):
-                if str(request.url.copy_with(path='',query=None,fragment=None)) not in (origin,origin+'/') or not allowed(request.method,request.url.path):raise ValueError('fixed Ollama SDK origin/path required')
-                response=await self.inner.handle_async_request(request)
-                if 300<=response.status_code<400:await response.aclose();raise ValueError('redirect forbidden')
-                return response
-            async def aclose(self):await self.inner.aclose()
-        return (httpx.Client(transport=module.AdmittedTransport(sync,gateway,stage=stage,provider=provider,model=model),trust_env=False,follow_redirects=False),
-            httpx.AsyncClient(transport=module.AsyncAdmittedTransport(AsyncFixed(),gateway,stage=stage,provider=provider,model=model),trust_env=False,follow_redirects=False))
-    return factory
+    return _clients(inner_sync,inner_async,owner_module,'ollama',origin,(parsed.path+'/chat/completions',))
