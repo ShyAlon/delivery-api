@@ -70,6 +70,8 @@ def _job(store,job_id):
 def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False):
     expense,retail=_quote(quote)
     if not isinstance(request_digest,str) or not request_digest:raise AdmissionDenied('exact request digest required')
+    # Same global-before-owner order as settlement and projection triggers.
+    store._execute_native('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
     _job(store,job_id);owner=current_scope().owner_id
     # Shared owner lock serializes independent processes, not just one API worker.
     lock_key=int.from_bytes(hashlib.sha256(owner.encode()).digest()[:8],'big',signed=True)
