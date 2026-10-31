@@ -1,0 +1,3 @@
+# One money-gateway readiness contract
+
+C09: cloud readiness separately parsed provider rows, enforced key/local-preview rules and built a catalog before asking ProductionGateways to do the same work. Remove those shadows. ProductionGateways remains the owner of provider topology, keys, reviewed prices, context ceilings, formula and vendor configuration; runtime readiness reports its failure. Request/profile flags and engine-start failure remain separate. The supplied environment now also owns the delivery-only profile decision, rather than accidentally reading a different process environment.

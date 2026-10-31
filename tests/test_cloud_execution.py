@@ -33,10 +33,20 @@ def test_closed_without_cloud_accounts_or_in_delivery_only_profile(monkeypatch):
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     assert any('Supabase' in p for p in cloud_execution.problems(GOOD))
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
-    monkeypatch.setenv('DELIVERY_CONTROL_PLANE_ONLY','1')
-    assert any('delivery-only' in p for p in cloud_execution.problems(GOOD))
+    assert any('delivery-only' in p for p in cloud_execution.problems({**GOOD,'DELIVERY_CONTROL_PLANE_ONLY':'1'}))
 
 
 def test_reasons_never_contain_secret_values():
     text=' '.join(cloud_execution.problems({**GOOD,'DEEPSEEK_API_KEY':'','INTERVIEW_ENGINE_TOKEN':'sekret-short'}))
     assert 'sekret-short' not in text
+
+
+def test_readiness_uses_gateway_catalog_once_and_supplied_profile(monkeypatch):
+    from delivery_api import production_gateway,cloud_runtime
+    cloud_runtime._checked.clear();calls=[]
+    original=production_gateway.catalog_from_environment
+    def counted(*args,**kwargs):calls.append(True);return original(*args,**kwargs)
+    monkeypatch.setattr(production_gateway,'catalog_from_environment',counted)
+    monkeypatch.setenv('DELIVERY_CONTROL_PLANE_ONLY','1')
+    assert cloud_execution.problems({**GOOD,'DELIVERY_CONTROL_PLANE_ONLY':'0'})==[]
+    assert calls==[True]
