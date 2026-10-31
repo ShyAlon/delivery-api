@@ -50,7 +50,7 @@ Limits exist to catch looping/runaway code, not prevent normal use. Within revie
 - Historical task capture at 20:26: two settled retail entries total 0.022425 credits before compute. This is partial-stage evidence, not a completed interview forecast.
 - Account-wide 73 settled calls and 2.114342 charged credits are not task-only totals.
 - Captured raw provider units lacked their source quote scale. A conversion using the code's current scale is provisional, not verified provider USD. No full-interview/day percentile or new numeric ceiling was inferred.
-- `launch_admission_policy.py`, `expense_alarm_policy.py`, `CONFIRMED-EXPENSE-GUARD.md` and `scripts/ops/grant-credits.sh` establish the configuration conflict; none proves installed live values.
+- `launch_admission_policy.py`, the now-retired preparation-only expense policy, `CONFIRMED-EXPENSE-GUARD.md` and `scripts/ops/grant-credits.sh` establish the configuration conflict; none proves installed live values.
 - Both child-process work items concern phase-5 acceptance/default cutover/retiring threads. Their local fake-provider tests do not prove paid-child readiness.
 - Hosted CI, Docker, private settings, SMTP delivery, production policies and the currently running preview remain unverified by this document.
 
