@@ -1667,13 +1667,6 @@ def task_artifact_download(task_id:str,phase:str,name:str):
 
 _ARTIFACT_TITLES={"srs.semantic-review.json":"Requirements Semantic Review","architecture.decisions.json":"Architecture Stack Decisions","intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification","validation.json":"Validation"}
 
-def _checkpoint_interview_turns(task_id:str,status=None)->list[tuple[str,str]]:
-    """Recover historical turns when old API events stored only answer lengths."""
-    def mark(availability,reason):
-        if status is not None:status['checkpoint_transcript']={'availability':availability,'reason':reason}
-    mark('policy_excluded','legacy_checkpoint_excluded')
-    return []  # Retired file transcript recovery never deserializes old blobs.
-
 def _interview_model_provenance(task_id:str,status=None)->list[str]:
     """Usage is per-call truth; never collapse a switched stage to its first model."""
     def mark(availability,reason):
@@ -1738,35 +1731,22 @@ def _interview_transcript_markdown(task_id:str)->str:
             if answer and target is not None:
                 target[1]=answer
                 matched_answers[event['id']]=(target[0],answer)
-    complete=[tuple(turn[:2]) for turn in turns if turn[1]]
     supplemental={}
-    checkpoint_turns=_checkpoint_interview_turns(task_id,supplemental)
-    if checkpoint_turns:complete=checkpoint_turns
-    route_changes=[e for e in _customer_events(store.events(task_id)) if e.get("kind")=="model_route" and (e.get("payload") or {}).get("scope")=="switch"]
     models=_interview_model_provenance(task_id,supplemental)
     notes=[f"Supplemental {name}: {row['availability']} ({row['reason']}). Primary artifact and recorded events are preserved." for name,row in supplemental.items() if row['availability'] in ('unavailable','absent')]
-    if not complete and not route_changes and not notes:return ""
+    events=_customer_events(store.events(task_id))
+    if not matched_answers and not notes and not any(e.get('kind')=='model_route' and (e.get('payload') or {}).get('scope')=='switch' for e in events):return ""
     lines=models+notes+["","## Interview questions and answers"]
-    # Keep switch markers in event order, between the questions and answers
-    # they actually separate. Checkpoint-only legacy transcripts fall back to
-    # the reconstructed complete turns.
     numbered=0
-    if not checkpoint_turns:
-        for event in _customer_events(store.events(task_id)):
-            if event.get("phase_key") not in ("intent","conops"):continue
-            payload=event.get("payload") or {}
-            if event.get("kind")=="model_route" and payload.get("scope")=="switch":
-                lines.extend(["",f"**{event.get('message','Model switched')}** · {payload.get('timestamp','unknown time')} · segment {payload.get('route_version','?')} · actor {payload.get('actor','unknown')}"])
-            elif event.get('id') in matched_answers:
-                question,answer=matched_answers[event['id']]
-                numbered+=1
-                lines.extend(["",f"### Question {numbered}",question,"",f"**Answer:** {answer}"])
-    else:
-        for index,(question,answer) in enumerate(complete,1):
-            lines.extend(["",f"### Question {index}",question,"",f"**Answer:** {answer}"])
-        for event in route_changes:
-            payload=event.get("payload") or {}
-            lines.extend(["",f"**{event.get('message','Model switched')}** · {payload.get('timestamp','unknown time')} · segment {payload.get('route_version','?')}"])
+    for event in events:
+        if event.get("phase_key") not in ("intent","conops"):continue
+        payload=event.get("payload") or {}
+        if event.get("kind")=="model_route" and payload.get("scope")=="switch":
+            lines.extend(["",f"**{event.get('message','Model switched')}** · {payload.get('timestamp','unknown time')} · segment {payload.get('route_version','?')} · actor {payload.get('actor','unknown')}"])
+        elif event.get('id') in matched_answers:
+            question,answer=matched_answers[event['id']]
+            numbered+=1
+            lines.extend(["",f"### Question {numbered}",question,"",f"**Answer:** {answer}"])
     return "\n".join(lines)
 
 

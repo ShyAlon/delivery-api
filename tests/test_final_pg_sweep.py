@@ -30,13 +30,3 @@ def test_lock_and_current_config_have_no_retired_driver():
     assert 'name = "libsql"' not in lock
     assert 'name = "langgraph-checkpoint-sqlite"' not in lock
     assert 'sqlite:' not in (ROOT/'Dockerfile').read_text()
-
-
-def test_retired_transcript_recovery_never_starts_a_deserializer(monkeypatch):
-    from delivery_api import app as service
-    def forbidden(*args,**kwargs):
-        raise AssertionError('retired checkpoint recovery must never spawn')
-    monkeypatch.setattr(service.subprocess,'run',forbidden)
-    status={}
-    assert service._checkpoint_interview_turns('retired',status)==[]
-    assert status['checkpoint_transcript']=={'availability':'policy_excluded','reason':'legacy_checkpoint_excluded'}

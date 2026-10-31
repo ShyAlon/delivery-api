@@ -1222,18 +1222,6 @@ def test_runner_emits_durable_phase_price(monkeypatch,tmp_path,pg_scoped_workspa
     audit=[e for e in store.audit_entries(tid) if e['action']=='phase.priced'][-1]
     assert audit['detail']['phase']=='needs' and audit['detail']['price']==10
 
-def test_legacy_intent_view_recovers_full_transcript_from_checkpoint(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
-    signed_app=pg_task_app(pg_scoped_workspace)
-    import json
-    from fastapi.testclient import TestClient
-    from delivery_api import app as app_module
-    monkeypatch.setattr(app_module.config,"CLOUD_TENANTS",False)
-    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=pg_scoped_workspace.store;tid=store.create_task('Legacy transcript')['task_id'];store.add_event(tid,'progress','session: legacy-turns',phase_key='intent')
-    folder=root/'legacy-turns'/'interview';folder.mkdir(parents=True);_publish_test_bytes(store,tid,'intent','intent_model.json',b'{}',session='legacy-turns');_test_readable(store,tid,'interview/intent_model.md','# What we understood')
-    store.add_event(tid,'waiting_input','You:',phase_key='intent',payload={'question':'Old question?','waiting_input':True});store.add_event(tid,'answer','Interview answer submitted',phase_key='intent',payload={'character_count':9})
-    monkeypatch.setattr(app_module,'store',store);monkeypatch.setattr(app_module,'_checkpoint_interview_turns',lambda _,supplemental:[('Who needs this?','Busy adults'),('What matters?','Easy scheduling')])
-    body=TestClient(signed_app,headers=pg_scoped_workspace.headers).get(f'/api/tasks/{tid}/artifacts/intent/intent_model.json/view').json()
-    assert 'Who needs this?' in body['content'] and 'Busy adults' in body['content'] and 'Old question?' not in body['content']
 
 def test_artifact_snapshot_exposes_content_owned_titles(monkeypatch,tmp_path,pg_scoped_workspace):
     import json
@@ -1583,9 +1571,6 @@ def test_built_runtime_contract_requires_scoped_postgres():
     assert 'pg_scoped_workspace' in inspect.signature(test_built_runtime_does_not_fall_back_to_legacy_interview_subprocess).parameters
 
 
-def test_legacy_transcript_receiver_requires_scoped_postgres():
-    import inspect
-    assert 'pg_scoped_workspace' in inspect.signature(test_legacy_intent_view_recovers_full_transcript_from_checkpoint).parameters
 
 
 def test_session_cost_receivers_require_scoped_postgres():
