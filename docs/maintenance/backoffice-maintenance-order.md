@@ -20,8 +20,8 @@ Reviewed direction, 2026-10-31: maintenance belongs in Back office, with diagnos
 ## Ordered next changes
 
 1. This PR: owner-only nonterminal jobs with task titles and exact evidence. All reads use current account debug authorization, active Auth session and tenant RLS. Page every pending/running/paused job rather than silently limiting to the latest100 of all states.
-2. Guarded reconcile for a durably stopped task: typed owner confirmation; prove original identity/generation, absent live worker and free DB writer lock; refuse with named missing proof for provider/compute uncertainty. No deletes or invented settlement.
-3. Add Stop through the existing Stop coordinator with confirmation, plus read-only own-test transition blockers and readiness diagnostics.
+2. Updated owner direction at07:06: binary-confirm Stop and Delete for the owner's own tasks. Persist Stop before hiding the task, preserve all provider/compute history and unresolved status, and do not label worker exit or settlement as verified. No running-work refusal merely to hide the task.
+3. Offer the same confirm-and-stop-and-delete flow from own-test maintenance. Do not let the owner's retained running-job row alone block the transition after confirmed cleanup; preserve real accounting checks. Add readiness diagnostics.
 4. Review individual maintenance mutations separately. Back office convenience must not bypass the existing accounting, Stop, role or schema fences.
 
 A job stored as running is not proof of a live process. A Stop request is not proof of exit. A rebuilt preview is not settlement evidence.
