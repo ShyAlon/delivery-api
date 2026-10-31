@@ -45,7 +45,7 @@ def _watch(gateways,stop,seconds):
         if stop.wait(seconds):return
 
 
-def install(store,environ,set_engine_client,watch_vendor=False):
+def install(store,environ,set_engine_client,watch_vendor=False,*,paid_runtime=None):
     global _state,_failure,_watcher
     if _state is not None:return
     from . import inprocess_engine
@@ -56,17 +56,21 @@ def install(store,environ,set_engine_client,watch_vendor=False):
         gateways=ProductionGateways(store,environ)
         base=artifacts_root(environ.get('VMODEL_ARTIFACTS_DIR'))
         database_url=environ.get('DELIVERY_DATABASE_URL','')
-        session_dsn=database_url if database_url.startswith(('postgres://','postgresql://')) else None
+        session_dsn=database_url if database_url.startswith(('postgres://','postgresql://','host=')) else None
         from .child_pool_budget import child_mode
         if child_mode(environ):
-            if set(gateways.models)!={'ollama'}:
+            if paid_runtime is not None:
+                from .child_paid_runtime import PaidChildRuntime
+                if not isinstance(paid_runtime,PaidChildRuntime):raise TypeError('typed paid child runtime required')
+                if gateways.models!=paid_runtime.models:raise ValueError('paid child models differ from reviewed gateways')
+            elif set(gateways.models)!={'ollama'}:
                 raise ValueError('local child mode requires only reviewed Ollama; paid child remains refused')
             if not session_dsn:raise ValueError('local child mode requires Postgres session persistence')
             from .child_generator import ChildGeneratorEngine
             from .child_interview import ChildInterviewHost
             endpoint=(environ.get('OLLAMA_BASE_URL') or 'http://localhost:11434/v1').rstrip('/')+'/chat/completions'
-            engine=ChildGeneratorEngine(base,gateway_factory=gateways,dsn=session_dsn,endpoint=endpoint)
-            host=ChildInterviewHost(store,base,gateway_factory=gateways,session_dsn=session_dsn,endpoint=endpoint)
+            engine=ChildGeneratorEngine(base,gateway_factory=gateways,dsn=session_dsn,endpoint=endpoint,paid_runtime=paid_runtime)
+            host=ChildInterviewHost(store,base,gateway_factory=gateways,session_dsn=session_dsn,endpoint=endpoint,paid_runtime=paid_runtime)
         else:
             raise ValueError(CUTOVER_NOTICE)
         client=host.client()
