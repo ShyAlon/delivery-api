@@ -292,8 +292,8 @@ class ChildInterviewClient(EngineClient):
 
 
 class ChildInterviewHost:
-    def __init__(self,store,base,*,gateway_factory,session_dsn,endpoint):
+    def __init__(self,store,base,*,gateway_factory,session_dsn,endpoint,paid_runtime=None):
         if not session_dsn:raise ValueError('child interview requires explicit Postgres session storage')
-        self._client=ChildInterviewClient(store,base,gateway_factory=gateway_factory,dsn=session_dsn,endpoint=endpoint)
+        self._client=ChildInterviewClient(store,base,gateway_factory=gateway_factory,dsn=session_dsn,endpoint=endpoint,paid_runtime=paid_runtime)
     def client(self):return self._client
     def close(self):self._client.close()
