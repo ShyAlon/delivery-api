@@ -161,14 +161,25 @@ class OperatorReadStore:
         if type(limit) is not int or not 1<=limit<=500:raise ValueError('bounded operator page required')
         with self._read(owner_store,'analytics.read') as (connection,authority):
             rows=connection.execute("""
-              WITH moment AS (SELECT extract(epoch FROM statement_timestamp())::double precision AS t)
-              SELECT u.label,a.balance_units,a.units_per_credit,m.t AS as_of,
-               (SELECT COALESCE(sum(-l.delta_units::numeric/l.units_per_credit),0) FROM public.credit_ledger l WHERE l.owner_id=a.owner_id AND l.kind='debit' AND l.recorded_at>m.t-86400) AS credits_24h,
-               (SELECT COALESCE(sum(-l.delta_units::numeric/l.units_per_credit),0) FROM public.credit_ledger l WHERE l.owner_id=a.owner_id AND l.kind='debit' AND l.recorded_at>m.t-604800) AS credits_7d,
-               (SELECT COALESCE(sum(p.expense_actual),0) FROM public.provider_attempts p WHERE p.owner_id=a.owner_id AND p.state='settled' AND p.settled_at>m.t-86400) AS expense_24h,
-               (SELECT COALESCE(sum(p.expense_actual),0) FROM public.provider_attempts p WHERE p.owner_id=a.owner_id AND p.state='settled' AND p.settled_at>m.t-604800) AS expense_7d
-              FROM public.credit_accounts a CROSS JOIN moment m LEFT JOIN public.users u ON u.user_id=a.owner_id
-              ORDER BY u.label NULLS LAST,a.owner_id LIMIT %s""",(limit+1,)).fetchall()
+              WITH moment AS (SELECT extract(epoch FROM statement_timestamp())::double precision AS t),
+              page AS MATERIALIZED (
+                SELECT a.owner_id,a.balance_units,a.units_per_credit,u.label FROM public.credit_accounts a LEFT JOIN public.users u ON u.user_id=a.owner_id
+                ORDER BY u.label NULLS LAST,a.owner_id LIMIT %s
+              )
+              SELECT a.label,a.balance_units,a.units_per_credit,m.t AS as_of,
+                l.credits_24h,l.credits_7d,p.expense_24h,p.expense_7d
+              FROM page a CROSS JOIN moment m
+              CROSS JOIN LATERAL (
+                SELECT COALESCE(sum(-l.delta_units::numeric/l.units_per_credit) FILTER(WHERE l.recorded_at>m.t-86400),0) credits_24h,
+                       COALESCE(sum(-l.delta_units::numeric/l.units_per_credit),0) credits_7d
+                FROM public.credit_ledger l WHERE l.owner_id=a.owner_id AND l.kind='debit' AND l.recorded_at>m.t-604800
+              ) l
+              CROSS JOIN LATERAL (
+                SELECT COALESCE(sum(p.expense_actual) FILTER(WHERE p.settled_at>m.t-86400),0) expense_24h,
+                       COALESCE(sum(p.expense_actual),0) expense_7d
+                FROM public.provider_attempts p WHERE p.owner_id=a.owner_id AND p.state='settled' AND p.settled_at>m.t-604800
+              ) p
+              ORDER BY a.label NULLS LAST,a.owner_id""",(limit+1,)).fetchall()
             usd=10**12   # the price scale every current vendor quote uses
             out=[{'account':r['label'] or 'Unknown User','balance_credits':round(r['balance_units']/r['units_per_credit'],2),
                 'credits_24h':round(float(r['credits_24h']),2),'credits_7d':round(float(r['credits_7d']),2),

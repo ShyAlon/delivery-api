@@ -107,3 +107,15 @@ def test_the_spend_route_serves_the_operator_refuses_others_and_says_what_to_do_
         assert off.status_code == 503 and "not switched on" in off.json()["detail"]["error"]
     finally:
         module.app.dependency_overrides.pop(auth.require_admin, None)
+
+
+def test_spend_query_pages_before_aggregates_and_shares_windows(world,monkeypatch):
+    import inspect
+    source=inspect.getsource(OperatorReadStore.spend)
+    assert 'page AS MATERIALIZED' in source
+    assert source.index('LIMIT %s')<source.index('FROM public.credit_ledger')
+    assert source.count('FROM public.credit_ledger')==1
+    assert source.count('FROM public.provider_attempts')==1
+    store,oid,label,_=world
+    result=read(store)
+    assert next(r for r in result['accounts'] if r['account']==label)['credits_7d']==8
