@@ -58,40 +58,35 @@ def session_artifact_files(root: Path):
     return found
 
 
-def pin_settled_artifacts(task, root: Path, *, current_phase: str):
-    """The authoritative completed-phase snapshot, pinned BEFORE a phase child starts:
-    (phase_key, name) -> sha256 for every present declared artifact of phases already
-    settled ('completed'/'approved'/'awaiting_approval'), excluding the child's own
-    phase. A phase child legitimately writes ONLY its own phase's artifacts (plus
-    non-declared diagnostics); no settled artifact may change, vanish, or appear
-    while it runs - gate-time founder mutations happen before the next child starts,
-    never during one."""
+def artifact_set_hash(snapshot):
+    lines=[f'{phase}/{name}:{sha}' for (phase,name),sha in snapshot.items()]
+    return hashlib.sha256('\n'.join(sorted(lines)).encode()).hexdigest(),len(lines)
+
+
+def settled_phases(task,current_phase):
     from .artifact_restore import _COMPLETED_STATES
-    settled = {p['phase_key'] for p in (task or {}).get('phases', [])
-               if p.get('state') in _COMPLETED_STATES} - {current_phase}
-    pinned = {}
-    for phase_key, filename, path in session_artifact_files(root):
-        if phase_key in settled:
-            pinned[(phase_key, filename)] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return pinned, settled
+    return {p['phase_key'] for p in (task or {}).get('phases',[]) if p.get('state') in _COMPLETED_STATES}-{current_phase}
 
 
-def settled_substitutions(root: Path, pinned, settled) -> list:
-    """Settled artifacts that changed, vanished, or appeared while the child ran."""
-    after = {}
-    for phase_key, filename, path in session_artifact_files(root):
-        if phase_key in settled:
-            after[(phase_key, filename)] = hashlib.sha256(path.read_bytes()).hexdigest()
-    problems = []
-    for key, sha in pinned.items():
-        if key not in after:
-            problems.append(('vanished',) + key)
-        elif after[key] != sha:
-            problems.append(('changed',) + key)
-    for key in after:
-        if key not in pinned:
-            problems.append(('appeared',) + key)
+def snapshot_substitutions(pinned,after):
+    problems=[('vanished',*key) if key not in after else ('changed',*key) for key,sha in pinned.items() if after.get(key)!=sha]
+    problems.extend(('appeared',*key) for key in after if key not in pinned)
     return sorted(problems)
+
+
+def file_artifact_snapshot(root,phases=None):
+    return {(phase,name):hashlib.sha256(path.read_bytes()).hexdigest()
+            for phase,name,path in session_artifact_files(root) if phases is None or phase in phases}
+
+
+def pin_settled_artifacts(task,root: Path,*,current_phase: str):
+    """Pin declared settled bytes before a producer starts, excluding its own phase."""
+    settled=settled_phases(task,current_phase)
+    return file_artifact_snapshot(root,settled),settled
+
+
+def settled_substitutions(root: Path,pinned,settled):
+    return snapshot_substitutions(pinned,file_artifact_snapshot(root,settled))
 
 
 def format_settled_substitution(phase: str, problems) -> str:

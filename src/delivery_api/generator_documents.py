@@ -43,15 +43,19 @@ class GeneratorDocuments:
             raise ValueError('canonical owned workflow document key required')
         return key
 
+    @staticmethod
+    def _verified_bytes(row):
+        raw=bytes(row['payload'])
+        if hashlib.sha256(raw).hexdigest()!=row['sha256']:raise ValueError('workflow document hash differs')
+        return raw
+
     def read(self,key):
         key=self._key(key)
         with self.saver._cursor() as cur:
             row=cur.execute('SELECT payload,sha256 FROM generator_documents WHERE execution_session_id=%s AND generation=%s AND document_key=%s',
                 (self.capability.session_id,self.capability.generation,key)).fetchone()
             if row is None or row['payload'] is None:return None
-            raw=bytes(row['payload'])
-            if hashlib.sha256(raw).hexdigest()!=row['sha256']:raise ValueError('workflow document hash differs')
-            return raw
+            return self._verified_bytes(row)
 
     def read_fresh(self,key,*,not_before):
         key=self._key(key)
@@ -59,9 +63,7 @@ class GeneratorDocuments:
             row=cur.execute('SELECT payload,sha256,updated_at FROM generator_documents WHERE execution_session_id=%s AND generation=%s AND document_key=%s',
                 (self.capability.session_id,self.capability.generation,key)).fetchone()
             if row is None or row['payload'] is None or row['updated_at']<not_before:return None
-            raw=bytes(row['payload'])
-            if hashlib.sha256(raw).hexdigest()!=row['sha256']:raise ValueError('workflow document hash differs')
-            return raw
+            return self._verified_bytes(row)
 
     def capture(self,keys):
         """One original-attempt transaction, no directory enumeration or fallback."""
@@ -75,9 +77,7 @@ class GeneratorDocuments:
         result={}
         for row in rows:
             if row['payload'] is None:continue
-            raw=bytes(row['payload'])
-            if hashlib.sha256(raw).hexdigest()!=row['sha256']:raise ValueError('workflow document hash differs')
-            result[row['document_key']]=raw
+            result[row['document_key']]=self._verified_bytes(row)
         return result
 
     def write(self,key,raw):
@@ -99,9 +99,7 @@ class GeneratorDocuments:
         with self.saver._cursor() as cur:
             row=cur.execute('SELECT payload,sha256 FROM generator_documents WHERE execution_session_id=%s AND generation=%s AND document_key=%s',
                 (self.capability.session_id,self.capability.generation,key)).fetchone()
-            prior=b'' if row is None or row['payload'] is None else bytes(row['payload'])
-            if row is not None and row['payload'] is not None and hashlib.sha256(prior).hexdigest()!=row['sha256']:
-                raise ValueError('workflow document hash differs')
+            prior=b'' if row is None or row['payload'] is None else self._verified_bytes(row)
             combined=prior+raw
             if len(combined)>64*1024*1024:raise ValueError('bounded workflow document bytes required')
             self._put_cursor(cur,key,combined,hashlib.sha256(combined).hexdigest())
@@ -163,30 +161,27 @@ def prepare_document_workspace(store,task_id,documents,*,current_phase):
             documents._put_cursor(cursor,key,raw,hashlib.sha256(raw).hexdigest())
 
 
-def document_set_hash(documents):
+def document_artifact_snapshot(documents,phases=None):
     from .artifact_publication import document_artifact_keys
-    keys=document_artifact_keys();captured=documents.capture(list(keys.values()))
-    lines=[f'{phase}/{name}:{hashlib.sha256(captured[key]).hexdigest()}' for (phase,name),key in keys.items() if key in captured]
-    return hashlib.sha256('\n'.join(sorted(lines)).encode()).hexdigest(),len(lines)
+    keys={identity:key for identity,key in document_artifact_keys().items() if phases is None or identity[0] in phases}
+    captured=documents.capture(list(keys.values()))
+    return {identity:hashlib.sha256(captured[key]).hexdigest() for identity,key in keys.items() if key in captured}
+
+
+def document_set_hash(documents):
+    from .artifact_publication import artifact_set_hash
+    return artifact_set_hash(document_artifact_snapshot(documents))
 
 
 def pin_document_artifacts(task,documents,*,current_phase):
-    from .artifact_publication import document_artifact_keys
-    from .artifact_restore import _COMPLETED_STATES
-    settled={phase['phase_key'] for phase in (task or {}).get('phases',[]) if phase.get('state') in _COMPLETED_STATES}-{current_phase}
-    keys={identity:key for identity,key in document_artifact_keys().items() if identity[0] in settled}
-    captured=documents.capture(list(keys.values()))
-    return {identity:hashlib.sha256(captured[key]).hexdigest() for identity,key in keys.items() if key in captured},settled
+    from .artifact_publication import settled_phases
+    settled=settled_phases(task,current_phase)
+    return document_artifact_snapshot(documents,settled),settled
 
 
 def document_substitutions(documents,pinned,settled):
-    from .artifact_publication import document_artifact_keys
-    keys={identity:key for identity,key in document_artifact_keys().items() if identity[0] in settled}
-    captured=documents.capture(list(keys.values()))
-    after={identity:hashlib.sha256(captured[key]).hexdigest() for identity,key in keys.items() if key in captured}
-    problems=[('vanished',*identity) if identity not in after else ('changed',*identity) for identity,sha in pinned.items() if after.get(identity)!=sha]
-    problems.extend(('appeared',*identity) for identity in after if identity not in pinned)
-    return sorted(problems)
+    from .artifact_publication import snapshot_substitutions
+    return snapshot_substitutions(pinned,document_artifact_snapshot(documents,settled))
 
 
 def commit_gate_documents(store,task_id,phase,replacements):

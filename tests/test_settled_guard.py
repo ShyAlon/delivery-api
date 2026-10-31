@@ -73,3 +73,20 @@ def test_identical_settled_bytes_pass(tmp_path):
     pinned, settled = pin_settled_artifacts(task, root, current_phase='items')
     (root / 'spec' / 'items.json').write_bytes(b'[]')
     assert settled_substitutions(root, pinned, settled) == []
+
+
+def test_file_and_document_snapshots_share_hash_and_substitution_policy(tmp_path):
+    from delivery_api.same_host_producer import _produced_set_hash
+    from delivery_api.generator_documents import document_set_hash,pin_document_artifacts,document_substitutions
+    class Documents:
+        data={'spec/needs.json':b'old','spec/srs.json':b'current'}
+        def capture(self,keys):return {key:self.data[key] for key in keys if key in self.data}
+    docs=Documents();root=tmp_path
+    (root/'spec').mkdir()
+    for key,raw in docs.data.items():(root/key).write_bytes(raw)
+    task={'phases':[{'phase_key':'needs','state':'completed'},{'phase_key':'srs','state':'completed'}]}
+    assert _produced_set_hash(root)==document_set_hash(docs)
+    pin=pin_settled_artifacts(task,root,current_phase='srs')
+    assert pin==pin_document_artifacts(task,docs,current_phase='srs')
+    (root/'spec/needs.json').write_bytes(b'changed');docs.data['spec/needs.json']=b'changed'
+    assert settled_substitutions(root,*pin)==document_substitutions(docs,*pin)==[('changed','needs','needs.json')]
