@@ -118,7 +118,7 @@ candidate_tag(){
 build_exec_env(){
   ( umask 077; : > "$2"; chmod 600 "$2"
     grep -E '^(DELIVERY_[A-Z0-9_]*|REQUI_OPERATOR_SUBJECT|REQUI_OPERATOR_REGISTRY_VERSION|REQUI_OPERATOR_CAPABILITIES)=' "$1" | grep -v -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|MISTRAL|GROQ|COHERE|XAI|PROVIDER|API_KEY|MODEL_KEY)[A-Z0-9_]*=' \
-      | grep -v -E '^(DELIVERY_CLOUD_EXECUTION|DELIVERY_COOKIE_SECURE|DELIVERY_PREVIEW|DELIVERY_LOCAL_PREVIEW|DELIVERY_METRICS_DB|DELIVERY_HOST|DELIVERY_PORT|DELIVERY_CONTROL_PLANE_ONLY|DELIVERY_PUBLIC_ORIGIN|DELIVERY_ALT_ORIGINS)=' >> "$2" || true
+      | grep -v -E '^(DELIVERY_CHILD_EXECUTION|DELIVERY_PAID_CHILD_PREVIEW|DELIVERY_CLOUD_EXECUTION|DELIVERY_COOKIE_SECURE|DELIVERY_PREVIEW|DELIVERY_LOCAL_PREVIEW|DELIVERY_METRICS_DB|DELIVERY_HOST|DELIVERY_PORT|DELIVERY_CONTROL_PLANE_ONLY|DELIVERY_PUBLIC_ORIGIN|DELIVERY_ALT_ORIGINS)=' >> "$2" || true
     # The engine token is a password between the two processes inside the preview container only. It is made fresh here (never the live one, which the allowlist drops).
     tok=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n'); [ ${#tok} = 48 ] || exit 1
     # REQUI_EXPECTED_REPOS pins the build this launcher asked for, so the image's own build-staleness
@@ -302,6 +302,13 @@ umask 077; WORK=$(mktemp -d "${TMPDIR:-/tmp}/requi-preview-exec.XXXXXXXXXX"); ch
 # and a selectable dead route fails the task start with a connection error instead of being absent.
 .venv/bin/python scripts/ops/settings.py delivery-env "$WORK/loaded.env" || abort SETTINGS "cannot prepare private settings"
 build_exec_env "$WORK/loaded.env" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"
+# The old saved settings cannot silently opt into paid children. Owner approval is separate.
+if [ "$PROVIDER" != ollama ]; then
+  [ "${PREVIEW_PAID_CHILD_APPROVED:-0}" = 1 ] || abort PAID-NOT-APPROVED "paid child activation remains off" "No container was started." "finish the owner policy preflight and obtain separate paid-run approval before using PREVIEW_PAID_CHILD_APPROVED=1"
+  printf '%s\n' DELIVERY_CHILD_EXECUTION=attended-paid DELIVERY_PAID_CHILD_PREVIEW=1 >> "$WORK/preview.env"
+else
+  printf '%s\n' DELIVERY_CHILD_EXECUTION=local >> "$WORK/preview.env"
+fi
 if [ "$PROVIDER" != deepseek ]; then
   preview_ollama_env "$WORK/preview.env" "$OLLAMA_MODEL" "$OLLAMA_HOST"
 fi

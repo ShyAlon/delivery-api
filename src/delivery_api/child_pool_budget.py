@@ -6,6 +6,9 @@ service and caps parent+one active child at 8+4=12, leaving 3 of 15 spare.
 def child_mode(env):
     mode=env.get('DELIVERY_CHILD_EXECUTION','').strip()
     if not mode:return False
+    if mode=='attended-paid':
+        from .paid_preview import require_preview
+        require_preview(env);return True
     if mode!='local':raise ValueError('child execution accepts local only; paid subprocess remains refused')
     if env.get('DELIVERY_LOCAL_PREVIEW')!='1':raise ValueError('child execution requires explicit local preview')
     return True

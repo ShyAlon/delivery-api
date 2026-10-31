@@ -1,4 +1,4 @@
-"""Installs only the explicit local child preview; paid activation remains closed.
+"""Installs explicitly selected attended child previews; defaults remain closed.
 
 Builds the money gateway from reviewed server configuration, then installs the generator-phase engine and the interview
 host, and points the service's engine client at the hosted interview. Nothing runs until a user starts work. If any step
@@ -54,6 +54,9 @@ def install(store,environ,set_engine_client,watch_vendor=False,*,paid_runtime=No
     gateways=None
     try:
         gateways=ProductionGateways(store,environ)
+        if paid_runtime is None:
+            from .paid_preview import construct
+            paid_runtime=construct(environ,gateways)
         base=artifacts_root(environ.get('VMODEL_ARTIFACTS_DIR'))
         database_url=environ.get('DELIVERY_DATABASE_URL','')
         session_dsn=database_url if database_url.startswith(('postgres://','postgresql://','host=')) else None

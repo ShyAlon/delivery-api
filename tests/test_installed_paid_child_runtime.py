@@ -81,3 +81,13 @@ def test_installed_adapters_run_real_paid_child_with_fake_provider(store,tmp_pat
                 assert conn.execute("SELECT count(*) AS n FROM retail_compute_segments WHERE state='settled'").fetchone()['n']==1
                 assert conn.execute("SELECT count(*) AS n FROM retail_contributions r JOIN worker_jobs w USING(job_id) WHERE r.kind='tokens' AND w.task_id=%s",(tid,)).fetchone()['n']==len(calls)
     finally:server.shutdown();server.server_close()
+
+
+def test_explicit_attended_preview_constructs_runtime_but_never_dispatches(store,tmp_path):
+    chosen=[]
+    settings=env(DELIVERY_CHILD_EXECUTION='attended-paid',DELIVERY_PAID_CHILD_PREVIEW='1',DELIVERY_PREVIEW='1',DELIVERY_PUBLIC_ORIGIN='http://127.0.0.1:8090',DELIVERY_DATABASE_URL=DSN,VMODEL_ARTIFACTS_DIR=str(tmp_path))
+    cloud_runtime.install(store,settings,chosen.append)
+    runtime=inprocess_engine.current().paid_runtime
+    assert isinstance(runtime,PaidChildRuntime) and chosen[0].paid_runtime is runtime
+    assert runtime.models==cloud_runtime.gateway_factory().models
+    assert cloud_runtime.gateway_factory()(None,'not-dispatched').launch_guard
