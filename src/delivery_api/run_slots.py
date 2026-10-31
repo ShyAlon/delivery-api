@@ -54,8 +54,6 @@ async def _watch(orchestrator,task_id,limit_s,tick_s,store=None):
         if proc is None or proc.returncode is not None:continue
         peak=peak_rss_mb(proc.pid) if proc.pid else None
         if peak is not None:info["peak_rss_mb"]=max(info["peak_rss_mb"],peak)
-        group=run_metrics.read_group(proc.pid) if proc.pid else None   # CPU seconds of the child and its group, charged when the run ends
-        if group is not None:info["cpu_seconds"]=max(info.get("cpu_seconds",0.0),group["cpu_seconds"])
         if proc.pid and time.monotonic()>=next_sample:
             next_sample=time.monotonic()+config.METRICS_INTERVAL_S
             run_metrics.tick(info,task_id,proc.pid,store)   # CPU and memory samples for the operator; never raises

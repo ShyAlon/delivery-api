@@ -1,7 +1,7 @@
-"""Private reusable in-process producer worker. No queue scan or public route.
+"""Publication coordinator for isolated child production. No queue scan or public route.
 
 An explicit owner-authorized durable job supplies all authority. Accepted calls
-finish on their threads; the engine and producer use the same filesystem marker.
+finish through the parent broker; the coordinator retains publication/recovery ownership.
 This seam neither enables cloud execution nor replaces the SDK wire adapter.
 """
 class ProducerRecoveryPaused(Exception):
@@ -143,22 +143,8 @@ class SameHostProducerWorker:
                         from spec_generator.wire_binding import wire_clients
                         stack.enter_context(wire_clients(gateway,self.wire_client_factory))
                     if getattr(gateway,'retail_rates',None) is not None and self.isolated_accounting is None:
-                        from .compute_meter import ComputeMeter,bind
-                        segment=job_id+':compute'
-                        job=self.store.worker_job(job_id)
-                        self.store.begin_retail_compute(segment,job_id,job['kind'].split(':')[-1],gateway.retail_rates.snapshot())
-                        meter=ComputeMeter();gateway.compute_meter=meter
-                        try:
-                            with bind(meter):result=None if resuming_publication else producer(capability,root)
-                            if inspect.isawaitable(result):
-                                if inspect.iscoroutine(result):result.close()
-                                raise TypeError('synchronous producer required')
-                            self.store.finish_retail_compute(segment,meter.milliseconds())
-                        except BaseException:
-                            self.store.close_failed_retail_compute(segment)
-                            raise
-                    else:
-                        result=None if resuming_publication else producer(capability,root)
+                        raise PermissionError('paid production requires isolated child accounting')
+                    result=None if resuming_publication else producer(capability,root)
                     if inspect.isawaitable(result):
                         if inspect.iscoroutine(result):result.close()
                         raise TypeError('synchronous producer required')

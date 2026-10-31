@@ -272,50 +272,6 @@ print('settled')
         assert s.provider_attempt('child-test')['state']=='settled'
 
 
-def test_fake_only_runner_descriptor_lifetime_covers_subprocess(ledger,tmp_path,monkeypatch):
-    import asyncio,sys
-    from delivery_api.runner import ProcessRunner
-    from delivery_api import config
-    from delivery_api.producer_admission import WorkerAdmissionGateway,worker_gateway
-    from delivery_api.admission_catalog import ReviewedCatalog,ReviewedModelPrice,RequestBound
-    from delivery_api.tenancy import session_root
-    root=os.getenv('DELIVERY_TEST_SPEC_SOURCE')
-    if not root:pytest.skip('explicit producer source required')
-    s,tid,job=ledger
-    monkeypatch.setattr(config,'CLOUD_TENANTS',True);monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path))
-    catalog=ReviewedCatalog([ReviewedModelPrice('fake','fake','TEST','test-source',1,2,3,4)],
-        {('fake','fake'):lambda **kw:RequestBound('TEST',10,10,b'fake complete payload',True)})
-    gateway=WorkerAdmissionGateway(s,job,require_prepaid=False,resolve_quote=catalog.resolve,measure_usage=catalog.measure_standard_usage)
-    script='''
-import os
-from types import SimpleNamespace
-from spec_generator.attempt_admission import admitted_invoke
-admitted_invoke(lambda:SimpleNamespace(usage_metadata={'input_tokens':2,'output_tokens':3}),stage='needs',provider='fake',model='fake',messages=['test'],max_output_tokens=10)
-print('fake attempt complete')
-'''
-    # Keep the production fixed-module check and original PG binding. Replace
-    # only the child command after the reviewed launch context accepted it.
-    from contextlib import contextmanager
-    from delivery_api import pg_generator_process
-    original_launch=pg_generator_process.launch_context
-    @contextmanager
-    def fake_child(*args,**kwargs):
-        with original_launch(*args,**kwargs) as (_,env,fd,documents):
-            yield [sys.executable,'-c',script,'--out',args[3][-1]],env,fd,documents
-    monkeypatch.setattr(pg_generator_process,'launch_context',fake_child)
-    with tenant_context(A),worker_gateway(gateway):
-        sid=s.engine_session(tid);path=session_root(tmp_path,A,sid)
-        code=asyncio.run(ProcessRunner(s).run(tid,[sys.executable,'-m','spec_generator.cli','--out',str(path/'spec')],cwd=tmp_path,phase='needs',env={'VMODEL_ARTIFACTS_DIR':str(path.parent),'VMODEL_TENANT_OWNER':A.owner_id,'PYTHONPATH':root}))
-        # Fake subprocess writes no generator artifact. The admission socket
-        # settles successfully, while the current runner must reject gate opening.
-        assert code==1
-        assert s.task(tid)['state']!='waiting_gate'
-        assert any('no configured artifact was written' in event['message'] for event in s.events(tid))
-        with s._postgres.transaction() as c:
-            assert c.execute('SELECT state FROM provider_attempts WHERE job_id=%s',(job,)).fetchone()['state']=='settled'
-        s.update_phase(tid,'needs','failed')
-
-
 def test_prompt_text_and_model_output_cannot_provision_limits_through_worker_channel(ledger,monkeypatch):
     import importlib
     from types import SimpleNamespace
@@ -1471,23 +1427,19 @@ def test_task_stop_hide_requires_confirmation_preserves_events_and_rolls_back_on
 @pytest.mark.parametrize('source',['raw','response','staged'])
 def test_shared_accepted_completion_survives_hide_and_replays_without_debit(ledger,source):
     from types import SimpleNamespace
-    from delivery_api.compute_meter import ComputeMeter
     s,tid,job=ledger;usage={'input_tokens':2,'output_tokens':3}
     with tenant_context(A):
         aid=_started_attempt(s,job)
         gateway=WorkerAdmissionGateway(s,job,require_prepaid=False,
             measure_raw_usage=lambda raw:usage,measure_usage=lambda response:usage)
-        meter=ComputeMeter();gateway.compute_meter=meter
-        meter.pause();gateway._meter_attempts.add(aid)
         s.stop_hide_task(tid,confirm=True)
         complete={'raw':lambda:gateway.settle_raw(aid,{'prompt_tokens':2,'completion_tokens':3}),
                   'response':lambda:gateway.settle(aid,SimpleNamespace()),
                   'staged':lambda:gateway.settle_staged(aid,usage)}[source]
         complete();first=s.provider_attempt(aid)
-        assert first['state']=='settled' and first['usage']==usage and meter.depth==0
+        assert first['state']=='settled' and first['usage']==usage
         complete();replay=s.provider_attempt(aid)
         assert replay['expense_actual']==first['expense_actual'] and replay['retail_actual']==first['retail_actual']
-        assert not gateway._meter_attempts and meter.depth==0
 
 
 def test_atomic_admission_denial_commits_tripwire_episode_without_dispatch(expense_guard):

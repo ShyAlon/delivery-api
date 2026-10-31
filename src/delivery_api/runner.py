@@ -92,8 +92,6 @@ class ProcessRunner:
         if not config.CLOUD_TENANTS:return await self._run(task_id,command,**options)
         # Only a trusted parent can install the job-bound gateway; no public
         # environment variable enables it. Descriptor lifetime is the child run.
-        from .producer_admission import current_worker_gateway
-        from .admission_transport import worker_admission_channel
         from .worker_capability import WorkerCapability
         from .tenant_files import authorized_session
         from vmodel_contracts.runtime import artifacts_root
@@ -107,79 +105,11 @@ class ProcessRunner:
         if virtual is not None:
             # The service runs this phase itself under its own gateway; no child process, no descriptor.
             return await self._run(task_id,command,virtual=virtual,**options)
-        gateway=current_worker_gateway(self.store,task_id)
-        if hasattr(self.store,'_postgres') and self._recover_pg_generator_result(task_id,phase,capability,gateway):
-            return 0
-        with worker_admission_channel(gateway) as channel:
-            options['env']={**(env or {}),'VMODEL_ADMISSION_FD':str(channel.fileno())}
-            if hasattr(self.store,'_postgres'):
-                from .pg_generator_process import launch_context
-                with launch_context(self.store,capability,gateway,command,options['env']) as (pg_command,pg_env,fd,documents):
-                    options['env']=pg_env
-                    return await self._run(task_id,pg_command,admission_fds=(channel.fileno(),fd),pg_documents=documents,**options)
-            return await self._run(task_id,command,admission_fds=(channel.fileno(),),**options)
-
-    def _recover_pg_generator_result(self,task_id,phase,capability,gateway):
-        from .generator_documents import GeneratorDocuments,document_set_hash
-        from .same_host_producer import ProducerRecoveryPaused
-        capability.validate(self.store)
-        pending=self.store.producer_result(gateway.job_id)
-        if pending is None:return False
-        with self.store._task_operation_guard('task.rerun'):
-            job=self.store.worker_job(gateway.job_id)
-            docs=GeneratorDocuments(self.store,capability,gateway.job_id,expected_attempt=job['attempt'])
-            with docs.saver._cursor():pass
-            if (pending['task_id']!=task_id or pending['generation']!=capability.generation
-                or job['kind']!='phase:'+phase):
-                raise ProducerRecoveryPaused('process publication binding changed')
-            digest,count=document_set_hash(docs)
-            if not count or digest!=pending['content_hash']:
-                raise ProducerRecoveryPaused('process result bytes differ; reconcile without rerunning paid work')
-            if pending['published_at'] is not None:
-                snapshot=self.store.manifest_snapshot(task_id)
-                if snapshot is None:
-                    raise ProducerRecoveryPaused('process publication receipt has no ready manifest')
-                from .artifact_publication import document_artifact_keys
-                import hashlib
-                keys=document_artifact_keys();captured=docs.capture(list(keys.values()))
-                expected={identity:hashlib.sha256(captured[key]).hexdigest() for identity,key in keys.items() if key in captured}
-                actual={(row['phase_key'],row['name']):row['sha256'] for row in snapshot['rows'] if (row['phase_key'],row['name']) in keys}
-                if expected!=actual:
-                    raise ProducerRecoveryPaused('process publication receipt differs from the ready manifest')
-                task=self.store.task(task_id)
-                phase_state=next(p['state'] for p in task['phases'] if p['phase_key']==phase)
-                if phase_state=='awaiting_approval':
-                    gate=next((g for g in task['gates'] if g['after_phase']==phase),None)
-                    if gate is not None and gate['state'] not in ('waiting','approved','bypassed'):
-                        self.store.wait_at_gate(task_id,phase)
-                return True
-            self._commit_pg_generator_result(task_id,phase,pending['session_root'],docs)
-            self.store.wait_at_gate(task_id,phase)
-        return True
-
-    def _commit_pg_generator_result(self,task_id,phase,root,documents):
-        from .artifact_publication import publish_document_revision
-        from .generator_documents import document_set_hash
-        # Original attempt, Stop check, manifest, result receipt and phase commit
-        # share one document-writer transaction. A failed publication opens no gate.
-        with self.store._task_operation_guard('task.rerun'):
-            # Validate and lock without retaining the saver's non-reentrant mutex.
-            with documents.saver._cursor():pass
-            self.store.update_phase(task_id,phase,"awaiting_approval",detail="Generated; waiting for founder approval")
-            job_id=documents.saver.job_id
-            digest,_=document_set_hash(documents)
-            pending=self.store.producer_result(job_id)
-            if pending is None:
-                self.store.record_producer_result(job_id,task_id,documents.capability.generation,str(root),digest)
-            elif pending['task_id']!=task_id or pending['generation']!=documents.capability.generation or pending['content_hash']!=digest:
-                from .same_host_producer import ProducerRecoveryPaused
-                raise ProducerRecoveryPaused('process publication result changed')
-            publish_document_revision(self.store,task_id,documents)
-            self.store.mark_producer_published(job_id)
+        raise PermissionError('isolated child phase required')
 
     async def _run(self, task_id: str, command: list[str], *, cwd: Path, phase: str = "intent",
                   env: dict[str, str] | None = None, completion_phases: tuple[str, ...] = (), infer_phase: bool = True,
-                  stall_timeout: float | None = None, admission_fds: tuple[int,...] = (), virtual=None, pg_documents=None) -> int:
+                  stall_timeout: float | None = None, virtual=None) -> int:
         from .execution_fence import require_engine_execution
         require_engine_execution()
         if task_id in self.processes:
@@ -201,12 +131,9 @@ class ProcessRunner:
                 raise PermissionError('cloud subprocess output must match authorized session')
             if (env or {}).get('VMODEL_ARTIFACTS_DIR')!=str(expected.parent.parent):
                 raise PermissionError('cloud subprocess root must match tenant namespace')
-        if config.CLOUD_TENANTS and virtual is None:
-            from .producer_admission import current_worker_gateway
-            # Guard before phase/event mutations and before child creation.
-            current_worker_gateway(self.store,task_id)
+        if config.CLOUD_TENANTS and virtual is None:raise PermissionError('isolated child phase required')
         from .generator_documents import pin_document_artifacts,document_substitutions
-        documents=pg_documents
+        documents=None
         if hasattr(self.store,'_postgres') and virtual is not None:
             from .generator_documents import GeneratorDocuments,pin_document_artifacts,document_substitutions
             from .worker_capability import WorkerCapability
@@ -231,7 +158,6 @@ class ProcessRunner:
             *command, cwd=str(cwd), env={**os.environ, **(env or {})},
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
             start_new_session=(os.name == "posix"),
-            **({"pass_fds":admission_fds} if admission_fds else {}),
         )
         self.processes[task_id] = proc
         self.active_work[task_id]=ActiveWork("subprocess",phase,"running",time.time(),durable_ref=str(proc.pid) if proc.pid is not None else "in-process")
@@ -394,17 +320,8 @@ class ProcessRunner:
                             self.store.set_gate_open(task_id,'gate-srs',False,'semantic review policy')
                             self.store.add_event(task_id,'semantic_review','Open-gate auto approval paused for unresolved item findings',phase_key=phase,payload={'revision':semantic.revision})
                     from .artifact_publication import publish_committed_session
-                    if pg_documents is not None:
-                        # Durable producer completion survives a later publication failure.
-                        from .generator_documents import document_set_hash
-                        with self.store._task_operation_guard('task.rerun'):
-                            with pg_documents.saver._cursor():pass
-                            digest,_=document_set_hash(pg_documents)
-                            self.store.record_producer_result(pg_documents.saver.job_id,task_id,pg_documents.capability.generation,str(source.parent),digest)
-                        self._commit_pg_generator_result(task_id,phase,source.parent,pg_documents)
-                    else:
-                        self.store.update_phase(task_id, phase, "awaiting_approval", detail="Generated; waiting for founder approval")
-                        if documents is None:publish_committed_session(self.store,task_id,source.parent,phase_key=phase)
+                    self.store.update_phase(task_id, phase, "awaiting_approval", detail="Generated; waiting for founder approval")
+                    if documents is None:publish_committed_session(self.store,task_id,source.parent,phase_key=phase)
                     gate=self.store.wait_at_gate(task_id,phase)
                     self.store.add_event(task_id,"gate","Generated artifact is waiting for founder approval",phase_key=phase,payload={"gate_key":gate["gate_key"] if gate else None})
                     # Explicit open-gate policy approves in wait_at_gate. It

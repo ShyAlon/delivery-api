@@ -53,6 +53,10 @@ async def dispatch_phase(store,orchestrator,task_id,phase,*,resume_job_id=None,q
     Not used by public routes until that admission boundary and full lifecycle
     integration are complete. Resume is an explicit current-owner operation.
     """
+    from . import config,inprocess_engine
+    if config.CLOUD_TENANTS and inprocess_engine.current() is None:
+        from .attempt_ledger import AdmissionDenied
+        raise AdmissionDenied('child execution is not installed on this server')
     from .orchestrator import ExecutionMode
     from .observability import event as activity
     requested={}
@@ -87,38 +91,6 @@ async def dispatch_phase(store,orchestrator,task_id,phase,*,resume_job_id=None,q
     if "model_route" in durable:options["model_route"]=durable["model_route"]
     from . import config,inprocess_engine
     engine=inprocess_engine.current()
-    from .child_pool_budget import child_mode
-    if config.CLOUD_TENANTS and config.RUN_ISOLATION=="process" and not child_mode(__import__('os').environ):
-        # One child process per run, admitted through its own descriptor. Slots, time limit and peak memory live in run_slots.
-        from . import run_slots
-        async def run_child(capability):
-            capability.validate(store)
-            from . import child_compute,cloud_runtime,producer_admission
-            from .attempt_ledger import AdmissionDenied
-            factory=cloud_runtime.gateway_factory()
-            if factory is None:raise AdmissionDenied('cloud execution is not installed on this server')
-            # The child self-wires its admission from the descriptor the runner hands it;
-            # this process supplies the job-bound gateway for the lifetime of the run.
-            with producer_admission.worker_gateway(factory(capability,job_id)):
-                segment=child_compute.begin(store,job_id,phase) if child_compute.available(store) else None
-                try:
-                    await orchestrator.execute_phase(capability.task_id,phase,**options)
-                finally:
-                    # Charged for the CPU the child used, also when it failed, was stopped or hit the time limit.
-                    if segment is not None:
-                        cpu=run_slots.running.get(task_id,{}).get("cpu_seconds")
-                        try:child_compute.settle(store,segment,cpu)
-                        except Exception as exc:
-                            from .observability import event as activity
-                            activity("run.compute_unsettled","The run's compute charge could not be posted; it is marked unresolved for review",task_id=task_id,error=type(exc).__name__,detail=str(exc)[:120])
-                            try:store.finish_retail_compute(segment,None)
-                            except Exception:pass
-        started=await run_slots.run_limited(store,orchestrator,task_id,lambda:execute_job(store,job_id,run_child))
-        if not started:
-            activity("phase.dispatch.rejected","Worker job was already claimed; no execution started",task_id=task_id,phase=phase,job_id=job_id,reason="already_claimed")
-            raise ValueError("worker job was already claimed; no execution started")
-        activity("phase.dispatch.claimed","Worker job claimed and started",task_id=task_id,phase=phase,job_id=job_id)
-        return job_id
     if config.CLOUD_TENANTS and engine is not None:
         # The service runs the generator itself under the money gateway; it claims the job and meters it.
         if not await engine.dispatch(store,orchestrator,task_id,phase,job_id,options):

@@ -59,31 +59,3 @@ def test_alternating_jobs_keep_quotes_usage_and_money_on_the_selected_provider(j
             for jid in jobs:
                 connection.execute('DELETE FROM credit_charges WHERE owner_id=%s',(A.owner_id,))
                 connection.execute('DELETE FROM provider_attempts WHERE job_id=%s',(jid,))
-
-
-def test_worker_meter_starts_only_for_durable_paid_selection(job,tmp_path,monkeypatch):
-    import asyncio,time,psycopg
-    from delivery_api.same_host_producer import SameHostProducerWorker
-    store,tid,original=job;jobs=[]
-    factory=pg.ProductionGateways(store,dual_env())
-    worker=SameHostProducerWorker(store,tmp_path,gateway_factory=factory,usage_log_factory=lambda *a:object())
-    try:
-        with tenant_context(A):
-            store.finish_worker(original)
-            for provider,model in [('ollama','phi4'),('deepseek',MODEL)]:
-                jid=store.enqueue_worker(tid,'phase:intent',execution_options={'model_route':provider+':'+model});jobs.append(jid)
-                def producer(capability,root):
-                    from delivery_api.compute_meter import current
-                    assert (current() is not None)==(provider=='deepseek')
-                    time.sleep(.005)
-                assert asyncio.run(worker.execute(jid,producer))
-                with store._postgres.transaction() as connection:
-                    rows=connection.execute('SELECT state FROM retail_compute_segments WHERE job_id=%s',(jid,)).fetchall()
-                assert rows==([{'state':'settled'}] if provider=='deepseek' else [])
-    finally:
-        factory.close()
-        with psycopg.connect(DSN) as connection:
-            for jid in jobs:
-                connection.execute('DELETE FROM credit_charges WHERE owner_id=%s',(A.owner_id,))
-                connection.execute('DELETE FROM retail_contributions WHERE job_id=%s',(jid,))
-                connection.execute('DELETE FROM retail_compute_segments WHERE job_id=%s',(jid,))

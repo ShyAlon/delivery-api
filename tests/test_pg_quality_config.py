@@ -113,33 +113,3 @@ def test_runtime_config_role_denies_sql_writes_and_public_roles_cannot_read():
     with psycopg.connect(STATE['dsn']) as c:
         for role in ('anon','authenticated','service_role','requi_backend','requi_operator_read'):
             assert c.execute("SELECT has_table_privilege(%s,'public.engine_quality_config','SELECT')",(role,)).fetchone()[0] is False
-
-
-def test_host_real_worker_binding_reads_pg_not_ambient_config_and_resets(tmp_path,monkeypatch):
-    import threading
-    from types import SimpleNamespace
-    from delivery_api.inprocess_interview import InProcessInterviewHost
-    from delivery_api.pg_quality_config import PostgresQualityConfig
-    from interview_engine import question_config as q
-    from spec_generator import cooperative_run
-    backend=PostgresQualityConfig(STATE['dsn'].replace('user=sandbox','user=delivery_app'))
-    host=InProcessInterviewHost(None,tmp_path,gateway_factory=lambda *a:None,generator_clients=None,interview_clients=None)
-    host._quality_store=backend
-    ambient=q.ConfigStore();ambient.put({'retrieval':{'max_words':170}})
-    with psycopg.connect(STATE['dsn']) as c:
-        c.execute("INSERT INTO engine_quality_config(config_key,body) VALUES('question-quality','{\"retrieval\":{\"max_words\":130}}')")
-    results=[];errors=[]
-    def worker():
-        token=cooperative_run._cli_fence.set((SimpleNamespace(check=lambda *a:None),1))
-        try:
-            with q.bound_store(ambient):
-                with host._bound(SimpleNamespace(),'fixture-job'):
-                    results.append(q.current()['retrieval']['max_words'])
-                results.append(q.current()['retrieval']['max_words'])
-        except Exception as error:errors.append(error)
-        finally:cooperative_run._cli_fence.reset(token)
-    try:
-        thread=threading.Thread(target=worker);thread.start();thread.join(timeout=5)
-        assert not thread.is_alive() and errors==[] and results==[130,170]
-    finally:
-        with psycopg.connect(STATE['dsn']) as c:c.execute('DELETE FROM engine_quality_config')

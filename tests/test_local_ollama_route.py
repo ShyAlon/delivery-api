@@ -203,10 +203,10 @@ def test_execution_switch_admits_the_local_route_only_with_the_flag(monkeypatch)
     from delivery_api import cloud_execution
     monkeypatch.setattr(config, 'CLOUD_TENANTS', True)
     monkeypatch.delenv('DELIVERY_CONTROL_PLANE_ONLY', raising=False)
-    good = local_env(DELIVERY_CLOUD_EXECUTION='1', INTERVIEW_ENGINE_TOKEN='t' * 32)
+    good = local_env(DELIVERY_CLOUD_EXECUTION='1', INTERVIEW_ENGINE_TOKEN='t' * 32, DELIVERY_CHILD_EXECUTION='local')
     assert cloud_execution.problems(good) == []
     noflag = dict(good); noflag.pop('DELIVERY_LOCAL_PREVIEW')
-    assert any('local execution preview' in p for p in cloud_execution.problems(noflag))
+    assert any('explicit local preview' in p for p in cloud_execution.problems(noflag))
     assert any('no provider key' in p for p in cloud_execution.problems({**good, 'DEEPSEEK_API_KEY': 'sk-test'}))
 
 

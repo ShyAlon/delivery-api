@@ -79,18 +79,6 @@ def test_virtual_process_is_never_signalled(monkeypatch):
     assert calls==[(4242,signal.SIGTERM)]
 
 
-def test_process_settings_are_restored_exactly(monkeypatch):
-    monkeypatch.setenv('VMODEL_KEEP','before');monkeypatch.setenv('SPEC_GENERATOR_OLD','old');monkeypatch.setenv('OTHER','x')
-    monkeypatch.delenv('VMODEL_ADDED',raising=False);monkeypatch.delenv('SPEC_GENERATOR_FROM',raising=False)
-    with ie.process_settings({'VMODEL_KEEP':'during','VMODEL_ADDED':'1','PYTHONUNBUFFERED':'1','OTHER':'changed'}):
-        assert os.environ['VMODEL_KEEP']=='during' and os.environ['VMODEL_ADDED']=='1'
-        assert os.environ['OTHER']=='x' and 'PYTHONUNBUFFERED' not in os.environ
-        os.environ['SPEC_GENERATOR_FROM']='needs';os.environ['SPEC_GENERATOR_OLD']='generator-changed'
-        os.environ.setdefault('VMODEL_LLM_LOG','/tmp/x')
-    assert os.environ['VMODEL_KEEP']=='before' and os.environ['SPEC_GENERATOR_OLD']=='old'
-    for k in ('VMODEL_ADDED','SPEC_GENERATOR_FROM','VMODEL_LLM_LOG'):assert k not in os.environ
-
-
 def fake_spec_generator(monkeypatch,main):
     pkg=types.ModuleType('spec_generator');pkg.__path__=[]
     cli=types.ModuleType('spec_generator.cli');cli.main=main
@@ -160,52 +148,20 @@ class Harness:
 
 
 def make(monkeypatch,main,claimed=True):
-    errors=fake_spec_generator(monkeypatch,main)
-    engine=ie.InProcessEngine(Path('/tmp'),gateway_factory=None,wire_client_factory=None)
+    engine=ie.ChildPhaseLifecycle(Path('/tmp'),gateway_factory=None)
     h=Harness(claimed);h.task_id='t1';h.worker(engine)
-    return engine,h,errors
-
-
-def test_dispatch_runs_generator_and_phase_lifecycle_together(monkeypatch):
-    seen={}
-    def main(argv,io):
-        seen['argv']=argv;seen['env']=os.environ.get('SPEC_GENERATOR_MODEL_SRS')
-        io.stdout.write('VMODEL_PROGRESS_JSONL:{}\n');io.stderr.write('note\n')
-    engine,h,_=make(monkeypatch,main)
-    before=dict(os.environ)      # whatever the machine already has (a parent .env may set this name) must survive
-    assert run(engine.dispatch(None,Harness.Orchestrator(h),'t1','srs','job1',{}))is True
-    assert seen['argv']==['intent.json','--out','/o'] and seen['env']=='deepseek:m'
-    assert dict(os.environ)==before
-    assert h.read==['VMODEL_PROGRESS_JSONL:{}\nnote\n'] and h.codes==[0]
-    assert h.order==['claimed job1','phase srs'] and ie.take('t1') is None
+    def produce(proc):
+        def invoke(*args):
+            main([],None);proc.finish(0)
+        return invoke
+    engine._produce=produce
+    return engine,h,None
 
 
 def test_unclaimed_job_starts_no_phase(monkeypatch):
     engine,h,_=make(monkeypatch,lambda *a,**k:None,claimed=False)
     assert run(engine.dispatch(None,Harness.Orchestrator(h),'t1','srs','job1',{})) is False
     assert h.order==[] and h.codes==[] and ie.take('t1') is None
-
-
-@pytest.mark.parametrize('raised,code,text',[('user',1,'friendly: bad input'),('exit3',3,''),('exit',0,''),('stopped',130,'')])
-def test_exit_codes_reach_the_runner(monkeypatch,raised,code,text):
-    box={}
-    def main(argv,io):
-        e=box['errors']
-        if raised=='user':raise e.UserFacingError('bad input')
-        if raised=='exit3':raise SystemExit(3)
-        if raised=='exit':raise SystemExit(None)
-        raise ie.EngineStopped('x')
-    engine,h,errors=make(monkeypatch,main);box['errors']=errors
-    run(engine.dispatch(None,Harness.Orchestrator(h),'t1','srs','j',{}))
-    assert h.codes==[code] and text in h.read[0]
-
-
-def test_unexpected_error_is_reported_to_the_runner_and_raised(monkeypatch):
-    def main(argv,io):raise RuntimeError('boom')
-    engine,h,_=make(monkeypatch,main)
-    with pytest.raises(RuntimeError,match='boom'):
-        run(engine.dispatch(None,Harness.Orchestrator(h),'t1','srs','j',{}))
-    assert h.codes==[1] and 'RuntimeError: boom' in h.read[0] and ie.take('t1') is None
 
 
 def test_one_phase_at_a_time(monkeypatch):
@@ -224,21 +180,6 @@ def test_one_phase_at_a_time(monkeypatch):
     assert max(peak)==1 and h.codes==[0,0]
 
 
-def test_the_decision_handler_is_what_the_generator_sees(monkeypatch):
-    answers=[]
-    def main(argv,io):answers.append(io.decide({'decision_id':'d9','prompt':'Approve SRS?'}))
-    engine,h,_=make(monkeypatch,main)
-    class Orch(Harness.Orchestrator):
-        async def execute_phase(self,task_id,phase,**o):
-            proc=ie.take(task_id)
-            proc.attach(['x','spec_generator.cli','i'],{'SPEC_GENERATOR_MODEL_SRS':'deepseek:m'})
-            line=await proc.stdout.readline();h.read.append(line.decode())
-            proc.stdin.write(b'approve\n')
-            await read_all(proc);h.codes.append(await proc.wait())
-    run(engine.dispatch(None,Orch(h),'t1','srs','j',{}))
-    assert answers==['approve'] and h.read[0].startswith('REQUIRE_EVENT ') and h.codes==[0]
-
-
 def test_runner_and_dispatch_wiring_in_source():
     root=Path(ie.__file__).parent
     runner=(root/'runner.py').read_text();jobs=(root/'tenant_jobs.py').read_text()
@@ -254,14 +195,3 @@ def test_without_a_configured_engine_nothing_is_taken():
     try:
         ie.configure(None);assert ie.current() is None
     finally:ie.configure(saved)
-
-
-@pytest.mark.parametrize('preset',[None,'ollama:phi4'])
-def test_phase_settings_do_not_leak_whether_or_not_the_name_was_already_set(monkeypatch,preset):
-    if preset is None:monkeypatch.delenv('SPEC_GENERATOR_MODEL_SRS',raising=False)
-    else:monkeypatch.setenv('SPEC_GENERATOR_MODEL_SRS',preset)
-    seen={}
-    def main(argv,io):seen['during']=os.environ.get('SPEC_GENERATOR_MODEL_SRS')
-    engine,h,_=make(monkeypatch,main)
-    run(engine.dispatch(None,Harness.Orchestrator(h),'t1','srs','job1',{}))
-    assert seen['during']=='deepseek:m' and os.environ.get('SPEC_GENERATOR_MODEL_SRS')==preset

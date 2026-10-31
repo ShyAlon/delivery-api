@@ -24,7 +24,8 @@ def test_closed_unless_flag_is_one():
 
 
 def test_open_only_with_every_check_passing():
-    assert cloud_execution.problems(GOOD)==[]
+    assert any('activation is pending' in p for p in cloud_execution.problems(GOOD))
+    assert not cloud_execution.admitted(GOOD)
     for key,bad in (('DEEPSEEK_API_KEY',''),('INTERVIEW_ENGINE_TOKEN','local-interview-engine-token'),('INTERVIEW_ENGINE_TOKEN','short'),('VMODEL_REVIEWED_MODEL_PRICES','[]')):
         assert cloud_execution.problems({**GOOD,key:bad}),key
 
@@ -48,5 +49,5 @@ def test_readiness_uses_gateway_catalog_once_and_supplied_profile(monkeypatch):
     def counted(*args,**kwargs):calls.append(True);return original(*args,**kwargs)
     monkeypatch.setattr(production_gateway,'catalog_from_environment',counted)
     monkeypatch.setenv('DELIVERY_CONTROL_PLANE_ONLY','1')
-    assert cloud_execution.problems({**GOOD,'DELIVERY_CONTROL_PLANE_ONLY':'0'})==[]
-    assert calls==[True]
+    assert any('activation is pending' in p for p in cloud_execution.problems({**GOOD,'DELIVERY_CONTROL_PLANE_ONLY':'0'}))
+    assert calls==[]  # activation boundary refuses before price preparation

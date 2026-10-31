@@ -330,6 +330,8 @@ def test_atomic_gate_handoff_and_redo_job_options(store,monkeypatch,action):
 
 
 def test_resume_cannot_reauthorize_running_job_and_dispatch_cannot_report_lost_claim(store,monkeypatch):
+    from delivery_api import config
+    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # local dispatch lost-claim contract
     import asyncio
     from delivery_api.tenant_jobs import dispatch_phase
     sid='lost-claim-'+uuid.uuid4().hex
@@ -367,7 +369,7 @@ def test_cloud_subprocess_without_reviewed_gateway_stops_before_phase_or_child(s
         before=store.task(tid);events=store.events(tid)
         root=session_root(tmp_path,A,sid)
         runner=ProcessRunner(store)
-        with pytest.raises(AdmissionDenied,match='gateway'):
+        with pytest.raises(PermissionError,match='isolated child phase required'):
             asyncio.run(runner.run(tid,['fake','--out',str(root/'spec')],cwd=tmp_path,phase='needs',env={'VMODEL_ARTIFACTS_DIR':str(root.parent)}))
         assert store.task(tid)==before and store.events(tid)==events
         store.delete_task(tid)
@@ -1120,23 +1122,6 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_
                         assert standalone.resolve('snapshot',later.session_id)(later.session_id).process_status==ProcessStatus.COMPLETED
                         with pytest.raises(ProtocolFailure,match='preserves approved'):standalone.resolve('respond',later.session_id)(later.session_id,{})
                     finally:_owner.reset(ot);_session.reset(st)
-                    from delivery_api.inprocess_interview import InProcessInterviewHost,_HostedEngineTransport
-                    import httpx
-                    host=InProcessInterviewHost(store,tmp_path,gateway_factory=None,generator_clients=None,interview_clients=None,session_dsn=store._postgres.dsn)
-                    host._registry_type=lambda:NeverInterviewRegistry
-                    transport=_HostedEngineTransport(host._app())
-                    client=httpx.Client(transport=transport,base_url='http://hosted',headers={'X-Interview-Engine-Token':host._token,'X-Requi-Owner':A.owner_id,'X-Requi-Session-Id':A.session_id})
-                    try:
-                        response=client.get('/v1/sessions/'+later.session_id)
-                        assert response.status_code==200 and response.json()['session_id']==later.session_id and response.json()['open_input'] is None
-                        from uuid import uuid4
-                        input_id=str(uuid4())
-                        response=client.post('/v1/sessions/'+later.session_id+'/inputs/'+input_id,json={'input_id':input_id,'value':'unexpected new answer','actor_id':'founder'})
-                        assert response.status_code==422 and 'preserves approved' in response.text
-                        response=client.post('/v1/sessions/'+later.session_id+'/model-route',json={'model_route':'ollama','model':'fake','expected_sequence':0,'expected_input_id':input_id,'actor_id':'founder','idempotency_key':str(uuid4())})
-                        assert response.status_code==409 and 'preserves approved' in response.text,response.text
-                        assert host._engine_router._registries=={}
-                    finally:client.close();transport.close();host.close()
                     pg=PgSessionStore(store._postgres._pool,claims=(A.owner_id,A.session_id))
                     jid=store.enqueue_worker(tid,'phase:architecture');assert store.claim_worker(jid)==later
                     b=SimpleNamespace(session_id=later.session_id,owner_id=A.owner_id,task_id=tid,job_id=jid,generation=2,auth_session_id=A.session_id,execution_anchor_sha256=later.anchor_sha256)

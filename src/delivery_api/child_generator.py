@@ -7,7 +7,7 @@ from .diagnostic_evidence import thread_target
 import asyncio,hashlib,json,socket,sys,threading
 from contextlib import contextmanager
 from pathlib import Path
-from .inprocess_engine import InProcessEngine,stage_models,EngineStopped
+from .inprocess_engine import ChildPhaseLifecycle,stage_models,EngineStopped
 from .child_interview import LocalComputeEvidence,_slot
 from .child_supervisor import ChildSupervisor
 
@@ -43,9 +43,9 @@ def output_channel(proc,gates):
         if thread.is_alive() or errors:raise RuntimeError('child output incomplete')
 
 
-class ChildGeneratorEngine(InProcessEngine):
+class ChildGeneratorEngine(ChildPhaseLifecycle):
     def __init__(self,base,*,gateway_factory,dsn,endpoint,command=None,paid_runtime=None):
-        super().__init__(base,gateway_factory=gateway_factory,wire_client_factory=None)
+        super().__init__(base,gateway_factory=gateway_factory)
         if paid_runtime is not None:
             from .child_paid_runtime import PaidChildRuntime
             if not isinstance(paid_runtime,PaidChildRuntime):raise TypeError('typed parent accounting runtime required')
