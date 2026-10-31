@@ -122,9 +122,14 @@ class WorkerAdmissionGateway:
             raise AdmissionDenied('vendor source unverifiable/changed; accepted usage held') from None
         try:usage=self.measure_raw_usage(raw_usage) if self.measure_raw_usage else None
         except Exception:usage=None  # Evidence survives a failed schema/rate adapter.
+        self._complete_attempt(attempt,usage,'raw usage')
+
+    def _complete_attempt(self,attempt,usage,source):
+        # Accepted evidence goes to the ledger, never through new-work authority.
         result=self.store.transition_provider_attempt(attempt,'settle',usage)
         self._resume_meter(attempt)
-        if result['state']!='settled':raise AdmissionDenied('raw usage uncertain; reservation held for review')
+        if result['state']!='settled':raise AdmissionDenied(source+' uncertain; reservation held for review')
+        return result
 
     def _resume_meter(self,attempt):
         if attempt in self._meter_attempts:
@@ -195,9 +200,7 @@ class WorkerAdmissionGateway:
             self.uncertain(attempt)
             raise AdmissionDenied('vendor source unverifiable/changed; accepted usage held') from None
         usage=self.measure_usage(response) if self.measure_usage else None
-        result=self.store.transition_provider_attempt(attempt,'settle',usage)
-        self._resume_meter(attempt)
-        if result['state']!='settled':raise AdmissionDenied('usage uncertain; reservation held for review')
+        self._complete_attempt(attempt,usage,'usage')
 
     def settle_staged(self,attempt,staged_usage):
         """Settle a completed-but-unsettled staged provider call from its durably
@@ -214,10 +217,7 @@ class WorkerAdmissionGateway:
         usage={k:staged_usage.get(k) for k in ('input_tokens','output_tokens')}
         if any(not isinstance(v,int) or v<0 for v in usage.values()):
             raise AdmissionDenied('staged usage incomplete; reconcile before replay')
-        result=self.store.transition_provider_attempt(attempt,'settle',usage)
-        self._resume_meter(attempt)
-        if result['state']!='settled':raise AdmissionDenied('staged usage uncertain; reservation held for review')
-        return result
+        return self._complete_attempt(attempt,usage,'staged usage')
 
     def reconcile_staged_calls(self,session_id,generation):
         """Reconcile one session generation's staged provider calls against the

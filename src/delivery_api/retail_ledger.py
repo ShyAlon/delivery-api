@@ -62,28 +62,6 @@ def phase_totals(store,job_id):
     return totals
 
 
-def migrate_account(connection, owner_id, *, now):
-    """Explicit private operator connection, never invoked during admission.
-
-    Preserve immutable purchase/quote/charge evidence in its recorded scale.
-    A pending item must be reconciled before changing the active account scale.
-    """
-    with connection.transaction():
-        account=connection.execute('SELECT * FROM public.credit_accounts WHERE owner_id=%s FOR UPDATE',(owner_id,)).fetchone()
-        if not account:raise AdmissionDenied('prepaid account missing')
-        if account['units_per_credit']==UNITS_PER_CREDIT:return False
-        if account['units_per_credit']!=1000:raise AdmissionDenied('unsupported historical prepaid scale')
-        pending=connection.execute("SELECT EXISTS(SELECT 1 FROM public.provider_attempts WHERE owner_id=%s AND state IN ('reserved','dispatched','uncertain')) OR EXISTS(SELECT 1 FROM public.credit_charges WHERE owner_id=%s AND state='pending') OR EXISTS(SELECT 1 FROM public.payment_purchases WHERE owner_id=%s AND NOT credit_posted) OR EXISTS(SELECT 1 FROM public.retail_compute_segments WHERE owner_id=%s AND state<>'settled')",(owner_id,owner_id,owner_id,owner_id)).fetchone()
-        if next(iter(pending.values())):raise AdmissionDenied('pending provider or payment evidence; scale migration held')
-        balance=account['balance_units']*(UNITS_PER_CREDIT//1000)
-        if not -(2**63)<=balance<=2**63-1:raise AdmissionDenied('migrated balance outside integer range')
-        if account['fractional_debit_units']!=0:raise AdmissionDenied('legacy fractional remainder needs reconciliation')
-        connection.execute('INSERT INTO public.retail_scale_migrations VALUES(%s,%s,%s,%s,%s,%s)',(owner_id,1000,account['balance_units'],UNITS_PER_CREDIT,balance,now))
-        credit_audit.attribute(connection.execute,'rescale','operator:scale_migration','prepaid scale 1000 to retail scale',None,marker='%s')
-        connection.execute('UPDATE public.credit_accounts SET balance_units=%s,units_per_credit=%s,updated_at=%s WHERE owner_id=%s',(balance,UNITS_PER_CREDIT,now,owner_id))
-        return True
-
-
 def begin_compute(store,key,job_id,phase,rates):
     rates=rates_from_snapshot(rates).snapshot();owner_lock(store)
     job=store.worker_job(job_id)
