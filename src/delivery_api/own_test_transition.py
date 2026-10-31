@@ -22,12 +22,15 @@ def transition(conn,email,*,apply=False):
         raise AdmissionDenied('only exact legacy $2/86400 cap may be replaced')
     validate_owner_limits(old|{'expense_limit':None})
     if existing and existing!=(2*SCALE,SCALE):raise AdmissionDenied('existing own-test profile conflicts')
-    if conn.execute("SELECT 1 FROM provider_attempts WHERE owner_id=%s AND state IN ('reserved','dispatched','uncertain') LIMIT 1",(owner,)).fetchone():
-        raise AdmissionDenied('owner attempts must be reconciled before transition')
-    if conn.execute("SELECT 1 FROM worker_jobs WHERE owner_id=%s AND state IN ('pending','running') LIMIT 1",(owner,)).fetchone():
-        raise AdmissionDenied('stop and reconcile owner work before transition')
-    if conn.execute("SELECT 1 FROM retail_compute_segments WHERE owner_id=%s AND state IN ('pending','unresolved') LIMIT 1",(owner,)).fetchone():
-        raise AdmissionDenied('owner compute accounting must be reconciled before transition')
+    attempt=conn.execute("SELECT a.attempt_id,a.job_id,j.task_id,a.state FROM provider_attempts a JOIN worker_jobs j USING(job_id) WHERE a.owner_id=%s AND a.state IN ('reserved','dispatched','uncertain') ORDER BY a.created_at,a.attempt_id LIMIT 1",(owner,)).fetchone()
+    if attempt:
+        raise AdmissionDenied(f'owner attempts must be reconciled before transition: task={attempt[2]} job={attempt[1]} attempt={attempt[0]} state={attempt[3]}; confirm provider outcome before settling or cancelling; do not erase accounting')
+    job=conn.execute("SELECT task_id,job_id,state FROM worker_jobs WHERE owner_id=%s AND state IN ('pending','running') ORDER BY created_at,job_id LIMIT 1",(owner,)).fetchone()
+    if job:
+        raise AdmissionDenied(f'stop and reconcile owner work before transition: task={job[0]} job={job[1]} state={job[2]}; Stop this task and wait for confirmed worker quiescence, then retry; a stale job requires reviewed recovery, not row deletion')
+    compute=conn.execute("SELECT s.segment_key,s.job_id,j.task_id,s.state FROM retail_compute_segments s JOIN worker_jobs j USING(job_id) WHERE s.owner_id=%s AND s.state IN ('pending','unresolved') ORDER BY s.started_at,s.segment_key LIMIT 1",(owner,)).fetchone()
+    if compute:
+        raise AdmissionDenied(f'owner compute accounting must be reconciled before transition: task={compute[2]} job={compute[1]} segment={compute[0]} state={compute[3]}; recover measured compute accounting before retrying; do not guess duration or delete the segment')
     # Do not erase history or guess the unit scale of legacy charges.
     if conn.execute("SELECT 1 FROM provider_attempts WHERE owner_id=%s AND state='settled' AND quote->>'provider'='deepseek' AND (settled_at IS NULL OR settled_at>extract(epoch FROM clock_timestamp()) OR (settled_at>extract(epoch FROM clock_timestamp())-86400 AND (expense_actual IS NULL OR quote->>'expense_units_per_usd' IS DISTINCT FROM %s))) LIMIT 1",(owner,str(SCALE))).fetchone():
         raise AdmissionDenied('recent provider expense history needs explicit scale reconciliation')
