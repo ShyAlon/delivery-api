@@ -25,8 +25,9 @@ def ledger(store):
         c.execute('DELETE FROM provider_attempts WHERE job_id=%s',(job,))
         c.execute('DELETE FROM admission_limits WHERE owner_id=%s',(A.owner_id,))
     with tenant_context(A):
-        store.finish_worker(job)
-        if store.task(tid) is not None:store.delete_task(tid)
+        if store.task(tid) is not None:
+            store.finish_worker(job)
+            store.delete_task(tid)
 
 def test_reserve_dispatch_settle_replays_and_owner_isolation(ledger):
     s,tid,job=ledger;attempt=uuid.uuid4().hex
@@ -93,13 +94,15 @@ def test_reviewed_spend_and_rate_limits_are_enforced(ledger,column,value):
             s.transition_provider_attempt(first['attempt_id'],'cancel')
         with pytest.raises(AdmissionDenied):s.reserve_provider_attempt(job,uuid.uuid4().hex,Q,'denied')
 
-def test_config_is_operator_only_and_ledger_history_cannot_be_deleted(ledger):
+def test_config_is_operator_only_and_delete_retains_reserved_ledger(ledger):
     s,tid,job=ledger
     with tenant_context(A):
         with pytest.raises(Exception):
             with s._postgres.transaction() as c:c.execute('UPDATE admission_limits SET expense_limit=999999 WHERE owner_id=%s',(A.owner_id,))
         attempt=s.reserve_provider_attempt(job,uuid.uuid4().hex,Q,'one')
-        with pytest.raises(ValueError,match='ledger history'):s.delete_task(tid)
+        out=s.delete_task(tid,confirm=True)
+        assert out['hidden'] and out['accounting_retained'] and not out['accounting_settled']
+        assert s.task(tid) is None
         assert s.provider_attempt(attempt['attempt_id'])['state']=='reserved'
 
 
@@ -630,7 +633,7 @@ def test_task_stop_generation_denies_new_call_but_accepted_usage_settles(ledger)
         deleted=s.tombstone_stopped_task(tid)
         assert deleted['deleted_at'] is not None
         assert s.task(tid) is None and all(t['task_id']!=tid for t in s.list_tasks())
-        with pytest.raises(KeyError):s.delete_task(tid)
+        assert s.delete_task(tid,confirm=True)['already_hidden']
         assert s.provider_attempt(attempt)['expense_actual']==8
     with tenant_context(B):
         with pytest.raises(KeyError):s.request_task_stop(tid)
@@ -726,15 +729,16 @@ def test_serialized_gateway_rejects_wrong_digest_and_actual_cap_before_reserve(l
         assert s.provider_attempt(args['attempt_id']) is None
 
 
-def test_public_delete_stopped_tombstones_keeps_cost_and_owner_ledger(ledger):
+def test_public_delete_stop_pending_retains_accepted_settlement_and_owner_ledger(ledger):
     s,tid,job=ledger;attempt=uuid.uuid4().hex
     with tenant_context(A):
         s.reserve_provider_attempt(job,attempt,Q,'accepted');s.transition_provider_attempt(attempt,'start')
         s.request_task_stop(tid)
-        with pytest.raises(ValueError,match='Stop is pending'):s.delete_task(tid)
+        out=s.delete_task(tid,'fake owner',confirm=True)
+        assert out['hidden'] and not out['worker_exit_verified'] and not out['accounting_settled']
+        assert s.provider_attempt(attempt)['state']=='dispatched'
         s.transition_provider_attempt(attempt,'settle',{'input_tokens':2,'output_tokens':3})
-        s.finish_stopped_worker(job,worker_quiescent=True);s.confirm_task_stopped(tid,engine_quiescent=True)
-        s.delete_task(tid,'fake owner')
+        assert s.delete_task(tid,'fake owner',confirm=True)['already_hidden']
         assert s.task(tid) is None and all(t['task_id']!=tid for t in s.list_tasks())
         assert s.provider_attempt(attempt)['expense_actual']==8
         assert any(e['action']=='task.deleted' and e['detail'].get('accounting_retained') for e in s.audit_entries(tid))
@@ -1443,3 +1447,20 @@ def test_production_factory_gateway_honors_owner_rolling_expense_limit(credit_ac
                 gw.reserve_serialized(attempt_id=denied,**kw)
             assert s.provider_attempt(denied) is None
     finally:factory.close()
+
+
+def test_task_stop_hide_requires_confirmation_preserves_events_and_rolls_back_on_audit_failure(ledger,monkeypatch):
+    s,tid,job=ledger
+    with tenant_context(A):
+        before=s.task(tid);s.add_event(tid,'test','retained customer event')
+        with pytest.raises(ValueError,match='confirmation'):s.stop_hide_task(tid)
+        real=s.audit
+        monkeypatch.setattr(s,'audit',lambda *a,**kw:(_ for _ in ()).throw(RuntimeError('audit unavailable')))
+        with pytest.raises(RuntimeError,match='audit unavailable'):s.stop_hide_task(tid,confirm=True)
+        assert s.task(tid)['generation']==before['generation'] and s.task(tid)['stop_requested_at'] is None
+        monkeypatch.setattr(s,'audit',real)
+        s.stop_hide_task(tid,confirm=True)
+        assert any(e['message']=='retained customer event' for e in s.events(tid))
+        assert s.worker_job(job)['state']=='running'
+        from delivery_api.tenancy import TenantAccessDenied
+        with pytest.raises(TenantAccessDenied):s.reserve_provider_attempt(job,uuid.uuid4().hex,Q,'after-hide')

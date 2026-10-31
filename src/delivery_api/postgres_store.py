@@ -851,39 +851,8 @@ FROM tasks t"""
             self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s',(time.time(),time.time(),task_id), write=True)
         return self._task_record(self._execute_native(self._TASK_PROJECTION+' WHERE t.task_id=%s',(task_id,)).fetchone())
 
-    def delete_task(self,task_id,actor='local user'):
-        task=self.task(task_id)
-        if not task:raise KeyError(task_id)
-        if task['state']=='stopped':
-            self.tombstone_stopped_task(task_id)
-            self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False,'accounting_retained':True})
-            return
-        if task['stop_requested_at'] is not None:
-            raise ValueError('Stop is pending; worker and provider quiescence must be confirmed before Delete')
-        if self._execute_native('SELECT 1 FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=%s LIMIT 1',(task_id,)).fetchone():
-            raise ValueError('task has provider ledger history; preserve it for reconciliation')
-        task=self.task(task_id)
-        if not task: raise KeyError(task_id)
-        if task['state'] in ('running','waiting_gate'):
-            raise ValueError('a running or paused task cannot be deleted')
-        if (self._execute_native('SELECT 1 FROM retail_compute_segments r JOIN worker_jobs j ON j.job_id=r.job_id WHERE j.task_id=%s LIMIT 1',(task_id,)).fetchone()
-                or self._execute_native('SELECT 1 FROM retail_contributions r JOIN worker_jobs j ON j.job_id=r.job_id WHERE j.task_id=%s LIMIT 1',(task_id,)).fetchone()):
-            # Compute and token accounting rows reference the task's jobs: hide the task, keep the rows.
-            self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s AND deleted_at IS NULL',(time.time(),time.time(),task_id), write=True)
-            self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False,'accounting_retained':True})
-            return
-        if (self._execute_native('SELECT 1 FROM final_packages WHERE task_id=%s LIMIT 1',(task_id,)).fetchone()
-                or self._execute_native('SELECT 1 FROM engine_session_journal j JOIN engine_sessions s ON s.session_id=j.session_id WHERE s.task_id=%s LIMIT 1',(task_id,)).fetchone()
-                or self._execute_native('SELECT 1 FROM generator_snapshots WHERE task_id=%s LIMIT 1',(task_id,)).fetchone()
-                or self._execute_native('SELECT 1 FROM generator_documents d JOIN engine_sessions s ON s.session_id=d.execution_session_id WHERE s.task_id=%s LIMIT 1',(task_id,)).fetchone()):
-            self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s AND deleted_at IS NULL',(time.time(),time.time(),task_id), write=True)
-            self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False,'checkpoint_evidence_retained':True})
-            return
-        self.audit(actor,'task.deleted',task_id,{'title':task['title'],'source_artifacts_deleted':False})
-        for table in ('worker_jobs','engine_sessions','review_comments','decision_reviews','decision_drafts',
-                      'answer_feedback','phases','gates','events','progress_ingest','progress_seen','task_artifacts'):
-            self._execute_native(f'DELETE FROM {table} WHERE task_id=%s',(task_id,), write=True)
-        self._execute_native('DELETE FROM tasks WHERE task_id=%s',(task_id,), write=True)
+    def delete_task(self,task_id,actor='local user',*,confirm=True):
+        return self.stop_hide_task(task_id,confirm=confirm,actor=actor)
 
     def set_engine_session(self,task_id,session_id):
         task=self.task(task_id)
@@ -1898,30 +1867,28 @@ FROM tasks t"""
         return phase_totals(self,job_id)
 
     def stop_hide_worker_task(self,job_id,*,confirm=False,actor='operator',hide=True):
-        """Fence then tombstone own task. Never manufacture worker/usage completion."""
-        if confirm is not True:raise ValueError('explicit confirmation required')
-        if type(hide) is not bool:raise ValueError('exact cleanup choice required')
-        from .prepaid import owner_lock
-        owner_lock(self)
         job=self.worker_job(job_id)
         if not job:raise KeyError(job_id)
-        task=self._execute_native('SELECT * FROM tasks WHERE task_id=%s AND owner_id=%s FOR UPDATE',
-            (job['task_id'],current_scope().owner_id)).fetchone()
-        if not task:raise KeyError(job_id)
-        already=task['deleted_at'] is not None
-        if not already:
-            # Stop and tombstone share one transaction. A failed commit exposes
-            # neither a false success nor an unfenced hidden task.
-            self.request_task_stop(task['task_id'])
-            if hide:
-                self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s',
-                    (time.time(),time.time(),task['task_id']),write=True)
-            self.audit(actor,'task.operator_stop_hidden' if hide else 'task.operator_stop_requested',task['task_id'],
-                {'job_id':job_id,'title':task['title'],'accounting_retained':True,'worker_exit_verified':False})
-        return {'job_id':job_id,'task_id':task['task_id'],'session_id':job['session_id'],
-            'hidden':already or hide,'stop_requested':True,'already_hidden':already,
-            'worker_exit_verified':False,'accounting_settled':False,'accounting_retained':True,
-            'accepted_calls_may_bill':True}
+        return self.stop_hide_task(job['task_id'],confirm=confirm,actor=actor,hide=hide)|{'job_id':job_id,'session_id':job['session_id']}
+
+    def stop_hide_task(self,task_id,*,confirm=False,actor='owner',hide=True):
+        """Confirmed own-task Stop+hide. Retain all work and uncertain accounting."""
+        if confirm is not True:raise ValueError('explicit confirmation required')
+        if type(hide) is not bool:raise ValueError('exact cleanup choice required')
+        with self._task_operation_guard('task.delete' if hide else 'task.stop'):
+            task=self._execute_native('SELECT * FROM tasks WHERE task_id=%s AND owner_id=%s FOR UPDATE',
+                (task_id,current_scope().owner_id)).fetchone()
+            if not task:raise KeyError(task_id)
+            already=task['deleted_at'] is not None
+            if not already:
+                self.request_task_stop(task_id)
+                if hide:self._execute_native('UPDATE tasks SET deleted_at=%s,updated_at=%s WHERE task_id=%s',
+                    (time.time(),time.time(),task_id),write=True)
+                self.audit(actor,'task.deleted' if hide else 'task.operator_stop_requested',task_id,
+                    {'title':task['title'],'accounting_retained':True,'worker_exit_verified':False,'source_artifacts_deleted':False})
+            return {'task_id':task_id,'hidden':already or hide,'stop_requested':True,'already_hidden':already,
+                'worker_exit_verified':False,'accounting_settled':False,'accounting_retained':True,
+                'source_artifacts_deleted':False,'accepted_calls_may_bill':True}
 
     def owner_active_jobs(self,*,limit=50,before=None):
         """Current owner only. Pending/running/paused are evidence, not proof of liveness."""
@@ -2326,7 +2293,7 @@ PG_OPERATIONS = (
     'manifest_revision',
     'manifest_snapshot',
     'mark_producer_published',
-    'operator_workspace_snapshot','owner_active_jobs','stop_hide_worker_task',
+    'operator_workspace_snapshot','owner_active_jobs','stop_hide_worker_task','stop_hide_task',
     'own_credit_balance',
     'own_credit_history',
     'own_last_topup',
