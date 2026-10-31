@@ -26,7 +26,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Qu
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 from fastapi.responses import JSONResponse
 
 from vmodel_contracts import RunState, RunStatus
@@ -955,17 +955,20 @@ def reconcile_task_stop(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     activity("task.stop.result","Cooperative stop reconcile recorded",task_id=task_id,actor=a.label,reconcile=True,outcome=str(out.get("status","ok"))[:40] if isinstance(out,dict) else "ok")
     return out
 
+class DeleteTaskRequest(BaseModel):
+    confirm: StrictBool = False
+
 @app.delete("/api/tasks/{task_id}")
-def delete_task(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
-    try:store.delete_task(task_id,a.label)
+def delete_task(task_id:str,body:DeleteTaskRequest,a:auth.Actor=Depends(auth.require_actor)):
+    try:out=store.delete_task(task_id,a.label,confirm=body.confirm)
     except KeyError:
         activity("task.delete.refused","Task delete refused: no such task",task_id=task_id,actor=a.label,reason="not_found")
         raise HTTPException(404,{"error":"Task not found.","cause":"It may already have been deleted.","next":"Return to the task list."})
     except ValueError as e:
-        activity("task.delete.refused","Task delete refused: active work or founder gate",task_id=task_id,actor=a.label,reason="active_work")
-        raise HTTPException(409,{"error":str(e),"cause":"This task still has active work or a founder gate.","next":"Stop or finish the active work before deleting this task. A replay interrupted by restart will be marked stopped on startup."})
+        activity("task.delete.refused","Task Delete needs confirmation",task_id=task_id,actor=a.label,reason="confirmation")
+        raise HTTPException(409,{"error":str(e),"next":"Confirm Delete to request Stop and hide this task. Saved work and accounting stay retained."})
     activity("task.deleted","Task deleted",task_id=task_id,actor=a.label)
-    return {"status":"deleted","task_id":task_id,"source_artifacts_deleted":False}
+    return {"status":"deleted",**out}
 
 class QualityConfigRequest(BaseModel):
     config:dict

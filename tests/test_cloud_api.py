@@ -71,7 +71,7 @@ def test_task_api_cross_tenant_ids_events_feedback_cost(cloud):
         reply=client.get('/api/tasks/'+task+suffix,headers=header('b'))
         assert reply.status_code in (404,403), (suffix,reply.text)
     assert client.patch('/api/tasks/'+task,json={'title':'stolen'},headers=header('b')).status_code==404
-    assert client.delete('/api/tasks/'+task,headers=header('b')).status_code==404
+    assert client.request('DELETE','/api/tasks/'+task,headers=header('b'),json={'confirm':True}).status_code==404
     assert client.get('/api/tasks').status_code==401
     health=client.get('/health').json()
     assert health['ok'] is True and set(health)<={'ok','runtime_id','repositories','built_at'}   # cloud mode adds the build id, its repository commit ids and the image build time (no tenant data) and nothing else
@@ -405,7 +405,7 @@ def test_stop_route_hermetic_admitted_path_stays_pending_for_running_job(cloud,m
     with tenant_context(A):store.finish_stopped_worker(job,worker_quiescent=True)
     reply=client.post(f'/api/tasks/{tid}/stop',headers=header('a'))
     assert reply.status_code==200 and reply.json()['state']=='stopped'
-    assert client.delete('/api/tasks/'+tid,headers=header('a')).status_code==200
+    assert client.request('DELETE','/api/tasks/'+tid,headers=header('a'),json={'confirm':True}).status_code==200
     assert client.get('/api/tasks/'+tid,headers=header('a')).status_code==404
 
 
@@ -428,7 +428,7 @@ def test_stop_reconcile_route_gate_owner_and_durable_precondition(cloud,monkeypa
     with tenant_context(A):store.request_task_stop(tid)
     reply=client.post(f'/api/tasks/{tid}/stop/reconcile',headers=header('a'))
     assert reply.status_code==200 and reply.json()['state']=='stopped' and calls==[sid]
-    assert client.delete('/api/tasks/'+tid,headers=header('a')).status_code==200
+    assert client.request('DELETE','/api/tasks/'+tid,headers=header('a'),json={'confirm':True}).status_code==200
 
 
 def test_closed_gate_revision_draft_cloud_scoped_and_no_execution(cloud):
@@ -858,3 +858,26 @@ def test_usage_missing_permission_explained_only_to_verified_debug_operator(clou
     finally:
         with psycopg.connect(DSN) as c:c.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))
         with tenant_context(A):store.delete_task(tid)
+
+
+def test_delete_requires_exact_confirmation_then_stop_hides_running_task(cloud):
+    client,store,root=cloud
+    with tenant_context(A):
+        task=store.create_task('confirm-delete-'+uuid.uuid4().hex);tid=task['task_id']
+        store.set_engine_session(tid,'delete-'+uuid.uuid4().hex)
+        job=store.enqueue_worker(tid,'phase:needs');store.claim_worker(job)
+        generation=store.task(tid)['generation']
+    url='/api/tasks/'+tid
+    assert client.delete(url,headers=header('a')).status_code==422
+    for body,status in [({},409),({'confirm':False},409),({'confirm':'true'},422)]:
+        assert client.request('DELETE',url,headers=header('a'),json=body).status_code==status
+    with tenant_context(A):assert store.task(tid)['generation']==generation
+    assert client.request('DELETE',url,headers=header('b'),json={'confirm':True}).status_code==404
+    out=client.request('DELETE',url,headers=header('a'),json={'confirm':True})
+    assert out.status_code==200,out.text
+    assert out.json()['hidden'] and out.json()['stop_requested'] and out.json()['accounting_retained']
+    assert not out.json()['worker_exit_verified'] and not out.json()['accounting_settled']
+    assert client.get(url,headers=header('a')).status_code==404
+    with tenant_context(A):
+        assert store.worker_job(job)['state']=='running'
+        assert store.delete_task(tid,confirm=True)['already_hidden']

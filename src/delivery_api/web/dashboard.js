@@ -35,12 +35,12 @@ async function dashboard(){
 
 function showRename(t){modal.classList.remove('hidden');modal.innerHTML=`<form class="dialog" id="renameform"><div class="eyebrow">Rename task</div><h2>${esc(t.title)}</h2><p class="dialog-intro">Renaming changes the workspace label only. It does not rerun phases or change artifacts.</p><label>Unique task name<input name="title" required maxlength="120" value="${esc(t.title)}"></label><div class="actions"><button type="button" class="secondary" id="cancel">Cancel</button><button class="primary">Save name</button></div></form>`;document.querySelector('#cancel').onclick=()=>modal.classList.add('hidden');bindDialogKeys({form:document.querySelector('#renameform'),focus:'input[name="title"]'});document.querySelector('#renameform').onsubmit=async e=>{e.preventDefault();try{await api(`/api/tasks/${t.task_id}`,{method:'PATCH',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});await refreshCurrent();}catch(x){showError(x)}};}
 function showDelete(t){
- const dialog=openDialog(`<div class="dialog" role="dialog" aria-label="Delete task ${esc(t.title)}"><div class="eyebrow">Delete task</div><h2>${esc(t.title)}</h2><div class="notice">This permanently removes the task, phases, gates, events, and artifact references from the UI. Original files in the artifacts folder stay on disk.</div><div class="actions"><button class="secondary" id="cancel">Cancel</button><button class="primary" id="confirmdelete">Delete task</button></div></div>`,{focus:'#cancel',canClose:()=>!deleting});
+ const dialog=openDialog(`<div class="dialog" role="dialog" aria-label="Delete task ${esc(t.title)}"><div class="eyebrow">Delete task</div><h2>${esc(t.title)}</h2><div class="notice">Delete requests Stop and hides this task from your workspace. Saved work, events and accounting are retained. A worker may still be finishing, and accepted model calls may still bill. Original files in the artifacts folder stay on disk.</div><div class="actions"><button class="secondary" id="cancel">Cancel</button><button class="primary" id="confirmdelete">Delete task</button></div></div>`,{focus:'#cancel',canClose:()=>!deleting});
  const cancel=dialog.querySelector('#cancel'),confirm=dialog.querySelector('#confirmdelete');let deleting=false;
  cancel.onclick=()=>{if(!deleting)closeModal()};
  confirm.onclick=async()=>{
   if(deleting)return;deleting=true;confirm.disabled=true;cancel.disabled=true;confirm.textContent='Deleting…';
-  try{await api(`/api/tasks/${t.task_id}`,{method:'DELETE'});if(location.pathname.startsWith('/tasks/')){closeModal();navigate('/');return}await refreshCurrent()}
+  try{await api(`/api/tasks/${t.task_id}`,{method:'DELETE',body:JSON.stringify({confirm:true})});if(location.pathname.startsWith('/tasks/')){closeModal();navigate('/');return}await refreshCurrent()}
   catch(x){deleting=false;confirm.disabled=false;cancel.disabled=false;confirm.textContent='Delete task';showError(x)}
  };
 }

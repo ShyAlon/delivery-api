@@ -32,6 +32,8 @@ def test_create_rename_reload_delete_task(pg_browser):
     print('PG_BROWSER_RENAMED_SCREENSHOT='+str(evidence))
     card.get_by_role('button', name='Delete').click()
     assert page.get_by_text('Original files in the artifacts folder stay on disk.').is_visible()
+    assert page.get_by_text('accepted model calls may still bill.',exact=False).is_visible()
+    page.screenshot(path='/downloads/c10-delete-confirmation.png')
     page.get_by_role('button', name='Delete task').click()
     page.locator('#app').get_by_text('PG renamed lifecycle', exact=True).wait_for(state='detached')
     page.reload()
