@@ -1,6 +1,6 @@
-"""Opt-in local interview client with claimless parent reads and fresh children.
+"""Interview child client with claimless parent reads and fresh children.
 
-Paid routes remain refused. A failure pauses the durable job, never falls back
+Paid routes require an internal accounting seam; production activation stays off. A failure pauses the durable job, never falls back
 to an in-process graph. One process-wide child slot includes reap/reconciliation.
 """
 import asyncio,json,sys,threading
@@ -29,7 +29,11 @@ class LocalComputeEvidence:
 
 
 class ChildInterviewClient(EngineClient):
-    def __init__(self,store,artifacts_base,*,gateway_factory,dsn,endpoint,command=None):
+    def __init__(self,store,artifacts_base,*,gateway_factory,dsn,endpoint,command=None,paid_runtime=None):
+        if paid_runtime is not None:
+            from .child_paid_runtime import PaidChildRuntime
+            if not isinstance(paid_runtime,PaidChildRuntime):raise TypeError('typed parent accounting runtime required')
+        self.paid_runtime=paid_runtime
         self.store=store;self.base=Path(artifacts_base);self.gateway_factory=gateway_factory;self.dsn=dsn;self.endpoint=endpoint
         from interview_engine.question_config import ConfigStore
         self.quality_store=ConfigStore(__import__('os').environ.get('INTERVIEW_ENGINE_QUESTION_QUALITY_CONFIG') or self.base/'question_quality.json')
@@ -54,13 +58,15 @@ class ChildInterviewClient(EngineClient):
     def default_route(self):
         from interview_engine import session_models
         route,model=session_models.initial_default()
-        if route!='ollama':raise PermissionError('local child default must be Ollama')
+        if route!='ollama' and self.paid_runtime is None:raise PermissionError('local child default must be Ollama')
         return self.preview_route(route,model)
     def preview_route(self,route,initial_model=None):
-        if route!='ollama':raise PermissionError('paid child route remains refused')
+        if route!='ollama' and self.paid_runtime is None:raise PermissionError('paid child route remains refused')
         from interview_engine import session_models
         models=session_models.resolve(route,initial_model)
         session_models.validate(models,route)
+        if self.paid_runtime is not None:
+            for provider,model in models.values():self.paid_runtime.require(provider,model)
         return {'route':route,'model_map':models}
     def question_quality_config(self):
         from interview_engine import question_config
@@ -86,7 +92,7 @@ class ChildInterviewClient(EngineClient):
         from vmodel_contracts.interactive import ModelRouteSwitchResponse,EventType,ProtocolError,ProtocolErrorCode,ProcessStatus,NextStep
         from .engine_client import EngineClientError
         def conflict(message):raise EngineClientError(409,ProtocolError(code=ProtocolErrorCode.ROUTE_SWITCH_CONFLICT,detail=message))
-        if request.model_route!='ollama':raise PermissionError('paid child route remains refused')
+        if request.model_route!='ollama' and self.paid_runtime is None:raise PermissionError('paid child route remains refused')
         from .tenancy import current_scope
         scope=current_scope()
         with self._registry() as registry:
@@ -103,7 +109,9 @@ class ChildInterviewClient(EngineClient):
         if snapshot.sequence!=request.expected_sequence or snapshot.open_input.input_id!=request.expected_input_id:
             conflict('input or session sequence changed; refresh and retry')
         source={tuple(pair) for pair in (snapshot.model_map or {}).values()}
-        if len(source)!=1 or next(iter(source))[0]!='ollama':raise PermissionError('local source route required')
+        if len(source)!=1:raise PermissionError('one pinned source route required')
+        if self.paid_runtime is None and next(iter(source))[0]!='ollama':raise PermissionError('local source route required')
+        if self.paid_runtime is not None:self.paid_runtime.require(request.model_route,request.model)
         provider,model=next(iter(source));tid=snapshot.task_id
         if request.model==model:conflict('session already uses this model')
         refs=ChildOperationRefs(self.store,tid);ref=refs.put('route',request.model_dump(mode='json'))
@@ -123,7 +131,7 @@ class ChildInterviewClient(EngineClient):
     def close(self):pass
     def start(self,request):
         from vmodel_contracts.interactive import StartSessionResponse
-        if request.model_route!='ollama':raise PermissionError('paid child dispatch remains refused')
+        if request.model_route!='ollama' and self.paid_runtime is None:raise PermissionError('paid child dispatch remains refused')
         if not request.session_id:request=request.model_copy(update={'session_id':uuid4()})
         self._execute(str(request.session_id),request=request)
         with self._registry() as registry:
@@ -145,7 +153,11 @@ class ChildInterviewClient(EngineClient):
         if not binding:raise PermissionError('prebound engine session required')
         task_id=binding['task_id'];refs=ChildOperationRefs(self.store,task_id)
         if request is not None:
-            model=request.initial_model or 'qwen2.5-coder:14b';ref=refs.put('start',request.model_dump(mode='json'))
+            provider=request.model_route
+            model=request.initial_model or (self.paid_runtime.models.get(provider) if self.paid_runtime is not None else 'qwen2.5-coder:14b')
+            if self.paid_runtime is not None:self.paid_runtime.require(provider,model)
+            request=request.model_copy(update={'initial_model':model})
+            ref=refs.put('start',request.model_dump(mode='json'))
             body={'kind':'interview.start','request_ref':ref}
         else:
             with self._registry() as registry:
@@ -153,8 +165,11 @@ class ChildInterviewClient(EngineClient):
                 snapshot=registry.get(sid,serve=False).snapshot()
             if not snapshot.open_input:raise PermissionError('no open child input')
             pairs={tuple(pair) for pair in (snapshot.model_map or {}).values()}
-            if len(pairs)!=1 or next(iter(pairs))[0]!='ollama':raise PermissionError('paid or unpinned child answer refused')
-            _,model=next(iter(pairs));ref=refs.put('answer',response.model_dump(mode='json'))
+            if len(pairs)!=1:raise PermissionError('unpinned child answer refused')
+            if self.paid_runtime is None and next(iter(pairs))[0]!='ollama':raise PermissionError('paid child answer refused')
+            provider,model=next(iter(pairs))
+            if self.paid_runtime is not None:self.paid_runtime.require(provider,model)
+            ref=refs.put('answer',response.model_dump(mode='json'))
             body={'kind':'interview.answer','checkpoint_sha256':published_digest(row),
                 'wait_id':str(snapshot.open_input.input_id),'expected_sequence':snapshot.sequence,
                 'review_revision':snapshot.open_input.context.get('evidence_revision') or 'engine:'+sid+':'+str(snapshot.sequence),'answer_ref':ref}
@@ -163,13 +178,13 @@ class ChildInterviewClient(EngineClient):
                 claim=registry._store.claim(sid,scope.owner_id,'child-bootstrap#'+str(uuid4()),30)
                 if claim is None:raise PermissionError('bootstrap lease held')
                 if not registry._store.release(claim):raise PermissionError('bootstrap release lost')
-        options={'model_route':'ollama:'+model}
+        options={'model_route':provider+':'+model}
         job_id=self.store.enqueue_worker(task_id,'phase:intent',execution_options=options)
         # The durable job id is the logical operation id, reused by recovery.
         binding=self.store.session_binding(sid)
         value={'version':1,'operation_id':job_id,'binding':{'owner_id':scope.owner_id,'auth_session_id':scope.session_id,
             'task_id':task_id,'session_id':sid,'job_id':job_id,'generation':binding['generation'],
-            'lease_epoch':binding['lease_epoch'],'provider':'ollama','model':model},'operation':body}
+            'lease_epoch':binding['lease_epoch'],'provider':provider,'model':model},'operation':body}
         if binding['generation']>1:value['binding']['execution_anchor_sha256']=self.store.installed_execution_anchor(sid)['anchor_sha256']
         operation=decode_operation(json.dumps(value).encode()+b'\n')
         self.store.retain_decision_review(task_id,'child-job:'+job_id,'child-operation-v1',value)
@@ -229,12 +244,14 @@ class ChildInterviewClient(EngineClient):
                 from .tenancy import session_root
                 import httpx
                 gateway=self.gateway_factory(capability,job_id)
-                if getattr(gateway,'retail_rates',None) is not None:raise PermissionError('paid child dispatch remains refused')
+                if getattr(gateway,'retail_rates',None) is not None and self.paid_runtime is None:raise PermissionError('paid child dispatch remains refused')
                 journal=ChildBrokerJournal(self.store,operation)
                 compute=LocalComputeEvidence(lambda value:self.store.retain_decision_review(task_id,'child-job:'+job_id,'compute:'+str(operation.binding.lease_epoch),value))
+                if self.paid_runtime is not None:compute=self.paid_runtime.compute(self.store,operation,gateway,'intent',journal) or compute
+                endpoint,headers=self.paid_runtime.transport(operation.binding.provider,operation.binding.model,self.endpoint) if self.paid_runtime is not None else (self.endpoint,{})
                 authority=ChildBrokerAuthority(self.store,operation,lease_epoch=operation.binding.lease_epoch+1)
                 root=session_root(self.base,scope,sid);owner_root=root.parent
-                cfg={'version':1,'provider':'ollama','binding':operation.binding.model_dump(mode='json'),
+                cfg={'version':1,'provider':operation.binding.provider,'binding':operation.binding.model_dump(mode='json'),
                     'dsn':self.dsn,'owner_root':str(owner_root),'input_ref':ref,
                     'input':refs.get(ref,ref_kind),'question_quality':self.question_quality_config()['config']}
                 stop=asyncio.Event()
@@ -251,7 +268,7 @@ class ChildInterviewClient(EngineClient):
                         raise PermissionError('stop signal has no durable stop/revocation evidence')
                 with httpx.Client(trust_env=False,follow_redirects=False,timeout=3600) as client:
                     broker=ChildProviderBroker(operation,gateway=gateway,journal=journal,client=client,
-                        endpoint=self.endpoint,headers={},authorize=authority)
+                        endpoint=endpoint,headers=headers,authorize=authority)
                     with provider_broker_channel(broker) as provider_fd,child_compute_channel(compute) as compute_fd:
                         await self.supervisor.run(operation,authorize=lambda op:capability.validate(self.store),private_config=cfg,
                             descriptors={'broker':provider_fd.fileno(),'compute':compute_fd.fileno()},stop=stop,persist_stop=fence_stop)

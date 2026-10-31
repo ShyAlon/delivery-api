@@ -12,7 +12,7 @@ class ChildComputeAccounting:
         invocation=operation.operation_id+':lease:'+str(operation.binding.lease_epoch)
         self.segment=operation.binding.job_id+':child:'+invocation
         self.evidence_key=(operation.operation_id,'compute:'+str(operation.binding.lease_epoch),'compute')
-        self.started=False;self.settled=False
+        self.started=False;self.settled=False;self.value=None
 
     def begin(self):
         if self.started:raise ComputeEvidenceError('child segment already opened')
@@ -38,7 +38,7 @@ class ChildComputeAccounting:
             self.journal.complete(key,{'events':self.transcript,'milliseconds':str(value)},None)
         elif prior.get('request_sha256')!=digest or prior.get('response')!={'events':self.transcript,'milliseconds':str(value)}:
             raise ComputeEvidenceError('child compute durable transcript differs')
-        self.store.finish_retail_compute(self.segment,value);self.settled=True
+        self.store.finish_retail_compute(self.segment,value);self.value=value;self.settled=True
         return value
 
     def abort(self):

@@ -19,8 +19,8 @@ def main():
     config_stream.close();config_socket.close()
     op=decode_operation(stream.readline(65537));binding=JobBinding.model_validate(cfg['binding']);require_binding(op,binding)
     # No arbitrary factory/import path can arrive through private configuration.
-    if cfg.get('version')!=1 or cfg.get('provider')!='ollama' or binding.provider!='ollama':
-        raise PermissionError('only explicit local child cutover is installed')
+    if cfg.get('version')!=1 or cfg.get('provider')!=binding.provider or binding.provider not in ('ollama','deepseek'):
+        raise PermissionError('pinned parent broker provider required')
     root=Path(cfg['owner_root'])
     if not root.is_absolute() or root.resolve()!=root:raise PermissionError('canonical owner root required')
     sequence=0;stop=threading.Event();gone=threading.Event()
