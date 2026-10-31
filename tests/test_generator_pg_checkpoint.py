@@ -1,7 +1,20 @@
 """Generator saver must fence each PG checkpoint with durable job authority."""
 import uuid,pytest
-from test_postgres_store import store,A,B,DSN
+from test_postgres_store import store as base_store,A,B,DSN
 from delivery_api.tenancy import tenant_context,TenantAccessDenied
+
+@pytest.fixture
+def store(base_store,monkeypatch):
+    jobs=[];enqueue=base_store.enqueue_worker
+    def track(*args,**kwargs):
+        job=enqueue(*args,**kwargs);jobs.append(job);return job
+    monkeypatch.setattr(base_store,'enqueue_worker',track)
+    try:yield base_store
+    finally:
+        # No live worker in these tests. End only this test's fake jobs, even after Stop.
+        import psycopg
+        with psycopg.connect(DSN) as c:
+            for job in jobs:c.execute("UPDATE worker_jobs SET state='done' WHERE job_id=%s",(job,))
 
 def test_generator_state_survives_new_saver_and_namespace_isolation(store,tmp_path):
     from delivery_api.generator_checkpoint import GeneratorCheckpoint
