@@ -57,3 +57,25 @@ def test_vendor_check_age_setting_is_bounded(monkeypatch):
         with pytest.raises(ValueError):vendor_sources.check_max_age_minutes()
     monkeypatch.delenv('VENDOR_CHECK_MAX_AGE_MINUTES')
     assert vendor_sources.check_max_age_minutes()==60
+
+
+def test_sync_async_share_fixed_request_and_redirect_policy(monkeypatch):
+    import asyncio
+    from delivery_api.provider_network import deepseek_client_factory,ollama_client_factory
+    async def check(factory,provider,origin,path):
+        seen=[]
+        def wire(r):seen.append(r);return httpx.Response(302 if r.headers.get('x-redirect') else 200)
+        sync,async_client=factory(inner_sync=lambda:httpx.MockTransport(wire),inner_async=lambda:httpx.MockTransport(wire),owner_module='interview_engine')(stage='intent',provider=provider,model='test',gateway=None)
+        for transport in (sync._transport.inner,async_client._transport.inner):
+            async def send(url,**kw):
+                request=httpx.Request('POST',url,**kw)
+                return await transport.handle_async_request(request) if isinstance(transport,httpx.AsyncBaseTransport) else transport.handle_request(request)
+            assert (await send(origin+path)).status_code==200
+            for url in ('https://evil.invalid'+path,origin+'/other',origin.replace('://','://user:pw@')+path,origin+path+'?redirect=elsewhere'):
+                with pytest.raises(ValueError):await send(url)
+            with pytest.raises(ValueError):await send(origin+path,headers={'x-redirect':'yes'})
+        assert len(seen)==4
+        sync.close();await async_client.aclose()
+    monkeypatch.setenv('OLLAMA_BASE_URL','http://localhost:11434/v1')
+    asyncio.run(check(deepseek_client_factory,'deepseek',ORIGIN,'/chat/completions'))
+    asyncio.run(check(ollama_client_factory,'ollama','http://localhost:11434','/v1/chat/completions'))
