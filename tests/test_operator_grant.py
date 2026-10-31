@@ -183,7 +183,7 @@ def test_the_routes_preview_confirm_grant_and_refuse_others(cloud, world, monkey
     client, store, _ = cloud
     _, oid, email = world
     monkeypatch.setattr(config, "DATABASE_URL", APP)
-    module._stop_readers.clear()
+    monkeypatch.setattr(module.app.state,'operator_read_store',reader(),raising=False)
     body = {"email": email, "credits": 25, "reason": "route test"}
     for path in ("/api/admin/operations/grant-preview", "/api/admin/operations/grant"):
         assert client.post(path, json=body).status_code == 401
@@ -205,4 +205,3 @@ def test_the_routes_preview_confirm_grant_and_refuse_others(cloud, world, monkey
         assert client.post("/api/admin/operations/grant", json={**body, "email": "nobody-x@example.test", "credits": 5, "confirm": "yes"}, headers=header("a")).status_code == 400
     finally:
         module.app.dependency_overrides.pop(auth.require_admin, None)
-        module._stop_readers.clear()

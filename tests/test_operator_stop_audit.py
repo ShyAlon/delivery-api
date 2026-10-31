@@ -106,7 +106,7 @@ def test_the_stops_route_serves_the_operator_refuses_others_and_says_what_to_do_
     client, store, _ = cloud
     path = "/api/admin/operations/stops"
     monkeypatch.setattr(config, "DATABASE_URL", APP)
-    module._stop_readers.clear()
+    monkeypatch.setattr(module.app.state,'operator_read_store',OperatorReadStore(APP,OperatorPrincipal(A.owner_id,'ops-v1',frozenset({'logs.read','sessions.read'}))),raising=False)
     assert client.get(path).status_code == 401
     assert client.get(path, headers=header("a")).status_code == 403   # signed in, not an administrator
     module.app.dependency_overrides[auth.require_admin] = lambda: auth.Actor(A.owner_id, "Shy", "shy.alon@gmail.com", True)
@@ -121,4 +121,3 @@ def test_the_stops_route_serves_the_operator_refuses_others_and_says_what_to_do_
         assert "not switched on" in detail["error"] and "20261020130000_operator_stop_audit.sql" in detail["next"]
     finally:
         module.app.dependency_overrides.pop(auth.require_admin, None)
-        module._stop_readers.clear()
