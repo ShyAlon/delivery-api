@@ -64,9 +64,7 @@ def _quote(quote):
 def _job(store,job_id):
     job=store.worker_job(job_id)
     if not job or job['state']!='running':raise AdmissionDenied('claimed worker job required')
-    capability=WorkerCapability.capture(store,job['task_id']);capability.validate(store)
-    if job['generation']!=capability.generation or job['session_id']!=capability.session_id or str(job['auth_session_id'])!=capability.scope.session_id:
-        raise TenantAccessDenied('attempt worker authority changed')
+    WorkerCapability.require_job(store,job)
     return job
 
 def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False):

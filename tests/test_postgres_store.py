@@ -1941,3 +1941,15 @@ def test_cloud_presentation_cold_two_statements_then_warm_zero(store,monkeypatch
             assert handle.connection is None
         finally:
             store._postgres.end_context(context);store._postgres.finish_request(handle,False);request_stats.reset(token)
+
+
+def test_shared_job_authority_rejects_stopped_same_generation_and_foreign_binding(store):
+    from delivery_api.worker_capability import WorkerCapability
+    with tenant_context(A):
+        task=store.create_task('shared-job-'+uuid.uuid4().hex);tid=task['task_id'];store.set_engine_session(tid,'shared-'+uuid.uuid4().hex)
+        job=store.enqueue_worker(tid,'phase:needs');store.claim_worker(job);row=store.worker_job(job)
+        assert WorkerCapability.require_job(store,row).task_id==tid
+        with pytest.raises(TenantAccessDenied):WorkerCapability.require_job(store,row|{'owner_id':B.owner_id})
+        with store._postgres.transaction() as c:c.execute('UPDATE tasks SET stop_requested_at=123 WHERE task_id=%s',(tid,))
+        with pytest.raises(TenantAccessDenied):WorkerCapability.require_job(store,row)
+        store.delete_task(tid)

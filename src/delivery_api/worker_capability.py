@@ -32,6 +32,22 @@ class WorkerCapability:
                 or anchor.generation!=task['generation']):raise TenantAccessDenied('installed worker lineage mismatch')
         return cls(scope,task_id,session,task['generation'],anchor,anchor_sha256)
 
+    def validate_job(self,job,*,state=None,attempt=None):
+        if (not job or job['task_id']!=self.task_id or job['generation']!=self.generation
+            or job['session_id']!=self.session_id or str(job['owner_id'])!=self.scope.owner_id
+            or str(job['auth_session_id'])!=self.scope.session_id or (state is not None and job['state']!=state)):
+            raise TenantAccessDenied('worker job authority changed')
+        if attempt is not None and job['attempt']!=attempt:raise TenantAccessDenied('generator attempt changed')
+
+    @classmethod
+    def require_job(cls,store,job):
+        """Fresh shared owner/job/session/generation authority, never cached admission."""
+        if not job:raise TenantAccessDenied('worker job required')
+        cap=cls.capture(store,job['task_id']);task=cap.validate(store)
+        if task.get('stop_requested_at') is not None:raise TenantAccessDenied('worker stopped')
+        cap.validate_job(job)
+        return cap
+
     def validate(self,store):
         if current_scope()!=self.scope:
             raise TenantAccessDenied('worker scope changed')
