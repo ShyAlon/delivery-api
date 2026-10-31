@@ -59,6 +59,11 @@ class ReviewedCatalog:
         key=(provider,model);price=self.prices.get(key);bounder=self.bounders.get(key)
         if not price or not bounder:raise AdmissionDenied('model price or complete-request bound is unreviewed')
         bound=bounder(stage=stage,messages=messages,max_output_tokens=max_output_tokens)
+        return self._quote_bound(price,bound,stage,max_output_tokens)
+
+    @staticmethod
+    def _quote_bound(price,bound,stage,max_output_tokens):
+        if not price:raise AdmissionDenied('model price or complete-request bound is unreviewed')
         if not isinstance(bound,RequestBound) or not bound.includes_complete_request or not bound.bound_version or not isinstance(bound.serialized_request,bytes) or not bound.serialized_request:
             raise AdmissionDenied('verified complete provider request required')
         if not _integer(bound.input_max) or not _integer(bound.output_max) or not bound.output_max or bound.output_max!=max_output_tokens:
@@ -90,8 +95,7 @@ class ReviewedCatalog:
         bound=adapter(stage=stage,serialized_request=serialized_request,max_output_tokens=max_output_tokens)
         if not isinstance(bound,RequestBound) or bound.serialized_request!=serialized_request:
             raise AdmissionDenied('bound must cover exact SDK bytes')
-        pinned=ReviewedCatalog(self.prices.values(),{(provider,model):lambda **kw:bound})
-        return pinned.resolve(stage=stage,provider=provider,model=model,messages=None,max_output_tokens=max_output_tokens)
+        return self._quote_bound(self.prices.get((provider,model)),bound,stage,max_output_tokens)
 
     @staticmethod
     def measure_standard_usage(response):
@@ -153,9 +157,8 @@ class ReviewedContextCeiling:
     def __call__(self,*,stage,serialized_request,max_output_tokens):
         if not isinstance(serialized_request,bytes) or not serialized_request:raise AdmissionDenied('complete SDK bytes required')
         try:
-            payload=json.loads(serialized_request)
-            caps=[payload[k] for k in ('max_tokens','max_completion_tokens') if k in payload]
-            if not isinstance(payload,dict) or payload.get('model')!=self.model or len(caps)!=1 or type(caps[0]) is not int or caps[0]!=max_output_tokens:raise ValueError()
+            from .provider_request import request_contract
+            request_contract(serialized_request,self.model,max_output_tokens)
         except (ValueError,TypeError,AttributeError) as exc:raise AdmissionDenied('context ceiling request identity/cap mismatch') from exc
         if not _integer(max_output_tokens) or not 0<max_output_tokens<=min(self.maximum_output_tokens,self.context_tokens):
             raise AdmissionDenied('provider output cap exceeds reviewed ceiling')

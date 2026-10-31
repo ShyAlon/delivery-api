@@ -240,3 +240,13 @@ def test_live_authority_positive_then_stop_and_revocation(ledger):
     with psycopg.connect(DSN) as conn:conn.execute('UPDATE tasks SET stop_requested_at=%s WHERE task_id=%s',(time.time(),tid))
     with tenant_context(A),pytest.raises(TenantAccessDenied):authority(op,call)
     with psycopg.connect(DSN) as conn:conn.execute('UPDATE tasks SET stop_requested_at=NULL WHERE task_id=%s',(tid,))
+
+
+@pytest.mark.parametrize('raw',[
+    b'{"model":"foreign","model":"deepseek-flash","max_tokens":10}',
+    b'{"model":"deepseek-flash","max_tokens":9,"max_tokens":10}',
+    b'{"model":"deepseek-flash","max_tokens":10,"temperature":NaN}'])
+def test_shared_exact_contract_rejects_ambiguity_before_journal_or_reserve(raw):
+    broker,g,j,calls=setup();value=request();value['serialized_request']=base64.b64encode(raw).decode()
+    with pytest.raises(ValueError):broker.dispatch(value)
+    assert j.row is None and not g.calls and not calls

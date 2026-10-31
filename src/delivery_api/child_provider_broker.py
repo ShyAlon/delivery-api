@@ -47,12 +47,8 @@ class ChildProviderBroker:
         try:raw=base64.b64decode(call.serialized_request,validate=True)
         except (ValueError,TypeError) as exc:raise ValueError('invalid serialized request') from exc
         if not 0<len(raw)<=MAX_REQUEST:raise ValueError('bounded serialized request required')
-        from requi_child_contract import _unique_pairs,_invalid_constant
-        payload=json.loads(raw,object_pairs_hook=_unique_pairs,parse_constant=_invalid_constant)
-        if not isinstance(payload,dict):raise ValueError('provider object required')
-        caps=[payload[k] for k in ('max_tokens','max_completion_tokens') if k in payload]
-        if payload.get('model')!=call.model or len(caps)!=1 or type(caps[0]) is not int or caps[0]<=0:
-            raise ValueError('exact model and output cap required')
+        from .provider_request import request_contract
+        payload,output_cap=request_contract(raw,call.model)
         # Buffer terminal SSE too: raw response is durably stored before any
         # bytes are delivered to the child. No blind streaming/retry window.
         if type(payload.get('stream',False)) is not bool:raise ValueError('boolean stream required')
@@ -70,7 +66,7 @@ class ChildProviderBroker:
             attempt=None
             try:
                 attempt=self.gateway.reserve_serialized(attempt_id=uuid.uuid4().hex,stage=call.stage,
-                    provider=call.provider,model=call.model,serialized_request=call.serialized_request,max_output_tokens=caps[0])
+                    provider=call.provider,model=call.model,serialized_request=call.serialized_request,max_output_tokens=output_cap)
                 if not attempt:raise BrokerPaused('provider reserve returned no attempt')
                 self.journal.bind(key,attempt)
                 self.authorize(self.operation,call)  # stop/revocation before start

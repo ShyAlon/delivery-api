@@ -95,3 +95,25 @@ def test_an_unreviewed_serialized_bound_names_the_route_and_stage():
     catalog=ReviewedCatalog()
     with pytest.raises(AdmissionDenied,match=r"unreviewed for ollama/qwen2\.5-coder:14b \(stage scope_tiebreak\)"):
         catalog.resolve_serialized(stage='scope_tiebreak',provider='ollama',model='qwen2.5-coder:14b',serialized_request=b'{}',max_output_tokens=1)
+
+
+@pytest.mark.parametrize('raw',[
+    b'{"model":"foreign","model":"fake","max_tokens":10}',
+    b'{"model":"fake","max_tokens":9,"max_tokens":10}',
+    b'{"model":"fake","max_tokens":10,"temperature":NaN}'])
+@pytest.mark.parametrize('boundary',['ceiling','gateway'])
+def test_exact_request_boundaries_reject_ambiguous_json_before_quote(raw,boundary):
+    import base64
+    from delivery_api.admission_catalog import ReviewedContextCeiling
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    seen=[]
+    if boundary=='ceiling':
+        call=lambda:ReviewedContextCeiling('fake',1000,100,'test','test')(
+            stage='needs',serialized_request=raw,max_output_tokens=10)
+    else:
+        store=SimpleNamespace(worker_job=lambda job:None,provider_attempt=lambda key:None)
+        gateway=WorkerAdmissionGateway(store,'job',resolve_serialized=lambda **kw:seen.append(kw))
+        call=lambda:gateway.reserve_serialized(attempt_id='a',stage='needs',provider='fake',model='fake',
+            serialized_request=base64.b64encode(raw).decode(),max_output_tokens=10)
+    with pytest.raises(AdmissionDenied,match='identity/cap mismatch'):call()
+    assert seen==[]
