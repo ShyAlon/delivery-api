@@ -85,7 +85,7 @@ def create_app(*,service_url,transport=None):
         if len(raw)>256:return JSONResponse({'detail':'Bounded confirmation required'},status_code=422)
         try:
             value=json.loads(raw)
-            if value!={'confirm':True}:raise ValueError()
+            if value not in ({'confirm':True},{'confirm':True,'hide':False},{'confirm':True,'hide':True}):raise ValueError()
         except (ValueError,TypeError):return JSONResponse({'detail':'Explicit confirmation required'},status_code=422)
         headers={key:request.headers[key] for key in ('authorization','cookie') if key in request.headers}
         if not headers:return JSONResponse({'detail':'Service API sign-in required'},status_code=401)
@@ -94,7 +94,7 @@ def create_app(*,service_url,transport=None):
         headers['Origin']=service_url;headers['Content-Type']='application/json'
         try:
             async with httpx.AsyncClient(base_url=service_url,transport=transport,timeout=20,follow_redirects=False) as client:
-                response=await client.post('/api/operations/worker-jobs/'+job_id+'/stop',headers=headers,json={'confirm':True})
+                response=await client.post('/api/operations/worker-jobs/'+job_id+'/stop',headers=headers,json=value)
                 if len(response.content)>65536 or response.status_code not in (200,401,403,404,409,422,503):raise ValueError()
                 value=response.json()
                 if not isinstance(value,dict):raise ValueError()
