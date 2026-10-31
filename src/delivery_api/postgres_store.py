@@ -1763,6 +1763,9 @@ FROM tasks t"""
         row=self._execute_native('SELECT * FROM expense_alert_outbox WHERE alert_key=%s FOR UPDATE',(alert_key,)).fetchone()
         if not row:raise KeyError(alert_key)
         if row['state'] not in ('pending','retry_pending'):return None
+        if row['attempts']>=row['max_attempts']:
+            self._execute_native("UPDATE expense_alert_outbox SET state='operator_review',updated_at=%s WHERE alert_key=%s",(time.time(),alert_key),write=True)
+            return None
         self._execute_native("UPDATE expense_alert_outbox SET state='sending',attempts=attempts+1,updated_at=%s WHERE alert_key=%s",(time.time(),alert_key), write=True)
         return dict(self._execute_native('SELECT * FROM expense_alert_outbox WHERE alert_key=%s',(alert_key,)).fetchone())
 
