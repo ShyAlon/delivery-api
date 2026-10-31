@@ -25,3 +25,7 @@ Reviewed direction, 2026-10-31: maintenance belongs in Back office, with diagnos
 4. Review individual maintenance mutations separately. Back office convenience must not bypass the existing accounting, Stop, role or schema fences.
 
 A job stored as running is not proof of a live process. A Stop request is not proof of exit. A rebuilt preview is not settlement evidence.
+
+## Worker Jobs follow-up
+
+The table is now named Worker Jobs and has View plus binary-confirm Stop. Stop means durable Stop plus removal from the normal view; retained running/unknown money records are not reclassified. View reuses existing metadata/events/usage panels. Row rendering and request/error handling are shared with the existing tables. The new reusable confirm and busy/write helpers are infrastructure for further maintenance actions. Older sections still have separate paging/load implementations; consolidating all of them is a later explicit change, not an unannounced rewrite.

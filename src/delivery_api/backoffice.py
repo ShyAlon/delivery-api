@@ -73,6 +73,33 @@ def create_app(*,service_url,transport=None):
                     return JSONResponse(value,status_code=response.status_code,headers={'Cache-Control':'no-store'})
         except (httpx.HTTPError,ValueError):
             return JSONResponse({'detail':'Operations service unavailable or invalid'},status_code=502)
+    @application.post('/api/operations/worker-jobs/{job_id}/stop')
+    async def stop_job(job_id:str,request:Request):
+        import re,json
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,240}',job_id):return JSONResponse({'detail':'Invalid job identifier'},status_code=422)
+        # This listener has one narrowly routed write, never a generic proxy.
+        origin=request.headers.get('origin')
+        if origin!=str(request.base_url).rstrip('/') or request.headers.get('sec-fetch-site')=='cross-site':
+            return JSONResponse({'detail':'Same-origin confirmation required'},status_code=403)
+        raw=await request.body()
+        if len(raw)>256:return JSONResponse({'detail':'Bounded confirmation required'},status_code=422)
+        try:
+            value=json.loads(raw)
+            if value!={'confirm':True}:raise ValueError()
+        except (ValueError,TypeError):return JSONResponse({'detail':'Explicit confirmation required'},status_code=422)
+        headers={key:request.headers[key] for key in ('authorization','cookie') if key in request.headers}
+        if not headers:return JSONResponse({'detail':'Service API sign-in required'},status_code=401)
+        # Forward the listener's reviewed upstream origin only after verifying
+        # the actual browser origin above. Service still checks identity/registry.
+        headers['Origin']=service_url;headers['Content-Type']='application/json'
+        try:
+            async with httpx.AsyncClient(base_url=service_url,transport=transport,timeout=20,follow_redirects=False) as client:
+                response=await client.post('/api/operations/worker-jobs/'+job_id+'/stop',headers=headers,json={'confirm':True})
+                if len(response.content)>65536 or response.status_code not in (200,401,403,404,409,422,503):raise ValueError()
+                value=response.json()
+                if not isinstance(value,dict):raise ValueError()
+                return JSONResponse(value,status_code=response.status_code,headers={'Cache-Control':'no-store'})
+        except (httpx.HTTPError,ValueError):return JSONResponse({'detail':'Stop outcome unverified. Refresh jobs; do not infer accounting settlement.'},status_code=502)
     return application
 
 
