@@ -83,7 +83,9 @@ def test_transition_refuses_active_work_and_other_caps(credit_account):
     with psycopg.connect(DSN) as c:
         email=c.execute('SELECT email FROM auth.users WHERE id=%s',(A.owner_id,)).fetchone()[0]
         c.execute('UPDATE admission_limits SET expense_limit=%s,period_seconds=86400 WHERE owner_id=%s',(2*SCALE,A.owner_id))
-        with pytest.raises(AdmissionDenied,match='owner work'):transition(c,email,apply=True)
+        with pytest.raises(AdmissionDenied,match='owner work') as refusal:transition(c,email,apply=True)
+        assert tid in str(refusal.value) and job in str(refusal.value)
+        assert 'state=running' in str(refusal.value) or 'state=pending' in str(refusal.value)
         c.execute('UPDATE admission_limits SET rate_max=1 WHERE owner_id=%s',(A.owner_id,))
         with pytest.raises(AdmissionDenied,match='no owner quota'):transition(c,email,apply=True)
         c.rollback()

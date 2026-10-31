@@ -222,7 +222,16 @@ class InstalledInterviewControlRouter:
         task=self.store.task(binding['task_id'])
         if not task or task['engine_session_id']!=session_id:raise TenantAccessDenied('installed control task changed')
         installed=self.store.installed_execution_anchor(session_id)
-        if not installed:raise TenantAccessDenied('installed control binding unavailable')
+        if not installed:
+            # Ordinary engine Stop bumps the lease generation as well. Only
+            # that exact stopped first execution belongs to the normal registry;
+            # missing lineage on a later execution must still fail closed.
+            control=binding.get('control') or {}
+            if isinstance(control,str):control=__import__('json').loads(control)
+            if (binding['generation']==2 and control.get('stopped') is True
+                and task['generation']==2 and task.get('stop_requested_at') is not None):
+                return None
+            raise TenantAccessDenied('installed control binding unavailable')
         cap=WorkerCapability(scope,task['task_id'],session_id,binding['generation'],installed['anchor'],installed['anchor_sha256'])
         from interview_engine.installed_execution import InstalledExecutionRegistry
         def read(owner,sid):
