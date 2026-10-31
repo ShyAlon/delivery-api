@@ -1802,7 +1802,11 @@ FROM tasks t"""
         # Returning a denial commits its durable episode/outbox. Raising here
         # would roll it back and lose the alert on every denied call.
         row=self._execute_native('SELECT public.requi_confirmed_expense_guard(%s,%s) AS reason',(job_id,expense_scale), write=True).fetchone()
-        return row['reason']
+        from .operational_alerts import emit
+        reason=row['reason']
+        if reason in ('session_expense_limit','platform_rolling_24h_expense_limit'):emit('tripwire_breach',reason)
+        elif reason=='unknown_provider_outcome':emit('unresolved_accounting',reason)
+        return reason
 
     @_transactional
     def admit_provider_attempt(self,job_id,attempt_id,quote,digest,*,balance,bind_attempt,authorize,require_prepaid,launch_guard):
@@ -1834,7 +1838,11 @@ FROM tasks t"""
 
     def transition_provider_attempt(self,attempt_id,action,usage=None,*,require_prepaid=False):
         from .attempt_ledger import transition
-        return transition(self,attempt_id,action,usage,require_prepaid=require_prepaid)
+        result=transition(self,attempt_id,action,usage,require_prepaid=require_prepaid)
+        if result.get('state')=='uncertain':
+            from .operational_alerts import emit
+            emit('unresolved_accounting','provider_usage')
+        return result
 
     def record_provider_balance_check(self,attempt_id,evidence):
         from .provider_balance import validate_balance
@@ -1862,7 +1870,11 @@ FROM tasks t"""
 
     def close_failed_retail_compute(self,key):
         from .retail_ledger import close_failed_compute
-        return close_failed_compute(self,key)
+        result=close_failed_compute(self,key)
+        if result=='held':
+            from .operational_alerts import emit
+            emit('unresolved_accounting','compute_usage')
+        return result
 
     def release_own_compute(self,confirm):
         from .retail_ledger import release_compute
@@ -1870,7 +1882,11 @@ FROM tasks t"""
 
     def finish_retail_compute(self,key,deterministic_ms):
         from .retail_ledger import finish_compute
-        return finish_compute(self,key,deterministic_ms)
+        result=finish_compute(self,key,deterministic_ms)
+        if result is None:
+            from .operational_alerts import emit
+            emit('unresolved_accounting','compute_usage')
+        return result
 
     def post_retail_contribution(self,**contribution):
         from .retail_ledger import post

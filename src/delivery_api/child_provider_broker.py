@@ -91,6 +91,8 @@ class ChildProviderBroker:
                 self.journal.complete(key,reply,usage)
             except BaseException as exc:
                 if attempt is not None:
+                    from .operational_alerts import emit
+                    emit('provider_failure','provider_outcome_incomplete')
                     try:self.gateway.uncertain(attempt)
                     except Exception:pass  # Existing durable dispatched row remains held.
                 raise BrokerPaused('provider outcome incomplete; reconcile before retry') from exc

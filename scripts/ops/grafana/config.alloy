@@ -1,0 +1,37 @@
+// Run locally on the Docker host only after owner setup. No account values here.
+discovery.docker "requi" {
+  host = "unix:///var/run/docker.sock"
+  filter {
+    name = "name"
+    values = ["requi-delivery", "requi-preview-exec"]
+  }
+}
+loki.source.docker "requi" {
+  host = "unix:///var/run/docker.sock"
+  targets = discovery.docker.requi.targets
+  labels = {app = "requi", signal = "operator_alert"}
+  forward_to = [loki.process.alerts.receiver]
+}
+loki.process "alerts" {
+  // Ship only our allowlisted operator signal. Do not export general server logs.
+  stage.match {
+    selector = "{app=\"requi\"} !~ `REQUI_ALERT (\\{\"action\":\"operator_review\",\"event\":\"(tripwire_breach|provider_failure|unresolved_accounting)\",\"reason\":\"(session_expense_limit|platform_rolling_24h_expense_limit|own_test_rolling_24h_expense_limit|provider_outcome_incomplete|provider_usage|compute_usage|unknown_provider_outcome|own_test_unknown_provider_outcome|own_test_expense_history_unverifiable)\",\"version\":1\\})$`"
+    action = "drop"
+  }
+  stage.regex {
+    expression = "REQUI_ALERT (?P<payload>\\{\"action\":\"operator_review\",\"event\":\"(tripwire_breach|provider_failure|unresolved_accounting)\",\"reason\":\"(session_expense_limit|platform_rolling_24h_expense_limit|own_test_rolling_24h_expense_limit|provider_outcome_incomplete|provider_usage|compute_usage|unknown_provider_outcome|own_test_unknown_provider_outcome|own_test_expense_history_unverifiable)\",\"version\":1\\})$"
+  }
+  stage.output {
+    source = "payload"
+  }
+  forward_to = [loki.write.cloud.receiver]
+}
+loki.write "cloud" {
+  endpoint {
+    url = sys.env("REQUI_LOKI_URL")
+    basic_auth {
+      username = sys.env("REQUI_LOKI_USERNAME")
+      password_file = sys.env("REQUI_LOKI_TOKEN_FILE")
+    }
+  }
+}
