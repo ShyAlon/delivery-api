@@ -330,7 +330,8 @@ def test_cloud_provider_usage_categories_are_private_even_with_debug(cloud):
         reply=client.get('/api/tasks/'+tid+suffix,headers=header('a'))
         assert reply.status_code==404,reply.text
         assert all(key not in reply.text for key in sensitive)
-    assert client.post('/api/tasks/'+tid+'/debug.zip',json={},headers=header('a')).status_code==503
+    debug=client.post('/api/tasks/'+tid+'/debug.zip',json={},headers=header('a'))
+    assert debug.status_code==404 and all(key not in debug.text for key in sensitive)
     assert client.get('/api/tasks/'+tid+'/execution?debug=true',headers=header('b')).status_code==404
     assert client.post('/api/tasks/'+tid+'/debug.zip',json={},headers=header('b')).status_code==404
     assert json.loads((path/'usage.jsonl').read_text())==sensitive
@@ -357,13 +358,15 @@ def test_cloud_events_and_audit_never_project_provider_categories(cloud):
         assert store.audit_entries(tid)[0]['detail']==payload
 
 
-def test_cloud_packages_fail_closed_until_customer_safe_export(cloud):
+def test_cloud_packages_reject_incomplete_owner_and_hide_foreign_task(cloud):
     client,store,root=cloud
     with tenant_context(A):
         task=store.create_task('private-export-'+uuid.uuid4().hex);tid=task['task_id']
-    for owner,status in [('a',503),('b',404)]:
-        assert client.post('/api/tasks/'+tid+'/packages',headers=header(owner)).status_code==status
-        assert client.get('/api/tasks/'+tid+'/packages/'+'a'*64+'?generation=1',headers=header(owner)).status_code==status
+    rejected=client.post('/api/tasks/'+tid+'/packages',headers=header('a'))
+    assert rejected.status_code==409
+    assert client.get('/api/tasks/'+tid+'/packages/'+'a'*64+'?generation=1',headers=header('a')).status_code==404
+    for method,path in [('POST','/packages'),('GET','/packages/'+'a'*64+'?generation=1')]:
+        assert client.request(method,'/api/tasks/'+tid+path,headers=header('b')).status_code==404
 
 
 def test_raw_provider_audit_and_cache_categories_never_project_to_customer():
