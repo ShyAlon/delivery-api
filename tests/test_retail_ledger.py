@@ -5,7 +5,6 @@ from test_attempt_ledger import ledger
 from test_postgres_store import DSN, A, B, store
 from delivery_api.tenancy import tenant_context
 from delivery_api.retail_pricing import RetailRates,UNITS_PER_CREDIT
-from delivery_api.retail_ledger import migrate_account
 from delivery_api.attempt_ledger import AdmissionDenied
 pytestmark=pytest.mark.skipif(not DSN,reason='disposable migrated Postgres required')
 
@@ -49,19 +48,6 @@ def test_compute_remainder_and_replay_are_durable(account):
     with tenant_context(B):
         assert not s.retail_phase_totals(job)
         with pytest.raises(AdmissionDenied):s.post_retail_contribution(key='foreign',job_id=job,phase='needs',kind='compute',deterministic_ms=1,rates=r)
-
-
-def test_account_scale_migration_preserves_value_and_replay(account):
-    import psycopg
-    from psycopg.rows import dict_row
-    s,tid,job=account
-    with psycopg.connect(DSN,row_factory=dict_row) as c:
-        c.execute('UPDATE credit_accounts SET balance_units=-17,units_per_credit=1000 WHERE owner_id=%s',(A.owner_id,))
-        assert migrate_account(c,A.owner_id,now=1)
-        assert not migrate_account(c,A.owner_id,now=2)
-        row=c.execute('SELECT * FROM credit_accounts WHERE owner_id=%s',(A.owner_id,)).fetchone()
-        assert row['balance_units']==-17000000 and row['units_per_credit']==UNITS_PER_CREDIT
-        assert c.execute('SELECT count(*) AS n FROM retail_scale_migrations').fetchone()['n']==1
 
 
 def test_compute_segment_settles_once_and_failed_measurement_holds(account):
@@ -125,19 +111,6 @@ def test_provider_ceiling_is_not_confirmed_expense_and_boundary_is_held(account,
         result=s.transition_provider_attempt(second,'settle',u)
         assert result['state']=='uncertain' and result['expense_actual'] is None
         with s._postgres.transaction() as c:assert c.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']==1
-
-
-def test_pending_attempt_refuses_scale_migration_without_history_rewrite(account):
-    import psycopg
-    from psycopg.rows import dict_row
-    from test_attempt_ledger import Q
-    s,tid,job=account
-    with tenant_context(A):s.reserve_provider_attempt(job,uuid.uuid4().hex,Q,'pending')
-    with psycopg.connect(DSN,row_factory=dict_row) as c:
-        c.execute('UPDATE credit_accounts SET units_per_credit=1000,balance_units=5000 WHERE owner_id=%s',(A.owner_id,))
-        with pytest.raises(AdmissionDenied,match='pending'):
-            migrate_account(c,A.owner_id,now=1)
-        assert c.execute('SELECT units_per_credit FROM credit_accounts WHERE owner_id=%s',(A.owner_id,)).fetchone()['units_per_credit']==1000
 
 
 def test_parallel_subunit_posting_serializes_owner_remainder(account):

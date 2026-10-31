@@ -1464,3 +1464,25 @@ def test_task_stop_hide_requires_confirmation_preserves_events_and_rolls_back_on
         assert s.worker_job(job)['state']=='running'
         from delivery_api.tenancy import TenantAccessDenied
         with pytest.raises(TenantAccessDenied):s.reserve_provider_attempt(job,uuid.uuid4().hex,Q,'after-hide')
+
+
+@pytest.mark.parametrize('source',['raw','response','staged'])
+def test_shared_accepted_completion_survives_hide_and_replays_without_debit(ledger,source):
+    from types import SimpleNamespace
+    from delivery_api.compute_meter import ComputeMeter
+    s,tid,job=ledger;usage={'input_tokens':2,'output_tokens':3}
+    with tenant_context(A):
+        aid=_started_attempt(s,job)
+        gateway=WorkerAdmissionGateway(s,job,require_prepaid=False,
+            measure_raw_usage=lambda raw:usage,measure_usage=lambda response:usage)
+        meter=ComputeMeter();gateway.compute_meter=meter
+        meter.pause();gateway._meter_attempts.add(aid)
+        s.stop_hide_task(tid,confirm=True)
+        complete={'raw':lambda:gateway.settle_raw(aid,{'prompt_tokens':2,'completion_tokens':3}),
+                  'response':lambda:gateway.settle(aid,SimpleNamespace()),
+                  'staged':lambda:gateway.settle_staged(aid,usage)}[source]
+        complete();first=s.provider_attempt(aid)
+        assert first['state']=='settled' and first['usage']==usage and meter.depth==0
+        complete();replay=s.provider_attempt(aid)
+        assert replay['expense_actual']==first['expense_actual'] and replay['retail_actual']==first['retail_actual']
+        assert not gateway._meter_attempts and meter.depth==0
