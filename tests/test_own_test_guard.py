@@ -96,7 +96,9 @@ def test_production_factory_path_checks_confirmed_profile(profile):
     from delivery_api import production_gateway as pg
     from test_production_gateway import env as gateway_env
     s,tid,job=profile
-    # Give enough prepaid balance; provider balance transport and actual provider are never called.
+    # The production launch path requires its separate confirmed-expense policy.
+    with psycopg.connect(DSN) as c:
+        c.execute("INSERT INTO expense_guard_policy VALUES(true,'test-only',%s,%s,%s,3)",(3*10**12,3*10**12,10**12))
     factory=pg.ProductionGateways(s,gateway_env(),vendor_fetcher=lambda u:(_ for _ in ()).throw(RuntimeError('offline')))
     try:
         with tenant_context(A):
@@ -110,7 +112,9 @@ def test_production_factory_path_checks_confirmed_profile(profile):
             gw.provider_balance=lambda:{'response':{'is_available':True,'balance_infos':[{'currency':'USD','total_balance':'100','granted_balance':'0','topped_up_balance':'100'}]},'observed_at':__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()}
             with pytest.raises(AdmissionDenied,match='own_test_expense_scale_mismatch'):gw.start(aid)
             assert s.provider_attempt(aid)['state']=='cancelled'
-    finally:factory.close()
+    finally:
+        factory.close()
+        with psycopg.connect(DSN) as c:c.execute('DELETE FROM expense_guard_policy')
 
 
 def test_settlement_serializes_with_next_dispatch(profile):

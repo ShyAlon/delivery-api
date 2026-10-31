@@ -43,7 +43,7 @@ def test_builds_with_every_reviewed_input_and_makes_a_job_bound_gateway():
     try:
         gateway=factory(None,'job-1')
         assert factory.model==MODEL and gateway.job_id=='job-1'
-        assert gateway.require_prepaid is True and gateway.retail_rates is not None
+        assert gateway.launch_guard is True and gateway.require_prepaid is True and gateway.retail_rates is not None
         assert gateway.resolve_serialized is not None and gateway.verify_provider_snapshot is not None and gateway.provider_balance is not None
     finally:factory.close()
 
