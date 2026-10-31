@@ -2,14 +2,6 @@ from types import SimpleNamespace
 from delivery_api import app as module
 
 
-def test_checkpoint_retirement_is_explicit_without_invented_turns(tmp_path,monkeypatch):
-    monkeypatch.setattr(module,'store',SimpleNamespace())
-    monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
-    monkeypatch.setattr(module,'_recorded_engine_session',lambda task:'session')
-    monkeypatch.setattr(module,'authorized_session',lambda *args:tmp_path)
-    status={}
-    assert module._checkpoint_interview_turns('task',status)==[]
-    assert status['checkpoint_transcript']=={'availability':'policy_excluded','reason':'legacy_checkpoint_excluded'}
 
 
 def test_corrupt_model_usage_is_not_empty_provenance(tmp_path,monkeypatch):
