@@ -116,39 +116,55 @@ def test_manifest_rejects_foreign_or_changed_inputs(tmp_path):
     assert manifest([str(owned),'--out',str(root/'spec')],root)[1]!=digest
 
 
-def test_durable_gate_answer_survives_parent_crash_without_reasking(store,tmp_path,monkeypatch):
+@pytest.mark.parametrize('paid',[False,True])
+def test_durable_gate_answer_survives_parent_crash_without_reasking(store,tmp_path,monkeypatch,paid):
     from delivery_api import config
     monkeypatch.setattr(config,'ARTIFACT_PUBLISH',False);monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
     with tenant_context(A):
         tid=store.create_task('gate restart '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)
         root=session_root(tmp_path,A,sid);root.mkdir(parents=True);ip=root/'interview/intent_model.json'
         store.publish_task_revision_bytes(tid,[{'phase_key':'intent','name':'intent_model.json','data':b'{}'}],writer_instance='test-only')
-        job=store.enqueue_worker(tid,'phase:needs',execution_options={'model_route':'ollama:fake'})
+        route='deepseek:deepseek-flash' if paid else 'ollama:fake'
+        job=store.enqueue_worker(tid,'phase:needs',execution_options={'model_route':route})
         class Gateway:
             retail_rates=None
             def __init__(self,job):self.job_id=job;self.store=store
         from pathlib import Path
         command=[sys.executable,str(Path(__file__).parent/'fixtures/child_generator_gate_fixture.py'),
             str(Path(__file__).parents[2]/'interview-engine/src'),str(Path(__file__).parents[2]/'spec-generator/src')]
-        def engine():return ChildGeneratorEngine(tmp_path,gateway_factory=lambda cap,job:Gateway(job),dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint='http://127.0.0.1:1',command=command)
+        from contextlib import ExitStack
+        stack=ExitStack();factory=lambda cap,job:Gateway(job);runtime=None
+        if paid:
+            from paid_child_fixture import paid_child
+            factory,runtime=stack.enter_context(paid_child(store,'http://127.0.0.1:1'))
+        def engine():return ChildGeneratorEngine(tmp_path,gateway_factory=factory,paid_runtime=runtime,dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint='http://127.0.0.1:1',command=command)
         argv=[sys.executable,'-m','spec_generator.cli',str(ip),'--out',str(root/'spec')];asked=[]
         async def go(e):
-            proc=VirtualProcess(asyncio.get_running_loop());proc.attach(argv,{'SPEC_GENERATOR_MODEL_NEEDS':'ollama:fake'})
+            proc=VirtualProcess(asyncio.get_running_loop());proc.attach(argv,{'SPEC_GENERATOR_MODEL_NEEDS':route})
             def decide(d):asked.append(d);return 'a'
             proc.decide=decide
             assert await e._worker(store,proc).execute(job,e._produce(proc))
-        original=store.retain_decision_review
-        def crash_after_answer(task,wait,revision,payload):
-            original(task,wait,revision,payload)
-            if revision.startswith('answer:gate:'):raise RuntimeError('parent crashed after durable answer')
-        monkeypatch.setattr(store,'retain_decision_review',crash_after_answer)
-        with pytest.raises(RuntimeError,match='parent crashed'):asyncio.run(go(engine()))
-        monkeypatch.setattr(store,'retain_decision_review',original);store.reauthorize_worker(job)
-        asyncio.run(go(engine()))
-        assert len(asked)==1 and not (root/'spec/needs.json').exists()
-        with store._postgres.transaction() as c:
-            assert json.loads(bytes(c.execute('SELECT payload FROM generator_documents WHERE execution_session_id=%s AND document_key=%s',(sid,'spec/needs.json')).fetchone()['payload']))['accepted'] is True
-        assert store.worker_job(job)['state']=='done'
+        try:
+            original=store.retain_decision_review
+            def crash_after_answer(task,wait,revision,payload):
+                original(task,wait,revision,payload)
+                if revision.startswith('answer:gate:'):raise RuntimeError('parent crashed after durable answer')
+            monkeypatch.setattr(store,'retain_decision_review',crash_after_answer)
+            with pytest.raises(RuntimeError,match='parent crashed'):asyncio.run(go(engine()))
+            monkeypatch.setattr(store,'retain_decision_review',original);store.reauthorize_worker(job)
+            asyncio.run(go(engine()))
+            assert len(asked)==1 and not (root/'spec/needs.json').exists()
+            with store._postgres.transaction() as c:
+                assert json.loads(bytes(c.execute('SELECT payload FROM generator_documents WHERE execution_session_id=%s AND document_key=%s',(sid,'spec/needs.json')).fetchone()['payload']))['accepted'] is True
+            assert store.worker_job(job)['state']=='done'
+            if paid:
+                with store._postgres.transaction() as conn:
+                    rows=conn.execute('SELECT state FROM retail_compute_segments WHERE job_id=%s',(job,)).fetchall()
+                    assert len(rows)==3 and all(row['state']=='settled' for row in rows)
+                    assert conn.execute("SELECT count(*) AS n FROM retail_contributions WHERE job_id=%s AND kind='compute'",(job,)).fetchone()['n']==3
+                    assert conn.execute('SELECT count(*) AS n FROM provider_attempts WHERE job_id=%s',(job,)).fetchone()['n']==0
+    
+        finally:stack.close()
 
 
 def test_items_phase_uses_generator_stage_not_delivery_specs_alias():
