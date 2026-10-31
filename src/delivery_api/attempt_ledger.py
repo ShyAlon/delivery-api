@@ -133,7 +133,10 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         if row['quote'].get('provider')=='deepseek':
             reason=store._execute_native('SELECT public.requi_own_test_expense_guard(%s,%s) AS reason',
                 (row['job_id'],row['quote'].get('expense_units_per_usd'))).fetchone()['reason']
-            if reason!='allowed':raise AdmissionDenied(reason)
+            if reason!='allowed':
+                from .operational_alerts import emit
+                emit('tripwire_breach' if reason=='own_test_rolling_24h_expense_limit' else 'unresolved_accounting',reason)
+                raise AdmissionDenied(reason)
         if require_prepaid:
             from .prepaid import authorize
             authorize(store,dict(row))
