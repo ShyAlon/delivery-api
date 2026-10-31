@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 import httpx
 from fastapi import FastAPI,Request
 from fastapi.responses import JSONResponse,HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 ROUTES={'active-jobs':'/api/operations/active-jobs','payment-journal':'/api/operator/payment-journal','payment-totals':'/api/operator/payment-totals','workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
     'operator-sessions':'/api/operator/sessions','operator-credits':'/api/operator/credits',
@@ -36,13 +37,20 @@ def settings(environ):
 
 def create_app(*,service_url,transport=None):
     application=FastAPI(title='Requi.re back office',docs_url=None,redoc_url=None,openapi_url=None)
+    from pathlib import Path
+    application.mount('/assets',StaticFiles(directory=Path(__file__).parent/'web'),name='shared-assets')
+    application.mount('/backoffice-assets',StaticFiles(directory=Path(__file__).parent/'backoffice_web'),name='backoffice-assets')
+    @application.get('/favicon.ico')
+    def icon():
+        from fastapi.responses import FileResponse
+        return FileResponse(Path(__file__).parent/'web'/'favicon.ico')
     @application.get('/',response_class=HTMLResponse)
     def shell():
         from pathlib import Path
         return HTMLResponse((Path(__file__).parent/'backoffice_web'/'index.html').read_text(),
-            headers={'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Referrer-Policy':'no-referrer'})
+            headers={'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Referrer-Policy':'no-referrer'})
     @application.get('/health')
-    def health():return {'ok':True,'role':'backoffice','capabilities':'read_only_service_api_proxy'}
+    def health():return {'ok':True,'role':'backoffice','capabilities':'scoped_service_api_proxy'}
     @application.get('/api/operations/{capability}')
     async def read_operation(capability:str,request:Request):
         target=ROUTES.get(capability)

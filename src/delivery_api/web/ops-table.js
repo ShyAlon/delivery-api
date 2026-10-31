@@ -25,7 +25,7 @@ export function makeTable(root,title,tip,cols,emptyText){
       const th=el('th',{textContent:c.label+arrow,title:c.tip+' Click to sort.',className:c.num?'num':''});
       th.onclick=()=>{if(st.sort===c.key)st.dir=-st.dir;else{st.sort=c.key;st.dir=1}draw()};tr.append(th)});
     const body=el('tbody');
-    view.forEach(r=>body.append(el('tr',{},...cols.map(c=>el('td',{textContent:text(r,c),className:c.num?'num':''})))));
+    view.forEach(r=>{const row=tableRow({querySelectorAll:()=>tr.children},cols.map(c=>text(r,c)));cols.forEach((c,i)=>row.children[i].classList.toggle('num',!!c.num));body.append(row)});
     const table=el('table',{},el('thead',{},tr),body);
     // The column headers always stay. With no rows the note goes in the body of the table, never in place of it.
     if(!rows.length)body.append(el('tr',{className:'empty-row'},el('td',{colSpan:cols.length,className:'empty',textContent:st.rows.length?'No rows match the filter.':emptyText})));
@@ -38,3 +38,5 @@ export function makeTable(root,title,tip,cols,emptyText){
   prev.onclick=()=>{st.page--;draw()};next.onclick=()=>{st.page++;draw()};
   return {set(rows){st.rows=rows;draw()}};
 }
+
+export function tableRow(table,values){const row=document.createElement('tr'),labels=Array.from(table.querySelectorAll('th'),h=>h.textContent);values.forEach((value,i)=>{const cell=document.createElement('td');cell.dataset.label=labels[i];cell.textContent=String(value??'Unknown');row.append(cell);});return row;}

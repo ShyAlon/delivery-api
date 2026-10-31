@@ -118,7 +118,8 @@ def test_stop_http_requires_account_registry_and_confirms_even_engine_gone(pg_wo
             with workspace.admin() as c:c.execute('DELETE FROM operator_principals WHERE subject=%s',(workspace.scope.owner_id,))
 
 
-def test_browser_confirm_sends_one_scoped_stop_and_refreshes(tmp_path):
+@__import__('pytest').mark.parametrize('hide',[False,True])
+def test_browser_confirm_sends_one_scoped_stop_and_refreshes(tmp_path,hide):
     import httpx,socket,threading,time,uvicorn
     from playwright.sync_api import sync_playwright
     from delivery_api.backoffice import create_app
@@ -127,8 +128,8 @@ def test_browser_confirm_sends_one_scoped_stop_and_refreshes(tmp_path):
         calls.append(request)
         if request.method=='POST':
             assert request.url.path=='/api/operations/worker-jobs/job-one/stop'
-            assert __import__('json').loads(request.content)=={'confirm':True,'hide':True}
-            stopped[0]=True;return httpx.Response(200,json={'hidden':True,'stop_requested':True,'accounting_retained':True,'accounting_settled':False,'worker_exit_verified':False})
+            assert __import__('json').loads(request.content)=={'confirm':True,'hide':hide}
+            stopped[0]=True;return httpx.Response(200,json={'hidden':hide,'stop_requested':True,'accounting_retained':True,'accounting_settled':False,'worker_exit_verified':False})
         if request.url.path=='/api/operations/active-jobs':
             row={'title':'Confirm cleanup','task_id':'task-one','job_id':'job-one','kind':'phase:intent','state':'running','task_state':'running','generation':1,'task_generation':1,'stop_requested_at':None,'updated_at':1}
             return httpx.Response(200,json={'scope':'current_authorized_workspace','jobs':[] if stopped[0] else [row],'mutations_available':False,'truncated':False,'next_before':None})
@@ -143,8 +144,9 @@ def test_browser_confirm_sends_one_scoped_stop_and_refreshes(tmp_path):
         with sync_playwright() as p:
             browser=p.chromium.launch(headless=True,args=['--no-sandbox']);page=browser.new_page(extra_http_headers={'Authorization':'Bearer fake'})
             page.goto(f'http://127.0.0.1:{port}/');page.locator('#active-jobs tbody tr').wait_for()
-            page.locator('#active-jobs button').filter(has_text='Delete').click()
-            page.get_by_role('button',name='Stop and delete',exact=True).click()
+            page.get_by_role('button',name='Job actions',exact=True).click()
+            page.get_by_role('menuitem',name='Delete' if hide else 'Stop',exact=True).click()
+            page.get_by_role('button',name='Stop and delete' if hide else 'Stop task',exact=True).click()
             page.get_by_text('No pending, running or paused jobs returned.',exact=True).wait_for()
             assert len([x for x in calls if x.method=='POST'])==1
             assert not page.get_by_role('dialog').count()

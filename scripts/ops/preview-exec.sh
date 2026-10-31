@@ -12,7 +12,7 @@
 # passes privately to the container, never in argv, logs or the temporary Docker env file. Deepseek mode
 # is DeepSeek-ONLY: the local Ollama server is never checked, contacted or needed, and no Ollama setting may
 # reach its settings. If any prerequisite is missing this stops with a clear message; it never falls back to
-# another model route. Ctrl-C removes the container and the temp folder.
+# another model route. Ctrl-C removes the container, its owned Back office listener and the temp folder.
 #
 # Fail-fast: 8 numbered steps, cheapest and most likely first, each printing its elapsed time. The plan with
 # expected durations prints before step 1. There are exactly two questions: the provider pick (only when
@@ -21,13 +21,51 @@
 set -euo pipefail
 PORT=${PREVIEW_EXEC_PORT:-8001}
 NAME=requi-preview-exec; WORK=""; STARTED=0; KEEP_FOR_INSPECTION=0
+BACKOFFICE_PID=""; BACKOFFICE_PREVIEW_PORT=${PREVIEW_BACKOFFICE_PORT:-8020}
 DATA_VOLUME=${PREVIEW_DATA_VOLUME:-requi-preview-data}
 . "$(dirname "$0")/lib.sh"; ops_start preview-exec "$0" --venv
 REPO=$PWD
 
 scrub(){ sed -E 's#(postgres(ql)?://)[^ ]*#\1[hidden]#g; s#sk-[A-Za-z0-9_-]+#sk-[hidden]#g'; }
+# Own only the child created here. Never reuse or terminate an unrelated listener.
+stop_backoffice(){
+  if [ -n "${BACKOFFICE_PID:-}" ]; then
+    kill "$BACKOFFICE_PID" >/dev/null 2>&1 || true
+    wait "$BACKOFFICE_PID" 2>/dev/null || true
+    BACKOFFICE_PID=""
+  fi
+}
+start_backoffice(){
+  .venv/bin/python - "$BACKOFFICE_PREVIEW_PORT" "$PORT" <<'PYPORT' || return 1
+import socket,sys
+try:
+    port=int(sys.argv[1]);upstream=int(sys.argv[2])
+    if not 1<=port<=65535 or port in (upstream,8000,8010):raise ValueError('Back office port conflicts with a service port')
+    with socket.socket() as s:s.bind(('127.0.0.1',port))
+except (ValueError,OSError) as error:
+    print('Back office cannot own its private port: '+str(error),file=sys.stderr);raise SystemExit(1)
+PYPORT
+  BACKOFFICE_HOST=127.0.0.1 BACKOFFICE_PORT="$BACKOFFICE_PREVIEW_PORT" BACKOFFICE_SERVICE_URL="http://127.0.0.1:$PORT" \
+    .venv/bin/python -m delivery_api.backoffice > "$WORK/backoffice.log" 2>&1 &
+  BACKOFFICE_PID=$!
+  for _ in $(seq 1 40); do
+    kill -0 "$BACKOFFICE_PID" 2>/dev/null || break
+    if curl -fs --max-time 1 "http://127.0.0.1:$BACKOFFICE_PREVIEW_PORT/health" 2>/dev/null | .venv/bin/python -c 'import json,sys; x=json.load(sys.stdin);sys.exit(0 if x.get("ok") is True and x.get("role")=="backoffice" else 1)' 2>/dev/null; then
+      # A racing/foreign listener cannot count as our child's successful bind.
+      sleep .1
+      kill -0 "$BACKOFFICE_PID" 2>/dev/null && return 0
+      break
+    fi
+    sleep .1
+  done
+  echo "Back office did not become healthy; child log:"
+  scrub < "$WORK/backoffice.log"
+  stop_backoffice
+  return 1
+}
 cleanup(){
   rc=$?; trap - EXIT INT TERM
+  stop_backoffice
   if [ "$STARTED" = 1 ] && [ "${KEEP_FOR_INSPECTION:-0}" != 1 ]; then docker rm -f "$NAME" >/dev/null 2>&1 || true; fi
   [ -z "$WORK" ] || rm -rf "$WORK"
   if [ "${KEEP_FOR_INSPECTION:-0}" = 1 ]; then
@@ -165,7 +203,8 @@ PYEOF
 # cannot verify and says so instead of passing silently.
 if command -v node >/dev/null 2>&1; then
   JSTMP=$(mktemp -d); rc=0
-  for f in "$ROOT"/delivery-api/src/delivery_api/web/*.js; do
+  for f in "$ROOT"/delivery-api/src/delivery_api/web/*.js "$ROOT"/delivery-api/src/delivery_api/backoffice_web/*.js; do
+    [ -f "$f" ] || continue
     j="$JSTMP/$(basename "${f%.js}").mjs"; cp "$f" "$j"
     out=$(node --check "$j" 2>&1) || { echo "  $(basename "$f"):"; echo "$out" | head -6 | sed 's/^/    /'; rc=1; }
   done
@@ -232,6 +271,7 @@ fi
 
 echo "ops preview-exec: candidate $IMAGE (built on this Mac, no server access)"
 echo "  What it does: runs $IMAGE on http://127.0.0.1:$PORT with execution ON against the LIVE database."
+echo "  Also starts a private Back office at http://127.0.0.1:$BACKOFFICE_PREVIEW_PORT; both stop with this script."
 if [ "$PROVIDER" = deepseek ]; then
 echo "  Provider: DeepSeek only (paid) - no local model server is checked, contacted or needed. The local \$0 Ollama route is the other choice at the provider prompt (or PREVIEW_EXEC_PROVIDER=ollama)."
 echo "  The reviewed row and ceiling are grounded from the two public DeepSeek pages (public GETs, nothing paid),"
@@ -412,6 +452,8 @@ else
 fi
 step_ok
 echo
+start_backoffice || abort BACKOFFICE "the private Back office listener could not start" "No unrelated listener was reused or stopped." "Stop your standalone Back office, or choose PREVIEW_BACKOFFICE_PORT, then retry."
+echo "BACK OFFICE READY: http://127.0.0.1:$BACKOFFICE_PREVIEW_PORT   (same browser and sign-in as preview; stops with this script)"
 echo "PREVIEW-EXEC READY: http://127.0.0.1:$PORT   (execution OPEN, live database, real sign-in, provider: $PROVIDER)"
 [ "$PROVIDER" = both ] && echo "Both routes admitted: choose DeepSeek or Ollama in the UI. Local is zero-cost; DeepSeek uses credits. No fallback."
 [ "$PROVIDER" = ollama ] && echo "Local Ollama route: $OLLAMA_MODEL at \$0; every call is ledgered. The managed DeepSeek route is not configured in this mode."
