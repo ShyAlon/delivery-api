@@ -79,5 +79,5 @@ def test_installed_adapters_run_real_paid_child_with_fake_provider(store,tmp_pat
             assert result.snapshot.open_input is not None and chosen[0].supervisor.last_result.reaped and calls
             with store._postgres.transaction() as conn:
                 assert conn.execute("SELECT count(*) AS n FROM retail_compute_segments WHERE state='settled'").fetchone()['n']==1
-                assert conn.execute("SELECT count(*) AS n FROM retail_contributions WHERE kind='tokens'").fetchone()['n']==len(calls)
+                assert conn.execute("SELECT count(*) AS n FROM retail_contributions r JOIN worker_jobs w USING(job_id) WHERE r.kind='tokens' AND w.task_id=%s",(tid,)).fetchone()['n']==len(calls)
     finally:server.shutdown();server.server_close()
