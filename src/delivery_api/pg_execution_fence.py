@@ -3,7 +3,23 @@ from contextlib import contextmanager
 import threading
 from .tenancy import tenant_context,current_scope,TenantAccessDenied
 
-class PostgresExecutionFence:
+class _PublicationLifetime:
+    """Balance writer ownership and publication/Stop context for either PG host."""
+    @contextmanager
+    def running(self):
+        from spec_generator.stop_fence import execution_fence,_publish,_current
+        self.check(self.generation);self._writer_enter()
+        try:
+            def publish(call):
+                with self.marker_guard():return call()
+            p=_publish.set(publish);c=_current.set(self)
+            try:
+                with execution_fence(lambda:self.check(self.generation)):yield self.generation
+            finally:_current.reset(c);_publish.reset(p)
+        finally:self._writer_exit()
+
+
+class PostgresExecutionFence(_PublicationLifetime):
     def __init__(self,store,capability,*,root):
         from pathlib import Path
         from .tenancy import session_root
@@ -82,18 +98,6 @@ class PostgresExecutionFence:
                 try:lease.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))',(key,))
                 finally:context.__exit__(None,None,None)
 
-    @contextmanager
-    def running(self):
-        from spec_generator.stop_fence import execution_fence,_publish,_current
-        self.check(self.generation);self._writer_enter()
-        try:
-            def publish(call):
-                with self.marker_guard():return call()
-            p=_publish.set(publish);c=_current.set(self)
-            try:
-                with execution_fence(lambda:self.check(self.generation)):yield self.generation
-            finally:_current.reset(c);_publish.reset(p)
-        finally:self._writer_exit()
 
 
 class PostgresControlFence:
@@ -151,7 +155,7 @@ class PostgresControlFence:
         return 'STOPPED'
 
 
-class ChildPostgresExecutionFence:
+class ChildPostgresExecutionFence(_PublicationLifetime):
     """Child writer lifetime plus short PG publication transactions, no files."""
     def __init__(self,documents,*,root):
         from pathlib import Path
@@ -194,18 +198,6 @@ class ChildPostgresExecutionFence:
                 try:conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))',(key,));conn.commit()
                 finally:context.__exit__(None,None,None)
 
-    @contextmanager
-    def running(self):
-        from spec_generator.stop_fence import execution_fence,_publish,_current
-        self.check(self.generation);self._writer_enter()
-        try:
-            def publish(call):
-                with self.marker_guard():return call()
-            p=_publish.set(publish);c=_current.set(self)
-            try:
-                with execution_fence(lambda:self.check(self.generation)):yield self.generation
-            finally:_current.reset(c);_publish.reset(p)
-        finally:self._writer_exit()
 
 
 class InstalledInterviewControlRouter:
