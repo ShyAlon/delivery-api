@@ -30,7 +30,7 @@ def _execute_claimed(operation,cfg,store,broker,stop,output_fd,claim):
     if actual!=value or digest!=operation.operation.input_manifest_sha256:raise PermissionError('generator input manifest differs')
     if '--to' in value['argv'] and value['argv'][value['argv'].index('--to')+1]!=operation.operation.phase:
         raise PermissionError('typed generator phase differs from reviewed CLI boundary')
-    if (b.provider,b.model)!=('ollama',cfg.get('model',b.model)):raise PermissionError('local pinned generator model required')
+    if b.provider!=cfg.get('provider') or b.model!=cfg.get('model',b.model):raise PermissionError('parent pinned generator model required')
     output=socket.socket(fileno=output_fd);stream=output.makefile('wb',buffering=0);lock=threading.Lock();halt=threading.Event();lost=threading.Event()
     def publish(value):
         raw=json.dumps(value,separators=(',',':')).encode()+b'\n'

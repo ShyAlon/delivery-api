@@ -6,11 +6,13 @@ from delivery_api.tenancy import tenant_context,session_root
 from test_postgres_store import A,DSN
 
 
-@pytest.mark.parametrize('stage',['needs','srs','publication-recovery'])
+@pytest.mark.parametrize('stage',['needs','srs','publication-recovery','paid-needs'])
 def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkeypatch,stage):
     pytest.importorskip('spec_generator')
     from delivery_api import config
     from vmodel_contracts import CONTRACT_VERSION
+    paid=stage=='paid-needs'
+    if paid:stage='needs'
     publishing=stage=='publication-recovery'
     stage='needs' if publishing else stage
     monkeypatch.setattr(config,'ARTIFACT_PUBLISH',publishing)
@@ -33,10 +35,10 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
                 content=json.dumps({'purpose':'Record task evidence','scope_summary':'Record evidence for people'}) if 'purpose, scope_summary' in json.dumps(payload) else json.dumps({'title':'Record evidence','statement':'The system shall record task evidence for people.','priority':'must','acceptance':['Task evidence is recorded.']})
                 if payload.get('stream'):
                     events=[{'id':'fake','model':'fake','choices':[{'index':0,'delta':{'role':'assistant','content':content},'finish_reason':None}]},
-                        {'id':'fake','model':'fake','choices':[{'index':0,'delta':{},'finish_reason':'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20}}]
+                        {'id':'fake','model':'fake','choices':[{'index':0,'delta':{},'finish_reason':'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20,'prompt_cache_hit_tokens':0,'prompt_cache_miss_tokens':10}}]
                     body=b''.join(b'data: '+json.dumps(e).encode()+b'\n\n' for e in events)+b'data: [DONE]\n\n';ct='text/event-stream'
                 else:
-                    body=json.dumps({'id':'fake','model':'fake','choices':[{'index':0,'message':{'role':'assistant','content':content},'finish_reason':'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20}}).encode();ct='application/json'
+                    body=json.dumps({'id':'fake','model':'fake','choices':[{'index':0,'message':{'role':'assistant','content':content},'finish_reason':'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20,'prompt_cache_hit_tokens':0,'prompt_cache_miss_tokens':10}}).encode();ct='application/json'
                 self.send_response(200);self.send_header('Content-Type',ct);self.end_headers();self.wfile.write(body)
             def log_message(self,*a):pass
         server=HTTPServer(('127.0.0.1',0),Handler);threading.Thread(target=server.serve_forever,daemon=True).start()
@@ -48,11 +50,19 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
             def settle_raw(self,a,u):self.states[a]='settled'
             def uncertain(self,a):self.states[a]='uncertain'
             def _attempt(self,a):return {'state':self.states[a]}
-        engine=ChildGeneratorEngine(tmp_path,gateway_factory=lambda cap,job:Gateway(job),dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint=f'http://127.0.0.1:{server.server_port}/v1/chat/completions',
+        from contextlib import ExitStack
+        stack=ExitStack();factory=lambda cap,job:Gateway(job);paid_runtime=None;route='ollama:fake'
+        if paid:
+            import psycopg
+            from paid_child_fixture import paid_child
+            factory,paid_runtime=stack.enter_context(paid_child(store,f'http://127.0.0.1:{server.server_port}/v1/chat/completions'))
+            route='deepseek:deepseek-flash'
+            with psycopg.connect(DSN) as conn:conn.execute("UPDATE worker_jobs SET execution_options=%s::jsonb WHERE job_id=%s",(json.dumps({'model_route':route}),job))
+        engine=ChildGeneratorEngine(tmp_path,gateway_factory=factory,paid_runtime=paid_runtime,dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint=f'http://127.0.0.1:{server.server_port}/v1/chat/completions',
             command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(__import__('pathlib').Path(__file__).parents[2]/'interview-engine/src'),str(__import__('pathlib').Path(__file__).parents[2]/'spec-generator/src')])
         argv=[sys.executable,'-m','spec_generator.cli',str(ip),'--system-baseline',str(bp),'--out',str(out),'--to',stage]
         async def go():
-            proc=VirtualProcess(asyncio.get_running_loop());proc.attach(argv,{'SPEC_GENERATOR_MODEL_NEEDS':'ollama:fake'})
+            proc=VirtualProcess(asyncio.get_running_loop());proc.attach(argv,{'SPEC_GENERATOR_MODEL_NEEDS':route})
             assert await engine._worker(store,proc).execute(job,engine._produce(proc))
             assert await proc.wait()==0
             return await proc.stdout.read()
@@ -77,7 +87,14 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
                 asyncio.run(recover());output=b'Stopped after stage'
                 assert store.producer_result(job)['published_at'] is not None
             else:output=asyncio.run(go())
-        finally:server.shutdown();server.server_close()
+        finally:
+            server.shutdown();server.server_close()
+            if paid:
+                with store._postgres.transaction() as conn:
+                    rows=conn.execute("SELECT state,deterministic_ms FROM retail_compute_segments WHERE job_id=%s",(job,)).fetchall()
+                    assert len(rows)==1 and rows[0]['state']=='settled' and rows[0]['deterministic_ms']>0
+                    assert conn.execute("SELECT count(*) AS n FROM retail_contributions WHERE job_id=%s AND kind='tokens'",(job,)).fetchone()['n']==len(calls)
+            stack.close()
         assert not (out/'checkpoints.sqlite').exists(), 'child generator must persist checkpoints only in PG'
         assert not (out/'needs.json').exists() and b'Stopped after stage' in output
         with store._postgres.transaction() as c:

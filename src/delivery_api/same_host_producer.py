@@ -23,7 +23,7 @@ from .tenant_jobs import execute_job
 
 
 class SameHostProducerWorker:
-    def __init__(self,store,artifacts_base,*,gateway_factory,usage_log_factory,wire_client_factory=None,runtime_factory=None,isolated_quiescent=None,documents_enabled=False):
+    def __init__(self,store,artifacts_base,*,gateway_factory,usage_log_factory,wire_client_factory=None,runtime_factory=None,isolated_quiescent=None,documents_enabled=False,isolated_accounting=None):
         self.store=store
         self.artifacts_base=artifacts_base
         self.gateway_factory=gateway_factory
@@ -32,6 +32,11 @@ class SameHostProducerWorker:
         self.runtime_factory=runtime_factory
         self.documents_enabled=documents_enabled
         self.isolated_quiescent=isolated_quiescent
+        if isolated_accounting is not None:
+            from .child_paid_runtime import PaidChildRuntime
+            if not isinstance(isolated_accounting,PaidChildRuntime) or isolated_quiescent is None:
+                raise TypeError('typed isolated accounting and quiescence required')
+        self.isolated_accounting=isolated_accounting
 
     async def execute(self,job_id,producer):
         """Claim once, bind a synchronous producer, never restart automatically.
@@ -70,7 +75,7 @@ class SameHostProducerWorker:
             if fence.generation!=capability.generation or fence.requested:
                 raise TenantAccessDenied('producer stop generation mismatch')
             gateway=self.gateway_factory(capability,job_id)
-            if self.isolated_quiescent is not None and getattr(gateway,'retail_rates',None) is not None:
+            if self.isolated_quiescent is not None and getattr(gateway,'retail_rates',None) is not None and self.isolated_accounting is None:
                 raise PermissionError('paid child producer remains refused')
             # A caller cannot accidentally lend another job's gateway.
             if gateway.store is not self.store or gateway.job_id!=job_id:
@@ -137,7 +142,7 @@ class SameHostProducerWorker:
                     if self.wire_client_factory is not None:
                         from spec_generator.wire_binding import wire_clients
                         stack.enter_context(wire_clients(gateway,self.wire_client_factory))
-                    if getattr(gateway,'retail_rates',None) is not None:
+                    if getattr(gateway,'retail_rates',None) is not None and self.isolated_accounting is None:
                         from .compute_meter import ComputeMeter,bind
                         segment=job_id+':compute'
                         job=self.store.worker_job(job_id)

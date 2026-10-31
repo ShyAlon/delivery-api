@@ -1,4 +1,4 @@
-"""Local generator adapter: fresh child per run/gate, same publication owner.
+"""Child generator adapter: fresh child per run/gate, same publication owner.
 
 The runner still consumes its existing line protocol. Only private fixed child
 execution receives a validated CLI manifest; no shell or executable in payload.
@@ -44,8 +44,12 @@ def output_channel(proc,gates):
 
 
 class ChildGeneratorEngine(InProcessEngine):
-    def __init__(self,base,*,gateway_factory,dsn,endpoint,command=None):
+    def __init__(self,base,*,gateway_factory,dsn,endpoint,command=None,paid_runtime=None):
         super().__init__(base,gateway_factory=gateway_factory,wire_client_factory=None)
+        if paid_runtime is not None:
+            from .child_paid_runtime import PaidChildRuntime
+            if not isinstance(paid_runtime,PaidChildRuntime):raise TypeError('typed parent accounting runtime required')
+        self.paid_runtime=paid_runtime
         self.dsn=dsn;self.endpoint=endpoint;self.command=command or [sys.executable,'-m','delivery_api.child_entry']
         self._quiescent=True
     def _worker(self,store,proc):
@@ -58,7 +62,10 @@ class ChildGeneratorEngine(InProcessEngine):
             proc._loop.call_soon_threadsafe(proc.started.set)
             command,env=proc.wait_command()
             routes={(m.provider,m.model) for m in stage_models(env).values()}
-            if len(routes)!=1 or next(iter(routes))[0]!='ollama':raise PermissionError('paid generator child refused')
+            if len(routes)!=1:raise PermissionError('one pinned child route required')
+            provider,model=next(iter(routes))
+            if self.paid_runtime is not None:self.paid_runtime.require(provider,model)
+            elif provider!='ollama':raise PermissionError('paid generator child refused')
             from spec_generator.worker_runtime import JobRuntime
             return JobRuntime(stage_models(env),str(root/'private-llm-calls.jsonl'),lambda text:None)
         engine=self
@@ -69,7 +76,7 @@ class ChildGeneratorEngine(InProcessEngine):
                 return result
         return Worker(store,self.artifacts_base,gateway_factory=self.gateway_factory,
             usage_log_factory=lambda cap,root:UsageLog(cap.session_id),runtime_factory=runtime,
-            isolated_quiescent=lambda:engine._quiescent)
+            isolated_quiescent=lambda:engine._quiescent,isolated_accounting=self.paid_runtime)
     def _produce(self,proc):
         def produce(capability,root):
             from .child_operation_refs import ChildOperationRefs
@@ -84,7 +91,8 @@ class ChildGeneratorEngine(InProcessEngine):
             import httpx
             command,env=proc.wait_command();argv=command[command.index('spec_generator.cli')+1:]
             model_set={(m.provider,m.model) for m in stage_models(env).values()}
-            if len(model_set)!=1 or next(iter(model_set))[0]!='ollama':raise PermissionError('local generator only')
+            if len(model_set)!=1:raise PermissionError('one pinned generator route required')
+            if self.paid_runtime is None and next(iter(model_set))[0]!='ollama':raise PermissionError('local generator only')
             provider,model=next(iter(model_set));job_id=__import__('spec_generator.worker_runtime',fromlist=['current_runtime']).current_runtime().worker_binding[2]
             job=self.store.worker_job(job_id);phase=job['kind'].split(':')[-1]
             from .phases import PHASE_BY_KEY
@@ -97,7 +105,7 @@ class ChildGeneratorEngine(InProcessEngine):
                 {'ref':manifest_ref,'sha256':digest,'provider':provider,'model':model})
             answers={}
             gateway=self.gateway_factory(capability,job_id)
-            if getattr(gateway,'retail_rates',None) is not None:raise PermissionError('paid child remains refused')
+            if getattr(gateway,'retail_rates',None) is not None and self.paid_runtime is None:raise PermissionError('paid child remains refused')
             session_store=pg_session_store(pool_for(self.dsn),capability.scope.owner_id,capability.scope.session_id)
             while True:
                 if proc.stop_requested:raise EngineStopped('generator stopped')
@@ -113,17 +121,20 @@ class ChildGeneratorEngine(InProcessEngine):
                 body={'version':1,'operation_id':job_id,'binding':binding,'operation':{'kind':'generator.phase','phase':generator_stage,'input_manifest_sha256':digest}}
                 op=decode_operation(json.dumps(body).encode()+b'\n')
                 self.store.retain_decision_review(capability.task_id,'child-job:'+job_id,'child-launch:'+str(row['lease_epoch']),body)
-                cfg={'version':1,'provider':'ollama','binding':binding,'dsn':self.dsn,'owner_root':str(root.parent),
+                cfg={'version':1,'provider':provider,'binding':binding,'dsn':self.dsn,'owner_root':str(root.parent),
                     'input_ref':manifest_ref,'input':refs.get(manifest_ref,'generator-manifest'),'answers':answers,
                     'worker_attempt':self.store.worker_job(job_id)['attempt']}
                 if capability.execution_anchor is not None:cfg['execution_anchor']=capability.execution_anchor.document()
                 gates=[]
                 compute=LocalComputeEvidence(lambda value:self.store.retain_decision_review(capability.task_id,'child-job:'+job_id,'compute:'+str(row['lease_epoch']),value))
+                journal=ChildBrokerJournal(self.store,op)
+                if self.paid_runtime is not None:compute=self.paid_runtime.compute(self.store,op,gateway,phase,journal) or compute
+                endpoint,headers=self.paid_runtime.transport(provider,model,self.endpoint) if self.paid_runtime is not None else (self.endpoint,{})
                 supervisor=ChildSupervisor(self.command);self._quiescent=False
                 async def launch():
                     with httpx.Client(trust_env=False,follow_redirects=False,timeout=3600) as http:
-                        broker=ChildProviderBroker(op,gateway=gateway,journal=ChildBrokerJournal(self.store,op),client=http,
-                            endpoint=self.endpoint,headers={},authorize=ChildBrokerAuthority(self.store,op,lease_epoch=row['lease_epoch']+1))
+                        broker=ChildProviderBroker(op,gateway=gateway,journal=journal,client=http,
+                            endpoint=endpoint,headers=headers,authorize=ChildBrokerAuthority(self.store,op,lease_epoch=row['lease_epoch']+1))
                         with provider_broker_channel(broker) as broker_fd,child_compute_channel(compute) as compute_fd,output_channel(proc,gates) as out_fd:
                             stop=asyncio.Event()
                             async def watch():
