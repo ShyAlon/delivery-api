@@ -547,3 +547,15 @@ def test_missing_live_schema_aborts_before_grounding_or_build(tmp_path):
     assert 'resource_run_samples' not in result.stderr  # no credential-bearing traceback
     assert 'settings + grounding' not in result.stdout.split('== [1/9]')[-1]
     assert '== building' not in result.stdout
+
+
+def test_venv_gate_names_missing_vendored_contracts_before_pin(capsys,monkeypatch):
+    import importlib.util,runpy,pytest
+    monkeypatch.setattr(importlib.util,'find_spec',lambda name: None if name in {'requi_child_contract','vmodel_contracts'} else object())
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_path(str(REPO/'scripts/ops/venv_check.py'),run_name='__main__')
+    assert exc.value.code==1
+    text=capsys.readouterr().out
+    assert 'requi_child_contract' in text and 'vmodel_contracts' in text
+    assert 'vendor/requi_child_contract-0.3.0-py3-none-any.whl' in text
+    assert 'vendor/vmodel_contracts-0.28.0-py3-none-any.whl' in text
