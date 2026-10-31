@@ -94,7 +94,7 @@ def test_the_spend_route_serves_the_operator_refuses_others_and_says_what_to_do_
     client, store, _ = cloud
     path = "/api/admin/operations/spend"
     monkeypatch.setattr(config, "DATABASE_URL", APP)
-    module._stop_readers.clear()
+    monkeypatch.setattr(module.app.state,'operator_read_store',OperatorReadStore(APP,OperatorPrincipal(A.owner_id,'ops-v1',frozenset({'analytics.read'}))),raising=False)
     assert client.get(path).status_code == 401
     assert client.get(path, headers=header("a")).status_code == 403
     module.app.dependency_overrides[auth.require_admin] = lambda: auth.Actor(A.owner_id, "Shy", "shy.alon@gmail.com", True)
@@ -107,4 +107,3 @@ def test_the_spend_route_serves_the_operator_refuses_others_and_says_what_to_do_
         assert off.status_code == 503 and "not switched on" in off.json()["detail"]["error"]
     finally:
         module.app.dependency_overrides.pop(auth.require_admin, None)
-        module._stop_readers.clear()

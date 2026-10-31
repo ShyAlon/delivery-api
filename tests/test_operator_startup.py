@@ -99,3 +99,21 @@ def test_actual_preview_filter_preserves_only_explicit_operator_settings(tmp_pat
     assert 'REQUI_OPERATOR_REGISTRY_VERSION=v1' in body
     assert 'REQUI_OPERATOR_CAPABILITIES=["logs.read"]' in body
     assert 'REQUI_OPERATOR_EVIL' not in body and 'never-copy' not in body
+
+
+def test_admin_badge_cannot_mint_an_operator_principal(monkeypatch,store):
+    import pytest
+    from fastapi import HTTPException
+    from delivery_api import auth
+    monkeypatch.setattr(m.config,'CLOUD_TENANTS',True)
+    monkeypatch.setattr(m,'store',store)
+    monkeypatch.setattr(m.app.state,'operator_read_store',None,raising=False)
+    from delivery_api import operator_reads
+    built=[];original=operator_reads.OperatorReadStore
+    def record(*args,**kwargs):built.append(args);return original(*args,**kwargs)
+    monkeypatch.setattr(operator_reads,'OperatorReadStore',record)
+    actor=auth.Actor(A.owner_id,'Admin',None,True)
+    for call in (lambda:m.admin_operations_stops(actor),lambda:m.admin_operations_attempt_releases(50,actor),lambda:m.admin_operations_spend(actor),lambda:m.admin_operations_grants(actor)):
+        with pytest.raises(HTTPException) as denied:call()
+        assert denied.value.status_code==503
+    assert built==[],"an admin badge must never mint a route-specific principal"
