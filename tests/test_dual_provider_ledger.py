@@ -13,7 +13,8 @@ def test_alternating_jobs_keep_quotes_usage_and_money_on_the_selected_provider(j
     store,tid,original=job;contacts=[];checks=[];jobs=[]
     monkeypatch.setenv('OLLAMA_BASE_URL','http://127.0.0.1:11434/v1')
     with psycopg.connect(DSN) as connection:
-        connection.execute('UPDATE admission_limits SET expense_limit=100000000000000,retail_limit=100000000000000,attempt_expense_max=100000000000000,attempt_retail_max=100000000000000 WHERE owner_id=%s',(A.owner_id,))
+        connection.execute('UPDATE admission_limits SET expense_limit=NULL,retail_limit=NULL,attempt_expense_max=NULL,attempt_retail_max=NULL,rate_max=NULL,concurrency_max=3 WHERE owner_id=%s',(A.owner_id,))
+        connection.execute("INSERT INTO expense_guard_policy VALUES(true,'test-only',%s,%s,%s,3)",(3*10**12,3*10**12,10**12))
     def balance(request):
         checks.append('balance')
         return httpx.Response(200,json={'is_available':True,'balance_infos':[{'currency':'USD','total_balance':'1000'}]})
@@ -56,6 +57,8 @@ def test_alternating_jobs_keep_quotes_usage_and_money_on_the_selected_provider(j
     finally:
         factory.close()
         with psycopg.connect(DSN) as connection:
+            connection.execute('DELETE FROM expense_guard_policy')
             for jid in jobs:
+                connection.execute('DELETE FROM retail_contributions WHERE owner_id=%s',(A.owner_id,))
                 connection.execute('DELETE FROM credit_charges WHERE owner_id=%s',(A.owner_id,))
                 connection.execute('DELETE FROM provider_attempts WHERE job_id=%s',(jid,))

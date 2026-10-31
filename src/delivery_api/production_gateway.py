@@ -87,7 +87,7 @@ class ProductionGateways:
                 measure_raw_usage=ollama_settlement_usage,require_prepaid=True)
         return WorkerAdmissionGateway(self.store,job_id,resolve_serialized=self.catalog.resolve_serialized,
             measure_raw_usage=deepseek_settlement_usage,require_prepaid=True,retail_rates=self.retail_rates,
-            verify_provider_snapshot=self.verify_vendor,provider_balance=self.provider_balance)
+            verify_provider_snapshot=self.verify_vendor,provider_balance=self.provider_balance,launch_guard=True)
 
     def _init_dual(self,store,environ,rows,contexts,**kw):
         """Two independently reviewed providers, never one mixed accounting adapter.

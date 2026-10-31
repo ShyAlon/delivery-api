@@ -1377,7 +1377,7 @@ def test_repeated_start_never_audits_a_release(credit_account):
 
 
 def test_production_factory_gateway_honors_owner_rolling_expense_limit(credit_account):
-    """The wired production factory shape (launch guard off, prepaid on) honors
+    """The wired production factory shape (launch guard on, prepaid on) honors
     the existing owner rolling-24h expense setting at reserve: a reservation
     that would pass the setting is refused and creates no row. No network."""
     import base64,json,psycopg
@@ -1390,7 +1390,7 @@ def test_production_factory_gateway_honors_owner_rolling_expense_limit(credit_ac
     try:
         with tenant_context(A):
             gw=factory(None,job)
-            assert gw.launch_guard is False and gw.require_prepaid is True
+            assert gw.launch_guard is True and gw.require_prepaid is True
             req=base64.b64encode(json.dumps({'model':'deepseek-test-model','max_tokens':8000}).encode()).decode()
             kw=dict(stage='preflight',provider='deepseek',model='deepseek-test-model',serialized_request=req,max_output_tokens=8000)
             first=uuid.uuid4().hex
