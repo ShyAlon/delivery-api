@@ -231,7 +231,7 @@ def _case_the_endpoint_serves_the_zip_to_an_admin_and_records_it(monkeypatch):
 # ---- 5. every table keeps its column headers ----
 
 NODE_TABLE = r"""
-class El{constructor(t){this.tag=t;this.kids=[];this.title='';this.className='';this.style={}}
+class El{constructor(t){this.tag=t;this.kids=[];this.title='';this.className='';this.style={};this.dataset={};this.classList={toggle(){}}}get children(){return this.kids}
  append(...k){for(const x of k)this.kids.push(typeof x==='string'?{text:x}:x)}
  replaceChildren(...k){this.kids=[];this.append(...k)}
  set textContent(v){this.kids=[{text:String(v)}];this._t=String(v)}
