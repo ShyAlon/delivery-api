@@ -90,7 +90,7 @@ class WorkerAdmissionGateway:
             raise AdmissionDenied('resolved quote does not match requested attempt')
         return self.store.reserve_provider_attempt(self.job_id,attempt_id,quote,digest,require_prepaid=self.require_prepaid)['attempt_id']
 
-    def reserve_serialized(self,*,attempt_id,stage,provider,model,serialized_request,max_output_tokens):
+    def _serialized_quote(self,*,attempt_id,stage,provider,model,serialized_request,max_output_tokens):
         import base64,hashlib
         self._phase_model(provider,model)
         if self.resolve_serialized is None:raise AdmissionDenied('serialized request resolver unavailable')
@@ -105,13 +105,43 @@ class WorkerAdmissionGateway:
             quote=existing['quote'];digest=hashlib.sha256(raw).hexdigest()
             if existing['job_id']!=self.job_id or quote['provider']!=provider or quote['model']!=model or quote['output_max']!=max_output_tokens:
                 raise AdmissionDenied('existing attempt identity differs from request')
-            return self.store.reserve_provider_attempt(self.job_id,attempt_id,quote,digest,require_prepaid=self.require_prepaid)['attempt_id']
+            return quote,digest
         self._verify_snapshot()
         quote,digest=self.resolve_serialized(stage=stage,provider=provider,model=model,
             serialized_request=raw,max_output_tokens=max_output_tokens)
         if quote['provider']!=provider or quote['model']!=model or quote['output_max']!=max_output_tokens or digest!=hashlib.sha256(raw).hexdigest():
             raise AdmissionDenied('serialized quote/digest mismatch')
-        return self.store.reserve_provider_attempt(self.job_id,attempt_id,quote,digest,require_prepaid=self.require_prepaid)['attempt_id']
+        return quote,digest
+
+    def reserve_serialized(self,**request):
+        quote,digest=self._serialized_quote(**request)
+        return self.store.reserve_provider_attempt(self.job_id,request['attempt_id'],quote,digest,require_prepaid=self.require_prepaid)['attempt_id']
+
+    def admit_serialized(self,*,bind_attempt,authorize,**request):
+        """Parent-only atomic reservation/binding/start; never exposed over IPC.
+
+        Vendor IO finishes before opening the transaction. A refusal result from
+        the confirmed guard commits its episode, but never authorizes HTTP send.
+        """
+        if self.store._connection.get() is not None:raise AdmissionDenied('parent dispatch requires its own commit boundary')
+        quote,digest=self._serialized_quote(**request)
+        balance=self._prepare_start(quote)
+        attempt=request['attempt_id']
+        reason=self.store.admit_provider_attempt(self.job_id,attempt,quote,digest,balance=balance,
+            bind_attempt=bind_attempt,authorize=authorize,require_prepaid=self.require_prepaid,launch_guard=self.launch_guard)
+        if reason!='allowed':raise AdmissionDenied('service temporarily unavailable: '+reason)
+        self._pause_meter(attempt)
+        return attempt
+
+    def _prepare_start(self,quote):
+        self._verify_snapshot()
+        if 'estimate_policy' not in quote:return None
+        if self.provider_balance is None:raise AdmissionDenied('pre-call provider balance reader required')
+        from .compute_meter import excluded_wait
+        try:
+            with excluded_wait():return self.provider_balance()
+        except AdmissionDenied:raise
+        except Exception as exc:raise AdmissionDenied('provider balance read failed: '+str(exc)[:300]) from exc
 
     def settle_raw(self,attempt,raw_usage):
         self._attempt(attempt)
@@ -148,17 +178,8 @@ class WorkerAdmissionGateway:
     def start(self,attempt):
         row=self._attempt(attempt)
         try:
-            # Slow vendor-source verification runs first so the 30s balance freshness window
-            # covers only the balance read to the start transition.
-            self._verify_snapshot()
-            if 'estimate_policy' in row.get('quote',{}):
-                if self.provider_balance is None:raise AdmissionDenied('pre-call provider balance reader required')
-                from .compute_meter import excluded_wait
-                try:
-                    with excluded_wait():balance=self.provider_balance()
-                except AdmissionDenied:raise
-                except Exception as exc:raise AdmissionDenied('provider balance read failed: '+str(exc)[:300]) from exc
-                self.store.record_provider_balance_check(attempt,balance)
+            balance=self._prepare_start(row.get('quote',{}))
+            if 'estimate_policy' in row.get('quote',{}):self.store.record_provider_balance_check(attempt,balance)
             if self.launch_guard:
                 result=self.store.start_launch_provider_attempt(attempt)
                 if not result['started']:raise AdmissionDenied('service temporarily unavailable: '+result['reason'])
@@ -187,6 +208,9 @@ class WorkerAdmissionGateway:
                 except Exception:
                     logging.getLogger(__name__).warning('release-failed audit record could not be written',exc_info=True)
             raise denied
+        self._pause_meter(attempt)
+
+    def _pause_meter(self,attempt):
         from .compute_meter import current
         meter=self.compute_meter or current()
         if meter:

@@ -1488,3 +1488,38 @@ def test_shared_accepted_completion_survives_hide_and_replays_without_debit(ledg
         complete();replay=s.provider_attempt(aid)
         assert replay['expense_actual']==first['expense_actual'] and replay['retail_actual']==first['retail_actual']
         assert not gateway._meter_attempts and meter.depth==0
+
+
+def test_atomic_admission_denial_commits_tripwire_episode_without_dispatch(expense_guard):
+    import base64,hashlib,psycopg
+    from delivery_api.child_broker_journal import ChildBrokerJournal
+    from delivery_api.child_execution_contract import decode_operation
+    from test_child_execution_contract import operation,frame
+    s,tid,job=expense_guard
+    with psycopg.connect(DSN) as conn:conn.execute('UPDATE expense_guard_policy SET session_units=1')
+    with tenant_context(A):
+        first=uuid.uuid4().hex;s.reserve_provider_attempt(job,first,LAUNCH_Q,'paid');s.start_launch_provider_attempt(first)
+        s.transition_provider_attempt(first,'settle',LAUNCH_USAGE)
+        data=operation();data['binding'].update(owner_id=A.owner_id,auth_session_id=A.session_id,task_id=tid,job_id=job,session_id=s.worker_job(job)['session_id'])
+        op=decode_operation(frame(data));journal=ChildBrokerJournal(s,op);key=(op.operation_id,'denied','intent')
+        raw=b'{"model":"fake","max_tokens":10}';journal.begin(key,hashlib.sha256(raw).hexdigest(),'deepseek','fake')
+        gateway=WorkerAdmissionGateway(s,job,launch_guard=True,resolve_serialized=lambda **kw:(LAUNCH_Q,hashlib.sha256(raw).hexdigest()))
+        aid=uuid.uuid4().hex
+        with pytest.raises(AdmissionDenied,match='session_expense_limit'):
+            gateway.admit_serialized(attempt_id=aid,stage='needs',provider='deepseek',model='fake',serialized_request=base64.b64encode(raw).decode(),max_output_tokens=10,
+                bind_attempt=lambda a:journal.bind(key,a),authorize=lambda:None)
+        assert s.provider_attempt(aid)['state']=='cancelled' and journal.load(key)['attempt_id']==aid
+        with s._postgres.transaction() as conn:
+            assert conn.execute("SELECT count(*) AS n FROM expense_alert_outbox WHERE payload->>'scope'='session'").fetchone()['n']==1
+    with psycopg.connect(DSN) as conn:conn.execute('DELETE FROM staged_provider_responses WHERE session_id=%s',(op.binding.session_id,))
+
+
+def test_atomic_dispatch_refuses_uncommitted_outer_store_operation(ledger):
+    s,tid,job=ledger;seen=[];g=WorkerAdmissionGateway(s,job,resolve_serialized=lambda **kw:seen.append(kw))
+    with tenant_context(A),s._postgres.transaction() as conn:
+        token=s._connection.set(conn)
+        try:
+            with pytest.raises(AdmissionDenied,match='own commit boundary'):
+                g.admit_serialized(bind_attempt=lambda a:None,authorize=lambda:None)
+        finally:s._connection.reset(token)
+    assert not seen

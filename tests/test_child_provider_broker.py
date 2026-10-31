@@ -163,7 +163,13 @@ def test_broker_actual_ledger_settles_once_and_reuses_durable_bytes(ledger):
     gateway=WorkerAdmissionGateway(store,job,require_prepaid=False,
         resolve_serialized=lambda **kw:(quote,hashlib.sha256(kw['serialized_request']).hexdigest()),
         measure_raw_usage=lambda raw:{'input_tokens':raw['prompt_tokens'],'output_tokens':raw['completion_tokens']})
-    client=httpx.Client(transport=httpx.MockTransport(lambda request:(calls.append(request) or httpx.Response(200,content=BODY))),trust_env=False)
+    def provider(request):
+        # Provider sees only committed dispatch and its journal binding.
+        with psycopg.connect(DSN) as conn:
+            row=conn.execute("SELECT p.state FROM provider_attempts p JOIN staged_provider_responses r ON r.attempt_id=p.attempt_id WHERE p.job_id=%s",(job,)).fetchone()
+            assert row==('dispatched',)
+        calls.append(request);return httpx.Response(200,content=BODY)
+    client=httpx.Client(transport=httpx.MockTransport(provider),trust_env=False)
     with tenant_context(A):
         journal=ChildBrokerJournal(store,op)
         broker=ChildProviderBroker(op,gateway=gateway,journal=journal,client=client,endpoint='https://fixed.invalid/chat/completions',headers={},authorize=lambda *a:None)
@@ -250,3 +256,46 @@ def test_shared_exact_contract_rejects_ambiguity_before_journal_or_reserve(raw):
     broker,g,j,calls=setup();value=request();value['serialized_request']=base64.b64encode(raw).decode()
     with pytest.raises(ValueError):broker.dispatch(value)
     assert j.row is None and not g.calls and not calls
+
+
+@pytest.mark.parametrize('fault',['binding','authority','start'])
+def test_atomic_parent_admission_rolls_back_attempt_and_binding_before_http(ledger,monkeypatch,fault):
+    import hashlib
+    from delivery_api.producer_admission import WorkerAdmissionGateway
+    from delivery_api.child_broker_journal import ChildBrokerJournal
+    from delivery_api.tenancy import tenant_context
+    from test_postgres_store import A,DSN
+    from test_attempt_ledger import Q
+    import psycopg
+    store,tid,job=ledger;data=operation()
+    data['binding'].update(owner_id=A.owner_id,auth_session_id=A.session_id,task_id=tid,job_id=job)
+    with tenant_context(A):data['binding']['session_id']=store.worker_job(job)['session_id']
+    op=decode_operation(frame(data));quote=Q|{'provider':'deepseek','model':'deepseek-flash'}
+    gateway=WorkerAdmissionGateway(store,job,require_prepaid=False,
+        resolve_serialized=lambda **kw:(quote,hashlib.sha256(kw['serialized_request']).hexdigest()))
+    journal=ChildBrokerJournal(store,op);calls=[];count=[0]
+    def fail():raise RuntimeError('injected '+fault)
+    def authorize(*args):
+        count[0]+=1
+        if fault=='authority' and count[0]==2:fail()
+    if fault=='binding':
+        original=journal.bind
+        def bind(*args):original(*args);fail()
+        monkeypatch.setattr(journal,'bind',bind)
+    if fault=='start':
+        original=store.transition_provider_attempt
+        def transition(a,action,*args,**kwargs):
+            result=original(a,action,*args,**kwargs)
+            if action=='start':fail()
+            return result
+        monkeypatch.setattr(store,'transition_provider_attempt',transition)
+    with httpx.Client(transport=httpx.MockTransport(lambda req:calls.append(req)),trust_env=False) as client,tenant_context(A):
+        broker=ChildProviderBroker(op,gateway=gateway,journal=journal,client=client,endpoint='https://fixed.invalid/chat/completions',headers={},authorize=authorize)
+        with pytest.raises(BrokerPaused):broker.dispatch(request())
+        row=journal.load((op.operation_id,'call-1','intent'))
+        assert row['attempt_id'] is None and not calls
+        with store._postgres.transaction() as conn:
+            assert conn.execute('SELECT count(*) AS n FROM provider_attempts WHERE job_id=%s',(job,)).fetchone()['n']==0
+        with pytest.raises(BrokerPaused,match='incomplete'):broker.dispatch(request())
+        assert not calls
+    with psycopg.connect(DSN) as conn:conn.execute('DELETE FROM staged_provider_responses WHERE session_id=%s',(op.binding.session_id,))

@@ -65,12 +65,15 @@ class ChildProviderBroker:
             self.journal.begin(key,digest,call.provider,call.model)
             attempt=None
             try:
-                attempt=self.gateway.reserve_serialized(attempt_id=uuid.uuid4().hex,stage=call.stage,
-                    provider=call.provider,model=call.model,serialized_request=call.serialized_request,max_output_tokens=output_cap)
-                if not attempt:raise BrokerPaused('provider reserve returned no attempt')
-                self.journal.bind(key,attempt)
-                self.authorize(self.operation,call)  # stop/revocation before start
-                self.gateway.start(attempt)
+                args=dict(attempt_id=uuid.uuid4().hex,stage=call.stage,provider=call.provider,model=call.model,
+                    serialized_request=call.serialized_request,max_output_tokens=output_cap)
+                if hasattr(self.gateway,'admit_serialized'):
+                    attempt=self.gateway.admit_serialized(**args,bind_attempt=lambda aid:self.journal.bind(key,aid),
+                        authorize=lambda:self.authorize(self.operation,call))
+                else:  # Explicit fake/legacy gateway seam, never production money wiring.
+                    attempt=self.gateway.reserve_serialized(**args)
+                    if not attempt:raise BrokerPaused('provider reserve returned no attempt')
+                    self.journal.bind(key,attempt);self.authorize(self.operation,call);self.gateway.start(attempt)
                 response=self.client.build_request('POST',self.endpoint,content=raw,headers=self.headers)
                 received=self.client.send(response,stream=True,follow_redirects=False)
                 try:
