@@ -33,7 +33,12 @@ def test_other_users_get_credits_as_their_only_ceiling_and_only_the_operator_has
 
 
 def test_the_connection_string_is_typed_hidden_and_never_an_argument():
-    assert "read -rs CONN" in SCRIPT and '"$1"' not in SCRIPT and "$@" not in SCRIPT
+    assert 'ops_settings REQUI_ADMIN_DATABASE_URL' in SCRIPT
+    assert 'CONN=$REQUI_ADMIN_DATABASE_URL' in SCRIPT
+    assert '\"$1\"' not in SCRIPT and '$@' not in SCRIPT
+    # Loader is covered by real PTY no-echo tests, not a retired shell spelling.
+    loader=(Path(__file__).resolve().parents[1]/'scripts/ops/settings.py').read_text()
+    assert 'termios.ECHO' in loader and 'hidden=True' in loader
 
 
 def test_it_warns_loudly_when_the_operator_ends_with_no_credits():

@@ -17,8 +17,10 @@ FAKE_SSH = r'''#!/usr/bin/env bash
 c="${@: -1}"
 echo "ssh $c" >> "$FAKE_LOG"
 case "$c" in
-  *full-smoke.py*) [ -z "${FAKE_SMOKE_OUT:-}" ] || printf '%s\n' "$FAKE_SMOKE_OUT"; exit "${FAKE_SMOKE_RC:-0}";;
+  *smoke-local-image.sh*) [ -z "${FAKE_SMOKE_OUT:-}" ] || printf '%s\n' "$FAKE_SMOKE_OUT"; exit "${FAKE_SMOKE_RC:-0}";;
   *"docker rmi"*) exit "${FAKE_RMI_RC:-0}";;
+  *"mktemp -d /tmp/requi-image-smoke."*) echo /tmp/requi-image-smoke.FIXTURE;;
+  *"tar -x -C '/tmp/requi-image-smoke."*) cat > /dev/null;;
   *"tar -x"*) mkdir -p "$FAKE_UP"; tar -x -p -C "$FAKE_UP";;
   *MODE=list*) cat > /dev/null; echo "stale="; echo "caddy=no-file";;
   *docker=ok*) echo docker=ok; echo "has control-plane.env"; echo "image=${FAKE_IMAGE_STATE:-present}"; echo running=none;;
@@ -64,6 +66,14 @@ def _setup(tmp_path, real_build=True):
         "scripts/ops/lib.sh": ops / "lib.sh", "scripts/ops/deploy-full.sh": ops / "deploy-full.sh",
         "scripts/docker/build-full-image.sh": docker / "build-full-image.sh" if real_build else 'echo BUILD-RAN >> "$FAKE_LOG"\n',
     }
+    # The real remote smoke now stages the owned-PG harness before invoking
+    # smoke-local-image. Keep that source boundary real in the fake checkout.
+    for name in ('scripts/docker/smoke-local-image.sh','scripts/docker/Dockerfile.pg-smoke',
+                 'scripts/docker/owned-pg-smoke.py','scripts/docker/system-pg-smoke.py',
+                 'tests/pg_harness.py','tests/pg_guardian.py'):
+        api_files[name]=ROOT/name
+    for source in (ROOT/'supabase/migrations').glob('*.sql'):
+        api_files['supabase/migrations/'+source.name]=source
     api = _repo(tmp_path, "delivery-api", api_files)
     for n in ("interview-engine", "spec-generator", "verification-loop"):
         _repo(tmp_path, n, {"README": n, "pkg/mod.py": "x = 1\n"})
@@ -102,7 +112,7 @@ def test_the_final_tag_is_published_only_after_the_smoke_passes(tmp_path):
     assert _build(api, env).returncode == 0
     lines = log.read_text().splitlines()
     build = [i for i, l in enumerate(lines) if "docker build" in l][0]
-    smoke = [i for i, l in enumerate(lines) if "full-smoke.py" in l][0]
+    smoke = [i for i, l in enumerate(lines) if "smoke-local-image.sh" in l][0]
     tag = [i for i, l in enumerate(lines) if "docker tag requi-full-candidate:" in l][0]
     assert build < smoke < tag
     assert " -t requi-full-candidate:" in lines[build] and " -t requi-full:" not in lines[build]
@@ -142,7 +152,7 @@ def test_deploy_full_smoke_checks_an_existing_image_and_does_not_rebuild_when_it
     api, env, log, _ = _setup(tmp_path, real_build=False)
     out = _deploy(api, env)
     text = log.read_text()
-    assert "full-smoke.py" in text and "BUILD-RAN" not in text and "DECLINED" in out.stdout, out.stdout + out.stderr
+    assert "smoke-local-image.sh" in text and "BUILD-RAN" not in text and "DECLINED" in out.stdout, out.stdout + out.stderr
 
 
 def test_deploy_full_removes_a_failed_existing_image_by_exact_tag_and_builds_again(tmp_path):
@@ -157,7 +167,7 @@ def test_deploy_full_stops_before_the_service_when_a_failed_image_cannot_be_remo
     api, env, log, _ = _setup(tmp_path, real_build=False)
     out = _deploy(api, env, FAKE_SMOKE_RC="1", FAKE_RMI_RC="1")
     assert "ABORTED [IMAGE-SMOKE]" in out.stdout and "Fix:" in out.stdout and "BUILD-RAN" not in log.read_text()
-    assert "PLAN" not in out.stdout and "docker=ok" not in log.read_text().split("full-smoke.py")[-1]
+    assert "PLAN" not in out.stdout and "docker=ok" not in log.read_text().split("smoke-local-image.sh")[-1]
 
 
 def test_the_build_passes_the_four_named_commits_to_the_image(tmp_path):
