@@ -3468,6 +3468,16 @@ def cloud_execution_admitted()->bool:
     return cloud_execution.admitted()
 
 
+@app.get('/api/operations/active-jobs')
+def owner_active_jobs(limit:int=50,before_updated_at:float|None=None,before_job_id:str|None=None,a:auth.Actor=Depends(auth.require_actor)):
+    _require_account_debug()
+    if (before_updated_at is None)!=(before_job_id is None):raise HTTPException(422,'complete jobs cursor required')
+    before=None if before_job_id is None else {'updated_at':before_updated_at,'job_id':before_job_id}
+    try:result=store.owner_active_jobs(limit=limit,before=before)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
+
 @app.get('/api/admin/operations/orphaned-tasks')
 def admin_orphaned_tasks(a:auth.Actor=Depends(auth.require_admin)):
     from .recovery import orphan_review_items
