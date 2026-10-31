@@ -8,10 +8,13 @@ export const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&
 export const time = timestamp => timestamp ? new Date(timestamp*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
 export const fullTime = timestamp => timestamp ? new Intl.DateTimeFormat([], {year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'short'}).format(new Date(timestamp*1000)) : '—';
 
+let clientLogTransport=entry=>fetch('/api/client-log',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(entry),keepalive:true}).catch(()=>{});
+// Private listeners may keep evidence locally without expanding their proxy API.
+export function setClientLogTransport(transport){clientLogTransport=transport}
 export function clientLog(kind,message,detail={}){
   const entry={ts:new Date().toISOString(),kind,message,path:location.pathname,...detail};
   (kind.includes('error')||kind.includes('failure')?console.error:console.info)(`[Requi.re ${entry.ts}] ${kind}: ${message}`,detail);
-  fetch('/api/client-log',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind,message,path:location.pathname,detail}),keepalive:true}).catch(()=>{});
+  if(clientLogTransport)clientLogTransport({kind,message,path:location.pathname,detail});
 }
 
 const browserCapture={started_at:new Date().toISOString(),records:[]};
@@ -93,6 +96,13 @@ const connection=createConnectionState({
   hide(){if(reconnectStrip){reconnectStrip.remove();reconnectStrip=null}}
 });
 
+export function recordResponse(url,method,response,began){
+  const ref=response.headers.get('x-request-id'),serverMs=Number((/dur=([0-9.]+)/.exec(response.headers.get('server-timing')||'')||[])[1]),totalMs=Math.round(performance.now()-began);
+  const entry={ts:new Date().toISOString(),method,url,status:response.status,total_ms:totalMs,server_ms:Number.isFinite(serverMs)?Math.round(serverMs):null,ref,db:((/db;dur=([0-9.]+);desc="([^"]*)"/.exec(response.headers.get('server-timing')||'')||[]).slice(1,3).join(' ms, '))||null};
+  requestLog.push(entry);if(requestLog.length>200)requestLog.shift();
+  capture('network',`${method} ${url} -> ${response.status} ${totalMs} ms (server ${entry.server_ms===null?'unknown':entry.server_ms+' ms'}) ref ${ref||'none'}`);
+  return entry;
+}
 export async function api(url,opts={}){
   if(url!=='/auth/refresh' && url!=='/api/auth' && !url.startsWith('/auth/sign') && !url.startsWith('/auth/email-availability'))await renewSessionIfDue();
   const began=performance.now();
@@ -111,10 +121,7 @@ export async function api(url,opts={}){
     const e=new Error(`Error: The server could not be reached.\nLikely cause: ${error.message||'The connection failed.'}\nNext: your text is preserved. Check the server is running, then retry.`);e.background=background;throw e;
   }finally{if(timer)clearTimeout(timer);endWait()}
   connection.ok();
-  const ref=response.headers.get('x-request-id'),serverMs=Number((/dur=([0-9.]+)/.exec(response.headers.get('server-timing')||'')||[])[1]),totalMs=Math.round(performance.now()-began);
-  const entry={ts:new Date().toISOString(),method,url,status:response.status,total_ms:totalMs,server_ms:Number.isFinite(serverMs)?Math.round(serverMs):null,ref,db:((/db;dur=([0-9.]+);desc="([^"]*)"/.exec(response.headers.get('server-timing')||'')||[]).slice(1,3).join(' ms, '))||null};
-  requestLog.push(entry);if(requestLog.length>200)requestLog.shift();
-  capture('network',`${method} ${url} -> ${response.status} ${totalMs} ms (server ${entry.server_ms===null?'unknown':entry.server_ms+' ms'}) ref ${ref||'none'}`);
+  const entry=recordResponse(url,method,response,began),ref=entry.ref;
   if(opts.onResponse){try{opts.onResponse({ref:entry.ref,status:entry.status,total_ms:entry.total_ms})}catch{}}  // request-owned metadata for the caller; never blocks the response path
   if(!response.ok){
     const raw=await response.text();let detail;

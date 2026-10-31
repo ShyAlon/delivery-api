@@ -29,3 +29,19 @@ A job stored as running is not proof of a live process. A Stop request is not pr
 ## Worker Jobs follow-up
 
 The table is now named Worker Jobs and has View plus binary-confirm Stop. Stop means durable Stop plus removal from the normal view; retained running/unknown money records are not reclassified. View reuses existing metadata/events/usage panels. Row rendering and request/error handling are shared with the existing tables. The new reusable confirm and busy/write helpers are infrastructure for further maintenance actions. Older sections still have separate paging/load implementations; consolidating all of them is a later explicit change, not an unannounced rewrite.
+
+## Shared UI and local preview, 2026-10-31
+
+Back office now shares the main app's fonts/icon/theme/chrome, table-row rendering, busy action lifecycle and bounded/redacted client evidence. Worker Jobs, Workspace, Accounts, Spend, Payments and Debug are hash-addressable keyboard tabs. Worker Jobs has one View/Stop/Delete menu for kebab, right-click and keyboard context-menu access. Stop keeps the task and saved work visible; Delete stops and hides it while retaining accounting and unverified outcomes. Suspend/Resume are not offered.
+
+The private listener still has only its named read proxies and the existing confirmed worker-job Stop/Delete route. Browser evidence stays local to the tab; Debug is not a claim to include all server logs. No customer app boot, new data authority, schema change or guard removal is added. Existing per-table paging remains server-owned.
+
+`preview-exec.sh` now launches its own Back office child after the preview checks pass, health-checks it, prints both URLs and stops it during cleanup. Default port8020; override `PREVIEW_BACKOFFICE_PORT` for a deliberate alternate. An already-running standalone Back office is not reused or killed. Same 127.0.0.1 host and signed-in browser are required. The child is stopped even when the preview container is retained after a failed smoke.
+
+### Own-test transition evidence
+
+The owner reported running `own-test-profile.sh` on main46df9ad at07:34 IST. The reported committed transition replaced the old2000000000000 reservation ceiling with NULL and selected the separate own-test $2 confirmed DeepSeek expense rolling24h profile, scale1000000000000 units/USD, `already_applied:false`. No execution started. This is owner-reported evidence, not an independently repeated live DB check or approval for another mutation. Paid children and the platform/session $3 guard remain parked; guard cleanup waits for the ten-guard decision sheet.
+
+### Hermetic timing check
+
+Five fresh Chromium contexts per version,1280x1000, localhost fake upstream, same current listener. Baseline inline shell at46df9ad: median Worker Jobs visible105.2ms (range95.9-140.0). Shared UI:174.4ms (168.3-225.0). This adds about69ms locally and loads shared fonts/modules rather than one inline document. It is not a live deployment performance measurement. No multi-second stall or telemetry gate was hidden or relaxed.

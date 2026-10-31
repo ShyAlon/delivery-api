@@ -115,8 +115,10 @@ def test_backoffice_jobs_pixels_filter_pagination_refresh_and_revocation(tmp_pat
             page.locator('#active-jobs tbody tr').wait_for()
             assert 'Meditator 7.5' in page.locator('#active-jobs').inner_text()
             assert 'ee89bcb759964a795ed7cf827871eb86' in page.locator('#active-jobs').inner_text()
-            assert page.locator('#active-jobs-panel button').count()==5 # refresh/next plus View/Stop/Delete
-            page.locator('#active-jobs button').filter(has_text='Stop').click()
+            assert page.locator('#active-jobs-panel button').count()==3 # refresh/next plus shared row menu
+            page.get_by_role('button',name='Job actions',exact=True).click()
+            assert page.get_by_role('menuitem').all_text_contents()==['View','Stop','Delete']
+            page.get_by_role('menuitem',name='Stop',exact=True).click()
             page.get_by_role('dialog').wait_for()
             assert 'accepted provider call' in page.get_by_role('dialog').inner_text()
             page.screenshot(path='/downloads/backoffice-worker-jobs-confirm.png',full_page=False)

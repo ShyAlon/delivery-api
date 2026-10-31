@@ -479,15 +479,23 @@ def test_a_full_run_reaches_ready_with_the_steps_in_order(tmp_path):
     regressions this week shipped through seams their tests mocked."""
     server = _ollama_server()
     bin_dir = _stubbin(tmp_path)
+    # Docker health is stubbed, but the new private listener is a real local child.
+    import shutil,socket
+    with socket.socket() as sock:sock.bind(('127.0.0.1',0));backoffice_port=sock.getsockname()[1]
+    real_curl=shutil.which('curl')
+    (bin_dir/'curl').write_text('#!/usr/bin/env bash\ncase "$*" in *127.0.0.1:'+str(backoffice_port)+'/*) exec '+real_curl+' "$@";; *) exit 0;; esac\n')
+    (bin_dir/'curl').chmod(0o755)
     (bin_dir / 'docker').write_text(FULL_DOCKER)
     (bin_dir / 'docker').chmod(0o755)
     tty = tmp_path / 'tty'
     tty.write_text('yes\n')
     p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama',
-                        'OLLAMA_HOST': 'http://127.0.0.1:%d' % server.server_address[1]},
+                        'OLLAMA_HOST': 'http://127.0.0.1:%d' % server.server_address[1],'PREVIEW_BACKOFFICE_PORT':str(backoffice_port)},
              settings=_settings(tmp_path))
     assert p.returncode == 0, p.stdout[-1500:]
     assert 'PREVIEW-EXEC READY' in p.stdout, p.stdout[-1500:]
+    assert 'BACK OFFICE READY: http://127.0.0.1:'+str(backoffice_port) in p.stdout
+    with socket.socket() as sock:sock.bind(('127.0.0.1',backoffice_port))
     markers = ['== [%d/' % k for k in range(1, 9)]
     positions = [p.stdout.index(m) for m in markers]
     assert positions == sorted(positions), 'the 8 steps must run in the printed order'
