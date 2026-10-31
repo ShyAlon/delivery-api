@@ -8,7 +8,7 @@ m=importlib.util.module_from_spec(SPEC)
 def load():SPEC.loader.exec_module(m);return m
 
 def test_all_rollout_files_have_catalog_probes():
-    s=load();assert len(s.MIGRATIONS)==10
+    s=load();assert len(s.MIGRATIONS)==11
     assert list(s.MIGRATIONS)==sorted(s.MIGRATIONS)
     assert '20261030030000_resource_metrics_maintenance.sql' in s.MIGRATIONS
 
@@ -89,7 +89,12 @@ def test_apply_seven_real_migrations_to_owned_disposable_db():
             for path in sorted((ROOT/'supabase/migrations').glob('*.sql')):
                 if path.name<'20261029203000_resource_metrics.sql' and path.name[:14].isdigit():conn.execute(path.read_text())
             rows=s.plan(conn,r,ROOT)
-            assert len([x for x in rows if x['status']=='pending'])==10
+            assert len([x for x in rows if x['status']=='pending'])==11
+            # New file has DELETE only inside private projection functions, but
+            # does not inherit the owner's exact old retention-file grant.
+            with pytest.raises(ValueError,match='destructive'):s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 11 MIGRATIONS TO delivery_app')
+            conn.execute((ROOT/'supabase/migrations/20261031163000_admission_totals.sql').read_text())
+            rows=s.plan(conn,r,ROOT)
             assert s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 10 MIGRATIONS TO delivery_app')==0
             assert all(x['status']=='present' for x in r.inventory(conn))
             for role in r.ROLES:assert conn.execute("SELECT pg_has_role('delivery_app',%s,'SET')",(role,)).fetchone()[0]

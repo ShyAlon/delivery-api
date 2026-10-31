@@ -118,7 +118,9 @@ def test_release_limits_per_job_and_per_owner_per_day(ledger):
 def test_released_never_counts_as_held_or_spent_by_admission():
     src = Path(L.__file__).read_text()
     # admission holds are exactly reserved/dispatched/uncertain; spend is settled/reserved-held/failure_waived
-    assert "r['state'] in ('reserved','dispatched','uncertain')" in src
+    projection=(Path(L.__file__).parents[2]/'supabase/migrations/20261031163000_admission_totals.sql').read_text()
+    assert "h=(a.state IN ('reserved','dispatched','uncertain'))::int" in projection
+    assert "a.state='failure_waived'" in projection
     assert "'released'" not in src.split('def reserve(')[1].split('def transition(')[0]
 
 
