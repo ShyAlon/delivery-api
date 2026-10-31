@@ -33,7 +33,7 @@ def _owned_log_line(line: str, task_id: str, session_id: str) -> bool:
    matched=True
  return matched
 
-def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:dict,control:dict,events:list,log_path:Path,engine_log_path:Path=None)->bytes:
+def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:dict,control:dict,events:list,log_path:Path,engine_log_path:Path=None,*,document_reader=None)->bytes:
  files={};omissions=[];limit=2_000_000;total_limit=12_000_000
  def add(name,content,source):
   if isinstance(content,str):text=redact(content)
@@ -43,6 +43,19 @@ def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:d
    omissions.append({'source':source,'reason':'export size limit'});return
   files[name]=raw
  def read(path,name):
+  if document_reader is not None:
+   raw=document_reader(name)
+   if raw is None:omissions.append({'source':name,'reason':'not recorded in owned PG documents'});return
+   if len(raw)>limit:omissions.append({'source':name,'reason':'source over 2 MB limit'});return
+   text=raw.decode(errors='replace')
+   if path.suffix=='.jsonl':
+    rows=[]
+    for line in text.splitlines():
+     try:rows.append(json.loads(line))
+     except ValueError:rows.append({'unparsed':line})
+    add(name,rows,'owned PG document')
+   else:add(name,text,'owned PG document')
+   return
   if not path.is_file():omissions.append({'source':name,'reason':'not recorded'});return
   # Reject symlinks escaping the canonical run. No arbitrary traversal.
   if not path.resolve().is_relative_to(root.resolve()):omissions.append({'source':name,'reason':'outside run root'});return

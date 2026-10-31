@@ -18,6 +18,9 @@ class OperatorReadStore:
             if not allowed or allowed['allowed'] is not True:raise TenantAccessDenied('database operator registry denied')
             yield connection,authority
 
+    def authorize_debug(self,owner_store):
+        with self._read(owner_store,'debug.read') as (_,authority):return authority
+
     def metrics(self,owner_store,*,task_id=None,limit=100):
         from .postgres_metrics import read_operator
         return read_operator(self,owner_store,task_id=task_id,limit=limit)
