@@ -21,7 +21,7 @@ def producer_handoff(interview,spec,baseline):
     try:return json.loads(result.stdout)
     except ValueError as exc:raise PackageBlocked('Producer returned an invalid handoff') from exc
 
-def package(task,session,handoff,folder:Path):
+def package(task,session,handoff,folder:Path,*,source=None):
     if task['state']!='done' or any(p['state'] not in ('approved','done') for p in task['phases']):raise PackageBlocked('All phases must finish and be approved before final packaging')
     from vmodel_contracts.handoff import CodingHandoff
     try:handoff=CodingHandoff.model_validate(handoff).model_dump(mode='json')
@@ -44,13 +44,14 @@ def package(task,session,handoff,folder:Path):
         if hashlib.sha256(text.encode()).hexdigest()!=handoff['sha256'].get(name):raise PackageBlocked('Export checksum mismatch: '+name)
     if sum(len(x.encode()) for x in files.values())>20_000_000:raise PackageBlocked('Export exceeds total limit')
     manifest={'version':1,'task_id':task['task_id'],'session_id':session,'generation':task['generation'],'phase_revisions':{p['phase_key']:{'completed_at':p['completed_at'],'state':p['state']} for p in task['phases']},'sha256':handoff['sha256']}
+    if source is not None:manifest['source']=source
     identity=hashlib.sha256(json.dumps(manifest,sort_keys=True).encode()).hexdigest();manifest['package_id']=identity
     folder.mkdir(parents=True,exist_ok=True);destination=folder/(identity+'.zip')
     if not destination.exists():
         stream=io.BytesIO()
         with zipfile.ZipFile(stream,'w',zipfile.ZIP_DEFLATED) as archive:
-            for name,text in sorted(files.items()):archive.writestr(name,text)
-            archive.writestr('package.json',json.dumps(manifest,indent=2))
+            for name,text in sorted(files.items()):archive.writestr(zipfile.ZipInfo(name,date_time=(1980,1,1,0,0,0)),text)
+            archive.writestr(zipfile.ZipInfo('package.json',date_time=(1980,1,1,0,0,0)),json.dumps(manifest,indent=2))
         with zipfile.ZipFile(io.BytesIO(stream.getvalue())) as archive:
             for name,expected_hash in manifest['sha256'].items():
                 if hashlib.sha256(archive.read(name)).hexdigest()!=expected_hash:raise PackageBlocked('ZIP checksum verification failed')

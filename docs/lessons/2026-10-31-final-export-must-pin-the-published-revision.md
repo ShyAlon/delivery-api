@@ -1,0 +1,13 @@
+# Final export must pin the published revision
+
+Both cloud package endpoints returned 503. The local exporter could not safely be enabled as-is: it read a mutable session directory, retained ZIPs on one host and did not bind the result to an authoritative database revision or owner.
+
+A finished, approved task now locks its task row while reading one hash-verified manifest snapshot, producing the zero-model handoff and retaining immutable ZIP bytes in PG. The identity includes owner, task, execution session, generation, phase approvals and exact source revision ID/hash. Downloads verify stored byte checksum, binding, manifest identity, unique bounded ZIP members, file checksums and the reviewed file allowlist before serving any bytes. RLS requires the active owner and an undeleted task; app roles have SELECT/INSERT only. Delete hides the task and preserves package evidence instead of violating retention FKs.
+
+Review evidence was not part of the artifact manifest before this change. The document publisher now captures only four explicit handoff companions in the same fenced revision transaction: findings ledger, review history, docs state and interview semantic review. They do not become pipeline phase artifacts. Missing review evidence on an older final revision blocks export until that exact retained document set is republished. No empty ledger is fabricated, no model work is rerun and mutable workflow documents are never a fallback for export.
+
+The owner-run schema inventory and runtime required-table inventory include the new additive final_packages table migration. No migration or live write was executed by this work.
+
+Fail-first actual cloud endpoint test reproduced the 503. New tests use real cloud auth, restricted disposable PG and the real producer handoff, not a mocked ZIP: repeat/download checksums, new revision identity, historical immutable download, foreign owner and generation denial, tamper refusal, missing/open review, bad session, missing baseline, active job, unapproved task, source tamper, revision race, publication capture, app-role UPDATE/DELETE refusal and delete hiding. A real concurrent publisher waits on the task row lock and cannot mix inputs during export. Existing package/document/manifest/readiness assertions remain; only reviewed migration count/typed confirmation updated from 9 to 10.
+
+A broad combined run was interrupted at the command time limit after more than 160 passing cases, so it is not a full-suite claim. Focused results are recorded in the PR. Hosted CI, deployed topology, real customer data and full paid run remain unverified. No live DB changes, deploys or spend.

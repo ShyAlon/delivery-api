@@ -33,7 +33,7 @@ REQUIRED_TABLES = frozenset({
     'closed_revision_promotion_events', 'closed_revision_restart_intents', 'closed_revision_source_reviews',
     'credit_accounts', 'credit_adjustments', 'credit_charges', 'credit_ledger', 'decision_drafts',
     'decision_reviews', 'engine_session_journal', 'engine_sessions', 'events', 'expense_alert_outbox',
-    'expense_guard_episodes', 'expense_guard_policy', 'own_test_expense_profiles', 'gates', 'installed_execution_bindings', 'links',
+    'expense_guard_episodes', 'expense_guard_policy', 'own_test_expense_profiles', 'final_packages', 'gates', 'installed_execution_bindings', 'links',
     'operator_failure_diagnostics', 'operator_principals', 'operator_state_events', 'payment_credits',
     'payment_events', 'payment_purchases', 'phases', 'producer_results', 'progress_ingest', 'progress_seen',
     'provider_attempts', 'retail_compute_segments', 'retail_contributions', 'retail_scale_migrations',

@@ -63,6 +63,7 @@ MIGRATIONS={
  '20261030040000_engine_quality_config.sql':('table:engine_quality_config',),
  '20261030050000_operator_usage_default.sql':('function0:requi_operator_usage_default','trigger:operator_usage_default'),
  '20261030223000_own_test_expense_profile.sql':('table:own_test_expense_profiles','signature:requi_own_test_expense_guard(text,bigint)'),
+ '20261031044500_final_packages.sql':('table:final_packages',),
 }
 ROLES=('requi_metrics_writer','requi_engine_config_read','requi_operator_usage')
 

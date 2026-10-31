@@ -3400,7 +3400,13 @@ def create_final_package(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     from .final_package import producer_handoff,package,PackageBlocked
     task=store.task(task_id)
     if not task:raise HTTPException(404,'task not found')
-    if config.CLOUD_TENANTS:raise HTTPException(503,'Cloud package export pending customer-safe diagnostics contract')
+    if config.CLOUD_TENANTS:
+        try:
+            result=store.create_final_package(task_id)
+            return {**result,'url':f"/api/tasks/{task_id}/packages/{result['package_id']}?generation={result['generation']}",'status':'ready'}
+        except (ValueError,KeyError,OSError,__import__('subprocess').TimeoutExpired):
+            raise HTTPException(409,{'error':'Final package is blocked','next':'Finish approval and publish the complete reviewed final revision before exporting. No model work was started.'})
+
     try:
         session,root,interview,spec=orchestrator._paths(task_id)
         if task['state']!='done':raise PackageBlocked('Final task approval is required')
@@ -3424,7 +3430,13 @@ def download_final_package(task_id:str,package_id:str,generation:int,a:auth.Acto
     if not task:
         activity("task.export.refused","Package download refused: no such task",task_id=task_id,export="package",actor=a.label,reason="not_found")
         raise HTTPException(404,'task not found')
-    if config.CLOUD_TENANTS:raise HTTPException(503,'Cloud package export pending customer-safe diagnostics contract')
+    if config.CLOUD_TENANTS:
+        from fastapi.responses import Response
+        try:raw=store.final_package(task_id,generation,package_id)
+        except KeyError:raise HTTPException(404,'package not found')
+        except (ValueError,OSError):raise HTTPException(409,'Package verification failed; no download was served')
+        return Response(raw,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="coding-agent-{task_id}-g{generation}.zip"','Cache-Control':'private, no-store'})
+
     from vmodel_contracts.runtime import artifacts_root
     package_root=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),store.engine_session(task_id),store).parent if config.CLOUD_TENANTS else artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))
     path=package_root/'packages'/task_id/str(generation)/(package_id+'.zip')
