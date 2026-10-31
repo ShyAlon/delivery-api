@@ -79,3 +79,14 @@ def test_real_child_provider_and_compute_boundary_without_child_credentials():
     assert len(calls)==1 and accounting.settled
     assert [e['kind'] for e in accounting.transcript]==['start','wait.begin','wait.end','finish']
     assert accounting.events.milliseconds()>=0
+
+
+@pytest.mark.parametrize('raw',[b'{"a":1,"a":2}\n',b'{"a":NaN}\n',b'{}',b'x'*4097+b'\n'])
+def test_shared_channel_rejects_bad_frame_before_protocol_handler(raw):
+    from delivery_api.child_channel import json_channel
+    seen=[]
+    with json_channel(lambda value:seen.append(value) or b'ok',limit=4096,name='fixture',quiescence_error=RuntimeError('not reaped')) as fd:
+        fd.settimeout(2);fd.sendall(raw);fd.shutdown(socket.SHUT_WR)
+        try:assert fd.recv(20)==b''
+        except ConnectionResetError:pass
+    assert seen==[]

@@ -1,11 +1,7 @@
 """Private compute transcript receiver. Missing finish never becomes a charge."""
-from .diagnostic_evidence import thread_target
-import contextvars
 from contextlib import contextmanager
 import json
-import socket
-import threading
-from requi_child_contract import _unique_pairs,_invalid_constant
+from .child_channel import json_channel
 from .child_compute_events import ChildComputeEvents,ComputeEvidenceError
 
 
@@ -48,34 +44,10 @@ class ChildComputeAccounting:
 
 @contextmanager
 def child_compute_channel(accounting):
-    parent,child=socket.socketpair();scope=contextvars.copy_context();failures=[]
     accounting.begin()
-    def serve():
-        stream=parent.makefile('rwb')
-        try:
-            while True:
-                raw=stream.readline(4097)
-                if not raw:break
-                if not raw.endswith(b'\n') or len(raw)>4096:raise ComputeEvidenceError('bounded compute frame required')
-                event=json.loads(raw,object_pairs_hook=_unique_pairs,parse_constant=_invalid_constant)
-                accounting.accept(event)
-                if event['kind']=='finish':accounting.finish()
-                stream.write(str(event['sequence']).encode()+b'\n');stream.flush()
-        except BaseException as exc:
-            from .diagnostic_evidence import failure
-            failure('child.compute.failed')
-            failures.append(type(exc).__name__)
-        finally:
-            try:parent.shutdown(socket.SHUT_RDWR)
-            except OSError:pass
-            stream.close();parent.close()
-    thread=threading.Thread(target=thread_target(lambda:scope.run(serve)),daemon=True,name='child-compute-accounting');thread.start()
-    try:yield child
-    finally:
-        child.close()
-        try:parent.shutdown(socket.SHUT_RDWR)
-        except OSError:pass
-        thread.join(timeout=2)
-        if thread.is_alive():raise ComputeEvidenceError('child compute receiver not quiescent')
-        if not accounting.settled:accounting.abort()
-        parent.close()
+    def accept(event):
+        accounting.accept(event)
+        if event['kind']=='finish':accounting.finish()
+        return str(event['sequence']).encode()
+    with json_channel(accept,limit=4096,name='compute',quiescence_error=ComputeEvidenceError('child compute receiver not quiescent'),
+                      on_close=lambda:None if accounting.settled else accounting.abort()) as child:yield child
