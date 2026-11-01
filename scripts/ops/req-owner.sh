@@ -24,6 +24,7 @@ case "$command" in
  preflight) target=scripts/ops/paid-child-preflight.py;;
  force-stop) target=scripts/owner/force-stop-all.py;;
  stop-all) target=scripts/owner/stop-all.py;;
+ reset-preview) target=scripts/owner/reset-preview.py;;
  preview-free) target=scripts/ops/preview-exec.sh;;
  *) fail 'unknown owner command.';;
 esac
@@ -41,13 +42,14 @@ case "$command" in
    if [ -z "$email" ]; then printf 'Exact signed-up owner email: '; read -r email; fi
    [ -n "$email" ] || fail 'signed-up email required.'
    exec .venv/bin/python "$target" "$PWD" --env-file "$envfile" --email "$email";;
- force-stop)
-   args=("$PWD" --env-file "$envfile")
-   [ "$apply" = 0 ] || args+=(--apply)
-   exec .venv/bin/python "$target" "${args[@]}";;
+ force-stop) fail 'force-stop retired; use req reset-preview for a fresh dry owner reset review.';;
  stop-all)
    args=("$PWD" --env-file "$envfile")
    [ "$apply" = 1 ] || args+=(--dry-run)
+   exec .venv/bin/python "$target" "${args[@]}";;
+ reset-preview)
+   args=("$PWD" --env-file "$envfile" --owner 9ed32462-3dd0-4222-90b3-92cb38e00911 --accounting wipe)
+   [ "$apply" = 0 ] || args+=(--apply)
    exec .venv/bin/python "$target" "${args[@]}";;
  preview-free)
    if [ "$apply" = 0 ]; then

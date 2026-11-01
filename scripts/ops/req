@@ -7,7 +7,7 @@
 #   req clean      keep the newest pending script, archive the other pending ones to requi-done/stale
 set -uo pipefail
 case "${1:-}" in
-migrate|policy|preflight|force-stop|stop-all|preview-free)
+migrate|policy|preflight|force-stop|stop-all|preview-free|reset-preview)
   REPO="${REQUI_ROOT:-$HOME/development/require}/delivery-api"
   fail(){ echo "REQ ABORTED: $* No owner step was run." >&2; exit 1; }
   [ -d "$REPO/.git" ] || fail "delivery-api checkout missing at $REPO."
