@@ -112,12 +112,21 @@ patches only the store/config and test signing key, never auth or scope function
         monkeypatch.setattr(module.orchestrator, 'store', workspace.store)
         # The app's own middleware was built before pool-lifecycle tests closed
         # its captured store. Bind every auth/request borrower to this workspace.
+        has_tenant_middleware=False
         for middleware in module.app.user_middleware:
             if middleware.cls is TenantMiddleware:
+                has_tenant_middleware=True
                 monkeypatch.setitem(middleware.kwargs,'verifier',SupabaseIdentityVerifier(URL,key_provider=Keys()))
                 monkeypatch.setitem(middleware.kwargs,'session_check',workspace.store.auth_session_active)
                 monkeypatch.setitem(middleware.kwargs,'request_database',workspace.store._postgres)
         monkeypatch.setattr(module.app,'middleware_stack',None)
+        # Route fixture intentionally excludes background execution/lifecycle.
+        # Lifespan behavior has its own real-process integration contracts.
+        from contextlib import asynccontextmanager
+        @asynccontextmanager
+        async def no_background_startup(application):yield
+        monkeypatch.setattr(module.app.router,'lifespan_context',no_background_startup)
+        if has_tenant_middleware:return module.app
         return TenantMiddleware(module.app,
             verifier=SupabaseIdentityVerifier(URL, key_provider=Keys()),
             session_check=workspace.store.auth_session_active,
