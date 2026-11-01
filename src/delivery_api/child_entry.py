@@ -83,4 +83,9 @@ def main():
         channel.close()
 
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    try:main()
+    except BaseException as error:
+        from .child_failure import emit
+        emit(error)
+        raise SystemExit(1) from None

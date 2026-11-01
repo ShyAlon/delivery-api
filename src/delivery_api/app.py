@@ -3329,6 +3329,14 @@ def server_log(minutes:int=Query(30,ge=1,le=240),a:auth.Actor=Depends(auth.requi
 
     return result
 
+@app.get('/api/tasks/{task_id}/log-window')
+def task_log_window(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    if not a.admin:raise HTTPException(403,'operator log access required')
+    task=store.task(task_id)
+    if not task:raise HTTPException(404,'task not found')
+    from .process_logs import task_window
+    return task_window(_operator_reader(),store,task_id,task.get('engine_session_id'),float(task['created_at']))
+
 @app.get("/health")
 def health():
     if control_plane_only():return {"ok":True,"runtime_profile":"control_plane_only","engine_execution":False,"payments_enabled":False}

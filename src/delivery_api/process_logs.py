@@ -26,12 +26,22 @@ class FileLogs:
         # Preserve parseable diagnostics while scrubbing values, not JSON syntax.
         if stream=='diagnostics':
             body=json.loads(text)
-            if not isinstance(body,dict) or set(body)-{'at','level','logger','message','request_id','task_id','session_id','job_id','error_class','frames'}:
+            if not isinstance(body,dict) or set(body)-{'at','level','logger','message','request_id','task_id','session_id','job_id','error_class','frames','causes'}:
                 raise ValueError('fixed diagnostic projection required')
             # Scrub values, never the serialized JSON syntax. Truncating the
             # JSON envelope makes restart-readable diagnostic evidence invalid.
             projected={}
             for key,value in body.items():
+                if key=='causes':
+                    if not isinstance(value,list) or len(value)>4:raise ValueError('bounded causes required')
+                    from .child_failure import parse,PREFIX
+                    causes=[]
+                    for cause in value:
+                        validated=parse(PREFIX+json.dumps(cause).encode())
+                        if validated is None:raise ValueError('shape-only cause required')
+                        causes.append(validated)
+                    projected[key]=causes
+                    continue
                 if key!='frames':
                     projected[key]=scrub(str(value))
                     continue
@@ -68,7 +78,7 @@ class FileLogs:
                 os.replace(path,str(path)+'.1')
             with os.fdopen(os.open(path,os.O_WRONLY|os.O_APPEND|os.O_CREAT,0o600),'ab') as out:out.write(raw)
 
-    def records(self,*,stream=None,task_id=None,limit=2000):
+    def records(self,*,stream=None,task_id=None,session_id=None,limit=2000):
         rows=[];unreadable=[]
         for key in ([stream] if stream else sorted(STREAMS)):
             if key not in STREAMS:raise ValueError('fixed stream required')
@@ -81,7 +91,7 @@ class FileLogs:
                         for line in f:
                             try:row=json.loads(line)
                             except ValueError:continue
-                            if task_id is None or row.get('task_id')==task_id:rows.append(row)
+                            if task_id is None or row.get('task_id')==task_id or (session_id and row.get('session_id')==session_id):rows.append(row)
                 except FileNotFoundError:pass
                 except OSError as error:unreadable.append(type(error).__name__)
         rows.sort(key=lambda r:r['ts'])
@@ -202,3 +212,67 @@ def operator_view(reader,owner_store,minutes,*,task_id=None,download=False,now=N
 
 import atexit
 atexit.register(flush,5)
+
+
+def exception_blocks(rows):
+    """Deterministic shape extraction, never raw traceback values/source lines."""
+    import re
+    blocks=[];current=None
+    def finish():
+        nonlocal current
+        if current:blocks.append(current);current=None
+    for row in rows:
+        text=row['text']
+        if row['stream']=='diagnostics':
+            try:body=json.loads(text)
+            except ValueError:continue
+            if body.get('error_class'):
+                finish();blocks.append({'ts':row['ts'],'source':'structured',
+                    'error_class':body['error_class'],'frames':body.get('frames',[]),
+                    'causes':body.get('causes',[])})
+            continue
+        for line in text.splitlines():
+            if 'Traceback (most recent call last):' in line:
+                finish();current={'ts':row['ts'],'source':'retained traceback scan','frames':[]}
+            elif current is not None:
+                frame=re.search(r'File "([^"\n]+)", line ([0-9]+), in ([A-Za-z0-9_.<>-]+)',line)
+                if frame:
+                    current['frames'].append({'file':Path(frame[1]).name,'line':int(frame[2]),'function':frame[3]})
+                else:
+                    error=re.search(r'(?:^|\s)([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Exit|Interrupt))(?::|$)',line)
+                    if error:current['error_class']=error[1];finish()
+    finish()
+    return {'blocks':blocks,'found':len(blocks),'scan':'deterministic structured exceptions and retained traceback markers',
+        'values_excluded':True,'scope':'only retained exact task/session rows; no recovery of rotated/never-recorded blocks',
+        'truncation':'inherits log-window retention/export limits; trailing partial blocks may lack class or frames'}
+
+
+def task_window(reader,owner_store,task_id,session_id,since,*,until=None):
+    """All retained attributed rows, not a 400-line tail; explicit export limits."""
+    from .server_log_buffer import scrub
+    with reader._read(owner_store,'logs.read'):pass
+    until=time.time() if until is None else until
+    result=selected().records(task_id=task_id,session_id=session_id,limit=100000)
+    rows=[];size=0;cut=False
+    for row in result['records']:
+        if not since<=row['ts']<=until:continue
+        # Raw traceback source/value lines must not enter an export. Keep their
+        # safe shape in exception_blocks, just like structured parent failures.
+        row=dict(row)
+        if row['stream']=='engine':
+            lines=row['text'].splitlines()
+            safe=[]
+            for line in lines:
+                if (line[:1].isspace() or 'Traceback (most recent call last):' in line
+                    or __import__('re').search(r'File "[^"\n]+", line [0-9]+|[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Exit|Interrupt):',line)):
+                    continue
+                safe.append(scrub(line))
+            row['text']='\n'.join(safe)
+        raw=json.dumps(row,ensure_ascii=False)
+        if size+len(raw.encode())>12000000:cut=True;break
+        rows.append(row);size+=len(raw.encode())
+    return {'records':rows,'exception_blocks':exception_blocks([r for r in result['records'] if since<=r['ts']<=until]),'since':since,'until':until,'unreadable':result['unreadable'],
+        'truncated':result['truncated'] or cut,'limits':{'rows':100000,'bytes':12000000},
+        'scope':'retained exact task/session-attributed delivery, diagnostic and engine records',
+        'omissions':['Unattributed lines excluded for privacy.','Files are rotating ephemeral storage; earlier rotated/restarted or never-recorded output is unrecoverable.',
+            'Raw provider audit/payloads and host Ollama/OS logs excluded.'],'storage':'ephemeral retained files'}

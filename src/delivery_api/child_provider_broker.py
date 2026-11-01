@@ -63,7 +63,7 @@ class ChildProviderBroker:
                     raise BrokerPaused('incomplete provider evidence; reconcile, never redispatch')
                 return self._deliver(prior)
             self.journal.begin(key,digest,call.provider,call.model)
-            attempt=None
+            attempt=None;step='admission'
             try:
                 args=dict(attempt_id=uuid.uuid4().hex,stage=call.stage,provider=call.provider,model=call.model,
                     serialized_request=call.serialized_request,max_output_tokens=output_cap)
@@ -74,6 +74,7 @@ class ChildProviderBroker:
                     attempt=self.gateway.reserve_serialized(**args)
                     if not attempt:raise BrokerPaused('provider reserve returned no attempt')
                     self.journal.bind(key,attempt);self.authorize(self.operation,call);self.gateway.start(attempt)
+                step='transport'
                 response=self.client.build_request('POST',self.endpoint,content=raw,headers=self.headers)
                 received=self.client.send(response,stream=True,follow_redirects=False)
                 try:
@@ -83,13 +84,17 @@ class ChildProviderBroker:
                         if len(body)>MAX_RESPONSE:raise BrokerPaused('provider response exceeds bounded durable envelope')
                     if received.status_code!=200:raise BrokerPaused('provider non-success response requires reconciliation')
                     content_type=received.headers.get('content-type','application/json')
+                    step='usage_decode'
                     usage=self._usage(bytes(body),content_type)
                     # Do not persist Set-Cookie, authorization or arbitrary headers.
                     reply={'status':received.status_code,'content_type':content_type,
                         'body':base64.b64encode(body).decode(),'sha256':hashlib.sha256(body).hexdigest()}
                 finally:received.close()
+                step='journal_complete'
                 self.journal.complete(key,reply,usage)
             except BaseException as exc:
+                from .diagnostic_evidence import record
+                record('child.broker.step',step=step,attempt_bound=attempt is not None)
                 if attempt is not None:
                     from .operational_alerts import emit
                     emit('provider_failure','provider_outcome_incomplete')
