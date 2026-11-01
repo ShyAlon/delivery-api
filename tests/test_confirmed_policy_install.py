@@ -92,14 +92,14 @@ def test_blocker_details_count_all_jobs_but_print_only_twenty(quiet):
 
 def test_dry_plan_does_not_wait_on_policy_row_and_diagnostics_name_holder(quiet):
     import psycopg
-    from delivery_api.confirmed_policy_install import lock_diagnostics
+    from delivery_api.db_lock_diagnostics import inspect
     with psycopg.connect(DSN) as holder,psycopg.connect(DSN) as reader:
         holder.execute('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
         pid=holder.execute('SELECT pg_backend_pid()').fetchone()[0]
         reader.execute("SET LOCAL statement_timeout='200ms'")
         plan(reader)
-        assert any(r['pid']==pid and r['locktype']=='advisory' for r in lock_diagnostics(reader))
-        assert not any(r['pid']==reader.execute('SELECT pg_backend_pid()').fetchone()[0] for r in lock_diagnostics(reader))
+        assert any(r['pid']==pid and any(l['type']=='advisory' for l in r['locks']) for r in inspect(reader)['sessions'])
+        assert not any(r['pid']==reader.execute('SELECT pg_backend_pid()').fetchone()[0] for r in inspect(reader)['sessions'])
         holder.rollback();reader.rollback()
 
 

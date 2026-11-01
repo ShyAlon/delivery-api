@@ -7,7 +7,7 @@
 #   req clean      keep the newest pending script, archive the other pending ones to requi-done/stale
 set -uo pipefail
 case "${1:-}" in
-migrate|policy|preflight|force-stop|stop-all|preview-free|reset-preview)
+migrate|policy|preflight|force-stop|stop-all|preview-free|reset-preview|locks)
   REPO="${REQUI_ROOT:-$HOME/development/require}/delivery-api"
   fail(){ echo "REQ ABORTED: $* No owner step was run." >&2; exit 1; }
   [ -d "$REPO/.git" ] || fail "delivery-api checkout missing at $REPO."
@@ -19,7 +19,7 @@ migrate|policy|preflight|force-stop|stop-all|preview-free|reset-preview)
   [ -f "$REPO/scripts/ops/req-owner.sh" ] || fail "pull main containing the req owner commands."
   exec bash "$REPO/scripts/ops/req-owner.sh" "$@";;
 help|--help|-h)
-  echo 'req migrate | policy | preflight | force-stop | stop-all | preview-free | reset-preview'
+  echo 'req migrate | policy | preflight | force-stop | stop-all | preview-free | reset-preview | locks'
   echo 'Owner commands sync clean main and default to dry review. --apply is explicit; existing confirmations stay.'
   echo 'req preflight --email your-signed-up-email; req list/status/clean; downloaded scripts require req download NAME.';exit 0;;
 esac

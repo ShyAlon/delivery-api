@@ -140,6 +140,8 @@ def main():
     root=args.repo.expanduser().resolve()
     spec=importlib.util.spec_from_file_location('settings',root/'scripts/ops/settings.py');settings=importlib.util.module_from_spec(spec);spec.loader.exec_module(settings)
     values=settings.load(root,explicit=args.env_file)
+    global diagnostic_dsn
+    diagnostic_dsn=values['REQUI_ADMIN_DATABASE_URL']
     owner=str(UUID(args.owner or values.get('RESET_OWNER_ID') or input('Preview owner UUID: ').strip()))
     import psycopg
     with psycopg.connect(values['REQUI_ADMIN_DATABASE_URL'],connect_timeout=10,options='-c default_transaction_read_only=on') as conn:
@@ -155,10 +157,17 @@ def main():
           'apply_scope':'selected owner only; never auto-expand to all owners','accounting_wipe_intent':True,'changes':False},indent=2,default=str))
     if args.apply and not sys.stdin.isatty():raise ValueError('interactive terminal required; no piped reset confirmation')
     if args.apply:reset(values['REQUI_ADMIN_DATABASE_URL'],owner,args.accounting)
+    if args.apply:return
     print('DRY INVENTORY ONLY. No changes. Accounting is not zeroed/refunded; keep can prevent parent job/session deletion.')
 
 
 if __name__=='__main__':
+    import psycopg
     try:main()
+    except (psycopg.errors.LockNotAvailable,psycopg.errors.QueryCanceled):
+        print('RESET LOCK/TIMEOUT: transaction rolled back; no reset committed. Current sessions follow, not proof of the expired wait edge.')
+        from delivery_api.db_lock_diagnostics import report
+        report(diagnostic_dsn)
+        raise SystemExit('Stop preview producers and review the holder before retrying. No session was cancelled/terminated.') from None
     except (KeyError,ValueError) as exc:raise SystemExit('RESET REFUSED: '+str(exc)) from None
     except Exception as exc:raise SystemExit('RESET FAILED ('+type(exc).__name__+'); transaction rolled back unless commit was already reported. Inspect dry inventory; snapshot retained if written. Private driver details excluded.') from None

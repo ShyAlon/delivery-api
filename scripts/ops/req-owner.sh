@@ -19,6 +19,7 @@ done
 .venv/bin/python scripts/ops/venv_check.py || fail 'dependencies missing; run the exact pip repair line above.'
 envfile="$HOME/.config/requi/preview.env"
 case "$command" in
+ locks) target=scripts/owner/locks.py;;
  migrate) target=scripts/owner/apply-pg-cutover.py;;
  policy) target=scripts/ops/confirmed-expense-policy.sh;;
  preflight) target=scripts/ops/paid-child-preflight.py;;
@@ -30,6 +31,9 @@ case "$command" in
 esac
 [ -f "$target" ] || fail "missing $target; pull main containing this step."
 case "$command" in
+ locks)
+   [ "$apply" = 0 ] || fail 'locks is read-only; --apply is not supported.'
+   exec .venv/bin/python "$target" "$PWD" --env-file "$envfile";;
  migrate)
    args=("$PWD" --env-file "$envfile")
    [ "$apply" = 0 ] || args+=(--apply --review-projection-functions)

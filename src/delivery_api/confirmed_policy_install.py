@@ -9,22 +9,6 @@ from .attempt_ledger import AdmissionDenied
 from .paid_child_preflight import SCALE
 
 
-def lock_diagnostics(conn):
-    # A timed-out statement is gone from the wait graph. Report current holders
-    # of this policy's row/table or exact shared advisory lock, not arbitrary SQL.
-    rows=conn.execute("""SELECT DISTINCT a.pid,a.state,a.wait_event_type,a.wait_event,
-        extract(epoch FROM clock_timestamp()-a.query_start) AS query_age_seconds,
-        extract(epoch FROM clock_timestamp()-a.xact_start) AS transaction_age_seconds,
-        l.locktype,l.mode,pg_blocking_pids(a.pid) AS blocked_by
-      FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid
-      WHERE a.pid<>pg_backend_pid() AND a.datname=current_database() AND l.granted
-        AND (l.relation='public.expense_guard_policy'::regclass OR
-          (l.locktype='advisory' AND l.classid=((73194720315621::bigint >> 32)::oid)
-           AND l.objid=((73194720315621::bigint & 4294967295)::oid)))
-      ORDER BY a.pid LIMIT 30""").fetchall()
-    return [dict(zip(('pid','state','wait_event_type','wait_event','query_age_seconds','transaction_age_seconds','locktype','mode','blocked_by'),r)) for r in rows]
-
-
 def plan(conn,*,apply=False):
     for table in ('expense_guard_policy','worker_jobs','provider_attempts','retail_compute_segments'):
         visible=conn.execute("SELECT has_table_privilege(current_user,%s,'SELECT') AND NOT row_security_active(%s::regclass)",('public.'+table,'public.'+table)).fetchone()

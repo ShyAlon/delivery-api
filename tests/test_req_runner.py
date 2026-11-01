@@ -157,3 +157,13 @@ def test_download_requires_exactly_one_name(tmp_path):
     for args in [('download',),('download','probe','--apply')]:
         out=_req(tmp_path,*args)
         assert out.returncode==1 and 'RAN-IT' not in out.stdout
+
+
+def test_locks_rejects_apply(tmp_path):
+    root=tmp_path/'delivery-api';(root/'scripts/ops').mkdir(parents=True);(root/'scripts/owner').mkdir();(root/'.venv/bin').mkdir(parents=True)
+    shutil.copy(REQ.parent/'req-owner.sh',root/'scripts/ops/req-owner.sh')
+    (root/'scripts/ops/venv_check.py').write_text('')
+    (root/'scripts/owner/locks.py').write_text('')
+    python=root/'.venv/bin/python';python.write_text('#!/bin/sh\nexit 0\n');python.chmod(0o755)
+    out=subprocess.run(['bash',str(root/'scripts/ops/req-owner.sh'),'locks','--apply'],capture_output=True,text=True)
+    assert out.returncode==1 and 'read-only' in out.stderr
