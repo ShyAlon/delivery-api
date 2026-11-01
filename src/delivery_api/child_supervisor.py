@@ -61,8 +61,9 @@ class ChildSupervisor:
         parent,child=socket.socketpair(socket.AF_UNIX,socket.SOCK_STREAM)
         config_parent=config_child=None
         if raw is not None:config_parent,config_child=socket.socketpair()
-        self.active=True
-        process=None;writer=None;stop_task=None;receive_task=None
+        self.active=True;self.last_result=None
+        process=None;writer=None;stop_task=None;receive_task=None;stderr_task=None
+        sequence=0;state=None;child_error=None;failed=False
         try:
             # Deliberate allowlist: never inherit provider keys, DB URLs, auth
             # headers, cloud credentials, PYTHONPATH, proxy or shell controls.
@@ -73,7 +74,21 @@ class ChildSupervisor:
                 fds.append(config_child.fileno());env['REQUI_CHILD_CONFIG_FD']=str(config_child.fileno())
             process=await asyncio.create_subprocess_exec(*self.command,pass_fds=tuple(fds),
                 start_new_session=True,env=env,stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
+                stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.PIPE)
+            async def drain_stderr():
+                nonlocal child_error
+                from .child_failure import parse
+                pending=b'';discard=False
+                while True:
+                    chunk=await process.stderr.read(4096)
+                    if not chunk:return
+                    for part in chunk.splitlines(keepends=True):
+                        if len(pending)+len(part)>4096:discard=True;pending=b''
+                        if not discard:pending+=part
+                        if part.endswith(b'\n'):
+                            if not discard and child_error is None:child_error=parse(pending)
+                            pending=b'';discard=False
+            stderr_task=asyncio.create_task(drain_stderr())
             child.close()
             if config_child is not None:
                 config_child.close()
@@ -82,7 +97,6 @@ class ChildSupervisor:
             reader,writer=await asyncio.open_connection(sock=parent,limit=4096)
             writer.write(wire);await writer.drain()
             stop_task=asyncio.create_task(stop.wait()) if stop is not None else None
-            sequence=0;state=None
             async def receive():
                 nonlocal sequence,state
                 while True:
@@ -113,6 +127,7 @@ class ChildSupervisor:
                 except asyncio.TimeoutError:raise ChildRunError('child did not stop cooperatively')
             else:await receive_task
         except Exception:
+            failed=True
             from .diagnostic_evidence import bound,failure
             with bound(task_id=operation.binding.task_id,session_id=operation.binding.session_id,job_id=operation.binding.job_id):
                 failure('child.lifecycle.failed')
@@ -128,6 +143,28 @@ class ChildSupervisor:
             for channel in (config_parent,config_child):
                 if channel is not None:channel.close()
             try:
-                if process is not None:await self._reap(process)
-            finally:self.active=False
+                if process is not None:
+                    # EOF can arrive just before asyncio observes natural exit.
+                    if failed and process.returncode is None:
+                        try:await asyncio.wait_for(asyncio.shield(process.wait()),.2)
+                        except asyncio.TimeoutError:pass
+                    await self._reap(process)
+            finally:
+                if stderr_task is not None:
+                    try:await asyncio.wait_for(stderr_task,.5)
+                    except Exception:
+                        stderr_task.cancel()
+                        try:await stderr_task
+                        except BaseException:pass
+                if failed and self.last_result is not None:
+                    from .diagnostic_evidence import bound,record
+                    code=self.last_result.returncode
+                    with bound(task_id=operation.binding.task_id,session_id=operation.binding.session_id,job_id=operation.binding.job_id):
+                        record('child.exit',pid=self.last_result.pid,returncode=code,
+                            signal=-code if code<0 else None,last_state=state,sequence=sequence,
+                            termination_scope='observed after supervisor cleanup; a negative code may be cleanup, not original cause')
+                        if child_error:
+                            record('child.failure.class',error_class=child_error['error_class'])
+                            for frame in child_error['frames']:record('child.failure.frame',**frame)
+                self.active=False
         return self.last_result

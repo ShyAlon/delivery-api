@@ -153,3 +153,33 @@ def test_terminal_child_failure_has_safe_parent_evidence(tmp_path,file_log_evide
  finally:log.removeHandler(h);h.close()
  text=file_log_evidence(task_id=op.binding.task_id)['text']
  assert 'child.lifecycle.failed' in text and op.binding.job_id in text
+
+
+def test_crash_exit_status_and_last_state_are_reported(monkeypatch):
+    from delivery_api import diagnostic_evidence as evidence
+    records=[];monkeypatch.setattr(evidence,'record',lambda code,**fields:records.append((code,fields)))
+    s=supervisor('crash')
+    with pytest.raises(ChildRunError):run(s.run(decode_operation(frame(operation())),authorize=lambda op:None))
+    row=next(v for k,v in records if k=='child.exit')
+    assert row['returncode']==17 and row['signal'] is None and row['last_state']=='running'
+
+
+def test_stderr_flood_is_drained_but_raw_text_never_reported(tmp_path,monkeypatch):
+    from delivery_api import diagnostic_evidence as evidence
+    records=[];monkeypatch.setattr(evidence,'record',lambda code,**fields:records.append((code,fields)))
+    script=tmp_path/'crash.py'
+    script.write_text("import os,socket\ns=socket.socket(fileno=int(os.environ['REQUI_CHILD_FD']))\nf=s.makefile('rb');f.readline()\nos.write(2,b'PRIVATE-DO-NOT-LOG'*100000)\nraise SystemExit(19)\n")
+    s=ChildSupervisor([sys.executable,str(script)],kill_seconds=.2)
+    with pytest.raises(ChildRunError):run(s.run(decode_operation(frame(operation())),authorize=lambda op:None,timeout_seconds=3))
+    assert s.last_result.returncode==19 and 'PRIVATE' not in str(records)
+
+
+def test_child_shape_envelope_excludes_exception_values_and_source(capsys):
+    from delivery_api.child_failure import emit,parse
+    try:raise ValueError('secret password and project content')
+    except ValueError as error:emit(error)
+    text=capsys.readouterr().err
+    assert 'secret' not in text and 'project' not in text
+    assert parse(text.encode())['error_class']=='ValueError'
+    for bad in (b'arbitrary stderr',b'REQUI_CHILD_FAILURE []',b'REQUI_CHILD_FAILURE {"error_class":"X","frames":[],"secret":"x"}'):
+        assert parse(bad) is None

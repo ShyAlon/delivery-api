@@ -1,0 +1,7 @@
+# Descriptor EOF is a symptom, not a diagnosis
+
+A broker wrapper hid its underlying exception, and child stderr went to DEVNULL. Record bounded cause classes/frames, broker phase and whether admission bound an attempt. Child sends a shape-only failure envelope: no exception message, source line, locals, key, DSN or provider payload. Continuously drain stderr and discard everything except a validated bounded envelope, so a full pipe cannot stall a worker. Capture reaped returncode/signal and last lifecycle state, noting cleanup may supply the signal. Allow a short natural-exit observation before cleanup.
+
+Everything ZIP now requests operator-authorized exact task/session logs over the task window from retained rotating files, not only the live 400-line view. Include explicit limits, missing attribution/rotation/restart caveats. This is not full historical recovery or raw audit disclosure. Hard kills have no traceback; host Ollama/OS/GPU evidence remains separate. No blind replay after an uncertain broker result.
+
+Deterministic exception-block scan extracts structured chains and text traceback markers as class/frame shapes, with a block manifest. Export never adds exception values or traceback source lines. New failure evidence cannot recover an old child stderr stream already discarded. A broader existing task-diagnostics by_stage assertion also fails with unchanged main app.py; do not weaken it to claim this change passes it.

@@ -70,3 +70,64 @@ def test_python_warning_is_durably_recorded(tmp_path,file_log_evidence):
    warnings.simplefilter('always');warnings.warn('synthetic warning',UserWarning)
  finally:logger.removeHandler(handler)
  assert 'synthetic warning' in file_log_evidence()['text']
+
+
+def test_exception_chain_records_shapes_not_values(tmp_path,file_log_evidence):
+ import sys,json
+ handler=d.EvidenceHandler(tmp_path/'unused.jsonl')
+ try:
+  try:raise KeyError('PRIVATE-ROOT')
+  except KeyError as cause:raise RuntimeError('PRIVATE-WRAPPER') from cause
+ except RuntimeError:
+  with d.bound(task_id='chain-task'):
+   handler.emit(logging.makeLogRecord({'name':'fixture','levelno':40,'levelname':'ERROR','msg':'chain.failed','exc_info':sys.exc_info()}))
+ result=file_log_evidence()['text']
+ assert 'KeyError' in result and 'RuntimeError' in result and 'causes' in result
+ assert 'PRIVATE-ROOT' not in result and 'PRIVATE-WRAPPER' not in result
+
+
+def test_task_window_exports_more_than_400_exact_task_or_session_rows(monkeypatch):
+ from contextlib import contextmanager
+ from delivery_api import process_logs as p
+ class Reader:
+  @contextmanager
+  def _read(self,*args):yield None
+ class Logs:
+  def records(self,**kwargs):
+   assert kwargs['task_id']=='t' and kwargs['session_id']=='s' and kwargs['limit']==100000
+   return {'records':[{'stream':'engine','ts':i,'text':'safe','session_id':'s'}for i in range(501)],'truncated':False,'unreadable':[]}
+ monkeypatch.setattr(p,'selected',lambda:Logs())
+ result=p.task_window(Reader(),None,'t','s',0,until=500)
+ assert len(result['records'])==501 and not result['truncated'] and result['omissions']
+
+
+def test_deterministic_exception_scan_discards_values_and_source():
+ from delivery_api.process_logs import exception_blocks
+ rows=[{'stream':'engine','ts':1,'text':line}for line in [
+  'Traceback (most recent call last):','  File "/private/root/worker.py", line 42, in run',
+  '    raise ValueError(secret_password)','ValueError: PRIVATE-SECRET']]
+ result=exception_blocks(rows)
+ assert result['found']==1 and result['blocks'][0]['frames']==[{'file':'worker.py','line':42,'function':'run'}]
+ assert result['blocks'][0]['error_class']=='ValueError'
+ assert 'PRIVATE-SECRET' not in str(result) and 'secret_password' not in str(result) and '/private/' not in str(result)
+
+
+def test_task_window_rejects_unauthorized_reader(monkeypatch):
+ from contextlib import contextmanager
+ from delivery_api import process_logs as p
+ class Reader:
+  @contextmanager
+  def _read(self,*args):raise PermissionError('no logs.read grant');yield
+ monkeypatch.setattr(p,'selected',lambda:pytest.fail('must authorize before reading'))
+ with pytest.raises(PermissionError):p.task_window(Reader(),None,'t','s',0)
+
+
+def test_task_window_file_scope_includes_bound_session_not_other_task(tmp_path,monkeypatch):
+ from delivery_api import process_logs as p
+ monkeypatch.setattr(p,'root',lambda:tmp_path)
+ repo=p.FileLogs()
+ repo.append('engine','safe',session_id='mine',ts=1)
+ repo.append('activity','safe',task_id='t',ts=2)
+ repo.append('engine','private',session_id='other',ts=3)
+ got=repo.records(task_id='t',session_id='mine',limit=100000)
+ assert len(got['records'])==2 and 'private' not in str(got)
