@@ -4,10 +4,12 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 fail(){ printf 'REQ ABORTED: %s No owner step was run.\n' "$*" >&2; exit 1; }
 command=${1:-}; shift
-apply=0; email=''
+apply=0; email=''; checks=full
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --apply) apply=1;shift;;
+    --fast) checks=fast;shift;;
+    --full-checks) checks=full;shift;;
     --email) [ "$#" -ge 2 ] || fail '--email needs a value.';email=$2;shift 2;;
     *) fail "unsupported argument $1";;
   esac
@@ -26,7 +28,7 @@ case "$command" in
  force-stop) target=scripts/owner/force-stop-all.py;;
  stop-all) target=scripts/owner/stop-all.py;;
  reset-preview) target=scripts/owner/reset-preview.py;;
- preview-free) target=scripts/ops/preview-exec.sh;;
+ preview|preview-free) target=scripts/ops/preview-exec.sh;;
  *) fail 'unknown owner command.';;
 esac
 [ -f "$target" ] || fail "missing $target; pull main containing this step."
@@ -55,13 +57,12 @@ case "$command" in
    args=("$PWD" --env-file "$envfile" --owner 9ed32462-3dd0-4222-90b3-92cb38e00911 --accounting wipe)
    [ "$apply" = 0 ] || args+=(--apply)
    exec .venv/bin/python "$target" "${args[@]}";;
- preview-free)
+ preview|preview-free)
+   [ "$command" != preview-free ] || echo 'preview-free is now an alias of req preview; both routes are visible, paid dispatch still needs explicit approval.'
    if [ "$apply" = 0 ]; then
-     echo 'DRY REVIEW ONLY: free Ollama phi4 preview, Docker/Mac, saved LIVE DB settings. No paid route. No container/model/DB access by this dry review.'
-     echo 'To build/start with the existing typed confirmation: req preview-free --apply'
+     echo 'DRY REVIEW ONLY: one preview, both reviewed routes, no spend approval. Use req preview --apply [--fast|--full-checks].'
      exit 0
    fi
-   export PREVIEW_EXEC_PROVIDER=ollama PREVIEW_EXEC_OLLAMA_MODEL=phi4
-   unset PREVIEW_PAID_CHILD_APPROVED
+   export PREVIEW_EXEC_PROVIDER=both PREVIEW_EXEC_OLLAMA_MODEL=phi4 PREVIEW_CHECKS="$checks"
    exec bash "$target";;
 esac

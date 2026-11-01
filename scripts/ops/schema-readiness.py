@@ -54,6 +54,7 @@ BASELINE_MIGRATIONS=frozenset({
  '20261025120000_operator_failure_diagnostics.sql',
 })
 MIGRATIONS={
+
  '20261029203000_resource_metrics.sql':('table:resource_run_samples','table:resource_run_summaries','table:resource_container_samples','table:resource_container_summaries'),
  '20261029210000_generator_snapshots.sql':('table:generator_snapshots',),
  '20261029220000_generator_documents.sql':('table:generator_documents',),
@@ -72,6 +73,7 @@ MIGRATIONS={
  '20261031220000_usage_projection.sql':('table:document_projections',),
  '20261101073000_fenced_job_force_close.sql':('signature:requi_force_close_fenced_job(text,text,text)',),
  '20261101124000_visible_task_names.sql':('visible-title-index:idx_tasks_tenant_title',),
+ '20261101150000_preview_spend_approvals.sql':('table:preview_spend_approvals',),
 }
 ROLES=('requi_metrics_writer','requi_engine_config_read','requi_operator_usage')
 

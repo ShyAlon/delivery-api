@@ -52,7 +52,7 @@ class SettingsValues(dict):
 
 def source_report(root,name,env=None,explicit=None):
     env=os.environ if env is None else env
-    paths=[Path(explicit).expanduser()] if explicit else [target_path(env),Path(root)/'.env']
+    paths=[Path(explicit).expanduser()] if explicit else ([Path(root)/'.env',target_path(env)] if name=='DEEPSEEK_API_KEY' else [target_path(env),Path(root)/'.env'])
     states=[];selected=None
     for path in paths:
         values=read_file(path)
@@ -76,6 +76,11 @@ def load(root,env=None,explicit=None):
                 raise SettingsError('project settings conflict for '+name+'; align the files or select --env-file explicitly')
         for name,value in values.items():
             if allowed(name) and value and name not in result:result[name]=value
+    # Provider key specifically prefers the repo file over preview.env. Project
+    # identity keeps its existing conflict checks and source priority.
+    if not explicit:
+        repo_key=read_file(Path(root)/'.env').get('DEEPSEEK_API_KEY')
+        if repo_key:result['DEEPSEEK_API_KEY']=repo_key
     # Environment is last, but never fill a partial file-based project identity
     # from an unrelated shell project. Provider keys and explicit owner IDs may fall back.
     file_identity=any(result.get(k) for k in IDENTITY)
