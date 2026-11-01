@@ -39,6 +39,17 @@ def cloud(monkeypatch,tmp_path,pg_workspace_factory,request):
                                                              resolve_quote=lambda **kw:None,
                                                              measure_usage=lambda response:None,
                                                              resolve_serialized=None,measure_raw_usage=None)))
+    # Route contract fixture supplies the current dispatch interface. Real
+    # child execution is covered by mandatory fresh-start acceptance separately.
+    from delivery_api import inprocess_engine
+    class FixtureEngine:
+        async def dispatch(self,store,orchestrator,task_id,phase,job_id,options):
+            from delivery_api.tenant_jobs import execute_job
+            async def handle(capability):
+                capability.validate(store)
+                await orchestrator.execute_phase(task_id,phase,**options)
+            return await execute_job(store,job_id,handle)
+    monkeypatch.setattr(inprocess_engine,'current',lambda:FixtureEngine())
     monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path))
     from delivery_api.supabase_auth import SupabaseIdentityVerifier
     from pg_workspace import URL,Keys
