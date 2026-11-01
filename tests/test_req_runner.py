@@ -104,7 +104,7 @@ def test_owner_command_refuses_wrong_branch_before_fetch(tmp_path):
     assert out.returncode==1 and 'switch the checkout to main' in out.stderr
 
 
-@pytest.mark.parametrize('name,expected',[('migrate','apply-pg-cutover.py'),('force-stop','force-stop-all.py'),('stop-all','--dry-run')])
+@pytest.mark.parametrize('name,expected',[('migrate','apply-pg-cutover.py'),('stop-all','--dry-run')])
 def test_owner_dispatch_is_dry_default_and_uses_repo_scripts(tmp_path,name,expected):
     root=tmp_path/'delivery-api';(root/'scripts/ops').mkdir(parents=True);(root/'scripts/owner').mkdir();(root/'.venv/bin').mkdir(parents=True)
     shutil.copy(REQ.parent/'req-owner.sh',root/'scripts/ops/req-owner.sh')

@@ -1,0 +1,3 @@
+# A pre-launch reset can be blunt without crossing owners
+
+Reviewed target is the named test-only Supabase project and selected owner, not a filename. Dry inventory shows all owners and FK order. Explicit reset deletes that owner's work/accounting dependents, never auth/prepaid/payment/policy/audit or another owner. Export and verify statistics first, fail on write error, then delete child-first in one transaction with writers locked out. Do not disable triggers or CASCADE unknown dependencies. Processes must be stopped first; deleting rows is not a process kill. Retire force-job runtime machinery rather than keeping both recovery tools; retain shipped migration history without requiring the unused fenced-close migration to run.
