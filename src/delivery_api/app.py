@@ -3442,6 +3442,25 @@ def operator_worker_job_stop(job_id:str,body:WorkerJobStopRequest,a:auth.Actor=D
     return JSONResponse(result|{'engine_notification_verified':notified},headers={'Cache-Control':'no-store'})
 
 
+class ForceStopAllRequest(BaseModel):
+    model_config={'extra':'forbid'}
+    fingerprint:str=Field(pattern=r'^[a-f0-9]{64}$')
+    confirmation:str=Field(min_length=1,max_length=64)
+
+
+@app.get('/api/operations/force-stop-plan')
+def owner_force_stop_plan(a:auth.Actor=Depends(auth.require_actor)):
+    _require_account_debug()
+    return JSONResponse(store.force_stop_jobs_plan(),headers={'Cache-Control':'no-store'})
+
+
+@app.post('/api/operations/force-stop-all')
+def owner_force_stop_all(body:ForceStopAllRequest,a:auth.Actor=Depends(auth.require_actor)):
+    _require_account_debug()
+    try:return JSONResponse(store.force_stop_jobs_apply(body.fingerprint,body.confirmation),headers={'Cache-Control':'no-store'})
+    except ValueError as exc:raise HTTPException(409,str(exc))
+
+
 @app.get('/api/operations/active-jobs')
 def owner_active_jobs(limit:int=50,before_updated_at:float|None=None,before_job_id:str|None=None,a:auth.Actor=Depends(auth.require_actor)):
     _require_account_debug()
