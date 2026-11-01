@@ -94,3 +94,24 @@ def test_snapshot_failure_prevents_deletion(store,tmp_path,monkeypatch):
     monkeypatch.setattr(m,'snapshot',fail)
     with pytest.raises(OSError):m.reset(DSN,A.owner_id,'wipe',confirm=lambda _:f'RESET PREVIEW {m.APPROVED_PROJECT} OWNER {A.owner_id} WIPE ACCOUNTING',directory=tmp_path)
     with tenant_context(A):assert store.task(t['task_id'])
+
+
+def test_confirmation_is_after_exclusive_lock_and_before_snapshot():
+    import inspect
+    text=inspect.getsource(module().reset)
+    assert text.index('LOCK TABLE')<text.index("if confirm(")<text.index('exported=snapshot(')
+
+
+def test_failed_table_lock_never_prompts_or_snapshots(store,monkeypatch,tmp_path):
+    import psycopg,pytest
+    from delivery_api.db_lock_diagnostics import inspect
+    m=module();monkeypatch.setattr(m,'target_evidence',lambda *a:{'supabase_project_ref':m.APPROVED_PROJECT})
+    def forbidden(*args):raise AssertionError('confirmation or snapshot before successful table lock')
+    monkeypatch.setattr(m,'snapshot',forbidden)
+    with psycopg.connect(DSN,application_name='reset-blocker') as holder:
+        holder.execute('LOCK TABLE public.tasks IN ROW EXCLUSIVE MODE')
+        pid=holder.execute('SELECT pg_backend_pid()').fetchone()[0]
+        with pytest.raises(psycopg.errors.LockNotAvailable):m.reset(DSN,m.APPROVED_OWNER,'wipe',confirm=forbidden,directory=tmp_path)
+        with psycopg.connect(DSN,options='-c default_transaction_read_only=on') as reader:
+            assert any(r['pid']==pid and r['application_name']=='reset-blocker' for r in inspect(reader)['sessions'])
+        assert not list(tmp_path.iterdir())
