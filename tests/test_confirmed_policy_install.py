@@ -50,3 +50,41 @@ def test_script_requires_both_operator_acknowledgments_and_never_launches():
 def test_hidden_accounting_is_not_quiescent(quiet):
     import psycopg
     with psycopg.connect(DSN.replace('user=sandbox','user=delivery_app')) as c,pytest.raises(AdmissionDenied,match='inspection unavailable'):plan(c,apply=True)
+
+
+def test_blocker_details_name_jobs_and_keep_output_bounded(quiet):
+    import json,psycopg
+    _,job=quiet
+    with psycopg.connect(DSN) as c:
+        c.execute("UPDATE worker_jobs SET state='running' WHERE job_id=%s",(job,))
+        with pytest.raises(AdmissionDenied) as exc:plan(c,apply=True)
+        blockers=json.loads(str(exc.value).split(': ',1)[1])
+        match=next(b for b in blockers if b['table']=='worker_jobs')
+        assert job in [r['id'] for r in match['records']]
+        assert all(set(r)=={'id','owner_id','state'} for r in match['records'])
+        assert len(match['records'])<=20 and match['count']>=1
+        assert c.execute('SELECT * FROM expense_guard_policy').fetchall()==[]
+        c.rollback()
+
+
+def test_installer_renders_policy_denial_without_traceback():
+    import ast
+    from pathlib import Path
+    text=(Path(__file__).parents[1]/'scripts/ops/confirmed-expense-policy.sh').read_text()
+    code=text.split("<<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+    tree=ast.parse(code)
+    handler=next(n for n in ast.walk(tree) if isinstance(n,ast.ExceptHandler) and getattr(n.type,'id','')=='AdmissionDenied')
+    error=next(n for n in ast.walk(handler) if isinstance(n,ast.Raise))
+    assert isinstance(error.cause,ast.Constant) and error.cause.value is None
+    assert 'POLICY BLOCKED:' in code and 'No policy change committed.' in code
+
+
+def test_blocker_details_count_all_jobs_but_print_only_twenty(quiet):
+    import json,psycopg
+    _,job=quiet
+    with psycopg.connect(DSN) as c:
+        c.execute("INSERT INTO worker_jobs(job_id,owner_id,auth_session_id,task_id,session_id,generation,kind,state,attempt,created_at,updated_at) SELECT job_id||'-block-'||i,owner_id,auth_session_id,task_id,session_id,generation,kind,'pending',attempt,created_at,updated_at FROM worker_jobs CROSS JOIN generate_series(1,25) i WHERE job_id=%s",(job,))
+        with pytest.raises(AdmissionDenied) as exc:plan(c)
+        match=next(b for b in json.loads(str(exc.value).split(': ',1)[1]) if b['table']=='worker_jobs')
+        assert match['count']>=25 and len(match['records'])==20 and match['truncated']
+        c.rollback()
