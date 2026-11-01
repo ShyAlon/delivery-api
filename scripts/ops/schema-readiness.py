@@ -71,6 +71,7 @@ MIGRATIONS={
  '20261031210000_document_chunks.sql':('table:document_chunks','signature:requi_document_parts(text,integer,text)','signature:requi_document_append(text,integer,text,bytea,uuid,uuid,double precision)'),
  '20261031220000_usage_projection.sql':('table:document_projections',),
  '20261101073000_fenced_job_force_close.sql':('signature:requi_force_close_fenced_job(text,text,text)',),
+ '20261101124000_visible_task_names.sql':('visible-title-index:idx_tasks_tenant_title',),
 }
 ROLES=('requi_metrics_writer','requi_engine_config_read','requi_operator_usage')
 
@@ -85,6 +86,9 @@ def destructive(text):
 
 def object_exists(conn,probe):
     kind,name=probe.split(':',1)
+    if kind=='visible-title-index':
+        row=conn.execute("SELECT i.indisunique,pg_get_expr(i.indpred,i.indrelid) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relnamespace='public'::regnamespace AND c.relname=%s",(name,)).fetchone()
+        return bool(row and row[0] and row[1] and 'deleted_at IS NULL' in row[1])
     if kind=='signature':return conn.execute('SELECT to_regprocedure(%s) IS NOT NULL',('public.'+name,)).fetchone()[0]
     if kind=='table':return conn.execute('SELECT to_regclass(%s) IS NOT NULL',('public.'+name,)).fetchone()[0]
     if kind=='function0':return conn.execute('SELECT to_regprocedure(%s) IS NOT NULL',('public.'+name+'()',)).fetchone()[0]

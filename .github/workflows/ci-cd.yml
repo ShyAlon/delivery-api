@@ -2,7 +2,7 @@ name: CI and deploy
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    types: [opened, reopened, ready_for_review, synchronize]
     branches: [main]
     paths-ignore:
       - 'docs/**'
@@ -37,6 +37,41 @@ jobs:
       - run: DELIVERY_TEST_SCOPE=pr ./scripts/test-local.sh
         env:
           DELIVERY_BROWSER_SCOPE: ${{ github.event_name == 'workflow_dispatch' && 'full' || 'smoke' }}
+
+  fresh-start-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require cross-repository source access
+        env:
+          SOURCE_READ_TOKEN: ${{ secrets.ITEM6_SOURCE_READ_TOKEN }}
+        run: test -n "$SOURCE_READ_TOKEN"
+      - uses: actions/checkout@v4
+        with:
+          repository: ShyAlon/interview-engine
+          ref: d6b3e690ec58caceb7446f0ae629d122f31cfa30
+          path: acceptance-sources/interview-engine
+          token: ${{ secrets.ITEM6_SOURCE_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ShyAlon/spec-generator
+          ref: adf43ff21ecd8252c1cffeff4909a5ff148a8c76
+          path: acceptance-sources/spec-generator
+          token: ${{ secrets.ITEM6_SOURCE_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install real runtime and test packages
+        run: |
+          python -m pip install vendor/vmodel_contracts-0.28.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl
+          python -m pip install -e '.[dev]'
+          python -m pip install -e acceptance-sources/interview-engine
+          python -m pip install -e acceptance-sources/spec-generator
+      - name: Real startup and first interview stage, zero credits
+        run: python scripts/ci/fresh-start-acceptance.py
 
   # Tracked cosmetic debt, not part of the merge-gating selection: visual-polish
   # assertions marked ui_cosmetic. This job reports honest red on failure so the
@@ -76,7 +111,7 @@ jobs:
 
   image:
     if: github.event_name == 'workflow_dispatch'
-    needs: [test, control-plane-wheel]
+    needs: [test, control-plane-wheel, fresh-start-acceptance]
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}
