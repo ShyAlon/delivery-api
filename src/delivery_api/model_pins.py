@@ -21,6 +21,15 @@ def validate(payload):
         if output and context['maximum_output_tokens']>output:raise ValueError('Output exceeds published vendor limit')
         ceiling=snap.ceiling()
         if any(row.get(k)!=v for k,v in [('expense_input',ceiling['cache_miss']),('expense_cache_miss',ceiling['cache_miss']),('expense_cache_hit',ceiling['cache_hit']),('expense_output',ceiling['output'])]):raise ValueError('Price row must match its source snapshot rates')
+    def no_secrets(item):
+        import re
+        if isinstance(item,dict):
+            for key,child in item.items():
+                if re.search(r'password|passcode|secret|authorization|cookie|api[_-]?key|credential|private[_-]?key|access[_-]?token',key,re.I):raise ValueError('Pins never contain credentials')
+                no_secrets(child)
+        elif isinstance(item,list):
+            for child in item:no_secrets(child)
+    no_secrets(value)
     text=json.dumps(value)
     if len(text)>50000:raise ValueError('Pin exceeds size bound')
     allowed={'provider','model','price_version','source','expense_input','expense_output','expense_cache_hit','expense_cache_miss','expense_units_per_usd','retail_input','retail_output','retail_units_per_credit','usage_categories','retail_formula','provider_snapshot'}

@@ -155,3 +155,8 @@ def test_reverting_payload_adds_a_new_revision_not_duplicate_primary_key(store,r
         second=repo.commit(store,changed,first,'changed')
         third=repo.commit(store,value,second,'explicit revert')
         assert len({first,second,third})==3 and len(repo.history(store))==3
+
+
+def test_nested_credentials_never_persist_as_public_pin_metadata():
+    value=payload();value['row']['provider_snapshot']['api_key']='not-real'
+    with pytest.raises(ValueError,match='credentials'):pins.validate(value)
