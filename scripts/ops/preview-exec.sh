@@ -279,7 +279,7 @@ if [ "$PROVIDER" = deepseek ]; then
 echo "  Provider: DeepSeek only (paid) - no local model server is checked, contacted or needed. The local \$0 Ollama route is the other choice at the provider prompt (or PREVIEW_EXEC_PROVIDER=ollama)."
 echo "  The reviewed row and ceiling are grounded from the two public DeepSeek pages (public GETs, nothing paid),"
 echo "  with the configured safety ceiling 128000 tokens per call / 16384 max output."
-echo "  The DeepSeek key comes from this shell's environment and is passed to the container without touching disk."
+echo "  The DeepSeek key comes from repo .env first, private preview settings next, then shell; missing keys use hidden terminal input. Values are never printed."
 echo "  Real spend is possible only for a person with an admission row and prepaid credits; anyone else is 'not admitted'."
 elif [ "$PROVIDER" = both ]; then
 echo "  Providers: both. UI choice per task: paid DeepSeek or local Ollama $OLLAMA_MODEL at \$0. No automatic fallback."
@@ -307,7 +307,7 @@ umask 077; WORK=$(mktemp -d "${TMPDIR:-/tmp}/requi-preview-exec.XXXXXXXXXX"); ch
 build_exec_env "$WORK/loaded.env" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"
 # The old saved settings cannot silently opt into paid children. Owner approval is separate.
 if [ "$PROVIDER" != ollama ]; then
-  [ "${PREVIEW_PAID_CHILD_APPROVED:-0}" = 1 ] || abort PAID-NOT-APPROVED "paid child activation remains off" "No container was started." "finish the owner policy preflight and obtain separate paid-run approval before using PREVIEW_PAID_CHILD_APPROVED=1"
+  echo 'Paid route visibility is not approval: each task requires explicit USD ceiling confirmation before paid dispatch.'
   printf '%s\n' DELIVERY_CHILD_EXECUTION=attended-paid DELIVERY_PAID_CHILD_PREVIEW=1 >> "$WORK/preview.env"
 else
   printf '%s\n' DELIVERY_CHILD_EXECUTION=local >> "$WORK/preview.env"

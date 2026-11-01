@@ -110,3 +110,12 @@ def test_explicit_operator_config_survives_file_first_container_boundary(tmp_pat
     text=target.read_text()
     assert all(k+'='+values[k] in text for k in s.OPERATOR_SETTINGS)
     assert 'REQUI_OPERATOR_EVIL' not in text
+
+
+def test_provider_key_prefers_repo_file_over_preview_file(tmp_path):
+    s=module()
+    preview=tmp_path/'preview.env';preview.write_text('DEEPSEEK_API_KEY=private-fallback\n');preview.chmod(0o600)
+    repo=tmp_path/'.env';repo.write_text('DEEPSEEK_API_KEY=repo-first\n');repo.chmod(0o600)
+    values=s.load(tmp_path,{'PREVIEW_SETTINGS_FILE':str(preview),'DEEPSEEK_API_KEY':'shell-last'})
+    assert values['DEEPSEEK_API_KEY']=='repo-first'
+    assert str(repo) in s.source_report(tmp_path,'DEEPSEEK_API_KEY',{'PREVIEW_SETTINGS_FILE':str(preview)}).split(';')[0]

@@ -1796,6 +1796,20 @@ FROM tasks t"""
             (json.dumps(raw_usage,allow_nan=False),time.time(),attempt_id), write=True)
         return self.provider_attempt(attempt_id)
 
+    @_transactional
+    def preview_spend_approval(self,task_id):
+        task=self.task(task_id)
+        if not task:return None
+        from .tenancy import current_scope
+        row=self._execute_native('SELECT * FROM preview_spend_approvals WHERE owner_id=%s AND task_id=%s AND generation=%s',
+            (current_scope().owner_id,task_id,task['generation'])).fetchone()
+        return dict(row) if row else None
+
+    @_transactional
+    def approve_preview_spend(self,task_id,model,amount):
+        from .preview_spend import approve
+        return approve(self,task_id,model,amount)
+
     def confirmed_expense_admission(self,job_id,expense_scale=None):
         # Returning a denial commits its durable episode/outbox. Raising here
         # would roll it back and lose the alert on every denied call.

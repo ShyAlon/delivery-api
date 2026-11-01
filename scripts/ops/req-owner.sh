@@ -26,7 +26,7 @@ case "$command" in
  force-stop) target=scripts/owner/force-stop-all.py;;
  stop-all) target=scripts/owner/stop-all.py;;
  reset-preview) target=scripts/owner/reset-preview.py;;
- preview-free) target=scripts/ops/preview-exec.sh;;
+ preview|preview-free) target=scripts/ops/preview-exec.sh;;
  *) fail 'unknown owner command.';;
 esac
 [ -f "$target" ] || fail "missing $target; pull main containing this step."
@@ -55,6 +55,13 @@ case "$command" in
    args=("$PWD" --env-file "$envfile" --owner 9ed32462-3dd0-4222-90b3-92cb38e00911 --accounting wipe)
    [ "$apply" = 0 ] || args+=(--apply)
    exec .venv/bin/python "$target" "${args[@]}";;
+ preview)
+   if [ "$apply" = 0 ]; then
+     echo 'DRY REVIEW ONLY: both reviewed routes, private env key, no spend approval. Use req preview --apply to build/start; each paid task needs an explicit USD ceiling.'
+     exit 0
+   fi
+   export PREVIEW_EXEC_PROVIDER=both PREVIEW_EXEC_OLLAMA_MODEL=phi4
+   exec bash "$target";;
  preview-free)
    if [ "$apply" = 0 ]; then
      echo 'DRY REVIEW ONLY: free Ollama phi4 preview, Docker/Mac, saved LIVE DB settings. No paid route. No container/model/DB access by this dry review.'
