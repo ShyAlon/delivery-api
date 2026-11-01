@@ -80,3 +80,32 @@ ops_settings(){
   [ "$rc" != 2 ] || abort SETTINGS "file-first settings preflight failed; see the value-free error above" "No changes by this preflight." "check the named setting or run scripts/ops/preview-provision.sh in a terminal; never send values"
   exit "$rc"
 }
+
+# Read-only listener evidence. Never stop/kill an existing process automatically.
+port_busy_details(){
+  local port="$1" expected="$2" rows matches
+  echo "Listener evidence for 127.0.0.1:$port (read-only):"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || echo "lsof could not identify a listener (permissions or a racing exit)."
+  else
+    echo "lsof is unavailable; PID/command could not be read. Inspect manually before stopping anything."
+  fi
+  rows=$(docker ps --format '{{.Names}}|{{.ID}}|{{.Ports}}' 2>/dev/null) || rows=""
+  # Filter actual HOST bindings, not docker's publish filter (which also matches
+  # container-only ports). Do not print container argv/environment or process args.
+  matches=$(printf '%s\n' "$rows" | awk -F'|' -v p="$port" '$3 ~ (":" p "->") {print}')
+  if [ -n "$matches" ]; then
+    printf '%s\n' "$matches" | while IFS='|' read -r name id ports; do
+      printf 'Docker listener: name=%s id=%s published=%s\n' "$name" "$id" "$ports"
+      if [ "$name" = "$expected" ]; then
+        echo "This matches our preview container name ($expected)."
+        printf 'Stop this preview explicitly: docker stop %s\n' "$name"
+      else
+        echo "This is NOT our preview container. Review its owner/purpose before stopping it."
+      fi
+    done
+  else
+    echo "No running Docker host-port mapping was found (or Docker inspection failed)."
+    echo "If this is a non-Docker process, review the printed PID and COMMAND first; only then stop that specific process. No process was killed."
+  fi
+}
