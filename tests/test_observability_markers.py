@@ -29,15 +29,15 @@ def _kinds(lines):
 
 
 def test_delete_marks_success_and_refusals(marks, monkeypatch):
-    monkeypatch.setattr(module, "store", NS(delete_task=lambda *a: None))
-    assert module.delete_task("t1", ACTOR)["status"] == "deleted"
+    monkeypatch.setattr(module, "store", NS(delete_task=lambda *a, **k: {}))
+    assert module.delete_task("t1", module.DeleteTaskRequest(confirm=True), ACTOR)["status"] == "deleted"
     assert "task.deleted" in _kinds(marks)
-    monkeypatch.setattr(module, "store", NS(delete_task=lambda *a: (_ for _ in ()).throw(KeyError())))
+    monkeypatch.setattr(module, "store", NS(delete_task=lambda *a, **k: (_ for _ in ()).throw(KeyError())))
     with pytest.raises(HTTPException):
-        module.delete_task("t1", ACTOR)
-    monkeypatch.setattr(module, "store", NS(delete_task=lambda *a: (_ for _ in ()).throw(ValueError("active"))))
+        module.delete_task("t1", module.DeleteTaskRequest(confirm=True), ACTOR)
+    monkeypatch.setattr(module, "store", NS(delete_task=lambda *a, **k: (_ for _ in ()).throw(ValueError("active"))))
     with pytest.raises(HTTPException):
-        module.delete_task("t1", ACTOR)
+        module.delete_task("t1", module.DeleteTaskRequest(confirm=True), ACTOR)
     assert _kinds(marks).count("task.delete.refused") == 2
 
 
@@ -87,7 +87,7 @@ def test_artifact_download_marks_success_and_refusal(marks, monkeypatch, tmp_pat
     assert "task.export" in _kinds(marks)
     monkeypatch.setattr(config, "CLOUD_TENANTS", True)
     monkeypatch.setattr(config, "ARTIFACT_MANIFEST_READS", True)
-    monkeypatch.setattr(module, "store", NS(read_artifact_bytes=lambda *a: (_ for _ in ()).throw(KeyError())))
+    monkeypatch.setattr(module, "store", NS(_postgres=True,read_artifact_bytes=lambda *a: (_ for _ in ()).throw(KeyError())))
     with pytest.raises(HTTPException):
         module.task_artifact_download("t1", "needs", "out.json")
     assert "task.export.refused" in _kinds(marks)
@@ -103,11 +103,13 @@ def test_artifacts_zip_refusal_is_marked(marks, monkeypatch):
 
 def test_debug_zip_marks_download(marks, monkeypatch, tmp_path):
     import delivery_api.debug_export as de
-    monkeypatch.setattr(module, "store", NS(task=lambda tid: {"generation": 1}, events=lambda tid: []))
+    monkeypatch.setattr(module, "store", NS(task=lambda tid: {"generation": 1,"state":"done"}, events=lambda tid: []))
     monkeypatch.setattr(config, "CLOUD_TENANTS", False)
     monkeypatch.setattr(module, "_recorded_engine_session", lambda tid: "sess1")
     monkeypatch.setattr(module, "authorized_session", lambda *a: tmp_path)
     monkeypatch.setattr(module, "get_task", lambda tid: {"control_snapshot": {}})
+    # Marker unit contract only; registry/session authorization has PG route tests.
+    monkeypatch.setattr(module.app.state,"operator_read_store",NS(authorize_debug=lambda store: {}),raising=False)
     monkeypatch.setattr(de, "diagnostic_zip", lambda *a, **k: b"PK")
     out = module.download_debug_zip("t1", module.BrowserDiagnostics(), ACTOR)
     assert out.media_type == "application/zip" and "task.export" in _kinds(marks)
@@ -197,6 +199,7 @@ def test_stream_close_is_marked(marks, monkeypatch):
 def test_dispatch_rejection_and_claim_are_marked(marks, monkeypatch):
     import delivery_api.tenant_jobs as tj
     from delivery_api.tenancy import TenantScope, tenant_context
+    monkeypatch.setattr(config, "CLOUD_TENANTS", False)
     scope = TenantScope("00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000a")
     store = NS(worker_job=lambda jid: None)
     with tenant_context(scope):

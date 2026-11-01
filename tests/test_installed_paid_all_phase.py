@@ -12,6 +12,7 @@ from paid_http_fake import answer
 
 
 def test_single_installed_paid_task_through_final_download(store,tmp_path,monkeypatch,pg_task_app):
+    monkeypatch.setenv('REQUI_RE_DIST','1')  # exercise installed producer export, not sibling checkout venv
     calls=[];errors=[]
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):

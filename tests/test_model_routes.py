@@ -111,11 +111,22 @@ def test_unknown_route_is_rejected():
     with pytest.raises(ValueError,match="unsupported"):
         model_routes.route_value("typo")
 
-def test_execution_payload_requires_debug_and_uses_pinned_state(monkeypatch,tmp_path):
+def test_execution_payload_requires_debug_and_uses_pinned_state(monkeypatch,tmp_path,model_workspace):
     from delivery_api import app as module
     task_id='execution-debug-test'
     _seed_task(module,module.store,task_id)
     module.store.set_engine_session(task_id,'s-debug')
+    from delivery_api.operator_reads import OperatorReadStore
+    from delivery_api.operator_authorization import OperatorPrincipal
+    ws=model_workspace
+    with ws.admin() as connection:
+        connection.execute('INSERT INTO operator_principals VALUES(%s,%s,%s,true)',(ws.scope.owner_id,'model-debug',['debug.read']))
+    monkeypatch.setattr(module.app.state,'operator_read_store',OperatorReadStore(ws.dsn.replace('user=sandbox','user=delivery_app'),OperatorPrincipal(ws.scope.owner_id,'model-debug',frozenset({'debug.read'}))),raising=False)
+    from delivery_api.generator_documents import GeneratorDocuments
+    docs={
+      'interview/usage.jsonl':(json.dumps({'stage':'probing','provider':'deepseek','model':'deepseek-chat'})+'\n').encode(),
+      'interview/llm-calls.jsonl':(json.dumps({'event':'llm_call_error','model':'deepseek-chat','error':{'kind':'empty_response','raw_payload':'sensitive response'}})+'\n').encode()}
+    monkeypatch.setattr(GeneratorDocuments,'owner_reader',lambda *a:type('Reader',(),{'read':staticmethod(docs.get)})())
     root=tmp_path/'s-debug'/'interview';root.mkdir(parents=True)
     (root/'http-session.json').write_text(json.dumps({'model_map':{'probing':['deepseek','deepseek-chat']}}))
     (root/'usage.jsonl').write_text(json.dumps({'stage':'probing','provider':'deepseek','model':'deepseek-chat'})+'\n')
@@ -131,7 +142,9 @@ def test_execution_payload_requires_debug_and_uses_pinned_state(monkeypatch,tmp_
         debug=module.task_execution(task_id,debug=True,a=None)
         assert debug['raw'][0]['content']=='private raw response'
         assert debug['calls'][0]['error']['raw_payload']=='sensitive response'
-    finally:module.store.delete_task(task_id)
+    finally:
+        module.store.delete_task(task_id)
+        with ws.admin() as connection:connection.execute('DELETE FROM operator_principals WHERE subject=%s',(ws.scope.owner_id,))
 
 
 def test_needs_default_comes_from_generator_config_not_delivery_ollama_override(monkeypatch,tmp_path):
