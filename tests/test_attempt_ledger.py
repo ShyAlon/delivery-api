@@ -875,14 +875,17 @@ def expense_guard(credit_account):
     import psycopg
     s,tid,job=credit_account
     with psycopg.connect(DSN) as c:
-        c.execute("INSERT INTO expense_guard_policy VALUES(true,'test-only',10,10,1,3)")
+        c.execute("INSERT INTO expense_guard_policy VALUES(true,'test-only',10,10,1000000000000,3)")
+        c.execute("INSERT INTO operator_expense_policy_revisions(revision,limit_units,units_per_usd,operator_subject,reason) VALUES('guard-fixture',1000000000000,1000000000000,%s,'fake fixture')",(A.owner_id,))
+        c.execute("INSERT INTO operator_expense_policy_head VALUES(true,'guard-fixture')")
     yield s,tid,job
     with psycopg.connect(DSN) as c:
         c.execute('DELETE FROM expense_alert_outbox')
         c.execute('DELETE FROM expense_guard_episodes')
         c.execute('DELETE FROM expense_guard_policy')
+        c.execute('DELETE FROM operator_expense_policy_head');c.execute('DELETE FROM operator_expense_policy_revisions')
 
-LAUNCH_Q={**Q,'expense_units_per_usd':1,'provider':'deepseek','expense_cache_hit':1,'expense_cache_miss':1,'retail_units_per_credit':1000000}
+LAUNCH_Q={**Q,'expense_units_per_usd':10**12,'provider':'deepseek','expense_cache_hit':1,'expense_cache_miss':1,'retail_units_per_credit':1000000}
 LAUNCH_USAGE={'input_tokens':2,'output_tokens':3,'cache_hit_tokens':1,'cache_miss_tokens':1}
 
 

@@ -3,6 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 PYTHON=.venv/bin/python
+export REQUI_TEST_ARTIFACTS="${REQUI_TEST_ARTIFACTS:-${RUNNER_TEMP:-/tmp}/requi-test-artifacts}"
+mkdir -p "$REQUI_TEST_ARTIFACTS"
 # Cross-repo engine integrations require the explicit full local release check.
 "$PYTHON" -m pytest -q --ignore=tests/test_ui_playwright.py -m 'not engine_integration and not producer_integration and not ui_cosmetic' --maxfail=3
 # ui_cosmetic browser tests are tracked debt, not a merge gate: the separate

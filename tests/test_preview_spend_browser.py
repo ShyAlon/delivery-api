@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+_ARTIFACTS=Path(os.environ.get('REQUI_TEST_ARTIFACTS','/downloads'));_ARTIFACTS.mkdir(parents=True,exist_ok=True)
 """Customer start is credits-only, never provider expense approval."""
 from delivery_api.tenancy import tenant_context
 
@@ -14,4 +17,4 @@ def test_paid_customer_start_has_no_native_dialog_or_provider_cost(pg_browser):
     assert '$' not in page.locator('#sessioncost').inner_text()
     assert 'USD' not in text and 'provider expense' not in text and 'Confirmation required' not in text
     assert 'Billed to your credits' in text
-    page.screenshot(path='/downloads/customer-credits-only.png',full_page=True)
+    page.screenshot(path=str(_ARTIFACTS/'customer-credits-only.png'),full_page=True)

@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+_ARTIFACTS=Path(os.environ.get('REQUI_TEST_ARTIFACTS','/downloads'));_ARTIFACTS.mkdir(parents=True,exist_ok=True)
 """Real shared Back office UI with fake external service responses, no accounts or provider."""
 import json,socket,threading,time
 from pathlib import Path
@@ -26,10 +29,10 @@ def test_model_pin_review_cancel_edit_menu_and_mobile():
             browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page(viewport={'width':1440,'height':1000},extra_http_headers={'Authorization':'Bearer fake'});errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
             page.goto(f'http://127.0.0.1:{port}/#model-pins');expect(page.locator('#model-pins-panel tbody tr')).to_have_count(1)
             page.locator('#model-pins-panel .row-menu-trigger').click();page.get_by_role('menuitem',name='Refresh prices').click();expect(page.get_by_role('dialog')).to_be_visible();expect(page.get_by_role('button',name='Approve default')).to_be_focused()
-            page.screenshot(path='/downloads/model-pins-review.png',full_page=False)
+            page.screenshot(path=str(_ARTIFACTS/'model-pins-review.png'),full_page=False)
             page.get_by_role('button',name='Cancel',exact=True).click();assert not any(r.url.path.endswith('/approve') for r in calls)
             page.locator('#model-pins-panel .row-menu-trigger').click();page.get_by_role('menuitem',name='Edit pin').click();expect(page.get_by_label('Public model pin JSON')).to_be_visible();page.get_by_role('button',name='Cancel',exact=True).click()
-            page.screenshot(path='/downloads/model-pins-desktop.png',full_page=True)
-            page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/downloads/model-pins-mobile.png',full_page=True)
+            page.screenshot(path=str(_ARTIFACTS/'model-pins-desktop.png'),full_page=True)
+            page.set_viewport_size({'width':390,'height':844});page.screenshot(path=str(_ARTIFACTS/'model-pins-mobile.png'),full_page=True)
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth');assert not errors;browser.close()
     finally:server.should_exit=True;thread.join(10)
