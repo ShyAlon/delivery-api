@@ -71,11 +71,11 @@ def test_operator_credit_pages_preserve_negative_fixed_point_and_capability(stor
    c.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))
 
 
-def test_operator_expense_aggregate_uses_settlement_time_and_retains_old_holds(ledger):
+def test_operator_expense_aggregate_uses_settlement_time_and_retains_old_holds(isolated_expense_ledger):
  import psycopg,time
  from test_attempt_ledger import Q
  from delivery_api.attempt_ledger import _quote
- store,tid,job=ledger
+ store,tid,job=isolated_expense_ledger
  owner=A;now=time.time();expense,retail=_quote(Q)
  # This aggregate fixture deliberately retains three simultaneous historical
  # attempts; configure its TEST ONLY concurrency bound explicitly.
@@ -268,3 +268,19 @@ def test_debug_export_batch_reuses_one_connection_and_keeps_capability_boundarie
     with reader.export_batch(store):reader.task_logs(store,tid)
  finally:
   with psycopg.connect(DSN) as c:c.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))
+
+
+from policy_database import isolated_policy_database
+
+@pytest.fixture
+def isolated_expense_ledger(monkeypatch,isolated_policy_database):
+ import test_attempt_ledger
+ from delivery_api.postgres_store import PostgresStore
+ monkeypatch.setitem(globals(),'DSN',isolated_policy_database)
+ monkeypatch.setattr(test_attempt_ledger,'DSN',isolated_policy_database)
+ store=PostgresStore(isolated_policy_database.replace('user=sandbox','user=delivery_app'))
+ fixture=test_attempt_ledger.ledger.__wrapped__(store)
+ value=next(fixture)
+ try:yield value
+ finally:
+  with pytest.raises(StopIteration):next(fixture)

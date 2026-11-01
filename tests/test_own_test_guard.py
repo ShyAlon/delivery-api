@@ -5,6 +5,19 @@ from delivery_api.tenancy import tenant_context
 from delivery_api.attempt_ledger import AdmissionDenied
 from test_attempt_ledger import credit_account, A, B, DSN, LAUNCH_Q, LAUNCH_USAGE
 
+from policy_database import isolated_policy_database
+
+@pytest.fixture(autouse=True)
+def isolated_module_policy(monkeypatch,isolated_policy_database):
+    import test_attempt_ledger,test_postgres_store
+    for namespace in (globals(),vars(test_attempt_ledger),vars(test_postgres_store)):
+        monkeypatch.setitem(namespace,'DSN',isolated_policy_database)
+
+@pytest.fixture
+def store(isolated_module_policy):
+    from delivery_api.postgres_store import PostgresStore
+    return PostgresStore(DSN.replace('user=sandbox','user=delivery_app'))
+
 @pytest.fixture
 def profile(credit_account):
     import psycopg
