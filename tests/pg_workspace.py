@@ -110,6 +110,14 @@ patches only the store/config and test signing key, never auth or scope function
         # so pytest restores rather than deletes the dynamic attribute.
         monkeypatch.setitem(module.app.state._state, 'store', workspace.store)
         monkeypatch.setattr(module.orchestrator, 'store', workspace.store)
+        # The app's own middleware was built before pool-lifecycle tests closed
+        # its captured store. Bind every auth/request borrower to this workspace.
+        for middleware in module.app.user_middleware:
+            if middleware.cls is TenantMiddleware:
+                monkeypatch.setitem(middleware.kwargs,'verifier',SupabaseIdentityVerifier(URL,key_provider=Keys()))
+                monkeypatch.setitem(middleware.kwargs,'session_check',workspace.store.auth_session_active)
+                monkeypatch.setitem(middleware.kwargs,'request_database',workspace.store._postgres)
+        monkeypatch.setattr(module.app,'middleware_stack',None)
         return TenantMiddleware(module.app,
             verifier=SupabaseIdentityVerifier(URL, key_provider=Keys()),
             session_check=workspace.store.auth_session_active,

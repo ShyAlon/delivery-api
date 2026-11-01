@@ -9,6 +9,11 @@ def test_delayed_dashboard_keeps_placeholder_and_task_identity_separate(pg_page,
     page.route('**/api/tasks',lambda route:held.append(route))
     page.goto(pg_ui)
     page.wait_for_function("document.querySelectorAll('.task-skeleton').length===3")
+    page.wait_for_function('document.querySelectorAll(".task-skeleton").length===3')
+    # Skeleton paints before async auth permits the task request.
+    for _ in range(100):
+        if held:break
+        page.wait_for_timeout(20)
     assert len(held)==1
     assert page.locator('.task-skeleton').count()==3
     page.screenshot(path='/tmp/dashboard-loading-after.png',full_page=True)
