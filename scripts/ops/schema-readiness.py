@@ -123,6 +123,16 @@ def settings():
     spec=importlib.util.spec_from_file_location('requi_settings',ROOT/'scripts/ops/settings.py')
     m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 
+def ready(rows,missing):
+    return not missing and all(r['status']=='present' for r in rows if r['file']!='20261030010000_operator_log_records.sql')
+
+def review_and_recheck(check,offer):
+    status=check()
+    if status!=1:return status  # Unavailable/error is not pending-schema evidence.
+    result=offer()
+    if result:return result
+    return check()
+
 def main():
     import psycopg
     s=settings();values=s.load(ROOT)
@@ -132,11 +142,17 @@ def main():
         rows=inventory(conn);missing=grants(conn)
     for row in rows:print(row['status'].upper(),row['file'],('REVIEW REQUIRED '+','.join(row['destructive'])) if row['status']!='present' and row['destructive'] else '')
     for role in missing:print('MISSING SET membership:',role)
-    if any(r['status']!='present' for r in rows if r['file']!='20261030010000_operator_log_records.sql') or missing:
+    if not ready(rows,missing):
         print('SCHEMA NOT READY: run python3 scripts/owner/apply-pg-cutover.py . for a dry review. No database changes made.');return 1
     print('SCHEMA READY: cutover catalog objects and app SET memberships present (not a full migration checksum proof).');return 0
 
 if __name__=='__main__':
-    try:sys.exit(main())
+    try:
+        if '--offer-apply' in sys.argv:
+            import subprocess
+            def offer():
+                return subprocess.call([sys.executable,str(ROOT/'scripts/owner/apply-pg-cutover.py'),str(ROOT),'--apply','--review-projection-functions','--preview-offer'])
+            sys.exit(review_and_recheck(main,offer))
+        sys.exit(main())
     except Exception as exc:
-        print('SCHEMA CHECK FAILED: '+type(exc).__name__+'; no values printed; no database changes.',file=sys.stderr);sys.exit(1)
+        print('SCHEMA CHECK FAILED: '+type(exc).__name__+'; no values printed; no database changes.',file=sys.stderr);sys.exit(2)
