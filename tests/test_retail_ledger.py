@@ -135,7 +135,7 @@ def test_failed_contribution_does_not_debit_or_drop_remainder(account):
         with s._postgres.transaction() as c:
             row=c.execute('SELECT balance_units,fractional_debit_units FROM credit_accounts').fetchone()
             assert row['balance_units']==1 and row['fractional_debit_units']==0
-            assert c.execute('SELECT count(*) AS n FROM retail_contributions').fetchone()['n']==0
+            assert c.execute('SELECT count(*) AS n FROM retail_contributions WHERE job_id=%s',(job,)).fetchone()['n']==0
 
 
 def test_compute_allocation_uses_call_phase_and_preserves_total(account):

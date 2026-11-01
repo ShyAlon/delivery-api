@@ -20,11 +20,12 @@ def inventory(conn,owner):
     threads=[r[0] for r in conn.execute('SELECT published_thread_id FROM public.engine_sessions WHERE owner_id=%s AND published_thread_id IS NOT NULL',(owner,))]
     sessions=list(set(sessions+threads))
     jobs=[r[0] for r in conn.execute('SELECT job_id FROM public.worker_jobs WHERE owner_id=%s',(owner,))]
+    runs=[r[0] for r in conn.execute('SELECT run_id FROM public.runs WHERE owner_id=%s',(owner,))]
     attempts=[r[0] for r in conn.execute('SELECT attempt_id FROM public.provider_attempts WHERE owner_id=%s',(owner,))]
     from psycopg import sql
     rows=[]
     for table,cols in columns.items():
-        field,values=next(((f,v) for f,v in (('owner_id',[owner]),('thread_id',sessions),('task_id',tasks),('session_id',sessions),('execution_session_id',sessions),('job_id',jobs),('attempt_id',attempts),('user_id',[owner])) if f in cols),(None,[]))
+        field,values=next(((f,v) for f,v in (('owner_id',[owner]),('thread_id',sessions),('task_id',tasks),('session_id',sessions),('execution_session_id',sessions),('job_id',jobs),('attempt_id',attempts),('run_id',runs),('user_id',[owner])) if f in cols),(None,[]))
         if not field:continue
         query=sql.SQL('SELECT count(*) FROM public.{} WHERE {}::text=ANY(%s)').format(sql.Identifier(table),sql.Identifier(field))
         count=conn.execute(query,(values,)).fetchone()[0]
@@ -121,6 +122,7 @@ def reset(dsn,owner,accounting,*,confirm=input,directory=None):
           'session_id':[r[0] for r in conn.execute('SELECT session_id FROM public.engine_sessions WHERE owner_id=%s',(owner,))],
           'job_id':[r[0] for r in conn.execute('SELECT job_id FROM public.worker_jobs WHERE owner_id=%s',(owner,))],
           'attempt_id':[r[0] for r in conn.execute('SELECT attempt_id FROM public.provider_attempts WHERE owner_id=%s',(owner,))]}
+        scope['run_id']=[r[0] for r in conn.execute('SELECT run_id FROM public.runs WHERE owner_id=%s',(owner,))]
         scope['execution_session_id']=scope['session_id']
         scope['thread_id']=list(set(scope['session_id']+[r[0] for r in conn.execute('SELECT published_thread_id FROM public.engine_sessions WHERE owner_id=%s AND published_thread_id IS NOT NULL',(owner,))]))
         by_table={r['table']:r for r in rows}

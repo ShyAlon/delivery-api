@@ -27,10 +27,11 @@ def test_verified_subject_only_no_metadata_admin():
     assert identity.owner_id == SUB
 
 
-@pytest.mark.parametrize('changes', [dict(exp=1),dict(iat=int(time.time())+900),
+@pytest.mark.parametrize('changes', [dict(exp=1),dict(iat="future"),
  dict(iss='https://evil.invalid/auth/v1'),dict(aud='service_role'),
  dict(role='service_role'),dict(sub='local-admin'),dict(exp=None)])
 def test_bad_claims_denied(changes):
+    if changes.get('iat')=='future':changes={'iat':int(time.time())+900}
     with pytest.raises(TenantAccessDenied):
         SupabaseIdentityVerifier(URL,key_provider=Keys()).verify(token(**changes))
 
