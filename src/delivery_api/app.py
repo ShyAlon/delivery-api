@@ -1122,6 +1122,14 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         raise HTTPException(exc.http_status,{"error":"Interview route rejected.","cause":exc.error.detail,"next":"Correct the named model settings and reload before starting."})
     except EngineUnreachableError as exc:raise _engine_unreachable(exc)
     except (KeyError,TypeError,ValueError) as exc:raise HTTPException(502,{"error":"Engine model preview was invalid.","cause":str(exc),"next":"Check the engine version and retry."})
+    if config.CLOUD_TENANTS:
+        from . import cloud_runtime
+        installed=cloud_runtime.gateway_factory()
+        reviewed=getattr(installed,'models',{}).get(selected_route) if installed else None
+        if reviewed!=model:
+            raise HTTPException(422,{'error':'Requested model does not match the reviewed route.',
+                'cause':f'Requested {provider}:{model}; reviewed {selected_route}:{reviewed or "not configured"}.',
+                'next':'Reload model routes and correct legacy initial defaults before starting. Task was not started.'})
     if selected_route=='deepseek' and os.environ.get('DELIVERY_PAID_CHILD_PREVIEW')=='1':
         approval=store.preview_spend_approval(task_id)
         from .tenancy import current_scope

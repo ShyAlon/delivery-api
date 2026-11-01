@@ -147,7 +147,7 @@ docker info >/dev/null 2>&1 || abort NO-DOCKER "Docker is installed but not runn
 case "$PORT" in ''|*[!0-9]*) abort PORT "PREVIEW_EXEC_PORT is not a number" "" "unset PREVIEW_EXEC_PORT";; esac
 if (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null; then
   port_busy_details "$PORT" "$NAME"
-  abort PORT-BUSY "a listener already occupies 127.0.0.1:$PORT; listener evidence is printed above" "" "use the reviewed stop instruction above, or: PREVIEW_EXEC_PORT=8011 req preview-free"
+  abort PORT-BUSY "a listener already occupies 127.0.0.1:$PORT; listener evidence is printed above" "" "use the reviewed stop instruction above, or: PREVIEW_EXEC_PORT=8011 req preview"
 fi
 docker ps -a --format '{{.Names}}' | grep -qx "$NAME" && abort LEFTOVER "a container named $NAME is left over from an earlier run" "" "docker rm -f $NAME"
 MACHINE=$(uname -m); case "$MACHINE" in arm64|aarch64) NATIVE=arm64;; x86_64|amd64) NATIVE=amd64;; *) abort ARCH "unknown machine architecture $MACHINE";; esac
@@ -168,9 +168,23 @@ for f in $PINFILES src/delivery_api/production_gateway.py; do [ -f "$f" ] || abo
 rc=0; .venv/bin/python scripts/ops/venv_check.py || rc=$?
 [ "$rc" = 0 ] || abort VENV-DEPS "the checkout's .venv is missing declared dependencies" "Nothing was started." "run the exact pip line printed above, then run ops preview-exec again"
 # Cheap read-only schema proof before local model grounding or image build.
-.venv/bin/python scripts/ops/schema-readiness.py --offer-apply || abort SCHEMA-NOT-READY "schema review, apply, or restricted-role readiness did not complete" "Nothing built or started. If apply began, earlier APPLIED files persist; inspect the review output." "resolve the named review blocker and rerun req preview-free; do not send credentials"
+.venv/bin/python scripts/ops/schema-readiness.py --offer-apply || abort SCHEMA-NOT-READY "schema review, apply, or restricted-role readiness did not complete" "Nothing built or started. If apply began, earlier APPLIED files persist; inspect the review output." "resolve the named review blocker and rerun req preview; do not send credentials"
 step_ok
 
+# Fast mode is allowed only for the exact immutable candidate identity.
+FAST_CURRENT=0
+case "${PREVIEW_CHECKS:-full}" in full) ;; fast)
+  if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    IDENTITIES=$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$IMAGE" 2>/dev/null | grep '^REQUI_BUILD_REPOS=' || true)
+    if [ "$IDENTITIES" = "REQUI_BUILD_REPOS=$REPOS" ]; then FAST_CURRENT=1
+    else echo 'FAST request: exact image identity not proven; running full checks instead.'; fi
+  else echo 'FAST request: exact image absent; running full checks/build instead.'; fi;;
+ *) abort CHECKS 'PREVIEW_CHECKS must be fast or full' '' 'use req preview --apply --fast or --full-checks';;
+esac
+if [ "$FAST_CURRENT" = 1 ]; then
+  step "source smoke skipped: --fast and exact image identity verified"
+  step_ok
+else
 step "source smoke: the image's startup checks against the candidate sources, minutes before the image exists"
 PY=.venv/bin/python
 # 2a: every shipped Python file parses. The image smoke finds a syntax error only AFTER a full build;
@@ -253,6 +267,8 @@ print('engine surface: create_app, the sessions DSN contract and build_pool(max_
 PYEOF
 [ "$rc" = 0 ] || abort SRC-ENGINE "the candidate interview-engine tree does not expose the surface the image's startup preflight requires - the image would refuse to start" "Nothing was started." "the mismatch is named above"
 step_ok
+
+fi
 
 step "confirmation"
 # Three provider modes. both is the default and composes two independent pins. ollama: the operator's local model at $0 - no key, no vendor pages, the reviewed row
@@ -375,7 +391,9 @@ fi
 step_ok
 
 step "image smoke"
-if [ "$HAVE" = 1 ]; then
+if [ "$FAST_CURRENT" = 1 ]; then
+  echo "SKIPPED image smoke: --fast, exact image identity verified"
+elif [ "$HAVE" = 1 ]; then
   echo "== the image is already on this Mac: checking that it passes the smoke check before it is reused"
   rc=0
   SMOKE_OUT=$(bash scripts/docker/smoke-local-image.sh "$IMAGE" "$PLATFORM" 2>&1) || rc=$?
@@ -450,7 +468,9 @@ step "browser smoke: the real page boots clean - only named, expected anonymous 
 # anything else, naming the URL Chromium's console line omits. The fake-login half lives in the
 # hermetic pytest (tests/test_ui_playwright.py::test_boot_smoke_zero_console_errors_anonymous_and_after_fake_login),
 # which runs against a throwaway test database, never the live one.
-if .venv/bin/python -c "import playwright.sync_api" 2>/dev/null; then
+if [ "$FAST_CURRENT" = 1 ]; then
+  echo "SKIPPED browser smoke: --fast, exact image identity verified; UI boot not browser-verified this run"
+elif .venv/bin/python -c "import playwright.sync_api" 2>/dev/null; then
   rc=0; BROWSER_OUT=$(.venv/bin/python scripts/ops/browser_smoke.py "http://127.0.0.1:$PORT" 2>&1 | scrub) || rc=$?
   [ -z "$BROWSER_OUT" ] || printf '%s\n' "$BROWSER_OUT"
   case "$rc" in
@@ -462,8 +482,11 @@ else
 fi
 step_ok
 echo
-start_backoffice || abort BACKOFFICE "the private Back office listener could not start" "No unrelated listener was reused or stopped." "Stop your standalone Back office, or choose PREVIEW_BACKOFFICE_PORT, then retry."
-echo "BACK OFFICE READY: http://127.0.0.1:$BACKOFFICE_PREVIEW_PORT   (same browser and sign-in as preview; stops with this script)"
+if start_backoffice; then
+  echo "BACK OFFICE READY: http://127.0.0.1:$BACKOFFICE_PREVIEW_PORT (stops with this script)"
+else
+  echo 'WARNING: optional Back office unavailable; preview remains usable. No unrelated listener was reused or stopped.'
+fi
 echo "PREVIEW-EXEC READY: http://127.0.0.1:$PORT   (execution OPEN, live database, real sign-in, provider: $PROVIDER)"
 [ "$PROVIDER" = both ] && echo "Both routes admitted: choose DeepSeek or Ollama in the UI. Local is zero-cost; DeepSeek uses credits. No fallback."
 [ "$PROVIDER" = ollama ] && echo "Local Ollama route: $OLLAMA_MODEL at \$0; every call is ledgered. The managed DeepSeek route is not configured in this mode."
