@@ -310,17 +310,17 @@ echo "  What it does: runs $IMAGE on http://127.0.0.1:$PORT with execution ON ag
 echo "  Also starts a private Back office at http://127.0.0.1:$BACKOFFICE_PREVIEW_PORT; both stop with this script."
 if [ "$PROVIDER" = deepseek ]; then
 echo "  Provider: DeepSeek only (paid) - no local model server is checked, contacted or needed. The local \$0 Ollama route is the other choice at the provider prompt (or PREVIEW_EXEC_PROVIDER=ollama)."
-echo "  The reviewed row and ceiling are grounded from the two public DeepSeek pages (public GETs, nothing paid),"
-echo "  with the configured safety ceiling 128000 tokens per call / 16384 max output."
-echo "  The DeepSeek key comes from repo .env first, private preview settings next, then shell; missing keys use hidden terminal input. Values are never printed."
+echo "  Reviewed models, prices and ceilings come from the shared Back office Model pins store."
+echo "  No local default or fallback is invented; missing reviewed pins block dispatch."
+echo "  The DeepSeek key comes from repo .env first, private preview settings next, then shell; missing keys stop the launcher. Values are never printed."
 echo "  Real spend is possible only for a person with an admission row and prepaid credits; anyone else is 'not admitted'."
 elif [ "$PROVIDER" = both ]; then
 echo "  Providers: both. UI choice per task: paid DeepSeek or reviewed local Ollama default at \$0. No automatic fallback."
-echo "  Grounding loads the local model once (heavy on this Mac for 1-5 min); DeepSeek pin reads public pages only."
+echo "  The launcher uses shared reviewed pins; local model work starts only when selected."
 echo "  Later local model work runs only when you select Ollama; DeepSeek remains independently available."
 else
 echo "  Provider: local Ollama model $OLLAMA_MODEL at $OLLAMA_HOST (\$0, nothing paid, no key needed) - heavy on this Mac while it runs; PREVIEW_EXEC_PROVIDER=deepseek or picking 2 selects the paid managed route."
-echo "  The reviewed row and context ceiling are grounded from this Mac's own Ollama server and the candidate"
+echo "  The reviewed model and context ceiling come from Back office Model pins, not local discovery or the candidate"
 echo "  checkouts; every call is still reserved and settled in the shared ledger at \$0. The container reaches"
 echo "  the server through host.docker.internal."
 fi

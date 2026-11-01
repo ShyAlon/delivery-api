@@ -25,7 +25,7 @@ def _stubbin(tmp_path):
     if d.exists():
         return d
     d.mkdir()
-    (d / 'docker').write_text('#!/usr/bin/env bash\ncase "$1" in info) exit 0;; ps) exit 0;; *) exit 0;; esac\n')
+    (d / 'docker').write_text('#!/usr/bin/env bash\ncase "$1" in info) exit 0;; ps) exit 0;; inspect|container) exit 1;; *) exit 0;; esac\n')
     (d / 'git').write_text('''#!/usr/bin/env bash
 # Answers every git question ops_start/candidate_tag asks, always clean main at origin.
 while [ $# -gt 0 ]; do case "$1" in -C) shift 2;; *) break;; esac; done
@@ -91,14 +91,14 @@ if sys.argv[0].endswith('schema-readiness.py'):
  class Result:
   def fetchone(self):
    import os
-   return (os.environ.get('FAKE_SCHEMA_MISSING')!='1',)
+   return (os.environ.get('FAKE_SCHEMA_MISSING')!='1','deleted_at IS NULL')
  class Conn:
   def __enter__(self):return self
   def __exit__(self,*a):pass
   def execute(self,*a,**kw):return Result()
  psycopg.connect=lambda *a,**kw:Conn()
 """)
-    env['PYTHONPATH']=str(hooks)
+    env['PYTHONPATH']=str(hooks)+os.pathsep+str(REPO/'src')
     env.update(env_extra)
     if settings is not None:
         env['PREVIEW_SETTINGS_FILE'] = str(settings)
@@ -187,7 +187,7 @@ def test_confirmed_start_passes_origin_checks(tmp_path):
                         'OLLAMA_HOST': 'http://127.0.0.1:9'},
              settings=_settings(tmp_path))
     assert 'ABORTED [ORIGIN]' not in p.stdout, p.stdout[-500:]
-    assert 'ABORTED [PIN' in p.stdout, p.stdout[-500:]
+    assert 'ABORTED [ARCH]' in p.stdout and '== [6/9] image smoke' in p.stdout, p.stdout[-500:]
 
 def test_provider_default_is_both_and_requires_key(tmp_path):
     p = _run(tmp_path, {}, settings=_settings(tmp_path))
@@ -231,7 +231,7 @@ def test_provider_env_skips_the_prompt(tmp_path):
                         'OLLAMA_HOST': 'http://127.0.0.1:9'},
              settings=_settings(tmp_path))
     assert 'Provider for this preview' not in p.stdout, p.stdout[-500:]
-    assert 'ABORTED [PIN' in p.stdout, p.stdout[-500:]
+    assert 'ABORTED [ARCH]' in p.stdout and '== [6/9] image smoke' in p.stdout, p.stdout[-500:]
 
 
 def test_local_preview_flag_only_in_ollama_mode():
@@ -330,22 +330,13 @@ def test_repo_detection_rejects_copied_out_script(tmp_path):
     p = _run_real_git(_real_git_layout(tmp_path, 'copied'))
     assert 'ABORTED [NO-REPO]' in p.stdout, p.stdout[-300:]
 
-def test_ollama_pin_abort_points_at_the_pin_fail_fix_not_a_vendor_page(tmp_path):
-    """Regression: in ollama mode a PIN-FAIL is a local server/model/context
-    condition whose line names its own fix (start the server, pull the model,
-    raise OLLAMA_CONTEXT_LENGTH). The abort advice must point at that line.
-    The 'page or the parser changed' text belongs to the deepseek pin, which
-    scrapes vendor pages - it sent an operator hunting for a parser bug when
-    the Ollama server simply ran with the default 4096 context."""
-    tty = tmp_path / 'tty'
-    tty.write_text('yes\n')
-    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama',
-                        'OLLAMA_HOST': 'http://127.0.0.1:9'},
-             settings=_settings(tmp_path))
-    assert 'ABORTED [PIN]' in p.stdout, p.stdout[-500:]
-    assert 'PIN-FAIL' in p.stdout
-    assert 'page or the parser changed' not in p.stdout
-    assert 'the PIN-FAIL line above names' in p.stdout
+def test_preview_model_pins_are_reviewed_in_shared_store_not_scraped_by_launcher():
+    text=SCRIPT.read_text()
+    assert 'REQUI_PIN_STORE' in text
+    assert 'scripts/ops/pin-local.py "$WORK"' not in text
+    pin=(REPO/'scripts/ops/pin.py').read_text()
+    assert 'selected_environment' in pin and 'Back office > Model pins' in pin
+    assert 'fetch_verified_source' not in pin
 
 
 def test_phi4_is_the_default_local_model(tmp_path):
@@ -406,7 +397,7 @@ def test_the_build_is_not_asked_a_second_yes():
     assert 'REQUI_BUILD_YES' in build
 
 
-def test_the_grounding_step_says_it_loads_the_model(tmp_path):
+def test_launcher_discloses_shared_reviewed_model_authority(tmp_path):
     """The ollama grounding step LOADS the model on this Mac (minutes of fan
     noise) so the server reports the context window it will actually use -
     the step must say that up front, not look like a hang."""
@@ -414,12 +405,13 @@ def test_the_grounding_step_says_it_loads_the_model(tmp_path):
     tty.write_text('yes\n')
     p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama',
                         'OLLAMA_HOST': 'http://127.0.0.1:9'}, settings=_settings(tmp_path))
-    assert 'loads the model' in p.stdout, p.stdout[-800:]
+    assert 'come from Back office Model pins' in p.stdout, p.stdout[-800:]
 
 
 FULL_DOCKER = r'''#!/usr/bin/env bash
 case "$1" in
   info) exit 0;;
+  container|inspect) exit 1;;
   ps) case "$*" in *-a*) exit 0;; *) echo requi-preview-exec;; esac;;
   image)
     case "$*" in
@@ -501,7 +493,7 @@ def test_a_full_run_reaches_ready_with_the_steps_in_order(tmp_path):
     assert positions == sorted(positions), 'the 8 steps must run in the printed order'
     assert 'Provider: local Ollama model phi4' in p.stdout
     assert 'Type or paste' not in p.stdout and 'ABORTED' not in p.stdout
-    assert 'MODEL      phi4' in p.stdout   # the real pin-local grounding ran against the fake server
+    assert 'REQUI_PIN_STORE=1' in SCRIPT.read_text()  # no independent local pricing/pin defaults
 
 
 def test_the_venv_gate_passes_with_the_real_venv_and_fails_loud_without_site_packages():
@@ -536,7 +528,7 @@ def test_both_mode_requires_key_and_warns_of_local_grounding_before_confirmation
     assert 'ABORTED [SETTINGS]'  in p.stdout
     tty=tmp_path/'both-tty';tty.write_text('3\n')
     p=_run(tmp_path,{'PREVIEW_TTY':str(tty),'DEEPSEEK_API_KEY':KEY},settings=_settings(tmp_path))
-    assert 'Providers: both' in p.stdout and 'loads the local model once' in p.stdout
+    assert 'Providers: both' in p.stdout and 'launcher uses shared reviewed pins' in p.stdout
     assert 'ABORTED [NOT-CONFIRMED]' in p.stdout
     assert KEY not in p.stdout+p.stderr
 

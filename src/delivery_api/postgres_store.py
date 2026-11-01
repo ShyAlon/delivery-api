@@ -1806,7 +1806,6 @@ FROM tasks t"""
         elif reason=='unknown_provider_outcome':emit('unresolved_accounting',reason)
         return reason
 
-    @_transactional
     def admit_provider_attempt(self,job_id,attempt_id,quote,digest,*,balance,bind_attempt,authorize,require_prepaid,launch_guard):
         """Parent-only reservation/binding/start transaction, after external IO."""
         self._execute_native('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
@@ -2262,6 +2261,7 @@ _TASK_ENTRY_OPERATIONS={
 _LOCAL_AUTH = {'create_oauth_state','consume_oauth_state','upsert_user','create_basic_user',
  'basic_user','create_session','session','rotate_session','delete_session','set_user_quota'}
 PG_OPERATIONS = (
+    'admit_provider_attempt',
     'activate_private_revision_installation',
     'add_artifact',
     'add_event',
