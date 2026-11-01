@@ -8,7 +8,7 @@ export REQUI_ADMIN_DATABASE_URL
 .venv/bin/python - <<'PY'
 import os,json
 import psycopg
-from delivery_api.confirmed_policy_install import plan
+from delivery_api.confirmed_policy_install import plan,lock_diagnostics
 from delivery_api.attempt_ledger import AdmissionDenied
 
 def main():
@@ -29,6 +29,14 @@ def main():
 
 try:
     main()
+except (psycopg.errors.QueryCanceled,psycopg.errors.LockNotAvailable):
+    print('POLICY TIMEOUT: no policy change committed. Current policy/advisory lock holders (not proof of the expired wait edge):')
+    try:
+        with psycopg.connect(os.environ['REQUI_ADMIN_DATABASE_URL'],options='-c default_transaction_read_only=on -c statement_timeout=3000') as diagnostic:
+            print(json.dumps(lock_diagnostics(diagnostic),indent=2,default=str))
+    except Exception:
+        print('Lock inspection unavailable. No automatic cancel/terminate. Ask the owner of any other active maintenance terminal to finish or roll back.')
+    raise SystemExit('Retry only after reviewing the lock holder; no automatic retry or termination.') from None
 except AdmissionDenied as exc:
     raise SystemExit('POLICY BLOCKED: '+str(exc)+'\nNo policy change committed. Inspect blockers; use normal Stop/reconciliation, never rewrite accounting.') from None
 

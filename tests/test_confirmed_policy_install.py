@@ -88,3 +88,23 @@ def test_blocker_details_count_all_jobs_but_print_only_twenty(quiet):
         match=next(b for b in json.loads(str(exc.value).split(': ',1)[1]) if b['table']=='worker_jobs')
         assert match['count']>=25 and len(match['records'])==20 and match['truncated']
         c.rollback()
+
+
+def test_dry_plan_does_not_wait_on_policy_row_and_diagnostics_name_holder(quiet):
+    import psycopg
+    from delivery_api.confirmed_policy_install import lock_diagnostics
+    with psycopg.connect(DSN) as holder,psycopg.connect(DSN) as reader:
+        holder.execute('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
+        pid=holder.execute('SELECT pg_backend_pid()').fetchone()[0]
+        reader.execute("SET LOCAL statement_timeout='200ms'")
+        plan(reader)
+        assert any(r['pid']==pid and r['locktype']=='advisory' for r in lock_diagnostics(reader))
+        assert not any(r['pid']==reader.execute('SELECT pg_backend_pid()').fetchone()[0] for r in lock_diagnostics(reader))
+        holder.rollback();reader.rollback()
+
+
+def test_preview_transaction_is_closed_before_confirmation_prompts():
+    from pathlib import Path
+    text=(Path(__file__).parents[1]/'scripts/ops/confirmed-expense-policy.sh').read_text()
+    assert text.index('conn.rollback()')<text.index("print('Type exactly:")
+    assert 'pg_terminate_backend' not in text and 'pg_cancel_backend' not in text
