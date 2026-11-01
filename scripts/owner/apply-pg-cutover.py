@@ -146,7 +146,7 @@ def check_targets(admin,app):
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('repo');p.add_argument('--apply',action='store_true');p.add_argument('--env-file');p.add_argument('--review-projection-functions',action='store_true',help='allow a separate exact filename+SHA typed review of known private cache DELETE function definitions; not arbitrary destructive SQL');p.add_argument('--identify',action='store_true',help='read-only app identity and settings source only; no admin URL required');args=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('repo');p.add_argument('--apply',action='store_true');p.add_argument('--preview-offer',action='store_true',help='return to preview after apply; do not run separate operator file setup');p.add_argument('--env-file');p.add_argument('--review-projection-functions',action='store_true',help='allow a separate exact filename+SHA typed review of known private cache DELETE function definitions; not arbitrary destructive SQL');p.add_argument('--identify',action='store_true',help='read-only app identity and settings source only; no admin URL required');args=p.parse_args()
     root=Path(args.repo).expanduser().resolve();py=root/'.venv/bin/python'
     if not py.is_file():raise ValueError('checkout .venv missing')
     if Path(sys.prefix).resolve()!=(root/'.venv').resolve():os.execv(str(py),[str(py),str(Path(__file__).resolve()),*sys.argv[1:]])
@@ -193,6 +193,7 @@ def main():
         conn.execute('SET default_transaction_read_only=off')
         result=apply(conn,reviewed,r,root,app_login,s.terminal_confirm,review_functions=args.review_projection_functions)
     if result:return result
+    if args.preview_offer:return 0
     # Standard operator configuration, not a past-task repair. The existing
     # setup owns its own explicit private-file confirmation after DB apply.
     operator_setup=module(root/'scripts/ops/operator-config-setup.py','requi_operator_setup')

@@ -168,7 +168,7 @@ for f in $PINFILES src/delivery_api/production_gateway.py; do [ -f "$f" ] || abo
 rc=0; .venv/bin/python scripts/ops/venv_check.py || rc=$?
 [ "$rc" = 0 ] || abort VENV-DEPS "the checkout's .venv is missing declared dependencies" "Nothing was started." "run the exact pip line printed above, then run ops preview-exec again"
 # Cheap read-only schema proof before local model grounding or image build.
-.venv/bin/python scripts/ops/schema-readiness.py || abort SCHEMA-NOT-READY "live schema or app SET memberships are behind this checkout" "No database changes; nothing built or started." "run python3 scripts/owner/apply-pg-cutover.py . for dry review; do not send credentials"
+.venv/bin/python scripts/ops/schema-readiness.py --offer-apply || abort SCHEMA-NOT-READY "schema review, apply, or restricted-role readiness did not complete" "Nothing built or started. If apply began, earlier APPLIED files persist; inspect the review output." "resolve the named review blocker and rerun req preview-free; do not send credentials"
 step_ok
 
 step "source smoke: the image's startup checks against the candidate sources, minutes before the image exists"
