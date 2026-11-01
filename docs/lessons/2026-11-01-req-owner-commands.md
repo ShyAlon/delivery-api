@@ -1,0 +1,3 @@
+# Repeatable owner steps belong in req, not download launchers
+
+Extend the existing Downloads-aware req runner with migrate/policy/preflight/force-stop/stop-all/preview-free. First refuse dirty/wrong-branch checkout, fetch and fast-forward main, verify required files and host dependencies, then invoke the repo scripts. Preserve downloaded-script behavior for other names. New owner commands default to dry review; explicit --apply keeps native confirmations and no paid activation shortcut. Stop dry review must not save settings. Installed copied req needs one explicit installer update after the PR is pulled; it cannot discover commands absent from its own old copy.

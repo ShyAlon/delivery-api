@@ -21,6 +21,7 @@ def git(root,*args):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--dry-run',action='store_true',help='exit after review, before any Stop confirmation')
     parser.add_argument('repo',help='path to delivery-api checkout')
     parser.add_argument('--container',default='requi-preview-exec',help='running local preview container')
     parser.add_argument('--env-file',help='explicit settings file; default existing preview settings, otherwise checkout .env')
@@ -100,7 +101,7 @@ def main():
     with tenant_context(TenantScope(owner,session)):
         if not store.auth_session_active():fail('owner/auth session is not active; no reset was run.')
         values['RESET_OWNER_ID']=owner;values['RESET_AUTH_SESSION_ID']=session
-        if values!=before:
+        if values!=before and not args.dry_run:
             try:settings.save_confirmed(Path(args.env_file).expanduser() if args.env_file else settings.target_path(),{k:v for k,v in values.items() if before.get(k)!=v})
             except settings.SettingsError as exc:fail(str(exc))
         stop_path=root/'scripts/ops-stop-existing-tasks.py'
@@ -118,6 +119,7 @@ def main():
                 'quiescence':'unverified until engine confirms Stop','inventory_capped':item['inventory_capped']},sort_keys=True))
         print('Stop candidates:',len(reviewed['tasks']),'PLAN FINGERPRINT:',reviewed['fingerprint'])
         print('This only requests cooperative Stop. No Delete, retry/start, worker-state rewrite, release/refund/credit change, or invented quiescence. Accepted earlier calls may still settle. Missing legacy sessions remain blocked.')
+        if args.dry_run:print('DRY RUN ONLY. No Stop requested.');return
         if not reviewed['tasks']:print('No blocked tasks need Stop. No changes.');return
         if input('Type CONTINUE to verify the running local preview, or Enter to exit dry-only: ').strip()!='CONTINUE':
             print('DRY RUN ONLY. No changes.');return

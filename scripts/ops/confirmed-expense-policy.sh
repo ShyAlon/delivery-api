@@ -15,6 +15,8 @@ def main():
     print('Install only the reviewed $3/session and $3 x registered users/rolling24h confirmed-expense policy. Existing conflicting policy is refused, never replaced. All work and accounting must be quiescent/reconciled. This does NOT enable paid execution or send alerts. Verify migrated schema and the reviewed runtime before continuing.')
     with psycopg.connect(os.environ['REQUI_ADMIN_DATABASE_URL']) as conn:
         print(json.dumps(plan(conn),indent=2));conn.rollback()
+    if os.environ.get('REQUI_POLICY_DRY_RUN')=='1':
+        print('DRY RUN ONLY. No policy changes. Use req policy --apply for the existing explicit confirmations.');return
     print('Type exactly: reviewed runtime includes production launch guard')
     with open('/dev/tty') as tty:ack=tty.readline().strip()
     if ack!='reviewed runtime includes production launch guard':raise SystemExit('Not confirmed; nothing written.')
