@@ -1,0 +1,3 @@
+# Review hidden jobs before the force override
+
+Back office force uses the same authenticated owner plan/apply seam as the script, not a cross-user admin shortcut. A fresh dialog lists hidden jobs and retained accounting, warns worker exit is unverified, and requires the exact typed batch phrase. Fingerprint revalidation remains server-side. The narrow same-origin proxy accepts no recipient/owner or generic path. An unknown response requires a fresh plan/audit read, not a blind retry. Inspected desktop and 390px mobile dialog screenshots and tested one POST only; unsettled accounting remains shown after success.

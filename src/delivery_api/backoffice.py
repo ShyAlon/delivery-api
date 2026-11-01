@@ -9,7 +9,7 @@ from fastapi import FastAPI,Request
 from fastapi.responses import JSONResponse,HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-ROUTES={'active-jobs':'/api/operations/active-jobs','payment-journal':'/api/operator/payment-journal','payment-totals':'/api/operator/payment-totals','workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
+ROUTES={'force-stop-plan':'/api/operations/force-stop-plan','active-jobs':'/api/operations/active-jobs','payment-journal':'/api/operator/payment-journal','payment-totals':'/api/operator/payment-totals','workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
     'operator-sessions':'/api/operator/sessions','operator-credits':'/api/operator/credits',
     'expense-totals':'/api/operator/expense-totals','vendor-status':'/api/operator/vendor-status','task-debug':'/api/operator/task-debug','task-logs':'/api/operator/task-logs','credit-account':'/api/operator/credit-account','task-usage':'/api/operator/task-usage',
     'attempt-releases':'/api/admin/operations/attempt-releases'}
@@ -81,6 +81,30 @@ def create_app(*,service_url,transport=None):
                     return JSONResponse(value,status_code=response.status_code,headers={'Cache-Control':'no-store'})
         except (httpx.HTTPError,ValueError):
             return JSONResponse({'detail':'Operations service unavailable or invalid'},status_code=502)
+    @application.post('/api/operations/force-stop-all')
+    async def force_stop_all(request:Request):
+        import re,json
+        if request.headers.get('origin')!=str(request.base_url).rstrip('/') or request.headers.get('sec-fetch-site')=='cross-site':
+            return JSONResponse({'detail':'Same-origin confirmation required'},status_code=403)
+        raw=await request.body()
+        try:
+            if len(raw)>8192:raise ValueError()
+            value=json.loads(raw)
+            if (not isinstance(value,dict) or set(value)!={'fingerprint','confirmation'}
+                or not isinstance(value['fingerprint'],str) or not re.fullmatch('[a-f0-9]{64}',value['fingerprint'])
+                or not isinstance(value['confirmation'],str) or not re.fullmatch(r'FORCE STOP [0-9]{1,5} JOBS(?: REPAIR [A-Za-z0-9_,.-]{1,4000})?',value['confirmation'])):raise ValueError()
+        except (ValueError,TypeError):return JSONResponse({'detail':'Exact reviewed plan and typed confirmation required'},status_code=422)
+        headers={key:request.headers[key] for key in ('authorization','cookie') if key in request.headers}
+        if not headers:return JSONResponse({'detail':'Service API sign-in required'},status_code=401)
+        headers['Origin']=service_url
+        try:
+            async with httpx.AsyncClient(base_url=service_url,transport=transport,timeout=30,follow_redirects=False) as client:
+                response=await client.post('/api/operations/force-stop-all',headers=headers,json=value)
+                if len(response.content)>1024*1024 or response.status_code not in (200,401,403,409,422,503):raise ValueError()
+                result=response.json()
+                if not isinstance(result,dict):raise ValueError()
+                return JSONResponse(result,status_code=response.status_code,headers={'Cache-Control':'no-store'})
+        except (httpx.HTTPError,ValueError):return JSONResponse({'detail':'Force outcome unverified. Read a fresh plan and audit evidence; do not retry blindly.'},status_code=502)
     @application.post('/api/operations/worker-jobs/{job_id}/stop')
     async def stop_job(job_id:str,request:Request):
         import re,json
