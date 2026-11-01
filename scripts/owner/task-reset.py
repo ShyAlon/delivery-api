@@ -125,7 +125,7 @@ def main():
         if not reviewed['tasks']:
             print('Nothing to reset. No changes.');return
         print('\nReview the entire plan. Exit now to send it for review, or continue locally.')
-        if input('Type APPLY to enter the repository script\'s typed-confirmation step, or press Enter to stop: ').strip()!='APPLY':
+        if input('Type "APPLY" to enter the repository script\'s typed-confirmation step, or press Enter to stop: ').strip()!='APPLY':
             print('DRY RUN ONLY. No changes.');return
         if reset.plan(store)!=reviewed:fail('plan changed since dry-run; rerun and review. No reset was run.')
         # Native apply performs its own fresh plan, typed DELETE N TASKS prompt,

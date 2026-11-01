@@ -19,7 +19,7 @@ if [ -s "$STORE" ]; then
   echo
   echo "A saved settings file already exists. Typing yes updates missing fields and preserves existing settings."
 fi
-printf 'Type yes to save the settings locally on this Mac: '
+printf 'Type "yes" to save the settings locally on this Mac: '
 read -r A <&9 || A=no; [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "Nothing was written." "run again and type yes"
 ASK_RESULT=''
 ask(){ local kind=$1 note=$2 allow_empty=${3:-} val name=${2%% *}

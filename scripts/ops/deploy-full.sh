@@ -162,7 +162,7 @@ echo "  execution        OFF. Users can sign in and use the screens; starting wo
 echo "  limits           3 GB memory, 512 processes, read-only container, artifacts in /data/requi"
 case "$CADDY" in missing) echo "  compression      adds 'encode zstd gzip' to the Caddy site (backup kept, validated first, restored if Caddy rejects it)";; has-encode) echo "  compression      already on";; *) echo "  compression      not changed (Caddyfile state: $CADDY)";; esac
 echo "  cleanup          removes exited test containers older than 2 days: ${STALE:-none}"
-read -r -p "Type yes (English keyboard) to deploy, anything else changes nothing: " A
+read -r -p "Type \"yes\" (English keyboard) to deploy, anything else changes nothing: " A
 [ "$A" = yes ] || abort DECLINED "You did not type yes." "Nothing was changed." "nothing needed"
 echo "== deploying"
 RC=0; "${SSH[@]}" "IMAGE=$IMAGE PORT=$PORT bash -s" < "$WORK/remote.sh" 2>&1 | tee /tmp/requi-deploy-full.log || RC=$?

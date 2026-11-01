@@ -52,7 +52,7 @@ def save(settings,destination,values,confirm):
     destination=Path(destination)
     settings.read_file(destination)  # refuses symlinks, nonfiles, nonprivate mode
     before=destination.read_bytes() if destination.exists() else None
-    if confirm('Save the three operator settings with only the five Debug read permissions to the selected private settings file? Type yes to save, anything else to cancel: ')!='yes':return False
+    if confirm('Save the three operator settings with only the five Debug read permissions to the selected private settings file? Type "yes" to save, anything else to cancel: ')!='yes':return False
     settings.read_file(destination)
     if (destination.read_bytes() if destination.exists() else None)!=before:raise ValueError('settings changed during confirmation')
     destination.parent.mkdir(parents=True,exist_ok=True,mode=0o700)

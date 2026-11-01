@@ -144,7 +144,7 @@ def attest_config(root,*,prompt=input,output=None):
     facts=review(root)
     print(json.dumps(facts,indent=2),file=output,flush=True)
     print('Config review only. This does not authorize a run, spending or any other gate.',file=output,flush=True)
-    try:answer=prompt('Confirm this exact config review? Type yes, or Enter to leave unreviewed: ')
+    try:answer=prompt('Confirm this exact config review? Type "yes", or Enter to leave unreviewed: ')
     except EOFError:answer=''
     if answer.strip()!='yes':
         return {'reviewed':False,'run_started':False,'launch_authorized':False,'files_changed':False}

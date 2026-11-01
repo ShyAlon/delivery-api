@@ -20,7 +20,7 @@ if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
   if docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
     echo "== a preview is RUNNING now. Stopping it ends its console and its in-memory log"
     echo "   (download the Debug ZIP first if you still need it)."
-    printf 'Type yes (English keyboard) to stop and replace it, anything else changes nothing: '
+    printf 'Type "yes" (English keyboard) to stop and replace it, anything else changes nothing: '
     read -r A < "${PREVIEW_TTY:-/dev/tty}" || A=no; [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "" "run ops preview-rebuild again when the running preview can be stopped"
   fi
   docker rm -f "$NAME" >/dev/null || abort RM "the old container $NAME could not be removed" "" "docker rm -f $NAME"

@@ -68,7 +68,7 @@ def test_cli_terminal_displays_then_confirms_without_hash(tmp_path):
                 except OSError:break
                 if not chunk:break
                 text+=chunk
-                if b'Type yes' in text and not answered:
+                if b'Type "yes"' in text and not answered:
                     assert b'nonsecret_values' in text and b'review_conditions' in text
                     os.write(master,b'yes\n');answered=True
             if process.poll() is not None and not ready:break

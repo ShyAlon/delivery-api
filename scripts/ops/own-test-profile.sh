@@ -14,10 +14,10 @@ with open('/dev/tty') as tty:
     print('Own signed-up email: ',end='',flush=True);email=tty.readline().strip()
 with psycopg.connect(os.environ['REQUI_ADMIN_DATABASE_URL']) as conn:
     print(json.dumps(transition(conn,email),indent=2));conn.rollback()
-print('Type exactly: reviewed runtime includes own-test dispatch guard')
+print('Type exactly: "reviewed runtime includes own-test dispatch guard"')
 with open('/dev/tty') as tty:ack=tty.readline().strip()
 if ack!='reviewed runtime includes own-test dispatch guard':raise SystemExit('Not confirmed; nothing written.')
-print('Type yes to revalidate and commit this exact transition: ',end='',flush=True)
+print('Type "yes" to revalidate and commit this exact transition: ',end='',flush=True)
 with open('/dev/tty') as tty:ack=tty.readline().strip()
 if ack!='yes':raise SystemExit('Not confirmed; nothing written.')
 with psycopg.connect(os.environ['REQUI_ADMIN_DATABASE_URL']) as conn:

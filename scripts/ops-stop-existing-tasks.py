@@ -24,7 +24,7 @@ def plan(store):
 
 def apply(store,engine,reviewed,*,confirm=input):
     count=len(reviewed['tasks'])
-    if confirm('Type STOP '+str(count)+' TASKS to request Stop only: ')!='STOP '+str(count)+' TASKS':
+    if confirm('Type "STOP '+str(count)+' TASKS" to request Stop only: ')!='STOP '+str(count)+' TASKS':
         raise ValueError('typed confirmation did not match; no Stop requested')
     if plan(store)!=reviewed:raise ValueError('reviewed plan changed; rerun dry review; no Stop requested')
     from delivery_api.cooperative_stop import request_stop

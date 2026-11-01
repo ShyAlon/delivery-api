@@ -131,7 +131,7 @@ def test_policy_dry_exits_before_ack_and_stop_dry_skips_settings_save():
     assert text.index("REQUI_POLICY_DRY_RUN')=='1'")<text.index("print('Type exactly:")
     stop=(REQ.parents[1]/'owner/stop-all.py').read_text()
     assert 'if values!=before and not args.dry_run:' in stop
-    assert stop.index('if args.dry_run:')<stop.index("input('Type CONTINUE")
+    assert stop.index('if args.dry_run:')<stop.index("input('Type \"CONTINUE\"")
 
 
 def test_unknown_owner_like_command_never_runs_download(tmp_path):

@@ -112,7 +112,7 @@ def reset(dsn,owner,accounting,*,confirm=input,directory=None):
         rows=inventory(conn,owner);order=deletion_order(conn,rows,'wipe')
         phrase='RESET PREVIEW '+APPROVED_PROJECT+' OWNER '+owner+' WIPE ACCOUNTING'
         print(json.dumps({'deletes':rows,'order':order,'warning':'All owner preview work and test accounting will be deleted. Auth/prepaid/payment/policy/audit and other owner data survive. Stop all preview producers first; this is not a process kill.'},indent=2,default=str))
-        if confirm('Type '+phrase+': ')!=phrase:raise ValueError('confirmation mismatch; no changes')
+        if confirm('Type "'+phrase+'": ')!=phrase:raise ValueError('confirmation mismatch; no changes')
         exported=snapshot(conn,owner,directory or Path.home()/'Downloads/requi-preview-reset')
         print('VERIFIED STATISTICS SNAPSHOT '+json.dumps(exported))
         scope={

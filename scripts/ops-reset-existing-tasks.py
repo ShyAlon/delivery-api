@@ -42,7 +42,7 @@ def plan(store):
 def apply(store,reviewed,*,confirm=input):
     if reviewed['blocked']:raise ValueError('unresolved work; Stop/reconcile first, no task changed')
     expected='DELETE '+str(reviewed['task_count'])+' TASKS'
-    if confirm('Type '+expected+' to apply this owner-scoped reset: ')!=expected:raise ValueError('typed confirmation did not match; no task changed')
+    if confirm('Type "'+expected+'" to apply this owner-scoped reset: ')!=expected:raise ValueError('typed confirmation did not match; no task changed')
     if plan(store)!=reviewed:raise ValueError('reviewed task set changed; rerun dry review')
     completed=[]
     for task in reviewed['tasks']:

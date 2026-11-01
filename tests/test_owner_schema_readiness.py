@@ -183,7 +183,8 @@ def test_exact_projection_review_applies_all_pending_and_resumes_disposable_data
             prompts=[]
             def confirm(prompt):
                 prompts.append(prompt)
-                return prompt.removeprefix('Type ').split(': ')[0].split(' to apply')[0]
+                assert prompt.startswith('Type "')
+                return prompt.split('"')[1]
             reviewed=s.plan(conn,r,ROOT)
             assert s.apply(conn,reviewed,r,ROOT,'delivery_app',confirm,review_functions=True)==0
             assert len([p for p in prompts if 'REVIEW FUNCTIONS' in p])==2

@@ -14,4 +14,4 @@ def test_driver_keeps_the_money_and_run_guards():
     assert 'CEILING=2.00' in text
     assert 'evidence is not empty' in text
     assert 'docker rm requi-item6-$RID' in text and text.count('docker rm ') == 1
-    assert text.count('Type yes') == 1
+    assert text.count(r'Type \"yes\"') == 1

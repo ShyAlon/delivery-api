@@ -293,7 +293,7 @@ echo "  the server through host.docker.internal."
 fi
 echo "  This start is NOT the activation approval for the first real interview: spend limit, cost ceiling, model"
 echo "  route and live changes are approved once, separately, before that interview."
-printf 'Type yes (English keyboard) to start, anything else changes nothing: '
+printf 'Type "yes" (English keyboard) to start, anything else changes nothing: '
 A=no; prompt_open && read -r A <&9 || A=${A:-no}; [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "" "run ops preview-exec again and type yes"
 step_ok
 

@@ -18,10 +18,10 @@ def main():
         print(json.dumps(plan(conn),indent=2));conn.rollback()
     if os.environ.get('REQUI_POLICY_DRY_RUN')=='1':
         print('DRY RUN ONLY. No policy changes. Use req policy --apply for the existing explicit confirmations.');return
-    print('Type exactly: reviewed runtime includes production launch guard')
+    print('Type exactly: "reviewed runtime includes production launch guard"')
     with open('/dev/tty') as tty:ack=tty.readline().strip()
     if ack!='reviewed runtime includes production launch guard':raise SystemExit('Not confirmed; nothing written.')
-    print('Type yes to revalidate and commit this policy only: ',end='',flush=True)
+    print('Type "yes" to revalidate and commit this policy only: ',end='',flush=True)
     with open('/dev/tty') as tty:ack=tty.readline().strip()
     if ack!='yes':raise SystemExit('Not confirmed; nothing written.')
     with psycopg.connect(os.environ['REQUI_ADMIN_DATABASE_URL']) as conn:

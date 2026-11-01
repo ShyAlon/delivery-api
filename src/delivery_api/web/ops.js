@@ -90,12 +90,12 @@ const grants=makeTable($('#grant-view'),'Recent Grants','Credits given to accoun
 const gEmail=el('input',{id:'g-email',type:'email',placeholder:'name@example.com',title:'The sign-in email of the account that gets the credits.'});
 const gCredits=el('input',{id:'g-credits',type:'number',min:'0.01',max:'500',step:'any',placeholder:'50',title:'How many credits to give. At most 500 at a time.'});
 const gReason=el('input',{id:'g-reason',type:'text',value:'Free launch credits',maxLength:400,title:'Why the credits are given. It is kept in the credit history.'});
-const gConfirm=el('input',{id:'g-confirm',type:'text',placeholder:'yes',autocomplete:'off',title:'Type yes to allow the grant after you have read the preview.'});
+const gConfirm=el('input',{id:'g-confirm',type:'text',placeholder:'yes',autocomplete:'off',title:'Type "yes" to allow the grant after you have read the preview.'});
 const gPreviewBtn=el('button',{id:'g-preview',textContent:'Preview',title:'Shows what the grant would do. Nothing is changed.'});
 const gGrantBtn=el('button',{id:'g-grant',textContent:'Grant Credits',disabled:true,title:'Press Preview first.'});
 const gOut=el('div',{id:'grant-preview',className:'empty'});
 const fld=(t,i)=>el('label',{textContent:t},i);
-const gForm=el('div',{id:'grant-form'},fld('Account Email',gEmail),fld('Credits',gCredits),fld('Reason',gReason),gPreviewBtn,fld('Type Yes To Confirm',gConfirm),gGrantBtn);
+const gForm=el('div',{id:'grant-form'},fld('Account Email',gEmail),fld('Credits',gCredits),fld('Reason',gReason),gPreviewBtn,fld('Type "yes" To Confirm',gConfirm),gGrantBtn);
 $('#grant-view').prepend(gOut);$('#grant-view').prepend(gForm);
 let gPreview=null,gWorking=false;
 function gSync(){
@@ -104,7 +104,7 @@ function gSync(){
   gGrantBtn.disabled=gWorking||gGrantBtn.getAttribute('aria-busy')==='true'||!(ok&&yes);
   gGrantBtn.title=!gPreview||gPreview.key!==gEmail.value.trim().toLowerCase()+'|'+gCredits.value?'Press Preview first. Changing the email or credits needs a new preview.':
     !gPreview.found?'No account has that email.':!gPreview.scale_ok?'This account uses a different credit scale.':gPreview.already_granted_today?'This exact grant was already given today.':
-    !yes?'Type yes in the confirm box.':'Gives the credits now.';
+    !yes?'Type "yes" in the confirm box.':'Gives the credits now.';
 }
 [gEmail,gCredits,gConfirm].forEach(i=>i.addEventListener('input',gSync));
 async function gCall(path,body){
@@ -123,7 +123,7 @@ gPreviewBtn.onclick=async()=>runAction('ops.grant',[gPreviewBtn,gGrantBtn],async
     p.key=email.toLowerCase()+'|'+gCredits.value;gPreview=p;
     gOut.textContent=!p.found?'No account has that email. They need to sign up first.':
       'Balance now: '+num(p.balance_credits)+' credits\nGrant: +'+num(credits)+' credits\nBalance after: '+num(p.after_credits)+' credits\nLimits row: '+p.admission_row+
-      (p.already_granted_today?'\nThis exact grant was already given today. Nothing more can be granted.':'\nType yes, then press Grant Credits.');
+      (p.already_granted_today?'\nThis exact grant was already given today. Nothing more can be granted.':'\nType "yes", then press Grant Credits.');
   }catch(e){gOut.textContent=e.message}
   gWorking=false;
 }).finally(gSync);
