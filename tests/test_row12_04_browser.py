@@ -1,3 +1,4 @@
+from test_artifacts import evidence_path
 from test_debug_progress_browser import ui, page, _open_debug
 
 
@@ -6,4 +7,4 @@ def test_local_incomplete_usage_is_not_a_complete_cost(page, ui):
     page.goto(ui+'/tasks/'+page._debug_task_id+'/view')
     page.wait_for_function("() => document.querySelector('#sessioncost').textContent==='Session Cost Incomplete'")
     assert '2 rejected rows' in page.locator('#sessioncost').get_attribute('title')
-    page.screenshot(path='/downloads/row12-10-cost-incomplete.png',full_page=True)
+    page.screenshot(path=evidence_path('row12-10-cost-incomplete.png'),full_page=True)

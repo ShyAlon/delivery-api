@@ -1,4 +1,5 @@
 """Classification Debug section reads owned PG evidence, not local residue."""
+from test_artifacts import evidence_path
 from test_ui_playwright import pg_ui,pg_page,pg_ids
 from playwright.sync_api import expect
 
@@ -24,7 +25,7 @@ def test_debug_reads_pg_classification_evidence(pg_page,pg_ui,pg_ids,pg_browser)
     expect(section).to_contain_text('"differed": true')
     expect(section).to_contain_text('"relevance": "thin"')
     section.scroll_into_view_if_needed()
-    page.screenshot(path='/downloads/pg-classifications-desktop.png',full_page=False)
+    page.screenshot(path=evidence_path('pg-classifications-desktop.png'),full_page=False)
     page.set_viewport_size({'width':390,'height':844})
     section.scroll_into_view_if_needed()
-    page.screenshot(path='/downloads/pg-classifications-mobile.png',full_page=False)
+    page.screenshot(path=evidence_path('pg-classifications-mobile.png'),full_page=False)

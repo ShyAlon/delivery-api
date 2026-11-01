@@ -1,3 +1,4 @@
+from test_artifacts import evidence_path
 from test_debug_progress_browser import ui, page, _open_debug
 
 
@@ -8,5 +9,5 @@ def test_operator_debug_shows_log_evidence_degradation(page, ui):
     host.evaluate("el => el.closest('details').open=true")
     page.wait_for_function("() => document.querySelector('#logdurability').textContent.includes('engine-mirror')")
     host.scroll_into_view_if_needed()
-    page.screenshot(path='/downloads/row12-04-log-state.png',full_page=True)
+    page.screenshot(path=evidence_path('row12-04-log-state.png'),full_page=True)
     assert 'Log evidence degraded' in host.inner_text()

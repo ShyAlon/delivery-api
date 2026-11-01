@@ -1,4 +1,5 @@
 """Browser-level contracts for the three task views and traceable rerun UX."""
+from test_artifacts import evidence_path
 import tempfile
 from pathlib import Path as _ScreenshotPath
 SCREENSHOTS = _ScreenshotPath(tempfile.mkdtemp(prefix='delivery-browser-evidence-'))
@@ -1024,7 +1025,7 @@ def test_everything_zip_includes_runtime_snapshot_and_resource_decision(pg_page,
     assert text.startswith('===== Known omissions =====')
 
     assert tid not in text
-    page.screenshot(path="/downloads/resource-zip-redacted.png",full_page=False)
+    page.screenshot(path=evidence_path('resource-zip-redacted.png'),full_page=False)
 def test_copy_diagnostic_summary_copies_a_bounded_digest(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     tid=pg_ids["live"]
@@ -2353,7 +2354,7 @@ def test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_
     assert page.get_by_role("button",name="Rerun stage").count()==0  # owner-approved tenant policy, not a local rerun port
     assert live["rerun_control"]["available"] is False
     expect(page.locator("#rerununavailable")).to_contain_text("Tenant stage rerun is unavailable")
-    page.screenshot(path="/downloads/tenant-session-unavailable.png",full_page=True)
+    page.screenshot(path=evidence_path('tenant-session-unavailable.png'),full_page=True)
 
 
 def test_everything_zip_downloads_with_the_manifest_first(pg_page,pg_ui,pg_ids,tmp_path):
@@ -2392,10 +2393,10 @@ def test_start_route_pills_show_all_choices_and_disabled_reasons(pg_page,pg_ui,p
     ollama=choices.get_by_role('button',name='Ollama');assert ollama.get_attribute('aria-pressed')=='true'
     assert 'ollama:phi4' in choices.inner_text()
     assert page.get_by_role('button',name='Start interview').is_enabled()
-    page.screenshot(path='/downloads/start-route-options.png',full_page=True)
+    page.screenshot(path=evidence_path('start-route-options.png'),full_page=True)
     page.set_viewport_size({'width':390,'height':844})
     assert choices.evaluate('e=>e.scrollWidth<=e.clientWidth')
-    page.screenshot(path='/downloads/start-route-options-mobile.png',full_page=True)
+    page.screenshot(path=evidence_path('start-route-options-mobile.png'),full_page=True)
     routes['routes'][1]={'id':'ollama','managed':True,'available':False,'error':'DELIVERY_LOCAL_PREVIEW is not enabled on this server'};routes['default_route']={'route':'deepseek'}
     page.reload();choices.wait_for()
     assert choices.get_by_role('button').count()==2
@@ -2519,11 +2520,11 @@ def test_both_admitted_routes_can_be_selected_without_hiding_either(pg_page,pg_u
         expect(button).to_have_attribute('aria-pressed','true')
         expect(choices.locator('[aria-pressed=true]')).to_have_count(1)
     expect(page.locator('#defaultroute')).to_have_value('deepseek')
-    page.screenshot(path='/downloads/both-provider-options.png',full_page=True)
+    page.screenshot(path=evidence_path('both-provider-options.png'),full_page=True)
     page.set_viewport_size({'width':390,'height':844})
     assert choices.evaluate('e=>e.scrollWidth<=e.clientWidth')
     expect(choices.get_by_role('button',name='Ollama')).to_be_enabled()
-    page.screenshot(path='/downloads/both-provider-options-mobile.png',full_page=True)
+    page.screenshot(path=evidence_path('both-provider-options-mobile.png'),full_page=True)
 
 
 def test_customer_audit_summary_is_credits_only_even_with_legacy_provider_totals(pg_page,pg_ui,pg_ids):
@@ -2537,7 +2538,7 @@ def test_customer_audit_summary_is_credits_only_even_with_legacy_provider_totals
     expect(dialog).to_contain_text('2.50 credits')
     for text in ['Interview API cost','No usage records','USD','$']:
         expect(dialog).not_to_contain_text(text)
-    page.screenshot(path='/downloads/audit-credits-only.png',full_page=True)
+    page.screenshot(path=evidence_path('audit-credits-only.png'),full_page=True)
 
 
 def test_gate_comment_shared_guard_prevents_duplicate_and_allows_retry(pg_page,pg_ui,pg_ids):
@@ -2582,7 +2583,7 @@ def test_gate_approval_shared_guard_ignores_second_action_and_preserves_retry(pg
     assert page.locator('[data-action="approve"]').get_attribute('aria-busy')=='true'
     page.locator('[data-action="approve"]').dispatch_event('click');page.wait_for_timeout(100)
     assert len(pending)==1
-    page.screenshot(path='/downloads/gate-shared-action-busy.png',full_page=True)
+    page.screenshot(path=evidence_path('gate-shared-action-busy.png'),full_page=True)
     pending.pop().fulfill(status=500,json={'detail':'approval retry fixture'})
     expect(page.locator('#gate-decision-status')).to_contain_text('approval retry fixture')
     expect(page.locator('[data-action="approve"]')).to_be_enabled()

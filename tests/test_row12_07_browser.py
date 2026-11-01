@@ -1,3 +1,4 @@
+from test_artifacts import evidence_path
 from test_debug_progress_browser import ui, page, _open_debug
 
 
@@ -8,4 +9,4 @@ def test_result_freshness_notice_is_readable_and_keeps_content(page,ui):
     assert 'Phase results stale' in page.locator('.result-stale').inner_text()
     page.locator('.result-stale').scroll_into_view_if_needed()
     page.wait_for_timeout(100)
-    page.screenshot(path='/downloads/row12-07-stale.png',full_page=True)
+    page.screenshot(path=evidence_path('row12-07-stale.png'),full_page=True)

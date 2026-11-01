@@ -52,7 +52,14 @@ def test_operator_credit_pages_preserve_negative_fixed_point_and_capability(stor
    first=reader.credits(store,limit=1)
    assert first['truncated'] and first['accounts']==[{'owner_id':A.owner_id,'balance_units':-17,'units_per_credit':100,'updated_at':0}]
    second=reader.credits(store,limit=1,after_owner=first['next_owner'])
-   assert not second['truncated'] and second['accounts'][0]['owner_id']==B.owner_id
+   assert second['accounts'][0]['owner_id']==B.owner_id
+   # Other retained tenant credit accounts may follow B on the shared server.
+   pages=second;owners=[first['accounts'][0]['owner_id']]
+   while True:
+    owners.extend(a['owner_id'] for a in pages['accounts'])
+    if not pages['truncated']:break
+    pages=reader.credits(store,limit=1,after_owner=pages['next_owner'])
+   assert owners==sorted(set(owners)) and B.owner_id in owners
    assert not second['credit_adjustment_available']
    with pytest.raises(TenantAccessDenied):reader.sessions(store)
    with pytest.raises(ValueError):reader.credits(store,after_owner='bad')

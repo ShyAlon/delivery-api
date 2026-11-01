@@ -1,3 +1,4 @@
+from test_artifacts import evidence_path
 from test_ui_playwright import pg_ui,pg_page,pg_ids,_promote_control
 from playwright.sync_api import expect
 
@@ -17,7 +18,7 @@ def test_failed_tenant_interview_explains_unavailable_rerun_without_confirm(pg_p
     expect(page.locator('#rerun')).to_have_count(0)
     expect(page.locator('#rerununavailable')).to_contain_text('new-generation')
     expect(page.locator('#rerununavailable')).to_contain_text('Audit')
-    page.screenshot(path='/downloads/tenant-rerun-unavailable.png',full_page=True)
+    page.screenshot(path=evidence_path('tenant-rerun-unavailable.png'),full_page=True)
 
 
 import pytest
