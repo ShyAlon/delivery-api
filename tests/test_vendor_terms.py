@@ -1,5 +1,4 @@
-"""Hermetic checks of the vendor-terms rule (owner ruling 2026-10-17): nothing the vendor pages do stops a call.
-A failed refresh, an old pin or a changed term is a loud, persistent warning; billing continues on the pinned terms."""
+"""Hermetic checks of the vendor-terms rule (owner ruling 2026-10-17): failed refreshes warn under 24h and block at or above 24h."""
 import copy,datetime,hashlib
 import pytest
 from delivery_api import vendor_sources as vs,vendor_status,cloud_runtime
@@ -31,10 +30,10 @@ def run(snap,monkeypatch,fetcher=lambda u:'page changed',parse=None):
     return vs.verify_current_sources(snap,fetcher,cached=False,log=lines.append),lines
 
 
-def test_unreadable_pages_with_a_three_day_old_pin_warn_and_the_call_continues(monkeypatch):
+def test_unreadable_pages_with_a_fresh_pin_warn_and_the_call_continues(monkeypatch):
     def boom(url):raise ConnectionError('no route')
     monkeypatch.setattr(vs,'fetch_verified_source',lambda url,fetcher:boom(url))
-    ok,lines=run(snapshot(72),monkeypatch)
+    ok,lines=run(snapshot(1),monkeypatch)
     status=vendor_status.status()
     assert ok is True and status['ok'] is False and {w['kind'] for w in status['warnings']}>={'vendor-read'}
     assert lines and 'WARNING vendor terms (vendor-read)' in lines[0] and 'no route' in lines[0]
@@ -89,3 +88,20 @@ def test_the_background_watch_records_a_failed_check_and_stops_when_told():
             calls.append(1);stop.set();raise RuntimeError('boom')
     cloud_runtime._watch(Gateways(),stop,0)
     assert calls==[1] and any(w['kind']=='vendor-stop' and 'boom' in w['text'] for w in vendor_status.status()['warnings'])
+
+
+@pytest.mark.parametrize('hours',[24,72])
+def test_stale_failed_refresh_blocks_even_if_warning_is_cached(monkeypatch,hours):
+    from delivery_api.attempt_ledger import AdmissionDenied
+    snap=snapshot(hours)
+    vs._WARNED[vs.ProviderSnapshot(snap).id]=vs.time.monotonic()
+    monkeypatch.setattr(vs,'fetch_verified_source',lambda *a:(_ for _ in ()).throw(ConnectionError('offline')))
+    with pytest.raises(AdmissionDenied,match='24 hours'):
+        vs.verify_current_sources(snap,cached=True)
+
+
+def test_successful_refresh_accepts_old_pin_then_outage_uses_recent_verification(monkeypatch):
+    snap=snapshot(72)
+    run(snap,monkeypatch,parse=lambda *a:parsed())
+    monkeypatch.setattr(vs,'fetch_verified_source',lambda *a:(_ for _ in ()).throw(ConnectionError('offline')))
+    assert vs.verify_current_sources(snap,cached=False,log=lambda t:None)
