@@ -3473,14 +3473,13 @@ class ForceStopAllRequest(BaseModel):
 @app.get('/api/operations/force-stop-plan')
 def owner_force_stop_plan(a:auth.Actor=Depends(auth.require_actor)):
     _require_account_debug()
-    return JSONResponse(store.force_stop_jobs_plan(),headers={'Cache-Control':'no-store'})
+    raise HTTPException(410,'Force job closure was retired. Use normal Stop or the reviewed owner preview reset after stopping producers; accounting remains unresolved.')
 
 
 @app.post('/api/operations/force-stop-all')
 def owner_force_stop_all(body:ForceStopAllRequest,a:auth.Actor=Depends(auth.require_actor)):
     _require_account_debug()
-    try:return JSONResponse(store.force_stop_jobs_apply(body.fingerprint,body.confirmation),headers={'Cache-Control':'no-store'})
-    except ValueError as exc:raise HTTPException(409,str(exc))
+    raise HTTPException(410,'Force job closure was retired. No job or accounting record changed. Use the reviewed owner preview reset after stopping producers.')
 
 
 @app.get('/api/operations/active-jobs')
