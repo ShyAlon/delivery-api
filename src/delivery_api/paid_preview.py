@@ -18,4 +18,6 @@ def construct(env,gateways):
     if env.get('DELIVERY_CHILD_EXECUTION')!='attended-paid':return None
     require_preview(env)
     from .child_paid_runtime import PaidChildRuntime
-    return PaidChildRuntime(models=gateways.models,api_key=env.get('DEEPSEEK_API_KEY',''))
+    runtime=PaidChildRuntime(models=gateways.models,api_key=env.get('DEEPSEEK_API_KEY',''))
+    if hasattr(gateways,'for_task'):runtime.pin_factory=gateways
+    return runtime

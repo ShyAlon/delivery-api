@@ -11,10 +11,15 @@ class PaidChildRuntime:
         if not isinstance(models,dict) or not isinstance(models.get('deepseek'),str) or not models['deepseek'] or set(models)-{'deepseek','ollama'}:
             raise ValueError('reviewed paid child model map required')
         if not isinstance(api_key,str) or not api_key.strip():raise ValueError('parent provider key required')
-        self.models=dict(models);self._key=api_key
+        self._models=dict(models);self._key=api_key;self.pin_factory=None
+
+    @property
+    def models(self):return self.pin_factory.models if self.pin_factory is not None else self._models
 
     def require(self,provider,model):
-        if self.models.get(provider)!=model:raise PermissionError('child route differs from reviewed parent model')
+        if self.models.get(provider)!=model:
+            from .tenancy import current_scope
+            if self.pin_factory is None or not self.pin_factory.accepts(provider,model):raise PermissionError('child route differs from reviewed parent model')
 
     def transport(self,provider,model,local_endpoint):
         self.require(provider,model)

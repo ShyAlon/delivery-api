@@ -63,6 +63,8 @@ class ChildInterviewClient(EngineClient):
     def preview_route(self,route,initial_model=None):
         if route!='ollama' and self.paid_runtime is None:raise PermissionError('paid child route remains refused')
         from interview_engine import session_models
+        if hasattr(self.gateway_factory,'for_task') and initial_model is None:
+            initial_model=self.gateway_factory.models.get(route)
         models=session_models.resolve(route,initial_model)
         session_models.validate(models,route)
         if self.paid_runtime is not None:
@@ -168,6 +170,7 @@ class ChildInterviewClient(EngineClient):
             if len(pairs)!=1:raise PermissionError('unpinned child answer refused')
             if self.paid_runtime is None and next(iter(pairs))[0]!='ollama':raise PermissionError('paid child answer refused')
             provider,model=next(iter(pairs))
+            if hasattr(self.gateway_factory,'for_task'):self.gateway_factory.for_task(task_id)
             if self.paid_runtime is not None:self.paid_runtime.require(provider,model)
             ref=refs.put('answer',response.model_dump(mode='json'))
             body={'kind':'interview.answer','checkpoint_sha256':published_digest(row),

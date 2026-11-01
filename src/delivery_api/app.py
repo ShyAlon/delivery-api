@@ -1135,6 +1135,7 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         from .tenancy import current_scope
         if not approval or (approval['model'],str(approval['auth_session_id']))!=(model,current_scope().session_id):
             raise HTTPException(409,'DeepSeek is selectable, but this task generation needs explicit USD ceiling confirmation before start')
+    if config.CLOUD_TENANTS and hasattr(installed,'for_task'):installed.for_task(task_id)
     proposed_session=str(uuid4())
     if not store.begin_interview_start(task_id,proposed_session,selected_route):
         raise HTTPException(409,"task already started")
@@ -3859,3 +3860,6 @@ def operator_payment_totals(start_at:float,end_at:float,owner_id:str|None=None,l
     try:return _operator_reader().payment_totals(store,start_at=start_at,end_at=end_at,owner_id=owner_id,limit=limit)
     except ValueError as exc:raise HTTPException(422,str(exc))
 
+
+from .model_pin_api import install as install_model_pin_routes
+install_model_pin_routes(app,store,_operator_reader)

@@ -1,3 +1,4 @@
+import {mountModelPins} from './model-pins.js';
 import {mountTabs,mountRowMenu} from '/assets/operator-ui.js';
 import {runAction} from '/assets/ui-action.js';
 import {clientReport,clientLog,setClientLogTransport,recordResponse} from '/assets/client-core.js';
@@ -70,6 +71,7 @@ mountTabs(document.querySelector('#backoffice-tabs'),document.querySelector('mai
  {id:'workspace',label:'Workspace',panels:['workspace-panels','workspace-sessions-panel','orphans-panel']},
  {id:'accounts',label:'Accounts',panels:['accounts-panel','global-sessions-panel']},
  {id:'spend',label:'Spend',panels:['expense-panel','releases-panel','vendor-panel']},
+ {id:'model-pins',label:'Model pins',panels:['model-pins-panel']},
  {id:'payments',label:'Payments',panels:['payments-panel']},
  {id:'debug',label:'Debug',panels:['debug-panel']}
 ]);
@@ -78,3 +80,5 @@ document.querySelector('#debug-download').onclick=()=>{const text=clientReport('
 clientLog('backoffice.ready','Back office shared UI ready');
 
 for(const button of document.querySelectorAll('button[id]')){const handler=button.onclick;if(handler)button.onclick=()=>runAction('backoffice.'+button.id,button,()=>handler()).catch(error=>{failure(error);clientLog('backoffice.action.error','Action failed',{action:button.id});});}
+
+mountModelPins(request);
