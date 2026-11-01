@@ -229,7 +229,9 @@ def test_task_names_unique_rename_and_delete_cascade(tmp_path,pg_scoped_workspac
     s.add_event(second['task_id'],'progress','x');s.add_task_artifact(second['task_id'],'tests','x','/x')
     s.delete_task(second['task_id'])
     assert s.task(second['task_id']) is None
-    assert not s.events(second['task_id']) and not s.task_artifacts(second['task_id'])
+    assert any(e['message']=='x' for e in s.events(second['task_id']))
+    assert s.task_artifacts(second['task_id'])  # hide retains evidence, never cascades accounting
+    assert s.create_task('Gamma')['title']=='Gamma'
     assert any(x['action']=='task.deleted' and x['task_id']==second['task_id'] for x in s.audit_entries())
 
 
@@ -242,7 +244,7 @@ def test_task_management_api_structured_collisions_and_delete(pg_workspace_facto
             assert set(b.json()['detail'])=={'error','cause','next'}
             tid=a.json()['task_id']
             r=c.patch(f'/api/tasks/{tid}',json={'title':'Renamed API Task'});assert r.status_code==200 and r.json()['title']=='Renamed API Task'
-            d=c.delete(f'/api/tasks/{tid}');assert d.status_code==200 and d.json()['source_artifacts_deleted'] is False
+            d=c.request('DELETE',f'/api/tasks/{tid}',json={'confirm':True});assert d.status_code==200 and d.json()['source_artifacts_deleted'] is False
             assert c.get(f'/api/tasks/{tid}').status_code==404
 
 def test_engine_runtime_skips_missing_dependency_and_selects_working_python(tmp_path,monkeypatch):
@@ -1023,7 +1025,7 @@ def test_greenfield_correction_recovers_session_from_recent_requirement_path(mon
     store=pg_scoped_workspace.store;tid=store.create_task('Daily Habit')['task_id']
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(store,PostgresStore)
-    session='20260919-163614-adc4';interview=artifacts/session/'interview';interview.mkdir(parents=True)
+    session='legacy-'+__import__('uuid').uuid4().hex;interview=artifacts/session/'interview';interview.mkdir(parents=True)
     _test_interview(store,tid,interview.parent.name)
     store.add_event(tid,'progress',f'session: {session}',phase_key='intent')
     for index in range(510):store.add_event(tid,'output',f'line {index}',phase_key='srs')
@@ -1128,7 +1130,7 @@ def test_legacy_artifact_projection_recovers_session_from_requirement_path(monke
     import json
     from delivery_api import app as app_module
     monkeypatch.setattr(app_module.config,'CLOUD_TENANTS',False)
-    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=pg_scoped_workspace.store;tid=store.create_task('Daily Habit')['task_id'];session='20260919-163614-adc4'
+    root=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(root));store=pg_scoped_workspace.store;tid=store.create_task('Daily Habit')['task_id'];session='legacy-'+__import__('uuid').uuid4().hex
     for index in range(510):store.add_event(tid,'output',f'line {index}',phase_key='srs')
     store.add_event(tid,'requirement','baseline',phase_key='architecture',payload={'kind':'external_input','path':str(root/session/'spec'/'system-baseline.json')})
     (root/session/'spec').mkdir(parents=True);_publish_test_bytes(store,tid,'architecture','architecture.json',json.dumps({'contract_version':'0.16.0'}).encode(),session=session)
