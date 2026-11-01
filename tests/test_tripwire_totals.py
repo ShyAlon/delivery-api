@@ -30,11 +30,14 @@ def test_transition_time_boundary_repair_user_and_rollback(credit_account):
     s,tid,job=credit_account;now=time.time();ids=[]
     with psycopg.connect(DSN) as c:
         check(c,now)
+        # This differential suite tests settlement-time expense retention,
+        # including malformed historical expense. Keep admission created-time
+        # evidence outside its independent window, never disable its trigger.
         for state,stamp,expense,scale in [('settled',None,3,'1'),('settled',now+5,4,'1'),('settled',now-86400,7,'1'),('settled',now,8,'2'),('settled',now,None,'1'),('uncertain',now,None,'1')]:
             a=uuid.uuid4().hex;ids.append(a)
             c.execute('''INSERT INTO provider_attempts(attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,expense_actual,retail_actual,created_at,updated_at,settled_at)
              VALUES(%s,%s,%s,'test',%s::jsonb,'test',%s,10,10,%s,0,%s,%s,%s)''',
-             (a,A.owner_id,job,__import__('json').dumps({'provider':'deepseek','expense_units_per_usd':scale}),state,expense,now,now,stamp))
+             (a,A.owner_id,job,__import__('json').dumps({'provider':'deepseek','expense_units_per_usd':scale}),state,expense,now-90000,now,stamp))
             check(c,now)
         check(c,now+5);check(c,now+86400);check(c,now-1)
         user=uuid.uuid4();c.execute('INSERT INTO auth.users(id) VALUES(%s)',(user,));check(c,now)
@@ -89,7 +92,7 @@ def test_parallel_settlement_guard_expiry_and_single_episode(credit_account):
         refresh(c,now)
     def settle(a):
         with psycopg.connect(DSN) as c:
-            c.execute("UPDATE provider_attempts SET state='settled',expense_actual=3,settled_at=%s WHERE attempt_id=%s",(time.time(),a))
+            c.execute("UPDATE provider_attempts SET state='settled',expense_actual=3,retail_actual=0,settled_at=%s WHERE attempt_id=%s",(time.time(),a))
         db=PostgresStore(DSN.replace('user=sandbox','user=delivery_app'))
         with tenant_context(A):return db.confirmed_expense_admission(job,1)
     try:

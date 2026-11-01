@@ -101,6 +101,9 @@ def test_after_sign_in_only_the_fixed_pages_come_back():
 @pytest.fixture
 def metrics(tmp_path, monkeypatch):
     monkeypatch.setenv("DELIVERY_METRICS_DB", str(tmp_path / "metrics.db"))
+    import uuid
+    run_metrics.stop_idle_sampler()
+    monkeypatch.setenv('DELIVERY_METRICS_SOURCE','operator-pages-'+uuid.uuid4().hex)
     run_metrics.reset(); run_slots.reset()
     yield
     run_metrics.stop_idle_sampler(); run_metrics.reset(); run_slots.reset()
