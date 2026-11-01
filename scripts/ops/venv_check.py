@@ -4,11 +4,15 @@ tests, the pin) import pytest, psycopg and psycopg_pool from this checkout's
 (2026-10-27: the launcher died inside a step-2 pytest import traceback
 instead of saying so). ops_venv refreshes an old venv by itself since the
 extras fix; this gate is the belt for anything the refresh could not cover.
+The pin also imports the vendored child and model contracts. A working pool
+alone does not prove an older venv has these newer dependencies.
 Exit 1 names the exact per-module install line."""
 import importlib.util
 import sys
 
-MODULES = {'psycopg': 'psycopg[binary]>=3.2,<4', 'psycopg_pool': 'psycopg-pool>=3.2,<4', 'pytest': 'pytest>=8'}
+MODULES = {'psycopg': 'psycopg[binary]>=3.2,<4', 'psycopg_pool': 'psycopg-pool>=3.2,<4', 'pytest': 'pytest>=8',
+           'requi_child_contract': 'vendor/requi_child_contract-0.3.0-py3-none-any.whl',
+           'vmodel_contracts': 'vendor/vmodel_contracts-0.28.0-py3-none-any.whl'}
 
 missing = [(module, package) for module, package in MODULES.items() if importlib.util.find_spec(module) is None]
 if missing:
