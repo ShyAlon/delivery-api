@@ -1,0 +1,3 @@
+# Names are commands, not a Downloads fallback
+
+Known owner commands dispatch to clean synced main before inspecting Downloads. Unknown named commands must fail, including typos: they may not select a same-named pending script. Downloaded scripts need explicit `req download NAME`. Preserve the existing no-argument newest-script flow for compatibility, rather than silently change it in a command collision fix. Owner commands and explicit Downloads are distinct routes. The installed req is a copy: updating the repository does not update an older installed runner. Run req-install.sh once after pulling this change.

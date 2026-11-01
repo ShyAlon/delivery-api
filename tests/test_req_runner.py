@@ -132,3 +132,28 @@ def test_policy_dry_exits_before_ack_and_stop_dry_skips_settings_save():
     stop=(REQ.parents[1]/'owner/stop-all.py').read_text()
     assert 'if values!=before and not args.dry_run:' in stop
     assert stop.index('if args.dry_run:')<stop.index("input('Type CONTINUE")
+
+
+def test_unknown_owner_like_command_never_runs_download(tmp_path):
+    _script(tmp_path,'polciy')
+    out=_req(tmp_path,'polciy')
+    assert out.returncode==1 and 'RAN-IT' not in out.stdout
+    assert 'never fall back' in out.stderr
+    out=_req(tmp_path,'download','polciy')
+    assert out.returncode==0 and 'RAN-IT' in out.stdout
+
+
+@pytest.mark.parametrize('name',['policy','reset-preview','migrate','preflight'])
+def test_reserved_owner_name_never_runs_same_named_download(tmp_path,name):
+    script=_script(tmp_path,name)
+    out=subprocess.run(['bash',str(REQ),name],capture_output=True,text=True,
+                       env={**os.environ,'REQ_DOWNLOADS':str(tmp_path),'REQUI_ROOT':str(tmp_path/'missing')})
+    assert out.returncode==1 and 'RAN-IT' not in out.stdout and script.exists()
+    assert 'No owner step was run' in out.stderr
+
+
+def test_download_requires_exactly_one_name(tmp_path):
+    _script(tmp_path,'probe')
+    for args in [('download',),('download','probe','--apply')]:
+        out=_req(tmp_path,*args)
+        assert out.returncode==1 and 'RAN-IT' not in out.stdout
