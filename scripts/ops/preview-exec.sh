@@ -340,7 +340,7 @@ umask 077; WORK=$(mktemp -d "${TMPDIR:-/tmp}/requi-preview-exec.XXXXXXXXXX"); ch
 build_exec_env "$WORK/loaded.env" "$WORK/preview.env" || abort NO-TOKEN "could not make the temporary engine token" "" "send me this output"
 # The old saved settings cannot silently opt into paid children. Owner approval is separate.
 if [ "$PROVIDER" != ollama ]; then
-  echo 'Paid route visibility is not approval: each task requires explicit USD ceiling confirmation before paid dispatch.'
+  echo 'Paid route visibility is not approval: paid dispatch requires an audited Back office expense policy. Customers see credits only.'
   printf '%s\n' DELIVERY_CHILD_EXECUTION=attended-paid DELIVERY_PAID_CHILD_PREVIEW=1 >> "$WORK/preview.env"
 else
   printf '%s\n' DELIVERY_CHILD_EXECUTION=local >> "$WORK/preview.env"

@@ -27,7 +27,8 @@ def test_native_task_lifecycle_and_session_bindings(pg_workspace_factory,monkeyp
                 stopped=s.request_task_stop(tid)
                 assert stopped['generation']==generation+1
                 assert s.request_task_stop(tid)['generation']==generation+1
-                with pytest.raises(ValueError,match='Stop is pending'):s.delete_task(tid)
+                with pytest.raises(ValueError,match='explicit confirmation'):s.delete_task(tid,confirm=False)
+                assert s.task(tid) is not None
                 with pytest.raises(AdmissionDenied,match='engine quiescence'):s.confirm_task_stopped(tid,engine_quiescent=False)
                 with pytest.raises(AdmissionDenied,match='worker remains active'):s.confirm_task_stopped(tid,engine_quiescent=True)
                 s.finish_stopped_worker(job,worker_quiescent=True)
@@ -55,10 +56,10 @@ def test_native_delete_postwrite_failure_preserves_task(pg_workspace_factory,mon
         original=s._execute_native
         def fail(sql,parameters=(),*,write=False):
             out=original(sql,parameters,write=write)
-            if sql=='DELETE FROM tasks WHERE task_id=%s':raise RuntimeError('after real delete')
+            if sql.startswith('UPDATE tasks SET deleted_at='):raise RuntimeError('after real hide')
             return out
         before=s.task(tid)
         with monkeypatch.context() as patch:
             patch.setattr(s,'_execute_native',fail)
-            with pytest.raises(RuntimeError,match='after real delete'):s.delete_task(tid)
+            with pytest.raises(RuntimeError,match='after real hide'):s.delete_task(tid)
         assert s.task(tid)==before
