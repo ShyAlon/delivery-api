@@ -18,9 +18,10 @@ def ui(pg_browser):
     from pg_workspace import KEY
     from delivery_api.tenancy import tenant_context
     page,base,workspace=pg_browser
+    tid='live'+workspace.scope.owner_id[:8]
     with tenant_context(workspace.scope):
-        workspace.store.create_task('Live definition','Detailed progress',task_id='live')
-        workspace.store.update_phase('live','intent','done',detail='Approved')
+        workspace.store.create_task('Live definition','Detailed progress',task_id=tid)
+        workspace.store.update_phase(tid,'intent','done',detail='Approved')
     claims=jwt.decode(workspace.token,options={'verify_signature':False})
     claims['email']=config.OPERATOR_EMAIL
     page.context.add_cookies([{'name':'requi_access','value':jwt.encode(claims,KEY,algorithm='ES256',headers={'kid':'fixture'}),'url':base}])

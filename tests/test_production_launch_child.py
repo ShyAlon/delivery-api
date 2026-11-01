@@ -18,6 +18,8 @@ def test_production_child_dispatch_obeys_composed_guards(credit_account,guard):
     store,tid,job=credit_account;calls=[]
     with psycopg.connect(DSN) as c:
         c.execute('UPDATE credit_accounts SET balance_units=1000000000000,units_per_credit=1000000000 WHERE owner_id=%s',(A.owner_id,))
+        c.execute("INSERT INTO operator_expense_policy_revisions(revision,limit_units,units_per_usd,operator_subject,reason) VALUES('launch-fixture',900000000000000000,1000000000000,%s,'fake fixture')",(A.owner_id,))
+        c.execute("INSERT INTO operator_expense_policy_head VALUES(true,'launch-fixture')")
         if guard!='missing':c.execute("INSERT INTO expense_guard_policy VALUES(true,'test-only',%s,%s,%s,3)",(3*S,3*S,S))
         if guard in ('own_test','own_allowed'):c.execute("INSERT INTO own_test_expense_profiles VALUES(%s,'test-only',%s,%s)",(A.owner_id,2*S,S))
         if guard=='legacy_cap':c.execute('UPDATE admission_limits SET expense_limit=%s WHERE owner_id=%s',(2*S,A.owner_id))
@@ -59,4 +61,5 @@ def test_production_child_dispatch_obeys_composed_guards(credit_account,guard):
         factory.close()
         with psycopg.connect(DSN) as c:
             c.execute('DELETE FROM expense_alert_outbox');c.execute('DELETE FROM expense_guard_episodes');c.execute('DELETE FROM expense_guard_policy')
+            c.execute('DELETE FROM operator_expense_policy_head');c.execute('DELETE FROM operator_expense_policy_revisions')
             c.execute('DELETE FROM own_test_expense_profiles WHERE owner_id=%s',(A.owner_id,))

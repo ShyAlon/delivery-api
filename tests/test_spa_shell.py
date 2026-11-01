@@ -21,9 +21,10 @@ def ui(pg_browser):
     from pg_workspace import KEY
     from delivery_api.tenancy import tenant_context
     page,base,workspace=pg_browser
+    page._spa_task_id='live'+workspace.scope.owner_id[:8]
     with tenant_context(workspace.scope):
-        workspace.store.create_task('Live definition','Detailed progress',task_id='live')
-        workspace.store.update_phase('live','intent','done',detail='Approved')
+        workspace.store.create_task('Live definition','Detailed progress',task_id=page._spa_task_id)
+        workspace.store.update_phase(page._spa_task_id,'intent','done',detail='Approved')
     claims=jwt.decode(workspace.token,options={'verify_signature':False})
     claims['email']=config.OPERATOR_EMAIL
     page.context.add_cookies([{'name':'requi_access','value':jwt.encode(claims,KEY,algorithm='ES256',headers={'kid':'fixture'}),'url':base}])
@@ -132,9 +133,9 @@ def test_session_cost_header_uses_60s_safety_and_skips_while_hidden(page, ui):
     def cost(route):
         cost_hits.append(1)
         route.fulfill(json={"price": state["price"], "price_usd": state["price"]}, headers={"Cache-Control": "no-store"})
-    page.route("**/api/tasks/live/cost", cost)
-    page.route("**/api/tasks/live/cost-phases", lambda r: (phases_hits.append(1), r.fulfill(json={"phases": []}, headers={"Cache-Control": "no-store"})))
-    page.goto(ui + "/tasks/live/view")
+    page.route('**/api/tasks/'+page._spa_task_id+'/cost', cost)
+    page.route('**/api/tasks/'+page._spa_task_id+'/cost-phases', lambda r: (phases_hits.append(1), r.fulfill(json={"phases": []}, headers={"Cache-Control": "no-store"})))
+    page.goto(ui + '/tasks/'+page._spa_task_id+'/view')
     page.wait_for_selector("#app.view-in")   # route mount settled and re-navigated: only the steady-state cost header instance stays live (the pre-mount instance is disposed on navigation)
     cost_el = page.locator("#sessioncost")
     expect(cost_el).to_have_text("0.73 credits")
@@ -179,9 +180,9 @@ def test_session_cost_refresh_debounces_overlap_and_recovers(page, ui):
             held.append(route)
             return
         route.fulfill(json={"price": state["price"], "price_usd": state["price"]}, headers={"Cache-Control": "no-store"})
-    page.route("**/api/tasks/live/cost", cost)
-    page.route("**/api/tasks/live/cost-phases", lambda r: (phases_hits.append(1), r.fulfill(json={"phases": []}, headers={"Cache-Control": "no-store"})))
-    page.goto(ui + "/tasks/live/view")
+    page.route('**/api/tasks/'+page._spa_task_id+'/cost', cost)
+    page.route('**/api/tasks/'+page._spa_task_id+'/cost-phases', lambda r: (phases_hits.append(1), r.fulfill(json={"phases": []}, headers={"Cache-Control": "no-store"})))
+    page.goto(ui + '/tasks/'+page._spa_task_id+'/view')
     page.wait_for_selector("#app.view-in")   # route mount settled and re-navigated: a single cost header instance is live
     host = page.locator("#sessioncost")
     expect(host).to_have_text("0.73 credits")
@@ -285,8 +286,8 @@ def test_an_unknown_in_app_route_gets_an_explicit_not_found(page, ui):
 
 def test_leaving_a_page_stops_its_polling(page, ui):
     seen = []
-    page.on("request", lambda req: seen.append(req.url) if "/api/tasks/live" in req.url else None)
-    page.goto(ui + "/tasks/live/view"); page.wait_for_timeout(2600)
+    page.on("request", lambda req: seen.append(req.url) if ('/api/tasks/'+page._spa_task_id) in req.url else None)
+    page.goto(ui + '/tasks/'+page._spa_task_id+'/view'); page.wait_for_timeout(2600)
     during = len(seen)
     assert during > 0, "the task page did not poll while open"
     seen.clear()
@@ -320,7 +321,7 @@ def _park(page, pattern):
 def test_geometry_is_reserved_while_cost_and_balance_are_delayed(page, ui):
     cost = _park(page, "**/api/tasks/*/cost")
     balance = _park(page, "**/api/account/credits")
-    page.goto(ui + "/tasks/live/view")
+    page.goto(ui + '/tasks/'+page._spa_task_id+'/view')
     page.wait_for_selector("header nav a.nav-link")
     page.wait_for_selector("#identity .avatar", timeout=8000)
     early = _boxes(page)

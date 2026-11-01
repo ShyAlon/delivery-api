@@ -10,9 +10,13 @@ def profile(credit_account):
     import psycopg
     s,tid,job=credit_account
     with psycopg.connect(DSN) as c:
-        c.execute('INSERT INTO own_test_expense_profiles VALUES(%s,%s,2,1)',(A.owner_id,'test-reviewed'))
+        c.execute('INSERT INTO own_test_expense_profiles VALUES(%s,%s,%s,%s)',(A.owner_id,'test-reviewed',2*10**12,10**12))
+        c.execute("INSERT INTO operator_expense_policy_revisions(revision,limit_units,units_per_usd,operator_subject,reason) VALUES('own-fixture',900000000000000000,1000000000000,%s,'fake fixture')",(A.owner_id,))
+        c.execute("INSERT INTO operator_expense_policy_head VALUES(true,'own-fixture')")
     yield s,tid,job
-    with psycopg.connect(DSN) as c:c.execute('DELETE FROM own_test_expense_profiles WHERE owner_id=%s',(A.owner_id,))
+    with psycopg.connect(DSN) as c:
+        c.execute('DELETE FROM own_test_expense_profiles WHERE owner_id=%s',(A.owner_id,))
+        c.execute('DELETE FROM operator_expense_policy_head');c.execute('DELETE FROM operator_expense_policy_revisions')
 
 def test_real_dispatch_ignores_large_quote_then_blocks_only_new_calls(profile):
     s,tid,job=profile
@@ -24,6 +28,8 @@ def test_real_dispatch_ignores_large_quote_then_blocks_only_new_calls(profile):
         s.transition_provider_attempt(a,'settle',LAUNCH_USAGE,require_prepaid=True)
         # Already-dispatched call finishes and debits after threshold.
         s.transition_provider_attempt(b,'settle',LAUNCH_USAGE,require_prepaid=True)
+        import psycopg
+        with psycopg.connect(DSN) as c:c.execute('UPDATE provider_attempts SET expense_actual=%s WHERE attempt_id=%s',(2*10**12,a))
         nxt=uuid.uuid4().hex;s.reserve_provider_attempt(job,nxt,LAUNCH_Q,nxt)
         with pytest.raises(AdmissionDenied,match='own_test_rolling_24h_expense_limit'):
             s.transition_provider_attempt(nxt,'start',require_prepaid=True)
@@ -35,7 +41,9 @@ def test_scale_unknown_and_window(profile):
     s,tid,job=profile
     with tenant_context(A):
         bad=uuid.uuid4().hex;s.reserve_provider_attempt(job,bad,LAUNCH_Q|{'expense_units_per_usd':10},bad)
-        with pytest.raises(AdmissionDenied,match='own_test_expense_scale_mismatch'):s.transition_provider_attempt(bad,'start')
+        with s._postgres.transaction() as c:
+            assert c.execute('SELECT requi_own_test_expense_guard(%s,10) AS reason',(job,)).fetchone()['reason']=='own_test_expense_scale_mismatch'
+        with pytest.raises(AdmissionDenied,match='Operator expense policy scale unverifiable'):s.transition_provider_attempt(bad,'start')
         s.transition_provider_attempt(bad,'cancel')
         a=uuid.uuid4().hex;s.reserve_provider_attempt(job,a,LAUNCH_Q,a);s.transition_provider_attempt(a,'start')
         s.transition_provider_attempt(a,'settle',LAUNCH_USAGE)
@@ -44,7 +52,7 @@ def test_scale_unknown_and_window(profile):
         s.transition_provider_attempt(b,'uncertain')
         # Direct DB guard check, because the ordinary reserve path already rejects uncertain usage.
         with s._postgres.transaction() as c:
-            assert c.execute('SELECT requi_own_test_expense_guard(%s,1) AS reason',(job,)).fetchone()['reason']=='own_test_unknown_provider_outcome'
+            assert c.execute('SELECT requi_own_test_expense_guard(%s,1000000000000) AS reason',(job,)).fetchone()['reason']=='own_test_unknown_provider_outcome'
 
 def test_profile_hidden_from_backend(profile):
     import psycopg
@@ -52,7 +60,7 @@ def test_profile_hidden_from_backend(profile):
     with tenant_context(A),s._postgres.transaction() as c:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):c.execute('SELECT * FROM own_test_expense_profiles')
     with tenant_context(B),s._postgres.transaction() as c:
-        assert c.execute('SELECT requi_own_test_expense_guard(%s,1) AS reason',(job,)).fetchone()['reason']=='worker_unavailable'
+        assert c.execute('SELECT requi_own_test_expense_guard(%s,1000000000000) AS reason',(job,)).fetchone()['reason']=='worker_unavailable'
 
 
 def test_explicit_transition_atomic_and_idempotent(credit_account):
@@ -98,6 +106,7 @@ def test_production_factory_path_checks_confirmed_profile(profile):
     s,tid,job=profile
     # The production launch path requires its separate confirmed-expense policy.
     with psycopg.connect(DSN) as c:
+        c.execute('UPDATE own_test_expense_profiles SET limit_units=2,units_per_usd=1 WHERE owner_id=%s',(A.owner_id,))
         c.execute("INSERT INTO expense_guard_policy VALUES(true,'test-only',%s,%s,%s,3)",(3*10**12,3*10**12,10**12))
     factory=pg.ProductionGateways(s,gateway_env(),vendor_fetcher=lambda u:(_ for _ in ()).throw(RuntimeError('offline')))
     try:
@@ -127,8 +136,9 @@ def test_settlement_serializes_with_next_dispatch(profile):
         a,b=uuid.uuid4().hex,uuid.uuid4().hex
         s.reserve_provider_attempt(job,a,LAUNCH_Q,a);s.transition_provider_attempt(a,'start')
         s.reserve_provider_attempt(job,b,LAUNCH_Q,b)
-        with s._postgres.transaction():
+        with s._postgres.transaction() as connection:
             s.transition_provider_attempt(a,'settle',LAUNCH_USAGE)
+            connection.execute('UPDATE provider_attempts SET expense_actual=%s WHERE attempt_id=%s',(2*10**12,a))
             entered=threading.Event()
             def start():
                 db=PostgresStore(DSN.replace('user=sandbox','user=delivery_app'))
@@ -164,7 +174,7 @@ def test_future_or_mixed_scale_settled_expense_is_not_free(profile):
                 if future:c.execute('UPDATE provider_attempts SET settled_at=%s WHERE attempt_id=%s',(time.time()+60,aid))
                 else:c.execute("UPDATE provider_attempts SET settled_at=%s,quote=jsonb_set(quote,'{expense_units_per_usd}','10') WHERE attempt_id=%s",(time.time(),aid))
             with s._postgres.transaction() as c:
-                assert c.execute('SELECT requi_own_test_expense_guard(%s,1) AS reason',(job,)).fetchone()['reason']=='own_test_expense_history_unverifiable'
+                assert c.execute('SELECT requi_own_test_expense_guard(%s,1000000000000) AS reason',(job,)).fetchone()['reason']=='own_test_expense_history_unverifiable'
 
 
 def test_transition_does_not_erase_unresolved_compute(credit_account):

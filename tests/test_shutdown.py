@@ -35,7 +35,7 @@ from pathlib import Path
 Path({str(tmp_path/'token')!r}).write_text(Workspace('',None,scope).token)
 from delivery_api.app import app,store,runner
 with tenant_context(scope):
- TASK=store.create_task("Shutdown test","live child",task_id="shutdown-live")["task_id"]
+ TASK=store.create_task("Shutdown test","live child",task_id="shutdown-{w.scope.owner_id[:8]}")["task_id"]
 from contextlib import asynccontextmanager
 from delivery_api.app import lifespan as original_lifespan
 @asynccontextmanager
@@ -58,7 +58,7 @@ uvicorn.run(app,host="127.0.0.1",port={port},log_level="warning")
             time.sleep(.05)
         assert pidfile.exists()
         token=(tmp_path/'token').read_text()
-        code=f"import time,urllib.request; r=urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:{port}/api/tasks/shutdown-live/stream',headers={{'Authorization':'Bearer {token}'}}));r.readline();time.sleep(120)"
+        code=f"import time,urllib.request; r=urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:{port}/api/tasks/shutdown-{w.scope.owner_id[:8]}/stream',headers={{'Authorization':'Bearer {token}'}}));r.readline();time.sleep(120)"
         stream=subprocess.Popen([sys.executable,'-c',code],env=env)
         time.sleep(.4);assert stream.poll() is None
         started=time.monotonic();server.send_signal(shutdown_signal)

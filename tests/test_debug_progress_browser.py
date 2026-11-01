@@ -108,7 +108,7 @@ def test_everything_zip_reports_per_section_progress_and_honest_counts(page, ui,
 
 
 def test_copy_summary_uses_the_repository_build_identity(page, ui):
-    page.route("**/api/tasks/dbg/diagnostics", lambda route: route.fulfill(
+    page.route('**/api/tasks/'+page._debug_task_id+'/diagnostics', lambda route: route.fulfill(
         status=200, content_type="application/json", body='{"question":"q","control_state":{}}'))
     _open_debug(page, ui)
     page.locator("#copysummary").click()
