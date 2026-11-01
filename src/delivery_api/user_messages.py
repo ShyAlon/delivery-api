@@ -8,7 +8,7 @@ _CREDIT_WORDS=('balance','prepaid','insufficient','credits')
 # Wording that only the admission and ledger checks produce. Narrow on purpose: ordinary run output must pass untouched.
 INTERNAL_MARKERS=('AdmissionDenied','spend allowance','attempt exceeds','owner attempt','admission configuration','admission replay',
                   'expense_limit','expense limit','uncertain provider usage','unresolved compute accounting','held for review',
-                  'release limit reached','vendor cost')
+                  'release limit reached','vendor cost','operator expense','provider expense','provider usd','task expense ceiling')
 
 
 def user_denial_message(reason):

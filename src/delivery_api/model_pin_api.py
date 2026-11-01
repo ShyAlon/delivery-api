@@ -6,6 +6,7 @@ from . import auth,model_pins as pins,production_gateway as pg
 
 class PinAction(BaseModel):
     payload:dict|None=None
+    amount:str=''
     model:str='deepseek-flash'
     context:int=128000
     maximum_output:int=16384
@@ -31,6 +32,8 @@ def install(app,owner_store,reader,activate=None):
         repository=repo();history=repository.history(owner_store)
         rows=repository.list()
         result={'pins':[{**dict(r),'status':pins.badge(r['payload'])} for r in rows],'history':history,'bootstrap':[]}
+        from .operator_expense_policy import read
+        result['expense_policy']=read(repository,owner_store)
         if not rows:
             # Reviewable import, never an automatic write, never includes keys.
             try:
@@ -46,6 +49,10 @@ def install(app,owner_store,reader,activate=None):
         repository=repo()
         if request.headers.get('origin')!=str(request.base_url).rstrip('/') or request.headers.get('sec-fetch-site')=='cross-site':raise HTTPException(403,'Same-origin operator action required')
         def run():
+            if action=='expense-policy':
+                if not body.confirm:raise ValueError('Confirm the reviewed operator policy')
+                from .operator_expense_policy import commit
+                return {'revision':commit(repository,owner_store,body.amount,body.expected,body.reason),'status':'saved','activation':False}
             if action=='new-local':
                 model=body.model
                 value={'row':{'provider':'ollama','model':model,'price_version':'local-reviewed','source':'Operator reviewed local server bounds','expense_input':0,'expense_output':0,'retail_input':0,'retail_output':0,'retail_units_per_credit':10**9},'context':{'model':model,'context_tokens':body.context,'maximum_output_tokens':body.maximum_output,'source':'Operator reviewed local server bounds','bound_version':'local-reviewed','protective_run_ceiling':False}}

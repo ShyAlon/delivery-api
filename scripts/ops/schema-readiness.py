@@ -74,7 +74,7 @@ MIGRATIONS={
  '20261101073000_fenced_job_force_close.sql':('signature:requi_force_close_fenced_job(text,text,text)',),
  '20261101124000_visible_task_names.sql':('visible-title-index:idx_tasks_tenant_title',),
  '20261101150000_preview_spend_approvals.sql':('table:preview_spend_approvals',),
- '20261101160000_model_pins.sql':('table:model_pin_revisions','table:model_pin_heads'),
+ '20261101160000_model_pins.sql':('table:model_pin_revisions','table:model_pin_heads','table:operator_expense_policy_revisions','table:operator_expense_policy_head'),
 }
 ROLES=('requi_metrics_writer','requi_engine_config_read','requi_operator_usage','requi_model_pin_editor')
 

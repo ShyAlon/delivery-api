@@ -160,3 +160,22 @@ def test_reverting_payload_adds_a_new_revision_not_duplicate_primary_key(store,r
 def test_nested_credentials_never_persist_as_public_pin_metadata():
     value=payload();value['row']['provider_snapshot']['api_key']='not-real'
     with pytest.raises(ValueError,match='credentials'):pins.validate(value)
+
+
+def test_operator_expense_policy_audit_race_and_customer_endpoint_removed(store,repo):
+    from delivery_api import operator_expense_policy as policy
+    with psycopg.connect(DSN) as c:c.execute('DELETE FROM operator_expense_policy_head');c.execute('DELETE FROM operator_expense_policy_revisions')
+    try:
+        with tenant_context(A):
+            assert policy.configured(store) is None
+            revision=policy.commit(repo,store,'0.5',None,'Reviewed test policy')
+            data=policy.read(repo,store);assert data['current']['revision']==revision and data['activation'] is False
+            assert policy.configured(store)['limit_units']==500000000000
+            with pytest.raises(ValueError,match='Policy changed'):policy.commit(repo,store,'0.6',None,'stale form')
+            newer=policy.commit(repo,store,'0.6',revision,'reviewed edit');assert len(policy.read(repo,store)['history'])==2
+        with tenant_context(B):
+            with pytest.raises(TenantAccessDenied):policy.commit(repo,store,'9',newer,'not operator')
+        from delivery_api import app as service
+        assert not any(getattr(r,'path','').endswith('/preview-spend-approval') for r in service.app.routes)
+    finally:
+        with psycopg.connect(DSN) as c:c.execute('DELETE FROM operator_expense_policy_head');c.execute('DELETE FROM operator_expense_policy_revisions')

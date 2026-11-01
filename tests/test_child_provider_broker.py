@@ -159,7 +159,11 @@ def test_broker_actual_ledger_settles_once_and_reuses_durable_bytes(ledger):
     value=operation();value['binding'].update(owner_id=A.owner_id,auth_session_id=A.session_id,task_id=tid,job_id=job)
     with tenant_context(A):value['binding']['session_id']=store.worker_job(job)['session_id']
     op=decode_operation(frame(value))
-    quote={**Q,'provider':'deepseek','model':'deepseek-flash'}
+    quote={**Q,'provider':'deepseek','model':'deepseek-flash','expense_units_per_usd':10**12}
+    with psycopg.connect(DSN) as conn:
+        conn.execute('DELETE FROM operator_expense_policy_head');conn.execute('DELETE FROM operator_expense_policy_revisions')
+        conn.execute("INSERT INTO operator_expense_policy_revisions(revision,limit_units,units_per_usd,operator_subject,reason) VALUES('broker-fixture',1000000000000,1000000000000,%s,'fake fixture')",(A.owner_id,))
+        conn.execute("INSERT INTO operator_expense_policy_head VALUES(true,'broker-fixture')")
     gateway=WorkerAdmissionGateway(store,job,require_prepaid=False,
         resolve_serialized=lambda **kw:(quote,hashlib.sha256(kw['serialized_request']).hexdigest()),
         measure_raw_usage=lambda raw:{'input_tokens':raw['prompt_tokens'],'output_tokens':raw['completion_tokens']})
@@ -177,6 +181,8 @@ def test_broker_actual_ledger_settles_once_and_reuses_durable_bytes(ledger):
         row=journal.load((op.operation_id,'call-1','intent'));attempt=store.provider_attempt(row['attempt_id'])
         assert attempt['state']=='settled' and attempt['expense_actual']==8 and attempt['retail_actual']==18
         assert len(calls)==1
+    with psycopg.connect(DSN) as conn:
+        conn.execute('DELETE FROM operator_expense_policy_head');conn.execute('DELETE FROM operator_expense_policy_revisions')
     client.close()
     with psycopg.connect(DSN) as conn:
         conn.execute('DELETE FROM staged_provider_responses WHERE session_id=%s',(op.binding.session_id,))
@@ -299,3 +305,11 @@ def test_atomic_parent_admission_rolls_back_attempt_and_binding_before_http(ledg
         with pytest.raises(BrokerPaused,match='incomplete'):broker.dispatch(request())
         assert not calls
     with psycopg.connect(DSN) as conn:conn.execute('DELETE FROM staged_provider_responses WHERE session_id=%s',(op.binding.session_id,))
+
+
+def test_non_success_logs_safe_http_status_and_keeps_attempt_uncertain(caplog):
+    broker,g,j,calls=setup(lambda request:httpx.Response(402,content=b'{"private":"prompt-secret"}',headers={'Retry-After':'secret-value'}))
+    with pytest.raises(BrokerPaused):broker.dispatch(request())
+    assert g.calls==['reserve','start','uncertain'] and len(calls)==1
+    assert 'child.provider.http_refusal' in caplog.text and '402' in caplog.text
+    assert 'prompt-secret' not in caplog.text and 'secret-value' not in caplog.text

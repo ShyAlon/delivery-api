@@ -26,7 +26,7 @@ SYNTHETIC_SUB = '00000000-0000-0000-0000-000000000000'
 # tests/test_startup_preflight.py::test_required_tables_match_the_migrations_on_disk:
 # a migration that adds or renames a table fails that test until this set is updated.
 REQUIRED_TABLES = frozenset({
-    'model_pin_heads','model_pin_revisions','preview_spend_approvals','document_projections','document_chunks','retail_totals','expense_totals','expense_total_entries','expense_total_clock','admission_limits', 'admission_totals', 'admission_total_entries', 'answer_feedback', 'artifact_bytes', 'artifact_manifest_ready', 'artifacts',
+    'operator_expense_policy_revisions','operator_expense_policy_head','model_pin_heads','model_pin_revisions','preview_spend_approvals','document_projections','document_chunks','retail_totals','expense_totals','expense_total_entries','expense_total_clock','admission_limits', 'admission_totals', 'admission_total_entries', 'answer_feedback', 'artifact_bytes', 'artifact_manifest_ready', 'artifacts',
     'audit_log', 'checkpoint_blobs', 'checkpoint_migrations', 'checkpoint_writes', 'checkpoints',
     'closed_revision_acceptance_revocations', 'closed_revision_acceptances',
     'closed_revision_install_events', 'closed_revision_installations', 'closed_revision_lineage_plans',
@@ -50,6 +50,8 @@ REQUIRED_TABLES = frozenset({
 # these are warn-level, each named with the migration file that creates it.
 # Pinned by tests: every entry sits in REQUIRED_TABLES and its migration creates it.
 FEATURE_TABLES = {
+    'operator_expense_policy_revisions': ('20261101160000_model_pins.sql','operator expense policy'),
+    'operator_expense_policy_head': ('20261101160000_model_pins.sql','operator expense policy'),
     'model_pin_revisions': ('20261101160000_model_pins.sql','reviewed model pins'),
     'model_pin_heads': ('20261101160000_model_pins.sql','reviewed model pins'),
     'credit_adjustments': ('20261009130000_private_credit_adjustment_evidence.sql',
@@ -300,7 +302,7 @@ def _table_visibility(connection_holder):
     rows = connection_holder[0].execute(
         "SELECT c.relname, CASE WHEN policy.role_name IS NULL THEN "
         "NOT has_table_privilege('requi_backend', c.oid, 'SELECT') "
-        "WHEN r.oid IS NULL THEN false WHEN c.relname='model_pin_revisions' THEN has_column_privilege(r.oid,c.oid,'payload','SELECT') AND has_column_privilege(r.oid,c.oid,'revision','SELECT') ELSE has_table_privilege(r.oid, c.oid, 'SELECT') END "
+        "WHEN r.oid IS NULL THEN false WHEN c.relname='operator_expense_policy_revisions' THEN has_column_privilege(r.oid,c.oid,'limit_units','SELECT') WHEN c.relname='model_pin_revisions' THEN has_column_privilege(r.oid,c.oid,'payload','SELECT') AND has_column_privilege(r.oid,c.oid,'revision','SELECT') ELSE has_table_privilege(r.oid, c.oid, 'SELECT') END "
         "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "JOIN (VALUES " + policy + ") AS policy(table_name,role_name) ON policy.table_name=c.relname "
         "LEFT JOIN pg_roles r ON r.rolname=policy.role_name "

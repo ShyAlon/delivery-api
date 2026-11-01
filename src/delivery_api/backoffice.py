@@ -134,7 +134,7 @@ def create_app(*,service_url,transport=None):
         except (httpx.HTTPError,ValueError):return JSONResponse({'detail':'Stop outcome unverified. Refresh jobs; do not infer accounting settlement.'},status_code=502)
     @application.post('/api/operations/model-pins/{action}')
     async def model_pin_action(action:str,request:Request):
-        if action not in ('new','new-local','refresh','edit','approve'):return JSONResponse({'detail':'Unknown pin action'},status_code=404)
+        if action not in ('new','new-local','refresh','edit','approve','expense-policy'):return JSONResponse({'detail':'Unknown pin action'},status_code=404)
         if request.headers.get('origin')!=str(request.base_url).rstrip('/') or request.headers.get('sec-fetch-site')=='cross-site':return JSONResponse({'detail':'Same-origin confirmation required'},status_code=403)
         raw=await request.body()
         if len(raw)>65536:return JSONResponse({'detail':'Pin review exceeds bound'},status_code=422)

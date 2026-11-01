@@ -89,6 +89,10 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
         with workspace.admin() as c:
             c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,%s,1000000000,0)',(workspace.scope.owner_id,100000000000 if paid else 0))
             if paid:c.execute("INSERT INTO expense_guard_policy VALUES(true,'acceptance',1000000000000,1000000000000,1000000000000,3) ON CONFLICT DO NOTHING")
+            if paid:
+                c.execute('DELETE FROM operator_expense_policy_head');c.execute('DELETE FROM operator_expense_policy_revisions')
+                c.execute("INSERT INTO operator_expense_policy_revisions(revision,limit_units,units_per_usd,operator_subject,reason) VALUES('http-policy',1000000000000,1000000000000,%s,'fake acceptance policy')",(workspace.scope.owner_id,))
+                c.execute("INSERT INTO operator_expense_policy_head VALUES(true,'http-policy')")
             c.execute('INSERT INTO admission_limits VALUES(%s,%s,86400,NULL,NULL,NULL,NULL,60,NULL,3)',(workspace.scope.owner_id,'acceptance'))
         if paid:
             from delivery_api import model_pins
@@ -114,12 +118,6 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
                 deleted=client.request('DELETE','/api/tasks/'+tid,json={'confirm':True});assert deleted.status_code==200,deleted.text
                 created=client.post('/api/tasks',json=body);assert created.status_code==201,created.text
                 tid=created.json()['task_id']
-                if paid:
-                    unapproved=client.post(f'/api/tasks/{tid}/start',json={'model_route':'deepseek'})
-                    assert unapproved.status_code==409,unapproved.text
-                    assert not calls
-                    approved=client.post(f'/api/tasks/{tid}/preview-spend-approval',json={'model':selected_model,'ceiling_usd':'1','confirmation':'APPROVE USD 1'})
-                    assert approved.status_code==200,approved.text
                 start=client.post(f'/api/tasks/{tid}/start',json={'model_route':selected_route});assert start.status_code==202,start.text
                 deadline=time.monotonic()+35
                 while time.monotonic()<deadline:

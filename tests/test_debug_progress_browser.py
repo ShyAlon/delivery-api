@@ -27,11 +27,12 @@ def ui(pg_browser,monkeypatch):
     monkeypatch.setenv('REQUI_BUILD_ID','local-9')
     monkeypatch.setenv('REQUI_BUILD_REPOS',REPOS)
     with tenant_context(workspace.scope):
-        workspace.store.create_task('Debug subject','Diagnostics target',task_id='dbg')
-        workspace.store.update_phase('dbg','intent','done',detail='Approved')
+        workspace.store.create_task('Debug subject','Diagnostics target',task_id='dbg'+workspace.scope.owner_id[:8])
+        workspace.store.update_phase('dbg'+workspace.scope.owner_id[:8],'intent','done',detail='Approved')
     claims=jwt.decode(workspace.token,options={'verify_signature':False})
     claims['email']=config.OPERATOR_EMAIL
     page.context.add_cookies([{'name':'requi_access','value':jwt.encode(claims,KEY,algorithm='ES256'),'url':base}])
+    page._debug_task_id='dbg'+workspace.scope.owner_id[:8]
     page.context.grant_permissions(['clipboard-read','clipboard-write'])
     import delivery_api.app as module
     monkeypatch.setattr(module,'RUNTIME_VERSION',module._runtime_version())
@@ -44,7 +45,7 @@ def page(ui,pg_browser):
 
 
 def _open_debug(page, ui):
-    page.goto(ui + "/tasks/dbg/view")
+    page.goto(ui + '/tasks/'+page._debug_task_id+'/view')
     page.locator("#accountbutton").wait_for(timeout=10000)
     page.locator("#accountbutton").click()
     page.locator("#opendebug").click()
@@ -87,15 +88,17 @@ def test_everything_zip_reports_per_section_progress_and_honest_counts(page, ui,
         body = z.read("requi-everything.txt").decode()
     import json,re
     manifest_text=body.split('===== Evidence manifest and DB projections =====\n',1)[1].split('\n\n===== Debug info =====',1)[0]
-    manifest=json.loads(manifest_text)
-    assert manifest['version']==2 and manifest['task_id']=='dbg'
+    manifest=json.JSONDecoder().raw_decode(manifest_text)[0]
+    timings=json.loads(body.split('===== Export collector timings =====\n',1)[1])
+    assert timings['total_ms']>=0 and all(x['duration_ms']>=0 for x in timings['stages'] if x['duration_ms'] is not None)
+    assert manifest['version']==2 and manifest['task_id']==page._debug_task_id
     allowed=[entry for entry in manifest['sections'] if entry['availability']!='policy_excluded']
     assert all(entry['availability'] in ('available','unavailable') for entry in allowed)
-    fixed=['Debug info','Task diagnostics (question, control state, engine state)','Run events','Server logs (last 30 min)','Client logs (this tab)']
+    fixed=['Task-window retained logs','Debug info','Task diagnostics (question, control state, engine state)','Run events','Server logs (last 30 min)','Client logs (this tab)']
     assert all('===== '+title+' =====' in body for title in fixed)
-    missing=[entry['source'] for entry in allowed if entry['availability']=='unavailable']+['Server logs (last 30 min)']
+    missing=[entry['source'] for entry in allowed if entry['availability']=='unavailable']+['Task-window retained logs','Server logs (last 30 min)']
     total=len(allowed)+len(fixed)
-    collected=sum(entry['availability']=='available' for entry in allowed)+len(fixed)-1
+    collected=sum(entry['availability']=='available' for entry in allowed)+len(fixed)-2
     assert f'Downloaded requi-everything.zip: {collected} of {total} sections collected; unavailable: '+', '.join(missing)+'.' in text,text
     assert "===== Known omissions =====" in body
     assert "===== Server logs (last 30 min) =====" in body

@@ -28,7 +28,7 @@ PROJECTION_FUNCTION_REVIEW={
 }
 
 # Exact schema-only constraint widening, no data deletion. Always separately reviewed by owner.
-MODEL_PIN_SCHEMA_REVIEW={'20261101160000_model_pins.sql':'c13e416d43a13a4aea909b1c30149bf2d7df67d17f5d7787a9efc07594a90e04'}
+MODEL_PIN_SCHEMA_REVIEW={'20261101160000_model_pins.sql':'968d8b882b4611ce4cee375ca9880f5398944c61ba42a07cd67077b4174ee8c0'}
 
 def review_projection_functions(rows,confirm):
     allowed={}

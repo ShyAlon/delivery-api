@@ -40,3 +40,28 @@ CREATE POLICY operator_revision_read ON public.model_pin_revisions FOR SELECT TO
 CREATE POLICY operator_revision_insert ON public.model_pin_revisions FOR INSERT TO requi_model_pin_editor WITH CHECK(public.requi_operator_read_allowed('services.operate') AND operator_subject=auth.uid());
 CREATE POLICY operator_head_edit ON public.model_pin_heads FOR ALL TO requi_model_pin_editor USING(public.requi_operator_read_allowed('services.operate')) WITH CHECK(public.requi_operator_read_allowed('services.operate'));
 -- Membership provisioned to the restricted runtime login by the existing reviewed role grant step, not here.
+
+-- Operator expense limits, not customer approval or activation of paid work.
+CREATE TABLE public.operator_expense_policy_revisions (
+ revision text PRIMARY KEY, limit_units bigint NOT NULL CHECK(limit_units>0),
+ units_per_usd bigint NOT NULL CHECK(units_per_usd=1000000000000),
+ operator_subject uuid NOT NULL REFERENCES auth.users(id), reason text NOT NULL CHECK(length(reason) BETWEEN 1 AND 400),
+ created_at timestamptz NOT NULL DEFAULT now(),previous_revision text REFERENCES public.operator_expense_policy_revisions(revision)
+);
+CREATE TABLE public.operator_expense_policy_head (
+ singleton boolean PRIMARY KEY CHECK(singleton), revision text NOT NULL REFERENCES public.operator_expense_policy_revisions(revision)
+);
+ALTER TABLE public.operator_expense_policy_revisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.operator_expense_policy_revisions FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.operator_expense_policy_head ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.operator_expense_policy_head FORCE ROW LEVEL SECURITY;
+REVOKE ALL ON public.operator_expense_policy_revisions,public.operator_expense_policy_head FROM PUBLIC,anon,authenticated,service_role;
+GRANT SELECT(revision,limit_units,units_per_usd) ON public.operator_expense_policy_revisions TO requi_backend;
+GRANT SELECT ON public.operator_expense_policy_head TO requi_backend;
+CREATE POLICY expense_policy_runtime_read ON public.operator_expense_policy_revisions FOR SELECT TO requi_backend USING(true);
+CREATE POLICY expense_policy_head_runtime_read ON public.operator_expense_policy_head FOR SELECT TO requi_backend USING(true);
+GRANT SELECT,INSERT ON public.operator_expense_policy_revisions TO requi_model_pin_editor;
+GRANT SELECT,INSERT,UPDATE ON public.operator_expense_policy_head TO requi_model_pin_editor;
+CREATE POLICY expense_policy_operator_read ON public.operator_expense_policy_revisions FOR SELECT TO requi_model_pin_editor USING(public.requi_operator_read_allowed('services.operate'));
+CREATE POLICY expense_policy_operator_insert ON public.operator_expense_policy_revisions FOR INSERT TO requi_model_pin_editor WITH CHECK(public.requi_operator_read_allowed('services.operate') AND operator_subject=auth.uid());
+CREATE POLICY expense_policy_head_edit ON public.operator_expense_policy_head FOR ALL TO requi_model_pin_editor USING(public.requi_operator_read_allowed('services.operate')) WITH CHECK(public.requi_operator_read_allowed('services.operate'));

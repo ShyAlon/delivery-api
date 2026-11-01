@@ -231,3 +231,33 @@ def test_future_credit_adjustment_evidence_is_private_consistent_and_unique(stor
   with psycopg.connect(DSN) as c:assert c.execute('SELECT count(*) FROM credit_accounts WHERE owner_id=%s',(A.owner_id,)).fetchone()[0]==0
  finally:
   with psycopg.connect(DSN) as c:c.execute('DELETE FROM credit_adjustments WHERE adjustment_id=%s',(adjustment,))
+
+
+def test_debug_export_batch_reuses_one_connection_and_keeps_capability_boundaries(store):
+ import psycopg
+ from delivery_api.postgres_scope import RequestStats,request_stats
+ with psycopg.connect(DSN) as c:
+  c.execute('GRANT requi_operator_read TO delivery_app')
+  c.execute('INSERT INTO operator_principals VALUES (%s,%s,%s,true)',(A.owner_id,'batch-v1',['debug.read','logs.read']))
+ try:
+  reader=OperatorReadStore(DSN.replace('user=sandbox','user=delivery_app'),OperatorPrincipal(A.owner_id,'batch-v1',frozenset({'debug.read','logs.read'})))
+  with tenant_context(A):
+   tid=store.create_task('batch '+uuid.uuid4().hex)['task_id'];stats=RequestStats();token=request_stats.set(stats)
+   try:
+    with reader.export_batch(store) as connection:
+     assert store.task(tid)['task_id']==tid
+     assert reader.task_debug(store,tid)['task']['task_id']==tid
+     reader.task_logs(store,tid);reader.failure_diagnostics(store,tid)
+     # One failed source cannot poison later sources; no capability upgrade.
+     with pytest.raises(TenantAccessDenied):
+      with connection.transaction():reader.task_usage(store,tid)
+     assert reader.task_debug(store,tid)['task']['task_id']==tid
+    assert stats.transactions==1
+   finally:request_stats.reset(token)
+   assert store._connection.get() is None
+   store.delete_task(tid)
+  with tenant_context(B):
+   with pytest.raises(TenantAccessDenied):
+    with reader.export_batch(store):reader.task_logs(store,tid)
+ finally:
+  with psycopg.connect(DSN) as c:c.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))
