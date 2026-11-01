@@ -69,12 +69,12 @@ def test_stale_live_precondition_disables_submission(page):
 def test_avatar_debug_dialog_download_and_default_is_not_debug(page):
  p,base,root=page;fake(p)
  p.route('**/api/tasks/concept/execution?debug=1',lambda r:r.fulfill(json={'session_id':'s','calls':[],'usage':[],'raw':[]}))
- downloads=[]
- p.route('**/api/tasks/concept/debug.zip',lambda r:(downloads.append(r.request.post_data_json),r.fulfill(status=200,content_type='application/zip',body=b'zip fixture')))
+ p.route('**/api/debug/collection*',lambda r:r.fulfill(json={'sections':[]}))
  p.goto(base+'/tasks/concept/decisions/wait-concept');p.locator('#accountbutton').click();p.get_by_role('menuitem',name='Debug',exact=True).click()
  expect(p.locator('.debug-dialog h2')).to_have_text('Debug');expect(p.locator('.debug-dialog')).to_contain_text('Browser capture: this tab since')
- p.get_by_role('button',name='Download debug ZIP').click();expect(p.locator('#debugstatus')).to_contain_text('Download prepared')
- assert downloads and downloads[0]['started_at'];assert downloads[0]['records']
+ with p.expect_download() as download:p.get_by_role('button',name='Download everything ZIP').click()
+ download.value.save_as(str(root/'debug-evidence.zip'))
+ expect(p.locator('#debugstatus')).to_contain_text('Downloaded requi-everything.zip')
  assert p.locator('#debugtoggle').count()==0 and p.locator('.execution-data').count()==0
  p.screenshot(path=str(root/'avatar-debug.png'),full_page=True)
 
@@ -451,9 +451,9 @@ def test_shared_session_cost_above_every_decision_screen(page,screen):
  totals={'price':0.73,'price_usd':0.73}
  p.route('**/api/tasks/concept/cost',lambda r:r.fulfill(json=totals))
  p.goto(base+'/tasks/concept/decisions/'+state['current']['wait_id'])
- cost=p.locator('header #sessioncost');expect(cost).to_have_text('0.73 credits · $0.73')
+ cost=p.locator('header #sessioncost');expect(cost).to_have_text('0.73 credits')
  totals.update(price=0.9,price_usd=0.9)
- _return_to_tab_until(p,cost,'0.90 credits · $0.90')
+ _return_to_tab_until(p,cost,'0.90 credits')
  assert p.locator('#sessioncost').count()==1
  p.screenshot(path=f'/tmp/global-cost-{screen}-desktop.png')
  p.set_viewport_size({'width':390,'height':844});p.evaluate('window.scrollTo(0,0)')
@@ -469,9 +469,9 @@ def test_header_cost_unavailable_last_known_and_recovery(page):
  p.route('**/api/tasks/concept/cost',cost)
  p.goto(base+'/tasks/concept/decisions/wait-concept');host=p.locator('#sessioncost')
  expect(host).to_have_text('Session Cost Unavailable')
- state['fail']=False;_return_to_tab_until(p,host,'0.73 credits · $0.73')
- state['fail']=True;_return_to_tab_until(p,host,'0.73 credits · $0.73 · Last Known')
- state.update(fail=False,price=.9);_return_to_tab_until(p,host,'0.90 credits · $0.90')
+ state['fail']=False;_return_to_tab_until(p,host,'0.73 credits')
+ state['fail']=True;_return_to_tab_until(p,host,'0.73 credits · Last Known')
+ state.update(fail=False,price=.9);_return_to_tab_until(p,host,'0.90 credits')
 
 
 def test_gate_render_failure_stays_explained_after_checklist_refresh(page):

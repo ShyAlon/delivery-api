@@ -142,6 +142,8 @@ def test_header_uses_the_tooltip_and_debug_has_the_history():
     assert 'id="historyhost"' in ident and "api('/api/account/credit-history')" in ident
     assert ident.index('ledgerwrap')<ident.index('historywrap')<ident.index('Current technical state')
     collector=(ROOT/'web'/'debug-package.js').read_text()
-    assert "['credit-history','/api/account/credit-history']" in collector
+    assert "'/api/debug/collection'" in collector
+    server=(ROOT/'debug_collection.py').read_text()
+    assert "('credit-history',lambda:module.account_credit_history(actor))" in server
     assert "import {collectDebugEvidence} from './debug-package.js'" in ident
     assert 'await collectDebugEvidence({taskId,operator:!!authState.admin,cloud:authState.mode' in ident

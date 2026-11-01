@@ -1893,7 +1893,7 @@ def test_completion_screen_summary_download_and_package(pg_page,pg_ui,pg_ids):
     page.get_by_role('heading',name='Congratulations',exact=False).wait_for()
     assert page.locator('.confetti i').count()==60
     body=page.locator('.complete-page').inner_text()
-    assert '0.63 credits · $0.63' in body and 'legacy scale' in body and 'tokens' not in body.lower()
+    assert '0.63 credits' in body and 'legacy scale' in body and 'tokens' not in body.lower()
     counts=page.locator('.complete-counts')
     assert counts.locator('div').nth(0).inner_text().replace('\n',' ').lower()=='requirements 3' and counts.locator('div').nth(1).inner_text().replace('\n',' ').lower()=='specs 1' and counts.locator('div').nth(2).inner_text().replace('\n',' ').lower()=='tests -'
     assert counts.get_by_role('link',name='3').get_attribute('href')==f'/tasks/{tid}/gates/gate-srs'
@@ -2197,7 +2197,7 @@ def test_running_cost_header_shows_credits_and_usd_and_grows_while_running(pg_pa
     header.wait_for(state="attached")
     # the header can restart (Loading again) while sibling widgets settle; expect() polls to the
     # settled exact text instead of catching a transient frame.
-    expect(header).to_have_text("1.25 credits · $1.25",timeout=10000)
+    expect(header).to_have_text("1.25 credits",timeout=10000)
     assert "token" not in page.locator(".detail-head").inner_text().lower()
     page.screenshot(path=str(_screenshots_dir / "running-cost-header.png"),clip={"x":0,"y":0,"width":1365,"height":260})
     # visibilitychange is the app's own "back on the tab" refresh trigger, so dispatching it proves
@@ -2209,12 +2209,12 @@ def test_running_cost_header_shows_credits_and_usd_and_grows_while_running(pg_pa
     page.wait_for_timeout(500)   # let the initial refresh clear its pending flag first
     with page.expect_response(f"**/api/tasks/{tid}/cost-phases"):
         page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
-    expect(header).to_have_text("2.50 credits · $2.50",timeout=10000)
+    expect(header).to_have_text("2.50 credits",timeout=10000)
     page.wait_for_timeout(200)
     stage["price"]=3.75
     with page.expect_response(f"**/api/tasks/{tid}/cost-phases"):
         page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
-    expect(header).to_have_text("3.75 credits · $3.75",timeout=10000)
+    expect(header).to_have_text("3.75 credits",timeout=10000)
 def test_live_headline_names_latest_stage_and_stage_line_ignores_phase_tag(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     tid=pg_ids["live"]
@@ -2300,7 +2300,7 @@ def test_global_cost_header_on_all_route_families(pg_page,pg_ui,pg_ids,path):
  page.route('**/api/tasks/*/cost',lambda r:r.fulfill(json={'price':.73,'price_usd':.73}))
  page.goto(base+path)
  host=page.locator('header #sessioncost')
- expect(host).to_have_text('0.73 credits · $0.73' if task else 'No Session Selected')
+ expect(host).to_have_text('0.73 credits' if task else 'No Session Selected')
  assert page.locator('#sessioncost').count()==1
  for width in (1365,390):
   page.set_viewport_size({'width':width,'height':844});page.evaluate('window.scrollTo(0,0)');page.wait_for_timeout(200)
@@ -2415,7 +2415,7 @@ def test_idle_stream_reads_only_at_60s_safety_then_refreshes_on_events(pg_page,p
     page.route('**/api/account/credits',lambda r:r.fulfill(json={'credits':10}))
     page.route(f'**/api/tasks/{tid}/cost',lambda r:r.fulfill(json={'price':1.25,'price_usd':1.25}))
     page.route(f'**/api/tasks/{tid}/cost-phases',lambda r:r.fulfill(json={'phases':[{'phase':'intent','credits':1.25}]}))
-    page.goto(ui+f'/tasks/{tid}/view');page.locator('#stageprogress').wait_for();expect(page.locator('#sessioncost')).to_have_text('1.25 credits · $1.25');page.wait_for_timeout(1500)
+    page.goto(ui+f'/tasks/{tid}/view');page.locator('#stageprogress').wait_for();expect(page.locator('#sessioncost')).to_have_text('1.25 credits');page.wait_for_timeout(1500)
     for _ in range(10):
         page.clock.run_for(100);time.sleep(.1)
         if page.locator('#sessioncost').get_attribute('title').endswith('Total: 1.25 credits'):break

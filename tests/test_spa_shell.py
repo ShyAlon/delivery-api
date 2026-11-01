@@ -137,33 +137,33 @@ def test_session_cost_header_uses_60s_safety_and_skips_while_hidden(page, ui):
     page.goto(ui + "/tasks/live/view")
     page.wait_for_selector("#app.view-in")   # route mount settled and re-navigated: only the steady-state cost header instance stays live (the pre-mount instance is disposed on navigation)
     cost_el = page.locator("#sessioncost")
-    expect(cost_el).to_have_text("0.73 credits · $0.73")
+    expect(cost_el).to_have_text("0.73 credits")
     base = _quiet(cost_hits)                 # every startup refresh settled: the header's pending flag is clear
     base_phases = _quiet(phases_hits)
     now = page.evaluate("Date.now()")
     page.clock.run_for(_next_cost_poll_fire(page) + 500 - now)
     _wait_cost_hits(page, cost_hits, base + 1)          # the poll's own fire ran a real refresh (same price, so the text stands)
     _wait_cost_hits(page, phases_hits, base_phases + 1) # ...and the refresh fully settled (pending cleared) before the clock moves on
-    assert cost_el.inner_text() == "0.73 credits · $0.73"
+    assert cost_el.inner_text() == "0.73 credits"
     state["price"] = 0.9
     now = page.evaluate("Date.now()")
     page.clock.run_for(_next_cost_poll_fire(page) - 1500 - now)   # 1.5s before the poll's next fire: nothing
     _flush(page)
-    assert len(cost_hits) == base + 1 and cost_el.inner_text() == "0.73 credits · $0.73"
+    assert len(cost_hits) == base + 1 and cost_el.inner_text() == "0.73 credits"
     page.clock.run_for(2_500)                                     # crosses it: the poll itself refreshes
     _wait_cost_hits(page, cost_hits, base + 2)
     _wait_cost_hits(page, phases_hits, base_phases + 2)
-    expect(cost_el).to_have_text("0.90 credits · $0.90", timeout=8000)
+    expect(cost_el).to_have_text("0.90 credits", timeout=8000)
     page.evaluate("Object.defineProperty(document, 'hidden', {configurable: true, get: () => window.__hidden === true})")
     page.evaluate("window.__hidden = true")
     state["price"] = 1.1
     page.clock.run_for(65_000)               # two more interval fires, both skipped while the tab is hidden
     _flush(page)
-    assert len(cost_hits) == base + 2 and cost_el.inner_text() == "0.90 credits · $0.90"
+    assert len(cost_hits) == base + 2 and cost_el.inner_text() == "0.90 credits"
     page.evaluate("window.__hidden = false")
     page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
     _wait_cost_hits(page, cost_hits, base + 3)        # returning to the tab refreshes immediately
-    expect(cost_el).to_have_text("1.10 credits · $1.10", timeout=8000)
+    expect(cost_el).to_have_text("1.10 credits", timeout=8000)
 
 
 def test_session_cost_refresh_debounces_overlap_and_recovers(page, ui):
@@ -184,7 +184,7 @@ def test_session_cost_refresh_debounces_overlap_and_recovers(page, ui):
     page.goto(ui + "/tasks/live/view")
     page.wait_for_selector("#app.view-in")   # route mount settled and re-navigated: a single cost header instance is live
     host = page.locator("#sessioncost")
-    expect(host).to_have_text("0.73 credits · $0.73")
+    expect(host).to_have_text("0.73 credits")
     base = _quiet(cost_hits)                 # every startup refresh settled
     base_phases = _quiet(phases_hits)
     state.update(price=0.9, hold=True)
@@ -199,12 +199,12 @@ def test_session_cost_refresh_debounces_overlap_and_recovers(page, ui):
     state["hold"] = False
     held[0].fulfill(json={"price": 0.9, "price_usd": 0.9}, headers={"Cache-Control": "no-store"})
     _wait_cost_hits(page, phases_hits, base_phases + 1)   # the released refresh fully settled (pending cleared)
-    expect(host).to_have_text("0.90 credits · $0.90", timeout=8000)
+    expect(host).to_have_text("0.90 credits", timeout=8000)
     state["price"] = 1.1
     now = page.evaluate("Date.now()")
     page.clock.run_for(_next_cost_poll_fire(page) + 500 - now)               # pending cleared: the next interval fire refreshes normally
     _wait_cost_hits(page, cost_hits, base + 2)
-    expect(host).to_have_text("1.10 credits · $1.10", timeout=8000)
+    expect(host).to_have_text("1.10 credits", timeout=8000)
 
 
 def test_signed_out_sign_in_fits_its_reserved_slot_and_geometry_holds(page, ui):
