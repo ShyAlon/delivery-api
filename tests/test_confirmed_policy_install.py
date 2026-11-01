@@ -7,10 +7,35 @@ from test_attempt_ledger import credit_account,A,DSN
 
 
 @pytest.fixture
-def quiet(credit_account):
-    store,_,job=credit_account
-    with tenant_context(A):store.finish_worker(job)
-    return store,job
+def quiet(monkeypatch):
+    # Installer inspects global quiescence. A tenant fixture cannot isolate it
+    # from other tests' deliberately unresolved accounting on the shared server.
+    import psycopg,uuid
+    from psycopg.conninfo import make_conninfo
+    import pg_harness
+    from delivery_api.postgres_store import PostgresStore
+    name='test_tenant_policy_'+uuid.uuid4().hex[:12]
+    admin_dsn=make_conninfo(DSN,dbname='postgres')
+    isolated=make_conninfo(DSN,dbname=name)
+    with psycopg.connect(admin_dsn,autocommit=True) as connection:
+        connection.execute('CREATE DATABASE '+name)
+    try:
+        with psycopg.connect(isolated,autocommit=True) as connection:
+            connection.execute(pg_harness.SUPABASE_STAND_IN)
+            connection.execute(pg_harness.SUPABASE_DEFAULT_ACL)
+            for path in sorted(pg_harness.MIGRATIONS.glob('*.sql')):
+                if pg_harness._numbered(path):connection.execute(path.read_text())
+            connection.execute(pg_harness.SEED)
+        monkeypatch.setitem(globals(),'DSN',isolated)
+        store=PostgresStore(make_conninfo(isolated,user='delivery_app'))
+        with tenant_context(A):
+            tid=store.create_task('Policy installer isolated')['task_id']
+            store.set_engine_session(tid,'policy-'+uuid.uuid4().hex)
+            job=store.enqueue_worker(tid,'fake');store.claim_worker(job);store.finish_worker(job)
+        yield store,job
+    finally:
+        with psycopg.connect(admin_dsn,autocommit=True) as connection:
+            connection.execute('DROP DATABASE '+name+' WITH (FORCE)')
 
 
 def test_preview_commit_replay_and_rollback_only_change_policy(quiet):

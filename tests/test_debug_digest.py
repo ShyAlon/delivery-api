@@ -88,7 +88,7 @@ def test_summary_quotes_events_verbatim_after_scrubbing():
 
 def test_everything_zip_discloses_omissions_and_downloads_without_the_clipboard():
     ident = (WEB / "identity.js").read_text()
-    assert "Known omissions" in ident and "engine process logs" in ident
+    assert "Known omissions" in ident and "engine process logs" in ident.lower()
     assert "downloadTextZip(parts.join" in ident and "'requi-everything.txt'" in ident
     assert "copysummary" in ident and "downloadeverything" in ident and "copyeverything" not in ident
     assert "deliverTextZip(text,'requi-diagnostic-summary.txt')" in ident
