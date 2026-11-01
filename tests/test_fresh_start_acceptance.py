@@ -101,7 +101,7 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
                 c.execute('DELETE FROM model_pin_heads');c.execute('DELETE FROM model_pin_revisions')
                 c.execute('INSERT INTO model_pin_revisions(revision,provider,model,payload,fetched_at,operator_subject,reason) VALUES(%s,%s,%s,%s::jsonb,%s,%s,%s)',(rev,'deepseek',selected_model,json.dumps(value),snap['fetched_at'],workspace.scope.owner_id,'HTTP acceptance reviewed pin'))
                 c.execute('INSERT INTO model_pin_heads(provider,model,revision,is_default) VALUES(%s,%s,%s,true)',('deepseek',selected_model,rev))
-        middleware=pg_task_app(workspace)
+        middleware=pg_task_app(workspace,lifespan=True)
         with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
         server=uvicorn.Server(uvicorn.Config(middleware,host='127.0.0.1',port=port,lifespan='on',log_level='warning',access_log=False))
         thread=threading.Thread(target=server.run);thread.start()

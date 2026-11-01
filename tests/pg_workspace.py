@@ -104,7 +104,7 @@ patches only the store/config and test signing key, never auth or scope function
     from delivery_api.tenant_http import TenantMiddleware
     monkeypatch.setattr(module.config, 'CLOUD_TENANTS', True)
 
-    def build(workspace):
+    def build(workspace,*,lifespan=False):
         monkeypatch.setattr(module, 'store', workspace.store)
         # State stores values in its mapping, not __dict__. Patch that mapping
         # so pytest restores rather than deletes the dynamic attribute.
@@ -112,21 +112,15 @@ patches only the store/config and test signing key, never auth or scope function
         monkeypatch.setattr(module.orchestrator, 'store', workspace.store)
         # The app's own middleware was built before pool-lifecycle tests closed
         # its captured store. Bind every auth/request borrower to this workspace.
-        has_tenant_middleware=False
-        for middleware in module.app.user_middleware:
-            if middleware.cls is TenantMiddleware:
-                has_tenant_middleware=True
-                monkeypatch.setitem(middleware.kwargs,'verifier',SupabaseIdentityVerifier(URL,key_provider=Keys()))
-                monkeypatch.setitem(middleware.kwargs,'session_check',workspace.store.auth_session_active)
-                monkeypatch.setitem(middleware.kwargs,'request_database',workspace.store._postgres)
+        # One real auth middleware, owned by this fixture, never nested.
+        monkeypatch.setattr(module.app,'user_middleware',[m for m in module.app.user_middleware if m.cls is not TenantMiddleware])
         monkeypatch.setattr(module.app,'middleware_stack',None)
         # Route fixture intentionally excludes background execution/lifecycle.
         # Lifespan behavior has its own real-process integration contracts.
         from contextlib import asynccontextmanager
         @asynccontextmanager
         async def no_background_startup(application):yield
-        monkeypatch.setattr(module.app.router,'lifespan_context',no_background_startup)
-        if has_tenant_middleware:return module.app
+        if not lifespan:monkeypatch.setattr(module.app.router,'lifespan_context',no_background_startup)
         return TenantMiddleware(module.app,
             verifier=SupabaseIdentityVerifier(URL, key_provider=Keys()),
             session_check=workspace.store.auth_session_active,

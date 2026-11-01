@@ -71,7 +71,7 @@ def capacity_client(pg_workspace_factory,pg_task_app,monkeypatch):
             previous=[r[0] for r in c.execute('SELECT subject FROM operator_principals WHERE enabled').fetchall()]
             c.execute('UPDATE operator_principals SET enabled=false WHERE enabled')
             c.execute("INSERT INTO operator_principals(subject,registry_version,capabilities,enabled) VALUES(%s,'capacity-test',ARRAY['logs.read'],true)",(workspace.scope.owner_id,))
-        application=pg_task_app(workspace)
+        application=pg_task_app(workspace,lifespan=True)
         from delivery_api import app as app_module
         # Exercise production lifespan wiring instead of injecting a reader that
         # startup must clear to prevent stale authority across lifecycles.
