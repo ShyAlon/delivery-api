@@ -66,7 +66,7 @@ def test_no_credit_amount_is_printed_with_normalize():
 
 
 def test_the_typed_yes_is_read_from_the_terminal_because_stdin_holds_the_script():
-    assert "input(" not in PYTHON and "ask('\\nType yes" in PYTHON
+    assert "input(" not in PYTHON and 'Type "yes"' in PYTHON
 
 
 def test_a_missing_terminal_ends_with_a_clear_abort_and_never_a_traceback(monkeypatch):

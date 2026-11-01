@@ -39,7 +39,7 @@ def review_projection_functions(rows,confirm):
         print('Defines private derived-cache DELETE functions. Does not authorize deletion of source task, artifact or provider evidence.')
         print('Read the exact SQL before confirming. Creating these functions enables their later normal trigger/read behavior.')
         expected='REVIEW FUNCTIONS '+name+' SHA256 '+digest
-        if confirm('Type '+expected+': ')!=expected:raise ValueError('projection-function confirmation did not match; no changes')
+        if confirm('Type "'+expected+'": ')!=expected:raise ValueError('projection-function confirmation did not match; no changes')
         allowed[name]=digest
     return allowed
 
@@ -60,11 +60,12 @@ def plan(conn,readiness,root):
 def apply(conn,reviewed,readiness,root,app_login,confirm,*,review_functions=False):
     if any(r['status']=='partial' for r in reviewed):raise ValueError('partial migration objects; manual review required, no automatic replay')
     pending=[r for r in reviewed if r['status']=='pending']
+    print('Type only the text inside quotes, without the quote marks. Press Enter to cancel.')
     reviewed_functions=review_projection_functions(reviewed,confirm) if review_functions else {}
     allowed={**APPROVED_DESTRUCTIVE,**reviewed_functions}
     blocked=[r['file']+': '+','.join(r['destructive']) for r in pending if r['destructive'] and (r['file'] not in allowed or allowed[r['file']]!=r.get('sha256'))]
     if blocked:raise ValueError('refused pending destructive migration(s): '+'; '.join(blocked)+'; no migrations or grants applied')
-    if confirm('Type APPLY '+str(len(pending))+' MIGRATIONS TO '+app_login+' to apply in order and grant restricted SET memberships: ')!='APPLY '+str(len(pending))+' MIGRATIONS TO '+app_login:
+    if confirm('Type "APPLY '+str(len(pending))+' MIGRATIONS TO '+app_login+'" to apply in order and grant restricted SET memberships: ')!='APPLY '+str(len(pending))+' MIGRATIONS TO '+app_login:
         raise ValueError('confirmation did not match; no changes')
     if plan(conn,readiness,root)!=reviewed:raise ValueError('review changed; rerun dry review')
     import psycopg

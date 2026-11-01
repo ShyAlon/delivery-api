@@ -47,7 +47,7 @@ class Attended:
             for f in findings:
                 print(f"  [{f.get('kind','semantic')}] rule {f['rule']} at {'/'.join(str(x) for x in f['path'])}: {f['reason']}",flush=True)
                 print('  original: '+json.dumps(f['original'],ensure_ascii=False)[:1500],flush=True)
-            choice=ask('Type accept, remove or replace: ').strip()
+            choice=ask('Type "accept", "remove" or "replace": ').strip()
             if choice not in ('accept','remove','replace'):raise ValueError('explicit item choice required')
             decision={'item_id':item_id,'action':choice,'actor':self.owner(),'rationale':ask('Rationale (Enter to skip): ').strip()}
             if choice=='replace':decision['replacement']=json.loads(ask('Replacement value as JSON: '))
@@ -55,7 +55,7 @@ class Attended:
         return json.dumps({'revision':review['revision'],'decisions':decisions},sort_keys=True)
     def gate(self,review,digest):
         self.show('gate.waiting',review,digest)
-        action=input('Type accept or regenerate: ').strip()
+        action=input('Type "accept" or "regenerate": ').strip()
         decision={'action':action}
         if action=='regenerate':decision['feedback']=input('Founder change guidance: ')
         if action not in ('accept','regenerate'):raise ValueError('explicit gate choice required')
@@ -63,11 +63,11 @@ class Attended:
     def change(self,review,digest):
         self.show('closed-edit.waiting',review,digest)
         guidance=input('Founder SRS change guidance: ').strip()
-        if input('Type EXTRA COST ACKNOWLEDGED to generate and later continue: ')!='EXTRA COST ACKNOWLEDGED':raise ValueError('cost acknowledgement required')
+        if input('Type "EXTRA COST ACKNOWLEDGED" to generate and later continue: ')!='EXTRA COST ACKNOWLEDGED':raise ValueError('cost acknowledgement required')
         return {'review_sha256':digest,'change_request':guidance,'extra_cost_acknowledged':True}
     def approve_revision(self,shown):
         self.show('fresh-review.waiting',shown['review'],shown['review_sha256'])
-        if input('Type APPROVE AND ACKNOWLEDGE EXTRA COST to continue: ')!='APPROVE AND ACKNOWLEDGE EXTRA COST':raise ValueError('fresh exact approval required')
+        if input('Type "APPROVE AND ACKNOWLEDGE EXTRA COST" to continue: ')!='APPROVE AND ACKNOWLEDGE EXTRA COST':raise ValueError('fresh exact approval required')
         return {'review_sha256':shown['review_sha256'],'choice':'approve','change_request':'','extra_cost_acknowledged':True}
     def paypal(self,approval):
         print('PayPal sandbox approval: '+approval['approval_url'],flush=True)

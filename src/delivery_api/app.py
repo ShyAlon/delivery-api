@@ -3644,7 +3644,7 @@ def admin_operations_grant_preview(body:GrantRequest,a:auth.Actor=Depends(auth.r
 def admin_operations_grant(body:GrantRequest,a:auth.Actor=Depends(auth.require_admin)):
     # Operator only: give credits. Needs the typed word yes. The database checks the operator registry again and refuses a same-day repeat.
     if not config.CLOUD_TENANTS:raise HTTPException(404,'Not available on this server.')
-    if body.confirm!='yes':raise HTTPException(400,'Type yes to confirm the grant.')
+    if body.confirm!='yes':raise HTTPException(400,'Type "yes" to confirm the grant.')
     try:out=_operator_reader().grant_apply(store,body.email,body.credits,body.reason)
     except ValueError as exc:raise HTTPException(400,str(exc))
     except Exception as exc:

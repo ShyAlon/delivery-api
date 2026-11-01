@@ -139,7 +139,7 @@ def terminal_confirm(prompt):
 
 def save_confirmed(path,values,confirm=None):
     confirm=confirm or terminal_confirm
-    if confirm('Type yes to save these settings locally at '+str(path)+' (mode 600), Enter to keep them only for this run: ')!='yes':return False
+    if confirm('Type "yes" to save these settings locally at '+str(path)+' (mode 600), Enter to keep them only for this run: ')!='yes':return False
     path=Path(path);existing=read_file(path)
     existing.update({k:v for k,v in values.items() if allowed(k)})
     path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)

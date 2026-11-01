@@ -73,7 +73,7 @@ local_flow(){
   echo "  The database is the REAL one: signing in and any button that writes (Grant Credits, Admin Stop, delete task, stop run) is a real change."
   echo "  Not part of a local preview: artifact files, phase output files and interview transcripts - the app says so where they would appear."
   echo "  The image is this Mac's architecture ($EXPECTED_ARCH); the deployed server build is amd64. Ctrl-C removes the container and the temp folder."
-  printf 'Type yes (English keyboard) to start, anything else changes nothing: '
+  printf 'Type "yes" (English keyboard) to start, anything else changes nothing: '
   read -r A < "${PREVIEW_TTY:-/dev/tty}" || A=no; [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "" "run ops preview again and type yes"
 
   trap cleanup EXIT INT TERM
@@ -183,7 +183,7 @@ server_flow(){
   echo "  copies the live settings into a private temp file, runs the image on http://127.0.0.1:$PORT with execution OFF and no model key."
   echo "  The database is the REAL one: signing in and any button that writes (Grant Credits, Admin Stop, delete task, stop run) is a real change."
   echo "  File changes stay in the local copy. Ctrl-C removes the container and the temp folder."
-  printf 'Type yes (English keyboard) to start, anything else changes nothing: '
+  printf 'Type "yes" (English keyboard) to start, anything else changes nothing: '
   read -r A < "${PREVIEW_TTY:-/dev/tty}" || A=no; [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "" "run ops preview again and type yes"
 
   trap cleanup EXIT INT TERM

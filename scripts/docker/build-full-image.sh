@@ -23,7 +23,7 @@ chmod -R u+rwX,go+rX "$CTX"   # sources only: no secret is ever in this folder
 [ -f "$CTX/delivery-api/Dockerfile.full" ] || abort NO-DOCKERFILE "delivery-api main has no Dockerfile.full" "merge the Dockerfile.full PR first"
 IMAGE=requi-full:$TAG; CAND=requi-full-candidate:$TAG
 echo "image tag: $IMAGE   server: $HOST   build dir: ~/requi/build-$STAMP"
-printf 'This uploads the four source trees (no keys, a few MB) over ssh and builds the image on the server. Type yes to continue: '
+printf 'This uploads the four source trees (no keys, a few MB) over ssh and builds the image on the server. Type "yes" to continue: '
 read -r A < "${BUILD_TTY:-/dev/tty}" || A=no; [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "run again and type yes"
 ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" 'sudo -n docker info >/dev/null && echo ok' | grep -q ok || abort SSH-DOCKER "cannot ssh to $HOST or ubuntu cannot run sudo docker" "ssh $HOST 'sudo -n docker info' | head -3"
 ssh "$HOST" "mkdir -p ~/requi && chmod 700 ~/requi && for d in ~/requi/build-[0-9]*; do [ -d \"\$d\" ] && rm -rf \"\$d\"; done; mkdir ~/requi/build-$STAMP" || abort MKDIR "cannot create the build folder"

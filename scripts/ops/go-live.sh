@@ -51,7 +51,7 @@ echo
 echo "STEP 1 of 2 - write settings (nothing restarts, execution stays OFF)"
 echo "  prices + ceiling  -> $REMOTE_FILE (shown above; the old copy kept as .prev)"
 echo "  DeepSeek key      -> /etc/requi/deepseek.env ($([ "$NEWKEY" = yes ] && echo 'the locally loaded key' || echo 'kept as it is'); owner deploy, mode 600)"
-read -r -p "Type yes (English keyboard) to write these, anything else changes nothing: " A
+read -r -p "Type \"yes\" (English keyboard) to write these, anything else changes nothing: " A
 [ "$A" = yes ] || abort DECLINED "You did not type yes." "Nothing was written." "nothing needed"
 EV=$HOME/requi-evidence/price-pin-$(date +%Y%m%d-%H%M%S); mkdir -p "$EV"; chmod 700 "$EV"
 cp "$WORK"/cloud-models.env "$WORK"/page-*.html "$WORK/out.txt" "$EV"/
@@ -71,7 +71,7 @@ echo "STEP 2 of 2 - turn execution ON"
 echo "  What changes: the running service restarts on the SAME image with the key, the prices and DELIVERY_CLOUD_EXECUTION=1."
 echo "  What this does NOT do: no model call and no spend. A call needs, for each person, an admission row and prepaid credits. A person without both is answered 'not admitted'."
 echo "  Safety: the service must start healthy and log 'Cloud execution: OPEN', otherwise the previous (OFF) service is put back automatically."
-read -r -p "Type yes (English keyboard) to turn execution ON now, anything else leaves it OFF with the settings written: " A
+read -r -p "Type \"yes\" (English keyboard) to turn execution ON now, anything else leaves it OFF with the settings written: " A
 [ "$A" = yes ] || { echo; echo "Stopped. Settings are written, execution is still OFF. Run this command again to finish."; exit 0; }
 cat > "$WORK/on.sh" <<'RS_EOF'
 #!/usr/bin/env bash

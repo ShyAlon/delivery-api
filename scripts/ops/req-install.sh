@@ -16,7 +16,7 @@ if [ -f "$CUR" ] && cmp -s "$SRC" "$CUR"; then echo "ok  $CUR already is the rep
 echo "Your req:   $CUR"
 echo "Repo req:   $SRC"
 if [ -f "$CUR" ]; then echo "== what changes (lines starting with - leave, + arrive):"; diff -u "$CUR" "$SRC" | tail -n +3 | head -80 || true; fi
-printf 'Type yes to replace %s with the repo runner (the old file is kept as %s.bak): ' "$CUR" "$CUR"; read -r A
+printf 'Type "yes" to replace %s with the repo runner (the old file is kept as %s.bak): ' "$CUR" "$CUR"; read -r A
 [ "$A" = yes ] || abort DECLINED "you did not type yes" "" "scripts/ops/req-install.sh   (run it again when ready)"
 [ ! -f "$CUR" ] || cp "$CUR" "$CUR.bak"
 cp "$SRC" "$CUR" && chmod +x "$CUR" || abort COPY "cannot write $CUR" "" "ls -l $CUR"

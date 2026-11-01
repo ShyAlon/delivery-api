@@ -356,7 +356,7 @@ PY
   echo "  You will be asked at the terminal: interview answers, accept/regenerate decisions, the cost approvals, and nothing else: after your one PayPal sandbox click the run continues by itself when PayPal records the approval. The webhook file is exported by a watcher on the server. No auto answers."
   echo "  If the connection drops: bash item6-run.sh --resume $RUN attach"
   echo "============================================================"
-  read -r -p "To start, type exactly:  GO $RID CEILING $CEILING   > " PHRASE
+  read -r -p "To start, type exactly: \"GO $RID CEILING $CEILING\" > " PHRASE
   [ "$PHRASE" = "GO $RID CEILING $CEILING" ] || abort NOT-STARTED "go phrase not typed exactly" "Nothing was started."
   echo "== starting"
   "${UBU[@]}" "NAME=$NAME RID=$RID CEILING=$CEILING START=$B bash -s" <<'INNER'
@@ -458,7 +458,7 @@ This one command will, in order:
   5. start the interview in tmux: you answer content questions (interview answers, accept or regenerate decisions), click PayPal sandbox once (nothing to type, the run waits for PayPal's approval); the webhook file is handled automatically
   6. copy the evidence back to this Mac when it ends
 Costs: DeepSeek spend capped at USD 2.00 by a balance watcher; PayPal sandbox only (12-credit pack, fake money)."
-read -r -p "Type yes (English keyboard) to begin steps 1-3, anything else aborts with no change: " A
+read -r -p "Type \"yes\" (English keyboard) to begin steps 1-3, anything else aborts with no change: " A
 [ "$A" = yes ] || abort DECLINED "You did not type yes." "Nothing was changed."
 if [ $REBUILD_IMG = 1 ]; then ( stage_build ); fi
 ( stage_config )

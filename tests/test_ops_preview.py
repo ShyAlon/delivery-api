@@ -142,7 +142,7 @@ def test_without_a_typed_yes_nothing_is_started(env, tmp_path):
 def test_the_real_database_warning_is_shown_before_the_yes(env):
     api, e, log, _ = env
     out = _run(api, e)
-    assert "REAL one" in out.stdout and "Grant Credits" in out.stdout and "Type yes" in out.stdout
+    assert "REAL one" in out.stdout and "Grant Credits" in out.stdout and 'Type "yes"' in out.stdout
 
 
 def test_execution_is_forced_off_and_no_model_key_reaches_the_container(env):

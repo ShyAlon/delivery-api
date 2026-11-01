@@ -37,7 +37,7 @@ fi
 if [ "${REQUI_BUILD_YES:-}" = 1 ]; then
   echo "== the calling preview run already confirmed this build (REQUI_BUILD_YES=1); not asking again"
 else
-  printf 'This builds the four source trees (no keys, a few MB) into a local image. Type yes to continue: '
+  printf 'This builds the four source trees (no keys, a few MB) into a local image. Type "yes" to continue: '
   read -r A < "${BUILD_TTY:-/dev/tty}" || A=no; [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "run again and type yes"
 fi
 docker build --build-arg REQUI_BUILD_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" --platform "$PLATFORM" --build-arg REQUI_BUILD_ID="local-$STAMP" --build-arg REQUI_BUILD_REPOS="$REPOS" -f "$CTX/delivery-api/Dockerfile.full" -t "$CAND" "$CTX" || abort BUILD "the local build did not finish" "Nothing was tagged. The output above names the failing step."

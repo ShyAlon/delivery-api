@@ -5,7 +5,7 @@ OPS_NOTE="Nothing was written to the database."
 . "$(dirname "$0")/lib.sh"; ops_start grant-credits "$0" --venv; ops_settings REQUI_ADMIN_DATABASE_URL; REPO=$PWD; PY=$REPO/.venv/bin/python
 if ! "$PY" -c 'import psycopg' 2>/dev/null; then
   echo "The Python package psycopg (Postgres driver) is missing in $REPO/.venv. This will run:  $PY -m pip install 'psycopg[binary]>=3.2,<4'"
-  printf 'Type yes to install it, anything else to stop: '; read -r A < /dev/tty || A=no
+  printf 'Type "yes" to install it, anything else to stop: '; read -r A < /dev/tty || A=no
   [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "$PY -m pip install 'psycopg[binary]>=3.2,<4'"
   "$PY" -m pip install -q 'psycopg[binary]>=3.2,<4' || abort PIP "pip install failed (error above)" "$PY -m pip install 'psycopg[binary]>=3.2,<4'"
 fi
@@ -115,7 +115,7 @@ for p in plan:
     print('%-34s %-10s %-9s %-9s %s'%(p['email'][:34],fmt(bal) if p['acc'] else 'new',('+%s'%fmt(g)) if g else ('already today' if p['already'] else '-'),fmt(bal+g),p['limit_action'] or 'ok as is'))
 for e,why in skipped:print('  skipped %s: %s'%(e,why))
 print('Total credits granted: %s'%fmt(tot))
-if ask('\nType yes (English keyboard) to write all of this in one transaction, anything else stops: ')!='yes':
+if ask('\nType "yes" (English keyboard) to write all of this in one transaction, anything else stops: ')!='yes':
     conn.rollback();die('DECLINED','you did not type yes','nothing needed')
 now=time.time()
 try:

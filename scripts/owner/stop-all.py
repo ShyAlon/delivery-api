@@ -121,7 +121,7 @@ def main():
         print('This only requests cooperative Stop. No Delete, retry/start, worker-state rewrite, release/refund/credit change, or invented quiescence. Accepted earlier calls may still settle. Missing legacy sessions remain blocked.')
         if args.dry_run:print('DRY RUN ONLY. No Stop requested.');return
         if not reviewed['tasks']:print('No blocked tasks need Stop. No changes.');return
-        if input('Type CONTINUE to verify the running local preview, or Enter to exit dry-only: ').strip()!='CONTINUE':
+        if input('Type "CONTINUE" to verify the running local preview, or Enter to exit dry-only: ').strip()!='CONTINUE':
             print('DRY RUN ONLY. No changes.');return
         try:engine=batch.PreviewEngine(args.container,owner,session,os.environ['DELIVERY_DATABASE_URL'])
         except Exception as exc:fail('preview preflight failed ('+type(exc).__name__+'). Start the current preview against the same settings file. No Stop requested.')
