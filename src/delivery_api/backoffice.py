@@ -88,11 +88,11 @@ def create_app(*,service_url,transport=None):
             return JSONResponse({'detail':'Same-origin confirmation required'},status_code=403)
         raw=await request.body()
         try:
-            if len(raw)>256:raise ValueError()
+            if len(raw)>8192:raise ValueError()
             value=json.loads(raw)
             if (not isinstance(value,dict) or set(value)!={'fingerprint','confirmation'}
                 or not isinstance(value['fingerprint'],str) or not re.fullmatch('[a-f0-9]{64}',value['fingerprint'])
-                or not isinstance(value['confirmation'],str) or not re.fullmatch(r'FORCE STOP [0-9]{1,5} JOBS',value['confirmation'])):raise ValueError()
+                or not isinstance(value['confirmation'],str) or not re.fullmatch(r'FORCE STOP [0-9]{1,5} JOBS(?: REPAIR [A-Za-z0-9_,.-]{1,4000})?',value['confirmation'])):raise ValueError()
         except (ValueError,TypeError):return JSONResponse({'detail':'Exact reviewed plan and typed confirmation required'},status_code=422)
         headers={key:request.headers[key] for key in ('authorization','cookie') if key in request.headers}
         if not headers:return JSONResponse({'detail':'Service API sign-in required'},status_code=401)

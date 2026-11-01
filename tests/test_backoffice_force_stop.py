@@ -37,11 +37,11 @@ def test_browser_force_reviews_hidden_jobs_requires_phrase_and_sends_once(tmp_pa
     def upstream(request):
         calls.append(request)
         if request.url.path=='/api/operations/force-stop-plan':
-            return httpx.Response(200,json={'owner_id':'owner-one','fingerprint':'a'*64,'warning':'Worker exit UNVERIFIED. Accounting unchanged. Accepted calls may bill.',
+            return httpx.Response(200,json={'owner_id':'owner-one','fingerprint':'a'*64,'confirmation':'FORCE STOP 1 JOBS REPAIR hidden-job','warning':'Worker exit UNVERIFIED. Accounting unchanged. Accepted calls may bill.',
               'jobs':[{'job_id':'hidden-job','title':'Meditator 7.5','task_id':'hidden-task','state':'running','deleted_at':1}],
               'accounting':[{'ledger':'provider','id':'attempt-one','state':'uncertain'}]})
         if request.method=='POST':
-            assert json.loads(request.content)=={'fingerprint':'a'*64,'confirmation':'FORCE STOP 1 JOBS'}
+            assert json.loads(request.content)=={'fingerprint':'a'*64,'confirmation':'FORCE STOP 1 JOBS REPAIR hidden-job'}
             return httpx.Response(200,json={'forced_count':1,'results':[{'job_id':'hidden-job','state':'failed','worker_exit_verified':False}],
               'warning':'Worker exit UNVERIFIED. Accounting unchanged.','accounting':[{'state':'uncertain'}]})
         if request.url.path=='/api/operations/active-jobs':return httpx.Response(200,json={'scope':'current_authorized_workspace','jobs':[],'mutations_available':False,'truncated':False})
@@ -64,7 +64,7 @@ def test_browser_force_reviews_hidden_jobs_requires_phrase_and_sends_once(tmp_pa
             page.screenshot(path='/downloads/requi-rollout/force-review-desktop.png')
             page.set_viewport_size({'width':390,'height':844})
             page.screenshot(path='/downloads/requi-rollout/force-review-mobile.png')
-            page.locator('#force-stop-phrase').fill('FORCE STOP 1 JOBS')
+            page.locator('#force-stop-phrase').fill('FORCE STOP 1 JOBS REPAIR hidden-job')
             page.get_by_role('button',name='Force close job records').click()
             page.get_by_text('1 job records forced closed.',exact=False).wait_for()
             assert len([x for x in calls if x.method=='POST'])==1

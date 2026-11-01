@@ -3445,7 +3445,7 @@ def operator_worker_job_stop(job_id:str,body:WorkerJobStopRequest,a:auth.Actor=D
 class ForceStopAllRequest(BaseModel):
     model_config={'extra':'forbid'}
     fingerprint:str=Field(pattern=r'^[a-f0-9]{64}$')
-    confirmation:str=Field(min_length=1,max_length=64)
+    confirmation:str=Field(min_length=1,max_length=4096)
 
 
 @app.get('/api/operations/force-stop-plan')
