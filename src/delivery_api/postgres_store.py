@@ -1918,6 +1918,14 @@ FROM tasks t"""
                 'worker_exit_verified':False,'accounting_settled':False,'accounting_retained':True,
                 'source_artifacts_deleted':False,'accepted_calls_may_bill':True}
 
+    def force_stop_jobs_plan(self):
+        from .force_stop_jobs import plan
+        return plan(self)
+
+    def force_stop_jobs_apply(self,fingerprint,confirmation):
+        from .force_stop_jobs import apply
+        return apply(self,fingerprint,confirmation)
+
     def owner_active_jobs(self,*,limit=50,before=None):
         """Current owner only. Pending/running/paused are evidence, not proof of liveness."""
         import math
@@ -2321,6 +2329,7 @@ PG_OPERATIONS = (
     'manifest_revision',
     'manifest_snapshot',
     'mark_producer_published',
+    'force_stop_jobs_plan','force_stop_jobs_apply',
     'operator_workspace_snapshot','owner_active_jobs','stop_hide_worker_task','stop_hide_task',
     'own_credit_balance',
     'own_credit_history',
