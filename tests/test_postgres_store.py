@@ -775,8 +775,19 @@ def test_source_change_during_concrete_stage_validation_leaves_only_prepared_eve
             assert len(conn.execute('SELECT 1 FROM closed_revision_promotion_events WHERE lineage_id=%s',(lid,)).fetchall())==1
 
 
+from policy_database import isolated_policy_database
+
+@pytest.fixture
+def retained_revision_store(monkeypatch,isolated_policy_database):
+    # These real graph chains retain thousands of checkpoint/evidence rows.
+    # Every parameter is an independent scenario, not an ever-growing owner.
+    # Preserve all RLS, graph reconstruction and reconciliation checks.
+    monkeypatch.setitem(globals(),'DSN',isolated_policy_database)
+    return PostgresStore(isolated_policy_database.replace('user=sandbox','user=delivery_app'))
+
 @pytest.mark.parametrize('coordinated',['pg_child_control','pg_control_stop','pg_architecture_continue','pg_real_architecture','pg_anchor_tamper','pg_stage_tamper','pg_source_tamper','pg_continuation_tamper','pg_successor_revoked','pg_successor_expired','pg_successor_snapshot_swap','pg_successor_prepared_swap','pg_successor_provider_hold','pg_install_only','pg_continuation_only','pg_continuation_consume','pg_continuation_consume_revoked','pg_continuation_failure','pg_activation_rollback',False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph','architecture_continuation','successor_revoked','successor_expired','successor_swap','successor_prepared_swap','successor_provider_hold'])
-def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(store,tmp_path,monkeypatch,coordinated):
+def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(retained_revision_store,tmp_path,monkeypatch,coordinated):
+    store=retained_revision_store
     pg_architecture=coordinated=='pg_architecture_continue'
     if pg_architecture:coordinated='pg_continuation_only'
     pg_real=coordinated=='pg_real_architecture'
