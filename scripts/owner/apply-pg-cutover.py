@@ -16,7 +16,8 @@ import sys
 
 
 # Owner yes2026-10-30 16:45:41 IST, exact reviewed metrics-only function.
-APPROVED_DESTRUCTIVE={'20261030030000_resource_metrics_maintenance.sql':'8bef488bdc0d6795624821d2cd06c6fb663276ccc27643bd2311ab0ec56cb07a'}
+# Exact index-only replacement still requires the owner APPLY confirmation.
+APPROVED_DESTRUCTIVE={'20261101124000_visible_task_names.sql':'c39397fa2d8718d6c290b0807b1c56bba21d6275ad560f0b6e320ccdfa292189','20261030030000_resource_metrics_maintenance.sql':'8bef488bdc0d6795624821d2cd06c6fb663276ccc27643bd2311ab0ec56cb07a'}
 
 # Exact additive migrations: DELETE occurs in private derived-cache functions,
 # not a grant to delete provider attempts, artifacts, task history or money rows.
