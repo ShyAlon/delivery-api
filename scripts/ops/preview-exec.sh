@@ -4,20 +4,10 @@
 # run here spends real money for a person who has an admission row and prepaid credits; anyone else is answered
 # 'not admitted'. Starting this preview is NOT the activation approval for the first real interview: the spend
 # limit, cost ceiling, model route and live changes are approved once, separately, before that interview.
-# Settings: the file saved on this Mac by scripts/ops/preview-provision.sh (~/.config/requi/preview.env), plus
-# a fresh pin of the reviewed model row: the local Ollama server in ollama mode (scripts/ops/pin-local.py, $0,
-# nothing paid), or the two public DeepSeek pages in deepseek mode (scripts/ops/pin.py, the exact step
-# ops go-live runs; public GETs only, never a paid call). DeepSeek keys load from private preview.env, then
-# checkout .env, then the shell. Only missing values ask for hidden terminal input; saving is opt-in. The key
-# passes privately to the container, never in argv, logs or the temporary Docker env file. Deepseek mode
-# is DeepSeek-ONLY: the local Ollama server is never checked, contacted or needed, and no Ollama setting may
-# reach its settings. If any prerequisite is missing this stops with a clear message; it never falls back to
-# another model route. Ctrl-C removes the container, its owned Back office listener and the temp folder.
-#
-# Fail-fast: 8 numbered steps, cheapest and most likely first, each printing its elapsed time. The plan with
-# expected durations prints before step 1. There are exactly two questions: the provider pick (only when
-# PREVIEW_EXEC_PROVIDER is unset) and one typed yes. The build script's own yes is covered by that yes
-# (REQUI_BUILD_YES=1); there is no key prompt - a missing DeepSeek key is a loud stop.
+# Settings: private preview/env credentials and one durable public model pin store.
+# Back office > Model pins owns all price refresh/review/edit/default changes.
+# No launcher price generator or filesystem pin cache. Paid route visibility is not spend approval.
+# Ctrl-C removes only this invocation's container; data volume is retained.
 set -euo pipefail
 # Color is presentation only: no ANSI in pipes/files/ZIPs, no exit-code masking.
 if [ -t 1 ] && [ -z "${NO_COLOR+x}" ] && [ "${REQUI_TERMINAL_COLOR_ACTIVE:-0}" != 1 ] && command -v python3 >/dev/null 2>&1; then
@@ -146,7 +136,7 @@ Plan (8 steps, fail fast - cheapest and most likely first; every step prints its
   1 inputs and environment (~5s): tools, Docker, port, saved settings, the four checkouts at origin/main, LIVE DB schema + app role readiness
   2 source smoke (~15s): the image's startup checks against the candidate sources - syntax parse, the preflight's own tests, the engine surface
   3 confirmation (you): provider pick if unset, DeepSeek key presence (deepseek only), what will run, one typed yes
-  4 settings + grounding (~10s deepseek; ~1-5 min ollama: it loads the model on this Mac)
+  4 settings + shared model pin store (Back office owns refresh and review)
   5 build (0s if the image is current; otherwise ~10-30 min - no second yes, step 3 covered it)
   6 image smoke (~30s): the image's own full smoke - no network, no provider key, not root
   7 database + startability (~20s): this Mac opens the database; the image would start with these settings
@@ -325,7 +315,7 @@ echo "  with the configured safety ceiling 128000 tokens per call / 16384 max ou
 echo "  The DeepSeek key comes from repo .env first, private preview settings next, then shell; missing keys use hidden terminal input. Values are never printed."
 echo "  Real spend is possible only for a person with an admission row and prepaid credits; anyone else is 'not admitted'."
 elif [ "$PROVIDER" = both ]; then
-echo "  Providers: both. UI choice per task: paid DeepSeek or local Ollama $OLLAMA_MODEL at \$0. No automatic fallback."
+echo "  Providers: both. UI choice per task: paid DeepSeek or reviewed local Ollama default at \$0. No automatic fallback."
 echo "  Grounding loads the local model once (heavy on this Mac for 1-5 min); DeepSeek pin reads public pages only."
 echo "  Later local model work runs only when you select Ollama; DeepSeek remains independently available."
 else
@@ -489,7 +479,7 @@ else
 fi
 echo "PREVIEW-EXEC READY: http://127.0.0.1:$PORT   (execution OPEN, live database, real sign-in, provider: $PROVIDER)"
 [ "$PROVIDER" = both ] && echo "Both routes admitted: choose DeepSeek or Ollama in the UI. Local is zero-cost; DeepSeek uses credits. No fallback."
-[ "$PROVIDER" = ollama ] && echo "Local Ollama route: $OLLAMA_MODEL at \$0; every call is ledgered. The managed DeepSeek route is not configured in this mode."
+[ "$PROVIDER" = ollama ] && echo "Local Ollama route: reviewed default at \$0; every call is ledgered. The managed DeepSeek route is not configured in this mode."
 echo "Spend is possible only for a person with an admission row and prepaid credits."
 echo "Running build: $(printf '%s' "$REPOS" | sed 's/=/ /g; s/,/, /g')"
 echo "Reminder: the first real interview still needs its own one-time approval (spend limit, cost ceiling, model route, live changes)."

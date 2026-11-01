@@ -103,8 +103,7 @@ def selected_environment(db,environ):
     mode=environ.get('REQUI_PIN_PROVIDERS','deepseek').split(',')
     selected=[]
     for provider in mode:
-        model=None # the reviewed durable head chooses the provider default, not legacy environment settings
-        candidates=[r for r in pins if r['provider']==provider and (r['model']==model if model else r['is_default'])]
+        candidates=[r for r in pins if r['provider']==provider and r['is_default']]
         if len(candidates)!=1:raise ValueError('Choose one reviewed '+provider+' model in Back office > Model pins; no implicit fallback')
         selected.append(candidates[0]['payload'])
     return environment(selected)

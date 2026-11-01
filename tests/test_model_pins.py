@@ -146,3 +146,12 @@ def test_durable_verifier_blocks_changed_price_and_reuses_only_good_checks(monke
     other=copy.deepcopy(value);other['row']['provider_snapshot']['published_usd_per_million']['peak']['output']='9.00'
     monkeypatch.setattr(pins,'refresh',lambda candidate:{'payload':other,'warning':None,'changed':True})
     with pytest.raises(ValueError,match='changed'):pins.pin_verifier(value)()
+
+
+def test_reverting_payload_adds_a_new_revision_not_duplicate_primary_key(store,repo):
+    with tenant_context(A):
+        value=payload();first=repo.commit(store,value,None,'first')
+        changed=copy.deepcopy(value);changed['context']['maximum_output_tokens']-=1
+        second=repo.commit(store,changed,first,'changed')
+        third=repo.commit(store,value,second,'explicit revert')
+        assert len({first,second,third})==3 and len(repo.history(store))==3
