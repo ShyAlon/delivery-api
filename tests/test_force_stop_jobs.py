@@ -105,8 +105,11 @@ def test_force_preflight_names_legacy_generation_binding(store):
     with tenant_context(A):
         tid,j=job(store,True)
         with psycopg.connect(DSN) as c:c.execute('UPDATE engine_sessions SET generation=99 WHERE task_id=%s',(tid,))
-        with pytest.raises(ValueError,match='immutable engine-session RLS binding'):store.force_stop_jobs_plan()
-        assert store.worker_job(j)['state']=='running'
+        review=store.force_stop_jobs_plan()
+        assert j in review['fenced_repair_ids']
+        assert j in review['confirmation']
+        store.force_stop_jobs_apply(review['fingerprint'],review['confirmation'])
+        assert store.worker_job(j)['state']=='failed'
 
 
 def test_denial_context_never_leaks_raw_driver_text():
@@ -117,3 +120,34 @@ def test_denial_context_never_leaks_raw_driver_text():
     with pytest.raises(ValueError) as exc:execute(Store(),'tasks','UPDATE stop fence','ignored')
     assert 'tasks UPDATE stop fence' in str(exc.value) and '42501' in str(exc.value)
     assert 'DO-NOT-PRINT' not in str(exc.value)
+
+
+def test_fenced_function_refuses_foreign_owner_and_accounting_and_is_not_public(store):
+    from test_attempt_ledger import DSN
+    import psycopg
+    with tenant_context(A):
+        tid,j=job(store,True)
+        with psycopg.connect(DSN) as c:c.execute('UPDATE engine_sessions SET generation=2 WHERE task_id=%s',(tid,))
+        review=store.force_stop_jobs_plan()
+        with pytest.raises(ValueError):store.force_stop_jobs_apply(review['fingerprint'],'FORCE STOP '+str(len(review['jobs']))+' JOBS')
+        with store._postgres.transaction() as c:
+            assert not c.execute("SELECT has_function_privilege('anon','public.requi_force_close_fenced_job(text,text,text)','EXECUTE') AS allowed").fetchone()['allowed']
+    with tenant_context(B),store._postgres.transaction() as c:
+        with pytest.raises(Exception):c.execute('SELECT public.requi_force_close_fenced_job(%s,%s,%s)',(j,'FORCE CLOSE '+j,'a'*64))
+    with tenant_context(A):assert store.worker_job(j)['state']=='running'
+
+
+def test_newer_binding_force_preserves_task_and_has_durable_false_exit_audit(store):
+    from test_attempt_ledger import DSN
+    import psycopg
+    with tenant_context(A):
+        tid,j=job(store,True)
+        with psycopg.connect(DSN) as c:
+            c.execute('UPDATE engine_sessions SET generation=2 WHERE task_id=%s',(tid,))
+            before=c.execute('SELECT generation,deleted_at,stopped_at FROM tasks WHERE task_id=%s',(tid,)).fetchone()
+        review=store.force_stop_jobs_plan();store.force_stop_jobs_apply(review['fingerprint'],review['confirmation'])
+        with psycopg.connect(DSN) as c:assert c.execute('SELECT generation,deleted_at,stopped_at FROM tasks WHERE task_id=%s',(tid,)).fetchone()==before
+        evidence=next(r for r in store.audit_entries(tid) if r['action']=='worker.force_close_fenced')
+        detail=evidence['detail'];detail=json.loads(detail) if isinstance(detail,str) else detail
+        assert detail['forced_override'] and not detail['worker_exit_verified']
+        assert detail['binding_generation']==2 and detail['job_generation']==1

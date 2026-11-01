@@ -34,20 +34,36 @@ def plan(store,*,lock=False):
     records=[dict(r) for r in rows]
     accounting=store._execute_native("SELECT 'provider' AS ledger,p.attempt_id AS id,p.job_id,p.state FROM provider_attempts p WHERE p.owner_id=%s AND p.job_id=ANY(%s) UNION ALL SELECT 'compute',c.segment_key,c.job_id,c.state FROM retail_compute_segments c WHERE c.owner_id=%s AND c.job_id=ANY(%s) ORDER BY ledger,id",(owner,[r['job_id'] for r in records],owner,[r['job_id'] for r in records])).fetchall()
     binding=store._execute_native("SELECT j.job_id,j.generation AS job_generation,s.generation AS binding_generation FROM worker_jobs j LEFT JOIN engine_sessions s ON s.session_id=j.session_id AND s.owner_id=j.owner_id AND s.task_id=j.task_id WHERE j.owner_id=%s AND j.job_id=ANY(%s) AND (s.session_id IS NULL OR s.generation<>j.generation) ORDER BY j.job_id",(owner,[r['job_id'] for r in records])).fetchall()
-    if binding:raise ValueError('FORCE STOP worker_jobs UPDATE would fail immutable engine-session RLS binding: '+json.dumps([dict(r) for r in binding],sort_keys=True)+'; no changes. A reviewed terminal-job repair is required, not an UPDATE grant.')
-    body={'owner_id':owner,'jobs':records,'accounting':[dict(r) for r in accounting]}
-    return body|{'fingerprint':hashlib.sha256(json.dumps(body,sort_keys=True,default=str).encode()).hexdigest(),'warning':WARNING}
+    repair_ids=[r['job_id'] for r in binding]
+    for item in binding:
+        job=next(r for r in records if r['job_id']==item['job_id'])
+        if (item['binding_generation'] is None or item['binding_generation']<=item['job_generation']
+            or job['task_generation']<=job['generation'] or job['stop_requested_at'] is None
+            or any(r['job_id']==item['job_id'] for r in accounting)):
+            raise ValueError('fenced repair unavailable for '+item['job_id']+': newer task/session fence, durable Stop and no accounting required')
+    if repair_ids:
+        present=store._execute_native("SELECT to_regprocedure('public.requi_force_close_fenced_job(text,text,text)') IS NOT NULL AS present").fetchone()['present']
+        if not present:raise ValueError('apply migration 20261101073000_fenced_job_force_close.sql first; no force changes')
+    body={'owner_id':owner,'jobs':records,'accounting':[dict(r) for r in accounting],'fenced_repair_ids':repair_ids}
+    phrase='FORCE STOP '+str(len(records))+' JOBS'+(' REPAIR '+','.join(repair_ids) if repair_ids else '')
+    return body|{'confirmation':phrase,'fingerprint':hashlib.sha256(json.dumps(body,sort_keys=True,default=str).encode()).hexdigest(),'warning':WARNING}
 
 
 def apply(store,fingerprint,confirmation):
     with store._task_operation_guard('task.stop'):
         reviewed=plan(store,lock=True)
         if fingerprint!=reviewed['fingerprint']:raise ValueError('plan changed; review again; nothing forced')
-        expected='FORCE STOP '+str(len(reviewed['jobs']))+' JOBS'
+        expected=reviewed['confirmation']
         if confirmation!=expected:raise ValueError('typed confirmation mismatch; nothing forced')
         scope=current_scope();now=time.time();tasks=set();results=[]
         for job in reviewed['jobs']:
             tid=job['task_id']
+            if job['job_id'] in reviewed['fenced_repair_ids']:
+                execute(store,'worker_jobs/audit_log','SELECT terminal-only fenced repair',
+                    'SELECT public.requi_force_close_fenced_job(%s,%s,%s)',
+                    (job['job_id'],'FORCE CLOSE '+job['job_id'],fingerprint),write=True)
+                results.append({'job_id':job['job_id'],'task_id':tid,'state':'failed','worker_exit_verified':False,'fenced_repair':True})
+                continue
             if tid not in tasks:
                 # Always bump generation, even if an earlier Stop already exists.
                 execute(store,'tasks','UPDATE stop fence',"UPDATE tasks SET generation=generation+1,state='stop_requested',stop_requested_at=COALESCE(stop_requested_at,%s),updated_at=%s WHERE task_id=%s AND owner_id=%s",(now,now,tid,scope.owner_id),write=True)

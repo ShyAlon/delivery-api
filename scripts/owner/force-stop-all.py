@@ -25,7 +25,7 @@ def main():
         if not args.apply:
             print('DRY RUN ONLY. No changes. Rerun with --apply to review a fresh plan and enter its exact confirmation.');return
         if not sys.stdin.isatty():raise SystemExit('Interactive terminal required; no piped confirmations.')
-        phrase='FORCE STOP '+str(len(review['jobs']))+' JOBS'
+        phrase=review['confirmation']
         answer=input('Type '+phrase+' to accept the UNVERIFIED worker-exit override: ')
         print(json.dumps(store.force_stop_jobs_apply(review['fingerprint'],answer),indent=2,default=str))
 
