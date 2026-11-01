@@ -1,0 +1,3 @@
+# Force is an administrative override, not verified process exit
+
+An owner-hidden task can retain a running job and be omitted from normal Stop lists. An explicit owner FORCE STOP batch includes hidden tasks, reviews every pending/running/paused job and retained accounting, fences task generations, administratively fails job rows and records one durable forced-override audit per item. Never set stopped_at, mark jobs done, settle/release/refund accounting or imply old processes were killed. Default to dry review, exact typed confirmation and an atomic fresh-plan fingerprint check. A changed plan or failed audit rolls back the batch. Provider/compute uncertainty remains visible and can still block policy installation.
