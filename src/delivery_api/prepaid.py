@@ -15,6 +15,13 @@ def owner_lock(store):
 
 
 def authorize(store,attempt):
+    # Only the reviewed, zero-rate local provider is free. A zero-sized request
+    # or a promotional paid-provider quote must not bypass prepaid authority.
+    quote=attempt['quote']
+    if quote.get('provider')=='ollama' and all(type(quote.get(k)) is int and quote[k]==0 for k in
+            ('expense_input','expense_output','retail_input','retail_output')) and not any(
+            k in quote for k in ('expense_cache_hit','expense_cache_miss','retail_formula','provider_evidence','estimate_policy')):
+        return
     owner_lock(store)
     account=store._execute_native('SELECT * FROM credit_accounts WHERE owner_id=%s FOR UPDATE',(current_scope().owner_id,)).fetchone()
     if not account or account['balance_units']<=0:raise AdmissionDenied('positive prepaid balance required')
