@@ -51,5 +51,3 @@ def test_server_log_task_filter_never_includes_neighboring_task(monkeypatch,file
  got=m.server_log(30,SimpleNamespace(id='operator',admin=True),'task-a')
  assert 'INFO task=task-a own' in got['text'] and got['count']==1
  assert 'neighbor' not in got['text'] and 'system-wide' not in got['text']
-
-
