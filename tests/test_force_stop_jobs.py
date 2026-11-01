@@ -84,3 +84,36 @@ def test_script_is_dry_by_default_and_requires_exact_confirmation():
     assert "'--apply',action='store_true'" in text
     assert text.index('if not args.apply:')<text.index('store.force_stop_jobs_apply(')
     assert 'sys.stdin.isatty()' in text and 'UNVERIFIED' in text
+
+
+def test_force_preflight_names_missing_update_before_apply(store):
+    from test_attempt_ledger import DSN
+    import psycopg
+    with tenant_context(A):
+        tid,j=job(store)
+        with psycopg.connect(DSN) as c:c.execute('REVOKE UPDATE ON worker_jobs FROM authenticated')
+        try:
+            with pytest.raises(ValueError,match='worker_jobs'):store.force_stop_jobs_plan()
+            assert store.worker_job(j)['state']=='running'
+        finally:
+            with psycopg.connect(DSN) as c:c.execute('GRANT UPDATE ON worker_jobs TO authenticated')
+
+
+def test_force_preflight_names_legacy_generation_binding(store):
+    from test_attempt_ledger import DSN
+    import psycopg
+    with tenant_context(A):
+        tid,j=job(store,True)
+        with psycopg.connect(DSN) as c:c.execute('UPDATE engine_sessions SET generation=99 WHERE task_id=%s',(tid,))
+        with pytest.raises(ValueError,match='immutable engine-session RLS binding'):store.force_stop_jobs_plan()
+        assert store.worker_job(j)['state']=='running'
+
+
+def test_denial_context_never_leaks_raw_driver_text():
+    from delivery_api.force_stop_jobs import execute
+    class Denied(Exception):sqlstate='42501'
+    class Store:
+        def _execute_native(self,*args,**kwargs):raise Denied('password=DO-NOT-PRINT')
+    with pytest.raises(ValueError) as exc:execute(Store(),'tasks','UPDATE stop fence','ignored')
+    assert 'tasks UPDATE stop fence' in str(exc.value) and '42501' in str(exc.value)
+    assert 'DO-NOT-PRINT' not in str(exc.value)

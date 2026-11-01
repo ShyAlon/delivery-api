@@ -1,0 +1,3 @@
+# SQLSTATE 42501 is not proof a GRANT is missing
+
+Force apply updates tasks, worker_jobs and inserts audit_log; task/worker state triggers write operator_state_events as their definer. Backend inherits the authenticated task/job UPDATE and audit INSERT grants. A legacy engine-session generation mismatch can instead fail worker_jobs WITH CHECK with the same 42501. Preflight all required privileges separately and immutable job/session binding before any override; label task/job/audit denial without leaking raw driver text. Never grant broad privileges or rewrite a binding to make a terminal-job operation pass. Both CLI and Back office use this same core; neither should silently bypass RLS.
