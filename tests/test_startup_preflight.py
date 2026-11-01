@@ -510,3 +510,22 @@ def test_pg_metrics_preflight_refuses_file_override_or_invalid_source_and_probes
 def test_resource_metrics_access_policy_matches_the_restricted_writer_role():
     for table in ('resource_run_samples','resource_run_summaries','resource_container_samples','resource_container_summaries'):
         assert preflight.TABLE_ACCESS[table]=='requi_metrics_writer'
+
+
+def test_migrated_core_projection_privacy_passes_without_broadening_grants():
+    import psycopg
+    from test_postgres_store import DSN
+    private=('admission_total_entries','expense_total_clock','expense_total_entries','expense_totals')
+    with psycopg.connect(DSN.replace('user=sandbox','user=delivery_app')) as conn:
+        conn.execute('SET ROLE requi_backend')
+        result=preflight._check_tables({'DELIVERY_DATABASE_URL':'postgresql://test'},[conn],preflight.REQUIRED_TABLES)
+        assert result.status=='pass',result.found
+        for table in private:
+            assert preflight.TABLE_ACCESS[table] is None
+            assert not conn.execute("SELECT has_table_privilege('requi_backend',%s,'SELECT')",('public.'+table,)).fetchone()[0]
+    with psycopg.connect(DSN) as conn:
+        try:
+            conn.execute('GRANT SELECT ON public.expense_totals TO requi_backend')
+            result=preflight._check_tables({'DELIVERY_DATABASE_URL':'postgresql://test'},[conn],preflight.REQUIRED_TABLES)
+            assert result.status=='fail' and 'expense_totals (owner/function-only' in result.found
+        finally:conn.rollback()
