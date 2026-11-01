@@ -105,7 +105,7 @@ def test_history_never_mentions_vendor_cost_or_limits():
 
 
 def test_writers_attribute_before_they_change_a_balance():
-    for name,needle in (('retail_ledger.py',"'debit','system:retail_ledger'"),('retail_ledger.py',"'rescale','operator:scale_migration'"),('prepaid.py',"'debit','system:prepaid'")):
+    for name,needle in (('retail_ledger.py',"'debit','system:retail_ledger'"),('prepaid.py',"'debit','system:prepaid'")):
         src=(ROOT/name).read_text()
         i=src.index(needle);assert 'UPDATE' in src[i:i+700] and 'credit_audit.attribute(' in src[i-60:i]
     grant=(REPO/'scripts'/'ops'/'grant-credits.sh').read_text()

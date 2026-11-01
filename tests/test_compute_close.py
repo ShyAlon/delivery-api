@@ -68,7 +68,7 @@ def compute_workspace(pg_workspace_factory):
                 for i in range(attempts):
                     connection.execute("INSERT INTO provider_attempts(attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,created_at,updated_at) VALUES(%s,%s,%s,'fixture','{}','fixture',%s,1,1,0,0)",(uuid4().hex,workspace.scope.owner_id,job,'dispatched' if i<nonterminal else 'cancelled'))
                 for i in range(tokens):
-                    connection.execute("INSERT INTO retail_contributions VALUES(%s,%s,%s,'intent','tokens',1,0,0,'{}',1,1,1000000000,'fixture',0)",(uuid4().hex,workspace.scope.owner_id,job))
+                    connection.execute("INSERT INTO retail_contributions VALUES(%s,%s,%s,'intent','tokens',1,0,0,%s::jsonb,1,1,1000000000,'fixture',0)",(uuid4().hex,workspace.scope.owner_id,job,__import__('json').dumps(rates)))
             return job,key
         def state(key):
             with workspace.admin() as connection:return connection.execute('SELECT state,deterministic_ms FROM retail_compute_segments WHERE segment_key=%s',(key,)).fetchone()
@@ -146,9 +146,9 @@ def test_a_job_with_no_row_is_not_running_and_is_releasable_when_it_made_no_call
 
 
 def test_the_producer_closes_by_evidence_instead_of_parking_every_failure():
-    src=(ROOT/'same_host_producer.py').read_text()
-    block=src.split('except BaseException:')[1].split('raise')[0]
-    assert 'self.store.close_failed_retail_compute(segment)' in block and 'finish_retail_compute(segment,None)' not in block
+    src=(ROOT/'child_compute_channel.py').read_text()
+    assert 'if self.started and not self.settled:self.store.close_failed_retail_compute(self.segment)' in src
+    assert 'finish_retail_compute(self.segment,None)' not in src
 
 
 def test_store_exposes_the_close_and_release_operations_with_the_owner_scope():
@@ -156,9 +156,13 @@ def test_store_exposes_the_close_and_release_operations_with_the_owner_scope():
     assert 'def close_failed_retail_compute(self,key)' in src and 'release_compute(self,current_scope().owner_id,bool(confirm))' in src
 
 
-def test_delete_keeps_accounting_rows_by_hiding_the_task_instead_of_deleting_its_jobs():
-    src=(ROOT/'postgres_store.py').read_text()
-    body=src.split('def delete_task(')[1].split('def set_engine_session')[0]
-    keep=body.rindex('accounting_retained')
-    assert 'retail_compute_segments' in body[:keep] and 'retail_contributions' in body[:keep]
-    assert body.index("UPDATE tasks SET deleted_at")<keep<body.index("for table in ('worker_jobs'")
+def test_delete_keeps_accounting_rows_by_hiding_the_task_instead_of_deleting_its_jobs(compute_workspace):
+    workspace,seed,state,evidence=compute_workspace
+    job,key=seed(1,state='unresolved',attempts=1,nonterminal=1,tokens=1)
+    before=evidence();segment=state(key)
+    tid=workspace.store.worker_job(job)['task_id']
+    result=workspace.store.delete_task(tid)
+    assert result['accounting_retained'] and result['hidden'] and result['stop_requested']
+    assert workspace.store.task(tid) is None
+    assert workspace.store.worker_job(job) is not None
+    assert state(key)==segment and evidence()==before
