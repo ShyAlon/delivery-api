@@ -8,6 +8,7 @@ from html.parser import HTMLParser
 import datetime,hashlib,re,time,urllib.error,urllib.request
 from . import vendor_status
 from .provider_snapshot import ProviderSnapshot
+from .attempt_ledger import AdmissionDenied
 
 PRICING_URL='https://api-docs.deepseek.com/quick_start/pricing/'
 API_URL='https://api-docs.deepseek.com/api/create-chat-completion/'
@@ -164,16 +165,15 @@ def check_max_age_minutes():
     return minutes
 
 
-# Owner ruling 2026-10-17: nothing the vendor page does stops a call. Every failure to confirm, and every changed term, is a persistent warning.
+# Failed refresh can use verified stored prices for strictly less than 24 hours.
 _WARNED={}
 
 
 def verify_current_sources(snapshot,fetcher=fetch,*,cached=True,clock=time.monotonic,log=None):
     """Before a new contact/settlement; public reads, never provider inference.
 
-    A good check is reused for check_max_age_minutes(). Owner ruling 2026-10-17: a page that cannot be read, no longer parses,
-    or differs in a pinned term (price, peak rule, limit, version) is a warning (log and vendor_status) and the run
-    continues on the pinned terms, however old the pin. A failed check is never cached."""
+    A good check is reused for check_max_age_minutes(). Failed refreshes warn only
+    while the last verified prices are under 24 hours old. No failed check renews them."""
     now=datetime.datetime.now(datetime.timezone.utc)
     checked=ProviderSnapshot(snapshot);checked.fresh(now)
     sources={s['url']:s['sha256'] for s in snapshot['sources']}
@@ -181,12 +181,15 @@ def verify_current_sources(snapshot,fetcher=fetch,*,cached=True,clock=time.monot
     log=log or (lambda text:print(text,flush=True))
     key=checked.id;last=_GOOD.get(key)
     if cached and last and clock()-last[0]<check_max_age_minutes()*60:return True
-    if cached and key in _WARNED and clock()-_WARNED[key]<check_max_age_minutes()*60:return True
-    _GOOD.pop(key,None)
+    verified_at=datetime.datetime.fromisoformat(last[1]) if last else checked.fetched
+    age=now-verified_at
+    if cached and key in _WARNED and age<datetime.timedelta(hours=24) and clock()-_WARNED[key]<check_max_age_minutes()*60:return True
     ages=[(now-checked.fetched).total_seconds()/60]
     if last:ages.append((clock()-last[0])/60)
     last_text='last good check '+last[1] if last else 'no earlier good check in this process'
     def warn(kind,why):
+        if age>=datetime.timedelta(hours=24):
+            raise AdmissionDenied('vendor prices could not be refreshed and stored prices are at least 24 hours old: '+why)
         _WARNED[key]=clock()
         vendor_status.warn(kind,'vendor check: '+why+'; last good check %.0f minutes ago, so the run continues; '%min(ages)+last_text,log=log)
         return True

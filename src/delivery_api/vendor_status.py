@@ -1,7 +1,7 @@
 """What the service knows about the vendor's published terms, for the operator and the log.
 
-A failed refresh or an old pin is a warning here, never a stop. Only a detected change of a pinned term stops a call
-(vendor_sources). A warning stays until a later check succeeds.
+Refresh failures are warnings below 24 hours; vendor_sources blocks stale failed refreshes.
+A warning stays until a later check succeeds.
 """
 import datetime,sys,threading
 
@@ -57,8 +57,8 @@ def status():
     newest=state['last_verified_at'] or state['pinned_fetched_at']
     if newest:
         age=now-datetime.datetime.fromisoformat(newest.replace('Z','+00:00'))
-        if age>datetime.timedelta(hours=STALE_HOURS):
-            warnings.append({'kind':'terms-not-verified','text':'The vendor prices and limits have not been confirmed for %d hours. Calls continue on the pinned terms.'%(age.total_seconds()//3600),'first_seen':None,'last_seen':_iso(now),'count':1})
+        if age>=datetime.timedelta(hours=STALE_HOURS):
+            warnings.append({'kind':'terms-not-verified','text':'The vendor prices and limits have not been confirmed for %d hours. A failed refresh now blocks new calls.'%(age.total_seconds()//3600),'first_seen':None,'last_seen':_iso(now),'count':1})
     elif state['model']:
         warnings.append({'kind':'terms-not-verified','text':'The vendor prices and limits have not been confirmed yet.','first_seen':None,'last_seen':_iso(now),'count':1})
     return {'ok':not warnings,'as_of':_iso(now),'model':state['model'],'pinned_fetched_at':state['pinned_fetched_at'],'last_verified_at':state['last_verified_at'],'warnings':warnings}
