@@ -19,6 +19,16 @@
 # PREVIEW_EXEC_PROVIDER is unset) and one typed yes. The build script's own yes is covered by that yes
 # (REQUI_BUILD_YES=1); there is no key prompt - a missing DeepSeek key is a loud stop.
 set -euo pipefail
+# Color is presentation only: no ANSI in pipes/files/ZIPs, no exit-code masking.
+if [ -t 1 ] && [ -z "${NO_COLOR+x}" ] && [ "${REQUI_TERMINAL_COLOR_ACTIVE:-0}" != 1 ] && command -v python3 >/dev/null 2>&1; then
+  color_self=$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")
+  color_filter="$(dirname "$color_self")/terminal-color.py"
+  if [ -f "$color_filter" ]; then
+    set +e
+    REQUI_TERMINAL_COLOR_ACTIVE=1 bash "$color_self" "$@" 2>&1 | python3 "$color_filter"
+    color_rc=${PIPESTATUS[0]};exit "$color_rc"
+  fi
+fi
 PORT=${PREVIEW_EXEC_PORT:-8001}
 NAME=requi-preview-exec; WORK=""; STARTED=0; KEEP_FOR_INSPECTION=0
 BACKOFFICE_PID=""; BACKOFFICE_PREVIEW_PORT=${PREVIEW_BACKOFFICE_PORT:-8020}
@@ -65,6 +75,7 @@ PYPORT
 }
 cleanup(){
   rc=$?; trap - EXIT INT TERM
+  if [ "$rc" != 0 ]; then .venv/bin/python scripts/ops/preview-debug.py --code "${FAIL_CODE:-UNEXPECTED-$rc}" --step "${STEP_NAME:-startup}" || echo "WARNING debug ZIP unavailable; run req debug from this checkout."; fi
   stop_backoffice
   if [ "$STARTED" = 1 ] && [ "${KEEP_FOR_INSPECTION:-0}" != 1 ]; then docker rm -f "$NAME" >/dev/null 2>&1 || true; fi
   [ -z "$WORK" ] || rm -rf "$WORK"
@@ -82,7 +93,9 @@ step(){ STEP_N=$((STEP_N+1)); STEP_NAME=$1; STEP_START=$SECONDS; echo "== [$STEP
 step_ok(){ echo "   ok ($((SECONDS-STEP_START))s)"; STEP_NAME=''; }
 # Local abort: lib.sh's format, plus the step and elapsed time when a step is running.
 abort(){
+  FAIL_CODE=$1
   echo; echo "ABORTED [$1]: $2"
+  echo "Debug: req debug (ZIP under $REPO/runs/preview-debug)"
   if [ "$1" = BROWSER-SMOKE ]; then
     echo "browser errors repeated for inspection (anonymous smoke, no sign-in):"
     [ -z "${BROWSER_OUT:-}" ] || printf '%s\n' "$BROWSER_OUT"
@@ -145,11 +158,25 @@ step "inputs and environment"
 for t in docker curl git shasum tar; do command -v $t >/dev/null 2>&1 || abort "TOOL-$t" "$t is missing" "" "install $t (Docker: open Docker Desktop once, or brew install --cask docker)"; done
 docker info >/dev/null 2>&1 || abort NO-DOCKER "Docker is installed but not running" "" "open -a Docker   (wait until it says running)"
 case "$PORT" in ''|*[!0-9]*) abort PORT "PREVIEW_EXEC_PORT is not a number" "" "unset PREVIEW_EXEC_PORT";; esac
+# Replace only our positively identified preview. Graceful stop, container only, no volume removal.
+if docker container inspect "$NAME" >/dev/null 2>&1; then
+  identity=$(docker container inspect "$NAME" | .venv/bin/python scripts/ops/preview-container-identity.py "$PORT" "$DATA_VOLUME") || abort PREVIEW-IDENTITY "named container is not a verified owned preview" "Nothing stopped; persistent data unchanged." "Open Debug or send this failure code; unrelated containers are never removed."
+  own_id=${identity#OWNED }
+  echo "Replacing our previous preview container $own_id; waiting up to 30s for graceful shutdown, data volume retained."
+  docker kill --signal TERM "$own_id" >/dev/null 2>&1 || true
+  stopped=0
+  for _ in $(seq 1 30); do
+    [ "$(docker inspect --format '{{.State.Running}}' "$own_id" 2>/dev/null)" = false ] && { stopped=1;break; }
+    sleep 1
+  done
+  [ "$stopped" = 1 ] || abort PREVIEW-STOP "owned preview did not stop gracefully; no force kill was sent" "Container not removed; inspect shutdown evidence."
+  docker rm "$own_id" >/dev/null || abort PREVIEW-REMOVE "stopped owned preview could not be removed" "Data volume retained."
+fi
 if (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null; then
   port_busy_details "$PORT" "$NAME"
   abort PORT-BUSY "a listener already occupies 127.0.0.1:$PORT; listener evidence is printed above" "" "use the reviewed stop instruction above, or: PREVIEW_EXEC_PORT=8011 req preview"
 fi
-docker ps -a --format '{{.Names}}' | grep -qx "$NAME" && abort LEFTOVER "a container named $NAME is left over from an earlier run" "" "docker rm -f $NAME"
+
 MACHINE=$(uname -m); case "$MACHINE" in arm64|aarch64) NATIVE=arm64;; x86_64|amd64) NATIVE=amd64;; *) abort ARCH "unknown machine architecture $MACHINE";; esac
 EXPECTED_ARCH=${PREVIEW_ARCH:-$NATIVE}; case "$EXPECTED_ARCH" in arm64|amd64) ;; *) abort ARCH "PREVIEW_ARCH must be arm64 or amd64, not '$EXPECTED_ARCH'" "" "unset PREVIEW_ARCH";; esac
 PLATFORM=linux/$EXPECTED_ARCH
@@ -160,7 +187,7 @@ ops_settings "$REQUIRED"
 # the candidate: the four checkouts at origin/main, exactly as deploy-full takes them
 [ -f scripts/docker/build-local-image.sh ] || abort NO-FILE "scripts/docker/build-local-image.sh is missing on main" "" "git -C $PWD log --oneline -5   (is main pulled?)"
 candidate_tag
-PINFILES="scripts/ops/pin.py src/delivery_api/vendor_sources.py src/delivery_api/retail_pricing.py scripts/ops/pin-local.py src/delivery_api/ollama_usage.py src/delivery_api/local_route.py src/delivery_api/provider_network.py"
+PINFILES="src/delivery_api/model_pins.py scripts/ops/pin.py src/delivery_api/vendor_sources.py src/delivery_api/retail_pricing.py scripts/ops/pin-local.py src/delivery_api/ollama_usage.py src/delivery_api/local_route.py src/delivery_api/provider_network.py"
 for f in $PINFILES src/delivery_api/production_gateway.py; do [ -f "$f" ] || abort NO-FILE "$f is missing on main" "" "git -C $PWD log --oneline -5   (is main pulled?)"; done
 # The venv must carry what the steps ahead import - the pool redesign added psycopg-pool and older
 # venvs predate it (ops_venv installs -e . without extras, so even a fresh ops venv lacks it). Fail
@@ -344,40 +371,13 @@ fi
 [ "$(grep -c '^DELIVERY_PUBLIC_ORIGIN=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT\$" "$WORK/preview.env" || abort ORIGIN "the preview's sign-in address is not set to its own local address" "" "send me this output"
 [ "$(grep -c '^DELIVERY_ALT_ORIGINS=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_ALT_ORIGINS=http://localhost:$PORT\$" "$WORK/preview.env" || abort ORIGIN "the preview's second sign-in address is not exactly localhost with its own port" "" "send me this output"
 [ "$(grep -c '^DELIVERY_PREVIEW=1$' "$WORK/preview.env")" = 1 ] || abort PREVIEW-FLAG "the preview flag is not set exactly once" "" "send me this output"
-# reviewed prices and limits. deepseek: the exact pin step ops go-live runs (public GETs, nothing paid).
-# ollama: grounded from this Mac's own server and the candidate checkouts (local HTTP, nothing paid) -
-# this LOADS the model once so the server reports the context window it will actually use.
-if [ "$PROVIDER" = both ]; then
-  mkdir "$WORK/paid-pin" "$WORK/local-pin"
-  echo "== both: public DeepSeek pin, then local Ollama grounding (loads the model once; no paid call)"
-  rc=0
-  PYTHONPATH=src .venv/bin/python "$(dirname "$0")/pin.py" "$WORK/paid-pin" > "$WORK/pin-out.txt" 2>&1 || rc=$?
-  if [ "$rc" = 0 ]; then
-    PYTHONPATH=src REQUI_REPOS_ROOT="$ROOT" PREVIEW_EXEC_OLLAMA_MODEL="$OLLAMA_MODEL" OLLAMA_HOST="$OLLAMA_HOST" .venv/bin/python "$(dirname "$0")/pin-local.py" "$WORK/local-pin" "$ROOT" >> "$WORK/pin-out.txt" 2>&1 || rc=$?
-  fi
-  if [ "$rc" = 0 ]; then
-    PYTHONPATH=src .venv/bin/python "$(dirname "$0")/combine-provider-pins.py" "$WORK" "$WORK/paid-pin" "$WORK/local-pin" >> "$WORK/pin-out.txt" 2>&1 || rc=$?
-  fi
-elif [ "$PROVIDER" = ollama ]; then
-echo "== grounding the local Ollama row and context ceiling (local HTTP, \$0, nothing paid)"
-echo "   What this does: checks the server, loads the model once (this Mac works hard for ~1-5 min - fan noise"
-echo "   is normal), reads the context window the server actually loaded, caps it by the largest stage output in"
-echo "   the candidate engine/generator sources, and writes the reviewed \$0 row + ceiling for the container."
-rc=0; PYTHONPATH=src REQUI_REPOS_ROOT="$ROOT" PREVIEW_EXEC_OLLAMA_MODEL="$OLLAMA_MODEL" OLLAMA_HOST="$OLLAMA_HOST" .venv/bin/python "$(dirname "$0")/pin-local.py" "$WORK" "$ROOT" > "$WORK/pin-out.txt" 2>&1 || rc=$?
-else
-echo "== reading the two DeepSeek pages (public GET, nothing paid)"
-rc=0; PYTHONPATH=src .venv/bin/python "$(dirname "$0")/pin.py" "$WORK" > "$WORK/pin-out.txt" 2>&1 || rc=$?
-fi
-if [ "$rc" != 0 ]; then
-  tail -15 "$WORK/pin-out.txt"
-  case "$(tail -1 "$WORK/pin-out.txt")" in PIN-FAIL*)
-    if [ "$PROVIDER" = ollama ]; then abort PIN "see the line above" "" "follow the fix the PIN-FAIL line above names, then run this again; if it still refuses, send me this output"
-    else abort PIN "see the line above" "" "send me this output; the page or the parser changed, and I have to look before anything is pinned"; fi;;
-    *) abort PIN-CRASH "the pin step crashed" "" "send me this whole output";; esac
-fi
-cat "$WORK/pin-out.txt"
-[ -s "$WORK/cloud-models.env" ] || abort PIN-EMPTY "the pin step wrote no settings" "" "send me this output"
-grep -q '^VMODEL_REVIEWED_MODEL_PRICES=.' "$WORK/cloud-models.env" && grep -q '^VMODEL_REVIEWED_CONTEXT_CEILING=.' "$WORK/cloud-models.env" || abort PIN-PARTIAL "the pinned settings are incomplete" "" "send me this output (not the files)"
+# One durable pin store, shared with Back office and the runtime. No separate launch pin generator.
+echo '== Model pins: read from the shared store; review changes in Back office > Model pins.'
+printf '%s\n' REQUI_PIN_STORE=1 >> "$WORK/preview.env"
+case "$PROVIDER" in both) printf '%s\n' REQUI_PIN_PROVIDERS=deepseek,ollama >> "$WORK/preview.env";; *) printf 'REQUI_PIN_PROVIDERS=%s\n' "$PROVIDER" >> "$WORK/preview.env";; esac
+# Public config is resolved inside the runtime using its restricted DB identity.
+# Empty/unavailable pins keep execution closed, but the operator UI must still boot for repair.
+: > "$WORK/cloud-models.env"
 step_ok
 
 step "build (skipped when the exact candidate tag is already on this Mac)"
@@ -452,7 +452,7 @@ if [ "$OK" != 1 ]; then echo "== the container did not become healthy; last log 
 # readiness needs POSITIVE evidence: the app's own startup line says OPEN, and the running container's own
 # environment confirms execution 1 with exactly one provider key variable (its value is never printed).
 LOGS=$(docker logs "$NAME" 2>&1 | scrub)
-echo "$LOGS" | grep -q 'Cloud execution: OPEN' || abort EXEC-UNKNOWN "the app did not report 'Cloud execution: OPEN' at startup" "" "send me this output"
+echo "$LOGS" | grep -q 'Cloud execution: OPEN' || echo 'WARNING: execution is closed. Open Back office > Model pins to review pins; the UI remains available. Debug: docker logs --tail 100 requi-preview-exec'
 PROBE='import os,re;print("EXEC="+os.environ.get("DELIVERY_CLOUD_EXECUTION","unset"));print("KEYS="+str(len([k for k in os.environ if re.search("DEEPSEEK|OPENAI|ANTHROPIC|API_KEY",k,re.I)])))'
 EXECOUT=$(docker exec "$NAME" python -c "$PROBE" 2>/dev/null || true)
 EXPECTED_KEYS=1; [ "$PROVIDER" = ollama ] && EXPECTED_KEYS=0

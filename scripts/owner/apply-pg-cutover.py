@@ -27,12 +27,21 @@ PROJECTION_FUNCTION_REVIEW={
  '20261031180000_expense_totals.sql':'06a9b6f68613018c2e2f265f9d2ab7d4c6ccab7ee0a8fda1e37a016458a0e44b',
 }
 
+# Exact schema-only constraint widening, no data deletion. Always separately reviewed by owner.
+MODEL_PIN_SCHEMA_REVIEW={'20261101160000_model_pins.sql':'c13e416d43a13a4aea909b1c30149bf2d7df67d17f5d7787a9efc07594a90e04'}
+
 def review_projection_functions(rows,confirm):
     allowed={}
     for row in rows:
         if row['status']!='pending' or not row['destructive']:continue
         name=row['file'];digest=row.get('sha256')
         if APPROVED_DESTRUCTIVE.get(name)==digest:continue
+        if MODEL_PIN_SCHEMA_REVIEW.get(name)==digest and row['destructive']==['DROP']:
+            expected='REVIEW MODEL PIN SCHEMA '+name+' SHA256 '+digest
+            print('Widens the operator capability constraint; no source data is deleted. Read the exact SQL.')
+            if confirm('Type "'+expected+'": ')!=expected:raise ValueError('model pin schema review did not match; no changes')
+            allowed[name]=digest
+            continue
         if PROJECTION_FUNCTION_REVIEW.get(name)!=digest or row['destructive']!=['DELETE']:
             raise ValueError('refused destructive migration '+name+'; not an exact reviewed projection-function file')
         print('REVIEW',name,'SHA256',digest)

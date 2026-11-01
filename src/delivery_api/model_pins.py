@@ -10,6 +10,17 @@ def revision(payload):return hashlib.sha256(json.dumps(payload,sort_keys=True,se
 def validate(payload):
     if not isinstance(payload,dict) or set(payload)!={'row','context'}:raise ValueError('A price row and context are required')
     value=copy.deepcopy(payload);row=value['row'];context=value['context']
+    if row.get('provider')=='deepseek':
+        snap=ProviderSnapshot(row['provider_snapshot']);snap.fresh(datetime.datetime.now(datetime.timezone.utc))
+        raw=snap.data.get('raw_context_limit')
+        if raw:
+            from decimal import Decimal
+            limit=Decimal(raw[:-1])*{'K':1000,'M':1000000}[raw[-1]]
+            if context['context_tokens']>limit:raise ValueError('Context exceeds published vendor limit')
+        output=snap.data.get('context_proposal',{}).get('maximum_output_tokens')
+        if output and context['maximum_output_tokens']>output:raise ValueError('Output exceeds published vendor limit')
+        ceiling=snap.ceiling()
+        if any(row.get(k)!=v for k,v in [('expense_input',ceiling['cache_miss']),('expense_cache_miss',ceiling['cache_miss']),('expense_cache_hit',ceiling['cache_hit']),('expense_output',ceiling['output'])]):raise ValueError('Price row must match its source snapshot rates')
     text=json.dumps(value)
     if len(text)>50000:raise ValueError('Pin exceeds size bound')
     allowed={'provider','model','price_version','source','expense_input','expense_output','expense_cache_hit','expense_cache_miss','expense_units_per_usd','retail_input','retail_output','retail_units_per_credit','usage_categories','retail_formula','provider_snapshot'}
@@ -62,21 +73,21 @@ class PinRepository:
     def __init__(self,db,principal=None):self.db=db;self.principal=principal
     def list(self):
         with public_pin_context(),self.db.transaction() as conn:
-            return conn.execute('SELECT r.* FROM public.model_pin_heads h JOIN public.model_pin_revisions r USING(revision) ORDER BY r.provider,r.model').fetchall()
+            return conn.execute('SELECT r.revision,r.provider,r.model,r.payload,r.fetched_at,h.is_default FROM public.model_pin_heads h JOIN public.model_pin_revisions r USING(revision) ORDER BY r.provider,r.model').fetchall()
     def commit(self,store,payload,expected,reason):
         value=validate(payload)
         if not isinstance(reason,str) or not 1<=len(reason.strip())<=400:raise ValueError('A reason of 1 to 400 characters is required')
-        authority=self.principal.authorize(store,'services.operate');row=value['row'];rev=revision(value)
+        authority=self.principal.authorize(store,'services.operate');row=value['row'];rev=__import__('uuid').uuid4().hex
         with self.db.transaction() as conn:
             conn.execute('SET LOCAL ROLE requi_model_pin_editor')
             if not conn.execute('SELECT public.requi_operator_read_allowed(%s,%s) AS allowed',('services.operate',authority['registry_version'])).fetchone()['allowed']:raise PermissionError('Operator registry denied model pin write')
-            conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('model-pin:'+row['provider']+':'+row['model'],))
+            conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('model-pin:'+row['provider'],))
             head=conn.execute('SELECT revision FROM public.model_pin_heads WHERE provider=%s AND model=%s',(row['provider'],row['model'])).fetchone()
             if (head['revision'] if head else None)!=expected:raise ValueError('Pin changed. Refresh the page and review the current diff.')
-            if head and head['revision']==rev:return rev
             fetched=value['row'].get('provider_snapshot',{}).get('fetched_at')
             conn.execute('INSERT INTO public.model_pin_revisions(revision,provider,model,payload,fetched_at,operator_subject,reason,previous_revision) VALUES(%s,%s,%s,%s::jsonb,%s,%s,%s,%s)',(rev,row['provider'],row['model'],json.dumps(value),fetched,authority['operator_subject'],reason.strip(),expected))
-            conn.execute('INSERT INTO public.model_pin_heads VALUES(%s,%s,%s) ON CONFLICT(provider,model) DO UPDATE SET revision=excluded.revision',(row['provider'],row['model'],rev))
+            conn.execute('UPDATE public.model_pin_heads SET is_default=false WHERE provider=%s',(row['provider'],))
+            conn.execute('INSERT INTO public.model_pin_heads(provider,model,revision,is_default) VALUES(%s,%s,%s,true) ON CONFLICT(provider,model) DO UPDATE SET revision=excluded.revision,is_default=true',(row['provider'],row['model'],rev))
         return rev
     def history(self,store):
         authority=self.principal.authorize(store,'services.operate')
@@ -92,8 +103,8 @@ def selected_environment(db,environ):
     mode=environ.get('REQUI_PIN_PROVIDERS','deepseek').split(',')
     selected=[]
     for provider in mode:
-        model=environ.get('DEEPSEEK_MODEL' if provider=='deepseek' else 'DELIVERY_OLLAMA_MODEL')
-        candidates=[r for r in pins if r['provider']==provider and (not model or r['model']==model)]
+        model=None # the reviewed durable head chooses the provider default, not legacy environment settings
+        candidates=[r for r in pins if r['provider']==provider and (r['model']==model if model else r['is_default'])]
         if len(candidates)!=1:raise ValueError('Choose one reviewed '+provider+' model in Back office > Model pins; no implicit fallback')
         selected.append(candidates[0]['payload'])
     return environment(selected)
@@ -102,10 +113,22 @@ def selected_environment(db,environ):
 class DurableGateways:
     """One immutable reviewed pin set per task generation, restored for every job."""
     def __init__(self,store,environ):
-        self.store=store;self.environ=dict(environ);self._factories={}
+        import threading
+        self.store=store;self.environ=dict(environ);self._factories={};self._lock=threading.RLock()
     def _factory(self,env):
-        key=revision(env)
-        if key not in self._factories:self._factories[key]=pg.ProductionGateways(self.store,{**self.environ,**env})
+        key=revision({k:json.loads(v) for k,v in env.items()})
+        with self._lock:
+            if key not in self._factories:
+                factory=pg.ProductionGateways(self.store,{**self.environ,**env})
+                rows=json.loads(env[pg.PRICES_ENV]);contexts=json.loads(env[pg.CEILING_ENV])
+                for row in rows:
+                    if row['provider']!='deepseek':continue
+                    context=next(c for c in contexts if c['provider']=='deepseek') if isinstance(contexts,list) else contexts
+                    context=dict(context);context.pop('provider',None)
+                    verify=pin_verifier({'row':row,'context':context})
+                    child=factory._providers['deepseek'] if hasattr(factory,'_providers') else factory
+                    child.verify_vendor=verify;factory.verify_vendor=verify
+                self._factories[key]=factory
         return self._factories[key]
     @property
     def models(self):return self._factory(selected_environment(self.store._postgres,self.environ)).models
@@ -127,6 +150,15 @@ class DurableGateways:
     def accepts(self,provider,model):
         # Existing immutable factories are accessible only through task-owned job resolution.
         return any(factory.models.get(provider)==model for factory in self._factories.values())
+    def refresh_launch(self):
+        import warnings
+        for row in PinRepository(self.store._postgres).list():
+            result=refresh(row['payload'])
+            if result.get('warning'):warnings.warn(result['warning'])
+            elif result['changed']:
+                before=row['payload']['row']['provider_snapshot'];after=result['payload']['row']['provider_snapshot']
+                if any(before.get(k)!=after.get(k) for k in vs.FACT_KEYS):raise ValueError('Vendor terms changed. Review and approve Back office > Model pins before new paid work.')
+                vs.verify_current_sources(before,cached=False)
     def close(self):
         for factory in self._factories.values():factory.close()
 
@@ -171,3 +203,22 @@ def new_deepseek(model,context=128000,maximum_output=16384,fetcher=None):
         'retail_formula':{'formula_version':'tokens-plus-compute-v1','units_per_credit':10**9,'price_per_token':DEFAULTS['PRICE_PER_TOKEN'],'price_per_10ms':DEFAULTS['PRICE_PER_10MS'],'usd_per_credit':DEFAULTS['USD_PER_CREDIT']}}
     bound={'model':model,'context_tokens':context,'maximum_output_tokens':maximum_output,'source':vs.PRICING_URL,'bound_version':row['price_version'],'protective_run_ceiling':True}
     return validate({'row':row,'context':bound})
+
+
+def pin_verifier(payload):
+    """Unchanged successful checks renew in memory, never silently adopt changed terms."""
+    import time,warnings
+    last=[None,None]
+    def verify():
+        now=datetime.datetime.now(datetime.timezone.utc)
+        if last[0] is not None and time.monotonic()-last[0]<vs.check_max_age_minutes()*60:return True
+        candidate=copy.deepcopy(payload)
+        if last[1]:candidate['row']['provider_snapshot']['fetched_at']=last[1]
+        result=refresh(candidate)
+        if result['warning']:
+            warnings.warn(result['warning']);return True
+        before=payload['row']['provider_snapshot'];after=result['payload']['row']['provider_snapshot']
+        if any(before.get(k)!=after.get(k) for k in vs.FACT_KEYS):raise ValueError('Vendor terms changed; task retains its reviewed pin and new paid dispatch is blocked. Open Model pins to review.')
+        last[:]=[time.monotonic(),now.isoformat()]
+        return True
+    return verify

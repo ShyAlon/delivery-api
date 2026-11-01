@@ -61,6 +61,11 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
             self.provider_balance=lambda:{'response':{'is_available':True,'balance_infos':[{'currency':'USD','total_balance':'1000'}]},'observed_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
         monkeypatch.setattr(production_gateway.ProductionGateways,'__init__',init)
         monkeypatch.setattr(PaidChildRuntime,'transport',lambda self,p,m,local:(f'http://127.0.0.1:{vendor.server_port}/v1/chat/completions',{}))
+    if paid:
+        env.update(REQUI_PIN_STORE='1',REQUI_PIN_PROVIDERS='deepseek')
+        from delivery_api import model_pins
+        monkeypatch.setattr(model_pins,'refresh',lambda value:{'payload':value,'changed':False,'warning':None})
+        monkeypatch.setattr(model_pins,'pin_verifier',lambda value:lambda:True)
     if not paid:env.update(local_env(MODEL))
     env.update(DELIVERY_CLOUD_EXECUTION='1',DELIVERY_CHILD_EXECUTION='local',INTERVIEW_ENGINE_TOKEN='acceptance-not-a-live-secret-0000',OLLAMA_BASE_URL=f'http://127.0.0.1:{vendor.server_port}/v1',INTERVIEW_ENGINE_OLLAMA_MODEL=MODEL)
     for key,value in env.items():monkeypatch.setenv(key,value)
@@ -85,6 +90,13 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
             c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,%s,1000000000,0)',(workspace.scope.owner_id,100000000000 if paid else 0))
             if paid:c.execute("INSERT INTO expense_guard_policy VALUES(true,'acceptance',1000000000000,1000000000000,1000000000000,3) ON CONFLICT DO NOTHING")
             c.execute('INSERT INTO admission_limits VALUES(%s,%s,86400,NULL,NULL,NULL,NULL,60,NULL,3)',(workspace.scope.owner_id,'acceptance'))
+        if paid:
+            from delivery_api import model_pins
+            value={'row':paidrow,'context':ceiling};rev=model_pins.revision(value)
+            with workspace.admin() as c:
+                c.execute('DELETE FROM model_pin_heads');c.execute('DELETE FROM model_pin_revisions')
+                c.execute('INSERT INTO model_pin_revisions(revision,provider,model,payload,fetched_at,operator_subject,reason) VALUES(%s,%s,%s,%s::jsonb,%s,%s,%s)',(rev,'deepseek',selected_model,json.dumps(value),snap['fetched_at'],workspace.scope.owner_id,'HTTP acceptance reviewed pin'))
+                c.execute('INSERT INTO model_pin_heads(provider,model,revision,is_default) VALUES(%s,%s,%s,true)',('deepseek',selected_model,rev))
         middleware=pg_task_app(workspace)
         with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
         server=uvicorn.Server(uvicorn.Config(middleware,host='127.0.0.1',port=port,lifespan='on',log_level='warning',access_log=False))

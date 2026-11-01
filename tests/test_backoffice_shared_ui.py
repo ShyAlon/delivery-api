@@ -50,8 +50,8 @@ def test_tabs_keyboard_context_menu_and_local_debug(ui):
         browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page(viewport={'width':1280,'height':1000},extra_http_headers={'Authorization':'Bearer fake'})
         errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
         page.goto(url);row=page.locator('#active-jobs tbody tr').first;row.wait_for()
-        assert page.get_by_role('tab').all_text_contents()==['Worker Jobs','Workspace','Accounts','Spend','Payments','Debug']
-        assert page.locator('[role=tabpanel]').count()==11
+        assert page.get_by_role('tab').all_text_contents()==['Worker Jobs','Workspace','Accounts','Spend','Model pins','Payments','Debug']
+        assert page.locator('[role=tabpanel]').count()==12
         for tab,panel in [('Workspace','workspace-panels'),('Accounts','accounts-panel'),('Spend','expense-panel'),('Payments','payments-panel'),('Debug','debug-panel'),('Worker Jobs','active-jobs-panel')]:
             page.get_by_role('tab',name=tab,exact=True).click();expect(page.locator('#'+panel)).to_be_visible()
             expect(page.get_by_role('tab',name=tab,exact=True)).to_have_attribute('aria-selected','true')

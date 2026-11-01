@@ -16,12 +16,15 @@ class PinAction(BaseModel):
     reason:str=''
 
 
-def install(app,owner_store,reader):
+def install(app,owner_store,reader,activate=None):
     def repo():
-        operator=reader();operator.principal.authorize(owner_store,'services.operate')
+        operator=reader()
+        try:operator.principal.authorize(owner_store,'services.operate')
+        except PermissionError as exc:raise HTTPException(403,str(exc)) from exc
         return pins.PinRepository(operator.db,operator.principal)
     def safe(action):
         try:return action()
+        except PermissionError as exc:raise HTTPException(403,str(exc)) from exc
         except (ValueError,KeyError,TypeError) as exc:raise HTTPException(409,{'error':str(exc),'next':'Open Back office > Debug > Download evidence; refresh Model pins and retry.'}) from exc
     @app.get('/api/operator/model-pins')
     def listing(a:auth.Actor=Depends(auth.require_actor)):
@@ -41,8 +44,12 @@ def install(app,owner_store,reader):
     @app.post('/api/operator/model-pins/{action}')
     def operate(action:str,body:PinAction,request:Request,a:auth.Actor=Depends(auth.require_actor)):
         repository=repo()
-        if request.headers.get('sec-fetch-site')=='cross-site':raise HTTPException(403,'Same-origin operator action required')
+        if request.headers.get('origin')!=str(request.base_url).rstrip('/') or request.headers.get('sec-fetch-site')=='cross-site':raise HTTPException(403,'Same-origin operator action required')
         def run():
+            if action=='new-local':
+                model=body.model
+                value={'row':{'provider':'ollama','model':model,'price_version':'local-reviewed','source':'Operator reviewed local server bounds','expense_input':0,'expense_output':0,'retail_input':0,'retail_output':0,'retail_units_per_credit':10**9},'context':{'model':model,'context_tokens':body.context,'maximum_output_tokens':body.maximum_output,'source':'Operator reviewed local server bounds','bound_version':'local-reviewed','protective_run_ceiling':False}}
+                return {**pins.proposal(pins.validate(value),None,a.id),'before':None}
             if action=='new':
                 value=pins.new_deepseek(body.model,body.context,body.maximum_output)
                 return {**pins.proposal(value,None,a.id),'before':None}
@@ -64,6 +71,10 @@ def install(app,owner_store,reader):
                 if body.confirm is not True:raise ValueError('Confirm the reviewed diff')
                 value=pins.approved_proposal(body.review,body.signature,a.id)
                 rev=repository.commit(owner_store,value,body.review['expected'],body.reason)
-                return {'revision':rev,'status':'approved','message':'New runs use this pin. Existing runs keep their reviewed revision.'}
+                warning=None
+                if activate is not None:
+                    try:activate()
+                    except Exception as exc:warning='Pin saved; execution is still closed: '+str(exc)
+                return {'warning':warning,'revision':rev,'status':'approved','message':'New runs use this pin. Existing runs keep their reviewed revision.'}
             raise ValueError('Unknown pin action')
         return safe(run)

@@ -8,14 +8,18 @@ CREATE TABLE public.model_pin_revisions (
 );
 CREATE TABLE public.model_pin_heads (
  provider text NOT NULL, model text NOT NULL, revision text NOT NULL REFERENCES public.model_pin_revisions(revision),
+ is_default boolean NOT NULL DEFAULT false,
  PRIMARY KEY(provider,model)
 );
+CREATE UNIQUE INDEX model_pin_provider_default ON public.model_pin_heads(provider) WHERE is_default;
 ALTER TABLE public.model_pin_revisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.model_pin_revisions FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.model_pin_heads ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.model_pin_heads FORCE ROW LEVEL SECURITY;
 REVOKE ALL ON public.model_pin_revisions,public.model_pin_heads FROM PUBLIC,authenticated;
-GRANT SELECT ON public.model_pin_revisions,public.model_pin_heads TO requi_backend;
+REVOKE ALL ON public.model_pin_revisions,public.model_pin_heads FROM anon,service_role;
+GRANT SELECT(revision,provider,model,payload,fetched_at) ON public.model_pin_revisions TO requi_backend;
+GRANT SELECT ON public.model_pin_heads TO requi_backend;
 CREATE POLICY runtime_public_pin_read ON public.model_pin_revisions FOR SELECT TO requi_backend USING(true);
 CREATE POLICY runtime_public_head_read ON public.model_pin_heads FOR SELECT TO requi_backend USING(true);
 -- Existing services.operate capability remains explicit in both protected config and DB registry.

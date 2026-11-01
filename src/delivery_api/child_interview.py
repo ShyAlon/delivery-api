@@ -59,6 +59,7 @@ class ChildInterviewClient(EngineClient):
         from interview_engine import session_models
         route,model=session_models.initial_default()
         if route!='ollama' and self.paid_runtime is None:raise PermissionError('local child default must be Ollama')
+        if hasattr(self.gateway_factory,'for_task'):model=self.gateway_factory.models.get(route)
         return self.preview_route(route,model)
     def preview_route(self,route,initial_model=None):
         if route!='ollama' and self.paid_runtime is None:raise PermissionError('paid child route remains refused')

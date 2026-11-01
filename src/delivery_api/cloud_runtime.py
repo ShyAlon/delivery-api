@@ -60,6 +60,7 @@ def install(store,environ,set_engine_client,watch_vendor=False,*,paid_runtime=No
         if environ.get('REQUI_PIN_STORE')=='1':
             from .model_pins import DurableGateways
             gateways=DurableGateways(store,environ)
+            gateways.refresh_launch()
         else:gateways=ProductionGateways(store,environ)
         if paid_runtime is None:
             from .paid_preview import construct
