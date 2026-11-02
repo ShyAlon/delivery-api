@@ -3866,6 +3866,13 @@ def debug_collection(task_id:str|None=Query(None,max_length=240),a:auth.Actor=De
     return collect(sys.modules[__name__],a,task_id)
 
 
+@app.get('/api/operator/backoffice-access')
+def operator_backoffice_access(a:auth.Actor=Depends(auth.require_actor)):
+    from .backoffice_access import effective,PURPOSES
+    try:return JSONResponse(effective(_operator_reader(),store),headers={'Cache-Control':'no-store'})
+    except HTTPException:return JSONResponse({'capabilities':{c:False for c in PURPOSES},'purposes':PURPOSES,'paid_activation':False,'write_off':False},headers={'Cache-Control':'no-store'})
+
+
 @app.get('/api/operator/audit-events')
 def operator_audit_events(before:int|None=None,limit:int=50,event:str|None=None,a:auth.Actor=Depends(auth.require_admin)):
     from .audit_view import list_rows

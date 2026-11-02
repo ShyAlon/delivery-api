@@ -14,6 +14,7 @@ def test_model_pin_review_cancel_edit_menu_and_mobile():
     value=payload();value['row']['model']='deepseek-flash';value['context']['model']='deepseek-flash';calls=[]
     def upstream(request):
         calls.append(request)
+        if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{c:True for c in ('services.operate','logs.read','debug.read','sessions.read','analytics.read','usage.read','payments.read')}})
         if request.url.path=='/api/operator/model-pins':return httpx.Response(200,json={'pins':[{'payload':value,'revision':'abc','is_default':True,'status':{'fetched_at':'2026-11-01T11:00:00Z','badge':'Stale - refresh needed'}}],'history':[],'bootstrap':[]})
         if request.url.path.endswith('/refresh') or request.url.path.endswith('/edit'):
             return httpx.Response(200,json={'before':value,'review':{'payload':value,'expected':'abc','subject':'fake','expires':9999999999},'signature':'fake'})
@@ -36,3 +37,25 @@ def test_model_pin_review_cancel_edit_menu_and_mobile():
             page.set_viewport_size({'width':390,'height':844});page.screenshot(path=str(_ARTIFACTS/'model-pins-mobile.png'),full_page=True)
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth');assert not errors;browser.close()
     finally:server.should_exit=True;thread.join(10)
+
+
+def test_missing_operator_capability_disables_new_model_and_names_gap():
+ from playwright.sync_api import sync_playwright,expect
+ def upstream(request):
+  if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{'services.operate':False}})
+  return httpx.Response(403,json={'detail':'unavailable'})
+ app=create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream))
+ with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+ server=uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=port,lifespan='off',log_level='error'));thread=threading.Thread(target=server.run);thread.start()
+ try:
+  for _ in range(100):
+   if server.started:break
+   time.sleep(.02)
+  with sync_playwright() as p:
+   browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page(viewport={'width':1280,'height':900},extra_http_headers={'Authorization':'Bearer fake'})
+   page.goto(f'http://127.0.0.1:{port}/#model-pins')
+   expect(page.get_by_role('button',name='Add model',exact=True)).to_be_disabled()
+   expect(page.locator('#model-pins-panel .access-denied')).to_contain_text('services.operate')
+   page.screenshot(path='/downloads/backoffice-missing-capability.png')
+   browser.close()
+ finally:server.should_exit=True;thread.join(10)

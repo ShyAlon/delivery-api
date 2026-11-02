@@ -12,6 +12,7 @@ def ui():
     calls=[]
     def upstream(request):
         calls.append(request)
+        if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{c:True for c in ('services.operate','logs.read','debug.read','sessions.read','analytics.read','usage.read','payments.read')}})
         if request.url.path=='/api/operations/active-jobs':
             return httpx.Response(200,json={'scope':'current_authorized_workspace','mutations_available':False,'jobs':[{'title':'Shared UI test','task_id':'task-one','job_id':'job-one','kind':'phase:intent','state':'running','task_state':'running','generation':1,'task_generation':1,'updated_at':1}],'truncated':False})
         if request.url.path.endswith('/expense-totals'):

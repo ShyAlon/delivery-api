@@ -22,6 +22,7 @@ done
 .venv/bin/python scripts/ops/venv_check.py || fail 'dependencies missing; run the exact pip repair line above.'
 envfile="$HOME/.config/requi/preview.env"
 case "$command" in
+ backoffice-access) target=scripts/owner/backoffice-access.py;;
  debug) target=scripts/ops/preview-debug.py;;
  locks) target=scripts/owner/locks.py;;
  migrate) target=scripts/owner/apply-pg-cutover.py;;
@@ -35,6 +36,10 @@ case "$command" in
 esac
 [ -f "$target" ] || fail "missing $target; pull main containing this step."
 case "$command" in
+ backoffice-access)
+   args=("$PWD" --env-file "$envfile")
+   [ "$apply" = 0 ] || args+=(--apply)
+   exec .venv/bin/python "$target" "${args[@]}";;
  debug) [ "$apply" = 0 ] || fail "debug is read-only";exec .venv/bin/python "$target";;
  locks)
    [ "$apply" = 0 ] || fail 'locks is read-only; --apply is not supported.'
