@@ -33,12 +33,10 @@ class ProviderCall(BaseModel):
 class ChildProviderBroker:
     def __init__(self,operation,*,gateway,journal,client,endpoint,headers,authorize):
         if gateway.job_id!=operation.binding.job_id:raise ValueError('trusted gateway job mismatch')
-        url=httpx.URL(endpoint)
-        if url.scheme not in ('http','https') or url.username or url.password or url.query or url.fragment:
-            raise ValueError('fixed reviewed provider endpoint required')
-        if client.follow_redirects:raise ValueError('provider redirects forbidden')
+        from .provider_http import ParentProviderHTTP
         self.operation=operation;self.gateway=gateway;self.journal=journal;self.client=client
         self.endpoint=endpoint;self.headers=dict(headers);self.authorize=authorize;self.lock=threading.Lock()
+        self.http=ParentProviderHTTP(client,endpoint,headers)
 
     def dispatch(self,value):
         call=ProviderCall.model_validate(value)
@@ -75,32 +73,17 @@ class ChildProviderBroker:
                     if not attempt:raise BrokerPaused('provider reserve returned no attempt')
                     self.journal.bind(key,attempt);self.authorize(self.operation,call);self.gateway.start(attempt)
                 step='transport'
-                response=self.client.build_request('POST',self.endpoint,content=raw,headers=self.headers)
-                received=self.client.send(response,stream=True,follow_redirects=False)
-                try:
-                    body=bytearray()
-                    for chunk in received.iter_bytes():
-                        body.extend(chunk)
-                        if len(body)>MAX_RESPONSE:raise BrokerPaused('provider response exceeds bounded durable envelope')
-                    if received.status_code!=200:
-                        from .diagnostic_evidence import record
-                        # Safe fixed facts only: body text may contain prompts, credentials or provider internals.
-                        error_code='unavailable'
-                        try:
-                            candidate=json.loads(body).get('error',{}).get('code')
-                            # Fixed vocabulary, never arbitrary vendor text from the body.
-                            if candidate in ('invalid_api_key','authentication_error','insufficient_balance','invalid_request_error','rate_limit_exceeded','model_not_found','server_error','context_length_exceeded','invalid_model','invalid_request'):error_code=candidate
-                            elif candidate is not None:error_code='other_redacted'
-                        except (ValueError,AttributeError,TypeError):pass
-                        record('child.provider.http_refusal',error_code=error_code,status=received.status_code,provider=call.provider,model=call.model,body_bytes=len(body),retry_after_present='retry-after' in received.headers)
-                        raise BrokerPaused('provider non-success response requires reconciliation')
-                    content_type=received.headers.get('content-type','application/json')
-                    step='usage_decode'
-                    usage=self._usage(bytes(body),content_type)
-                    # Do not persist Set-Cookie, authorization or arbitrary headers.
-                    reply={'status':received.status_code,'content_type':content_type,
-                        'body':base64.b64encode(body).decode(),'sha256':hashlib.sha256(body).hexdigest()}
-                finally:received.close()
+                from .provider_http import ProviderHTTPError
+                try:body,content_type=self.http.send(raw)
+                except ProviderHTTPError as error:
+                    from .diagnostic_evidence import record
+                    record('child.provider.http_refusal',status=error.status,error_code=error.code,
+                        provider=call.provider,model=call.model,reason=str(error))
+                    raise
+                step='usage_decode'
+                usage=self._usage(body,content_type)
+                reply={'status':200,'content_type':content_type,
+                    'body':base64.b64encode(body).decode(),'sha256':hashlib.sha256(body).hexdigest()}
                 step='journal_complete'
                 self.journal.complete(key,reply,usage)
             except BaseException as exc:

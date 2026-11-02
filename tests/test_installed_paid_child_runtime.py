@@ -48,7 +48,8 @@ def test_installed_adapters_run_real_paid_child_with_fake_provider(store,tmp_pat
     calls=[]
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            payload=json.loads(self.rfile.read(int(self.headers['content-length'])));calls.append(payload)
+            from strict_provider import read_request
+            payload=read_request(self);calls.append(payload)
             content={'is_web_app':True,'archetype':'saas_crud','confidence':0.9,'reason':'fake'} if 'is_web_app' in json.dumps(payload) else {'question':'What does a booking look like for customers?','covered':[],'thin':[],'skipped':[],'complete':False}
             message={'role':'assistant','content':json.dumps(content)};finish='stop'
             if payload.get('tools'):

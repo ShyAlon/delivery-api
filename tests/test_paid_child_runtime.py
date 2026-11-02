@@ -14,7 +14,8 @@ def test_paid_interview_exact_parent_accounting_reaped_and_recovery_never_rebill
     calls=[]
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            payload=json.loads(self.rfile.read(int(self.headers['content-length'])));calls.append(payload)
+            from strict_provider import read_request
+            payload=read_request(self);calls.append(payload)
             content={'is_web_app':True,'archetype':'saas_crud','confidence':0.9,'reason':'fake'} if 'is_web_app' in json.dumps(payload) else {'question':'What does a booking look like for customers?','covered':[],'thin':[],'skipped':[],'complete':False}
             message={'role':'assistant','content':json.dumps(content)};finish='stop'
             if payload.get('tools'):
@@ -85,7 +86,8 @@ def test_paid_child_interruption_keeps_accepted_money_without_redispatch(store,t
     accepted=threading.Event();release=threading.Event();calls=[]
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            payload=json.loads(self.rfile.read(int(self.headers['content-length'])));calls.append(payload);accepted.set();assert release.wait(10)
+            from strict_provider import read_request
+            payload=read_request(self);calls.append(payload);accepted.set();assert release.wait(10)
             body=json.dumps({'id':'fake','model':'deepseek-flash','choices':[{'index':0,'message':{'role':'assistant','content':json.dumps({'is_web_app':True,'archetype':'saas_crud','confidence':0.9,'reason':'fake'})},'finish_reason':'stop'}],
                 'usage':{'prompt_tokens':10,'completion_tokens':1,'total_tokens':11,'prompt_cache_hit_tokens':0,'prompt_cache_miss_tokens':10}}).encode()
             self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
