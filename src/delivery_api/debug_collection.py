@@ -23,4 +23,9 @@ def collect(module,actor,task_id):
             except Exception:row={'source':source,'availability':'unavailable','category':'read_failed','next':'Retry collection in Debug; missing evidence is not an empty result.'}
             row.update(duration_ms=round((time.monotonic()-began)*1000),collected_at=datetime.now(timezone.utc).isoformat(),sql_statements=len(stats.statements)-query_start if stats else None)
             sections.append(row)
+    if actor.admin:
+        from . import cloud_execution,cloud_runtime
+        from .server_log_buffer import scrub
+        began=time.monotonic();reasons=cloud_execution.problems()
+        sections.append({'source':'execution-readiness','availability':'available','data':{'admitted':not reasons,'installed':cloud_runtime.installed(),'reasons':[scrub(str(r)) for r in reasons]},'duration_ms':round((time.monotonic()-began)*1000),'sql_statements':None,'collected_at':datetime.now(timezone.utc).isoformat()})
     return {'sections':sections,'duration_ms':round((time.monotonic()-started)*1000),'scope':'fixed bounded evidence projections; per-source authority preserved'}

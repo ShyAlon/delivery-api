@@ -1,0 +1,7 @@
+# Report the blocker and measure export groups
+
+A missing installed admission gateway is a consequence, not a diagnosis. Operator model-route responses must carry the scrubbed actual cloud execution reasons; customer responses must not disclose private startup exceptions. Model pin repair uses the configured private Back office URL, never a guessed port. Start remains disabled and no configuration approval is inferred. Include admitted/installed/reasons in operator evidence exports so the next report can distinguish missing reviewed pins, gateway validation and engine installation failures.
+
+Measured owner export: 26.348 seconds total. Diagnostics 9.659 seconds; fixed server collection 10.229 seconds; retained logs 2.027 seconds; run events 2.732 seconds; server logs 1.693 seconds. The single-collection path was present; client/server differences were milliseconds, with database/checkout waits in requests. Do not blame ZIP compression or say the optimization reverted without evidence.
+
+Run independent export groups with a maximum of two concurrent HTTP requests, each retaining its own existing authorization/tenant/pooled transaction scope. Keep the server batch on its one connection; never share a connection between concurrent collectors. Preserve section ordering, errors, policy exclusions and per-stage timings. Do not omit slow evidence to make the number look better. Test overlap, the concurrency bound, individual failures, real browser download and disabled-start presentation.

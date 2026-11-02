@@ -381,3 +381,5 @@ details.review-progress>summary>.progress-current{color:var(--ink);margin-top:3p
 .signal-updated{animation:signal-reveal .18s ease-out}
 @keyframes signal-reveal{from{opacity:.5;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}
 @media(prefers-reduced-motion:reduce){.signal-updated{animation:none}}
+
+.route-unavailable .model-pins-repair{display:block;margin-top:6px;}

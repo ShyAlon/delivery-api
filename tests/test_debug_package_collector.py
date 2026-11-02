@@ -20,13 +20,18 @@ def test_customer_batch_never_calls_operator_sources():
     assert len(result['sections'])==3
 
 
-def test_operator_batch_exact_task_failures_and_safe_unavailability():
+def test_operator_batch_exact_task_failures_and_safe_unavailability(monkeypatch):
+    from delivery_api import cloud_execution,cloud_runtime
+    monkeypatch.setattr(cloud_execution,'problems',lambda:['Choose one reviewed deepseek model in Back office > Model pins'])
+    monkeypatch.setattr(cloud_runtime,'installed',lambda:False)
     module,calls=fake_module();actor=SimpleNamespace(admin=True)
     module.operator_task_logs=lambda *args:(_ for _ in ()).throw(ValueError('private backend error'))
     module.operator_task_usage=lambda *args:{'availability':'unavailable','required_capability':'usage.read','reason':'Usage is not configured'}
     module.account_credit_history=lambda *args:{'text':'credit history evidence'}
     result=collect(module,actor,'task a');sections={s['source']:s for s in result['sections']}
-    assert len(sections)==11
+    assert len(sections)==12
+    assert sections['execution-readiness']['data']['installed'] is False
+    assert 'Model pins' in sections['execution-readiness']['data']['reasons'][0]
     assert sections['db-state-events']['availability']=='unavailable'
     assert sections['credit-history']['data']['text']=='credit history evidence'
     assert sections['db-usage']['availability']=='unavailable' and sections['db-usage']['data']['required_capability']=='usage.read'
