@@ -122,12 +122,14 @@ class DurableGateways:
     """One immutable reviewed pin set per task generation, restored for every job."""
     def __init__(self,store,environ):
         import threading
-        self.store=store;self.environ=dict(environ);self._factories={};self._lock=threading.RLock()
+        self.store=store;self.environ=dict(environ);self._factories={};self._lock=threading.RLock();self._launch_errors={};self.route_errors={}
     def _factory(self,env):
         key=revision({k:json.loads(v) for k,v in env.items()})
         with self._lock:
             if key not in self._factories:
-                factory=pg.ProductionGateways(self.store,{**self.environ,**env})
+                config={**self.environ,**env}
+                if {r['provider'] for r in json.loads(env[pg.PRICES_ENV])}=={'ollama'}:config.pop(pg.KEY_ENV,None)
+                factory=pg.ProductionGateways(self.store,config)
                 rows=json.loads(env[pg.PRICES_ENV]);contexts=json.loads(env[pg.CEILING_ENV])
                 for row in rows:
                     if row['provider']!='deepseek':continue
@@ -138,17 +140,38 @@ class DurableGateways:
                     child.verify_vendor=verify;factory.verify_vendor=verify
                 self._factories[key]=factory
         return self._factories[key]
+    def available_environment(self):
+        """Resolve each explicitly configured provider independently, never a substitute model.
+
+        A missing or invalid paid pin must not erase an independently valid local
+        route. Unavailable providers remain named in route_errors and cannot dispatch.
+        """
+        rows=PinRepository(self.store._postgres).list();selected=[];errors={}
+        for provider in self.environ.get('REQUI_PIN_PROVIDERS','deepseek').split(','):
+            try:
+                if provider=='deepseek' and self.environ.get('DELIVERY_CHILD_EXECUTION')=='local':raise ValueError('Local child mode does not authorize paid dispatch')
+                if provider in self._launch_errors:raise ValueError(self._launch_errors[provider])
+                candidates=[r for r in rows if r['provider']==provider and r['is_default']]
+                if len(candidates)!=1:raise ValueError('Choose one reviewed '+provider+' model in Back office > Model pins; no implicit fallback')
+                payload=candidates[0]['payload'];self._factory(environment([payload]))
+                selected.append(payload)
+            except (ValueError,pg.AdmissionDenied,KeyError,TypeError) as exc:errors[provider]=f'{type(exc).__name__}: {exc}'
+        self.route_errors=errors
+        if not selected:raise ValueError('No ready reviewed route: '+'; '.join(k+': '+v for k,v in errors.items()))
+        return environment(selected)
     @property
-    def models(self):return self._factory(selected_environment(self.store._postgres,self.environ)).models
+    def models(self):
+        try:return self._factory(self.available_environment()).models
+        except ValueError:return {}
     @property
     def verify_vendor(self):
-        return self._factory(selected_environment(self.store._postgres,self.environ)).verify_vendor
+        return self._factory(self.available_environment()).verify_vendor
     def for_task(self,task_id):
         task=self.store.task(task_id)
         if not task:raise KeyError(task_id)
         name='model-pins:'+str(task['generation']);old=self.store.decision_review(task_id,name,'model-pins-v1')
         if old is None:
-            self.store.retain_decision_review(task_id,name,'model-pins-v1',selected_environment(self.store._postgres,self.environ))
+            self.store.retain_decision_review(task_id,name,'model-pins-v1',self.available_environment())
             old=self.store.decision_review(task_id,name,'model-pins-v1')
         return self._factory(old)
     def __call__(self,capability,job_id):
@@ -160,13 +183,21 @@ class DurableGateways:
         return any(factory.models.get(provider)==model for factory in self._factories.values())
     def refresh_launch(self):
         import warnings
+        self._launch_errors={}
         for row in PinRepository(self.store._postgres).list():
-            result=refresh(row['payload'])
-            if result.get('warning'):warnings.warn(result['warning'])
-            elif result['changed']:
-                before=row['payload']['row']['provider_snapshot'];after=result['payload']['row']['provider_snapshot']
-                if any(before.get(k)!=after.get(k) for k in vs.FACT_KEYS):raise ValueError('Vendor terms changed. Review and approve Back office > Model pins before new paid work.')
-                vs.verify_current_sources(before,cached=False)
+            provider=row['provider']
+            if provider=='ollama' or not row['is_default'] or provider not in self.environ.get('REQUI_PIN_PROVIDERS','deepseek').split(','):continue
+            try:
+                result=refresh(row['payload'])
+                if result.get('warning'):warnings.warn(result['warning'])
+                elif result['changed']:
+                    before=row['payload']['row']['provider_snapshot'];after=result['payload']['row']['provider_snapshot']
+                    if any(before.get(k)!=after.get(k) for k in vs.FACT_KEYS):raise ValueError('Vendor terms changed. Review and approve Back office > Model pins before new paid work.')
+                    vs.verify_current_sources(before,cached=False)
+            except Exception as exc:
+                self._launch_errors[provider]=f'{type(exc).__name__}: {exc}'
+                warnings.warn(provider+' route unavailable: '+self._launch_errors[provider])
+        self.available_environment()
     def close(self):
         for factory in self._factories.values():factory.close()
 

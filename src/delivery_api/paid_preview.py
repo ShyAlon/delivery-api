@@ -17,6 +17,7 @@ def require_preview(env):
 def construct(env,gateways):
     if env.get('DELIVERY_CHILD_EXECUTION')!='attended-paid':return None
     require_preview(env)
+    if set(gateways.models)=={'ollama'}:return None  # no paid authority is created for a local-only ready set
     from .child_paid_runtime import PaidChildRuntime
     runtime=PaidChildRuntime(models=gateways.models,api_key=env.get('DEEPSEEK_API_KEY',''))
     if hasattr(gateways,'for_task'):runtime.pin_factory=gateways
