@@ -108,6 +108,7 @@ def test_owner_command_refuses_wrong_branch_before_fetch(tmp_path):
 def test_owner_dispatch_is_dry_default_and_uses_repo_scripts(tmp_path,name,expected):
     root=tmp_path/'delivery-api';(root/'scripts/ops').mkdir(parents=True);(root/'scripts/owner').mkdir();(root/'.venv/bin').mkdir(parents=True)
     shutil.copy(REQ.parent/'req-owner.sh',root/'scripts/ops/req-owner.sh')
+    shutil.copy(REQ.parent/'terminal-log.sh',root/'scripts/ops/terminal-log.sh')
     (root/'scripts/ops/venv_check.py').write_text('')
     for target in ('apply-pg-cutover.py','force-stop-all.py','stop-all.py'):(root/'scripts/owner'/target).write_text('')
     python=root/'.venv/bin/python';python.write_text('#!/bin/sh\nprintf "PY:%s\\n" "$@"\n');python.chmod(0o755)
@@ -119,6 +120,7 @@ def test_owner_dispatch_is_dry_default_and_uses_repo_scripts(tmp_path,name,expec
 def test_free_preview_dry_does_not_invoke_preview(tmp_path):
     root=tmp_path/'delivery-api';(root/'scripts/ops').mkdir(parents=True);(root/'.venv/bin').mkdir(parents=True)
     shutil.copy(REQ.parent/'req-owner.sh',root/'scripts/ops/req-owner.sh')
+    shutil.copy(REQ.parent/'terminal-log.sh',root/'scripts/ops/terminal-log.sh')
     (root/'scripts/ops/venv_check.py').write_text('')
     (root/'scripts/ops/preview-exec.sh').write_text('echo MUST-NOT-START;exit 9\n')
     python=root/'.venv/bin/python';python.write_text('#!/bin/sh\nexit 0\n');python.chmod(0o755)
@@ -162,6 +164,7 @@ def test_download_requires_exactly_one_name(tmp_path):
 def test_locks_rejects_apply(tmp_path):
     root=tmp_path/'delivery-api';(root/'scripts/ops').mkdir(parents=True);(root/'scripts/owner').mkdir();(root/'.venv/bin').mkdir(parents=True)
     shutil.copy(REQ.parent/'req-owner.sh',root/'scripts/ops/req-owner.sh')
+    shutil.copy(REQ.parent/'terminal-log.sh',root/'scripts/ops/terminal-log.sh')
     (root/'scripts/ops/venv_check.py').write_text('')
     (root/'scripts/owner/locks.py').write_text('')
     python=root/'.venv/bin/python';python.write_text('#!/bin/sh\nexit 0\n');python.chmod(0o755)
