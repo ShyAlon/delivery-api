@@ -11,3 +11,5 @@ This is a progress-only producer change, not the provider envelope fix. The
 fixture in this test deliberately retains its original HTTP behavior so the
 progress regression can be isolated. Strict HTTP fixtures live in the separate
 shared provider-envelope theme. No live database/provider or paid run.
+
+CI follow-through: engine86rebased onto the87mirrored-schema repair; wheel rebuilt from ba85b562. Production runtime behavior remains the observational journal change.
