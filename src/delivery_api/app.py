@@ -182,6 +182,9 @@ async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=
         cursor=await run_in_threadpool(store.progress_cursor,task_id,"interview",session_id)
         fetched_at=time.monotonic()
         try:page=await run_in_threadpool(engine_client.progress,session_id,cursor)
+        except KeyError:
+            if allow_absent:return
+            raise
         except EngineClientError as exc:
             if allow_absent and exc.http_status==404:return
             raise
@@ -1140,26 +1143,26 @@ async def _complete_interview_start(task_id:str,proposed_session:str,selected_ro
                  session_id=proposed_session,dur_ms=int((time.monotonic()-engine_started_at)*1000))
     except EngineUnreachableError as exc:
         activity("engine.unreachable","Interview engine unreachable at task start",task_id=task_id,base_url=exc.base_url,cause=str(exc.cause))
-        store.add_event(task_id,"error",f"Error: the interview engine is not reachable. Likely cause: nothing accepted the connection at {exc.base_url} - the engine service is not running. Next: restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Then retry.",phase_key="intent",payload=_engine_unreachable_payload(exc))
-        store.update_phase(task_id,"intent","failed",detail=str(exc)[:300])
+        await run_in_threadpool(store.update_phase,task_id,"intent","failed",detail=str(exc)[:300])
+        await run_in_threadpool(store.add_event,task_id,"error",f"Error: the interview engine is not reachable. Likely cause: nothing accepted the connection at {exc.base_url} - the engine service is not running. Next: restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Then retry.",phase_key="intent",payload=_engine_unreachable_payload(exc))
         return
     except EngineClientError as exc:
         payload={"route":selected_route,"http_status":exc.http_status,"protocol_error":exc.error.model_dump(mode="json"),"stage":"preflight"}
         activity("model.route.preflight.rejected","Interview route rejected by engine",task_id=task_id,**payload)
-        store.add_event(task_id,"model_preflight",f"Interview route {selected_route} rejected: {exc.error.detail}",phase_key="intent",payload=payload)
-        store.add_event(task_id,"error",f"Interview start failed: {exc.error.detail}",phase_key="intent",payload=payload)
+        await run_in_threadpool(store.add_event,task_id,"model_preflight",f"Interview route {selected_route} rejected: {exc.error.detail}",phase_key="intent",payload=payload)
+        await run_in_threadpool(store.update_phase,task_id,"intent","failed",detail=exc.error.detail[:300])
+        await run_in_threadpool(store.add_event,task_id,"error",f"Interview start failed: {exc.error.detail}",phase_key="intent",payload=payload)
         # Operator-only failure evidence: the engine's sanitized 503 block is
         # recorded on the dedicated diagnostics store - never on the events or
         # audit rows every customer surface reads.
         if getattr(exc,'operator_diagnostics',None):
-            try:store.record_failure_diagnostics(task_id,'engine.start',exc.http_status,exc.operator_diagnostics)
+            try:await run_in_threadpool(store.record_failure_diagnostics,task_id,'engine.start',exc.http_status,exc.operator_diagnostics)
             except Exception as record_exc:activity("engine.start.diagnostics_unrecorded","Operator failure diagnostics could not be recorded",task_id=task_id,error=f"{type(record_exc).__name__}")
-        store.update_phase(task_id,"intent","failed",detail=exc.error.detail[:300])
         return
     except Exception as exc:
         activity("engine.start.failed","Interview start failed unexpectedly",task_id=task_id,error=f"{type(exc).__name__}: {str(exc)[:200]}")
-        store.add_event(task_id,"error",f"Interview start failed: {type(exc).__name__}: {str(exc)[:200]}",phase_key="intent")
-        store.update_phase(task_id,"intent","failed",detail=f"{type(exc).__name__}: {str(exc)[:200]}")
+        await run_in_threadpool(store.update_phase,task_id,"intent","failed",detail=f"{type(exc).__name__}: {str(exc)[:200]}")
+        await run_in_threadpool(store.add_event,task_id,"error",f"Interview start failed: {type(exc).__name__}: {str(exc)[:200]}",phase_key="intent")
         return
     finally:
         drain_started_at=time.monotonic()
