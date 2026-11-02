@@ -156,7 +156,7 @@ class PostgresStore:
     def add_event(self, task_id: str, kind: str, message: str, *, phase_key: str | None=None, payload: dict | None=None) -> int:
         cur = self._execute_native('INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id', (task_id, phase_key, kind, message, json.dumps(payload or {}), time.time()), write=True)
         self._execute_native('UPDATE tasks SET updated_at=%s WHERE task_id=%s', (time.time(), task_id), write=True)
-        event_bus.notify(task_id)
+        self._connection.get().notify_after_commit(task_id)
         return cur.fetchone()['id']
 
     def events(self, task_id: str, after: int=0, limit: int=500) -> list[dict]:
@@ -197,7 +197,7 @@ class PostgresStore:
             self._execute_native('INSERT INTO progress_ingest(task_id,source,session_id,cursor) VALUES (%s,%s,%s,%s) ON CONFLICT(task_id,source,session_id) DO UPDATE SET cursor=GREATEST(progress_ingest.cursor,excluded.cursor)', (signal.task_id, source, signal.session_id, signal.cursor), write=True)
             self._execute_native("UPDATE phases SET detail=%s,completed=COALESCE(%s,completed),total=COALESCE(%s,total) WHERE task_id=%s AND phase_key=%s AND state='running'", (message, signal.completed, signal.total, signal.task_id, signal.phase_key), write=True)
             self._execute_native('UPDATE tasks SET updated_at=%s WHERE task_id=%s', (time.time(), signal.task_id), write=True)
-            event_bus.notify(signal.task_id)
+            self._connection.get().notify_after_commit(signal.task_id)
         except Exception:
             self._connection.get().execute('ROLLBACK TO SAVEPOINT operation_start')
             raise
@@ -259,7 +259,7 @@ class PostgresStore:
         ) INSERT INTO progress_ingest(task_id,source,session_id,cursor) VALUES (%s,'interview',%s,%s)
           ON CONFLICT(task_id,source,session_id) DO UPDATE SET cursor=excluded.cursor""",
           (json.dumps(records),task_id,task_id,time.time(),task_id,time.time(),task_id,task_id,session_id,page.next_cursor),write=True)
-        event_bus.notify(task_id)
+        self._connection.get().notify_after_commit(task_id)
         return len(kept)
 
     def audit(self, actor: str, action: str, task_id: str | None=None, detail: dict | None=None) -> int:
@@ -505,7 +505,7 @@ class PostgresStore:
         self._execute_native("UPDATE tasks SET state='running',active_phase='conops',updated_at=%s WHERE task_id=%s", (now, task_id), write=True)
         self._execute_native('INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s)', (task_id, 'conops', 'progress', 'Completed HTTP interview reconciled with V-process', json.dumps({'session_id': session_id, 'sequence': sequence, 'source': 'terminal_engine_snapshot', 'handoff': 'needs'}), now), write=True)
         self.audit('engine', 'interview.reconciled', task_id, {'session_id': session_id, 'sequence': sequence, 'next_phase': 'needs'})
-        event_bus.notify(task_id)
+        self._connection.get().notify_after_commit(task_id)
         return True
 
     def claim_failed_needs_retry(self, task_id: str, actor: str) -> bool:
@@ -525,7 +525,7 @@ class PostgresStore:
         self._execute_native("UPDATE tasks SET state='running',active_phase='needs',updated_at=%s WHERE task_id=%s", (now, task_id), write=True)
         self._execute_native('INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s)', (task_id, 'needs', 'retry', 'Founder confirmed retry of failed Stakeholder needs', json.dumps({'actor': actor, 'session_id': row['engine_session_id']}), now), write=True)
         self.audit(actor, 'phase.retry', task_id, {'phase': 'needs', 'session_id': row['engine_session_id']})
-        event_bus.notify(task_id)
+        self._connection.get().notify_after_commit(task_id)
         return True
 
     def claim_next_phase(self, task_id: str, phase: str, actor: str) -> bool:
@@ -550,7 +550,7 @@ class PostgresStore:
         self._execute_native("UPDATE tasks SET state='running',active_phase=%s,updated_at=%s WHERE task_id=%s", (phase, now, task_id), write=True)
         self._execute_native('INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s)', (task_id, phase, 'progress', f'You started {PHASE_BY_KEY[phase].label}', json.dumps({'actor': actor, 'session_id': row['engine_session_id'], 'started': True}), now), write=True)
         self.audit(actor, 'phase.start', task_id, {'phase': phase, 'session_id': row['engine_session_id']})
-        event_bus.notify(task_id)
+        self._connection.get().notify_after_commit(task_id)
         return True
 
     def claim_failed_phase_retry(self, task_id: str, phase: str, actor: str) -> bool:
@@ -578,7 +578,7 @@ class PostgresStore:
         self._execute_native("UPDATE tasks SET state='running',active_phase=%s,updated_at=%s WHERE task_id=%s", (phase, now, task_id), write=True)
         self._execute_native('INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s)', (task_id, phase, 'retry', f'Founder confirmed retry of failed {PHASE_BY_KEY[phase].label}', json.dumps({'actor': actor, 'session_id': row['engine_session_id']}), now), write=True)
         self.audit(actor, 'phase.retry', task_id, {'phase': phase, 'session_id': row['engine_session_id']})
-        event_bus.notify(task_id)
+        self._connection.get().notify_after_commit(task_id)
         return True
 
     def set_model_route(self, task_id: str, model_route: str) -> None:
