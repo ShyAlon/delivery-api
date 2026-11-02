@@ -67,4 +67,5 @@ def test_read_connection_names_driver_startup_stage_without_retry(monkeypatch):
  assert report['failure.stage.database.connect_readonly_startup'] is True
  assert report['failure.reason.startup_parameter_unsupported'] is True
  assert len(calls)==1 and calls[0]['options']=='-c default_transaction_read_only=on'
+ assert calls[0]['connect_timeout']==30
  assert 'private' not in str(report) and 'secret' not in str(report)

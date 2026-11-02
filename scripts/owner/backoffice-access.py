@@ -12,7 +12,7 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'src'))
 from delivery_api.backoffice_access import PURPOSES,DEFAULT_CAPABILITIES,EXCLUDED
 from delivery_api.operator_authorization import CAPABILITIES
-from delivery_api.owner_diagnostics import failure
+from delivery_api.owner_diagnostics import failure,OWNER_CONNECT_TIMEOUT_SECONDS
 
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path)
@@ -83,7 +83,7 @@ def run(root,*,explicit=None,apply=False,confirm=None,out=None):
             settings.read_file(destination)
             stage='registry.apply_recheck'
             import psycopg
-            with psycopg.connect(values['REQUI_ADMIN_DATABASE_URL'],connect_timeout=10) as conn:
+            with psycopg.connect(values['REQUI_ADMIN_DATABASE_URL'],connect_timeout=OWNER_CONNECT_TIMEOUT_SECONDS) as conn:
                 conn.execute("SET LOCAL statement_timeout='5s'")
                 fresh,fresh_local,fresh_registry=review(conn,values,True)
                 if (fresh,fresh_local,fresh_registry)!=(operator,local,registry):raise ValueError('registry changed')

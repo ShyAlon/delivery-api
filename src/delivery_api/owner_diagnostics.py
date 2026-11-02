@@ -1,6 +1,9 @@
 """Safe names/booleans for owner commands, never raw exception text or values."""
 import re
 
+# A bounded connection window for owner configuration/access, no automatic retry.
+OWNER_CONNECT_TIMEOUT_SECONDS=30
+
 # Fixed messages from our validators. Prefixes deliberately discard paths,
 # setting values and source content that may follow the known reason.
 _REASONS={

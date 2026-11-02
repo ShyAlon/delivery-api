@@ -18,7 +18,7 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'src'))
 from delivery_api.operator_authorization import CAPABILITIES
 from delivery_api.operator_startup import SETTINGS
-from delivery_api.owner_diagnostics import failure
+from delivery_api.owner_diagnostics import failure,OWNER_CONNECT_TIMEOUT_SECONDS
 
 DEBUG_CAPABILITIES=frozenset({'logs.read','debug.read','sessions.read','analytics.read','usage.read'})
 
@@ -55,7 +55,7 @@ def read_connection(dsn):
     try:
         import psycopg
         stage='database.connect_readonly_startup'
-        with psycopg.connect(dsn,connect_timeout=10,options='-c default_transaction_read_only=on') as conn:
+        with psycopg.connect(dsn,connect_timeout=OWNER_CONNECT_TIMEOUT_SECONDS,options='-c default_transaction_read_only=on') as conn:
             stage='database.begin_readonly'
             with conn.transaction():
                 conn.execute('SET TRANSACTION READ ONLY')
