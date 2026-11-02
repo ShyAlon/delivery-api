@@ -95,6 +95,36 @@ def task_totals(store,task_id):
     return {'price':float(round(row['credits'],6)),'price_usd':float(round(row['usd'],6))} if row else None
 
 
+def child_task_cost(store,task_id):
+    """Read-only child accounting, including before the first debit lands.
+
+    No settled rows is not proof of no cost. Pending/uncertain operations retain
+    unknown totals while any confirmed contributions remain visible as partial.
+    A legacy document-accounted session returns None to keep its own reader.
+    """
+    row=store._execute_native("""SELECT
+        EXISTS(SELECT 1 FROM decision_reviews WHERE task_id=%s AND
+            (revision='child-operation-v1' OR (revision='manifest-v1' AND wait_id LIKE 'child-generator:%%'))) AS child,
+        EXISTS(SELECT 1 FROM worker_jobs WHERE task_id=%s AND state IN ('pending','running','paused')) AS active,
+        EXISTS(SELECT 1 FROM provider_attempts p JOIN worker_jobs w USING(job_id)
+            WHERE w.task_id=%s AND p.state IN ('reserved','dispatched','uncertain','held')) AS provider_pending,
+        EXISTS(SELECT 1 FROM retail_compute_segments r JOIN worker_jobs w USING(job_id)
+            WHERE w.task_id=%s AND r.state<>'settled') AS compute_pending,
+        (SELECT credits FROM retail_totals WHERE scope='task' AND ref=%s AND n>0) AS credits,
+        (SELECT usd FROM retail_totals WHERE scope='task' AND ref=%s AND n>0) AS usd
+        FROM tasks t WHERE t.task_id=%s AND t.deleted_at IS NULL
+        """,(task_id,)*7).fetchone()
+    if row is None:raise KeyError('owned task not found')
+    if not row['child']:return None
+    complete=not (row['active'] or row['provider_pending'] or row['compute_pending'])
+    evidence={'scope':'child ledger','complete':complete,
+        'provider_pending':row['provider_pending'],'compute_pending':row['compute_pending']}
+    # Confirmed posted contributions are a lower bound while work is unsettled.
+    return {'price':float(round(row['credits'],6)) if row['credits'] is not None else 0.0 if complete else None,
+        'price_usd':float(round(row['usd'],6)) if row['usd'] is not None else 0.0 if complete else None,
+        'evidence':evidence}
+
+
 def task_phase_totals(store,task_id):
     """Credits per phase for one task, largest first. Credits only: no price, vendor cost or rate leaves this function."""
     rows=store._execute_native("SELECT phase_key,credits FROM retail_totals WHERE scope='task_phase' AND ref=%s AND n>0",(task_id,)).fetchall()

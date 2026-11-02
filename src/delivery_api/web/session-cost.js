@@ -32,6 +32,10 @@ export function startSessionCostHeader(){
   pending=true;try{
   const value=await api(route);if(stopped)return;
   if(!stillHere()){empty();return}
+  if(value.evidence?.scope==='child ledger'&&value.evidence.complete===false){
+   host.textContent=Number.isFinite(value.price)?`${value.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} credits · Pending`:'Session Cost Pending';
+   host.dataset.state='pending';host.title='Confirmed charges only. Work is still running or a call has not settled; the final total is not known.';hasValue=false;return;
+  }
   if(value.evidence?.complete===false){host.textContent='Session Cost Incomplete';host.dataset.state='unavailable';host.title=`Local usage evidence incomplete: ${value.evidence.rejected_rows} rejected rows; ${value.evidence.invalid_numeric_rows||0} invalid numeric rows. Source preserved; missing amounts unknown.`;hasValue=false;return}
   if(!Number.isFinite(value.price))throw new Error('Cost unavailable');
   host.textContent=`${value.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} credits`;

@@ -2554,6 +2554,9 @@ def _task_cost(task_id:str)->dict:
     price events; model tokens recorded in the usage files but not yet covered by an
     event (the phase is still running) and all interview tokens are added at the token
     rate, so the total grows as calls land. Interview calls carry no process-time part."""
+    if hasattr(store,'task_child_cost'):
+        child=store.task_child_cost(task_id)
+        if child is not None:return child
     if hasattr(store,'task_retail_totals'):
         exact=store.task_retail_totals(task_id)
         if exact is not None:return exact
@@ -2587,7 +2590,11 @@ def _task_cost(task_id:str)->dict:
 
 @app.get("/api/tasks/{task_id}/cost")
 def task_cost(task_id:str,request:Request):
-    if not store.task(task_id):raise HTTPException(404,"task not found")
+    if hasattr(store,'task_child_cost'):
+        try:child=store.task_child_cost(task_id)
+        except KeyError:raise HTTPException(404,"task not found")
+        if child is not None:return child
+    elif not store.task(task_id):raise HTTPException(404,"task not found")
     if hasattr(store,'task_retail_totals'):
         exact=store.task_retail_totals(task_id)
         if exact is not None:return exact

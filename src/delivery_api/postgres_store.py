@@ -1858,6 +1858,10 @@ FROM tasks t"""
         self._execute_native('UPDATE provider_attempts SET provider_balance_evidence=%s::jsonb WHERE attempt_id=%s',(json.dumps(checked),attempt_id), write=True)
         return checked
 
+    def task_child_cost(self,task_id):
+        from .retail_ledger import child_task_cost
+        return child_task_cost(self,task_id)
+
     def task_retail_totals(self,task_id):
         from .retail_ledger import task_totals
         return task_totals(self,task_id)
@@ -2395,6 +2399,7 @@ PG_OPERATIONS = (
     'task',
     'task_artifacts',
     'task_phase_credits',
+    'task_child_cost',
     'task_retail_totals',
     'task_snapshot',
     'task_worker_state',
