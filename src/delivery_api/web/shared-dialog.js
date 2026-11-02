@@ -1,5 +1,5 @@
 /* One dialog lifecycle for native private pages and customer overlay content. */
-import {runAction} from './ui-action.js';
+import {logEnter,runAction} from './ui-action.js';
 let sequence=0;
 const bindings=new WeakMap();
 export function bindDialog(dialog,options={}){
@@ -13,7 +13,7 @@ export function bindDialog(dialog,options={}){
   if(e.key==='Escape'){e.preventDefault();e.stopPropagation();close();return}
   const items=[...dialog.querySelectorAll('button,input,select,textarea,a[href],[tabindex="0"]')].filter(x=>!x.disabled&&x.getClientRects().length),first=items[0],last=items.at(-1);
   if(e.key==='Tab'&&items.length&&((e.shiftKey&&document.activeElement===first)||(!e.shiftKey&&document.activeElement===last)||!dialog.contains(document.activeElement))){e.preventDefault();(e.shiftKey?last:first).focus()}
-  if(e.key==='Enter'&&!e.isComposing&&(!e.target.matches('textarea,[contenteditable="true"]')||e.ctrlKey||e.metaKey)&&!e.target.matches('button,a,select')){const form=state.form||dialog.querySelector('form')||(dialog.localName==='form'?dialog:null),primary=state.primary||dialog.querySelector('[data-dialog-primary],button.primary,button[type="submit"]');if(form||primary){e.preventDefault();e.stopPropagation();form?form.requestSubmit():primary.click()}}
+  if(e.key==='Enter'&&!e.isComposing&&(!e.target.matches('textarea,[contenteditable="true"]')||e.ctrlKey||e.metaKey)&&!e.target.matches('button,a,select')){const form=state.form||dialog.querySelector('form')||(dialog.localName==='form'?dialog:null),primary=state.primary||dialog.querySelector('[data-dialog-primary],button.primary,button[type="submit"]');if(form||primary){e.preventDefault();e.stopPropagation();if(form){logEnter('dialog','form.requestSubmit');form.requestSubmit()}else{logEnter('dialog','primary.click');primary.click()}}}
  });
  dialog.addEventListener('cancel',e=>{e.preventDefault();close()});
  requestAnimationFrame(()=>{const focus=typeof state.focus==='string'?dialog.querySelector(state.focus):state.focus; (focus||dialog.querySelector('[autofocus],input,select,textarea,button'))?.focus()});return dialog;

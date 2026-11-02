@@ -115,7 +115,7 @@ def test_ui_action_module_is_preloaded_and_wired():
                     "disabledSet('engine.answer'", "disabledClear('engine.answer'", "logEnter('answer-composer'"],
         "dashboard.js": ["runAction('task.create'"],
         "taskactions.js": ["runAction('task.rerun'", "runAction('task.rerun.preview'"],
-        "dialogs.js": ["logEnter('dialog','form.requestSubmit')", "logEnter('dialog','primary.click')", "logEnter('dialog','none"],
+        "shared-dialog.js": ["logEnter('dialog','form.requestSubmit')", "logEnter('dialog','primary.click')", "logEnter('dialog','none"],
     }
     for name, needles in checks.items():
         text = (WEB / name).read_text()
@@ -223,7 +223,7 @@ def test_remaining_server_action_surfaces_share_the_guard():
         'qa.js':['feedback:'],
         'completion.js':['package.prepare'],
         'ops.js':['ops.grant','ops.refresh','ops.logs'],
-        'dialogs.js':['requirement.resolve','founder.decision'],
+        'shared-dialog.js':['requirement.resolve','founder.decision'],
     }
     for file,actions in expected.items():
         source=(WEB/file).read_text()
