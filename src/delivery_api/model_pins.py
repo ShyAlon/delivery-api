@@ -198,6 +198,7 @@ class DurableGateways:
                 self._launch_errors[provider]=f'{type(exc).__name__}: {exc}'
                 warnings.warn(provider+' route unavailable: '+self._launch_errors[provider])
         self.available_environment()
+        for provider,reason in self.route_errors.items():warnings.warn(provider+' route unavailable: '+reason)
     def close(self):
         for factory in self._factories.values():factory.close()
 
