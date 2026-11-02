@@ -41,7 +41,7 @@ def test_cloud_model_routes_are_managed_and_start_only_when_execution_is_open(mo
     from delivery_api import cloud_runtime
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(local=False,model='deepseek-flash',models={'deepseek':'deepseek-flash'}))
     monkeypatch.setattr(module.engine_client,'preview_route',lambda route:{'model_map':{'probing':['deepseek','deepseek-flash']}})
-    reply=module.model_routes(None)
+    reply=module.model_routes(module.auth.Actor('test-owner','Test owner'))
     assert reply['managed'] is True and reply['default_route']==({'route':'deepseek'} if open_now else None)
     route=reply['routes'][0]
     assert [r['id'] for r in reply['routes']]==['deepseek','ollama']
@@ -73,7 +73,7 @@ def test_cloud_model_routes_keyless_deepseek_is_unavailable_with_the_reason(monk
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
     monkeypatch.setattr(module,'cloud_execution_admitted',lambda:True)
     monkeypatch.delenv('DEEPSEEK_API_KEY',raising=False)
-    reply=module.model_routes(None)
+    reply=module.model_routes(module.auth.Actor('test-owner','Test owner'))
     route=reply['routes'][0]
     assert [r['id'] for r in reply['routes']]==['deepseek','ollama']
     assert route['available'] is False
@@ -91,7 +91,7 @@ def test_cloud_model_routes_never_enable_an_unreviewed_engine_model(monkeypatch,
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(
         local=False,model='deepseek-flash',models=reviewed_models))
     monkeypatch.setattr(module.engine_client,'preview_route',lambda route:{'model_map':{'probing':['deepseek','deepseek-flash']}})
-    reply=module.model_routes(None)
+    reply=module.model_routes(module.auth.Actor('test-owner','Test owner'))
     assert reply['default_route'] is None
     route=next(r for r in reply['routes'] if r['id']=='deepseek')
     assert route['available'] is False
