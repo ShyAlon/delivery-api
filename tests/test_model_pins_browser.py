@@ -59,3 +59,34 @@ def test_missing_operator_capability_disables_new_model_and_names_gap(tmp_path):
    page.screenshot(path=str(tmp_path/'backoffice-missing-capability.png'))
    browser.close()
  finally:server.should_exit=True;thread.join(10)
+
+
+def test_shared_add_model_labels_focus_enter_inline_error_and_escape(tmp_path):
+ from playwright.sync_api import sync_playwright,expect
+ calls=[]
+ def upstream(request):
+  calls.append(request)
+  if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{'services.operate':True}})
+  if request.url.path=='/api/operator/model-pins':return httpx.Response(200,json={'pins':[],'history':[],'bootstrap':[]})
+  return httpx.Response(403,json={'detail':'Review unavailable: fixture refusal'})
+ app=create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream))
+ with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+ server=uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=port,lifespan='off',log_level='error'));thread=threading.Thread(target=server.run);thread.start()
+ try:
+  for _ in range(100):
+   if server.started:break
+   time.sleep(.02)
+  with sync_playwright() as p:
+   browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page(viewport={'width':1280,'height':900},extra_http_headers={'Authorization':'Bearer fake'})
+   page.goto(f'http://127.0.0.1:{port}/#model-pins');page.get_by_role('button',name='Add model',exact=True).click()
+   d=page.get_by_role('dialog',name='Add reviewed model');expect(d).to_be_visible()
+   for label in ('Provider','Provider model ID','Context tokens','Maximum output tokens'):expect(d.get_by_label(label,exact=True)).to_be_visible()
+   d.get_by_label('Provider model ID',exact=True).focus();page.keyboard.press('Enter')
+   expect(d.locator('.dialog-status')).to_contain_text('fixture refusal')
+   assert sum(r.url.path.endswith('/new') for r in calls)==1
+   d.get_by_role('button',name='Fetch prices and review').focus();page.keyboard.press('Tab');expect(d.get_by_label('Provider',exact=True)).to_be_focused()
+   page.screenshot(path=str(tmp_path/'shared-add-model-desktop.png'))
+   page.set_viewport_size({'width':390,'height':844});page.screenshot(path=str(tmp_path/'shared-add-model-mobile.png'))
+   assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+   page.keyboard.press('Escape');expect(d).not_to_be_visible();browser.close()
+ finally:server.should_exit=True;thread.join(10)
