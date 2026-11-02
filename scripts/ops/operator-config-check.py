@@ -51,14 +51,21 @@ def configuration(values):
 
 @contextmanager
 def read_connection(dsn):
-    import psycopg
-    # Read-only from connection startup, before any query. No implicit writable
-    # transaction, session role change, migration, or persistent setting update.
-    with psycopg.connect(dsn,connect_timeout=10,options='-c default_transaction_read_only=on') as conn:
-        with conn.transaction():
-            conn.execute('SET TRANSACTION READ ONLY')
-            conn.execute("SET LOCAL statement_timeout='5s'")
-            yield conn
+    stage='driver.import'
+    try:
+        import psycopg
+        stage='database.connect_readonly_startup'
+        with psycopg.connect(dsn,connect_timeout=10,options='-c default_transaction_read_only=on') as conn:
+            stage='database.begin_readonly'
+            with conn.transaction():
+                conn.execute('SET TRANSACTION READ ONLY')
+                stage='database.statement_timeout'
+                conn.execute("SET LOCAL statement_timeout='5s'")
+                stage='database.read_queries'
+                yield conn
+    except Exception as exc:
+        exc.owner_diagnostic_stage=stage
+        raise
 
 
 def database(conn,values,app_user):

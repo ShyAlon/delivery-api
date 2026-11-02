@@ -51,3 +51,20 @@ def test_config_check_emits_safe_exception_stage_on_connection_failure(tmp_path)
  out=io.StringIO();assert check.run(tmp_path,explicit=f,connect=broken,out=out)==1
  text=out.getvalue();assert 'failure.stage.registry.read_check=true' in text
  assert 'failure.exception.RuntimeError=true' in text and 'password' not in text and 'secret' not in text
+
+
+def test_read_connection_names_driver_startup_stage_without_retry(monkeypatch):
+ from test_operator_config_check import check
+ import psycopg
+ calls=[]
+ def blocked(*a,**kw):
+  calls.append(kw);raise psycopg.OperationalError('unsupported startup parameter: options; private secret')
+ monkeypatch.setattr(psycopg,'connect',blocked)
+ try:
+  with check.read_connection('fixture'):assert False
+ except psycopg.OperationalError as exc:
+  report={};failure(report,exc,'registry.read_check')
+ assert report['failure.stage.database.connect_readonly_startup'] is True
+ assert report['failure.reason.startup_parameter_unsupported'] is True
+ assert len(calls)==1 and calls[0]['options']=='-c default_transaction_read_only=on'
+ assert 'private' not in str(report) and 'secret' not in str(report)
