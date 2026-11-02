@@ -77,7 +77,7 @@ def test_cloud_model_routes_keyless_deepseek_is_unavailable_with_the_reason(monk
     route=reply['routes'][0]
     assert [r['id'] for r in reply['routes']]==['deepseek','ollama']
     assert route['available'] is False
-    assert 'missing key: DEEPSEEK_API_KEY is not set on this server' in route['error']
+    assert 'DeepSeek is not available on this server.' in route['error']
     assert 'test-key' not in str(route)   # presence boolean only, never a value
 
 
@@ -95,4 +95,4 @@ def test_cloud_model_routes_never_enable_an_unreviewed_engine_model(monkeypatch,
     assert reply['default_route'] is None
     route=next(r for r in reply['routes'] if r['id']=='deepseek')
     assert route['available'] is False
-    assert 'reviewed' in route['error']
+    assert 'DeepSeek is' in route['error'] and 'unavailable' in route['error'] or 'DeepSeek is not available' in route['error']

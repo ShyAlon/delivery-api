@@ -52,11 +52,27 @@ def test_operator_can_read_durable_evidence_in_dialog_without_script(pg_page,pg_
  page.screenshot(path=str(tmp_path/'durable-evidence-dialog.png'),full_page=False)
 
 
-def test_closed_route_names_pin_review_and_links_private_backoffice(pg_page,pg_ui,pg_ids,tmp_path):
+def test_customer_route_rejects_operator_text_and_links_even_from_stale_api(pg_page,pg_ui,pg_ids,tmp_path):
  page=pg_page
  page.route('**/api/model-routes',lambda r:r.fulfill(json={'managed':True,'routes':[{'id':p,'available':False,'managed':True,'error':'Execution is closed: Choose one reviewed '+p+' model in Back office > Model pins; no implicit fallback','repair':{'kind':'model-pins','label':'Open Model pins in Back office','url':'http://127.0.0.1:8031/#model-pins'}} for p in ('deepseek','ollama')]}))
  page.goto(pg_ui+'/tasks/'+pg_ids['empty']+'/view')
- expect(page.locator('.route-unavailable').first).to_contain_text('Choose one reviewed deepseek')
+ expect(page.locator('.route-unavailable').first).to_contain_text('DeepSeek is temporarily unavailable')
+ expect(page.locator('.route-unavailable').last).to_contain_text('Local interviews are temporarily unavailable')
+ assert not any(term in page.locator('body').inner_text().lower() for term in ('back office','model pins','money gateway'))
  expect(page.get_by_role('button',name='Start interview',exact=True)).to_be_disabled()
- expect(page.locator('.model-pins-repair').first).to_have_attribute('href','http://127.0.0.1:8031/#model-pins')
- page.screenshot(path=str(tmp_path/'closed-model-pins-repair.png'),full_page=True)
+ assert page.locator('a[href*="8031"],.model-pins-repair').count()==0
+ page.screenshot(path=str(tmp_path/'customer-route-boundary.png'),full_page=True)
+
+
+def test_shared_loading_is_animated_and_respects_reduced_motion(pg_page,pg_ui,tmp_path):
+ page=pg_page
+ page.emulate_media(reduced_motion='no-preference')
+ page.goto(pg_ui+'/')
+ expect(page.get_by_role('button',name='+ New task',exact=True)).to_be_visible()
+ page.evaluate('document.querySelector("#app").innerHTML=\'<div class="loading route-loading" role="status">Loading…</div>\'')
+ status=page.get_by_role('status').filter(has_text='Loading…')
+ expect(status).to_be_visible()
+ assert status.evaluate('e=>getComputedStyle(e,"::before").animationName')=='workspace-loading-spin'
+ page.screenshot(path=str(tmp_path/'customer-loading-motion.png'))
+ page.emulate_media(reduced_motion='reduce')
+ assert status.evaluate('e=>getComputedStyle(e,"::before").animationName')=='none'
