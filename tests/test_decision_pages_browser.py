@@ -670,3 +670,17 @@ def test_final_approval_shared_checklist_answer_reason_draft_and_leave_open(page
  p.locator('[data-founder-group] label.pill',has_text='Leave Open').click()
  expect(p.get_by_role('button',name='Continue',exact=True)).to_be_enabled()
  assert not state['posts']
+
+
+def test_child_cost_pending_is_not_zero_or_legacy_corruption(page):
+ p,base,root=page;fake(p)
+ totals={'price':None,'price_usd':None,'evidence':{'scope':'child ledger','complete':False,'provider_pending':True}}
+ p.route('**/api/tasks/concept/cost',lambda r:r.fulfill(json=totals))
+ p.goto(base+'/tasks/concept/decisions/wait-concept');host=p.locator('#sessioncost')
+ expect(host).to_have_text('Session Cost Pending')
+ assert 'final total is not known' in host.get_attribute('title')
+ totals['price']=.73;totals['price_usd']=.73
+ _return_to_tab_until(p,host,'0.73 credits · Pending')
+ p.screenshot(path='/tmp/requi-test-artifacts/child-cost-pending.png',full_page=True)
+ totals['evidence']['complete']=True
+ _return_to_tab_until(p,host,'0.73 credits')
