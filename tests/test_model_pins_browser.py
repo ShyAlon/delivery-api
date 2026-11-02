@@ -39,7 +39,7 @@ def test_model_pin_review_cancel_edit_menu_and_mobile():
     finally:server.should_exit=True;thread.join(10)
 
 
-def test_missing_operator_capability_disables_new_model_and_names_gap():
+def test_missing_operator_capability_disables_new_model_and_names_gap(tmp_path):
  from playwright.sync_api import sync_playwright,expect
  def upstream(request):
   if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{'services.operate':False}})
@@ -56,6 +56,6 @@ def test_missing_operator_capability_disables_new_model_and_names_gap():
    page.goto(f'http://127.0.0.1:{port}/#model-pins')
    expect(page.get_by_role('button',name='Add model',exact=True)).to_be_disabled()
    expect(page.locator('#model-pins-panel .access-denied')).to_contain_text('services.operate')
-   page.screenshot(path='/downloads/backoffice-missing-capability.png')
+   page.screenshot(path=str(tmp_path/'backoffice-missing-capability.png'))
    browser.close()
  finally:server.should_exit=True;thread.join(10)
