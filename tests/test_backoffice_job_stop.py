@@ -125,6 +125,7 @@ def test_browser_confirm_sends_one_scoped_stop_and_refreshes(tmp_path,hide):
     from delivery_api.backoffice import create_app
     stopped=[False];calls=[]
     def upstream(request):
+        if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{'debug.read':True,'logs.read':True}})
         calls.append(request)
         if request.method=='POST':
             assert request.url.path=='/api/operations/worker-jobs/job-one/stop'

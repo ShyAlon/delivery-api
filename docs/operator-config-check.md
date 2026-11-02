@@ -156,3 +156,12 @@ roles. The capture preserves an unavailable usage result and a fixed setup
 reason for a verified Debug operator rather than a misleading missing-task404.
 Other users and revoked operators retain opaque denial. New server settings take
 effect on the next owner-managed restart; do not interrupt active paid work.
+
+## Full private workspace access
+
+Read setup preserves previously reviewed local capabilities only when the same
+identity/version remains covered by the enabled registry. It never imports a new
+effect capability from the DB. For the separate typed full workspace enrollment,
+see [Back office access](backoffice-access.md): `req backoffice-access` is dry,
+`req backoffice-access --apply` updates the existing owner's registry/config only
+after purpose review. It does not activate paid work or allow write-off.

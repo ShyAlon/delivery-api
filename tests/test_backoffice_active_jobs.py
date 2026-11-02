@@ -95,6 +95,7 @@ def test_backoffice_jobs_pixels_filter_pagination_refresh_and_revocation(tmp_pat
     from playwright.sync_api import sync_playwright
     calls=[];revoked=[False]
     def upstream(request):
+        if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{'debug.read':True,'logs.read':True}})
         calls.append(request)
         if request.url.path!='/api/operations/active-jobs':return httpx.Response(403,json={'detail':'unavailable'})
         if revoked[0]:return httpx.Response(401,json={'detail':'revoked'})

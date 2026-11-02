@@ -52,7 +52,7 @@ def save(settings,destination,values,confirm):
     destination=Path(destination)
     settings.read_file(destination)  # refuses symlinks, nonfiles, nonprivate mode
     before=destination.read_bytes() if destination.exists() else None
-    if confirm('Save the three operator settings with only the five Debug read permissions to the selected private settings file? Type "yes" to save, anything else to cancel: ')!='yes':return False
+    if confirm('Save the three operator settings with five Debug reads, preserving already-reviewed local capabilities to the selected private settings file? Type "yes" to save, anything else to cancel: ')!='yes':return False
     settings.read_file(destination)
     if (destination.read_bytes() if destination.exists() else None)!=before:raise ValueError('settings changed during confirmation')
     destination.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -90,6 +90,16 @@ def run(root,*,env=None,explicit=None,confirm=None,connect=check.read_connection
         existing=settings.read_file(destination)
         for name in settings.IDENTITY:
             if existing.get(name) and existing[name]!=values.get(name):raise ValueError('target identity conflict')
+        # Preserve only already-reviewed local authority, never copy new DB effects.
+        previous=check.capabilities(values.get(check.SETTINGS[2]))
+        if previous:
+            if values.get(check.SETTINGS[0])!=operator[check.SETTINGS[0]] or values.get(check.SETTINGS[1])!=operator[check.SETTINGS[1]]:
+                raise ValueError('existing authority identity/version conflict')
+            with connect(values['REQUI_ADMIN_DATABASE_URL']) as conn:
+                rows=conn.execute('SELECT capabilities FROM public.operator_principals WHERE enabled AND subject=%s AND registry_version=%s',
+                    (operator[check.SETTINGS[0]],operator[check.SETTINGS[1]])).fetchall()
+            if len(rows)!=1 or not previous<=set(rows[0][0]):raise ValueError('existing local authority revoked or unverifiable')
+            operator[check.SETTINGS[2]]=json.dumps(sorted(previous|check.DEBUG_CAPABILITIES),separators=(',',':'))
         report['settings.saved']=save(settings,destination,operator,confirm or settings.terminal_confirm)
     except (Exception,KeyboardInterrupt):
         report['setup.completed']=False
