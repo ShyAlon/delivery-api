@@ -169,7 +169,8 @@ def main(argv=None):
                 screenshot=args.output/('success-'+tid+'.png');page.screenshot(path=str(screenshot),full_page=True);screenshot.chmod(0o600)
                 if not live['seen'] or not cost_seen['seen']:raise Refused('Live Start progress or visible cost was not proven; test retained')
                 # The actual browser must show the current question before cleanup.
-                if not page.get_by_text(task['control_snapshot']['prompt'],exact=False).first.is_visible():raise Refused('Question was not visible in the real page; test retained')
+                from playwright.sync_api import expect
+                expect(page.locator('#currentquestion p')).to_contain_text(task['control_snapshot']['prompt'],timeout=15000)
                 browser.close()
             api('POST','/api/operations/test-tasks/'+tid+'/purge',{'confirm':True})
             report={'at':stamp,'model':plan['model'],'pin_revision':pin['revision'],'elapsed_seconds':round(time.monotonic()-started,2),
