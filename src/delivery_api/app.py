@@ -898,6 +898,10 @@ def create_test_task(body:TaskCreate,a:auth.Actor=Depends(auth.require_actor)):
 def list_test_tasks(a:auth.Actor=Depends(auth.require_actor)):
     return _test_task_action(lambda:{'tasks':store.list_test_tasks()})
 
+@app.get('/api/operations/test-tasks/{task_id}/expense')
+def test_task_expense(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    return _test_task_action(lambda:store.test_task_expense(task_id))
+
 @app.post('/api/operations/test-tasks/{task_id}/purge')
 def purge_test_task(task_id:str,body:TestTaskPurge,a:auth.Actor=Depends(auth.require_actor)):
     return _test_task_action(lambda:store.purge_test_task(task_id,confirm=body.confirm))
