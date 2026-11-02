@@ -10,11 +10,12 @@ from delivery_api.child_interview import ChildInterviewClient
 def test_actual_interview_start_runs_in_child_with_parent_broker(store,tmp_path,monkeypatch):
     # Force real imports; this test is run with both checked-out consumer sources.
     pytest.importorskip('interview_engine')
-    calls=[]
+    calls=[];entered=threading.Event();release=threading.Event()
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             from strict_provider import read_request
             payload=read_request(self);calls.append(payload)
+            if len(calls)==1:entered.set();assert release.wait(20)
             # Invalid semantic output intentionally exercises durable provider
             # dispatch and fails the graph without any real provider request.
             body=json.dumps({'id':'fake','object':'chat.completion','model':payload['model'],
@@ -47,7 +48,20 @@ def test_actual_interview_start_runs_in_child_with_parent_broker(store,tmp_path,
                 return await original_run(*args,**kw)
             client.supervisor.run=checked_run
             from vmodel_contracts.interactive import StartSessionRequest
-            result=client.start(StartSessionRequest(session_id=sid,task_id=tid,idea='A test app',model_route='ollama',initial_model='fake'))
+            from concurrent.futures import ThreadPoolExecutor
+            def start():
+                with tenant_context(A):
+                    return client.start(StartSessionRequest(session_id=sid,task_id=tid,idea='A test app',model_route='ollama',initial_model='fake'))
+            with ThreadPoolExecutor(max_workers=1) as workers:
+                pending=workers.submit(start)
+                try:
+                    assert entered.wait(20), 'real child never reached fake provider'
+                    page=client.progress(sid)
+                    assert page.events, 'Start must expose stage events before the first provider response'
+                    assert any(e.stage and e.timestamp for e in page.events)
+                    assert not pending.done(), 'live progress assertion must happen during Start'
+                finally:release.set()
+                result=pending.result(timeout=40)
             assert result.snapshot.sequence>0
             assert client.supervisor.last_result.reaped
             assert client.snapshot(sid).sequence==result.snapshot.sequence
