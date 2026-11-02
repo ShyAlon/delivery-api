@@ -9,21 +9,16 @@
 # No launcher price generator or filesystem pin cache. Paid route visibility is not spend approval.
 # Ctrl-C removes only this invocation's container; data volume is retained.
 set -euo pipefail
-# Color is presentation only: no ANSI in pipes/files/ZIPs, no exit-code masking.
-if [ -t 1 ] && [ -z "${NO_COLOR+x}" ] && [ "${REQUI_TERMINAL_COLOR_ACTIVE:-0}" != 1 ] && command -v python3 >/dev/null 2>&1; then
-  color_self=$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")
-  color_filter="$(dirname "$color_self")/terminal-color.py"
-  if [ -f "$color_filter" ]; then
-    set +e
-    REQUI_TERMINAL_COLOR_ACTIVE=1 bash "$color_self" "$@" 2>&1 | python3 "$color_filter"
-    color_rc=${PIPESTATUS[0]};exit "$color_rc"
-  fi
-fi
+
 PORT=${PREVIEW_EXEC_PORT:-8001}
 NAME=requi-preview-exec; WORK=""; STARTED=0; KEEP_FOR_INSPECTION=0
 BACKOFFICE_PID=""; BACKOFFICE_PREVIEW_PORT=${PREVIEW_BACKOFFICE_PORT:-8020}
 DATA_VOLUME=${PREVIEW_DATA_VOLUME:-requi-preview-data}
-. "$(dirname "$0")/lib.sh"; ops_start preview-exec "$0" --venv
+. "$(dirname "$0")/lib.sh"
+# Settings may re-exec the launcher. Complete that handoff before any run header.
+REQUIRED=DELIVERY_DATABASE_URL,DELIVERY_SUPABASE_URL,DELIVERY_SUPABASE_ANON_KEY
+[ "${PREVIEW_EXEC_PROVIDER:-both}" = ollama ] || REQUIRED="$REQUIRED,DEEPSEEK_API_KEY"
+ops_start preview-exec "$0" --venv "$REQUIRED"
 REPO=$PWD
 
 scrub(){ sed -E 's#(postgres(ql)?://)[^ ]*#\1[hidden]#g; s#sk-[A-Za-z0-9_-]+#sk-[hidden]#g'; }
@@ -65,7 +60,7 @@ PYPORT
 }
 cleanup(){
   rc=$?; trap - EXIT INT TERM
-  if [ "$rc" != 0 ]; then .venv/bin/python scripts/ops/preview-debug.py --code "${FAIL_CODE:-UNEXPECTED-$rc}" --step "${STEP_NAME:-startup}" || echo "WARNING debug ZIP unavailable; run req debug from this checkout."; fi
+  if [ "$rc" != 0 ]; then .venv/bin/python scripts/ops/preview-debug.py --code "${FAIL_CODE:-UNEXPECTED-$rc}" --step "${STEP_NAME:-startup}" || warn "WARNING debug ZIP unavailable; run req debug from this checkout."; fi
   stop_backoffice
   if [ "$STARTED" = 1 ] && [ "${KEEP_FOR_INSPECTION:-0}" != 1 ]; then docker rm -f "$NAME" >/dev/null 2>&1 || true; fi
   [ -z "$WORK" ] || rm -rf "$WORK"
@@ -84,13 +79,13 @@ step_ok(){ echo "   ok ($((SECONDS-STEP_START))s)"; STEP_NAME=''; }
 # Local abort: lib.sh's format, plus the step and elapsed time when a step is running.
 abort(){
   FAIL_CODE=$1
-  echo; echo "ABORTED [$1]: $2"
+  echo; error "ABORTED [$1]: $2"
   echo "Debug: req debug (ZIP under $REPO/runs/preview-debug)"
   if [ "$1" = BROWSER-SMOKE ]; then
     echo "browser errors repeated for inspection (anonymous smoke, no sign-in):"
     [ -z "${BROWSER_OUT:-}" ] || printf '%s\n' "$BROWSER_OUT"
   fi
-  [ -z "$STEP_NAME" ] || echo "Step $STEP_N/$STEPS_TOTAL '$STEP_NAME' failed after $((SECONDS-STEP_START))s."
+  [ -z "$STEP_NAME" ] || error "Step $STEP_N/$STEPS_TOTAL '$STEP_NAME' failed after $((SECONDS-STEP_START))s."
   echo "${3:-Nothing was started and the database was not touched.}"
   echo "Fix: ${4:-run scripts/ops/$OPS_NAME.sh again; if it repeats, send me this whole output}"
   echo "Then run: scripts/ops/$OPS_NAME.sh"; exit 1
@@ -132,7 +127,7 @@ build_exec_env(){
 }
 
 cat <<'PLAN'
-Plan (8 steps, fail fast - cheapest and most likely first; every step prints its elapsed time, every failure names its step):
+Plan (9 steps, fail fast - cheapest and most likely first; every step prints its elapsed time, every failure names its step):
   1 inputs and environment (~5s): tools, Docker, port, saved settings, the four checkouts at origin/main, LIVE DB schema + app role readiness
   2 source smoke (~15s): the image's startup checks against the candidate sources - syntax parse, the preflight's own tests, the engine surface
   3 confirmation (you): provider pick if unset, DeepSeek key presence (deepseek only), what will run, one typed yes
@@ -170,10 +165,6 @@ fi
 MACHINE=$(uname -m); case "$MACHINE" in arm64|aarch64) NATIVE=arm64;; x86_64|amd64) NATIVE=amd64;; *) abort ARCH "unknown machine architecture $MACHINE";; esac
 EXPECTED_ARCH=${PREVIEW_ARCH:-$NATIVE}; case "$EXPECTED_ARCH" in arm64|amd64) ;; *) abort ARCH "PREVIEW_ARCH must be arm64 or amd64, not '$EXPECTED_ARCH'" "" "unset PREVIEW_ARCH";; esac
 PLATFORM=linux/$EXPECTED_ARCH
-# the settings saved on this Mac by ops preview-provision (one time), never printed
-REQUIRED=DELIVERY_DATABASE_URL,DELIVERY_SUPABASE_URL,DELIVERY_SUPABASE_ANON_KEY
-[ "${PREVIEW_EXEC_PROVIDER:-both}" = ollama ] || REQUIRED="$REQUIRED,DEEPSEEK_API_KEY"
-ops_settings "$REQUIRED"
 # the candidate: the four checkouts at origin/main, exactly as deploy-full takes them
 [ -f scripts/docker/build-local-image.sh ] || abort NO-FILE "scripts/docker/build-local-image.sh is missing on main" "" "git -C $PWD log --oneline -5   (is main pulled?)"
 candidate_tag
@@ -326,7 +317,7 @@ echo "  the server through host.docker.internal."
 fi
 echo "  This start is NOT the activation approval for the first real interview: spend limit, cost ceiling, model"
 echo "  route and live changes are approved once, separately, before that interview."
-printf 'Type "yes" (English keyboard) to start, anything else changes nothing: '
+prompt 'Waiting for input: Type "yes" (English keyboard) to start, anything else changes nothing:'
 A=no; prompt_open && read -r A <&9 || A=${A:-no}; [ "$A" = yes ] || abort NOT-CONFIRMED "you did not type yes" "" "run ops preview-exec again and type yes"
 step_ok
 
@@ -442,7 +433,7 @@ if [ "$OK" != 1 ]; then echo "== the container did not become healthy; last log 
 # readiness needs POSITIVE evidence: the app's own startup line says OPEN, and the running container's own
 # environment confirms execution 1 with exactly one provider key variable (its value is never printed).
 LOGS=$(docker logs "$NAME" 2>&1 | scrub)
-echo "$LOGS" | grep -q 'Cloud execution: OPEN' || echo 'WARNING: execution is closed. Open Back office > Model pins to review pins; the UI remains available. Debug: docker logs --tail 100 requi-preview-exec'
+echo "$LOGS" | grep -q 'Cloud execution: OPEN' || warn 'WARNING: execution is closed. Open Back office > Model pins to review pins; the UI remains available. Debug: docker logs --tail 100 requi-preview-exec'
 PROBE='import os,re;print("EXEC="+os.environ.get("DELIVERY_CLOUD_EXECUTION","unset"));print("KEYS="+str(len([k for k in os.environ if re.search("DEEPSEEK|OPENAI|ANTHROPIC|API_KEY",k,re.I)])))'
 EXECOUT=$(docker exec "$NAME" python -c "$PROBE" 2>/dev/null || true)
 EXPECTED_KEYS=1; [ "$PROVIDER" = ollama ] && EXPECTED_KEYS=0
@@ -475,7 +466,7 @@ echo
 if start_backoffice; then
   echo "BACK OFFICE READY: http://127.0.0.1:$BACKOFFICE_PREVIEW_PORT (stops with this script)"
 else
-  echo 'WARNING: optional Back office unavailable; preview remains usable. No unrelated listener was reused or stopped.'
+  warn 'WARNING: optional Back office unavailable; preview remains usable. No unrelated listener was reused or stopped.'
 fi
 echo "PREVIEW-EXEC READY: http://127.0.0.1:$PORT   (execution OPEN, live database, real sign-in, provider: $PROVIDER)"
 [ "$PROVIDER" = both ] && echo "Both routes admitted: choose DeepSeek or Ollama in the UI. Local is zero-cost; DeepSeek uses credits. No fallback."

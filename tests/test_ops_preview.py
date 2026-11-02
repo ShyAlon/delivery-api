@@ -66,7 +66,7 @@ def _repo(tmp_path, owner, name, with_ops):
     if with_ops:
         (seed / "scripts" / "ops").mkdir(parents=True)
         (seed / "scripts" / "docker").mkdir(parents=True)
-        for n in ("lib.sh", "preview.sh"):
+        for n in ("lib.sh", "terminal-log.sh", "preview.sh"):
             shutil.copy(OPS / n, seed / "scripts" / "ops" / n)
         shutil.copy(OPS.parent / "docker" / "smoke-image.sh", seed / "scripts" / "docker" / "smoke-image.sh")
         for relative in ('scripts/docker/smoke-local-image.sh','scripts/docker/Dockerfile.pg-smoke','scripts/docker/owned-pg-smoke.py','scripts/docker/system-pg-smoke.py','tests/pg_harness.py','tests/pg_guardian.py','supabase/migrations/20261030000000_test.sql'):

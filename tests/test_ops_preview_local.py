@@ -56,6 +56,7 @@ def _repo(tmp_path, name, with_ops):
         (seed / "scripts" / "ops").mkdir(parents=True)
         (seed / "scripts" / "docker").mkdir(parents=True)
         shutil.copy(OPS / "lib.sh", seed / "scripts" / "ops" / "lib.sh")
+        shutil.copy(OPS / "terminal-log.sh", seed / "scripts" / "ops" / "terminal-log.sh")
         shutil.copy(OPS / "settings.py", seed / "scripts" / "ops" / "settings.py")
         shutil.copy(OPS / "preview.sh", seed / "scripts" / "ops" / "preview.sh")
         shutil.copy(OPS.parent / "docker" / "build-local-image.sh", seed / "scripts" / "docker" / "build-local-image.sh")

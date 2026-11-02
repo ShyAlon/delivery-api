@@ -300,7 +300,7 @@ def _real_git_layout(tmp_path, kind):
         base.mkdir()
     ops = base / 'scripts' / 'ops'
     ops.mkdir(parents=True, exist_ok=True)
-    for f in ('preview-exec.sh', 'lib.sh', 'pin.py'):
+    for f in ('preview-exec.sh', 'lib.sh', 'terminal-log.sh', 'pin.py'):
         (ops / f).write_text((REPO / 'scripts' / 'ops' / f).read_text())
     return base
 
@@ -368,13 +368,11 @@ def test_the_plan_is_printed_up_front_with_expected_durations(tmp_path):
 
 
 def test_a_failure_names_the_step_and_how_long_it_ran(tmp_path):
-    tty = tmp_path / 'tty'
-    tty.write_text('no\n')
-    p = _run(tmp_path, {'PREVIEW_TTY': str(tty), 'PREVIEW_EXEC_PROVIDER': 'ollama'},
-             settings=tmp_path / 'absent.env')   # unprovisioned: fails inside step 1
+    p = _run(tmp_path, {'PREVIEW_EXEC_PROVIDER':'ollama','FAKE_SCHEMA_MISSING':'1'},
+             settings=_settings(tmp_path))
     assert '== [1/' in p.stdout
-    assert 'ABORTED [SETTINGS]'  in p.stdout
-    assert 'Step 1/' in p.stdout and 'failed after' in p.stdout, p.stdout[-400:]
+    assert 'ABORTED [SCHEMA-NOT-READY]' in p.stdout
+    assert 'Step 1/' in p.stdout and 'failed after' in p.stdout,p.stdout[-400:]
 
 
 def test_preview_env_pins_the_expected_build():
@@ -551,3 +549,13 @@ def test_venv_gate_names_missing_vendored_contracts_before_pin(capsys,monkeypatc
     assert 'requi_child_contract' in text and 'vmodel_contracts' in text
     assert 'vendor/requi_child_contract-0.3.0-py3-none-any.whl' in text
     assert 'vendor/vmodel_contracts-0.28.0-py3-none-any.whl' in text
+
+
+def test_settings_handoff_prints_plan_identity_and_step_once(tmp_path):
+    # Real launcher + real settings exec, fake Docker/Git/schema only.
+    # Abort at the named source-tree boundary after the handoff.
+    p=_run(tmp_path,{'PREVIEW_EXEC_PROVIDER':'deepseek','DEEPSEEK_API_KEY':KEY},settings=_settings(tmp_path))
+    assert p.stdout.count('ops 00000000  (preview-exec, origin/main)')==1,p.stdout
+    assert p.stdout.count('Plan (9 steps,')==1,p.stdout
+    assert p.stdout.count('== [1/9] inputs and environment')==1,p.stdout
+    assert KEY not in p.stdout+p.stderr

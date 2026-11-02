@@ -30,6 +30,7 @@ def env(tmp_path):
     _git(tmp_path, "clone", "-q", str(bare), str(seed))
     (seed / "scripts" / "ops").mkdir(parents=True)
     shutil.copy(OPS / "lib.sh", seed / "scripts" / "ops" / "lib.sh")
+    shutil.copy(OPS / "terminal-log.sh", seed / "scripts" / "ops" / "terminal-log.sh")
     shutil.copy(OPS / "settings.py", seed / "scripts" / "ops" / "settings.py")
     shutil.copy(OPS / "preview-provision.sh", seed / "scripts" / "ops" / "preview-provision.sh")
     _git(seed, "add", "-A")
