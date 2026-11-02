@@ -61,6 +61,11 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
             self.provider_balance=lambda:{'response':{'is_available':True,'balance_infos':[{'currency':'USD','total_balance':'1000'}]},'observed_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
         monkeypatch.setattr(production_gateway.ProductionGateways,'__init__',init)
         monkeypatch.setattr(PaidChildRuntime,'transport',lambda self,p,m,local:(f'http://127.0.0.1:{vendor.server_port}/v1/chat/completions',{}))
+    if paid:
+        env.update(REQUI_PIN_STORE='1',REQUI_PIN_PROVIDERS='deepseek')
+        from delivery_api import model_pins
+        monkeypatch.setattr(model_pins,'refresh',lambda value:{'payload':value,'changed':False,'warning':None})
+        monkeypatch.setattr(model_pins,'pin_verifier',lambda value:lambda:True)
     if not paid:env.update(local_env(MODEL))
     env.update(DELIVERY_CLOUD_EXECUTION='1',DELIVERY_CHILD_EXECUTION='local',INTERVIEW_ENGINE_TOKEN='acceptance-not-a-live-secret-0000',OLLAMA_BASE_URL=f'http://127.0.0.1:{vendor.server_port}/v1',INTERVIEW_ENGINE_OLLAMA_MODEL=MODEL)
     for key,value in env.items():monkeypatch.setenv(key,value)
@@ -84,8 +89,19 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
         with workspace.admin() as c:
             c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,%s,1000000000,0)',(workspace.scope.owner_id,100000000000 if paid else 0))
             if paid:c.execute("INSERT INTO expense_guard_policy VALUES(true,'acceptance',1000000000000,1000000000000,1000000000000,3) ON CONFLICT DO NOTHING")
+            if paid:
+                c.execute('DELETE FROM operator_expense_policy_head');c.execute('DELETE FROM operator_expense_policy_revisions')
+                c.execute("INSERT INTO operator_expense_policy_revisions(revision,limit_units,units_per_usd,operator_subject,reason) VALUES('http-policy',1000000000000,1000000000000,%s,'fake acceptance policy')",(workspace.scope.owner_id,))
+                c.execute("INSERT INTO operator_expense_policy_head VALUES(true,'http-policy')")
             c.execute('INSERT INTO admission_limits VALUES(%s,%s,86400,NULL,NULL,NULL,NULL,60,NULL,3)',(workspace.scope.owner_id,'acceptance'))
-        middleware=pg_task_app(workspace)
+        if paid:
+            from delivery_api import model_pins
+            value={'row':paidrow,'context':ceiling};rev=model_pins.revision(value)
+            with workspace.admin() as c:
+                c.execute('DELETE FROM model_pin_heads');c.execute('DELETE FROM model_pin_revisions')
+                c.execute('INSERT INTO model_pin_revisions(revision,provider,model,payload,fetched_at,operator_subject,reason) VALUES(%s,%s,%s,%s::jsonb,%s,%s,%s)',(rev,'deepseek',selected_model,json.dumps(value),snap['fetched_at'],workspace.scope.owner_id,'HTTP acceptance reviewed pin'))
+                c.execute('INSERT INTO model_pin_heads(provider,model,revision,is_default) VALUES(%s,%s,%s,true)',('deepseek',selected_model,rev))
+        middleware=pg_task_app(workspace,lifespan=True)
         with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
         server=uvicorn.Server(uvicorn.Config(middleware,host='127.0.0.1',port=port,lifespan='on',log_level='warning',access_log=False))
         thread=threading.Thread(target=server.run);thread.start()
@@ -102,12 +118,6 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
                 deleted=client.request('DELETE','/api/tasks/'+tid,json={'confirm':True});assert deleted.status_code==200,deleted.text
                 created=client.post('/api/tasks',json=body);assert created.status_code==201,created.text
                 tid=created.json()['task_id']
-                if paid:
-                    unapproved=client.post(f'/api/tasks/{tid}/start',json={'model_route':'deepseek'})
-                    assert unapproved.status_code==409,unapproved.text
-                    assert not calls
-                    approved=client.post(f'/api/tasks/{tid}/preview-spend-approval',json={'model':selected_model,'ceiling_usd':'1','confirmation':'APPROVE USD 1'})
-                    assert approved.status_code==200,approved.text
                 start=client.post(f'/api/tasks/{tid}/start',json={'model_route':selected_route});assert start.status_code==202,start.text
                 deadline=time.monotonic()+35
                 while time.monotonic()<deadline:

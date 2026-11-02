@@ -244,6 +244,8 @@ def _case_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch,
 
 
 def _case_start_records_interview_flash_not_downstream_chat(tmp_path,monkeypatch,pg_scoped_workspace):
+ from delivery_api import operator_expense_policy
+ monkeypatch.setattr(operator_expense_policy,'configured',lambda store:{'revision':'fake-policy'})
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
  store=pg_scoped_workspace.store
  task=store.create_task('Flash provenance', 'An idea')

@@ -1,14 +1,46 @@
 """Narrow cross-user read path under an explicit RLS operator-read role."""
 from .tenancy import TenantAccessDenied
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 class OperatorReadStore:
     def __init__(self,dsn,principal):
         from .postgres_scope import ScopedPostgres
         self.db=ScopedPostgres(dsn);self.principal=principal
+        self._export_connection=ContextVar('operator_export_connection',default=None)
+
+    @contextmanager
+    def export_batch(self,owner_store):
+        # One bounded HTTP export, no cross-request authorization cache.
+        with owner_store._postgres.transaction() as connection:
+            token=self._export_connection.set((connection,{}))
+            owner_token=owner_store._connection.set(connection)
+            try:yield connection
+            finally:
+                owner_store._connection.reset(owner_token)
+                self._export_connection.reset(token)
 
     @contextmanager
     def _read(self,owner_store,capability,*,role="requi_operator_read",repeatable_read=False):
+        batch=self._export_connection.get()
+        if batch is not None:
+            connection,checked=batch
+            key=(capability,role)
+            authority=checked.get(key)
+            if authority is None:
+                authority=self.principal.authorize(owner_store,capability)
+            if role not in ('requi_operator_read','requi_operator_usage','requi_operator_payment_read'):raise ValueError('fixed role required')
+            connection.execute('SET LOCAL ROLE '+role)
+            try:
+                if key not in checked:
+                    allowed=connection.execute('SELECT public.requi_operator_read_allowed(%s,%s) AS allowed',(capability,authority['registry_version'])).fetchone()
+                    if not allowed or allowed['allowed'] is not True:raise TenantAccessDenied('database operator registry denied')
+                    checked[key]=authority
+                yield connection,authority
+            finally:
+                # Failed collector SQL is rolled back by the outer savepoint first.
+                if connection.info.transaction_status.name!='INERROR':connection.execute('SET LOCAL ROLE requi_backend')
+            return
         authority=self.principal.authorize(owner_store,capability)
         with self.db.transaction(repeatable_read=repeatable_read or role in ('requi_operator_usage','requi_operator_payment_read')) as connection:
             if role not in ('requi_operator_read','requi_operator_usage','requi_operator_payment_read'):raise ValueError('fixed role required')
@@ -116,7 +148,7 @@ class OperatorReadStore:
     def _grant(self,owner_store):
         """The only write path: a role that can call two database functions. The functions check the operator registry themselves."""
         authority=self.principal.authorize(owner_store,'credits.allocate')
-        with self.db.transaction(repeatable_read=True) as connection:
+        with owner_store._postgres.transaction() as connection:
             connection.execute('SET LOCAL ROLE requi_operator_grant')
             yield connection,authority
 

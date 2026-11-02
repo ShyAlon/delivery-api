@@ -28,11 +28,11 @@ def test_pure_local_mode_never_constructs_a_paid_runtime():
     assert construct(env,None) is None
 
 
-def test_launcher_drops_inherited_paid_selectors_and_requires_separate_owner_optin():
+def test_launcher_drops_inherited_paid_selectors_and_requires_private_operator_policy():
     from pathlib import Path
     text=(Path(__file__).parents[1]/'scripts/ops/preview-exec.sh').read_text()
     build=text.split('build_exec_env(){',1)[1].split("cat <<'PLAN'",1)[0]
     assert 'DELIVERY_CHILD_EXECUTION|DELIVERY_PAID_CHILD_PREVIEW|' in build
-    gate=text.index('abort PAID-NOT-APPROVED')
+    gate=text.index('paid dispatch requires an audited Back office expense policy')
     assert gate<text.index('DELIVERY_CHILD_EXECUTION=attended-paid',gate)<text.index('docker run -d')
-    assert 'PREVIEW_PAID_CHILD_APPROVED:-0' in text
+    assert 'explicit USD ceiling confirmation' not in text

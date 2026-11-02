@@ -39,12 +39,12 @@ if(reads!==1)throw Error('disposed balance started another read');
 def test_debug_collector_keeps_history_payload_and_unavailability(tmp_path):
     run(tmp_path,(WEB/'debug-package.js').read_text()+'''
 const calls=[];const history={text:'credit history evidence'};
-const api=async url=>{calls.push(url);return url==='/api/account/credit-history'?history:{}};
+const api=async url=>{calls.push(url);return {sections:[{source:'credit-history',availability:'available',data:history}]}};
 let evidence=await collectDebugEvidence({taskId:null,operator:false,cloud:true,api});
 let row=evidence.sections.find(x=>x.source==='credit-history');
 if(row?.availability!=='available'||row.data!==history)throw Error('credit history not collected');
-if(calls.filter(x=>x==='/api/account/credit-history').length!==1)throw Error('history endpoint not fetched once');
-evidence=await collectDebugEvidence({taskId:null,operator:false,cloud:true,api:async url=>{if(url==='/api/account/credit-history')throw Error('offline');return {}}});
+if(calls.length!==1||calls[0]!=='/api/debug/collection')throw Error('collection must be one fixed request');
+evidence=await collectDebugEvidence({taskId:null,operator:false,cloud:true,api:async()=>({sections:[{source:'credit-history',availability:'unavailable',category:'read_failed'}]})});
 row=evidence.sections.find(x=>x.source==='credit-history');
 if(row?.availability!=='unavailable'||row.category!=='read_failed')throw Error('failed history presented as available');
 ''')

@@ -1,4 +1,5 @@
 """Signal age must come from event time,never epoch-zero or run start."""
+from test_artifacts import evidence_path
 import pytest
 
 
@@ -29,4 +30,4 @@ def test_signal_age_requires_valid_event_time(pg_browser,event,expected):
 
     if expected is None and 'ts' not in event and not event['payload']:
         page.evaluate("html=>document.querySelector('#app').innerHTML=html",result)
-        page.screenshot(path='/downloads/progress-unknown-signal-time.png')
+        page.screenshot(path=evidence_path('progress-unknown-signal-time.png'))

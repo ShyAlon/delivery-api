@@ -33,8 +33,8 @@ export function startSessionCostHeader(){
   const value=await api(route);if(stopped)return;
   if(!stillHere()){empty();return}
   if(value.evidence?.complete===false){host.textContent='Session Cost Incomplete';host.dataset.state='unavailable';host.title=`Local usage evidence incomplete: ${value.evidence.rejected_rows} rejected rows; ${value.evidence.invalid_numeric_rows||0} invalid numeric rows. Source preserved; missing amounts unknown.`;hasValue=false;return}
-  if(!Number.isFinite(value.price)||!Number.isFinite(value.price_usd))throw new Error('Cost unavailable');
-  host.textContent=`${value.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} credits · $${value.price_usd.toFixed(2)}`;
+  if(!Number.isFinite(value.price))throw new Error('Cost unavailable');
+  host.textContent=`${value.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} credits`;
   host.dataset.state='current';hasValue=true;host.title='Rolling Session Cost';
   if(task){try{const parts=await api(`${route}-phases`);if(!stopped&&stillHere())host.title=costTitle(value.price,parts.phases)}catch{/* the total stands; the breakdown is optional */}}
  }catch(error){if(stopped)return;

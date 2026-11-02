@@ -104,12 +104,23 @@ patches only the store/config and test signing key, never auth or scope function
     from delivery_api.tenant_http import TenantMiddleware
     monkeypatch.setattr(module.config, 'CLOUD_TENANTS', True)
 
-    def build(workspace):
+    def build(workspace,*,lifespan=False):
         monkeypatch.setattr(module, 'store', workspace.store)
         # State stores values in its mapping, not __dict__. Patch that mapping
         # so pytest restores rather than deletes the dynamic attribute.
         monkeypatch.setitem(module.app.state._state, 'store', workspace.store)
         monkeypatch.setattr(module.orchestrator, 'store', workspace.store)
+        # The app's own middleware was built before pool-lifecycle tests closed
+        # its captured store. Bind every auth/request borrower to this workspace.
+        # One real auth middleware, owned by this fixture, never nested.
+        monkeypatch.setattr(module.app,'user_middleware',[m for m in module.app.user_middleware if m.cls is not TenantMiddleware])
+        monkeypatch.setattr(module.app,'middleware_stack',None)
+        # Route fixture intentionally excludes background execution/lifecycle.
+        # Lifespan behavior has its own real-process integration contracts.
+        from contextlib import asynccontextmanager
+        @asynccontextmanager
+        async def no_background_startup(application):yield
+        if not lifespan:monkeypatch.setattr(module.app.router,'lifespan_context',no_background_startup)
         return TenantMiddleware(module.app,
             verifier=SupabaseIdentityVerifier(URL, key_provider=Keys()),
             session_check=workspace.store.auth_session_active,

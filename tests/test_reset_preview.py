@@ -76,6 +76,9 @@ def test_complete_owner_reset_keeps_other_owner_balance_and_audit(store,tmp_path
                 aid=uuid.uuid4().hex;store.reserve_provider_attempt(j,aid,Q,'reset-test');store.transition_provider_attempt(aid,'start')
                 store.stop_hide_worker_task(j,confirm=True)
     with psycopg.connect(DSN) as c:
+        run='reset-run-'+uuid.uuid4().hex
+        c.execute("INSERT INTO runs(run_id,state,budget_usd,created_at,updated_at,owner_id) VALUES(%s,'done',0,0,0,%s)",(run,A.owner_id))
+        c.execute("INSERT INTO links(token,run_id,founder_label,created_at) VALUES(%s,%s,'reset fixture',0)",(uuid.uuid4().hex,run))
         other=c.execute('SELECT count(*) FROM tasks WHERE owner_id=%s',(B.owner_id,)).fetchone()[0]
     m.reset(DSN,A.owner_id,'wipe',confirm=lambda _:f'RESET PREVIEW {m.APPROVED_PROJECT} OWNER {A.owner_id} WIPE ACCOUNTING',directory=tmp_path)
     with psycopg.connect(DSN) as c:

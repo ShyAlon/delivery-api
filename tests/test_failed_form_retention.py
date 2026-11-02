@@ -1,4 +1,5 @@
 """Real browser with disposable PG; failed requests never replace form DOM."""
+from test_artifacts import evidence_path
 from pathlib import Path
 from delivery_api.tenancy import tenant_context
 
@@ -15,10 +16,10 @@ def test_create_and_rename_failure_preserve_fields(pg_browser):
     assert page.locator('#newform [name=brief]').input_value()=='Keep this exact multiline brief\nsecond line'
     assert page.locator('#newform [name=title]').get_attribute('aria-invalid')=='true'
     assert page.locator('#newform button.primary').is_enabled()
-    Path('/downloads/form-retention').mkdir(exist_ok=True)
-    page.screenshot(path='/downloads/form-retention/create-error-desktop.png',full_page=True)
+    Path(evidence_path('form-retention')).mkdir(exist_ok=True)
+    page.screenshot(path=evidence_path('form-retention/create-error-desktop.png'),full_page=True)
     page.set_viewport_size({'width':390,'height':844})
-    page.screenshot(path='/downloads/form-retention/create-error-mobile.png',full_page=True)
+    page.screenshot(path=evidence_path('form-retention/create-error-mobile.png'),full_page=True)
     page.locator('#newform [name=title]').fill('Corrected name')
     page.locator('#newform button.primary').click()
     page.wait_for_url('**/tasks/*/view')

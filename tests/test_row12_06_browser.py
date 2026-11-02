@@ -25,7 +25,7 @@ def test_cloud_execution_excluded_but_owner_classifications_are_available(page,u
 
 @pytest.mark.parametrize('route,index',[('diagnostics',0),('classifications',3)])
 def test_permitted_diagnostics_failure_is_unavailable_not_empty_or_raw(page,ui,tmp_path,route,index):
-    page.route('**/api/tasks/dbg/'+route,lambda r:r.fulfill(status=503,content_type='application/json',body='{"detail":"private-error"}'))
+    page.route('**/api/tasks/'+page._debug_task_id+'/'+route,lambda r:r.fulfill(status=503,content_type='application/json',body='{"detail":"private-error"}'))
     _open_debug(page,ui)
     section=page.locator('#debugexecution details').nth(index)
     section.wait_for()

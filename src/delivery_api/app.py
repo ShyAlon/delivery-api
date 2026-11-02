@@ -996,23 +996,6 @@ def put_question_quality_config(req:QualityConfigRequest,a:auth.Actor=Depends(au
     activity("settings.saved","Question quality settings saved",actor=a.label,key="question-quality")
     return out
 
-class PreviewSpendApproval(BaseModel):
-    model:str
-    ceiling_usd:str
-    confirmation:str
-
-@app.post('/api/tasks/{task_id}/preview-spend-approval')
-def preview_spend_approval(task_id:str,body:PreviewSpendApproval,a:auth.Actor=Depends(auth.require_actor)):
-    from . import cloud_runtime
-    if os.environ.get('DELIVERY_PAID_CHILD_PREVIEW')!='1':raise HTTPException(403,'Attended paid preview required')
-    gateway=cloud_runtime.gateway_factory()
-    if not gateway or getattr(gateway,'models',{}).get('deepseek')!=body.model:raise HTTPException(422,'Choose the reviewed DeepSeek model')
-    expected='APPROVE USD '+body.ceiling_usd
-    if body.confirmation!=expected:raise HTTPException(422,'Type "'+expected+'" to approve this task generation ceiling')
-    try:store.approve_preview_spend(task_id,body.model,body.ceiling_usd)
-    except ValueError as exc:raise HTTPException(409,str(exc)) from exc
-    return {'status':'approved','scope':'task_generation','ceiling_usd':body.ceiling_usd,'currency':'USD','model':body.model}
-
 class TaskStartRequest(BaseModel):
     model_route:Literal["ollama","deepseek"]|None=None
     initial_model:str|None=None
@@ -1046,7 +1029,7 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
                     if model!=admitted_models.get(route):raise ValueError(f'Admission gateway reviewed model is {admitted_models.get(route)}; engine selected {model}.')
                 except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
                     errors.append(exc.error.detail if isinstance(exc,EngineClientError) else str(exc))
-            routes.append({'id':route,'available':not errors,'managed':True,'confirmation_required':route=='deepseek' and os.environ.get('DELIVERY_PAID_CHILD_PREVIEW')=='1',
+            routes.append({'id':route,'available':not errors,'managed':True,
                 **({'error':' '.join(errors)} if errors else {}),
                 **({'model':f'{route}:{model}','model_map':models,'models':[model]} if model else {})})
         enabled=next((r['id'] for r in routes if r['available']),None)
@@ -1130,11 +1113,12 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
             raise HTTPException(422,{'error':'Requested model does not match the reviewed route.',
                 'cause':f'Requested {provider}:{model}; reviewed {selected_route}:{reviewed or "not configured"}.',
                 'next':'Reload model routes and correct legacy initial defaults before starting. Task was not started.'})
-    if selected_route=='deepseek' and os.environ.get('DELIVERY_PAID_CHILD_PREVIEW')=='1':
-        approval=store.preview_spend_approval(task_id)
-        from .tenancy import current_scope
-        if not approval or (approval['model'],str(approval['auth_session_id']))!=(model,current_scope().session_id):
-            raise HTTPException(409,'DeepSeek is selectable, but this task generation needs explicit USD ceiling confirmation before start')
+    if selected_route=='deepseek':
+        from .operator_expense_policy import configured
+        if not configured(store):
+            activity('operator.expense_policy.missing','Provider dispatch blocked: operator expense policy missing',task_id=task_id)
+            raise HTTPException(503,'This model is temporarily unavailable. Please choose another available model or try later.')
+    if config.CLOUD_TENANTS and hasattr(installed,'for_task'):installed.for_task(task_id)
     proposed_session=str(uuid4())
     if not store.begin_interview_start(task_id,proposed_session,selected_route):
         raise HTTPException(409,"task already started")
@@ -3489,14 +3473,13 @@ class ForceStopAllRequest(BaseModel):
 @app.get('/api/operations/force-stop-plan')
 def owner_force_stop_plan(a:auth.Actor=Depends(auth.require_actor)):
     _require_account_debug()
-    return JSONResponse(store.force_stop_jobs_plan(),headers={'Cache-Control':'no-store'})
+    raise HTTPException(410,'Force job closure was retired. Use normal Stop or the reviewed owner preview reset after stopping producers; accounting remains unresolved.')
 
 
 @app.post('/api/operations/force-stop-all')
 def owner_force_stop_all(body:ForceStopAllRequest,a:auth.Actor=Depends(auth.require_actor)):
     _require_account_debug()
-    try:return JSONResponse(store.force_stop_jobs_apply(body.fingerprint,body.confirmation),headers={'Cache-Control':'no-store'})
-    except ValueError as exc:raise HTTPException(409,str(exc))
+    raise HTTPException(410,'Force job closure was retired. No job or accounting record changed. Use the reviewed owner preview reset after stopping producers.')
 
 
 @app.get('/api/operations/active-jobs')
@@ -3859,3 +3842,17 @@ def operator_payment_totals(start_at:float,end_at:float,owner_id:str|None=None,l
     try:return _operator_reader().payment_totals(store,start_at=start_at,end_at=end_at,owner_id=owner_id,limit=limit)
     except ValueError as exc:raise HTTPException(422,str(exc))
 
+
+from .model_pin_api import install as install_model_pin_routes
+def _activate_reviewed_pins():
+    from . import cloud_runtime
+    cloud_runtime._failure=None  # explicit operator configuration repair retries startup checks
+    if cloud_execution_admitted():cloud_runtime.install(store,os.environ,_set_engine_client,watch_vendor=True)
+install_model_pin_routes(app,store,_operator_reader,_activate_reviewed_pins)
+
+
+@app.get('/api/debug/collection')
+def debug_collection(task_id:str|None=Query(None,max_length=240),a:auth.Actor=Depends(auth.require_actor)):
+    from .debug_collection import collect
+    import sys
+    return collect(sys.modules[__name__],a,task_id)

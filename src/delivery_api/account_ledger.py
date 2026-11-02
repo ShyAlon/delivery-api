@@ -37,22 +37,35 @@ def _time_of(row):
 
 def read(db,owner_id,usd_per_credit,*,marker='?'):
     """Balance, recent provider attempts, attempt counts by state and the credit debits (tokens and compute), for this owner."""
-    account=db.execute('SELECT balance_units,units_per_credit FROM credit_accounts WHERE owner_id=%s'%marker,(owner_id,)).fetchone()
+    from contextlib import nullcontext
+    with db.pipeline() if hasattr(db,'pipeline') else nullcontext():
+        cursors=[
+            db.execute('SELECT balance_units,units_per_credit FROM credit_accounts WHERE owner_id=%s'%marker,(owner_id,)),
+            db.execute('SELECT attempt_id,job_id,state,created_at,quote FROM provider_attempts WHERE owner_id=%s ORDER BY created_at DESC LIMIT %d'%(marker,RECENT),(owner_id,)),
+            db.execute('SELECT state,count(*) AS n FROM provider_attempts WHERE owner_id=%s GROUP BY state'%marker,(owner_id,)),
+            db.execute('SELECT kind,count(*) AS n,COALESCE(sum(posted_units),0) AS posted FROM retail_contributions GROUP BY kind',()),
+            db.execute('SELECT * FROM retail_contributions LIMIT %d'%DEBIT_FETCH,()),
+            db.execute('SELECT s.segment_key,s.job_id,s.phase_key,s.state,w.state AS job_state FROM retail_compute_segments s LEFT JOIN worker_jobs w ON w.job_id=s.job_id WHERE s.owner_id=%s ORDER BY s.started_at DESC LIMIT %d'%(marker,SEGMENT_FETCH),(owner_id,)),
+            db.execute('SELECT job_id,count(*) AS n FROM provider_attempts WHERE owner_id=%s GROUP BY job_id'%marker,(owner_id,)),
+            db.execute("SELECT job_id,count(*) AS n FROM retail_contributions WHERE kind='tokens' GROUP BY job_id",()),
+            db.execute("SELECT job_id,count(*) AS n FROM provider_attempts WHERE owner_id=%s AND state IN ('reserved','dispatched','uncertain','held') GROUP BY job_id"%marker,(owner_id,)),
+        ]
+    account=cursors[0].fetchone()
     per=int(account['units_per_credit']) if account else 1
     if per<=0:raise ValueError('credit account has an invalid unit scale')
     balance=_credits(account['balance_units'],per) if account else Decimal(0)
-    attempts=db.execute('SELECT attempt_id,job_id,state,created_at,quote FROM provider_attempts WHERE owner_id=%s ORDER BY created_at DESC LIMIT %d'%(marker,RECENT),(owner_id,)).fetchall()
-    by_state={r['state']:int(r['n']) for r in db.execute('SELECT state,count(*) AS n FROM provider_attempts WHERE owner_id=%s GROUP BY state'%marker,(owner_id,)).fetchall()}
+    attempts=cursors[1].fetchall()
+    by_state={r['state']:int(r['n']) for r in cursors[2].fetchall()}
     # Row security limits retail_contributions to the signed-in owner; the store refuses to start unless every table enforces it.
     # Totals come from SQL; the listed entries are the numeric debit rows, reduced to fixed fields below (no prompt or response text lives in this table).
-    by_kind={r['kind']:(int(r['n']),_credits(r['posted'],per)) for r in db.execute('SELECT kind,count(*) AS n,COALESCE(sum(posted_units),0) AS posted FROM retail_contributions GROUP BY kind',()).fetchall()}
-    raw=db.execute('SELECT * FROM retail_contributions LIMIT %d'%DEBIT_FETCH,()).fetchall()
+    by_kind={r['kind']:(int(r['n']),_credits(r['posted'],per)) for r in cursors[3].fetchall()}
+    raw=cursors[4].fetchall()
     rate=Decimal(str(usd_per_credit))
     # Compute records: which ones are not settled, whether they block new work, and whether the owner can release them.
-    seg_rows=db.execute('SELECT s.segment_key,s.job_id,s.phase_key,s.state,w.state AS job_state FROM retail_compute_segments s LEFT JOIN worker_jobs w ON w.job_id=s.job_id WHERE s.owner_id=%s ORDER BY s.started_at DESC LIMIT %d'%(marker,SEGMENT_FETCH),(owner_id,)).fetchall()
-    per_attempts={str(r['job_id']):int(r['n']) for r in db.execute('SELECT job_id,count(*) AS n FROM provider_attempts WHERE owner_id=%s GROUP BY job_id'%marker,(owner_id,)).fetchall()}
-    per_tokens={str(r['job_id']):int(r['n']) for r in db.execute("SELECT job_id,count(*) AS n FROM retail_contributions WHERE kind='tokens' GROUP BY job_id",()).fetchall()}
-    per_nonterminal={str(r['job_id']):int(r['n']) for r in db.execute("SELECT job_id,count(*) AS n FROM provider_attempts WHERE owner_id=%s AND state IN ('reserved','dispatched','uncertain','held') GROUP BY job_id"%marker,(owner_id,)).fetchall()}
+    seg_rows=cursors[5].fetchall()
+    per_attempts={str(r['job_id']):int(r['n']) for r in cursors[6].fetchall()}
+    per_tokens={str(r['job_id']):int(r['n']) for r in cursors[7].fetchall()}
+    per_nonterminal={str(r['job_id']):int(r['n']) for r in cursors[8].fetchall()}
     segments=[segment_view(dict(r),per_attempts.get(str(r['job_id']),0),per_tokens.get(str(r['job_id']),0),per_nonterminal.get(str(r['job_id']),0)) for r in seg_rows]
     open_segments=[s for s in segments if s['state']!='settled']
     debits=[]

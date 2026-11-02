@@ -21,9 +21,10 @@ def ui(pg_browser):
     from pg_workspace import KEY
     from delivery_api.tenancy import tenant_context
     page,base,workspace=pg_browser
+    page._spa_task_id='live'+workspace.scope.owner_id[:8]
     with tenant_context(workspace.scope):
-        workspace.store.create_task('Live definition','Detailed progress',task_id='live')
-        workspace.store.update_phase('live','intent','done',detail='Approved')
+        workspace.store.create_task('Live definition','Detailed progress',task_id=page._spa_task_id)
+        workspace.store.update_phase(page._spa_task_id,'intent','done',detail='Approved')
     claims=jwt.decode(workspace.token,options={'verify_signature':False})
     claims['email']=config.OPERATOR_EMAIL
     page.context.add_cookies([{'name':'requi_access','value':jwt.encode(claims,KEY,algorithm='ES256',headers={'kid':'fixture'}),'url':base}])
@@ -132,38 +133,38 @@ def test_session_cost_header_uses_60s_safety_and_skips_while_hidden(page, ui):
     def cost(route):
         cost_hits.append(1)
         route.fulfill(json={"price": state["price"], "price_usd": state["price"]}, headers={"Cache-Control": "no-store"})
-    page.route("**/api/tasks/live/cost", cost)
-    page.route("**/api/tasks/live/cost-phases", lambda r: (phases_hits.append(1), r.fulfill(json={"phases": []}, headers={"Cache-Control": "no-store"})))
-    page.goto(ui + "/tasks/live/view")
+    page.route('**/api/tasks/'+page._spa_task_id+'/cost', cost)
+    page.route('**/api/tasks/'+page._spa_task_id+'/cost-phases', lambda r: (phases_hits.append(1), r.fulfill(json={"phases": []}, headers={"Cache-Control": "no-store"})))
+    page.goto(ui + '/tasks/'+page._spa_task_id+'/view')
     page.wait_for_selector("#app.view-in")   # route mount settled and re-navigated: only the steady-state cost header instance stays live (the pre-mount instance is disposed on navigation)
     cost_el = page.locator("#sessioncost")
-    expect(cost_el).to_have_text("0.73 credits · $0.73")
+    expect(cost_el).to_have_text("0.73 credits")
     base = _quiet(cost_hits)                 # every startup refresh settled: the header's pending flag is clear
     base_phases = _quiet(phases_hits)
     now = page.evaluate("Date.now()")
     page.clock.run_for(_next_cost_poll_fire(page) + 500 - now)
     _wait_cost_hits(page, cost_hits, base + 1)          # the poll's own fire ran a real refresh (same price, so the text stands)
     _wait_cost_hits(page, phases_hits, base_phases + 1) # ...and the refresh fully settled (pending cleared) before the clock moves on
-    assert cost_el.inner_text() == "0.73 credits · $0.73"
+    assert cost_el.inner_text() == "0.73 credits"
     state["price"] = 0.9
     now = page.evaluate("Date.now()")
     page.clock.run_for(_next_cost_poll_fire(page) - 1500 - now)   # 1.5s before the poll's next fire: nothing
     _flush(page)
-    assert len(cost_hits) == base + 1 and cost_el.inner_text() == "0.73 credits · $0.73"
+    assert len(cost_hits) == base + 1 and cost_el.inner_text() == "0.73 credits"
     page.clock.run_for(2_500)                                     # crosses it: the poll itself refreshes
     _wait_cost_hits(page, cost_hits, base + 2)
     _wait_cost_hits(page, phases_hits, base_phases + 2)
-    expect(cost_el).to_have_text("0.90 credits · $0.90", timeout=8000)
+    expect(cost_el).to_have_text("0.90 credits", timeout=8000)
     page.evaluate("Object.defineProperty(document, 'hidden', {configurable: true, get: () => window.__hidden === true})")
     page.evaluate("window.__hidden = true")
     state["price"] = 1.1
     page.clock.run_for(65_000)               # two more interval fires, both skipped while the tab is hidden
     _flush(page)
-    assert len(cost_hits) == base + 2 and cost_el.inner_text() == "0.90 credits · $0.90"
+    assert len(cost_hits) == base + 2 and cost_el.inner_text() == "0.90 credits"
     page.evaluate("window.__hidden = false")
     page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
     _wait_cost_hits(page, cost_hits, base + 3)        # returning to the tab refreshes immediately
-    expect(cost_el).to_have_text("1.10 credits · $1.10", timeout=8000)
+    expect(cost_el).to_have_text("1.10 credits", timeout=8000)
 
 
 def test_session_cost_refresh_debounces_overlap_and_recovers(page, ui):
@@ -179,12 +180,12 @@ def test_session_cost_refresh_debounces_overlap_and_recovers(page, ui):
             held.append(route)
             return
         route.fulfill(json={"price": state["price"], "price_usd": state["price"]}, headers={"Cache-Control": "no-store"})
-    page.route("**/api/tasks/live/cost", cost)
-    page.route("**/api/tasks/live/cost-phases", lambda r: (phases_hits.append(1), r.fulfill(json={"phases": []}, headers={"Cache-Control": "no-store"})))
-    page.goto(ui + "/tasks/live/view")
+    page.route('**/api/tasks/'+page._spa_task_id+'/cost', cost)
+    page.route('**/api/tasks/'+page._spa_task_id+'/cost-phases', lambda r: (phases_hits.append(1), r.fulfill(json={"phases": []}, headers={"Cache-Control": "no-store"})))
+    page.goto(ui + '/tasks/'+page._spa_task_id+'/view')
     page.wait_for_selector("#app.view-in")   # route mount settled and re-navigated: a single cost header instance is live
     host = page.locator("#sessioncost")
-    expect(host).to_have_text("0.73 credits · $0.73")
+    expect(host).to_have_text("0.73 credits")
     base = _quiet(cost_hits)                 # every startup refresh settled
     base_phases = _quiet(phases_hits)
     state.update(price=0.9, hold=True)
@@ -199,12 +200,12 @@ def test_session_cost_refresh_debounces_overlap_and_recovers(page, ui):
     state["hold"] = False
     held[0].fulfill(json={"price": 0.9, "price_usd": 0.9}, headers={"Cache-Control": "no-store"})
     _wait_cost_hits(page, phases_hits, base_phases + 1)   # the released refresh fully settled (pending cleared)
-    expect(host).to_have_text("0.90 credits · $0.90", timeout=8000)
+    expect(host).to_have_text("0.90 credits", timeout=8000)
     state["price"] = 1.1
     now = page.evaluate("Date.now()")
     page.clock.run_for(_next_cost_poll_fire(page) + 500 - now)               # pending cleared: the next interval fire refreshes normally
     _wait_cost_hits(page, cost_hits, base + 2)
-    expect(host).to_have_text("1.10 credits · $1.10", timeout=8000)
+    expect(host).to_have_text("1.10 credits", timeout=8000)
 
 
 def test_signed_out_sign_in_fits_its_reserved_slot_and_geometry_holds(page, ui):
@@ -285,8 +286,8 @@ def test_an_unknown_in_app_route_gets_an_explicit_not_found(page, ui):
 
 def test_leaving_a_page_stops_its_polling(page, ui):
     seen = []
-    page.on("request", lambda req: seen.append(req.url) if "/api/tasks/live" in req.url else None)
-    page.goto(ui + "/tasks/live/view"); page.wait_for_timeout(2600)
+    page.on("request", lambda req: seen.append(req.url) if ('/api/tasks/'+page._spa_task_id) in req.url else None)
+    page.goto(ui + '/tasks/'+page._spa_task_id+'/view'); page.wait_for_timeout(2600)
     during = len(seen)
     assert during > 0, "the task page did not poll while open"
     seen.clear()
@@ -320,7 +321,7 @@ def _park(page, pattern):
 def test_geometry_is_reserved_while_cost_and_balance_are_delayed(page, ui):
     cost = _park(page, "**/api/tasks/*/cost")
     balance = _park(page, "**/api/account/credits")
-    page.goto(ui + "/tasks/live/view")
+    page.goto(ui + '/tasks/'+page._spa_task_id+'/view')
     page.wait_for_selector("header nav a.nav-link")
     page.wait_for_selector("#identity .avatar", timeout=8000)
     early = _boxes(page)

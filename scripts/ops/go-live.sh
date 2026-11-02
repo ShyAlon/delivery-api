@@ -54,7 +54,7 @@ echo "  DeepSeek key      -> /etc/requi/deepseek.env ($([ "$NEWKEY" = yes ] && e
 read -r -p "Type \"yes\" (English keyboard) to write these, anything else changes nothing: " A
 [ "$A" = yes ] || abort DECLINED "You did not type yes." "Nothing was written." "nothing needed"
 EV=$HOME/requi-evidence/price-pin-$(date +%Y%m%d-%H%M%S); mkdir -p "$EV"; chmod 700 "$EV"
-cp "$WORK"/cloud-models.env "$WORK"/page-*.html "$WORK/out.txt" "$EV"/
+cp "$WORK"/cloud-models.env "$WORK/out.txt" "$EV"/
 LOCAL=$(shasum -a 256 "$WORK/cloud-models.env" | cut -d' ' -f1)
 "${UBU[@]}" "sudo sh -c 'umask 077; set -e; [ ! -e $REMOTE_FILE ] || cp -p $REMOTE_FILE $REMOTE_FILE.prev; cat > $REMOTE_FILE.new; chown deploy:deploy $REMOTE_FILE.new; chmod 600 $REMOTE_FILE.new; mv $REMOTE_FILE.new $REMOTE_FILE'" < "$WORK/cloud-models.env" || abort WRITE "the write failed part way; the old file is still in place or at $REMOTE_FILE.prev" "Check the server file before the next run." "ssh ubuntu@$HOST 'ls -l /etc/requi'   (send me this output)"
 if [ "$NEWKEY" = yes ]; then

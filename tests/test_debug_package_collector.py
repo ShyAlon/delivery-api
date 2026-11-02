@@ -1,36 +1,39 @@
-import json,subprocess
-from pathlib import Path
-WEB=Path(__file__).parents[1]/'src/delivery_api/web'
+import json
+from types import SimpleNamespace
+from delivery_api.debug_collection import collect
 
 
-def test_operator_package_collects_existing_db_evidence_with_exact_task_and_failures():
- source=f"""
-import {{collectDebugEvidence}} from '{WEB/'debug-package.js'}';
-const calls=[];
-const out=await collectDebugEvidence({{taskId:'task a',operator:true,cloud:true,api:async url=>{{calls.push(url);if(url.includes('task-logs'))throw new Error('private backend error');return {{ok:true}}}}}});
-console.log(JSON.stringify({{out,calls}}));
-"""
- r=subprocess.run(['node','--input-type=module','-e',source],capture_output=True,text=True)
- assert r.returncode==0,r.stderr
- result=json.loads(r.stdout);calls=result['calls'];sections=result['out']['sections']
- assert '/api/operator/task-failure-diagnostics?task_id=task%20a&limit=20' in calls
- assert '/api/debug/evidence?task_id=task%20a' in calls
- assert any(x['availability']=='unavailable' and x['source']=='db-state-events' for x in sections)
- assert 'private backend error' not in json.dumps(result['out'])
- assert result['out']['task_id']=='task a'
+def fake_module():
+    calls=[]
+    module=SimpleNamespace(config=SimpleNamespace(CLOUD_TENANTS=True),app=SimpleNamespace(state=SimpleNamespace()),store=None)
+    def bind(name):
+        def run(*args):calls.append((name,args));return {}
+        setattr(module,name,run)
+    for name in ['account_ledger_view','account_credit_history','debug_preflight','admin_operations_request_costs','admin_operations_capacity','debug_log_durability','debug_evidence','operator_task_debug','operator_task_logs','operator_task_failure_diagnostics','operator_task_usage']:bind(name)
+    return module,calls
 
 
-def test_customer_collection_never_calls_operator_endpoints():
- source=f"""
-import {{collectDebugEvidence}} from '{WEB/'debug-package.js'}';
-const calls=[];const out=await collectDebugEvidence({{taskId:'a',operator:false,cloud:true,api:async url=>{{calls.push(url);return {{}}}}}});
-console.log(JSON.stringify({{calls,out}}));
-"""
- r=subprocess.run(['node','--input-type=module','-e',source],capture_output=True,text=True)
- assert r.returncode==0,r.stderr
- result=json.loads(r.stdout)
- assert not any('/operator/' in x or '/debug/evidence' in x for x in result['calls'])
- assert any(x['availability']=='policy_excluded' for x in result['out']['sections'])
+def test_customer_batch_never_calls_operator_sources():
+    module,calls=fake_module();actor=SimpleNamespace(admin=False)
+    result=collect(module,actor,'a')
+    assert [x[0] for x in calls]==['account_ledger_view','account_credit_history','debug_preflight']
+    assert len(result['sections'])==3
+
+
+def test_operator_batch_exact_task_failures_and_safe_unavailability():
+    module,calls=fake_module();actor=SimpleNamespace(admin=True)
+    module.operator_task_logs=lambda *args:(_ for _ in ()).throw(ValueError('private backend error'))
+    module.operator_task_usage=lambda *args:{'availability':'unavailable','required_capability':'usage.read','reason':'Usage is not configured'}
+    module.account_credit_history=lambda *args:{'text':'credit history evidence'}
+    result=collect(module,actor,'task a');sections={s['source']:s for s in result['sections']}
+    assert len(sections)==11
+    assert sections['db-state-events']['availability']=='unavailable'
+    assert sections['credit-history']['data']['text']=='credit history evidence'
+    assert sections['db-usage']['availability']=='unavailable' and sections['db-usage']['data']['required_capability']=='usage.read'
+    assert ('operator_task_failure_diagnostics',('task a',20,actor)) in calls
+    assert ('debug_evidence',('task a',actor)) in calls
+    assert 'private backend error' not in json.dumps(result)
+    assert all(s['duration_ms']>=0 for s in result['sections'])
 
 
 def test_server_log_task_filter_never_includes_neighboring_task(monkeypatch,file_log_evidence,pg_operator_log_reader):
@@ -48,39 +51,3 @@ def test_server_log_task_filter_never_includes_neighboring_task(monkeypatch,file
  got=m.server_log(30,SimpleNamespace(id='operator',admin=True),'task-a')
  assert 'INFO task=task-a own' in got['text'] and got['count']==1
  assert 'neighbor' not in got['text'] and 'system-wide' not in got['text']
-
-
-def test_package_fresh_reads_do_not_depend_on_dialog_loading_state():
- source=f"""
-import {{collectDebugEvidence}} from '{WEB/'debug-package.js'}';
-const calls=[];
-const out=await collectDebugEvidence({{taskId:'live',operator:true,cloud:true,api:async url=>{{calls.push(url);await new Promise(r=>setTimeout(r,5));if(url.includes('credit-history'))throw new Error('sensitive');return {{text:'fresh '+url}}}}}});
-console.log(JSON.stringify({{calls,out}}));
-"""
- r=subprocess.run(['node','--input-type=module','-e',source],capture_output=True,text=True)
- assert r.returncode==0,r.stderr
- result=json.loads(r.stdout)
- required=['/api/account/ledger','/api/account/credit-history','/api/debug/preflight','/api/admin/operations/request-costs','/api/admin/operations/capacity']
- assert all(p in result['calls'] for p in required)
- sections={s['source']:s for s in result['out']['sections']}
- assert sections['credits']['data']['text']=='fresh /api/account/ledger'
- assert sections['credit-history']['availability']=='unavailable'
- assert 'sensitive' not in str(result['out'])
- # Package must never scrape placeholders or stale globals from the dialog.
- identity=(WEB/'identity.js').read_text()
- handler=identity.split("document.querySelector('#downloadeverything').onclick=",1)[1].split("{const lh=document.querySelector('#ledgerhost')",1)[0]
- assert "document.querySelector('#ledgerhost').textContent" not in handler
- assert 'window.__preflightText' not in handler and 'window.__requestCostsText' not in handler
-
-
-def test_usage_unavailable_preserves_safe_reason_not_available():
- source=f"""
-import {{collectDebugEvidence}} from '{WEB/'debug-package.js'}';
-const out=await collectDebugEvidence({{taskId:'a',operator:true,cloud:true,api:async url=>url.includes('task-usage')?{{availability:'unavailable',category:'permission_missing',required_capability:'usage.read',reason:'Usage read is not configured for this operator.',next:'Run the owner-reviewed usage setup.'}}:{{}}}});
-console.log(JSON.stringify(out.sections.find(x=>x.source==='db-usage')));
-"""
- r=subprocess.run(['node','--input-type=module','-e',source],capture_output=True,text=True)
- assert r.returncode==0,r.stderr
- result=json.loads(r.stdout)
- assert result['availability']=='unavailable'
- assert result['data']['required_capability']=='usage.read'

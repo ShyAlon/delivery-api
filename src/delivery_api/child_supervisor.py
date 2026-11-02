@@ -113,8 +113,19 @@ class ChildSupervisor:
                     if state in {'completed','stopped','failed'}:
                         # Require EOF and exit: no duplicate or trailing frame can
                         # turn an apparently completed operation into success.
-                        if await reader.read(1):raise ChildRunError('trailing lifecycle data')
-                        code=await process.wait()
+                        try:trailing=await asyncio.wait_for(reader.read(1),self.grace)
+                        except asyncio.TimeoutError:
+                            # A descendant may inherit the socket/stderr after the
+                            # leader exits. Bound EOF wait and reap its private group.
+                            await self._reap(process)
+                            trailing=await asyncio.wait_for(reader.read(1),self.kill)
+                        if trailing:raise ChildRunError('trailing lifecycle data')
+                        try:code=await asyncio.wait_for(asyncio.shield(process.wait()),self.grace)
+                        except asyncio.TimeoutError:
+                            # wait() also waits for inherited stderr pipes; reap
+                            # descendants even when the leader already exited.
+                            await self._reap(process)
+                            code=process.returncode
                         if code!=0 or state=='failed':raise ChildRunError('child failed; durable reconciliation required')
                         return
             receive_task=asyncio.create_task(receive())

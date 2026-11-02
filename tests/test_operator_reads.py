@@ -52,7 +52,14 @@ def test_operator_credit_pages_preserve_negative_fixed_point_and_capability(stor
    first=reader.credits(store,limit=1)
    assert first['truncated'] and first['accounts']==[{'owner_id':A.owner_id,'balance_units':-17,'units_per_credit':100,'updated_at':0}]
    second=reader.credits(store,limit=1,after_owner=first['next_owner'])
-   assert not second['truncated'] and second['accounts'][0]['owner_id']==B.owner_id
+   assert second['accounts'][0]['owner_id']==B.owner_id
+   # Other retained tenant credit accounts may follow B on the shared server.
+   pages=second;owners=[first['accounts'][0]['owner_id']]
+   while True:
+    owners.extend(a['owner_id'] for a in pages['accounts'])
+    if not pages['truncated']:break
+    pages=reader.credits(store,limit=1,after_owner=pages['next_owner'])
+   assert owners==sorted(set(owners)) and B.owner_id in owners
    assert not second['credit_adjustment_available']
    with pytest.raises(TenantAccessDenied):reader.sessions(store)
    with pytest.raises(ValueError):reader.credits(store,after_owner='bad')
@@ -64,11 +71,11 @@ def test_operator_credit_pages_preserve_negative_fixed_point_and_capability(stor
    c.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))
 
 
-def test_operator_expense_aggregate_uses_settlement_time_and_retains_old_holds(ledger):
+def test_operator_expense_aggregate_uses_settlement_time_and_retains_old_holds(isolated_expense_ledger):
  import psycopg,time
  from test_attempt_ledger import Q
  from delivery_api.attempt_ledger import _quote
- store,tid,job=ledger
+ store,tid,job=isolated_expense_ledger
  owner=A;now=time.time();expense,retail=_quote(Q)
  # This aggregate fixture deliberately retains three simultaneous historical
  # attempts; configure its TEST ONLY concurrency bound explicitly.
@@ -231,3 +238,49 @@ def test_future_credit_adjustment_evidence_is_private_consistent_and_unique(stor
   with psycopg.connect(DSN) as c:assert c.execute('SELECT count(*) FROM credit_accounts WHERE owner_id=%s',(A.owner_id,)).fetchone()[0]==0
  finally:
   with psycopg.connect(DSN) as c:c.execute('DELETE FROM credit_adjustments WHERE adjustment_id=%s',(adjustment,))
+
+
+def test_debug_export_batch_reuses_one_connection_and_keeps_capability_boundaries(store):
+ import psycopg
+ from delivery_api.postgres_scope import RequestStats,request_stats
+ with psycopg.connect(DSN) as c:
+  c.execute('GRANT requi_operator_read TO delivery_app')
+  c.execute('INSERT INTO operator_principals VALUES (%s,%s,%s,true)',(A.owner_id,'batch-v1',['debug.read','logs.read']))
+ try:
+  reader=OperatorReadStore(DSN.replace('user=sandbox','user=delivery_app'),OperatorPrincipal(A.owner_id,'batch-v1',frozenset({'debug.read','logs.read'})))
+  with tenant_context(A):
+   tid=store.create_task('batch '+uuid.uuid4().hex)['task_id'];stats=RequestStats();token=request_stats.set(stats)
+   try:
+    with reader.export_batch(store) as connection:
+     assert store.task(tid)['task_id']==tid
+     assert reader.task_debug(store,tid)['task']['task_id']==tid
+     reader.task_logs(store,tid);reader.failure_diagnostics(store,tid)
+     # One failed source cannot poison later sources; no capability upgrade.
+     with pytest.raises(TenantAccessDenied):
+      with connection.transaction():reader.task_usage(store,tid)
+     assert reader.task_debug(store,tid)['task']['task_id']==tid
+    assert stats.transactions==1
+   finally:request_stats.reset(token)
+   assert store._connection.get() is None
+   store.delete_task(tid)
+  with tenant_context(B):
+   with pytest.raises(TenantAccessDenied):
+    with reader.export_batch(store):reader.task_logs(store,tid)
+ finally:
+  with psycopg.connect(DSN) as c:c.execute('DELETE FROM operator_principals WHERE subject=%s',(A.owner_id,))
+
+
+from policy_database import isolated_policy_database
+
+@pytest.fixture
+def isolated_expense_ledger(monkeypatch,isolated_policy_database):
+ import test_attempt_ledger
+ from delivery_api.postgres_store import PostgresStore
+ monkeypatch.setitem(globals(),'DSN',isolated_policy_database)
+ monkeypatch.setattr(test_attempt_ledger,'DSN',isolated_policy_database)
+ store=PostgresStore(isolated_policy_database.replace('user=sandbox','user=delivery_app'))
+ fixture=test_attempt_ledger.ledger.__wrapped__(store)
+ value=next(fixture)
+ try:yield value
+ finally:
+  with pytest.raises(StopIteration):next(fixture)

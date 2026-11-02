@@ -111,13 +111,13 @@ def test_pg_running_fixture_is_revoked_without_weakening_delete(pg_workspace_fac
         with tenant_context(workspace.scope):
             task_id = workspace.store.create_task('Running fixture')['task_id']
             workspace.store.update_phase(task_id,'intent','running')
-            with pytest.raises(ValueError, match='running or paused'):
-                workspace.store.delete_task(task_id)
+            with pytest.raises(ValueError, match='explicit confirmation'):
+                workspace.store.delete_task(task_id,confirm=False)
     with workspace.admin() as connection:
         assert connection.execute('SELECT count(*) FROM auth.sessions WHERE id=%s',
             (workspace.scope.session_id,)).fetchone()[0] == 0
         assert connection.execute('SELECT state FROM tasks WHERE task_id=%s',
-            (task_id,)).fetchone()[0] == 'running'
+            (task_id,)).fetchone()[0] == 'stop_requested'
 
 
 def test_pg_published_artifact_snapshot_and_cross_owner_bytes(pg_workspace_factory, tmp_path):

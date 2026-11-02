@@ -1,4 +1,5 @@
 """Browser-level contracts for the three task views and traceable rerun UX."""
+from test_artifacts import evidence_path
 import tempfile
 from pathlib import Path as _ScreenshotPath
 SCREENSHOTS = _ScreenshotPath(tempfile.mkdtemp(prefix='delivery-browser-evidence-'))
@@ -1024,7 +1025,7 @@ def test_everything_zip_includes_runtime_snapshot_and_resource_decision(pg_page,
     assert text.startswith('===== Known omissions =====')
 
     assert tid not in text
-    page.screenshot(path="/downloads/resource-zip-redacted.png",full_page=False)
+    page.screenshot(path=evidence_path('resource-zip-redacted.png'),full_page=False)
 def test_copy_diagnostic_summary_copies_a_bounded_digest(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     tid=pg_ids["live"]
@@ -1893,7 +1894,7 @@ def test_completion_screen_summary_download_and_package(pg_page,pg_ui,pg_ids):
     page.get_by_role('heading',name='Congratulations',exact=False).wait_for()
     assert page.locator('.confetti i').count()==60
     body=page.locator('.complete-page').inner_text()
-    assert '0.63 credits · $0.63' in body and 'legacy scale' in body and 'tokens' not in body.lower()
+    assert '0.63 credits' in body and 'legacy scale' in body and 'tokens' not in body.lower()
     counts=page.locator('.complete-counts')
     assert counts.locator('div').nth(0).inner_text().replace('\n',' ').lower()=='requirements 3' and counts.locator('div').nth(1).inner_text().replace('\n',' ').lower()=='specs 1' and counts.locator('div').nth(2).inner_text().replace('\n',' ').lower()=='tests -'
     assert counts.get_by_role('link',name='3').get_attribute('href')==f'/tasks/{tid}/gates/gate-srs'
@@ -2197,7 +2198,7 @@ def test_running_cost_header_shows_credits_and_usd_and_grows_while_running(pg_pa
     header.wait_for(state="attached")
     # the header can restart (Loading again) while sibling widgets settle; expect() polls to the
     # settled exact text instead of catching a transient frame.
-    expect(header).to_have_text("1.25 credits · $1.25",timeout=10000)
+    expect(header).to_have_text("1.25 credits",timeout=10000)
     assert "token" not in page.locator(".detail-head").inner_text().lower()
     page.screenshot(path=str(_screenshots_dir / "running-cost-header.png"),clip={"x":0,"y":0,"width":1365,"height":260})
     # visibilitychange is the app's own "back on the tab" refresh trigger, so dispatching it proves
@@ -2209,12 +2210,12 @@ def test_running_cost_header_shows_credits_and_usd_and_grows_while_running(pg_pa
     page.wait_for_timeout(500)   # let the initial refresh clear its pending flag first
     with page.expect_response(f"**/api/tasks/{tid}/cost-phases"):
         page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
-    expect(header).to_have_text("2.50 credits · $2.50",timeout=10000)
+    expect(header).to_have_text("2.50 credits",timeout=10000)
     page.wait_for_timeout(200)
     stage["price"]=3.75
     with page.expect_response(f"**/api/tasks/{tid}/cost-phases"):
         page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
-    expect(header).to_have_text("3.75 credits · $3.75",timeout=10000)
+    expect(header).to_have_text("3.75 credits",timeout=10000)
 def test_live_headline_names_latest_stage_and_stage_line_ignores_phase_tag(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     tid=pg_ids["live"]
@@ -2300,7 +2301,7 @@ def test_global_cost_header_on_all_route_families(pg_page,pg_ui,pg_ids,path):
  page.route('**/api/tasks/*/cost',lambda r:r.fulfill(json={'price':.73,'price_usd':.73}))
  page.goto(base+path)
  host=page.locator('header #sessioncost')
- expect(host).to_have_text('0.73 credits · $0.73' if task else 'No Session Selected')
+ expect(host).to_have_text('0.73 credits' if task else 'No Session Selected')
  assert page.locator('#sessioncost').count()==1
  for width in (1365,390):
   page.set_viewport_size({'width':width,'height':844});page.evaluate('window.scrollTo(0,0)');page.wait_for_timeout(200)
@@ -2353,7 +2354,7 @@ def test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_
     assert page.get_by_role("button",name="Rerun stage").count()==0  # owner-approved tenant policy, not a local rerun port
     assert live["rerun_control"]["available"] is False
     expect(page.locator("#rerununavailable")).to_contain_text("Tenant stage rerun is unavailable")
-    page.screenshot(path="/downloads/tenant-session-unavailable.png",full_page=True)
+    page.screenshot(path=evidence_path('tenant-session-unavailable.png'),full_page=True)
 
 
 def test_everything_zip_downloads_with_the_manifest_first(pg_page,pg_ui,pg_ids,tmp_path):
@@ -2392,10 +2393,10 @@ def test_start_route_pills_show_all_choices_and_disabled_reasons(pg_page,pg_ui,p
     ollama=choices.get_by_role('button',name='Ollama');assert ollama.get_attribute('aria-pressed')=='true'
     assert 'ollama:phi4' in choices.inner_text()
     assert page.get_by_role('button',name='Start interview').is_enabled()
-    page.screenshot(path='/downloads/start-route-options.png',full_page=True)
+    page.screenshot(path=evidence_path('start-route-options.png'),full_page=True)
     page.set_viewport_size({'width':390,'height':844})
     assert choices.evaluate('e=>e.scrollWidth<=e.clientWidth')
-    page.screenshot(path='/downloads/start-route-options-mobile.png',full_page=True)
+    page.screenshot(path=evidence_path('start-route-options-mobile.png'),full_page=True)
     routes['routes'][1]={'id':'ollama','managed':True,'available':False,'error':'DELIVERY_LOCAL_PREVIEW is not enabled on this server'};routes['default_route']={'route':'deepseek'}
     page.reload();choices.wait_for()
     assert choices.get_by_role('button').count()==2
@@ -2415,7 +2416,7 @@ def test_idle_stream_reads_only_at_60s_safety_then_refreshes_on_events(pg_page,p
     page.route('**/api/account/credits',lambda r:r.fulfill(json={'credits':10}))
     page.route(f'**/api/tasks/{tid}/cost',lambda r:r.fulfill(json={'price':1.25,'price_usd':1.25}))
     page.route(f'**/api/tasks/{tid}/cost-phases',lambda r:r.fulfill(json={'phases':[{'phase':'intent','credits':1.25}]}))
-    page.goto(ui+f'/tasks/{tid}/view');page.locator('#stageprogress').wait_for();expect(page.locator('#sessioncost')).to_have_text('1.25 credits · $1.25');page.wait_for_timeout(1500)
+    page.goto(ui+f'/tasks/{tid}/view');page.locator('#stageprogress').wait_for();expect(page.locator('#sessioncost')).to_have_text('1.25 credits');page.wait_for_timeout(1500)
     for _ in range(10):
         page.clock.run_for(100);time.sleep(.1)
         if page.locator('#sessioncost').get_attribute('title').endswith('Total: 1.25 credits'):break
@@ -2519,11 +2520,11 @@ def test_both_admitted_routes_can_be_selected_without_hiding_either(pg_page,pg_u
         expect(button).to_have_attribute('aria-pressed','true')
         expect(choices.locator('[aria-pressed=true]')).to_have_count(1)
     expect(page.locator('#defaultroute')).to_have_value('deepseek')
-    page.screenshot(path='/downloads/both-provider-options.png',full_page=True)
+    page.screenshot(path=evidence_path('both-provider-options.png'),full_page=True)
     page.set_viewport_size({'width':390,'height':844})
     assert choices.evaluate('e=>e.scrollWidth<=e.clientWidth')
     expect(choices.get_by_role('button',name='Ollama')).to_be_enabled()
-    page.screenshot(path='/downloads/both-provider-options-mobile.png',full_page=True)
+    page.screenshot(path=evidence_path('both-provider-options-mobile.png'),full_page=True)
 
 
 def test_customer_audit_summary_is_credits_only_even_with_legacy_provider_totals(pg_page,pg_ui,pg_ids):
@@ -2537,7 +2538,7 @@ def test_customer_audit_summary_is_credits_only_even_with_legacy_provider_totals
     expect(dialog).to_contain_text('2.50 credits')
     for text in ['Interview API cost','No usage records','USD','$']:
         expect(dialog).not_to_contain_text(text)
-    page.screenshot(path='/downloads/audit-credits-only.png',full_page=True)
+    page.screenshot(path=evidence_path('audit-credits-only.png'),full_page=True)
 
 
 def test_gate_comment_shared_guard_prevents_duplicate_and_allows_retry(pg_page,pg_ui,pg_ids):
@@ -2582,7 +2583,7 @@ def test_gate_approval_shared_guard_ignores_second_action_and_preserves_retry(pg
     assert page.locator('[data-action="approve"]').get_attribute('aria-busy')=='true'
     page.locator('[data-action="approve"]').dispatch_event('click');page.wait_for_timeout(100)
     assert len(pending)==1
-    page.screenshot(path='/downloads/gate-shared-action-busy.png',full_page=True)
+    page.screenshot(path=evidence_path('gate-shared-action-busy.png'),full_page=True)
     pending.pop().fulfill(status=500,json={'detail':'approval retry fixture'})
     expect(page.locator('#gate-decision-status')).to_contain_text('approval retry fixture')
     expect(page.locator('[data-action="approve"]')).to_be_enabled()

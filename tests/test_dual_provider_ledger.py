@@ -15,6 +15,8 @@ def test_alternating_jobs_keep_quotes_usage_and_money_on_the_selected_provider(j
     with psycopg.connect(DSN) as connection:
         connection.execute('UPDATE admission_limits SET expense_limit=NULL,retail_limit=NULL,attempt_expense_max=NULL,attempt_retail_max=NULL,rate_max=NULL,concurrency_max=3 WHERE owner_id=%s',(A.owner_id,))
         connection.execute("INSERT INTO expense_guard_policy VALUES(true,'test-only',%s,%s,%s,3)",(3*10**12,3*10**12,10**12))
+        connection.execute("INSERT INTO operator_expense_policy_revisions(revision,limit_units,units_per_usd,operator_subject,reason) VALUES('dual-fixture',1000000000000,1000000000000,%s,'fake fixture')",(A.owner_id,))
+        connection.execute("INSERT INTO operator_expense_policy_head VALUES(true,'dual-fixture')")
     def balance(request):
         checks.append('balance')
         return httpx.Response(200,json={'is_available':True,'balance_infos':[{'currency':'USD','total_balance':'1000'}]})
@@ -58,6 +60,7 @@ def test_alternating_jobs_keep_quotes_usage_and_money_on_the_selected_provider(j
         factory.close()
         with psycopg.connect(DSN) as connection:
             connection.execute('DELETE FROM expense_guard_policy')
+            connection.execute('DELETE FROM operator_expense_policy_head');connection.execute('DELETE FROM operator_expense_policy_revisions')
             for jid in jobs:
                 connection.execute('DELETE FROM retail_contributions WHERE owner_id=%s',(A.owner_id,))
                 connection.execute('DELETE FROM credit_charges WHERE owner_id=%s',(A.owner_id,))

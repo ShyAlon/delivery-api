@@ -22,20 +22,8 @@ def test_composes_both_pins_without_repricing_or_persisting_key(tmp_path):
     assert 'test-key' not in (out/'cloud-models.env').read_text()
 
 
-def test_both_shell_pin_branch_passes_repo_root_only_to_local_pin(tmp_path):
-    import os
-    fake=tmp_path/'fake-python'
-    fake.write_text("#!/usr/bin/env python3\nimport sys,os,pathlib,json\nwith open(os.environ['CALL_LOG'],'a') as f:f.write(json.dumps(sys.argv[1:])+'\\n')\n")
-    fake.chmod(0o755)
+def test_launcher_uses_shared_store_instead_of_per_provider_file_pins():
     script=(ROOT/'scripts/ops/preview-exec.sh').read_text()
-    start=script.index('if [ \"$PROVIDER\" = both ]; then\n  mkdir')
-    end=script.index('\nif [ \"$rc\" != 0 ]; then',start)
-    branch=script[start:end].replace('.venv/bin/python','\"'+str(fake)+'\"')
-    # dirname of $0 must still point to the actual ops directory.
-    log=tmp_path/'calls'
-    result=subprocess.run(['bash','-c',branch,str(ROOT/'scripts/ops/preview-exec.sh')],env={**os.environ,'CALL_LOG':str(log),'PROVIDER':'both','WORK':str(tmp_path),'ROOT':'/candidate/repos','OLLAMA_MODEL':'phi4','OLLAMA_HOST':'http://local'},text=True,capture_output=True)
-    assert result.returncode==0,result.stdout+result.stderr
-    calls=[json.loads(line) for line in log.read_text().splitlines()]
-    assert calls==[[str(ROOT/'scripts/ops/pin.py'),str(tmp_path/'paid-pin')],
-        [str(ROOT/'scripts/ops/pin-local.py'),str(tmp_path/'local-pin'),'/candidate/repos'],
-        [str(ROOT/'scripts/ops/combine-provider-pins.py'),str(tmp_path),str(tmp_path/'paid-pin'),str(tmp_path/'local-pin')]]
+    assert 'combine-provider-pins.py' not in script
+    assert 'paid-pin' not in script and 'local-pin' not in script
+    assert 'model-pins' in script or 'Model pins' in script

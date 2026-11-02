@@ -149,7 +149,8 @@ def _case_diagnostics_route_includes_model_calls_when_session_recorded(monkeypat
     out=reply.json()["model_calls"]
     assert out["calls"][0]["stage"]=="probing" and out["calls"][0]["keep_alive"]=="30m"
     assert out["by_stage"]==[{"provider":"ollama","model":"phi4","stage":"probing","calls":1,
-                              "total_s":14.2,"input_tokens":10,"output_tokens":5,"mean_s":14.2}]
+                              "total_s":14.2,"mean_s":14.2}]
+    assert "input_tokens" not in str(out) and "output_tokens" not in str(out)
 
 
 def _case_diagnostics_route_without_session_has_no_model_calls(monkeypatch,tmp_path,pg_scoped_workspace):

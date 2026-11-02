@@ -129,10 +129,8 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         _job(store,row['job_id'])
         if row['state']!='reserved':raise AdmissionDenied('attempt already dispatched or closed')
         if row['quote'].get('provider')=='deepseek':
-            import os
-            if os.environ.get('DELIVERY_PAID_CHILD_PREVIEW')=='1':
-                from .preview_spend import require
-                require(store,dict(row))
+            from .operator_expense_policy import require
+            require(store,dict(row))
             reason=store._execute_native('SELECT public.requi_own_test_expense_guard(%s,%s) AS reason',
                 (row['job_id'],row['quote'].get('expense_units_per_usd'))).fetchone()['reason']
             if reason!='allowed':

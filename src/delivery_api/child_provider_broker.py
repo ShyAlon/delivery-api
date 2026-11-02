@@ -82,7 +82,18 @@ class ChildProviderBroker:
                     for chunk in received.iter_bytes():
                         body.extend(chunk)
                         if len(body)>MAX_RESPONSE:raise BrokerPaused('provider response exceeds bounded durable envelope')
-                    if received.status_code!=200:raise BrokerPaused('provider non-success response requires reconciliation')
+                    if received.status_code!=200:
+                        from .diagnostic_evidence import record
+                        # Safe fixed facts only: body text may contain prompts, credentials or provider internals.
+                        error_code='unavailable'
+                        try:
+                            candidate=json.loads(body).get('error',{}).get('code')
+                            # Fixed vocabulary, never arbitrary vendor text from the body.
+                            if candidate in ('invalid_api_key','authentication_error','insufficient_balance','invalid_request_error','rate_limit_exceeded','model_not_found','server_error','context_length_exceeded','invalid_model','invalid_request'):error_code=candidate
+                            elif candidate is not None:error_code='other_redacted'
+                        except (ValueError,AttributeError,TypeError):pass
+                        record('child.provider.http_refusal',error_code=error_code,status=received.status_code,provider=call.provider,model=call.model,body_bytes=len(body),retry_after_present='retry-after' in received.headers)
+                        raise BrokerPaused('provider non-success response requires reconciliation')
                     content_type=received.headers.get('content-type','application/json')
                     step='usage_decode'
                     usage=self._usage(bytes(body),content_type)

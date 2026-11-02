@@ -1796,20 +1796,6 @@ FROM tasks t"""
             (json.dumps(raw_usage,allow_nan=False),time.time(),attempt_id), write=True)
         return self.provider_attempt(attempt_id)
 
-    @_transactional
-    def preview_spend_approval(self,task_id):
-        task=self.task(task_id)
-        if not task:return None
-        from .tenancy import current_scope
-        row=self._execute_native('SELECT * FROM preview_spend_approvals WHERE owner_id=%s AND task_id=%s AND generation=%s',
-            (current_scope().owner_id,task_id,task['generation'])).fetchone()
-        return dict(row) if row else None
-
-    @_transactional
-    def approve_preview_spend(self,task_id,model,amount):
-        from .preview_spend import approve
-        return approve(self,task_id,model,amount)
-
     def confirmed_expense_admission(self,job_id,expense_scale=None):
         # Returning a denial commits its durable episode/outbox. Raising here
         # would roll it back and lose the alert on every denied call.
@@ -1820,7 +1806,6 @@ FROM tasks t"""
         elif reason=='unknown_provider_outcome':emit('unresolved_accounting',reason)
         return reason
 
-    @_transactional
     def admit_provider_attempt(self,job_id,attempt_id,quote,digest,*,balance,bind_attempt,authorize,require_prepaid,launch_guard):
         """Parent-only reservation/binding/start transaction, after external IO."""
         self._execute_native('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
@@ -1986,7 +1971,7 @@ FROM tasks t"""
     def own_ledger(self,usd_per_credit):
         """Read-only: the signed-in owner's credit balance and provider-call ledger, as text for the Debug dialog."""
         from .account_ledger import read
-        return read(SimpleNamespace(execute=self._execute_native),current_scope().owner_id,usd_per_credit,marker='%s')
+        return read(SimpleNamespace(execute=self._execute_native,pipeline=getattr(self._connection.get(),'pipeline',contextlib.nullcontext)),current_scope().owner_id,usd_per_credit,marker='%s')
 
     def _unsupported(self,*args,**kwargs):
         raise TenantAccessDenied('local authentication or quota provisioning unavailable on user connection')
@@ -2276,6 +2261,7 @@ _TASK_ENTRY_OPERATIONS={
 _LOCAL_AUTH = {'create_oauth_state','consume_oauth_state','upsert_user','create_basic_user',
  'basic_user','create_session','session','rotate_session','delete_session','set_user_quota'}
 PG_OPERATIONS = (
+    'admit_provider_attempt',
     'activate_private_revision_installation',
     'add_artifact',
     'add_event',

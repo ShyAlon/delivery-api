@@ -6,10 +6,19 @@ from delivery_api.tenancy import tenant_context
 from test_attempt_ledger import credit_account,A,DSN
 
 
+from policy_database import isolated_policy_database
+
 @pytest.fixture
-def quiet(credit_account):
-    store,_,job=credit_account
-    with tenant_context(A):store.finish_worker(job)
+def quiet(monkeypatch,isolated_policy_database):
+    from delivery_api.postgres_store import PostgresStore
+    from psycopg.conninfo import make_conninfo
+    import uuid
+    monkeypatch.setitem(globals(),'DSN',isolated_policy_database)
+    store=PostgresStore(make_conninfo(isolated_policy_database,user='delivery_app'))
+    with tenant_context(A):
+        tid=store.create_task('Policy isolated')['task_id']
+        store.set_engine_session(tid,'policy-'+uuid.uuid4().hex)
+        job=store.enqueue_worker(tid,'fake');store.claim_worker(job);store.finish_worker(job)
     return store,job
 
 

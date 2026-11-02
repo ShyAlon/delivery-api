@@ -43,7 +43,7 @@ def test_task_api_lifecycle_and_owner_isolation(pg_workspace_factory, pg_task_ap
             assert client.patch('/api/tasks/'+task_id, json={'title':'Renamed'}, headers=headers).json()['title'] == 'Renamed'
             assert client.get('/api/tasks', headers=second.headers).json() == {'tasks':[]}
             assert client.patch('/api/tasks/'+task_id, json={'title':'Stolen'}, headers=second.headers).status_code == 404
-            deleted = client.delete('/api/tasks/'+task_id, headers=headers)
+            deleted = client.request('DELETE','/api/tasks/'+task_id, headers=headers,json={'confirm':True})
             assert deleted.status_code == 200
             assert deleted.json()['source_artifacts_deleted'] is False
             assert client.get('/api/tasks/'+task_id, headers=headers).status_code == 404
@@ -111,7 +111,7 @@ def test_factory_revokes_session_and_cleans_tasks_on_failure(pg_workspace_factor
     with workspace.admin() as connection:
         assert connection.execute('SELECT count(*) FROM auth.sessions WHERE id=%s',
             (workspace.scope.session_id,)).fetchone()[0] == 0
-        assert connection.execute('SELECT count(*) FROM tasks WHERE task_id=%s',
+        assert connection.execute('SELECT count(*) FROM tasks WHERE task_id=%s AND deleted_at IS NULL',
             (task['task_id'],)).fetchone()[0] == 0
 
 

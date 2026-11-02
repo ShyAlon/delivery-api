@@ -40,6 +40,15 @@ def test_the_three_denial_responses_never_echo_the_raw_reason():
         assert marker not in app
 
 
-def test_the_engine_console_scrubs_failures_and_keeps_the_raw_trace_in_the_server_log():
-    src=(SRC/'inprocess_engine.py').read_text()
-    assert 'scrub_failure_text(exc.render())' in src and 'scrub_failure_text(trace)' in src and 'file=sys.stderr' in src
+def test_child_failure_envelope_retains_shape_without_secrets(capsys):
+    from delivery_api.child_failure import emit,parse
+    try:
+        raise RuntimeError('raw provider credential and private source')
+    except RuntimeError as exc:
+        emit(exc)
+    line=capsys.readouterr().err.encode()
+    result=parse(line)
+    assert result['error_class']=='RuntimeError' and result['frames']
+    assert result['frames'][-1]['function']=='test_child_failure_envelope_retains_shape_without_secrets'
+    assert 'raw provider' not in line.decode() and 'credential' not in line.decode()
+    assert set(result)=={'error_class','frames'}

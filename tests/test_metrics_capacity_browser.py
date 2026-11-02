@@ -1,4 +1,5 @@
 """Real operator registry + two PG host sources in the existing Debug dialog."""
+from test_artifacts import evidence_path
 from test_ui_playwright import pg_ui,pg_page,pg_ids
 from test_debug_package_browser import _operator_cookie
 from playwright.sync_api import expect
@@ -32,10 +33,10 @@ def test_debug_capacity_shows_distinct_pg_host_series(pg_page,pg_ui,pg_ids,pg_br
         expect(page.locator('#caphost')).to_contain_text('host-beta')
         expect(page.locator('#caphost')).to_contain_text('memory average 80')
         page.locator('#caphost').scroll_into_view_if_needed()
-        page.screenshot(path='/downloads/pg-metrics-capacity-desktop.png',full_page=False)
+        page.screenshot(path=evidence_path('pg-metrics-capacity-desktop.png'),full_page=False)
         page.set_viewport_size({'width':390,'height':844})
         page.locator('#caphost').scroll_into_view_if_needed()
-        page.screenshot(path='/downloads/pg-metrics-capacity-mobile.png',full_page=False)
+        page.screenshot(path=evidence_path('pg-metrics-capacity-mobile.png'),full_page=False)
     finally:
         with psycopg.connect(STATE['dsn']) as c:
             c.execute('DELETE FROM operator_principals WHERE subject=%s',(workspace.scope.owner_id,))

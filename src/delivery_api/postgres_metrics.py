@@ -161,23 +161,28 @@ def read_operator(reader,owner_store,*,task_id=None,limit=100):
             avg(rss_mb) avg_rss_mb,max(peak_rss_mb) max_rss_mb,max(cpu_seconds) cpu_seconds
             FROM resource_run_samples GROUP BY source_id,run_key ORDER BY max(ts) DESC LIMIT %s''',(limit+1,)).fetchall()
         kept=c.execute('SELECT * FROM resource_run_summaries ORDER BY ended_at DESC LIMIT %s',(limit+1,)).fetchall()
+        # One bounded timeline query for all selected series, not one round trip per run.
+        from psycopg.types.json import Jsonb
+        points=c.execute('''WITH selected AS (SELECT * FROM jsonb_to_recordset(%s::jsonb) AS x(source_id text,run_key text)),
+            ranked AS (SELECT r.source_id,r.run_key,r.rss_mb,row_number() OVER(PARTITION BY r.source_id,r.run_key ORDER BY r.ts,r.id) n,
+                count(*) OVER(PARTITION BY r.source_id,r.run_key) total
+                FROM resource_run_samples r JOIN selected s USING(source_id,run_key))
+            SELECT source_id,run_key,array_agg(rss_mb ORDER BY n) timeline FROM ranked
+            WHERE total<=12 OR n IN (SELECT 1+floor(i*(total-1)/11.0)::bigint FROM generate_series(0,11) i)
+            GROUP BY source_id,run_key''',(Jsonb([{'source_id':r['source_id'],'run_key':r['run_key']} for r in live]),)).fetchall() if live else []
+        timelines={(r['source_id'],r['run_key']):r['timeline'] for r in points}
         for row in live:
             row['summary']=False
-            # SQL ranks all retained points but transfers at most twelve per
-            # series, preserving the legacy shape without an unbounded fetch.
-            points=c.execute('''SELECT rss_mb FROM (
-                SELECT rss_mb,row_number() OVER(ORDER BY ts,id) n,count(*) OVER() total
-                FROM resource_run_samples WHERE source_id=%s AND run_key=%s) ranked
-                WHERE total<=12 OR n IN (SELECT 1+floor(i*(total-1)/11.0)::bigint FROM generate_series(0,11) i)
-                ORDER BY n''',(row['source_id'],row['run_key'])).fetchall()
-            row['timeline_mb']=[round(v['rss_mb']) for v in points if v['rss_mb'] is not None]
+            row['timeline_mb']=[round(v) for v in timelines.get((row['source_id'],row['run_key']),[]) if v is not None]
         for row in kept:row['summary']=True;row['timeline_mb']=[]
         containers=c.execute('''SELECT DISTINCT ON (source_id) source_id,ts,mem_used_mb,mem_limit_mb,cpu_pct
             FROM resource_container_samples ORDER BY source_id,ts DESC LIMIT %s''',(limit+1,)).fetchall()
-        for box in containers:
-            box['day']=c.execute('''SELECT count(*) n,avg(mem_used_mb) am,max(mem_used_mb) mm,avg(cpu_pct) ac,max(cpu_pct) mc
-                FROM resource_container_samples WHERE source_id=%s AND ts>=%s AND ts<=%s''',
-                (box['source_id'],box['ts']-86400,box['ts'])).fetchone()
+        days=c.execute('''WITH selected AS (SELECT * FROM jsonb_to_recordset(%s::jsonb) AS x(source_id text,ts double precision))
+            SELECT s.source_id,count(r.ts) n,avg(r.mem_used_mb) am,max(r.mem_used_mb) mm,avg(r.cpu_pct) ac,max(r.cpu_pct) mc
+            FROM selected s LEFT JOIN resource_container_samples r ON r.source_id=s.source_id AND r.ts>=s.ts-86400 AND r.ts<=s.ts
+            GROUP BY s.source_id''',(Jsonb([{'source_id':r['source_id'],'ts':r['ts']} for r in containers]),)).fetchall() if containers else []
+        day_by_source={r['source_id']:{k:v for k,v in r.items() if k!='source_id'} for r in days}
+        for box in containers:box['day']=day_by_source[box['source_id']]
         runs=sorted(live+kept,key=lambda r:r['ended_at'] or 0,reverse=True)
     from . import config
     return {'path':'postgres:resource_metrics','problem':None,'runs':runs[:limit],'container':None,'containers':containers[:limit],

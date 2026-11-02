@@ -9,10 +9,10 @@ from fastapi import FastAPI,Request
 from fastapi.responses import JSONResponse,HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-ROUTES={'force-stop-plan':'/api/operations/force-stop-plan','active-jobs':'/api/operations/active-jobs','payment-journal':'/api/operator/payment-journal','payment-totals':'/api/operator/payment-totals','workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
+ROUTES={'active-jobs':'/api/operations/active-jobs','payment-journal':'/api/operator/payment-journal','payment-totals':'/api/operator/payment-totals','workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
     'operator-sessions':'/api/operator/sessions','operator-credits':'/api/operator/credits',
     'expense-totals':'/api/operator/expense-totals','vendor-status':'/api/operator/vendor-status','task-debug':'/api/operator/task-debug','task-logs':'/api/operator/task-logs','credit-account':'/api/operator/credit-account','task-usage':'/api/operator/task-usage',
-    'attempt-releases':'/api/admin/operations/attempt-releases'}
+    'attempt-releases':'/api/admin/operations/attempt-releases','model-pins':'/api/operator/model-pins'}
 QUERY_KEYS={'active-jobs':{'limit','before_updated_at','before_job_id'},'payment-journal':{'start_at','end_at','owner_id','limit','before_created_at','before_purchase_id'},'payment-totals':{'start_at','end_at','owner_id','limit'},'task-usage':{'task_id'},'credit-account':{'owner_id'},'task-logs':{'task_id','before_id','limit'},'task-debug':{'task_id'},'attempt-releases':{'limit'},'operator-sessions':{'limit','before_created_at','before_session_id'},
             'operator-credits':{'limit','after_owner'}}
 
@@ -81,30 +81,6 @@ def create_app(*,service_url,transport=None):
                     return JSONResponse(value,status_code=response.status_code,headers={'Cache-Control':'no-store'})
         except (httpx.HTTPError,ValueError):
             return JSONResponse({'detail':'Operations service unavailable or invalid'},status_code=502)
-    @application.post('/api/operations/force-stop-all')
-    async def force_stop_all(request:Request):
-        import re,json
-        if request.headers.get('origin')!=str(request.base_url).rstrip('/') or request.headers.get('sec-fetch-site')=='cross-site':
-            return JSONResponse({'detail':'Same-origin confirmation required'},status_code=403)
-        raw=await request.body()
-        try:
-            if len(raw)>8192:raise ValueError()
-            value=json.loads(raw)
-            if (not isinstance(value,dict) or set(value)!={'fingerprint','confirmation'}
-                or not isinstance(value['fingerprint'],str) or not re.fullmatch('[a-f0-9]{64}',value['fingerprint'])
-                or not isinstance(value['confirmation'],str) or not re.fullmatch(r'FORCE STOP [0-9]{1,5} JOBS(?: REPAIR [A-Za-z0-9_,.-]{1,4000})?',value['confirmation'])):raise ValueError()
-        except (ValueError,TypeError):return JSONResponse({'detail':'Exact reviewed plan and typed confirmation required'},status_code=422)
-        headers={key:request.headers[key] for key in ('authorization','cookie') if key in request.headers}
-        if not headers:return JSONResponse({'detail':'Service API sign-in required'},status_code=401)
-        headers['Origin']=service_url
-        try:
-            async with httpx.AsyncClient(base_url=service_url,transport=transport,timeout=30,follow_redirects=False) as client:
-                response=await client.post('/api/operations/force-stop-all',headers=headers,json=value)
-                if len(response.content)>1024*1024 or response.status_code not in (200,401,403,409,422,503):raise ValueError()
-                result=response.json()
-                if not isinstance(result,dict):raise ValueError()
-                return JSONResponse(result,status_code=response.status_code,headers={'Cache-Control':'no-store'})
-        except (httpx.HTTPError,ValueError):return JSONResponse({'detail':'Force outcome unverified. Read a fresh plan and audit evidence; do not retry blindly.'},status_code=502)
     @application.post('/api/operations/worker-jobs/{job_id}/stop')
     async def stop_job(job_id:str,request:Request):
         import re,json
@@ -132,6 +108,21 @@ def create_app(*,service_url,transport=None):
                 if not isinstance(value,dict):raise ValueError()
                 return JSONResponse(value,status_code=response.status_code,headers={'Cache-Control':'no-store'})
         except (httpx.HTTPError,ValueError):return JSONResponse({'detail':'Stop outcome unverified. Refresh jobs; do not infer accounting settlement.'},status_code=502)
+    @application.post('/api/operations/model-pins/{action}')
+    async def model_pin_action(action:str,request:Request):
+        if action not in ('new','new-local','refresh','edit','approve','expense-policy'):return JSONResponse({'detail':'Unknown pin action'},status_code=404)
+        if request.headers.get('origin')!=str(request.base_url).rstrip('/') or request.headers.get('sec-fetch-site')=='cross-site':return JSONResponse({'detail':'Same-origin confirmation required'},status_code=403)
+        raw=await request.body()
+        if len(raw)>65536:return JSONResponse({'detail':'Pin review exceeds bound'},status_code=422)
+        headers={k:request.headers[k] for k in ('authorization','cookie') if k in request.headers}
+        if not headers:return JSONResponse({'detail':'Service API sign-in required'},status_code=401)
+        headers.update(Origin=service_url,**{'Content-Type':'application/json'})
+        try:
+            async with httpx.AsyncClient(base_url=service_url,transport=transport,timeout=30,follow_redirects=False) as client:
+                response=await client.post('/api/operator/model-pins/'+action,headers=headers,content=raw)
+                if len(response.content)>1024*1024 or response.status_code not in (200,401,403,404,409,422,503):raise ValueError()
+                return JSONResponse(response.json(),status_code=response.status_code,headers={'Cache-Control':'no-store'})
+        except (httpx.HTTPError,ValueError):return JSONResponse({'detail':'Pin outcome unverified. Refresh pins and audit history; Back office > Debug > Download evidence.'},status_code=502)
     return application
 
 

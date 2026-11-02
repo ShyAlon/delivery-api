@@ -6,6 +6,19 @@ from delivery_api.tenancy import tenant_context
 from test_attempt_ledger import credit_account,A,DSN
 
 
+from policy_database import isolated_policy_database
+
+@pytest.fixture(autouse=True)
+def isolated_preflight(monkeypatch,isolated_policy_database):
+    import test_attempt_ledger
+    monkeypatch.setitem(globals(),'DSN',isolated_policy_database)
+    monkeypatch.setattr(test_attempt_ledger,'DSN',isolated_policy_database)
+
+@pytest.fixture
+def store(isolated_preflight):
+    from delivery_api.postgres_store import PostgresStore
+    return PostgresStore(DSN.replace('user=sandbox','user=delivery_app'))
+
 @pytest.fixture
 def ready(credit_account):
     import psycopg

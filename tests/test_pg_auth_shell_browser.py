@@ -1,4 +1,5 @@
 """Cloud shell outcomes survive local-auth implementation test retirement."""
+from test_artifacts import evidence_path
 from playwright.sync_api import expect
 
 
@@ -23,7 +24,7 @@ def test_pg_shell_home_boot_and_signed_reload_have_no_browser_errors(pg_browser)
     expect(page.locator('.avatar')).to_be_visible()
     assert 'Loading workspace' not in page.locator('body').inner_text()
     assert errors==[],errors
-    page.screenshot(path='/downloads/pg-shell-signed-reload.png')
+    page.screenshot(path=evidence_path('pg-shell-signed-reload.png'))
 
 
 def test_pg_shell_logout_returns_to_signin_and_clears_cookie(pg_browser,monkeypatch):
@@ -44,4 +45,4 @@ def test_pg_shell_logout_returns_to_signin_and_clears_cookie(pg_browser,monkeypa
     assert not any(c['name'] in ('requi_access','requi_refresh') for c in page.context.cookies())
     page.reload()
     expect(page.locator('#authform')).to_be_visible()
-    page.screenshot(path='/downloads/pg-shell-signed-out.png')
+    page.screenshot(path=evidence_path('pg-shell-signed-out.png'))
