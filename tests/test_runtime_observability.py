@@ -223,7 +223,7 @@ def test_remaining_server_action_surfaces_share_the_guard():
         'qa.js':['feedback:'],
         'completion.js':['package.prepare'],
         'ops.js':['ops.grant','ops.refresh','ops.logs'],
-        'shared-dialog.js':['requirement.resolve','founder.decision'],
+        'dialogs.js':['requirement.resolve','founder.decision'],
     }
     for file,actions in expected.items():
         source=(WEB/file).read_text()
