@@ -23,7 +23,7 @@ def test_function_review_quotes_exact_file_and_hash():
 
 def test_launch_shell_prints_literal_quotes():
     import subprocess
-    line=next(x for x in (ROOT/'scripts/ops/preview-exec.sh').read_text().splitlines() if x.startswith("printf 'Type"))
-    result=subprocess.run(['bash','-c',line],capture_output=True,text=True,check=True)
-    assert result.stdout.startswith('Type "yes" ')
+    line=next(x for x in (ROOT/'scripts/ops/preview-exec.sh').read_text().splitlines() if x.startswith("prompt 'Waiting for input:"))
+    result=subprocess.run(['bash','-c','source "$1"; '+line,'bash',str(ROOT/'scripts/ops/terminal-log.sh')],capture_output=True,text=True,check=True)
+    assert result.stdout.startswith('Waiting for input: Type "yes" ')
     assert '[ "$A" = yes ]' in (ROOT/'scripts/ops/preview-exec.sh').read_text()

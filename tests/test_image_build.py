@@ -63,7 +63,7 @@ def _setup(tmp_path, real_build=True):
     api_files = {
         "Dockerfile.full": "FROM scratch\n", "scripts/docker/smoke-image.sh": docker / "smoke-image.sh",
         "scripts/docker/full-smoke.py": "print('x')\n", "scripts/docker/full_entry.py": "print('y')\n",
-        "scripts/ops/lib.sh": ops / "lib.sh", "scripts/ops/deploy-full.sh": ops / "deploy-full.sh",
+        "scripts/ops/lib.sh": ops / "lib.sh", "scripts/ops/terminal-log.sh": ops / "terminal-log.sh", "scripts/ops/deploy-full.sh": ops / "deploy-full.sh",
         "scripts/docker/build-full-image.sh": docker / "build-full-image.sh" if real_build else 'echo BUILD-RAN >> "$FAKE_LOG"\n',
     }
     # The real remote smoke now stages the owned-PG harness before invoking

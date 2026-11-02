@@ -430,10 +430,8 @@ for i in $(seq 1 "${PREVIEW_WAIT_TRIES:-90}"); do
   sleep "${PREVIEW_POLL:-2}"
 done
 if [ "$OK" != 1 ]; then echo "== the container did not become healthy; last log lines:"; docker logs --tail 30 "$NAME" 2>&1 | scrub; abort NOT-HEALTHY "the preview did not start" "" "send me the log lines above"; fi
-# readiness needs POSITIVE evidence: the app's own startup line says OPEN, and the running container's own
-# environment confirms execution 1 with exactly one provider key variable (its value is never printed).
-LOGS=$(docker logs "$NAME" 2>&1 | scrub)
-echo "$LOGS" | grep -q 'Cloud execution: OPEN' || warn 'WARNING: execution is closed. Open Back office > Model pins to review pins; the UI remains available. Debug: docker logs --tail 100 requi-preview-exec'
+# The flag/key check verifies configuration, not actual gateway readiness.
+# Application startup status is reported truthfully in the final summary below.
 PROBE='import os,re;print("EXEC="+os.environ.get("DELIVERY_CLOUD_EXECUTION","unset"));print("KEYS="+str(len([k for k in os.environ if re.search("DEEPSEEK|OPENAI|ANTHROPIC|API_KEY",k,re.I)])))'
 EXECOUT=$(docker exec "$NAME" python -c "$PROBE" 2>/dev/null || true)
 EXPECTED_KEYS=1; [ "$PROVIDER" = ollama ] && EXPECTED_KEYS=0
@@ -468,10 +466,17 @@ if start_backoffice; then
 else
   warn 'WARNING: optional Back office unavailable; preview remains usable. No unrelated listener was reused or stopped.'
 fi
-echo "PREVIEW-EXEC READY: http://127.0.0.1:$PORT   (execution OPEN, live database, real sign-in, provider: $PROVIDER)"
-[ "$PROVIDER" = both ] && echo "Both routes admitted: choose DeepSeek or Ollama in the UI. Local is zero-cost; DeepSeek uses credits. No fallback."
-[ "$PROVIDER" = ollama ] && echo "Local Ollama route: reviewed default at \$0; every call is ledgered. The managed DeepSeek route is not configured in this mode."
-echo "Spend is possible only for a person with an admission row and prepaid credits."
+# Re-read after browser/Back office checks: health may arrive before startup
+# status. Missing status is UNVERIFIED, never evidence for OPEN or CLOSED.
+EXECUTION_STATUS=$(docker logs "$NAME" 2>&1 | scrub | awk '
+  /^Cloud execution: OPEN([ (]|$)/ {state="OPEN"}
+  /^Cloud execution: CLOSED([ -]|$)/ {state="CLOSED"}
+  END {print (state ? state : "UNVERIFIED")}' )
+if [ "$EXECUTION_STATUS" = OPEN ]; then
+  echo "PREVIEW-EXEC READY: http://127.0.0.1:$PORT (execution OPEN confirmed by application startup; provider: $PROVIDER; per-call admission and credits still required)"
+else
+  warn "PREVIEW UI READY: http://127.0.0.1:$PORT (WARNING: execution $EXECUTION_STATUS; provider: $PROVIDER). Review Back office > Model pins and Debug before starting a task."
+fi
 echo "Running build: $(printf '%s' "$REPOS" | sed 's/=/ /g; s/,/, /g')"
 echo "Reminder: the first real interview still needs its own one-time approval (spend limit, cost ceiling, model route, live changes)."
 echo "Press Ctrl-C here when you are done."
