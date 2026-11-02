@@ -3864,3 +3864,28 @@ def debug_collection(task_id:str|None=Query(None,max_length=240),a:auth.Actor=De
     from .debug_collection import collect
     import sys
     return collect(sys.modules[__name__],a,task_id)
+
+
+@app.get('/api/operator/audit-events')
+def operator_audit_events(before:int|None=None,limit:int=50,event:str|None=None,a:auth.Actor=Depends(auth.require_admin)):
+    from .audit_view import list_rows
+    try:return JSONResponse(list_rows(_operator_reader(),store,owner=a.id,before=before,limit=limit,event=event),headers={'Cache-Control':'no-store'})
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+class AuditResolutionRequest(BaseModel):
+    model_config={'extra':'forbid'}
+    action:Literal['hide','cancel','release']
+    confirm:bool=False
+    expected_attempt_state:str|None=None
+
+@app.post('/api/operations/audit-events/{audit_id}/resolve')
+def resolve_audit_event(audit_id:int,body:AuditResolutionRequest,a:auth.Actor=Depends(auth.require_admin)):
+    _require_account_debug()
+    if not body.confirm:raise HTTPException(422,'Explicit confirmation required')
+    # Fresh logs authority, then drop back to normal current-owner store scope.
+    with _operator_reader()._read(store,'logs.read'):pass
+    from .attempt_ledger import AdmissionDenied
+    try:result=store.resolve_audit_event(audit_id,body.action,body.expected_attempt_state)
+    except KeyError:raise HTTPException(404,'Owned audit record not found')
+    except (ValueError,AdmissionDenied) as exc:raise HTTPException(409,str(exc))
+    return JSONResponse(result,headers={'Cache-Control':'no-store'})

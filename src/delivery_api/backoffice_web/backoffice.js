@@ -1,3 +1,4 @@
+import {mountAudit} from './audit.js';
 import {mountModelPins} from './model-pins.js';
 import {mountTabs,mountRowMenu} from '/assets/operator-ui.js';
 import {runAction} from '/assets/ui-action.js';
@@ -55,6 +56,7 @@ mountTabs(document.querySelector('#backoffice-tabs'),document.querySelector('mai
  {id:'spend',label:'Spend',panels:['expense-panel','releases-panel','vendor-panel']},
  {id:'model-pins',label:'Model pins',panels:['model-pins-panel']},
  {id:'payments',label:'Payments',panels:['payments-panel']},
+ {id:'audit',label:'Audit',panels:['audit-panel']},
  {id:'debug',label:'Debug',panels:['debug-panel']}
 ]);
 document.querySelector('#debug-refresh').onclick=()=>{document.querySelector('#debug-report').textContent=clientReport('Back office').text;};
@@ -64,3 +66,5 @@ clientLog('backoffice.ready','Back office shared UI ready');
 for(const button of document.querySelectorAll('button[id]')){const handler=button.onclick;if(handler)button.onclick=()=>runAction('backoffice.'+button.id,button,()=>handler()).catch(error=>{failure(error);clientLog('backoffice.action.error','Action failed',{action:button.id});});}
 
 mountModelPins(request);
+
+mountAudit({read,write:async(path,body)=>{const response=await request(path,{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let out;try{out=await response.json()}catch{throw Error('Resolution unverified. Refresh audit before retrying.')}if(!response.ok)throw Error(typeof out.detail==='string'?out.detail:'Resolution failed. Refresh audit.');return out},fieldList});

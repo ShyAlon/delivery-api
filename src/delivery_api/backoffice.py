@@ -9,11 +9,11 @@ from fastapi import FastAPI,Request
 from fastapi.responses import JSONResponse,HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-ROUTES={'active-jobs':'/api/operations/active-jobs','payment-journal':'/api/operator/payment-journal','payment-totals':'/api/operator/payment-totals','workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
+ROUTES={'audit-events':'/api/operator/audit-events','active-jobs':'/api/operations/active-jobs','payment-journal':'/api/operator/payment-journal','payment-totals':'/api/operator/payment-totals','workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
     'operator-sessions':'/api/operator/sessions','operator-credits':'/api/operator/credits',
     'expense-totals':'/api/operator/expense-totals','vendor-status':'/api/operator/vendor-status','task-debug':'/api/operator/task-debug','task-logs':'/api/operator/task-logs','credit-account':'/api/operator/credit-account','task-usage':'/api/operator/task-usage',
     'attempt-releases':'/api/admin/operations/attempt-releases','model-pins':'/api/operator/model-pins'}
-QUERY_KEYS={'active-jobs':{'limit','before_updated_at','before_job_id'},'payment-journal':{'start_at','end_at','owner_id','limit','before_created_at','before_purchase_id'},'payment-totals':{'start_at','end_at','owner_id','limit'},'task-usage':{'task_id'},'credit-account':{'owner_id'},'task-logs':{'task_id','before_id','limit'},'task-debug':{'task_id'},'attempt-releases':{'limit'},'operator-sessions':{'limit','before_created_at','before_session_id'},
+QUERY_KEYS={'audit-events':{'before','limit','event'},'active-jobs':{'limit','before_updated_at','before_job_id'},'payment-journal':{'start_at','end_at','owner_id','limit','before_created_at','before_purchase_id'},'payment-totals':{'start_at','end_at','owner_id','limit'},'task-usage':{'task_id'},'credit-account':{'owner_id'},'task-logs':{'task_id','before_id','limit'},'task-debug':{'task_id'},'attempt-releases':{'limit'},'operator-sessions':{'limit','before_created_at','before_session_id'},
             'operator-credits':{'limit','after_owner'}}
 
 
@@ -108,6 +108,25 @@ def create_app(*,service_url,transport=None):
                 if not isinstance(value,dict):raise ValueError()
                 return JSONResponse(value,status_code=response.status_code,headers={'Cache-Control':'no-store'})
         except (httpx.HTTPError,ValueError):return JSONResponse({'detail':'Stop outcome unverified. Refresh jobs; do not infer accounting settlement.'},status_code=502)
+    @application.post('/api/operations/audit-events/{audit_id}/resolve')
+    async def resolve_audit(audit_id:int,request:Request):
+        import json
+        if request.headers.get('origin')!=str(request.base_url).rstrip('/') or request.headers.get('sec-fetch-site')=='cross-site':return JSONResponse({'detail':'Same-origin confirmation required'},status_code=403)
+        raw=await request.body()
+        if len(raw)>512:return JSONResponse({'detail':'Bounded confirmation required'},status_code=422)
+        try:
+            value=json.loads(raw)
+            if not isinstance(value,dict) or set(value)-{'action','confirm','expected_attempt_state'} or value.get('confirm') is not True or value.get('action') not in ('hide','cancel','release'):raise ValueError()
+        except (ValueError,TypeError):return JSONResponse({'detail':'Explicit bounded confirmation required'},status_code=422)
+        headers={k:request.headers[k] for k in ('authorization','cookie') if k in request.headers}
+        if not headers:return JSONResponse({'detail':'Sign in required'},status_code=401)
+        headers.update(Origin=service_url,**{'Content-Type':'application/json'})
+        try:
+            async with httpx.AsyncClient(base_url=service_url,transport=transport,timeout=20,follow_redirects=False) as client:
+                response=await client.post('/api/operations/audit-events/'+str(audit_id)+'/resolve',headers=headers,json=value)
+                if len(response.content)>65536 or response.status_code not in (200,401,403,404,409,422,503):raise ValueError()
+                return JSONResponse(response.json(),status_code=response.status_code,headers={'Cache-Control':'no-store'})
+        except (httpx.HTTPError,ValueError):return JSONResponse({'detail':'Resolution unverified. Refresh audit before doing anything else.'},status_code=502)
     @application.post('/api/operations/model-pins/{action}')
     async def model_pin_action(action:str,request:Request):
         if action not in ('new','new-local','refresh','edit','approve','expense-policy'):return JSONResponse({'detail':'Unknown pin action'},status_code=404)

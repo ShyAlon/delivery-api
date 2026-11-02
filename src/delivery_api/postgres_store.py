@@ -1833,6 +1833,10 @@ FROM tasks t"""
         self.transition_provider_attempt(attempt_id,'start',require_prepaid=True)
         return {'started':True,'reason':'allowed'}
 
+    def resolve_audit_event(self,audit_id,action,expected_attempt_state=None):
+        from .audit_view import resolve
+        return resolve(self,audit_id,action,expected_attempt_state)
+
     def transition_provider_attempt(self,attempt_id,action,usage=None,*,require_prepaid=False):
         from .attempt_ledger import transition
         self._execute_native('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
@@ -2362,7 +2366,7 @@ PG_OPERATIONS = (
     'record_validated_revision_staging',
     'recover_uncertain_expense_alert',
     'recoverable_worker_jobs',
-    'release_own_compute',
+    'release_own_compute','resolve_audit_event',
     'rename_task',
     'request_task_stop',
     'rerun_prerequisite',
