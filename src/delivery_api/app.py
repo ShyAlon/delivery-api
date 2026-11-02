@@ -1009,6 +1009,13 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
         gateway=cloud_runtime.gateway_factory()
         open_now=cloud_execution_admitted()
         admitted_models=getattr(gateway,'models',{}) if gateway else {}
+        from . import cloud_execution
+        from .server_log_buffer import scrub
+        closed_reasons=cloud_execution.problems() if not open_now else []
+        # Startup exception strings can include operator details. Keep them out
+        # of customer responses; the operator gets the scrubbed actual reason.
+        closed_message=('Execution is closed: '+'; '.join(scrub(str(x)) for x in closed_reasons)) if a.admin and closed_reasons else 'Execution is temporarily unavailable. The operator must review server readiness.'
+        repair={'kind':'model-pins','label':'Open Model pins in Back office','url':os.environ.get('DELIVERY_BACKOFFICE_URL')} if a.admin and os.environ.get('REQUI_PIN_STORE')=='1' and not open_now else None
         routes=[]
         for route in ('deepseek','ollama'):
             errors=[];models=None;model=None
@@ -1016,9 +1023,9 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
                 errors.append('missing key: DEEPSEEK_API_KEY is not set on this server')
             if route=='ollama' and not local_route.local_preview_enabled():
                 errors.append('DELIVERY_LOCAL_PREVIEW is not enabled on this server')
-            if not open_now:errors.append('Execution is closed on this server.')
-            if gateway is None:errors.append('Admission gateway is not installed on this server.')
-            elif route not in admitted_models:errors.append('Admission gateway is configured for '+', '.join(admitted_models)+' only; no reviewed '+route+' route.')
+            if not open_now:errors.append(closed_message)
+            if gateway is None and open_now:errors.append('The execution engine did not install after readiness checks. Open Debug for startup evidence.')
+            elif gateway is not None and route not in admitted_models:errors.append('Admission gateway is configured for '+', '.join(admitted_models)+' only; no reviewed '+route+' route.')
             if not errors:
                 try:
                     preview=engine_client.preview_route(route)
@@ -1031,6 +1038,7 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
                     errors.append(exc.error.detail if isinstance(exc,EngineClientError) else str(exc))
             routes.append({'id':route,'available':not errors,'managed':True,
                 **({'error':' '.join(errors)} if errors else {}),
+                **({'repair':repair} if repair else {}),
                 **({'model':f'{route}:{model}','model_map':models,'models':[model]} if model else {})})
         enabled=next((r['id'] for r in routes if r['available']),None)
         return {'routes':routes,'default_route':{'route':enabled} if enabled else None,'managed':True}

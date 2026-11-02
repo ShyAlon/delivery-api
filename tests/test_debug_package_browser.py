@@ -50,3 +50,13 @@ def test_operator_can_read_durable_evidence_in_dialog_without_script(pg_page,pg_
  expect(page.locator('#durableevidencehost')).to_contain_text('truncated')
  page.locator('#durableevidencehost').scroll_into_view_if_needed()
  page.screenshot(path=str(tmp_path/'durable-evidence-dialog.png'),full_page=False)
+
+
+def test_closed_route_names_pin_review_and_links_private_backoffice(pg_page,pg_ui,pg_ids,tmp_path):
+ page=pg_page
+ page.route('**/api/model-routes',lambda r:r.fulfill(json={'managed':True,'routes':[{'id':p,'available':False,'managed':True,'error':'Execution is closed: Choose one reviewed '+p+' model in Back office > Model pins; no implicit fallback','repair':{'kind':'model-pins','label':'Open Model pins in Back office','url':'http://127.0.0.1:8031/#model-pins'}} for p in ('deepseek','ollama')]}))
+ page.goto(pg_ui+'/tasks/'+pg_ids['empty']+'/view')
+ expect(page.locator('.route-unavailable').first).to_contain_text('Choose one reviewed deepseek')
+ expect(page.get_by_role('button',name='Start interview',exact=True)).to_be_disabled()
+ expect(page.locator('.model-pins-repair').first).to_have_attribute('href','http://127.0.0.1:8031/#model-pins')
+ page.screenshot(path=str(tmp_path/'closed-model-pins-repair.png'),full_page=True)

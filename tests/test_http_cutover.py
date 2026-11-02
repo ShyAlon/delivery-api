@@ -297,7 +297,7 @@ def _case_route_preview_shows_conflict_without_switching(monkeypatch):
     raise EngineClientError(422,ProtocolError(code=ProtocolErrorCode.INVALID_RESPONSE,detail="selected route 'deepseek' conflicts with INTERVIEW_ENGINE_MODEL_PROBING='ollama:phi4'"))
    return {'route':'ollama','model_map':{stage:['ollama','phi4'] for stage in ('probing','distillation','phrasing','scope_tiebreak','expert_opinion','conops')}}
  monkeypatch.setattr(module,'engine_client',ConflictEngine())
- routes=module.model_routes(a=None)['routes']
+ routes=module.model_routes(a=module.auth.Actor('test-owner','Test owner'))['routes']
  assert routes[0]['available'] and routes[0]['model']=='ollama:phi4'
  assert routes[1]['available'] is False
  assert 'INTERVIEW_ENGINE_MODEL_PROBING' in routes[1]['error']
@@ -376,7 +376,7 @@ def _case_retired_ollama_default_still_lists_installed_switch_targets(monkeypatc
    return {'model_map':{'probing':['deepseek','deepseek-flash']}}
   def local_models(self):return ['phi4']
  monkeypatch.setattr(module,'engine_client',Engine())
- routes=module.model_routes(a=None)['routes']
+ routes=module.model_routes(a=module.auth.Actor('test-owner','Test owner'))['routes']
  assert routes[0]['id']=='ollama' and routes[0]['available'] and routes[0]['models']==['phi4']
 
 def test_recovery_does_not_reexecute_completed_http_interview(tmp_path,monkeypatch,pg_scoped_workspace):
