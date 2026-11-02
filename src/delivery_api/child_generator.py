@@ -132,7 +132,7 @@ class ChildGeneratorEngine(ChildPhaseLifecycle):
                 endpoint,headers=self.paid_runtime.transport(provider,model,self.endpoint) if self.paid_runtime is not None else (self.endpoint,{})
                 supervisor=ChildSupervisor(self.command);self._quiescent=False
                 async def launch():
-                    with httpx.Client(trust_env=False,follow_redirects=False,timeout=3600) as http:
+                    with httpx.Client(trust_env=False,follow_redirects=False,timeout=None) as http:
                         broker=ChildProviderBroker(op,gateway=gateway,journal=journal,client=http,
                             endpoint=endpoint,headers=headers,authorize=ChildBrokerAuthority(self.store,op,lease_epoch=row['lease_epoch']+1))
                         with provider_broker_channel(broker) as broker_fd,child_compute_channel(compute) as compute_fd,output_channel(proc,gates) as out_fd:

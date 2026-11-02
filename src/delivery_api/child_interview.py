@@ -270,7 +270,7 @@ class ChildInterviewClient(EngineClient):
                     task=self.store.task(task_id);session=self.store.session_binding(sid)
                     if task and task.get('stop_requested_at') is None and session and session['generation']==op.binding.generation:
                         raise PermissionError('stop signal has no durable stop/revocation evidence')
-                with httpx.Client(trust_env=False,follow_redirects=False,timeout=3600) as client:
+                with httpx.Client(trust_env=False,follow_redirects=False,timeout=None) as client:
                     broker=ChildProviderBroker(operation,gateway=gateway,journal=journal,client=client,
                         endpoint=endpoint,headers=headers,authorize=authority)
                     with provider_broker_channel(broker) as provider_fd,child_compute_channel(compute) as compute_fd:
