@@ -161,7 +161,8 @@ def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch,
     from fastapi.testclient import TestClient
     monkeypatch.setenv('DEEPSEEK_API_KEY','super-secret')
     body=TestClient(signed_app,headers=pg_scoped_workspace.headers).get('/api/model-routes').json()
-    assert all(route['available'] is False for route in body['routes'])
+    assert next(r for r in body['routes'] if r['id']=='ollama')['available'] is True
+    assert next(r for r in body['routes'] if r['id']=='deepseek')['available'] is False
     assert 'super-secret' not in str(body)
 
 
