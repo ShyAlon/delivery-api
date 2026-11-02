@@ -63,9 +63,9 @@ def test_scale_unknown_and_window(profile):
         with psycopg.connect(DSN) as c:c.execute('UPDATE provider_attempts SET settled_at=%s WHERE attempt_id=%s',(time.time()-86401,a))
         b=uuid.uuid4().hex;s.reserve_provider_attempt(job,b,LAUNCH_Q,b);s.transition_provider_attempt(b,'start')
         s.transition_provider_attempt(b,'uncertain')
-        # Direct DB guard check, because the ordinary reserve path already rejects uncertain usage.
+        # Unknown outcomes warn; known confirmed limits remain authoritative.
         with s._postgres.transaction() as c:
-            assert c.execute('SELECT requi_own_test_expense_guard(%s,1000000000000) AS reason',(job,)).fetchone()['reason']=='own_test_unknown_provider_outcome'
+            assert c.execute('SELECT requi_own_test_expense_guard(%s,1000000000000) AS reason',(job,)).fetchone()['reason']=='allowed'
 
 def test_profile_hidden_from_backend(profile):
     import psycopg

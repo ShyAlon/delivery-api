@@ -14,6 +14,8 @@ def ui():
         calls.append(request)
         if request.url.path=='/api/operations/active-jobs':
             return httpx.Response(200,json={'scope':'current_authorized_workspace','mutations_available':False,'jobs':[{'title':'Shared UI test','task_id':'task-one','job_id':'job-one','kind':'phase:intent','state':'running','task_state':'running','generation':1,'task_generation':1,'updated_at':1}],'truncated':False})
+        if request.url.path.endswith('/expense-totals'):
+            return httpx.Response(200,json={'scope':'reviewed_cross_user_operator_read','operator_subject':'fixture','registry_version':'fixture','as_of':123,'rolling_settled_units':0,'outstanding_hold_units':30,'conservative_used_units':30,'uncertain_attempts':1})
         if request.url.path.endswith('/workspace'):
             return httpx.Response(200,json={'scope':'current_authorized_workspace','sessions':[],'credits':None,'reason':'No account'})
         if request.url.path.endswith('/orphaned-tasks'):
@@ -74,4 +76,20 @@ def test_tabs_keyboard_context_menu_and_local_debug(ui):
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         assert page.evaluate("getComputedStyle(document.querySelector('.panel')).animationName")=='none'
         page.keyboard.press('Escape');page.goto(url+'/#payments');expect(page.locator('#payments-panel')).to_be_visible();assert not errors
+        browser.close()
+
+
+def test_uncertain_provider_warning_is_visible_without_mutation(ui):
+    from playwright.sync_api import sync_playwright,expect
+    url,calls=ui
+    with sync_playwright() as p:
+        browser=p.chromium.launch(args=['--no-sandbox'])
+        page=browser.new_page(viewport={'width':1280,'height':950},extra_http_headers={'Authorization':'Bearer fake'})
+        page.goto(url+'/#spend')
+        expect(page.locator('#operator-status')).to_contain_text('not an admission block')
+        expect(page.locator('#operator-status')).to_contain_text('Do not retry the same call')
+        expect(page.locator('#operator-status')).to_have_class('accounting-warning')
+        expect(page.locator('#expense')).to_contain_text('Uncertain attempts: 1')
+        page.screenshot(path=str(_EVIDENCE/'uncertainty-backoffice-warning.png'),full_page=True)
+        assert not [r for r in calls if r.method=='POST']
         browser.close()

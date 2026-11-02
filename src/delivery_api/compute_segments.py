@@ -1,12 +1,11 @@
-"""What a compute-accounting segment means for the next provider call. Pure rules, no database: the ledger, the Debug view and the release action all use them."""
+"""Compute accounting review and release rules. Unresolved records do not block independent provider calls."""
 
 
 def compute_block(state,job_state):
-    """Why a segment stops new provider calls for its owner, or None. Mirrors the admission check in attempt_ledger.
+    """Accounting uncertainty is review evidence, never an independent-call gate.
 
-    An unresolved segment always blocks. A pending one blocks once its job is no longer running (an orphan)."""
-    if state=='unresolved':return 'unresolved'
-    if state=='pending' and job_state is not None and job_state!='running':return 'pending, job not running'
+    Same-operation recovery/replay guards remain in the worker and ledger.
+    """
     return None
 
 

@@ -30,9 +30,9 @@ def test_actual_guard_and_unknown_usage_emit_safe_signal(expense_guard,caplog):
         aid=uuid.uuid4().hex;s.reserve_provider_attempt(job,aid,LAUNCH_Q,'unknown-usage')
         assert s.start_launch_provider_attempt(aid)['started']
         s.transition_provider_attempt(aid,'settle',None)
-        assert s.confirmed_expense_admission(job)=='unknown_provider_outcome'
+        assert s.confirmed_expense_admission(job)=='allowed'
     values=[json.loads(r.message.removeprefix('REQUI_ALERT ')) for r in caplog.records if r.name=='requi.alert']
-    assert {'provider_usage','unknown_provider_outcome'}<={v['reason'] for v in values}
+    assert {'provider_usage'}<={v['reason'] for v in values}
     assert all(set(v)=={'version','event','reason','action'} for v in values)
 
 

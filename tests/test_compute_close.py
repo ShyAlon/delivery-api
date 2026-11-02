@@ -12,13 +12,10 @@ from delivery_api.tenancy import tenant_context
 ROOT=Path(__file__).resolve().parents[1]/'src'/'delivery_api'
 
 
-def test_unresolved_always_blocks_and_pending_blocks_only_when_orphaned():
-    assert cs.compute_block('unresolved','failed')=='unresolved'
-    assert cs.compute_block('unresolved','running')=='unresolved'
-    assert cs.compute_block('pending','running') is None
-    assert cs.compute_block('pending','failed') and cs.compute_block('pending','done')
-    assert cs.compute_block('settled','failed') is None
-    assert cs.compute_block('pending',None) is None   # same as the admission SQL: no job row, no block
+def test_uncertain_compute_does_not_block_independent_admission():
+    for state in ('unresolved','pending','settled'):
+        for job_state in ('failed','running','done',None):
+            assert cs.compute_block(state,job_state) is None
 
 
 def test_decision_voids_only_with_no_provider_call_and_no_token_charge():
