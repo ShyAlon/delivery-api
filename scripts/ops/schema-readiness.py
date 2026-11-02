@@ -54,7 +54,6 @@ BASELINE_MIGRATIONS=frozenset({
  '20261025120000_operator_failure_diagnostics.sql',
 })
 MIGRATIONS={
- '20261102220000_owner_test_tasks.sql':('signature:requi_test_task_owner()','signature:requi_purge_test_task(text,boolean)','test-marker:is_test'),
 
  '20261029203000_resource_metrics.sql':('table:resource_run_samples','table:resource_run_summaries','table:resource_container_samples','table:resource_container_summaries'),
  '20261029210000_generator_snapshots.sql':('table:generator_snapshots',),
@@ -78,6 +77,7 @@ MIGRATIONS={
  '20261101160000_model_pins.sql':('table:model_pin_revisions','table:model_pin_heads','table:operator_expense_policy_revisions','table:operator_expense_policy_head'),
  '20261102070000_uncertainty_is_audit_not_admission.sql':('function0:requi_uncertainty_warning_policy',),
  '20261102080000_backoffice_audit_view.sql':('audit-policy:operator_curated_audit_read',),
+ '20261102220000_owner_test_tasks.sql':('signature:requi_test_task_owner()','signature:requi_purge_test_task(text,boolean)','test-marker:is_test'),
 }
 ROLES=('requi_metrics_writer','requi_engine_config_read','requi_operator_usage','requi_model_pin_editor')
 
