@@ -862,6 +862,7 @@ def run_artifacts(run_id: str): return store.artifacts(run_id)
 
 # Task-oriented UI API.
 class TaskCreate(BaseModel):
+    model_config={'extra':'forbid'}
     title: str = Field(min_length=1, max_length=120)
     brief: str = Field(default="", max_length=4000)
 
@@ -874,6 +875,39 @@ def create_task(req: TaskCreate, request: Request, a: auth.Actor = Depends(auth.
     except ValueError as e: raise HTTPException(409,{"error":str(e),"cause":"Task names must be unique (ignoring capitalization).","next":"Choose a different task name or rename the existing task."})
     store.audit(a.label, "task.created_by", task["task_id"])
     return task
+
+class TestTaskPurge(BaseModel):
+    model_config={'extra':'forbid'}
+    confirm:bool=False
+
+
+def _test_task_action(action):
+    try:return action()
+    except PermissionError:raise HTTPException(403,{'error':'This action is reserved for the reviewed test owner.','next':'Use your normal task list.'}) from None
+    except Exception:
+        # Driver details can contain content. The database refuses atomically.
+        raise HTTPException(409,{'error':'Test action refused; no content was removed.',
+            'cause':'Creation requires the reviewed owner. Purge requires successful reaped Start and answer jobs, settled costs, and no live lease or unreviewed content.',
+            'next':'Keep the test and download Debug evidence. Resolve failed work, live processes or unsettled accounting before retrying.'}) from None
+
+@app.post('/api/operations/test-tasks',status_code=201)
+def create_test_task(body:TaskCreate,a:auth.Actor=Depends(auth.require_actor)):
+    return _test_task_action(lambda:store.create_task(body.title,body.brief,is_test=True))
+
+@app.get('/api/operations/test-tasks')
+def list_test_tasks(a:auth.Actor=Depends(auth.require_actor)):
+    return _test_task_action(lambda:{'tasks':store.list_test_tasks()})
+
+@app.post('/api/operations/test-tasks/{task_id}/purge')
+def purge_test_task(task_id:str,body:TestTaskPurge,a:auth.Actor=Depends(auth.require_actor)):
+    return _test_task_action(lambda:store.purge_test_task(task_id,confirm=body.confirm))
+
+
+def _deny_test_product_export(task_id):
+    task=store.task(task_id)
+    if task and task.get('is_test'):
+        raise HTTPException(409,{'error':'Test data is excluded from product exports.',
+            'next':'Use the owner test view or Debug evidence instead.'})
 
 class TaskRename(BaseModel):
     title: str = Field(min_length=1,max_length=120)
@@ -1614,6 +1648,7 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}")
 def task_artifact_download(task_id:str,phase:str,name:str):
+    _deny_test_product_export(task_id)
     if hasattr(store,'_postgres'):
         from fastapi.responses import Response
         # Error mapping: genuinely missing or foreign-invisible artifact is 404; a
@@ -1856,6 +1891,7 @@ def task_artifact_view(task_id:str,phase:str,name:str):
 
 @app.get("/api/tasks/{task_id}/artifacts.zip")
 def task_artifacts_zip(task_id:str):
+    _deny_test_product_export(task_id)
     if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1" and os.environ.get("DELIVERY_CLOUD_EXECUTION")!="1":raise HTTPException(404,"Artifact downloads are not part of a local preview")
     records=_task_artifact_snapshot(task_id)
     if not records:
@@ -3372,6 +3408,7 @@ def health():
 
 @app.post('/api/tasks/{task_id}/packages')
 def create_final_package(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    _deny_test_product_export(task_id)
     from .final_package import producer_handoff,package,PackageBlocked
     task=store.task(task_id)
     if not task:raise HTTPException(404,'task not found')
@@ -3400,6 +3437,7 @@ def create_final_package(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 
 @app.get('/api/tasks/{task_id}/packages/{package_id}')
 def download_final_package(task_id:str,package_id:str,generation:int,a:auth.Actor=Depends(auth.require_actor)):
+    _deny_test_product_export(task_id)
     if not __import__('re').fullmatch(r'[a-f0-9]{64}',package_id) or generation<1:raise HTTPException(404,'package not found')
     task=store.task(task_id)
     if not task:

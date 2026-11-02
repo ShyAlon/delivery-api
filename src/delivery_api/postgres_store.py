@@ -669,15 +669,16 @@ class PostgresStore:
         self._execute_native('UPDATE runs SET cost_usd=cost_usd+%s,updated_at=%s WHERE run_id=%s', (cost_usd, time.time(), run_id), write=True)
         return self.run(run_id)['cost_usd']
 
-    def create_task(self,title,brief='',*,task_id=None):
+    def create_task(self,title,brief='',*,task_id=None,is_test=False):
+        if type(is_test) is not bool:raise ValueError('boolean test marker required')
         import psycopg
         title=title.strip()
         if not title: raise ValueError('task name cannot be empty')
         task_id,now=task_id or secrets.token_hex(6),time.time()
         owner=current_scope().owner_id
         try:
-            self._execute_native('INSERT INTO tasks(task_id,title,brief,state,model_route,generation,created_at,updated_at,owner_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-                             (task_id,title,brief,'not_started','deepseek',1,now,now,owner), write=True)
+            self._execute_native('INSERT INTO tasks(task_id,title,brief,state,model_route,generation,created_at,updated_at,owner_id,is_test) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                             (task_id,title,brief,'not_started','deepseek',1,now,now,owner,is_test), write=True)
         except psycopg.errors.UniqueViolation as exc:
             raise ValueError(f'a task named {title!r} already exists') from exc
         for i,(key,label) in enumerate(PHASES):
@@ -743,8 +744,17 @@ FROM tasks t"""
         return self._ARTIFACTS_SUBQUERY + ",\n" + self._MANIFEST_SUBQUERY
 
     def list_tasks(self):
-        rows=self._execute_native(self._TASK_PROJECTION+' WHERE t.deleted_at IS NULL ORDER BY t.updated_at DESC').fetchall()
+        rows=self._execute_native(self._TASK_PROJECTION+' WHERE t.deleted_at IS NULL AND NOT t.is_test ORDER BY t.updated_at DESC').fetchall()
         return [self._task_record(row) for row in rows]
+
+    def list_test_tasks(self):
+        if not self._execute_native('SELECT public.requi_test_task_owner() AS allowed').fetchone()['allowed']:
+            raise TenantAccessDenied('reviewed test owner required')
+        return [dict(row) for row in self._execute_native('SELECT task_id,state,is_test,test_purged_at,created_at FROM tasks WHERE is_test ORDER BY created_at DESC LIMIT 100').fetchall()]
+
+    def purge_test_task(self,task_id,*,confirm=False):
+        row=self._execute_native('SELECT public.requi_purge_test_task(%s,%s) AS result',(task_id,confirm),write=True).fetchone()
+        return row['result']
 
     def task(self,task_id):
         row=self._execute_native(self._TASK_PROJECTION+' WHERE t.task_id=%s AND t.deleted_at IS NULL',(task_id,)).fetchone()
@@ -2329,6 +2339,8 @@ PG_OPERATIONS = (
     'link',
     'list_feedback',
     'list_tasks',
+    'list_test_tasks',
+    'purge_test_task',
     'manifest_artifacts',
     'manifest_ready',
     'manifest_revision',
