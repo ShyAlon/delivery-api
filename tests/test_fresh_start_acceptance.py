@@ -15,7 +15,7 @@ from delivery_api.tenancy import tenant_context
 
 
 @pytest.mark.parametrize('paid',[False,True])
-def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtime_environment,monkeypatch,tmp_path,paid):
+def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtime_environment,monkeypatch,tmp_path,paid,owner_acceptance=False):
     # Missing producer packages are errors, not a silently skipped acceptance.
     import interview_engine, spec_generator
     from delivery_api import app as module,cloud_runtime
@@ -101,6 +101,10 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
                 c.execute('DELETE FROM model_pin_heads');c.execute('DELETE FROM model_pin_revisions')
                 c.execute('INSERT INTO model_pin_revisions(revision,provider,model,payload,fetched_at,operator_subject,reason) VALUES(%s,%s,%s,%s::jsonb,%s,%s,%s)',(rev,'deepseek',selected_model,json.dumps(value),snap['fetched_at'],workspace.scope.owner_id,'HTTP acceptance reviewed pin'))
                 c.execute('INSERT INTO model_pin_heads(provider,model,revision,is_default) VALUES(%s,%s,%s,true)',('deepseek',selected_model,rev))
+        if owner_acceptance:
+            with workspace.admin() as c:
+                c.execute('DELETE FROM operator_principals')
+                c.execute("INSERT INTO operator_principals(subject,registry_version,capabilities,enabled) VALUES(%s,'owner-acceptance',ARRAY['sessions.operate'],true)",(workspace.scope.owner_id,))
         middleware=pg_task_app(workspace,lifespan=True)
         with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
         server=uvicorn.Server(uvicorn.Config(middleware,host='127.0.0.1',port=port,lifespan='on',log_level='warning',access_log=False))
@@ -112,6 +116,23 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
                 time.sleep(.05)
             assert server.started and cloud_runtime.installed(),cloud_runtime.failure()
             with httpx.Client(base_url=f'http://127.0.0.1:{port}',headers=workspace.headers,timeout=20) as client:
+                if owner_acceptance:
+                    spec=importlib.util.spec_from_file_location('owner_acceptance',Path(__file__).parents[1]/'scripts/owner/deepseek-acceptance.py')
+                    owner_script=importlib.util.module_from_spec(spec);spec.loader.exec_module(owner_script)
+                    api=owner_script.API(client)
+                    # Use real task/API/producers/PG and only replace the operator
+                    # aggregate read (separately tested under its restricted role).
+                    def owner_api(method,path,body=None,**kwargs):
+                        if path.startswith('/api/operator/task-usage?'):
+                            return {'complete':True,'attempts':len(calls)}
+                        return api(method,path,body,**kwargs)
+                    seen=[]
+                    tid,task,cost,usage=owner_script.journey(owner_api,observe=lambda t:seen.append(t))
+                    assert cost['evidence']['complete'] and usage['provider_expense']['complete']
+                    assert any(e.get('kind')=='progress' for t in seen for e in t.get('events',[]))
+                    out=api('POST','/api/operations/test-tasks/'+tid+'/purge',{'confirm':True})
+                    assert out['purged'] and out['accounting_retained']
+                    return
                 body={'title':'Acceptance recycled name','brief':'A booking app for a small salon'}
                 first=client.post('/api/tasks',json=body);assert first.status_code==201,first.text
                 tid=first.json()['task_id']
