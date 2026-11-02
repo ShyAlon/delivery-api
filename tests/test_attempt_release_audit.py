@@ -72,14 +72,23 @@ def test_the_operator_sees_releases_with_reason_and_current_attention(releases):
     assert not any(r['event'] == 'task.renamed' for r in mine)
 
 
-def test_the_operator_role_reads_only_the_release_and_stop_actions_straight_from_the_database(releases):
-    store = releases[0]
+def test_the_operator_role_reads_only_curated_operations_actions_straight_from_the_database(releases):
+    store, tid = releases[:2]
+    with tenant_context(A):
+        store.audit(str(A.owner_id), 'task.deleted', tid, {'accounting_retained': True})
+        store.audit(str(A.owner_id), 'private.unreviewed', tid, {'secret': 'not operator data'})
     reader = OperatorReadStore(APP, OperatorPrincipal(A.owner_id, "ops-v1", CAPS))
     with tenant_context(A):
         with reader._read(store, "logs.read") as (connection, _authority):
             rows = connection.execute("SELECT DISTINCT action FROM public.audit_log").fetchall()
     actions = {r['action'] for r in rows}
-    assert actions <= {'run.stopped', 'provider.attempt.cancelled', 'provider.attempt.released', 'provider.attempt.release_failed'}
+    assert actions <= {'provider.attempt.uncertain', 'provider.attempt.cancelled',
+                       'provider.attempt.released', 'provider.attempt.release_failed',
+                       'task.deleted', 'task.operator_stop_requested', 'run.stopped',
+                       'compute.segment_closed_no_provider_call', 'compute.segment_released_by_owner',
+                       'compute.segment_reconciled_no_charge', 'audit.resolution'}
+    assert 'task.deleted' in actions  # reviewed Audit-tab evidence is now visible
+    assert 'task.renamed' not in actions and 'private.unreviewed' not in actions
     assert 'provider.attempt.cancelled' in actions   # non-vacuous: the new policy really widened the role
 
 

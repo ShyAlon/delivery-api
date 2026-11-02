@@ -52,8 +52,8 @@ def test_tabs_keyboard_context_menu_and_local_debug(ui):
         browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page(viewport={'width':1280,'height':1000},extra_http_headers={'Authorization':'Bearer fake'})
         errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
         page.goto(url);row=page.locator('#active-jobs tbody tr').first;row.wait_for()
-        assert page.get_by_role('tab').all_text_contents()==['Worker Jobs','Workspace','Accounts','Spend','Model pins','Payments','Debug']
-        assert page.locator('[role=tabpanel]').count()==12
+        assert page.get_by_role('tab').all_text_contents()==['Worker Jobs','Workspace','Accounts','Spend','Model pins','Payments','Audit','Debug']
+        assert page.locator('[role=tabpanel]').count()==13
         for tab,panel in [('Workspace','workspace-panels'),('Accounts','accounts-panel'),('Spend','expense-panel'),('Payments','payments-panel'),('Debug','debug-panel'),('Worker Jobs','active-jobs-panel')]:
             page.get_by_role('tab',name=tab,exact=True).click();expect(page.locator('#'+panel)).to_be_visible()
             expect(page.get_by_role('tab',name=tab,exact=True)).to_have_attribute('aria-selected','true')
@@ -92,4 +92,43 @@ def test_uncertain_provider_warning_is_visible_without_mutation(ui):
         expect(page.locator('#expense')).to_contain_text('Uncertain attempts: 1')
         page.screenshot(path=str(_EVIDENCE/'uncertainty-backoffice-warning.png'),full_page=True)
         assert not [r for r in calls if r.method=='POST']
+        browser.close()
+
+
+def test_audit_table_dialog_binary_hide_and_cross_owner_guard(ui):
+    import json
+    from playwright.sync_api import sync_playwright,expect
+    url,calls=ui
+    def item(n,own=True):
+        return {'id':n,'ts':123,'event':'provider.attempt.uncertain','actor':'Operator','owner_id':'owner-one' if own else 'owner-two','task_id':'task-one','detail':{'outcome':'unknown','admission':'warning_only'},'current_owner':own,'attempt_id':'attempt-one','job_id':'job-one','attempt_state':'uncertain','job_state':'failed','task_hidden':False,'actions':{'hide':{'available':own,'reason':'Audit and accounting evidence retained.'},'cancel':{'available':False,'reason':'Not reserved.'},'release':{'available':False,'reason':'Unknown dispatch is not proof of no cost.'}}}
+    with sync_playwright() as p:
+        browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page(viewport={'width':1280,'height':1000},extra_http_headers={'Authorization':'Bearer fake'})
+        mutations=[]
+        def events(route):
+            before='before=' in route.request.url
+            route.fulfill(json={'scope':'reviewed_cross_user_operator_read','events':[item(1,False)] if before else [item(3),item(2)],'truncated':not before,'next_before':None if before else 2,'event_types':['provider.attempt.uncertain']})
+        page.route('**/api/operations/audit-events?*',events)
+        def resolve(route):
+            mutations.append(route.request.post_data_json)
+            route.fulfill(json={'resolved':True,'accounting_retained':True})
+        page.route('**/api/operations/audit-events/*/resolve',resolve)
+        page.goto(url+'/#audit')
+        expect(page.locator('#audit-panel tbody tr')).to_have_count(2)
+        page.get_by_role('button',name='Next audit page').click();expect(page.locator('#audit-panel tbody tr')).to_have_count(3)
+        page.get_by_role('row',name='Open audit event 1',exact=True).click()
+        expect(page.locator('.audit-dialog')).to_contain_text('Other-owner row: evidence only')
+        expect(page.get_by_role('button',name='Delete task (hide)',exact=True)).to_be_disabled()
+        page.get_by_role('button',name='Close',exact=True).click()
+        page.get_by_label('Filter audit',exact=True).fill('owner-one');expect(page.locator('#audit-panel tbody tr')).to_have_count(2)
+        page.get_by_role('row',name='Open audit event 3',exact=True).click()
+        expect(page.get_by_role('button',name='Release',exact=True)).to_be_disabled()
+        page.screenshot(path=str(_EVIDENCE/'backoffice-audit-evidence.png'),full_page=True)
+        page.get_by_role('button',name='Delete task (hide)',exact=True).click()
+        expect(page.get_by_role('dialog').last).to_contain_text('Accounting and audit records stay')
+        page.get_by_role('button',name='Cancel',exact=True).click();assert not mutations
+        page.get_by_role('button',name='Delete task (hide)',exact=True).click()
+        page.get_by_role('button',name='Delete task',exact=True).click()
+        expect(page.locator('.audit-dialog [role=status]')).to_contain_text('Success:')
+        assert mutations==[{'action':'hide','confirm':True,'expected_attempt_state':'uncertain'}]
+        page.screenshot(path=str(_EVIDENCE/'backoffice-audit-resolution.png'),full_page=True)
         browser.close()
