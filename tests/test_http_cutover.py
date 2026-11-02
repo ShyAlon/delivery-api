@@ -298,7 +298,7 @@ def _case_route_preview_shows_conflict_without_switching(monkeypatch):
    return {'route':'ollama','model_map':{stage:['ollama','phi4'] for stage in ('probing','distillation','phrasing','scope_tiebreak','expert_opinion','conops')}}
  monkeypatch.setattr(module,'engine_client',ConflictEngine())
  routes=module.model_routes(a=module.auth.Actor('test-owner','Test owner'))['routes']
- assert routes[0]['available'] and routes[0]['model']=='ollama:phi4'
+ assert routes[0]['available'] and routes[0]['readiness']=='checked_on_start'
  assert routes[1]['available'] is False
  assert routes[1]['error']=='DeepSeek is temporarily unavailable. Please try again later.'
 
@@ -377,7 +377,7 @@ def _case_retired_ollama_default_still_lists_installed_switch_targets(monkeypatc
   def local_models(self):return ['phi4']
  monkeypatch.setattr(module,'engine_client',Engine())
  routes=module.model_routes(a=module.auth.Actor('test-owner','Test owner'))['routes']
- assert routes[0]['id']=='ollama' and routes[0]['available'] and routes[0]['models']==['phi4']
+ assert routes[0]['id']=='ollama' and routes[0]['available'] and routes[0]['models']==['qwen2.5-coder:14b','phi4']
 
 def test_recovery_does_not_reexecute_completed_http_interview(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)

@@ -209,14 +209,14 @@ def test_bound_legacy_session_without_exact_selection_requires_a_choice(tmp_path
         model_routes.task_default_model(store,tid,'srs')
 
 
-def test_route_listing_does_not_probe_local_models_before_start(monkeypatch):
+def test_failed_optional_local_model_listing_does_not_disable_choice(monkeypatch):
     from delivery_api import app as module
     from types import SimpleNamespace
     monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
     def preview(route,**kw):
         assert route=='deepseek'
         return {'model_map':{'probing':[route,'pinned']}}
-    def unavailable():raise AssertionError('local model list must not be queried')
+    def unavailable():raise AttributeError('fixture list unavailable')
     monkeypatch.setattr(module,'engine_client',SimpleNamespace(default_route=lambda:{'route':'ollama','model':'pinned'},preview_route=preview,local_models=unavailable))
     result=module.model_routes()
     route=next(r for r in result['routes'] if r['id']=='ollama')

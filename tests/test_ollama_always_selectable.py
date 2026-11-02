@@ -10,7 +10,7 @@ def test_ollama_selectable_without_gateway_or_preflight(monkeypatch,cloud):
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:None)
     monkeypatch.setattr(module,'engine_client',SimpleNamespace(default_route=lambda:None,
         preview_route=lambda route:(_ for _ in ()).throw(module.EngineUnreachableError('fixture',RuntimeError('not running'))),
-        local_models=lambda:(_ for _ in ()).throw(AssertionError('route list must not probe local daemon'))))
+        local_models=lambda:(_ for _ in ()).throw(module.EngineUnreachableError('fixture',RuntimeError('not running')))))
     result=module.model_routes()
     local=next(r for r in result['routes'] if r['id']=='ollama')
     assert local['available'] is True

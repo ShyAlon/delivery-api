@@ -1002,6 +1002,21 @@ def put_question_quality_config(req:QualityConfigRequest,a:auth.Actor=Depends(au
 class TaskStartRequest(BaseModel):
     model_route:Literal["ollama","deepseek"]|None=None
     initial_model:str|None=None
+def _ollama_route_choice(model=None,*,managed=False):
+    """Optional picker data is never a readiness gate. Start validates the route."""
+    options=[model] if model else []
+    status={'availability':'unavailable','reason':'installed_lookup_failed','scope':'pinned_route_only'}
+    if managed:
+        status={'availability':'available','scope':'reviewed_models'}
+    else:
+        try:
+            installed=engine_client.local_models()
+            options=list(dict.fromkeys([*options,*installed]))
+            status={'availability':'available','scope':'installed_models'}
+        except (EngineClientError,EngineUnreachableError,AttributeError):pass
+    return {'id':'ollama','available':True,'managed':managed,'readiness':'checked_on_start',
+        'model':'ollama:'+model if model else None,'models':options,'model_list':status}
+
 @app.get("/api/model-routes")
 def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     """The engine resolves routes; legacy env keys only seed the initial choice."""
@@ -1018,9 +1033,7 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
         routes=[]
         for route in ('deepseek','ollama'):
             if route=='ollama':
-                routes.append({'id':'ollama','available':True,'managed':True,'readiness':'checked_on_start',
-                    'model':'ollama:'+admitted_models['ollama'] if admitted_models.get('ollama') else None,
-                    'models':[admitted_models['ollama']] if admitted_models.get('ollama') else []})
+                routes.append(_ollama_route_choice(admitted_models.get('ollama'),managed=True))
                 continue
             errors=[];models=None;model=None
             if route=='deepseek' and not (os.environ.get('DEEPSEEK_API_KEY') or '').strip():
@@ -1049,8 +1062,7 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     for route in ("ollama","deepseek"):
         if route=='ollama':
             model=(default or {}).get('model') if (default or {}).get('route')=='ollama' else None
-            routes.append({'id':'ollama','available':True,'readiness':'checked_on_start',
-                'model':'ollama:'+model if model else None,'models':[model] if model else []})
+            routes.append(_ollama_route_choice(model))
             continue
         try:
             initial_model=(default or {}).get("model") if route==(default or {}).get("route") else None
