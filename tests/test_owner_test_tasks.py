@@ -142,6 +142,8 @@ def test_success_purge_deletes_checkpoint_payload(store,operator):
     t,sid=completed_test(store);blob=b'private checkpoint'
     with psycopg.connect(DSN) as c:
         c.execute("INSERT INTO checkpoint_blobs(thread_id,checkpoint_ns,channel,version,type,blob) VALUES(%s,'','private','1','bytes',%s)",(sid,blob))
+    with psycopg.connect(DSN) as c:
+        c.execute("UPDATE engine_sessions SET placement_instance='released-instance',lease_expires_at=1 WHERE session_id=%s",(sid,))
     with tenant_context(A):store.purge_test_task(t['task_id'],confirm=True)
     with psycopg.connect(DSN) as c:
         assert c.execute('SELECT count(*) FROM checkpoint_blobs WHERE thread_id=%s',(sid,)).fetchone()[0]==0

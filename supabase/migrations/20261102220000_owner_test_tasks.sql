@@ -45,7 +45,7 @@ BEGIN
   OR NOT EXISTS(SELECT 1 FROM public.decision_reviews WHERE task_id=target_task AND revision='child-operation-v1' AND payload::jsonb->'operation'->>'kind'='interview.start')
   OR NOT EXISTS(SELECT 1 FROM public.decision_reviews WHERE task_id=target_task AND revision='child-operation-v1' AND payload::jsonb->'operation'->>'kind'='interview.answer')
   OR EXISTS(SELECT 1 FROM public.worker_jobs WHERE task_id=target_task AND state<>'done')
-  OR EXISTS(SELECT 1 FROM public.engine_sessions WHERE task_id=target_task AND (placement_instance IS NOT NULL OR lease_expires_at>extract(epoch FROM clock_timestamp())))
+  OR EXISTS(SELECT 1 FROM public.engine_sessions WHERE task_id=target_task AND lease_expires_at>extract(epoch FROM clock_timestamp()))
   OR EXISTS(SELECT 1 FROM public.provider_attempts p JOIN public.worker_jobs j USING(job_id) WHERE j.task_id=target_task AND (p.state NOT IN ('settled','cancelled') OR (p.state='settled' AND (p.expense_actual IS NULL OR p.retail_actual IS NULL))))
   OR EXISTS(SELECT 1 FROM public.retail_compute_segments r JOIN public.worker_jobs j USING(job_id) WHERE j.task_id=target_task AND r.state<>'settled')
   OR EXISTS(SELECT 1 FROM public.credit_charges c JOIN public.provider_attempts p USING(attempt_id) JOIN public.worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=target_task AND c.state='pending')
