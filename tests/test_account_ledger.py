@@ -166,16 +166,16 @@ def test_stuck_compute_records_are_listed_with_what_blocks_and_what_can_be_relea
     # Shy's live case: two failed Starts left unresolved compute records and no provider call, which blocks every later Start.
     db=Db(ACCOUNT,segments=[segment(2),segment(1),segment(3,'settled','done')])
     r=account_ledger.read(db,A,Decimal('1'));t=r['text']
-    assert 'Compute records: 3, 2 not settled, 2 block new work, 2 can be released below.' in t
-    assert 'unresolved' in t and 'blocks new work: yes  releasable: yes' in t and t.count('provider calls 0')==2
-    assert [s['releasable'] for s in r['segments']]==[True,True] and all(s['blocks_admission'] for s in r['segments'])
+    assert 'Compute records: 3, 2 not settled, 0 block new work, 2 can be released below.' in t
+    assert 'unresolved' in t and 'blocks new work: no  releasable: yes' in t and t.count('provider calls 0')==2
+    assert [s['releasable'] for s in r['segments']]==[True,True] and all(not s['blocks_admission'] for s in r['segments'])
     assert 'job00000003' not in t and set(r['segments'][0])=={'key','job','phase','state','job_state','provider_calls','blocks_admission','releasable'}
 
 
 def test_a_record_with_a_provider_call_still_in_flight_blocks_but_cannot_be_released():
     db=Db(ACCOUNT,segments=[segment(1)],seg_attempts=[{'job_id':'job00000001','n':1}],seg_nonterminal=[{'job_id':'job00000001','n':1}])
     r=account_ledger.read(db,A,Decimal('1'))
-    assert r['segments'][0]['blocks_admission'] is True and r['segments'][0]['releasable'] is False and 'releasable: no' in r['text']
+    assert r['segments'][0]['blocks_admission'] is False and r['segments'][0]['releasable'] is False and 'releasable: no' in r['text']
 
 
 def test_a_crashed_record_whose_provider_calls_all_settled_can_be_released():
@@ -183,7 +183,7 @@ def test_a_crashed_record_whose_provider_calls_all_settled_can_be_released():
     # charge is final; the owner releases it and admission unblocks.
     db=Db(ACCOUNT,segments=[segment(1)],seg_attempts=[{'job_id':'job00000001','n':2}],seg_tokens=[{'job_id':'job00000001','n':1}])
     r=account_ledger.read(db,A,Decimal('1'))
-    assert r['segments'][0]['blocks_admission'] is True and r['segments'][0]['releasable'] is True and 'releasable: yes' in r['text']
+    assert r['segments'][0]['blocks_admission'] is False and r['segments'][0]['releasable'] is True and 'releasable: yes' in r['text']
 
 
 def test_a_record_of_a_running_job_neither_blocks_nor_releases():

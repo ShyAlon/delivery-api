@@ -91,8 +91,8 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
     now=time.time()
     totals=store._execute_native('SELECT * FROM public.requi_admission_totals(%s)',(now,)).fetchone()
     if totals['overruns']:raise AdmissionDenied('actual input exceeded estimate; new admission held for review')
-    if 'retail_formula' in quote and store._execute_native("SELECT 1 FROM retail_compute_segments r JOIN worker_jobs w ON r.job_id=w.job_id WHERE r.owner_id=%s AND (r.state='unresolved' OR (r.state='pending' AND w.state<>'running')) LIMIT 1",(owner,)).fetchone():raise AdmissionDenied('unresolved compute accounting requires review')
-    if totals['uncertain']:raise AdmissionDenied('uncertain provider usage requires review')
+    # Uncertain outcomes remain audited liabilities, not an owner-wide stop.
+    # Their reserved amounts still count in used_expense/used_retail.
     if totals['held']>=limits['concurrency_max']:raise AdmissionDenied('owner attempt concurrency exhausted')
     if limits['rate_max'] is not None and totals['recent']>=limits['rate_max']:
         raise AdmissionDenied('owner attempt rate exhausted')
@@ -159,6 +159,7 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
         if isinstance(usage,dict) and isinstance(usage.get('refusal'),str):detail['refusal']=scrub(usage['refusal'])[:300]
         store.audit(str(row['owner_id']),'provider.attempt.cancelled',store.worker_job(row['job_id'])['task_id'],detail)
     elif action=='uncertain':
+        if row['state']=='uncertain':return dict(row)
         if row['state'] not in ('dispatched','uncertain'):raise AdmissionDenied('only dispatched attempts can be uncertain')
         store._execute_native("UPDATE provider_attempts SET state='uncertain',updated_at=%s WHERE attempt_id=%s",(time.time(),attempt_id), write=True)
     elif action=='settle':

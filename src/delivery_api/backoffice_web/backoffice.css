@@ -3,3 +3,5 @@
 .operator-header>.badge{flex:none;margin-left:auto}.backoffice .operator-header .brand span{flex:none}.backoffice .operator-intro .badge{display:inline-block}.backoffice .tabs{scroll-margin-top:80px}.backoffice .panel h2{font-size:24px}.backoffice .tabs button.active:hover{background:var(--ink)}
 
 .backoffice dialog:has(.force-plan){width:min(900px,90vw);max-width:900px;max-height:90vh;overflow:auto}.force-plan{max-height:32vh;overflow:auto;background:var(--paper);padding:14px;border-radius:10px;font-size:12px}.backoffice dialog #force-stop-phrase{display:block;width:100%;margin:12px 0}
+
+.accounting-warning{padding:12px;border:1px solid #9c6418;background:#fff2cf;color:#684100;}

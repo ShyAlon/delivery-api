@@ -23,6 +23,7 @@ APPROVED_DESTRUCTIVE={'20261101124000_visible_task_names.sql':'c39397fa2d8718d6c
 # not a grant to delete provider attempts, artifacts, task history or money rows.
 # Hash mismatch, rename or another destructive keyword always refuses.
 PROJECTION_FUNCTION_REVIEW={
+ '20261102070000_uncertainty_is_audit_not_admission.sql':'ddb46f7c130b92aec1be95de754580559840ac3c38de34f153e8673fc67597c7',
  '20261031163000_admission_totals.sql':'3e62b46bb60da59c02016830f5fd74492d10b435714c253f56a7dd2a9c229b10',
  '20261031180000_expense_totals.sql':'06a9b6f68613018c2e2f265f9d2ab7d4c6ccab7ee0a8fda1e37a016458a0e44b',
 }
@@ -45,7 +46,7 @@ def review_projection_functions(rows,confirm):
         if PROJECTION_FUNCTION_REVIEW.get(name)!=digest or row['destructive']!=['DELETE']:
             raise ValueError('refused destructive migration '+name+'; not an exact reviewed projection-function file')
         print('REVIEW',name,'SHA256',digest)
-        print('Defines private derived-cache DELETE functions. Does not authorize deletion of source task, artifact or provider evidence.')
+        print('Defines private projection functions or clears derived caches only. Does not delete source task, artifact, money or provider evidence.')
         print('Read the exact SQL before confirming. Creating these functions enables their later normal trigger/read behavior.')
         expected='REVIEW FUNCTIONS '+name+' SHA256 '+digest
         if confirm('Type "'+expected+'": ')!=expected:raise ValueError('projection-function confirmation did not match; no changes')

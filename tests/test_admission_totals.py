@@ -24,8 +24,8 @@ def totals(s):
 
 def oracle():
     with psycopg.connect(DSN) as c:
-        return c.execute('''SELECT count(*) FILTER(WHERE input_estimate_overrun),
-        count(*) FILTER(WHERE state IN ('reserved','dispatched','uncertain')),
+        return c.execute('''SELECT count(*) FILTER(WHERE input_estimate_overrun AND state<>'uncertain'),
+        count(*) FILTER(WHERE state IN ('reserved','dispatched')),
         count(*) FILTER(WHERE state='uncertain'),
         count(*) FILTER(WHERE created_at>%s-rate_window_seconds),
         COALESCE(sum(CASE WHEN state='settled' THEN expense_actual ELSE expense_reserved END) FILTER(WHERE state IN ('reserved','dispatched','uncertain','failure_waived') OR (state='settled' AND created_at>%s-period_seconds)),0),

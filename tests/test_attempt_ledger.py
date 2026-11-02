@@ -51,14 +51,14 @@ def test_reserve_dispatch_settle_replays_and_owner_isolation(ledger):
         with pytest.raises(AdmissionDenied):s.transition_provider_attempt(attempt,'cancel')
         with pytest.raises(AdmissionDenied):s.reserve_provider_attempt(job,uuid.uuid4().hex,Q,'foreign')
 
-def test_missing_overbound_usage_stays_held_and_blocks_next_attempt(ledger):
+def test_missing_overbound_usage_stays_held_and_allows_independent_attempt(ledger):
     s,tid,job=ledger;attempt=uuid.uuid4().hex
     with tenant_context(A):
         s.reserve_provider_attempt(job,attempt,Q,'digest');s.transition_provider_attempt(attempt,'start')
         result=s.transition_provider_attempt(attempt,'settle',{'input_tokens':11,'output_tokens':1})
         assert result['state']=='uncertain' and result['expense_actual'] is None
         with pytest.raises(AdmissionDenied):s.transition_provider_attempt(attempt,'cancel')
-        with pytest.raises(AdmissionDenied):s.reserve_provider_attempt(job,uuid.uuid4().hex,Q,'next')
+        assert s.reserve_provider_attempt(job,uuid.uuid4().hex,Q,'next')['state']=='reserved'
 
 def test_parallel_attempts_share_owner_concurrency_and_cancellation(ledger):
     s,tid,job=ledger
@@ -394,9 +394,9 @@ def test_explicit_disabled_caps_keep_three_owner_wide_slots(ledger):
         with pytest.raises(AdmissionDenied,match='concurrency'):s.reserve_provider_attempt(job,uuid.uuid4().hex,large,'fourth')
         s.transition_provider_attempt(attempts[0],'cancel')
         assert s.reserve_provider_attempt(job,uuid.uuid4().hex,large,'replacement')['state']=='reserved'
-        # Disabled quotas do not disable uncertain-outcome protection.
+        # Uncertainty keeps the bill, not an active-call slot or owner stop.
         s.transition_provider_attempt(attempts[1],'start');s.transition_provider_attempt(attempts[1],'uncertain')
-        with pytest.raises(AdmissionDenied,match='uncertain'):s.reserve_provider_attempt(job,uuid.uuid4().hex,large,'uncertain-next')
+        assert s.reserve_provider_attempt(job,uuid.uuid4().hex,large,'uncertain-next')['state']=='reserved'
 
 
 def test_settlement_timestamp_is_recorded_once_and_replay_preserved(ledger):
@@ -923,13 +923,13 @@ def test_confirmed_guard_ignores_holds_and_inflight_calls_finish(expense_guard):
         with s._postgres.transaction() as c:assert c.execute("SELECT count(*) AS n FROM expense_alert_outbox WHERE payload->>'accounting'='confirmed_provider_charges'").fetchone()['n']==2
 
 
-def test_confirmed_guard_unknown_outcome_blocks_without_estimated_charge(expense_guard):
+def test_confirmed_guard_unknown_outcome_warns_without_estimated_charge(expense_guard):
     s,tid,job=expense_guard
     with tenant_context(A):
         first=uuid.uuid4().hex;s.reserve_provider_attempt(job,first,LAUNCH_Q,'unknown')
         assert s.start_launch_provider_attempt(first)['started']
         s.transition_provider_attempt(first,'settle',None)
-        assert s.confirmed_expense_admission(job)=='unknown_provider_outcome'
+        assert s.confirmed_expense_admission(job)=='allowed'
         with s._postgres.transaction() as c:
             assert c.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']==1
             assert c.execute("SELECT count(*) AS n FROM expense_alert_outbox WHERE payload->>'accounting'='confirmed_provider_charges'").fetchone()['n']==0
@@ -1478,3 +1478,25 @@ def test_atomic_dispatch_refuses_uncommitted_outer_store_operation(ledger):
                 g.admit_serialized(bind_attempt=lambda a:None,authorize=lambda:None)
         finally:s._connection.reset(token)
     assert not seen
+
+
+def test_real_paid_and_free_dispatch_after_uncertain_bill_with_audit(expense_guard):
+    s,tid,job=expense_guard
+    with tenant_context(A):
+        unknown=uuid.uuid4().hex
+        s.reserve_provider_attempt(job,unknown,LAUNCH_Q,'old-unknown')
+        assert s.start_launch_provider_attempt(unknown)['started']
+        original=s.transition_provider_attempt(unknown,'settle',None)
+        local=Q|{'provider':'ollama','expense_input':0,'expense_output':0,'retail_input':0,'retail_output':0,'retail_units_per_credit':10**9}
+        free=uuid.uuid4().hex
+        s.reserve_provider_attempt(job,free,local,'new-free')
+        assert s.transition_provider_attempt(free,'start',require_prepaid=True)['state']=='dispatched'
+        assert s.transition_provider_attempt(free,'settle',{'input_tokens':1,'output_tokens':1},require_prepaid=True)['state']=='settled'
+        paid=uuid.uuid4().hex
+        assert s.reserve_provider_attempt(job,paid,LAUNCH_Q,'new-paid')['state']=='reserved'
+        assert s.start_launch_provider_attempt(paid)['started']
+        assert s.transition_provider_attempt(paid,'settle',LAUNCH_USAGE,require_prepaid=True)['state']=='settled'
+        assert s.provider_attempt(unknown)==original
+        entries=[e for e in s.audit_entries(tid) if e['action']=='provider.attempt.uncertain']
+        assert len(entries)==1 and entries[0]['detail']['attempt_id']==unknown
+        assert entries[0]['detail']['automatic_retry'] is False

@@ -1835,7 +1835,12 @@ FROM tasks t"""
 
     def transition_provider_attempt(self,attempt_id,action,usage=None,*,require_prepaid=False):
         from .attempt_ledger import transition
+        self._execute_native('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
+        before=self.provider_attempt(attempt_id)
         result=transition(self,attempt_id,action,usage,require_prepaid=require_prepaid)
+        if result.get('state')=='uncertain' and (not before or before['state']!='uncertain'):
+            self.audit(str(result['owner_id']),'provider.attempt.uncertain',self.worker_job(result['job_id'])['task_id'],
+                {'attempt_id':attempt_id,'job_id':result['job_id'],'outcome':'unknown','admission':'warning_only','automatic_retry':False})
         if result.get('state')=='uncertain':
             from .operational_alerts import emit
             emit('unresolved_accounting','provider_usage')

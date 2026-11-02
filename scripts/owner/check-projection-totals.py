@@ -9,8 +9,8 @@ def module(path,name):
 
 ADMISSION="""
 WITH expected AS (
- SELECT t.owner_id,count(*) FILTER(WHERE a.input_estimate_overrun) overruns,
- count(*) FILTER(WHERE a.state IN ('reserved','dispatched','uncertain')) held,
+ SELECT t.owner_id,count(*) FILTER(WHERE a.input_estimate_overrun AND a.state<>'uncertain') overruns,
+ count(*) FILTER(WHERE a.state IN ('reserved','dispatched')) held,
  count(*) FILTER(WHERE a.state='uncertain') uncertain,
  count(*) FILTER(WHERE a.created_at>t.as_of-t.rate_window_seconds) recent,
  COALESCE(sum(CASE WHEN a.state IN ('reserved','dispatched','uncertain','failure_waived') THEN a.expense_reserved WHEN a.state='settled' AND a.created_at>t.as_of-t.period_seconds THEN a.expense_actual ELSE 0 END),0) used_expense,

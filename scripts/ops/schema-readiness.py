@@ -75,6 +75,7 @@ MIGRATIONS={
  '20261101124000_visible_task_names.sql':('visible-title-index:idx_tasks_tenant_title',),
  '20261101150000_preview_spend_approvals.sql':('table:preview_spend_approvals',),
  '20261101160000_model_pins.sql':('table:model_pin_revisions','table:model_pin_heads','table:operator_expense_policy_revisions','table:operator_expense_policy_head'),
+ '20261102070000_uncertainty_is_audit_not_admission.sql':('function0:requi_uncertainty_warning_policy',),
 }
 ROLES=('requi_metrics_writer','requi_engine_config_read','requi_operator_usage','requi_model_pin_editor')
 
