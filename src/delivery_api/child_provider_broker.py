@@ -21,6 +21,16 @@ MAX_RESPONSE=8*1024*1024
 class BrokerPaused(RuntimeError):pass
 
 
+class ProviderRefused(BrokerPaused):
+    """Only parent-generated, sanitized HTTP refusal text may cross to the UI."""
+    def __init__(self,error):
+        from .provider_http import ProviderHTTPError
+        if type(error) is not ProviderHTTPError:raise TypeError('typed parent HTTP refusal required')
+        super().__init__(str(error).replace('Review the failed attempt before retrying.',
+            'Reconcile this attempt before retrying. Charges may be uncertain.'))
+
+
+
 class ProviderCall(BaseModel):
     model_config=ConfigDict(extra='forbid',strict=True,frozen=True)
     call_id:Ref
@@ -94,6 +104,8 @@ class ChildProviderBroker:
                     emit('provider_failure','provider_outcome_incomplete')
                     try:self.gateway.uncertain(attempt)
                     except Exception:pass  # Existing durable dispatched row remains held.
+                from .provider_http import ProviderHTTPError
+                if type(exc) is ProviderHTTPError:raise ProviderRefused(exc) from exc
                 raise BrokerPaused('provider outcome incomplete; reconcile before retry') from exc
             return self._deliver(self.journal.load(key))
 
