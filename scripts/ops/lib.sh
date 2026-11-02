@@ -2,8 +2,9 @@
 # Shared start for the operations scripts. Source it, then call: ops_start <name> "$0" [--venv]
 # It brings this checkout to origin/main by itself, re-runs the script if the pull changed it,
 # prints the ops identity, and refuses to go on if anything under scripts/ops differs from origin/main.
+. "$(dirname "${BASH_SOURCE[0]}")/terminal-log.sh"
 OPS_NAME=""; OPS_SELF=""; OPS_NOTE="Nothing was changed on the server."
-abort(){ echo; echo "ABORTED [$1]: $2"; echo "${3:-$OPS_NOTE}"; echo "Fix: ${4:-run scripts/ops/$OPS_NAME.sh again; if it repeats, send me this whole output}"; echo "Then run: scripts/ops/$OPS_NAME.sh"; exit 1; }
+abort(){ echo; error "ABORTED [$1]: $2"; echo "${3:-$OPS_NOTE}"; echo "Fix: ${4:-run scripts/ops/$OPS_NAME.sh again; if it repeats, send me this whole output}"; echo "Then run: scripts/ops/$OPS_NAME.sh"; exit 1; }
 ops_venv(){
   if [ -x .venv/bin/python ]; then
     # An existing venv predating the extras never received them (the pool redesign added
@@ -41,7 +42,7 @@ preview_ollama_env(){
   [ -z "${VMODEL_OLLAMA_NUM_CTX:-}" ] || printf 'VMODEL_OLLAMA_NUM_CTX=%s\n' "$VMODEL_OLLAMA_NUM_CTX" >> "$1"
 }
 ops_start(){
-  OPS_NAME=$1; OPS_SELF=$2; local want_venv=${3:-}
+  OPS_NAME=$1; OPS_SELF=$2; local want_venv=${3:-} settings_required=${4:-}
   local repo; repo=$(cd "$(dirname "$OPS_SELF")/../.." 2>/dev/null && pwd) && git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || abort NO-REPO "$OPS_SELF is not inside a git checkout" "Nothing changed." "git clone https://github.com/ShyAlon/delivery-api ~/development/require/delivery-api   (then run its scripts/ops/$OPS_NAME.sh)"
   cd "$repo"
   git remote get-url origin | grep -qi 'ShyAlon/delivery-api' || abort REMOTE "origin is not ShyAlon/delivery-api" "" "git -C $PWD remote -v   (this must be your delivery-api checkout)"
@@ -58,6 +59,9 @@ ops_start(){
   fi
   [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || abort STALE "this checkout is not at origin/main after pulling" "" "git -C $PWD status"
   git diff --quiet origin/main -- scripts/ops || abort OPS-DIFFERS "scripts/ops differs from origin/main" "" "git -C $PWD diff origin/main -- scripts/ops   (discard your edits)"
+  # Settings starts a child with the loaded environment. Only that child prints
+  # the identity/plan; the parent has not begun a visible run or side effects.
+  if [ -n "$settings_required" ]; then ops_settings "$settings_required"; fi
   echo "ops $(git rev-parse --short=8 HEAD)  ($OPS_NAME, origin/main)"
   if ! command -v ops >/dev/null 2>&1 && [ -t 0 ] && [ -z "${OPS_REEXEC:-}" ]; then
     printf 'ops is not on your PATH yet. Type "yes" to put it there (afterwards you only type: ops %s), or press Enter to skip: ' "$OPS_NAME"; read -r _a

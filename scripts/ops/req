@@ -6,20 +6,12 @@
 #   req status     read-only: git status of every repo under ~/development/require
 #   req clean      keep the newest pending script, archive the other pending ones to requi-done/stale
 set -uo pipefail
-# Color is presentation only: no ANSI in pipes/files/ZIPs, no exit-code masking.
-if [ -t 1 ] && [ -z "${NO_COLOR+x}" ] && [ "${REQUI_TERMINAL_COLOR_ACTIVE:-0}" != 1 ] && command -v python3 >/dev/null 2>&1; then
-  color_self=$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")
-  color_filter="$(dirname "$color_self")/terminal-color.py"
-  if [ -f "$color_filter" ]; then
-    set +e
-    REQUI_TERMINAL_COLOR_ACTIVE=1 bash "$color_self" "$@" 2>&1 | python3 "$color_filter"
-    color_rc=${PIPESTATUS[0]};exit "$color_rc"
-  fi
-fi
+
+. "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")")/terminal-log.sh"
 case "${1:-}" in
 debug|migrate|policy|preflight|force-stop|stop-all|preview|preview-free|reset-preview|locks)
   REPO="${REQUI_ROOT:-$HOME/development/require}/delivery-api"
-  fail(){ echo "REQ ABORTED: $* No owner step was run." >&2; exit 1; }
+  fail(){ error "REQ ABORTED: $* No owner step was run." >&2; exit 1; }
   [ -d "$REPO/.git" ] || fail "delivery-api checkout missing at $REPO."
   [ "$(git -C "$REPO" branch --show-current)" = main ] || fail "switch the checkout to main first."
   [ -z "$(git -C "$REPO" status --porcelain --untracked-files=no)" ] || fail "tracked checkout changes; commit/stash them first."
@@ -64,8 +56,8 @@ list) cands | while IFS=$'\t' read -r t f n s e; do echo "$n $s  $(basename "$f"
 esac
 case "${1:-}" in
  "") WANT="";;
- download) shift; WANT=${1:-}; [ "$#" = 1 ] && [ -n "$WANT" ] || { echo 'REQ ABORTED: use req download NAME for a Downloads script.' >&2; exit 1; };;
- *) echo 'REQ ABORTED: unknown command. Owner commands never fall back to Downloads. Use req help, or req download NAME explicitly.' >&2; exit 1;;
+ download) shift; WANT=${1:-}; [ "$#" = 1 ] && [ -n "$WANT" ] || { error 'REQ ABORTED: use req download NAME for a Downloads script.' >&2; exit 1; };;
+ *) error 'REQ ABORTED: unknown command. Owner commands never fall back to Downloads. Use req help, or req download NAME explicitly.' >&2; exit 1;;
 esac
 PICK=""
 NOW=$(date +%s)
@@ -87,7 +79,7 @@ done < <(cands)
 [ -n "$PICK" ] || { echo "No Requi.re script found in $DL (looked for *.txt with a '# REQUI-SCRIPT' line)."; echo "Fix: download the attachment again, then run: req"; exit 1; }
 IFS='|' read -r F N S T <<<"$PICK"
 A=$(sha8 "$F")
-[ "$A" = "$S" ] || { echo "ABORTED: $(basename "$F") is damaged or edited (content hash $A, expected $S). Nothing was run."; echo "Fix: download the attachment again, then run: req"; exit 1; }
+[ "$A" = "$S" ] || { error "ABORTED: $(basename "$F") is damaged or edited (content hash $A, expected $S). Nothing was run."; echo "Fix: download the attachment again, then run: req"; exit 1; }
 echo "Running $N $S ($(basename "$F"))"
 bash "$F"; RC=$?
 if [ $RC -eq 0 ]; then mkdir -p "$DONE"; mv "$F" "$DONE/$N-$S-$(date +%H%M%S).txt"; echo "(script moved to $DONE so req cannot re-run it)"
