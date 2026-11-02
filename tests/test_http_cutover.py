@@ -300,7 +300,7 @@ def _case_route_preview_shows_conflict_without_switching(monkeypatch):
  routes=module.model_routes(a=module.auth.Actor('test-owner','Test owner'))['routes']
  assert routes[0]['available'] and routes[0]['model']=='ollama:phi4'
  assert routes[1]['available'] is False
- assert 'INTERVIEW_ENGINE_MODEL_PROBING' in routes[1]['error']
+ assert routes[1]['error']=='DeepSeek is temporarily unavailable. Please try again later.'
 
 
 def _case_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path,monkeypatch,pg_scoped_workspace):

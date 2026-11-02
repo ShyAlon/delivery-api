@@ -61,10 +61,10 @@ def test_customer_route_rejects_operator_text_and_links_even_from_stale_api(pg_p
  assert not any(term in page.locator('body').inner_text().lower() for term in ('back office','model pins','money gateway'))
  expect(page.get_by_role('button',name='Start interview',exact=True)).to_be_disabled()
  assert page.locator('a[href*="8031"],.model-pins-repair').count()==0
- page.screenshot(path='/downloads/customer-route-boundary.png',full_page=True)
+ page.screenshot(path=str(tmp_path/'customer-route-boundary.png'),full_page=True)
 
 
-def test_shared_loading_is_animated_and_respects_reduced_motion(pg_page,pg_ui):
+def test_shared_loading_is_animated_and_respects_reduced_motion(pg_page,pg_ui,tmp_path):
  page=pg_page
  page.emulate_media(reduced_motion='no-preference')
  page.goto(pg_ui+'/')
@@ -73,6 +73,6 @@ def test_shared_loading_is_animated_and_respects_reduced_motion(pg_page,pg_ui):
  status=page.get_by_role('status').filter(has_text='Loading…')
  expect(status).to_be_visible()
  assert status.evaluate('e=>getComputedStyle(e,"::before").animationName')=='workspace-loading-spin'
- page.screenshot(path='/downloads/customer-loading-motion.png')
+ page.screenshot(path=str(tmp_path/'customer-loading-motion.png'))
  page.emulate_media(reduced_motion='reduce')
  assert status.evaluate('e=>getComputedStyle(e,"::before").animationName')=='none'
