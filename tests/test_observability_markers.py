@@ -82,18 +82,19 @@ def test_artifact_download_marks_success_and_refusal(marks, monkeypatch, tmp_pat
     f = tmp_path / "out.json"; f.write_text("{}")
     monkeypatch.setattr(module, "_task_artifact", lambda *a: f)
     monkeypatch.setattr(config, "CLOUD_TENANTS", False)
-    monkeypatch.setattr(module,"store",NS(read_artifact_bytes=lambda *a:b"{}"))
+    monkeypatch.setattr(module,"store",NS(task=lambda tid:{"task_id":tid,"is_test":False},read_artifact_bytes=lambda *a:b"{}"))
     assert module.task_artifact_download("t1", "needs", "out.json")
     assert "task.export" in _kinds(marks)
     monkeypatch.setattr(config, "CLOUD_TENANTS", True)
     monkeypatch.setattr(config, "ARTIFACT_MANIFEST_READS", True)
-    monkeypatch.setattr(module, "store", NS(_postgres=True,read_artifact_bytes=lambda *a: (_ for _ in ()).throw(KeyError())))
+    monkeypatch.setattr(module, "store", NS(task=lambda tid:{"task_id":tid,"is_test":False},_postgres=True,read_artifact_bytes=lambda *a: (_ for _ in ()).throw(KeyError())))
     with pytest.raises(HTTPException):
         module.task_artifact_download("t1", "needs", "out.json")
     assert "task.export.refused" in _kinds(marks)
 
 
 def test_artifacts_zip_refusal_is_marked(marks, monkeypatch):
+    monkeypatch.setattr(module,"store",NS(task=lambda tid:{"task_id":tid,"is_test":False}))
     monkeypatch.delenv("DELIVERY_LOCAL_PREVIEW", raising=False)
     monkeypatch.setattr(module, "_task_artifact_snapshot", lambda snapshot_task_id, **kwargs: [])
     with pytest.raises(HTTPException):

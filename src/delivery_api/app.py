@@ -1891,8 +1891,8 @@ def task_artifact_view(task_id:str,phase:str,name:str):
 
 @app.get("/api/tasks/{task_id}/artifacts.zip")
 def task_artifacts_zip(task_id:str):
-    _deny_test_product_export(task_id)
     if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1" and os.environ.get("DELIVERY_CLOUD_EXECUTION")!="1":raise HTTPException(404,"Artifact downloads are not part of a local preview")
+    _deny_test_product_export(task_id)
     records=_task_artifact_snapshot(task_id)
     if not records:
         activity("task.export.refused","Artifacts zip refused: no artifacts",task_id=task_id,export="zip",reason="no_artifacts")

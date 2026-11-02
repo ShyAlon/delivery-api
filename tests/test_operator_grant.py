@@ -159,19 +159,21 @@ def test_the_migration_is_repeatable_and_the_registry_accepts_the_new_capability
     sql = next(pathlib.Path(__file__).resolve().parents[1].glob("supabase/migrations/20261020150000_operator_grant_credits.sql")).read_text()
     subject = str(uuid.uuid4())
     with psycopg.connect(DSN, autocommit=True) as c:
-        c.execute("UPDATE public.operator_principals SET enabled=false")
-        c.execute("INSERT INTO auth.users(id,email) VALUES (%s,%s)", (subject, "mig-%s@example.test" % subject[:8]))
-        c.execute("INSERT INTO public.operator_principals(subject,registry_version,capabilities,enabled) VALUES (%s,'ops-v1','{analytics.read,logs.read}',true)", (subject,))
-        try:
-            c.execute(sql); c.execute(sql)
-            assert c.execute("SELECT capabilities FROM public.operator_principals WHERE subject=%s", (subject,)).fetchone()[0].count("credits.allocate") == 1
-            with pytest.raises(psycopg.errors.CheckViolation):
-                c.execute("UPDATE public.operator_principals SET capabilities='{users.suspend}' WHERE subject=%s", (subject,))
-            c.execute("UPDATE public.operator_principals SET capabilities='{usage.read,payments.read}' WHERE subject=%s", (subject,))   # earlier capabilities stay allowed
-        finally:
-            c.execute("DELETE FROM public.operator_principals WHERE subject=%s", (subject,))
-            c.execute("DELETE FROM public.users WHERE user_id=%s", (subject,))
-            c.execute("DELETE FROM auth.users WHERE id=%s", (subject,))
+        # Never leave the shared server at the historical constraint version.
+        with c.transaction(force_rollback=True):
+            c.execute("UPDATE public.operator_principals SET enabled=false")
+            c.execute("INSERT INTO auth.users(id,email) VALUES (%s,%s)", (subject, "mig-%s@example.test" % subject[:8]))
+            c.execute("INSERT INTO public.operator_principals(subject,registry_version,capabilities,enabled) VALUES (%s,'ops-v1','{analytics.read,logs.read}',true)", (subject,))
+            try:
+                c.execute(sql); c.execute(sql)
+                assert c.execute("SELECT capabilities FROM public.operator_principals WHERE subject=%s", (subject,)).fetchone()[0].count("credits.allocate") == 1
+                with pytest.raises(psycopg.errors.CheckViolation), c.transaction():
+                    c.execute("UPDATE public.operator_principals SET capabilities='{users.suspend}' WHERE subject=%s", (subject,))
+                c.execute("UPDATE public.operator_principals SET capabilities='{usage.read,payments.read}' WHERE subject=%s", (subject,))   # earlier capabilities stay allowed
+            finally:
+                c.execute("DELETE FROM public.operator_principals WHERE subject=%s", (subject,))
+                c.execute("DELETE FROM public.users WHERE user_id=%s", (subject,))
+                c.execute("DELETE FROM auth.users WHERE id=%s", (subject,))
 
 
 from test_cloud_api import cloud, header  # noqa: E402,F401
