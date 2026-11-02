@@ -68,3 +68,30 @@ import pytest
 def scoped_start_store(pg_workspace_factory):
     from delivery_api.tenancy import tenant_context
     with pg_workspace_factory() as w,tenant_context(w.scope):yield w.store
+
+
+def test_real_start_failure_publishes_failed_state_before_error_wakes_stream(monkeypatch,scoped_start_store):
+    """Actual async Start completion on migrated PG, not a mocked watcher."""
+    import threading
+    from delivery_api import event_bus
+    store=scoped_start_store;tid=store.create_task('child fails')['task_id'];sid=str(uuid4())
+    store.begin_interview_start(tid,sid,'deepseek')
+    loop_thread=threading.get_ident();write_threads=[];notified=[]
+    original=store.add_event
+    def add(*args,**kwargs):
+        write_threads.append(threading.get_ident());return original(*args,**kwargs)
+    monkeypatch.setattr(store,'add_event',add)
+    notify=event_bus.notify
+    def inspect(task):
+        if task==tid:notified.append(store.task(tid)['state'])
+        notify(task)
+    monkeypatch.setattr(event_bus,'notify',inspect)
+    class Failed:
+        def start(self,request):raise RuntimeError('fixture provider rejected HTTP415')
+        def progress(self,*args):raise KeyError(sid)
+    monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',Failed())
+    asyncio.run(module._complete_interview_start(tid,sid,'deepseek',None,'test',{},'owner'))
+    assert store.task(tid)['state']=='failed'
+    assert notified and all(state=='failed' for state in notified)
+    assert write_threads and all(t!=loop_thread for t in write_threads)
+    assert any('HTTP415' in e['message'] for e in store.events(tid))
