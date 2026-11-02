@@ -103,10 +103,19 @@ def note_statement(label,seconds):
     if stats is not None and len(stats.statements)<RequestStats.MAX_STATEMENTS:
         stats.statements.append((label,int(seconds*1000)))
 
+def _publish_notifications(task_ids):
+    from . import event_bus
+    for task_id in task_ids:event_bus.notify(task_id)
+
+
 class TimingConnection:
     """Wraps a raw driver connection so every statement lands in the request's labeled
     statement list. Attributes other than execute pass through to the driver connection."""
-    def __init__(self,inner):self._inner=inner
+    def __init__(self,inner,notifications=None):
+        self._inner=inner;self._notifications=notifications
+    def notify_after_commit(self,task_id):
+        if self._notifications is None:raise RuntimeError('transaction notification scope required')
+        self._notifications.add(task_id)
     def execute(self,sql,params=()):
         started=time.monotonic()
         try:return self._inner.execute(sql,params)
@@ -127,6 +136,7 @@ class _RequestTransaction:
         self.connection=self.transaction=None
         self.broken=self.done=False
         self.cache_invalidations=set()
+        self.notifications=set()
         self.first_begin=None   # when the shared transaction actually opened; the pin window
 
     def finish(self,failed):
@@ -144,6 +154,7 @@ class _RequestTransaction:
             else:
                 transaction.__exit__(None,None,None)
                 self.postgres._release(connection)
+                _publish_notifications(self.notifications)
         except BaseException:
             self.postgres._drop(connection);raise
         finally:
@@ -312,8 +323,10 @@ class ScopedPostgres:
                 shared.lock.release();raise
             if connection is not None:
                 try:
-                    try:yield TimingConnection(connection)
+                    before=set(shared.notifications)
+                    try:yield TimingConnection(connection,shared.notifications)
                     except BaseException:
+                        shared.notifications.intersection_update(before)
                         # Undo only the failed operation; if that cannot be done the request's transaction is discarded at its end
                         # and later calls in the request use their own transaction.
                         try:connection.execute('ROLLBACK TO SAVEPOINT operation_start')
@@ -323,8 +336,9 @@ class ScopedPostgres:
                 return
             shared.lock.release()
         connection,transaction=self._begin(scope,repeatable_read)
+        notifications=set()
         try:
-            yield TimingConnection(connection)
+            yield TimingConnection(connection,notifications)
         except BaseException:
             try:transaction.__exit__(*sys.exc_info())
             except BaseException:self._drop(connection)
@@ -334,6 +348,7 @@ class ScopedPostgres:
         except BaseException:
             self._drop(connection);raise
         self._release(connection)
+        _publish_notifications(notifications)
 
     def begin_request(self,scope):
         """Start sharing one transaction among the store calls of the current read request. Returns (handle, token); call end_context(token) in
