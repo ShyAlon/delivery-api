@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from delivery_api import app as m,cloud_runtime,cloud_execution
 
-def test_operator_sees_scrubbed_actual_pin_reason_and_configured_repair(monkeypatch):
+def test_customer_route_api_never_exposes_operator_evidence_even_to_admin(monkeypatch):
     monkeypatch.setattr(m.config,'CLOUD_TENANTS',True)
     monkeypatch.setattr(m,'cloud_execution_admitted',lambda:False)
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:None)
@@ -12,9 +12,9 @@ def test_operator_sees_scrubbed_actual_pin_reason_and_configured_repair(monkeypa
     monkeypatch.setattr(m.local_route,'local_preview_enabled',lambda:True)
     reply=m.model_routes(SimpleNamespace(admin=True))
     assert all(not r['available'] for r in reply['routes'])
-    for r in reply['routes']:
-        assert 'Choose one reviewed deepseek' in r['error']
-        assert 'secret' not in r['error'] and 'not installed on this server' not in r['error']
-        assert r['repair']['url']=='http://127.0.0.1:8031/#model-pins'
-    customer=m.model_routes(SimpleNamespace(admin=False))
-    assert all('Choose one' not in r['error'] and 'repair' not in r for r in customer['routes'])
+    for actor in (SimpleNamespace(admin=True),SimpleNamespace(admin=False)):
+        customer=m.model_routes(actor)
+        for r in customer['routes']:
+            assert 'temporarily unavailable' in r['error']
+            assert 'repair' not in r
+            assert not any(term in str(r).lower() for term in ('back office','model pins','money gateway','secret','postgresql:','deepseek model'))

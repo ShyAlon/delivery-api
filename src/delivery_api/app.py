@@ -1009,23 +1009,19 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
         gateway=cloud_runtime.gateway_factory()
         open_now=cloud_execution_admitted()
         admitted_models=getattr(gateway,'models',{}) if gateway else {}
-        from . import cloud_execution
-        from .server_log_buffer import scrub
-        closed_reasons=cloud_execution.problems() if not open_now else []
-        # Startup exception strings can include operator details. Keep them out
-        # of customer responses; the operator gets the scrubbed actual reason.
-        closed_message=('Execution is closed: '+'; '.join(scrub(str(x)) for x in closed_reasons)) if a.admin and closed_reasons else 'Execution is temporarily unavailable. The operator must review server readiness.'
-        repair={'kind':'model-pins','label':'Open Model pins in Back office','url':os.environ.get('DELIVERY_BACKOFFICE_URL')} if a.admin and os.environ.get('REQUI_PIN_STORE')=='1' and not open_now else None
+        # This endpoint belongs to the customer workspace, even for an admin.
+        # Raw readiness evidence belongs only to the separate operations surface.
+        closed_message='Interviews are temporarily unavailable. Please try again later.'
         routes=[]
         for route in ('deepseek','ollama'):
             errors=[];models=None;model=None
             if route=='deepseek' and not (os.environ.get('DEEPSEEK_API_KEY') or '').strip():
-                errors.append('missing key: DEEPSEEK_API_KEY is not set on this server')
+                errors.append('DeepSeek is not available on this server.')
             if route=='ollama' and not local_route.local_preview_enabled():
-                errors.append('DELIVERY_LOCAL_PREVIEW is not enabled on this server')
+                errors.append('Local interviews are not enabled on this server.')
             if not open_now:errors.append(closed_message)
-            if gateway is None and open_now:errors.append('The execution engine did not install after readiness checks. Open Debug for startup evidence.')
-            elif gateway is not None and route not in admitted_models:errors.append('Admission gateway is configured for '+', '.join(admitted_models)+' only; no reviewed '+route+' route.')
+            if gateway is None and open_now:errors.append('Interviews are temporarily unavailable. Please try again later.')
+            elif gateway is not None and route not in admitted_models:errors.append(('Local interviews are not available on this server.' if route=='ollama' else 'DeepSeek is not available on this server.'))
             if not errors:
                 try:
                     preview=engine_client.preview_route(route)
@@ -1035,10 +1031,9 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
                     if provider!=route:raise ValueError(f'engine preview returned {provider} for selected {route}')
                     if model!=admitted_models.get(route):raise ValueError(f'Admission gateway reviewed model is {admitted_models.get(route)}; engine selected {model}.')
                 except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
-                    errors.append(exc.error.detail if isinstance(exc,EngineClientError) else str(exc))
+                    errors.append(('Local interviews are temporarily unavailable. Please try again later.' if route=='ollama' else 'DeepSeek is temporarily unavailable. Please try again later.'))
             routes.append({'id':route,'available':not errors,'managed':True,
                 **({'error':' '.join(errors)} if errors else {}),
-                **({'repair':repair} if repair else {}),
                 **({'model':f'{route}:{model}','model_map':models,'models':[model]} if model else {})})
         enabled=next((r['id'] for r in routes if r['available']),None)
         return {'routes':routes,'default_route':{'route':enabled} if enabled else None,'managed':True}
@@ -1063,7 +1058,7 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
                     list_status={'availability':'unavailable','reason':'installed_lookup_failed','scope':'pinned_route_only'}
             routes.append({"id":route,"available":True,"model":f"{provider}:{model}","model_map":models,"models":options,"model_list":list_status})
         except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
-            reason=exc.error.detail if isinstance(exc,EngineClientError) else str(exc)
+            reason=('Local interviews are temporarily unavailable. Please try again later.' if route=='ollama' else 'DeepSeek is temporarily unavailable. Please try again later.')
             if route=="ollama":
                 try:
                     installed=engine_client.local_models()

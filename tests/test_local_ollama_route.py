@@ -237,8 +237,8 @@ def test_deployed_route_list_displays_both_but_only_deepseek_is_admitted(monkeyp
     assert [r['id'] for r in result['routes']]==['deepseek','ollama']
     assert result['routes'][0]['available'] is True
     assert result['routes'][1]['available'] is False
-    assert 'DELIVERY_LOCAL_PREVIEW' in result['routes'][1]['error']
-    assert 'deepseek only' in result['routes'][1]['error']
+    assert 'Local interviews are not enabled' in result['routes'][1]['error']
+    assert 'Local interviews are not available' in result['routes'][1]['error']
     assert result['default_route']=={'route':'deepseek'}
 
 
@@ -265,7 +265,7 @@ def test_a_keyless_deepseek_route_shows_unavailable_missing_key(monkeypatch):
     result = module.model_routes(a=module.auth.Actor('test-owner','Test owner'))
     deepseek = result['routes'][0]
     assert deepseek['available'] is False
-    assert 'missing key' in deepseek['error'] and 'DEEPSEEK_API_KEY' in deepseek['error']
+    assert 'DeepSeek is not available' in deepseek['error']
     assert result['routes'][1]['available'] is True, 'the local route is untouched'
 
 
@@ -276,7 +276,7 @@ def test_a_present_key_cannot_bypass_the_ollama_only_gateway(monkeypatch):
         'model_map': {stage: ['ollama', LOCAL_MODEL] for stage in ('probing', 'distillation')}})
     result = module.model_routes(a=module.auth.Actor('test-owner','Test owner'))
     deepseek = result['routes'][0]
-    assert deepseek['available'] is False and 'ollama only' in deepseek['error']
+    assert deepseek['available'] is False and 'DeepSeek is not available' in deepseek['error']
     assert result['default_route']=={'route':'ollama'}
 
 
@@ -316,7 +316,7 @@ def test_engine_model_must_match_the_installed_gateway(monkeypatch):
     monkeypatch.setattr(module.engine_client,'preview_route',lambda route:{'model_map':{'probing':['ollama','unreviewed-model']}})
     result=module.model_routes(module.auth.Actor('test-owner','Test owner'))
     assert result['routes'][1]['available'] is False
-    assert 'reviewed model' in result['routes'][1]['error']
+    assert 'Local interviews are temporarily unavailable' in result['routes'][1]['error']
     assert result['default_route'] is None
 
 
@@ -326,11 +326,11 @@ def test_missing_gateway_disables_both_without_probing(monkeypatch):
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:None)
     monkeypatch.setattr(module.engine_client,'preview_route',lambda route:(_ for _ in ()).throw(AssertionError('must not probe')))
     result=module.model_routes(module.auth.Actor('test-owner','Test owner'))
-    assert all(not r['available'] and 'engine did not install after readiness checks' in r['error'] for r in result['routes'])
+    assert all(not r['available'] and 'Interviews are temporarily unavailable' in r['error'] for r in result['routes'])
     assert result['default_route'] is None
 
 
-def test_engine_model_missing_reason_is_preserved_below_disabled_route(monkeypatch):
+def test_engine_model_missing_reason_is_plain_below_disabled_route(monkeypatch):
     module=_cloud_app(monkeypatch,flag=True)
     from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
     def missing(route):
@@ -338,7 +338,7 @@ def test_engine_model_missing_reason_is_preserved_below_disabled_route(monkeypat
     monkeypatch.setattr(module.engine_client,'preview_route',missing)
     result=module.model_routes(module.auth.Actor('test-owner','Test owner'))
     assert result['routes'][1]['available'] is False
-    assert result['routes'][1]['error']=='Ollama model phi4 is unavailable; pull phi4 and retry'
+    assert result['routes'][1]['error']=='Local interviews are temporarily unavailable. Please try again later.'
     assert result['default_route'] is None
 
 

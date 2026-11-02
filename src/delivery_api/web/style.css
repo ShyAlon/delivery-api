@@ -382,4 +382,9 @@ details.review-progress>summary>.progress-current{color:var(--ink);margin-top:3p
 @keyframes signal-reveal{from{opacity:.5;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}
 @media(prefers-reduced-motion:reduce){.signal-updated{animation:none}}
 
-.route-unavailable .model-pins-repair{display:block;margin-top:6px;}
+
+/* Shared initial and navigation loading status. Text remains available to AT. */
+.loading{display:flex;align-items:center;justify-content:center;gap:12px}
+.loading::before{content:"";display:inline-block;width:18px;height:18px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:workspace-loading-spin .8s linear infinite}
+@keyframes workspace-loading-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.loading::before{animation:none;border-style:dotted}}
