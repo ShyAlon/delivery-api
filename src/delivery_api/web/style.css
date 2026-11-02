@@ -388,3 +388,8 @@ details.review-progress>summary>.progress-current{color:var(--ink);margin-top:3p
 .loading::before{content:"";display:inline-block;width:18px;height:18px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:workspace-loading-spin .8s linear infinite}
 @keyframes workspace-loading-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.loading::before{animation:none;border-style:dotted}}
+
+/* Dialog structure shared by customer overlays and the private native surface. */
+.shared-dialog{width:min(600px,calc(100vw - 32px));max-height:88vh;overflow:auto;border:1px solid var(--line);border-radius:20px;background:var(--card);color:var(--ink);padding:28px;font:var(--fs-md)/1.6 Manrope,system-ui,sans-serif;box-shadow:0 30px 90px #17211d55}
+.shared-dialog::backdrop{background:#17211d70;backdrop-filter:blur(3px)}
+.dialog-field{display:flex;flex-direction:column;gap:6px;margin:16px 0;font-size:var(--fs-sm);font-weight:600}.dialog-field input,.dialog-field select,.dialog-field textarea{display:block;width:100%;min-width:0;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink);font:inherit}.dialog-fields{display:grid;grid-template-columns:1fr 1fr;gap:16px}.dialog-actions{display:flex;justify-content:flex-end;gap:12px;margin-top:20px}.dialog-status{min-height:24px;white-space:pre-wrap}.dialog-status.error{color:#a82b22}.dialog-status.success{color:var(--green)}@media(max-width:600px){.dialog-fields{grid-template-columns:1fr}.shared-dialog{padding:20px}}
