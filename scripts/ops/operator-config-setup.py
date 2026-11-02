@@ -14,6 +14,8 @@ import sys
 import tempfile
 
 ROOT=Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(ROOT/'src'))
+from delivery_api.owner_diagnostics import failure
 
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path)
@@ -77,16 +79,20 @@ def save(settings,destination,values,confirm):
 def run(root,*,env=None,explicit=None,confirm=None,connect=check.read_connection,out=None):
     out=sys.stdout if out is None else out
     report={'settings.loaded':False,'database.targets_match':False,'registry.verified':False,'settings.saved':False}
+    stage='settings.load'
     try:
         settings=settings_module();values=settings.load(Path(root),env=env,explicit=explicit)
         report['settings.loaded']=True
+        stage='database.target_match'
         if not values.get('REQUI_ADMIN_DATABASE_URL') or not values.get('DELIVERY_DATABASE_URL'):raise ValueError('both DSNs required')
         if not same_target(values['REQUI_ADMIN_DATABASE_URL'],values['DELIVERY_DATABASE_URL']):raise ValueError('targets differ')
         report['database.targets_match']=True
+        stage='registry.read_review'
         with connect(values['REQUI_ADMIN_DATABASE_URL']) as conn:operator=read_registry(conn)
         report['registry.verified']=True
         destination=Path(explicit).expanduser() if explicit else settings.target_path(env)
         # Private target must not select a different project on next file-first load.
+        stage='settings.target_read'
         existing=settings.read_file(destination)
         for name in settings.IDENTITY:
             if existing.get(name) and existing[name]!=values.get(name):raise ValueError('target identity conflict')
@@ -100,8 +106,10 @@ def run(root,*,env=None,explicit=None,confirm=None,connect=check.read_connection
                     (operator[check.SETTINGS[0]],operator[check.SETTINGS[1]])).fetchall()
             if len(rows)!=1 or not previous<=set(rows[0][0]):raise ValueError('existing local authority revoked or unverifiable')
             operator[check.SETTINGS[2]]=json.dumps(sorted(previous|check.DEBUG_CAPABILITIES),separators=(',',':'))
+        stage='settings.save'
         report['settings.saved']=save(settings,destination,operator,confirm or settings.terminal_confirm)
-    except (Exception,KeyboardInterrupt):
+    except (Exception,KeyboardInterrupt) as exc:
+        failure(report,exc,stage)
         report['setup.completed']=False
     else:report['setup.completed']=report['settings.saved']
     for key,value in report.items():print(key+'='+str(bool(value)).lower(),file=out)

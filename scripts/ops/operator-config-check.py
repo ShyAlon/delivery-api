@@ -18,6 +18,7 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'src'))
 from delivery_api.operator_authorization import CAPABILITIES
 from delivery_api.operator_startup import SETTINGS
+from delivery_api.owner_diagnostics import failure,OWNER_CONNECT_TIMEOUT_SECONDS
 
 DEBUG_CAPABILITIES=frozenset({'logs.read','debug.read','sessions.read','analytics.read','usage.read'})
 
@@ -50,14 +51,21 @@ def configuration(values):
 
 @contextmanager
 def read_connection(dsn):
-    import psycopg
-    # Read-only from connection startup, before any query. No implicit writable
-    # transaction, session role change, migration, or persistent setting update.
-    with psycopg.connect(dsn,connect_timeout=10,options='-c default_transaction_read_only=on') as conn:
-        with conn.transaction():
-            conn.execute('SET TRANSACTION READ ONLY')
-            conn.execute("SET LOCAL statement_timeout='5s'")
-            yield conn
+    stage='driver.import'
+    try:
+        import psycopg
+        stage='database.connect_readonly_startup'
+        with psycopg.connect(dsn,connect_timeout=OWNER_CONNECT_TIMEOUT_SECONDS,options='-c default_transaction_read_only=on') as conn:
+            stage='database.begin_readonly'
+            with conn.transaction():
+                conn.execute('SET TRANSACTION READ ONLY')
+                stage='database.statement_timeout'
+                conn.execute("SET LOCAL statement_timeout='5s'")
+                stage='database.read_queries'
+                yield conn
+    except Exception as exc:
+        exc.owner_diagnostic_stage=stage
+        raise
 
 
 def database(conn,values,app_user):
@@ -93,6 +101,7 @@ def database(conn,values,app_user):
 def run(root,*,env=None,explicit=None,connect=read_connection,out=None):
     out=sys.stdout if out is None else out
     report={'settings.loaded':False,'database.connected':False,'registry.inspected':False}
+    stage='settings.load'
     try:
         spec=importlib.util.spec_from_file_location('requi_operator_settings',ROOT/'scripts/ops/settings.py')
         settings=importlib.util.module_from_spec(spec);spec.loader.exec_module(settings)
@@ -103,6 +112,7 @@ def run(root,*,env=None,explicit=None,connect=read_connection,out=None):
         report['REQUI_ADMIN_DATABASE_URL.present']=bool(values.get('REQUI_ADMIN_DATABASE_URL'))
         dsn=values.get('REQUI_ADMIN_DATABASE_URL') or values.get('DELIVERY_DATABASE_URL')
         if dsn:
+            stage='registry.read_check'
             with connect(dsn) as conn:
                 report['database.connected']=True
                 report.update(database(conn,values,None))
@@ -110,16 +120,19 @@ def run(root,*,env=None,explicit=None,connect=read_connection,out=None):
         # app connection knows its actual PostgreSQL identity and privileges.
         if values.get('DELIVERY_DATABASE_URL'):
             try:
+                stage='app_role.read_check'
                 with connect(values['DELIVERY_DATABASE_URL']) as app:
                     for role,key in (('requi_operator_read','app_role.can_set_operator_read'),('requi_operator_usage','app_role.can_set_operator_usage')):
                         exists=app.execute('SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=%s)',(role,)).fetchone()[0]
                         report[key]=bool(exists and app.execute("SELECT pg_has_role(current_user,%s,'SET')",(role,)).fetchone()[0])
                     report['app_role.inspected']=True
-            except Exception:
+            except Exception as exc:
+                failure(report,exc,stage)
                 report['app_role.inspected']=False
                 report.pop('app_role.can_set_operator_read',None)
                 report.pop('app_role.can_set_operator_usage',None)
-    except Exception:
+    except Exception as exc:
+        failure(report,exc,stage)
         # Never include exception text, DSN, private file contents or identity.
         # A failed query means unverified, not a confirmed absent registry row.
         report['check.completed']=False

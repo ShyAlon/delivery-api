@@ -12,6 +12,7 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'src'))
 from delivery_api.backoffice_access import PURPOSES,DEFAULT_CAPABILITIES,EXCLUDED
 from delivery_api.operator_authorization import CAPABILITIES
+from delivery_api.owner_diagnostics import failure,OWNER_CONNECT_TIMEOUT_SECONDS
 
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path)
@@ -19,10 +20,17 @@ def module(name,path):
 setup=module('backoffice_setup',ROOT/'scripts/ops/operator-config-setup.py')
 
 
-def review(conn,values,lock=False):
+def review(conn,values,lock=False,report=None):
     # Registry must already bind the owner. No guessed email, auto-enrollment or
     # identity/version replacement. Lock/recheck after the owner's confirmation.
     rows=conn.execute('SELECT subject,registry_version,capabilities FROM public.operator_principals WHERE enabled'+(' FOR UPDATE' if lock else '')).fetchall()
+    if report is not None:
+        report['registry.exactly_one_enabled_row']=len(rows)==1
+        if len(rows)==1:
+            report['registry.subject_matches']=str(rows[0][0])==values.get(setup.check.SETTINGS[0])
+            report['registry.version_matches']=rows[0][1]==values.get(setup.check.SETTINGS[1])
+            old=setup.check.capabilities(values.get(setup.check.SETTINGS[2]))
+            report['registry.local_capabilities_covered']=old is not None and old<=set(rows[0][2])
     operator=setup.from_rows(rows)
     if any(values.get(k)!=operator[k] for k in setup.check.SETTINGS[:2]):raise ValueError('configured identity differs')
     old=setup.check.capabilities(values.get(setup.check.SETTINGS[2]))
@@ -34,12 +42,21 @@ def review(conn,values,lock=False):
 def run(root,*,explicit=None,apply=False,confirm=None,out=None):
     out=out or sys.stdout
     report={'review.verified':False,'database.updated':False,'settings.saved':False,'apply.requested':apply}
+    stage='settings.load'
     try:
         settings=setup.settings_module();values=settings.load(Path(root),explicit=explicit)
-        if not setup.same_target(values['REQUI_ADMIN_DATABASE_URL'],values['DELIVERY_DATABASE_URL']):raise ValueError('target mismatch')
+        report['settings.loaded']=True
+        report.update(setup.check.configuration(values))
+        stage='database.target_match'
+        for name in ('REQUI_ADMIN_DATABASE_URL','DELIVERY_DATABASE_URL'):report[name+'.present']=bool(values.get(name))
+        if not values.get('REQUI_ADMIN_DATABASE_URL') or not values.get('DELIVERY_DATABASE_URL'):raise ValueError('both DSNs required')
+        report['database.targets_match']=setup.same_target(values['REQUI_ADMIN_DATABASE_URL'],values['DELIVERY_DATABASE_URL'])
+        if not report['database.targets_match']:raise ValueError('target mismatch')
         destination=Path(explicit).expanduser() if explicit else settings.target_path()
+        stage='settings.target_read'
         settings.read_file(destination);before=destination.read_bytes()
-        with setup.check.read_connection(values['REQUI_ADMIN_DATABASE_URL']) as conn:operator,local,registry=review(conn,values)
+        stage='registry.read_review'
+        with setup.check.read_connection(values['REQUI_ADMIN_DATABASE_URL']) as conn:operator,local,registry=review(conn,values,report=report)
         report['review.verified']=True
         for cap in PURPOSES:
             report['configured.'+cap]=cap in local;report['registry.'+cap]=cap in registry
@@ -59,11 +76,14 @@ def run(root,*,explicit=None,apply=False,confirm=None,out=None):
             finally:os.close(fd)
         except OSError:pass
         if apply:
+            stage='confirmation'
             if (confirm or settings.terminal_confirm)(prompt)!='ENROLL REVIEWED BACK OFFICE ACCESS':raise ValueError('not confirmed')
+            stage='settings.drift_check'
             if destination.read_bytes()!=before:raise ValueError('settings changed')
             settings.read_file(destination)
+            stage='registry.apply_recheck'
             import psycopg
-            with psycopg.connect(values['REQUI_ADMIN_DATABASE_URL'],connect_timeout=10) as conn:
+            with psycopg.connect(values['REQUI_ADMIN_DATABASE_URL'],connect_timeout=OWNER_CONNECT_TIMEOUT_SECONDS) as conn:
                 conn.execute("SET LOCAL statement_timeout='5s'")
                 fresh,fresh_local,fresh_registry=review(conn,values,True)
                 if (fresh,fresh_local,fresh_registry)!=(operator,local,registry):raise ValueError('registry changed')
@@ -71,12 +91,14 @@ def run(root,*,explicit=None,apply=False,confirm=None,out=None):
                 conn.execute('UPDATE public.operator_principals SET capabilities=%s WHERE subject=%s AND registry_version=%s AND enabled',
                     (updated,operator[setup.check.SETTINGS[0]],operator[setup.check.SETTINGS[1]]))
             report['database.updated']=True
+            stage='settings.save'
             operator[setup.check.SETTINGS[2]]=json.dumps(sorted(local|DEFAULT_CAPABILITIES),separators=(',',':'))
             # Already confirmed the exact two effects. The atomic saver still
             # verifies private permissions and concurrent drift at the file boundary.
             if destination.read_bytes()!=before:raise ValueError('settings changed after registry commit')
             report['settings.saved']=setup.save(settings,destination,operator,lambda _: 'yes')
-    except (Exception,KeyboardInterrupt):report['operation.completed']=False
+    except (Exception,KeyboardInterrupt) as exc:
+        failure(report,exc,stage);report['operation.completed']=False
     else:report['operation.completed']=not apply or report['settings.saved']
     for key,value in report.items():print(key+'='+str(bool(value)).lower(),file=out)
     return 0 if report.get('operation.completed') else 1
