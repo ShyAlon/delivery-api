@@ -102,7 +102,10 @@ def terminal_line(prompt,hidden=False):
             original=termios.tcgetattr(fd);changed=list(original)
             changed[3]&=~termios.ECHO
             termios.tcsetattr(fd,termios.TCSAFLUSH,changed)
-        os.write(fd,prompt.encode())
+        # Whole line is visible in terminal copies before waiting for input.
+        text=prompt.rstrip()
+        if 'NO_COLOR' not in os.environ:text='\033[36m'+text+'\033[0m'
+        os.write(fd,(text+'\n').encode())
         raw=bytearray()
         while True:
             char=os.read(fd,1)

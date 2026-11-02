@@ -65,3 +65,47 @@ def test_real_launcher_prompt_is_visible_before_answer():
     finally:
         if child.poll() is None:child.kill();child.wait()
         os.close(master)
+
+
+def test_shared_read_is_last_complete_line_on_tty_even_with_redirected_output():
+    import select,time
+    master,slave=pty.openpty();tty=os.ttyname(slave)
+    child=subprocess.Popen(['bash','-c','source "$1"; printf "SQL ending;\\n"; ops_read ANSWER "Waiting for input: type yes or Enter to cancel:"; [ "$ANSWER" = yes ] && echo ACCEPTED','bash',str(LOG)],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={**os.environ,'PREVIEW_TTY':tty,'NO_COLOR':'1'})
+    out=b''
+    try:
+        until=time.monotonic()+3
+        while b'cancel:\r\n' not in out and time.monotonic()<until:
+            if select.select([master],[],[],.1)[0]:out+=os.read(master,4096)
+        assert out.endswith(b'Waiting for input: type yes or Enter to cancel:\r\n'),out
+        assert child.poll() is None and b'\033' not in out
+        os.write(master,b'yes\n');stdout,stderr=child.communicate(timeout=3)
+        assert child.returncode==0 and b'ACCEPTED' in stdout and b'SQL ending;' in stdout
+    finally:
+        if child.poll() is None:child.kill();child.wait()
+        os.close(master);os.close(slave)
+
+
+def test_migration_helper_uses_shared_prompt_and_explicit_warning_severity():
+    src=(LOG.parents[1]/'owner/migrate-622.sh').read_text()
+    assert "ops_read ANSWER 'Continue to the interactive apply review?" in src
+    assert "warn 'Risk:" in src and 'read -r ANSWER' not in src
+
+
+def test_shared_prompt_bypasses_old_line_buffered_runner():
+    import select,time
+    master,slave=pty.openpty();tty=os.ttyname(slave)
+    # Old wrappers may still be alive while a helper pulls new code. The prompt
+    # must reach the terminal, not wait for that wrapper to consume a newline.
+    command=['bash','-c','source "$1"; ops_read ANSWER "Waiting: type yes:"; echo FINISHED','bash',str(LOG)]
+    child=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={**os.environ,'PREVIEW_TTY':tty,'NO_COLOR':'1'})
+    out=b''
+    try:
+        until=time.monotonic()+3
+        while b'type yes:\r\n' not in out and time.monotonic()<until:
+            if select.select([master],[],[],.1)[0]:out+=os.read(master,4096)
+        assert out.endswith(b'type yes:\r\n') and child.poll() is None
+        os.write(master,b'yes\n');stdout,stderr=child.communicate(timeout=3)
+        assert child.returncode==0 and b'FINISHED' in stdout
+    finally:
+        if child.poll() is None:child.kill();child.wait()
+        os.close(master);os.close(slave)

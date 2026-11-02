@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Invoked by the existing req runner AFTER clean-main synchronization.
 set -euo pipefail
+. "$(dirname "$0")/terminal-log.sh"
 cd "$(dirname "$0")/../.."
 fail(){ printf 'REQ ABORTED: %s No owner step was run.\n' "$*" >&2; exit 1; }
 command=${1:-}; shift
@@ -47,7 +48,7 @@ case "$command" in
    exec bash "$target";;
  preflight)
    [ "$apply" = 0 ] || fail 'preflight is read-only; --apply is not supported.'
-   if [ -z "$email" ]; then printf 'Exact signed-up owner email: '; read -r email; fi
+   if [ -z "$email" ]; then ops_read email 'Exact signed-up owner email:'; fi
    [ -n "$email" ] || fail 'signed-up email required.'
    exec .venv/bin/python "$target" "$PWD" --env-file "$envfile" --email "$email";;
  force-stop) fail 'force-stop retired; use req reset-preview for a fresh dry owner reset review.';;

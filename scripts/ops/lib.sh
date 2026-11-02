@@ -64,7 +64,7 @@ ops_start(){
   if [ -n "$settings_required" ]; then ops_settings "$settings_required"; fi
   echo "ops $(git rev-parse --short=8 HEAD)  ($OPS_NAME, origin/main)"
   if ! command -v ops >/dev/null 2>&1 && [ -t 0 ] && [ -z "${OPS_REEXEC:-}" ]; then
-    printf 'ops is not on your PATH yet. Type "yes" to put it there (afterwards you only type: ops %s), or press Enter to skip: ' "$OPS_NAME"; read -r _a
+    ops_read _a "ops is not on your PATH yet. Type yes to install it (afterwards: ops $OPS_NAME), or Enter to skip:"
     [ "$_a" = yes ] && { bash "$repo/scripts/ops/ops" install --yes || echo "(not installed; the script goes on)"; }
   fi
   [ "$want_venv" = --venv ] && ops_venv
