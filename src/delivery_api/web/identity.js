@@ -68,7 +68,8 @@ document.querySelector('#downloadeverything').onclick=async e=>{const btn=e.curr
  sections.push(['Server logs (last 30 min)',async()=>(await serverText()).text],['Client logs (this tab)',async()=>(await clientText()).text]);
  const collected=evidence.sections.filter(x=>x.availability==='available').map(x=>x.source),unavailable=evidence.sections.filter(x=>x.availability==='unavailable').map(x=>x.source),total=sections.length+evidence.sections.filter(x=>x.availability!=='policy_excluded').length;
  status.innerHTML='<span class="waiting-spinner"></span> Collecting remaining evidence (up to two groups at a time)…';
- const groupResults=await collectExportGroups(sections.map(([,collect])=>collect));
+ const activeGroups=new Set();
+ const groupResults=await collectExportGroups(sections.map(([,collect])=>collect),(index,active)=>{if(active)activeGroups.add(index);else activeGroups.delete(index);status.textContent=`Collecting section: ${[...activeGroups].map(i=>sections[i][0]).join(' + ')} (up to two groups at a time)…`});
  for(let n=0;n<sections.length;n++){const title=sections[n][0],result=groupResults[n];if(result.error){add(title,JSON.stringify({error:String(result.error.message||result.error)}));unavailable.push(title)}else{add(title,result.value);collected.push(title)}collectorTimings.push({source:title,duration_ms:result.duration_ms});}
  parts.push('===== Export collector timings =====\n'+JSON.stringify({total_ms:Math.round(performance.now()-exportBegan),stages:[...evidence.sections.map(x=>({source:x.source,duration_ms:x.duration_ms??null,availability:x.availability})),...collectorTimings]},null,2));
  status.textContent=`Collected ${collected.length} of ${total} sections${unavailable.length?'; unavailable: '+unavailable.join(', '):''}. Writing ZIP…`;

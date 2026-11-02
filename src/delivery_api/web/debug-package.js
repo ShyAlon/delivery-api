@@ -7,8 +7,8 @@ export async function collectDebugEvidence({taskId,operator,cloud,api}){
 
 // Two groups at most: do not multiply the database pool budget with an
 // unbounded Promise.all. Each HTTP request owns a separate scoped connection.
-export async function collectExportGroups(groups){
+export async function collectExportGroups(groups,onProgress=()=>{}){
  const result=new Array(groups.length);let next=0;
- async function worker(){while(next<groups.length){const index=next++,began=performance.now();try{result[index]={value:await groups[index](),duration_ms:Math.round(performance.now()-began)}}catch(error){result[index]={error,duration_ms:Math.round(performance.now()-began)}}}}
+ async function worker(){while(next<groups.length){const index=next++,began=performance.now();try{onProgress(index,true);result[index]={value:await groups[index](),duration_ms:Math.round(performance.now()-began)}}catch(error){result[index]={error,duration_ms:Math.round(performance.now()-began)}}finally{onProgress(index,false)}}}
  await Promise.all(Array.from({length:Math.min(2,groups.length)},worker));return result;
 }
