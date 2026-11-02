@@ -39,7 +39,8 @@ def setup(handler=None):
         calls.append(request)
         assert request.url==httpx.URL('https://fixed.invalid/v1/chat/completions')
         assert request.headers['authorization']=='Bearer parent-only'
-        return handler(request) if handler else httpx.Response(200,content=BODY)
+        assert request.headers['content-type']=='application/json'
+        return handler(request) if handler else httpx.Response(200,headers={'content-type':'application/json'},content=BODY)
     client=httpx.Client(transport=httpx.MockTransport(transport),trust_env=False,follow_redirects=False)
     op=decode_operation(frame(operation()))
     broker=ChildProviderBroker(op,gateway=gateway,journal=journal,client=client,
@@ -172,7 +173,7 @@ def test_broker_actual_ledger_settles_once_and_reuses_durable_bytes(ledger):
         with psycopg.connect(DSN) as conn:
             row=conn.execute("SELECT p.state FROM provider_attempts p JOIN staged_provider_responses r ON r.attempt_id=p.attempt_id WHERE p.job_id=%s",(job,)).fetchone()
             assert row==('dispatched',)
-        calls.append(request);return httpx.Response(200,content=BODY)
+        calls.append(request);return httpx.Response(200,headers={'content-type':'application/json'},content=BODY)
     client=httpx.Client(transport=httpx.MockTransport(provider),trust_env=False)
     with tenant_context(A):
         journal=ChildBrokerJournal(store,op)
@@ -193,14 +194,16 @@ def test_terminal_sse_is_durable_before_return_and_replay():
     usage=json.loads(BODY)['usage']
     body=b'data: '+json.dumps({'choices':[],'usage':usage}).encode()+b'\r\n\r\ndata: [DONE]\r\n\r\n'
     broker,g,j,calls=setup(lambda request:httpx.Response(200,headers={'content-type':'text/event-stream'},content=body))
-    assert base64.b64decode(broker.dispatch(request())['body'])==body
+    value=request();value['serialized_request']=base64.b64encode(json.dumps(json.loads(RAW)|{'stream':True,'stream_options':{'include_usage':True}}).encode()).decode()
+    assert base64.b64decode(broker.dispatch(value)['body'])==body
     assert j.row['usage']==usage and g.calls==['reserve','start','settle']
 
 
 @pytest.mark.parametrize('body',[b'data: [DONE]\n\n',b'data: {"choices":[],"usage":{}}\n\n',b'data: {"choices":[{"delta":{"content":"x"}}],"usage":{}}\n\ndata: [DONE]\n\n'])
 def test_incomplete_sse_never_settles_or_returns(body):
     broker,g,j,calls=setup(lambda request:httpx.Response(200,headers={'content-type':'text/event-stream'},content=body))
-    with pytest.raises(BrokerPaused):broker.dispatch(request())
+    value=request();value['serialized_request']=base64.b64encode(json.dumps(json.loads(RAW)|{'stream':True,'stream_options':{'include_usage':True}}).encode()).decode()
+    with pytest.raises(BrokerPaused):broker.dispatch(value)
     assert 'settle' not in g.calls and g.calls[-1]=='uncertain'
 
 
