@@ -20,7 +20,7 @@ def test_overlay_and_native_dialog_share_styles_and_keyboard_lifecycle(tmp_path)
         assert dialog.evaluate('e=>{const r=e.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight}')
         page.get_by_role('button',name='Close review').scroll_into_view_if_needed()
         expect(page.get_by_role('button',name='Close review')).to_be_in_viewport()
-        page.screenshot(path='/downloads/shared-dialog-short-mobile.png')
+        page.screenshot(path=str(tmp_path/'shared-dialog-short-mobile.png'))
         page.get_by_role('button',name='Close review').click();expect(dialog).to_have_count(0)
         assert page.locator('#ui-dialog-styles').count()==1
         browser.close()

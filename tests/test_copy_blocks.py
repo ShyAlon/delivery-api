@@ -1,11 +1,14 @@
 """Hover Copy on every dark text block, and the Debug dialog layout."""
-import re
+import re,json
 from pathlib import Path
 
 WEB=Path(__file__).resolve().parents[1]/'src'/'delivery_api'/'web'
 
 
 def _web(name):return (WEB/name).read_text()
+
+def _dialog_css():
+    return json.loads(re.search(r'const dialogStyles=(".*");',_web('shared-dialog.js')).group(1))
 
 
 def test_the_copy_module_covers_every_dark_block_class_and_gives_busy_and_result_feedback():
@@ -45,14 +48,14 @@ def test_debug_dialog_buttons_sit_in_one_aligned_row_with_gaps():
     assert row.count('<button')==3 and 'id="copysummary"' in row and 'id="downloadeverything"' in row and 'id="downloaddebug"' in row
     for gone in ('copydebug','copyserverlogs','copyclientlogs','copydiag','logButton'):assert gone not in s
     for box in ('debuginfohost','serverloghost','clientloghost'):assert re.search(r'<pre id="'+box+'" class="json-view"',s)
-    css=_web('style.css')
+    css=_dialog_css()
     assert re.search(r'\.debug-dialog \.debug-actions\{display:flex;flex-wrap:wrap;gap:12px',css)
     assert re.search(r'\.debug-dialog \.debug-actions button\{margin:0;padding:12px 18px;min-height:44px',css)
 
 
 def test_debug_dialog_sections_are_separated_ledger_first_and_open_and_the_close_button_stays_reachable():
-    s=_web('identity.js');css=_web('style.css')
-    dialog=s.split('class="dialog debug-dialog"')[1].split('</div>`,{focus')[0]
+    s=_web('identity.js');css=_dialog_css()
+    dialog=s.split('Dialog.html(`',1)[1]
     assert dialog.index('id="ledgerwrap" open')<dialog.index('Current technical state')<dialog.index('Recent requests')
     assert '<details open><summary>Recent requests' not in dialog
     assert '.debug-dialog details{margin:0;padding:12px 0;border-top:1px solid var(--line)}' in css
@@ -60,5 +63,5 @@ def test_debug_dialog_sections_are_separated_ledger_first_and_open_and_the_close
 
 
 def test_boxes_inside_the_debug_dialog_do_not_scroll_inside_the_scrolling_dialog():
-    css=_web('style.css')
+    css=_dialog_css()
     assert re.search(r'\.debug-dialog \.json-view\{max-height:none;margin:0;overflow-x:auto;overflow-y:visible\}',css)
