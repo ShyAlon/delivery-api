@@ -457,3 +457,11 @@ def test_answer_request_has_300s_transport_budget_inside_900s_stage():
         return api(method,path,body,**kw)
     a.journey(capture)
     assert limits==[300]
+
+
+def test_http_evidence_records_utc_start_for_server_correlation():
+    import httpx,datetime
+    with httpx.Client(base_url='http://fixture.invalid',transport=httpx.MockTransport(lambda request:httpx.Response(200,json={}))) as client:
+        api=a.API(client);api('GET','/api/tasks/t')
+    assert datetime.datetime.fromisoformat(api.records[0]['started_at']).utcoffset()==datetime.timedelta(0)
+    assert api.records[0]['path']=='/api/tasks/t'
