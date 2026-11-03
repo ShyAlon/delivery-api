@@ -402,4 +402,4 @@ details.review-progress>summary>.progress-current{color:var(--ink);margin-top:3p
 
 .detail-head.page-head{position:relative;top:auto}
 /* Shared operator status, including keyboard/touch resolution controls. */
-.operator-status{display:inline-block;border:1px solid #b8c7b9;border-radius:999px;padding:7px 11px;font:600 12px Manrope;white-space:nowrap}.operator-status-pass{background:#e3eee3;color:#234e2a}.operator-status-fail,.backoffice button.operator-status-fail{background:#fbe6e4;color:#a21f19;border-color:#d78b85}.operator-status-fail:hover,.backoffice button.operator-status-fail:hover{background:#f7d3cf}.operator-status-unverified{background:#fff1d2;color:#725000}
+.operator-status{display:inline-block;border:1px solid #b8c7b9;border-radius:999px;padding:7px 11px;font:600 var(--fs-xs) Manrope;white-space:nowrap}.operator-status-pass{background:#e3eee3;color:#234e2a}.operator-status-fail,.backoffice button.operator-status-fail{background:#fbe6e4;color:#a21f19;border-color:#d78b85}.operator-status-fail:hover,.backoffice button.operator-status-fail:hover{background:#f7d3cf}.operator-status-unverified{background:#fff1d2;color:#725000}
