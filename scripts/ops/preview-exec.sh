@@ -17,7 +17,7 @@ DATA_VOLUME=${PREVIEW_DATA_VOLUME:-requi-preview-data}
 . "$(dirname "$0")/lib.sh"
 # Settings may re-exec the launcher. Complete that handoff before any run header.
 REQUIRED=DELIVERY_DATABASE_URL,DELIVERY_SUPABASE_URL,DELIVERY_SUPABASE_ANON_KEY
-[ "${PREVIEW_EXEC_PROVIDER:-both}" = ollama ] || REQUIRED="$REQUIRED,DEEPSEEK_API_KEY"
+[ "${PREVIEW_EXEC_PROVIDER:-both}" != deepseek ] || REQUIRED="$REQUIRED,DEEPSEEK_API_KEY"
 ops_start preview-exec "$0" --venv "$REQUIRED"
 REPO=$PWD
 
@@ -290,7 +290,7 @@ case "$PROVIDER" in deepseek|ollama|both) ;; *) abort PROVIDER "PREVIEW_EXEC_PRO
 OLLAMA_MODEL=${PREVIEW_EXEC_OLLAMA_MODEL:-phi4}
 OLLAMA_HOST=${OLLAMA_HOST:-http://localhost:11434}
 # File-first key is inherited privately, separately from the filtered container env file.
-if [ "$PROVIDER" != ollama ]; then
+if [ "$PROVIDER" = deepseek ] || { [ "$PROVIDER" = both ] && [ -n "${DEEPSEEK_API_KEY:-}" ]; }; then
   [ -n "${DEEPSEEK_API_KEY:-}" ] || abort NO-KEY "DEEPSEEK_API_KEY is missing after file-first settings loading" "Nothing was started and the database was not touched." "save DEEPSEEK_API_KEY in the protected preview.env or checkout .env, then retry"
   case "${DEEPSEEK_API_KEY:-}" in *[[:space:]]*) abort KEY-SPACE "DEEPSEEK_API_KEY has a space or line break in it" "" "export only the key, then run again";; esac
   [ "${#DEEPSEEK_API_KEY}" -ge 20 ] || abort KEY-SHORT "DEEPSEEK_API_KEY is too short to be a DeepSeek key" "" "export the whole key, then run again"
@@ -308,7 +308,8 @@ echo "  Real spend is possible only for a person with an admission row and prepa
 elif [ "$PROVIDER" = both ]; then
 echo "  Providers: both. UI choice per task: paid DeepSeek or reviewed local Ollama default at \$0. No automatic fallback."
 echo "  The launcher uses shared reviewed pins; local model work starts only when selected."
-echo "  Later local model work runs only when you select Ollama; DeepSeek remains independently available."
+echo "  Local Start needs no DeepSeek key, paid pin, expense policy or credits; it still needs its reviewed zero-cost pin and owner admission row."
+if [ -z "${DEEPSEEK_API_KEY:-}" ]; then echo "  DeepSeek key is absent: paid Start stays unavailable. Configure paid prerequisites separately only if you want that route."; fi
 else
 echo "  Provider: local Ollama model $OLLAMA_MODEL at $OLLAMA_HOST (\$0, nothing paid, no key needed) - heavy on this Mac while it runs; PREVIEW_EXEC_PROVIDER=deepseek or picking 2 selects the paid managed route."
 echo "  The reviewed model and context ceiling come from Back office Model pins, not local discovery or the candidate"
@@ -411,7 +412,7 @@ OUT=$(docker run --rm --platform "$PLATFORM" --read-only --cap-drop ALL --securi
 [ "$OUT" = DBOK ] || abort NO-DB "this Mac cannot open the database ($OUT)" "" "check your network or VPN; if it says OperationalError the database may not accept this Mac's address: send me this line"
 # the image's OWN startup rules, run on these exact settings plus the pinned prices and the key. Prints problem names only, never a value.
 CONTRACT='import os,sys;sys.path.insert(0,"/app");import full_entry;p=full_entry.check_env(os.environ);print("CONTRACT-OK" if not p else "CONTRACT-PROBLEMS");[print("problem:",x) for x in p]'
-KEYPASS=(); [ "$PROVIDER" != ollama ] && KEYPASS=(-e DEEPSEEK_API_KEY)
+KEYPASS=(); if [ "$PROVIDER" != ollama ] && [ -n "${DEEPSEEK_API_KEY:-}" ]; then KEYPASS=(-e DEEPSEEK_API_KEY); fi
 COUT=$(docker run --rm --platform "$PLATFORM" --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$WORK/preview.env" --env-file "$WORK/cloud-models.env" ${KEYPASS[@]+"${KEYPASS[@]}"} "$IMAGE" python -c "$CONTRACT" 2>&1 | scrub | tail -8 || true)
 echo "$COUT" | grep -qx CONTRACT-OK || abort NOT-STARTABLE "the image would not start with these settings: $(echo "$COUT" | grep '^problem:' | tr '\n' ' ')" "" "send me this output"
 step_ok
@@ -434,7 +435,7 @@ if [ "$OK" != 1 ]; then echo "== the container did not become healthy; last log 
 # Application startup status is reported truthfully in the final summary below.
 PROBE='import os,re;print("EXEC="+os.environ.get("DELIVERY_CLOUD_EXECUTION","unset"));print("KEYS="+str(len([k for k in os.environ if re.search("DEEPSEEK|OPENAI|ANTHROPIC|API_KEY",k,re.I)])))'
 EXECOUT=$(docker exec "$NAME" python -c "$PROBE" 2>/dev/null || true)
-EXPECTED_KEYS=1; [ "$PROVIDER" = ollama ] && EXPECTED_KEYS=0
+EXPECTED_KEYS=0; [ "${#KEYPASS[@]}" = 0 ] || EXPECTED_KEYS=1
 echo "$EXECOUT" | grep -qx 'EXEC=1' && echo "$EXECOUT" | grep -qx "KEYS=$EXPECTED_KEYS" || abort EXEC-UNVERIFIED "the running container's environment does not confirm execution on with the expected provider key count ($EXPECTED_KEYS)" "" "send me this output"
 step_ok
 

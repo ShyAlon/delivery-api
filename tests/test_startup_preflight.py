@@ -529,3 +529,9 @@ def test_migrated_core_projection_privacy_passes_without_broadening_grants():
             result=preflight._check_tables({'DELIVERY_DATABASE_URL':'postgresql://test'},[conn],preflight.REQUIRED_TABLES)
             assert result.status=='fail' and 'expense_totals (owner/function-only' in result.found
         finally:conn.rollback()
+
+
+def test_local_execution_does_not_misreport_missing_paid_key():
+    check=preflight._check_provider_key({'DELIVERY_CLOUD_EXECUTION':'1','DELIVERY_LOCAL_PREVIEW':'1'},lambda name:None)
+    assert check.status=='pass'
+    assert 'no paid provider key' in check.expected

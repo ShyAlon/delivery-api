@@ -189,10 +189,12 @@ def test_confirmed_start_passes_origin_checks(tmp_path):
     assert 'ABORTED [ORIGIN]' not in p.stdout, p.stdout[-500:]
     assert 'ABORTED [ARCH]' in p.stdout and '== [6/9] image smoke' in p.stdout, p.stdout[-500:]
 
-def test_provider_default_is_both_and_requires_key(tmp_path):
+def test_provider_default_is_both_without_key_prompt(tmp_path):
     p = _run(tmp_path, {}, settings=_settings(tmp_path))
     assert 'Provider for this preview' not in p.stdout
-    assert 'ABORTED [SETTINGS]'  in p.stdout
+    assert 'ABORTED [SETTINGS]' not in p.stdout
+    assert 'Providers: both.' in p.stdout
+    assert 'ABORTED [NOT-CONFIRMED]' in p.stdout
     assert p.returncode == 1
 
 
@@ -521,9 +523,10 @@ def test_the_venv_gate_runs_in_step_1_before_any_pytest():
     assert step1 < gate < pytest_step
 
 
-def test_both_mode_requires_key_and_warns_of_local_grounding_before_confirmation(tmp_path):
+def test_both_mode_no_key_preserves_confirmation(tmp_path):
     p=_run(tmp_path,{'PREVIEW_EXEC_PROVIDER':'both'},settings=_settings(tmp_path))
-    assert 'ABORTED [SETTINGS]'  in p.stdout
+    assert 'ABORTED [SETTINGS]' not in p.stdout
+    assert 'ABORTED [NOT-CONFIRMED]' in p.stdout
     tty=tmp_path/'both-tty';tty.write_text('3\n')
     p=_run(tmp_path,{'PREVIEW_TTY':str(tty),'DEEPSEEK_API_KEY':KEY},settings=_settings(tmp_path))
     assert 'Providers: both' in p.stdout and 'launcher uses shared reviewed pins' in p.stdout
@@ -559,3 +562,11 @@ def test_settings_handoff_prints_plan_identity_and_step_once(tmp_path):
     assert p.stdout.count('Plan (9 steps,')==1,p.stdout
     assert p.stdout.count('== [1/9] inputs and environment')==1,p.stdout
     assert KEY not in p.stdout+p.stderr
+
+
+def test_default_both_without_paid_setup_reaches_confirmation(tmp_path):
+    tty=tmp_path/'tty';tty.write_text('')
+    p=_run(tmp_path,{'PREVIEW_TTY':str(tty)},settings=_settings(tmp_path))
+    assert 'ABORTED [SETTINGS]' not in p.stdout,p.stdout
+    assert 'Providers: both.' in p.stdout
+    assert 'ABORTED [NOT-CONFIRMED]' in p.stdout

@@ -59,7 +59,7 @@ def test_startup_check_uses_the_same_independent_routes(monkeypatch):
 
 
 def test_failed_paid_refresh_is_scoped_and_never_contacts_local_vendor(monkeypatch):
- env,payload=setup(monkeypatch,DELIVERY_CHILD_EXECUTION='attended-paid')
+ env,payload=setup(monkeypatch,DELIVERY_CHILD_EXECUTION='attended-paid',DEEPSEEK_API_KEY='fixture-paid')
  rows=[{'provider':'deepseek','is_default':True,'payload':{'row':{'provider':'deepseek'}}},{'provider':'ollama','is_default':True,'payload':payload}]
  monkeypatch.setattr(pins.PinRepository,'list',lambda self:rows)
  calls=[]
@@ -112,3 +112,14 @@ def test_installer_boots_local_when_paid_review_is_missing(monkeypatch,tmp_path)
   assert cloud_runtime.installed() and chosen[0].paid_runtime is None
   assert cloud_runtime.gateway_factory().models=={'ollama':payload['row']['model']}
  finally:cloud_runtime.uninstall();cloud_runtime._failure=None
+
+
+def test_no_paid_key_never_refreshes_paid_sources_before_local_start(monkeypatch):
+ env,payload=setup(monkeypatch,DELIVERY_CHILD_EXECUTION='attended-paid')
+ rows=[{'provider':'deepseek','is_default':True,'payload':{'row':{'provider':'deepseek'}}},{'provider':'ollama','is_default':True,'payload':payload}]
+ monkeypatch.setattr(pins.PinRepository,'list',lambda self:rows)
+ monkeypatch.setattr(pins,'refresh',lambda value:pytest.fail('No paid key: no paid source or balance request is needed'))
+ gateway=pins.DurableGateways(SimpleNamespace(_postgres=object()),env)
+ with pytest.warns(UserWarning,match='deepseek route unavailable'):gateway.refresh_launch()
+ assert gateway.models=={'ollama':payload['row']['model']}
+ assert 'key' in gateway.route_errors['deepseek']
