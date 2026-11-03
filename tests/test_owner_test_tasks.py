@@ -182,4 +182,6 @@ def test_breakdown_reconciles_tokens_compute_and_actual_units(store,operator):
             from decimal import Decimal
             assert Decimal(out['total_exact_credits'])==Decimal('0.046647')
     finally:
-        with psycopg.connect(DSN) as c:c.execute('DELETE FROM credit_accounts WHERE owner_id=%s',(A.owner_id,))
+        with psycopg.connect(DSN) as c:
+            c.execute('DELETE FROM retail_contributions WHERE job_id IN (SELECT job_id FROM worker_jobs WHERE task_id=%s)',(t['task_id'],))
+            c.execute('DELETE FROM credit_accounts WHERE owner_id=%s',(A.owner_id,))
