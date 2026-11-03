@@ -1,3 +1,4 @@
+import {Dialog} from './shared-dialog.js';
 import {esc} from './client-core.js';
 import {humanLabel} from './format.js';
 
@@ -33,11 +34,11 @@ export function phaseChange(t,view,transition,prev){
 
 export function phaseChangeHtml(info){
  const flow=info.fromLabel?`<div class="phase-flow" aria-hidden="true"><b>${esc(info.fromLabel)}</b><i>→</i><b class="to">${esc(info.toLabel)}</b></div>`:'';
- return `<div class="dialog phase-change-dialog" role="dialog" aria-label="Phase change" aria-live="polite"><button class="dialog-x" aria-label="Close phase change">×</button>
+ return Dialog.html(`<button class="dialog-x" aria-label="Close phase change">×</button>
 <div class="eyebrow">PHASE ${info.position} OF ${info.total} · INPUT PAUSED</div>
 <h2>${info.fromLabel?`Moving from ${esc(info.fromLabel)} to ${esc(info.toLabel)}`:`Starting ${esc(info.toLabel)}`}</h2>${flow}
 <p class="phase-explain">${esc(info.explain)}</p>
 <p class="phase-live"><span class="waiting-spinner" aria-hidden="true"></span><span id="transitionprogress">${esc(info.latest?'Latest: '+info.latest:'Starting up…')}</span>${info.count?` <small>${esc(info.count)}</small>`:''}</p>
 <p class="phase-pause">Nothing for you to do right now. Your input is paused while this runs, and this closes by itself when the next step is ready for you.</p>
-<div class="dialog-actions"><button class="secondary" id="transitionhide">Keep watching in the background</button></div></div>`;
+<div class="dialog-actions"><button class="secondary" id="transitionhide">Keep watching in the background</button></div>`,{"tag":"div","attributes":{"class":"dialog phase-change-dialog","aria-label":"Phase change","aria-live":"polite"}});
 }

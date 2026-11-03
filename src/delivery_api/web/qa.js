@@ -1,3 +1,4 @@
+import {Dialog} from './shared-dialog.js';
 import {runAction} from './ui-action.js';
 import {api,esc} from './client-core.js';
 const app=document.querySelector('#app'),modal=document.querySelector('#modal');
@@ -85,7 +86,7 @@ async function saveThumb(el,target,ref,content,value){
 function openFeedbackDialog(target,ref,content){
  if(!feedbackAvailable)return;
  const key=fbKey(target,ref),existing=feedbackState.get(key),q=target==='question';
- const dialog=openDialog(`<div class="dialog feedback-dialog" role="dialog" aria-label="${q?'Comment on this question':'Comment on this answer'}"><button class="dialog-x" aria-label="Close comment">×</button><div class="eyebrow">${q?'QUESTION FEEDBACK':'ANSWER FEEDBACK'} · ANNOTATION ONLY</div><h3>${q?'What should we learn from this question?':'What did the engine misread?'}</h3><p class="feedback-context">${esc(content||'')}</p><textarea id="feedbacktext" rows="4" maxlength="4000" placeholder="A note for the team - it does not steer the interview">${esc(existing?.comment||'')}</textarea><div class="dialog-actions"><button class="primary" id="savefeedback">Save comment</button>${existing?'<button class="secondary danger" id="deletefeedback">Delete feedback</button>':''}</div><div id="feedbackstatus" aria-live="polite"></div></div>`);
+ const dialog=openDialog(Dialog.html(`<button class="dialog-x" aria-label="Close comment">×</button><div class="eyebrow">${q?'QUESTION FEEDBACK':'ANSWER FEEDBACK'} · ANNOTATION ONLY</div><h3>${q?'What should we learn from this question?':'What did the engine misread?'}</h3><p class="feedback-context">${esc(content||'')}</p><textarea id="feedbacktext" rows="4" maxlength="4000" placeholder="A note for the team - it does not steer the interview">${esc(existing?.comment||'')}</textarea><div class="dialog-actions"><button class="primary" id="savefeedback">Save comment</button>${existing?'<button class="secondary danger" id="deletefeedback">Delete feedback</button>':''}</div><div id="feedbackstatus" aria-live="polite"></div>`,{"tag":"div","attributes":{"class":"dialog feedback-dialog","aria-label":`${q?'Comment on this question':'Comment on this answer'}`}}));
  if(!dialog)return;
  const text=dialog.querySelector('#feedbacktext'),status=dialog.querySelector('#feedbackstatus'),save=dialog.querySelector('#savefeedback');
  save.onclick=async()=>runAction(`feedback:${qaContext.taskId}:${target}:${ref}`,Array.from(dialog.querySelectorAll('.dialog-actions button')),async()=>{
