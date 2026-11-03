@@ -10,6 +10,7 @@ per-page patches are deleted; base rules that would fight the guard are scoped
 :not(:disabled). These tests pin that contract without launching a browser.
 """
 import re
+import json
 from pathlib import Path
 
 WEB = Path(__file__).resolve().parents[1] / "src" / "delivery_api" / "web"
@@ -59,7 +60,7 @@ def test_competing_base_rules_are_scoped_not_disabled():
 
 def test_shared_rule_wins_source_order_over_hover_motion_rules():
     shared_at = STYLE.index("button:disabled:hover")
-    for rival in (".primary:hover", ".phase-actions button", ".dialog-x:hover", ".avatar:hover"):
+    for rival in (".primary:hover", ".phase-actions button", ".avatar:hover"):
         assert STYLE.index(rival) < shared_at, rival
 
 
@@ -69,3 +70,10 @@ def test_busy_buttons_keep_progress_cursor():
     assert m and "cursor:progress" in m.group(1).replace(" ", "")
     assert "button.is-busy:hover" in STYLE[at:at + 80], "busy must keep progress cursor even under the shared :disabled:hover variant"
     assert at > STYLE.index("button:disabled:hover"), "is-busy must follow the shared rule to win the specificity tie"
+
+
+def test_late_injected_dialog_hover_is_scoped_to_enabled_buttons():
+    source = (WEB / "shared-dialog.js").read_text()
+    css = json.loads(re.search(r"const dialogStyles=(.*?);\n", source).group(1))
+    assert ".dialog-x:not(:disabled):hover{" in css
+    assert ".dialog-x:hover{" not in css
