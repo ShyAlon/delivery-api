@@ -179,7 +179,7 @@ def wait_question(api,tid,*,after=None,timeout=900,observe=lambda value:None,pro
         control=task.get('control_snapshot',{})
         if task.get('state')=='failed' or control.get('mode')=='failed':raise Refused('The real Start/answer failed; test data retained')
         if control.get('mode')=='waiting_input' and control.get('kind')=='text' and control.get('prompt'):
-            if after is None or control.get('input_id')!=after:return task
+            if after is None or (isinstance(control.get('input_id'),str) and control['input_id'] and control['input_id']!=after):return task
         if control.get('mode')=='waiting_input' and control.get('kind')!='text':
             raise Refused('The real journey requested a structured decision, not a text question; no blind approval was sent. Test data retained.')
         time.sleep(2)
@@ -201,9 +201,23 @@ def journey(api,*,observe=lambda value:None,progress=None,base=''):
         paid_start='accepted'
         first=wait_question(api,tid,observe=observe,progress=progress)
         control=first['control_snapshot']
+        if not isinstance(control.get('input_id'),str) or not control['input_id']:raise Refused('Current question has no input identity; no answer sent and no replay attempted.')
         progress.set('Submitting the scripted tutor answer; no human answer needed',90)
-        api('POST','/api/tasks/'+tid+'/answer',{'answer':ANSWER,'expected_sequence':control.get('precondition',{}).get('session_sequence')})
-        second=wait_question(api,tid,after=control.get('input_id'),observe=observe,progress=progress)
+        answer_deadline=time.monotonic()+900
+        try:
+            api('POST','/api/tasks/'+tid+'/answer',{'answer':ANSWER,'decision_id':control.get('input_id'),'expected_sequence':control.get('precondition',{}).get('session_sequence')})
+        except TransportUnavailable as error:
+            # A lost response is not a rejected answer. Never replay it. Only a
+            # fresh read showing a different text input can complete this stage.
+            progress.note('Answer response unavailable; acceptance is unconfirmed. Not resending. Confirming advancement with GET task polls only.')
+            try:
+                second=wait_question(api,tid,after=control.get('input_id'),timeout=max(1,int(answer_deadline-time.monotonic())),observe=observe,progress=progress)
+            except Refused:
+                error.next_step='Answer outcome could not be confirmed by read-only task state within the original 900s window. Do not resend or start a second run. Inspect this retained task; client timeout does not Stop server work.'
+                raise error from None
+            progress.note('Fresh task state has a different text input; answer advancement confirmed without replay.')
+        else:
+            second=wait_question(api,tid,after=control.get('input_id'),timeout=max(1,int(answer_deadline-time.monotonic())),observe=observe,progress=progress)
         progress.set('Reading settled cost and usage; each HTTP request times out after 90s')
         cost=api('GET','/api/tasks/'+tid+'/cost')
         usage=api('GET','/api/operator/task-usage?task_id='+tid)
