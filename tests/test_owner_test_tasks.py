@@ -147,3 +147,36 @@ def test_success_purge_deletes_checkpoint_payload(store,operator):
     with tenant_context(A):store.purge_test_task(t['task_id'],confirm=True)
     with psycopg.connect(DSN) as c:
         assert c.execute('SELECT count(*) FROM checkpoint_blobs WHERE thread_id=%s',(sid,)).fetchone()[0]==0
+
+
+def test_compact_breakdown_is_numeric_owned_and_pre_purge(store,operator):
+    t,sid=completed_test(store)
+    with tenant_context(A):
+        value=store.test_task_breakdown(t['task_id'])
+        assert value['total_posted_units']=='0'
+        assert value['total_exact_credits']=='0'
+        assert len(value['children'])==2 and all(x['reaped'] for x in value['children'])
+        assert 'private prompt' not in str(value) and 'private brief' not in str(value)
+    with tenant_context(B),pytest.raises(Exception):store.test_task_breakdown(t['task_id'])
+    with tenant_context(A):
+        store.purge_test_task(t['task_id'],confirm=True)
+        with pytest.raises(KeyError):store.test_task_breakdown(t['task_id'])
+
+
+def test_breakdown_reconciles_tokens_compute_and_actual_units(store,operator):
+    from delivery_api.retail_pricing import RetailRates
+    t,sid=completed_test(store)
+    with tenant_context(A):
+        with store._postgres.transaction() as c:
+            job=c.execute('SELECT job_id FROM worker_jobs WHERE task_id=%s LIMIT 1',(t['task_id'],)).fetchone()['job_id']
+        with psycopg.connect(DSN) as c:c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,1000000000,1000000000,0) ON CONFLICT(owner_id) DO NOTHING',(A.owner_id,))
+        rates=RetailRates.from_environment({}).snapshot()
+        store.post_retail_contribution(key='token:'+job,job_id=job,phase='intent',kind='tokens',input_tokens=3207,output_tokens=315,rates=rates)
+        store.post_retail_contribution(key='compute:'+job,job_id=job,phase='intent',kind='compute',deterministic_ms=52440,rates=rates)
+        out=store.test_task_breakdown(t['task_id'])
+        assert out['parts']['tokens']['posted_units']=='44025000'
+        assert out['parts']['compute']['posted_units']=='2622000'
+        assert out['parts']['compute']['compute_ms']=='52440'
+        assert out['total_posted_units']=='46647000'
+        from decimal import Decimal
+        assert Decimal(out['total_exact_credits'])==Decimal('0.046647')

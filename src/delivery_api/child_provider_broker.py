@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import threading
+import time
 import uuid
 import httpx
 from pydantic import BaseModel,ConfigDict,Field,StringConstraints
@@ -46,7 +47,7 @@ class ChildProviderBroker:
         from .provider_http import ParentProviderHTTP
         self.operation=operation;self.gateway=gateway;self.journal=journal;self.client=client
         self.endpoint=endpoint;self.headers=dict(headers);self.authorize=authorize;self.lock=threading.Lock()
-        self.http=ParentProviderHTTP(client,endpoint,headers)
+        self.http=ParentProviderHTTP(client,endpoint,headers);self.timings=[]
 
     def dispatch(self,value):
         call=ProviderCall.model_validate(value)
@@ -84,18 +85,21 @@ class ChildProviderBroker:
                     self.journal.bind(key,attempt);self.authorize(self.operation,call);self.gateway.start(attempt)
                 step='transport'
                 from .provider_http import ProviderHTTPError
+                transport_at=time.monotonic()
                 try:body,content_type=self.http.send(raw)
                 except ProviderHTTPError as error:
                     from .diagnostic_evidence import record
                     record('child.provider.http_refusal',status=error.status,error_code=error.code,
                         provider=call.provider,model=call.model,reason=str(error))
                     raise
+                transport_ms=int((time.monotonic()-transport_at)*1000)
                 step='usage_decode'
                 usage=self._usage(body,content_type)
                 reply={'status':200,'content_type':content_type,
                     'body':base64.b64encode(body).decode(),'sha256':hashlib.sha256(body).hexdigest()}
                 step='journal_complete'
-                self.journal.complete(key,reply,usage)
+                journal_at=time.monotonic();self.journal.complete(key,reply,usage)
+                journal_ms=int((time.monotonic()-journal_at)*1000)
             except BaseException as exc:
                 from .diagnostic_evidence import record
                 record('child.broker.step',step=step,attempt_bound=attempt is not None)
@@ -107,7 +111,9 @@ class ChildProviderBroker:
                 from .provider_http import ProviderHTTPError
                 if type(exc) is ProviderHTTPError:raise ProviderRefused(exc) from exc
                 raise BrokerPaused('provider outcome incomplete; reconcile before retry') from exc
-            return self._deliver(self.journal.load(key))
+            settlement_at=time.monotonic();result=self._deliver(self.journal.load(key))
+            self.timings.append({'stage':call.stage,'transport_ms':transport_ms,'journal_ms':journal_ms,'settlement_ms':int((time.monotonic()-settlement_at)*1000)})
+            return result
 
     @staticmethod
     def _usage(body,content_type):

@@ -3,7 +3,7 @@
 Paid routes require an internal accounting seam; production activation stays off. A failure pauses the durable job, never falls back
 to an in-process graph. One process-wide child slot includes reap/reconciliation.
 """
-import asyncio,json,sys,threading
+import asyncio,json,sys,threading,time
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
@@ -241,11 +241,13 @@ class ChildInterviewClient(EngineClient):
         from .child_operation_refs import ChildOperationRefs
         scope=current_scope();sid=operation.binding.session_id;task_id=operation.binding.task_id;job_id=operation.binding.job_id
         refs=ChildOperationRefs(self.store,task_id)
-        quiescent=False
+        quiescent=False;timings={};slot_at=time.monotonic()
         async def run():
+            run_at=time.monotonic()
             from .tenant_jobs import execute_job
             async def handler(capability):
                 nonlocal quiescent
+                setup_at=time.monotonic()
                 from .child_provider_broker import ChildProviderBroker
                 from .child_broker_authority import ChildBrokerAuthority
                 from .child_broker_journal import ChildBrokerJournal
@@ -280,21 +282,25 @@ class ChildInterviewClient(EngineClient):
                     broker=ChildProviderBroker(operation,gateway=gateway,journal=journal,client=client,
                         endpoint=endpoint,headers=headers,authorize=authority)
                     with provider_broker_channel(broker) as provider_fd,child_compute_channel(compute) as compute_fd:
+                        timings['setup']=int((time.monotonic()-setup_at)*1000);supervisor_at=time.monotonic()
                         await self.supervisor.run(operation,authorize=lambda op:capability.validate(self.store),private_config=cfg,
                             descriptors={'broker':provider_fd.fileno(),'compute':compute_fd.fileno()},stop=stop,persist_stop=fence_stop)
+                timings['supervisor']=int((time.monotonic()-supervisor_at)*1000);completion_at=time.monotonic()
                 watcher.cancel()
                 try:await watcher
                 except asyncio.CancelledError:pass
                 if not compute.settled:raise RuntimeError('child exact compute evidence incomplete')
                 if stop.is_set():raise RuntimeError('child stopped; durable state needs reconciliation')
+                timings['completion']=int((time.monotonic()-completion_at)*1000);timings['run']=int((time.monotonic()-run_at)*1000)
                 self.store.retain_decision_review(task_id,'child-job:'+job_id,'child-completion-v1',
-                    {'operation_id':operation.operation_id,'compute_ms':str(compute.value),'reaped':True})
+                    {'operation_id':operation.operation_id,'compute_ms':str(compute.value),'reaped':True,'timings':timings,'provider_timings':broker.timings})
                 quiescent=True
                 self.store.add_event(task_id,'child.completed','Local child reaped after durable publication',
                     payload={'job_id':job_id,'compute_ms':str(compute.value),'pid':self.supervisor.last_result.pid})
             return await execute_job(self.store,job_id,handler,
                 verify_completion_quiescence=lambda cap:quiescent,verify_stopped_quiescence=lambda cap:quiescent)
         with _slot:
+            timings['slot_wait']=int((time.monotonic()-slot_at)*1000)
             try:asyncio.run(run())
             except BaseException:
                 self.store.pause_interrupted_worker(job_id)

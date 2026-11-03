@@ -190,7 +190,12 @@ async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=
             raise
         fetch_ms=int((time.monotonic()-fetched_at)*1000)
         ingest_at=time.monotonic()
-        await run_in_threadpool(ingest_interview_page,store,task_id,session_id,page)
+        # Empty source page has no durable signal/cursor change. The cursor read
+        # and source progress read still perform their normal tenant checks.
+        if page.events:
+            await run_in_threadpool(ingest_interview_page,store,task_id,session_id,page)
+        elif page.next_cursor!=cursor:
+            raise RuntimeError('empty progress page advanced cursor')
         if page.events:
             from datetime import datetime,timezone
             now=datetime.now(timezone.utc)
@@ -199,7 +204,9 @@ async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=
                      session_id=session_id,events=len(page.events),cursor=cursor,next_cursor=page.next_cursor,
                      fetch_ms=fetch_ms,ingest_ms=int((time.monotonic()-ingest_at)*1000),
                      source_age_max_ms=max(lags),source_age_min_ms=min(lags))
-        if not page.events:return
+        if not page.events:
+            activity('progress.poll.empty','No committed progress; ingestion transaction skipped',task_id=task_id,session_id=session_id,fetch_ms=fetch_ms)
+            return
         if page.next_cursor<=cursor:raise RuntimeError("engine progress page made no cursor advance")
 
 async def _watch_engine_advance(task_id:str,session_id:str,stop:asyncio.Event)->None:
@@ -901,6 +908,10 @@ def list_test_tasks(a:auth.Actor=Depends(auth.require_actor)):
 @app.get('/api/operations/test-tasks/{task_id}/expense')
 def test_task_expense(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     return _test_task_action(lambda:store.test_task_expense(task_id))
+
+@app.get('/api/operations/test-tasks/{task_id}/breakdown')
+def test_task_breakdown(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
+    return _test_task_action(lambda:store.test_task_breakdown(task_id))
 
 @app.post('/api/operations/test-tasks/{task_id}/purge')
 def purge_test_task(task_id:str,body:TestTaskPurge,a:auth.Actor=Depends(auth.require_actor)):
