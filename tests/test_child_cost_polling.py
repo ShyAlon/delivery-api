@@ -17,6 +17,7 @@ def test_empty_child_ledger_cost_is_read_only_and_bounded(tmp_path,monkeypatch,p
     assert result['price'] is None
     assert result['evidence']['complete'] is False
     assert result['evidence']['scope']=='child ledger'
+    assert result['evidence']['active_worker'] is True
 
 
 def test_child_unknown_cost_never_reads_or_writes_legacy_documents(tmp_path,monkeypatch,pg_scoped_workspace):

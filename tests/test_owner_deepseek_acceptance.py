@@ -62,7 +62,10 @@ def test_missing_marker_stops_before_paid_start():
     assert not any(p.endswith('/start') for m,p,b in calls)
 
 
-def test_unsettled_cost_retains_test_and_no_purge():
+def test_unsettled_cost_retains_test_and_no_purge(monkeypatch):
+    clock=[0]
+    monkeypatch.setattr(a.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(a.time,'sleep',lambda n:clock.__setitem__(0,clock[0]+n))
     api,calls=api_fixture()
     def pending(method,path,body=None,**kw):
         out=api(method,path,body,**kw)
@@ -415,3 +418,50 @@ def test_missing_original_input_id_refuses_before_answer():
         return result
     with pytest.raises(a.Refused,match='no input identity'):a.journey(missing)
     assert not any(p.endswith('/answer') for m,p,b in calls)
+
+
+def test_settlement_waits_for_worker_cleanup_without_stop_or_replay(monkeypatch):
+    clock=[0];seen=[];cost_reads=[0]
+    monkeypatch.setattr(a.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(a.time,'sleep',lambda n:clock.__setitem__(0,clock[0]+n))
+    def api(method,path,body=None):
+        seen.append((method,path))
+        if path.endswith('/cost'):
+            cost_reads[0]+=1
+            return {'price':1,'evidence':{'complete':cost_reads[0]>1,'active_worker':cost_reads[0]==1}}
+        if path.endswith('/expense'):return {'complete':True,'provider_usd':'0.01'}
+        return {'complete':True,'attempts':2}
+    cost,usage=a.wait_settlement(api,'t',timeout=20)
+    assert clock[0]==5 and cost_reads[0]==2 and usage['provider_expense']['provider_usd']=='0.01'
+    assert all(m=='GET' for m,p in seen)
+
+
+def test_unsettled_deadline_names_exact_blockers_without_raw_content(monkeypatch):
+    clock=[0]
+    monkeypatch.setattr(a.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(a.time,'sleep',lambda n:clock.__setitem__(0,clock[0]+n))
+    def api(method,path,body=None):
+        if path.endswith('/cost'):return {'price':None,'evidence':{'complete':False,'active_worker':True,'compute_pending':True},'private':'do-not-print'}
+        if path.endswith('/expense'):return {'complete':False,'provider_usd':None}
+        return {'complete':False,'attempts':2,'pending_charges':1,'unresolved_attempts':1}
+    with pytest.raises(a.Refused) as caught:a.wait_settlement(api,'t',timeout=6)
+    assert clock[0]==6 and caught.value.gate=='settlement_unconfirmed'
+    assert 'cost.active_worker=true' in str(caught.value) and 'usage.pending_charges=1' in str(caught.value)
+    assert 'do-not-print' not in str(caught.value)
+
+
+def test_answer_request_has_300s_transport_budget_inside_900s_stage():
+    api,calls=api_fixture();limits=[]
+    def capture(method,path,body=None,**kw):
+        if path.endswith('/answer'):limits.append(kw['timeout_seconds'])
+        return api(method,path,body,**kw)
+    a.journey(capture)
+    assert limits==[300]
+
+
+def test_http_evidence_records_utc_start_for_server_correlation():
+    import httpx,datetime
+    with httpx.Client(base_url='http://fixture.invalid',transport=httpx.MockTransport(lambda request:httpx.Response(200,json={}))) as client:
+        api=a.API(client);api('GET','/api/tasks/t')
+    assert datetime.datetime.fromisoformat(api.records[0]['started_at']).utcoffset()==datetime.timedelta(0)
+    assert api.records[0]['path']=='/api/tasks/t'
