@@ -176,3 +176,96 @@ def test_shared_readiness_distinguishes_owner_permission_and_orders_next_actions
 
 def test_no_duplicate_cli_limit_is_accepted():
     with pytest.raises(SystemExit):a.main(['--dry-run','--max-usd','4'])
+
+
+def test_cookie_write_uses_target_origin_and_real_csrf_guard(monkeypatch):
+    import httpx
+    from fastapi import FastAPI,Request
+    from fastapi.testclient import TestClient
+    from delivery_api import auth
+    monkeypatch.setattr(auth,'enabled',lambda:True)
+    monkeypatch.setattr(auth.config,'PUBLIC_ORIGIN','http://testserver')
+    monkeypatch.setattr(auth.config,'ALT_ORIGINS',[])
+    app=FastAPI();created=[]
+    @app.get('/api/auth')
+    def read():return {'authenticated':True}
+    @app.post('/api/operations/test-tasks')
+    def create(request:Request):
+        auth.csrf_guard(request);created.append(True)
+        return {'task_id':'fixture','is_test':True}
+    with TestClient(app) as client:
+        client.cookies.set('requi_access','private-cookie')
+        assert client.get('/api/auth').status_code==200
+        denied=client.post('/api/operations/test-tasks',json={})
+        assert denied.status_code==403 and not created
+        assert a.API(client)('POST','/api/operations/test-tasks',{})['is_test']
+        assert created==[True]
+
+
+def test_failure_keeps_safe_http_blocker_and_no_raw_body(capsys):
+    import httpx
+    def handle(request):
+        return httpx.Response(403,json={'detail':'Authenticated state changes require a same-origin request.','secret':'private-token'})
+    with httpx.Client(base_url='http://fixture.invalid',transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(a.Refused) as caught:a.API(client)('POST','/api/operations/test-tasks',{})
+    report=a.failure_report(caught.value,None,None)
+    assert report['http_status']==403
+    assert report['gate']=='same_origin'
+    assert 'same-origin' in report['reason']
+    assert report['operation']=='POST /api/operations/test-tasks'
+    assert report['task_creation']=='refused' and report['paid_start']=='not_sent'
+    assert 'private-token' not in str(report)
+    assert 'HTTP 403' in str(caught.value)
+
+
+def test_unknown_failure_never_echoes_private_error_or_claims_no_writes():
+    report=a.failure_report(RuntimeError('private-dsn-secret'),None,None)
+    assert 'private-dsn-secret' not in str(report)
+    assert report['task_creation']=='unconfirmed' and report['paid_start']=='not_sent'
+    assert report['data_retained'] is None
+    assert report['reason'] and report['next']
+
+
+def test_journey_create_refusal_never_sends_start_and_preserves_http_evidence():
+    import httpx
+    calls=[]
+    def handle(request):
+        calls.append((request.method,request.url.path))
+        return httpx.Response(403,json={'detail':'Authenticated state changes require a same-origin request.'})
+    with httpx.Client(base_url='http://fixture.invalid',transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(a.Refused) as caught:a.journey(a.API(client))
+    report=a.failure_report(caught.value,None,None)
+    assert report['http_status']==403 and report['paid_start']=='not_sent'
+    assert calls==[('POST','/api/operations/test-tasks')]
+
+
+@pytest.mark.parametrize('status,gate',[(401,'authentication'),(403,'access_or_origin'),(409,'task_action'),(422,'request_validation'),(500,'http_response')])
+def test_unrecognized_server_content_is_not_echoed(status,gate):
+    import httpx
+    response=httpx.Response(status,json={'detail':{'error':'private-user-content','cause':'postgres://private-secret'}})
+    result=a.http_blocker(response)
+    assert result[0]==gate and 'private' not in str(result)
+
+
+def test_ambiguous_creation_failure_is_not_reported_as_no_task():
+    error=a.Refused('unknown outcome');error.http_status=500;error.operation='POST /api/operations/test-tasks'
+    assert a.failure_report(error,None,None)['task_creation']=='unconfirmed'
+
+
+def test_final_abort_line_repeats_observed_status_gate_and_reason(monkeypatch,capsys,tmp_path):
+    import httpx
+    monkeypatch.setattr(a,'load_settings',lambda *args:(object(),{'DELIVERY_BASE_URL':'http://127.0.0.1:8001'}))
+    monkeypatch.setattr(a,'identify',lambda *args,**kwargs:{})
+    monkeypatch.setattr(a,'authenticate',lambda *args:{})
+    monkeypatch.setattr(a,'preflight',lambda *args:(PIN,{'model':'fixture'}))
+    def refused(*args,**kwargs):
+        error=a.Refused('HTTP refusal');error.http_status=403;error.operation='POST /api/operations/test-tasks'
+        error.gate='same_origin';error.reason='Authenticated state changes require a same-origin request.'
+        error.next_step='Use the updated acceptance script.';error.paid_start='not_sent';raise error
+    monkeypatch.setattr(a,'journey',refused)
+    with pytest.raises(a.Refused,match='HTTP 403 \\[same_origin\\]') as caught:
+        a.main(['--execute','--output',str(tmp_path)])
+    assert 'same-origin request' in str(caught.value)
+    output=capsys.readouterr().err
+    assert '"http_status": 403' in output and '"paid_start": "not_sent"' in output
+    assert '"task_creation": "refused"' in output
