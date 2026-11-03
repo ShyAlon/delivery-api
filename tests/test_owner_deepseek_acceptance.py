@@ -358,3 +358,60 @@ def test_failure_zip_receives_browser_and_operation_evidence(tmp_path):
     def api(method,path,body,**kwargs):calls.append((method,path,body));return b'PKfixture'
     assert a.save_failure(api,'t',tmp_path,evidence)
     assert calls[0][2]==evidence
+
+
+def test_lost_answer_response_confirms_new_input_without_replaying(monkeypatch):
+    api,calls=api_fixture();posts=[]
+    def lost(method,path,body=None,**kw):
+        if path.endswith('/answer'):
+            posts.append(path);raise a.TransportUnavailable('unknown answer response')
+        return api(method,path,body,**kw)
+    tid,task,cost,usage=a.journey(lost)
+    assert tid=='t' and task['control_snapshot']['input_id']=='q2' and len(posts)==1
+
+
+def test_lost_answer_same_question_times_out_without_second_post(monkeypatch):
+    api,calls=api_fixture();clock=[0];posts=[];reads=[0]
+    monkeypatch.setattr(a.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(a.time,'sleep',lambda n:clock.__setitem__(0,clock[0]+n))
+    def lost(method,path,body=None,**kw):
+        if path.endswith('/answer'):
+            posts.append(body);clock[0]+=90;raise a.TransportUnavailable('unknown response')
+        if path=='/api/tasks/t':
+            reads[0]+=1
+            return {'task_id':'t','state':'running','control_snapshot':{'mode':'waiting_input','kind':'text','prompt':'fixture','input_id':'q1'}}
+        return api(method,path,body,**kw)
+    with pytest.raises(a.TransportUnavailable) as caught:a.journey(lost)
+    assert len(posts)==1 and posts[0]['decision_id']=='q1'
+    assert 900<=clock[0]<=902 and reads[0]>1
+    assert 'Do not resend' in caught.value.next_step
+    assert caught.value.test_task_id=='t' and caught.value.paid_start=='accepted'
+
+
+def test_lost_answer_polls_old_working_and_transport_unknown_until_fresh_question(monkeypatch):
+    api,calls=api_fixture();reads=[0];posts=[];notes=[]
+    monkeypatch.setattr(a.time,'sleep',lambda n:None)
+    class Reporter(a.QuietProgress):
+        def note(self,text):notes.append(text)
+    def lost(method,path,body=None,**kw):
+        if path.endswith('/answer'):posts.append(body);raise a.TransportUnavailable('unknown response')
+        if path=='/api/tasks/t':
+            reads[0]+=1
+            n=reads[0]
+            if n==3:raise a.TransportUnavailable('unknown GET')
+            mode='working' if n==4 else 'waiting_input'
+            return {'task_id':'t','state':'running','control_snapshot':{'mode':mode,'kind':'text','prompt':'fixture','input_id':'q2' if n>=5 else 'q1'}}
+        return api(method,path,body,**kw)
+    tid,task,_,_=a.journey(lost,progress=Reporter())
+    assert tid=='t' and reads[0]==5 and len(posts)==1 and task['control_snapshot']['input_id']=='q2'
+    assert any('unconfirmed' in n for n in notes) and any('advancement confirmed' in n for n in notes)
+
+
+def test_missing_original_input_id_refuses_before_answer():
+    api,calls=api_fixture()
+    def missing(method,path,body=None,**kw):
+        result=api(method,path,body,**kw)
+        if path=='/api/tasks/t':result['control_snapshot'].pop('input_id')
+        return result
+    with pytest.raises(a.Refused,match='no input identity'):a.journey(missing)
+    assert not any(p.endswith('/answer') for m,p,b in calls)

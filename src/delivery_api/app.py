@@ -1403,11 +1403,16 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
             if pending.rationale_required and not rationale:raise RuntimeError("typed input requires a rationale")
             progress_stop=asyncio.Event()
             progress_watch=spawn(_watch_engine_advance(task_id,session_id,progress_stop))
+            submit_at=time.monotonic()
+            activity('engine.answer.submit_begin','Waiting for engine input advance, not an enqueue receipt',task_id=task_id,session_id=session_id)
             try:
                 submitted=await run_in_threadpool(engine_client.submit,session_id,InputResponse(input_id=pending.input_id,expected_sequence=body.expected_sequence,value=typed_value,
                     rationale=rationale or None,actor_id=a.label,founder_inputs=body.founder_inputs))
             finally:
-                progress_stop.set();await progress_watch
+                activity('engine.answer.submit_end','Engine input request finished; outcome is recorded separately',task_id=task_id,session_id=session_id,elapsed_ms=int((time.monotonic()-submit_at)*1000))
+                drain_at=time.monotonic();progress_stop.set()
+                try:await progress_watch
+                finally:activity('engine.answer.progress_drain','Final answer progress watch finished',task_id=task_id,session_id=session_id,elapsed_ms=int((time.monotonic()-drain_at)*1000))
             store.add_event(task_id,"engine_protocol","Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
             source="http_interview"
             if body.comment.strip():
