@@ -10,7 +10,7 @@ RULES={
  'page':r'<(?:header|main|footer)\b|class=[\x27\"][^\x27\"]*\b(?:page-head|detail-head|operator-intro)\b',
  'table-style':r'(?:\.ui-table[\w-]*|\.audit-table[\w-]*)[^{}]*\{|(?<![\w-])(?:table|thead|tbody|th|td|tr)(?![\w-])[^{}]*\{',
 }
-OWNERS={'table':{'web/table-component.js'},'table-style':{'web/table-component.js'},'dialog':{'web/shared-dialog.js'},'dialog-style':{'web/shared-dialog.js'},'page':{'web/spa-shell.js'}}
+OWNERS={'table':{'web/table-component.js'},'table-style':{'web/table-component.js'},'dialog':{'web/shared-dialog.js'},'dialog-style':{'web/shared-dialog.js'},'page':{'web/page-component.js'}}
 
 def inventory(root):
  result={}

@@ -266,7 +266,7 @@ def test_the_app_and_the_operator_page_share_the_same_header_and_footer():
     index = module._page("index.html").body.decode()
     ops = module.operator_page().body.decode()
     assert ops == index
-    shell = (WEB / "spa-shell.js").read_text(encoding="utf-8")
+    shell = (WEB / "page-component.js").read_text(encoding="utf-8")
     for needle in ('<header>', '<footer', 'class="brand"', 'id="identity"', "label:'Home'", "label:'Add Credits'", "label:'About'"):
         assert needle in shell, needle
     assert "All sessions" not in shell
@@ -289,7 +289,7 @@ if(!/admin=!!\(auth&&auth\.authenticated&&auth\.admin\)/.test(shell))throw new E
 if(!/hidden=\${!admin}/.test(shell))throw new Error('operator links are not hidden for non-admins');
 for(const p of OPERATOR_PAGES){if(!p.view||!p.label||!p.tip)throw new Error('bad operator page '+JSON.stringify(p))}
 console.log(JSON.stringify({pages:OPERATOR_PAGES.length,views:OPERATOR_PAGES.map(p=>p.view)}));
-""" % ((WEB / "chrome.js").as_uri(), (WEB / "spa-shell.js").as_uri().replace('file://','')))
+""" % ((WEB / "chrome.js").as_uri(), (WEB / "page-component.js").as_uri().replace('file://','')))
     assert out["pages"] == 4 and out["views"] == ["health", "stops", "spend", "grant"]
 
 
