@@ -31,6 +31,8 @@ PROJECTION_FUNCTION_REVIEW={
 # Exact schema-only constraint widening, no data deletion. Always separately reviewed by owner.
 MODEL_PIN_SCHEMA_REVIEW={'20261101160000_model_pins.sql':'968d8b882b4611ce4cee375ca9880f5398944c61ba42a07cd67077b4174ee8c0'}
 
+TEST_PURGE_SCHEMA_REVIEW={'20261102220000_owner_test_tasks.sql':'e015c52c430027398fdacace33837b06d0fe8e68abefbfda36782802ae397082'}
+
 def review_projection_functions(rows,confirm):
     allowed={}
     for row in rows:
@@ -41,6 +43,12 @@ def review_projection_functions(rows,confirm):
             expected='REVIEW MODEL PIN SCHEMA '+name+' SHA256 '+digest
             print('Widens the operator capability constraint; no source data is deleted. Read the exact SQL.')
             if confirm('Type "'+expected+'": ')!=expected:raise ValueError('model pin schema review did not match; no changes')
+            allowed[name]=digest
+            continue
+        if TEST_PURGE_SCHEMA_REVIEW.get(name)==digest and row['destructive']==['DELETE']:
+            print('Defines owner-only test content deletion. No purge is invoked by installation; later explicit confirmed requests can erase test content. Money/audit identities stay.')
+            expected='REVIEW TEST PURGE '+name+' SHA256 '+digest
+            if confirm('Type "'+expected+'": ')!=expected:raise ValueError('test purge schema review did not match; no changes')
             allowed[name]=digest
             continue
         if PROJECTION_FUNCTION_REVIEW.get(name)!=digest or row['destructive']!=['DELETE']:

@@ -8,7 +8,7 @@ m=importlib.util.module_from_spec(SPEC)
 def load():SPEC.loader.exec_module(m);return m
 
 def test_all_rollout_files_have_catalog_probes():
-    s=load();assert len(s.MIGRATIONS)==22
+    s=load();assert len(s.MIGRATIONS)==23
     assert list(s.MIGRATIONS)==sorted(s.MIGRATIONS)
     assert '20261030030000_resource_metrics_maintenance.sql' in s.MIGRATIONS
 
@@ -90,7 +90,7 @@ def test_apply_seven_real_migrations_to_owned_disposable_db():
             for path in sorted((ROOT/'supabase/migrations').glob('*.sql')):
                 if path.name<'20261029203000_resource_metrics.sql' and path.name[:14].isdigit():conn.execute(path.read_text())
             rows=s.plan(conn,r,ROOT)
-            assert len([x for x in rows if x['status']=='pending'])==22
+            assert len([x for x in rows if x['status']=='pending'])==23
             # New file has DELETE only inside private projection functions, but
             # does not inherit the owner's exact old retention-file grant.
             with pytest.raises(ValueError,match='destructive'):s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 16 MIGRATIONS TO delivery_app')
@@ -188,8 +188,23 @@ def test_exact_projection_review_applies_all_pending_and_resumes_disposable_data
             reviewed=s.plan(conn,r,ROOT)
             assert s.apply(conn,reviewed,r,ROOT,'delivery_app',confirm,review_functions=True)==0
             assert len([p for p in prompts if 'REVIEW FUNCTIONS' in p])==3
+            assert len([p for p in prompts if 'REVIEW TEST PURGE' in p])==1
             assert all(row['status']=='present' for row in s.plan(conn,r,ROOT))
             prompts.clear()
             assert s.apply(conn,s.plan(conn,r,ROOT),r,ROOT,'delivery_app',confirm,review_functions=True)==0
             assert not any('REVIEW FUNCTIONS' in p for p in prompts)
     finally:server.cleanup();shutil.rmtree(scratch,ignore_errors=True)
+
+
+def test_owner_test_purge_review_is_exact_and_separate_from_projection_permission():
+    s=owner();r=load();name='20261102220000_owner_test_tasks.sql'
+    import hashlib
+    digest=hashlib.sha256((ROOT/'supabase/migrations'/name).read_bytes()).hexdigest()
+    row={'file':name,'sha256':digest,'status':'pending','destructive':['DELETE']}
+    prompts=[]
+    def confirm(prompt):prompts.append(prompt);return prompt.split('"')[1]
+    assert s.review_projection_functions([row],confirm)=={name:digest}
+    assert len(prompts)==1 and 'REVIEW TEST PURGE' in prompts[0]
+    for changed in ({**row,'sha256':'0'*64},{**row,'file':'renamed.sql'},{**row,'destructive':['DROP','DELETE']}):
+        with pytest.raises(ValueError,match='refused'):s.review_projection_functions([changed],confirm)
+    with pytest.raises(ValueError,match='did not match'):s.review_projection_functions([row],lambda _:'')

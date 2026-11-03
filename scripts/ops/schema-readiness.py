@@ -77,6 +77,7 @@ MIGRATIONS={
  '20261101160000_model_pins.sql':('table:model_pin_revisions','table:model_pin_heads','table:operator_expense_policy_revisions','table:operator_expense_policy_head'),
  '20261102070000_uncertainty_is_audit_not_admission.sql':('function0:requi_uncertainty_warning_policy',),
  '20261102080000_backoffice_audit_view.sql':('audit-policy:operator_curated_audit_read',),
+ '20261102220000_owner_test_tasks.sql':('signature:requi_test_task_owner()','signature:requi_purge_test_task(text,boolean)','test-marker:is_test'),
 }
 ROLES=('requi_metrics_writer','requi_engine_config_read','requi_operator_usage','requi_model_pin_editor')
 
@@ -91,6 +92,7 @@ def destructive(text):
 
 def object_exists(conn,probe):
     kind,name=probe.split(':',1)
+    if kind=='test-marker':return conn.execute("SELECT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='public.tasks'::regclass AND attname=%s AND NOT attisdropped) AND EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.tasks'::regclass AND tgname='requi_test_task_marker_guard' AND NOT tgisinternal)",(name,)).fetchone()[0]
     if kind=='audit-policy':return conn.execute("SELECT EXISTS(SELECT 1 FROM pg_policy WHERE polrelid='public.audit_log'::regclass AND polname=%s)",(name,)).fetchone()[0]
     if kind=='visible-title-index':
         row=conn.execute("SELECT i.indisunique,pg_get_expr(i.indpred,i.indrelid) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relnamespace='public'::regnamespace AND c.relname=%s",(name,)).fetchone()
