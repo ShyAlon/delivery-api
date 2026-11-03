@@ -118,7 +118,7 @@ def child_task_cost(store,task_id):
     if not row['child']:return None
     complete=not (row['active'] or row['provider_pending'] or row['compute_pending'])
     evidence={'scope':'child ledger','complete':complete,
-        'provider_pending':row['provider_pending'],'compute_pending':row['compute_pending']}
+        'active_worker':row['active'],'provider_pending':row['provider_pending'],'compute_pending':row['compute_pending']}
     # Confirmed posted contributions are a lower bound while work is unsettled.
     return {'price':float(round(row['credits'],6)) if row['credits'] is not None else 0.0 if complete else None,
         'price_usd':float(round(row['usd'],6)) if row['usd'] is not None else 0.0 if complete else None,

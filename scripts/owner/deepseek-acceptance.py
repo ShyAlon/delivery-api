@@ -66,7 +66,7 @@ class Progress:
         with self.lock:
             elapsed=int(self.clock()-self.started);stage_elapsed=int(self.clock()-self.stage_started)
             limit=('; timeout '+str(self.limit)+'s; '+str(max(0,int(self.limit-stage_elapsed)))+'s remaining') if self.limit else '; no additional user input needed'
-            self.write('Acceptance: '+self.stage+'; elapsed '+str(elapsed)+'s; stage '+str(stage_elapsed)+'s'+limit,flush=True)
+            self.write('Acceptance: '+self.stage+'; at '+datetime.datetime.now(datetime.timezone.utc).isoformat()+'; elapsed '+str(elapsed)+'s; stage '+str(stage_elapsed)+'s'+limit,flush=True)
     def set(self,stage,limit=None):
         with self.lock:self.stage=stage;self.limit=limit;self.stage_started=self.clock();self.emit()
     def task(self,tid,base):
@@ -102,7 +102,7 @@ class API:
             headers['Origin']=str(self.client.base_url).rstrip('/')
         import httpx
         began=time.monotonic()
-        record={'kind':'acceptance.http','method':method,'path':path.split('?')[0],'timeout_seconds':timeout_seconds}
+        record={'kind':'acceptance.http','started_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'method':method,'path':path.split('?')[0],'timeout_seconds':timeout_seconds}
         self.records.append(record);self.records[:]=self.records[-200:]
         try:response=self.client.request(method,path,json=body,timeout=timeout_seconds,headers=headers)
         except httpx.TransportError as cause:
@@ -186,6 +186,50 @@ def wait_question(api,tid,*,after=None,timeout=900,observe=lambda value:None,pro
     raise Refused('No new text question within '+str(timeout)+' seconds; no retry, task retained. Closing the script does not Stop server work.')
 
 
+def settlement_blockers(cost,usage,expense):
+    reasons=[];evidence=cost.get('evidence',{})
+    if evidence.get('complete') is not True:reasons.append('cost.evidence.complete=false')
+    for key in ('active_worker','provider_pending','compute_pending'):
+        if evidence.get(key) is True:reasons.append('cost.'+key+'=true')
+    if cost.get('price') is None:reasons.append('cost.price=missing')
+    if usage.get('complete') is not True:reasons.append('usage.complete=false')
+    if not isinstance(usage.get('attempts'),int) or usage['attempts']<1:reasons.append('usage.attempts=missing_or_zero')
+    for key in ('unresolved_attempts','unknown_settled_usage','waived_unknown_attempts','unknown_charge_scale_or_amount','pending_charges','settled_attempts_without_charge'):
+        value=usage.get(key)
+        if type(value) is int and value>0:reasons.append('usage.'+key+'='+str(value))
+    if expense.get('complete') is not True:reasons.append('expense.complete=false')
+    if expense.get('provider_usd') is None:reasons.append('expense.provider_usd=missing')
+    return reasons
+
+
+def wait_settlement(api,tid,*,timeout=180,progress=None):
+    progress=progress or QuietProgress();progress.set('Reading settled cost and usage; GET-only settlement checks every 5s',timeout)
+    deadline=time.monotonic()+timeout;last=['accounting.read=unconfirmed'];previous=None
+    while time.monotonic()<deadline:
+        try:
+            values=[]
+            for path in ('/api/tasks/'+tid+'/cost','/api/operator/task-usage?task_id='+tid,'/api/operations/test-tasks/'+tid+'/expense'):
+                remaining=deadline-time.monotonic()
+                if remaining<=0:break
+                values.append(api('GET',path,timeout_seconds=max(1,min(90,int(remaining)))) if isinstance(api,API) else api('GET',path))
+            if len(values)!=3:break
+            cost,usage,expense=values;last=settlement_blockers(cost,usage,expense)
+            if isinstance(api,API):
+                api.records.append({'kind':'acceptance.settlement','at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'blockers':last,'complete':not last});api.records[:]=api.records[-200:]
+            if not last:
+                usage['provider_expense']=expense;progress.note('Cost, usage and provider expense are settled by current reads. No Stop was sent.')
+                return cost,usage
+        except TransportUnavailable:
+            last=['accounting.read=transport_unknown']
+        summary='; '.join(last)
+        if summary!=previous:progress.note('Settlement pending: '+summary);previous=summary
+        time.sleep(min(5,max(0,deadline-time.monotonic())))
+    error=Refused('Actual cost/usage remains unsettled after '+str(timeout)+'s: '+'; '.join(last)+'; no purge or Stop sent')
+    error.reason=str(error);error.gate='settlement_unconfirmed'
+    error.next_step='Inspect the named accounting blockers and retained task/server evidence. Do not resend the answer, repeat Start, or Stop merely to clear this check.'
+    raise error
+
+
 def journey(api,*,observe=lambda value:None,progress=None,base=''):
     progress=progress or QuietProgress()
     tid=None;paid_start='not_sent'
@@ -202,10 +246,10 @@ def journey(api,*,observe=lambda value:None,progress=None,base=''):
         first=wait_question(api,tid,observe=observe,progress=progress)
         control=first['control_snapshot']
         if not isinstance(control.get('input_id'),str) or not control['input_id']:raise Refused('Current question has no input identity; no answer sent and no replay attempted.')
-        progress.set('Submitting the scripted tutor answer; no human answer needed',90)
+        progress.set('Submitting the scripted tutor answer; no human answer needed',300)
         answer_deadline=time.monotonic()+900
         try:
-            api('POST','/api/tasks/'+tid+'/answer',{'answer':ANSWER,'decision_id':control.get('input_id'),'expected_sequence':control.get('precondition',{}).get('session_sequence')})
+            api('POST','/api/tasks/'+tid+'/answer',{'answer':ANSWER,'decision_id':control.get('input_id'),'expected_sequence':control.get('precondition',{}).get('session_sequence')},timeout_seconds=300)
         except TransportUnavailable as error:
             # A lost response is not a rejected answer. Never replay it. Only a
             # fresh read showing a different text input can complete this stage.
@@ -218,13 +262,7 @@ def journey(api,*,observe=lambda value:None,progress=None,base=''):
             progress.note('Fresh task state has a different text input; answer advancement confirmed without replay.')
         else:
             second=wait_question(api,tid,after=control.get('input_id'),timeout=max(1,int(answer_deadline-time.monotonic())),observe=observe,progress=progress)
-        progress.set('Reading settled cost and usage; each HTTP request times out after 90s')
-        cost=api('GET','/api/tasks/'+tid+'/cost')
-        usage=api('GET','/api/operator/task-usage?task_id='+tid)
-        expense=api('GET','/api/operations/test-tasks/'+tid+'/expense')
-        usage['provider_expense']=expense
-        if not cost.get('evidence',{}).get('complete') or cost.get('price') is None or not usage.get('complete') or usage.get('attempts',0)<1 or not expense.get('complete') or expense.get('provider_usd') is None:
-            raise Refused('Actual cost/usage is unsettled or missing; no purge')
+        cost,usage=wait_settlement(api,tid,progress=progress)
         return tid,second,cost,usage
     except (Exception,KeyboardInterrupt) as error:
         if tid:setattr(error,'test_task_id',tid)
