@@ -39,3 +39,5 @@ export function commandDialog(title,explanation,commands){
  const safe=document.createElement('p');safe.textContent='Nothing runs from this dialog. Review terminal output before any --apply confirmation. No paid approval or activation is made.';dialog.append(safe);
  const close=document.createElement('button');close.textContent='Close';close.dataset.dialogPrimary='true';close.onclick=()=>dialog.close();dialog.append(close);bindDialog(dialog,{primary:close,focus:close});dialog.showModal();return dialog;
 }
+
+export function confirmDialog({title,message,label,run}){const dialog=createDialog(title),copy=document.createElement('p');copy.textContent=message;dialog.append(copy);const actions=dialogActions(dialog,{focus:'cancel',label,run:async()=>{await run();dialog.close();}});dialog.showModal();actions.cancel.focus();return dialog;}

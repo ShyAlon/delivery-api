@@ -133,3 +133,15 @@ def test_acceptance_readiness_requires_reviewed_operator_access():
  c=TestClient(create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(lambda request:httpx.Response(403,json={'detail':'private sql'}))))
  r=c.get('/api/operations/acceptance-readiness',headers={'Authorization':'Bearer fixture'})
  assert r.status_code==403 and 'private sql' not in r.text
+
+
+def test_build_projection_uses_running_service_and_drops_noncommit_health_fields():
+    calls=[]
+    def upstream(request):
+        calls.append(request)
+        return httpx.Response(200,json={'repositories':{'delivery-api':'a'*40,'interview-engine':'b'*40,'spec-generator':'c'*40,'bad':'not-commit'},'total_spend_usd':100,'tasks':4})
+    client=TestClient(create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream)))
+    response=client.get('/api/operations/build',headers={'Authorization':'Bearer fake'})
+    assert response.status_code==200
+    assert response.json()=={'repositories':{'delivery-api':'a'*40,'interview-engine':'b'*40}}
+    assert calls[0].url.path=='/health'
