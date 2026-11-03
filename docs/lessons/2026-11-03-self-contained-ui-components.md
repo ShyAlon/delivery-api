@@ -1,0 +1,3 @@
+# Component means one owner of markup, behavior and styles
+
+Shy's2026-11-03 ruling applies to both customer and private Back office UI. Shared cell helpers and scattered CSS are not one Table component. Table now owns table/row/cell/detail/empty construction, scoped structural styles and reusable filter/sort/page mechanics. Page files supply schema/data and authorized action callbacks. Remaining Dialog/Page construction is recorded in ui-component-debt.json; the check rejects growth, new bypass files and resolved debt not removed from the inventory. Do not call remaining debt compliant. Table has zero construction/style exceptions.
