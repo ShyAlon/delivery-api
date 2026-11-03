@@ -15,14 +15,18 @@ EXCLUDED={'credits.allocate':'Separate confirmed credit allocation; not offered 
 
 
 def effective(reader,store):
-    result={}
-    for cap in PURPOSES:
-        try:
-            authority=reader.principal.authorize(store,cap)
-            with reader.db.transaction() as conn:
-                conn.execute('SET LOCAL ROLE requi_operator_read')
-                allowed=conn.execute('SELECT public.requi_operator_read_allowed(%s,%s) AS allowed',
-                    (cap,authority['registry_version'])).fetchone()
-                result[cap]=bool(allowed and allowed['allowed'])
-        except PermissionError:result[cap]=False
-    return {'capabilities':result,'purposes':PURPOSES,'paid_activation':False,'write_off':False}
+    result={};checks={}
+    # One transaction/checkout for the inventory, not seven independent pools.
+    with reader.db.transaction() as conn:
+        conn.execute('SET LOCAL ROLE requi_operator_read')
+        for cap in PURPOSES:
+            if cap not in reader.principal.capabilities:
+                result[cap]=False;checks[cap]={'state':'denied','reason':'Running delivery process settings do not include '+cap+'. Review protected REQUI_OPERATOR_CAPABILITIES and restart delivery only after approval.'};continue
+            try:authority=reader.principal.authorize(store,cap)
+            except PermissionError:
+                result[cap]=False;checks[cap]={'state':'denied','reason':'The current signed-in subject or active session is not authorized by the running delivery process.'};continue
+            allowed=conn.execute('SELECT public.requi_operator_read_allowed(%s,%s) AS allowed',
+                (cap,authority['registry_version'])).fetchone()
+            result[cap]=bool(allowed and allowed['allowed'])
+            checks[cap]={'state':'allowed' if result[cap] else 'denied','reason':'' if result[cap] else 'Database registry did not authorize '+cap+' for the running delivery registry version. Review registry and protected settings; a restart alone may not fix this.'}
+    return {'capabilities':result,'checks':checks,'purposes':PURPOSES,'paid_activation':False,'write_off':False}

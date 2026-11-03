@@ -3922,7 +3922,7 @@ def debug_collection(task_id:str|None=Query(None,max_length=240),a:auth.Actor=De
 def operator_backoffice_access(a:auth.Actor=Depends(auth.require_actor)):
     from .backoffice_access import effective,PURPOSES
     try:return JSONResponse(effective(_operator_reader(),store),headers={'Cache-Control':'no-store'})
-    except HTTPException:return JSONResponse({'capabilities':{c:False for c in PURPOSES},'purposes':PURPOSES,'paid_activation':False,'write_off':False},headers={'Cache-Control':'no-store'})
+    except HTTPException:return JSONResponse({'capabilities':{c:False for c in PURPOSES},'checks':{c:{'state':'denied','reason':'Running delivery process has no configured operator reader. Review protected REQUI_OPERATOR_SUBJECT, REQUI_OPERATOR_REGISTRY_VERSION and REQUI_OPERATOR_CAPABILITIES; restart delivery after approved settings changes.'} for c in PURPOSES},'purposes':PURPOSES,'paid_activation':False,'write_off':False},headers={'Cache-Control':'no-store'})
 
 
 @app.get('/api/operator/audit-events')
