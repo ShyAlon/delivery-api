@@ -16,10 +16,7 @@ cleanup(){ rc=$?; trap - EXIT; "${D[@]}" rmi "$TEST_IMAGE" >/dev/null 2>&1 || tr
 trap cleanup EXIT
 # Minimal public source context only. Never send an untracked .env, whole checkout,
 # auth state or artifact data to the Docker daemon, even under remote sudo.
-mkdir -p "$CTX/tests" "$CTX/supabase/migrations" "$CTX/scripts/docker"
-cp "$HERE/tests/pg_harness.py" "$HERE/tests/pg_guardian.py" "$CTX/tests/"
-cp "$HERE/supabase/migrations/"*.sql "$CTX/supabase/migrations/"
-cp "$HERE/scripts/docker/owned-pg-smoke.py" "$HERE/scripts/docker/system-pg-smoke.py" "$HERE/scripts/docker/Dockerfile.pg-smoke" "$CTX/scripts/docker/"
+python3 "$HERE/scripts/docker/smoke-context.py" "$HERE" "$CTX"
 chmod -R go+rX "$CTX"
 echo '== build test-only PG smoke derivative (service image unchanged)'
 "${D[@]}" build "${P[@]}" --build-arg "SERVICE_IMAGE=$IMAGE" -f "$CTX/scripts/docker/Dockerfile.pg-smoke" -t "$TEST_IMAGE" "$CTX"

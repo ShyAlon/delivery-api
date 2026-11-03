@@ -60,7 +60,7 @@ def _repo(tmp_path, name, with_ops):
         shutil.copy(OPS / "settings.py", seed / "scripts" / "ops" / "settings.py")
         shutil.copy(OPS / "preview.sh", seed / "scripts" / "ops" / "preview.sh")
         shutil.copy(OPS.parent / "docker" / "build-local-image.sh", seed / "scripts" / "docker" / "build-local-image.sh")
-        for relative in ('scripts/docker/smoke-local-image.sh','scripts/docker/Dockerfile.pg-smoke','scripts/docker/owned-pg-smoke.py','scripts/docker/system-pg-smoke.py','tests/pg_harness.py','tests/pg_guardian.py','supabase/migrations/20261030000000_test.sql'):
+        for relative in ('scripts/docker/smoke-local-image.sh','scripts/docker/smoke-context.py','scripts/docker/Dockerfile.pg-smoke','scripts/docker/owned-pg-smoke.py','scripts/docker/system-pg-smoke.py','tests/pg_harness.py','tests/pg_guardian.py','src/delivery_api/runtime_roles.py','supabase/migrations/20261030000000_test.sql'):
             target=seed/relative;target.parent.mkdir(parents=True,exist_ok=True)
             source=Path(__file__).resolve().parents[1]/relative
             target.write_text(source.read_text() if source.exists() else '-- fixture migration\n')

@@ -47,9 +47,11 @@ SMOKE_OUT=$(bash "$HERE/scripts/docker/smoke-local-image.sh" "$CAND" "$PLATFORM"
 [ -z "$SMOKE_OUT" ] || printf '%s\n' "$SMOKE_OUT"
 if [ "$rc" -ne 0 ]; then
   [ -n "$SMOKE_OUT" ] || echo "== the smoke container produced no output at all (docker exit code $rc): it was killed before it could print - a signal kill, commonly the Docker Desktop VM running out of memory, leaves no output"
+  REASON=$(printf '%s\n' "$SMOKE_OUT" | grep -E 'SMOKE FAILED at stage|disposable PG failed|[A-Za-z]+Error:|smoke stage:' | tail -n 1 | cut -c1-600) || true
+  [ -n "$REASON" ] || REASON="no diagnostic failure line; docker exit code $rc"
   echo "smoke FAILED for $CAND (docker exit code $rc; output above)"
-  if docker rmi "$CAND" >/dev/null 2>&1; then echo "removed the failed image tag $CAND (only that tag)"; abort SMOKE "the candidate image failed its smoke check and was removed" "Nothing was tagged. The output above names the failing check."; fi
-  abort SMOKE "the candidate image failed its smoke check and could not be removed (a container may be using it); it is NOT approved and was left in place" "" "docker rmi $CAND   (then run again)"
+  if docker rmi "$CAND" >/dev/null 2>&1; then echo "removed the failed image tag $CAND (only that tag)"; abort SMOKE "the candidate image failed its smoke check and was removed. Failing check: $REASON" "Nothing was tagged. The output above names the failing check."; fi
+  abort SMOKE "the candidate image failed its smoke check and could not be removed (a container may be using it); it is NOT approved and was left in place. Failing check: $REASON" "" "docker rmi $CAND   (then run again)"
 fi
 echo "smoke passed: $CAND"
 EXIST=$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
