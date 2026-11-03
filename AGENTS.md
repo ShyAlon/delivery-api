@@ -35,6 +35,8 @@
 - Confirm deletion; disabled buttons must explain why.
 - Give actions busy, success and error states; use loading text with motion, never a bare spinner.
 - Dialogs share focus handling, Enter submission and Esc close; gates default to Approve without changing approval meaning.
+- Every user-visible error names the actual known cause and a practical next step in plain words. Never replace a known cause with "temporarily unavailable" or "the server could not complete this action".
+- When the cause is unverified, say what failed and what is still unknown. Preserve a safe specific reason across worker/process boundaries, keep secrets and raw provider payloads private, and include a reference for diagnostics.
 - Show customer prices in credits with USD equivalents where applicable; vendor costs stay operator-only.
 - Never put operator links, private operations terms or raw readiness errors in customer pages, even for admins.
 - Keep saved artifacts and audit evidence accessible; Delete means confirmed Stop/hide, not erasing accounting.
