@@ -81,13 +81,13 @@ async function acceptanceReadiness(){
    const explanation=[row.reason,row.next].filter(Boolean).join(' ');
    const resolve=()=>{
     if(['default pin','ceiling'].includes(row.check)){location.hash='model-pins';return;}
-    const commands=row.check==='marker migration'?(row.reason.includes('lacks reviewed owner-test access')?['req backoffice-access --test-owner','req backoffice-access --test-owner --apply']:['req migrate','req migrate --apply']):row.check==='run approval'?['scripts/ops/acceptance.sh --dry-run --max-usd YOUR_APPROVED_NUMBER']:['req preview --apply'];
+    const commands=row.check==='marker migration'?(row.reason.includes('lacks reviewed owner-test access')?['req backoffice-access --test-owner','req backoffice-access --test-owner --apply']:['req migrate','req migrate --apply']):['req preview --apply'];
     commandDialog(row.check==='marker migration'?'Review owner test access':row.check,explanation,commands);
    };
    const tr=tableRow(table,[(row.step?row.step+'. '+row.group+' / ':'')+(row.check==='marker migration'?'owner test access':row.check),'',row.reason||'Verified by current read.',row.next||'Review the reason above.']);
    tr.children[1].append(statusPill(row.status,explanation,row.status==='pass'?null:resolve));body.append(tr);
   }
-  $('acceptance-status').textContent=data.ready?'Read checks pass. Run approval is still separate.':'Not ready. Review the reasons below; nothing was changed.';
+  $('acceptance-status').textContent=data.ready?'Read checks pass. The Back office ceiling applies; the owner starts execution explicitly.':'Not ready. Review the reasons below; nothing was changed.';
  }catch(error){failure(error);$('acceptance-status').textContent=error.message;}
 }
 $('acceptance-refresh').addEventListener('click',()=>runAction('backoffice.acceptance.refresh',$('acceptance-refresh'),acceptanceReadiness));

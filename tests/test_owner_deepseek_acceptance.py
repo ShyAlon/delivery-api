@@ -36,10 +36,9 @@ def test_dry_preflight_is_only_authenticated_get_and_uses_exact_pin():
     assert plan['provider_usd_scenario']=='320'
 
 
-def test_server_ceiling_must_not_exceed_explicit_owner_approval():
-    from decimal import Decimal
-    api,calls=api_fixture()
-    with pytest.raises(a.Refused,match='operator task-generation ceiling'):a.preflight(api,Decimal('0.5'))
+def test_backoffice_ceiling_is_the_only_run_limit():
+    api,calls=api_fixture();_,plan=a.preflight(api)
+    assert plan['server_provider_ceiling_usd']=='1'
     assert all(m=='GET' for m,p,b in calls)
 
 
@@ -155,7 +154,7 @@ def test_shared_readiness_reports_each_gap_without_raw_private_values():
     def unavailable(*args):raise RuntimeError('private-dsn-secret')
     report=inspect(unavailable)
     assert not report['ready'] and not report['activation_enabled']
-    assert {r['check'] for r in report['checks']}=={'session','target','token/session','marker migration','default pin','ceiling','run approval'}
+    assert {r['check'] for r in report['checks']}=={'session','target','token/session','marker migration','default pin','ceiling'}
     assert all(r['reason'] for r in report['checks'])
     assert 'private-dsn-secret' not in str(report)
 
@@ -172,3 +171,7 @@ def test_shared_readiness_distinguishes_owner_permission_and_orders_next_actions
     assert 'lacks reviewed owner-test access' in row['reason']
     assert '--test-owner' in row['next'] and not result['ready']
     assert [r['step'] for r in result['checks']]==sorted(r['step'] for r in result['checks'])
+
+
+def test_no_duplicate_cli_limit_is_accepted():
+    with pytest.raises(SystemExit):a.main(['--dry-run','--max-usd','4'])
