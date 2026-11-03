@@ -269,3 +269,45 @@ def test_final_abort_line_repeats_observed_status_gate_and_reason(monkeypatch,ca
     output=capsys.readouterr().err
     assert '"http_status": 403' in output and '"paid_start": "not_sent"' in output
     assert '"task_creation": "refused"' in output
+
+
+def test_progress_reports_stage_elapsed_timeout_and_task_link_without_content(capsys):
+    clock=[10]
+    progress=a.Progress(clock=lambda:clock[0])
+    progress.set('Waiting for first text question',900)
+    clock[0]=25;progress.emit()
+    progress.task('fixture-task','http://127.0.0.1:8001')
+    out=capsys.readouterr().out
+    assert 'elapsed 15s; stage 15s; timeout 900s; 885s remaining' in out
+    assert 'http://127.0.0.1:8001/tasks/fixture-task/view' in out
+    assert 'does not Stop server work' in out
+
+
+def test_heartbeat_continues_during_a_blocking_step():
+    import time
+    rows=[]
+    with a.Progress(write=lambda line,**kwargs:rows.append(line),interval=.01) as progress:
+        progress.set('Opening browser',30);time.sleep(.035)
+    assert len(rows)>=3 and not progress.thread.is_alive()
+
+
+def test_question_timeout_is_explicit_and_never_retries_or_submits(monkeypatch):
+    clock=iter([0,1,3]);monkeypatch.setattr(a.time,'monotonic',lambda:next(clock))
+    monkeypatch.setattr(a.time,'sleep',lambda n:None)
+    calls=[]
+    def api(method,path):calls.append((method,path));return {'task_id':'t','control_snapshot':{'mode':'working'}}
+    with pytest.raises(a.Refused,match='within 2 seconds'):a.wait_question(api,'t',timeout=2)
+    assert calls==[('GET','/api/tasks/t')]
+
+
+def test_interrupt_retains_task_id_and_warns_server_was_not_stopped():
+    api,calls=api_fixture()
+    def interrupt(method,path,body=None,**kwargs):
+        if method=='GET' and path=='/api/tasks/t':raise KeyboardInterrupt()
+        return api(method,path,body,**kwargs)
+    with pytest.raises(KeyboardInterrupt) as caught:a.journey(interrupt)
+    report=a.failure_report(caught.value,caught.value.test_task_id,None)
+    assert report['task_id']=='t' and report['paid_start']=='accepted'
+    assert report['gate']=='owner_interrupted' and 'not stopped' in report['reason']
+    assert 'confirm Stop' in report['next']
+    assert not any('purge' in p or p.endswith('/stop') for m,p,b in calls)
