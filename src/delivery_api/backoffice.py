@@ -69,10 +69,44 @@ def create_app(*,service_url,transport=None):
     @application.get('/',response_class=HTMLResponse)
     def shell():
         from pathlib import Path
-        return HTMLResponse((Path(__file__).parent/'backoffice_web'/'index.html').read_text().replace('src="/backoffice-assets/backoffice.js"','src="/backoffice-assets/backoffice.js?v='+revision+'"'),
+        return HTMLResponse((Path(__file__).parent/'backoffice_web'/'index.html').read_text().replace('src="/backoffice-assets/auth.js"','src="/backoffice-assets/auth.js?v='+revision+'"'),
             headers={'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Referrer-Policy':'no-referrer'})
     @application.get('/health')
     def health():return {'ok':True,'role':'backoffice','capabilities':'scoped_service_api_proxy'}
+    # Same shared browser form, exact service auth routes. No generic proxy or
+    # local credential/session store; the service owns identity and permissions.
+    @application.api_route('/api/auth',methods=['GET'])
+    @application.api_route('/auth/{action}',methods=['GET','POST'])
+    async def browser_auth(request:Request,action:str='status'):
+        allowed={'status':'GET','email-availability':'GET','signin':'POST','signup':'POST','refresh':'POST','logout':'POST'}
+        if action not in allowed or request.method!=allowed[action]:
+            return JSONResponse({'detail':'Unknown authentication route'},status_code=404)
+        if request.headers.get('sec-fetch-site')=='cross-site':
+            return JSONResponse({'detail':'Cross-site authentication denied'},status_code=403)
+        if request.method=='POST' and request.headers.get('origin')!=str(request.base_url).rstrip('/'):
+            return JSONResponse({'detail':'Same-origin authentication required'},status_code=403)
+        query=list(request.query_params.multi_items())
+        if query and (action!='email-availability' or len(query)!=1 or query[0][0]!='email' or len(query[0][1])>254):
+            return JSONResponse({'detail':'Unsupported authentication parameters'},status_code=422)
+        raw=await request.body()
+        if len(raw)>4096:return JSONResponse({'detail':'Authentication request exceeds bound'},status_code=422)
+        headers={key:request.headers[key] for key in ('authorization','cookie','content-type') if key in request.headers}
+        if request.method=='POST':headers['Origin']=service_url
+        target='/api/auth' if action=='status' else '/auth/'+action
+        try:
+            async with httpx.AsyncClient(base_url=service_url,transport=transport,timeout=30,follow_redirects=False) as client:
+                response=await client.request(request.method,target,headers=headers,params=query,content=raw)
+                if len(response.content)>65536 or response.status_code not in (200,201,400,401,403,409,422,429,503):raise ValueError()
+                value=response.json()
+                if not isinstance(value,dict):raise ValueError()
+                result=JSONResponse(value,status_code=response.status_code,headers={'Cache-Control':'no-store'})
+                # Preserve separate Set-Cookie fields, including HttpOnly, Path,
+                # SameSite, Secure and deletion. Never expose tokens to JS.
+                for cookie in response.headers.get_list('set-cookie'):
+                    result.headers.append('Set-Cookie',cookie)
+                return result
+        except (httpx.HTTPError,ValueError):
+            return JSONResponse({'detail':'Authentication service unavailable. No operation was retried.'},status_code=502,headers={'Cache-Control':'no-store'})
     @application.get('/api/operations/{capability}')
     async def read_operation(capability:str,request:Request):
         target=ROUTES.get(capability)

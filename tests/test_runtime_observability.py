@@ -110,7 +110,7 @@ def test_ui_action_module_is_preloaded_and_wired():
     index = (WEB / "index.html").read_text()
     assert '/assets/ui-action.js' in index
     checks = {
-        "identity.js": ["actionBusy('auth.'+mode", "actionIdle('auth.'+mode", "logEnter('auth.'+mode"],
+        "account-component.js": ["actionBusy('auth.'+mode", "actionIdle('auth.'+mode", "logEnter('auth.'+mode"],
         "task.js": ["runAction('engine.start'", "guardBlocked('engine.answer'",
                     "disabledSet('engine.answer'", "disabledClear('engine.answer'", "logEnter('answer-composer'"],
         "dashboard.js": ["runAction('task.create'"],
