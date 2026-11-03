@@ -1,0 +1,7 @@
+# A failed permission read is not a missing permission
+
+The private UI collapsed timeout, network error, invalid inventory and actual denial into an empty capability set, claimed a missing capability and restart, then permanently re-disabled every control. Other data requests ran independently, so actual rows could appear below an invented denial banner. This is a confirmed UI failure mode, not proof of the owner's specific underlying network/config problem.
+
+Unknown access now says unknown with observed HTTP status and an enabled retry. Actual denials carry fixed per-capability reasons distinguishing running delivery settings, current session/subject and database registry. A restart is recommended only conditionally after approved protected-setting changes; restarting an execution preview is not a harmless page reload. The access inventory uses one transaction rather than seven checkouts. Retry disconnects old observers, restores only controls it changed and re-applies the new state. Server checks remain authoritative for every data/mutation request.
+
+Full CI found a second ownership collision: Model pins and Audit selected the first role=status under their panel, so the newly prepended access status could be overwritten by an unrelated panel-load error. Each module now selects its dedicated status node by data attribute. Access status keeps its own live region and retry control; the existing browser denial test now also proves the independent load refusal remains visible without replacing the named capability gap.
