@@ -66,8 +66,14 @@ class ChildInterviewClient(EngineClient):
         from interview_engine import session_models
         if hasattr(self.gateway_factory,'for_task') and initial_model is None:
             initial_model=self.gateway_factory.models.get(route)
-        models=session_models.resolve(route,initial_model)
-        session_models.validate(models,route)
+        from interview_engine.errors import UserFacingError
+        try:
+            models=session_models.resolve(route,initial_model)
+            session_models.validate(models,route)
+        except UserFacingError as exc:
+            from .engine_client import EngineClientError
+            from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
+            raise EngineClientError(422,ProtocolError(code=ProtocolErrorCode.INVALID_RESPONSE,detail=exc.render())) from exc
         if self.paid_runtime is not None:
             for provider,model in models.values():self.paid_runtime.require(provider,model)
         return {'route':route,'model_map':models}

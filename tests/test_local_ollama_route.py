@@ -226,7 +226,7 @@ def _cloud_app(monkeypatch, flag):
     return module
 
 
-def test_deployed_route_list_displays_both_but_only_deepseek_is_admitted(monkeypatch):
+def test_deployed_route_list_keeps_ollama_selectable_but_checks_on_start(monkeypatch):
     module = _cloud_app(monkeypatch, flag=False)
     monkeypatch.setenv('DEEPSEEK_API_KEY','fake-only')
     def preview(route):
@@ -236,9 +236,8 @@ def test_deployed_route_list_displays_both_but_only_deepseek_is_admitted(monkeyp
     result=module.model_routes(a=module.auth.Actor('test-owner','Test owner'))
     assert [r['id'] for r in result['routes']]==['deepseek','ollama']
     assert result['routes'][0]['available'] is True
-    assert result['routes'][1]['available'] is False
-    assert 'Local interviews are not enabled' in result['routes'][1]['error']
-    assert 'Local interviews are not available' in result['routes'][1]['error']
+    assert result['routes'][1]['available'] is True
+    assert result['routes'][1]['readiness']=='checked_on_start'
     assert result['default_route']=={'route':'deepseek'}
 
 
@@ -280,69 +279,62 @@ def test_a_present_key_cannot_bypass_the_ollama_only_gateway(monkeypatch):
     assert result['default_route']=={'route':'ollama'}
 
 
-def test_local_preview_route_list_fails_closed_when_the_engine_cannot_resolve(monkeypatch):
+def test_local_preview_choice_survives_engine_unreachable_until_start(monkeypatch):
     module = _cloud_app(monkeypatch, flag=True)
     def down(route):
         raise module.EngineUnreachableError('http://engine', RuntimeError('down'))
     monkeypatch.setattr(module.engine_client, 'preview_route', down)
     result = module.model_routes(a=module.auth.Actor('test-owner','Test owner'))
-    assert result['routes'][1]['available'] is False and 'error' in result['routes'][1]
+    assert result['routes'][1]['available'] is True and result['routes'][1]['readiness']=='checked_on_start'
 
 
-def test_deployed_start_rejects_a_forced_ollama_route(monkeypatch, pg_scoped_workspace):
-    module = _cloud_app(monkeypatch, flag=False)
-    store = module.store
-    task = store.create_task('forced-ollama-start-' + LOCAL_MODEL, 'an idea')
-    task_id = task['task_id'] if isinstance(task, dict) else task
-    def explode(*args, **kwargs):
-        raise AssertionError('a rejected route must not reach the engine')
-    monkeypatch.setattr(module.engine_client, 'preview_route', explode)
-    monkeypatch.setattr(module.engine_client, 'default_route', explode)
+def test_start_checks_actual_ollama_connection_before_any_launch(monkeypatch,pg_scoped_workspace):
+    module=_cloud_app(monkeypatch,flag=False)
+    store=module.store;tid=store.create_task('Ollama connection check')['task_id']
+    def down(route):
+        assert route=='ollama'
+        raise module.EngineUnreachableError('fixture-local',RuntimeError('connection refused'))
+    monkeypatch.setattr(module.engine_client,'preview_route',down)
     from delivery_api import auth
-    actor = auth.Actor(id='owner-1', label='tester')
     with pytest.raises(module.HTTPException) as raised:
-        asyncio.run(module.start_task_engine(task_id, module.TaskStartRequest(model_route='ollama'), a=actor))
-    assert raised.value.status_code == 422
-    store.delete_task(task_id)
+        asyncio.run(module.start_task_engine(tid,module.TaskStartRequest(model_route='ollama'),a=auth.Actor('owner','Owner')))
+    assert raised.value.status_code==503
+    assert store.task(tid)['state']=='not_started' and store.engine_session(tid) is None
 
 
-def test_deployed_start_rejects_a_forced_ollama_route_even_when_open(monkeypatch, pg_scoped_workspace):
-    # The rejection is route policy, not execution state: it fires while execution is admitted.
-    test_deployed_start_rejects_a_forced_ollama_route(monkeypatch, pg_scoped_workspace)
-
-
-def test_engine_model_must_match_the_installed_gateway(monkeypatch):
+def test_route_choice_does_not_claim_model_preflight_passed(monkeypatch):
     module=_cloud_app(monkeypatch,flag=True)
     monkeypatch.setattr(module.engine_client,'preview_route',lambda route:{'model_map':{'probing':['ollama','unreviewed-model']}})
     result=module.model_routes(module.auth.Actor('test-owner','Test owner'))
-    assert result['routes'][1]['available'] is False
-    assert 'Local interviews are temporarily unavailable' in result['routes'][1]['error']
-    assert result['default_route'] is None
+    assert result['routes'][1]['available'] is True
+    assert result['routes'][1]['readiness']=='checked_on_start'
+    assert result['default_route']=={'route':'ollama'}
 
 
-def test_missing_gateway_disables_both_without_probing(monkeypatch):
+def test_missing_gateway_keeps_only_ollama_selectable_without_probing(monkeypatch):
     module=_cloud_app(monkeypatch,flag=True)
     from delivery_api import cloud_runtime
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:None)
     monkeypatch.setattr(module.engine_client,'preview_route',lambda route:(_ for _ in ()).throw(AssertionError('must not probe')))
     result=module.model_routes(module.auth.Actor('test-owner','Test owner'))
-    assert all(not r['available'] and 'Interviews are temporarily unavailable' in r['error'] for r in result['routes'])
-    assert result['default_route'] is None
+    assert not result['routes'][0]['available']
+    assert result['routes'][1]['available'] and result['routes'][1]['readiness']=='checked_on_start'
+    assert result['default_route']=={'route':'ollama'}
 
 
-def test_engine_model_missing_reason_is_plain_below_disabled_route(monkeypatch):
+def test_missing_model_does_not_disable_the_ollama_choice(monkeypatch):
     module=_cloud_app(monkeypatch,flag=True)
     from vmodel_contracts.interactive import ProtocolError,ProtocolErrorCode
     def missing(route):
         raise module.EngineClientError(422,ProtocolError(code=ProtocolErrorCode.INVALID_RESPONSE,detail='Ollama model phi4 is unavailable; pull phi4 and retry'))
     monkeypatch.setattr(module.engine_client,'preview_route',missing)
     result=module.model_routes(module.auth.Actor('test-owner','Test owner'))
-    assert result['routes'][1]['available'] is False
-    assert result['routes'][1]['error']=='Local interviews are temporarily unavailable. Please try again later.'
-    assert result['default_route'] is None
+    assert result['routes'][1]['available'] is True
+    assert result['routes'][1]['readiness']=='checked_on_start'
+    assert result['default_route']=={'route':'ollama'}
 
 
-def test_dual_preview_offers_both_only_after_independent_engine_preflights(monkeypatch):
+def test_dual_preview_checks_paid_readiness_but_defers_local_check_to_start(monkeypatch):
     module=_cloud_app(monkeypatch,flag=True)
     from types import SimpleNamespace
     from delivery_api import cloud_runtime
@@ -354,11 +346,12 @@ def test_dual_preview_offers_both_only_after_independent_engine_preflights(monke
         return {'model_map':{'probing':[route,LOCAL_MODEL if route=='ollama' else 'deepseek-flash']}}
     monkeypatch.setattr(module.engine_client,'preview_route',preview)
     result=module.model_routes(module.auth.Actor('test-owner','Test owner'))
-    assert seen==['deepseek','ollama']
+    assert seen==['deepseek']
     assert all(route['available'] for route in result['routes'])
     def missing_local(route):
         if route=='ollama':raise module.EngineUnreachableError('local',RuntimeError('down'))
         return preview(route)
     monkeypatch.setattr(module.engine_client,'preview_route',missing_local)
     result=module.model_routes(module.auth.Actor('test-owner','Test owner'))
-    assert result['routes'][0]['available'] and not result['routes'][1]['available']
+    assert result['routes'][0]['available'] and result['routes'][1]['available']
+    assert result['routes'][1]['readiness']=='checked_on_start'

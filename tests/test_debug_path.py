@@ -42,7 +42,7 @@ def test_cloud_model_routes_are_managed_and_start_only_when_execution_is_open(mo
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(local=False,model='deepseek-flash',models={'deepseek':'deepseek-flash'}))
     monkeypatch.setattr(module.engine_client,'preview_route',lambda route:{'model_map':{'probing':['deepseek','deepseek-flash']}})
     reply=module.model_routes(module.auth.Actor('test-owner','Test owner'))
-    assert reply['managed'] is True and reply['default_route']==({'route':'deepseek'} if open_now else None)
+    assert reply['managed'] is True and reply['default_route']==({'route':'deepseek'} if open_now else {'route':'ollama'})
     route=reply['routes'][0]
     assert [r['id'] for r in reply['routes']]==['deepseek','ollama']
     assert route['id']=='deepseek' and route['managed'] is True and route['available'] is open_now
@@ -92,7 +92,8 @@ def test_cloud_model_routes_never_enable_an_unreviewed_engine_model(monkeypatch,
         local=False,model='deepseek-flash',models=reviewed_models))
     monkeypatch.setattr(module.engine_client,'preview_route',lambda route:{'model_map':{'probing':['deepseek','deepseek-flash']}})
     reply=module.model_routes(module.auth.Actor('test-owner','Test owner'))
-    assert reply['default_route'] is None
+    assert reply['default_route']=={'route':'ollama'}
+    assert next(r for r in reply['routes'] if r['id']=='ollama')['readiness']=='checked_on_start'
     route=next(r for r in reply['routes'] if r['id']=='deepseek')
     assert route['available'] is False
     assert 'DeepSeek is' in route['error'] and 'unavailable' in route['error'] or 'DeepSeek is not available' in route['error']

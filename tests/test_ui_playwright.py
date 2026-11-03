@@ -183,7 +183,8 @@ def test_not_started_running_and_done_pages(pg_page,pg_ui,pg_ids):
     tid=pg_ids["live"]
     page.goto(ui + f'/tasks/{pg_ids["empty"]}/view')
     page.get_by_text("This task hasn't started.").wait_for();assert page.get_by_text("This task hasn't started.").is_visible()
-    start=page.get_by_role("button",name="Start interview");assert start.is_visible() and not start.is_enabled()
+    start=page.get_by_role("button",name="Start interview");assert start.is_visible() and start.is_enabled()
+    assert page.locator('[data-start-route=ollama]').is_enabled()
     assert page.get_by_text("Start engine · wiring next").count()==0
     page.goto(ui + f"/tasks/{tid}/view")
     page.locator(".live-indicator").wait_for()

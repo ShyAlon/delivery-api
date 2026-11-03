@@ -1002,12 +1002,27 @@ def put_question_quality_config(req:QualityConfigRequest,a:auth.Actor=Depends(au
 class TaskStartRequest(BaseModel):
     model_route:Literal["ollama","deepseek"]|None=None
     initial_model:str|None=None
+def _ollama_route_choice(model=None,*,managed=False):
+    """Optional picker data is never a readiness gate. Start validates the route."""
+    options=[model] if model else []
+    status={'availability':'unavailable','reason':'installed_lookup_failed','scope':'pinned_route_only'}
+    if managed:
+        status={'availability':'available','scope':'reviewed_models'}
+    else:
+        try:
+            installed=engine_client.local_models()
+            options=list(dict.fromkeys([*options,*installed]))
+            status={'availability':'available','scope':'installed_models'}
+        except (EngineClientError,EngineUnreachableError,AttributeError):pass
+    return {'id':'ollama','available':True,'managed':managed,'readiness':'checked_on_start',
+        'model':'ollama:'+model if model else None,'models':options,'model_list':status}
+
 @app.get("/api/model-routes")
 def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     """The engine resolves routes; legacy env keys only seed the initial choice."""
     if config.CLOUD_TENANTS:
-        # Display every supported route; availability is bounded by the installed
-        # gateway AND the same live engine preflight used by Start.
+        # Ollama is always selectable; actual model/connection checks run on Start.
+        # Paid availability retains the installed gateway and preflight checks.
         from . import cloud_runtime
         gateway=cloud_runtime.gateway_factory()
         open_now=cloud_execution_admitted()
@@ -1017,14 +1032,15 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
         closed_message='Interviews are temporarily unavailable. Please try again later.'
         routes=[]
         for route in ('deepseek','ollama'):
+            if route=='ollama':
+                routes.append(_ollama_route_choice(admitted_models.get('ollama'),managed=True))
+                continue
             errors=[];models=None;model=None
             if route=='deepseek' and not (os.environ.get('DEEPSEEK_API_KEY') or '').strip():
                 errors.append('DeepSeek is not available on this server.')
-            if route=='ollama' and not local_route.local_preview_enabled():
-                errors.append('Local interviews are not enabled on this server.')
             if not open_now:errors.append(closed_message)
             if gateway is None and open_now:errors.append('Interviews are temporarily unavailable. Please try again later.')
-            elif gateway is not None and route not in admitted_models:errors.append(('Local interviews are not available on this server.' if route=='ollama' else 'DeepSeek is not available on this server.'))
+            elif gateway is not None and route not in admitted_models:errors.append('DeepSeek is not available on this server.')
             if not errors:
                 try:
                     preview=engine_client.preview_route(route)
@@ -1034,7 +1050,7 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
                     if provider!=route:raise ValueError(f'engine preview returned {provider} for selected {route}')
                     if model!=admitted_models.get(route):raise ValueError(f'Admission gateway reviewed model is {admitted_models.get(route)}; engine selected {model}.')
                 except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
-                    errors.append(('Local interviews are temporarily unavailable. Please try again later.' if route=='ollama' else 'DeepSeek is temporarily unavailable. Please try again later.'))
+                    errors.append('DeepSeek is temporarily unavailable. Please try again later.')
             routes.append({'id':route,'available':not errors,'managed':True,
                 **({'error':' '.join(errors)} if errors else {}),
                 **({'model':f'{route}:{model}','model_map':models,'models':[model]} if model else {})})
@@ -1044,6 +1060,10 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     try:default=engine_client.default_route()
     except (EngineClientError,EngineUnreachableError,AttributeError):default=None
     for route in ("ollama","deepseek"):
+        if route=='ollama':
+            model=(default or {}).get('model') if (default or {}).get('route')=='ollama' else None
+            routes.append(_ollama_route_choice(model))
+            continue
         try:
             initial_model=(default or {}).get("model") if route==(default or {}).get("route") else None
             result=engine_client.preview_route(route,initial_model=initial_model) if initial_model else engine_client.preview_route(route)
@@ -1052,24 +1072,9 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
             if len(pairs)!=1:raise ValueError("engine preview returned divergent stage models")
             provider,model=next(iter(pairs))
             if provider!=route:raise ValueError(f"engine preview returned {provider} for selected {route}")
-            options=[model];list_status={'availability':'available','scope':'pinned_route'}
-            if route=="ollama":
-                try:
-                    options=engine_client.local_models()
-                    list_status={'availability':'available','scope':'installed_models'}
-                except (EngineClientError,EngineUnreachableError,AttributeError):
-                    list_status={'availability':'unavailable','reason':'installed_lookup_failed','scope':'pinned_route_only'}
-            routes.append({"id":route,"available":True,"model":f"{provider}:{model}","model_map":models,"models":options,"model_list":list_status})
-        except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError) as exc:
-            reason=('Local interviews are temporarily unavailable. Please try again later.' if route=='ollama' else 'DeepSeek is temporarily unavailable. Please try again later.')
-            if route=="ollama":
-                try:
-                    installed=engine_client.local_models()
-                    if installed:
-                        routes.append({"id":route,"available":True,"model":None,"models":installed,"error":f"default unavailable: {reason}"})
-                        continue
-                except (EngineClientError,EngineUnreachableError,AttributeError):pass
-            routes.append({"id":route,"available":False,"error":reason})
+            routes.append({"id":route,"available":True,"model":f"{provider}:{model}","model_map":models,"models":[model]})
+        except (EngineClientError,EngineUnreachableError,KeyError,ValueError,TypeError):
+            routes.append({"id":route,"available":False,"error":"DeepSeek is temporarily unavailable. Please try again later."})
     return {"routes":routes,"default_route":default}
 @app.post("/api/tasks/{task_id}/start")
 async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest(),a:auth.Actor=Depends(auth.require_run_start)):
@@ -1093,7 +1098,7 @@ async def start_task_engine(task_id:str,body:TaskStartRequest=TaskStartRequest()
         if selected_route!=initial.get("route") or body.initial_model!=initial.get("model"):
             raise HTTPException(422,"initial model must match the engine's current new-session default")
         initial_model=body.initial_model
-    if config.CLOUD_TENANTS and selected_route not in local_route.managed_routes():
+    if config.CLOUD_TENANTS and selected_route not in ('deepseek','ollama'):
         raise HTTPException(422,{"error":"That model route is not available on this server.","cause":"managed routes: "+", ".join(local_route.managed_routes()),"next":"Reload the Start screen and choose an available route."})
     # Same engine resolver as the Start screen; never infer a model from the
     # route name or a second copy of the .env in delivery.
