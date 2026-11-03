@@ -14,7 +14,7 @@ def api_fixture():
     calls=[];questions=iter(['q1','q2'])
     def api(method,path,body=None,**kw):
         calls.append((method,path,body))
-        if path=='/api/auth':return {'authenticated':True}
+        if path=='/api/auth':return {'authenticated':True,'mode':'supabase','preview':True,'local_preview':True}
         if path=='/api/operations/test-tasks' and method=='GET':return {'tasks':[]}
         if path=='/api/operator/model-pins':return {'pins':[PIN],'expense_policy':{'current':{'limit_units':1000,'units_per_usd':1000}}}
         if path=='/api/model-routes':return {'routes':[]}
@@ -39,7 +39,7 @@ def test_dry_preflight_is_only_authenticated_get_and_uses_exact_pin():
 def test_server_ceiling_must_not_exceed_explicit_owner_approval():
     from decimal import Decimal
     api,calls=api_fixture()
-    with pytest.raises(a.Refused,match='server task-generation ceiling'):a.preflight(api,Decimal('0.5'))
+    with pytest.raises(a.Refused,match='operator task-generation ceiling'):a.preflight(api,Decimal('0.5'))
     assert all(m=='GET' for m,p,b in calls)
 
 
@@ -116,3 +116,45 @@ def test_owner_expense_read_uses_actual_scale_and_refuses_non_test(store,operato
         c.execute("INSERT INTO provider_attempts(attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,expense_actual,retail_actual,created_at,updated_at) VALUES(%s,%s,%s,'test','{\"expense_units_per_usd\":1000}','test','settled',1,1,25,1,1,2)",('exp-'+uuid.uuid4().hex,A.owner_id,job))
     with tenant_context(A):
         assert store.test_task_expense(t['task_id'])=={'provider_usd':'0.025','complete':True,'attempts':1,'test':True}
+
+
+def test_target_default_and_override_never_fall_back():
+    assert a.target({})==('http://127.0.0.1:8001',True)
+    assert a.target({'PREVIEW_EXEC_PORT':'8123'})==('http://127.0.0.1:8123',True)
+    assert a.target({'DELIVERY_PUBLIC_ORIGIN':'https://fixture.invalid'})==('https://fixture.invalid',False)
+    assert a.target({},'http://localhost:8999')==('http://localhost:8999',True)
+    for url in ('https://user:secret@fixture.invalid','http://cloud.invalid','https://fixture.invalid/tasks'):
+        with pytest.raises(a.Refused):a.target({},url)
+
+
+def test_wrong_target_refuses_before_auth_prompt_or_writes():
+    calls=[]
+    def api(method,path):calls.append((method,path));return {'authenticated':False,'mode':'supabase'}
+    with pytest.raises(a.Refused,match='identify'):a.identify(api,True,execute=True)
+    assert calls==[('GET','/api/auth')]
+
+
+def test_missing_token_prompt_is_hidden_only_missing_and_no_login(monkeypatch):
+    import httpx
+    prompts=[];calls=[]
+    class Settings:
+        def hidden_prompt(self,name):prompts.append(name);return 'private-owner-token'
+    def handle(request):
+        calls.append(request.method)
+        return httpx.Response(200,json={'authenticated':request.headers.get('authorization')=='Bearer private-owner-token'})
+    with httpx.Client(base_url='http://127.0.0.1:8001',transport=httpx.MockTransport(handle)) as client:
+        assert a.authenticate(client,Settings(),{},'http://127.0.0.1:8001',{})['authenticated']
+        assert len(prompts)==1
+        assert a.authenticate(client,Settings(),{},'http://127.0.0.1:8001',{})['authenticated']
+        assert len(prompts)==1
+    assert set(calls)=={'GET'}
+
+
+def test_shared_readiness_reports_each_gap_without_raw_private_values():
+    from delivery_api.acceptance_readiness import inspect
+    def unavailable(*args):raise RuntimeError('private-dsn-secret')
+    report=inspect(unavailable)
+    assert not report['ready'] and not report['activation_enabled']
+    assert {r['check'] for r in report['checks']}=={'session','target','token/session','marker migration','default pin','ceiling','run approval'}
+    assert all(r['reason'] for r in report['checks'])
+    assert 'private-dsn-secret' not in str(report)

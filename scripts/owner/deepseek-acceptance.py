@@ -39,18 +39,15 @@ def estimate(pin,input_tokens=20000,output_tokens=6000,compute_ms=60000):
 
 
 def preflight(api,maximum=None):
-    state=api('GET','/api/auth')
-    if not state.get('authenticated'):raise Refused('Sign-in is missing or expired; sign in again')
-    view=api('GET','/api/operations/test-tasks')
-    if not isinstance(view.get('tasks'),list):raise Refused('Owner test migration/permission is not ready')
-    pins=api('GET','/api/operator/model-pins')
+    from delivery_api.acceptance_readiness import inspect
+    result=inspect(api,maximum)
+    print(json.dumps({'acceptance_readiness':result['checks'],'activation_enabled':False},indent=2))
+    if not result['ready']:
+        reasons=[r['reason'] for r in result['checks'] if r['status']=='fail']
+        raise Refused('; '.join(reasons))
+    pins=result['data']['default pin']
     selected=[p for p in pins.get('pins',[]) if p.get('provider')=='deepseek' and p.get('is_default')]
-    if len(selected)!=1:raise Refused('Exactly one default reviewed DeepSeek pin is required; review it in Back office')
-    policy=pins.get('expense_policy',{}).get('current')
-    if not policy:raise Refused('Set the operator expense ceiling in Back office before running')
-    ceiling=Decimal(policy['limit_units'])/positive(policy['units_per_usd'])
-    if maximum is not None and ceiling>maximum:
-        raise Refused('The server task-generation ceiling exceeds --max-usd; lower it in Back office before running. This script will not edit it.')
+    ceiling=result['ceiling']
     plan=estimate(selected[0]);plan['server_provider_ceiling_usd']=str(ceiling)
     api('GET','/api/model-routes')
     return selected[0],plan
@@ -118,30 +115,78 @@ def load_settings(root,explicit=None):
     return module,module.load(root,explicit=explicit)
 
 
+def target(values,override=None):
+    # The preview launcher owns this default. An explicit URL is never silently
+    # replaced by another host if it fails. No remote origin is guessed.
+    base=(override or values.get('DELIVERY_BASE_URL') or values.get('DELIVERY_PUBLIC_ORIGIN') or
+          'http://127.0.0.1:'+str(values.get('PREVIEW_EXEC_PORT') or '8001')).rstrip('/')
+    parsed=urlsplit(base)
+    if parsed.scheme not in ('http','https') or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
+        raise Refused('Target must be one app origin, without credentials, path or query; use --base-url')
+    local=parsed.hostname in ('localhost','127.0.0.1','::1')
+    if not local and parsed.scheme!='https':raise Refused('Cloud target requires HTTPS')
+    return base,local
+
+
+def identify(api,local,*,execute=False):
+    state=api('GET','/api/auth')
+    if local:
+        if state.get('preview') is not True or state.get('local_preview') is not True:
+            raise Refused('The local target did not identify as the execution preview. Start scripts/ops/preview-exec.sh and retry; no credentials or paid request sent')
+    elif state.get('mode')!='supabase':
+        raise Refused('The cloud target did not identify as the signed-in account service; no credentials or paid request sent')
+    return state
+
+
+def authenticate(client,settings,values,base,state):
+    """Reuse only owner-supplied private credentials, never fabricate a session."""
+    token=values.get('DELIVERY_ACCEPTANCE_TOKEN')
+    if token:client.headers['Authorization']='Bearer '+token
+    state_path=values.get('DELIVERY_ACCEPTANCE_BROWSER_STATE') or values.get('PREVIEW_BROWSER_STATE') or __import__('os').environ.get('PREVIEW_BROWSER_STATE')
+    if state_path and not token:
+        path=Path(state_path).expanduser()
+        if path.is_symlink() or not path.is_file() or path.stat().st_mode&0o077:
+            raise Refused('Browser session file must exist, be private (chmod 600), and not be a symlink')
+        try:
+            cookies=json.loads(path.read_text()).get('cookies',[])
+            host=urlsplit(base).hostname
+            for cookie in cookies:
+                # Exact origin host only. Never copy another site's cookies or
+                # localStorage tokens to this target.
+                if cookie.get('domain','').lstrip('.')==host and cookie.get('name') in ('requi_access','requi_refresh','requi_session'):
+                    client.cookies.set(cookie['name'],cookie['value'],domain=host,path=cookie.get('path','/'))
+        except (ValueError,KeyError,TypeError):raise Refused('Saved browser session could not be read; refresh it and retry') from None
+    current=API(client)('GET','/api/auth')
+    if not current.get('authenticated'):
+        # A dry run never creates a sign-in session. Collect only a missing
+        # existing access token through the shared hidden terminal prompt.
+        values['DELIVERY_ACCEPTANCE_TOKEN']=settings.hidden_prompt('Existing signed-in owner access token (hidden; not saved)')
+        if not values['DELIVERY_ACCEPTANCE_TOKEN']:raise Refused('Owner access token missing; nothing changed')
+        client.headers['Authorization']='Bearer '+values['DELIVERY_ACCEPTANCE_TOKEN']
+        current=API(client)('GET','/api/auth')
+        if not current.get('authenticated'):raise Refused('Owner session is expired or not accepted; sign in to the preview and retry')
+    return current
+
+
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--repo',type=Path,default=ROOT);p.add_argument('--env-file',type=Path)
     p.add_argument('--dry-run',action='store_true');p.add_argument('--execute',action='store_true')
+    p.add_argument('--base-url',help='Explicit app origin; otherwise use the preview settings/default')
     p.add_argument('--max-usd',type=positive);p.add_argument('--output',type=Path,default=Path.home()/'Downloads/requi-acceptance')
     args=p.parse_args(argv)
     if args.execute and args.dry_run:p.error('choose --dry-run or --execute')
     if args.execute and args.max_usd is None:p.error('--execute requires an explicitly approved --max-usd')
     settings,values=load_settings(args.repo,args.env_file)
-    base=values.get('DELIVERY_BASE_URL','').rstrip('/')
-    parsed=urlsplit(base)
-    if parsed.scheme not in ('http','https') or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise Refused('Set DELIVERY_BASE_URL to the real app origin in the private settings file')
-    if parsed.scheme=='http' and parsed.hostname not in ('localhost','127.0.0.1','::1'):raise Refused('Remote sign-in requires HTTPS')
+    base,local=target(values,args.base_url)
+    print('Target: '+('local execution preview' if local else 'cloud account service')+' '+base,flush=True)
     import httpx
     started=time.monotonic();stamp=datetime.datetime.now().astimezone().isoformat()
     with httpx.Client(base_url=base,follow_redirects=False,trust_env=False) as client:
-        token=values.get('DELIVERY_ACCEPTANCE_TOKEN')
-        if token:client.headers['Authorization']='Bearer '+token
-        else:
-            if not args.execute:raise Refused('Dry-run needs DELIVERY_ACCEPTANCE_TOKEN in private settings; it never logs in or changes data')
-            settings.require(values,['DELIVERY_ACCEPTANCE_EMAIL','DELIVERY_ACCEPTANCE_PASSWORD'])
-            API(client)('POST','/auth/signin',{'username':values['DELIVERY_ACCEPTANCE_EMAIL'],'password':values['DELIVERY_ACCEPTANCE_PASSWORD']})
-        api=API(client);pin,plan=preflight(api,args.max_usd if args.execute else None)
+        api=API(client)
+        state=identify(api,local,execute=args.execute)
+        authenticate(client,settings,values,base,state)
+        api=API(client);pin,plan=preflight(api,args.max_usd)
         print(json.dumps({'at':stamp,'dry_run':not args.execute,'plan':plan},indent=2))
         if not args.execute:
             print('DRY RUN: authenticated reads only; zero task writes, zero provider calls. HTTP content-type regression is covered by tests/test_provider_http.py; this cannot prove the deployed server code version.')
@@ -187,3 +232,4 @@ def main(argv=None):
 if __name__=='__main__':
     try:raise SystemExit(main())
     except Refused as error:raise SystemExit(str(error)) from None
+    except Exception as error:raise SystemExit('Acceptance check failed ('+type(error).__name__+'). Check that the named target is running and your private settings/session are current; no automatic retry.') from None

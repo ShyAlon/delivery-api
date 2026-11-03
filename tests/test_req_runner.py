@@ -170,3 +170,13 @@ def test_locks_rejects_apply(tmp_path):
     python=root/'.venv/bin/python';python.write_text('#!/bin/sh\nexit 0\n');python.chmod(0o755)
     out=subprocess.run(['bash',str(root/'scripts/ops/req-owner.sh'),'locks','--apply'],capture_output=True,text=True)
     assert out.returncode==1 and 'read-only' in out.stderr
+
+
+def test_acceptance_dispatches_the_repo_entry_with_flags_unchanged(tmp_path):
+    root=tmp_path/'delivery-api';(root/'scripts/ops').mkdir(parents=True)
+    shutil.copy(REQ.parent/'req-owner.sh',root/'scripts/ops/req-owner.sh')
+    shutil.copy(REQ.parent/'terminal-log.sh',root/'scripts/ops/terminal-log.sh')
+    (root/'scripts/ops/acceptance.sh').write_text('printf "ARG:%s\\n" "$@"\n')
+    out=subprocess.run(['bash',str(root/'scripts/ops/req-owner.sh'),'acceptance','--dry-run','--base-url','http://127.0.0.1:8123'],capture_output=True,text=True)
+    assert out.returncode==0,out.stderr
+    assert 'ARG:--dry-run' in out.stdout and 'ARG:http://127.0.0.1:8123' in out.stdout

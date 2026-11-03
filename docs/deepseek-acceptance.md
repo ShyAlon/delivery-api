@@ -1,30 +1,25 @@
-# Owner-run DeepSeek acceptance
+# Owner-only repeated acceptance
 
-This script is not paid acceptance evidence until you explicitly approve a provider-cost ceiling and run it. It has not been run against a paid provider by the implementer.
+Ordinary users never run this checklist or these commands. It is an operator release/activation check, repeated after provider-path changes, a new pin or before a paid acceptance run. Normal users choose a model and Start; the service applies all tenant, admission and money checks automatically.
 
-Prerequisites:
-- Merge the test-marker/purge PR and apply its migration yourself.
-- Use the real running app with the provider HTTP fixes and real child runtime installed.
-- Review the default DeepSeek model pin, set a positive operator task-generation ceiling, and keep that server ceiling at or below the amount you explicitly approve for this run.
-- Install the repo's dev dependencies and Playwright Chromium.
-- Put `DELIVERY_BASE_URL` and either `DELIVERY_ACCEPTANCE_TOKEN` or `DELIVERY_ACCEPTANCE_EMAIL` / `DELIVERY_ACCEPTANCE_PASSWORD` in the repo's private `.env` or private settings file. No secret belongs in the command line. Missing execution login details are requested with hidden terminal input. The existing server's provider key is used; this script never sends a new provider key or changes server configuration.
-
-Read-only preflight (zero task writes and zero provider calls):
+The repo owns the implementation. From the checkout run:
 
 ```sh
-.venv/bin/python scripts/owner/deepseek-acceptance.py --dry-run
+scripts/ops/acceptance.sh --dry-run
 ```
 
-After separate approval, the owner runs one line, replacing `APPROVED_USD` with that approved limit:
+`req acceptance --dry-run` is a thin convenience route to that same repo entry. `req preflight --email YOUR_SIGNED_UP_EMAIL` runs the existing read-only owner policy evidence and this same acceptance readiness check. No new independent policy checker is installed.
+
+The script loads private preview settings and repo `.env`, then uses the configured app origin or the preview default `http://127.0.0.1:8001`. `--base-url` selects an explicit origin. It prints local preview vs cloud and the origin. Before credentials or execution, the service must identify correctly. It reuses a configured private acceptance token or `PREVIEW_BROWSER_STATE` cookies for that exact host; otherwise it asks with hidden input for only the missing existing owner access token. It does not save it, create a login, or make you edit config. Back office has no stored token for this script to reuse automatically.
+
+Dry mode makes GET requests only, no task writes and no provider calls. It checks session, marker migration/owner permission, approved default pin and positive server ceiling. With `--max-usd N` it also checks the server ceiling is at most N. It prints a planning scenario from the actual reviewed pin:20,000input tokens,6,000output tokens and60seconds active compute, separately providerUSDandretailcredits/USD. This is not a measured forecast or a maximum.
+
+After separately approving the exact run ceiling, the owner runs:
 
 ```sh
-.venv/bin/python scripts/owner/deepseek-acceptance.py --execute --max-usd APPROVED_USD
+scripts/ops/acceptance.sh --execute --max-usd APPROVED_USD
 ```
 
-The script signs in through the real API, checks the owner test view (including DB/migration permission), reviewed pin and operator ceiling before creating anything. Dry mode uses an existing token and only GET requests. It reports a price scenario from the actual approved pin, not remembered vendor prices: 20,000 input tokens, 6,000 output tokens and 60 seconds active compute. The scenario is a planning allowance, not an expected measured bill or a maximum. Graph calls and prompt sizes vary; the server ceiling is the provider-spend control. Retail credits include measured compute and can differ from vendor expense.
+Replace APPROVED_USD with the approved number. First apply the owner test-task migration, review the default pin, and set the server task-generation ceiling at or below that number. The script never changes it. An unidentified target refuses. Explicit remote targets require HTTPS.
 
-Execution creates an immutable test task, starts DeepSeek once, waits for a text question, submits one fixed fixture answer, and waits for a new text question. It does not approve arbitrary structured decisions. A real browser checks the question, live persisted Start progress and cost visibility, then captures a screenshot. Cost/usage must be complete before the guarded purge is called. The purge is atomic and refuses live or unsettled work. No automatic retry. Failure retains the test and tries to save a private Debug ZIP. If ZIP collection fails, the report says `debug_zip: null`; use the retained task to download evidence manually.
-
-Outputs go to `~/Downloads/requi-acceptance` with private directory/file permissions: datetime with timezone, model and pin revision, elapsed time, actual retail credits and USD, normalized usage, screenshot, and result JSON. Actual provider expense is summed from settled attempt evidence with verified scales, never inferred from retail price. Money/audit records survive and charges still count in balances and spend limits.
-
-Limits: the dry preflight cannot prove the deployed server's HTTP Content-Type implementation. The strict HTTP fixtures are run separately in CI. The script refuses if it cannot observe live Start progress while working, even if a fast run otherwise returns a question. No paid execution or live DB mutation was performed during implementation.
+Execution creates a marked test, starts once, answers one text question, waits for another, proves live progress and visible cost in a browser, and purges only with complete settled cost/usage. No blind structured approvals or automatic retry. Failure keeps evidence and tries to save a private Debug ZIP. Successful purge preserves money/audit and charges still count in balances and spend limits. Private results are in ~/Downloads/requi-acceptance.
