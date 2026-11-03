@@ -9,3 +9,5 @@ Moving main construction exposed an import-time contract: several page modules c
 All seven recorded Page construction entries are gone. The separate zero-exception gate theme still needs to strengthen static detection of programmatic construction and Page style bypasses; an empty legacy inventory alone is not proof of all possible bypasses. Existing Table/Dialog boundaries stay enforced.
 
 Validation includes persistent shell identity, auth/font geometry, stale mounts, polling cleanup, decision pages, access retry, confirmed Delete, and private jobs. New tests prove one set of landmarks, shared compatibility lifecycle/abort, one-time style installation and desktop/mobile task layouts. No production data writes, provider run, deploy or merge.
+
+CI's incomplete-cost browser check dereferenced sessioncost before the owned shell was attached. It now explicitly waits for that slot to attach before evaluating the unchanged exact incomplete-cost text and rejected-row tooltip. This preserves the assertion while respecting the component's boot boundary.
