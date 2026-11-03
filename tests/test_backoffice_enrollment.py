@@ -5,7 +5,10 @@ from uuid import uuid4
 ROOT=Path(__file__).parents[1]
 spec=importlib.util.spec_from_file_location('enroll',ROOT/'scripts/owner/backoffice-access.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 
-def test_enrollment_is_dry_confirmed_scoped_and_preserves(tmp_path):
+import pytest
+
+@pytest.mark.parametrize("test_owner",[False,True])
+def test_enrollment_is_dry_confirmed_scoped_and_preserves(tmp_path,test_owner):
  dsn=os.environ['DELIVERY_TEST_POSTGRES_DSN'];subject=str(uuid4());caps=sorted(m.setup.check.DEBUG_CAPABILITIES|{'credits.allocate'})
  f=tmp_path/'private.env';f.write_text('');f.chmod(0o600)
  from dotenv import set_key
@@ -21,13 +24,15 @@ def test_enrollment_is_dry_confirmed_scoped_and_preserves(tmp_path):
   def confirm(prompt):
    for cap,purpose in m.PURPOSES.items():assert cap in prompt and purpose in prompt
    return 'ENROLL REVIEWED BACK OFFICE ACCESS'
-  assert m.run(ROOT,explicit=f,apply=True,confirm=confirm,out=out)==0
+  if test_owner:
+   confirm=lambda prompt:'ENROLL REVIEWED OWNER TEST ACCESS' if 'OWNER TEST ACCESS:' in prompt else 'no'
+  assert m.run(ROOT,explicit=f,apply=True,confirm=confirm,out=out,test_owner=test_owner)==0
   with psycopg.connect(dsn) as c:updated=set(c.execute('SELECT capabilities FROM operator_principals').fetchone()[0])
-  assert updated==set(caps)|m.DEFAULT_CAPABILITIES
+  assert updated==set(caps)|m.DEFAULT_CAPABILITIES|({'sessions.operate'} if test_owner else set())
   saved=m.setup.settings_module().read_file(f)
   assert set(json.loads(saved['REQUI_OPERATOR_CAPABILITIES']))==updated
   assert saved['DELIVERY_DATABASE_URL']==values['DELIVERY_DATABASE_URL']
-  assert 'users.suspend' not in updated and 'sessions.operate' not in updated
+  assert 'users.suspend' not in updated and ('sessions.operate' in updated)==test_owner
   assert all(line.rsplit('=',1)[1] in ('true','false') for line in out.getvalue().splitlines())
   assert subject not in out.getvalue() and dsn not in out.getvalue()
  finally:

@@ -9,3 +9,6 @@
 .audit-dialog{max-width:850px;width:calc(100% - 40px);max-height:85vh;overflow:auto}.audit-dialog dd{white-space:pre-wrap;overflow-wrap:anywhere}#audit-panel tbody tr{cursor:pointer}#audit-panel tbody tr:focus{outline:2px solid #214e37}
 /* Readiness is a short checklist: keep every reason in the page's normal flow. */
 #acceptance-panel .scroll{max-height:none;overflow:visible}
+
+/* Shared operator status, including keyboard/touch resolution controls. */
+.operator-status{display:inline-block;border:1px solid #b8c7b9;border-radius:999px;padding:7px 11px;font:600 var(--fs-xs) Manrope;white-space:nowrap}.operator-status-pass{background:#e3eee3;color:#234e2a}.operator-status-fail,.backoffice button.operator-status-fail{background:#fbe6e4;color:#a21f19;border-color:#d78b85}.operator-status-fail:hover,.backoffice button.operator-status-fail:hover{background:#f7d3cf}.operator-status-unverified{background:#fff1d2;color:#725000}

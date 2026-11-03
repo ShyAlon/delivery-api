@@ -883,7 +883,7 @@ class TestTaskPurge(BaseModel):
 
 def _test_task_action(action):
     try:return action()
-    except PermissionError:raise HTTPException(403,{'error':'This action is reserved for the reviewed test owner.','next':'Use your normal task list.'}) from None
+    except PermissionError:raise HTTPException(403,{'error':'This action is reserved for the reviewed test owner.','next':'For owner acceptance, review req backoffice-access --test-owner. Normal customers use their normal task list.'}) from None
     except Exception:
         # Driver details can contain content. The database refuses atomically.
         raise HTTPException(409,{'error':'Test action refused; no content was removed.',

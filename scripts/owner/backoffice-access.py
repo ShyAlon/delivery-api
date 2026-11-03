@@ -39,9 +39,10 @@ def review(conn,values,lock=False,report=None):
     return operator,old,frozenset(rows[0][2])
 
 
-def run(root,*,explicit=None,apply=False,confirm=None,out=None):
+def run(root,*,explicit=None,apply=False,confirm=None,out=None,test_owner=False):
     out=out or sys.stdout
     report={'review.verified':False,'database.updated':False,'settings.saved':False,'apply.requested':apply}
+    selected=DEFAULT_CAPABILITIES|({'sessions.operate'} if test_owner else set())
     stage='settings.load'
     try:
         settings=setup.settings_module();values=settings.load(Path(root),explicit=explicit)
@@ -61,10 +62,12 @@ def run(root,*,explicit=None,apply=False,confirm=None,out=None):
         for cap in PURPOSES:
             report['configured.'+cap]=cap in local;report['registry.'+cap]=cap in registry
             report['requested.'+cap]=True
-        for cap in EXCLUDED:report['requested.'+cap]=False
+        for cap in EXCLUDED:report['requested.'+cap]=cap in selected
+        report['test_owner.requested']=test_owner
         # Purpose inventory is fixed documented prose; command results are booleans
         # only. The confirmation carries the review, no identity/secret values.
         prompt='Review access for the existing sole operator:\n'+''.join(c+': '+p+'\n' for c,p in PURPOSES.items())
+        if test_owner:prompt+='OWNER TEST ACCESS: sessions.operate allows own marked test creation, view and guarded content purge. Money/audit remain; no cross-owner mutation or paid activation.\n'
         prompt+='Excluded: credit allocation, suspension, cross-owner mutation, paid activation and write-off. Existing reviewed capabilities are retained.\nType ENROLL REVIEWED BACK OFFICE ACCESS to update this registry row and private settings, or Enter to stop:'
         # The fixed human review is sent to the controlling terminal, while
         # machine-readable stdout remains boolean-only (including dry runs).
@@ -75,9 +78,10 @@ def run(root,*,explicit=None,apply=False,confirm=None,out=None):
                 if os.isatty(fd):os.write(fd,(prompt.rsplit('Type ENROLL',1)[0]+'Dry review only. No changes.\n' if not apply else '').encode())
             finally:os.close(fd)
         except OSError:pass
+        if test_owner:prompt=prompt.replace('ENROLL REVIEWED BACK OFFICE ACCESS','ENROLL REVIEWED OWNER TEST ACCESS')
         if apply:
             stage='confirmation'
-            if (confirm or settings.terminal_confirm)(prompt)!='ENROLL REVIEWED BACK OFFICE ACCESS':raise ValueError('not confirmed')
+            if (confirm or settings.terminal_confirm)(prompt)!=('ENROLL REVIEWED OWNER TEST ACCESS' if test_owner else 'ENROLL REVIEWED BACK OFFICE ACCESS'):raise ValueError('not confirmed')
             stage='settings.drift_check'
             if destination.read_bytes()!=before:raise ValueError('settings changed')
             settings.read_file(destination)
@@ -87,12 +91,12 @@ def run(root,*,explicit=None,apply=False,confirm=None,out=None):
                 conn.execute("SET LOCAL statement_timeout='5s'")
                 fresh,fresh_local,fresh_registry=review(conn,values,True)
                 if (fresh,fresh_local,fresh_registry)!=(operator,local,registry):raise ValueError('registry changed')
-                updated=sorted(registry|DEFAULT_CAPABILITIES)
+                updated=sorted(registry|selected)
                 conn.execute('UPDATE public.operator_principals SET capabilities=%s WHERE subject=%s AND registry_version=%s AND enabled',
                     (updated,operator[setup.check.SETTINGS[0]],operator[setup.check.SETTINGS[1]]))
             report['database.updated']=True
             stage='settings.save'
-            operator[setup.check.SETTINGS[2]]=json.dumps(sorted(local|DEFAULT_CAPABILITIES),separators=(',',':'))
+            operator[setup.check.SETTINGS[2]]=json.dumps(sorted(local|selected),separators=(',',':'))
             # Already confirmed the exact two effects. The atomic saver still
             # verifies private permissions and concurrent drift at the file boundary.
             if destination.read_bytes()!=before:raise ValueError('settings changed after registry commit')
@@ -104,5 +108,5 @@ def run(root,*,explicit=None,apply=False,confirm=None,out=None):
     return 0 if report.get('operation.completed') else 1
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('repo',type=Path);p.add_argument('--env-file');p.add_argument('--apply',action='store_true')
-    args=p.parse_args();sys.exit(run(args.repo,explicit=args.env_file,apply=args.apply))
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('repo',type=Path);p.add_argument('--env-file');p.add_argument('--apply',action='store_true');p.add_argument('--test-owner',action='store_true',help='separate explicit review of own marked-test access and guarded purge')
+    args=p.parse_args();sys.exit(run(args.repo,explicit=args.env_file,apply=args.apply,test_owner=args.test_owner))

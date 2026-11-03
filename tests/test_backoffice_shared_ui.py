@@ -141,16 +141,30 @@ def test_acceptance_checklist_is_read_only_and_readable_on_phone(ui):
     with sync_playwright() as p:
         browser=p.chromium.launch(args=['--no-sandbox'])
         page=browser.new_page(viewport={'width':1280,'height':950},extra_http_headers={'Authorization':'Bearer fake'})
-        fixture={'owner_only':True,'activation_enabled':False,'ready':False,'checks':[
-            {'check':name,'status':'fail','reason':reason} for name,reason in [
-            ('target','Target evidence unavailable.'),('session','Sign in as the operator.'),
-            ('marker migration','Apply the owner test-task migration.'),('default pin','Review the default DeepSeek pin.'),
-            ('ceiling','Set a positive ceiling at or below the approved run amount.'),('token/session','Current owner session is required.')]]}
+        from delivery_api.acceptance_readiness import inspect
+        def fake_api(method,path):
+            if path=='/api/auth':return {'authenticated':True,'mode':'supabase'}
+            if path=='/api/operations/test-tasks':
+                error=ValueError('forbidden');error.http_status=403;raise error
+            return {'pins':[]}
+        result=inspect(fake_api)
+        fixture={key:result[key] for key in ('ready','checks','activation_enabled')};fixture['owner_only']=True
         page.route('**/api/operations/acceptance-readiness',lambda route:route.fulfill(json=fixture))
         page.goto(url+'/#acceptance')
         expect(page.locator('#acceptance-status')).to_contain_text('Not ready')
-        assert page.locator('#acceptance-checks tbody tr').count()==6
+        assert page.locator('#acceptance-checks tbody tr').count()==7
         expect(page.locator('#acceptance-panel')).to_contain_text('Customers do not run this')
+        expect(page.locator('#acceptance-checks')).to_contain_text('2. Prepare owner test access')
+        expect(page.locator('#acceptance-checks')).to_contain_text('--test-owner')
+        blocked=page.get_by_role('button',name='Blocked: The signed-in account',exact=False)
+        expect(blocked).to_have_attribute('title',__import__('re').compile('lacks reviewed owner-test access'))
+        blocked.click()
+        expect(page.get_by_role('dialog')).to_contain_text('req backoffice-access --test-owner')
+        expect(page.get_by_role('button',name='Close',exact=True)).to_be_focused()
+        page.screenshot(path=str(_EVIDENCE/'acceptance-owner-access-dialog.png'),full_page=True)
+        page.keyboard.press('Escape')
+        expect(page.get_by_role('dialog')).to_have_count(0)
+        assert not [c for c in calls if c.method=='POST']
         page.screenshot(path=str(_EVIDENCE/'acceptance-readiness-desktop.png'),full_page=True)
         page.set_viewport_size({'width':390,'height':844})
         page.evaluate('scrollTo(0,0)');page.wait_for_timeout(200)

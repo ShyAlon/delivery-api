@@ -1,8 +1,8 @@
 import {accessBoundary} from './access.js';
-import {createDialog,dialogActions} from '/assets/shared-dialog.js';
+import {createDialog,dialogActions,commandDialog} from '/assets/shared-dialog.js';
 import {mountAudit} from './audit.js';
 import {mountModelPins} from './model-pins.js';
-import {mountTabs,mountRowMenu} from '/assets/operator-ui.js';
+import {mountTabs,mountRowMenu,statusPill} from '/assets/operator-ui.js';
 import {runAction} from '/assets/ui-action.js';
 import {clientReport,clientLog,setClientLogTransport,recordResponse} from '/assets/client-core.js';
 import {tableRow} from '/assets/ops-table.js';
@@ -78,7 +78,16 @@ async function acceptanceReadiness(){
  $('acceptance-status').textContent='Checking owner readiness...';
  try{const data=await read('acceptance-readiness');
   if(data.owner_only!==true||data.activation_enabled!==false||!Array.isArray(data.checks))throw Error('Readiness evidence is unverified. Refresh and check the service.');
-  for(const row of data.checks)body.append(tableRow(table,[row.check,row.status,row.reason||'Verified by current read.']));
+  for(const row of data.checks){
+   const explanation=[row.reason,row.next].filter(Boolean).join(' ');
+   const resolve=()=>{
+    if(['default pin','ceiling'].includes(row.check)){location.hash='model-pins';return;}
+    const commands=row.check==='marker migration'?(row.reason.includes('lacks reviewed owner-test access')?['req backoffice-access --test-owner','req backoffice-access --test-owner --apply']:['req migrate','req migrate --apply']):row.check==='run approval'?['scripts/ops/acceptance.sh --dry-run --max-usd YOUR_APPROVED_NUMBER']:['req preview --apply'];
+    commandDialog(row.check==='marker migration'?'Review owner test access':row.check,explanation,commands);
+   };
+   const tr=tableRow(table,[(row.step?row.step+'. '+row.group+' / ':'')+(row.check==='marker migration'?'owner test access':row.check),'',row.reason||'Verified by current read.',row.next||'Review the reason above.']);
+   tr.children[1].append(statusPill(row.status,explanation,row.status==='pass'?null:resolve));body.append(tr);
+  }
   $('acceptance-status').textContent=data.ready?'Read checks pass. Run approval is still separate.':'Not ready. Review the reasons below; nothing was changed.';
  }catch(error){failure(error);$('acceptance-status').textContent=error.message;}
 }

@@ -8,9 +8,10 @@ command=${1:-}; shift
 # Acceptance has its own exact argparse contract; pass every argument unchanged
 # to the one repo entry rather than teaching this generic parser paid flags.
 if [ "$command" = acceptance ]; then exec bash scripts/ops/acceptance.sh "$@"; fi
-apply=0; email=''; checks=full; acceptance_args=()
+apply=0; email=''; checks=full; acceptance_args=(); test_owner=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --test-owner) [ "$command" = backoffice-access ] || fail "--test-owner is only for backoffice-access.";test_owner=1;shift;;
     --apply) apply=1;shift;;
     --fast) checks=fast;shift;;
     --full-checks) checks=full;shift;;
@@ -42,6 +43,7 @@ esac
 case "$command" in
  backoffice-access)
    args=("$PWD" --env-file "$envfile")
+   [ "$test_owner" = 0 ] || args+=(--test-owner)
    [ "$apply" = 0 ] || args+=(--apply)
    exec .venv/bin/python "$target" "${args[@]}";;
  debug) [ "$apply" = 0 ] || fail "debug is read-only";exec .venv/bin/python "$target";;

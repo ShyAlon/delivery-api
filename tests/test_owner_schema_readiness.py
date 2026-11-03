@@ -208,3 +208,35 @@ def test_owner_test_purge_review_is_exact_and_separate_from_projection_permissio
     for changed in ({**row,'sha256':'0'*64},{**row,'file':'renamed.sql'},{**row,'destructive':['DROP','DELETE']}):
         with pytest.raises(ValueError,match='refused'):s.review_projection_functions([changed],confirm)
     with pytest.raises(ValueError,match='did not match'):s.review_projection_functions([row],lambda _:'')
+
+
+def test_runtime_role_inventory_covers_fixed_role_switches_without_wildcards():
+    s=load()
+    required={'requi_backend','requi_operator_read','requi_operator_usage','requi_operator_payment_read',
+              'requi_operator_grant','requi_metrics_writer','requi_log_writer','requi_engine_config_read','requi_model_pin_editor','requi_payment'}
+    assert set(s.ROLES)==required
+
+
+def test_installer_repairs_every_named_membership_for_nonstandard_app_login():
+    import tempfile,shutil,pgserver,psycopg,pg_harness
+    s=owner();r=load();scratch=tempfile.mkdtemp(prefix='runtime-role-rollout-');server=pgserver.get_server(scratch,cleanup_mode='delete')
+    try:
+        with psycopg.connect(server.get_uri(),autocommit=True) as conn:
+            conn.execute(pg_harness.ROLES);conn.execute(pg_harness.SUPABASE_STAND_IN);conn.execute(pg_harness.SUPABASE_DEFAULT_ACL)
+            for path in sorted((ROOT/'supabase/migrations').glob('*.sql')):conn.execute(path.read_text())
+            conn.execute('CREATE ROLE candidate_app LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS')
+            with conn.transaction():
+                conn.execute('SET LOCAL ROLE candidate_app')
+                assert set(r.grants(conn))==set(r.ROLES)
+            confirm=lambda prompt:prompt.split('"')[1]
+            assert s.apply(conn,s.plan(conn,r,ROOT),r,ROOT,'candidate_app',confirm,review_functions=True)==0
+            with conn.transaction():
+                conn.execute('SET LOCAL ROLE candidate_app')
+                assert r.grants(conn)==[]
+                conn.execute('SET LOCAL ROLE requi_operator_payment_read')
+                with pytest.raises(psycopg.errors.InsufficientPrivilege),conn.transaction():conn.execute('DELETE FROM public.payment_purchases')
+                with pytest.raises(psycopg.errors.InsufficientPrivilege),conn.transaction():conn.execute('SELECT * FROM public.payment_events')
+            # An unrelated role is never discovered or granted by a prefix scan.
+            conn.execute('CREATE ROLE requi_unreviewed NOLOGIN')
+            assert not conn.execute("SELECT pg_has_role('candidate_app','requi_unreviewed','SET')").fetchone()[0]
+    finally:server.cleanup();shutil.rmtree(scratch,ignore_errors=True)

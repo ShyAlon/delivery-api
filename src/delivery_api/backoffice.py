@@ -77,8 +77,11 @@ def create_app(*,service_url,transport=None):
                         if path=='/api/operator/model-pins' and response.status_code!=200:
                             return JSONResponse({'detail':'Reviewed model-pin access is required for acceptance readiness'},status_code=403,headers={'Cache-Control':'no-store'})
                         if response.status_code==200 and len(response.content)<=1024*1024:values[path]=response.json()
+                        else:values[path]={'_http_status':response.status_code}
                     def read(method,path):
                         if path not in values:raise ValueError('Readiness evidence unavailable')
+                        if '_http_status' in values[path]:
+                            error=ValueError('Readiness request refused');error.http_status=values[path]['_http_status'];raise error
                         return values[path]
                     result=inspect(read)
                     return JSONResponse({'checks':result['checks'],'ready':result['ready'],

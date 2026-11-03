@@ -32,3 +32,10 @@ export function dialogActions(dialog,{label='Approve',run,busy='Saving changes. 
  row.append(no,yes);dialog.append(status,note,row);bindDialog(dialog,{primary:yes,focus:focus==='cancel'?no:yes,allowBusyClose:true});return {status,primary:yes,cancel:no};
 }
 export function observeDialogs(host,close){const scan=()=>host.querySelectorAll('[role="dialog"],[role="alertdialog"],.dialog,.decision-dialog,.requirement-dialog').forEach(d=>{if(bindings.has(d))return;bindDialog(d,{close:()=>{const layer=d.closest('.dialog-layer');layer?layer.remove():close()}})});new MutationObserver(scan).observe(host,{childList:true,subtree:true});scan()}
+
+export function commandDialog(title,explanation,commands){
+ const dialog=createDialog(title),note=document.createElement('p');note.textContent=explanation;dialog.append(note);
+ for(const command of commands){const input=dialogField(dialog,'Owner terminal command',document.createElement('textarea'));input.readOnly=true;input.rows=2;input.value=command;const copy=document.createElement('button');copy.textContent='Copy command';copy.onclick=async()=>{try{await navigator.clipboard.writeText(command);copy.textContent='Copied';}catch{input.focus();input.select();copy.textContent='Select and copy command';}};dialog.append(copy);}
+ const safe=document.createElement('p');safe.textContent='Nothing runs from this dialog. Review terminal output before any --apply confirmation. No paid approval or activation is made.';dialog.append(safe);
+ const close=document.createElement('button');close.textContent='Close';close.dataset.dialogPrimary='true';close.onclick=()=>dialog.close();dialog.append(close);bindDialog(dialog,{primary:close,focus:close});dialog.showModal();return dialog;
+}

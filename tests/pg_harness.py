@@ -129,8 +129,11 @@ def start(*,database_prefix='test_tenant_',socket_directory=None,server_factory=
                 except Exception as exc:
                     STATE.update(status='failed',reason='%s did not apply: %s: %s'%(path.name,type(exc).__name__,str(exc).strip()[:400]),applied=list(STATE['applied']));return
                 STATE['applied'].append(path.name)
-            # The operator grants the app login SET membership in each private requi_* role before rollout; the harness stands in for that step.
-            for (role,) in conn.execute("SELECT rolname FROM pg_roles WHERE rolname LIKE 'requi\\_%' AND NOT rolcanlogin AND rolname<>'requi_backend' ORDER BY 1").fetchall():
+            # Mirror the real owner installer exactly; wildcard grants masked
+            # missing production memberships such as payment-read and log-write.
+            import runpy
+            roles=runpy.run_path(str(MIGRATIONS.parent.parent/'src/delivery_api/runtime_roles.py'))['RUNTIME_ROLES']
+            for role in roles:
                 conn.execute('GRANT "%s" TO delivery_app WITH INHERIT FALSE, SET TRUE'%role)
             try:conn.execute(SEED)
             except Exception as exc:
