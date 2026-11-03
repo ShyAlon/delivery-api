@@ -93,7 +93,7 @@ class QuietProgress:
 
 
 class API:
-    def __init__(self,client):self.client=client
+    def __init__(self,client):self.client=client;self.records=[]
     def __call__(self,method,path,body=None,*,raw=False,timeout_seconds=90):
         # A normal browser session is cookie-authenticated. Preserve the same
         # Origin proof the browser sends, without weakening the server guard.
@@ -101,14 +101,19 @@ class API:
         if method.upper() not in ('GET','HEAD','OPTIONS'):
             headers['Origin']=str(self.client.base_url).rstrip('/')
         import httpx
+        began=time.monotonic()
+        record={'kind':'acceptance.http','method':method,'path':path.split('?')[0],'timeout_seconds':timeout_seconds}
+        self.records.append(record);self.records[:]=self.records[-200:]
         try:response=self.client.request(method,path,json=body,timeout=timeout_seconds,headers=headers)
         except httpx.TransportError as cause:
+            record.update(outcome='unknown',transport_class=type(cause).__name__,elapsed_seconds=round(time.monotonic()-began,2))
             error=TransportUnavailable('Transport response unavailable; request outcome is unknown')
             error.operation=method+' '+path.split('?')[0];error.timeout_seconds=timeout_seconds
             error.transport_class=type(cause).__name__;error.gate='transport_unknown'
             error.reason=error.operation+' did not return a confirmed response ('+type(cause).__name__+', per-request timeout '+str(timeout_seconds)+'s).'
             error.next_step='Do not repeat a state-changing request. Inspect this task and server evidence; local timeout does not Stop server work.'
             raise error from None
+        record.update(status=response.status_code,elapsed_seconds=round(time.monotonic()-began,2))
         if response.status_code>=300:
             # Never echo raw bodies, JWTs, SQL or user content to the terminal.
             error=Refused(f'{method} {path.split("?")[0]} returned HTTP {response.status_code}; review Debug evidence and server prerequisites')
@@ -213,10 +218,10 @@ def journey(api,*,observe=lambda value:None,progress=None,base=''):
         raise
 
 
-def save_failure(api,tid,directory):
+def save_failure(api,tid,directory,browser=None):
     if not tid:return None
     try:
-        raw=api('POST','/api/tasks/'+tid+'/debug.zip',{'records':[]},raw=True)
+        raw=api('POST','/api/tasks/'+tid+'/debug.zip',browser or {'records':[]},raw=True)
         if not raw.startswith(b'PK'):raise Refused('Debug response was not a ZIP')
         path=directory/('debug-'+tid+'.zip');path.write_bytes(raw);path.chmod(0o600);return str(path)
     except Exception:return None
@@ -295,6 +300,7 @@ def main(argv=None):
         args.output.mkdir(parents=True,exist_ok=True);args.output.chmod(0o700)
         with Progress() as progress:
             tid=None
+            browser_evidence={'started_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'url':'','records':[]}
             try:
                 from playwright.sync_api import sync_playwright
                 live={'seen':False};cost_seen={'seen':False};page_ref={}
@@ -317,6 +323,12 @@ def main(argv=None):
                     context=browser.new_context(extra_http_headers={'Authorization':client.headers['Authorization']} if client.headers.get('Authorization') else {})
                     context.add_cookies([{'name':c.name,'value':c.value,'url':base} for c in client.cookies.jar])
                     page=context.new_page();page_ref['page']=page
+                    def browser_response(response):
+                        parsed=urlsplit(response.url)
+                        if parsed.netloc==urlsplit(base).netloc:
+                            browser_evidence['records'].append({'kind':'hidden_browser.response','method':response.request.method,'path':parsed.path,'status':response.status})
+                            browser_evidence['records'][:]=browser_evidence['records'][-300:]
+                    page.on('response',browser_response)
                     tid,task,cost,usage=journey(api,observe=observe,progress=progress,base=base)
                     progress.set('Verifying UI; browser operations timeout 30s each, current question timeout 15s')
                     screenshot=args.output/('success-'+tid+'.png');page.screenshot(path=str(screenshot),full_page=True);screenshot.chmod(0o600)
@@ -336,7 +348,10 @@ def main(argv=None):
             except (Exception,KeyboardInterrupt) as error:
                 tid=tid or getattr(error,'test_task_id',None)
                 progress.set('Saving retained failure evidence; no Stop or retry is sent',90)
-                evidence=save_failure(api,tid,args.output)
+                browser_evidence['ended_at']=datetime.datetime.now(datetime.timezone.utc).isoformat()
+                browser_evidence['url']=base+'/tasks/'+tid+'/view' if tid else base
+                browser_evidence['records']=(browser_evidence['records']+api.records)[-500:]
+                evidence=save_failure(api,tid,args.output,browser_evidence)
                 report=failure_report(error,tid,evidence)
                 print(json.dumps(report),file=sys.stderr)
                 operation=report['operation'] or 'acceptance check'

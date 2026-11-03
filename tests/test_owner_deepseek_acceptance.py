@@ -350,3 +350,11 @@ def test_transport_retries_do_not_extend_question_deadline(monkeypatch):
     with httpx.Client(base_url='http://fixture.invalid',transport=httpx.MockTransport(handle)) as client:
         with pytest.raises(a.Refused,match='within 3 seconds'):a.wait_question(a.API(client),'t',timeout=3)
     assert calls==['GET','GET'] and clock[0]==4
+
+
+def test_failure_zip_receives_browser_and_operation_evidence(tmp_path):
+    calls=[]
+    evidence={'started_at':'fixture','url':'http://fixture/tasks/t/view','records':[{'kind':'acceptance.http','method':'POST','path':'/api/tasks/t/answer','outcome':'unknown','transport_class':'ReadTimeout'}]}
+    def api(method,path,body,**kwargs):calls.append((method,path,body));return b'PKfixture'
+    assert a.save_failure(api,'t',tmp_path,evidence)
+    assert calls[0][2]==evidence
