@@ -76,7 +76,15 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
     if paid:
         for key,value in {'DELIVERY_CHILD_EXECUTION':'attended-paid','DELIVERY_PAID_CHILD_PREVIEW':'1','DELIVERY_PREVIEW':'1','DELIVERY_PUBLIC_ORIGIN':'http://127.0.0.1:8001','DEEPSEEK_API_KEY':'acceptance-fake-no-real-key'}.items():monkeypatch.setenv(key,value)
         env.update(DELIVERY_PAID_CHILD_PREVIEW='1')
-    else:monkeypatch.delenv('DEEPSEEK_API_KEY',raising=False)
+    else:
+        monkeypatch.delenv('DEEPSEEK_API_KEY',raising=False)
+        # Same default launcher topology: local can boot even when the paid route
+        # is offered but has no key, reviewed pin, balance or expense policy.
+        from delivery_api import model_pins
+        env.update(REQUI_PIN_STORE='1',REQUI_PIN_PROVIDERS='deepseek,ollama',
+                   DELIVERY_CHILD_EXECUTION='attended-paid',DELIVERY_PAID_CHILD_PREVIEW='1',DELIVERY_PREVIEW='1',DELIVERY_PUBLIC_ORIGIN='http://127.0.0.1:8001')
+        for key,value in env.items():monkeypatch.setenv(key,value)
+
     # The same preview startup schema/grants checks, against the real app role.
     spec=importlib.util.spec_from_file_location('acceptance_schema',Path(__file__).parents[1]/'scripts/ops/schema-readiness.py');schema=importlib.util.module_from_spec(spec);spec.loader.exec_module(schema)
     import psycopg
@@ -105,6 +113,14 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
                 c.execute('DELETE FROM model_pin_heads');c.execute('DELETE FROM model_pin_revisions')
                 c.execute('INSERT INTO model_pin_revisions(revision,provider,model,payload,fetched_at,operator_subject,reason) VALUES(%s,%s,%s,%s::jsonb,%s,%s,%s)',(rev,'deepseek',selected_model,json.dumps(value),snap['fetched_at'],workspace.scope.owner_id,'HTTP acceptance reviewed pin'))
                 c.execute('INSERT INTO model_pin_heads(provider,model,revision,is_default) VALUES(%s,%s,%s,true)',('deepseek',selected_model,rev))
+        if not paid:
+            value={'row':json.loads(env['VMODEL_REVIEWED_MODEL_PRICES'])[0],
+                   'context':json.loads(env['VMODEL_REVIEWED_CONTEXT_CEILING'])}
+            rev=model_pins.revision(value)
+            with workspace.admin() as c:
+                c.execute('DELETE FROM model_pin_heads');c.execute('DELETE FROM model_pin_revisions')
+                c.execute('INSERT INTO model_pin_revisions(revision,provider,model,payload,fetched_at,operator_subject,reason) VALUES(%s,%s,%s,%s::jsonb,now(),%s,%s)',(rev,'ollama',MODEL,json.dumps(value),workspace.scope.owner_id,'zero-cost local acceptance reviewed pin'))
+                c.execute('INSERT INTO model_pin_heads(provider,model,revision,is_default) VALUES(%s,%s,%s,true)',('ollama',MODEL,rev))
         if owner_acceptance:
             with workspace.admin() as c:
                 c.execute('DELETE FROM operator_principals')

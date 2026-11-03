@@ -188,6 +188,7 @@ class DurableGateways:
             provider=row['provider']
             if provider=='ollama' or not row['is_default'] or provider not in self.environ.get('REQUI_PIN_PROVIDERS','deepseek').split(','):continue
             try:
+                if not (self.environ.get(pg.KEY_ENV) or '').strip():raise ValueError('DeepSeek key is not configured; set it only to enable paid work')
                 result=refresh(row['payload'])
                 if result.get('warning'):warnings.warn(result['warning'])
                 elif result['changed']:

@@ -413,6 +413,10 @@ def _check_provider_key(env, import_module):
         return Check('provider-key', 'warn', 'skip', 'a provider API key when execution is open',
                      'at least one configured provider key present (presence only - never a validation call)',
                      'skipped: execution is closed, no provider key is needed', 'provider key environment')
+    if env.get('DELIVERY_LOCAL_PREVIEW')=='1':
+        return Check('provider-key', 'warn', 'pass', 'provider credentials scoped to the selected route',
+                     'reviewed local Ollama needs no paid provider key',
+                     'Ollama can start without paid credentials; paid routes remain gated independently', 'route admission configuration')
     try:
         # Providers with no key (ollama maps to None) contribute no env var; feeding
         # None into env.get crashed this whole check into the unnamed fallback
