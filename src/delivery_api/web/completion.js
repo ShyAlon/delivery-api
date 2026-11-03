@@ -1,3 +1,4 @@
+import {Page} from './page-component.js';
 import {runAction} from './ui-action.js';
 import {pageEpoch,pageStale} from './page-lifecycle.js';
 import {api,esc} from './client-core.js';
@@ -41,7 +42,7 @@ export function createCompletion(ctx){
   const approved=t.phases.filter(p=>['approved','done'].includes(p.state)).length;
   const total=audit?.totals?`${credits(audit.totals.price)} credits · ${usd(audit.totals.price_usd)}`:'-';
   if(pageStale(at))return;   // the artifact counts resolved after navigation: never commit
-  app.innerHTML=`<div class="complete-page"><div class="page-head compact-head"><div class="ch-left"><a class="back" href="/tasks/${id}/view">← Back to task</a><div class="eyebrow">Generation ${String(t.generation).padStart(2,'0')} · Complete</div></div><div class="ch-main"><h1>Congratulations, ${esc(t.title)} is complete</h1><p>${end?`Finished ${esc(new Date(end*1000).toLocaleString())}`:'Finished'}</p></div></div>
+  app.innerHTML=`<div class="complete-page">${Page.heading(`<div class="ch-left"><a class="back" href="/tasks/${id}/view">← Back to task</a><div class="eyebrow">Generation ${String(t.generation).padStart(2,'0')} · Complete</div></div><div class="ch-main"><h1>Congratulations, ${esc(t.title)} is complete</h1><p>${end?`Finished ${esc(new Date(end*1000).toLocaleString())}`:'Finished'}</p></div>`,{classes:"page-head compact-head"})}
    <section class="panel complete-summary"><div class="audit-totals"><div><span>Total time</span><b>${start&&end?esc(durationLabel(end-start)):'-'}</b></div><div><span>Phases</span><b>${approved}/${t.phases.length}</b></div><div><span>Price</span><b>${total}</b></div></div>
    <div class="audit-totals complete-counts">${counts.map(c=>{const g=gateFor(c.phase),v=c.value===null?'-':c.value.toLocaleString();return `<div><span>${c.label}</span><b>${g?`<a href="/tasks/${id}/gates/${encodeURIComponent(g.gate_key)}">${v}</a>`:v}</b></div>`}).join('')}</div>
    <ol class="complete-phases">${phaseRows}</ol></section>

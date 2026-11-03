@@ -1,3 +1,4 @@
+import {Page} from '/assets/page-component.js';
 import {Table} from '/assets/table-component.js';
 import {tableSchemas} from './table-schemas.js';
 import {mountBottomBar} from './bottom-bar.js';
@@ -10,6 +11,7 @@ import {mountRowMenu,statusPill,statePill} from '/assets/operator-ui.js';
 import {runAction} from '/assets/ui-action.js';
 import {clientReport,clientLog,setClientLogTransport,recordResponse} from '/assets/client-core.js';
 import {tableRow,tableCell,detailTable,fieldList,mountSort} from '/assets/ops-table.js';
+Page.mountFrame({headerClass:'operator-header'});
 setClientLogTransport(null);
 async function request(url,options={}){const began=performance.now();try{const response=await fetch(url,options);recordResponse(url,options.method||'GET',response,began);return response;}catch(error){clientLog('backoffice.network.error','Request failed',{method:options.method||'GET',endpoint:url});throw error;}}
 function integer(value){if(typeof value==='number'&&Number.isSafeInteger(value))return BigInt(value);if(typeof value==='string'&&/^-?(0|[1-9][0-9]*)$/.test(value))return BigInt(value);throw Error('Service returned an unverifiable numeric value.');}

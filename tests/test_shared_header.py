@@ -2,19 +2,20 @@
 Every HTML route serves the same app page, so the header, navigation, slots and footer are identical by
 construction; the avatar and operator-scoped style rules cannot be overridden by a page's own styles."""
 import re
+import json
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 WEB = Path(__file__).resolve().parents[1] / "src" / "delivery_api" / "web"
-SHELL = (WEB / "spa-shell.js").read_text(encoding="utf-8")
+SHELL = (WEB / "page-component.js").read_text(encoding="utf-8")
 
 
 def test_no_page_file_carries_its_own_header():
     # the shell builds the header at runtime; the served page must not carry a static one
     text = (WEB / "index.html").read_text(encoding="utf-8")
-    assert "<header" not in text and '<div id="shell-top">' in text and 'id="app"' in text
+    assert "<header" not in text and '<div id="shell-top">' in text and 'id="page-outlet"' in text
     assert not (WEB / "shell-header.html").exists() and not (WEB / "ops.html").exists()
 
 
@@ -38,7 +39,7 @@ def test_the_task_and_session_page_handlers_return_the_app_page():
     pages = [module.task_view("t"), module.gate_page("t", "g"), module.complete_page("t"), module.decision_page("t", "w")]
     for page in pages:
         body = page.body.decode()
-        assert '<div id="shell-top">' in body and 'id="app"' in body and "SHELL_HEADER" not in body
+        assert '<div id="shell-top">' in body and 'id="page-outlet"' in body and "SHELL_HEADER" not in body
 
 
 def test_the_routes_serve_the_app_page_and_the_operator_page_is_the_same_document():
@@ -54,7 +55,7 @@ def _rules(css):
 
 
 def test_the_avatar_has_no_padding_and_no_page_rule_reaches_header_buttons():
-    css = (WEB / "chrome.css").read_text(encoding="utf-8")
+    css = json.loads(re.search(r"const pageStyles=(.*?);\n", SHELL).group(1))["/assets/chrome.css"]
     avatar = [body for sel, body in _rules(css) if sel.strip() == "header .avatar"]
     assert avatar and "padding:0" in avatar[0] and "line-height:1" in avatar[0]
     for sel, _ in _rules(css):
@@ -64,7 +65,7 @@ def test_the_avatar_has_no_padding_and_no_page_rule_reaches_header_buttons():
 
 
 def test_only_the_nav_is_flexible_and_the_cost_slot_keeps_its_space():
-    css = (WEB / "chrome.css").read_text(encoding="utf-8")
+    css = json.loads(re.search(r"const pageStyles=(.*?);\n", SHELL).group(1))["/assets/chrome.css"]
     bodies = {sel.strip(): body for sel, body in _rules(css)}
     # the header is a grid where only the nav column flexes; the cost/balance slots keep their
     # reserved space whether or not data has arrived (visibility, never display), so nothing moves.

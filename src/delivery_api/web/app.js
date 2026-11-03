@@ -1,5 +1,5 @@
 /* Boot: mount the persistent shell once, load identity into it, then run the router.
-   Pages render into the persistent <main id="app"> exactly as before; navigation only
+   Pages render into the persistent app outlet exactly as before; navigation only
    decides which page function runs and owns cleanup (timers, streams, listeners). */
 import {createPurchase} from './purchase.js';
 import {createDecisions} from './decisions.js';
@@ -33,14 +33,14 @@ if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>{
 });
 startCopyBlocks();
 
+const config=window.__REQUI_CONFIG__||{};
+const shell=mountShell(config);
 const ctx={};
 for(const create of [createPurchase,createQa,createIdentity,createDialogs,createDashboard,createTask,createGate,createCompletion,createDecisions,createTaskActions])Object.assign(ctx,create(ctx));
 const {purchasePage,loadIdentity,decisionPage,gatePage,completePage,aboutPage,detail,dashboard,showError}=ctx;
 const mountError=e=>{if(e&&e.name==='AbortError')return;showError(e)};   // leaving a page cancels its loads; that is navigation, not an error
 window.addEventListener('unhandledrejection',e=>showError(e.reason));
 
-const config=window.__REQUI_CONFIG__||{};
-const shell=mountShell(config);
 fetch('/health',{cache:'no-store'}).then(r=>r.json()).then(live=>shell.setRuntime(live.runtime_id)).catch(()=>{});
 
 let stopCostHeader=null;
