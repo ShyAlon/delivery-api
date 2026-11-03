@@ -143,7 +143,7 @@ def test_backoffice_jobs_pixels_filter_pagination_refresh_and_revocation(tmp_pat
             page.locator('#active-jobs-refresh').click()
             page.get_by_text('Meditator 7.5 / 77c30a258523',exact=True).wait_for()
             revoked[0]=True;page.locator('#active-jobs-refresh').click()
-            page.locator('#authform').wait_for();assert not page.locator('main').is_visible()
+            page.locator('#authform').wait_for();assert not page.locator('#backoffice-workspace').is_visible()
             assert 'Meditator' not in page.locator('#active-jobs').inner_text()
             assert not errors
             assert all(r.method=='GET' for r in calls)

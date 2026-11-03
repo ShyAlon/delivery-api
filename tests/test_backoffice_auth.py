@@ -45,6 +45,7 @@ def test_browser_signin_avatar_logout_and_expiry_never_replays_write(tmp_path):
  calls=[]
  def service(r):
   calls.append(r);signed='requi_access=opaque' in r.headers.get('cookie','')
+  if r.url.path=='/health':return httpx.Response(200,json={'repositories':{'delivery-api':'a'*40,'interview-engine':'b'*40}})
   if r.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':signed,'mode':'supabase','actor':'owner@example.com'})
   if r.url.path=='/auth/signin':return httpx.Response(200,json={'status':'signed_in'},headers={'Set-Cookie':'requi_access=opaque; HttpOnly; Path=/; SameSite=Lax'})
   if r.url.path=='/auth/logout':return httpx.Response(200,json={'status':'signed_out'},headers={'Set-Cookie':'requi_access=""; Max-Age=0; Path=/'})
@@ -63,7 +64,7 @@ def test_browser_signin_avatar_logout_and_expiry_never_replays_write(tmp_path):
    browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page(viewport={'width':1280,'height':950})
    errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
    page.goto(f'http://127.0.0.1:{port}')
-   expect(page.locator('#authform')).to_be_visible();expect(page.locator('main')).to_be_hidden()
+   expect(page.locator('#authform')).to_be_visible();expect(page.locator('#backoffice-workspace')).to_be_hidden()
    assert not any('/api/operations/' in r.url.path for r in calls)
    page.screenshot(path='/downloads/backoffice-shared-signin-desktop.png',full_page=True)
    page.locator('[name=username]').fill('owner@example.com');page.locator('[name=password]').fill('fixture password')
@@ -74,7 +75,7 @@ def test_browser_signin_avatar_logout_and_expiry_never_replays_write(tmp_path):
    page.keyboard.press('Escape');expect(page.locator('#accountbutton')).to_be_focused()
    page.get_by_role('button',name='Job actions',exact=True).click();page.get_by_role('menuitem',name='Delete',exact=True).click()
    page.get_by_role('button',name='Stop and delete',exact=True).click()
-   expect(page.locator('#authform')).to_be_visible();expect(page.locator('main')).to_be_hidden()
+   expect(page.locator('#authform')).to_be_visible();expect(page.locator('#backoffice-workspace')).to_be_hidden()
    assert len([r for r in calls if r.url.path.endswith('/stop')])==1
    page.locator('[name=username]').fill('owner@example.com');page.locator('[name=password]').fill('fixture password')
    page.get_by_role('button',name='Sign in',exact=True).last.click();expect(page.locator('#accountbutton')).to_be_visible()
@@ -83,6 +84,8 @@ def test_browser_signin_avatar_logout_and_expiry_never_replays_write(tmp_path):
    page.screenshot(path='/downloads/backoffice-shared-avatar-phone.png',full_page=True)
    page.get_by_role('menuitem',name='Sign out').click();expect(page.locator('#authform')).to_be_visible()
    page.screenshot(path='/downloads/backoffice-shared-signin-phone.png',full_page=True)
+   assert page.locator('.auth-card').bounding_box()['x']==20
+   assert page.locator('.auth-copy').bounding_box()['x']==20
    assert not errors
    browser.close()
  finally:server.should_exit=True;thread.join(timeout=10)

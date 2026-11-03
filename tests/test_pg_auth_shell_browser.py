@@ -12,6 +12,11 @@ def test_pg_shell_home_boot_and_signed_reload_have_no_browser_errors(pg_browser)
     page.goto(base+'/')
     expect(page.get_by_text('Welcome to Requi.re',exact=True)).to_be_visible()
     assert 'Loading workspace' not in page.locator('body').inner_text()
+    page.set_viewport_size({'width':390,'height':844})
+    page.screenshot(path='/downloads/main-shared-signin-phone.png',full_page=True)
+    assert page.locator('.auth-card').bounding_box()['x']==20
+    assert page.locator('.auth-copy').bounding_box()['x']==20
+    page.set_viewport_size({'width':1280,'height':950})
     page.evaluate('window.__guardToken=Math.random()')
     page.get_by_role('link',name='Home',exact=True).click()
     assert page.evaluate('window.__guardToken') is not None and page.url==base+'/'
