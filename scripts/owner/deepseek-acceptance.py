@@ -56,14 +56,55 @@ def preflight(api):
 class API:
     def __init__(self,client):self.client=client
     def __call__(self,method,path,body=None,*,raw=False):
-        response=self.client.request(method,path,json=body,timeout=90)
+        # A normal browser session is cookie-authenticated. Preserve the same
+        # Origin proof the browser sends, without weakening the server guard.
+        headers={}
+        if method.upper() not in ('GET','HEAD','OPTIONS'):
+            headers['Origin']=str(self.client.base_url).rstrip('/')
+        response=self.client.request(method,path,json=body,timeout=90,headers=headers)
         if response.status_code>=300:
             # Never echo raw bodies, JWTs, SQL or user content to the terminal.
             error=Refused(f'{method} {path.split("?")[0]} returned HTTP {response.status_code}; review Debug evidence and server prerequisites')
             error.http_status=response.status_code
+            error.operation=method+' '+path.split('?')[0]
+            error.gate,error.reason,error.next_step=http_blocker(response)
             raise error
         return response.content if raw else response.json()
 
+
+
+def http_blocker(response):
+    """Recognize fixed public gate responses, never copy arbitrary response text."""
+    try:detail=response.json().get('detail')
+    except (ValueError,AttributeError):detail=None
+    if detail=='Authenticated state changes require a same-origin request.':
+        return ('same_origin','Authenticated state changes require a same-origin request.',
+                'Use the updated acceptance script; no owner permission or ceiling change is needed.')
+    if detail=='Delivery-only runtime: mutations and execution remain fenced':
+        return ('execution_runtime','This runtime fences all task mutations.',
+                'Start the execution preview and verify the named target before retrying.')
+    if detail=='Cloud execution pending scoped worker protocol':
+        return ('execution_protocol','The target refuses this execution route.',
+                'Check execution readiness on the named target; do not retry blindly.')
+    status=response.status_code
+    if status==401:return ('authentication','The server rejected the owner session.','Sign in normally again before retrying.')
+    if status==403:return ('access_or_origin','The server denied this operation (access or origin check).','Inspect target Debug/server request evidence; do not grant more access blindly.')
+    if status==409:return ('task_action','The server refused the test-task state or database prerequisite.','Inspect retained test and server evidence; do not retry blindly.')
+    if status==422:return ('request_validation','The server rejected the request shape.','Update the acceptance script to match the server before retrying.')
+    return ('http_response','The target returned an unsuccessful HTTP response.','Inspect target Debug/server evidence before retrying.')
+
+
+def failure_report(error,tid,evidence):
+    status=getattr(error,'http_status',None)
+    creation_refused=not tid and getattr(error,'operation',None)=='POST /api/operations/test-tasks' and status in (400,401,403,404,422)
+    return {'failed':True,'task_id':tid,'data_retained':bool(tid),
+        'task_creation':'confirmed' if tid else 'refused' if creation_refused else 'unconfirmed',
+        'paid_start':getattr(error,'paid_start','not_sent' if not tid else 'unconfirmed'),
+        'debug_zip':evidence,'error_class':type(error).__name__,
+        'operation':getattr(error,'operation',None),'http_status':status,
+        'gate':getattr(error,'gate','acceptance_check' if isinstance(error,Refused) else 'unexpected_failure'),
+        'reason':getattr(error,'reason',str(error) if isinstance(error,Refused) else 'The acceptance check stopped unexpectedly; private exception details were not printed.'),
+        'next':getattr(error,'next_step','Inspect retained test and target Debug/server evidence before retrying. No purge or automatic retry was attempted.')}
 
 def wait_question(api,tid,*,after=None,timeout=900,observe=lambda value:None):
     deadline=time.monotonic()+timeout
@@ -80,12 +121,14 @@ def wait_question(api,tid,*,after=None,timeout=900,observe=lambda value:None):
 
 
 def journey(api,*,observe=lambda value:None):
-    tid=None
+    tid=None;paid_start='not_sent'
     try:
         task=api('POST','/api/operations/test-tasks',{'title':'Acceptance DeepSeek '+uuid.uuid4().hex[:12],'brief':IDEA})
         tid=task['task_id']
         if task.get('is_test') is not True:raise Refused('Test marker missing; refusing paid Start')
+        paid_start='submitted_outcome_unconfirmed'
         api('POST','/api/tasks/'+tid+'/start',{'model_route':'deepseek'})
+        paid_start='accepted'
         first=wait_question(api,tid,observe=observe)
         control=first['control_snapshot']
         api('POST','/api/tasks/'+tid+'/answer',{'answer':ANSWER,'expected_sequence':control.get('precondition',{}).get('session_sequence')})
@@ -99,6 +142,7 @@ def journey(api,*,observe=lambda value:None):
         return tid,second,cost,usage
     except Exception as error:
         if tid:setattr(error,'test_task_id',tid)
+        setattr(error,'paid_start',paid_start)
         raise
 
 
@@ -215,8 +259,11 @@ def main(argv=None):
         except Exception as error:
             tid=tid or getattr(error,'test_task_id',None)
             evidence=save_failure(api,tid,args.output)
-            print(json.dumps({'failed':True,'task_id':tid,'data_retained':True,'debug_zip':evidence,'error_class':type(error).__name__,'next':'Inspect retained test and Debug evidence. Do not retry blindly.'}),file=sys.stderr)
-            raise Refused('Acceptance failed; test data retained, no purge and no automatic retry') from None
+            report=failure_report(error,tid,evidence)
+            print(json.dumps(report),file=sys.stderr)
+            operation=report['operation'] or 'acceptance check'
+            status=' HTTP '+str(report['http_status']) if report['http_status'] else ''
+            raise Refused('Acceptance stopped: '+operation+status+' ['+report['gate']+']: '+report['reason']+' Next: '+report['next']) from None
     return 0
 
 if __name__=='__main__':
