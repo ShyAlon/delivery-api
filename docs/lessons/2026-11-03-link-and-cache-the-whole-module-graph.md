@@ -1,0 +1,3 @@
+# Link and refresh the whole browser module graph
+
+A syntax parse cannot prove named imports exist. Link every shipped browser module with the real ES module linker, and prove the guard by removing an export in an owned fixture. A missing-export console error is not proof the current source deleted it: this incident's exactmain already exported statePill. Cache incoherence remains a hypothesis for the owner's browser, but fresh shells must use one graph revision and never reuse old unversioned modules. Fresh-page browser smoke must catch console CSP errors as well as pageerror events on every Back office tab. Mount the same shared tabs before any API await; keep their DOM identity through loading rather than invent another shell.

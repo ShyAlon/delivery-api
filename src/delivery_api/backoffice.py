@@ -38,8 +38,30 @@ def settings(environ):
 def create_app(*,service_url,transport=None):
     application=FastAPI(title='Requi.re back office',docs_url=None,redoc_url=None,openapi_url=None)
     from pathlib import Path
-    application.mount('/assets',StaticFiles(directory=Path(__file__).parent/'web'),name='shared-assets')
-    application.mount('/backoffice-assets',StaticFiles(directory=Path(__file__).parent/'backoffice_web'),name='backoffice-assets')
+    # One revision covers the whole linked graph, not just the HTML entrypoint.
+    # A new release must not combine cached shared modules with a new consumer.
+    import hashlib,re
+    from fastapi.responses import Response
+    roots=[Path(__file__).parent/name for name in ('web','backoffice_web')]
+    revision=hashlib.sha256(b''.join(path.read_bytes() for root in roots for path in sorted(root.rglob('*.js')))).hexdigest()[:16]
+    class FreshModules(StaticFiles):
+        async def get_response(self,path,scope):
+            if path.endswith('.js'):
+                full,stat=self.lookup_path(path)
+                if stat and Path(full).is_file():
+                    text=Path(full).read_text()
+                    text=re.sub(r"(^\s*(?:import|export)\s+[^\n;]*?from\s*['\"])([^'\"]+)(['\"])",
+                        lambda m:m[1]+m[2]+('?v='+revision if m[2].startswith(('.','/')) else '')+m[3],text,flags=re.M)
+                    return Response(text,media_type='text/javascript',headers={'Cache-Control':'no-store'})
+            return await super().get_response(path,scope)
+    application.mount('/assets',FreshModules(directory=roots[0]),name='shared-assets')
+    application.mount('/backoffice-assets',FreshModules(directory=roots[1]),name='backoffice-assets')
+    @application.middleware('http')
+    async def fresh_assets(request,call_next):
+        response=await call_next(request)
+        if request.url.path.startswith(('/assets/','/backoffice-assets/')):
+            response.headers['Cache-Control']='no-store'
+        return response
     @application.get('/favicon.ico')
     def icon():
         from fastapi.responses import FileResponse
@@ -47,8 +69,8 @@ def create_app(*,service_url,transport=None):
     @application.get('/',response_class=HTMLResponse)
     def shell():
         from pathlib import Path
-        return HTMLResponse((Path(__file__).parent/'backoffice_web'/'index.html').read_text(),
-            headers={'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Referrer-Policy':'no-referrer'})
+        return HTMLResponse((Path(__file__).parent/'backoffice_web'/'index.html').read_text().replace('src="/backoffice-assets/backoffice.js"','src="/backoffice-assets/backoffice.js?v='+revision+'"'),
+            headers={'Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Referrer-Policy':'no-referrer'})
     @application.get('/health')
     def health():return {'ok':True,'role':'backoffice','capabilities':'scoped_service_api_proxy'}
     @application.get('/api/operations/{capability}')
