@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import sys
 import time
+import threading
 from urllib.parse import urlsplit
 import uuid
 
@@ -16,6 +17,8 @@ IDEA='A simple web app for a solo tutor to manage students and lesson bookings. 
 ANSWER='I am the only tutor and user. I create student records with a name and email, then book one-hour lessons in my local timezone. I need to see upcoming bookings and edit or cancel them. A double booking should be rejected. No payments, messaging or external calendars are needed.'
 
 class Refused(RuntimeError):pass
+
+class TransportUnavailable(Refused):pass
 
 
 def positive(value):
@@ -53,15 +56,64 @@ def preflight(api):
     return selected[0],plan
 
 
+class Progress:
+    """Fixed, names-only status while browser, HTTP or polling work is pending."""
+    def __init__(self,write=print,clock=time.monotonic,interval=10):
+        self.write=write;self.clock=clock;self.interval=interval;self.started=clock()
+        self.stage='Starting acceptance';self.limit=None;self.stage_started=clock()
+        self.lock=threading.RLock();self.stop=threading.Event()
+    def emit(self):
+        with self.lock:
+            elapsed=int(self.clock()-self.started);stage_elapsed=int(self.clock()-self.stage_started)
+            limit=('; timeout '+str(self.limit)+'s; '+str(max(0,int(self.limit-stage_elapsed)))+'s remaining') if self.limit else '; no additional user input needed'
+            self.write('Acceptance: '+self.stage+'; elapsed '+str(elapsed)+'s; stage '+str(stage_elapsed)+'s'+limit,flush=True)
+    def set(self,stage,limit=None):
+        with self.lock:self.stage=stage;self.limit=limit;self.stage_started=self.clock();self.emit()
+    def task(self,tid,base):
+        self.write('Acceptance test task: '+tid+'; open '+base+'/tasks/'+tid+'/view. Closing this script does not Stop server work.',flush=True)
+    def note(self,message):
+        with self.lock:self.write('Acceptance: '+message+'; elapsed '+str(int(self.clock()-self.started))+'s',flush=True)
+    def state(self,task):
+        mode=task.get('control_snapshot',{}).get('mode')
+        if mode in ('working','waiting_input','failed','completed'):
+            with self.lock:
+                self.stage=self.stage.split('; server state ')[0]+'; server state '+mode
+    def beat(self):
+        while not self.stop.wait(self.interval):self.emit()
+    def __enter__(self):
+        self.thread=threading.Thread(target=self.beat,daemon=True);self.thread.start();return self
+    def __exit__(self,*args):self.stop.set();self.thread.join(timeout=1)
+
+
+class QuietProgress:
+    def set(self,*args):pass
+    def task(self,*args):pass
+    def state(self,*args):pass
+    def note(self,*args):pass
+
+
 class API:
-    def __init__(self,client):self.client=client
-    def __call__(self,method,path,body=None,*,raw=False):
+    def __init__(self,client):self.client=client;self.records=[]
+    def __call__(self,method,path,body=None,*,raw=False,timeout_seconds=90):
         # A normal browser session is cookie-authenticated. Preserve the same
         # Origin proof the browser sends, without weakening the server guard.
         headers={}
         if method.upper() not in ('GET','HEAD','OPTIONS'):
             headers['Origin']=str(self.client.base_url).rstrip('/')
-        response=self.client.request(method,path,json=body,timeout=90,headers=headers)
+        import httpx
+        began=time.monotonic()
+        record={'kind':'acceptance.http','method':method,'path':path.split('?')[0],'timeout_seconds':timeout_seconds}
+        self.records.append(record);self.records[:]=self.records[-200:]
+        try:response=self.client.request(method,path,json=body,timeout=timeout_seconds,headers=headers)
+        except httpx.TransportError as cause:
+            record.update(outcome='unknown',transport_class=type(cause).__name__,elapsed_seconds=round(time.monotonic()-began,2))
+            error=TransportUnavailable('Transport response unavailable; request outcome is unknown')
+            error.operation=method+' '+path.split('?')[0];error.timeout_seconds=timeout_seconds
+            error.transport_class=type(cause).__name__;error.gate='transport_unknown'
+            error.reason=error.operation+' did not return a confirmed response ('+type(cause).__name__+', per-request timeout '+str(timeout_seconds)+'s).'
+            error.next_step='Do not repeat a state-changing request. Inspect this task and server evidence; local timeout does not Stop server work.'
+            raise error from None
+        record.update(status=response.status_code,elapsed_seconds=round(time.monotonic()-began,2))
         if response.status_code>=300:
             # Never echo raw bodies, JWTs, SQL or user content to the terminal.
             error=Refused(f'{method} {path.split("?")[0]} returned HTTP {response.status_code}; review Debug evidence and server prerequisites')
@@ -96,20 +148,34 @@ def http_blocker(response):
 
 def failure_report(error,tid,evidence):
     status=getattr(error,'http_status',None)
+    if isinstance(error,KeyboardInterrupt):
+        error.reason='Interrupted locally. Server work was not stopped and accepted calls may still bill.'
+        error.next_step='Do not start another run. Review the named test in Back office Worker Jobs and confirm Stop there if needed.'
+        error.gate='owner_interrupted'
     creation_refused=not tid and getattr(error,'operation',None)=='POST /api/operations/test-tasks' and status in (400,401,403,404,422)
     return {'failed':True,'task_id':tid,'data_retained':True if tid else False if creation_refused else None,
         'task_creation':'confirmed' if tid else 'refused' if creation_refused else 'unconfirmed',
         'paid_start':getattr(error,'paid_start','not_sent' if not tid else 'unconfirmed'),
         'debug_zip':evidence,'error_class':type(error).__name__,
         'operation':getattr(error,'operation',None),'http_status':status,
+        'timeout_seconds':getattr(error,'timeout_seconds',None),'transport_class':getattr(error,'transport_class',None),
         'gate':getattr(error,'gate','acceptance_check' if isinstance(error,Refused) else 'unexpected_failure'),
         'reason':getattr(error,'reason',str(error) if isinstance(error,Refused) else 'The acceptance check stopped unexpectedly; private exception details were not printed.'),
         'next':getattr(error,'next_step','Inspect retained test and target Debug/server evidence before retrying. No purge or automatic retry was attempted.')}
 
-def wait_question(api,tid,*,after=None,timeout=900,observe=lambda value:None):
+def wait_question(api,tid,*,after=None,timeout=900,observe=lambda value:None,progress=None):
+    progress=progress or QuietProgress()
+    progress.set('Waiting for '+('first' if after is None else 'next')+' text question; polling every 2s',timeout)
     deadline=time.monotonic()+timeout
     while time.monotonic()<deadline:
-        task=api('GET','/api/tasks/'+tid);observe(task)
+        try:
+            task=api('GET','/api/tasks/'+tid,timeout_seconds=max(1,min(90,int(deadline-time.monotonic())))) if isinstance(api,API) else api('GET','/api/tasks/'+tid)
+        except TransportUnavailable as error:
+            # Only this idempotent GET can be repeated. The original question
+            # deadline is never extended and no Start/answer is replayed.
+            progress.note('Task poll response unavailable; server state unknown; retrying GET only within the original deadline')
+            time.sleep(2);continue
+        progress.state(task);progress.note('Read-only task poll completed');observe(task)
         control=task.get('control_snapshot',{})
         if task.get('state')=='failed' or control.get('mode')=='failed':raise Refused('The real Start/answer failed; test data retained')
         if control.get('mode')=='waiting_input' and control.get('kind')=='text' and control.get('prompt'):
@@ -117,22 +183,28 @@ def wait_question(api,tid,*,after=None,timeout=900,observe=lambda value:None):
         if control.get('mode')=='waiting_input' and control.get('kind')!='text':
             raise Refused('The real journey requested a structured decision, not a text question; no blind approval was sent. Test data retained.')
         time.sleep(2)
-    raise Refused('No new text question before the deadline; no retry, data retained')
+    raise Refused('No new text question within '+str(timeout)+' seconds; no retry, task retained. Closing the script does not Stop server work.')
 
 
-def journey(api,*,observe=lambda value:None):
+def journey(api,*,observe=lambda value:None,progress=None,base=''):
+    progress=progress or QuietProgress()
     tid=None;paid_start='not_sent'
     try:
+        progress.set('Creating marked test task',90)
         task=api('POST','/api/operations/test-tasks',{'title':'Acceptance DeepSeek '+uuid.uuid4().hex[:12],'brief':IDEA})
         tid=task['task_id']
+        progress.task(tid,base)
         if task.get('is_test') is not True:raise Refused('Test marker missing; refusing paid Start')
+        progress.set('Submitting paid Start; accepted work may spend under the server ceiling',90)
         paid_start='submitted_outcome_unconfirmed'
         api('POST','/api/tasks/'+tid+'/start',{'model_route':'deepseek'})
         paid_start='accepted'
-        first=wait_question(api,tid,observe=observe)
+        first=wait_question(api,tid,observe=observe,progress=progress)
         control=first['control_snapshot']
+        progress.set('Submitting the scripted tutor answer; no human answer needed',90)
         api('POST','/api/tasks/'+tid+'/answer',{'answer':ANSWER,'expected_sequence':control.get('precondition',{}).get('session_sequence')})
-        second=wait_question(api,tid,after=control.get('input_id'),observe=observe)
+        second=wait_question(api,tid,after=control.get('input_id'),observe=observe,progress=progress)
+        progress.set('Reading settled cost and usage; each HTTP request times out after 90s')
         cost=api('GET','/api/tasks/'+tid+'/cost')
         usage=api('GET','/api/operator/task-usage?task_id='+tid)
         expense=api('GET','/api/operations/test-tasks/'+tid+'/expense')
@@ -140,16 +212,16 @@ def journey(api,*,observe=lambda value:None):
         if not cost.get('evidence',{}).get('complete') or cost.get('price') is None or not usage.get('complete') or usage.get('attempts',0)<1 or not expense.get('complete') or expense.get('provider_usd') is None:
             raise Refused('Actual cost/usage is unsettled or missing; no purge')
         return tid,second,cost,usage
-    except Exception as error:
+    except (Exception,KeyboardInterrupt) as error:
         if tid:setattr(error,'test_task_id',tid)
         setattr(error,'paid_start',paid_start)
         raise
 
 
-def save_failure(api,tid,directory):
+def save_failure(api,tid,directory,browser=None):
     if not tid:return None
     try:
-        raw=api('POST','/api/tasks/'+tid+'/debug.zip',{'records':[]},raw=True)
+        raw=api('POST','/api/tasks/'+tid+'/debug.zip',browser or {'records':[]},raw=True)
         if not raw.startswith(b'PK'):raise Refused('Debug response was not a ZIP')
         path=directory/('debug-'+tid+'.zip');path.write_bytes(raw);path.chmod(0o600);return str(path)
     except Exception:return None
@@ -226,44 +298,65 @@ def main(argv=None):
             print('DRY RUN: authenticated reads only; zero task writes, zero provider calls. HTTP content-type regression is covered by tests/test_provider_http.py; this cannot prove the deployed server code version.')
             return 0
         args.output.mkdir(parents=True,exist_ok=True);args.output.chmod(0o700)
-        tid=None
-        try:
-            from playwright.sync_api import sync_playwright
-            live={'seen':False};cost_seen={'seen':False};page_ref={}
-            def observe(task):
-                nonlocal tid
-                tid=task['task_id']
-                page=page_ref.get('page')
-                if page and page.url!=base+'/tasks/'+tid+'/view':page.goto(base+'/tasks/'+tid+'/view')
-                # Actual persisted child stage data, never synthetic progress.
-                if task.get('control_snapshot',{}).get('mode')=='working' and any(e.get('phase_key')=='intent' and e.get('kind')=='progress' and e.get('payload',{}).get('source')=='interview' for e in task.get('events',[])):
-                    if page and page.locator('.phase-list-primary > .phase').first.locator('.phase-current-progress').is_visible():live['seen']=True
-                if page and page.locator('#sessioncost').count() and page.locator('#sessioncost').is_visible() and page.locator('#sessioncost').inner_text().strip():cost_seen['seen']=True
-            with sync_playwright() as pw:
-                browser=pw.chromium.launch(headless=True)
-                context=browser.new_context(extra_http_headers={'Authorization':client.headers['Authorization']} if client.headers.get('Authorization') else {})
-                context.add_cookies([{'name':c.name,'value':c.value,'url':base} for c in client.cookies.jar])
-                page=context.new_page();page_ref['page']=page
-                tid,task,cost,usage=journey(api,observe=observe)
-                screenshot=args.output/('success-'+tid+'.png');page.screenshot(path=str(screenshot),full_page=True);screenshot.chmod(0o600)
-                if not live['seen'] or not cost_seen['seen']:raise Refused('Live Start progress or visible cost was not proven; test retained')
-                # The actual browser must show the current question before cleanup.
-                from playwright.sync_api import expect
-                expect(page.locator('#currentquestion p')).to_contain_text(task['control_snapshot']['prompt'],timeout=15000)
-                browser.close()
-            api('POST','/api/operations/test-tasks/'+tid+'/purge',{'confirm':True})
-            report={'at':stamp,'model':plan['model'],'pin_revision':pin['revision'],'elapsed_seconds':round(time.monotonic()-started,2),
-                'task_id':tid,'retail_credits':cost['price'],'retail_usd':cost['price_usd'],'provider_usd':usage['provider_expense']['provider_usd'],'usage':usage,
-                'purged':True,'money_and_audit_retained':True}
-            result_path=args.output/('result-'+tid+'.json');result_path.write_text(json.dumps(report,indent=2));result_path.chmod(0o600);print(json.dumps(report,indent=2))
-        except Exception as error:
-            tid=tid or getattr(error,'test_task_id',None)
-            evidence=save_failure(api,tid,args.output)
-            report=failure_report(error,tid,evidence)
-            print(json.dumps(report),file=sys.stderr)
-            operation=report['operation'] or 'acceptance check'
-            status=' HTTP '+str(report['http_status']) if report['http_status'] else ''
-            raise Refused('Acceptance stopped: '+operation+status+' ['+report['gate']+']: '+report['reason']+' Next: '+report['next']) from None
+        with Progress() as progress:
+            tid=None
+            browser_evidence={'started_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'url':'','records':[]}
+            try:
+                from playwright.sync_api import sync_playwright
+                live={'seen':False};cost_seen={'seen':False};page_ref={}
+                def observe(task):
+                    nonlocal tid
+                    tid=task['task_id']
+                    page=page_ref.get('page')
+                    if page and page.url!=base+'/tasks/'+tid+'/view':
+                        progress.note('Hidden browser navigating to the test task; navigation timeout 30s')
+                        page.goto(base+'/tasks/'+tid+'/view')
+                        progress.note('Hidden browser task navigation complete')
+                    # Actual persisted child stage data, never synthetic progress.
+                    if task.get('control_snapshot',{}).get('mode')=='working' and any(e.get('phase_key')=='intent' and e.get('kind')=='progress' and e.get('payload',{}).get('source')=='interview' for e in task.get('events',[])):
+                        if page and page.locator('.phase-list-primary > .phase').first.locator('.phase-current-progress').is_visible():live['seen']=True
+                    progress.note('Hidden browser checking visible progress and cost; no clicks or answers are sent by this browser')
+                    if page and page.locator('#sessioncost').count() and page.locator('#sessioncost').is_visible() and page.locator('#sessioncost').inner_text().strip():cost_seen['seen']=True
+                progress.set('Opening the headless UI verification browser; launch timeout 30s, no human input needed')
+                with sync_playwright() as pw:
+                    browser=pw.chromium.launch(headless=True)
+                    context=browser.new_context(extra_http_headers={'Authorization':client.headers['Authorization']} if client.headers.get('Authorization') else {})
+                    context.add_cookies([{'name':c.name,'value':c.value,'url':base} for c in client.cookies.jar])
+                    page=context.new_page();page_ref['page']=page
+                    def browser_response(response):
+                        parsed=urlsplit(response.url)
+                        if parsed.netloc==urlsplit(base).netloc:
+                            browser_evidence['records'].append({'kind':'hidden_browser.response','method':response.request.method,'path':parsed.path,'status':response.status})
+                            browser_evidence['records'][:]=browser_evidence['records'][-300:]
+                    page.on('response',browser_response)
+                    tid,task,cost,usage=journey(api,observe=observe,progress=progress,base=base)
+                    progress.set('Verifying UI; browser operations timeout 30s each, current question timeout 15s')
+                    screenshot=args.output/('success-'+tid+'.png');page.screenshot(path=str(screenshot),full_page=True);screenshot.chmod(0o600)
+                    if not live['seen'] or not cost_seen['seen']:raise Refused('Live Start progress or visible cost was not proven; test retained')
+                    # The actual browser must show the current question before cleanup.
+                    from playwright.sync_api import expect
+                    progress.note('Hidden browser waiting for the current question text; timeout 15s')
+                    expect(page.locator('#currentquestion p')).to_contain_text(task['control_snapshot']['prompt'],timeout=15000)
+                    progress.note('Hidden browser current question confirmed; closing verification browser')
+                    browser.close()
+                progress.set('Purging successful test content; accounting stays retained',90)
+                api('POST','/api/operations/test-tasks/'+tid+'/purge',{'confirm':True})
+                report={'at':stamp,'model':plan['model'],'pin_revision':pin['revision'],'elapsed_seconds':round(time.monotonic()-started,2),
+                    'task_id':tid,'retail_credits':cost['price'],'retail_usd':cost['price_usd'],'provider_usd':usage['provider_expense']['provider_usd'],'usage':usage,
+                    'purged':True,'money_and_audit_retained':True}
+                result_path=args.output/('result-'+tid+'.json');result_path.write_text(json.dumps(report,indent=2));result_path.chmod(0o600);print(json.dumps(report,indent=2))
+            except (Exception,KeyboardInterrupt) as error:
+                tid=tid or getattr(error,'test_task_id',None)
+                progress.set('Saving retained failure evidence; no Stop or retry is sent',90)
+                browser_evidence['ended_at']=datetime.datetime.now(datetime.timezone.utc).isoformat()
+                browser_evidence['url']=base+'/tasks/'+tid+'/view' if tid else base
+                browser_evidence['records']=(browser_evidence['records']+api.records)[-500:]
+                evidence=save_failure(api,tid,args.output,browser_evidence)
+                report=failure_report(error,tid,evidence)
+                print(json.dumps(report),file=sys.stderr)
+                operation=report['operation'] or 'acceptance check'
+                status=' HTTP '+str(report['http_status']) if report['http_status'] else ''
+                raise Refused('Acceptance stopped: '+operation+status+' ['+report['gate']+']: '+report['reason']+' Next: '+report['next']) from None
     return 0
 
 if __name__=='__main__':
