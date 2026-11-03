@@ -131,8 +131,9 @@ def start(*,database_prefix='test_tenant_',socket_directory=None,server_factory=
                 STATE['applied'].append(path.name)
             # Mirror the real owner installer exactly; wildcard grants masked
             # missing production memberships such as payment-read and log-write.
-            from delivery_api.runtime_roles import RUNTIME_ROLES
-            for role in RUNTIME_ROLES:
+            import runpy
+            roles=runpy.run_path(str(MIGRATIONS.parent.parent/'src/delivery_api/runtime_roles.py'))['RUNTIME_ROLES']
+            for role in roles:
                 conn.execute('GRANT "%s" TO delivery_app WITH INHERIT FALSE, SET TRUE'%role)
             try:conn.execute(SEED)
             except Exception as exc:
