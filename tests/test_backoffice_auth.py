@@ -84,6 +84,7 @@ def test_browser_signin_avatar_logout_and_expiry_never_replays_write(tmp_path):
    page.screenshot(path='/downloads/backoffice-shared-avatar-phone.png',full_page=True)
    page.get_by_role('menuitem',name='Sign out').click();expect(page.locator('#authform')).to_be_visible()
    page.screenshot(path='/downloads/backoffice-shared-signin-phone.png',full_page=True)
+   assert page.locator('.auth-card input').first.evaluate("e=>getComputedStyle(e).padding")=="14px"
    assert page.locator('.auth-card').bounding_box()['x']==20
    assert page.locator('.auth-copy').bounding_box()['x']==20
    assert not errors
