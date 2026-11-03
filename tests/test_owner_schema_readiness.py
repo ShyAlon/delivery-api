@@ -246,3 +246,16 @@ def test_installer_repairs_every_named_membership_for_nonstandard_app_login():
             conn.execute('CREATE ROLE requi_unreviewed NOLOGIN')
             assert not conn.execute("SELECT pg_has_role('candidate_app','requi_unreviewed','SET')").fetchone()[0]
     finally:server.cleanup();shutil.rmtree(scratch,ignore_errors=True)
+
+
+def test_preview_inventory_uses_actual_restricted_app_connection(pg_runtime_environment):
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    import pg_harness
+    fields = conninfo_to_dict(pg_harness.STATE['dsn'])
+    fields['user'] = 'delivery_app'
+    with psycopg.connect(make_conninfo(**fields), autocommit=True) as conn:
+        conn.execute('SET default_transaction_read_only=on')
+        rows = load().inventory(conn)
+        assert all(row['status']=='present' for row in rows)
+        assert load().grants(conn)==[]
