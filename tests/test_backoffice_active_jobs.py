@@ -100,7 +100,7 @@ def test_backoffice_jobs_pixels_filter_pagination_refresh_and_revocation(tmp_pat
         if request.url.path!='/api/operations/active-jobs':return httpx.Response(403,json={'detail':'unavailable'})
         if revoked[0]:return httpx.Response(401,json={'detail':'revoked'})
         older='before_job_id' in request.url.params
-        row={'title':'Meditator 7.5' if not older else 'Older pending task','task_id':'77c30a258523' if not older else 'older-task','job_id':'ee89bcb759964a795ed7cf827871eb86' if not older else 'older-job','kind':'phase:intent','state':'running' if not older else 'pending','task_state':'stop_requested' if not older else 'running','generation':1,'task_generation':2,'stop_requested_at':123 if not older else None,'updated_at':1793383200,'quiescence_verified':False,'stale_verified':False}
+        row={'title':'Meditator 7.5' if not older else 'Older pending task','task_id':'77c30a258523' if not older else 'older-task','job_id':'ee89bcb759964a795ed7cf827871eb86' if not older else 'older-job','kind':'phase:intent','state':'done' if not older else 'pending','listed_for':'active_task_latest_job' if not older else 'nonterminal_worker','task_state':'running' if not older else 'running','generation':1,'task_generation':2,'stop_requested_at':None,'updated_at':1793383200,'quiescence_verified':False,'stale_verified':False}
         return httpx.Response(200,json={'scope':'current_authorized_workspace','jobs':[row],'mutations_available':False,'truncated':not older,'next_before':None if older else {'updated_at':1793383200,'job_id':row['job_id']}})
     with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
     app=create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream))
@@ -118,6 +118,7 @@ def test_backoffice_jobs_pixels_filter_pagination_refresh_and_revocation(tmp_pat
             page.goto(f'http://127.0.0.1:{port}/')
             page.locator('#active-jobs tbody tr').wait_for()
             assert 'Meditator 7.5' in page.locator('#active-jobs').inner_text()
+            assert 'Task remains active; last worker done.' in page.locator('#active-jobs').inner_text()
             assert 'ee89bcb759964a795ed7cf827871eb86' in page.locator('#active-jobs').inner_text()
             assert page.locator('#active-jobs-panel button').count()==3 # refresh/next plus shared row menu
             page.get_by_role('button',name='Job actions',exact=True).click()
@@ -146,3 +147,32 @@ def test_backoffice_jobs_pixels_filter_pagination_refresh_and_revocation(tmp_pat
             assert all(r.method=='GET' for r in calls)
             browser.close()
     finally:server.should_exit=True;thread.join(timeout=10)
+
+
+def test_running_marked_task_remains_visible_after_its_worker_is_reaped(pg_workspace_factory):
+    import uuid
+    with pg_workspace_factory() as workspace,tenant_context(workspace.scope):
+        store=workspace.store
+        with workspace.admin() as connection:
+            connection.execute('DELETE FROM operator_principals')
+            connection.execute("INSERT INTO operator_principals(subject,registry_version,capabilities,enabled) VALUES(%s,'task-visibility',ARRAY['sessions.operate'],true)",(workspace.scope.owner_id,))
+        try:
+            task=store.create_task('Waiting between interview turns',is_test=True)
+            store.set_engine_session(task['task_id'],str(uuid.uuid4()))
+            job=store.enqueue_worker(task['task_id'],'phase:intent');assert store.claim_worker(job)
+            store.finish_worker(job)
+            # The worker finishes at an input boundary. Task lifecycle stays active.
+            with workspace.admin() as connection:connection.execute("UPDATE tasks SET state='running' WHERE task_id=%s",(task['task_id'],))
+            row=next(x for x in store.owner_active_jobs()['jobs'] if x['task_id']==task['task_id'])
+            assert row['job_id']==job and row['state']=='done' and row['task_state']=='running'
+            assert row['is_test'] is True and row['listed_for']=='active_task_latest_job'
+            assert row['quiescence_verified'] is False
+            for state in ('waiting_gate','stop_requested'):
+                with workspace.admin() as connection:connection.execute('UPDATE tasks SET state=%s WHERE task_id=%s',(state,task['task_id']))
+                assert job in {x['job_id'] for x in store.owner_active_jobs()['jobs']}
+            with pg_workspace_factory() as other,tenant_context(other.scope):
+                assert task['task_id'] not in {x['task_id'] for x in other.store.owner_active_jobs()['jobs']}
+            result=store.stop_hide_worker_task(job,hide=False,confirm=True)
+            assert result['stop_requested'] is True and result['worker_exit_verified'] is False
+        finally:
+            with workspace.admin() as connection:connection.execute('DELETE FROM operator_principals WHERE subject=%s',(workspace.scope.owner_id,))

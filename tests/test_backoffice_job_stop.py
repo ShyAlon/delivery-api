@@ -148,7 +148,7 @@ def test_browser_confirm_sends_one_scoped_stop_and_refreshes(tmp_path,hide):
             page.get_by_role('button',name='Job actions',exact=True).click()
             page.get_by_role('menuitem',name='Delete' if hide else 'Stop',exact=True).click()
             page.get_by_role('button',name='Stop and delete' if hide else 'Stop task',exact=True).click()
-            page.get_by_text('No pending, running or paused jobs returned.',exact=True).wait_for()
+            page.get_by_text('No active-task or pending, running or paused worker jobs returned.',exact=True).wait_for()
             assert len([x for x in calls if x.method=='POST'])==1
             assert not page.get_by_role('dialog').count()
             browser.close()
