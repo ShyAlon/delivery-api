@@ -87,6 +87,9 @@ def _run(tmp_path, env_extra, settings=None, tty_input='yes\n'):
     hooks=tmp_path/'schema-hooks';hooks.mkdir(exist_ok=True)
     (hooks/'sitecustomize.py').write_text("""import sys
 if sys.argv[0].endswith('schema-readiness.py'):
+ import os
+ if os.environ.get('FAKE_SCHEMA_DIAGNOSTIC'):
+  print(os.environ['FAKE_SCHEMA_DIAGNOSTIC'],flush=True);os._exit(2)
  import psycopg
  class Result:
   def fetchone(self):
@@ -570,3 +573,25 @@ def test_default_both_without_paid_setup_reaches_confirmation(tmp_path):
     assert 'ABORTED [SETTINGS]' not in p.stdout,p.stdout
     assert 'Providers: both.' in p.stdout
     assert 'ABORTED [NOT-CONFIRMED]' in p.stdout
+
+
+def test_schema_abort_repeats_observed_diagnostics_beside_final_abort(tmp_path):
+    diagnostic = 'MISSING SET membership: requi_backend\nMIGRATION ABORTED: confirmation did not match; no changes'
+    result = _run(tmp_path, {'PREVIEW_EXEC_PROVIDER':'ollama', 'FAKE_SCHEMA_DIAGNOSTIC':diagnostic}, settings=_settings(tmp_path))
+    final = result.stdout.split('ABORTED [SCHEMA-NOT-READY]:', 1)[1]
+    assert 'requi_backend' in final and 'confirmation did not match' in final
+    assert '== building' not in result.stdout
+
+
+def test_schema_abort_names_exit_code_when_no_diagnostic_was_emitted(tmp_path):
+    result = _run(tmp_path, {'PREVIEW_EXEC_PROVIDER':'ollama', 'FAKE_SCHEMA_DIAGNOSTIC':'unrelated progress'}, settings=_settings(tmp_path))
+    final = result.stdout.split('ABORTED [SCHEMA-NOT-READY]:', 1)[1]
+    assert 'no named diagnostic emitted; schema command exit code 2' in final
+
+
+def test_schema_abort_scrubs_secrets_from_repeated_diagnostic(tmp_path):
+    diagnostic='SCHEMA CHECK FAILED: connection postgresql://user:password@host/db sk-not-a-real-secret'
+    result=_run(tmp_path, {'PREVIEW_EXEC_PROVIDER':'ollama','FAKE_SCHEMA_DIAGNOSTIC':diagnostic},settings=_settings(tmp_path))
+    final=result.stdout.split('ABORTED [SCHEMA-NOT-READY]:',1)[1]
+    assert 'user:password@host' not in final and 'sk-not-a-real-secret' not in final
+    assert 'postgresql://[hidden]' in final and 'sk-[hidden]' in final

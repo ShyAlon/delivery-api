@@ -176,7 +176,20 @@ for f in $PINFILES src/delivery_api/production_gateway.py; do [ -f "$f" ] || abo
 rc=0; .venv/bin/python scripts/ops/venv_check.py || rc=$?
 [ "$rc" = 0 ] || abort VENV-DEPS "the checkout's .venv is missing declared dependencies" "Nothing was started." "run the exact pip line printed above, then run ops preview-exec again"
 # Cheap read-only schema proof before local model grounding or image build.
-.venv/bin/python scripts/ops/schema-readiness.py --offer-apply || abort SCHEMA-NOT-READY "schema review, apply, or restricted-role readiness did not complete" "Nothing built or started. If apply began, earlier APPLIED files persist; inspect the review output." "resolve the named review blocker and rerun req preview; do not send credentials"
+# Tee leaves stdin attached to the terminal: guarded apply keeps its interactive
+# confirmation, while the final abort can repeat evidence rather than hide it.
+SCHEMA_LOG=$(mktemp "${TMPDIR:-/tmp}/requi-schema.XXXXXXXXXX")
+chmod 600 "$SCHEMA_LOG"
+schema_rc=0
+.venv/bin/python scripts/ops/schema-readiness.py --offer-apply 2>&1 | tee "$SCHEMA_LOG" || schema_rc=$?
+if [ "$schema_rc" != 0 ]; then
+  SCHEMA_REASON=$(grep -E '^(PENDING |PARTIAL |MISSING SET membership:|SCHEMA CHECK FAILED:|MIGRATION ABORTED:|FAILED |SCHEMA NOT READY:)' "$SCHEMA_LOG" | tail -n 40 | cut -c1-600 | scrub) || true
+  rm -f "$SCHEMA_LOG"
+  [ -n "$SCHEMA_REASON" ] || SCHEMA_REASON="no named diagnostic emitted; schema command exit code $schema_rc"
+  abort SCHEMA-NOT-READY "schema review, apply, or restricted-role readiness did not complete. Observed blocker(s):
+$SCHEMA_REASON" "Nothing built or started. If apply began, earlier APPLIED files persist." "resolve the repeated review blocker and rerun req preview; do not send credentials"
+fi
+rm -f "$SCHEMA_LOG"
 step_ok
 
 # Fast mode is allowed only for the exact immutable candidate identity.
