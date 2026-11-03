@@ -4,7 +4,7 @@ import {mountRowMenu,statePill} from '/assets/operator-ui.js';
 import {reviewDiff} from '/assets/review-diff.js';
 export function mountModelPins(request){
  const host=document.querySelector('#model-pins-panel');let rows=[],bootstrap=[],expensePolicy=null;
- const status=host.querySelector('[role=status]'),body=host.querySelector('tbody');
+ const status=host.querySelector('[data-pin-status]'),body=host.querySelector('tbody');
  function error(e){status.textContent=(e.message||String(e))+' Open Debug > Download evidence.';}
  async function action(kind,data){const r=await request('/api/operations/model-pins/'+kind,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify(data)});const value=await r.json();if(!r.ok)throw Error(value.detail?.error||value.detail||'Pin request failed ('+r.status+')');return value;}
  async function review(kind,row,payload){
