@@ -27,8 +27,6 @@ body.ops-page #frame button{font:500 var(--fs-sm) Manrope;border:1px solid var(-
 body.ops-page #frame button.secondary{background:transparent;color:var(--ink)}
 body.ops-page select,body.ops-page input[type=search],body.ops-page input{font:var(--fs-sm) Manrope;border:1px solid var(--line);border-radius:10px;padding:6px 10px;background:var(--card);color:var(--ink)}
 body.ops-page .panel{padding:0}body.ops-page .panel,body.ops-page .card{background:var(--card);border:1px solid var(--line);border-radius:16px}
-body.ops-page th{background:var(--paper);font:var(--fs-xs) DM Mono;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-body.ops-page td.empty{color:var(--muted);white-space:normal;padding:16px 10px}
 .refresh-note{color:var(--muted);font:var(--fs-xs) DM Mono}
 body:not(.ops-page){min-height:100vh;display:flex;flex-direction:column}
 body:not(.ops-page)>main{flex:1}

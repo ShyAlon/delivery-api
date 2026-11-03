@@ -1,0 +1,17 @@
+{
+  "dialog:web/dashboard.js": 10,
+  "dialog:web/dialogs.js": 12,
+  "dialog:web/gate.js": 2,
+  "dialog:web/identity.js": 2,
+  "dialog:web/phase-transition.js": 4,
+  "dialog:web/qa.js": 4,
+  "dialog:web/task.js": 11,
+  "dialog:web/taskactions.js": 13,
+  "page:backoffice_web/index.html": 3,
+  "page:web/app.js": 1,
+  "page:web/completion.js": 1,
+  "page:web/decisions.js": 2,
+  "page:web/gate.js": 1,
+  "page:web/index.html": 1,
+  "page:web/task.js": 1
+}

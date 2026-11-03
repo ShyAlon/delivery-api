@@ -18,14 +18,7 @@ body:not([data-view=stops]) #stops-view,body:not([data-view=spend]) #spend-view,
 #p-sessions .scroll,#p-running .scroll{max-height:230px}
 .panel{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
 .panel h2{font:700 var(--fs-md) Manrope;margin:0;padding:10px 12px 0}
-.tools{display:flex;gap:8px;align-items:center;padding:8px 12px}
 .scroll{flex:1;min-height:0;overflow:auto;border-top:1px solid var(--line)}
-table{border-collapse:collapse;width:100%}
-th{position:sticky;top:0;text-align:left;padding:8px 10px;cursor:pointer;white-space:nowrap;border-bottom:1px solid var(--line);user-select:none}
-td{padding:6px 10px;border-bottom:1px solid #eceae2;white-space:nowrap}
-td.num,th.num{text-align:right}
-.pager{display:flex;gap:8px;align-items:center;padding:8px 12px;border-top:1px solid var(--line);color:var(--muted);font-size:var(--fs-sm)}
-.pager .grow{flex:1}
 @media(max-width:900px){#panels{grid-template-columns:1fr;grid-template-rows:auto}}
 </style>
 <div id="frame">

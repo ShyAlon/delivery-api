@@ -233,37 +233,28 @@ def _case_the_endpoint_serves_the_zip_to_an_admin_and_records_it(monkeypatch):
 
 # ---- 5. every table keeps its column headers ----
 
-NODE_TABLE = r"""
-class El{constructor(t){this.tag=t;this.kids=[];this.title='';this.className='';this.style={};this.dataset={};this.classList={toggle(){}}}get children(){return this.kids}
- append(...k){for(const x of k)this.kids.push(typeof x==='string'?{text:x}:x)}
- replaceChildren(...k){this.kids=[];this.append(...k)}
- set textContent(v){this.kids=[{text:String(v)}];this._t=String(v)}
- get textContent(){return this._t||''}
- find(tag,out=[]){if(this.tag===tag)out.push(this);for(const k of this.kids)if(k.find)k.find(tag,out);return out}
- text(){return this.kids.map(k=>k instanceof El?k.text():k.text).join('')}}
-globalThis.document={createElement:t=>new El(t)};
-const {makeTable,el}=await import(%r);
-const cols=[{key:'a',label:'Name',tip:'t'},{key:'b',label:'Amount',tip:'t',num:true}];
-const root=new El('section');
-const t=makeTable(root,'Title','tip',cols,'Nothing yet.');
-const shape=()=>{const th=root.find('th').map(x=>x.text());const td=root.find('td').map(x=>x.text());return {th,td,tables:root.find('table').length,thead:root.find('thead').length}};
-t.set([]);const empty=shape();
-t.set([{a:'x',b:1}]);const full=shape();
-console.log(JSON.stringify({empty,full}));
-"""
-
-
 @pytest.mark.skipif(subprocess.run(["which", "node"], capture_output=True).returncode != 0, reason="needs node")
 def test_an_empty_table_still_shows_its_columns_with_the_note_in_the_body():
-    out = _node(NODE_TABLE % (WEB / "ops-table.js").as_uri())
-    assert out["empty"]["tables"] == 1 and out["empty"]["thead"] == 1
-    assert out["empty"]["th"] == ["Name", "Amount"] and out["empty"]["td"] == ["Nothing yet."]
-    assert out["full"]["th"] == ["Name", "Amount"] and out["full"]["td"] == ["x", "1"]
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page()
+        page.route('http://table.test/**',lambda route:route.fulfill(content_type='text/javascript',body=(WEB/route.request.url.split('/')[-1]).read_text()) if route.request.url.endswith('.js') else route.fulfill(content_type='text/html',body='<main></main>'))
+        page.goto('http://table.test/')
+        out=page.evaluate("""async()=>{
+          const {makeTable}=await import('/ops-table.js');
+          const t=makeTable(document.querySelector('main'),'Title','tip',[{key:'a',label:'Name',tip:'t'},{key:'b',label:'Amount',tip:'t',num:true}],'Nothing yet.');
+          const shape=()=>({th:[...document.querySelectorAll('th')].map(x=>x.textContent),td:[...document.querySelectorAll('td')].map(x=>x.textContent),tables:document.querySelectorAll('table').length,thead:document.querySelectorAll('thead').length});
+          t.set([]);const empty=shape();t.set([{a:'x',b:1}]);return {empty,full:shape()};
+        }""")
+        assert out['empty']=={'th':['Name','Amount'],'td':['Nothing yet.'],'tables':1,'thead':1}
+        assert out['full']['th']==['Name','Amount'] and out['full']['td']==['x','1']
+        browser.close()
 
 
 def test_the_task_audit_table_keeps_its_columns_when_empty():
-    source = (WEB / "taskactions.js").read_text()
-    assert "colspan=\"4\">No matching actions.</td></tr>" in source and "data-audit-sort" in source
+    source=(WEB/'taskactions.js').read_text()
+    assert "auditTable.empty('No matching actions.')" in source and 'data-audit-sort' in source
+    assert 'new Table(' in source and '<table' not in source
 
 
 # ---- 6. one header, navigation and footer ----
