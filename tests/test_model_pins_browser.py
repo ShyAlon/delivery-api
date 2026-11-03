@@ -13,6 +13,7 @@ def test_model_pin_review_cancel_edit_menu_and_mobile():
     from playwright.sync_api import sync_playwright,expect
     value=payload();value['row']['model']='deepseek-flash';value['context']['model']='deepseek-flash';calls=[]
     def upstream(request):
+        if request.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':True,'mode':'supabase','actor':'fixture@example.com'})
         calls.append(request)
         if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{c:True for c in ('services.operate','logs.read','debug.read','sessions.read','analytics.read','usage.read','payments.read')}})
         if request.url.path=='/api/operator/model-pins':return httpx.Response(200,json={'pins':[{'payload':value,'revision':'abc','is_default':True,'status':{'fetched_at':'2026-11-01T11:00:00Z','badge':'Stale - refresh needed'}}],'history':[],'bootstrap':[]})
@@ -42,6 +43,7 @@ def test_model_pin_review_cancel_edit_menu_and_mobile():
 def test_missing_operator_capability_disables_new_model_and_names_gap(tmp_path):
  from playwright.sync_api import sync_playwright,expect
  def upstream(request):
+  if request.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':True,'mode':'supabase','actor':'fixture@example.com'})
   if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{'services.operate':False}})
   return httpx.Response(403,json={'detail':'unavailable'})
  app=create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream))
@@ -67,6 +69,7 @@ def test_shared_add_model_labels_focus_enter_inline_error_and_escape(tmp_path):
  from playwright.sync_api import sync_playwright,expect
  calls=[]
  def upstream(request):
+  if request.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':True,'mode':'supabase','actor':'fixture@example.com'})
   calls.append(request)
   if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{'services.operate':True}})
   if request.url.path=='/api/operator/model-pins':return httpx.Response(200,json={'pins':[],'history':[],'bootstrap':[]})
@@ -99,6 +102,7 @@ def test_loaded_review_readable_values_and_pending_approval_keeps_cancel(tmp_pat
  value=payload();value['row'].update(model='deepseek-flash',price_version='review-2026-11-02T18:43:26.026862+00:00',expense_input=280000,expense_output=420000,expense_units_per_usd=1000000000000);value['context']['model']='deepseek-flash'
  calls=[]
  def upstream(request):
+  if request.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':True,'mode':'supabase','actor':'fixture@example.com'})
   calls.append(request)
   if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{'services.operate':True}})
   if request.url.path=='/api/operator/model-pins':return httpx.Response(200,json={'pins':[],'history':[],'bootstrap':[]})

@@ -1,3 +1,4 @@
+from test_artifacts import evidence_path
 """Hermetic browser auth bridge. Never contacts owner preview or paid tasks."""
 import httpx
 from fastapi.testclient import TestClient
@@ -66,12 +67,12 @@ def test_browser_signin_avatar_logout_and_expiry_never_replays_write(tmp_path):
    page.goto(f'http://127.0.0.1:{port}')
    expect(page.locator('#authform')).to_be_visible();expect(page.locator('#backoffice-workspace')).to_be_hidden()
    assert not any('/api/operations/' in r.url.path for r in calls)
-   page.screenshot(path='/downloads/backoffice-shared-signin-desktop.png',full_page=True)
+   page.screenshot(path=evidence_path('backoffice-shared-signin-desktop.png'),full_page=True)
    page.locator('[name=username]').fill('owner@example.com');page.locator('[name=password]').fill('fixture password')
    page.get_by_role('button',name='Sign in',exact=True).last.click()
    expect(page.locator('#accountbutton')).to_be_visible();expect(page.locator('#active-jobs tbody tr')).to_have_count(1)
    page.locator('#accountbutton').click();expect(page.get_by_role('menuitem',name='Sign out')).to_be_visible()
-   page.screenshot(path='/downloads/backoffice-shared-avatar-desktop.png',full_page=True)
+   page.screenshot(path=evidence_path('backoffice-shared-avatar-desktop.png'),full_page=True)
    page.keyboard.press('Escape');expect(page.locator('#accountbutton')).to_be_focused()
    page.get_by_role('button',name='Job actions',exact=True).click();page.get_by_role('menuitem',name='Delete',exact=True).click()
    page.get_by_role('button',name='Stop and delete',exact=True).click()
@@ -81,9 +82,9 @@ def test_browser_signin_avatar_logout_and_expiry_never_replays_write(tmp_path):
    page.get_by_role('button',name='Sign in',exact=True).last.click();expect(page.locator('#accountbutton')).to_be_visible()
    assert len([r for r in calls if r.url.path.endswith('/stop')])==1
    page.set_viewport_size({'width':390,'height':844});page.locator('#accountbutton').click()
-   page.screenshot(path='/downloads/backoffice-shared-avatar-phone.png',full_page=True)
+   page.screenshot(path=evidence_path('backoffice-shared-avatar-phone.png'),full_page=True)
    page.get_by_role('menuitem',name='Sign out').click();expect(page.locator('#authform')).to_be_visible()
-   page.screenshot(path='/downloads/backoffice-shared-signin-phone.png',full_page=True)
+   page.screenshot(path=evidence_path('backoffice-shared-signin-phone.png'),full_page=True)
    assert page.locator('.auth-card input').first.evaluate("e=>getComputedStyle(e).padding")=="14px"
    assert page.locator('.auth-card').bounding_box()['x']==20
    assert page.locator('.auth-copy').bounding_box()['x']==20

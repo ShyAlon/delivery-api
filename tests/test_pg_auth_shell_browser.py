@@ -13,7 +13,7 @@ def test_pg_shell_home_boot_and_signed_reload_have_no_browser_errors(pg_browser)
     expect(page.get_by_text('Welcome to Requi.re',exact=True)).to_be_visible()
     assert 'Loading workspace' not in page.locator('body').inner_text()
     page.set_viewport_size({'width':390,'height':844})
-    page.screenshot(path='/downloads/main-shared-signin-phone.png',full_page=True)
+    page.screenshot(path=evidence_path('main-shared-signin-phone.png'),full_page=True)
     assert page.locator('.auth-card input').first.evaluate("e=>getComputedStyle(e).padding")=="14px"
     assert page.locator('.auth-card').bounding_box()['x']==20
     assert page.locator('.auth-copy').bounding_box()['x']==20
