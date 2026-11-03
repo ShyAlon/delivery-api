@@ -145,28 +145,17 @@ def authenticate(client,settings,values,base,state):
     token=values.get('DELIVERY_ACCEPTANCE_TOKEN')
     if token:client.headers['Authorization']='Bearer '+token
     state_path=values.get('DELIVERY_ACCEPTANCE_BROWSER_STATE') or values.get('PREVIEW_BROWSER_STATE') or __import__('os').environ.get('PREVIEW_BROWSER_STATE')
-    if state_path and not token:
-        path=Path(state_path).expanduser()
-        if path.is_symlink() or not path.is_file() or path.stat().st_mode&0o077:
-            raise Refused('Browser session file must exist, be private (chmod 600), and not be a symlink')
-        try:
-            cookies=json.loads(path.read_text()).get('cookies',[])
-            host=urlsplit(base).hostname
-            for cookie in cookies:
-                # Exact origin host only. Never copy another site's cookies or
-                # localStorage tokens to this target.
-                if cookie.get('domain','').lstrip('.')==host and cookie.get('name') in ('requi_access','requi_refresh','requi_session'):
-                    client.cookies.set(cookie['name'],cookie['value'],domain=host,path=cookie.get('path','/'))
-        except (ValueError,KeyError,TypeError):raise Refused('Saved browser session could not be read; refresh it and retry') from None
-    current=API(client)('GET','/api/auth')
-    if not current.get('authenticated'):
-        # A dry run never creates a sign-in session. Collect only a missing
-        # existing access token through the shared hidden terminal prompt.
-        values['DELIVERY_ACCEPTANCE_TOKEN']=settings.hidden_prompt('Existing signed-in owner access token (hidden; not saved)')
-        if not values['DELIVERY_ACCEPTANCE_TOKEN']:raise Refused('Owner access token missing; nothing changed')
-        client.headers['Authorization']='Bearer '+values['DELIVERY_ACCEPTANCE_TOKEN']
+    from delivery_api.owner_browser_session import load_state,sign_in,SessionUnavailable
+    try:
+        if state_path and not token:load_state(client,state_path,base)
         current=API(client)('GET','/api/auth')
-        if not current.get('authenticated'):raise Refused('Owner session is expired or not accepted; sign in to the preview and retry')
+        if not current.get('authenticated'):
+            # Never ask a person to extract an HttpOnly browser credential.
+            client.headers.pop('Authorization',None)
+            sign_in(client,base)
+            current=API(client)('GET','/api/auth')
+            if not current.get('authenticated'):raise Refused('Owner browser session was not accepted; no acceptance work started')
+    except SessionUnavailable as exc:raise Refused(str(exc)) from None
     return current
 
 

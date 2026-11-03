@@ -1,0 +1,3 @@
+# Do not make the owner extract an HttpOnly session
+
+Acceptance must check protected settings and configured private browser state before asking for anything. A terminal cannot read an unrelated browser's HttpOnly cookie. On missing or expired state, open a dedicated exact-origin sign-in window, verify its authenticated session and transfer only the current access cookie in memory. Never ask for a copied token, inspect arbitrary profiles, collect refresh cookies or fabricate a session. Distinguish normal auth-session creation from the no-task/no-provider dry-run guarantee. Block task/payment mutations in the handoff browser.

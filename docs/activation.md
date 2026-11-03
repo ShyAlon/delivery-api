@@ -28,3 +28,8 @@ Real payments stay OFF until your pre-activation checklist and cleanup pass are 
 - The dry-run cost is a scenario, not an expected measured bill or a maximum. The approved server ceiling controls provider spend; retail credits also include active compute.
 - The HTTP timeout fix sets HTTP phase limits, not a total wall-clock deadline.
 - No live database write, paid call, deployment, reset, payment activation or credit grant was performed to prepare this document.
+
+
+### Owner session for acceptance
+
+Run `bash scripts/ops/acceptance.sh --dry-run`. The script checks protected settings and any configured private browser-state file first. If no valid session is available, it opens a dedicated browser window at the verified target. Sign in normally in that window. Do not copy an access token, cookie, password or connection string into the terminal. A sign-in may create a normal authentication session; the acceptance dry run still starts no task or paid call. Cookies transfer only in memory and the window closes after the handoff. Your ordinary browser profile is not read.

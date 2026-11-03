@@ -133,20 +133,21 @@ def test_wrong_target_refuses_before_auth_prompt_or_writes():
     assert calls==[('GET','/api/auth')]
 
 
-def test_missing_token_prompt_is_hidden_only_missing_and_no_login(monkeypatch):
+def test_missing_session_opens_browser_once_never_prompts_for_token(monkeypatch):
     import httpx
-    prompts=[];calls=[]
+    from delivery_api import owner_browser_session
+    calls=[];opened=[]
     class Settings:
-        def hidden_prompt(self,name):prompts.append(name);return 'private-owner-token'
+        def hidden_prompt(self,name):pytest.fail('never ask for a browser token')
+    def signin(client,base):opened.append(base);client.cookies.set('requi_access','private-cookie')
+    monkeypatch.setattr(owner_browser_session,'sign_in',signin)
     def handle(request):
         calls.append(request.method)
-        return httpx.Response(200,json={'authenticated':request.headers.get('authorization')=='Bearer private-owner-token'})
+        return httpx.Response(200,json={'authenticated':'requi_access=private-cookie' in request.headers.get('cookie','')})
     with httpx.Client(base_url='http://127.0.0.1:8001',transport=httpx.MockTransport(handle)) as client:
         assert a.authenticate(client,Settings(),{},'http://127.0.0.1:8001',{})['authenticated']
-        assert len(prompts)==1
         assert a.authenticate(client,Settings(),{},'http://127.0.0.1:8001',{})['authenticated']
-        assert len(prompts)==1
-    assert set(calls)=={'GET'}
+    assert opened==['http://127.0.0.1:8001'] and set(calls)=={'GET'}
 
 
 def test_shared_readiness_reports_each_gap_without_raw_private_values():
