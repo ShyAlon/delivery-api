@@ -261,7 +261,7 @@ def test_phase_keys_have_human_labels():
  node=shutil.which('node')
  if not node:__import__('pytest').skip('node not available')
  web=pathlib.Path(__file__).resolve().parents[1]/'src/delivery_api/web/format.js'
- src=web.read_text().replace("import {esc} from './client-core.js';","const esc=s=>String(s);")
+ src=web.read_text().replace("import {esc} from './client-core.js';","const esc=s=>String(s);").replace("'./table-component.js'",json.dumps(web.with_name('table-component.js').as_uri()))
  out=subprocess.run([node,'--input-type=module','-e',src+";console.log(JSON.stringify(['intent','conops','needs','srs','architecture','specs','tests'].map(humanLabel)))"],capture_output=True,text=True,timeout=30)
  assert out.returncode==0,out.stderr
  assert json.loads(out.stdout)==['Start','Concept of Operations','Stakeholder Needs','Requirements','Architecture','Specifications','Tests']
