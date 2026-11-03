@@ -205,6 +205,8 @@ def main():
         print('PREFLIGHT PASSED: protected settings, matching admin/app target, app identity, DDL capability and complete migration inventory.')
         print('DRY REVIEW, NO DATABASE CHANGES; app login:',app_login)
         print('Restricted SET membership inventory: '+', '.join(r.ROLES))
+        for membership in r.role_inventory(conn,app_login):
+            print('SET MEMBERSHIP',membership['status'].upper(),membership['role'],'FOR',app_login,'ROLE EXISTS',membership['role_exists'])
         print('ROLLBACK: each migration has its own transaction; a failed file rolls back, earlier APPLIED files persist. Rerun dry review to resume. No automatic down-migration or runtime rollback.')
         for row in reviewed:print(json.dumps(row,sort_keys=True))
         print('Catalog presence does not prove exact applied SQL/checksum. Supabase ledger shown only if available. No older migration is replayed automatically.')

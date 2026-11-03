@@ -121,13 +121,18 @@ def inventory(conn):
                      'destructive':destructive((ROOT/'supabase/migrations'/name).read_text())})
     return rows
 
-def grants(conn):
-    result=[]
+def role_inventory(conn,login=None):
+    if login is None:login=conn.execute('SELECT current_user').fetchone()[0]
+    rows=[]
     for role in ROLES:
         exists=conn.execute('SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=%s)',(role,)).fetchone()[0]
-        can=exists and conn.execute('SELECT pg_has_role(current_user,%s,\'SET\')',(role,)).fetchone()[0]
-        if not can:result.append(role)
-    return result
+        can=exists and conn.execute("SELECT pg_has_role(%s,%s,'SET')",(login,role)).fetchone()[0]
+        rows.append({'role':role,'role_exists':exists,'status':'present' if can else 'missing'})
+    return rows
+
+
+def grants(conn):
+    return [row['role'] for row in role_inventory(conn) if row['status']=='missing']
 
 def settings():
     spec=importlib.util.spec_from_file_location('requi_settings',ROOT/'scripts/ops/settings.py')
