@@ -15,7 +15,7 @@ while [ "$#" -gt 0 ]; do
     --apply) apply=1;shift;;
     --fast) checks=fast;shift;;
     --full-checks) checks=full;shift;;
-    --max-usd|--base-url) [ "$command" = preflight ] && [ "$#" -ge 2 ] || fail "$1 is only for preflight and needs a value.";acceptance_args+=("$1" "$2");shift 2;;
+    --base-url) [ "$command" = preflight ] && [ "$#" -ge 2 ] || fail "$1 is only for preflight and needs a value.";acceptance_args+=("$1" "$2");shift 2;;
     --email) [ "$#" -ge 2 ] || fail '--email needs a value.';email=$2;shift 2;;
     *) fail "unsupported argument $1";;
   esac

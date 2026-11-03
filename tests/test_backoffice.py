@@ -124,7 +124,7 @@ def test_acceptance_readiness_reuses_shared_checks_and_exposes_no_private_ids():
  assert response.status_code==200 and response.headers['cache-control']=='no-store'
  body=response.json();assert body['owner_only'] and not body['activation_enabled'] and not body['ready']
  assert 'private-' not in response.text
- assert {x['check'] for x in body['checks']}=={'session','target','token/session','marker migration','default pin','ceiling','run approval'}
+ assert {x['check'] for x in body['checks']}=={'session','target','token/session','marker migration','default pin','ceiling'}
  assert all(method=='GET' for method,path in calls)
  assert c.post('/api/operations/acceptance-readiness',headers={'Authorization':'Bearer fixture'}).status_code==405
 

@@ -152,7 +152,7 @@ def test_acceptance_checklist_is_read_only_and_readable_on_phone(ui):
         page.route('**/api/operations/acceptance-readiness',lambda route:route.fulfill(json=fixture))
         page.goto(url+'/#acceptance')
         expect(page.locator('#acceptance-status')).to_contain_text('Not ready')
-        assert page.locator('#acceptance-checks tbody tr').count()==7
+        assert page.locator('#acceptance-checks tbody tr').count()==6
         expect(page.locator('#acceptance-panel')).to_contain_text('Customers do not run this')
         expect(page.locator('#acceptance-checks')).to_contain_text('2. Prepare owner test access')
         expect(page.locator('#acceptance-checks')).to_contain_text('--test-owner')

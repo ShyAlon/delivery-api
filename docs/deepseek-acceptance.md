@@ -12,12 +12,12 @@ scripts/ops/acceptance.sh --dry-run
 
 The script loads private preview settings and repo `.env`, then uses the configured app origin or the preview default `http://127.0.0.1:8001`. `--base-url` selects an explicit origin. It prints local preview vs cloud and the origin. Before credentials or execution, the service must identify correctly. It reuses a configured private acceptance token or `PREVIEW_BROWSER_STATE` cookies for that exact host; otherwise it asks with hidden input for only the missing existing owner access token. It does not save it, create a login, or make you edit config. Back office has no stored token for this script to reuse automatically.
 
-Dry mode makes GET requests only, no task writes and no provider calls. It checks session, marker migration/owner permission, approved default pin and positive server ceiling. With `--max-usd N` it also checks the server ceiling is at most N. It prints a planning scenario from the actual reviewed pin:20,000input tokens,6,000output tokens and60seconds active compute, separately providerUSDandretailcredits/USD. This is not a measured forecast or a maximum.
+Dry mode makes GET requests only, no task writes and no provider calls. It checks session, marker migration/owner permission, approved default pin and positive server ceiling. The positive Back office operator ceiling is the single provider-spend limit; no duplicate per-run limit is accepted. It prints a planning scenario from the actual reviewed pin:20,000input tokens,6,000output tokens and60seconds active compute, separately providerUSDandretailcredits/USD. This is not a measured forecast or a maximum.
 
 After separately approving the exact run ceiling, the owner runs:
 
 ```sh
-scripts/ops/acceptance.sh --execute --max-usd APPROVED_USD
+scripts/ops/acceptance.sh --execute
 ```
 
 Replace APPROVED_USD with the approved number. First apply the owner test-task migration, review the default pin, and set the server task-generation ceiling at or below that number. The script never changes it. An unidentified target refuses. Explicit remote targets require HTTPS.

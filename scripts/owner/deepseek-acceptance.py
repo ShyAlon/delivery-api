@@ -38,9 +38,9 @@ def estimate(pin,input_tokens=20000,output_tokens=6000,compute_ms=60000):
         'warning':'Planning scenario, not a measured forecast or maximum. Real graph calls, prompt lengths and compute vary. Server ceiling is the hard provider-spend control.'}
 
 
-def preflight(api,maximum=None):
+def preflight(api):
     from delivery_api.acceptance_readiness import inspect
-    result=inspect(api,maximum)
+    result=inspect(api)
     print(json.dumps({'acceptance_readiness':result['checks'],'activation_enabled':False},indent=2))
     if not result['ready']:
         reasons=[r['reason'] for r in result['checks'] if r['status']=='fail']
@@ -175,10 +175,9 @@ def main(argv=None):
     p.add_argument('--repo',type=Path,default=ROOT);p.add_argument('--env-file',type=Path)
     p.add_argument('--dry-run',action='store_true');p.add_argument('--execute',action='store_true')
     p.add_argument('--base-url',help='Explicit app origin; otherwise use the preview settings/default')
-    p.add_argument('--max-usd',type=positive);p.add_argument('--output',type=Path,default=Path.home()/'Downloads/requi-acceptance')
+    p.add_argument('--output',type=Path,default=Path.home()/'Downloads/requi-acceptance')
     args=p.parse_args(argv)
     if args.execute and args.dry_run:p.error('choose --dry-run or --execute')
-    if args.execute and args.max_usd is None:p.error('--execute requires an explicitly approved --max-usd')
     settings,values=load_settings(args.repo,args.env_file)
     base,local=target(values,args.base_url)
     print('Target: '+('local execution preview' if local else 'cloud account service')+' '+base,flush=True)
@@ -188,7 +187,7 @@ def main(argv=None):
         api=API(client)
         state=identify(api,local,execute=args.execute)
         authenticate(client,settings,values,base,state)
-        api=API(client);pin,plan=preflight(api,args.max_usd)
+        api=API(client);pin,plan=preflight(api)
         print(json.dumps({'at':stamp,'dry_run':not args.execute,'plan':plan},indent=2))
         if not args.execute:
             print('DRY RUN: authenticated reads only; zero task writes, zero provider calls. HTTP content-type regression is covered by tests/test_provider_http.py; this cannot prove the deployed server code version.')
