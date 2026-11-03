@@ -9,7 +9,7 @@ from fastapi import FastAPI,Request
 from fastapi.responses import JSONResponse,HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-ROUTES={'access':'/api/operator/backoffice-access','audit-events':'/api/operator/audit-events','active-jobs':'/api/operations/active-jobs','payment-journal':'/api/operator/payment-journal','payment-totals':'/api/operator/payment-totals','workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
+ROUTES={'build':'/health','access':'/api/operator/backoffice-access','audit-events':'/api/operator/audit-events','active-jobs':'/api/operations/active-jobs','payment-journal':'/api/operator/payment-journal','payment-totals':'/api/operator/payment-totals','workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
     'operator-sessions':'/api/operator/sessions','operator-credits':'/api/operator/credits',
     'expense-totals':'/api/operator/expense-totals','vendor-status':'/api/operator/vendor-status','task-debug':'/api/operator/task-debug','task-logs':'/api/operator/task-logs','credit-account':'/api/operator/credit-account','task-usage':'/api/operator/task-usage',
     'attempt-releases':'/api/admin/operations/attempt-releases','model-pins':'/api/operator/model-pins','acceptance-readiness':'acceptance-readiness'}
@@ -96,6 +96,11 @@ def create_app(*,service_url,transport=None):
                     import json
                     value=json.loads(body)
                     if not isinstance(value,dict):raise ValueError('operations object required')
+                    if capability=='build':
+                        import re
+                        repos=value.get('repositories',{})
+                        if not isinstance(repos,dict):raise ValueError('Invalid running build repositories')
+                        value={'repositories':{name:sha for name,sha in repos.items() if name in ('delivery-api','interview-engine') and isinstance(sha,str) and re.fullmatch(r'[0-9a-f]{7,40}',sha)}}
                     return JSONResponse(value,status_code=response.status_code,headers={'Cache-Control':'no-store'})
         except (httpx.HTTPError,ValueError):
             return JSONResponse({'detail':'Operations service unavailable or invalid'},status_code=502)

@@ -1,0 +1,8 @@
+// Standalone accessible tab bar. No API authority.
+export function mountTabs(host,root,tabs){
+ const panels=new Set(tabs.flatMap(x=>x.panels));host.setAttribute('role','tablist');
+ const buttons=tabs.map(tab=>{const button=document.createElement('button');button.textContent=tab.label;button.id='tab-'+tab.id;button.setAttribute('role','tab');button.setAttribute('aria-controls',tab.panels.join(' '));button.onclick=()=>select(tab.id,true);host.append(button);return button;});
+ function select(id,update){document.dispatchEvent(new Event('operator-navigation'));const index=Math.max(0,tabs.findIndex(x=>x.id===id));tabs.forEach((tab,i)=>{buttons[i].classList.toggle('active',i===index);buttons[i].setAttribute('aria-selected',String(i===index));buttons[i].tabIndex=i===index?0:-1;});for(const id of panels){const panel=root.querySelector('#'+id);if(panel){panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby','tab-'+tabs.find(t=>t.panels.includes(id)).id);panel.hidden=!tabs[index].panels.includes(id);panel.classList.toggle('view-in',!panel.hidden);}}if(update)history.replaceState({},'','#'+tabs[index].id);}
+ host.addEventListener('keydown',e=>{const index=buttons.indexOf(document.activeElement);if(index<0)return;let next=index;if(e.key==='ArrowRight')next=(index+1)%tabs.length;else if(e.key==='ArrowLeft')next=(index+tabs.length-1)%tabs.length;else if(e.key==='Home')next=0;else if(e.key==='End')next=tabs.length-1;else return;e.preventDefault();select(tabs[next].id,true);buttons[next].focus();});
+ window.addEventListener('hashchange',()=>select(location.hash.slice(1),false));select(location.hash.slice(1),false);
+}

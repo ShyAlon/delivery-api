@@ -39,4 +39,9 @@ export function makeTable(root,title,tip,cols,emptyText){
   return {set(rows){st.rows=rows;draw()}};
 }
 
-export function tableRow(table,values){const row=document.createElement('tr'),labels=Array.from(table.querySelectorAll('th'),h=>h.textContent);values.forEach((value,i)=>{const cell=document.createElement('td');cell.dataset.label=labels[i];cell.textContent=String(value??'Unknown');row.append(cell);});return row;}
+export function tableCell(table,row,value){const cell=document.createElement('td');cell.dataset.label=table.querySelectorAll('th')[row.children.length]?.textContent||'';if(value&&typeof value==='object'&&value.nodeType)cell.append(value);else cell.textContent=String(value??'Unavailable');row.append(cell);return cell;}
+export function tableRow(table,values){const row=document.createElement('tr');values.forEach(value=>tableCell(table,row,value));return row;}
+export function detailTable(host,labels,items,values){const table=el('table'),head=el('thead'),tr=el('tr'),body=el('tbody');labels.forEach(label=>tr.append(el('th',{textContent:label})));head.append(tr);table.append(head,body);items.forEach(item=>body.append(tableRow(table,values(item))));host.append(table);return table;}
+export function fieldList(host,fields){const list=el('dl',{className:'detail-fields'});for(const [label,value] of fields)list.append(el('dt',{textContent:label}),el('dd',{textContent:String(value??'Unavailable')}));host.append(list);return list;}
+
+export function mountSort(table,filter,onSort){const select=el('select');select.setAttribute('aria-label','Sort this page');select.className='table-sort';select.add(new Option('Sort this page',''));table.querySelectorAll('[data-sort]').forEach(button=>{select.add(new Option(button.textContent,button.dataset.sort));button.addEventListener('click',()=>onSort(button.dataset.sort,true));});select.addEventListener('change',()=>onSort(select.value,false));filter.after(select);return select;}
