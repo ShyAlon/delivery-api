@@ -55,3 +55,15 @@ def test_system_pg_adapter_migrates_owned_unix_socket_database(tmp_path):
     result=subprocess.run([sys.executable,str(ROOT/'scripts/docker/owned-pg-smoke.py'),str(ROOT),sys.executable,'-c',proof],env=env,capture_output=True,text=True,timeout=45)
     assert result.returncode==0,result.stdout+result.stderr
     assert 'OWNED-PG-MIGRATED' in result.stdout
+
+
+def test_minimal_smoke_context_includes_runtime_inventory_and_migrates(tmp_path):
+    import shutil,sys
+    context=tmp_path/'context'
+    subprocess.run([sys.executable,str(ROOT/'scripts/docker/smoke-context.py'),str(ROOT),str(context)],check=True)
+    assert (context/'src/delivery_api/runtime_roles.py').read_bytes()==(ROOT/'src/delivery_api/runtime_roles.py').read_bytes()
+    assert 'runtime_roles.py' in (context/'scripts/docker/Dockerfile.pg-smoke').read_text()
+    env={k:v for k,v in os.environ.items() if k not in ('DELIVERY_DATABASE_URL','DELIVERY_TEST_POSTGRES_DSN','DELIVERY_TEST_POSTGRES_URL')}
+    result=subprocess.run([sys.executable,str(context/'scripts/docker/owned-pg-smoke.py'),str(context),sys.executable,'-c',"print('MINIMAL-CONTEXT-PASSED')"],env=env,capture_output=True,text=True,timeout=45)
+    assert result.returncode==0,result.stdout+result.stderr
+    assert 'MINIMAL-CONTEXT-PASSED' in result.stdout

@@ -45,7 +45,7 @@ def env(tmp_path):
         if name == "delivery-api":
             (seed / "scripts" / "docker").mkdir(parents=True)
             shutil.copy(REPO / "scripts" / "docker" / "build-local-image.sh", seed / "scripts" / "docker" / "build-local-image.sh")
-            for relative in ('scripts/docker/smoke-local-image.sh','scripts/docker/Dockerfile.pg-smoke','scripts/docker/owned-pg-smoke.py','scripts/docker/system-pg-smoke.py','tests/pg_harness.py','tests/pg_guardian.py','supabase/migrations/20261030000000_test.sql'):
+            for relative in ('scripts/docker/smoke-local-image.sh','scripts/docker/smoke-context.py','scripts/docker/Dockerfile.pg-smoke','scripts/docker/owned-pg-smoke.py','scripts/docker/system-pg-smoke.py','tests/pg_harness.py','tests/pg_guardian.py','src/delivery_api/runtime_roles.py','supabase/migrations/20261030000000_test.sql'):
                 target=seed/relative;target.parent.mkdir(parents=True,exist_ok=True)
                 source=Path(__file__).resolve().parents[1]/relative
                 target.write_text(source.read_text() if source.exists() else '-- fixture migration\n')
@@ -141,6 +141,8 @@ def test_a_smoke_failure_prints_the_containers_own_reason(env):
     out = _run(api, e, FAKE_SMOKE_RC="1",
                FAKE_SMOKE_OUT="RuntimeError: entry exited early: [fail] engine-compatible: create_app is missing")
     assert "entry exited early" in out.stdout, out.stdout
+    summary=next(line for line in out.stdout.splitlines() if "ABORTED [SMOKE]" in line)
+    assert "engine-compatible: create_app is missing" in summary
     assert "exit code 1" in out.stdout, out.stdout
 
 

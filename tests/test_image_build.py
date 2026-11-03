@@ -68,7 +68,7 @@ def _setup(tmp_path, real_build=True):
     }
     # The real remote smoke now stages the owned-PG harness before invoking
     # smoke-local-image. Keep that source boundary real in the fake checkout.
-    for name in ('scripts/docker/smoke-local-image.sh','scripts/docker/Dockerfile.pg-smoke',
+    for name in ('scripts/docker/smoke-local-image.sh','scripts/docker/smoke-context.py','scripts/docker/Dockerfile.pg-smoke',
                  'scripts/docker/owned-pg-smoke.py','scripts/docker/system-pg-smoke.py',
                  'tests/pg_harness.py','tests/pg_guardian.py'):
         api_files[name]=ROOT/name

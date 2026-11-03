@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends postgresql \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/lib/postgresql/*/bin /opt/smoke-pg-bin
 ENV REQUI_SMOKE_PG_BIN=/opt/smoke-pg-bin
+COPY src/delivery_api/runtime_roles.py /smoke/src/delivery_api/
 COPY tests/pg_harness.py tests/pg_guardian.py /smoke/tests/
 COPY supabase/migrations/ /smoke/supabase/migrations/
 COPY scripts/docker/owned-pg-smoke.py scripts/docker/system-pg-smoke.py /smoke/
