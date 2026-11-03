@@ -1957,7 +1957,7 @@ FROM tasks t"""
                 'source_artifacts_deleted':False,'accepted_calls_may_bill':True}
 
     def owner_active_jobs(self,*,limit=50,before=None):
-        """Current owner only. Pending/running/paused are evidence, not proof of liveness."""
+        """Owner nonterminal workers and latest workers for active tasks; never proof of liveness."""
         import math
         if type(limit) is not int or not 1<=limit<=100:raise ValueError('limit must be between 1 and 100')
         params=[current_scope().owner_id]
@@ -1971,15 +1971,18 @@ FROM tasks t"""
             params.extend((before['updated_at'],before['job_id']))
         params.append(limit+1)
         rows=self._execute_native("SELECT j.job_id,j.task_id,j.session_id,j.generation,j.kind,j.state,j.created_at,j.updated_at,"
-            "t.title,t.state AS task_state,t.generation AS task_generation,t.stop_requested_at,t.deleted_at "
+            "t.title,t.state AS task_state,t.generation AS task_generation,t.stop_requested_at,t.deleted_at,t.is_test, "
+            "CASE WHEN j.state IN ('pending','running','paused') THEN 'nonterminal_worker' ELSE 'active_task_latest_job' END AS listed_for "
             "FROM worker_jobs j JOIN tasks t ON t.task_id=j.task_id AND t.owner_id=j.owner_id "
-            "WHERE j.owner_id=%s AND t.deleted_at IS NULL AND j.state IN ('pending','running','paused')"+cursor+
+            "WHERE j.owner_id=%s AND t.deleted_at IS NULL AND (j.state IN ('pending','running','paused') OR "
+            "(t.state IN ('running','waiting_gate','stop_requested') AND j.job_id=(SELECT latest.job_id FROM worker_jobs latest "
+            "WHERE latest.task_id=t.task_id AND latest.owner_id=t.owner_id ORDER BY latest.generation DESC,latest.created_at DESC,latest.job_id DESC LIMIT 1)))"+cursor+
             " ORDER BY j.updated_at DESC,j.job_id DESC LIMIT %s",tuple(params)).fetchall()
         page=[dict(row)|{'quiescence_verified':False,'stale_verified':False} for row in rows[:limit]]
         truncated=len(rows)>limit
         return {'scope':'current_authorized_workspace','owner_id':current_scope().owner_id,'jobs':page,
             'truncated':truncated,'limit':limit,'next_before':{'updated_at':page[-1]['updated_at'],'job_id':page[-1]['job_id']} if truncated else None,
-            'states_included':['pending','running','paused'],'mutations_available':False,'quiescence_verified':False}
+            'states_included':['pending','running','paused'],'active_task_latest_job_included':True,'mutations_available':False,'quiescence_verified':False}
 
     def operator_workspace_snapshot(self):
         """Read-only current-owner operations, never cross-tenant privilege."""
