@@ -34,6 +34,7 @@ def test_proxy_confirm_requires_same_origin_and_fixed_body():
     from delivery_api.backoffice import create_app
     calls=[]
     def upstream(request):
+        if request.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':True,'mode':'supabase','actor':'fixture@example.com'})
         calls.append(request);return httpx.Response(200,json={'hidden':True,'stop_requested':True,'accounting_retained':True})
     c=TestClient(create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream)))
     route='/api/operations/worker-jobs/job-1/stop'
@@ -125,6 +126,7 @@ def test_browser_confirm_sends_one_scoped_stop_and_refreshes(tmp_path,hide):
     from delivery_api.backoffice import create_app
     stopped=[False];calls=[]
     def upstream(request):
+        if request.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':True,'mode':'supabase','actor':'fixture@example.com'})
         if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{'debug.read':True,'logs.read':True}})
         calls.append(request)
         if request.method=='POST':

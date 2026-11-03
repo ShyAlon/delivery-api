@@ -11,9 +11,9 @@ import {mountRowMenu,statusPill,statePill} from '/assets/operator-ui.js';
 import {runAction} from '/assets/ui-action.js';
 import {clientReport,clientLog,setClientLogTransport,recordResponse} from '/assets/client-core.js';
 import {tableRow,tableCell,detailTable,fieldList,mountSort} from '/assets/ops-table.js';
-Page.mountFrame({headerClass:'operator-header'});
+
 setClientLogTransport(null);
-async function request(url,options={}){const began=performance.now();try{const response=await fetch(url,options);recordResponse(url,options.method||'GET',response,began);return response;}catch(error){clientLog('backoffice.network.error','Request failed',{method:options.method||'GET',endpoint:url});throw error;}}
+async function request(url,options={}){const began=performance.now();try{const response=await fetch(url,options);recordResponse(url,options.method||'GET',response,began);if(response.status===401)window.dispatchEvent(new CustomEvent('requi:signin-needed'));return response;}catch(error){clientLog('backoffice.network.error','Request failed',{method:options.method||'GET',endpoint:url});throw error;}}
 function integer(value){if(typeof value==='number'&&Number.isSafeInteger(value))return BigInt(value);if(typeof value==='string'&&/^-?(0|[1-9][0-9]*)$/.test(value))return BigInt(value);throw Error('Service returned an unverifiable numeric value.');}
 function credits(balance,scale){const b=integer(balance),s=integer(scale);if(s<=0n)throw Error('Service returned an invalid credit scale.');const sign=b<0n?'-':'',n=b<0n?-b:b;let digits=0,t=s;while(t>1n&&t%10n===0n){digits++;t/=10n;}if(t!==1n)return b.toString()+' / '+s.toString()+' credits (exact)';const frac=digits?String(n%s).padStart(digits,'0').replace(/0+$/,''):'';return sign+String(n/s)+(frac?'.'+frac:'')+' credits';}
 
@@ -71,7 +71,7 @@ document.querySelector('#debug-refresh').onclick=()=>{document.querySelector('#d
 document.querySelector('#debug-download').onclick=()=>{const text=clientReport('Back office').text,url=URL.createObjectURL(new Blob([text],{type:'text/plain'})),link=document.createElement('a');link.href=url;link.download='requi-backoffice-debug.txt';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 clientLog('backoffice.ready','Back office shared UI ready');
 
-for(const button of document.querySelectorAll('button[id]')){const handler=button.onclick;if(handler)button.onclick=()=>runAction('backoffice.'+button.id,button,()=>handler()).catch(error=>{failure(error);clientLog('backoffice.action.error','Action failed',{action:button.id});});}
+for(const button of document.querySelectorAll('main button[id]')){const handler=button.onclick;if(handler)button.onclick=event=>runAction('backoffice.'+button.id,button,()=>handler(event)).catch(error=>{failure(error);clientLog('backoffice.action.error','Action failed',{action:button.id});});}
 
 mountModelPins(request);
 

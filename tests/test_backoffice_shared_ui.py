@@ -11,6 +11,7 @@ from delivery_api.backoffice import create_app
 def ui():
     calls=[]
     def upstream(request):
+        if request.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':True,'mode':'supabase','actor':'fixture@example.com'})
         calls.append(request)
         if request.url.path=='/health':return httpx.Response(200,json={'repositories':{'delivery-api':'a'*40,'interview-engine':'b'*40},'total_spend_usd':'private'})
         if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{c:True for c in ('services.operate','logs.read','debug.read','sessions.read','analytics.read','usage.read','payments.read')}})
@@ -283,7 +284,7 @@ def test_module_revision_covers_every_shared_and_private_import():
     import re
     client=TestClient(create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(lambda r:httpx.Response(500))))
     shell=client.get('/').text
-    revision=re.search(r'backoffice.js\?v=([a-f0-9]+)',shell).group(1)
+    revision=re.search(r'auth.js\?v=([a-f0-9]+)',shell).group(1)
     for path in ('/backoffice-assets/backoffice.js','/backoffice-assets/audit.js','/backoffice-assets/model-pins.js','/assets/operator-ui.js','/assets/client-core.js'):
         text=client.get(path).text
         imports=re.findall(r"^\s*(?:import|export)\s+[^\n;]*?from\s*['\"]([^'\"]+)['\"]",text,re.M)

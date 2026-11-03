@@ -12,6 +12,7 @@ from test_postgres_store import A
 def test_active_jobs_proxy_is_read_only_and_preserves_exact_pagination():
     calls=[]
     def upstream(request):
+        if request.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':True,'mode':'supabase','actor':'fixture@example.com'})
         calls.append(request)
         return httpx.Response(200,json={'scope':'current_authorized_workspace','jobs':[],'truncated':False})
     c=TestClient(create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream)))
@@ -95,6 +96,7 @@ def test_backoffice_jobs_pixels_filter_pagination_refresh_and_revocation(tmp_pat
     from playwright.sync_api import sync_playwright
     calls=[];revoked=[False]
     def upstream(request):
+        if request.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':True,'mode':'supabase','actor':'fixture@example.com'})
         if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{'debug.read':True,'logs.read':True}})
         calls.append(request)
         if request.url.path!='/api/operations/active-jobs':return httpx.Response(403,json={'detail':'unavailable'})
@@ -141,7 +143,7 @@ def test_backoffice_jobs_pixels_filter_pagination_refresh_and_revocation(tmp_pat
             page.locator('#active-jobs-refresh').click()
             page.get_by_text('Meditator 7.5 / 77c30a258523',exact=True).wait_for()
             revoked[0]=True;page.locator('#active-jobs-refresh').click()
-            page.locator('#active-jobs-empty').filter(has_text='Sign in').wait_for()
+            page.locator('#authform').wait_for();assert not page.locator('#backoffice-workspace').is_visible()
             assert 'Meditator' not in page.locator('#active-jobs').inner_text()
             assert not errors
             assert all(r.method=='GET' for r in calls)
