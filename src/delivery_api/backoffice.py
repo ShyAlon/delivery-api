@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 ROUTES={'access':'/api/operator/backoffice-access','audit-events':'/api/operator/audit-events','active-jobs':'/api/operations/active-jobs','payment-journal':'/api/operator/payment-journal','payment-totals':'/api/operator/payment-totals','workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
     'operator-sessions':'/api/operator/sessions','operator-credits':'/api/operator/credits',
     'expense-totals':'/api/operator/expense-totals','vendor-status':'/api/operator/vendor-status','task-debug':'/api/operator/task-debug','task-logs':'/api/operator/task-logs','credit-account':'/api/operator/credit-account','task-usage':'/api/operator/task-usage',
-    'attempt-releases':'/api/admin/operations/attempt-releases','model-pins':'/api/operator/model-pins'}
+    'attempt-releases':'/api/admin/operations/attempt-releases','model-pins':'/api/operator/model-pins','acceptance-readiness':'acceptance-readiness'}
 QUERY_KEYS={'audit-events':{'before','limit','event'},'active-jobs':{'limit','before_updated_at','before_job_id'},'payment-journal':{'start_at','end_at','owner_id','limit','before_created_at','before_purchase_id'},'payment-totals':{'start_at','end_at','owner_id','limit'},'task-usage':{'task_id'},'credit-account':{'owner_id'},'task-logs':{'task_id','before_id','limit'},'task-debug':{'task_id'},'attempt-releases':{'limit'},'operator-sessions':{'limit','before_created_at','before_session_id'},
             'operator-credits':{'limit','after_owner'}}
 
@@ -68,6 +68,21 @@ def create_app(*,service_url,transport=None):
         if not headers:return JSONResponse({'detail':'Service API sign-in required'},status_code=401)
         try:
             async with httpx.AsyncClient(base_url=service_url,transport=transport,timeout=10,follow_redirects=False) as client:
+                if capability=='acceptance-readiness':
+                    from .acceptance_readiness import inspect
+                    paths=('/api/auth','/api/operations/test-tasks','/api/operator/model-pins')
+                    values={}
+                    for path in paths:
+                        response=await client.get(path,headers=headers)
+                        if path=='/api/operator/model-pins' and response.status_code!=200:
+                            return JSONResponse({'detail':'Reviewed model-pin access is required for acceptance readiness'},status_code=403,headers={'Cache-Control':'no-store'})
+                        if response.status_code==200 and len(response.content)<=1024*1024:values[path]=response.json()
+                    def read(method,path):
+                        if path not in values:raise ValueError('Readiness evidence unavailable')
+                        return values[path]
+                    result=inspect(read)
+                    return JSONResponse({'checks':result['checks'],'ready':result['ready'],
+                        'activation_enabled':False,'owner_only':True},headers={'Cache-Control':'no-store'})
                 async with client.stream('GET',target,headers=headers,params=query) as response:
                     body=bytearray()
                     async for chunk in response.aiter_bytes():

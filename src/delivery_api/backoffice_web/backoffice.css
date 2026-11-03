@@ -7,3 +7,5 @@
 .accounting-warning{padding:12px;border:1px solid #9c6418;background:#fff2cf;color:#684100;}
 
 .audit-dialog{max-width:850px;width:calc(100% - 40px);max-height:85vh;overflow:auto}.audit-dialog dd{white-space:pre-wrap;overflow-wrap:anywhere}#audit-panel tbody tr{cursor:pointer}#audit-panel tbody tr:focus{outline:2px solid #214e37}
+/* Readiness is a short checklist: keep every reason in the page's normal flow. */
+#acceptance-panel .scroll{max-height:none;overflow:visible}

@@ -58,6 +58,7 @@ mountTabs(document.querySelector('#backoffice-tabs'),document.querySelector('mai
  {id:'accounts',label:'Accounts',panels:['accounts-panel','global-sessions-panel']},
  {id:'spend',label:'Spend',panels:['expense-panel','releases-panel','vendor-panel']},
  {id:'model-pins',label:'Model pins',panels:['model-pins-panel']},
+ {id:'acceptance',label:'Acceptance readiness',panels:['acceptance-panel']},
  {id:'payments',label:'Payments',panels:['payments-panel']},
  {id:'audit',label:'Audit',panels:['audit-panel']},
  {id:'debug',label:'Debug',panels:['debug-panel']}
@@ -71,3 +72,15 @@ for(const button of document.querySelectorAll('button[id]')){const handler=butto
 mountModelPins(request);
 
 mountAudit({read,write:async(path,body)=>{const response=await request(path,{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let out;try{out=await response.json()}catch{throw Error('Resolution unverified. Refresh audit before retrying.')}if(!response.ok)throw Error(typeof out.detail==='string'?out.detail:'Resolution failed. Refresh audit.');return out},fieldList});
+
+async function acceptanceReadiness(){
+ const table=$('acceptance-checks'),body=table.querySelector('tbody');body.replaceChildren();
+ $('acceptance-status').textContent='Checking owner readiness...';
+ try{const data=await read('acceptance-readiness');
+  if(data.owner_only!==true||data.activation_enabled!==false||!Array.isArray(data.checks))throw Error('Readiness evidence is unverified. Refresh and check the service.');
+  for(const row of data.checks)body.append(tableRow(table,[row.check,row.status,row.reason||'Verified by current read.']));
+  $('acceptance-status').textContent=data.ready?'Read checks pass. Run approval is still separate.':'Not ready. Review the reasons below; nothing was changed.';
+ }catch(error){failure(error);$('acceptance-status').textContent=error.message;}
+}
+$('acceptance-refresh').addEventListener('click',()=>runAction('backoffice.acceptance.refresh',$('acceptance-refresh'),acceptanceReadiness));
+acceptanceReadiness();

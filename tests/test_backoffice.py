@@ -109,3 +109,27 @@ def test_attempt_releases_proxy_preserves_authority_and_rejects_unknown_keys():
  assert c.get('/api/operations/attempt-releases?raw=true',headers=h).status_code==422
  assert c.get('/api/operations/attempt-releases').status_code==401
  assert len(calls)==1
+
+
+def test_acceptance_readiness_reuses_shared_checks_and_exposes_no_private_ids():
+ calls=[]
+ def upstream(request):
+  calls.append((request.method,request.url.path))
+  if request.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':True,'mode':'supabase'})
+  if request.url.path=='/api/operations/test-tasks':return httpx.Response(200,json={'tasks':[{'task_id':'private-task-id'}]})
+  return httpx.Response(200,json={'pins':[],'history':[{'operator_subject':'private-owner-id'}]})
+ c=TestClient(create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream)))
+ assert c.get('/api/operations/acceptance-readiness').status_code==401
+ response=c.get('/api/operations/acceptance-readiness',headers={'Authorization':'Bearer fixture'})
+ assert response.status_code==200 and response.headers['cache-control']=='no-store'
+ body=response.json();assert body['owner_only'] and not body['activation_enabled'] and not body['ready']
+ assert 'private-' not in response.text
+ assert {x['check'] for x in body['checks']}=={'session','target','token/session','marker migration','default pin','ceiling','run approval'}
+ assert all(method=='GET' for method,path in calls)
+ assert c.post('/api/operations/acceptance-readiness',headers={'Authorization':'Bearer fixture'}).status_code==405
+
+
+def test_acceptance_readiness_requires_reviewed_operator_access():
+ c=TestClient(create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(lambda request:httpx.Response(403,json={'detail':'private sql'}))))
+ r=c.get('/api/operations/acceptance-readiness',headers={'Authorization':'Bearer fixture'})
+ assert r.status_code==403 and 'private sql' not in r.text

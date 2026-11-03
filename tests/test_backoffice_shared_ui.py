@@ -53,8 +53,8 @@ def test_tabs_keyboard_context_menu_and_local_debug(ui):
         browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page(viewport={'width':1280,'height':1000},extra_http_headers={'Authorization':'Bearer fake'})
         errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
         page.goto(url);row=page.locator('#active-jobs tbody tr').first;row.wait_for()
-        assert page.get_by_role('tab').all_text_contents()==['Worker Jobs','Workspace','Accounts','Spend','Model pins','Payments','Audit','Debug']
-        assert page.locator('[role=tabpanel]').count()==13
+        assert page.get_by_role('tab').all_text_contents()==['Worker Jobs','Workspace','Accounts','Spend','Model pins','Acceptance readiness','Payments','Audit','Debug']
+        assert page.locator('[role=tabpanel]').count()==14
         for tab,panel in [('Workspace','workspace-panels'),('Accounts','accounts-panel'),('Spend','expense-panel'),('Payments','payments-panel'),('Debug','debug-panel'),('Worker Jobs','active-jobs-panel')]:
             page.get_by_role('tab',name=tab,exact=True).click();expect(page.locator('#'+panel)).to_be_visible()
             expect(page.get_by_role('tab',name=tab,exact=True)).to_have_attribute('aria-selected','true')
@@ -132,4 +132,31 @@ def test_audit_table_dialog_binary_hide_and_cross_owner_guard(ui):
         expect(page.locator('.audit-dialog [role=status]')).to_contain_text('Success:')
         assert mutations==[{'action':'hide','confirm':True,'expected_attempt_state':'uncertain'}]
         page.screenshot(path=str(_EVIDENCE/'backoffice-audit-resolution.png'),full_page=True)
+        browser.close()
+
+
+def test_acceptance_checklist_is_read_only_and_readable_on_phone(ui):
+    from playwright.sync_api import sync_playwright,expect
+    url,calls=ui
+    with sync_playwright() as p:
+        browser=p.chromium.launch(args=['--no-sandbox'])
+        page=browser.new_page(viewport={'width':1280,'height':950},extra_http_headers={'Authorization':'Bearer fake'})
+        fixture={'owner_only':True,'activation_enabled':False,'ready':False,'checks':[
+            {'check':name,'status':'fail','reason':reason} for name,reason in [
+            ('target','Target evidence unavailable.'),('session','Sign in as the operator.'),
+            ('marker migration','Apply the owner test-task migration.'),('default pin','Review the default DeepSeek pin.'),
+            ('ceiling','Set a positive ceiling at or below the approved run amount.'),('token/session','Current owner session is required.')]]}
+        page.route('**/api/operations/acceptance-readiness',lambda route:route.fulfill(json=fixture))
+        page.goto(url+'/#acceptance')
+        expect(page.locator('#acceptance-status')).to_contain_text('Not ready')
+        assert page.locator('#acceptance-checks tbody tr').count()==6
+        expect(page.locator('#acceptance-panel')).to_contain_text('Customers do not run this')
+        page.screenshot(path=str(_EVIDENCE/'acceptance-readiness-desktop.png'),full_page=True)
+        page.set_viewport_size({'width':390,'height':844})
+        page.evaluate('scrollTo(0,0)');page.wait_for_timeout(200)
+        page.screenshot(path=str(_EVIDENCE/'acceptance-readiness-mobile.png'),full_page=True)
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        page.locator('#acceptance-refresh').click()
+        expect(page.locator('#acceptance-status')).to_contain_text('Not ready')
+        assert not [r for r in calls if r.method=='POST']
         browser.close()
