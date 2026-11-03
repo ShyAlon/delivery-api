@@ -15,7 +15,7 @@ from delivery_api.tenancy import tenant_context
 
 
 @pytest.mark.parametrize('paid',[False,True])
-def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtime_environment,monkeypatch,tmp_path,paid):
+def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtime_environment,monkeypatch,tmp_path,paid,owner_acceptance=False):
     # Missing producer packages are errors, not a silently skipped acceptance.
     import interview_engine, spec_generator
     from delivery_api import app as module,cloud_runtime
@@ -27,6 +27,7 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
             self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
         def do_POST(self):
             payload=json.loads(self.rfile.read(int(self.headers['content-length'])));calls.append(payload)
+            if owner_acceptance and len(calls)==1:time.sleep(5)
             content=({'is_web_app':True,'archetype':'saas_crud','confidence':0.9,'reason':'fake web app'}
                      if 'is_web_app' in json.dumps(payload) else
                      {'question':'What does a booking look like for your customers?','covered':[],'thin':[],'skipped':[],'complete':False})
@@ -39,7 +40,10 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
         def log_message(self,*a):pass
     vendor=ThreadingHTTPServer(('127.0.0.1',0),Provider)
     threading.Thread(target=vendor.serve_forever,daemon=True).start()
+    import os
+    browser_cache=os.environ.get('PLAYWRIGHT_BROWSERS_PATH') or str(Path.home()/'.cache/ms-playwright')
     env=pg_runtime_environment()
+    if owner_acceptance:monkeypatch.setenv('PLAYWRIGHT_BROWSERS_PATH',browser_cache)
     selected_route='ollama';selected_model=MODEL
     if paid:
         # Vendor/config fixtures replace only external pricing/balance/HTTP,
@@ -101,10 +105,19 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
                 c.execute('DELETE FROM model_pin_heads');c.execute('DELETE FROM model_pin_revisions')
                 c.execute('INSERT INTO model_pin_revisions(revision,provider,model,payload,fetched_at,operator_subject,reason) VALUES(%s,%s,%s,%s::jsonb,%s,%s,%s)',(rev,'deepseek',selected_model,json.dumps(value),snap['fetched_at'],workspace.scope.owner_id,'HTTP acceptance reviewed pin'))
                 c.execute('INSERT INTO model_pin_heads(provider,model,revision,is_default) VALUES(%s,%s,%s,true)',('deepseek',selected_model,rev))
+        if owner_acceptance:
+            with workspace.admin() as c:
+                c.execute('DELETE FROM operator_principals')
+                c.execute("INSERT INTO operator_principals(subject,registry_version,capabilities,enabled) VALUES(%s,'owner-acceptance',ARRAY['sessions.operate'],true)",(workspace.scope.owner_id,))
         middleware=pg_task_app(workspace,lifespan=True)
         with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
         server=uvicorn.Server(uvicorn.Config(middleware,host='127.0.0.1',port=port,lifespan='on',log_level='warning',access_log=False))
-        thread=threading.Thread(target=server.run);thread.start()
+        import asyncio
+        loops=[]
+        async def serve():
+            loops.append(asyncio.get_running_loop())
+            await server.serve()
+        thread=threading.Thread(target=lambda:asyncio.run(serve()));thread.start()
         try:
             for _ in range(100):
                 if server.started:break
@@ -112,6 +125,45 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
                 time.sleep(.05)
             assert server.started and cloud_runtime.installed(),cloud_runtime.failure()
             with httpx.Client(base_url=f'http://127.0.0.1:{port}',headers=workspace.headers,timeout=20) as client:
+                if owner_acceptance:
+                    spec=importlib.util.spec_from_file_location('owner_acceptance',Path(__file__).parents[1]/'scripts/owner/deepseek-acceptance.py')
+                    owner_script=importlib.util.module_from_spec(spec);spec.loader.exec_module(owner_script)
+                    api=owner_script.API(client)
+                    # Use real task/API/producers/PG and only replace the operator
+                    # aggregate read (separately tested under its restricted role).
+                    def owner_api(method,path,body=None,**kwargs):
+                        if path.startswith('/api/operator/task-usage?'):
+                            return {'complete':True,'attempts':len(calls)}
+                        return api(method,path,body,**kwargs)
+                    seen=[];observed={'live':False,'cost':False}
+                    from playwright.sync_api import sync_playwright
+                    with sync_playwright() as pw:
+                        browser=pw.chromium.launch(headless=True)
+                        context=browser.new_context(extra_http_headers=workspace.headers)
+                        page=context.new_page()
+                        def observe(task):
+                            seen.append(task)
+                            url=f'http://127.0.0.1:{port}/tasks/'+task['task_id']+'/view'
+                            if page.url!=url:page.goto(url)
+                            if task['control_snapshot']['mode']=='working' and any(e.get('payload',{}).get('source')=='interview' for e in task.get('events',[])):
+                                line=page.locator('.phase-list-primary > .phase').first.locator('.phase-current-progress')
+                                if line.is_visible() and line.inner_text().strip():
+                                    observed['live']=True
+                                    from test_artifacts import evidence_path
+                                    page.screenshot(path=evidence_path('owner-acceptance-live-start.png'),full_page=True)
+                            header=page.locator('#sessioncost')
+                            if header.is_visible() and header.inner_text().strip():observed['cost']=True
+                        tid,task,cost,usage=owner_script.journey(owner_api,observe=observe)
+                        page.reload()
+                        from playwright.sync_api import expect
+                        expect(page.locator('#currentquestion p')).to_contain_text(task['control_snapshot']['prompt'],timeout=15000)
+                        browser.close()
+                    assert observed['live'] and observed['cost'],observed
+                    assert cost['evidence']['complete'] and usage['provider_expense']['complete']
+                    assert any(e.get('kind')=='progress' for t in seen for e in t.get('events',[]))
+                    out=api('POST','/api/operations/test-tasks/'+tid+'/purge',{'confirm':True})
+                    assert out['purged'] and out['accounting_retained']
+                    return
                 body={'title':'Acceptance recycled name','brief':'A booking app for a small salon'}
                 first=client.post('/api/tasks',json=body);assert first.status_code==201,first.text
                 tid=first.json()['task_id']
@@ -140,5 +192,8 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
                     balance=c.execute('SELECT balance_units FROM credit_accounts WHERE owner_id=%s',(workspace.scope.owner_id,)).fetchone()[0]
                     assert balance<100000000000 if paid else balance==0
         finally:
+            def stop_streams():
+                for stop in tuple(module._stream_shutdown_events):stop.set()
+            if loops:loops[0].call_soon_threadsafe(stop_streams)
             server.should_exit=True;thread.join(10);vendor.shutdown();vendor.server_close()
             assert not thread.is_alive()

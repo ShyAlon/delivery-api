@@ -752,6 +752,22 @@ FROM tasks t"""
             raise TenantAccessDenied('reviewed test owner required')
         return [dict(row) for row in self._execute_native('SELECT task_id,state,is_test,test_purged_at,created_at FROM tasks WHERE is_test ORDER BY created_at DESC LIMIT 100').fetchall()]
 
+    def test_task_expense(self,task_id):
+        if not self._execute_native('SELECT public.requi_test_task_owner() AS allowed').fetchone()['allowed']:
+            raise TenantAccessDenied('reviewed test owner required')
+        task=self.task(task_id)
+        if not task or not task['is_test']:raise KeyError('owned test task required')
+        rows=self._execute_native("""SELECT p.state,p.expense_actual,p.quote->>'expense_units_per_usd' AS scale
+            FROM provider_attempts p JOIN worker_jobs j USING(job_id) WHERE j.task_id=%s""",(task_id,)).fetchall()
+        from decimal import Decimal
+        total=Decimal(0);complete=bool(rows)
+        for row in rows:
+            if row['state']=='cancelled':continue
+            if row['state']!='settled' or row['expense_actual'] is None or not row['scale'] or not row['scale'].isdigit() or int(row['scale'])<=0:
+                complete=False
+            else:total+=Decimal(row['expense_actual'])/Decimal(row['scale'])
+        return {'provider_usd':str(total) if complete else None,'complete':complete,'attempts':len(rows),'test':True}
+
     def purge_test_task(self,task_id,*,confirm=False):
         row=self._execute_native('SELECT public.requi_purge_test_task(%s,%s) AS result',(task_id,confirm),write=True).fetchone()
         return row['result']
@@ -2341,6 +2357,7 @@ PG_OPERATIONS = (
     'list_tasks',
     'list_test_tasks',
     'purge_test_task',
+    'test_task_expense',
     'manifest_artifacts',
     'manifest_ready',
     'manifest_revision',
