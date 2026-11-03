@@ -204,3 +204,104 @@ def test_every_page_shares_shell_and_mobile_table_cells(ui):
         assert not errors
         assert not [request for request in calls if request.method=='POST']
         browser.close()
+
+
+def test_static_modules_always_revalidate_with_the_current_shell():
+    client=TestClient(create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(lambda r:httpx.Response(500))))
+    for path in ('/assets/operator-ui.js','/backoffice-assets/audit.js'):
+        response=client.get(path)
+        assert response.headers.get('cache-control')=='no-store',path
+    assert "img-src 'self' data:;" in client.get('/').headers['content-security-policy']
+
+
+def test_loading_and_loaded_use_the_same_shared_tabs(ui):
+    from playwright.sync_api import sync_playwright,expect
+    url,calls=ui
+    with sync_playwright() as p:
+        browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page(viewport={'width':1280,'height':950},extra_http_headers={'Authorization':'Bearer fake'})
+        pending=[]
+        page.route('**/api/operations/access',lambda route:pending.append(route))
+        page.goto(url+'/#acceptance',wait_until='domcontentloaded')
+        expect(page.get_by_role('tab')).to_have_count(9,timeout=2000)
+        expect(page.get_by_role('tab',name='Acceptance readiness',exact=True)).to_have_attribute('aria-selected','true')
+        expect(page.locator('#acceptance-panel')).to_be_visible()
+        tabs=page.get_by_role('tab').all_text_contents()
+        page.evaluate("window.initialTab=document.getElementById('tab-acceptance')")
+        page.screenshot(path=str(_EVIDENCE/'backoffice-loading-tabs.png'),full_page=True)
+        assert pending
+        pending[0].continue_()
+        page.locator('#active-jobs tbody tr').first.wait_for(state='attached')
+        assert page.get_by_role('tab').all_text_contents()==tabs
+        assert page.evaluate("initialTab===document.getElementById('tab-acceptance')")
+        browser.close()
+
+
+def test_each_page_boots_without_module_or_console_errors(ui):
+    from playwright.sync_api import sync_playwright,expect
+    url,calls=ui
+    with sync_playwright() as p:
+        browser=p.chromium.launch(args=['--no-sandbox'])
+        for name,hash in [('Worker Jobs','jobs'),('Workspace','workspace'),('Accounts','accounts'),('Spend','spend'),('Model pins','model-pins'),('Acceptance readiness','acceptance'),('Payments','payments'),('Audit','audit'),('Debug','debug')]:
+            page=browser.new_page(extra_http_headers={'Authorization':'Bearer fake'})
+            errors=[];violations=[]
+            page.on('pageerror',lambda error:errors.append(str(error)))
+            page.on('console',lambda message: errors.append(message.text) if message.type=='error' else None)
+            # API fixtures isolate expected permission failures; resource console errors remain failures.
+            page.route('**/api/operations/**',lambda route:route.fulfill(status=200,json={'capabilities':{},'pins':[],'events':[],'jobs':[],'payments':[],'groups':[]}))
+            page.add_init_script("window.cspViolations=[];document.addEventListener('securitypolicyviolation',e=>cspViolations.push(e.violatedDirective+' '+e.blockedURI))")
+            page.goto(url+'/#'+hash)
+            expect(page.get_by_role('tab',name=name,exact=True)).to_have_attribute('aria-selected','true')
+            page.wait_for_timeout(150)
+            violations=page.evaluate('cspViolations')
+            assert not errors,(hash,errors)
+            assert not violations,(hash,violations)
+            page.close()
+        browser.close()
+
+
+def test_fresh_shell_bypasses_unversioned_old_shared_module(ui):
+    from playwright.sync_api import sync_playwright,expect
+    import re
+    url,calls=ui
+    with sync_playwright() as p:
+        browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page(extra_http_headers={'Authorization':'Bearer fake'})
+        stale=[];errors=[]
+        # Simulate a previously cached pre-statePill body at the old URL. A
+        # revision must travel through every importer, not only the entrypoint.
+        def old_module(route):
+            stale.append(route.request.url)
+            route.fulfill(content_type='text/javascript',body='export function mountRowMenu(){};export function statusPill(){}')
+        page.route(re.compile(r'/assets/operator-ui\.js$'),old_module)
+        page.on('pageerror',lambda error:errors.append(str(error)))
+        page.goto(url+'/#audit')
+        expect(page.get_by_role('tab',name='Audit',exact=True)).to_have_attribute('aria-selected','true')
+        assert not stale and not errors
+        browser.close()
+
+
+def test_module_revision_covers_every_shared_and_private_import():
+    import re
+    client=TestClient(create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(lambda r:httpx.Response(500))))
+    shell=client.get('/').text
+    revision=re.search(r'backoffice.js\?v=([a-f0-9]+)',shell).group(1)
+    for path in ('/backoffice-assets/backoffice.js','/backoffice-assets/audit.js','/backoffice-assets/model-pins.js','/assets/operator-ui.js','/assets/client-core.js'):
+        text=client.get(path).text
+        imports=re.findall(r"^\s*(?:import|export)\s+[^\n;]*?from\s*['\"]([^'\"]+)['\"]",text,re.M)
+        assert imports,path
+        assert all(value.endswith('?v='+revision) for value in imports),(path,imports)
+        assert client.get(path,headers={'If-None-Match':'*'}).status_code==200
+
+
+def test_loading_shell_is_not_a_separate_page_implementation():
+    from pathlib import Path
+    root=Path(__file__).parents[1]/'src/delivery_api/backoffice_web'
+    source=(root/'backoffice.js').read_text()
+    assert source.count('mountTabs(')==1
+    assert source.index('mountTabs(')<source.index('await accessBoundary(')
+    assert "from '/assets/operator-tabs.js'" in source
+    assert source.count("document.querySelector('#backoffice-tabs')")==1
+    for path in root.glob('*.js'):
+        assert "createElement('nav')" not in path.read_text(),path
+    shell=(root/'index.html').read_text()
+    assert shell.count('id="backoffice-tabs"')==1
+    assert 'loading-shell' not in shell
