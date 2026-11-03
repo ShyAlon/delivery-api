@@ -97,7 +97,7 @@ def http_blocker(response):
 def failure_report(error,tid,evidence):
     status=getattr(error,'http_status',None)
     creation_refused=not tid and getattr(error,'operation',None)=='POST /api/operations/test-tasks' and status in (400,401,403,404,422)
-    return {'failed':True,'task_id':tid,'data_retained':bool(tid),
+    return {'failed':True,'task_id':tid,'data_retained':True if tid else False if creation_refused else None,
         'task_creation':'confirmed' if tid else 'refused' if creation_refused else 'unconfirmed',
         'paid_start':getattr(error,'paid_start','not_sent' if not tid else 'unconfirmed'),
         'debug_zip':evidence,'error_class':type(error).__name__,

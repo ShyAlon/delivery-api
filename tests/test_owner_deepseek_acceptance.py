@@ -222,6 +222,7 @@ def test_unknown_failure_never_echoes_private_error_or_claims_no_writes():
     report=a.failure_report(RuntimeError('private-dsn-secret'),None,None)
     assert 'private-dsn-secret' not in str(report)
     assert report['task_creation']=='unconfirmed' and report['paid_start']=='not_sent'
+    assert report['data_retained'] is None
     assert report['reason'] and report['next']
 
 
@@ -249,3 +250,22 @@ def test_unrecognized_server_content_is_not_echoed(status,gate):
 def test_ambiguous_creation_failure_is_not_reported_as_no_task():
     error=a.Refused('unknown outcome');error.http_status=500;error.operation='POST /api/operations/test-tasks'
     assert a.failure_report(error,None,None)['task_creation']=='unconfirmed'
+
+
+def test_final_abort_line_repeats_observed_status_gate_and_reason(monkeypatch,capsys,tmp_path):
+    import httpx
+    monkeypatch.setattr(a,'load_settings',lambda *args:(object(),{'DELIVERY_BASE_URL':'http://127.0.0.1:8001'}))
+    monkeypatch.setattr(a,'identify',lambda *args,**kwargs:{})
+    monkeypatch.setattr(a,'authenticate',lambda *args:{})
+    monkeypatch.setattr(a,'preflight',lambda *args:(PIN,{'model':'fixture'}))
+    def refused(*args,**kwargs):
+        error=a.Refused('HTTP refusal');error.http_status=403;error.operation='POST /api/operations/test-tasks'
+        error.gate='same_origin';error.reason='Authenticated state changes require a same-origin request.'
+        error.next_step='Use the updated acceptance script.';error.paid_start='not_sent';raise error
+    monkeypatch.setattr(a,'journey',refused)
+    with pytest.raises(a.Refused,match='HTTP 403 \\[same_origin\\]') as caught:
+        a.main(['--execute','--output',str(tmp_path)])
+    assert 'same-origin request' in str(caught.value)
+    output=capsys.readouterr().err
+    assert '"http_status": 403' in output and '"paid_start": "not_sent"' in output
+    assert '"task_creation": "refused"' in output
