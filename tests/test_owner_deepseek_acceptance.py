@@ -311,3 +311,42 @@ def test_interrupt_retains_task_id_and_warns_server_was_not_stopped():
     assert report['gate']=='owner_interrupted' and 'not stopped' in report['reason']
     assert 'confirm Stop' in report['next']
     assert not any('purge' in p or p.endswith('/stop') for m,p,b in calls)
+
+
+def test_poll_read_timeout_is_unknown_then_retried_without_repeating_mutation(monkeypatch):
+    import httpx
+    calls=[];reads=[0]
+    def handle(request):
+        calls.append((request.method,request.url.path))
+        reads[0]+=1
+        if reads[0]==1:raise httpx.ReadTimeout('private-host-secret')
+        return httpx.Response(200,json={'task_id':'t','control_snapshot':{'mode':'waiting_input','kind':'text','prompt':'fixture','input_id':'q'}})
+    monkeypatch.setattr(a.time,'sleep',lambda n:None)
+    with httpx.Client(base_url='http://fixture.invalid',transport=httpx.MockTransport(handle)) as client:
+        assert a.wait_question(a.API(client),'t',timeout=10)['task_id']=='t'
+    assert calls==[('GET','/api/tasks/t')]*2
+
+
+def test_answer_transport_timeout_names_operation_and_never_replays():
+    import httpx
+    calls=[]
+    def handle(request):
+        calls.append(request.method)
+        raise httpx.ReadTimeout('private-host-token')
+    with httpx.Client(base_url='http://fixture.invalid',transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(a.TransportUnavailable) as caught:a.API(client)('POST','/api/tasks/t/answer',{})
+    report=a.failure_report(caught.value,'t',None)
+    assert report['operation']=='POST /api/tasks/t/answer' and report['timeout_seconds']==90
+    assert report['transport_class']=='ReadTimeout' and report['gate']=='transport_unknown'
+    assert 'private-host-token' not in str(report) and calls==['POST']
+
+
+def test_transport_retries_do_not_extend_question_deadline(monkeypatch):
+    import httpx
+    clock=[0];calls=[]
+    monkeypatch.setattr(a.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(a.time,'sleep',lambda n:clock.__setitem__(0,clock[0]+n))
+    def handle(request):calls.append(request.method);raise httpx.ReadTimeout('private')
+    with httpx.Client(base_url='http://fixture.invalid',transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(a.Refused,match='within 3 seconds'):a.wait_question(a.API(client),'t',timeout=3)
+    assert calls==['GET','GET'] and clock[0]==4

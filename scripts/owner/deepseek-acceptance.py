@@ -18,6 +18,8 @@ ANSWER='I am the only tutor and user. I create student records with a name and e
 
 class Refused(RuntimeError):pass
 
+class TransportUnavailable(Refused):pass
+
 
 def positive(value):
     try:n=Decimal(str(value))
@@ -69,6 +71,8 @@ class Progress:
         with self.lock:self.stage=stage;self.limit=limit;self.stage_started=self.clock();self.emit()
     def task(self,tid,base):
         self.write('Acceptance test task: '+tid+'; open '+base+'/tasks/'+tid+'/view. Closing this script does not Stop server work.',flush=True)
+    def note(self,message):
+        with self.lock:self.write('Acceptance: '+message+'; elapsed '+str(int(self.clock()-self.started))+'s',flush=True)
     def state(self,task):
         mode=task.get('control_snapshot',{}).get('mode')
         if mode in ('working','waiting_input','failed','completed'):
@@ -85,17 +89,26 @@ class QuietProgress:
     def set(self,*args):pass
     def task(self,*args):pass
     def state(self,*args):pass
+    def note(self,*args):pass
 
 
 class API:
     def __init__(self,client):self.client=client
-    def __call__(self,method,path,body=None,*,raw=False):
+    def __call__(self,method,path,body=None,*,raw=False,timeout_seconds=90):
         # A normal browser session is cookie-authenticated. Preserve the same
         # Origin proof the browser sends, without weakening the server guard.
         headers={}
         if method.upper() not in ('GET','HEAD','OPTIONS'):
             headers['Origin']=str(self.client.base_url).rstrip('/')
-        response=self.client.request(method,path,json=body,timeout=90,headers=headers)
+        import httpx
+        try:response=self.client.request(method,path,json=body,timeout=timeout_seconds,headers=headers)
+        except httpx.TransportError as cause:
+            error=TransportUnavailable('Transport response unavailable; request outcome is unknown')
+            error.operation=method+' '+path.split('?')[0];error.timeout_seconds=timeout_seconds
+            error.transport_class=type(cause).__name__;error.gate='transport_unknown'
+            error.reason=error.operation+' did not return a confirmed response ('+type(cause).__name__+', per-request timeout '+str(timeout_seconds)+'s).'
+            error.next_step='Do not repeat a state-changing request. Inspect this task and server evidence; local timeout does not Stop server work.'
+            raise error from None
         if response.status_code>=300:
             # Never echo raw bodies, JWTs, SQL or user content to the terminal.
             error=Refused(f'{method} {path.split("?")[0]} returned HTTP {response.status_code}; review Debug evidence and server prerequisites')
@@ -140,6 +153,7 @@ def failure_report(error,tid,evidence):
         'paid_start':getattr(error,'paid_start','not_sent' if not tid else 'unconfirmed'),
         'debug_zip':evidence,'error_class':type(error).__name__,
         'operation':getattr(error,'operation',None),'http_status':status,
+        'timeout_seconds':getattr(error,'timeout_seconds',None),'transport_class':getattr(error,'transport_class',None),
         'gate':getattr(error,'gate','acceptance_check' if isinstance(error,Refused) else 'unexpected_failure'),
         'reason':getattr(error,'reason',str(error) if isinstance(error,Refused) else 'The acceptance check stopped unexpectedly; private exception details were not printed.'),
         'next':getattr(error,'next_step','Inspect retained test and target Debug/server evidence before retrying. No purge or automatic retry was attempted.')}
@@ -149,7 +163,14 @@ def wait_question(api,tid,*,after=None,timeout=900,observe=lambda value:None,pro
     progress.set('Waiting for '+('first' if after is None else 'next')+' text question; polling every 2s',timeout)
     deadline=time.monotonic()+timeout
     while time.monotonic()<deadline:
-        task=api('GET','/api/tasks/'+tid);progress.state(task);observe(task)
+        try:
+            task=api('GET','/api/tasks/'+tid,timeout_seconds=max(1,min(90,int(deadline-time.monotonic())))) if isinstance(api,API) else api('GET','/api/tasks/'+tid)
+        except TransportUnavailable as error:
+            # Only this idempotent GET can be repeated. The original question
+            # deadline is never extended and no Start/answer is replayed.
+            progress.note('Task poll response unavailable; server state unknown; retrying GET only within the original deadline')
+            time.sleep(2);continue
+        progress.state(task);progress.note('Read-only task poll completed');observe(task)
         control=task.get('control_snapshot',{})
         if task.get('state')=='failed' or control.get('mode')=='failed':raise Refused('The real Start/answer failed; test data retained')
         if control.get('mode')=='waiting_input' and control.get('kind')=='text' and control.get('prompt'):
@@ -281,10 +302,14 @@ def main(argv=None):
                     nonlocal tid
                     tid=task['task_id']
                     page=page_ref.get('page')
-                    if page and page.url!=base+'/tasks/'+tid+'/view':page.goto(base+'/tasks/'+tid+'/view')
+                    if page and page.url!=base+'/tasks/'+tid+'/view':
+                        progress.note('Hidden browser navigating to the test task; navigation timeout 30s')
+                        page.goto(base+'/tasks/'+tid+'/view')
+                        progress.note('Hidden browser task navigation complete')
                     # Actual persisted child stage data, never synthetic progress.
                     if task.get('control_snapshot',{}).get('mode')=='working' and any(e.get('phase_key')=='intent' and e.get('kind')=='progress' and e.get('payload',{}).get('source')=='interview' for e in task.get('events',[])):
                         if page and page.locator('.phase-list-primary > .phase').first.locator('.phase-current-progress').is_visible():live['seen']=True
+                    progress.note('Hidden browser checking visible progress and cost; no clicks or answers are sent by this browser')
                     if page and page.locator('#sessioncost').count() and page.locator('#sessioncost').is_visible() and page.locator('#sessioncost').inner_text().strip():cost_seen['seen']=True
                 progress.set('Opening the headless UI verification browser; launch timeout 30s, no human input needed')
                 with sync_playwright() as pw:
@@ -298,7 +323,9 @@ def main(argv=None):
                     if not live['seen'] or not cost_seen['seen']:raise Refused('Live Start progress or visible cost was not proven; test retained')
                     # The actual browser must show the current question before cleanup.
                     from playwright.sync_api import expect
+                    progress.note('Hidden browser waiting for the current question text; timeout 15s')
                     expect(page.locator('#currentquestion p')).to_contain_text(task['control_snapshot']['prompt'],timeout=15000)
+                    progress.note('Hidden browser current question confirmed; closing verification browser')
                     browser.close()
                 progress.set('Purging successful test content; accounting stays retained',90)
                 api('POST','/api/operations/test-tasks/'+tid+'/purge',{'confirm':True})
