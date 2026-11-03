@@ -4,9 +4,28 @@ The SDK body crosses the private broker; its headers and credentials do not.
 Reconstruct the supported protocol here, never from child-supplied headers.
 """
 import json
+import math
+import os
 import httpx
 
 MAX_RESPONSE=8*1024*1024
+
+
+def provider_timeout(*,stream=False):
+    """Trusted parent phase budgets, not a wall-clock/retry guarantee.
+
+    Match the existing model guard defaults. Adaptive child deadlines are not
+    accepted as authority; the parent owns socket limits and never retries.
+    """
+    def seconds(name,default):
+        try:value=float(os.environ.get(name,str(default)))
+        except (TypeError,ValueError):raise ValueError(f'{name} must be a finite positive number of seconds') from None
+        if not math.isfinite(value) or value<=0:
+            raise ValueError(f'{name} must be a finite positive number of seconds')
+        return value
+    call=seconds('VMODEL_LLM_CALL_TIMEOUT_S',600)
+    stall=seconds('VMODEL_LLM_STALL_TIMEOUT_S',180)
+    return httpx.Timeout(call,read=min(call,stall) if stream else call)
 
 
 class ProviderHTTPError(RuntimeError):
@@ -28,7 +47,7 @@ class ParentProviderHTTP:
         headers=httpx.Headers(self.headers)
         headers['Content-Type']='application/json'
         headers['Accept']='text/event-stream' if stream else 'application/json'
-        request=self.client.build_request('POST',self.endpoint,content=raw,headers=headers)
+        request=self.client.build_request('POST',self.endpoint,content=raw,headers=headers,timeout=provider_timeout(stream=stream))
         response=self.client.send(request,stream=True,follow_redirects=False)
         try:
             body=bytearray()
