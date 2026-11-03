@@ -79,7 +79,9 @@ MIGRATIONS={
  '20261102080000_backoffice_audit_view.sql':('audit-policy:operator_curated_audit_read',),
  '20261102220000_owner_test_tasks.sql':('signature:requi_test_task_owner()','signature:requi_purge_test_task(text,boolean)','test-marker:is_test'),
 }
-ROLES=('requi_metrics_writer','requi_engine_config_read','requi_operator_usage','requi_model_pin_editor')
+# Shared with installer and disposable harness: no hidden blanket grants.
+sys.path.insert(0,str(ROOT/'src'))
+from delivery_api.runtime_roles import RUNTIME_ROLES as ROLES
 
 def destructive(text):
     # Keep strings/function bodies, including dynamic SQL, but strip comments.

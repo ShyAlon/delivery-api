@@ -158,3 +158,17 @@ def test_shared_readiness_reports_each_gap_without_raw_private_values():
     assert {r['check'] for r in report['checks']}=={'session','target','token/session','marker migration','default pin','ceiling','run approval'}
     assert all(r['reason'] for r in report['checks'])
     assert 'private-dsn-secret' not in str(report)
+
+
+def test_shared_readiness_distinguishes_owner_permission_and_orders_next_actions():
+    from delivery_api.acceptance_readiness import inspect
+    api,calls=api_fixture()
+    def denied(method,path):
+        if path=='/api/operations/test-tasks':
+            error=a.Refused('forbidden');error.http_status=403;raise error
+        return api(method,path)
+    result=inspect(denied)
+    row=next(r for r in result['checks'] if r['check']=='marker migration')
+    assert 'lacks reviewed owner-test access' in row['reason']
+    assert '--test-owner' in row['next'] and not result['ready']
+    assert [r['step'] for r in result['checks']]==sorted(r['step'] for r in result['checks'])

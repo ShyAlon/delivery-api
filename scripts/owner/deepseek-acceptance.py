@@ -59,7 +59,9 @@ class API:
         response=self.client.request(method,path,json=body,timeout=90)
         if response.status_code>=300:
             # Never echo raw bodies, JWTs, SQL or user content to the terminal.
-            raise Refused(f'{method} {path.split("?")[0]} returned HTTP {response.status_code}; review Debug evidence and server prerequisites')
+            error=Refused(f'{method} {path.split("?")[0]} returned HTTP {response.status_code}; review Debug evidence and server prerequisites')
+            error.http_status=response.status_code
+            raise error
         return response.content if raw else response.json()
 
 
