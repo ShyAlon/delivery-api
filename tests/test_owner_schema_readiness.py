@@ -104,6 +104,12 @@ def test_apply_seven_real_migrations_to_owned_disposable_db():
                 if row['status']=='pending':conn.execute((ROOT/'supabase/migrations'/row['file']).read_text())
             rows=s.plan(conn,r,ROOT)
             assert s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 0 MIGRATIONS TO delivery_app')==0
+            assert all(row['status']=='present' for row in r.role_inventory(conn,'delivery_app'))
+            conn.execute('REVOKE requi_operator_payment_read FROM delivery_app')
+            membership=r.role_inventory(conn,'delivery_app')
+            assert [row['role'] for row in membership if row['status']=='missing']==['requi_operator_payment_read']
+            assert s.apply(conn,s.plan(conn,r,ROOT),r,ROOT,'delivery_app',lambda _:'APPLY 0 MIGRATIONS TO delivery_app')==0
+            assert all(row['status']=='present' for row in r.role_inventory(conn,'delivery_app'))
             assert all(x['status']=='present' for x in r.inventory(conn))
             for role in r.ROLES:assert conn.execute("SELECT pg_has_role('delivery_app',%s,'SET')",(role,)).fetchone()[0]
     finally:server.cleanup();shutil.rmtree(scratch,ignore_errors=True)
