@@ -5,12 +5,16 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 fail(){ printf 'REQ ABORTED: %s No owner step was run.\n' "$*" >&2; exit 1; }
 command=${1:-}; shift
-apply=0; email=''; checks=full
+# Acceptance has its own exact argparse contract; pass every argument unchanged
+# to the one repo entry rather than teaching this generic parser paid flags.
+if [ "$command" = acceptance ]; then exec bash scripts/ops/acceptance.sh "$@"; fi
+apply=0; email=''; checks=full; acceptance_args=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --apply) apply=1;shift;;
     --fast) checks=fast;shift;;
     --full-checks) checks=full;shift;;
+    --max-usd|--base-url) [ "$command" = preflight ] && [ "$#" -ge 2 ] || fail "$1 is only for preflight and needs a value.";acceptance_args+=("$1" "$2");shift 2;;
     --email) [ "$#" -ge 2 ] || fail '--email needs a value.';email=$2;shift 2;;
     *) fail "unsupported argument $1";;
   esac
@@ -55,7 +59,10 @@ case "$command" in
    [ "$apply" = 0 ] || fail 'preflight is read-only; --apply is not supported.'
    if [ -z "$email" ]; then ops_read email 'Exact signed-up owner email:'; fi
    [ -n "$email" ] || fail 'signed-up email required.'
-   exec .venv/bin/python "$target" "$PWD" --env-file "$envfile" --email "$email";;
+   # Existing owner policy proof and acceptance checks are one command. Neither
+   # result grants activation or edits a missing policy.
+   .venv/bin/python "$target" "$PWD" --email "$email" || exit $?
+   exec bash scripts/ops/acceptance.sh --dry-run "${acceptance_args[@]}";;
  force-stop) fail 'force-stop retired; use req reset-preview for a fresh dry owner reset review.';;
  stop-all)
    args=("$PWD" --env-file "$envfile")
