@@ -343,3 +343,9 @@ operator boundary changed or bypass added.
 - Real full-graph fixture now captures measured_work events and replays them into production ChildComputeEvents: two attended waits are excluded exactly (3 ms work from 5 ms elapsed). Not a no-op replacement; paid same-host producers remain refused by existing guards.
 - Source-grounded local gate: private real graph plus child compute evidence, 9 passed. Unit 36 bounded signed phase/claim gate: 30 passed.
 - Full gate still incomplete. Combined process budgets are not passes. Per-file sweep through preview/production is all green so far; remaining progress/provider tail not yet collected.
+
+### Rebuild unit 38: progress and operator quality fixtures
+- Progress parity consumes registered diagnostic child streams with current owned PG output documents, preserving exact gate/progress assertions. Missing artifacts still fail without a gate.
+- Customer credits shell is signed; unmounted payment mutation fence remains 404.
+- Quality config checks use a signed administrator and real debug.read registry capability, with row cleanup. The operator fixture now names logs.read and debug.read explicitly, not a bypass.
+- Local gate: 14 passed. Broad next group stopped at six stale fixture failures after 76 passes; those six now fixed, remaining files still pending.

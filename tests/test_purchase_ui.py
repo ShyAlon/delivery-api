@@ -24,10 +24,7 @@ def _case_customer_shell_and_payment_mutations_remain_unmounted():
   assert cloud_execution_admitted() is False
 
 
-def _check_customer_shell_and_payment_mutations_remain_unmounted(monkeypatch,tmp_path,workspace):
- from tests.test_purchase_ui import _case_customer_shell_and_payment_mutations_remain_unmounted
+def test_customer_shell_and_payment_mutations_remain_unmounted(pg_scoped_workspace,pg_task_app,monkeypatch):
+ c=TestClient(pg_task_app(pg_scoped_workspace),headers=pg_scoped_workspace.headers)
+ monkeypatch.setitem(globals(),'TestClient',lambda *a,**kw:c)
  _case_customer_shell_and_payment_mutations_remain_unmounted()
-
-
-def test_customer_shell_and_payment_mutations_remain_unmounted(pg_local_compat_process):
- pg_local_compat_process(_check_customer_shell_and_payment_mutations_remain_unmounted)

@@ -211,8 +211,8 @@ def pg_operator_http(pg_scoped_workspace,pg_task_app,monkeypatch):
     ws=pg_scoped_workspace
     with ws.admin() as conn:
         conn.execute('GRANT requi_operator_read TO delivery_app')
-        conn.execute('INSERT INTO operator_principals VALUES(%s,%s,%s,true)',(ws.scope.owner_id,'ops-http-test',['logs.read']))
-    reader=OperatorReadStore(ws.store._postgres.dsn,OperatorPrincipal(ws.scope.owner_id,'ops-http-test',frozenset({'logs.read'})))
+        conn.execute('INSERT INTO operator_principals VALUES(%s,%s,%s,true)',(ws.scope.owner_id,'ops-http-test',['logs.read','debug.read']))
+    reader=OperatorReadStore(ws.store._postgres.dsn,OperatorPrincipal(ws.scope.owner_id,'ops-http-test',frozenset({'logs.read','debug.read'})))
     monkeypatch.setitem(module.app.state._state,'operator_read_store',reader)
     try:
         yield TestClient(pg_task_app(ws,admin_subjects=(ws.scope.owner_id,)),headers=ws.headers)

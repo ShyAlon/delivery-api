@@ -31,26 +31,6 @@ class FakeQualityEngine:
         return httpx.Response(200, json={"config_version": 1, "config": self.config})
 
 
-def _debug_registry(monkeypatch,workspace):
- from delivery_api.operator_authorization import OperatorPrincipal
- from delivery_api.operator_reads import OperatorReadStore
- from delivery_api.tenancy import current_scope
- import psycopg
- from test_postgres_store import DSN
- scope=current_scope()
- with psycopg.connect(DSN) as conn:
-  conn.execute('GRANT requi_operator_read TO delivery_app')
-  conn.execute("INSERT INTO operator_principals VALUES(%s,'quality-test',ARRAY['debug.read'],true) ON CONFLICT(subject) DO UPDATE SET registry_version=EXCLUDED.registry_version,capabilities=EXCLUDED.capabilities,enabled=true",(scope.owner_id,))
- reader=OperatorReadStore(workspace.store._postgres.dsn,OperatorPrincipal(scope.owner_id,'quality-test',frozenset({'debug.read'})))
- monkeypatch.setitem(app_module.app.state._state,'operator_read_store',reader)
- # Each helper runs in its own child process but shares the disposable server.
- # The fixture principal must not survive into unrelated registry tests.
- import atexit
- def cleanup():
-  with psycopg.connect(DSN) as conn:conn.execute("DELETE FROM operator_principals WHERE subject=%s AND registry_version='quality-test'",(scope.owner_id,))
- atexit.register(cleanup)
-
-
 def _engine(monkeypatch):
     fake = FakeQualityEngine()
     monkeypatch.setattr(app_module, "engine_client",
@@ -91,41 +71,23 @@ def _case_unreachable_engine_is_a_502_with_a_next_step(monkeypatch):
         assert "Start the engine" in r.json()["detail"]["next"]
 
 
-def _check_get_returns_config_and_defaults_from_the_engine(monkeypatch,tmp_path,workspace):
- from tests.test_question_quality_config_api import _debug_registry,_case_get_returns_config_and_defaults_from_the_engine,_engine
- _debug_registry(monkeypatch,workspace)
- _case_get_returns_config_and_defaults_from_the_engine(_engine(monkeypatch))
+@pytest.fixture
+def quality_http(pg_operator_http,monkeypatch):
+    monkeypatch.setitem(globals(),'TestClient',lambda *a,**kw:pg_operator_http)
+    return pg_operator_http
 
 
-def test_get_returns_config_and_defaults_from_the_engine(pg_local_compat_process):
- pg_local_compat_process(_check_get_returns_config_and_defaults_from_the_engine)
+def test_get_returns_config_and_defaults_from_the_engine(quality_http,monkeypatch):
+    _case_get_returns_config_and_defaults_from_the_engine(_engine(monkeypatch))
 
 
-def _check_put_forwards_the_edit_and_returns_the_saved_config(monkeypatch,tmp_path,workspace):
- from tests.test_question_quality_config_api import _debug_registry,_case_put_forwards_the_edit_and_returns_the_saved_config,_engine
- _debug_registry(monkeypatch,workspace)
- _case_put_forwards_the_edit_and_returns_the_saved_config(_engine(monkeypatch))
+def test_put_forwards_the_edit_and_returns_the_saved_config(quality_http,monkeypatch):
+    _case_put_forwards_the_edit_and_returns_the_saved_config(_engine(monkeypatch))
 
 
-def test_put_forwards_the_edit_and_returns_the_saved_config(pg_local_compat_process):
- pg_local_compat_process(_check_put_forwards_the_edit_and_returns_the_saved_config)
+def test_engine_rejection_is_a_422_that_names_the_setting_and_changes_nothing(quality_http,monkeypatch):
+    _case_engine_rejection_is_a_422_that_names_the_setting_and_changes_nothing(_engine(monkeypatch))
 
 
-def _check_engine_rejection_is_a_422_that_names_the_setting_and_changes_nothing(monkeypatch,tmp_path,workspace):
- from tests.test_question_quality_config_api import _debug_registry,_case_engine_rejection_is_a_422_that_names_the_setting_and_changes_nothing,_engine
- _debug_registry(monkeypatch,workspace)
- _case_engine_rejection_is_a_422_that_names_the_setting_and_changes_nothing(_engine(monkeypatch))
-
-
-def test_engine_rejection_is_a_422_that_names_the_setting_and_changes_nothing(pg_local_compat_process):
- pg_local_compat_process(_check_engine_rejection_is_a_422_that_names_the_setting_and_changes_nothing)
-
-
-def _check_unreachable_engine_is_a_502_with_a_next_step(monkeypatch,tmp_path,workspace):
- from tests.test_question_quality_config_api import _debug_registry,_case_unreachable_engine_is_a_502_with_a_next_step,_engine
- _debug_registry(monkeypatch,workspace)
- _case_unreachable_engine_is_a_502_with_a_next_step(monkeypatch)
-
-
-def test_unreachable_engine_is_a_502_with_a_next_step(pg_local_compat_process):
- pg_local_compat_process(_check_unreachable_engine_is_a_502_with_a_next_step)
+def test_unreachable_engine_is_a_502_with_a_next_step(quality_http,monkeypatch):
+    _case_unreachable_engine_is_a_502_with_a_next_step(monkeypatch)
