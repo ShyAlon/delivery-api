@@ -1,3 +1,4 @@
+from pathlib import Path
 """PR B gated read switch: manifest-backed snapshot and byte reads.
 
 Default behavior is unchanged while DELIVERY_ARTIFACT_MANIFEST_READS is off;
@@ -26,10 +27,10 @@ def _published(pgstore, tmp_path):
         task = pgstore.create_task('reads-' + uuid.uuid4().hex)
         body = b'{"requirements": ["x"]}'
         path = tmp_path / 'srs.json'; path.write_bytes(body)
-        pgstore.publish_task_revision(task['task_id'], [{'phase_key': 'spec', 'name': 'srs.json', 'ref': str(path),
+        pgstore.publish_task_revision_bytes(task['task_id'], [{**a,'data':Path(a['ref']).read_bytes()} for a in ([{'phase_key': 'spec', 'name': 'srs.json', 'ref': str(path),
                                       'mime_type': 'application/json',
                                       'validation_report': {'validator': 'SRSDocument', 'validator_version': 'vmodel-contracts==0.28.0',
-                                                            'valid': True, 'error': None, 'sha256': hashlib.sha256(body).hexdigest()}}],
+                                                            'valid': True, 'error': None, 'sha256': hashlib.sha256(body).hexdigest()}}])],
                                       writer_instance='host#1')
         return task['task_id'], body
 
@@ -134,7 +135,7 @@ def test_zip_reads_one_published_revision(pgstore, tmp_path):
         assert len(snapshot) == 1 and snapshot[0]['publication_state'] == 'published'
         newer = b'{"requirements": ["replaced"]}'
         path = tmp_path / 'srs.json'; path.write_bytes(newer)
-        pgstore.publish_task_artifact(task_id, 'spec', 'srs.json', str(path),
+        pgstore.publish_task_artifact_bytes(task_id, 'spec', 'srs.json', Path(str(path)).read_bytes(),
                                       writer_instance='host#1',
                                       validation_report={'validator': 'SRSDocument', 'validator_version': 'vmodel-contracts==0.28.0', 'valid': True, 'error': None,
                                                          'sha256': hl.sha256(newer).hexdigest()})
@@ -149,7 +150,7 @@ def test_validation_report_must_bind_published_bytes(pgstore, tmp_path):
     with tenant_context(A):
         task = pgstore.create_task('binding-' + uuid.uuid4().hex)
         with pytest.raises(ValueError, match='hash does not match'):
-            pgstore.publish_task_artifact(task['task_id'], 'spec', 'srs.json', str(path),
+            pgstore.publish_task_artifact_bytes(task['task_id'], 'spec', 'srs.json', Path(str(path)).read_bytes(),
                                           writer_instance='host#1',
                                           validation_report={'validator': 'SRSDocument', 'validator_version': 'vmodel-contracts==0.28.0', 'valid': True, 'error': None,
                                                              'sha256': hl.sha256(b'other bytes').hexdigest()})
@@ -164,7 +165,7 @@ def test_validation_report_requires_version_provenance(pgstore, tmp_path):
     with tenant_context(A):
         task = pgstore.create_task('prov-' + uuid.uuid4().hex)
         with pytest.raises(ValueError, match='validator_version'):
-            pgstore.publish_task_artifact(task['task_id'], 'spec', 'srs.json', str(path),
+            pgstore.publish_task_artifact_bytes(task['task_id'], 'spec', 'srs.json', Path(str(path)).read_bytes(),
                                           writer_instance='host#1',
                                           validation_report={'validator': 'SRSDocument', 'valid': True, 'error': None,
                                                              'sha256': hl.sha256(body).hexdigest()})
@@ -285,10 +286,10 @@ def test_revision_publish_is_atomic(pgstore, tmp_path):
     with tenant_context(A):
         task = pgstore.create_task('atomic-' + uuid.uuid4().hex)
         with pytest.raises(ValueError):
-            pgstore.publish_task_revision(task['task_id'], [
+            pgstore.publish_task_revision_bytes(task['task_id'], [{**a,'data':Path(a['ref']).read_bytes()} for a in ([
                 {'phase_key': 'spec', 'name': 'a.json', 'ref': str(good), 'validation_report': report(good)},
                 {'phase_key': 'spec', 'name': 'b.json', 'ref': str(bad),
-                 'validation_report': {**report(bad), 'sha256': hl.sha256(b'wrong').hexdigest()}}],
+                 'validation_report': {**report(bad), 'sha256': hl.sha256(b'wrong').hexdigest()}}])],
                 writer_instance='host#1')
         assert pgstore.manifest_artifacts(task['task_id']) == []
         assert pgstore.manifest_ready(task['task_id']) is False
@@ -303,7 +304,7 @@ def _revision(pgstore, task_id, tmp_path, members, writer='host#1'):
         artifacts.append({'phase_key': 'spec', 'name': name, 'ref': str(p),
                           'validation_report': {'validator': 'V', 'validator_version': 'v==1',
                                                 'valid': True, 'error': None, 'sha256': hl.sha256(data).hexdigest()}})
-    return pgstore.publish_task_revision(task_id, artifacts, writer_instance=writer)
+    return pgstore.publish_task_revision_bytes(task_id, [{**a,'data':Path(a['ref']).read_bytes()} for a in (artifacts)], writer_instance=writer)
 
 
 def test_republish_supersedes_omitted_member(pgstore, tmp_path):
@@ -326,7 +327,7 @@ def test_empty_complete_set_is_ready(pgstore, tmp_path, monkeypatch):
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     with tenant_context(A):
         task = pgstore.create_task('emptyrev-' + uuid.uuid4().hex)
-        pgstore.publish_task_revision(task['task_id'], [], writer_instance='host#1')
+        pgstore.publish_task_revision_bytes(task['task_id'], [{**a,'data':Path(a['ref']).read_bytes()} for a in ([])], writer_instance='host#1')
         assert pgstore.manifest_ready(task['task_id']) is True
         assert app._task_artifact_snapshot(task['task_id']) == []
 

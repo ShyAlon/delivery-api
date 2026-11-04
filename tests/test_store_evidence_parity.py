@@ -1,3 +1,4 @@
+from pathlib import Path
 """Retained evidence contracts against isolated real PostgreSQL."""
 from uuid import uuid4
 import pytest
@@ -131,9 +132,9 @@ def test_pg_published_artifact_snapshot_and_cross_owner_bytes(pg_workspace_facto
         digest = hashlib.sha256(body).hexdigest()
         with tenant_context(first.scope):
             task_id = store.create_task('Artifact projection')['task_id']
-            store.publish_task_revision(task_id,[{'phase_key':'spec','name':'srs.json','ref':str(path),
+            store.publish_task_revision_bytes(task_id,[{**a,'data':Path(a['ref']).read_bytes()} for a in ([{'phase_key':'spec','name':'srs.json','ref':str(path),
                 'validation_report':{'validator':'V','validator_version':'v==1','valid':True,
-                                     'error':None,'sha256':digest}}],writer_instance='fixture#1')
+                                     'error':None,'sha256':digest}}])],writer_instance='fixture#1')
             manifest = store.manifest_snapshot(task_id)
             assert manifest['rows'][0]['sha256'] == digest
             assert store.read_artifact_bytes(task_id,'spec','srs.json') == body

@@ -2027,22 +2027,12 @@ FROM tasks t"""
 # User-entry mutations and new work claims only. Nested accepted-worker writes,
 # progress/usage evidence and completion remain available. Never gate settlement.
     # ---- PR B: artifact manifest authority (Postgres-only) ----
-    def publish_task_artifact(self,task_id,phase_key,name,ref,*,mime_type='application/json',writer_instance,validation_report=None):
-        """Measure, store and atomically publish one artifact: bytes into tenant-owned
-        artifact_bytes (content-addressed, immutable), a staged manifest row, then one
-        CAS demote-and-promote. The whole publication is this operation's transaction.
 
-        validation_report binds a validator verdict to the EXACT bytes being stored:
-        {'validator':name,'valid':bool,'error':str|None,'sha256':hex,
-        'validator_version':str}. Its sha256 must equal the measured hash of the
-        published bytes, otherwise the verdict came from other content and the publish
-        is refused - an unvalidated artifact can never carry a verdict it did not earn.
-        validator_version is the provenance of the validation code itself (package
-        version or schema fingerprint from validator_provenance); 'unknown' must be
-        explicit. A verdict recorded under one version is never reinterpreted as
-        another."""
-        from pathlib import Path
-        return self._publish_artifact_bytes(task_id,phase_key,name,Path(ref).read_bytes(),ref=ref,mime_type=mime_type,
+    def publish_task_artifact_bytes(self,task_id,phase_key,name,data,*,mime_type='application/json',writer_instance,validation_report=None):
+        """Publish one owned byte member, with no filesystem authority."""
+        import hashlib
+        return self._publish_artifact_bytes(task_id,phase_key,name,data,
+            ref='pg-artifact:'+hashlib.sha256(data).hexdigest(),mime_type=mime_type,
             writer_instance=writer_instance,validation_report=validation_report)
 
     def _publish_artifact_bytes(self,task_id,phase_key,name,data,*,ref,mime_type,writer_instance,validation_report=None):
@@ -2116,34 +2106,6 @@ FROM tasks t"""
                 (revision_id,revision_hash,now,writer_instance,task['task_id'],task['generation'],expected_revision_id), write=True)
         if changed.rowcount!=1: raise ValueError('readiness CAS failed: a concurrent producer published a revision')
 
-    def publish_task_revision(self,task_id,artifacts,*,writer_instance):
-        """Publish one COMPLETE validated revision atomically, in this operation's
-        single transaction: every member's bytes + staged row + CAS promote, supersede
-        published members of this generation that the new revision omits, then CAS the
-        readiness marker (bound to the exact revision hash) from the expected prior
-        revision. Any failure - including losing the race to a concurrent producer -
-        rolls everything back: no partial authority, no mixed revisions.
-        artifacts: [{'phase_key','name','ref','mime_type'?,'validation_report'?}]."""
-        import uuid as _uuid
-        task=self.task(task_id)
-        if not task: raise KeyError(task_id)
-        marker=self._execute_native('SELECT revision_id FROM artifact_manifest_ready WHERE task_id=%s AND generation=%s',
-            (task_id,task['generation'])).fetchone()
-        expected=marker['revision_id'] if marker else None
-        revision_id=_uuid.uuid4().hex
-        published=[self.publish_task_artifact(task_id,a['phase_key'],a['name'],a['ref'],
-            mime_type=a.get('mime_type','application/json'),writer_instance=writer_instance,
-            validation_report=a.get('validation_report')) for a in artifacts]
-        keep={(a['phase_key'],a['name']) for a in artifacts}
-        for row in self._execute_native("SELECT phase_key,name FROM task_artifacts WHERE task_id=%s AND generation=%s AND publication_state='published'",
-            (task_id,task['generation'])).fetchall():
-            if (row['phase_key'],row['name']) not in keep:
-                self._execute_native("UPDATE task_artifacts SET publication_state='superseded' WHERE task_id=%s AND generation=%s AND phase_key=%s AND name=%s AND publication_state='published'",
-                    (task_id,task['generation'],row['phase_key'],row['name']), write=True)
-        members=self._execute_native("SELECT phase_key,name,sha256 FROM task_artifacts WHERE task_id=%s AND generation=%s AND publication_state='published'",
-            (task_id,task['generation'])).fetchall()
-        self._mark_revision_ready(task,revision_id,self._revision_hash(members),expected,writer_instance,time.time())
-        return published
 
     def publish_task_revision_bytes(self,task_id,artifacts,*,writer_instance):
         """Complete durable byte revision with the same atomic manifest CAS.
@@ -2390,8 +2352,7 @@ PG_OPERATIONS = (
     'producer_result',
     'progress_cursor',
     'provider_attempt',
-    'publish_task_artifact',
-    'publish_task_revision',
+    'publish_task_artifact_bytes',
     'publish_task_revision_bytes',
     'quota_allows',
     'read_artifact_bytes',

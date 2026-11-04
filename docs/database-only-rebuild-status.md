@@ -113,3 +113,8 @@ runtime. Updated signed cloud/session/cache fixtures for retired bundle APIs and
 owner/session cache key. Both suspended semantic and stack PG mutations fail at
 the suspended-owner guard before evidence changes. Signed start error remains
 human-readable and leaves task unstarted.
+
+Unit 18: removed store-level path publication adapters. Single-member and complete
+revision publication now take exact bytes only. Existing tenant isolation,
+validation hash/provenance, CAS race and rollback assertions retained in converted
+fixtures. Red-first absent-adapter policy; 47 artifact/native/evidence tests passed.

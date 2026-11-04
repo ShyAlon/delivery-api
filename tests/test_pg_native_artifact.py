@@ -1,3 +1,4 @@
+from pathlib import Path
 """Manifest and producer SQL must bypass the dialect bridge, keeping byte authority."""
 import hashlib
 from uuid import uuid4
@@ -24,7 +25,7 @@ def test_native_manifest_and_producer_consumers(pg_workspace_factory,tmp_path,mo
             patch.setattr(_Connection,'execute',reject)
             with tenant_context(a.scope):
                 assert s.manifest_snapshot(tid) is None
-                s.publish_task_revision(tid,args,writer_instance='native')
+                s.publish_task_revision_bytes(tid,[{**a,'data':Path(a['ref']).read_bytes()} for a in (args)],writer_instance='native')
                 snap=s.manifest_snapshot(tid);assert len(snap['rows'])==1
                 assert s.manifest_revision(tid)==(snap['revision_id'],snap['revision_hash'])
                 assert s.manifest_ready(tid)
@@ -41,11 +42,11 @@ def test_native_manifest_and_producer_consumers(pg_workspace_factory,tmp_path,mo
                     fault.setattr(s,'_mark_revision_ready',fail)
                     path.write_bytes(b'{"replacement":true}')
                     replacement=[dict(phase_key='spec',name='other.json',ref=str(path))]
-                    with pytest.raises(RuntimeError,match='readiness fault'):s.publish_task_revision(tid,replacement,writer_instance='fault')
+                    with pytest.raises(RuntimeError,match='readiness fault'):s.publish_task_revision_bytes(tid,[{**a,'data':Path(a['ref']).read_bytes()} for a in (replacement)],writer_instance='fault')
                 assert s.manifest_snapshot(tid)==snap
                 assert len(s.manifest_artifacts(tid))==1
                 assert s.read_artifact_bytes_sha(digest)==b'{"native":true}'
-                s.publish_task_revision(tid,replacement,writer_instance='next')
+                s.publish_task_revision_bytes(tid,[{**a,'data':Path(a['ref']).read_bytes()} for a in (replacement)],writer_instance='next')
                 assert [r['name'] for r in s.manifest_snapshot(tid)['rows']]==['other.json']
                 assert sorted(r['publication_state'] for r in s.manifest_artifacts(tid))==['published','superseded']
                 with pytest.raises(KeyError):s.read_artifact_bytes(tid,'spec','srs.json')
