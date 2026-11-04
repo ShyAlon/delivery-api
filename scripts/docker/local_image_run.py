@@ -78,6 +78,12 @@ class OwnedRun:
                 if name==self.service and object_json(state.encode()).get('Running') is True:
                     probe=subprocess.run(['docker','exec',name,'python','/app/full_entry.py','--healthcheck'],capture_output=True,text=True,timeout=5)
                     chunks.append('in-container healthcheck exit='+str(probe.returncode)+'\n'+self.scrub(probe.stdout+probe.stderr))
+                    # This stream contains already shape-projected failures,
+                    # including child exit/exception frames; no Config.Env read.
+                    diagnostic=command(['docker','exec',name,'python','-c',
+                        "from pathlib import Path;p=Path('/tmp/control-plane/requi-re/logs/process/diagnostics.jsonl');f=p.open('rb');f.seek(max(0,p.stat().st_size-16000));print(f.read().decode('utf-8',errors='replace'))"],timeout=5)
+                    chunks.append('bounded service diagnostic tail:\n'+self.scrub(diagnostic))
+
             except Exception as diagnostic_error:
                 chunks.append(name+': diagnostics unavailable: '+type(diagnostic_error).__name__)
         if hasattr(self,'base'):

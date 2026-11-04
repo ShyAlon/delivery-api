@@ -23,4 +23,6 @@ def main():
 
 if __name__=='__main__':
     try:raise SystemExit(main())
-    except Exception as error:raise SystemExit('Local image acceptance failed ('+type(error).__name__+'); no receipt issued, no state-changing retry.') from None
+    except Exception as error:
+        from image_acceptance import safe_failure
+        raise SystemExit('Local image acceptance failed ('+type(error).__name__+'): '+safe_failure(str(error))+'; no receipt issued, no state-changing retry.') from None

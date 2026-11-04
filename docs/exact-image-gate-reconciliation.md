@@ -172,3 +172,27 @@ BuildKit pip cache mounts. Record plain BuildKit output to private build.log and
 fixture-build.log, and print committed context file/byte counts. No claim that
 large untracked data entered the context: git archive excludes it. Exact1555s
 attribution needs the retained plain build log from the next run.
+
+### Mac child EOF diagnostic follow-up (November 4, 20:59)
+
+The e88c728 Mac gate crossed ingress and signed HTTP, then the real Start child
+closed its descriptor without a terminal event. Container health and execution
+readiness were not proof of this child operation. The cause is not yet known.
+
+Supervisor now waits for bounded reap/stderr drain and adds observed exit code,
+signal, state, sequence, and validated stderr exception class/file/function/line
+to the raised failure and container stderr. Negative exit codes may reflect
+supervisor cleanup, not the initial cause. Arbitrary stderr remains withheld:
+redacting known secrets cannot guarantee removal of project/prompt text. The
+existing shape-only stderr envelope supplies bounded source-free evidence.
+Owned local-failure.log also captures the bounded private diagnostic file.
+HTTP failures name method/path/status and bounded redacted response text;
+transport failures are distinct, and the acceptance entry preserves Refused's
+reason rather than only its class. No state-changing operation is retried.
+
+Affected local gate: 355 passed (including real exit-23 envelope propagation,
+existing stderr flood/privacy checks, HTTP-500 response redaction and transport
+refusal checks). This is not unchanged-image acceptance or a Mac pass. The next
+Mac log line needed is `child exit=... error_class=... stderr_frames=...`.
+If no envelope exists it explicitly reports `stderr_shape=unavailable`; a
+negative code alone does not establish an OOM or original cause.

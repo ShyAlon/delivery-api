@@ -42,3 +42,8 @@ origin and mapping from one planner. Bound elapsed time and every blocking call,
 not merely the number of retries. Record build cache evidence before claiming
 why a build took longer. Whole-source COPY before dependency install defeats
 otherwise valid caches when only host tooling changed.
+
+- A child EOF must report evidence collected after reap and stderr drain. A
+  descriptor error alone masks the child failure. Keep stderr source-free by
+  surfacing its validated exception/frame envelope, not arbitrary raw prompts,
+  values or credentials. Preserve the owner acceptance refusal reason too.

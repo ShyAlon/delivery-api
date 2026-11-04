@@ -48,3 +48,21 @@ def test_missing_sequence_never_answers_or_stops():
 def test_unconfirmed_stop_never_passes():
     api,wait,calls=fixture(stop=False)
     with pytest.raises(m.AcceptanceFailure,match='Stop'):m.http_slice(api,wait=wait)
+
+
+def test_http_failure_names_request_status_and_redacted_response(monkeypatch):
+    import urllib.error,io
+    def fail(*a,**kw):
+        raise urllib.error.HTTPError('http://127.0.0.1:8001/api/tasks/x/start',500,'failed',{},io.BytesIO(b'{"detail":"child crash token=fictional-secret"}'))
+    monkeypatch.setattr(m.urllib.request,'urlopen',fail)
+    with pytest.raises(m.AcceptanceFailure,match='POST /api/tasks/x/start status=500.*child crash') as error:
+        m.API('http://127.0.0.1:8001','fictional-secret')('POST','/api/tasks/x/start',{})
+    assert 'fictional-secret' not in str(error.value)
+
+
+def test_transport_refusal_is_not_confused_with_app_http_refusal(monkeypatch):
+    import urllib.error
+    def fail(*a,**kw):raise urllib.error.URLError(ConnectionRefusedError('refused'))
+    monkeypatch.setattr(m.urllib.request,'urlopen',fail)
+    with pytest.raises(m.AcceptanceFailure,match='GET /api/tasks transport/response URLError'):
+        m.API('http://127.0.0.1:8001','fictional')('GET','/api/tasks')

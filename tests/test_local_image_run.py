@@ -94,7 +94,9 @@ def test_failure_evidence_is_retained_before_cleanup_and_redacts_handoff(monkeyp
     run=m.OwnedRun(tmp_path,ID);run.diagnostic_path=tmp_path/'retained.log'
     run.handoff={'token':'fictional-secret-token','dsn':'postgresql:///test_tenant_x?host=/fixture/socket'}
     run.created=[('container',run.fixture),('container',run.service)]
+    seen=[]
     def command(args,**kw):
+        seen.append(args)
         if '.Config.Labels' in ' '.join(args):return json.dumps({'requi.image-gate':run.suffix})
         if 'inspect' in args:return json.dumps({'Status':'exited','ExitCode':2,'OOMKilled':False,'Error':'fixture error'})
         return 'Traceback: Connection refused postgresql:///test_tenant_x?host=/fixture/socket token=fictional-secret-token\n'
@@ -161,3 +163,20 @@ def test_host_deadline_is_elapsed_time_not_number_of_slow_docker_polls(monkeypat
     monkeypatch.setattr(run,'check_container',inspect)
     with pytest.raises(m.WorkflowError,match='deadline exceeded'):run.wait_host(target,seconds=3)
     assert len(calls)==1
+
+
+def test_running_service_failure_retains_bounded_private_diagnostics(monkeypatch,tmp_path,capsys):
+    run=m.OwnedRun(tmp_path,ID);run.created=[('container',run.service)]
+    run.diagnostic_path=tmp_path/'failure.log'
+    seen=[]
+    def command(args,**kw):
+        seen.append(args)
+        if '.Config.Labels' in ' '.join(args):return json.dumps({'requi.image-gate':run.suffix})
+        if 'inspect' in args:return json.dumps({'Running':True})
+        return 'child.failure.class ValueError'
+    monkeypatch.setattr(m,'command',command)
+    from types import SimpleNamespace
+    monkeypatch.setattr(m.subprocess,'run',lambda *a,**k:SimpleNamespace(returncode=0,stdout='healthy',stderr=''))
+    run.diagnose(m.WorkflowError('failed'))
+    assert any('diagnostics.jsonl' in ' '.join(args) for args in seen)
+    assert 'bounded service diagnostic tail' in run.diagnostic_path.read_text()

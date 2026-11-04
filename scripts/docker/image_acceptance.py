@@ -14,6 +14,16 @@ import urllib.request
 from urllib.parse import urlsplit
 
 
+def safe_failure(text,token=''):
+    import re
+    text=str(text)
+    if token:text=text.replace(token,'[token redacted]')
+    text=re.sub(r'(?i)(?:postgres(?:ql)?://)[^\s\"\']+','[database URL redacted]',text)
+    text=re.sub(r'(?i)(authorization|password|token|api[_-]?key)([\"\']?\s*[:=]\s*[\"\']?)[^\s,\"\']+',r'\1\2[redacted]',text)
+    text=re.sub(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+','[JWT redacted]',text)
+    return ''.join(c if ord(c)>=32 else ' ' for c in text)[-2000:]
+
+
 class AcceptanceFailure(RuntimeError):
     pass
 
@@ -34,9 +44,9 @@ class API:
             with urllib.request.urlopen(request,timeout=kwargs.get('timeout_seconds',60)) as response:
                 return json.load(response)
         except urllib.error.HTTPError as error:
-            raise AcceptanceFailure('fixture HTTP '+method+' returned '+str(error.code)+'; no state-changing retry') from None
-        except (OSError,ValueError):
-            raise AcceptanceFailure('fixture HTTP response unavailable; outcome unconfirmed, no state-changing retry') from None
+            raise AcceptanceFailure('fixture HTTP '+method+' '+path+' status='+str(error.code)+' response_tail='+safe_failure(error.read(2048).decode('utf-8',errors='replace'),self.token)+'; no state-changing retry') from None
+        except (OSError,ValueError) as error:
+            raise AcceptanceFailure('fixture HTTP '+method+' '+path+' transport/response '+type(error).__name__+': '+safe_failure(error,self.token)+'; outcome unconfirmed, no state-changing retry') from None
 
 
 def owner_module():
