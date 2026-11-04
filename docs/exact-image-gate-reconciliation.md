@@ -53,3 +53,42 @@ publication assertions are replaced by private manifest/config receipt tests;
 failed deploy cannot rebuild is covered by deploy identity and remote apply
 contracts. Legacy build tests may now be migrated to these owning APIs. A real
 image build remains unrun here.
+
+
+## 2026-11-04 12:34 checkpoint
+
+Affected gate: 311 passed, one explicit-engine-source skip across 40 files.
+The source-backed entry test was then run and corrected to the actual one-parent
+runtime rather than a retired permanent engine daemon: 10 related checks pass.
+This correction preserves real subprocess boot, health and anonymous signed-data
+refusal. No signed admission is inferred from health.
+
+The shared typed-yes prompt passes a real PTY visibility-before-input test.
+A native process now validates the actual disposable PG fixture initialization,
+all migrations and zero-cost reviewed pin. It does not validate Docker networking,
+mount permissions, unchanged service image startup or the real child lifecycle.
+
+Audit regressions caught and fixed failing-test-first:
+- Re-acceptance failure previously left old preview-eligible state. Revoke local
+  acceptance and publication/receipt state before build/re-acceptance work.
+- Remote settings previously checked only file mode. Validate required values
+  with the same owner settings validator before registry access or replacement.
+- Public-only fixture context was unreadable under private umask. Normalize its
+  public file/directory permissions, with no settings or private key copying.
+
+Broader suite is not complete. Complete 246-case groups 2,4,6,7,8,9,10,11,13,14,15
+are green (with their explicit integration skips); group0 has 464 passes;
+groups5 and12 complete in four disjoint subgroups each. Group3 excluding 35 long
+real graph scenarios has 211 passes. The first twelve graph scenarios have 11
+completed passes and one timed-out scenario, not a pass. UI groups still require
+complete runs and reconciliation with the four unchanged main failures. An
+initial isolated item6 graph check without DELIVERY_TEST_SPEC_SOURCE failed;
+rerunning with the explicit source passed. No failure is silently excluded.
+
+Remaining before PR: complete all applicable local tests with a disjoint coverage
+ledger, review the exact owner commands, dated lesson, PR body and current-main
+base. CI unavailable, local gate only. Actual Docker build/local acceptance is
+still Shy's Mac gate. GHCR publication and remote apply have not been executed.
+Registry raw-manifest byte handling intentionally fails closed if buildx changes
+the bytes; Docker host integration and rollback health must not be claimed from
+fake-command tests. No server contact, paid work, live writes, migration or merge.

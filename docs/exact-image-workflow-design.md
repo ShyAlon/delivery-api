@@ -1,6 +1,6 @@
 # Theme 3: test once, pull the same private image
 
-Status: design, not a runnable handoff or deployment approval. CI unavailable,
+Status: WIP implementation, not deployment approval or a Docker-host gate pass. CI unavailable,
 local gate only. No Docker executable is available in the implementation
 workspace; actual image build/run must pass on a Docker host before readiness.
 
@@ -49,9 +49,8 @@ consume arbitrary shell or free-form commands from this file.
 Write it atomically only after all checks pass and the registry publication is verified.
 Failure leaves no accepted receipt. A source tag is a discovery alias only. A
 missing or mismatched receipt refuses deploy instead of building remotely. A
-changed acceptance/runtime contract invalidates prior acceptance. `--fast` can
-reuse only the exact accepted image with matching contracts; it never accepts a
-matching source tuple as proof.
+changed acceptance/runtime contract invalidates prior acceptance. `--fast` is refused. Build reuse requires the exact immutable ID; acceptance
+never accepts a matching source tuple as proof.
 
 ## Exact-image acceptance, not a derivative claim
 
@@ -98,18 +97,18 @@ trust a saved boolean. The actual Docker-host gate is the owner's Mac run, not
 the fake-command contract suite used during implementation.
 
 
-1. `req image` reviews clean source revisions/platform and builds the candidate
+1. `req image --review` reviews clean source revisions/platform and builds the candidate
    locally after the existing owner confirmation. No remote build.
 2. Run exact-image acceptance against owned disposable services. Only then save
    the receipt and manifest. Local preview launches that same accepted image ID
    with owner-selected real settings. Paid work still needs its own approval.
-3. `req deploy` defaults to a local dry review of receipt/manifest/launch values.
+3. `req image --deploy ghcr.io/OWNER/PACKAGE --host USER@HOST` defaults to a local dry review of receipt/manifest/launch values.
    Only an explicit owner apply may contact the named server. Verify target
    architecture, free space and settings readiness before stopping anything.
 4. Pull the PRIVATE GHCR reference by manifest digest using a read-only credential
    entered at the owner deploy prompt, not chat. Verify config digest/platform.
    Never echo or record that credential, and remove temporary login state. Retain the prior exact container and
-   settings identity for rollback. No build, pull or source fetch on the server.
+   settings identity for rollback. No build or source fetch on the server; the immutable pull is the only image acquisition.
 5. Start by ID with the shared spec. Verify readiness and actual running `.Image`
    equality. On failure restore the prior service and report the final state.
    No unrelated container cleanup, Caddy edits or data migration piggyback here.
@@ -122,7 +121,7 @@ its remote or paid steps. The owner is the merger and deployment decision-maker.
 Fake-command tests must cover tag replacement after acceptance, wrong loaded ID,
 wrong architecture, changed registry manifest/config, truncated receipt, unsuccessful smoke,
 interrupted publication/receipt write, stale source tuple, contract drift, deploy
-without receipt, no SSH before apply, no remote rebuild/pull, no stop before
+without receipt, no SSH before apply, no remote rebuild or mutable-tag pull, no stop before
 verification, failed readiness rollback, and identical local/remote runtime
 options. Verify shell quoting with paths containing spaces. Fake-command tests
 are not a substitute for a real amd64 build/run on a Mac Docker host.
