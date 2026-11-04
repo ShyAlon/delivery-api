@@ -274,7 +274,7 @@ def test_process_runner_hides_traceback_and_classifies_missing_module(tmp_path,p
 
 
 
-def _check_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monkeypatch,tmp_path,pg_scoped_workspace):
+def _check_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
     from delivery_api.app import app
     from delivery_api import config
     monkeypatch.setattr(config,"CLOUD_TENANTS",False)
@@ -297,9 +297,11 @@ def _check_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monke
             checked.append('typed-default-route')
             raise EngineUnreachableError('http://unavailable.invalid',httpx.ConnectError('test-only unavailable'))
     monkeypatch.setattr('delivery_api.app.engine_client',UnavailableEngine())
-    # Starting requires the typed HTTP engine, even in a built runtime.
-    response=TestClient(app).post(f'/api/tasks/{task_id}/start')
-    assert response.status_code==503 and not calls
+    # Installed capability is declared; the unavailable engine still cannot fall back.
+    from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
+    response=TestClient(pg_task_app(pg_scoped_workspace),headers=pg_scoped_workspace.headers).post(f'/api/tasks/{task_id}/start')
+    assert response.status_code==503 and not calls,response.text
     assert checked==['typed-default-route']
     assert store.task(task_id)['state']=='not_started'
 
@@ -1155,24 +1157,26 @@ def test_default_rates_put_a_full_run_near_five_credits(monkeypatch,tmp_path):
     row=pricing.price_execution(usage,llm,0)[0]
     assert row['token_price']==5.0 and row['price']==5.0 and row['price_usd']==5.0
 
-def test_runner_emits_durable_phase_price(monkeypatch,tmp_path,pg_scoped_workspace):
-    from delivery_api import config
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
-    import asyncio,json,sys
-    from delivery_api.runner import ProcessRunner
-    monkeypatch.setenv('PRICE_PER_TOKEN','2');monkeypatch.setenv('PRICE_PER_10MS','0')
-    from delivery_api import pricing
-    monkeypatch.setattr(pricing,'PRICE_PER_TOKEN',2.0);monkeypatch.setattr(pricing,'PRICE_PER_10MS',0.0)
-    out=tmp_path/'spec';out.mkdir();script="import json,sys,pathlib;p=pathlib.Path(sys.argv[1]);(p/'usage.jsonl').write_text(json.dumps({'stage':'needs','prompt_tokens':3,'completion_tokens':2})+'\\n')"
-    store=pg_scoped_workspace.store;tid=store.create_task('Priced')['task_id']
-    from delivery_api.postgres_store import PostgresStore
-    assert isinstance(store,PostgresStore)
-    code=asyncio.run(ProcessRunner(store).run(tid,[sys.executable,'-c',script,str(out),'--out',str(out)],cwd=tmp_path,phase='needs',infer_phase=False))
-    assert code!=0  # Pricing remains durable, but missing evidence blocks the gate.
-    event=[e for e in store.events(tid) if e['kind']=='price'][-1]
-    assert event['phase_key']=='needs' and event['payload']['tokens']==5 and event['payload']['price']==10
-    audit=[e for e in store.audit_entries(tid) if e['action']=='phase.priced'][-1]
-    assert audit['detail']['phase']=='needs' and audit['detail']['price']==10
+def _retail_fixture(workspace,phase):
+    from delivery_api.retail_pricing import RetailRates
+    import uuid
+    store=workspace.store;tid=store.create_task('Retained price')['task_id']
+    store.set_engine_session(tid,str(uuid.uuid4()))
+    job=store.enqueue_worker(tid,'phase:'+phase)
+    with workspace.admin() as conn:
+        conn.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES(%s,100000000000,1000000000,0)',(workspace.scope.owner_id,))
+    return store,tid,job,RetailRates('2','0','1').snapshot()
+
+
+def test_phase_price_is_durable_replay_safe_ledger_evidence(pg_scoped_workspace):
+    store,tid,job,rates=_retail_fixture(pg_scoped_workspace,'needs')
+    for _ in range(2):
+        contribution=store.post_retail_contribution(key=job+':price',job_id=job,phase='needs',kind='tokens',input_tokens=3,output_tokens=2,rates=rates)
+    assert store.task_retail_totals(tid)=={'price':10.0,'price_usd':10.0}
+    phase=store.retail_phase_totals(job)['needs']
+    assert phase['credits']==10
+    assert contribution['input_tokens']==3 and contribution['output_tokens']==2
+    assert store.worker_job(job)['state']=='pending'
 
 
 def test_artifact_snapshot_exposes_content_owned_titles(monkeypatch,tmp_path,pg_scoped_workspace):
@@ -1185,26 +1189,17 @@ def test_artifact_snapshot_exposes_content_owned_titles(monkeypatch,tmp_path,pg_
     rows={r['name']:r['title'] for r in app_module._task_artifact_snapshot(tid)}
     assert rows=={'intent_model.json':'Needs and Scope','conops.json':'Concept of Operations'}
 
-def test_runner_emits_incremental_interview_price_before_process_exit(monkeypatch,tmp_path,pg_scoped_workspace):
-    from delivery_api import config
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
-    import asyncio,json,sys,time
-    from delivery_api.runner import ProcessRunner
-    from delivery_api import pricing
-    monkeypatch.setattr(pricing,'PRICE_PER_TOKEN',2.0);monkeypatch.setattr(pricing,'PRICE_PER_10MS',0.0);monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'artifacts'))
-    session='live-price';folder=tmp_path/'artifacts'/session/'interview';folder.mkdir(parents=True)
-    script="import json,pathlib,time; p=pathlib.Path(%r); print('session: %s',flush=True); time.sleep(.05); (p/'usage.jsonl').write_text(json.dumps({'stage':'probing','prompt_tokens':3,'completion_tokens':2})+'\\n'); print('Question?\\nYou:',end='',flush=True); input(); print('done',flush=True)"%(str(folder),session)
-    store=pg_scoped_workspace.store;tid=store.create_task('Live price')['task_id'];runner=ProcessRunner(store)
-    async def scenario():
-        work=asyncio.create_task(runner.run(tid,[sys.executable,'-c',script],cwd=tmp_path,phase='intent'))
-        for _ in range(100):
-            if tid in runner.waiting:break
-            await asyncio.sleep(.01)
-        await runner.send_input(tid,'answer')
-        priced=[e for e in store.events(tid) if e['kind']=='price']
-        assert priced and priced[-1]['payload']['tokens']==5 and priced[-1]['payload']['price']==10
-        return await work
-    assert asyncio.run(scenario())==0
+def test_incremental_interview_price_is_visible_before_worker_exit(pg_scoped_workspace,pg_task_app):
+    store,tid,job,rates=_retail_fixture(pg_scoped_workspace,'intent')
+    store.claim_worker(job)
+    api=TestClient(pg_task_app(pg_scoped_workspace),headers=pg_scoped_workspace.headers)
+    for n in (1,2):
+        store.post_retail_contribution(key=job+':'+str(n),job_id=job,phase='intent',kind='tokens',input_tokens=3,output_tokens=2,rates=rates)
+        response=api.get(f'/api/tasks/{tid}/cost')
+        assert response.status_code==200,response.text
+        assert response.json()['price']==10*n
+        assert store.worker_job(job)['state']=='running'
+
 
 def test_interviewer_prefix_lines_are_diagnostics_not_questions(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
@@ -1529,8 +1524,8 @@ def test_session_cost_receivers_require_scoped_postgres():
         assert 'pg_scoped_workspace' in inspect.signature(case).parameters
 
 
-def test_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(pg_local_compat_process,pg_scoped_workspace):
-    pg_local_compat_process(_check_built_runtime_does_not_fall_back_to_legacy_interview_subprocess)
+def test_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
+    _check_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app)
 
 
 def test_interview_markdown_pairs_input_identity_despite_next_prompt_race(monkeypatch,pg_scoped_workspace):

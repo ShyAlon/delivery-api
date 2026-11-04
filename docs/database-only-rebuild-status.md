@@ -190,3 +190,12 @@ continuation remains separately unverified; do not claim its acceptance yet.
 Correction: the new admitted next-phase failure fixture initially returned no job; its prerequisite setup is being fixed before counting it as passed.
 
 Verified after fixing the first-start fixture: all 24 selected tests pass (6 seconds). Prior 23/1 result was not a completed gate.
+
+Unit23: migrated the two retired runner-file pricing assertions to the actual
+once-only retail ledger and signed live-cost route. Verifies retained token
+counts and exact 10-credit total under replay, incremental total while the worker
+is still running, and unchanged worker states. Built-runtime unavailable-engine
+assertion now uses real signed identity and declared installed routing; still
+proves typed default preflight failure and zero legacy runner calls. Combined
+test_tasks/retail projection/ledger: see actual local output below.
+108 passed, 1 warning in 28.93s
