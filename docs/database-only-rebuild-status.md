@@ -349,3 +349,7 @@ operator boundary changed or bypass added.
 - Customer credits shell is signed; unmounted payment mutation fence remains 404.
 - Quality config checks use a signed administrator and real debug.read registry capability, with row cleanup. The operator fixture now names logs.read and debug.read explicitly, not a bypass.
 - Local gate: 14 passed. Broad next group stopped at six stale fixture failures after 76 passes; those six now fixed, remaining files still pending.
+
+### Rebuild unit 39: private route fence with real signed customer
+- Private revision assets/install routes still return 404 to a valid signed customer, not merely an anonymous auth refusal. Source-import fence unchanged.
+- Local operator/quality/route gate: 32 passed. Broader 47-file rerun: 323 passed and this route fixture failure, now fixed. Next 40-file run exceeded outer budget with five unreported failures; not a gate pass.
