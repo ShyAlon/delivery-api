@@ -253,10 +253,9 @@ def _reconcile_terminal_http_interview(task_id:str,state:EngineSnapshot)->bool:
     from vmodel_contracts.runtime import artifacts_root
     from vmodel_contracts.interview import IntentModel
     from vmodel_contracts.conops import ConOpsDocument
-    interview=None if hasattr(store,'_postgres') else authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),state.session_id,store)/"interview"
     try:
-        intent=IntentModel.model_validate_json(store.read_artifact_bytes(task_id,'intent','intent_model.json') if hasattr(store,'_postgres') else _read_task_text(task_id,interview/"intent_model.json"))
-        conops=ConOpsDocument.model_validate_json(store.read_artifact_bytes(task_id,'conops','conops.json') if hasattr(store,'_postgres') else _read_task_text(task_id,interview/"conops.json"))
+        intent=IntentModel.model_validate_json(store.read_artifact_bytes(task_id,'intent','intent_model.json'))
+        conops=ConOpsDocument.model_validate_json(store.read_artifact_bytes(task_id,'conops','conops.json'))
         if intent.session_id!=state.session_id or conops.session_id!=state.session_id:
             raise ValueError("interview artifacts belong to a different session")
     except (OSError,ValueError,KeyError) as exc:
@@ -2068,13 +2067,12 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
     from vmodel_contracts.runtime import artifacts_root
     from vmodel_contracts.interview import IntentModel
     from vmodel_contracts.conops import ConOpsDocument
-    interview=None if hasattr(store,'_postgres') else authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"
     try:
-        intent=IntentModel.model_validate_json(store.read_artifact_bytes(task_id,'intent','intent_model.json') if hasattr(store,'_postgres') else (interview/"intent_model.json").read_text())
-        conops=ConOpsDocument.model_validate_json(store.read_artifact_bytes(task_id,'conops','conops.json') if hasattr(store,'_postgres') else (interview/"conops.json").read_text())
+        intent=IntentModel.model_validate_json(store.read_artifact_bytes(task_id,'intent','intent_model.json'))
+        conops=ConOpsDocument.model_validate_json(store.read_artifact_bytes(task_id,'conops','conops.json'))
         if intent.session_id!=session or conops.session_id!=session:raise ValueError("interview artifact session IDs do not match")
     except (OSError,ValueError,KeyError) as exc:
-        reject(f"The linked interview artifacts are missing or invalid: {exc}","Restore the named session artifacts before retrying Needs.")
+        reject(f"The linked interview artifacts are missing or invalid: {exc}","The approved interview evidence must be retained in PostgreSQL before retrying Needs.")
     from . import model_routes as downstream_routes
     try: default,default_source=downstream_routes.task_default_model(store,task_id,"needs")
     except ValueError: default,default_source=None,"selection required"
@@ -2098,25 +2096,15 @@ async def retry_failed_needs(task_id:str,body:FailedNeedsRetryRequest,a:auth.Act
         return {"status":"preview","phase":"needs","session_id":session,"retains":["intent","conops"],"model_route":effective,"default_model":default,"default_source":default_source,"checkpoint":checkpoint,"mode":"resume" if checkpoint else "start",
                 "last_failure":latest_failure["message"] if latest_failure else next(phase["detail"] for phase in task["phases"] if phase["phase_key"]=="needs"),
                 "message":f"Retry Stakeholder needs from the approved interview. Choose the downstream model; this may make new model calls and incur cost. The interview is not reopened."}
-    if config.CLOUD_TENANTS:
-        job_id=store.prepare_phase_retry(task_id,"needs",a.label,effective,checkpoint)
-        if not job_id:reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
-        await _run_failed_phase_retry(task_id,"needs","Stakeholder needs",effective,checkpoint,queued_job_id=job_id)
-        return {"status":"started","phase":"needs","session_id":session,"job_id":job_id}
-    if not store.claim_failed_needs_retry(task_id,a.label):reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
-    store.set_model_default(task_id,effective)
-    store.add_event(task_id,"model_route",f"Needs retry model selected: {effective}",phase_key="needs",payload={"route":route,"resolved":effective,"source":"explicit_retry_choice"})
-    store.audit(a.label,"phase.retry_model",task_id,{"phase":"needs","model":effective,"checkpoint":checkpoint})
-    activity("phase.retry","Founder confirmed retry of Stakeholder needs",task_id=task_id,session_id=session,actor=a.label,model_route=effective,checkpoint=checkpoint)
-    spawn(_run_failed_phase_retry(task_id,"needs","Stakeholder needs",effective,checkpoint))
-    return {"status":"started","phase":"needs","session_id":session}
+    job_id=store.prepare_phase_retry(task_id,"needs",a.label,effective,checkpoint)
+    if not job_id:reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
+    await _run_failed_phase_retry(task_id,"needs","Stakeholder needs",effective,checkpoint,queued_job_id=job_id)
+    return {"status":"started","phase":"needs","session_id":session,"job_id":job_id}
 
 async def _dispatch_failed_retry(task_id:str,phase:str,model_route:str,checkpoint:bool,*,queued_job_id=None)->None:
     options={"mode":ExecutionMode.RESUME if checkpoint else ExecutionMode.START,"model_route":model_route}
-    if config.CLOUD_TENANTS:
-        from .tenant_jobs import dispatch_phase
-        await dispatch_phase(store,orchestrator,task_id,phase,queued_job_id=queued_job_id,**options)
-    else:await orchestrator.execute_phase(task_id,phase,**options)
+    from .tenant_jobs import dispatch_phase
+    await dispatch_phase(store,orchestrator,task_id,phase,queued_job_id=queued_job_id,**options)
 
 class FailedPhaseRetryRequest(BaseModel):
     phase: str
@@ -2153,10 +2141,9 @@ async def retry_failed_phase(task_id:str,body:FailedPhaseRetryRequest,a:auth.Act
     from vmodel_contracts.runtime import artifacts_root
     from vmodel_contracts.interview import IntentModel
     from vmodel_contracts.conops import ConOpsDocument
-    interview=None if hasattr(store,'_postgres') else authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"
     try:
-        intent=IntentModel.model_validate_json(store.read_artifact_bytes(task_id,'intent','intent_model.json') if hasattr(store,'_postgres') else (interview/"intent_model.json").read_text())
-        conops=ConOpsDocument.model_validate_json(store.read_artifact_bytes(task_id,'conops','conops.json') if hasattr(store,'_postgres') else (interview/"conops.json").read_text())
+        intent=IntentModel.model_validate_json(store.read_artifact_bytes(task_id,'intent','intent_model.json'))
+        conops=ConOpsDocument.model_validate_json(store.read_artifact_bytes(task_id,'conops','conops.json'))
         if intent.session_id!=session or conops.session_id!=session:raise ValueError("interview artifact session IDs do not match")
     except (OSError,ValueError,KeyError) as exc:
         reject(f"The linked interview artifacts are missing or invalid: {exc}","Restore the named session artifacts before retrying.")
@@ -2180,18 +2167,10 @@ async def retry_failed_phase(task_id:str,body:FailedPhaseRetryRequest,a:auth.Act
         return {"status":"preview","phase":body.phase,"label":label,"session_id":session,"retains":list(PHASE_KEYS[:index]),"model_route":effective,"default_model":default,"default_source":default_source,"checkpoint":checkpoint,"mode":"resume" if checkpoint else "start",
                 "last_failure":latest_failure["message"] if latest_failure else next(phase["detail"] for phase in task["phases"] if phase["phase_key"]==body.phase),
                 "message":f"Retry {label} from the approved earlier phases. Choose the downstream model; this may make new model calls and incur cost. Nothing earlier is reopened."}
-    if config.CLOUD_TENANTS:
-        job_id=store.prepare_phase_retry(task_id,body.phase,a.label,effective,checkpoint)
-        if not job_id:reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
-        await _run_failed_phase_retry(task_id,body.phase,label,effective,checkpoint,queued_job_id=job_id)
-        return {"status":"started","phase":body.phase,"session_id":session,"job_id":job_id}
-    if not store.claim_failed_phase_retry(task_id,body.phase,a.label):reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
-    store.set_model_default(task_id,effective)
-    store.add_event(task_id,"model_route",f"{label} retry model selected: {effective}",phase_key=body.phase,payload={"route":route,"resolved":effective,"source":"explicit_retry_choice"})
-    store.audit(a.label,"phase.retry_model",task_id,{"phase":body.phase,"model":effective,"checkpoint":checkpoint})
-    activity("phase.retry",f"Founder confirmed retry of {label}",task_id=task_id,session_id=session,actor=a.label,model_route=effective,checkpoint=checkpoint)
-    spawn(_run_failed_phase_retry(task_id,body.phase,label,effective,checkpoint))
-    return {"status":"started","phase":body.phase,"session_id":session}
+    job_id=store.prepare_phase_retry(task_id,body.phase,a.label,effective,checkpoint)
+    if not job_id:reject("The task changed before the retry was confirmed.","Refresh and review the current phase again.")
+    await _run_failed_phase_retry(task_id,body.phase,label,effective,checkpoint,queued_job_id=job_id)
+    return {"status":"started","phase":body.phase,"session_id":session,"job_id":job_id}
 
 async def _run_failed_phase_retry(task_id:str,phase:str,label:str,model_route:str,checkpoint:bool,*,queued_job_id=None)->None:
     try:await _dispatch_failed_retry(task_id,phase,model_route,checkpoint,queued_job_id=queued_job_id)
@@ -2312,22 +2291,13 @@ def _task_cost(task_id:str)->dict:
         summary=usage_summary(store,task_id);evidence=summary['evidence']
         if not evidence['complete']:return {'price':None,'price_usd':None,'evidence':evidence}
         interview_tokens,spec_tokens=summary['tokens']
-    elif session:
-        from vmodel_contracts.runtime import artifacts_root
-        root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
-        if config.CLOUD_TENANTS:
-            with session_reader(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store):
-                interview_tokens=usage_tokens(root/'interview'/'usage.jsonl');spec_tokens=usage_tokens(root/'spec'/'usage.jsonl')
-        else:interview_tokens=usage_tokens(root/"interview"/"usage.jsonl");spec_tokens=usage_tokens(root/"spec"/"usage.jsonl")
     counted=[e for e in latest.values() if _is_credit_event(e) and not (interview_tokens and e.get("phase_key") in ("intent","conops"))]
     event_price=sum(float((e.get("payload") or {}).get("price") or 0) for e in counted)
     event_tokens=sum(int((e.get("payload") or {}).get("tokens") or 0) for e in counted if e.get("phase_key") not in ("intent","conops"))
     price=event_price+token_credits(interview_tokens)+token_credits(max(0,spec_tokens-event_tokens))
     result={"price":round(price,6),"price_usd":round(credits_to_usd(price),6)}
     if session and hasattr(store,'_postgres'):result['evidence']=evidence
-    elif session and not config.CLOUD_TENANTS:
-        from .pricing import usage_evidence
-        result['evidence']=usage_evidence(root)
+    pass
     return result
 
 @app.get("/api/tasks/{task_id}/cost")
@@ -2345,17 +2315,7 @@ def task_cost(task_id:str,request:Request):
         from .pg_usage import update_rollup
         evidence=update_rollup(store,task_id)
         if not evidence['complete']:return {'price':None,'price_usd':None,'evidence':evidence}
-    elif session and not config.CLOUD_TENANTS:
-        from vmodel_contracts.runtime import artifacts_root
-        from .pricing import usage_evidence
-        evidence=usage_evidence(authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store))
-        if not evidence['complete']:return {'price':None,'price_usd':None,'evidence':evidence}
-        try:
-            from vmodel_contracts.runtime import artifacts_root
-            from .pricing import write_cost_json
-            write_cost_json(authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store))
-        except (OSError,ValueError) as error:
-            activity('local.cost_rollup.unavailable','Local cost evidence rollup was not updated',level=logging.WARNING,category=type(error).__name__)
+    pass
     return _task_cost(task_id)
 
 @app.get("/api/tasks/{task_id}/cost-phases")
@@ -2389,14 +2349,6 @@ def task_audit(task_id: str, request: Request):
         from .generator_documents import GeneratorDocuments
         usage=GeneratorDocuments.owner_reader(store,task_id).read('interview/usage.jsonl')
         if usage is not None:interview_usage=[json.loads(line) for line in usage.decode().splitlines() if line.strip()]
-    elif session:
-        from vmodel_contracts.runtime import artifacts_root
-        path=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"usage.jsonl"
-        if path.is_file():
-            from .pricing import _rows
-            if config.CLOUD_TENANTS:
-                with session_reader(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session,store):interview_usage=_rows(path)
-            else:interview_usage=_rows(path)
     # The HTTP interview does not run through ProcessRunner, so it has no
     # phase-price event. Read its per-call records, but do not double-count
     # historical subprocess prices if both forms exist for an older task.
@@ -2417,10 +2369,9 @@ def task_audit(task_id: str, request: Request):
     live=_task_cost(task_id);totals["price"]=live["price"];totals["price_usd"]=live["price_usd"]
     totals["unpriced_calls"]=sum(int((event.get("payload") or {}).get("unpriced_calls") or 0) for event in counted)+totals["interview_unpriced_calls"]
     entries=store.audit_entries(task_id)
-    if config.CLOUD_TENANTS:
-        from .customer_projection import audit_credits_only
-        entries=audit_credits_only(_customer_events(entries))
-        totals={'price':totals['price']}
+    from .customer_projection import audit_credits_only
+    entries=audit_credits_only(_customer_events(entries))
+    totals={'price':totals['price']}
     return {"actor_mode": auth.actor(request).label, "entries": entries,"totals":totals}
 
 @app.post("/api/simulations", status_code=201)
@@ -2764,12 +2715,9 @@ async def decide_gate(task_id:str,gate_key:str,req:GateDecision,request:Request,
     # Finish the gate, document defaults, lineage and queue transaction before
     # dispatch. No transaction or task lock spans a provider/network await.
     gate,job_id,phase,selected=_decide_gate_sync(task_id,gate_key,req,a)
-    if config.CLOUD_TENANTS:
-        if job_id:
-            from .tenant_jobs import dispatch_phase
-            await dispatch_phase(store,orchestrator,task_id,phase,queued_job_id=job_id)
-    elif req.action=="redo":spawn(orchestrator.execute_phase(task_id,phase,mode=ExecutionMode.REDO,model_route=selected))
-    else:spawn(orchestrator.continue_after(task_id,phase,model_route=selected))
+    if job_id:
+        from .tenant_jobs import dispatch_phase
+        await dispatch_phase(store,orchestrator,task_id,phase,queued_job_id=job_id)
     return gate
 
 class FeedbackWrite(BaseModel):

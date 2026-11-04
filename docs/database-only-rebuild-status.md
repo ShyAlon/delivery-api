@@ -118,3 +118,8 @@ Unit 18: removed store-level path publication adapters. Single-member and comple
 revision publication now take exact bytes only. Existing tenant isolation,
 validation hash/provenance, CAS race and rollback assertions retained in converted
 fixtures. Red-first absent-adapter policy; 47 artifact/native/evidence tests passed.
+
+Unit 19: retry/handoff/audit/cost use retained PG artifacts and usage only. Retired
+local retry dispatch tails and cost rollup filesystem writes. Red-first no-file
+policy; 121 phase/retry-runner/gate/cost-field tests passed. Customer cost guards,
+lineage rollback and review-revision checks remain exercised.

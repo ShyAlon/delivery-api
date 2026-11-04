@@ -24,3 +24,9 @@ def test_model_call_diagnostics_are_pure_retained_byte_projection():
     from delivery_api import task_diagnostics
     source=inspect.getsource(task_diagnostics.model_calls)
     assert '.is_file(' not in source and '.open(' not in source
+
+@pytest.mark.parametrize('function',[module._reconcile_terminal_http_interview,module.retry_failed_needs,module.retry_failed_phase,module.task_audit,module._task_cost,module.task_cost])
+def test_retry_and_cost_have_no_file_reads(function):
+    source=inspect.getsource(function)
+    for forbidden in ('read_text(', 'usage_tokens(root/', 'write_cost_json(', 'usage_evidence(root)'):
+        assert forbidden not in source
