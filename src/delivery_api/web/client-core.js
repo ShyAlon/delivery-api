@@ -1,3 +1,4 @@
+import {beginOperation,requestDescription} from './operation-status.js';
 import {scrubText,buildClientReport} from './log-scrub.js';
 import {zipText} from './zip.js';
 import {pageController} from './page-lifecycle.js';
@@ -49,9 +50,9 @@ export function setSessionExpiry(expiresAt){refreshExpiresAt=Number(expiresAt)||
 export function noteActivity(){lastActivity=Date.now()}
 export async function renewSessionIfDue(){
   if(!refreshExpiresAt || Date.now()/1000 < refreshExpiresAt-600 || Date.now()-lastActivity>20*60*1000)return;
-  if(!refreshInFlight)refreshInFlight=fetch('/auth/refresh',{method:'POST',headers:{'content-type':'application/json'}})
+  if(!refreshInFlight){const finish=beginOperation('Renewing sign-in');refreshInFlight=fetch('/auth/refresh',{method:'POST',headers:{'content-type':'application/json'}})
     .then(async response=>{if(!response.ok){refreshExpiresAt=0;if(typeof window!=='undefined')window.dispatchEvent(new CustomEvent('requi:signin-needed',{detail:{reason:'session_expired'}}));throw new Error('Your sign-in expired. Sign in again before continuing.')}refreshExpiresAt=Number((await response.json()).expires_at)||0})
-    .finally(()=>{refreshInFlight=null});
+    .then(value=>{finish('success');return value},error=>{finish('error');throw error}).finally(()=>{refreshInFlight=null});}
   return refreshInFlight;
 }
 
@@ -112,15 +113,17 @@ export async function api(url,opts={}){
   const foregroundRead=method==='GET'&&(/\/api\/tasks\/[^/]+$/.test(url)||/\/api\/tasks\/[^/]+\/artifacts\//.test(url)||/\/api\/sessions/.test(url)||/\/api\/tasks\/[^/]+\/audit$/.test(url));
   const endWait=opts.inlineProgress||opts.background||(method==='GET'&&!foregroundRead)||url==='/api/client-log'||url==='/auth/refresh'||url.startsWith('/auth/')?()=>{}:beginWait(url);
   let timedOut=false,timer=timeout?setTimeout(()=>{timedOut=true;controller.abort()},timeout):null,response;
+  const finishStatus=url==='/api/client-log'?()=>{}:beginOperation(requestDescription(url,opts));
   try{response=await fetch(url,{headers:{'content-type':'application/json'},...opts,signal:opts.signal||controller.signal})}
   catch(error){
+    finishStatus('error');
     const background=isBackground(method,opts,foregroundRead);
     if(error.name!=='AbortError'||timedOut)connection.failed();
     if(error.name==='AbortError'&&timedOut){const e=new Error('Error: The request timed out.\nLikely cause: the server did not answer a read request within 60 seconds.\nNext: check the server log and retry the page load.');e.background=background;throw e}
     if(error.name==='AbortError')throw error;
     const e=new Error(`Error: The server could not be reached.\nLikely cause: ${error.message||'The connection failed.'}\nNext: your text is preserved. Check the server is running, then retry.`);e.background=background;throw e;
   }finally{if(timer)clearTimeout(timer);endWait()}
-  connection.ok();
+  connection.ok();if(!response.ok)finishStatus('error');
   const entry=recordResponse(url,method,response,began),ref=entry.ref;
   if(opts.onResponse){try{opts.onResponse({ref:entry.ref,status:entry.status,total_ms:entry.total_ms})}catch{}}  // request-owned metadata for the caller; never blocks the response path
   if(!response.ok){
@@ -132,5 +135,5 @@ export async function api(url,opts={}){
     clientLog('api.error',message,{endpoint:url,http_status:response.status,ref,task_state:info.current_state,active_phase:info.active_phase,decision_id:opts.decisionId});
     throw error;
   }
-  return response.json();
+  try{const data=await response.json();finishStatus('success');return data}catch(error){finishStatus('error');throw error}
 }

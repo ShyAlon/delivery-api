@@ -1,3 +1,4 @@
+import {beginOperation} from './operation-status.js';
 // Shared UI action lifecycle logging: one names-only record at each shared
 // point (in-flight guard enter/exit, disabled-state set/clear, Enter key
 // resolution) so a stuck-disabled button or a dead Enter key is diagnosable
@@ -33,21 +34,23 @@ export function logEnter(context,resolution){
 // the action while in flight, and restores the buttons when the call returns.
 // Every server-call button routes through this - no per-page copies.
 const inflight=new Set();
-export async function runAction(action,buttons,fn,{busyLabel=null,reason='Working on it - one moment',keepDisabledOnSuccess=false}={}){
+export async function runAction(action,buttons,fn,{busyLabel=null,reason='Working on it - one moment',keepDisabledOnSuccess=false,statusLabel=null,successLabel=null}={}){
   const list=(Array.isArray(buttons)?buttons:[buttons]).filter(Boolean);
   if(inflight.has(action)){guardBlocked(action,'in-flight');return undefined}
   inflight.add(action);
   const saved=list.map(b=>({b,text:b.textContent,title:b.title||'',wasDisabled:b.disabled}));
   list.forEach(b=>{b.disabled=true;b.classList.add('is-busy');b.setAttribute('aria-busy','true');b.title=reason;if(busyLabel)b.textContent=busyLabel});
   actionBusy(action,list[0]);
+  const label=statusLabel||busyLabel||list[0]?.textContent||'Working on action';
+  const finishStatus=beginOperation(label,{kind:'action',success:successLabel||'Completed: '+(saved[0]?.text||label),failure:'Failed: '+(saved[0]?.text||label)+'. Check the page before retrying.'});
   let ok=false;
   try{
     const out=await fn();
     ok=true;
-    actionIdle(action,list[0],'success');
+    actionIdle(action,list[0],'success');finishStatus('success');
     return out;
   }catch(error){
-    actionIdle(action,list[0],'error');
+    actionIdle(action,list[0],'error');finishStatus('error');
     throw error;
   }finally{
     inflight.delete(action);
