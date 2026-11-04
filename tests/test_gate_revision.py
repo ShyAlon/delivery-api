@@ -180,5 +180,9 @@ def _check_closed_revision_route_saves_only_owner_review_draft(monkeypatch,tmp_p
     _case_closed_revision_route_saves_only_owner_review_draft(tmp_path,monkeypatch,workspace)
 
 
-def test_closed_revision_route_saves_only_owner_review_draft(pg_local_compat_process):
-    pg_local_compat_process(_check_closed_revision_route_saves_only_owner_review_draft)
+def test_closed_revision_route_saves_only_owner_review_draft(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_closed_revision_route_saves_only_owner_review_draft(tmp_path,monkeypatch,pg_scoped_workspace)

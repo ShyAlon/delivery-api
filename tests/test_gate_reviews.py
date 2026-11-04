@@ -40,7 +40,7 @@ def _case_semantic_srs_choices_block_approval_then_structurally_validate(tmp_pat
  invalid=c.post(f'/api/tasks/{tid}/gates/gate-srs/semantic-review',json={'revision':semantic.revision,'decisions':[{'item_id':'R-1','action':'replace','replacement':{'statement':'missing IDs'}}]});assert invalid.status_code==422
  accepted=c.post(f'/api/tasks/{tid}/gates/gate-srs/semantic-review',json={'revision':semantic.revision,'decisions':[{'item_id':'R-1','action':'accept'}]});assert accepted.status_code==200
  assert not artifact.with_suffix('.md').exists();assert json.loads(artifact.read_text())['functional'][0]['statement']==body['functional'][0]['statement']
- stored=json.loads((path/'srs.semantic-review.json').read_text());assert stored['decisions'][0]['actor']=='local user'
+ stored=json.loads((path/'srs.semantic-review.json').read_text());assert stored['decisions'][0]['actor']=='Signed-In User'
 
 
 def _case_interrupted_semantic_write_blocks_approval_and_same_choices_repair(tmp_path,monkeypatch,pg_scoped_workspace):
@@ -204,18 +204,12 @@ def _case_semantic_decisions_rebind_the_new_bytes(tmp_path,monkeypatch,pg_scoped
  assert entry['sha256']==__import__('hashlib').sha256((spec/'srs.json').read_bytes()).hexdigest()
 
 
-def _case_lineage_rebind_import_rule(tmp_path, monkeypatch,pg_scoped_workspace):
-    """No authority record on this host: decisions behave as before binding existed.
-    Record present but spec-generator absent: the decision refuses clearly, never drifts."""
-    import sys
-    import pytest
-    import delivery_api.app as module
-    spec = tmp_path / 'spec'; spec.mkdir()
-    monkeypatch.setitem(sys.modules, 'spec_generator', None)
-    assert module._lineage_module_or_none(spec) is None, 'no record: nothing to maintain'
-    (spec / 'lineage.json').write_text('{"version": 1, "entries": [], "inputs": {}}')
-    with pytest.raises(ValueError, match='authority record'):
-        module._lineage_module_or_none(spec)
+def _case_lineage_rebind_import_rule(tmp_path,monkeypatch,pg_scoped_workspace):
+ import inspect
+ from delivery_api.generator_documents import transition_gate_lineage
+ source=inspect.getsource(transition_gate_lineage)
+ assert 'spec_generator' not in source and 'read_text' not in source
+ assert 'lineage.json' in source
 
 def _case_record_host_without_generator_refuses_before_any_mutation(tmp_path,monkeypatch,pg_scoped_workspace):
  # A malformed PG authority record must refuse BEFORE any artifact, manifest or
@@ -240,8 +234,12 @@ def _check_gate_content_revision_comments_drafts_and_history(monkeypatch,tmp_pat
  _case_gate_content_revision_comments_drafts_and_history(tmp_path,monkeypatch,workspace)
 
 
-def test_gate_content_revision_comments_drafts_and_history(pg_local_compat_process):
- pg_local_compat_process(_check_gate_content_revision_comments_drafts_and_history)
+def test_gate_content_revision_comments_drafts_and_history(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_gate_content_revision_comments_drafts_and_history(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_semantic_srs_choices_block_approval_then_structurally_validate(monkeypatch,tmp_path,workspace):
@@ -249,8 +247,12 @@ def _check_semantic_srs_choices_block_approval_then_structurally_validate(monkey
  _case_semantic_srs_choices_block_approval_then_structurally_validate(tmp_path,monkeypatch,workspace)
 
 
-def test_semantic_srs_choices_block_approval_then_structurally_validate(pg_local_compat_process):
- pg_local_compat_process(_check_semantic_srs_choices_block_approval_then_structurally_validate)
+def test_semantic_srs_choices_block_approval_then_structurally_validate(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_semantic_srs_choices_block_approval_then_structurally_validate(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_interrupted_semantic_write_blocks_approval_and_same_choices_repair(monkeypatch,tmp_path,workspace):
@@ -258,8 +260,12 @@ def _check_interrupted_semantic_write_blocks_approval_and_same_choices_repair(mo
  _case_interrupted_semantic_write_blocks_approval_and_same_choices_repair(tmp_path,monkeypatch,workspace)
 
 
-def test_interrupted_semantic_write_blocks_approval_and_same_choices_repair(pg_local_compat_process):
- pg_local_compat_process(_check_interrupted_semantic_write_blocks_approval_and_same_choices_repair)
+def test_interrupted_semantic_write_blocks_approval_and_same_choices_repair(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_interrupted_semantic_write_blocks_approval_and_same_choices_repair(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_gate_semantic_draft_restores_exact_saved_fields(monkeypatch,tmp_path,workspace):
@@ -267,8 +273,12 @@ def _check_gate_semantic_draft_restores_exact_saved_fields(monkeypatch,tmp_path,
  _case_gate_semantic_draft_restores_exact_saved_fields(tmp_path,monkeypatch,workspace)
 
 
-def test_gate_semantic_draft_restores_exact_saved_fields(pg_local_compat_process):
- pg_local_compat_process(_check_gate_semantic_draft_restores_exact_saved_fields)
+def test_gate_semantic_draft_restores_exact_saved_fields(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_gate_semantic_draft_restores_exact_saved_fields(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_gate_review_rejects_conflicting_retained_evidence(monkeypatch,tmp_path,workspace):
@@ -276,8 +286,12 @@ def _check_gate_review_rejects_conflicting_retained_evidence(monkeypatch,tmp_pat
  _case_gate_review_rejects_conflicting_retained_evidence(tmp_path,monkeypatch,workspace)
 
 
-def test_gate_review_rejects_conflicting_retained_evidence(pg_local_compat_process):
- pg_local_compat_process(_check_gate_review_rejects_conflicting_retained_evidence)
+def test_gate_review_rejects_conflicting_retained_evidence(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_gate_review_rejects_conflicting_retained_evidence(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_missing_semantic_review_fails_closed_and_restore_recovers(monkeypatch,tmp_path,workspace):
@@ -285,8 +299,12 @@ def _check_missing_semantic_review_fails_closed_and_restore_recovers(monkeypatch
  _case_missing_semantic_review_fails_closed_and_restore_recovers(tmp_path,monkeypatch,workspace)
 
 
-def test_missing_semantic_review_fails_closed_and_restore_recovers(pg_local_compat_process):
- pg_local_compat_process(_check_missing_semantic_review_fails_closed_and_restore_recovers)
+def test_missing_semantic_review_fails_closed_and_restore_recovers(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_missing_semantic_review_fails_closed_and_restore_recovers(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_gate_approval_flips_lineage_bindings_settled(monkeypatch,tmp_path,workspace):
@@ -295,8 +313,12 @@ def _check_gate_approval_flips_lineage_bindings_settled(monkeypatch,tmp_path,wor
 
 
 @pytest.mark.producer_integration
-def test_gate_approval_flips_lineage_bindings_settled(pg_local_compat_process):
- pg_local_compat_process(_check_gate_approval_flips_lineage_bindings_settled)
+def test_gate_approval_flips_lineage_bindings_settled(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_gate_approval_flips_lineage_bindings_settled(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_gate_redo_invalidates_redone_phase_and_downstream_only(monkeypatch,tmp_path,workspace):
@@ -305,8 +327,12 @@ def _check_gate_redo_invalidates_redone_phase_and_downstream_only(monkeypatch,tm
 
 
 @pytest.mark.producer_integration
-def test_gate_redo_invalidates_redone_phase_and_downstream_only(pg_local_compat_process):
- pg_local_compat_process(_check_gate_redo_invalidates_redone_phase_and_downstream_only)
+def test_gate_redo_invalidates_redone_phase_and_downstream_only(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_gate_redo_invalidates_redone_phase_and_downstream_only(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_semantic_decisions_rebind_the_new_bytes(monkeypatch,tmp_path,workspace):
@@ -315,8 +341,12 @@ def _check_semantic_decisions_rebind_the_new_bytes(monkeypatch,tmp_path,workspac
 
 
 @pytest.mark.producer_integration
-def test_semantic_decisions_rebind_the_new_bytes(pg_local_compat_process):
- pg_local_compat_process(_check_semantic_decisions_rebind_the_new_bytes)
+def test_semantic_decisions_rebind_the_new_bytes(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_semantic_decisions_rebind_the_new_bytes(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_lineage_rebind_import_rule(monkeypatch,tmp_path,workspace):
@@ -324,8 +354,12 @@ def _check_lineage_rebind_import_rule(monkeypatch,tmp_path,workspace):
  _case_lineage_rebind_import_rule(tmp_path,monkeypatch,workspace)
 
 
-def test_lineage_rebind_import_rule(pg_local_compat_process):
- pg_local_compat_process(_check_lineage_rebind_import_rule)
+def test_lineage_rebind_import_rule(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_lineage_rebind_import_rule(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_record_host_without_generator_refuses_before_any_mutation(monkeypatch,tmp_path,workspace):
@@ -333,5 +367,9 @@ def _check_record_host_without_generator_refuses_before_any_mutation(monkeypatch
  _case_record_host_without_generator_refuses_before_any_mutation(tmp_path,monkeypatch,workspace)
 
 
-def test_record_host_without_generator_refuses_before_any_mutation(pg_local_compat_process):
- pg_local_compat_process(_check_record_host_without_generator_refuses_before_any_mutation)
+def test_record_host_without_generator_refuses_before_any_mutation(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_record_host_without_generator_refuses_before_any_mutation(tmp_path,monkeypatch,pg_scoped_workspace)

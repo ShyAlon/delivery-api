@@ -19,6 +19,7 @@ def setup(tmp_path,monkeypatch,workspace,*,signed_app=None):
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=self.sequence,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending)
  engine=Engine();engine.pending=pending;engine.sequence=3;engine.session_id=sid
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ signed_app=signed_app or getattr(workspace,'signed_app',None)
  return store,tid,engine,TestClient(signed_app or module.app,headers=workspace.headers if signed_app is not None else {})
 
 def test_matching_shell_route_and_retained_old_review(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):

@@ -56,3 +56,7 @@ journey + fresh zero-credit startup group: 17 passed. No live model call.
 Unit 8: signed tenant identity only; no local admin/basic/OAuth fallback. Signed
 identity, routes, sessions and operator-startup group: 84 passed. Remaining
 compatibility tests still need conversion; no full-gate claim.
+
+Unit 9: gate decisions/lineage use PG transactions, not host paths. Signed gate,
+revision, stack and identity group: 51 passed. Unit fixtures queue only; provider
+execution proof remains the separate installed journey.

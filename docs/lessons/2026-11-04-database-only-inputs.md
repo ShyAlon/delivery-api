@@ -98,3 +98,16 @@ everywhere. Config cannot make an unsigned caller a local administrator.
 Both identity policy regressions failed before removal. Signed identity, route,
 Supabase session and operator startup group: 84 passed. Older compatibility
 tests must be converted to real signed fixtures or retired-route refusal.
+
+## Gate decisions and lineage
+
+Gate decisions now mutate retained PG artifacts/companions and lineage in the
+same guarded transaction. Remove host-path preflight/read/rebind fallbacks,
+including the unused semantic path lookup that still touched the host namespace.
+Signed test fixtures queue continuation without executing a provider. Real
+installed execution is checked separately.
+
+Signed gate/revision/stack/identity group: 51 passed. Missing companion, changed
+review, malformed lineage and invalid replacement continue to refuse without
+mutation. Safe comments/drafts/semantic-review route exceptions preserve signed
+identity, owner RLS and CSRF, and do not open a new execution route.
