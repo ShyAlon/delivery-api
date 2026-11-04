@@ -408,3 +408,10 @@ operator boundary changed or bypass added.
 - Final production audit found unreachable baseline file read/write branches selected by store type. Removed them rather than leave a hidden alternate storage path: baseline existence, greenfield publication and baseline recovery use PG only.
 - Preserved scratch path arguments for registered child protocol, no host artifact content or checkpoint reader.
 - Local affected gate: 122 passed (runner, policy, progress, real child including open gate). Final SPA22, heavy runtime66 and shared browser50 pass. Main UI gate so far39+39 pass excluding four explicitly recorded inherited failures.
+
+## Final local gate reconciliation, 2026-11-04
+- Collection: 4061 tests. JUnit union contains 4022 unique cases with zero duplicates: 3968 passed, 54 skipped. The separately completed 35 long PG graph variants pass. Four unchanged UI failures reproduced against detached origin/main remain recorded debt, not weakened assertions. Total: 4003 passed, 54 skipped, 4 inherited failures.
+- Debt: test_page_headers_stay_sticky_and_home_has_no_evidence_vault_hero (main shared Page sets relative); test_stale_decision_conflict_closes_and_refreshes_dialog (dialog remains); test_interview_scrolls_inside_its_section_and_live_process_stays_visible (live status scrolls offscreen); test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_known (rerun notice absent). Per parent scope ruling, separate UI PR after DB-only, no production web changes here.
+- Final heavy runtime66, SPA22, shared browser50 and non-debt UI156 pass. Affected orchestrator removal gate122 pass. Local fake-provider actual child and signed owner acceptance included; no external model calls.
+- Wheel rebuilt from current production source, installed into a fresh environment without dependencies, import/assets smoke passed using existing dependency paths and an owned disposable PG. First no-config smoke correctly refused absent DSN. No Docker image claim; exact image/digest workflow is theme3.
+- CI unavailable, local gate only. No deploy, server contact, paid work, live database writes, migration or merge.
