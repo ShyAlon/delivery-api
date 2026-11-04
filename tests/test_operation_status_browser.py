@@ -23,7 +23,7 @@ def test_shared_status_concurrency_action_error_and_no_content_leak():
   page.evaluate("const old=s.beginOperation('Old read');const action=s.beginOperation('New action',{kind:'action',success:'New action verified'});old('error');action('success')")
   expect(view).to_have_attribute('data-state','success');expect(view).to_contain_text('New action verified')
   page.evaluate("s.beginOperation('New read')('error')");expect(view).to_have_attribute('data-state','error')
-  assert page.evaluate("s.requestDescription('/api/operations/worker-jobs/job-one/stop',{method:'POST',body:JSON.stringify({hide:true,secret:'not for status'})})")== 'Deleting task (job job-one)'
+  assert page.evaluate("s.requestDescription('/api/example',{method:'POST',body:JSON.stringify({secret:'not for status'})})")== 'Sending action to server'
   browser.close()
 
 
