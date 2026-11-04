@@ -353,3 +353,7 @@ operator boundary changed or bypass added.
 ### Rebuild unit 39: private route fence with real signed customer
 - Private revision assets/install routes still return 404 to a valid signed customer, not merely an anonymous auth refusal. Source-import fence unchanged.
 - Local operator/quality/route gate: 32 passed. Broader 47-file rerun: 323 passed and this route fixture failure, now fixed. Next 40-file run exceeded outer budget with five unreported failures; not a gate pass.
+
+### Rebuild unit 40: private simulation validation versus public fence
+- Retained import/replay validation is tested through private function calls on real scoped PG, not retired unsigned/local HTTP exposure. Added signed-owner HTTP assertions for public simulation 503 in both routes.
+- Local simulation gate: 11 passed. Browser-tail combined run timed out after 19 tests without a final summary; rerun with adequate browser budget before counting.
