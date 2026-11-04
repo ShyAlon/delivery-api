@@ -111,3 +111,9 @@ Signed gate/revision/stack/identity group: 51 passed. Missing companion, changed
 review, malformed lineage and invalid replacement continue to refuse without
 mutation. Safe comments/drafts/semantic-review route exceptions preserve signed
 identity, owner RLS and CSRF, and do not open a new execution route.
+
+Private installation must have one destination guard and one retained anchor
+implementation. Removed file-lock and rename fallback from coordinator after
+red-first policy check; real PG install/crash/tamper/rollback scenarios passed.
+SDK raw-wire fixtures must seed an operator ceiling and matching quote scale,
+not bypass the actual launch admission check. Eight fake SDK variants passed.

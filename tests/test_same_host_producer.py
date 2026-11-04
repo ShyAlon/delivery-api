@@ -185,10 +185,23 @@ def test_symlinked_marker_rejected_before_producer_contact(worker,tmp_path):
     assert calls==[] and outside.read_text()=='outside must remain'
 
 
+@pytest.fixture
+def sdk_operator_policy(worker):
+    """Real expense authorization tables, fake transport and test-only dollars."""
+    import psycopg
+    with psycopg.connect(DSN) as c:
+        c.execute("INSERT INTO operator_expense_policy_revisions(revision,limit_units,units_per_usd,operator_subject,reason) VALUES('sdk-fixture',1000000000000,1000000000000,%s,'fake transport fixture')",(A.owner_id,))
+        c.execute("INSERT INTO operator_expense_policy_head VALUES(true,'sdk-fixture')")
+    yield
+    with psycopg.connect(DSN) as c:
+        c.execute('DELETE FROM operator_expense_policy_head')
+        c.execute("DELETE FROM operator_expense_policy_revisions WHERE revision='sdk-fixture'")
+
+
 @pytest.mark.parametrize('stream',[False,True])
 @pytest.mark.parametrize('stopped',[False,True])
 @pytest.mark.parametrize('prepaid',[False,True])
-def test_private_worker_actual_sdk_factory_raw_wire_once(worker,monkeypatch,stream,stopped,prepaid):
+def test_private_worker_actual_sdk_factory_raw_wire_once(worker,sdk_operator_policy,monkeypatch,stream,stopped,prepaid):
     import httpx,json,base64
     w,s,tid,job,base=worker;clients=[];captured=[]
     from spec_generator import model_config as module
@@ -200,7 +213,7 @@ def test_private_worker_actual_sdk_factory_raw_wire_once(worker,monkeypatch,stre
     # double admission through the old wrapper fails before fake contact.
     import hashlib
     w.gateway_factory=lambda cap,jid:WorkerAdmissionGateway(s,jid,require_prepaid=False,
-        resolve_serialized=lambda **kw:({**Q,'provider':'deepseek'},hashlib.sha256(kw['serialized_request']).hexdigest()),
+        resolve_serialized=lambda **kw:({**Q,'provider':'deepseek','expense_units_per_usd':10**12},hashlib.sha256(kw['serialized_request']).hexdigest()),
         measure_raw_usage=lambda usage:{'input_tokens':usage['prompt_tokens'],'output_tokens':usage['completion_tokens']})
     if prepaid:
         import psycopg
@@ -208,7 +221,7 @@ def test_private_worker_actual_sdk_factory_raw_wire_once(worker,monkeypatch,stre
             c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES (%s,1,1000000,0)',(A.owner_id,))
             c.execute('UPDATE admission_limits SET expense_limit=NULL,retail_limit=0,attempt_expense_max=NULL,attempt_retail_max=1,rate_max=NULL,concurrency_max=3 WHERE owner_id=%s',(A.owner_id,))
         w.gateway_factory=lambda cap,jid:WorkerAdmissionGateway(s,jid,
-            resolve_serialized=lambda **kw:({**Q,'provider':'deepseek','retail_units_per_credit':1000000},hashlib.sha256(kw['serialized_request']).hexdigest()),
+            resolve_serialized=lambda **kw:({**Q,'provider':'deepseek','expense_units_per_usd':10**12,'retail_units_per_credit':1000000},hashlib.sha256(kw['serialized_request']).hexdigest()),
             measure_raw_usage=lambda usage:{'input_tokens':usage['prompt_tokens'],'output_tokens':usage['completion_tokens']})
     usage={'prompt_tokens':2,'completion_tokens':3,'total_tokens':5}
     def fake(request):

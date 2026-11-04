@@ -60,3 +60,12 @@ compatibility tests still need conversion; no full-gate claim.
 Unit 9: gate decisions/lineage use PG transactions, not host paths. Signed gate,
 revision, stack and identity group: 51 passed. Unit fixtures queue only; provider
 execution proof remains the separate installed journey.
+
+Unit 10: installation coordinator uses PG destination lock, anchor and promotion
+receipt only. Policy regression failed first; 40 journal/plan/safety/staging tests
+passed, plus 5 real PG installation/crash/tamper/rollback scenarios. The old
+filesystem helper module remains to extract its pure plan validator then retire.
+
+SDK fixture gap resolved: fake wire tests now provide a real saved operator policy
+and matching 10^12 quote unit scale. All 8 SDK variants passed. This changes only
+disposable test policy, not production admission. No live provider contact.

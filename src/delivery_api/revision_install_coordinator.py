@@ -4,40 +4,14 @@ Called only with authenticated exact retained acceptance and original source
 writer scope. Never auto-resumes on recovery or dispatches paid work.
 """
 import json
-from pathlib import Path
-from .tenancy import session_root,current_scope
-from .revision_install_files import prepare_execution_anchor,promote_private_stage
 
 
 def apply_private_installation(store,task_id,*,installation_id,expected_authorized_event_sha256,artifacts_base,validate_acceptance):
-    """Hold exclusive destination namespace lock across journal/files/DB effects."""
-    if hasattr(store,'_postgres'):
-        from .pg_revision_install import destination_guard
-        with destination_guard(store,task_id,installation_id):
-            return _apply_locked_installation(store,task_id,installation_id=installation_id,
-                expected_authorized_event_sha256=expected_authorized_event_sha256,artifacts_base=artifacts_base,validate_acceptance=validate_acceptance)
-    import os,fcntl
-    from .producer_inputs import _open_directory
-    with store._task_operation_guard('task.rerun'):
-        row=store._execute_native('SELECT * FROM closed_revision_installations WHERE installation_id=%s AND task_id=%s',(installation_id,task_id)).fetchone()
-        if not row:raise KeyError(installation_id)
-        latest=store._execute_native('SELECT * FROM closed_revision_install_events WHERE installation_id=%s ORDER BY sequence DESC LIMIT 1',(installation_id,)).fetchone()
-        if not latest or latest['state']!='authorized' or latest['event_sha256']!=expected_authorized_event_sha256:
-            raise ValueError('fresh authorized installation required; explicit reconciliation otherwise')
-        plan=json.loads(row['payload']);sid=plan['destination_anchor']['execution_session_id']
-        # Validate exact plan/session before any lock filename is constructed.
-        from .revision_install_files import _validate_plan
-        _validate_plan(plan,row['plan_sha256'])
-        sessions=session_root(Path(artifacts_base),current_scope(),sid).parent
-    parent=_open_directory(sessions);fd=None
-    try:
-        fd=os.open('.install-'+sid+'.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600,dir_fd=parent)
-        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    """Hold a PG destination lock across the explicit accepted journal effects."""
+    from .pg_revision_install import destination_guard
+    with destination_guard(store,task_id,installation_id):
         return _apply_locked_installation(store,task_id,installation_id=installation_id,
             expected_authorized_event_sha256=expected_authorized_event_sha256,artifacts_base=artifacts_base,validate_acceptance=validate_acceptance)
-    finally:
-        if fd is not None:os.close(fd)
-        os.close(parent)
 
 
 def _apply_locked_installation(store,task_id,*,installation_id,expected_authorized_event_sha256,artifacts_base,validate_acceptance):
@@ -60,44 +34,19 @@ def _apply_locked_installation(store,task_id,*,installation_id,expected_authoriz
             if not store.inspect_revision_install_safety(task_id,lineage_id=row['lineage_id'],artifacts_base=artifacts_base)['observed_work_quiescent']:
                 raise ValueError('installation source writer/work quiescence unresolved')
         authority()
-        root=session_root(Path(artifacts_base),current_scope(),lineage['parent_execution_session_id'])
-        stage=root/'spec'/'revision-proposals'/lineage['proposal_id']/'staged'/lineage['execution_session_id']
-        if hasattr(store,'_postgres'):
-            from .pg_revision_install import prepare_anchor,read_evidence
-            evidence=prepare_anchor(store,task_id,installation_id,authority)
-            def staged_evidence():
-                authority()
-                current=store.retain_revision_installation_review(task_id,lineage_id=row['lineage_id'],expected_staged_event_sha256=plan['staged_event_sha256'],artifacts_base=artifacts_base)
-                if current!=review:raise ValueError('stage evidence changed before promotion')
-                return read_evidence(store,task_id,installation_id,promoted=False)
-        else:
-            proof=prepare_execution_anchor(stage_root=stage,plan=plan,plan_sha256=row['plan_sha256'],validate_authority=authority)
-            evidence={'manifest_sha256':plan['staged_receipt']['manifest_sha256'],'anchor_sha256':proof['anchor_sha256']}
-            def staged_evidence():
-                authority()
-                current=store.retain_revision_installation_review(task_id,lineage_id=row['lineage_id'],expected_staged_event_sha256=plan['staged_event_sha256'],artifacts_base=artifacts_base)
-                if current!=review:raise ValueError('stage evidence changed before promotion')
-                # Exact fsynced anchor bytes are bound separately from artifact manifest.
-                from .producer_inputs import _open_directory
-                import os,hashlib
-                fd=_open_directory(stage)
-                try:
-                    file=os.open('execution-generation.json',os.O_RDONLY|os.O_NOFOLLOW,dir_fd=fd)
-                    try:
-                        with os.fdopen(file,'rb',closefd=False) as f:raw=f.read(16385)
-                    finally:os.close(file)
-                finally:os.close(fd)
-                if len(raw)>16384 or hashlib.sha256(raw).hexdigest()!=evidence['anchor_sha256']:raise ValueError('prepared anchor changed')
-                return evidence
+        from .pg_revision_install import prepare_anchor,read_evidence
+        evidence=prepare_anchor(store,task_id,installation_id,authority)
+        def staged_evidence():
+            authority()
+            current=store.retain_revision_installation_review(task_id,lineage_id=row['lineage_id'],expected_staged_event_sha256=plan['staged_event_sha256'],artifacts_base=artifacts_base)
+            if current!=review:raise ValueError('stage evidence changed before promotion')
+            return read_evidence(store,task_id,installation_id,promoted=False)
         pending=store.append_private_installation_event(task_id,installation_id=installation_id,expected_previous_sha256=latest['event_sha256'],
             state='promotion_pending',evidence=evidence,read_current_evidence=staged_evidence)
-    # Persist promotion_pending before rename. An interruption holds this journal
-    # and never enters the authorized-only path again automatically.
-    if hasattr(store,'_postgres'):
-        from .pg_revision_install import promote_stage
-        promote_stage(store,task_id,installation_id,authority)
-    else:
-        promote_private_stage(artifacts_base=artifacts_base,lineage=lineage,plan=plan,plan_sha256=row['plan_sha256'],validate_authority=authority)
+    # Persist promotion_pending before the PG receipt. An interruption holds this
+    # journal and never enters the authorized-only path again automatically.
+    from .pg_revision_install import promote_stage
+    promote_stage(store,task_id,installation_id,authority)
     def promoted_evidence():
         authority()
         return store.read_promoted_installation_evidence(task_id,installation_id=installation_id,artifacts_base=artifacts_base)
