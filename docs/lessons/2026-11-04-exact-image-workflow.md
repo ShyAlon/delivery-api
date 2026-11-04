@@ -21,3 +21,13 @@ Never transplant old shell-source assertions without preserving their product
 and safety duty. Examples: visible-before-input PTY confirmation, real private
 Back office ownership, retained browser failure diagnostics, required settings
 before current-service stop, and health separate from signed route admission.
+
+## Failed startup must leave evidence before cleanup
+
+The first actual Mac image built but failed health. A generic timeout and finally
+cleanup destroyed the only container logs. Poll container state as well as HTTP,
+stop waiting after exit/unhealthy, and capture bounded owned state and log tails
+before cleanup, including stderr and the last health exception. Keep the file
+outside temporary scratch; never dump environment or fixture credentials.
+A native fixture that only seeds PG is insufficient startup coverage: also run
+the exact entry/preflight and prove HTTP health. This still is not a Docker gate.

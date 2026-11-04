@@ -67,6 +67,34 @@ def test_real_owned_fixture_initializes_migrated_pg_and_zero_cost_pin(tmp_path):
                 assert pin['row']['expense_input']==0 and pin['row']['retail_output']==0
                 assert conn.execute("SELECT count(*) FROM auth.sessions").fetchone()[0]==2
             assert sorted(p.name for p in shared.iterdir())==['ca.pem','socket']
+            # Exercise the real container entry's read-only startup checks too,
+            # not merely the fixture's successful database initialization.
+            service_env=env|{'DELIVERY_DATABASE_URL':handoff['dsn'],
+                'DELIVERY_SUPABASE_URL':'https://image-fixture.supabase.co',
+                'DELIVERY_SUPABASE_ANON_KEY':'fictional-public-key',
+                'INTERVIEW_ENGINE_TOKEN':'fixture-private-engine-token-123456789',
+                'VMODEL_ARTIFACTS_DIR':str(tmp_path/'artifacts'),
+                'XDG_DATA_HOME':str(tmp_path/'data')}
+            probe=subprocess.run([sys.executable,str(ROOT/'scripts/docker/preflight.py')],env=service_env,capture_output=True,text=True,timeout=30)
+            assert probe.returncode==0,probe.stdout+probe.stderr
+            import socket,urllib.request
+            with socket.socket() as listener:
+                listener.bind(('127.0.0.1',0));port=listener.getsockname()[1]
+            with (tmp_path/'entry.log').open('w') as output:
+                entry=subprocess.Popen([sys.executable,str(ROOT/'scripts/docker/full_entry.py')],
+                    env=service_env|{'DELIVERY_HOST':'127.0.0.1','DELIVERY_PORT':str(port),
+                    'SSL_CERT_FILE':str(shared/'ca.pem'),'REQUESTS_CA_BUNDLE':str(shared/'ca.pem')},stdout=output,stderr=output)
+                try:
+                    for _ in range(100):
+                        if entry.poll() is not None:raise AssertionError((tmp_path/'entry.log').read_text())
+                        try:
+                            with urllib.request.urlopen(f'http://127.0.0.1:{port}/health',timeout=1) as response:
+                                if json.load(response).get('ok') is True:break
+                        except OSError:time.sleep(.05)
+                    else:raise AssertionError((tmp_path/'entry.log').read_text())
+                finally:entry.terminate();entry.wait(timeout=10)
+
+
         finally:
             child.send_signal(signal.SIGTERM)
             child.wait(timeout=10)

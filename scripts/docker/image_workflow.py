@@ -51,7 +51,7 @@ def confirm(action: str) -> bool:
     except (EOFError,KeyboardInterrupt):return False
 
 
-def command(args: list[str], *, cwd: Path | None = None, timeout: int = 60) -> str:
+def command(args: list[str], *, cwd: Path | None = None, timeout: int = 60, include_stderr: bool = False) -> str:
     # Output is consumed as typed state. It may contain account config, so never
     # echo arbitrary subprocess output or include it in failure messages.
     try:
@@ -63,7 +63,7 @@ def command(args: list[str], *, cwd: Path | None = None, timeout: int = 60) -> s
         if not result.stdout.strip() and not result.stderr.strip():
             reason+="; produced no output, possible signal kill or out of memory"
         raise WorkflowError(reason)
-    return result.stdout.strip()
+    return (result.stdout+(result.stderr if include_stderr else "")).strip()
 
 
 def source_snapshot(root: Path) -> dict[str, str]:
@@ -237,9 +237,13 @@ def local_acceptance(root: Path, state: StageState, evidence: dict) -> dict:
     (state.path.parent/"accepted-image.json").unlink(missing_ok=True)
     log("INFO", "stage 3/6 local acceptance: owned services, signed HTTP, real child evidence")
     run=OwnedRun(root/"delivery-api",image_id)
+    run.diagnostic_path=state.path.parent/"local-failure.log"
     try:
         run.start()
         result=run.http_acceptance(state.path.parent/"local-http-evidence.json")
+    except BaseException as error:
+        if hasattr(run,"diagnose"):run.diagnose(error)
+        raise
     finally:
         run.close()
     required={"startup":"passed","signed-http":"passed","child-lifecycle":"passed",

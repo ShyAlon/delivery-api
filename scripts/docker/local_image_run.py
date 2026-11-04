@@ -40,6 +40,53 @@ class OwnedRun:
         self.fixture_tag='requi-local-fixture:'+self.suffix
         self.directory=None
 
+    def scrub(self,text):
+        import re
+        text=str(text)
+        for value in getattr(self,'handoff',{}).values():
+            if isinstance(value,str) and value:text=text.replace(value,'[fixture value redacted]')
+        text=re.sub(r'(?i)(?:postgres(?:ql)?://)[^\s\"\']+','[database URL redacted]',text)
+        text=re.sub(r'(?i)(authorization|password|token|api[_-]?key)([\"\']?\s*[:=]\s*[\"\']?)[^\s,\"\']+',r'\1\2[redacted]',text)
+        text=re.sub(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+','[JWT redacted]',text)
+        return text[-24000:]
+
+    def check_container(self,name):
+        state=object_json(command(['docker','container','inspect','--format','{{json .State}}',name]).encode())
+        if state.get('Running') is not True or state.get('Health',{}).get('Status')=='unhealthy':
+            raise WorkflowError('owned container '+name+' '+str(state.get('Status'))+
+                ' exit='+str(state.get('ExitCode'))+' oom='+str(state.get('OOMKilled'))+
+                ' error='+self.scrub(state.get('Error','')))
+        return state
+
+    def diagnose(self,error):
+        # Only invocation-owned fictional fixtures. Never inspect Config.Env or
+        # persist the handoff/settings/token. Capture before destructive cleanup.
+        chunks=['exact-image local acceptance failed: '+type(error).__name__+': '+self.scrub(error)]
+        for kind,name in self.created:
+            if kind!='container':continue
+            try:
+                labels=object_json(command(['docker','container','inspect','--format','{{json .Config.Labels}}',name]).encode())
+                if labels.get('requi.image-gate')!=self.suffix:
+                    chunks.append(name+': ownership differs, diagnostic read refused');continue
+                state=command(['docker','container','inspect','--format','{{json .State}}',name])
+                chunks.append(name+' state: '+self.scrub(state))
+                tail=command(['docker','logs','--tail','100',name],include_stderr=True)
+                chunks.append(name+' log tail:\n'+self.scrub(tail))
+                if name==self.service and object_json(state.encode()).get('Running') is True:
+                    probe=subprocess.run(['docker','exec',name,'python','/app/full_entry.py','--healthcheck'],capture_output=True,text=True,timeout=10)
+                    chunks.append('in-container healthcheck exit='+str(probe.returncode)+'\n'+self.scrub(probe.stdout+probe.stderr))
+            except Exception as diagnostic_error:
+                chunks.append(name+': diagnostics unavailable: '+type(diagnostic_error).__name__)
+        text='\n'.join(chunks)+'\n'
+        path=getattr(self,'diagnostic_path',None)
+        if path is not None:
+            try:
+                from image_receipt import atomic_write
+                atomic_write(path,text.encode())
+                log('FAIL','retained startup/acceptance diagnostics: '+str(path))
+            except OSError:log('WARN','could not retain diagnostic file; terminal evidence follows')
+        log('FAIL',text)
+
     def create(self,kind,name,args):
         command(args)
         self.created.append((kind,name))
@@ -81,9 +128,11 @@ class OwnedRun:
             '--tmpfs','/tmp:rw,nosuid,nodev,size=512m,mode=1777',self.fixture_tag])
         handoff=None
         for _ in range(240):
+            self.check_container(self.fixture)
             try:
                 handoff=object_json(command(['docker','exec',self.fixture,'cat','/tmp/fixture-state.json']).encode());break
             except (WorkflowError,ValueError):time.sleep(.5)
+        self.handoff=handoff or {}
         if handoff is None:raise WorkflowError('owned local fixture readiness timed out')
         if set(handoff)!={'dsn','token','issuer'} or not handoff['dsn'].startswith('postgresql:///test_tenant_') or handoff['issuer']!='https://image-fixture.supabase.co/auth/v1':
             raise WorkflowError('owned fixture handoff identity differs')
@@ -102,13 +151,16 @@ class OwnedRun:
         self.create('container',self.service,['docker',*args])
         self.handoff=handoff
         import urllib.request
+        last_health='no response'
         for _ in range(240):
+            self.check_container(self.service)
+            self.check_container(self.fixture)
             try:
                 with urllib.request.urlopen(self.base+'/health',timeout=1) as response:
                     if json.load(response).get('ok') is True:break
-            except (OSError,ValueError):pass
+            except (OSError,ValueError) as error:last_health=type(error).__name__+': '+self.scrub(error)
             time.sleep(.5)
-        else:raise WorkflowError('unchanged candidate startup did not become healthy')
+        else:raise WorkflowError('unchanged candidate startup did not become healthy; last health error: '+last_health)
         return self
 
     def active_stop(self):
@@ -137,7 +189,8 @@ class OwnedRun:
         # One repo entry, same input identity/answer protocol as owner acceptance.
         result=subprocess.run(['bash',str(self.root/'scripts/ops/acceptance.sh'),'--image-local','--base-url',self.base,'--output',str(output)],
             input=self.handoff['token'],text=True,capture_output=True,cwd=self.root,timeout=600)
-        if result.returncode:raise WorkflowError('unchanged-image signed HTTP acceptance failed; no receipt issued')
+        if result.returncode:
+            raise WorkflowError('unchanged-image signed HTTP acceptance failed; exit='+str(result.returncode)+'; no receipt issued\n'+self.scrub(result.stdout+result.stderr))
         actual=command(['docker','container','inspect','--format','{{.Image}}',self.service])
         if actual!=self.image_id:raise WorkflowError('running image changed during acceptance')
         result=object_json(output.read_bytes())

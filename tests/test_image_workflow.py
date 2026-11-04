@@ -167,3 +167,28 @@ def test_failed_reacceptance_revokes_previous_preview_and_publication_evidence(t
     restored=m.StageState(state.path,state.inputs)
     assert set(restored.state['stages'])=={'preflight','build'}
     assert not (tmp_path/'accepted-image.json').exists()
+
+
+def test_failure_diagnostics_precede_destructive_cleanup(tmp_path,monkeypatch):
+    import local_image_run
+    state=m.StageState(tmp_path/'state.json',{'runtime_contract':'fixture'})
+    state.complete('preflight',{});state.complete('build',{})
+    calls=[]
+    class Run:
+        def __init__(self,*args):pass
+        def start(self):raise m.WorkflowError('container exited')
+        def diagnose(self,error):
+            assert self.diagnostic_path==tmp_path/'local-failure.log'
+            calls.append(('diagnose',type(error).__name__,str(error)))
+        def close(self):calls.append(('cleanup',))
+    monkeypatch.setattr(local_image_run,'OwnedRun',Run)
+    monkeypatch.setattr(m,'inspect_image',lambda value:{'Id':value})
+    with pytest.raises(m.WorkflowError,match='container exited'):m.local_acceptance(tmp_path,state,{'image_id':'fixture'})
+    assert calls==[('diagnose','WorkflowError','container exited'),('cleanup',)]
+
+
+def test_docker_logs_stderr_is_preserved_only_for_explicit_diagnostics(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(m.subprocess,'run',lambda *a,**k:SimpleNamespace(returncode=0,stdout='out',stderr='Traceback on stderr'))
+    assert m.command(['docker','logs'])=='out'
+    assert m.command(['docker','logs'],include_stderr=True)=='outTraceback on stderr'

@@ -114,3 +114,29 @@ fake-command tests. No server contact, paid work, live writes, migration or merg
   The source-backed item6 runner itself produces2 pass/1 inherited failure.
 - Mandatory Mac unchanged-image gate remains unrun. PR must be draft/not ready
   to merge until that gate and owner review. See exact-image-owner-workflow.md.
+
+## Mac startup failure, 2026-11-04 16:13-16:21
+
+Owner review passed and the actual amd64 candidate built (94s). Local acceptance
+failed at startup: health did not pass. This is a failed gate, not accepted image.
+The old implementation waited to timeout even when a container exited, then
+removed containers/scratch without saving the reason. The old run cannot provide
+container logs after successful cleanup. Do not claim a startup root cause from
+this one-line failure.
+
+Fix: inspect owned fixture/candidate state each poll, fail immediately on exit or
+Docker unhealthy status, and include the last health exception for timeouts.
+Before cleanup, retain a private local-failure.log with exception class/reason,
+container state (exit/OOM/health/error), bounded stdout+stderr log tails, and an
+in-container healthcheck on a still-running candidate to distinguish internal
+startup from published-port reachability. Print the same redacted evidence in
+the terminal. Read only invocation-owned labels and state, never Config.Env;
+redact handoff token/DSN, URL credentials, key fields and JWTs. Resources still
+clean up after evidence capture. Signed HTTP failure output is retained too.
+
+The real native fixture test now runs the actual full-entry preflight and starts
+its delivery child to HTTP health with the fixture DSN and public CA. It passes;
+this narrows but does not establish Docker-only networking/mount/dependency
+behavior. Combined affected gate before final HTTP-tail addition319 pass.
+Mac rerun still mandatory. New source/acceptance contract intentionally uses a
+new run key: no carrying old acceptance across a changed diagnostic harness.
