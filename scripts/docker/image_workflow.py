@@ -17,6 +17,10 @@ import time
 import tempfile
 import tarfile
 
+# Keep one module identity when invoked as the owner script; helpers import it.
+if __name__ == "__main__":
+    sys.modules.setdefault("image_workflow", sys.modules[__name__])
+
 from image_receipt import InvalidReceipt, atomic_write, digest, object_json
 from runtime_spec import contract_bytes
 

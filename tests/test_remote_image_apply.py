@@ -43,3 +43,40 @@ def test_pull_mismatch_never_stops_existing_container(tmp_path,monkeypatch):
     login=next((args,kw) for args,kw in calls if 'login' in args)
     assert login[0][0]=='docker' and login[1]['secret']=='fictional-token'
     assert all('fictional-token' not in args for args,_ in calls)
+
+
+def test_transmitted_program_compiles_as_one_script():
+    combined=(D/'runtime_spec.py').read_text()+'\n'+(D/'remote_image_apply.py').read_text()
+    compile(combined,'remote-exact-image','exec')
+
+
+def test_candidate_run_failure_restores_prior_service(tmp_path,monkeypatch):
+    import json
+    value=plan(tmp_path);calls=[]
+    image={'Id':ID,'Os':'linux','Architecture':'amd64','RepoDigests':[value['reference']]}
+    current={'Image':'sha256:'+'b'*64,'Config':{'Labels':{'requi.shared-runtime':'1'}},'State':{'Running':True}}
+    candidate={'Image':ID,'Config':{'Labels':{'requi.shared-runtime':'1'}},'State':{'Running':False}}
+    class Result:
+        returncode=0
+        stdout=json.dumps(current)
+    def run(args,**kwargs):
+        result=Result()
+        if 'inspect' in args and any('rollback' in x for x in args):result.stdout=json.dumps(current)
+        elif 'inspect' in args and any('run' in x for x in calls[-1] if isinstance(x,str)):result.stdout=json.dumps(candidate)
+        elif 'inspect' in args and any('run' in call for call in calls):result.stdout=json.dumps(candidate)
+        return result
+    def call(args,**kwargs):
+        calls.append(args)
+        if 'image' in args and 'inspect' in args:return json.dumps(image)
+        if 'run' in args:raise RuntimeError('run failed after container create')
+        if 'inspect' in args:return json.dumps(current)
+        return ''
+    # Explicit deterministic inspect responses: initial current, then partial candidate.
+    responses=iter([current,candidate])
+    def subprocess_run(args,**kwargs):
+        result=Result();result.stdout=json.dumps(next(responses));return result
+    monkeypatch.setattr(m,'call',call);monkeypatch.setattr(m.subprocess,'run',subprocess_run)
+    with pytest.raises(RuntimeError,match='previous restart'):m.apply(value)
+    assert any(args[:4]==['sudo','-n','docker','stop'] for args in calls)
+    assert ['sudo','-n','docker','rm','--force','requi-service'] in calls
+    assert ['sudo','-n','docker','start','requi-service'] in calls

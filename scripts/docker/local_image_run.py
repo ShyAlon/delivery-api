@@ -73,7 +73,7 @@ class OwnedRun:
         self.create('volume',self.volume,['docker','volume','create','--label',self.label,self.volume])
         self.create('container',self.fixture,['docker','run','--detach','--name',self.fixture,'--label',self.label,
             '--platform','linux/amd64','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
-            '--network',self.network,'--network-alias','image-fixture.supabase.co',
+            '--sysctl','net.ipv4.ip_unprivileged_port_start=0','--network',self.network,'--network-alias','image-fixture.supabase.co',
             '--mount','type=volume,source='+self.volume+',target=/fixture',
             '--tmpfs','/tmp:rw,nosuid,nodev,size=512m,mode=1777',self.fixture_tag])
         handoff=None
