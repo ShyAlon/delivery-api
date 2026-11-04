@@ -1669,23 +1669,9 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None, request: Re
         input_state={"waiting":False,"process_live":True,"decision":None,"requirement":None,"question":None,"input_id":None}
     elif (session_id):
         snapshot,input_state=_cloud_engine_read(task_id,task,session_id,events=task_events)
-    elif session_id:
-        try:
-            snapshot=engine_client.snapshot(session_id)
-            if _reconcile_terminal_http_interview(task_id,snapshot):
-                activity("engine.recovery.reconciled","Restored completed interview boundary from task read; queuing Stakeholder needs",task_id=task_id,session_id=session_id,sequence=snapshot.sequence,next_phase="needs")
-                if background_tasks is not None:background_tasks.add_task(_continue_reconciled_interview,task_id)
-                task=store.task(task_id)
-            input_state=(_http_input_state(task_id,snapshot,events=task_events,task=task) if task.get("active_phase") in ("intent","conops")
-                         else {**runner.input_state(task_id),"engine_process_status":int(snapshot.process_status)})
-        except EngineClientError as exc:
-            input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None,
-                         "engine_error":{"http_status":exc.http_status,"code":int(exc.error.code),"detail":exc.error.detail}}
-        except EngineUnreachableError:
-            input_state={"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None,"engine_unreachable":True}
     else:input_state=({"waiting":False,"process_live":False,"decision":None,"requirement":None,"question":None,"input_id":None})
     work=None
-    work_state=({"owner":work.owner,"phase":work.phase,"status":work.status,"started_at":work.started_at,"durable_ref":work.durable_ref,"requirement":work.requirement} if work else None)
+    work_state=None
     artifacts=_task_artifact_snapshot(task_id,task=task,session=session_id,events=task_events,stored_artifacts=read_snapshot["artifacts"],manifest=read_snapshot["manifest"]);session=_recorded_engine_session(task_id,recorded=session_id,events=task_events)
     from .phases import PHASE_DEFINITIONS
     phase_config={phase.key:{"executor":phase.executor,"generator_stage":phase.generator_stage,

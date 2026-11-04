@@ -217,3 +217,9 @@ assertions now run through retained PG documents, including the signed unknown
 cost endpoint and preservation of raw bad bytes. test_tasks + usage evidence +
 incremental projection: 104 passed. The one session-fixture collision discovered
 on the first run was fixed with unique disposable session IDs.
+
+Post-unit25 installed child/producer/fresh HTTP acceptance re-run: 54 passed in
+59 seconds, fake providers only. Removed the provably unreachable legacy
+read-triggered auto-handoff branch from get_task. HTTP cutover fixture migration
+is still unfinished (latest bounded run stopped after five failures, nine passes);
+old auto-start expectations are not current acceptance. No partial run is a gate.
