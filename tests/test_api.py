@@ -217,8 +217,19 @@ def test_sessions_spec_completion_and_http_error(pg_scoped_workspace):
  assert row['oracle_passed'] and row['files_checked']==14 and row['completed_at']=='2026-09-19T00:00:00Z'
 
 
-def test_start_task_unreachable_http_engine_is_human_readable(pg_local_compat_process,pg_scoped_workspace):
-    pg_local_compat_process(_check_start_task_unreachable_http_engine_is_human_readable)
+def test_start_task_unreachable_http_engine_is_human_readable(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
+    signed=pg_task_app(pg_scoped_workspace)
+    from delivery_api import app as module
+    from delivery_api.engine_client import EngineUnreachableError
+    def unreachable():raise EngineUnreachableError('http://127.0.0.1:1','fake unavailable')
+    monkeypatch.setattr(module.engine_client,'default_route',unreachable)
+    monkeypatch.setattr('delivery_api.tenant_http._interview_route_open',lambda path:True)
+    tid=pg_scoped_workspace.store.create_task('Preflight failure','A product idea')['task_id']
+    response=TestClient(signed,headers=pg_scoped_workspace.headers).post(f'/api/tasks/{tid}/start')
+    assert response.status_code==503
+    assert set(response.json()['detail'])=={'error','cause','next'}
+    assert 'interview engine is not reachable' in response.json()['detail']['error'].lower()
+    assert pg_scoped_workspace.store.task(tid)['state']=='not_started'
 
 
 def _legacy_pg_identity_client(monkeypatch,workspace):

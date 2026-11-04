@@ -247,31 +247,8 @@ def test_task_management_api_structured_collisions_and_delete(pg_workspace_facto
             d=c.request('DELETE',f'/api/tasks/{tid}',json={'confirm':True});assert d.status_code==200 and d.json()['source_artifacts_deleted'] is False
             assert c.get(f'/api/tasks/{tid}').status_code==404
 
-def test_engine_runtime_skips_missing_dependency_and_selects_working_python(tmp_path,monkeypatch):
-    import asyncio,os
-    from delivery_api.engine_runtime import resolve_engine_runtime
-    engine=tmp_path/'interview-engine';engine.mkdir()
-    bad=tmp_path/'bad';good=engine/'.venv/bin';bad.mkdir();good.mkdir(parents=True)
-    for path,rc in ((bad/'python',1),(good/'python',0)):
-        path.write_text(f'#!/bin/sh\nexit {rc}\n');path.chmod(0o755)
-    monkeypatch.setenv('INTERVIEW_ENGINE_PYTHON',str(bad/'python'))
-    monkeypatch.setattr('delivery_api.engine_runtime.saved_python',lambda:None)
-    runtime=asyncio.run(resolve_engine_runtime(engine))
-    assert runtime.python==good.joinpath('python').absolute()
-    assert runtime.checked==(bad.joinpath('python').absolute(),good.joinpath('python').absolute())
 
 
-def test_engine_runtime_missing_dependency_reports_all_interpreters(tmp_path,monkeypatch):
-    import asyncio
-    from delivery_api.engine_runtime import EngineRuntimeError,resolve_engine_runtime
-    engine=tmp_path/'interview-engine';python=engine/'.venv/bin/python';python.parent.mkdir(parents=True)
-    python.write_text('#!/bin/sh\nexit 1\n');python.chmod(0o755)
-    monkeypatch.setenv('INTERVIEW_ENGINE_PYTHON',str(python))
-    monkeypatch.setattr('delivery_api.engine_runtime._candidates',lambda _: [python])
-    try:asyncio.run(resolve_engine_runtime(engine))
-    except EngineRuntimeError as e:
-        assert e.module=='langchain_core' and e.checked==(python,)
-    else:assert False,'missing dependency preflight should fail'
 
 
 def test_process_runner_hides_traceback_and_classifies_missing_module(tmp_path,pg_scoped_workspace,monkeypatch):
@@ -291,40 +268,10 @@ def test_process_runner_hides_traceback_and_classifies_missing_module(tmp_path,p
 
 
 
-def test_engine_runtime_persisted_setting_precedes_fallback(tmp_path,monkeypatch):
-    from delivery_api import engine_runtime
-    saved=tmp_path/'saved-python';fallback=tmp_path/'fallback-python'
-    for path in (saved,fallback):path.write_text('#!/bin/sh\nexit 0\n');path.chmod(0o755)
-    monkeypatch.setattr(engine_runtime,'SETTINGS_FILE',tmp_path/'.engine-python');engine_runtime.SETTINGS_FILE.write_text(str(saved))
-    monkeypatch.delenv('INTERVIEW_ENGINE_PYTHON',raising=False);monkeypatch.delenv('VMODEL_PYTHON',raising=False);monkeypatch.delenv('VIRTUAL_ENV',raising=False)
-    monkeypatch.setattr(engine_runtime.sys,'executable',str(fallback))
-    assert engine_runtime._candidates(tmp_path/'interview-engine')[0]==saved.absolute()
 
 
-def test_engine_python_setting_rejects_interpreter_without_dependency(tmp_path,monkeypatch):
-    import asyncio
-    from delivery_api import engine_runtime
-    bad=tmp_path/'python';bad.write_text('#!/bin/sh\nexit 1\n');bad.chmod(0o755)
-    monkeypatch.setattr(engine_runtime,'SETTINGS_FILE',tmp_path/'.engine-python')
-    try:asyncio.run(engine_runtime.save_python(str(bad),tmp_path))
-    except ValueError as e:assert 'langchain_core' in str(e)
-    else:assert False,'bad engine Python must not persist'
-    assert not engine_runtime.SETTINGS_FILE.exists()
 
 
-def test_venv_python_symlink_is_invoked_literally_for_preflight(tmp_path,monkeypatch):
-    import asyncio,subprocess,sys
-    from delivery_api import engine_runtime
-    venv=tmp_path/'engine-venv';subprocess.run([sys.executable,'-m','venv',str(venv)],check=True)
-    python=venv/'bin/python'
-    probe=venv/('Lib/site-packages' if sys.platform=='win32' else f'lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages')/'venv_only_probe.py'
-    probe.parent.mkdir(parents=True,exist_ok=True);probe.write_text('VALUE=1\n')
-    assert python.is_symlink(), 'regression requires the normal symlinked venv interpreter'
-    assert not asyncio.run(engine_runtime.validate_python(engine_runtime.Path(sys.executable),'venv_only_probe'))
-    monkeypatch.setattr(engine_runtime,'_candidates',lambda _:[python])
-    runtime=asyncio.run(engine_runtime.resolve_engine_runtime(tmp_path,required_module='venv_only_probe'))
-    assert runtime.python==python.absolute() and runtime.attempts==((python,True),)
-    assert runtime.python!=python.resolve()
 
 def _check_built_runtime_does_not_fall_back_to_legacy_interview_subprocess(monkeypatch,tmp_path,pg_scoped_workspace):
     from delivery_api.app import app

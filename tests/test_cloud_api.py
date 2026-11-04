@@ -29,7 +29,6 @@ def cloud(monkeypatch,tmp_path,pg_workspace_factory,request):
     monkeypatch.setitem(module.app.state._state,'store',store)
     monkeypatch.setattr(module.orchestrator,'store',store)
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
-    monkeypatch.setattr(module.bundles,'root',lambda:tmp_path)
     # Cloud dispatch runs behind the job-bound admission gateway; install the
     # test double so admitted routes exercise the seam (unadmitted stays 503).
     from types import SimpleNamespace as _NS
@@ -595,11 +594,9 @@ def test_suspended_file_only_gate_mutations_rejected_before_artifact_effect(clou
     monkeypatch.setattr(module,'_gate_review',lambda *a: touched.append('review') or {})
     with psycopg.connect(DSN) as c:c.execute('INSERT INTO user_task_policy VALUES (%s,true,1,0)',(A.owner_id,))
     try:
-        # semantic-review's cloud protocol gate stays closed (503). stack-decisions is
-        # now an admitted file operation (the founder records decisions on the pickup
-        # host): the route wall opens, and the suspended-tenant file guard itself
-        # rejects before any artifact effect - translated to 404, no existence oracle.
-        for suffix,body,expected in (('semantic-review',{'revision':'a'*64,'decisions':[]},503),
+        # Both PG gate writes reach the suspended-owner mutation guard and
+        # reject before reading evidence, with no tenant existence oracle.
+        for suffix,body,expected in (('semantic-review',{'revision':'a'*64,'decisions':[]},404),
              ('stack-decisions',{'revision':'a'*64,'decisions':[{'key':'x','text':'y'}]},404)):
             response=client.post('/api/tasks/'+task['task_id']+'/gates/gate-srs/'+suffix,json=body,headers=header('a'))
             assert response.status_code==expected,(suffix,response.status_code,response.text)
@@ -648,8 +645,8 @@ def test_cloud_bundle_reads_only_the_registered_session_and_hides_host_paths(clo
         store.publish_task_revision_bytes(task['task_id'],[{'phase_key':'intent','name':'intent_model.json','data':b'{"problem_statement":"My bundle"}'}],writer_instance='test-only')
     path=session_root(root,A,sid)
     def global_scan(*a,**k):raise AssertionError('cloud read scanned a shared or sibling directory')
-    monkeypatch.setattr(module.bundles,'discover',global_scan)
-    monkeypatch.setattr(module.bundles,'_discover',global_scan)
+    monkeypatch.setattr(module.bundles,'discover',global_scan,raising=False)
+    monkeypatch.setattr(module.bundles,'_discover',global_scan,raising=False)
     listing=client.get('/api/sessions',headers=header('a'))
     assert listing.status_code==200,listing.text
     assert listing.json()['sessions'][0]['title']=='My bundle'

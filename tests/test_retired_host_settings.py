@@ -9,3 +9,8 @@ def test_host_settings_routes_are_absent(path,pg_scoped_workspace,pg_task_app):
     assert path not in {route.path for route in module.app.routes}
     assert client.get(path).status_code==404
     assert client.post(path,json={'path':'/tmp/arbitrary'}).status_code==404
+
+
+def test_no_host_interpreter_discovery_module():
+    import importlib.util
+    assert importlib.util.find_spec('delivery_api.engine_runtime') is None

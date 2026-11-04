@@ -106,3 +106,10 @@ Signed route survives absent host directory; duration-only customer projection
 and account-debug token detail remain separate. Red-first path-policy regression;
 29 diagnostics/debug/policy tests passed. Signed classification desktop/mobile
 screenshots inspected: retained verdicts are readable, dialog scrolls correctly.
+
+Unit 17: removed unused host Python discovery/settings module and its obsolete
+interpreter selection tests. Installed child/contract checks cover the one Python
+runtime. Updated signed cloud/session/cache fixtures for retired bundle APIs and
+owner/session cache key. Both suspended semantic and stack PG mutations fail at
+the suspended-owner guard before evidence changes. Signed start error remains
+human-readable and leaves task unstarted.
