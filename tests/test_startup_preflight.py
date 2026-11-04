@@ -332,10 +332,14 @@ def test_an_engine_check_failure_names_the_missing_piece(monkeypatch):
 
 
 def test_the_launcher_pins_the_expected_build_for_the_staleness_check():
-    script = (ROOT/'scripts/ops/preview-exec.sh').read_text()
-    assert 'REQUI_EXPECTED_REPOS=$REPOS' in script
+    # Mutable expected-tag equality is replaced by immutable config/manifest and
+    # full source-tuple receipt verification, exercised in image identity tests.
+    source=(ROOT/'scripts/docker/local_image_preview.py').read_text()
+    assert "accepted.get('image_id')!=image_id" in source
+    assert "inspect_image(image_id)['Id']!=image_id" in source
     legacy=(ROOT/'scripts/ops/preview.sh').read_text()
     assert 'exec bash' in legacy and 'preview-exec.sh' in legacy
+
 
 
 def test_child_pool_budget_counts_active_child_and_no_compatibility():

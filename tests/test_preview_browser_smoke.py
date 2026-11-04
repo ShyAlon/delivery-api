@@ -160,13 +160,11 @@ def test_every_other_browser_error_fails():
 
 
 def test_the_launcher_delegates_to_the_smoke_module():
-    """The classification logic must be the tested module, not an untestable
-    heredoc: preview-exec.sh calls scripts/ops/browser_smoke.py and keeps the
-    BROWSER-SMOKE abort and the chromium-missing note."""
-    src = (REPO / "scripts" / "ops" / "preview-exec.sh").read_text()
-    assert '.venv/bin/python scripts/ops/browser_smoke.py "http://127.0.0.1:$PORT"' in src
-    assert "abort BROWSER-SMOKE" in src and "playwright install chromium" in src
-    assert "page.on(" not in src, "the inline playwright heredoc is gone - the logic lives in the tested module"
+    src=(REPO/'scripts/docker/local_image_preview.py').read_text()
+    assert "'ops/browser_smoke.py'" in src and 'subprocess.run' in src
+    assert 'if result.returncode:' in src and 'container retained:' in src
+    assert 'page.on(' not in src
+
 
 
 def test_telemetry_401_is_not_an_expected_anonymous_error():

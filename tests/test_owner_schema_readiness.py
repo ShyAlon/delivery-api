@@ -24,9 +24,15 @@ def test_checked_in_retention_migration_is_blocked():
     assert s.destructive(path.read_text())==['DELETE']
 
 def test_preview_checks_live_schema_before_grounding_and_build():
-    src=(ROOT/'scripts/ops/preview-exec.sh').read_text()
-    assert src.index('schema-readiness.py')<src.index('step "settings + grounding"')
-    assert src.index('schema-readiness.py')<src.index('step "build ')
+    # Image acceptance now migrates only owned disposable PG; production startup
+    # still runs its read-only schema preflight before spawning delivery.
+    fixture=(ROOT/'scripts/docker/local_service_fixture.py').read_text()
+    assert 'pg_harness.start(server_factory=Server)' in fixture
+    entry=(ROOT/'scripts/docker/full_entry.py').read_text()
+    assert entry.index('report=preflight.run')<entry.index('delivery=subprocess.Popen')
+    preview=(ROOT/'scripts/docker/local_image_preview.py').read_text()
+    assert 'apply-pg-cutover' not in preview and 'schema-readiness.py --offer-apply' not in preview
+
 
 def owner():
     spec=importlib.util.spec_from_file_location('owner_schema',ROOT/'scripts/owner/apply-pg-cutover.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m

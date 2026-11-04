@@ -78,6 +78,8 @@ case "$command" in
  preview|preview-free)
    [ "$command" != preview-free ] || echo 'preview-free is an alias of the same accepted-image runtime, not an execution-off mode.'
    args=()
-   [ "$apply" = 0 ] || args+=(--apply)
+   [ "$checks" = full ] || fail "--fast retired; exact-image acceptance is never skipped."
+   if [ "$apply" = 0 ]; then echo 'DRY REVIEW ONLY: req image --accept-local prepares the exact image; req preview --apply starts the accepted image. Nothing launched.';exit 0;fi
+   args+=(--apply)
    exec bash "$target" "${args[@]}";;
 esac
