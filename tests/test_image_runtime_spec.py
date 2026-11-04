@@ -38,3 +38,9 @@ def test_contract_stable_and_has_no_target_or_secret_values():
     assert b"linux/amd64" in raw and b"image-default" in raw
     assert b"service.env" not in raw and ID.encode() not in raw
     assert raw == m.contract_bytes()
+
+
+def test_optional_external_service_socket_and_public_ca_mount_only():
+    args=target(service_mount='requi-fixture-'+'a'*24).arguments()
+    assert 'type=volume,source=requi-fixture-'+'a'*24+',target=/fixture,readonly' in args
+    with pytest.raises(ValueError):target(service_mount='/private/user-data').arguments()

@@ -24,6 +24,7 @@ class Target:
     env_file: str
     port: int
     network: str
+    service_mount: str | None = None
 
     def arguments(self) -> list[str]:
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", self.image_id):
@@ -36,8 +37,13 @@ class Target:
             raise ValueError("explicit network required")
         if not PurePosixPath(self.env_file).is_absolute() or any(c in self.env_file for c in "\n\r\0"):
             raise ValueError("absolute settings path required")
+        mounts = []
+        if self.service_mount is not None:
+            if not re.fullmatch(r"requi-fixture-[a-f0-9]{24}", self.service_mount):
+                raise ValueError("invocation-owned external service volume required")
+            mounts = ["--mount", "type=volume,source=" + self.service_mount + ",target=/fixture,readonly"]
         return ["run", "--detach", "--name", self.name, *OPTIONS,
-                "--network", self.network, "--env-file", self.env_file,
+                "--network", self.network, *mounts, "--env-file", self.env_file,
                 "--publish", f"127.0.0.1:{self.port}:8000", self.image_id]
 
 
