@@ -246,7 +246,8 @@ def receipt(state: StageState, publication: dict) -> dict:
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repos-root", type=Path, default=Path(__file__).resolve().parents[3])
-    p.add_argument("--run-dir", type=Path, required=True)
+    p.add_argument("--run-dir", type=Path, help="resume directory, defaults to a source/contract keyed private local directory")
+    p.add_argument("--preview", action="store_true", help="review accepted local image with existing private settings; --apply starts it")
     p.add_argument("--deploy", metavar="PRIVATE_GHCR_REPOSITORY", help="review an accepted manifest; no SSH unless --apply")
     p.add_argument("--apply", action="store_true", help="owner-confirmed deploy apply only")
     p.add_argument("--previous-image-id", help="reviewed previous image config digest paired with previous container ID")
@@ -266,15 +267,20 @@ def parser():
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
     try:
-        if args.apply and not args.deploy:raise WorkflowError('--apply requires --deploy; no remote action inferred')
-        if sum(bool(v) for v in (args.review,args.build,args.accept_local,args.publish,args.deploy))!=1:
+        if args.apply and not (args.deploy or args.preview):raise WorkflowError('--apply requires --deploy or --preview; no action inferred')
+        if sum(bool(v) for v in (args.review,args.build,args.accept_local,args.publish,args.deploy,args.preview))!=1:
             raise WorkflowError('choose exactly one review/build/accept-local/publish/deploy stage goal')
         log("INFO", "stage 1/6 preflight: local tools and four clean source revisions")
         inputs = preflight(args.repos_root.resolve())
-        state = StageState(args.run_dir / "state.json", inputs)
+        run_dir=args.run_dir or Path.home()/".local/share/requi/image-workflow"/digest(json.dumps(inputs,sort_keys=True).encode()).split(":")[1][:24]
+        state = StageState(run_dir / "state.json", inputs)
         if not state.reusable("preflight", lambda evidence: evidence == inputs):
             state.complete("preflight", inputs)
         log("PASS", "preflight passed; platform linux/amd64, one shared runtime contract")
+        if args.preview:
+            from local_image_preview import preview
+            preview(state,env_file=args.env_file,name=args.name,port=args.port,network=args.network,apply=args.apply)
+            return 0
         if args.deploy:
             if not args.host:raise WorkflowError('deploy needs an explicit reviewed host')
             from owner_image_deploy import deploy
