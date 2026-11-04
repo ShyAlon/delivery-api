@@ -76,3 +76,8 @@ Five policy regressions failed first. Signed classification browser included in
 71-test provenance/documents/debug/policy group. Chromium installed locally for
 remaining browser gate. Full gate attempt was interrupted at 15%; no full-pass
 claim, known compatibility fixture failures remain.
+
+Unit 12: removed host bundle discovery/root settings/projection. Retained bundle
+summaries preserve actual pending/error/warning/approved interview states and
+project title, completion and validation from PG. Red-first retired-function
+policy; 5 selected bundle/session tests passed, signed routes included.

@@ -40,10 +40,12 @@ def test_missing_artifacts_give_empty_panel():
 
 
 
-def test_bundle_reads_validation(tmp_path, monkeypatch):
+def test_bundle_reads_validation(tmp_path, monkeypatch,pg_scoped_workspace):
     from delivery_api import bundles
-    spec = tmp_path / "s1" / "spec"; spec.mkdir(parents=True)
-    (spec / "validation.json").write_text(json.dumps({"session_id": "s1", "items": [ITEM]}))
-    monkeypatch.setenv("VMODEL_ARTIFACTS_DIR", str(tmp_path))
-    out = bundles.bundle("s1")
-    assert out["phase_status"]["validation"] == "done" and len(out["validation"]) == 1
+    store=pg_scoped_workspace.store
+    tid=store.create_task('Validation')['task_id'];store.set_engine_session(tid,'validation-test')
+    store.publish_task_revision_bytes(tid,[{'phase_key':'validation','name':'validation.json',
+        'data':json.dumps({'session_id':'validation-test','items':[ITEM]}).encode()}],writer_instance='test-only')
+    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'host-missing'))
+    out=bundles.postgres_bundle(store,'validation-test')
+    assert out['phase_status']['validation']=='done' and len(out['validation'])==1

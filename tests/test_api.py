@@ -10,7 +10,6 @@ from delivery_api import config
 @pytest.fixture()
 def client(pg_scoped_workspace,monkeypatch,pg_task_app):
     signed_app=pg_task_app(pg_scoped_workspace)
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import store
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(store,PostgresStore)
@@ -102,7 +101,6 @@ def test_completed_sessions_are_discovered_and_bundle_is_projected(client,tmp_pa
 
 
 def test_start_task_requires_typed_http_engine_not_subprocess(monkeypatch,tmp_path,pg_scoped_workspace):
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import app
     store=pg_scoped_workspace.store
     from fastapi.testclient import TestClient
@@ -117,7 +115,6 @@ def test_start_task_requires_typed_http_engine_not_subprocess(monkeypatch,tmp_pa
 
 
 def _check_start_task_unreachable_http_engine_is_human_readable(monkeypatch,tmp_path,pg_scoped_workspace):
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import app
     store=pg_scoped_workspace.store
     from fastapi.testclient import TestClient
@@ -133,7 +130,6 @@ def _check_start_task_unreachable_http_engine_is_human_readable(monkeypatch,tmp_
 
 def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch,pg_scoped_workspace,pg_task_app):
     signed_app=pg_task_app(pg_scoped_workspace)
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import app
     from fastapi.testclient import TestClient
     monkeypatch.setenv('DEEPSEEK_API_KEY','super-secret')
@@ -144,7 +140,6 @@ def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch,
 
 
 def test_start_task_deepseek_requires_engine_preflight(monkeypatch,tmp_path,pg_scoped_workspace):
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import app
     store=pg_scoped_workspace.store
     from fastapi.testclient import TestClient
@@ -189,55 +184,37 @@ def test_task_audit_uses_latest_cumulative_price_per_phase(pg_scoped_workspace,m
     assert body['totals']['interview_calls']==0
 
 
-def test_sessions_sort_title_and_interview_status_from_live_artifacts(tmp_path):
- import json,os
- from datetime import datetime,timezone
- from delivery_api import bundles
- root=tmp_path/'artifacts';root.mkdir()
- old=root/'old';(old/'interview').mkdir(parents=True)
- (old/'interview/intent_model.json').write_text(json.dumps({'problem_statement':'Approved intent'}))
- (old/'spec').mkdir()
- (old/'spec/hands-free-run.json').write_text(json.dumps({'completed_at':'2026-09-19T00:00:00Z'}))
- live=root/'live';(live/'interview').mkdir(parents=True)
- (live/'interview/usage.jsonl').write_text('{}\n')
- (live/'interview/http-session.json').write_text(json.dumps({'status':30,'request':{'idea':'  A founder brief  '},'open_input':{'prompt':'Question?'}}))
- stamp=datetime(2026,9,27,tzinfo=timezone.utc).timestamp()
- for path in (live/'interview/usage.jsonl',live/'interview/http-session.json'):os.utime(path,(stamp,stamp))
- rows=bundles._discover(root)
- assert [row['session_id'] for row in rows]==['live','old']
- assert rows[0]['title']=='A founder brief'
- assert rows[0]['phase_status']['interview']=='in_progress'
- assert rows[0]['updated_at'].startswith('2026-09-27T00:00:00')
- assert rows[1]['phase_status']['interview']=='done'
- assert rows[1]['title']=='Approved intent'
- assert rows[1]['completed_at']=='2026-09-19T00:00:00Z'
- # Usage alone is a trace of activity, never proof of an approved result.
- (live/'interview/http-session.json').unlink()
- assert bundles._discover(root)[0]['phase_status']['interview']=='in_progress'
- # A malformed/empty persisted request still cannot blank a card.
- (live/'interview/http-session.json').write_text(json.dumps({'status':40,'request':{'idea':''}}))
- assert bundles._discover(root)[0]['title']=='live'
- assert bundles._discover(root)[0]['phase_status']['interview']=='warning'
- # Card and bundle detail use the same interview status semantics.
- original=bundles.root
- try:
-  bundles.root=lambda:root
-  assert bundles.bundle('live')['phase_status']['interview']=='warning'
- finally:bundles.root=original
-
-
-def test_sessions_spec_completion_and_http_error(tmp_path):
+def test_sessions_title_and_interview_status_from_retained_evidence(tmp_path,monkeypatch,pg_scoped_workspace):
  import json
  from delivery_api import bundles
- root=tmp_path/'artifacts';session=root/'s';(session/'interview').mkdir(parents=True);(session/'spec').mkdir()
- (session/'interview/usage.jsonl').write_text('{}\n')
- (session/'interview/http-session.json').write_text(json.dumps({'status':50}))
- (session/'spec/bundle-integrity.json').write_text(json.dumps({'files_checked':14,'diagnostics':[]}))
- (session/'spec/hands-free-run.json').write_text(json.dumps({'completed_at':'2026-09-19T00:00:00Z'}))
- row=bundles._discover(root)[0]
- assert row['phase_status']['interview']=='error'
- assert row['phase_status']['oracle']=='done'
- assert row['oracle_passed'] and row['files_checked']==14
+ from test_http_cutover import _PGUsage
+ store=pg_scoped_workspace.store
+ tid=store.create_task('Fallback title')['task_id'];store.set_engine_session(tid,'live')
+ usage=_PGUsage(store,tid,'interview/usage.jsonl');usage.write_text('{}\n')
+ http=_PGUsage(store,tid,'interview/http-session.json')
+ http.write_text(json.dumps({'status':30,'request':{'idea':'  A founder brief  '}}))
+ monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'missing'))
+ row=bundles.postgres_bundle(store,'live')['session']
+ assert row['title']=='A founder brief' and row['phase_status']['interview']=='in_progress'
+ http.write_text(json.dumps({'status':40,'request':{'idea':''}}))
+ row=bundles.postgres_bundle(store,'live')['session']
+ assert row['title']=='Fallback title' and row['phase_status']['interview']=='warning'
+ store.publish_task_revision_bytes(tid,[{'phase_key':'intent','name':'intent_model.json','data':b'{"problem_statement":"Approved intent"}'}],writer_instance='test-only')
+ row=bundles.postgres_bundle(store,'live')['session']
+ assert row['title']=='Approved intent' and row['phase_status']['interview']=='done'
+
+
+def test_sessions_spec_completion_and_http_error(pg_scoped_workspace):
+ import json
+ from delivery_api import bundles
+ from test_http_cutover import _PGUsage
+ store=pg_scoped_workspace.store
+ tid=store.create_task('Test')['task_id'];store.set_engine_session(tid,'completion')
+ for name,value in {'interview/http-session.json':{'status':50},'spec/bundle-integrity.json':{'files_checked':14,'diagnostics':[]},'spec/hands-free-run.json':{'completed_at':'2026-09-19T00:00:00Z'}}.items():
+  _PGUsage(store,tid,name).write_text(json.dumps(value))
+ row=bundles.postgres_bundle(store,'completion')['session']
+ assert row['phase_status']['interview']=='error' and row['phase_status']['oracle']=='done'
+ assert row['oracle_passed'] and row['files_checked']==14 and row['completed_at']=='2026-09-19T00:00:00Z'
 
 
 def test_start_task_unreachable_http_engine_is_human_readable(pg_local_compat_process,pg_scoped_workspace):
