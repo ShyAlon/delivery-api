@@ -39,9 +39,9 @@ def local_env(**over):
 # --- the managed route list -------------------------------------------------
 
 def test_deployed_cloud_manages_exactly_the_deepseek_route():
-    assert local_route.managed_routes({}) == ['deepseek']
-    assert local_route.managed_routes({'DELIVERY_LOCAL_PREVIEW': '0'}) == ['deepseek']
-    assert local_route.managed_routes({'DELIVERY_LOCAL_PREVIEW': 'true'}) == ['deepseek']
+    assert local_route.managed_routes({}) == ['deepseek', 'ollama']
+    assert local_route.managed_routes({'DELIVERY_LOCAL_PREVIEW': '0'}) == ['deepseek', 'ollama']
+    assert local_route.managed_routes({'DELIVERY_LOCAL_PREVIEW': 'true'}) == ['deepseek', 'ollama']
 
 
 def test_local_preview_adds_exactly_one_managed_ollama_route():
@@ -80,13 +80,11 @@ def test_local_quote_is_complete_exact_and_zero_priced():
         factory.close()
 
 
-def test_local_gateway_refused_without_the_preview_flag():
-    env = local_env()
-    env.pop('DELIVERY_LOCAL_PREVIEW')
-    with pytest.raises(AdmissionDenied):
-        pg.gateways_from_environment(object(), env)
-    with pytest.raises(AdmissionDenied):
-        pg.gateways_from_environment(object(), local_env(DELIVERY_LOCAL_PREVIEW='0'))
+def test_reviewed_zero_gateway_needs_no_location_flag():
+    settings=local_env();settings.pop('DELIVERY_LOCAL_PREVIEW',None)
+    factory=pg.gateways_from_environment(object(),settings)
+    try:assert factory.models=={'ollama':LOCAL_MODEL}
+    finally:factory.close()
 
 
 def test_local_gateway_refused_with_a_provider_key():
@@ -199,15 +197,10 @@ def test_local_clients_are_pinned_to_the_configured_origin(monkeypatch):
 
 # --- the execution switch ------------------------------------------------------
 
-def test_execution_switch_admits_the_local_route_only_with_the_flag(monkeypatch):
-    from delivery_api import cloud_execution
-    monkeypatch.setattr(config, 'CLOUD_TENANTS', True)
-    monkeypatch.delenv('DELIVERY_CONTROL_PLANE_ONLY', raising=False)
-    good = local_env(DELIVERY_CLOUD_EXECUTION='1', INTERVIEW_ENGINE_TOKEN='t' * 32, DELIVERY_CHILD_EXECUTION='local')
-    assert cloud_execution.problems(good) == []
-    noflag = dict(good); noflag.pop('DELIVERY_LOCAL_PREVIEW')
-    assert any('explicit local preview' in p for p in cloud_execution.problems(noflag))
-    assert any('no provider key' in p for p in cloud_execution.problems({**good, 'DEEPSEEK_API_KEY': 'sk-test'}))
+def test_execution_readiness_requires_installed_runtime(monkeypatch):
+    from delivery_api import cloud_execution,cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'_state',None)
+    assert cloud_execution.problems(local_env())==['reviewed child runtime is not ready']
 
 
 # --- the deployed boundary (app) ----------------------------------------------

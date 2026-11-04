@@ -239,19 +239,11 @@ def test_provider_env_skips_the_prompt(tmp_path):
     assert 'ABORTED [ARCH]' in p.stdout and '== [6/9] image smoke' in p.stdout, p.stdout[-500:]
 
 
-def test_local_preview_flag_only_in_ollama_mode():
-    """DELIVERY_LOCAL_PREVIEW=1 offers the ollama route; without OLLAMA_BASE_URL
-    (deepseek mode) that route is dead and fails task starts with a connection
-    error. The flag must be written exactly once: by lib.sh's preview_ollama_env,
-    which the launcher calls only inside the ollama branch."""
-    src = SCRIPT.read_text()
-    lib = LIB.read_text()
-    assert lib.count('DELIVERY_LOCAL_PREVIEW=1') == 1, 'the flag is written exactly once, in preview_ollama_env'
-    fn = lib.split('preview_ollama_env(){', 1)[1].split('\n}', 1)[0]
-    assert 'DELIVERY_LOCAL_PREVIEW=1' in fn
-    assert 'DELIVERY_LOCAL_PREVIEW=1' not in src, 'the launcher never writes the flag itself'
-    block = 'if [ "$PROVIDER" != deepseek ]; then\n  preview_ollama_env "$WORK/preview.env" "$OLLAMA_MODEL" "$OLLAMA_HOST"'
-    assert block in src, 'the flag must be written inside the ollama provider branch'
+def test_provider_values_do_not_enable_an_execution_mode():
+    src=SCRIPT.read_text();lib=LIB.read_text()
+    for obsolete in ('DELIVERY_LOCAL_PREVIEW=1','DELIVERY_CLOUD_EXECUTION=1','DELIVERY_CHILD_EXECUTION='):
+        assert obsolete not in src and obsolete not in lib
+    assert 'preview_ollama_env' in src
 
 
 def test_key_never_written_or_printed(tmp_path):
@@ -264,12 +256,11 @@ def test_key_never_written_or_printed(tmp_path):
         if f.is_file() and f.stat().st_size < 1024 * 1024:
             assert KEY not in f.read_text(errors='replace'), f
 
-def test_preview_sh_pins_the_expected_build():
-    """preview.sh is no longer frozen: 2026-10-27 it gained the REQUI_EXPECTED_REPOS pin
-    (both preview paths) so the container's staleness check can compare the running image
-    against the build the launcher expected. Keep both pins, after the build_env calls."""
-    src = (REPO / 'scripts' / 'ops' / 'preview.sh').read_text()
-    assert src.count("printf 'REQUI_EXPECTED_REPOS=%s\\n' \"$REPOS\" >> \"$WORK/preview.env\"") == 2
+def test_preview_sh_delegates_to_the_build_pinned_launcher():
+    src=(REPO/'scripts/ops/preview.sh').read_text()
+    assert 'exec bash' in src and 'preview-exec.sh' in src
+    assert 'REQUI_EXPECTED_REPOS=$REPOS' in SCRIPT.read_text()
+
 
 def test_launcher_structure_guards():
     """Static invariants: key passed via -e only, never appended to an env file;
@@ -281,7 +272,7 @@ def test_launcher_structure_guards():
     build = src[src.index('build_exec_env(){'):src.index('for t in docker curl git shasum tar')]
     assert 'DEEPSEEK_API_KEY=' not in build, 'the key value must never be written into the temp env file'
     assert 'grep -v -i -E' in build, 'the provider-key strip filter from the preview settings builder must be kept'
-    assert 'DELIVERY_CLOUD_EXECUTION=1' in build
+    assert 'DELIVERY_CLOUD_EXECUTION=1' not in build
     assert "printenv DEEPSEEK_API_KEY" not in src and 'echo "$DEEPSEEK_API_KEY"' not in src
 
 
@@ -337,7 +328,7 @@ def test_repo_detection_rejects_copied_out_script(tmp_path):
 
 def test_preview_model_pins_are_reviewed_in_shared_store_not_scraped_by_launcher():
     text=SCRIPT.read_text()
-    assert 'REQUI_PIN_STORE' in text
+    assert 'One durable pin store' in text
     assert 'scripts/ops/pin-local.py "$WORK"' not in text
     pin=(REPO/'scripts/ops/pin.py').read_text()
     assert 'selected_environment' in pin and 'Back office > Model pins' in pin
@@ -496,7 +487,7 @@ def test_a_full_run_reaches_ready_with_the_steps_in_order(tmp_path):
     assert positions == sorted(positions), 'the 8 steps must run in the printed order'
     assert 'Provider: local Ollama model phi4' in p.stdout
     assert 'Type or paste' not in p.stdout and 'ABORTED' not in p.stdout
-    assert 'REQUI_PIN_STORE=1' in SCRIPT.read_text()  # no independent local pricing/pin defaults
+    assert 'One durable pin store' in SCRIPT.read_text()  # no independent local pricing/pin defaults
 
 
 def test_the_venv_gate_passes_with_the_real_venv_and_fails_loud_without_site_packages():

@@ -220,9 +220,7 @@ def test_dispatch_rejection_and_claim_are_marked(marks, monkeypatch):
 
 def test_execute_job_marks_a_failure_record_that_itself_fails(marks, monkeypatch):
     import delivery_api.tenant_jobs as tj
-    import delivery_api.execution_fence as fence
     from delivery_api.tenancy import TenantScope, tenant_context
-    monkeypatch.setattr(fence, "require_engine_execution", lambda: None)
     capability = NS(task_id="t1", session_id="s1", validate=lambda store: None)
     store = NS(claim_worker=lambda jid: capability,
                task=lambda tid: {"task_id": tid},

@@ -46,8 +46,9 @@ def test_single_installed_paid_task_through_final_download(store,tmp_path,monkey
             class Factory:
                 models=runtime.models;verify_vendor=None
                 def __call__(self,*a):return factory(*a)
+                def refresh_launch(self):pass
                 def close(self):pass
-            monkeypatch.setattr('delivery_api.production_gateway.ProductionGateways',lambda *a:Factory())
+            monkeypatch.setattr('delivery_api.model_pins.DurableGateways',lambda *a:Factory())
             chosen=[]
             cloud_runtime.install(store,env(DELIVERY_CHILD_EXECUTION='local',DELIVERY_LOCAL_PREVIEW='1',DELIVERY_DATABASE_URL=DSN.replace('user=sandbox','user=delivery_app'),VMODEL_ARTIFACTS_DIR=str(tmp_path)),chosen.append,paid_runtime=runtime)
             engine=inprocess_engine.current();engine.command=command;client=chosen[0]

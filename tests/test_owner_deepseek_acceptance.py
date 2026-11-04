@@ -121,18 +121,18 @@ def test_owner_expense_read_uses_actual_scale_and_refuses_non_test(store,operato
 
 
 def test_target_default_and_override_never_fall_back():
-    assert a.target({})==('http://127.0.0.1:8001',True)
-    assert a.target({'PREVIEW_EXEC_PORT':'8123'})==('http://127.0.0.1:8123',True)
-    assert a.target({'DELIVERY_PUBLIC_ORIGIN':'https://fixture.invalid'})==('https://fixture.invalid',False)
-    assert a.target({},'http://localhost:8999')==('http://localhost:8999',True)
+    assert a.target({})=='http://127.0.0.1:8001'
+    assert a.target({'PREVIEW_EXEC_PORT':'8123'})=='http://127.0.0.1:8123'
+    assert a.target({'DELIVERY_PUBLIC_ORIGIN':'https://fixture.invalid'})=='https://fixture.invalid'
+    assert a.target({},'http://localhost:8999')=='http://localhost:8999'
     for url in ('https://user:secret@fixture.invalid','http://cloud.invalid','https://fixture.invalid/tasks'):
         with pytest.raises(a.Refused):a.target({},url)
 
 
 def test_wrong_target_refuses_before_auth_prompt_or_writes():
     calls=[]
-    def api(method,path):calls.append((method,path));return {'authenticated':False,'mode':'supabase'}
-    with pytest.raises(a.Refused,match='identify'):a.identify(api,True,execute=True)
+    def api(method,path):calls.append((method,path));return {'authenticated':False,'mode':'unexpected'}
+    with pytest.raises(a.Refused,match='identify'):a.identify(api,execute=True)
     assert calls==[('GET','/api/auth')]
 
 
@@ -475,3 +475,10 @@ def test_success_breakdown_saved_before_any_purge_and_disagrees_fail_closed(tmp_
     assert path.exists() and value['parts']['compute']['posted_units']=='2622000'
     assert calls==[('GET','/api/operations/test-tasks/t/breakdown')]
     with pytest.raises(a.Refused,match='no purge'):a.save_success_breakdown(api,'t',tmp_path,{'price':0.05})
+
+@pytest.mark.parametrize('origin',['http://localhost:8001','https://fixture.invalid'])
+def test_same_acceptance_identity_contract_at_each_origin(origin):
+    seen=[]
+    assert a.target({},origin)==origin
+    assert a.identify(lambda method,path: seen.append((method,path)) or {'mode':'supabase','authenticated':False})['mode']=='supabase'
+    assert seen==[('GET','/api/auth')]

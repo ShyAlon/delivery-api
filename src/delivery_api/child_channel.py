@@ -22,7 +22,9 @@ def json_channel(handle,*,limit,name,quiescence_error,on_close=lambda:None):
         finally:
             try:parent.shutdown(socket.SHUT_RDWR)
             except OSError:pass
-            stream.close();parent.close()
+            try:stream.close()
+            except OSError:pass  # peer may be killed after the reply was buffered
+            finally:parent.close()
     thread=threading.Thread(target=thread_target(lambda:scope.run(serve)),daemon=True,name='child-'+name);thread.start()
     try:yield child
     finally:

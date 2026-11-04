@@ -74,9 +74,10 @@ def test_paid_interview_exact_parent_accounting_reaped_and_recovery_never_rebill
     finally:server.shutdown();server.server_close()
 
 
-def test_paid_activation_selector_still_refuses():
-    from delivery_api.child_pool_budget import child_mode
-    with pytest.raises(ValueError,match='local only'):child_mode({'DELIVERY_CHILD_EXECUTION':'paid','DELIVERY_LOCAL_PREVIEW':'1'})
+def test_missing_key_still_refuses_parent_runtime():
+    from delivery_api.provider_runtime import construct
+    from types import SimpleNamespace
+    with pytest.raises(ValueError):construct({},SimpleNamespace(models={'deepseek':'reviewed'}))
 
 
 @pytest.mark.parametrize('reason',['stop','kill'])

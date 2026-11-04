@@ -73,8 +73,9 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
             class Factory:
                 models=paid_runtime.models;verify_vendor=None
                 def __call__(self,*args):return factory(*args)
+                def refresh_launch(self):pass
                 def close(self):pass
-            monkeypatch.setattr('delivery_api.production_gateway.ProductionGateways',lambda *a:Factory())
+            monkeypatch.setattr('delivery_api.model_pins.DurableGateways',lambda *a:Factory())
             from test_production_gateway import env as gateway_env
             cloud_runtime.install(store,gateway_env(DELIVERY_CHILD_EXECUTION='local',DELIVERY_LOCAL_PREVIEW='1',DELIVERY_DATABASE_URL=engine.dsn,VMODEL_ARTIFACTS_DIR=str(tmp_path)),lambda c:None,paid_runtime=paid_runtime)
             installed_engine=inprocess_engine.current();installed_engine.command=engine.command;installed_engine.endpoint=engine.endpoint;engine=installed_engine

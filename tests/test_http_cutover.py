@@ -538,7 +538,7 @@ def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path
  assert str(artifacts/session/'interview'/'conops.json') in command
  assert options['phase']=='needs' and store.task(tid)['active_phase']=='needs'
  assert options['env']['SPEC_GENERATOR_MODEL_NEEDS']=='deepseek:deepseek-flash'
- assert command[0]==str(generator/'.venv/bin/python')
+ assert command[0]==__import__('sys').executable
 
 
 def test_final_typed_answer_reconciles_without_resubmission(tmp_path,monkeypatch,pg_scoped_workspace):

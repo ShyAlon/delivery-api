@@ -185,8 +185,8 @@ def test_pull_all_syncs_dependent_locked_repos_and_skips_contracts_source(tmp_pa
     assert 'Notice: vmodel-contracts is the source package' in result.stdout
 
 
-def test_generator_never_falls_back_to_delivery_python_when_sibling_venv_missing():
+def test_generator_uses_installed_producer_in_the_current_interpreter():
     source=(Path(__file__).parents[1]/'src/delivery_api/orchestrator.py').read_text()
-    assert 'if not python.is_file() and not built:' in source
-    assert 'spec-generator environment is missing at {python}' in source
-    assert 'if not python.exists():python=Path(sys.executable)' not in source
+    assert 'python=Path(sys.executable)' in source.replace(' ','')
+    assert 'REQUI_RE_DIST' not in source
+    assert '/ ".venv"' not in source

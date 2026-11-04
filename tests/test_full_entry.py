@@ -12,17 +12,14 @@ def test_refuses_missing_default_and_short_engine_token():
         assert any('INTERVIEW_ENGINE_TOKEN' in p for p in full_entry.check_env(env))
 
 
-def test_accepts_private_token_and_refuses_control_plane_flag():
+def test_retired_profile_does_not_select_a_different_launcher():
     good={'INTERVIEW_ENGINE_TOKEN':'x'*32,'DELIVERY_DATABASE_URL':'postgresql://delivery_app:x@db.example:6543/postgres'}
     assert full_entry.check_env(good)==[]
-    assert any('CONTROL_PLANE_ONLY' in p for p in full_entry.check_env({**good,'DELIVERY_CONTROL_PLANE_ONLY':'1'}))
+    assert full_entry.check_env({**good,'DELIVERY_CONTROL_PLANE_ONLY':'1'})==[]
 
 
-def test_engine_is_loopback_only_and_delivery_runs_as_module():
-    engine,delivery=full_entry.commands('python')
-    assert engine[engine.index('--host')+1]=='127.0.0.1'
-    assert engine[engine.index('--port')+1]=='8010'
-    assert delivery==['python','-m','delivery_api']
+def test_delivery_parent_is_the_only_resident_service():
+    assert full_entry.command('python')==['python','-m','delivery_api']
 
 
 def test_engine_session_dsn_is_derived_from_the_delivery_postgres():
@@ -44,10 +41,10 @@ def test_session_persistence_must_be_chosen_or_startup_refuses():
     assert any('INTERVIEW_ENGINE_SESSIONS_DSN' in p and 'INTERVIEW_ENGINE_SESSIONS_FILE' in p for p in problems),problems
 
 
-def test_child_optin_omits_compatibility_service_and_health_port(monkeypatch):
-    env={'DELIVERY_CHILD_EXECUTION':'local','DELIVERY_LOCAL_PREVIEW':'1'}
-    assert full_entry.compatibility_engine_required(env) is False
-    assert full_entry.compatibility_engine_required({}) is True
+def test_no_compatibility_engine_launch_branch():
+    source=Path(full_entry.__file__).read_text()
+    assert 'compatibility_engine_required' not in source
+    assert 'interview_engine.http_service:app' not in source
 
 
 def test_supervisor_releases_report_pool_even_when_preflight_refuses(monkeypatch):

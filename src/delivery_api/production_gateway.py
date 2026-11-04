@@ -95,7 +95,6 @@ class ProductionGateways:
         Bind to the immutable job choice before compute metering starts. Each child
         enforces that same choice at reserve and owns settlement/recovery unchanged.
         """
-        if environ.get('DELIVERY_LOCAL_PREVIEW')!='1':raise AdmissionDenied('dual providers require the local execution preview')
         providers={r.get('provider') for r in rows if isinstance(r,dict)}
         if providers!={'deepseek','ollama'}:raise AdmissionDenied('one reviewed row per supported provider required')
         if not isinstance(contexts,list) or len(contexts)!=2 or any(not isinstance(c,dict) for c in contexts):
@@ -125,8 +124,6 @@ class ProductionGateways:
         local model. The catalog still requires the reviewed row and context ceiling,
         and every call reserves/settles through the same shared ledger at $0.
         """
-        from .local_route import local_preview_enabled
-        if not local_preview_enabled(environ):raise AdmissionDenied('the local Ollama route exists only in the local execution preview')
         if (environ.get(KEY_ENV) or '').strip():raise AdmissionDenied('the local Ollama route carries no provider key')
         if 'retail_formula' in row or 'provider_snapshot' in row:raise AdmissionDenied('the local route carries no retail formula or vendor snapshot')
         if row.get('retail_units_per_credit')!=PREPAID_UNITS:raise AdmissionDenied('exact 1000000000-unit prepaid scale required')

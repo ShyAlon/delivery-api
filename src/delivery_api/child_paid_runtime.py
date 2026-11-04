@@ -1,6 +1,6 @@
-"""Trusted constructor seam for paid-child acceptance, not production activation.
+"""Parent-owned transport and compute accounting for reviewed paid children.
 
-Only the explicit attended loopback preview constructs this object. Keys/transport stay in the parent;
+Construction grants no spending authority. Keys/transport stay in the parent;
 child configuration receives only its pinned model and private descriptors.
 """
 from .child_compute_channel import ChildComputeAccounting

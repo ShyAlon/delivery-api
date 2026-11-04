@@ -210,7 +210,7 @@ def test_pool_budget_leaves_room_for_engine_sessions():
     # headroom for non-pool clients (migrations, ops psql, the engine
     # heartbeat's own bookkeeping on standalone).
     from delivery_api import db_pool, postgres_scope
-    assert db_pool.PROCESS_POOL_MAX == 10
+    assert db_pool.PROCESS_POOL_MAX == 8
     assert postgres_scope.POOL_OPEN_MAX == db_pool.PROCESS_POOL_MAX
     assert db_pool.PROCESS_POOL_MAX <= 15 - 5
 

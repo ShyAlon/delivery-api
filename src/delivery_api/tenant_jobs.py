@@ -7,8 +7,6 @@ from .tenancy import current_scope,tenant_context
 
 
 async def execute_job(store,job_id,handler,*,verify_stopped_quiescence=None,verify_completion_quiescence=None):
-    from .execution_fence import require_engine_execution
-    require_engine_execution()
     scope=current_scope()
     with tenant_context(scope):
         capability=store.claim_worker(job_id)

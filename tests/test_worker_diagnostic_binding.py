@@ -7,8 +7,6 @@ from delivery_api.tenancy import TenantScope,tenant_context
 
 
 def test_claimed_capability_is_the_diagnostic_binding(monkeypatch):
- from delivery_api import execution_fence
- monkeypatch.setattr(execution_fence,'require_engine_execution',lambda:None)
  cap=SimpleNamespace(task_id='task',session_id='session',validate=lambda store:None)
  seen=[]
  store=SimpleNamespace(claim_worker=lambda job:cap,task=lambda task:None,finish_worker=lambda *a,**k:None)

@@ -313,16 +313,13 @@ def target(values,override=None):
         raise Refused('Target must be one app origin, without credentials, path or query; use --base-url')
     local=parsed.hostname in ('localhost','127.0.0.1','::1')
     if not local and parsed.scheme!='https':raise Refused('Cloud target requires HTTPS')
-    return base,local
+    return base
 
 
-def identify(api,local,*,execute=False):
+def identify(api,*,execute=False):
     state=api('GET','/api/auth')
-    if local:
-        if state.get('preview') is not True or state.get('local_preview') is not True:
-            raise Refused('The local target did not identify as the execution preview. Start scripts/ops/preview-exec.sh and retry; no credentials or paid request sent')
-    elif state.get('mode')!='supabase':
-        raise Refused('The cloud target did not identify as the signed-in account service; no credentials or paid request sent')
+    if state.get('mode')!='supabase':
+        raise Refused('The target did not identify as the signed-in account service; no credentials or paid request sent')
     return state
 
 
@@ -354,13 +351,13 @@ def main(argv=None):
     args=p.parse_args(argv)
     if args.execute and args.dry_run:p.error('choose --dry-run or --execute')
     settings,values=load_settings(args.repo,args.env_file)
-    base,local=target(values,args.base_url)
-    print('Target: '+('local execution preview' if local else 'cloud account service')+' '+base,flush=True)
+    base=target(values,args.base_url)
+    print('Target: '+base,flush=True)
     import httpx
     started=time.monotonic();stamp=datetime.datetime.now().astimezone().isoformat()
     with httpx.Client(base_url=base,follow_redirects=False,trust_env=False) as client:
         api=API(client)
-        state=identify(api,local,execute=args.execute)
+        state=identify(api,execute=args.execute)
         authenticate(client,settings,values,base,state)
         api=API(client);pin,plan=preflight(api)
         print(json.dumps({'at':stamp,'dry_run':not args.execute,'plan':plan},indent=2))

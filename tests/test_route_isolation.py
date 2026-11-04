@@ -50,12 +50,10 @@ def test_task_generation_captures_only_valid_independent_routes(monkeypatch):
  assert gateway.for_task('task').models=={'ollama':json.loads(saved['pin'][pg.PRICES_ENV])[0]['model']}
 
 
-def test_startup_check_uses_the_same_independent_routes(monkeypatch):
+def test_gateway_resolution_uses_the_same_independent_routes(monkeypatch):
  env,_=setup(monkeypatch)
- from delivery_api import postgres_scope
- monkeypatch.setattr(postgres_scope,'ScopedPostgres',lambda dsn:object())
- cloud_runtime._checked.clear()
- cloud_runtime.check_gateways(env)
+ gateway=pins.DurableGateways(SimpleNamespace(_postgres=object()),env)
+ assert gateway.models.keys()=={'ollama'}
 
 
 def test_failed_paid_refresh_is_scoped_and_never_contacts_local_vendor(monkeypatch):
@@ -80,12 +78,12 @@ def test_missing_local_pin_does_not_implicitly_create_model_or_bounds(monkeypatc
 
 
 def test_paid_preview_does_not_create_paid_authority_for_local_only_ready_set(monkeypatch):
- from delivery_api import paid_preview
+ from delivery_api import provider_runtime
  env,payload=setup(monkeypatch,DELIVERY_CHILD_EXECUTION='attended-paid',DELIVERY_PAID_CHILD_PREVIEW='1',DELIVERY_PREVIEW='1',DELIVERY_PUBLIC_ORIGIN='http://127.0.0.1:8770')
  gateway=pins.DurableGateways(SimpleNamespace(_postgres=object()),env)
- assert paid_preview.construct(env,gateway) is None
+ assert provider_runtime.construct(env,gateway) is None
  env['DELIVERY_PUBLIC_ORIGIN']='https://deployed.example'
- with pytest.raises(ValueError,match='explicit attended'):paid_preview.construct(env,gateway)
+ assert provider_runtime.construct(env,gateway) is None
 
 
 def test_output_cap_and_model_mismatch_are_still_refused(monkeypatch):

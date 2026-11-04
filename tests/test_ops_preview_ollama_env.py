@@ -34,7 +34,7 @@ def test_the_engine_session_model_travels_with_the_reviewed_row(tmp_path):
     # The one line whose absence killed the interview start today: without it the
     # engine pins its built-in default, not the reviewed model.
     assert 'DELIVERY_OLLAMA_MODEL=phi4' in lines
-    assert 'DELIVERY_LOCAL_PREVIEW=1' in lines
+    assert not any(line.startswith('DELIVERY_LOCAL_PREVIEW=') for line in lines)
     assert 'OLLAMA_BASE_URL=http://host.docker.internal:11434/v1' in lines
 
 

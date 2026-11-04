@@ -106,7 +106,7 @@ def test_stage_models_only_the_one_deepseek_route(monkeypatch):
     models=ie.stage_models({'SPEC_GENERATOR_MODEL_SRS':'deepseek:deepseek-v4','PATH':'/bin'})
     assert set(models)==set(ie._STAGES) and {(m.provider,m.model) for m in models.values()}=={('deepseek','deepseek-v4')}
     assert models['tests'].max_tokens==12288 and models['needs'].max_tokens==8192 and models['repair'].max_tokens==8192
-    for env in ({},{'SPEC_GENERATOR_MODEL_SRS':'ollama:phi4'},{'SPEC_GENERATOR_MODEL_SRS':'deepseek:'},
+    for env in ({},{'SPEC_GENERATOR_MODEL_SRS':'deepseek:'},
                 {'SPEC_GENERATOR_MODEL_SRS':'openai:gpt-5'},{'SPEC_GENERATOR_MODEL_SRS':'deepseek:a','SPEC_GENERATOR_MODEL_NEEDS':'deepseek:b'}):
         with pytest.raises(ValueError):ie.stage_models(env)
 

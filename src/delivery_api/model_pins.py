@@ -34,7 +34,7 @@ def validate(payload):
     if len(text)>50000:raise ValueError('Pin exceeds size bound')
     allowed={'provider','model','price_version','source','expense_input','expense_output','expense_cache_hit','expense_cache_miss','expense_units_per_usd','retail_input','retail_output','retail_units_per_credit','usage_categories','retail_formula','provider_snapshot'}
     if set(row)-allowed:raise ValueError('Unexpected price fields; pins never contain credentials')
-    env=environment([value]);env.update(DELIVERY_LOCAL_PREVIEW='1',DEEPSEEK_API_KEY='offline-validation-only')
+    env=environment([value]);env.update(DEEPSEEK_API_KEY='offline-validation-only')
     if row.get('provider')=='ollama':env.pop(pg.KEY_ENV,None)
     gateway=pg.ProductionGateways(None,env);gateway.close()
     if row['provider']=='deepseek':ProviderSnapshot(row['provider_snapshot'])
@@ -149,7 +149,6 @@ class DurableGateways:
         rows=PinRepository(self.store._postgres).list();selected=[];errors={}
         for provider in self.environ.get('REQUI_PIN_PROVIDERS','deepseek').split(','):
             try:
-                if provider=='deepseek' and self.environ.get('DELIVERY_CHILD_EXECUTION')=='local':raise ValueError('Local child mode does not authorize paid dispatch')
                 if provider in self._launch_errors:raise ValueError(self._launch_errors[provider])
                 candidates=[r for r in rows if r['provider']==provider and r['is_default']]
                 if len(candidates)!=1:raise ValueError('Choose one reviewed '+provider+' model in Back office > Model pins; no implicit fallback')

@@ -32,7 +32,6 @@ ops_venv(){
 # and dies at its first model call: that model's request bound is unreviewed.
 # $1 = destination env file, $2 = reviewed ollama model, $3 = ollama host URL
 preview_ollama_env(){
-  printf 'DELIVERY_LOCAL_PREVIEW=1\n' >> "$1"
   printf 'DELIVERY_OLLAMA_MODEL=%s\n' "$2" >> "$1"
   local oport; oport=$(printf '%s' "$3" | sed -E 's#^[a-z]+://([^:/]+):?([0-9]*).*#\2#'); oport=${oport:-11434}
   # The local preview is not a reason to pin 10GB idle for the engines' 30m default.

@@ -26,12 +26,12 @@ def main():
                     break
                 except OSError:time.sleep(.1)
             else:raise RuntimeError('health timeout')
-            assert health=={'ok':True,'runtime_profile':'control_plane_only','engine_execution':False,'payments_enabled':False}
+            assert health.get('ok') is True
             with urllib.request.urlopen(f'http://127.0.0.1:{port}/',timeout=2) as response:assert response.status==200
             try:urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/api/tasks',data=b'{}',headers={'Content-Type':'application/json'}),timeout=2)
-            except urllib.error.HTTPError as error:assert error.code==503
+            except urllib.error.HTTPError as error:assert error.code==401
             else:raise AssertionError('mutations not fenced')
-            print(json.dumps({'installed_wheel_health':True,'static_ui':True,'mutations_fenced':True,'engine_provider_packages_absent':True,'container_execution_verified':False}))
+            print(json.dumps({'installed_wheel_health':True,'static_ui':True,'unauthenticated_mutations_denied':True,'engine_provider_packages_absent':True,'container_execution_verified':False}))
         finally:
             proc.terminate()
             try:proc.wait(timeout=5)

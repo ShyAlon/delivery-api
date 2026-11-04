@@ -13,30 +13,11 @@ def cleanup():
     cloud_runtime.uninstall();yield;cloud_runtime.uninstall()
 
 
-def test_trusted_installer_forwards_typed_runtime_to_both_adapters(store,tmp_path):
-    # Explicit constructor seam only; no environment path constructs paid runtime.
-    runtime=PaidChildRuntime(models={'deepseek':MODEL},api_key='fixture-only');chosen=[]
-    settings=env(DELIVERY_CHILD_EXECUTION='local',DELIVERY_LOCAL_PREVIEW='1',DELIVERY_DATABASE_URL=DSN,VMODEL_ARTIFACTS_DIR=str(tmp_path))
-    # PostgreSQL libpq DSN accepted by the adapter, unlike URL-only old installer.
-    cloud_runtime.install(store,settings,chosen.append,paid_runtime=runtime)
-    assert inprocess_engine.current().paid_runtime is runtime
-    assert chosen[0].paid_runtime is runtime and chosen[0].dsn==DSN
-    assert cloud_runtime.gateway_factory()(None,'fake-job').launch_guard
-    assert 'fixture-only' not in repr(settings)
-
-
-@pytest.mark.parametrize('mode,preview',[('paid','1'),('local','0'),('', '1')])
-def test_typed_runtime_cannot_bypass_preview_selector(store,tmp_path,mode,preview):
-    runtime=PaidChildRuntime(models={'deepseek':MODEL},api_key='fixture-only');chosen=[]
-    with pytest.raises(ValueError):cloud_runtime.install(store,env(DELIVERY_CHILD_EXECUTION=mode,DELIVERY_LOCAL_PREVIEW=preview),chosen.append,paid_runtime=runtime)
+def test_installer_rejects_missing_pins_before_any_dispatch(store,tmp_path):
+    chosen=[]
+    with pytest.raises(ValueError):
+        cloud_runtime.install(store,{'DELIVERY_DATABASE_URL':DSN,'VMODEL_ARTIFACTS_DIR':str(tmp_path)},chosen.append)
     assert chosen==[] and not cloud_runtime.installed()
-
-
-def test_installer_rejects_model_map_mismatch(store,tmp_path):
-    settings=env(DELIVERY_CHILD_EXECUTION='local',DELIVERY_LOCAL_PREVIEW='1',DELIVERY_DATABASE_URL=DSN)
-    with pytest.raises(ValueError,match='models differ'):
-        cloud_runtime.install(store,settings,lambda c:pytest.fail('no install'),paid_runtime=PaidChildRuntime(models={'deepseek':'wrong'},api_key='fixture-only'))
-    assert not cloud_runtime.installed() and inprocess_engine.current() is None
 
 
 def test_installed_adapters_run_real_paid_child_with_fake_provider(store,tmp_path,monkeypatch):
@@ -70,8 +51,9 @@ def test_installed_adapters_run_real_paid_child_with_fake_provider(store,tmp_pat
             class Factory:
                 models=runtime.models;verify_vendor=None
                 def __call__(self,*a):return factory(*a)
+                def refresh_launch(self):pass
                 def close(self):pass
-            monkeypatch.setattr('delivery_api.production_gateway.ProductionGateways',lambda *a:Factory())
+            monkeypatch.setattr('delivery_api.model_pins.DurableGateways',lambda *a:Factory())
             chosen=[]
             cloud_runtime.install(store,env(DELIVERY_CHILD_EXECUTION='local',DELIVERY_LOCAL_PREVIEW='1',DELIVERY_DATABASE_URL=DSN.replace('user=sandbox','user=delivery_app'),VMODEL_ARTIFACTS_DIR=str(tmp_path)),chosen.append,paid_runtime=runtime)
             tid=store.create_task('installed child '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)
@@ -82,13 +64,3 @@ def test_installed_adapters_run_real_paid_child_with_fake_provider(store,tmp_pat
                 assert conn.execute("SELECT count(*) AS n FROM retail_compute_segments WHERE state='settled'").fetchone()['n']==1
                 assert conn.execute("SELECT count(*) AS n FROM retail_contributions r JOIN worker_jobs w USING(job_id) WHERE r.kind='tokens' AND w.task_id=%s",(tid,)).fetchone()['n']==len(calls)
     finally:server.shutdown();server.server_close()
-
-
-def test_explicit_attended_preview_constructs_runtime_but_never_dispatches(store,tmp_path):
-    chosen=[]
-    settings=env(DELIVERY_CHILD_EXECUTION='attended-paid',DELIVERY_PAID_CHILD_PREVIEW='1',DELIVERY_PREVIEW='1',DELIVERY_PUBLIC_ORIGIN='http://127.0.0.1:8090',DELIVERY_DATABASE_URL=DSN,VMODEL_ARTIFACTS_DIR=str(tmp_path))
-    cloud_runtime.install(store,settings,chosen.append)
-    runtime=inprocess_engine.current().paid_runtime
-    assert isinstance(runtime,PaidChildRuntime) and chosen[0].paid_runtime is runtime
-    assert runtime.models==cloud_runtime.gateway_factory().models
-    assert cloud_runtime.gateway_factory()(None,'not-dispatched').launch_guard

@@ -13,7 +13,6 @@ def request(method='GET',path='/api/tasks/task-a'):
 
 @pytest.mark.parametrize('kind',['control','operator','csrf','normal'])
 def test_every_refusal_and_completed_request_has_durable_scope(monkeypatch,tmp_path,kind,file_log_evidence):
- monkeypatch.setattr(m,'control_plane_only',lambda:kind=='control')
  monkeypatch.setattr(m.config,'CLOUD_TENANTS',False)
  def csrf(r):
   if kind=='csrf':raise m.HTTPException(status_code=403,detail='refused')

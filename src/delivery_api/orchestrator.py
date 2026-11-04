@@ -128,11 +128,8 @@ class PhaseOrchestrator:
         sid,_,interview,spec=self._paths(task_id)
         if not hasattr(self.store,'_postgres'):spec.mkdir(parents=True,exist_ok=True)
         baseline=self._ensure_greenfield(task_id)
-        built=os.environ.get("REQUI_RE_DIST")=="1"
-        repo=(Path.cwd() if built else Path(os.environ.get("SPEC_GENERATOR_DIR",str(Path(__file__).resolve().parents[3]/"spec-generator"))).resolve())
-        python=Path(sys.executable) if built else (repo/".venv/bin/python")
-        if not python.is_file() and not built:
-            raise RuntimeError(f"spec-generator environment is missing at {python}. Run scripts/pull-all.sh before retrying the phase.")
+        repo=Path.cwd()
+        python=Path(sys.executable)
         cmd=[str(python),"-m","spec_generator.cli",str(interview/"intent_model.json"),"--conops",str(interview/"conops.json"),"--system-baseline",str(baseline),"--out",str(spec),"--to",definition.generator_stage]
         if phase=="validation":cmd.append("--final-review")
         if mode is ExecutionMode.REDO:cmd.extend(["--from",definition.generator_stage])
@@ -144,7 +141,7 @@ class PhaseOrchestrator:
             raise ValueError("exact model selection must include a provider and model")
         if route not in ("ollama","deepseek"):raise ValueError(f"unsupported model route {stored!r}")
         route_value=model_routes.route_value(route,model if sep else None)
-        env={"PYTHONUNBUFFERED":"1","VMODEL_PROGRESS_TASK_ID":task_id,"VMODEL_PROGRESS_SESSION_ID":sid,f"SPEC_GENERATOR_MODEL_{definition.generator_stage.upper()}":route_value,**({} if built else {"PYTHONPATH":str(repo/"src")+os.pathsep+os.environ.get("PYTHONPATH","")})}
+        env={"PYTHONUNBUFFERED":"1","VMODEL_PROGRESS_TASK_ID":task_id,"VMODEL_PROGRESS_SESSION_ID":sid,f"SPEC_GENERATOR_MODEL_{definition.generator_stage.upper()}":route_value}
         if model_route:
             self.store.set_model_default(task_id,route_value)
         self.store.add_event(task_id,"model_route",f"{phase} uses {route_value} ({source})",phase_key=phase,payload={"route":route,"resolved":route_value,"provider":route,"model":route_value.split(":",1)[1],"mode":mode.value,"source":source})

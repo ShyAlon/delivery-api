@@ -114,17 +114,17 @@ def test_the_old_session_page_code_is_gone_but_the_data_endpoints_stay():
     assert "/api/sessions" in paths and "/api/settings/artifacts-root" in paths
 
 
-def test_server_boot_config_carries_preview_execution_setting(monkeypatch):
+def test_server_boot_config_does_not_carry_a_runtime_mode(monkeypatch):
     import delivery_api.app as module
     monkeypatch.setenv('DELIVERY_PREVIEW','1')
     monkeypatch.setenv('DELIVERY_CLOUD_EXECUTION','1')
     body=module._page('index.html').body.decode()
     config=json.loads(body.split('window.__REQUI_CONFIG__=',1)[1].split(';',1)[0])
-    assert config['preview'] is True and config['execution_enabled'] is True
+    assert config=={}
     monkeypatch.setenv('DELIVERY_CLOUD_EXECUTION','0')
     body=module._page('index.html').body.decode()
     config=json.loads(body.split('window.__REQUI_CONFIG__=',1)[1].split(';',1)[0])
-    assert config['preview'] is True and config['execution_enabled'] is False
+    assert config=={}
 
 
 def _check_the_old_session_pages_send_people_home(monkeypatch,tmp_path,workspace):

@@ -25,7 +25,7 @@ def test_compatibility_pin_uses_only_shared_store(tmp_path,monkeypatch):
         return {'VMODEL_REVIEWED_MODEL_PRICES':'private reviewed content'}
     run_pin(tmp_path,monkeypatch,select)
     assert seen==['dbname=fixture_no_connect']
-    assert (tmp_path/'cloud-models.env').read_text()=='REQUI_PIN_STORE=1\nREQUI_PIN_PROVIDERS=deepseek\n'
+    assert (tmp_path/'cloud-models.env').read_text()=='REQUI_PIN_PROVIDERS=deepseek\n'
 
 
 def test_missing_or_changed_review_fails_closed_without_output(tmp_path,monkeypatch):
@@ -38,4 +38,4 @@ def test_missing_or_changed_review_fails_closed_without_output(tmp_path,monkeypa
 def test_provider_selection_is_preserved_not_invented(tmp_path,monkeypatch):
     monkeypatch.setenv('REQUI_PIN_PROVIDERS','ollama')
     run_pin(tmp_path,monkeypatch,lambda *a:{})
-    assert (tmp_path/'cloud-models.env').read_text()=='REQUI_PIN_STORE=1\nREQUI_PIN_PROVIDERS=ollama\n'
+    assert (tmp_path/'cloud-models.env').read_text()=='REQUI_PIN_PROVIDERS=ollama\n'

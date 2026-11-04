@@ -1631,18 +1631,18 @@ def test_cross_ui_waiting_banner_during_slow_write(pg_page,pg_ui,pg_ids):
     page.locator('#server-wait').wait_for(state='hidden',timeout=3000)
 
 
-def test_background_refresh_stays_quiet_and_terminal_output_poll_stops(pg_page,pg_ui,pg_ids):
+def test_background_refresh_stays_quiet_and_unavailable_output_keeps_refreshing(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     tid=pg_ids["live"]
     # Drive the approved 60s safety callbacks explicitly; state events are the normal refresh path.
     # The background read must not flash the global wait banner, and once the environment
-    # reports phase output as unavailable here (local preview), that poll leg must stop
-    # while the snapshot liveness leg keeps running. Foreground reads must still show progress.
+    # reports temporarily unreadable output, both refresh legs must keep running.
+    # Foreground reads must still show progress.
     page.add_init_script("""const originalInterval=window.setInterval;window.__safety=[];window.setInterval=(fn,ms,...args)=>{if(ms===60000)window.__safety.push(()=>fn(...args));return originalInterval(fn,ms,...args)}""")
     page.goto(ui + f'/tasks/{tid}/view')
     page.locator('.detail-head').wait_for()
     real = page.request.get(ui + f'/api/tasks/{tid}/phase-output').json()
-    terminal = {**real, 'status': 'local_preview', 'items': []}
+    terminal = {**real, 'status': 'unavailable', 'items': []}
     hits = {'task': 0, 'output': 0}
     def slow_task(route):
         hits['task'] += 1
@@ -1667,8 +1667,8 @@ def test_background_refresh_stays_quiet_and_terminal_output_poll_stops(pg_page,p
 
     assert page.evaluate('window.__bannerShows') == 0, 'background refresh flashed the Loading task banner'
     assert hits['task'] >= 2, f"snapshot liveness stopped: {hits}"
-    assert hits['output'] == 1, f"terminal output status did not stop the output poll: {hits}"
-    assert 'not part of a local preview' in page.locator('#phase-output-slot').inner_text()
+    assert hits['output'] >= 2, f"unavailable output lost its refresh path: {hits}"
+    assert 'could not be read' in page.locator('#phase-output-slot').inner_text()
     # Foreground progress is preserved: a full reload issues a foreground task read, still delayed.
     page.evaluate('window.__bannerShows = 0')
     page.reload()
@@ -2797,7 +2797,7 @@ def test_gate_controls_cases_require_signed_pg_browser():
 def test_request_timing_cases_require_signed_pg_browser():
     import inspect
     for case in (test_cross_ui_waiting_banner_during_slow_write,
-                 test_background_refresh_stays_quiet_and_terminal_output_poll_stops,
+                 test_background_refresh_stays_quiet_and_unavailable_output_keeps_refreshing,
                  test_idle_stream_reads_only_at_60s_safety_then_refreshes_on_events):
         assert 'pg_page' in inspect.signature(case).parameters
 
