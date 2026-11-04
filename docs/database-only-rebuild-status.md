@@ -373,3 +373,9 @@ operator boundary changed or bypass added.
 - Real generator CLI children behind ProcessRunner and ChildGeneratorEngine now exercise Needs open policy -> fresh SRS job -> closed SRS review. Assert prior registry/process cleanup, exact bypassed/waiting gates and retained PG artifacts. Fake local HTTP model only, no paid provider.
 - Current model identifier is validated before automatic reservation. Local actual child + policy gate: 8 passed (6.5s).
 - Four long PG retained graph tamper/revocation variants passed (42.3s); first six earlier emitted only dots before outer timeout and require a complete rerun.
+
+### Rebuild unit 44: retired host setting and signed legacy page redirects
+- Host artifact-root setting is absent, not an API contract to preserve. Session data endpoint remains.
+- Legacy page redirects are tested as a signed owner, avoiding auth-refusal false failures.
+- Local diagnostics gate: 16 passed. Long retained graph cases 0..22 now have completed passing groups (6,4,6,7). Remaining 12 group timed out after five dots; not a pass, split further.
+- Exact fetched remote/base verified at 10:33: HEAD and remote WIP 5a7a26edb20de09db5b60b9ce2bbb8a056933386; merge-base and origin/main f23feb2df0ebf8bcbada9a2f52e3b6936e9349a4.
