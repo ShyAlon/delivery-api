@@ -398,3 +398,8 @@ operator boundary changed or bypass added.
 - Fresh paid-fixture HTTP acceptance leaked its disposable database singleton expense policy into later tripwire tests. Explicitly remove only its 'acceptance' policy in finally after the test server stops. No production policy change.
 - First cleanup draft used wrong column 'version', caught by combined failing-test run; actual schema uses policy_version. Corrected and rerun below.
 - Final disjoint gate underway with JUnit results. Shard0 840 passed/10 skipped; shard1 504 passed/32 skipped plus this isolation failure; shard3 654 passed/10 skipped; shard4 462 passed/1 skipped. Shards2/5 outer budgets exceeded, split in halves. No full-gate claim.
+
+### Final disjoint gate checkpoint, 11:13
+- Complete: shard0 840 pass/10 skip; shard1a 282 pass/2 skip; shard2a 263 pass; shard2b split129+277 pass; shard3 654 pass/10 skip; shard4 462 pass/1 skip; shard5a265 pass/1 skip; shard5b-right118pass; shard5b-left excluding launcher121pass; launcher40pass (70.5s). Shard1b latest result separately retained, not counted here.
+- Wheel built with uv build --wheel --no-sources: delivery_api-0.2.0-py3-none-any.whl, 280 files, no SQLite payload. Clean install smoke still pending.
+- Final heavy suites, SPA browser and full JUnit coverage reconciliation remain pending. Four inherited UI failures still unchanged and separate per parent instruction. No PR/full-gate claim.
