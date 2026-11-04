@@ -31,7 +31,7 @@ def deploy(*,state,repository,host,name,env_file,port,network,previous_container
         raise WorkflowError('owner declined deployment; no server contact')
     username=input('GHCR username for the server read-only token: ').strip()
     token=getpass.getpass('Read-only GHCR token (hidden, not retained): ')
-    program=Path(__file__).with_name('runtime_spec.py').read_text()+'\n'+Path(__file__).with_name('remote_image_apply.py').read_text()
+    program=Path(__file__).with_name('runtime_spec.py').read_text()+'\n'+Path(__file__).with_name('image_settings.py').read_text()+'\nvalidate_settings=validate\n'+Path(__file__).with_name('remote_image_apply.py').read_text()
     plan={'reference':receipt.reference,'config_digest':receipt.config_digest,'name':name,'env_file':env_file,
           'port':port,'network':network,'username':username,'token':token,'runtime_arguments':args,'previous_container_id':previous_container_id,'previous_image_id':previous_image_id}
     try:

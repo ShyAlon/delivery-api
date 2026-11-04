@@ -30,6 +30,7 @@ def apply(plan):
     envfile=Path(plan['env_file'])
     if not envfile.is_absolute() or not envfile.is_file() or envfile.stat().st_mode&0o077:
         raise ValueError('private existing remote settings file required')
+    validate_settings(envfile)
     if type(plan['token']) is not str or len(plan['token'])<10:raise ValueError('read-only registry token required')
     # Target is the same runtime_spec.py class prepended by the owner runner.
     args=plan['runtime_arguments']

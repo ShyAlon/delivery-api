@@ -8,11 +8,13 @@ spec=importlib.util.spec_from_file_location('remote_image_apply',D/'remote_image
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 from runtime_spec import Target
 m.Target=Target
+from image_settings import validate
+m.validate_settings=validate
 ID='sha256:'+'a'*64
 
 
 def plan(tmp_path):
-    env=tmp_path/'private.env';env.write_text('FICTIONAL=value\n');env.chmod(0o600)
+    env=tmp_path/'private.env';env.write_text('DELIVERY_DATABASE_URL=postgresql://fixture/db\nDELIVERY_SUPABASE_URL=https://fixture.supabase.co\nDELIVERY_SUPABASE_ANON_KEY=public\nINTERVIEW_ENGINE_TOKEN=fixture-private-token-123456789\n');env.chmod(0o600)
     args=Target(ID,'requi-service',str(env),8000,'service').arguments()
     return dict(reference='ghcr.io/shyalon/require@'+ID,config_digest=ID,name='requi-service',
                 env_file=str(env),port=8000,network='service',username='shyalon',token='fictional-token',runtime_arguments=args,previous_container_id=None,previous_image_id=None)
@@ -46,7 +48,7 @@ def test_pull_mismatch_never_stops_existing_container(tmp_path,monkeypatch):
 
 
 def test_transmitted_program_compiles_as_one_script():
-    combined=(D/'runtime_spec.py').read_text()+'\n'+(D/'remote_image_apply.py').read_text()
+    combined=(D/'runtime_spec.py').read_text()+'\n'+(D/'image_settings.py').read_text()+'\nvalidate_settings=validate\n'+(D/'remote_image_apply.py').read_text()
     compile(combined,'remote-exact-image','exec')
 
 
@@ -94,3 +96,9 @@ def test_old_unlabeled_container_not_adopted_by_name_alone(tmp_path,monkeypatch)
     monkeypatch.setattr(m,'call',call)
     with pytest.raises(ValueError,match='exact reviewed previous'):m.apply(value)
     assert not any('stop' in args for args in calls)
+
+
+def test_remote_missing_required_settings_refuses_before_registry_pull(tmp_path,monkeypatch):
+    value=plan(tmp_path);Path(value['env_file']).write_text('FICTIONAL=only\n')
+    monkeypatch.setattr(m,'call',lambda *a,**k:pytest.fail('remote command before settings validation'))
+    with pytest.raises(ValueError,match='PostgreSQL settings required'):m.apply(value)
