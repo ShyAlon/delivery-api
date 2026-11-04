@@ -1,3 +1,4 @@
+from registered_runner import registered_runner
 import json
 import os
 import pytest
@@ -68,7 +69,7 @@ def test_static_ui_and_deep_link_are_served():
         assert b"<link rel=\"icon\" href=\"/favicon.ico\"" in client.get("/").content
 
 
-def test_process_runner_streams_cli_output_and_known_count(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_process_runner_streams_cli_output_and_known_count(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio
@@ -93,7 +94,7 @@ def test_process_runner_streams_cli_output_and_known_count(tmp_path,pg_scoped_wo
     assert event["payload"] == {"completed": 4, "total": 9}
 
 
-def test_process_runner_uses_child_stage_aware_heartbeat_without_generic_noise(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_process_runner_uses_child_stage_aware_heartbeat_without_generic_noise(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
@@ -108,7 +109,7 @@ def test_process_runner_uses_child_stage_aware_heartbeat_without_generic_noise(t
     assert not any(e['message']=='Engine is still working' for e in events)
 
 
-def test_subprocess_prompt_lines_are_diagnostics_not_input_waits(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_subprocess_prompt_lines_are_diagnostics_not_input_waits(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
@@ -251,7 +252,7 @@ def test_task_management_api_structured_collisions_and_delete(pg_workspace_facto
 
 
 
-def test_process_runner_hides_traceback_and_classifies_missing_module(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_process_runner_hides_traceback_and_classifies_missing_module(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
@@ -326,7 +327,7 @@ print(json.dumps({"postgres": True, "local_database": False}))
 
 
 
-def test_process_runner_emits_every_question_line_as_progress(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_process_runner_emits_every_question_line_as_progress(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
@@ -367,7 +368,7 @@ def test_open_gate_is_explicit_audited_bypass(tmp_path,pg_scoped_workspace):
     assert any(a['action']=='gate.bypassed' and a['detail']['provenance']=='explicit open-gate policy' for a in s.audit_entries(tid))
 
 
-def test_interview_preview_does_not_color_downstream_requirements(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_interview_preview_does_not_color_downstream_requirements(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local recovery/projection contract
     import asyncio,sys
@@ -395,7 +396,7 @@ def test_startup_marks_unbound_pre_http_checkpoint_incompatible(monkeypatch,tmp_
     assert store.engine_session(tid) is None
 
 
-def test_shutdown_interruption_preserves_running_state_for_resume(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_shutdown_interruption_preserves_running_state_for_resume(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio,sys
@@ -441,7 +442,7 @@ def test_runner_preserves_structured_founder_decision_options(tmp_path,pg_scoped
     event=next(e for e in store.events(tid) if e['kind']=='founder_decision')
     assert event['payload']['decision']['options'][1]['label']=='PWA'
 
-def test_fragmented_envelope_bytes_never_become_a_decision(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_fragmented_envelope_bytes_never_become_a_decision(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,json,sys
@@ -474,7 +475,7 @@ def test_every_phase_has_a_stable_data_log_path():
     assert list(STAGE_LOG_PATHS)==[key for key,_ in PHASES]
     assert all(str(path).endswith(f'/logs/stages/{phase}.log') for phase,path in STAGE_LOG_PATHS.items())
 
-def test_only_active_phase_pulses_blue(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_only_active_phase_pulses_blue(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,sys
@@ -496,7 +497,7 @@ def test_active_upstream_phase_resets_false_downstream_waiting_state(tmp_path,pg
     task=store.task(tid);specs=next(p for p in task['phases'] if p['phase_key']=='specs')
     assert specs['state']=='pending' and specs['detail']=='Blocked on upstream approval'
 
-def test_protocol_envelope_never_reappears_in_following_you_question(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_protocol_envelope_never_reappears_in_following_you_question(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,json,sys
@@ -508,7 +509,7 @@ def test_protocol_envelope_never_reappears_in_following_you_question(tmp_path,pg
     # Subprocess output is diagnostics only: protocol bytes can never become a question.
     assert not any(e['kind'] in ('founder_decision','waiting_input') for e in store.events(tid))
 
-def test_runner_can_close_engine_approved_phases(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_runner_can_close_engine_approved_phases(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio,sys
@@ -563,7 +564,7 @@ def test_orchestrator_architecture_is_greenfield_without_decision(monkeypatch,tm
     assert runner.calls[0][1]['phase']=='architecture'
 
 
-def test_runner_releases_process_before_completion_callback(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_runner_releases_process_before_completion_callback(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio,sys
@@ -575,7 +576,7 @@ def test_runner_releases_process_before_completion_callback(tmp_path,pg_scoped_w
     assert observed==[(True,'conops')]
 
 
-def test_open_gate_uses_same_automatic_continuation_path(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_open_gate_uses_same_automatic_continuation_path(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio,sys
@@ -657,7 +658,7 @@ def test_startup_recovers_approved_interview_handoff_to_needs(monkeypatch,tmp_pa
     assert calls==[(tid,'conops')]
 
 
-def test_next_phase_launch_failure_is_visible_and_preserves_completed_boundary(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_next_phase_launch_failure_is_visible_and_preserves_completed_boundary(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio,sys
@@ -731,7 +732,7 @@ def test_ui_state_doctrine_only_live_input_can_show_engine_decision():
     assert live.mode=='waiting_input' and live.decision==decision
     assert stale.mode=='failed' and stale.decision is None and stale.gate is None
 
-def test_untyped_blocking_console_prompt_fails_visibly(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_untyped_blocking_console_prompt_fails_visibly(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,sys
@@ -745,7 +746,7 @@ def test_untyped_blocking_console_prompt_fails_visibly(tmp_path,pg_scoped_worksp
     assert phase['state']=='failed'
     assert any(e['kind']=='error' and 'no output' in e['message'] for e in store.events(tid))
 
-def test_split_envelope_chunks_stay_diagnostics(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_split_envelope_chunks_stay_diagnostics(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,json,sys
@@ -758,7 +759,7 @@ def test_split_envelope_chunks_stay_diagnostics(tmp_path,pg_scoped_workspace,mon
     events=store.events(tid)
     assert not any(e['kind'] in ('founder_decision','waiting_input','error') for e in events)
 
-def test_untyped_console_prompt_cannot_create_control_wait(monkeypatch,tmp_path,pg_scoped_workspace):
+def test_untyped_console_prompt_cannot_create_control_wait(monkeypatch,tmp_path,pg_scoped_workspace,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,sys
@@ -824,7 +825,7 @@ def test_phase_configuration_is_canonical_and_complete():
     assert PHASE_BY_KEY['architecture'].prerequisite=='system-baseline'
     assert [successor(p.key).key if successor(p.key) else None for p in PHASE_DEFINITIONS]==['conops','needs','srs','architecture','specs','tests','validation',None]
 
-def test_active_work_is_one_standard_projection_for_subprocess_and_decision(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_active_work_is_one_standard_projection_for_subprocess_and_decision(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,sys
@@ -1203,7 +1204,7 @@ def test_runner_emits_incremental_interview_price_before_process_exit(monkeypatc
         return await work
     assert asyncio.run(scenario())==0
 
-def test_interviewer_prefix_lines_are_diagnostics_not_questions(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_interviewer_prefix_lines_are_diagnostics_not_questions(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess protocol
     import asyncio,sys
@@ -1298,7 +1299,7 @@ def test_task_classifications_join_shadow_to_answers(tmp_path,pg_scoped_workspac
         no_session = client.post("/api/tasks", json={"title": "No session"}).json()["task_id"]
         assert client.get(f"/api/tasks/{no_session}/classifications").json()["answers"] == {}
 
-def test_silent_engine_run_is_stopped_and_marked_failed(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_silent_engine_run_is_stopped_and_marked_failed(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio, sys
@@ -1316,7 +1317,7 @@ def test_silent_engine_run_is_stopped_and_marked_failed(tmp_path,pg_scoped_works
     assert errors and 'no output' in errors[-1]['message'] and 'stopped' in errors[-1]['message']
 
 
-def test_engine_heartbeats_reset_the_stall_window(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_engine_heartbeats_reset_the_stall_window(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
     import asyncio, sys
@@ -1327,7 +1328,7 @@ def test_engine_heartbeats_reset_the_stall_window(tmp_path,pg_scoped_workspace,m
     assert code == 0
 
 
-def test_runner_preserves_module_name_when_subprocess_read_splits_mid_word(tmp_path,monkeypatch,pg_scoped_workspace):
+def test_runner_preserves_module_name_when_subprocess_read_splits_mid_word(tmp_path,monkeypatch,pg_scoped_workspace,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
@@ -1349,7 +1350,7 @@ sys.stdout.write("aph\'\\n");sys.stdout.flush();sys.exit(1)'''
     assert error['payload']['module']=='langgraph'
 
 
-def test_generator_failure_names_needs_not_interview_engine(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_generator_failure_names_needs_not_interview_engine(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys
@@ -1363,7 +1364,7 @@ def test_generator_failure_names_needs_not_interview_engine(tmp_path,pg_scoped_w
     assert 'interview engine' not in error['message'].lower()
 
 
-def test_generator_failure_preserves_reported_contract_error(tmp_path,pg_scoped_workspace,monkeypatch):
+def test_generator_failure_preserves_reported_contract_error(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess diagnostics
     import asyncio,sys

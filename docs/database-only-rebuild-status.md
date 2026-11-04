@@ -170,3 +170,11 @@ Remaining before the theme PR:
 
 All meaningful units are pushed. No deploy, server contact, paid provider, live
 DB mutation, migration, merge or PR was performed.
+
+Unit22 WIP fixture conversion checkpoint: tests/registered_runner.py registers a
+real disposable child stdout stream after creating its real owned session, and
+the unchanged runner still validates owner/capability/output namespace. No provider
+or publication bypass. 24 existing diagnostic/lifecycle tests use this fixture;
+21 initially passed, three failed. Stdin EOF fixture fixed next; completion
+callback assumptions still need current queued-continuation assertions. This is
+an unfinished test-fixture unit, not a gate pass or production behavior change.
