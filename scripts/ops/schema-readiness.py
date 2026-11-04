@@ -148,18 +148,51 @@ def review_and_recheck(check,offer):
     if result:return result
     return check()
 
-def main():
+CONNECT_TIMEOUT_SECONDS=10
+
+
+def endpoint_class(dsn):
+    # Report only a fixed class and numeric port, never host/project/login/URL.
+    from psycopg.conninfo import conninfo_to_dict
+    import os
+    try:
+        params=conninfo_to_dict(dsn)
+        hosts=params.get('host',os.environ.get('PGHOST','')).lower().split(',')
+        ports=params.get('port',os.environ.get('PGPORT','5432')).split(',')
+        if len(hosts)!=1 or len(ports)!=1:return 'multiple endpoints; ports not shown'
+        host=hosts[0];port=int(ports[0])
+        if not 1<=port<=65535:return 'unknown endpoint; port not shown'
+        kind='other TCP endpoint' if host and not host.startswith('/') else 'local/default endpoint'
+        if host.endswith('.pooler.supabase.com'):
+            kind={5432:'Supabase session pooler',6543:'Supabase transaction pooler'}.get(port,'Supabase pooler (unrecognized mode)')
+        elif host.startswith('db.') and host.endswith('.supabase.co'):kind='Supabase direct'
+        return kind+'; port='+str(port)
+    except Exception:return 'unknown endpoint; port not shown'
+
+
+def check_connection(dsn):
     import psycopg
-    s=settings();values=s.load(ROOT)
-    if not values.get('DELIVERY_DATABASE_URL'):raise ValueError('DELIVERY_DATABASE_URL missing from protected settings')
-    with psycopg.connect(values['DELIVERY_DATABASE_URL'],connect_timeout=10,autocommit=True) as conn:
-        conn.execute('SET default_transaction_read_only=on')
-        rows=inventory(conn);missing=grants(conn)
+    try:
+        with psycopg.connect(dsn,connect_timeout=CONNECT_TIMEOUT_SECONDS,autocommit=True) as conn:
+            conn.execute('SET default_transaction_read_only=on')
+            rows=inventory(conn);missing=grants(conn)
+    except psycopg.errors.ConnectionTimeout:
+        print('SCHEMA CHECK FAILED: ConnectionTimeout; app connection; '+endpoint_class(dsn)+
+              '; connect_timeout='+str(CONNECT_TIMEOUT_SECONDS)+'s per connection attempt; no application retry. '+
+              'Check project running status and database/pooler connection counts in the provider dashboard. '+
+              'If healthy, check this Mac network/VPN and try the read-only schema check again. '+
+              'No connection values printed; no database changes. This timeout does not prove missing migrations.')
+        return 2
     for row in rows:print(row['status'].upper(),row['file'],('REVIEW REQUIRED '+','.join(row['destructive'])) if row['status']!='present' and row['destructive'] else '')
     for role in missing:print('MISSING SET membership:',role)
     if not ready(rows,missing):
         print('SCHEMA NOT READY: run python3 scripts/owner/apply-pg-cutover.py . for a dry review. No database changes made.');return 1
     print('SCHEMA READY: cutover catalog objects and app SET memberships present (not a full migration checksum proof).');return 0
+
+def main():
+    s=settings();values=s.load(ROOT)
+    if not values.get('DELIVERY_DATABASE_URL'):raise ValueError('DELIVERY_DATABASE_URL missing from protected settings')
+    return check_connection(values['DELIVERY_DATABASE_URL'])
 
 if __name__=='__main__':
     try:
