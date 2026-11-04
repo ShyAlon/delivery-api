@@ -483,7 +483,7 @@ from .tenant_http import TenantMiddleware
 app.add_middleware(TenantMiddleware,verifier=SupabaseIdentityVerifier(config.SUPABASE_URL),
                    admin_subjects=config.SUPABASE_ADMIN_SUBJECTS,session_check=store.auth_session_active,
                    request_database=getattr(store,'_postgres',None))
-from .tenant_files import authorized_session,session_reader,read_text as read_bound_text
+from .tenant_files import authorized_session
 from .tenancy import TenantAccessDenied
 from .postgres_scope import RequestStats, request_stats
 

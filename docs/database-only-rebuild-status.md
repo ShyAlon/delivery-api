@@ -209,3 +209,11 @@ fixtures now assert no unbound recovery, full empty input state, canonical owned
 paths, and no subprocess fallback. Combined group: 164 passed, one source-string
 spacing failure; corrected that assertion and all 10 inprocess tests pass.
 Full gate and dead-function audit remain outstanding.
+
+Unit25: retired file usage/pricing/rollup helpers and the unused bound file reader.
+Pricing calculation is now pure price_rows; production rate helpers unchanged.
+Malformed, non-object, missing, numeric-invalid and all-invalid rollup evidence
+assertions now run through retained PG documents, including the signed unknown
+cost endpoint and preservation of raw bad bytes. test_tasks + usage evidence +
+incremental projection: 104 passed. The one session-fixture collision discovered
+on the first run was fixed with unique disposable session IDs.
