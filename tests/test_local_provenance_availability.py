@@ -4,17 +4,12 @@ from delivery_api import app as module
 
 
 
-def test_corrupt_model_usage_is_not_empty_provenance(tmp_path,monkeypatch):
+def test_model_usage_policy_does_not_read_host_or_infer_empty_evidence(tmp_path,monkeypatch):
     monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
-    monkeypatch.setattr(module,'_recorded_engine_session',lambda task:'session')
-    monkeypatch.setattr(module,'authorized_session',lambda *args:tmp_path)
-    monkeypatch.setattr(module,'store',SimpleNamespace(events=lambda task:[]))
-    (tmp_path/'interview').mkdir();(tmp_path/'interview/usage.jsonl').write_text('fake-secret')
+    monkeypatch.setattr(module,'store',SimpleNamespace())
     status={}
     assert module._interview_model_provenance('task',status)==[]
-    assert status['model_usage']['availability']=='unavailable'
-    assert status['model_usage']['reason']=='invalid_or_unreadable'
-    assert 'fake-secret' not in str(status)
+    assert status['model_usage']=={'availability':'policy_excluded','reason':'provider_usage_excluded'}
 
 
 def test_validation_supplement_status_does_not_hide_corruption(tmp_path,monkeypatch):

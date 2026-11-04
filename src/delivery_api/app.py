@@ -1434,30 +1434,7 @@ def _interview_model_provenance(task_id:str,status=None)->list[str]:
     def mark(availability,reason):
         if status is not None:status['model_usage']={'availability':availability,'reason':reason}
     mark('absent','no_saved_usage')
-    if config.CLOUD_TENANTS:mark('policy_excluded','local_usage_excluded');return []
-    session=_recorded_engine_session(task_id)
-    rows=[]
-    if session:
-        from .pg_usage import usage_rows
-        batches,evidence=usage_rows(store,task_id)
-        if not evidence['complete']:
-            mark('unavailable','invalid_or_unreadable');return []
-        rows=batches[0]
-        if rows:mark('available','saved_usage')
-    if session and not hasattr(store,'_postgres'):
-        try:
-            from vmodel_contracts.runtime import artifacts_root
-            usage=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"usage.jsonl"
-            if usage.is_file():
-                rows=[json.loads(line) for line in usage.read_text().splitlines() if line.strip()]
-                if any(not isinstance(row,dict) for row in rows):raise ValueError('invalid usage row')
-                mark('available','saved_usage')
-        except (ValueError,OSError):mark('unavailable','invalid_or_unreadable');rows=[]
-    segments=_model_usage_segments(rows)
-    if segments:
-        return [f"Model segment {x['route_version'] if x['route_version'] is not None else 'unassigned'}: {x['provider']}:{x['model']} ({x['calls']} calls)" for x in segments]
-    resolved=next(((event.get("payload") or {}).get("resolved") for event in reversed(store.events(task_id)) if event.get("kind")=="model_route" and (event.get("payload") or {}).get("resolved")),None)
-    return [f"Model: {resolved}"] if resolved else []
+    mark('policy_excluded','provider_usage_excluded');return []
 
 def _model_usage_segments(rows:list[dict])->list[dict]:
     segments=[]
@@ -2889,31 +2866,14 @@ def health():
 @app.post('/api/tasks/{task_id}/packages')
 def create_final_package(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     _deny_test_product_export(task_id)
-    from .final_package import producer_handoff,package,PackageBlocked
     task=store.task(task_id)
     if not task:raise HTTPException(404,'task not found')
-    if config.CLOUD_TENANTS:
-        try:
-            result=store.create_final_package(task_id)
-            return {**result,'url':f"/api/tasks/{task_id}/packages/{result['package_id']}?generation={result['generation']}",'status':'ready'}
-        except (ValueError,KeyError,OSError,__import__('subprocess').TimeoutExpired):
-            raise HTTPException(409,{'error':'Final package is blocked','next':'Finish approval and publish the complete reviewed final revision before exporting. No model work was started.'})
-
     try:
-        session,root,interview,spec=orchestrator._paths(task_id)
-        if task['state']!='done':raise PackageBlocked('Final task approval is required')
-        for phase in task['phases']:
-            if phase['state'] not in ('approved','done'):raise PackageBlocked('Phase not approved: '+phase['phase_key'])
-            from .phases import PHASE_BY_KEY
-            canonical=[(interview if phase['phase_key'] in ('intent','conops') else spec)/name for name in PHASE_BY_KEY[phase['phase_key']].artifacts]
-            present=[path for path in canonical if path.is_file()]
-            if not present or phase['phase_key'] not in ('intent','conops') and any(path.stat().st_mtime<float(phase.get('started_at') or 0) for path in present):raise PackageBlocked('Missing or stale output: '+phase['phase_key'])
-        handoff=producer_handoff(interview,spec,spec/'system-baseline.json')
-        result=package(task,session,handoff,root.parent/'packages'/task_id/str(task['generation']))
-        url=f"/api/tasks/{task_id}/packages/{result['package_id']}?generation={task['generation']}"
-        store.add_event(task_id,'final_package','Coding-agent package created',payload={'package_id':result['package_id'],'generation':task['generation'],'url':url})
-        return {k:v for k,v in {**result,'url':url,'status':'ready'}.items() if k!='path'}
-    except (ValueError,OSError,__import__('subprocess').TimeoutExpired) as exc:raise HTTPException(409,{'error':'Final package is blocked','cause':str(exc),'next':'Review the affected phase or open founder inputs before exporting.'})
+        result=store.create_final_package(task_id)
+        return {**result,'url':f"/api/tasks/{task_id}/packages/{result['package_id']}?generation={result['generation']}",'status':'ready'}
+    except (ValueError,KeyError,OSError,__import__('subprocess').TimeoutExpired):
+        raise HTTPException(409,{'error':'Final package is blocked','next':'Finish approval and publish the complete reviewed final revision before exporting. No model work was started.'})
+
 
 @app.get('/api/tasks/{task_id}/packages/{package_id}')
 def download_final_package(task_id:str,package_id:str,generation:int,a:auth.Actor=Depends(auth.require_actor)):
@@ -2923,21 +2883,11 @@ def download_final_package(task_id:str,package_id:str,generation:int,a:auth.Acto
     if not task:
         activity("task.export.refused","Package download refused: no such task",task_id=task_id,export="package",actor=a.label,reason="not_found")
         raise HTTPException(404,'task not found')
-    if config.CLOUD_TENANTS:
-        from fastapi.responses import Response
-        try:raw=store.final_package(task_id,generation,package_id)
-        except KeyError:raise HTTPException(404,'package not found')
-        except (ValueError,OSError):raise HTTPException(409,'Package verification failed; no download was served')
-        return Response(raw,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="coding-agent-{task_id}-g{generation}.zip"','Cache-Control':'private, no-store'})
-
-    from vmodel_contracts.runtime import artifacts_root
-    package_root=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),store.engine_session(task_id),store).parent if config.CLOUD_TENANTS else artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'))
-    path=package_root/'packages'/task_id/str(generation)/(package_id+'.zip')
-    if not path.is_file() or path.is_symlink():
-        activity("task.export.refused","Package download refused: not found",task_id=task_id,export="package",actor=a.label,reason="not_found")
-        raise HTTPException(404,'package not found')
-    activity("task.export","Package downloaded",task_id=task_id,export="package",actor=a.label,generation=generation)
-    return FileResponse(path,media_type='application/zip',filename=f"coding-agent-{task_id}-g{generation}.zip")
+    from fastapi.responses import Response
+    try:raw=store.final_package(task_id,generation,package_id)
+    except KeyError:raise HTTPException(404,'package not found')
+    except (ValueError,OSError):raise HTTPException(409,'Package verification failed; no download was served')
+    return Response(raw,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="coding-agent-{task_id}-g{generation}.zip"','Cache-Control':'private, no-store'})
 
 
 @app.get('/api/worker-jobs/recovery')

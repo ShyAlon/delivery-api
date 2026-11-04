@@ -122,13 +122,10 @@ def test_package_download_refusal_is_marked(marks, monkeypatch):
     assert "task.export.refused" in _kinds(marks)
 
 
-def test_settings_writes_mark_saved_and_refused(marks, monkeypatch):
-    monkeypatch.setattr(module, "bundles", NS(save_root=lambda p: {"ok": 1}))
-    assert module.set_artifacts_root(module.ArtifactsRootRequest(path="/x"), ACTOR) == {"ok": 1}
-    monkeypatch.setattr(module, "bundles", NS(save_root=lambda p: (_ for _ in ()).throw(ValueError("bad"))))
-    with pytest.raises(HTTPException):
-        module.set_artifacts_root(module.ArtifactsRootRequest(path="/x"), ACTOR)
-    assert "settings.saved" in _kinds(marks) and "settings.save_refused" in _kinds(marks)
+def test_retired_host_settings_cannot_record_saved_markers(marks,monkeypatch):
+    assert not hasattr(module,'set_artifacts_root')
+    assert not hasattr(module,'set_engine_python')
+    assert 'settings.saved' not in _kinds(marks)
 
 
 def test_question_quality_config_marks_saved_and_refused(marks, monkeypatch):

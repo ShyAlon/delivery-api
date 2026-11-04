@@ -128,3 +128,10 @@ Unit 20: removed uncalled app path-artifact and bound-text helpers. Missing and
 hostile-symlink residue cannot become downloads; selected signed cloud,
 observability, provenance and session-cost fixtures use only PG evidence. No
 change to legacy raw runner fixture failures still awaiting conversion.
+
+Unit 21: final package create/download routes no longer have host package paths
+or a file-handoff fallback. Customer provider-provenance exclusion is identical
+across targets, not selected by location. Red-first package route policy; source
+helper settings/provenance tests updated to current boundaries. Prior unit20
+selected run was 142 passed, 3 failures: two obsolete helper fixtures corrected
+here, one raw runner fixture still pending. No full-pass claim.

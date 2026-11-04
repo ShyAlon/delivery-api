@@ -30,3 +30,8 @@ def test_retry_and_cost_have_no_file_reads(function):
     source=inspect.getsource(function)
     for forbidden in ('read_text(', 'usage_tokens(root/', 'write_cost_json(', 'usage_evidence(root)'):
         assert forbidden not in source
+
+@pytest.mark.parametrize('function',[module.create_final_package,module.download_final_package])
+def test_final_package_routes_never_use_host_output(function):
+    source=inspect.getsource(function)
+    for forbidden in ('_paths(', 'is_file(', 'FileResponse(', 'producer_handoff('):assert forbidden not in source
