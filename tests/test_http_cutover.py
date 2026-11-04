@@ -386,6 +386,18 @@ def _case_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch,p
  assert not [e for e in store.events(task['task_id']) if e['kind']=='model_route']
  assert store.task(task['task_id'])['model_default'] is None
 
+ # The public route stays closed. Preserve internal adapter idempotence without
+ # widening routing or claiming that the customer can switch models.
+ import asyncio
+ request=module.TaskRouteSwitchRequest(**body)
+ who=module.auth.Actor(pg_scoped_workspace.scope.owner_id,'Fixture')
+ asyncio.run(module.switch_interview_model(task['task_id'],request,who))
+ asyncio.run(module.switch_interview_model(task['task_id'],request,who))
+ events=[e for e in store.events(task['task_id']) if e['kind']=='model_route']
+ assert len(events)==1 and events[0]['payload']['route_version']==1
+ assert store.task(task['task_id'])['model_route']=='deepseek'
+ assert store.task(task['task_id'])['model_default']=='deepseek:deepseek-flash'
+
 
 def test_cost_segments_preserve_consecutive_route_versions():
  rows=[{'route_version':0,'provider':'ollama','model':'phi4','prompt_tokens':10,'completion_tokens':5,'price_per_mtok_prompt_usd':0,'price_per_mtok_completion_usd':0},
