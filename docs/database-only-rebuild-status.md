@@ -229,3 +229,10 @@ sweep reached 57% before its 95-second timeout and showed failures; no aggregate
 pass count is claimed. Signed identity + Stop routing/owner/admin tests:18 passed.
 Two Stop fixtures now prove flipping the retired mode constant cannot disable
 the actual process/ownership checks (same 409, not a local-only 404).
+
+Unit27: account/ledger/release/operator/build-source fixtures now assert the
+unconditional signed interface rather than the retired local bypass: 76 passed.
+Seventeen child/runtime files were run individually with complete results: all
+passed (see bounded per-file results; overlapping earlier runtime evidence).
+The a-c first-failure-per-file sweep is incomplete; audit API fixture still
+expects private token detail on the customer surface. No full-gate claim.

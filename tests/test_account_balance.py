@@ -49,10 +49,10 @@ def test_invalid_scale_is_refused_not_guessed():
     with pytest.raises(ValueError):account_balance.read(Db({'o':{'balance_units':1,'units_per_credit':0}}),'o',Decimal('1'))
 
 
-def test_route_is_private_and_local_mode_has_no_balance():
+def test_route_is_private_and_has_no_mode_bypass():
     s=(ROOT/'app.py').read_text()
     body=s.split("@app.get('/api/account/credits')")[1].split('\n\n')[0]
-    assert 'Depends(auth.require_actor)' in body and 'if not config.CLOUD_TENANTS:return {\'credits\':None' in body
+    assert 'Depends(auth.require_actor)' in body and 'CLOUD_TENANTS' not in body
     # The database is only reachable through a store method (its scoped transaction); a direct store._db read is the 404 this fixed.
     assert 'store.own_credit_balance(' in body and 'store._db' not in body
 
