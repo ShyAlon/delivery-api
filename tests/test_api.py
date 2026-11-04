@@ -254,13 +254,24 @@ def _legacy_pg_identity_client(monkeypatch,workspace):
     return TestClient(app)
 
 
-def test_budget_hard_stop(pg_local_compat_process):
-    pg_local_compat_process(_check_budget_hard_stop)
+def test_budget_hard_stop_retains_accounting_without_reopening_legacy_routes(pg_scoped_workspace,monkeypatch):
+    from delivery_api import app as module
+    from delivery_api.auth import Actor
+    from fastapi import HTTPException
+    store=pg_scoped_workspace.store;run=store.create_link('Budget test');rid=run['run_id']
+    monkeypatch.setattr(module.auth,'enabled',lambda:False)
+    with pytest.raises(HTTPException) as stopped:
+        from starlette.requests import Request
+        request=Request({'type':'http','headers':[]})
+        module.add_usage(rid,module.UsageRecord(record_json='{}',cost_usd=7.5),request)
+    assert stopped.value.status_code==402
+    assert store.run(rid)['state']=='budget_stopped'
+    assert store.total_spend()==7.5
 
 
-def test_unknown_link_rejected(pg_local_compat_process):
-    pg_local_compat_process(_check_unknown_link_rejected)
+def test_unknown_link_rejected(client):
+    assert client.post('/runs',json={'token':'nope','free_text':'x'}).status_code==503
 
 
-def test_links_are_admin_only(pg_local_compat_process):
-    pg_local_compat_process(_check_links_are_admin_only)
+def test_legacy_links_are_unavailable_even_with_signed_identity(client):
+    assert client.post('/links',json={'founder_label':'x'}).status_code==503

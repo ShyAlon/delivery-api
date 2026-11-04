@@ -250,3 +250,9 @@ intentional theme1 exception. Secret redaction, malformed JSONL, verification
 scores, per-source size, omissions, exact log identity and real account capability
 checks run unchanged through PG evidence:18 passed. All 15 first d-group files
 also finished individually green, including DB-only policies and debug helpers.
+
+Unit30: all 15 API tests now pass. Legacy public link/run endpoints remain
+unavailable even to signed identity; their old budget assertion now calls the
+existing scoped usage accounting directly and still proves 402, budget_stopped,
+and retained $7.50 spend. No production legacy route was reopened. Detailed
+accounting is still tested privately and public audit is still credits-only.
