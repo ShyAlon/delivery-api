@@ -52,7 +52,7 @@ async def dispatch_phase(store,orchestrator,task_id,phase,*,resume_job_id=None,q
     integration are complete. Resume is an explicit current-owner operation.
     """
     from . import config,inprocess_engine
-    if config.CLOUD_TENANTS and inprocess_engine.current() is None:
+    if (inprocess_engine.current() is None):
         from .attempt_ledger import AdmissionDenied
         raise AdmissionDenied('child execution is not installed on this server')
     from .orchestrator import ExecutionMode
@@ -89,18 +89,10 @@ async def dispatch_phase(store,orchestrator,task_id,phase,*,resume_job_id=None,q
     if "model_route" in durable:options["model_route"]=durable["model_route"]
     from . import config,inprocess_engine
     engine=inprocess_engine.current()
-    if config.CLOUD_TENANTS and engine is not None:
+    if engine is not None:
         # The service runs the generator itself under the money gateway; it claims the job and meters it.
         if not await engine.dispatch(store,orchestrator,task_id,phase,job_id,options):
             activity("phase.dispatch.rejected","Worker job was already claimed; no execution started",task_id=task_id,phase=phase,job_id=job_id,reason="already_claimed")
             raise ValueError("worker job was already claimed; no execution started")
         activity("phase.dispatch.claimed","Worker job claimed and started",task_id=task_id,phase=phase,job_id=job_id)
         return job_id
-    async def run(capability):
-        capability.validate(store)
-        await orchestrator.execute_phase(capability.task_id,phase,**options)
-    if not await execute_job(store,job_id,run):
-        activity("phase.dispatch.rejected","Worker job was already claimed; no execution started",task_id=task_id,phase=phase,job_id=job_id,reason="already_claimed")
-        raise ValueError("worker job was already claimed; no execution started")
-    activity("phase.dispatch.claimed","Worker job claimed and started",task_id=task_id,phase=phase,job_id=job_id)
-    return job_id

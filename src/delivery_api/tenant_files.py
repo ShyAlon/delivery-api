@@ -7,8 +7,6 @@ from .tenancy import current_scope, session_root, TenantAccessDenied
 
 
 def authorized_session(base:Path,session_id:str,store=None)->Path:
-    if not config.CLOUD_TENANTS:
-        return base/session_id
     if store is None:
         raise TenantAccessDenied('session ownership repository required')
     binding=store.session_binding(session_id)

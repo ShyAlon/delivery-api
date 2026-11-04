@@ -114,18 +114,17 @@ class ProcessRunner:
         out_index=command.index("--out")+1 if "--out" in command else None
         artifact_dir=Path(command[out_index]) if out_index else None
         from . import config
-        if config.CLOUD_TENANTS:
-            from .worker_capability import WorkerCapability
-            from .tenant_files import authorized_session
-            from vmodel_contracts.runtime import artifacts_root
-            capability=WorkerCapability.capture(self.store,task_id)
-            capability.validate(self.store)
-            expected=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),
-                                        capability.session_id,self.store)/'spec'
-            if artifact_dir is None or artifact_dir.resolve()!=expected:
-                raise PermissionError('cloud subprocess output must match authorized session')
-            if (env or {}).get('VMODEL_ARTIFACTS_DIR')!=str(expected.parent.parent):
-                raise PermissionError('cloud subprocess root must match tenant namespace')
+        from .worker_capability import WorkerCapability
+        from .tenant_files import authorized_session
+        from vmodel_contracts.runtime import artifacts_root
+        capability=WorkerCapability.capture(self.store,task_id)
+        capability.validate(self.store)
+        expected=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),
+                                    capability.session_id,self.store)/'spec'
+        if artifact_dir is None or artifact_dir.resolve()!=expected:
+            raise PermissionError('cloud subprocess output must match authorized session')
+        if (env or {}).get('VMODEL_ARTIFACTS_DIR')!=str(expected.parent.parent):
+            raise PermissionError('cloud subprocess root must match tenant namespace')
         if virtual is None:raise PermissionError('isolated child phase required')
         from .generator_documents import pin_document_artifacts,document_substitutions
         documents=None
@@ -334,16 +333,6 @@ class ProcessRunner:
             self.processes.pop(task_id, None);self.waiting.discard(task_id);self.pending_decisions.pop(task_id,None);self.active_work.pop(task_id,None);self.interrupted_for_shutdown.discard(task_id);self.pricing_wait_started.pop(task_id,None);self.pricing_wait_seconds.pop(task_id,None);self.pricing_usage_cursor.pop(task_id,None);self.pricing_llm_cursor.pop(task_id,None);self.pricing_wall_cursor.pop(task_id,None);self.pricing_totals.pop(task_id,None);self.pricing_paths.pop(task_id,None)
             # The finished process must release its task slot before the next
             # executable starts. This is the shared process boundary.
-            if not config.CLOUD_TENANTS and continuation_phase is not None and self.on_complete is not None:
-                try:
-                    await self.on_complete(task_id, continuation_phase)
-                except Exception as exc:
-                    error=(f"Error: the next V-model phase did not start. Likely cause: "
-                           f"{type(exc).__name__}: {exc}. Next: restart Requi.re; startup recovery will retry the durable handoff.")
-                    self.store.add_event(task_id,"error",error,phase_key=continuation_phase,
-                                         payload={"cause":f"{type(exc).__name__}: {exc}","next":"Restart Requi.re; startup recovery will retry the durable handoff.","completed_phase":continuation_phase})
-                    activity("orchestrator.failure","Next phase launch failed",task_id=task_id,phase=continuation_phase,error=f"{type(exc).__name__}: {exc}")
-                    raise
 
     async def shutdown(self, grace_seconds: float = 3.0) -> None:
         active=list(self.processes.items())

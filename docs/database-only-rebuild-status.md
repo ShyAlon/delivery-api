@@ -199,3 +199,13 @@ assertion now uses real signed identity and declared installed routing; still
 proves typed default preflight failure and zero legacy runner calls. Combined
 test_tasks/retail projection/ledger: see actual local output below.
 108 passed, 1 warning in 28.93s
+
+Unit24: removed constant CLOUD_TENANTS branch selection from app, runner,
+orchestrator, engine client, dispatch, debug collector and namespace authority.
+The signed/PG/owned child path is unconditional. Removed unreachable alternate
+public rerun/health/operator views and event-derived session recovery. No public
+capability added. Narrowed dispatch to installed child engine only. Four legacy
+fixtures now assert no unbound recovery, full empty input state, canonical owned
+paths, and no subprocess fallback. Combined group: 164 passed, one source-string
+spacing failure; corrected that assertion and all 10 inprocess tests pass.
+Full gate and dead-function audit remain outstanding.

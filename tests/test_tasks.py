@@ -384,7 +384,7 @@ def test_interview_preview_does_not_color_downstream_requirements(tmp_path,pg_sc
 
 
 
-def test_startup_marks_unbound_pre_http_checkpoint_incompatible(monkeypatch,tmp_path,pg_scoped_workspace):
+def test_startup_never_recovers_session_from_unbound_event(monkeypatch,tmp_path,pg_scoped_workspace):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local recovery/projection contract
     import asyncio
@@ -394,7 +394,7 @@ def test_startup_marks_unbound_pre_http_checkpoint_incompatible(monkeypatch,tmp_
     store.add_event(tid,'progress','session: 20260919-163600-abcd',phase_key='intent')
     monkeypatch.setattr(app_module,'store',store)
     asyncio.run(app_module._resume_interrupted_interviews())
-    assert any(e['kind']=='incompatible' for e in store.events(tid))
+    assert not any(e['kind'] in ('incompatible','command') for e in store.events(tid))
     assert store.engine_session(tid) is None
 
 
@@ -542,7 +542,9 @@ def test_orchestrator_phase_plan_launches_next_bounded_process(monkeypatch,tmp_p
     asyncio.run(orch.continue_after(tid,'conops'))
     cmd=runner.calls[0][0][1]
     assert runner.calls[0][1]['phase']=='needs' and cmd[-2:]==['--to','needs']
-    assert str(interview/'intent_model.json') in cmd and str(interview/'conops.json') in cmd
+    from delivery_api.tenancy import session_root
+    canonical=session_root(tmp_path/'artifacts',pg_scoped_workspace.scope,'session-1')/'interview'
+    assert str(canonical/'intent_model.json') in cmd and str(canonical/'conops.json') in cmd
 
 
 def test_orchestrator_architecture_is_greenfield_without_decision(monkeypatch,tmp_path,pg_scoped_workspace):
@@ -622,7 +624,7 @@ def test_task_projection_exposes_live_input_truth(monkeypatch,pg_scoped_workspac
     tid=app_module.store.create_task('Input truth projection')['task_id']
     monkeypatch.setattr(app_module.runner,'input_state',lambda task:{'waiting':False,'process_live':False,'decision':None,'requirement':None})
     result=app_module.get_task(tid)
-    assert result['input_state']=={'waiting':False,'process_live':False,'decision':None,'requirement':None}
+    assert result['input_state']=={'waiting':False,'process_live':False,'decision':None,'requirement':None,'question':None,'input_id':None}
 
 
 def test_restart_does_not_text_replay_gate_parked_pre_http_interview(monkeypatch,tmp_path,pg_scoped_workspace):
@@ -636,7 +638,7 @@ def test_restart_does_not_text_replay_gate_parked_pre_http_interview(monkeypatch
     monkeypatch.setattr(app_module,'store',store)
     asyncio.run(app_module._resume_interrupted_interviews())
     assert store.task(tid)['state']=='waiting_gate'
-    assert any(e['kind']=='incompatible' for e in store.events(tid))
+    assert not any(e['kind'] in ('incompatible','command') for e in store.events(tid))
 
 
 def test_health_exposes_runtime_revision(monkeypatch):

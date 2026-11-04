@@ -22,18 +22,7 @@ class PhaseOrchestrator:
     def _session(self,task_id:str)->str:
         bound=self.store.engine_session(task_id)
         if bound:return bound
-        if config.CLOUD_TENANTS:raise RuntimeError("authorized session binding required")
-        import re
-        for event in reversed(self.store.events(task_id)):
-            m=re.search(r"(?:^|\s)session:\s*([A-Za-z0-9._-]+)",event.get("message",""))
-            if m:return m.group(1)
-            # Long-lived tasks may have rotated the original session event out
-            # of the bounded snapshot. Requirements carry the canonical
-            # artifacts path, which is durable evidence of the same session.
-            path=str((event.get("payload") or {}).get("path") or "")
-            m=re.search(r"(?:^|[/\\])artifacts[/\\]([A-Za-z0-9._-]+)(?:[/\\]|$)",path)
-            if m:return m.group(1)
-        raise RuntimeError("completed interview did not report its durable session or artifacts path")
+        raise RuntimeError("authorized session binding required")
 
     def _paths(self,task_id:str):
         sid=self._session(task_id);root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),sid,self.store)
@@ -145,15 +134,14 @@ class PhaseOrchestrator:
         if model_route:
             self.store.set_model_default(task_id,route_value)
         self.store.add_event(task_id,"model_route",f"{phase} uses {route_value} ({source})",phase_key=phase,payload={"route":route,"resolved":route_value,"provider":route,"model":route_value.split(":",1)[1],"mode":mode.value,"source":source})
-        if config.CLOUD_TENANTS:
-            from .worker_capability import WorkerCapability
-            capability=WorkerCapability.capture(self.store,task_id)
-            capability.validate(self.store)
-            # Producer progress and auxiliary files must share the same private
-            # root as the canonical phase output, not the legacy shared root.
-            env['VMODEL_ARTIFACTS_DIR']=str(spec.parent.parent)
-            env['VMODEL_TENANT_OWNER']=capability.scope.owner_id
-            env['VMODEL_PROGRESS_GENERATION']=str(capability.generation)
+        from .worker_capability import WorkerCapability
+        capability=WorkerCapability.capture(self.store,task_id)
+        capability.validate(self.store)
+        # Producer progress and auxiliary files must share the same private
+        # root as the canonical phase output, not the legacy shared root.
+        env['VMODEL_ARTIFACTS_DIR']=str(spec.parent.parent)
+        env['VMODEL_TENANT_OWNER']=capability.scope.owner_id
+        env['VMODEL_PROGRESS_GENERATION']=str(capability.generation)
         code=await self.runner.run(task_id,cmd,cwd=repo,phase=phase,env=env,infer_phase=False)
         activity("orchestrator.exit","Phase subprocess exited",task_id=task_id,phase=phase,exit_code=code)
 

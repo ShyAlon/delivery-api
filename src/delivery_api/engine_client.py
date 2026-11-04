@@ -73,15 +73,14 @@ class HttpEngineClient(EngineClient):
         # process is not there at all - translate them at this boundary so
         # callers never see a raw httpx traceback.
         from . import config
-        if config.CLOUD_TENANTS:
-            from .tenancy import current_scope
-            scope=current_scope()
-            headers={'X-Requi-Owner':scope.owner_id}
-            # The engine's database session persistence runs under the real
-            # auth session, never a synthetic substitute; when this call is
-            # detached from a login the engine rejects rather than degrades.
-            if scope.session_id:headers['X-Requi-Session-Id']=scope.session_id
-            kwargs['headers']={**kwargs.get('headers',{}),**headers}
+        from .tenancy import current_scope
+        scope=current_scope()
+        headers={'X-Requi-Owner':scope.owner_id}
+        # The engine's database session persistence runs under the real
+        # auth session, never a synthetic substitute; when this call is
+        # detached from a login the engine rejects rather than degrades.
+        if scope.session_id:headers['X-Requi-Session-Id']=scope.session_id
+        kwargs['headers']={**kwargs.get('headers',{}),**headers}
         import time as _time
         from .postgres_scope import note_engine,release_read_before_engine
         release_read_before_engine()

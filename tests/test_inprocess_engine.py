@@ -184,8 +184,9 @@ def test_runner_and_dispatch_wiring_in_source():
     root=Path(ie.__file__).parent
     runner=(root/'runner.py').read_text();jobs=(root/'tenant_jobs.py').read_text()
     assert runner.count('os.killpg(')==0 and runner.count('inprocess_engine.terminate(')==6
-    assert 'virtual if virtual is not None else await asyncio.create_subprocess_exec(' in runner
-    assert 'if config.CLOUD_TENANTS and virtual is None:' in runner
+    assert 'asyncio.create_subprocess_exec(' not in runner
+    assert 'proc=virtual' in runner
+    assert "if virtual is None:raise PermissionError('isolated child phase required')" in runner
     assert jobs.count('engine.dispatch(')==1 and 'inprocess_engine.current()' in jobs
 
 
