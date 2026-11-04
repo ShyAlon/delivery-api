@@ -123,3 +123,8 @@ Unit 19: retry/handoff/audit/cost use retained PG artifacts and usage only. Reti
 local retry dispatch tails and cost rollup filesystem writes. Red-first no-file
 policy; 121 phase/retry-runner/gate/cost-field tests passed. Customer cost guards,
 lineage rollback and review-revision checks remain exercised.
+
+Unit 20: removed uncalled app path-artifact and bound-text helpers. Missing and
+hostile-symlink residue cannot become downloads; selected signed cloud,
+observability, provenance and session-cost fixtures use only PG evidence. No
+change to legacy raw runner fixture failures still awaiting conversion.

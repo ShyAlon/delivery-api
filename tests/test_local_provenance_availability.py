@@ -23,7 +23,6 @@ def test_validation_supplement_status_does_not_hide_corruption(tmp_path,monkeypa
     from fastapi import HTTPException
     monkeypatch.setattr(module,'_recorded_engine_session',lambda task:None)
     def artifact(*args):raise HTTPException(404,'missing')
-    monkeypatch.setattr(module,'_task_artifact',artifact)
     out=module._validation_panel_for('task','{}')
     assert out['supplemental_availability']['needs']['availability']=='absent'
     assert out['supplemental_availability']['tests']['availability']=='absent'

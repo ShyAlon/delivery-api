@@ -676,10 +676,7 @@ def test_cloud_download_rejects_symlink_swap_after_path_validation(cloud,monkeyp
     root=session_root(base,A,sid);folder=root/'interview';folder.mkdir(parents=True)
     artifact=folder/'intent_model.json';artifact.write_text('{"problem_statement":"private"}')
     outside=base/'foreign.json';outside.write_text('foreign-secret-bytes')
-    original=module._task_artifact
-    def swap(*args):
-        path=original(*args);artifact.unlink();artifact.symlink_to(outside);return path
-    monkeypatch.setattr(module,'_task_artifact',swap)
+    artifact.unlink();artifact.symlink_to(outside)
     response=client.get('/api/tasks/'+tid+'/artifacts/intent/intent_model.json',headers=header('a'))
     assert response.status_code==404,response.text
     assert 'foreign-secret-bytes' not in response.text

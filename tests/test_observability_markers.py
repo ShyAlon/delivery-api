@@ -80,7 +80,6 @@ def test_stop_run_refusal_is_marked(marks, monkeypatch):
 
 def test_artifact_download_marks_success_and_refusal(marks, monkeypatch, tmp_path):
     f = tmp_path / "out.json"; f.write_text("{}")
-    monkeypatch.setattr(module, "_task_artifact", lambda *a: f)
     monkeypatch.setattr(config, "CLOUD_TENANTS", False)
     monkeypatch.setattr(module,"store",NS(task=lambda tid:{"task_id":tid,"is_test":False},read_artifact_bytes=lambda *a:b"{}"))
     assert module.task_artifact_download("t1", "needs", "out.json")

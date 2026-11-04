@@ -1372,11 +1372,6 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
             spawn(_continue_reconciled_interview(task_id))
     return {"status":"accepted"}
 
-def _read_task_text(task_id:str,path:Path,*,errors='strict')->str:
-    if not config.CLOUD_TENANTS:return path.read_text(errors=errors)
-    from vmodel_contracts.runtime import artifacts_root
-    with session_reader(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),_recorded_engine_session(task_id),store):
-        return read_bound_text(path,errors=errors)
 
 def _project_manifest_rows(rows:list[dict])->list[dict]:
     records=[]
@@ -1400,12 +1395,6 @@ def _task_artifact_snapshot(task_id:str, *, task=None, session=_SESSION_UNSET, e
         raise HTTPException(500,'artifact manifest coverage is incomplete; no ready published revision for this generation')
     return []
 
-def _task_artifact(task_id:str,phase:str,name:str)->Path:
-    artifact=next((a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==phase and a["name"]==name),None)
-    if not artifact:raise HTTPException(404,"artifact not found")
-    path=Path(artifact["ref"]).resolve()
-    if not hasattr(store,"_postgres") and not path.is_file():raise HTTPException(404,"artifact file not found")
-    return path
 
 _OUTPUT_PARTIALS={"srs":"srs_fills.partial.json","architecture":"architecture.partial.json",
                   "specs":"items.partial.json","tests":"tests_fills.partial.json",
@@ -1448,7 +1437,7 @@ def _interview_model_provenance(task_id:str,status=None)->list[str]:
     if config.CLOUD_TENANTS:mark('policy_excluded','local_usage_excluded');return []
     session=_recorded_engine_session(task_id)
     rows=[]
-    if session and hasattr(store,'_postgres'):
+    if session:
         from .pg_usage import usage_rows
         batches,evidence=usage_rows(store,task_id)
         if not evidence['complete']:
@@ -2281,12 +2270,12 @@ def _task_cost(task_id:str)->dict:
     if hasattr(store,'task_retail_totals'):
         exact=store.task_retail_totals(task_id)
         if exact is not None:return exact
-    from .pricing import usage_tokens,token_credits,credits_to_usd
+    from .pricing import token_credits,credits_to_usd
     latest={}
     for event in store.events(task_id):
         if event.get("kind")=="price":latest[event.get("phase_key")]=event
     session=_recorded_engine_session(task_id);interview_tokens=spec_tokens=0
-    if session and hasattr(store,'_postgres'):
+    if session:
         from .pg_usage import usage_summary
         summary=usage_summary(store,task_id);evidence=summary['evidence']
         if not evidence['complete']:return {'price':None,'price_usd':None,'evidence':evidence}
@@ -2296,8 +2285,7 @@ def _task_cost(task_id:str)->dict:
     event_tokens=sum(int((e.get("payload") or {}).get("tokens") or 0) for e in counted if e.get("phase_key") not in ("intent","conops"))
     price=event_price+token_credits(interview_tokens)+token_credits(max(0,spec_tokens-event_tokens))
     result={"price":round(price,6),"price_usd":round(credits_to_usd(price),6)}
-    if session and hasattr(store,'_postgres'):result['evidence']=evidence
-    pass
+    if session:result['evidence']=evidence
     return result
 
 @app.get("/api/tasks/{task_id}/cost")
@@ -2311,11 +2299,10 @@ def task_cost(task_id:str,request:Request):
         exact=store.task_retail_totals(task_id)
         if exact is not None:return exact
     session=_recorded_engine_session(task_id)
-    if session and hasattr(store,'_postgres'):
+    if session:
         from .pg_usage import update_rollup
         evidence=update_rollup(store,task_id)
         if not evidence['complete']:return {'price':None,'price_usd':None,'evidence':evidence}
-    pass
     return _task_cost(task_id)
 
 @app.get("/api/tasks/{task_id}/cost-phases")
@@ -2345,7 +2332,7 @@ def task_audit(task_id: str, request: Request):
     priced=list(priced_by_phase.values())
     session=_recorded_engine_session(task_id)
     interview_usage=[]
-    if session and hasattr(store,'_postgres'):
+    if session:
         from .generator_documents import GeneratorDocuments
         usage=GeneratorDocuments.owner_reader(store,task_id).read('interview/usage.jsonl')
         if usage is not None:interview_usage=[json.loads(line) for line in usage.decode().splitlines() if line.strip()]
