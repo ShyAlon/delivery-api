@@ -662,7 +662,7 @@ def test_next_phase_launch_failure_is_visible_and_preserves_completed_boundary(t
     import asyncio
     from delivery_api import app as module
     store=pg_scoped_workspace.store;tid=store.create_task('Visible admitted dispatch failure')['task_id']
-    for phase in ('intent','conops'):store.update_phase(tid,phase,'approved')
+    for phase in ('intent','conops'):store.update_phase(tid,phase,'running');store.update_phase(tid,phase,'approved')
     store.set_engine_session(tid,'dispatch-failure-test')
     job=store.prepare_next_phase(tid,'needs','Signed-In User','ollama:fake')
     assert job

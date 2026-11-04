@@ -179,10 +179,14 @@ or publication bypass. 24 existing diagnostic/lifecycle tests use this fixture;
 callback assumptions still need current queued-continuation assertions. This is
 an unfinished test-fixture unit, not a gate pass or production behavior change.
 
-Unit22 completion: 24 retained runner diagnostic/control/lifecycle tests pass
+Unit22 partial follow-up: 23 retained runner diagnostic/control/lifecycle tests pass
 through registered owned child fixture. Replaced legacy implicit interview
 callback expectation with explicit no-auto-start after approved interview and
 released process slot. Admitted next-phase dispatch failure is visible, preserves
 approved upstream phases and retains pending job for explicit recovery. This
 matches phase_start's click-only policy. Explicit open-generator-gate automatic
 continuation remains separately unverified; do not claim its acceptance yet.
+
+Correction: the new admitted next-phase failure fixture initially returned no job; its prerequisite setup is being fixed before counting it as passed.
+
+Verified after fixing the first-start fixture: all 24 selected tests pass (6 seconds). Prior 23/1 result was not a completed gate.
