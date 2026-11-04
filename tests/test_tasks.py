@@ -564,16 +564,16 @@ def test_orchestrator_architecture_is_greenfield_without_decision(monkeypatch,tm
     assert runner.calls[0][1]['phase']=='architecture'
 
 
-def test_runner_releases_process_before_completion_callback(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
-    from delivery_api import config
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
+def test_runner_releases_process_without_implicit_next_phase(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
-    store=pg_scoped_workspace.store;tid=store.create_task('Handoff')['task_id'];runner=ProcessRunner(store);observed=[]
-    async def next_stage(task_id,phase):observed.append((task_id not in runner.processes,phase))
+    store=pg_scoped_workspace.store;tid=store.create_task('Explicit next phase')['task_id'];runner=ProcessRunner(store);observed=[]
+    async def next_stage(task_id,phase):observed.append(phase)
     runner.on_complete=next_stage
-    asyncio.run(runner.run(tid,[sys.executable,'-c','print("session: handoff")'],cwd=tmp_path,completion_phases=('intent','conops')))
-    assert observed==[(True,'conops')]
+    assert asyncio.run(runner.run(tid,[sys.executable,'-c','print("done")'],cwd=tmp_path,completion_phases=('intent','conops')))==0
+    assert tid not in runner.processes and observed==[]
+    states={p['phase_key']:p['state'] for p in store.task(tid)['phases']}
+    assert states['intent']==states['conops']=='approved' and states['needs']=='pending'
 
 
 def test_open_gate_uses_same_automatic_continuation_path(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
@@ -658,20 +658,22 @@ def test_startup_recovers_approved_interview_handoff_to_needs(monkeypatch,tmp_pa
     assert calls==[(tid,'conops')]
 
 
-def test_next_phase_launch_failure_is_visible_and_preserves_completed_boundary(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
-    from delivery_api import config
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # explicit local subprocess lifecycle
-    import asyncio,sys
-    from delivery_api.runner import ProcessRunner
-    store=pg_scoped_workspace.store;tid=store.create_task('Visible handoff failure')['task_id'];runner=ProcessRunner(store)
-    async def fail(task_id,phase):raise RuntimeError('missing intent_model.json')
-    runner.on_complete=fail
-    try:asyncio.run(runner.run(tid,[sys.executable,'-c','print("session: s")'],cwd=tmp_path,completion_phases=('intent','conops')))
-    except RuntimeError:pass
+def test_next_phase_launch_failure_is_visible_and_preserves_completed_boundary(tmp_path,pg_scoped_workspace,monkeypatch):
+    import asyncio
+    from delivery_api import app as module
+    store=pg_scoped_workspace.store;tid=store.create_task('Visible admitted dispatch failure')['task_id']
+    for phase in ('intent','conops'):store.update_phase(tid,phase,'approved')
+    store.set_engine_session(tid,'dispatch-failure-test')
+    job=store.prepare_next_phase(tid,'needs','Signed-In User','ollama:fake')
+    assert job
+    async def fail(*args,**kwargs):raise RuntimeError('retained upstream document unavailable')
+    monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',fail)
+    asyncio.run(module._run_next_phase(tid,'needs','Stakeholder needs',job))
     event=store.events(tid)[-1]
-    assert event['kind']=='error' and 'missing intent_model.json' in event['message']
+    assert event['kind']=='error' and 'retained upstream document unavailable' in event['message']
     states={p['phase_key']:p['state'] for p in store.task(tid)['phases']}
-    assert states['intent']=='approved' and states['conops']=='approved'
+    assert states['intent']==states['conops']=='approved' and states['needs']=='failed'
+    assert store.worker_job(job)['state']=='pending'
 
 
 def test_startup_handoff_recovery_is_shared_across_phase_boundaries(monkeypatch,tmp_path,pg_scoped_workspace):

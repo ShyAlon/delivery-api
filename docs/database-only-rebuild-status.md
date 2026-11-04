@@ -178,3 +178,11 @@ or publication bypass. 24 existing diagnostic/lifecycle tests use this fixture;
 21 initially passed, three failed. Stdin EOF fixture fixed next; completion
 callback assumptions still need current queued-continuation assertions. This is
 an unfinished test-fixture unit, not a gate pass or production behavior change.
+
+Unit22 completion: 24 retained runner diagnostic/control/lifecycle tests pass
+through registered owned child fixture. Replaced legacy implicit interview
+callback expectation with explicit no-auto-start after approved interview and
+released process slot. Admitted next-phase dispatch failure is visible, preserves
+approved upstream phases and retains pending job for explicit recovery. This
+matches phase_start's click-only policy. Explicit open-generator-gate automatic
+continuation remains separately unverified; do not claim its acceptance yet.
