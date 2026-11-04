@@ -33,6 +33,7 @@ class OwnedRun:
         self.service='requi-fixture-service-'+self.suffix
         self.label='requi.image-gate='+self.suffix
         self.created=[]
+        self.fixture_built=False
         self.fixture_tag='requi-local-fixture:'+self.suffix
         self.directory=None
 
@@ -54,8 +55,9 @@ class OwnedRun:
                 command(remove)
             except (WorkflowError,ValueError):log('WARN','owned cleanup unconfirmed; inspect invocation resources')
         self.created=[]
-        try:command(['docker','image','rm',self.fixture_tag])
-        except WorkflowError:pass
+        if self.fixture_built:
+            try:command(['docker','image','rm',self.fixture_tag])
+            except WorkflowError:pass
         if self.directory is not None:self.directory.cleanup()
 
     def start(self):
@@ -66,6 +68,7 @@ class OwnedRun:
         context(self.root,build_context)
         command(['docker','build','--platform','linux/amd64','--file',str(build_context/'scripts/docker/Dockerfile.local-fixture'),
                  '--tag',self.fixture_tag,str(build_context)],timeout=1800)
+        self.fixture_built=True
         self.create('network',self.network,['docker','network','create','--internal','--label',self.label,self.network])
         self.create('volume',self.volume,['docker','volume','create','--label',self.label,self.volume])
         self.create('container',self.fixture,['docker','run','--detach','--name',self.fixture,'--label',self.label,
@@ -95,6 +98,14 @@ class OwnedRun:
         args[1:1]=['--label',self.label]
         self.create('container',self.service,['docker',*args])
         self.handoff=handoff
+        import urllib.request
+        for _ in range(240):
+            try:
+                with urllib.request.urlopen(self.base+'/health',timeout=1) as response:
+                    if json.load(response).get('ok') is True:break
+            except (OSError,ValueError):pass
+            time.sleep(.5)
+        else:raise WorkflowError('unchanged candidate startup did not become healthy')
         return self
 
     def http_acceptance(self, output: Path):
