@@ -129,6 +129,7 @@ def test_server_boot_config_does_not_carry_a_runtime_mode(monkeypatch):
 
 @pytest.mark.parametrize("path", ["/sessions", "/sessions/abc", "/sessions/abc/view", "/sessions/abc/needs", "/sessions/abc/interview"])
 def test_the_old_session_pages_send_people_home(path,monkeypatch,pg_scoped_workspace,pg_task_app):
+    from fastapi.testclient import TestClient
     from delivery_api import app as module
     client=TestClient(pg_task_app(pg_scoped_workspace),headers=pg_scoped_workspace.headers,follow_redirects=False)
     response=client.get(path,headers={'Accept':'text/html'})

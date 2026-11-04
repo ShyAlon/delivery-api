@@ -377,5 +377,6 @@ operator boundary changed or bypass added.
 ### Rebuild unit 44: retired host setting and signed legacy page redirects
 - Host artifact-root setting is absent, not an API contract to preserve. Session data endpoint remains.
 - Legacy page redirects are tested as a signed owner, avoiding auth-refusal false failures.
-- Local diagnostics gate: 16 passed. Long retained graph cases 0..22 now have completed passing groups (6,4,6,7). Remaining 12 group timed out after five dots; not a pass, split further.
+- Initial diagnostics fixture run failed 5 cases due to missing TestClient import (11 passed); import corrected in following checkpoint, rerun below. Long retained graph cases 0..22 now have completed passing groups (6,4,6,7). Remaining 12 group timed out after five dots; not a pass, split further.
 - Exact fetched remote/base verified at 10:33: HEAD and remote WIP 5a7a26edb20de09db5b60b9ce2bbb8a056933386; merge-base and origin/main f23feb2df0ebf8bcbada9a2f52e3b6936e9349a4.
+- Unit 44 correction: actual corrected diagnostics rerun, 16 passed. Previous mistaken 16-pass wording was corrected to preserve its initial 5 NameError failures. No production change.
