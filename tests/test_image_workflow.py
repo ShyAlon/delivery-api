@@ -136,3 +136,14 @@ def test_failed_preflight_prints_recovery_without_private_command_output(tmp_pat
     assert m.main(['--review','--run-dir',str(tmp_path)])==2
     text=capsys.readouterr().err
     assert 'No automatic retry or alternate build path' in text and 'run directory' in text
+
+
+def test_declined_local_goal_never_builds_or_starts(tmp_path,monkeypatch,capsys):
+    import builtins
+    inputs={'sources':{},'runtime_contract':'fictional','acceptance_contract':'fictional'}
+    monkeypatch.setattr(m,'preflight',lambda *args:inputs)
+    monkeypatch.setattr(builtins,'input',lambda prompt:'no')
+    monkeypatch.setattr(m,'build',lambda *args:pytest.fail('build after decline'))
+    assert m.main(['--run-dir',str(tmp_path),'--build'])==2
+    assert 'declined; nothing built or started' in capsys.readouterr().err
+    assert set(m.StageState(tmp_path/'state.json',inputs).state['stages'])=={'preflight'}
