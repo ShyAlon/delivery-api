@@ -318,3 +318,11 @@ Continuation checkpoint, 2026-11-04 10:01 local:
   using PG http-session/debug-http docs, not host files.
 - Full build, all acceptance and final diff review still pending. CI unavailable,
   local gate only. Push WIP after every meaningful unit, noPR until full gate.
+
+Unit34: model-route tests now assert customer transcript exclusion of private
+model headers while existing pure per-segment and switch accounting assertions
+remain. Account-capability execution detail uses retained http-session and
+raw-debug documents, not a host directory. Combined model/cutover69 passed
+(one expensive blocked-advance test excluded here, previously green in56).
+Owner real-entry acceptance re-run with its required source and100s test budget:
+1 passed17.43s. Earlier15s timeout was below its actual duration, not a defect.
