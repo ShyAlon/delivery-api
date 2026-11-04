@@ -41,3 +41,15 @@ test_image_acceptance, test_image_fixture_services, test_image_local_service_fix
 test_owner_image_deploy, test_remote_image_apply, test_deploy_image_identity,
 test_local_image_preview, test_image_private_backoffice, test_one_image_entrypoints,
 test_req_image_entry.
+
+### Build assertion mapping completed
+
+`test_exact_image_build.py` now exercises real temporary git repositories and
+archive orchestration with only Docker faked: full SHAs/timestamp, amd64 only,
+readable under umask077, untracked secret exclusion, dirty/source drift refusal,
+failed build cannot advance evidence, wrong architecture refusal, symlink escape
+refusal and silent exit137/OOM diagnostic without secret echo. Mutable final-tag
+publication assertions are replaced by private manifest/config receipt tests;
+failed deploy cannot rebuild is covered by deploy identity and remote apply
+contracts. Legacy build tests may now be migrated to these owning APIs. A real
+image build remains unrun here.

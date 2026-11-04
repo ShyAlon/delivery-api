@@ -52,7 +52,10 @@ def command(args: list[str], *, cwd: Path | None = None, timeout: int = 60) -> s
     except (OSError, subprocess.TimeoutExpired) as error:
         raise WorkflowError("required command unavailable or timed out: " + args[0]) from error
     if result.returncode:
-        raise WorkflowError("required command failed: " + args[0] + "; no state advanced")
+        reason="required command failed: " + args[0] + "; exit code " + str(result.returncode) + "; no state advanced"
+        if not result.stdout.strip() and not result.stderr.strip():
+            reason+="; produced no output, possible signal kill or out of memory"
+        raise WorkflowError(reason)
     return result.stdout.strip()
 
 
