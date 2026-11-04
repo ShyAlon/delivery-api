@@ -78,6 +78,7 @@ MIGRATIONS={
  '20261102070000_uncertainty_is_audit_not_admission.sql':('function0:requi_uncertainty_warning_policy',),
  '20261102080000_backoffice_audit_view.sql':('audit-policy:operator_curated_audit_read',),
  '20261102220000_owner_test_tasks.sql':('signature:requi_test_task_owner()','signature:requi_purge_test_task(text,boolean)','test-marker:is_test'),
+ '20261104210000_stopped_child_job_closure.sql':('worker-policy:backend_stopped_worker_close','signature:requi_stopped_worker_immutable()','worker-trigger:stopped_worker_immutable'),
 }
 # Shared with installer and disposable harness: no hidden blanket grants.
 sys.path.insert(0,str(ROOT/'src'))
@@ -95,6 +96,8 @@ def destructive(text):
 def object_exists(conn,probe):
     kind,name=probe.split(':',1)
     if kind=='test-marker':return conn.execute("SELECT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='public.tasks'::regclass AND attname=%s AND NOT attisdropped) AND EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.tasks'::regclass AND tgname='requi_test_task_marker_guard' AND NOT tgisinternal)",(name,)).fetchone()[0]
+    if kind=='worker-policy':return conn.execute("SELECT EXISTS(SELECT 1 FROM pg_policy WHERE polrelid='public.worker_jobs'::regclass AND polname=%s AND polcmd='w')",(name,)).fetchone()[0]
+    if kind=='worker-trigger':return conn.execute("SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.worker_jobs'::regclass AND tgname=%s AND NOT tgisinternal)",(name,)).fetchone()[0]
     if kind=='audit-policy':return conn.execute("SELECT EXISTS(SELECT 1 FROM pg_policy WHERE polrelid='public.audit_log'::regclass AND polname=%s)",(name,)).fetchone()[0]
     if kind=='visible-title-index':
         row=conn.execute("SELECT i.indisunique,pg_get_expr(i.indpred,i.indrelid) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relnamespace='public'::regnamespace AND c.relname=%s",(name,)).fetchone()

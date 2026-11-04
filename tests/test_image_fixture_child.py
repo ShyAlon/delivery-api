@@ -1,11 +1,13 @@
 """Real graph/child and zero-cost production admission, fixture HTTP only."""
 import json,sys,uuid
+import pytest
 from pathlib import Path
 from delivery_api.tenancy import tenant_context
 from test_postgres_store import A,DSN,store
 
 
-def test_image_fixture_real_child_with_zero_balance_production_gateway(store,tmp_path):
+@pytest.mark.parametrize('active_stop',[False,True])
+def test_image_fixture_real_child_with_zero_balance_production_gateway(store,tmp_path,active_stop):
     import importlib.util,psycopg
     from delivery_api.production_gateway import ProductionGateways,PRICES_ENV,CEILING_ENV
     from delivery_api.child_interview import ChildInterviewClient
@@ -31,6 +33,28 @@ def test_image_fixture_real_child_with_zero_balance_production_gateway(store,tmp
         with tenant_context(A):
             tid=store.create_task('real image zero child '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)
             client=ChildInterviewClient(store,tmp_path/'artifacts',gateway_factory=pinned,dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint=f'http://127.0.0.1:{port}/v1/chat/completions',command=command)
+            if active_stop:
+                from concurrent.futures import ThreadPoolExecutor
+                from delivery_api.cooperative_stop import request_stop
+                def start_held():
+                    with tenant_context(A):
+                        try:client.start(StartSessionRequest(task_id=tid,session_id=sid,idea='EXACT_IMAGE_STOP: A booking app',model_route='ollama'))
+                        except RuntimeError:return
+                        raise AssertionError('stopped child returned success')
+                with ThreadPoolExecutor(1) as workers:
+                    future=workers.submit(start_held)
+                    try:
+                        assert services.active.wait(10),'real child never reached held provider'
+                        assert client.supervisor.active and not future.done()
+                        pending=request_stop(store,client,tid)
+                        assert pending['state']=='stop_requested' and pending['delete_allowed'] is False
+                    finally:services.release.set()
+                    future.result(timeout=15)
+                assert client.supervisor.last_result.reaped
+                assert len(services.calls)==1 and not services.active.is_set()
+                stopped=request_stop(store,client,tid,reconcile=True)
+                assert stopped['state']=='stopped' and stopped['delete_allowed'] is True,stopped
+                return
             result=client.start(StartSessionRequest(task_id=tid,session_id=sid,idea='A test booking app',model_route='ollama'))
             assert result.snapshot.open_input is not None
             assert services.calls and client.supervisor.last_result.reaped
@@ -39,6 +63,14 @@ def test_image_fixture_real_child_with_zero_balance_production_gateway(store,tmp
             answered=client.submit(sid,InputResponse(input_id=result.snapshot.open_input.input_id,value='Customers book a time slot',actor_id='fixture',expected_sequence=result.snapshot.sequence))
             assert answered.snapshot.sequence>result.snapshot.sequence
             assert client.supervisor.last_result.reaped
+            from delivery_api.cooperative_stop import request_stop
+            stopped=request_stop(store,client,tid)
+            assert stopped['state']=='stopped' and stopped['delete_allowed'] is True,stopped
+            # Completion cannot be inferred from lease expiry or job state.
+            with store._postgres.transaction() as conn:
+                conn.execute("UPDATE engine_sessions SET control=control-'stop_quiescent' WHERE session_id=%s",(sid,))
+                conn.execute("DELETE FROM decision_reviews WHERE task_id=%s AND revision='child-completion-v1'",(tid,))
+            assert store.confirm_child_session_quiescent(sid) is False
     finally:
         services.close();factory.close()
         with psycopg.connect(DSN) as connection:

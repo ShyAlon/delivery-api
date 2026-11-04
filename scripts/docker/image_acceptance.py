@@ -42,6 +42,7 @@ class API:
             headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json','Origin':self.base})
         try:
             with urllib.request.urlopen(request,timeout=kwargs.get('timeout_seconds',60)) as response:
+                self.last_status=response.status
                 return json.load(response)
         except urllib.error.HTTPError as error:
             raise AcceptanceFailure('fixture HTTP '+method+' '+path+' status='+str(error.code)+' response_tail='+safe_failure(error.read(2048).decode('utf-8',errors='replace'),self.token)+'; no state-changing retry') from None
@@ -84,7 +85,7 @@ def http_slice(api,*,wait=None):
         time.sleep(.25)
     stopped=api('POST','/api/tasks/'+tid+'/stop')
     if stopped.get('state')!='stopped' or stopped.get('delete_allowed') is not True:
-        raise AcceptanceFailure('fixture cooperative Stop not confirmed')
+        raise AcceptanceFailure('fixture cooperative Stop not confirmed: expected state=stopped delete_allowed=True after settled/reaped Start+answer; observed='+safe_failure(json.dumps({k:stopped.get(k) for k in ('state','delete_allowed','engine_status','pending_reason')}))+'; POST Stop HTTP status='+str(getattr(api,'last_status','unknown')))
     # Only scoped reads after Stop. Retain content until owned sidecar teardown;
     # absence of live deletion is intentional, not a production purge shortcut.
     retained=api('GET','/api/tasks/'+tid)

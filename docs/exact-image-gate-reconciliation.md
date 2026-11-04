@@ -223,3 +223,42 @@ private host/token messages and without a second provider request.
 Affected gate: 367 passed. Additional safe-envelope, operator diagnostic and
 user-message targeted checks passed in a separate 58-test run. No Mac/Docker
 pass claimed. Rerun with a fresh mac-modelpin run directory before accepting.
+
+### Idle and active child Stop (November 4, 22:45)
+
+Mac a5fda9c passed real Start and answer, then idle Stop returned a pending
+engine state. A real-child regression now reproduces this without Docker:
+parent control creates a fresh registry, which has no old child writer claim
+and cannot acknowledge the old registry's quiescence. Changing call timing
+would not repair this. Parent confirmation now requires stopped generation,
+all jobs done, durable parent reaped-child evidence for each job, and no
+unsettled provider or compute rows. Missing crash/reap proof stays pending.
+
+The separate active-call test now uses an explicit fixture release instead of
+a five-second sleep. It verifies fixture hold, running child job and dispatched
+attempt before one Stop, releases only after Stop's response, then waits for
+closed accounting and makes one explicit reconciliation. Native regression
+proves pending Stop while held, one accepted/settled call, reaped child, then
+stopped/delete_allowed. The original idle check and two-job retained proof
+remain required; no assertion was removed to bypass them.
+
+Active Stop also exposed an RLS defect: engine Stop advances the generation,
+but the worker job's old-generation row could not be closed. Added migration
+`20261104210000_stopped_child_job_closure.sql`. It grants no new INSERT or
+browser policy, preserves the old generation and provenance, and permits only
+original live Auth-session owner running-to-done closure at exactly the next
+stopped engine generation with a durable task Stop. A trigger rejects changing
+provenance alongside closure, which WITH CHECK alone cannot compare.
+Security tests reject missing Stop, larger generation gaps, foreign tenant,
+same-owner alternate Auth session, restart/pause/failure, changed generation,
+attempt/kind/auth/options and old-generation INSERT. Schema-readiness probes
+include policy/function/trigger. Applied only to disposable databases here;
+production application remains a separate owner decision, not performed.
+
+Gate: 375 passed. Additional final security/native lifecycle/local-run checks:
+17 passed. A broad extra store/ledger/API run exceeded its time limit and is
+not claimed as a pass. No new Mac or Docker acceptance result claimed.
+Failure diagnostics now state expected vs observed Stop state, delete_allowed,
+engine_status, pending_reason and HTTP status; active failures include fixture
+hold, child/attempt state and final accounting evidence. local-failure.log is
+retained for acceptance failures, before owned cleanup.

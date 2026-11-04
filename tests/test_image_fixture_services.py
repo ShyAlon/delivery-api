@@ -46,3 +46,21 @@ def test_tls_certificate_trusted_only_by_fixture_ca(tmp_path):
         context=ssl.create_default_context(cafile=str(tmp_path/'ca.pem'))
         assert context.verify_mode==ssl.CERT_REQUIRED and context.check_hostname
     finally:services.close()
+
+
+def test_fixture_hold_cannot_finish_before_explicit_release(tmp_path):
+    import threading
+    services=m.Services(tmp_path)
+    _,port=services.start(directory=tmp_path)
+    result=[]
+    def call():
+        request=urllib.request.Request('http://127.0.0.1:'+str(port)+'/v1/chat/completions',data=json.dumps({'model':m.MODEL,'messages':[{'role':'user','content':'EXACT_IMAGE_STOP'}]}).encode(),headers={'Content-Type':'application/json'})
+        result.append(json.load(urllib.request.urlopen(request)))
+    worker=threading.Thread(target=call);worker.start()
+    try:
+        assert services.active.wait(3) and not result
+        request=urllib.request.Request('http://127.0.0.1:'+str(port)+'/fixture/release',data=b'',method='POST')
+        assert json.load(urllib.request.urlopen(request))=={'released':True}
+        worker.join(3)
+        assert not worker.is_alive() and len(result)==1 and not services.active.is_set()
+    finally:services.release.set();worker.join(3);services.close()

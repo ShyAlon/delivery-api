@@ -52,3 +52,9 @@ otherwise valid caches when only host tooling changed.
   model default. Test route-only Start with real admission, not only an explicit
   initial model or fake gateway. BrokerUnavailable means channel failure, not
   necessarily network failure; report the parent's safe class/cause evidence.
+- Test idle Stop after real reaped children and active Stop during a positively
+  held provider call. A fresh registry is not evidence of writer quiescence.
+  Durable reap proof and settled ledger entries are required. Generation fences
+  must permit only provenance-preserving terminal closure, never restart or
+  rewriting an old job to the new generation. Review RLS WITH CHECK together
+  with OLD/NEW mutation guards.

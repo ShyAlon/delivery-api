@@ -47,7 +47,7 @@ def test_missing_sequence_never_answers_or_stops():
 
 def test_unconfirmed_stop_never_passes():
     api,wait,calls=fixture(stop=False)
-    with pytest.raises(m.AcceptanceFailure,match='Stop'):m.http_slice(api,wait=wait)
+    with pytest.raises(m.AcceptanceFailure,match='expected state=stopped.*observed=.*working.*HTTP status=unknown'):m.http_slice(api,wait=wait)
 
 
 def test_http_failure_names_request_status_and_redacted_response(monkeypatch):

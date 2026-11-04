@@ -9,7 +9,7 @@ import re
 import sys
 
 
-def inspect_task(task_id):
+def inspect_task(task_id,*,stop_state=False):
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',task_id):raise ValueError('bounded fixture task identity required')
     state=json.loads(Path('/tmp/fixture-state.json').read_bytes())
     from psycopg.conninfo import conninfo_to_dict
@@ -22,7 +22,12 @@ def inspect_task(task_id):
     with psycopg.connect(**fields) as conn:
         conn.execute('SET TRANSACTION READ ONLY')
         task=conn.execute('SELECT owner_id,engine_session_id,state FROM tasks WHERE task_id=%s',(task_id,)).fetchone()
-        if not task or str(task[0])!=OWNER or task[2]!='stopped':raise ValueError('owned stopped task required')
+        if not task or str(task[0])!=OWNER:raise ValueError('owned task required')
+        if stop_state:
+            jobs=conn.execute('SELECT state FROM worker_jobs WHERE task_id=%s',(task_id,)).fetchall()
+            attempts=conn.execute('SELECT p.state FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=%s',(task_id,)).fetchall()
+            return {'task_state':task[2],'child_jobs':[r[0] for r in jobs],'provider_attempts':[r[0] for r in attempts]}
+        if task[2]!='stopped':raise ValueError('owned stopped task required')
         sid=task[1]
         jobs=conn.execute('SELECT job_id,state,auth_session_id FROM worker_jobs WHERE task_id=%s ORDER BY created_at,job_id',(task_id,)).fetchall()
         if len(jobs)!=2 or any(row[1]!='done' or str(row[2])!=SESSION for row in jobs):
@@ -46,5 +51,5 @@ def inspect_task(task_id):
 
 
 if __name__=='__main__':
-    try:print(json.dumps(inspect_task(sys.argv[1]),sort_keys=True))
+    try:print(json.dumps(inspect_task(sys.argv[1],stop_state=sys.argv[2:]==['--stop-state']),sort_keys=True))
     except Exception as error:raise SystemExit('retained image proof failed: '+type(error).__name__) from None

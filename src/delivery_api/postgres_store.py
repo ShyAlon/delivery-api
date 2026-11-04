@@ -855,6 +855,29 @@ FROM tasks t"""
             self._execute_native("UPDATE tasks SET state='stop_requested',generation=generation+1,stop_requested_at=%s,updated_at=%s WHERE task_id=%s",(time.time(),time.time(),task_id), write=True)
         return self.task(task_id)
 
+    def confirm_child_session_quiescent(self,session_id):
+        """Reaped child evidence, never lease expiry or an empty local registry.
+
+        Stop fenced the generation first. All jobs in this session must have
+        finished and have durable parent evidence after descriptor quiescence.
+        A crash/restart without this evidence stays pending.
+        """
+        binding=self.session_binding(session_id)
+        if not binding:return False
+        tid=binding['task_id'];task=self.task(tid)
+        if not task or task.get('stop_requested_at') is None:return False
+        row=self._execute_native("SELECT control FROM engine_sessions WHERE session_id=%s FOR UPDATE",(session_id,)).fetchone()
+        if not row or not (row['control'] or {}).get('stopped'):return False
+        jobs=self._execute_native('SELECT job_id,state FROM worker_jobs WHERE task_id=%s AND session_id=%s',(tid,session_id)).fetchall()
+        if not jobs:return False
+        for job in jobs:
+            proof=self.decision_review(tid,'child-job:'+job['job_id'],'child-completion-v1')
+            if job['state']!='done' or not proof or proof.get('reaped') is not True:return False
+        if self._execute_native("SELECT 1 FROM provider_attempts p JOIN worker_jobs j ON j.job_id=p.job_id WHERE j.task_id=%s AND p.state!='settled' LIMIT 1",(tid,)).fetchone():return False
+        if self._execute_native("SELECT 1 FROM retail_compute_segments r JOIN worker_jobs j ON j.job_id=r.job_id WHERE j.task_id=%s AND r.state!='settled' LIMIT 1",(tid,)).fetchone():return False
+        self._execute_native("UPDATE engine_sessions SET control=control || '{\"stop_quiescent\":true}'::jsonb WHERE session_id=%s",(session_id,),write=True)
+        return True
+
     def confirm_task_stopped(self,task_id,*,engine_quiescent):
         from .attempt_ledger import AdmissionDenied
         if engine_quiescent is not True:raise AdmissionDenied('engine quiescence required')
@@ -2323,6 +2346,7 @@ PG_OPERATIONS = (
     'close_failed_retail_compute',
     'configure_simulation',
     'confirm_task_stopped',
+    'confirm_child_session_quiescent',
     'confirmed_expense_admission',
     'create_link',
     'create_task',

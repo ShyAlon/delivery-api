@@ -208,20 +208,33 @@ class OwnedRun:
         tid=task['task_id']
         api('POST','/api/tasks/'+tid+'/start',{'model_route':'ollama'})
         active=False
-        for _ in range(120):
+        hold_deadline=time.monotonic()+30
+        while time.monotonic()<hold_deadline:
             health=object_json(command(['docker','exec',self.fixture,'python','-c',
                 "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:11434/health',timeout=2).read().decode())"]).encode())
-            if health.get('active') is True:active=True;break
+            child_state=object_json(command(['docker','exec',self.fixture,'python','/harness/scripts/docker/retained_image_proof.py',tid,'--stop-state']).encode())
+            if health.get('active') is True and 'running' in child_state.get('child_jobs',[]) and 'dispatched' in child_state.get('provider_attempts',[]):active=True;break
             time.sleep(.1)
-        if not active:raise WorkflowError('Stop fixture never reached an active real provider call')
+        if not active:raise WorkflowError('Stop fixture expected active=True held provider call before Stop; observed fixture='+self.scrub(json.dumps(health))+' child_state='+self.scrub(json.dumps(child_state)))
         # One Stop request only, never repeat a mutation to manufacture success.
-        api('POST','/api/tasks/'+tid+'/stop')
-        for _ in range(120):
+        stop_response=api('POST','/api/tasks/'+tid+'/stop')
+        stop_http_status=getattr(api,'last_status','unknown')
+        # Release only after the durable Stop response while the fixture is held.
+        command(['docker','exec',self.fixture,'python','-c',
+            "import urllib.request;print(urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:11434/fixture/release',data=b'',method='POST'),timeout=2).read().decode())"],timeout=5)
+        cost={}
+        stop_deadline=time.monotonic()+60
+        while time.monotonic()<stop_deadline:
             stopped=api('GET','/api/tasks/'+tid)
             if stopped.get('state')=='stopped':break
+            cost=api('GET','/api/tasks/'+tid+'/cost').get('evidence',{})
+            if not any(cost.get(k,True) for k in ('active_worker','provider_pending','compute_pending')):
+                confirmed=api('POST','/api/tasks/'+tid+'/stop/reconcile')
+                if confirmed.get('state')=='stopped' and confirmed.get('delete_allowed') is True:break
+                raise WorkflowError('active-call Stop reconciliation expected stopped/delete_allowed=True after closed accounting; observed='+self.scrub(json.dumps(confirmed))+' child_at_stop='+self.scrub(json.dumps(child_state)))
             time.sleep(.25)
-        else:raise WorkflowError('active-call Stop never reached confirmed stopped state')
-        return {'task_id':tid,'active-call-observed':True,'stop':'passed'}
+        else:raise WorkflowError('active-call Stop expected held fixture + reaped child + settled provider + stopped; observed POST Stop status='+str(stop_http_status)+' stop_response='+self.scrub(json.dumps(stop_response))+' task_state='+str(stopped.get('state'))+' control='+self.scrub(json.dumps(stopped.get('control_snapshot',{})))+' cost_evidence='+self.scrub(json.dumps(cost))+' fixture_hold_observed='+str(active)+' child_at_stop='+self.scrub(json.dumps(child_state)))
+        return {'task_id':tid,'active-call-observed':True,'child-running-observed':True,'provider-dispatched-observed':True,'hold-released-after-stop':True,'stop':'passed'}
 
     def http_acceptance(self, output: Path):
         # One repo entry, same input identity/answer protocol as owner acceptance.

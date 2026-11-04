@@ -77,7 +77,8 @@ class Services:
         self.material = keys(directory)
         self.calls = []
         self.active = threading.Event()
-        active = self.active
+        self.release = threading.Event()
+        active, release = self.active, self.release
         material, calls = self.material, self.calls
         class Handler(BaseHTTPRequestHandler):
             def send(self, status, body):
@@ -90,6 +91,8 @@ class Services:
                 if self.path=="/health":return self.send(200,{"ok":True,"fixture":True,"calls":len(calls),"active":active.is_set()})
                 return self.send(404,{"error":"fixture path absent"})
             def do_POST(self):
+                if self.path=='/fixture/release':
+                    release.set();return self.send(200,{'released':True})
                 if self.path!="/v1/chat/completions":return self.send(404,{"error":"fixture path absent"})
                 size=int(self.headers.get("content-length","0"))
                 if not 0<size<=2_000_000:return self.send(413,{"error":"fixture request bound"})
@@ -98,7 +101,7 @@ class Services:
                 calls.append({"model":MODEL,"call":len(calls)+1})
                 if "EXACT_IMAGE_STOP" in json.dumps(payload):
                     active.set()
-                    try:time.sleep(5)
+                    try:release.wait(60)
                     finally:active.clear()
                 # A deterministic pause makes Stop acceptance exercise an active call.
                 if payload.get("stream") is True:return self.send(400,{"error":"fixture requires nonstreamed wire"})

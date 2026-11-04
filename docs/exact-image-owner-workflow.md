@@ -66,3 +66,8 @@ read-only registry token is entered at the hidden local prompt, never in chat.
 No server build, source fetch, proxy edit, schema apply or unrelated cleanup.
 Failed candidate startup requests rollback; a restarted prior container is not
 proof that its health passed. Inspect final state before retrying.
+
+PR673 Stop follow-up adds `20261104210000_stopped_child_job_closure.sql`.
+The local fixture applies it only to owned disposable PG. Before any future live
+apply, review the original-owner running-to-done policy and provenance trigger.
+This document does not authorize live migration or deployment.

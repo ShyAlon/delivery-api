@@ -65,7 +65,7 @@ def test_active_stop_requires_observed_inflight_call_and_single_stop(tmp_path,mo
         if path=='/api/tasks':return {'task_id':'active-fixture'}
         return {'state':'stopped'}
     monkeypatch.setattr(image_acceptance,'API',lambda *args:api)
-    monkeypatch.setattr(m,'command',lambda *a,**k:json.dumps({'active':True}))
+    monkeypatch.setattr(m,'command',lambda *a,**k:json.dumps({'active':True,'child_jobs':['running'],'provider_attempts':['dispatched']}))
     proof=run.active_stop()
     assert proof['active-call-observed'] and proof['stop']=='passed'
     assert sum(path.endswith('/stop') for _,path,_ in calls)==1
