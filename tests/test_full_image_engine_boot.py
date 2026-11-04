@@ -1,11 +1,8 @@
-"""The full image entry boots the one resident delivery parent.
+"""The real full entry boots one delivery parent with owned PG.
 
-Regresses the 2026-10-24 deploy smoke failure: after interview-engine PR #49 the
-engine refuses every request (HTTP 500) until session persistence is chosen, and
-the full image never chose one. These checks run the actual full_entry.py as a
-subprocess: the fail-fast check is hermetic; the boot check needs the engine
-source (DELIVERY_TEST_ENGINE_SOURCE) and is marked engine_integration like the
-other cross-repo boots.
+Job-scoped phase children replace the retired permanent engine HTTP daemon.
+Startup persistence refusal and the signed data boundary remain executable
+contracts. Explicit source is required for the installed cross-repo boot.
 """
 import json,os,subprocess,sys,time,urllib.error,urllib.request
 from pathlib import Path
