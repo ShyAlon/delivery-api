@@ -16,8 +16,9 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
         raise WorkflowError('preview acceptance incomplete')
     if inspect_image(image_id)['Id']!=image_id:raise WorkflowError('accepted local preview image unavailable')
     settings=Path(env_file).expanduser().resolve()
-    if not settings.is_file() or settings.stat().st_mode&0o077:
-        raise WorkflowError('preview requires existing private settings file; no automatic migration or setup')
+    from image_settings import validate
+    try:validate(settings)
+    except ValueError as error:raise WorkflowError(str(error)) from None
     # Pass exactly these owner settings values, no filtered environment or mode.
     args=Target(image_id,name,str(settings),port,network).arguments()
     log('INFO','preview review: accepted linux/amd64 image, existing settings, same shared runtime; work may spend only after explicit Start')
@@ -36,6 +37,7 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
         if actual.get('Image')!=image_id:raise WorkflowError('preview running image differs; inspect before retry')
         status=actual.get('State',{})
         if status.get('Health',{}).get('Status')=='healthy':
+            log('WARN','service health is not route admission; inspect signed Model routes before Start, no paid work approved')
             log('PASS','preview healthy at http://127.0.0.1:'+str(port)+'; exact local image retained')
             # Preserve the real browser gate, including named expected anonymous
             # 401 classification. Never infer readiness from health alone.

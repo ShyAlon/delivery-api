@@ -18,7 +18,7 @@ def state():
 
 
 def test_dry_preview_has_no_container_mutation(tmp_path,monkeypatch):
-    env=tmp_path/'private.env';env.write_text('FICTIONAL=value');env.chmod(0o600)
+    env=tmp_path/'private.env';env.write_text('DELIVERY_DATABASE_URL=postgresql://fixture/db\nDELIVERY_SUPABASE_URL=https://fixture.supabase.co\nDELIVERY_SUPABASE_ANON_KEY=fictional-public\nINTERVIEW_ENGINE_TOKEN=fictional-private-token-123456');env.chmod(0o600)
     monkeypatch.setattr(m,'inspect_image',lambda image:{'Id':image})
     monkeypatch.setattr(m,'command',lambda *a,**k:pytest.fail('mutation during review'))
     result=m.preview(state(),env_file=str(env))
@@ -35,7 +35,7 @@ def test_browser_failure_keeps_container_and_named_private_evidence(tmp_path,mon
     import subprocess
     import builtins
     value=state();value.path=tmp_path/'state.json'
-    env=tmp_path/'private.env';env.write_text('FICTIONAL=value');env.chmod(0o600)
+    env=tmp_path/'private.env';env.write_text('DELIVERY_DATABASE_URL=postgresql://fixture/db\nDELIVERY_SUPABASE_URL=https://fixture.supabase.co\nDELIVERY_SUPABASE_ANON_KEY=fictional-public\nINTERVIEW_ENGINE_TOKEN=fictional-private-token-123456');env.chmod(0o600)
     monkeypatch.setattr(m,'inspect_image',lambda image:{'Id':image})
     monkeypatch.setattr(builtins,'input',lambda prompt:'yes')
     calls=[]

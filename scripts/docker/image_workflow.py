@@ -270,9 +270,9 @@ def parser():
     p.add_argument("--previous-image-id", help="reviewed previous image config digest paired with previous container ID")
     p.add_argument("--previous-container-id", help="exact reviewed old container ID for the first ownership transition only")
     p.add_argument("--host", help="explicit reviewed SSH user@host for deployment")
-    p.add_argument("--name", default="requi-delivery")
-    p.add_argument("--env-file", default="/etc/requi/full.env")
-    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--name", help="container name; defaults by preview/deploy target")
+    p.add_argument("--env-file", help="existing private settings path; default by target")
+    p.add_argument("--port", type=int, help="loopback host port; default by target")
     p.add_argument("--network", default="bridge")
     p.add_argument("--publish", metavar="PRIVATE_GHCR_REPOSITORY", help="explicitly publish after local acceptance; existing private package and login required")
     p.add_argument("--accept-local", action="store_true", help="build/reuse and exercise exact image with owned local services only")
@@ -294,6 +294,9 @@ def main(argv=None) -> int:
         if not state.reusable("preflight", lambda evidence: evidence == inputs):
             state.complete("preflight", inputs)
         log("PASS", "preflight passed; platform linux/amd64, one shared runtime contract")
+        args.name=args.name or ('requi-preview-exec' if args.preview else 'requi-delivery')
+        args.port=args.port or (8001 if args.preview else 8000)
+        args.env_file=args.env_file or (str(Path.home()/'.config/requi/preview.env') if args.preview else '/etc/requi/full.env')
         if args.preview:
             from local_image_preview import preview
             preview(state,env_file=args.env_file,name=args.name,port=args.port,network=args.network,backoffice_port=args.backoffice_port,apply=args.apply)
@@ -308,6 +311,9 @@ def main(argv=None) -> int:
             log("INFO", "review only: nothing built, published, started or deployed")
             return 0
         if args.build or args.accept_local or args.publish:
+            log('INFO','selected goal may build an amd64 image and owned local test services; no live database or paid provider')
+            if input('Type yes to run this local image stage: ').strip()!='yes':
+                raise WorkflowError('local image stage declined; nothing built or started')
             evidence=build(args.repos_root.resolve(), state)
             if args.accept_local or args.publish:
                 accepted=local_acceptance(args.repos_root.resolve(),state,evidence)
