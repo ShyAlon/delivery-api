@@ -6,7 +6,7 @@ from image_workflow import WorkflowError, command, inspect_image, log
 from runtime_spec import Target
 
 
-def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge',apply=False):
+def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge',backoffice_port=8020,apply=False):
     accepted=state.state['stages'].get('local-acceptance',{})
     built=state.state['stages'].get('build',{})
     image_id=built.get('image_id')
@@ -37,7 +37,16 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
         status=actual.get('State',{})
         if status.get('Health',{}).get('Status')=='healthy':
             log('PASS','preview healthy at http://127.0.0.1:'+str(port)+'; exact local image retained')
-            return {'state':'healthy','image_id':image_id,'container':name}
+            from private_backoffice import PrivateBackoffice
+            backoffice=PrivateBackoffice(backoffice_port,port,state.path.parent/'backoffice.log')
+            try:
+                backoffice.start()
+                log('PASS','private Back office at http://127.0.0.1:'+str(backoffice_port)+'; Ctrl-C closes this listener, preview container is retained')
+                while backoffice.process.poll() is None:time.sleep(.5)
+                raise WorkflowError('private Back office exited; preview retained for inspection')
+            except KeyboardInterrupt:
+                return {'state':'healthy','image_id':image_id,'container':name}
+            finally:backoffice.close()
         if status.get('Running') is not True or status.get('Health',{}).get('Status')=='unhealthy':break
         time.sleep(1)
     raise WorkflowError('preview readiness failed; owned container retained for inspection, no task Start sent')

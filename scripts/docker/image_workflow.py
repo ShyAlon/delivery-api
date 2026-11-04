@@ -247,6 +247,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repos-root", type=Path, default=Path(__file__).resolve().parents[3])
     p.add_argument("--run-dir", type=Path, help="resume directory, defaults to a source/contract keyed private local directory")
+    p.add_argument("--backoffice-port", type=int, default=8020)
     p.add_argument("--preview", action="store_true", help="review accepted local image with existing private settings; --apply starts it")
     p.add_argument("--deploy", metavar="PRIVATE_GHCR_REPOSITORY", help="review an accepted manifest; no SSH unless --apply")
     p.add_argument("--apply", action="store_true", help="owner-confirmed deploy apply only")
@@ -279,7 +280,7 @@ def main(argv=None) -> int:
         log("PASS", "preflight passed; platform linux/amd64, one shared runtime contract")
         if args.preview:
             from local_image_preview import preview
-            preview(state,env_file=args.env_file,name=args.name,port=args.port,network=args.network,apply=args.apply)
+            preview(state,env_file=args.env_file,name=args.name,port=args.port,network=args.network,backoffice_port=args.backoffice_port,apply=args.apply)
             return 0
         if args.deploy:
             if not args.host:raise WorkflowError('deploy needs an explicit reviewed host')
