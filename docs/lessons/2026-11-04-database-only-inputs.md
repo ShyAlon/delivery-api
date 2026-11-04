@@ -76,3 +76,15 @@ inference no longer reads an unrelated global host session directory.
 
 Source-loss regression failed before the change. Replay/import selected group:
 14 passed. No public replay route was opened; existing route guards remain.
+
+## Registered child output runner
+
+Remove the arbitrary subprocess fallback and file pricing/publication readers
+from the parent output runner. The registered child bridge is required and its
+PG documents supply settled hashes and gate evidence. The orchestrator no longer
+restores host predecessor files. Production spending and Stop controls are not
+changed.
+
+The runner policy regression failed before removal. Actual child, installed
+seven-phase fake-provider journey, and fresh zero-credit startup group: 17 passed.
+These are rebuilt-code results, not results carried over from the lost checkout.

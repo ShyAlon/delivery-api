@@ -48,3 +48,7 @@ money checks remain intact. Full gate is not green and no PR is ready.
 Unit 6: imported recording rows/artifacts retained in PG; replay survives source
 folder loss. HTTP upload staging is temporary and cleaned. Replay/import selected
 group: 14 passed. Public replay remains guarded, unchanged.
+
+Unit 7: parent runner requires registered child and PG evidence, with no file
+pricing or publication fallback. Actual child + installed all-phase fake-provider
+journey + fresh zero-credit startup group: 17 passed. No live model call.

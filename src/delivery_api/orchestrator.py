@@ -154,11 +154,6 @@ class PhaseOrchestrator:
             env['VMODEL_ARTIFACTS_DIR']=str(spec.parent.parent)
             env['VMODEL_TENANT_OWNER']=capability.scope.owner_id
             env['VMODEL_PROGRESS_GENERATION']=str(capability.generation)
-            if config.ARTIFACT_RESTORE and not hasattr(self.store,'_postgres'):
-                # The child reads completed predecessors straight from disk; on a
-                # second host they must be restored before the subprocess starts.
-                from . import artifact_restore
-                artifact_restore.restore_completed_phases(self.store,task_id,spec.parent)
         code=await self.runner.run(task_id,cmd,cwd=repo,phase=phase,env=env,infer_phase=False)
         activity("orchestrator.exit","Phase subprocess exited",task_id=task_id,phase=phase,exit_code=code)
 
