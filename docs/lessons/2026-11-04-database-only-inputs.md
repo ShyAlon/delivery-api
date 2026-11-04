@@ -88,3 +88,13 @@ changed.
 The runner policy regression failed before removal. Actual child, installed
 seven-phase fake-provider journey, and fresh zero-credit startup group: 17 passed.
 These are rebuilt-code results, not results carried over from the lost checkout.
+
+## Signed identity only
+
+Remove basic/password/OAuth identity implementations and their unused HTTP
+routes. Signup, signin, refresh and logout use the same signed tenant service
+everywhere. Config cannot make an unsigned caller a local administrator.
+
+Both identity policy regressions failed before removal. Signed identity, route,
+Supabase session and operator startup group: 84 passed. Older compatibility
+tests must be converted to real signed fixtures or retired-route refusal.

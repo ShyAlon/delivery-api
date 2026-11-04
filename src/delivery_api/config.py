@@ -29,7 +29,7 @@ SUPABASE_ANON_KEY = os.environ.get("DELIVERY_SUPABASE_ANON_KEY", "")
 ARTIFACT_PUBLISH = os.environ.get("DELIVERY_ARTIFACT_PUBLISH", "").strip() == "1"  # PR B: publish manifest revisions after produce; default OFF
 ARTIFACT_MANIFEST_READS = os.environ.get("DELIVERY_ARTIFACT_MANIFEST_READS", "").strip() == "1"  # PR B: manifest-backed artifact reads; default OFF until approved enable
 ARTIFACT_RESTORE = os.environ.get("DELIVERY_ARTIFACT_RESTORE", "").strip() == "1"  # PR C: restore completed-phase artifacts onto this host on read; default OFF
-CLOUD_TENANTS = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+CLOUD_TENANTS = True  # One signed tenant runtime; retained name is not a selector.
 if CLOUD_TENANTS and (not SUPABASE_URL or not SUPABASE_ANON_KEY):
     raise RuntimeError("Postgres requires Supabase Auth URL and public anon/publishable key; no local-auth fallback.")
 SUPABASE_ADMIN_SUBJECTS = {x.strip() for x in os.environ.get("DELIVERY_SUPABASE_ADMIN_SUBJECTS", "").split(",") if x.strip()}
@@ -78,30 +78,6 @@ METRICS_RAW_DAYS = max(1, int(os.environ.get("DELIVERY_METRICS_RAW_DAYS", "3")))
 
 def is_admin(email: str | None) -> bool:
     return bool(email and email.lower() in ADMIN_EMAILS)
-
-def oauth_provider(name: str) -> dict:
-    providers = {
-      "google": {"client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET,
-        "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth", "token_url": "https://oauth2.googleapis.com/token",
-        "user_url": "https://openidconnect.googleapis.com/v1/userinfo", "scope": "openid email profile"},
-      "github": {"client_id": GITHUB_CLIENT_ID, "client_secret": GITHUB_CLIENT_SECRET,
-        "authorize_url": "https://github.com/login/oauth/authorize", "token_url": "https://github.com/login/oauth/access_token",
-        "user_url": "https://api.github.com/user", "scope": "read:user user:email"},
-    }
-    if name not in providers or not providers[name]["client_id"] or not providers[name]["client_secret"]:
-        raise ValueError(f"OAuth provider {name!r} is not configured")
-    return providers[name]
-
-
-def validate_auth_config() -> None:
-    values=(SESSION_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GITHUB_CLIENT_ID,GITHUB_CLIENT_SECRET)
-    if not any(values): return
-    complete_google=bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
-    complete_github=bool(GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET)
-    if len(SESSION_SECRET) < 32 or not (complete_google or complete_github):
-        raise RuntimeError("OAuth is partially configured: set a 32+ character DELIVERY_SESSION_SECRET and a complete Google or GitHub client id/secret pair; remove all OAuth variables for local mode.")
-    if bool(GOOGLE_CLIENT_ID) != bool(GOOGLE_CLIENT_SECRET) or bool(GITHUB_CLIENT_ID) != bool(GITHUB_CLIENT_SECRET):
-        raise RuntimeError("OAuth client id/secret pairs must be configured together.")
 
 INTERVIEW_ENGINE_URL = os.environ.get("INTERVIEW_ENGINE_URL", "http://127.0.0.1:8010").rstrip("/")
 INTERVIEW_ENGINE_TOKEN = os.environ.get("INTERVIEW_ENGINE_TOKEN", "local-interview-engine-token")

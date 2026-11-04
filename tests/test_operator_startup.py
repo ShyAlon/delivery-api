@@ -7,7 +7,6 @@ from test_postgres_store import A
 def test_real_lifespan_installs_explicit_operator_reader(monkeypatch):
     from delivery_api import cloud_execution,cloud_runtime,run_metrics
     monkeypatch.setattr(m.config,'CLOUD_TENANTS',True)
-    monkeypatch.setattr(m.config,'validate_auth_config',lambda:None)
     monkeypatch.setattr(cloud_execution,'admitted',lambda:False)
     monkeypatch.setattr(cloud_runtime,'uninstall',lambda:None)
     monkeypatch.setattr(run_metrics,'start_idle_sampler',lambda:None)

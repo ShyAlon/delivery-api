@@ -52,3 +52,7 @@ group: 14 passed. Public replay remains guarded, unchanged.
 Unit 7: parent runner requires registered child and PG evidence, with no file
 pricing or publication fallback. Actual child + installed all-phase fake-provider
 journey + fresh zero-credit startup group: 17 passed. No live model call.
+
+Unit 8: signed tenant identity only; no local admin/basic/OAuth fallback. Signed
+identity, routes, sessions and operator-startup group: 84 passed. Remaining
+compatibility tests still need conversion; no full-gate claim.

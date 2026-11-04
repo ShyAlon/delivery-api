@@ -433,7 +433,6 @@ async def _resume_one_interview(task_id:str,session:str)->None:
 async def lifespan(application:FastAPI):
     global _streams_closed_on_signal
     _streams_closed_on_signal=0
-    config.validate_auth_config()
     from .operator_startup import install as install_operator_reads
     install_operator_reads(application,os.environ,dsn=config.DATABASE_URL,enabled=True)
     print('Operator reads: '+application.state.operator_read_status,file=sys.stderr)
@@ -605,17 +604,15 @@ def index(): return _page("index.html")
 @app.get("/api/auth")
 def auth_status(request: Request):
     a = auth.actor(request)
-    mode="supabase" if config.CLOUD_TENANTS else "basic" if config.BASIC_AUTH_ENABLED else ("oauth" if auth.enabled() else "local")
-    session=request.app.state.store.session(request.cookies[config.SESSION_COOKIE]) if not config.CLOUD_TENANTS and auth.enabled() and request.cookies.get(config.SESSION_COOKIE) and a.id!="anonymous" else None
+    mode="supabase"
     result={"mode":mode,"authenticated":a.id not in {"anonymous"},"actor":a.email or a.label,"admin":a.admin,
-            "providers":[p for p,ident in (("google",config.GOOGLE_CLIENT_ID),("github",config.GITHUB_CLIENT_ID)) if ident],"workspace":"private" if config.CLOUD_TENANTS else "shared"}
+            "providers":[],"workspace":"private"}
     result['debug_features']=_account_debug_available() if a.id!='anonymous' else False
-    if config.CLOUD_TENANTS and a.id!='anonymous':
+    if a.id!='anonymous':
         from .supabase_sessions import ACCESS_COOKIE
         token=request.cookies.get(ACCESS_COOKIE)
         if token:
             result['expires_at']=jwt.decode(token,options={'verify_signature':False}).get('exp')
-    if session:result["expires_at"]=session["expires_at"]
     return result
 
 class ClientLog(BaseModel):
@@ -633,66 +630,29 @@ class BasicCredentials(BaseModel):
     username: str = Field(min_length=3,max_length=254)
     password: str = Field(min_length=1,max_length=256)
 
-def _auth_response(result):
-    actor,sid=result;response=JSONResponse({"status":"signed_in","actor":actor.label})
-    response.set_cookie(config.SESSION_COOKIE,sid,max_age=config.SESSION_TTL_SECONDS,httponly=True,secure=config.COOKIE_SECURE,samesite="lax",path="/");return response
 
-@app.get("/auth/email-availability")
-def email_availability(request:Request,email:str=Query(min_length=3,max_length=254)):
-    normalized=auth.normalize_email(email);valid=auth.valid_email(normalized);available=valid and request.app.state.store.basic_user(normalized) is None
-    activity("auth.email.check","Email availability checked",email=normalized,valid=valid,available=available)
-    return {"email":normalized,"valid":valid,"available":available}
 
 @app.post("/auth/signup")
 def signup(request:Request,body:BasicCredentials):
-    if config.CLOUD_TENANTS:
-        from .supabase_sessions import signup as cloud_signup
-        return cloud_signup(body.username,body.password)
-    activity("auth.signup.attempt","Signup attempted",username=body.username,client=request.client.host if request.client else "unknown")
-    try:result=auth.basic_signup(request,body.username,body.password);activity("auth.signup.success","Account created",username=body.username);return _auth_response(result)
-    except HTTPException as e:activity("auth.signup.failure","Signup rejected",username=body.username,status=e.status_code,reason=(e.detail.get("error") if isinstance(e.detail,dict) else e.detail));raise
+    from .supabase_sessions import signup as cloud_signup
+    return cloud_signup(body.username,body.password)
 
 @app.post("/auth/signin")
 def signin(request:Request,body:BasicCredentials):
-    if config.CLOUD_TENANTS:
-        from .supabase_sessions import signin as cloud_signin
-        return cloud_signin(body.username,body.password)
-    activity("auth.signin.attempt","Sign-in attempted",username=body.username,client=request.client.host if request.client else "unknown")
-    try:result=auth.basic_signin(request,body.username,body.password);activity("auth.signin.success","Sign-in succeeded",username=body.username);return _auth_response(result)
-    except HTTPException as e:activity("auth.signin.failure","Sign-in rejected",username=body.username,status=e.status_code,reason=(e.detail.get("error") if isinstance(e.detail,dict) else e.detail));raise
+    from .supabase_sessions import signin as cloud_signin
+    return cloud_signin(body.username,body.password)
 
-@app.get("/auth/{provider}/start")
-def oauth_start(request: Request, provider: str):
-    try: return auth.oauth_start(request, provider)
-    except ValueError as e: raise HTTPException(404, str(e))
 
-@app.get("/auth/{provider}/callback", name="oauth_callback")
-def oauth_callback(request: Request, provider: str, code: str, state: str):
-    try: return auth.oauth_callback(request, provider, code, state)
-    except (ValueError, KeyError) as e: raise HTTPException(401, "OAuth profile was incomplete or invalid.") from e
 
 @app.post("/auth/refresh")
 def refresh_auth(request: Request):
-    if config.CLOUD_TENANTS:
-        from .supabase_sessions import refresh
-        return refresh(request)
-    sid,expires_at = auth.refresh_session(request)
-    response = JSONResponse({"status": "refreshed", "expires_at": expires_at})
-    response.set_cookie(config.SESSION_COOKIE, sid, max_age=config.SESSION_TTL_SECONDS,
-                        httponly=True, secure=config.COOKIE_SECURE, samesite="lax", path="/")
-    response.headers["Cache-Control"] = "no-store"
-    return response
+    from .supabase_sessions import refresh
+    return refresh(request)
 
 @app.post("/auth/logout")
 def logout(request: Request):
-    if config.CLOUD_TENANTS:
-        from .supabase_sessions import logout as cloud_logout
-        return cloud_logout(request)
-    current=auth.actor(request);activity("auth.signout","Sign-out requested",actor=current.label)
-    sid=request.cookies.get(config.SESSION_COOKIE)
-    if sid: store.delete_session(sid)
-    from fastapi.responses import JSONResponse
-    response=JSONResponse({"status":"signed_out"}); response.delete_cookie(config.SESSION_COOKIE,path="/"); return response
+    from .supabase_sessions import logout as cloud_logout
+    return cloud_logout(request)
 
 @app.get("/credits",include_in_schema=False)
 def credits_page():return _page("index.html")
