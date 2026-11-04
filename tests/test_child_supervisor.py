@@ -192,3 +192,15 @@ def test_descriptor_failure_surfaces_shape_and_observed_exit_without_private_val
     with pytest.raises(ChildRunError,match='exit=23.*PermissionError.*open_cache'):
         run(s.run(decode_operation(frame(operation())),authorize=lambda op:None))
     assert 'stderr_frames=' in capsys.readouterr().err
+
+
+def test_safe_envelope_keeps_cause_classes_not_values(capsys):
+    from delivery_api.child_failure import emit,parse
+    try:
+        try:raise ConnectionError('password=private prompt text')
+        except ConnectionError as inner:raise RuntimeError('private SDK input') from inner
+    except RuntimeError as error:emit(error)
+    text=capsys.readouterr().err
+    assert parse(text.encode())['cause_classes']==['ConnectionError']
+    assert 'private' not in text and 'password' not in text
+    assert parse(b'REQUI_CHILD_FAILURE {"error_class":"X","frames":[],"cause_classes":["private secret"]}') is None

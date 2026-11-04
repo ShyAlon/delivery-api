@@ -163,7 +163,16 @@ class ChildInterviewClient(EngineClient):
         task_id=binding['task_id'];refs=ChildOperationRefs(self.store,task_id)
         if request is not None:
             provider=request.model_route
-            model=request.initial_model or (self.paid_runtime.models.get(provider) if self.paid_runtime is not None else 'qwen2.5-coder:14b')
+            # Preview and dispatch must use the same reviewed task pin. The
+            # local-only runtime has no PaidChildRuntime; that is not permission
+            # to substitute an old model default after preflight succeeded.
+            if hasattr(self.gateway_factory,'for_task'):
+                reviewed=self.gateway_factory.for_task(task_id).models.get(provider)
+                if not reviewed or (request.initial_model is not None and request.initial_model!=reviewed):
+                    raise PermissionError('child Start differs from reviewed task model')
+                model=reviewed
+            else:
+                model=request.initial_model or (self.paid_runtime.models.get(provider) if self.paid_runtime is not None else 'qwen2.5-coder:14b')
             if self.paid_runtime is not None:self.paid_runtime.require(provider,model)
             request=request.model_copy(update={'initial_model':model})
             ref=refs.put('start',request.model_dump(mode='json'))

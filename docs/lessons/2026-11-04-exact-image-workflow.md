@@ -47,3 +47,8 @@ otherwise valid caches when only host tooling changed.
   descriptor error alone masks the child failure. Keep stderr source-free by
   surfacing its validated exception/frame envelope, not arbitrary raw prompts,
   values or credentials. Preserve the owner acceptance refusal reason too.
+- Route preview and dispatch must resolve the same immutable reviewed task pin.
+  A local-only runtime lacking a paid adapter is not a signal to choose an old
+  model default. Test route-only Start with real admission, not only an explicit
+  initial model or fake gateway. BrokerUnavailable means channel failure, not
+  necessarily network failure; report the parent's safe class/cause evidence.

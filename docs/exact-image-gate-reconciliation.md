@@ -196,3 +196,30 @@ refusal checks). This is not unchanged-image acceptance or a Mac pass. The next
 Mac log line needed is `child exit=... error_class=... stderr_frames=...`.
 If no envelope exists it explicitly reports `stderr_shape=unavailable`; a
 negative code alone does not establish an OOM or original cause.
+
+### BrokerUnavailable cause reproduced and fixed (November 4, 21:10)
+
+A new real-child integration uses the image's actual zero-cost fixture HTTP,
+production admission catalog, zero account balance and reviewed `phi4` pin.
+With a route-only Start (the HTTP acceptance request shape), it failed before
+transport with the same BrokerUnavailable, exit 1, running/sequence 2 and SDK
+frames as the Mac log. Parent evidence identifies AdmissionDenied: the child
+requested unreviewed `ollama/qwen2.5-coder:14b`. Preview had correctly resolved
+`phi4`, but ChildInterviewClient._execute used the old hard-coded default when
+no paid runtime existed. This is not a child TLS/DNS/environment problem.
+
+Dispatch now obtains the reviewed immutable task factory model, rejects an
+explicit conflicting model, and never substitutes the legacy default on this
+production path. The same test now completes actual Start and answer in fresh
+children through parent HTTP, zero-cost reservation/settlement and retained PG.
+Existing fake-constructor seams retain their explicit test behavior.
+
+Child stderr envelopes now include up to six cause class names without values.
+Parent broker failures also print a bounded shape-only class/frame/cause line,
+since a child's channel EOF cannot reveal a parent's transport/admission cause.
+A regression proves ConnectError plus SSLCertVerificationError appear without
+private host/token messages and without a second provider request.
+
+Affected gate: 367 passed. Additional safe-envelope, operator diagnostic and
+user-message targeted checks passed in a separate 58-test run. No Mac/Docker
+pass claimed. Rerun with a fresh mac-modelpin run directory before accepting.

@@ -90,3 +90,17 @@ def test_shared_channel_rejects_bad_frame_before_protocol_handler(raw):
         try:assert fd.recv(20)==b''
         except ConnectionResetError:pass
     assert seen==[]
+
+
+def test_parent_transport_cause_is_safe_and_visible_when_child_only_gets_eof(capsys):
+    def fail(request):
+        try:raise __import__('ssl').SSLCertVerificationError('private certificate/host')
+        except Exception as error:raise httpx.ConnectError('private provider url/token') from error
+    broker,g,j,calls=setup(fail)
+    with provider_broker_channel(broker) as channel:
+        client=BrokerClient(channel.fileno(),next_call_id=lambda stage:'stable-call-1')
+        with pytest.raises(BrokerUnavailable):client.request(stage='intent',provider='deepseek',model='deepseek-flash',raw=b'{"model":"deepseek-flash","max_tokens":10}')
+        client.close()
+    text=capsys.readouterr().err
+    assert 'ConnectError' in text and 'SSLCertVerificationError' in text
+    assert 'private' not in text and len(calls)==1

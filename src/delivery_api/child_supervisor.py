@@ -184,6 +184,7 @@ class ChildSupervisor:
                     detail='child exit='+str(code)+' signal='+str(-code if code<0 else None)+' last_state='+str(state)+' sequence='+str(sequence)+' termination_scope=observed_after_cleanup'
                     if child_error:
                         detail+=' error_class='+child_error['error_class']+' stderr_frames='+json.dumps(child_error['frames'],separators=(',',':'))
+                        if child_error.get('cause_classes'):detail+=' cause_classes='+json.dumps(child_error['cause_classes'],separators=(',',':'))
                     else:detail+=' stderr_shape=unavailable (raw stderr withheld)'
                     import sys
                     print(detail,file=sys.stderr,flush=True)
