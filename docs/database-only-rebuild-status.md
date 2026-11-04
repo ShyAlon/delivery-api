@@ -236,3 +236,10 @@ Seventeen child/runtime files were run individually with complete results: all
 passed (see bounded per-file results; overlapping earlier runtime evidence).
 The a-c first-failure-per-file sweep is incomplete; audit API fixture still
 expects private token detail on the customer surface. No full-gate claim.
+
+Unit28: replaced removed file-reader race tests with real PG reader revocation
+and hostile replaced-host-directory evidence; all 48 cloud API tests pass.
+Extracted the existing private audit-total calculation without changing it;
+three detailed accounting assertions retain exact token/pricing semantics while
+signed customer route assertions explicitly verify credits-only disclosure.
+Those three audit tests pass. Legacy public-link budget wrappers still fail.

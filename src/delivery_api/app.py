@@ -2227,9 +2227,7 @@ def session_cost(session_id:str):
     raise HTTPException(404,"session task binding unavailable")
 
 
-@app.get("/api/tasks/{task_id}/audit")
-def task_audit(task_id: str, request: Request):
-    if not store.task(task_id): raise HTTPException(404, "task not found")
+def _task_audit_totals(task_id:str):
     priced_by_phase={}
     for event in store.events(task_id):
         if event.get("kind")=="price":priced_by_phase[event.get("phase_key")]=event
@@ -2259,6 +2257,12 @@ def task_audit(task_id: str, request: Request):
     totals["cost_usd"]=round(sum(float((event.get("payload") or {}).get("cost_usd") or 0) for event in counted)+totals["interview_cost_usd"],6)
     live=_task_cost(task_id);totals["price"]=live["price"];totals["price_usd"]=live["price_usd"]
     totals["unpriced_calls"]=sum(int((event.get("payload") or {}).get("unpriced_calls") or 0) for event in counted)+totals["interview_unpriced_calls"]
+    return totals
+
+@app.get("/api/tasks/{task_id}/audit")
+def task_audit(task_id: str, request: Request):
+    if not store.task(task_id):raise HTTPException(404,"task not found")
+    totals=_task_audit_totals(task_id)
     entries=store.audit_entries(task_id)
     from .customer_projection import audit_credits_only
     entries=audit_credits_only(_customer_events(entries))
