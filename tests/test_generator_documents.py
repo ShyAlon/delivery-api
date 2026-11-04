@@ -519,7 +519,7 @@ def test_pg_gate_decision_and_lineage_roll_back_together_before_dispatch(store,m
         job=store.enqueue_worker(tid,'phase:srs');cap=store.claim_worker(job)
         docs=GeneratorDocuments(store,cap,job);docs.write('spec/lineage.json',json.dumps({'entries':[{'phase':'srs','name':'srs.json','settled':False}]}).encode());store.finish_worker(job)
         store.wait_at_gate(tid,'srs');store.set_model_default(tid,'deepseek:deepseek-flash')
-        monkeypatch.setattr(app,'store',store);monkeypatch.setattr(app.config,'CLOUD_TENANTS',False)
+        monkeypatch.setattr(app,'store',store);monkeypatch.setattr(app,'cloud_execution_admitted',lambda:True)
         monkeypatch.setattr(app,'_recorded_engine_session',lambda *a:None)
         monkeypatch.setattr(app,'_task_artifact_snapshot',lambda *a:[{'phase_key':'srs','present':True,'stale':False,'valid':True}])
         before=store.task(tid);original=app._lineage_gate_settled

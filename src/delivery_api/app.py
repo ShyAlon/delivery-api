@@ -1528,27 +1528,15 @@ def _decision_provenance(task_id:str,architecture:dict)->list[dict]:
     """Derived, conservative provenance. Empty baseline refs do not prove founder intent."""
     session=_recorded_engine_session(task_id)
     from vmodel_contracts.runtime import artifacts_root
-    root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview" if session and not hasattr(store,'_postgres') else None
     preferences=[]
     preference_status={'availability':'absent','reason':'no_saved_intent'}
-    if hasattr(store,'_postgres'):
-        try:
-            from vmodel_contracts.interview import IntentModel
-            intent=IntentModel.model_validate_json(store.read_artifact_bytes(task_id,'intent','intent_model.json'))
-            preference_status={'availability':'available','reason':'saved_intent'}
-            preferences=[{'area':p.area.value,'preference':p.preference,'strength':p.strength.value,'source_turns':p.source_turns} for p in intent.tech_preferences]
-        except KeyError:pass
-        except ValueError:preference_status={'availability':'unavailable','reason':'invalid_or_unreadable'}
-    elif root:
-        path=root/"intent_model.json"
-        if path.is_file():
-            try:
-                from vmodel_contracts.interview import IntentModel
-                intent=IntentModel.model_validate_json(path.read_text())
-                preference_status={'availability':'available','reason':'saved_intent'}
-                preferences=[{"area":p.area.value,"preference":p.preference,"strength":p.strength.value,
-                              "source_turns":p.source_turns} for p in intent.tech_preferences]
-            except (OSError,ValueError):preference_status={'availability':'unavailable','reason':'invalid_or_unreadable'}
+    try:
+        from vmodel_contracts.interview import IntentModel
+        intent=IntentModel.model_validate_json(store.read_artifact_bytes(task_id,'intent','intent_model.json'))
+        preference_status={'availability':'available','reason':'saved_intent'}
+        preferences=[{'area':p.area.value,'preference':p.preference,'strength':p.strength.value,'source_turns':p.source_turns} for p in intent.tech_preferences]
+    except KeyError:pass
+    except ValueError:preference_status={'availability':'unavailable','reason':'invalid_or_unreadable'}
     result=[]
     for decision in architecture.get("decisions",[]):
         if not isinstance(decision,dict):continue
@@ -1574,7 +1562,7 @@ def _validation_panel_for(task_id:str,raw:str)->dict|None:
     availability={}
     def load(phase,name):
         try:
-            value=json.loads(store.read_artifact_bytes(task_id,phase,name) if hasattr(store,'_postgres') else _task_artifact(task_id,phase,name).read_text())
+            value=json.loads(store.read_artifact_bytes(task_id,phase,name))
             availability[phase]={'availability':'available'};return value
         except (HTTPException,KeyError):
             availability[phase]={'availability':'absent','reason':'no_saved_artifact'};return None
@@ -1587,13 +1575,11 @@ def _validation_panel_for(task_id:str,raw:str)->dict|None:
     if session:
         from vmodel_contracts.runtime import artifacts_root
         try:
-            if hasattr(store,'_postgres'):
-                from .generator_documents import GeneratorDocuments
-                from .worker_capability import WorkerCapability
-                raw_ledger=GeneratorDocuments.owner_reader(store,task_id).read('spec/findings-ledger.json')
-                if raw_ledger is None:raise FileNotFoundError('no saved ledger')
-                ledger=json.loads(raw_ledger)
-            else:ledger=json.loads((authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"spec"/"findings-ledger.json").read_text())
+            from .generator_documents import GeneratorDocuments
+            from .worker_capability import WorkerCapability
+            raw_ledger=GeneratorDocuments.owner_reader(store,task_id).read('spec/findings-ledger.json')
+            if raw_ledger is None:raise FileNotFoundError('no saved ledger')
+            ledger=json.loads(raw_ledger)
         except FileNotFoundError:availability['findings_ledger']={'availability':'absent','reason':'no_saved_ledger'};ledger=None
         except (OSError,ValueError):availability['findings_ledger']={'availability':'unavailable','reason':'invalid_or_unreadable'};ledger=None
     panel=validation_panel(validation,load("needs","needs.json"),load("tests","tests.json"),ledger)
@@ -1921,28 +1907,20 @@ def task_execution(task_id:str,debug:bool=False,a:auth.Actor=Depends(auth.requir
     _require_account_debug()
     session=_recorded_engine_session(task_id)
     if not session:return {"session_id":None,"route":None,"usage":[],"calls":[],"raw":[]}
-    from vmodel_contracts.runtime import artifacts_root
-    root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"
-    document_reader=None
-    if hasattr(store,'_postgres'):
-        from .generator_documents import GeneratorDocuments
-        document_reader=GeneratorDocuments.owner_reader(store,task_id).read
-    def lines(path:Path,limit:int=300):
-        if document_reader is not None:
-            raw=document_reader('interview/'+path.name)
-            if raw is None:return []
-            return [value for row in raw.decode(errors='replace').splitlines() if (value:=_execution_json(row)) is not None][-limit:]
-        if not path.is_file():return []
-        with path.open(errors="replace") as stream:
-            return [value for row in stream if (value:=_execution_json(row)) is not None][-limit:]
+    from .generator_documents import GeneratorDocuments
+    document_reader=GeneratorDocuments.owner_reader(store,task_id).read
+    def lines(name,limit=300):
+        raw=document_reader('interview/'+name)
+        if raw is None:return []
+        return [value for row in raw.decode(errors='replace').splitlines() if (value:=_execution_json(row)) is not None][-limit:]
     pinned=None
-    state=root/"http-session.json"
-    if state.is_file():
-        try:pinned=json.loads(state.read_text()).get("model_map")
-        except (ValueError,OSError):pass
+    state=document_reader('interview/http-session.json')
+    if state is not None:
+        try:pinned=json.loads(state).get('model_map')
+        except ValueError:pass
     route=(store.task(task_id) or {}).get("model_route")
-    usage=lines(root/"usage.jsonl")
-    calls=lines(root/"llm-calls.jsonl")
+    usage=lines("usage.jsonl")
+    calls=lines("llm-calls.jsonl")
     summary=[]
     for entry in calls:
         item={key:entry.get(key) for key in ("ts","event","stage","provider","model","attempt","latency_s","usage") if key in entry}
@@ -1954,12 +1932,7 @@ def task_execution(task_id:str,debug:bool=False,a:auth.Actor=Depends(auth.requir
         summary.append(item)
     raw=[]
     if debug:
-        raw.extend(lines(root/"debug-http.jsonl",100))
-        debug_dir=root/"debug"
-        if debug_dir.is_dir():
-            for file in sorted(debug_dir.glob("*.txt"))[-30:]:
-                if file.is_file() and file.stat().st_size<=1_000_000:
-                    raw.append({"file":file.name,"content":file.read_text(errors="replace")})
+        raw.extend(lines("debug-http.jsonl",100))
     return {"session_id":session,"route":route,"effective_models":pinned,"usage":usage,"usage_segments":_model_usage_segments(usage),"route_history":[(e.get("payload") or {}) for e in store.events(task_id) if e.get("kind")=="model_route" and (e.get("payload") or {}).get("scope")=="switch"],"calls":summary,"raw":raw}
 
 def _execution_json(row:str):
@@ -2400,13 +2373,7 @@ def session_cost(session_id:str):
     linked=[task for task in store.list_tasks() if _recorded_engine_session(task["task_id"])==session_id]
     if len(linked)>1:raise HTTPException(409,"session has multiple task bindings; cost cannot be selected safely")
     if linked:return _task_cost(linked[0]["task_id"])
-    from .pricing import usage_tokens,token_credits,credits_to_usd,_rows
-    root=authorized_session(bundles.root(),session_id,store)
-    paths=[root/area/"usage.jsonl" for area in ("interview","spec")]
-    if not any("prompt_tokens" in row and "completion_tokens" in row for row in _rows(paths[0])):raise HTTPException(404,"session usage unavailable")
-    if (root/"spec").is_dir() and any((root/"spec").iterdir()):raise HTTPException(404,"complete session cost unavailable without recorded task pricing")
-    price=token_credits(sum(usage_tokens(path) for path in paths))
-    return {"price":round(price,6),"price_usd":round(credits_to_usd(price),6)}
+    raise HTTPException(404,"session task binding unavailable")
 
 
 @app.get("/api/tasks/{task_id}/audit")
@@ -2877,22 +2844,13 @@ def task_classifications(task_id:str, a:auth.Actor=Depends(auth.require_actor)):
     session=store.engine_session(task_id)
     out={"session":session,"answers":{}}
     if not session: return out
-    if hasattr(store,'_postgres'):
-        from .generator_documents import GeneratorDocuments
-        try:raw=GeneratorDocuments.owner_reader(store,task_id).read('interview/categorization-shadow.jsonl')
-        except TenantAccessDenied:raise
-        except Exception:
-            raise HTTPException(503,'Classification evidence is unavailable') from None
-        if raw is None:
-            out['reason']='no shadow evidence';return out
-    else:
-        from vmodel_contracts.runtime import artifacts_root
-        root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)/"interview"/"categorization-shadow.jsonl"
-        if not root.is_file():
-            out['reason']='no shadow evidence';return out
-        try:raw=root.read_bytes()
-        except OSError:
-            raise HTTPException(503,'Classification evidence is unavailable') from None
+    from .generator_documents import GeneratorDocuments
+    try:raw=GeneratorDocuments.owner_reader(store,task_id).read('interview/categorization-shadow.jsonl')
+    except TenantAccessDenied:raise
+    except Exception:
+        raise HTTPException(503,'Classification evidence is unavailable') from None
+    if raw is None:
+        out['reason']='no shadow evidence';return out
     turns=_qa_turns(store.events(task_id,limit=10000))
     try:
         if len(raw)>8*1024*1024:raise ValueError('bounded classification evidence required')

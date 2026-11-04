@@ -69,3 +69,10 @@ filesystem helper module remains to extract its pure plan validator then retire.
 SDK fixture gap resolved: fake wire tests now provide a real saved operator policy
 and matching 10^12 quote unit scale. All 8 SDK variants passed. This changes only
 disposable test policy, not production admission. No live provider contact.
+
+Unit 11: supplemental classification, execution and provenance readers use PG
+only, with no host debug glob, pinned-route file or unbound session-price read.
+Five policy regressions failed first. Signed classification browser included in
+71-test provenance/documents/debug/policy group. Chromium installed locally for
+remaining browser gate. Full gate attempt was interrupted at 15%; no full-pass
+claim, known compatibility fixture failures remain.
