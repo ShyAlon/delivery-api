@@ -370,23 +370,24 @@ def test_provenance_labels_schema_and_source_exactly(pgstore):
     assert not prov.endswith('source=unknown')  # editable checkout ships readable sources
 
 
-def test_publish_session_revision_runs_real_validators_with_provenance(pgstore, tmp_path):
-    from delivery_api.artifact_publication import publish_session_revision
-    root = tmp_path / 'session'
-    (root / 'spec').mkdir(parents=True)
-    (root / 'spec' / 'srs.json').write_text('{"not": "a valid srs"}')
-    (root / 'interview').mkdir()
-    (root / 'interview' / 'intent_model.json').write_text('{"not": "valid either"}')
+def test_publish_pg_documents_runs_real_validators_with_provenance(pgstore,tmp_path):
+    from delivery_api.artifact_publication import publish_document_revision
+    from delivery_api.generator_documents import GeneratorDocuments
     with tenant_context(A):
-        task = pgstore.create_task('pubrev-' + uuid.uuid4().hex)
-        published = publish_session_revision(pgstore, task['task_id'], root, writer_instance='host#1')
-        rows = {r['name']: r for r in pgstore.manifest_artifacts(task['task_id'])}
-        assert pgstore.manifest_ready(task['task_id']) is True
-        assert rows['srs.json']['validator'] == 'vmodel_contracts.srs.SRSDocument'
-        assert rows['srs.json']['valid'] is False  # real validator ran and recorded the verdict
-        assert rows['srs.json']['validation_error']
+        task=pgstore.create_task('pubrev-'+uuid.uuid4().hex);tid=task['task_id']
+        pgstore.set_engine_session(tid,'pub-'+uuid.uuid4().hex)
+        job=pgstore.enqueue_worker(tid,'phase:srs');cap=pgstore.claim_worker(job)
+        docs=GeneratorDocuments(pgstore,cap,job)
+        docs.write('spec/srs.json',b'{"not":"a valid srs"}')
+        docs.write('interview/intent_model.json',b'{"not":"valid either"}')
+        published=publish_document_revision(pgstore,tid,docs,writer_instance='test-only')
+        rows={r['name']:r for r in pgstore.manifest_artifacts(tid)}
+        assert pgstore.manifest_ready(tid) is True
+        assert rows['srs.json']['validator']=='vmodel_contracts.srs.SRSDocument'
+        assert rows['srs.json']['valid'] is False and rows['srs.json']['validation_error']
         assert ';schema=' in rows['srs.json']['validator_version'] and ';source=' in rows['srs.json']['validator_version']
-        assert len(published) == 2
+        assert len(published)==2
+        pgstore.finish_worker(job)
 
 
 def test_concurrent_producers_one_pure_revision(pgstore, tmp_path):

@@ -117,3 +117,9 @@ implementation. Removed file-lock and rename fallback from coordinator after
 red-first policy check; real PG install/crash/tamper/rollback scenarios passed.
 SDK raw-wire fixtures must seed an operator ceiling and matching quote scale,
 not bypass the actual launch admission check. Eight fake SDK variants passed.
+
+A DB-only error must not prescribe restoring/backfilling files. Settled-byte
+protection retains the complete changed/vanished/appeared checks over captured PG
+documents, and publication failure leaves the prior ready revision untouched.
+Removed retired file restore/backfill tests only alongside their implementation;
+PG publication validator provenance and failure atomicity remain exercised.

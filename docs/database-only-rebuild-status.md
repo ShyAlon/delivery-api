@@ -81,3 +81,10 @@ Unit 12: removed host bundle discovery/root settings/projection. Retained bundle
 summaries preserve actual pending/error/warning/approved interview states and
 project title, completion and validation from PG. Red-first retired-function
 policy; 5 selected bundle/session tests passed, signed routes included.
+
+Unit 13: retired restore/backfill modules, backfill entrypoint and file publication
+helpers. Their tests were removed with the retired behavior, not skipped. Current
+PG validator provenance and settled changed/vanished/appeared/current/identical
+cases replace the old file tests. 94 document/manifest/byte/policy tests passed,
+including failed publication atomicity and worker-attempt fencing. No import or
+migration route remains in these modules.
