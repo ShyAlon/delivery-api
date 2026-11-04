@@ -25,6 +25,7 @@ def manifest(argv,root,documents=None):
         else:raise PermissionError('unreviewed child generator option')
     if '--final-review' in seen and ('--to' not in argv or argv[argv.index('--to')+1]!='validation' or ('--from' in seen and argv[argv.index('--from')+1]!='validation')):
         raise PermissionError('final review requires bounded validation without rewind')
+    if documents is None:raise PermissionError('owned generator documents required')
     # Only the CLI's explicit inputs, never output/checkpoint files.
     paths=[argv[0]]+[argv[i+1] for i,arg in enumerate(argv[:-1]) if arg in ('--conops','--system-baseline')]
     for path in paths:
@@ -32,7 +33,7 @@ def manifest(argv,root,documents=None):
         if not value.is_absolute() or value.resolve()!=value or not value.is_relative_to(root):
             raise PermissionError('generator input must be a canonical owned file')
         key=str(value.relative_to(root))
-        raw=documents.read(key) if documents is not None else value.read_bytes()
+        raw=documents.read(key)
         if raw is None:raise PermissionError('canonical owned generator input missing')
         files[key]=hashlib.sha256(raw).hexdigest()
     if '--out' not in argv or Path(argv[argv.index('--out')+1])!=root/'spec':raise PermissionError('owned generator output required')

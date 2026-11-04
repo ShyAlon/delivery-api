@@ -128,12 +128,24 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
 
 
 def test_manifest_rejects_foreign_or_changed_inputs(tmp_path):
+    from types import SimpleNamespace
     root=tmp_path/'owned';root.mkdir();outside=tmp_path/'foreign.json';outside.write_text('{}')
-    with pytest.raises(PermissionError):manifest([str(outside),'--out',str(root/'spec')],root)
-    owned=root/'intent.json';owned.write_text('{}')
-    a,digest=manifest([str(owned),'--out',str(root/'spec')],root)
-    owned.write_text('{"changed":true}')
-    assert manifest([str(owned),'--out',str(root/'spec')],root)[1]!=digest
+    retained={'intent.json':b'{}'};documents=SimpleNamespace(read=retained.get)
+    with pytest.raises(PermissionError):manifest([str(outside),'--out',str(root/'spec')],root,documents)
+    owned=root/'intent.json'
+    a,digest=manifest([str(owned),'--out',str(root/'spec')],root,documents)
+    owned.write_text('{"host":"must not override PG"}')
+    assert manifest([str(owned),'--out',str(root/'spec')],root,documents)[1]==digest
+    retained['intent.json']=b'{"changed":true}';owned.unlink()
+    assert manifest([str(owned),'--out',str(root/'spec')],root,documents)[1]!=digest
+    retained.clear()
+    with pytest.raises(PermissionError,match='missing'):manifest([str(owned),'--out',str(root/'spec')],root,documents)
+
+
+def test_manifest_cannot_accept_file_only_storage(tmp_path):
+    owned=tmp_path/'intent.json';owned.write_text('{}')
+    with pytest.raises(PermissionError,match='documents required'):
+        manifest([str(owned),'--out',str(tmp_path/'spec')],tmp_path)
 
 
 @pytest.mark.parametrize('paid',[False,True])
