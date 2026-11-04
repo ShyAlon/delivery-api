@@ -10,6 +10,9 @@ contact, migration, or paid execution is part of this work.
 - Unit 1: generator manifests require owned retained documents, with no host-file
   fallback. Failing regression reproduced before the change.
 - Child generator suite: 13 passed on the rebuilt code.
+- Unit 2: canonical producer/revision readers have no file fallback. PG reader
+  and journal tests: 33 passed; revision stage/job/intent: 27 passed.
+- Full PostgreSQL store run timed out without a final result and is unverified.
 - CI unavailable, local gate only. Full theme gate has not run.
 
 ## Still to audit and implement

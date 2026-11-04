@@ -1,65 +1,48 @@
-import hashlib,json,os
-from types import SimpleNamespace
+"""Retained proposal identity and content use PG, never host files."""
+import hashlib,json
+from uuid import uuid4
 import pytest
-from delivery_api.tenancy import TenantScope,session_root,TenantAccessDenied
+from delivery_api.tenancy import session_root,TenantAccessDenied
+from delivery_api.worker_capability import WorkerCapability
 from delivery_api.revision_proposal import read_retained_revision_proposal
 from test_revision_intent import proposal
 from test_closed_revision_job import options
 
 
-def setup(tmp_path):
-    scope=TenantScope('00000000-0000-0000-0000-000000000001')
-    cap=SimpleNamespace(scope=scope,session_id='s',task_id='task',generation=1,validate=lambda store:None)
-    root=session_root(tmp_path,scope,'s');pid='a'*32
-    path=root/'spec'/'revision-proposals'/pid/'proposal.json';path.parent.mkdir(parents=True)
-    body=proposal()|{'proposal_id':pid};path.write_text(json.dumps(body))
-    def read():return read_retained_revision_proposal(None,cap,root,pid,artifacts_base=tmp_path,options=options())
-    return cap,root,path,body,read
+def setup(tmp_path,workspace,change=None):
+    store=workspace.store;tid=store.create_task('Retained proposal')['task_id']
+    sid='proposal-'+uuid4().hex;store.set_engine_session(tid,sid);cap=WorkerCapability.capture(store,tid);pid='a'*32
+    body=proposal()|{'proposal_id':pid,'task_id':tid,'session_id':sid,'generation':cap.generation}|(change or {})
+    store.retain_decision_review(tid,'pg-revision-proposal:'+pid,'result',body)
+    root=session_root(tmp_path,cap.scope,cap.session_id)
+    def read():return read_retained_revision_proposal(store,cap,root,pid,artifacts_base=tmp_path,options=options())
+    return store,cap,root,body,read
 
 
-def test_exact_pinned_proposal_and_raw_digest(tmp_path):
-    cap,root,path,body,read=setup(tmp_path);before=path.read_bytes()
-    assert read()=={'proposal':body,'document_sha256':hashlib.sha256(before).hexdigest()}
-    assert path.read_bytes()==before
+def test_exact_retained_proposal_survives_host_folder_loss(tmp_path,pg_scoped_workspace):
+    store,cap,root,body,read=setup(tmp_path,pg_scoped_workspace)
+    expected={'proposal':body,'document_sha256':hashlib.sha256(json.dumps(body,sort_keys=True,indent=2).encode()).hexdigest()}
+    assert not root.exists() and read()==expected
+    root.mkdir(parents=True);(root/'spec').symlink_to(tmp_path/'foreign')
+    assert read()==expected
 
 
 @pytest.mark.parametrize('change',[{'session_id':'foreign'},{'task_id':'foreign'},{'generation':2},
     {'proposal_id':'b'*32},{'artifact':{'changed':True}},{'committed':True},
     {'source_checkpoint_id':'changed'},{'change_request':'changed'}])
-def test_rejects_misbound_or_changed_retained_proposal(tmp_path,change):
-    cap,root,path,body,read=setup(tmp_path);path.write_text(json.dumps(body|change))
+def test_rejects_misbound_or_changed_retained_proposal(tmp_path,pg_scoped_workspace,change):
+    *_,read=setup(tmp_path,pg_scoped_workspace,change)
     with pytest.raises((TenantAccessDenied,ValueError)):read()
 
 
-@pytest.mark.parametrize('unsafe',['file-symlink','directory-symlink','foreign-root','malformed-id','directory-file'])
-def test_unsafe_namespace_is_rejected(tmp_path,unsafe):
-    cap,root,path,body,read=setup(tmp_path)
-    if unsafe=='file-symlink':path.rename(tmp_path/'outside');path.symlink_to(tmp_path/'outside')
-    elif unsafe=='directory-symlink':path.parent.rename(tmp_path/'outside');path.parent.symlink_to(tmp_path/'outside',target_is_directory=True)
-    elif unsafe=='directory-file':path.unlink();path.mkdir()
-    elif unsafe=='foreign-root':
-        read=lambda:read_retained_revision_proposal(None,cap,tmp_path,'a'*32,artifacts_base=tmp_path,options=options())
-    else:
-        read=lambda:read_retained_revision_proposal(None,cap,root,'../outside',artifacts_base=tmp_path,options=options())
-    with pytest.raises((OSError,ValueError,TenantAccessDenied)):read()
+def test_unsafe_identity_or_root_refused(tmp_path,pg_scoped_workspace):
+    store,cap,root,body,read=setup(tmp_path,pg_scoped_workspace)
+    with pytest.raises(TenantAccessDenied):read_retained_revision_proposal(store,cap,tmp_path,'a'*32,artifacts_base=tmp_path,options=options())
+    with pytest.raises(ValueError):read_retained_revision_proposal(store,cap,root,'../outside',artifacts_base=tmp_path,options=options())
 
 
-def test_directory_swap_is_rejected(tmp_path,monkeypatch):
-    from delivery_api import revision_proposal as module
-    cap,root,path,body,read=setup(tmp_path);original=os.open;changed=[]
-    def opened(name,flags,*args,**kwargs):
-        fd=original(name,flags,*args,**kwargs)
-        if name=='proposal.json' and not changed:
-            path.parent.rename(root/'spec'/'old-proposal');path.parent.mkdir();changed.append(True)
-        return fd
-    monkeypatch.setattr(module.os,'open',opened)
-    with pytest.raises((TenantAccessDenied,FileNotFoundError)):read()
-
-
-def test_revoked_capability_on_final_check_is_rejected(tmp_path):
-    cap,root,path,body,read=setup(tmp_path);calls=[]
-    def authority(store):
-        calls.append(1)
-        if len(calls)>1:raise TenantAccessDenied('revoked')
-    cap.validate=authority
-    with pytest.raises(TenantAccessDenied,match='revoked'):read()
+def test_stale_capability_refused(tmp_path,pg_scoped_workspace):
+    store,cap,root,body,read=setup(tmp_path,pg_scoped_workspace)
+    with store._task_operation_guard('task.rerun'):
+        store._execute_native('UPDATE tasks SET generation=generation+1 WHERE task_id=%s',(cap.task_id,),write=True)
+    with pytest.raises(TenantAccessDenied):read()

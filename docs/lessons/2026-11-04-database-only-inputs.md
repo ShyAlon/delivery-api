@@ -14,3 +14,16 @@ retained-byte changes do change it, and missing retained bytes are refused.
 Local validation: 13 child-generator tests passed, including actual child and
 restart journeys. CI unavailable, local gate only. This is an incomplete WIP
 checkpoint, not a merge-ready theme or deployment approval.
+
+## Canonical producer/revision readers
+
+Fresh-input, phase-evidence and retained-proposal helpers still selected file
+implementations using a store attribute. Retain only their PG implementations.
+Real-PG tests replace obsolete descriptor-race tests with hostile/absent folder,
+required-byte, bounds, owner, generation and proposal identity checks. Shared
+descriptor helpers remain for other callers until their separate audit.
+
+The policy regression failed in all three readers before removal. Rebuilt PG
+reader/journal group: 33 passed. Revision-stage/job/intent cross-suite: 27 passed.
+A combined PostgreSQL store run reached the command timeout without a final
+result; it is not passing evidence and must be rerun in smaller groups.
