@@ -65,3 +65,14 @@ Eight SDK transport variants remain unverified here: the first fails because its
 fake DeepSeek quote has no configured operator expense policy. This also failed
 before the coordinator edit. Keep the real dispatch refusal; repair the disposable
 fixture with reviewed fake policy, never bypass the production money check.
+
+## Recording replay
+
+Imported recordings used to retain a source directory and reread it during
+replay. Store recording rows and artifact bytes in the owned PG execution at
+import time, then replay from retained bytes. HTTP upload folders are temporary
+and cleaned on success, validation failure or upload-limit refusal. Import title
+inference no longer reads an unrelated global host session directory.
+
+Source-loss regression failed before the change. Replay/import selected group:
+14 passed. No public replay route was opened; existing route guards remain.

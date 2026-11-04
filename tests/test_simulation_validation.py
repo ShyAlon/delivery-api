@@ -80,7 +80,7 @@ def test_import_title_override_and_session_fallback(tmp_path,simulation_workspac
     assert sim.import_run(source,'My replay')['title']=='My replay'
 
 
-def test_uploaded_jsonl_resolves_local_canonical_intent(monkeypatch,tmp_path,simulation_workspace):
+def test_uploaded_jsonl_does_not_consult_unrelated_host_intent(monkeypatch,tmp_path,simulation_workspace):
     from delivery_api.simulation import Simulation
     root=tmp_path/'artifacts';interview=root/'local-session'/'interview';interview.mkdir(parents=True)
     (interview/'intent_model.json').write_text(json.dumps({"problem_statement":"Track Pokémon collection goals"}))
@@ -89,7 +89,7 @@ def test_uploaded_jsonl_resolves_local_canonical_intent(monkeypatch,tmp_path,sim
     row={"stage":"probing","provider":"ollama","model":"phi4","ts":"2026-09-15T10:00:00+03:00","prompt_tokens":1,"completion_tokens":1,"session_id":"local-session"}
     (upload/'usage.jsonl').write_text(json.dumps(row)+'\n')
     task=Simulation(simulation_workspace.store).import_run(upload)
-    assert task['title']=='Track Pokémon collection goals'
+    assert task['title']=='Recorded run local-session'
 
 
 def test_simulation_fixture_uses_pg_for_http_and_replay(simulation_workspace):

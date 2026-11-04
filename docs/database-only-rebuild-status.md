@@ -44,3 +44,7 @@ Unit 5: coordinator uses PG documents, fence and publication unconditionally.
 Eight SDK transport variants remain unresolved: first failure is the fixture's
 missing operator expense policy (also reproduced before this edit). Production
 money checks remain intact. Full gate is not green and no PR is ready.
+
+Unit 6: imported recording rows/artifacts retained in PG; replay survives source
+folder loss. HTTP upload staging is temporary and cleaned. Replay/import selected
+group: 14 passed. Public replay remains guarded, unchanged.

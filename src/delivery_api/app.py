@@ -2504,15 +2504,15 @@ async def import_simulation(usage_file: UploadFile = File(...), title: str | Non
     if Path(usage_file.filename or "").name != "usage.jsonl":
         raise HTTPException(400,{"error":"Select the run's usage.jsonl file.","cause":"The chosen file is not named usage.jsonl.","next":"Open the recorded run folder and choose usage.jsonl."})
     import tempfile
-    root=Path(tempfile.mkdtemp(prefix="vmodel-import-"));dest=root/"usage.jsonl"
-    total=0
-    with dest.open("wb") as fh:
-        while chunk:=await usage_file.read(1024*1024):
-            total+=len(chunk)
-            if total>20_000_000: raise HTTPException(413,{"error":"The selected file is too large.","cause":"The 20 MB upload safety limit was exceeded.","next":"Choose the original usage.jsonl or archive the oversized recording."})
-            fh.write(chunk)
-    try:return simulation.import_run(root,title)
-    except ImportValidationError as e:raise HTTPException(400,{"error":str(e),"cause":e.cause,"next":e.next_action})
+    with tempfile.TemporaryDirectory(prefix='vmodel-import-') as temporary:
+        root=Path(temporary);dest=root/'usage.jsonl';total=0
+        with dest.open('wb') as fh:
+            while chunk:=await usage_file.read(1024*1024):
+                total+=len(chunk)
+                if total>20_000_000:raise HTTPException(413,{'error':'The selected file is too large.','cause':'The 20 MB upload safety limit was exceeded.','next':'Choose the original usage.jsonl or archive the oversized recording.'})
+                fh.write(chunk)
+        try:return simulation.import_run(root,title)
+        except ImportValidationError as e:raise HTTPException(400,{'error':str(e),'cause':e.cause,'next':e.next_action})
 
 class ReplayRequest(BaseModel):
     speed: float | None = 100
