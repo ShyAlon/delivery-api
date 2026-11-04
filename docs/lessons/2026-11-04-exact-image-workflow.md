@@ -31,3 +31,14 @@ before cleanup, including stderr and the last health exception. Keep the file
 outside temporary scratch; never dump environment or fixture credentials.
 A native fixture that only seeds PG is insufficient startup coverage: also run
 the exact entry/preflight and prove HTTP health. This still is not a Docker gate.
+
+## Requested port binding is not actual publication
+
+An internal-only Docker network can accept -p while providing no host mapping.
+A healthy app plus refused host connection must be diagnosed as a host path,
+not waited out as app startup. Keep app outbound isolation with a separate,
+fixed-destination ingress relay; verify Docker's actual mapping. Derive probe
+origin and mapping from one planner. Bound elapsed time and every blocking call,
+not merely the number of retries. Record build cache evidence before claiming
+why a build took longer. Whole-source COPY before dependency install defeats
+otherwise valid caches when only host tooling changed.

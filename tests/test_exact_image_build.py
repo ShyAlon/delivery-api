@@ -123,3 +123,25 @@ def test_silent_command_failure_names_exit_and_oom_without_echoing_secrets(monke
     Result.stderr='FICTIONAL_SECRET=must-not-print'
     with pytest.raises(m.WorkflowError) as error:m.command(['docker','build'])
     assert 'must-not-print' not in str(error.value)
+
+
+def test_build_records_plain_cache_log_and_context_size(build_inputs,capsys):
+    root,state,calls,contexts=build_inputs
+    m.build(root,state)
+    args=next(args for args in calls if args[:2]==['docker','build'])
+    assert args[args.index('--progress')+1]=='plain'
+    assert 'committed files /' in capsys.readouterr().err
+
+
+def test_dependency_install_layer_does_not_copy_product_wheels_first():
+    text=(D.parents[1]/'Dockerfile.full').read_text()
+    requirements=text.index('COPY --from=build /wheels/requirements.txt')
+    install=text.index('pip install -r /wheels/requirements.txt')
+    wheels=text.index('COPY --from=build /wheels/ /wheels/')
+    assert requirements<install<wheels
+    assert '--mount=type=cache,target=/root/.cache/pip' in text
+
+
+def test_dockerfile_no_run_continuation_consumes_next_copy():
+    text=(D.parents[1]/'Dockerfile.full').read_text()
+    assert "'pyarrow>=17,<24'\\\n\nCOPY" not in text

@@ -44,3 +44,10 @@ def test_optional_external_service_socket_and_public_ca_mount_only():
     args=target(service_mount='requi-fixture-'+'a'*24).arguments()
     assert 'type=volume,source=requi-fixture-'+'a'*24+',target=/fixture,readonly' in args
     with pytest.raises(ValueError):target(service_mount='/private/user-data').arguments()
+
+
+def test_internal_candidate_does_not_claim_unreachable_published_port():
+    value=target(publish=False)
+    assert '--publish' not in value.arguments()
+    assert value.origin=='http://127.0.0.1:8001'
+    assert value.binding=='127.0.0.1:8001:8000'

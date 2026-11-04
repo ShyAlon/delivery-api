@@ -140,3 +140,35 @@ this narrows but does not establish Docker-only networking/mount/dependency
 behavior. Combined affected gate before final HTTP-tail addition319 pass.
 Mac rerun still mandatory. New source/acceptance contract intentionally uses a
 new run key: no carrying old acceptance across a changed diagnostic harness.
+
+## Mac internal-only publication failure, 2026-11-04 19:12
+
+The second Mac run built successfully but host health refused while container
+health and startup were healthy. Cause class: internal-only bridge publication.
+Docker accepts the requested binding but has no default-gateway network on which
+to publish it. The source discussion explicitly reproduces this on macOS:
+https://github.com/moby/moby/discussions/53256
+Official internal-network semantics:
+https://docs.docker.com/reference/cli/docker/network/create/
+
+Fix: service stays on its owned internal-only network, without a false publish
+claim. An owned, bounded fixed-destination TCP relay alone connects to both the
+internal and a new normal ingress bridge; it publishes127.0.0.1:port:8000. It
+forwards bytes only to the named owned service8000, never interprets HTTP Host or
+CONNECT as a destination. No app image overlay, behavior flag, added egress route
+or Internet-enabled fixture. The same Target owns origin and publish binding.
+Read actual docker port mapping and print probe URL plus actual bindings on
+failure. Probe HTTP first; once container is healthy, a refused host probe or
+missing mapping fails immediately. Total wait uses a90-second monotonic deadline
+rather than240 iterations of potentially60-second Docker reads. Per-poll Docker
+commands are bounded to3 seconds. Actual Mac networking remains to be checked.
+
+Build slowdown: changed committed diagnostic files invalidated the whole-source
+COPY layer before wheel building; product wheels then invalidated third-party
+pip installation, and --no-cache-dir forced downloads again. This is a proven
+cache-invalidation design flaw, not proof which step consumed the reported1555s.
+Separate requirements-only COPY/install from product wheel COPY/install and use
+BuildKit pip cache mounts. Record plain BuildKit output to private build.log and
+fixture-build.log, and print committed context file/byte counts. No claim that
+large untracked data entered the context: git archive excludes it. Exact1555s
+attribution needs the retained plain build log from the next run.

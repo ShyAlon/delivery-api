@@ -20,7 +20,7 @@ def context(root: Path, destination: Path):
     spec=importlib.util.spec_from_file_location('minimal_smoke_context',root/'scripts/docker/smoke-context.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     module.prepare(root,destination)
-    for relative in ('scripts/docker/Dockerfile.local-fixture','scripts/docker/local_service_fixture.py','scripts/docker/fixture_services.py','scripts/docker/retained_image_proof.py'):
+    for relative in ('scripts/docker/fixture_ingress.py','scripts/docker/Dockerfile.local-fixture','scripts/docker/local_service_fixture.py','scripts/docker/fixture_services.py','scripts/docker/retained_image_proof.py'):
         target=destination/relative;target.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(root/relative,target)
     # Public-only context: copied paths must be readable by fixture UID10001,
@@ -34,11 +34,14 @@ class OwnedRun:
         self.network='requi-fixture-'+self.suffix;self.volume=self.network
         self.fixture='requi-fixture-services-'+self.suffix
         self.service='requi-fixture-service-'+self.suffix
+        self.front=self.network+'-ingress'
+        self.ingress='requi-fixture-ingress-'+self.suffix
         self.label='requi.image-gate='+self.suffix
         self.created=[]
         self.fixture_built=False
         self.fixture_tag='requi-local-fixture:'+self.suffix
         self.directory=None
+        self.diagnostic_path=None
 
     def scrub(self,text):
         import re
@@ -51,7 +54,7 @@ class OwnedRun:
         return text[-24000:]
 
     def check_container(self,name):
-        state=object_json(command(['docker','container','inspect','--format','{{json .State}}',name]).encode())
+        state=object_json(command(['docker','container','inspect','--format','{{json .State}}',name],timeout=3).encode())
         if state.get('Running') is not True or state.get('Health',{}).get('Status')=='unhealthy':
             raise WorkflowError('owned container '+name+' '+str(state.get('Status'))+
                 ' exit='+str(state.get('ExitCode'))+' oom='+str(state.get('OOMKilled'))+
@@ -73,10 +76,16 @@ class OwnedRun:
                 tail=command(['docker','logs','--tail','100',name],include_stderr=True)
                 chunks.append(name+' log tail:\n'+self.scrub(tail))
                 if name==self.service and object_json(state.encode()).get('Running') is True:
-                    probe=subprocess.run(['docker','exec',name,'python','/app/full_entry.py','--healthcheck'],capture_output=True,text=True,timeout=10)
+                    probe=subprocess.run(['docker','exec',name,'python','/app/full_entry.py','--healthcheck'],capture_output=True,text=True,timeout=5)
                     chunks.append('in-container healthcheck exit='+str(probe.returncode)+'\n'+self.scrub(probe.stdout+probe.stderr))
             except Exception as diagnostic_error:
                 chunks.append(name+': diagnostics unavailable: '+type(diagnostic_error).__name__)
+        if hasattr(self,'base'):
+            chunks.append('host probe URL: '+self.base+'/health')
+            try:
+                chunks.append('docker port ingress: '+command(['docker','port',self.ingress,'8000/tcp'],timeout=3))
+                chunks.append('actual ingress bindings: '+command(['docker','container','inspect','--format','{{json .NetworkSettings.Ports}}',self.ingress],timeout=3))
+            except WorkflowError:chunks.append('docker port ingress unavailable')
         text='\n'.join(chunks)+'\n'
         path=getattr(self,'diagnostic_path',None)
         if path is not None:
@@ -116,8 +125,8 @@ class OwnedRun:
         self.directory=tempfile.TemporaryDirectory(prefix='requi-image-gate-')
         scratch=Path(self.directory.name);build_context=scratch/'context';build_context.mkdir()
         context(self.root,build_context)
-        command(['docker','build','--platform','linux/amd64','--file',str(build_context/'scripts/docker/Dockerfile.local-fixture'),
-                 '--tag',self.fixture_tag,str(build_context)],timeout=1800)
+        command(['docker','build','--progress','plain','--platform','linux/amd64','--file',str(build_context/'scripts/docker/Dockerfile.local-fixture'),
+                 '--tag',self.fixture_tag,str(build_context)],timeout=1800,output_path=self.diagnostic_path.with_name('fixture-build.log') if self.diagnostic_path else None)
         self.fixture_built=True
         self.create('network',self.network,['docker','network','create','--internal','--label',self.label,self.network])
         self.create('volume',self.volume,['docker','volume','create','--label',self.label,self.volume])
@@ -127,10 +136,11 @@ class OwnedRun:
             '--mount','type=volume,source='+self.volume+',target=/fixture',
             '--tmpfs','/tmp:rw,nosuid,nodev,size=512m,mode=1777',self.fixture_tag])
         handoff=None
-        for _ in range(240):
+        fixture_deadline=time.monotonic()+120
+        while time.monotonic()<fixture_deadline:
             self.check_container(self.fixture)
             try:
-                handoff=object_json(command(['docker','exec',self.fixture,'cat','/tmp/fixture-state.json']).encode());break
+                handoff=object_json(command(['docker','exec',self.fixture,'cat','/tmp/fixture-state.json'],timeout=3).encode());break
             except (WorkflowError,ValueError):time.sleep(.5)
         self.handoff=handoff or {}
         if handoff is None:raise WorkflowError('owned local fixture readiness timed out')
@@ -138,30 +148,52 @@ class OwnedRun:
             raise WorkflowError('owned fixture handoff identity differs')
         with socket.socket() as listener:
             listener.bind(('127.0.0.1',0));port=listener.getsockname()[1]
-        self.base='http://127.0.0.1:'+str(port)
+        target=Target(self.image_id,self.service,str(scratch/'service.env'),port,self.network,self.volume,publish=False)
+        self.base=target.origin
         env={'DELIVERY_DATABASE_URL':handoff['dsn'],'DELIVERY_SUPABASE_URL':'https://image-fixture.supabase.co',
              'DELIVERY_SUPABASE_ANON_KEY':'fictional-public-key','DELIVERY_PUBLIC_ORIGIN':self.base,
              'INTERVIEW_ENGINE_TOKEN':'owned-image-gate-token-'+self.suffix,'REQUI_PIN_PROVIDERS':'ollama',
              'OLLAMA_BASE_URL':'http://image-fixture.supabase.co:11434/v1','DELIVERY_OLLAMA_MODEL':'phi4',
              'SSL_CERT_FILE':'/fixture/ca.pem','REQUESTS_CA_BUNDLE':'/fixture/ca.pem'}
         settings=scratch/'service.env';settings.write_text(''.join(k+'='+v+'\n' for k,v in env.items()));settings.chmod(0o600)
-        args=Target(self.image_id,self.service,str(settings),port,self.network,self.volume).arguments()
+        args=target.arguments()
         # Ownership is host-side metadata, not an execution mode.
         args[1:1]=['--label',self.label]
         self.create('container',self.service,['docker',*args])
         self.handoff=handoff
-        import urllib.request
-        last_health='no response'
-        for _ in range(240):
-            self.check_container(self.service)
-            self.check_container(self.fixture)
-            try:
-                with urllib.request.urlopen(self.base+'/health',timeout=1) as response:
-                    if json.load(response).get('ok') is True:break
-            except (OSError,ValueError) as error:last_health=type(error).__name__+': '+self.scrub(error)
-            time.sleep(.5)
-        else:raise WorkflowError('unchanged candidate startup did not become healthy; last health error: '+last_health)
+        # Only the relay has a gateway network. The unchanged candidate and
+        # fixture retain internal-only outbound isolation on every Docker host.
+        self.create('network',self.front,['docker','network','create','--label',self.label,self.front])
+        self.create('container',self.ingress,['docker','run','--detach','--name',self.ingress,'--label',self.label,
+            '--platform','linux/amd64','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
+            '--pids-limit','64','--memory','64m','--network',self.front,'--publish',target.binding,
+            self.fixture_tag,'python','/harness/scripts/docker/fixture_ingress.py',self.service])
+        command(['docker','network','connect',self.network,self.ingress],timeout=5)
+        self.wait_host(target)
         return self
+
+    def wait_host(self,target,*,seconds=90):
+        import urllib.request
+        # Never send fixture requests through a Mac's configured HTTP proxy.
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        deadline=time.monotonic()+seconds
+        last='no response'
+        while time.monotonic()<deadline:
+            try:
+                with opener.open(target.origin+'/health',timeout=min(1,max(.01,deadline-time.monotonic()))) as response:
+                    if json.load(response).get('ok') is True:return
+            except (OSError,ValueError) as error:last=type(error).__name__+': '+self.scrub(error)
+            state=self.check_container(self.service)
+            if time.monotonic()>=deadline:break
+            self.check_container(self.ingress)
+            mapping=command(['docker','port',self.ingress,'8000/tcp'],timeout=min(3,max(.01,deadline-time.monotonic())))
+            expected=target.binding.rsplit(':',1)[0]
+            if mapping!=expected:
+                raise WorkflowError('host publication missing/different: probe='+target.origin+'/health; docker port='+mapping+'; expected='+expected)
+            if state.get('Health',{}).get('Status')=='healthy':
+                raise WorkflowError('container healthy but host ingress failed: probe='+target.origin+'/health; docker port='+mapping+'; '+last)
+            time.sleep(min(.5,max(0,deadline-time.monotonic())))
+        raise WorkflowError('host readiness deadline exceeded: probe='+target.origin+'/health; '+last)
 
     def active_stop(self):
         from image_acceptance import API

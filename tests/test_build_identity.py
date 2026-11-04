@@ -31,6 +31,6 @@ def test_cloud_health_names_the_build_and_its_repositories_and_nothing_about_the
 def test_the_image_receives_the_build_id_from_the_build_script():
     docker=(ROOT/'Dockerfile.full').read_text()
     assert 'ARG REQUI_BUILD_ID=unknown\nENV REQUI_BUILD_ID=$REQUI_BUILD_ID\n' in docker
-    assert docker.index('pip install --no-cache-dir -r /wheels/requirements.txt')<docker.index('ARG REQUI_BUILD_ID')
+    assert docker.index('pip install -r /wheels/requirements.txt')<docker.index('ARG REQUI_BUILD_ID')
     script=(ROOT/'scripts/docker/image_workflow.py').read_text()
     assert '"REQUI_BUILD_ID=" + state.key' in script and '"REQUI_BUILD_REPOS=" + revisions' in script

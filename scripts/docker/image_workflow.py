@@ -51,13 +51,15 @@ def confirm(action: str) -> bool:
     except (EOFError,KeyboardInterrupt):return False
 
 
-def command(args: list[str], *, cwd: Path | None = None, timeout: int = 60, include_stderr: bool = False) -> str:
+def command(args: list[str], *, cwd: Path | None = None, timeout: int = 60, include_stderr: bool = False, output_path: Path | None = None) -> str:
     # Output is consumed as typed state. It may contain account config, so never
     # echo arbitrary subprocess output or include it in failure messages.
     try:
         result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise WorkflowError("required command unavailable or timed out: " + args[0]) from error
+    if output_path is not None:
+        atomic_write(output_path,(result.stdout+result.stderr).encode())
     if result.returncode:
         reason="required command failed: " + args[0] + "; exit code " + str(result.returncode) + "; no state advanced"
         if not result.stdout.strip() and not result.stderr.strip():
@@ -102,7 +104,7 @@ def preflight(root: Path, *, check_tools: bool = True) -> dict:
 def acceptance_contract(root: Path) -> str:
     # Covers orchestration, schema/roles, external fixtures and the same owner
     # acceptance entry. Any changed behavior invalidates earlier local evidence.
-    fixed=("scripts/docker/image_acceptance.py","scripts/docker/local_image_run.py",
+    fixed=("scripts/docker/image_acceptance.py","scripts/docker/local_image_run.py","scripts/docker/fixture_ingress.py",
            "scripts/docker/local_service_fixture.py","scripts/docker/fixture_services.py",
            "scripts/docker/retained_image_proof.py","scripts/docker/Dockerfile.local-fixture",
            "scripts/docker/image-local-acceptance.py","scripts/docker/private_backoffice.py",
@@ -212,11 +214,13 @@ def build(root: Path, state: StageState) -> dict:
             elif source.is_file():source.chmod(0o755 if source.stat().st_mode&0o111 else 0o644)
         tag = "requi-full-candidate:" + state.key.split(":")[1][:24]
         revisions = ",".join(name + "=" + sha for name, sha in sources.items())
+        files=[p for p in context.rglob('*') if p.is_file()]
+        log("INFO", "build context: "+str(len(files))+" committed files / "+str(sum(p.stat().st_size for p in files))+" bytes; plain build/cache evidence: "+str(state.path.parent/'build.log'))
         log("INFO", "stage 2/6 build: linux/amd64 candidate locally, no provider keys or server")
-        command(["docker", "build", "--platform", "linux/amd64", "--build-arg", "REQUI_BUILD_ID=" + state.key,
+        command(["docker", "build", "--progress", "plain", "--platform", "linux/amd64", "--build-arg", "REQUI_BUILD_ID=" + state.key,
                  "--build-arg", "REQUI_BUILD_REPOS=" + revisions, "--build-arg",
                  "REQUI_BUILD_AT=" + datetime.datetime.now(datetime.timezone.utc).isoformat(), "--file", str(context/"delivery-api"/"Dockerfile.full"),
-                 "--tag", tag, str(context)], timeout=7200)
+                 "--tag", tag, str(context)], timeout=7200, output_path=state.path.parent/"build.log")
         image = inspect_image(tag)
     evidence = {"image_id": image["Id"], "sources": sources, "platform": "linux/amd64"}
     state.complete("build", evidence)

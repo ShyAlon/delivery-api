@@ -122,3 +122,42 @@ def test_diagnostics_do_not_read_replaced_foreign_container_logs(monkeypatch,tmp
     monkeypatch.setattr(m,'command',command)
     run.diagnose(m.WorkflowError('failed'))
     assert 'ownership differs' in run.diagnostic_path.read_text()
+
+
+def test_healthy_candidate_refused_host_is_fast_mapping_diagnostic(monkeypatch,tmp_path):
+    import urllib.request,urllib.error
+    run=m.OwnedRun(tmp_path,ID)
+    target=m.Target(ID,run.service,'/tmp/private.env',8001,run.network,publish=False)
+    class Opener:
+        def open(self,*a,**kw):raise urllib.error.URLError(ConnectionRefusedError('refused'))
+    monkeypatch.setattr(urllib.request,'build_opener',lambda *a:Opener())
+    calls=[]
+    monkeypatch.setattr(run,'check_container',lambda name:{'Health':{'Status':'healthy'}})
+    monkeypatch.setattr(m,'command',lambda *a,**kw:calls.append(a) or '127.0.0.1:8001')
+    with pytest.raises(m.WorkflowError,match='container healthy.*http://127.0.0.1:8001/health.*docker port=127.0.0.1:8001'):run.wait_host(target)
+    assert len(calls)==1
+
+
+def test_missing_actual_mapping_refuses_instead_of_trusting_requested_publish(monkeypatch,tmp_path):
+    import urllib.request,urllib.error
+    run=m.OwnedRun(tmp_path,ID);target=m.Target(ID,run.service,'/tmp/env',8001,run.network)
+    class Opener:
+        def open(self,*a,**kw):raise urllib.error.URLError('refused')
+    monkeypatch.setattr(urllib.request,'build_opener',lambda *a:Opener())
+    monkeypatch.setattr(run,'check_container',lambda name:{})
+    monkeypatch.setattr(m,'command',lambda *a,**kw:'')
+    with pytest.raises(m.WorkflowError,match='publication missing/different'):run.wait_host(target)
+
+
+def test_host_deadline_is_elapsed_time_not_number_of_slow_docker_polls(monkeypatch,tmp_path):
+    import urllib.request,urllib.error
+    run=m.OwnedRun(tmp_path,ID);target=m.Target(ID,run.service,'/tmp/env',8001,run.network)
+    clock=[0.0];calls=[]
+    class Opener:
+        def open(self,*a,**kw):clock[0]+=1;raise urllib.error.URLError('refused')
+    monkeypatch.setattr(urllib.request,'build_opener',lambda *a:Opener())
+    monkeypatch.setattr(m.time,'monotonic',lambda:clock[0])
+    def inspect(name):clock[0]+=3;calls.append(name);return {}
+    monkeypatch.setattr(run,'check_container',inspect)
+    with pytest.raises(m.WorkflowError,match='deadline exceeded'):run.wait_host(target,seconds=3)
+    assert len(calls)==1

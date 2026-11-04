@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 import re
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 # Fixed options are shared by preview, owned acceptance and server deployment.
 OPTIONS = (
     "--platform", "linux/amd64", "--user", "10001:10001", "--read-only",
@@ -25,6 +25,13 @@ class Target:
     port: int
     network: str
     service_mount: str | None = None
+    publish: bool = True
+
+    @property
+    def origin(self):return "http://127.0.0.1:"+str(self.port)
+
+    @property
+    def binding(self):return "127.0.0.1:"+str(self.port)+":8000"
 
     def arguments(self) -> list[str]:
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", self.image_id):
@@ -42,9 +49,11 @@ class Target:
             if not re.fullmatch(r"requi-fixture-[a-f0-9]{24}", self.service_mount):
                 raise ValueError("invocation-owned external service volume required")
             mounts = ["--mount", "type=volume,source=" + self.service_mount + ",target=/fixture,readonly"]
+        if type(self.publish) is not bool:raise ValueError("explicit publication required")
+        publication=["--publish",self.binding] if self.publish else []
         return ["run", "--detach", "--name", self.name, *OPTIONS,
                 "--network", self.network, *mounts, "--env-file", self.env_file,
-                "--publish", f"127.0.0.1:{self.port}:8000", self.image_id]
+                *publication, self.image_id]
 
 
 def contract_bytes() -> bytes:
