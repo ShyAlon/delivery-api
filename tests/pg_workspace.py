@@ -104,7 +104,7 @@ patches only the store/config and test signing key, never auth or scope function
     from delivery_api.tenant_http import TenantMiddleware
     monkeypatch.setattr(module.config, 'CLOUD_TENANTS', True)
 
-    def build(workspace,*,lifespan=False):
+    def build(workspace,*,lifespan=False,admin_subjects=()):
         monkeypatch.setattr(module, 'store', workspace.store)
         # State stores values in its mapping, not __dict__. Patch that mapping
         # so pytest restores rather than deletes the dynamic attribute.
@@ -122,7 +122,7 @@ patches only the store/config and test signing key, never auth or scope function
         async def no_background_startup(application):yield
         if not lifespan:monkeypatch.setattr(module.app.router,'lifespan_context',no_background_startup)
         return TenantMiddleware(module.app,
-            verifier=SupabaseIdentityVerifier(URL, key_provider=Keys()),
+            verifier=SupabaseIdentityVerifier(URL, key_provider=Keys()),admin_subjects=admin_subjects,
             session_check=workspace.store.auth_session_active,
             request_database=workspace.store._postgres)
     return build
@@ -199,3 +199,22 @@ def pg_scoped_workspace(pg_workspace_factory,monkeypatch):
         assert_pg_storage_only()
         with tenant_context(workspace.scope):
             yield workspace
+
+
+@pytest.fixture
+def pg_operator_http(pg_scoped_workspace,pg_task_app,monkeypatch):
+    """Signed operator, real read registry and source-scoped process log files."""
+    from fastapi.testclient import TestClient
+    from delivery_api import app as module
+    from delivery_api.operator_reads import OperatorReadStore
+    from delivery_api.operator_authorization import OperatorPrincipal
+    ws=pg_scoped_workspace
+    with ws.admin() as conn:
+        conn.execute('GRANT requi_operator_read TO delivery_app')
+        conn.execute('INSERT INTO operator_principals VALUES(%s,%s,%s,true)',(ws.scope.owner_id,'ops-http-test',['logs.read']))
+    reader=OperatorReadStore(ws.store._postgres.dsn,OperatorPrincipal(ws.scope.owner_id,'ops-http-test',frozenset({'logs.read'})))
+    monkeypatch.setitem(module.app.state._state,'operator_read_store',reader)
+    try:
+        yield TestClient(pg_task_app(ws,admin_subjects=(ws.scope.owner_id,)),headers=ws.headers)
+    finally:
+        with ws.admin() as conn:conn.execute('DELETE FROM operator_principals WHERE subject=%s',(ws.scope.owner_id,))

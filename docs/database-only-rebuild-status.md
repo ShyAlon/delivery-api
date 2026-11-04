@@ -326,3 +326,9 @@ raw-debug documents, not a host directory. Combined model/cutover69 passed
 (one expensive blocked-advance test excluded here, previously green in56).
 Owner real-entry acceptance re-run with its required source and100s test budget:
 1 passed17.43s. Earlier15s timeout was below its actual duration, not a defect.
+
+Unit35: operator ZIP/health/shell fixtures now use real signed identity, separate
+admin mapping and the actual logs.read database registry. Customer is403, admin
+ZIP includes one bounded text file, shell remains data-free:27 passed.
+pg_task_app gained an optional admin_subjects fixture argument only. No production
+operator boundary changed or bypass added.
