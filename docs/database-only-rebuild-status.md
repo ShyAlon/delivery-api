@@ -332,3 +332,8 @@ admin mapping and the actual logs.read database registry. Customer is403, admin
 ZIP includes one bounded text file, shell remains data-free:27 passed.
 pg_task_app gained an optional admin_subjects fixture argument only. No production
 operator boundary changed or bypass added.
+
+### Rebuild unit 36: phase display and dispatch fixture parity
+- Signed PG HTTP phase-output projections retain previous/current/invalid/redo assertions. No unsigned compatibility middleware.
+- Dispatch lifecycle fixtures install a test engine that uses real execute_job/claims; lost claim still cannot launch. Retired mode flag cannot disable an admitted start.
+- Local bounded gate: 30 passed. Broad 40-file group: 219 passed. A combined Postgres group exceeded the outer tool budget after 81 dots, so it is not a passing result; split below before final gate.

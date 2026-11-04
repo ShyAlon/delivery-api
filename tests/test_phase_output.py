@@ -4,9 +4,11 @@ from fastapi.testclient import TestClient
 from delivery_api import app as module
 
 @pytest.fixture
-def output_workspace(pg_scoped_workspace,monkeypatch):
+def output_workspace(pg_scoped_workspace,monkeypatch,pg_task_app):
     # PG output projection retains the existing local HTTP presentation contract.
     monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
+    signed=pg_task_app(pg_scoped_workspace);original=TestClient
+    monkeypatch.setitem(globals(),'TestClient',lambda *a,**kw:original(signed,headers=pg_scoped_workspace.headers,**kw))
     return pg_scoped_workspace
 
 
@@ -128,8 +130,8 @@ def _check_partial_current_phase_and_labeled_previous_result(monkeypatch,tmp_pat
     _case_partial_current_phase_and_labeled_previous_result(tmp_path,monkeypatch,workspace)
 
 
-def test_partial_current_phase_and_labeled_previous_result(pg_local_compat_process):
-    pg_local_compat_process(_check_partial_current_phase_and_labeled_previous_result)
+def test_partial_current_phase_and_labeled_previous_result(tmp_path,monkeypatch,output_workspace):
+    _case_partial_current_phase_and_labeled_previous_result(tmp_path,monkeypatch,output_workspace)
 
 
 def _check_architecture_partial_uses_generator_keys(monkeypatch,tmp_path,workspace):
@@ -137,8 +139,8 @@ def _check_architecture_partial_uses_generator_keys(monkeypatch,tmp_path,workspa
     _case_architecture_partial_uses_generator_keys(tmp_path,monkeypatch,workspace)
 
 
-def test_architecture_partial_uses_generator_keys(pg_local_compat_process):
-    pg_local_compat_process(_check_architecture_partial_uses_generator_keys)
+def test_architecture_partial_uses_generator_keys(tmp_path,monkeypatch,output_workspace):
+    _case_architecture_partial_uses_generator_keys(tmp_path,monkeypatch,output_workspace)
 
 
 def _check_empty_current_partial_keeps_labeled_previous_phase(monkeypatch,tmp_path,workspace):
@@ -146,8 +148,8 @@ def _check_empty_current_partial_keeps_labeled_previous_phase(monkeypatch,tmp_pa
     _case_empty_current_partial_keeps_labeled_previous_phase(tmp_path,monkeypatch,workspace)
 
 
-def test_empty_current_partial_keeps_labeled_previous_phase(pg_local_compat_process):
-    pg_local_compat_process(_check_empty_current_partial_keeps_labeled_previous_phase)
+def test_empty_current_partial_keeps_labeled_previous_phase(tmp_path,monkeypatch,output_workspace):
+    _case_empty_current_partial_keeps_labeled_previous_phase(tmp_path,monkeypatch,output_workspace)
 
 
 def _check_gate_redo_resets_phase_start_and_rejects_old_output(monkeypatch,tmp_path,workspace):
@@ -155,8 +157,8 @@ def _check_gate_redo_resets_phase_start_and_rejects_old_output(monkeypatch,tmp_p
     _case_gate_redo_resets_phase_start_and_rejects_old_output(tmp_path,monkeypatch,workspace)
 
 
-def test_gate_redo_resets_phase_start_and_rejects_old_output(pg_local_compat_process):
-    pg_local_compat_process(_check_gate_redo_resets_phase_start_and_rejects_old_output)
+def test_gate_redo_resets_phase_start_and_rejects_old_output(tmp_path,monkeypatch,output_workspace):
+    _case_gate_redo_resets_phase_start_and_rejects_old_output(tmp_path,monkeypatch,output_workspace)
 
 
 def _check_invalid_current_artifact_is_unavailable_not_previous(monkeypatch,tmp_path,workspace):
@@ -164,5 +166,5 @@ def _check_invalid_current_artifact_is_unavailable_not_previous(monkeypatch,tmp_
     _case_invalid_current_artifact_is_unavailable_not_previous(tmp_path,monkeypatch,workspace)
 
 
-def test_invalid_current_artifact_is_unavailable_not_previous(pg_local_compat_process):
-    pg_local_compat_process(_check_invalid_current_artifact_is_unavailable_not_previous)
+def test_invalid_current_artifact_is_unavailable_not_previous(tmp_path,monkeypatch,output_workspace):
+    _case_invalid_current_artifact_is_unavailable_not_previous(tmp_path,monkeypatch,output_workspace)
