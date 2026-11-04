@@ -357,3 +357,8 @@ operator boundary changed or bypass added.
 ### Rebuild unit 40: private simulation validation versus public fence
 - Retained import/replay validation is tested through private function calls on real scoped PG, not retired unsigned/local HTTP exposure. Added signed-owner HTTP assertions for public simulation 503 in both routes.
 - Local simulation gate: 11 passed. Browser-tail combined run timed out after 19 tests without a final summary; rerun with adequate browser budget before counting.
+
+### Rebuild unit 41: no legacy session recovery or local rerun toggle
+- Legacy event text cannot establish an engine session; retained explicit session still wins without duplicate reads.
+- Rerun capability remains unavailable regardless of retired mode flag, including signed HTTP task detail, because new-generation checkpoint recovery is not implemented.
+- Local gate: 21 passed. Final 41-file broad sweep reached 749 passed/1 skip/6 failures, including these three fixed fixture assertions plus three old UI expectations under review. Subsequent non-UI combined run has no completed result yet and is not a pass.
