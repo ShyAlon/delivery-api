@@ -1,0 +1,15 @@
+# External disposable services, never the service image being accepted.
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/lib/postgresql/*/bin /opt/fixture-pg-bin \
+    && pip install --no-cache-dir 'psycopg[binary]>=3.2,<4' 'PyJWT[crypto]>=2.9,<3' \
+    && useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin fixture \
+    && mkdir /fixture && chown 10001:10001 /fixture
+COPY tests/pg_harness.py tests/pg_guardian.py /harness/tests/
+COPY src/delivery_api/runtime_roles.py /harness/src/delivery_api/
+COPY supabase/migrations/ /harness/supabase/migrations/
+COPY scripts/docker/fixture_services.py scripts/docker/local_service_fixture.py scripts/docker/system-pg-smoke.py /harness/scripts/docker/
+ENV REQUI_SMOKE_PG_BIN=/opt/fixture-pg-bin PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER 10001:10001
+CMD ["python", "/harness/scripts/docker/local_service_fixture.py"]
