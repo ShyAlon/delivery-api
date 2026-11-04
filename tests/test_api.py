@@ -100,18 +100,6 @@ def test_completed_sessions_are_discovered_and_bundle_is_projected(client,tmp_pa
  data=client.get('/api/sessions/s1').json();assert len(data['graph']['nodes'])==3
  assert data['graph']['edges']==[{"from":"N-1","to":"R-1","kind":"realizes"},{"from":"R-1","to":"AC-1","kind":"accepts"}]
 
-def test_artifacts_root_accepts_interview_only_spec_only_and_combined(client,tmp_path,monkeypatch):
- from delivery_api import bundles
- root=tmp_path/"artifacts"
- for session,area,name in (("i","interview","intent_model.json"),("s","spec","srs.json"),("both","interview","conops.json"),("both","spec","bundle-integrity.json")):
-  p=root/session/area;p.mkdir(parents=True,exist_ok=True);(p/name).write_text('{}')
- monkeypatch.setattr(bundles,"SETTINGS_FILE",tmp_path/"setting")
- r=client.post('/api/settings/artifacts-root',json={'path':str(root)})
- assert r.status_code==200 and r.json()['count']==3
- rows={x['session_id']:x['phases'] for x in r.json()['sessions']}
- assert rows=={'i':['interview'],'s':['spec'],'both':['interview','spec']}
- r=client.post('/api/settings/artifacts-root',json={'path':str(tmp_path/'missing')})
- assert r.status_code==400 and set(r.json()['detail'])=={'error','cause','next'}
 
 def test_start_task_requires_typed_http_engine_not_subprocess(monkeypatch,tmp_path,pg_scoped_workspace):
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)
@@ -142,17 +130,6 @@ def _check_start_task_unreachable_http_engine_is_human_readable(monkeypatch,tmp_
     assert store.task(tid)['state']=='not_started'
 
 
-def test_engine_python_settings_show_candidates_and_persist(monkeypatch,tmp_path,client):
-    from delivery_api import engine_runtime
-    good=tmp_path/'python';good.write_text('#!/bin/sh\nexit 0\n');good.chmod(0o755)
-    monkeypatch.setattr(engine_runtime,'SETTINGS_FILE',tmp_path/'.engine-python')
-    monkeypatch.setattr('delivery_api.app.discover_engine_runtimes',lambda _dir: __import__('asyncio').sleep(0,result=[good]))
-    async def save(path,_dir):engine_runtime.SETTINGS_FILE.write_text(path+'\n');return good
-    monkeypatch.setattr('delivery_api.app.save_python',save)
-    result=client.get('/api/settings/engine-python').json()
-    assert result['count']==1 and result['candidates']==[str(good)]
-    response=client.post('/api/settings/engine-python',json={'path':str(good)})
-    assert response.status_code==200 and response.json()['path']==str(good)
 
 def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch,pg_scoped_workspace,pg_task_app):
     signed_app=pg_task_app(pg_scoped_workspace)

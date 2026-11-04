@@ -37,7 +37,6 @@ from . import auth
 from .jobs import JobQueue
 from .runner import ProcessRunner
 from .orchestrator import PhaseOrchestrator,ExecutionMode
-from .engine_runtime import discover_engine_runtimes, save_python, saved_python
 from .engine_client import HttpEngineClient,EngineClientError,EngineUnreachableError,QualityConfigRejected
 from vmodel_contracts.interactive import InputKind,InputRequest,InputResponse,ProcessStatus,StartSessionRequest,EngineSnapshot,ModelRouteSwitchRequest
 from .store import create_store
@@ -738,28 +737,7 @@ def sessions():
             result.append(bundles.postgres_bundle(store,task['engine_session_id'])['session'])
     return {'sessions':result}
 
-@app.get("/api/settings/engine-python")
-async def engine_python_settings(a:auth.Actor=Depends(auth.require_admin)):
-    engine_dir=Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve()
-    candidates=await discover_engine_runtimes(engine_dir)
-    return {"path":str(saved_python() or ""),"candidates":[str(x) for x in candidates],"count":len(candidates)}
-class EnginePythonRequest(BaseModel):path:str
-@app.post("/api/settings/engine-python")
-async def set_engine_python(req:EnginePythonRequest,a:auth.Actor=Depends(auth.require_admin)):
-    engine_dir=Path(os.environ.get("INTERVIEW_ENGINE_DIR",str(Path(__file__).resolve().parents[3]/"interview-engine"))).resolve()
-    try:path=await save_python(req.path,engine_dir)
-    except ValueError as e:raise HTTPException(400,{"error":"Engine Python could not be saved.","cause":str(e),"next":"Choose one of the detected Python environments that passes the dependency check."})
-    activity("engine.settings","Engine Python saved",actor=a.label,python=str(path));return {"path":str(path),"status":"saved"}
 
-class ArtifactsRootRequest(BaseModel): path: str
-@app.post("/api/settings/artifacts-root")
-def set_artifacts_root(req: ArtifactsRootRequest, a: auth.Actor = Depends(auth.require_admin)):
-    try:out=bundles.save_root(req.path)
-    except ValueError as e:
-        activity("settings.save_refused","Artifacts folder save refused",actor=a.label,key="artifacts-root",reason=str(e)[:200])
-        raise HTTPException(400,{"error":"Artifacts folder could not be loaded.","cause":str(e),"next":"Choose the folder that directly contains your session directories, then validate again."})
-    activity("settings.saved","Artifacts folder saved",actor=a.label,key="artifacts-root")
-    return out
 
 @app.get("/api/sessions/{session_id}")
 def session_bundle(session_id: str):

@@ -34,3 +34,7 @@ contact, migration, or paid execution is part of this work.
   gate; final diff review before opening one theme PR. The owner merges.
 
 Previous environment results do not count as proof for this rebuilt branch.
+
+Unit 4: retired host folder/interpreter setting routes, 57 signed route/policy
+tests passed. The underlying uncalled module awaits dead-code removal with its
+remaining legacy tests; no runtime setting is written by HTTP anymore.

@@ -119,7 +119,7 @@ def test_session_registry_and_file_namespace(cloud):
 def test_unsafe_settings_local_auth_and_worker_routes_denied(cloud):
     client,_,_=cloud
     for path in ['/api/settings/artifacts-root','/api/settings/engine-python']:
-        assert client.post(path,json={'path':'/tmp'},headers=header('a')).status_code==403
+        assert client.post(path,json={'path':'/tmp'},headers=header('a')).status_code==404
     for path in ['/auth/email-availability','/auth/github/start']:
         assert client.post(path,headers=header('a')).status_code==404
     for path in ['/api/tasks/guess/start','/api/tasks/guess/model-route','/api/simulations']:

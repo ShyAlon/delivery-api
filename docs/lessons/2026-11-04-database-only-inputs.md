@@ -40,3 +40,11 @@ All seven policy cases failed before the change. Route/byte/package tests: 66
 passed. Added a real authenticated route regression for absent and hostile host
 folders: exact download bytes, view JSON and ZIP bytes must agree, while a second
 owner sees 404. Full theme gate is still pending.
+
+## Retired host settings
+
+Removed folder/interpreter settings routes. An installed image owns its runtime;
+PostgreSQL owns durable content. A request cannot persist `.artifacts-root` or
+`.engine-python` choices through these obsolete endpoints. Both route-absence
+regressions failed before removal; 57 signed-route/policy tests pass afterward.
+The old route-only tests were replaced, not used to broaden local permissions.
