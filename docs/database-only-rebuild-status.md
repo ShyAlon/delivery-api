@@ -261,3 +261,15 @@ Unit31: engine-unreachable and stale decision review tests now enter the signed
 HTTP boundary with declared installed routing, never unsigned local wrappers.
 Transport/down-engine errors and stale review 409 preserve their assertions;
 12 tests pass. The old wrapper helpers are not counted as acceptance.
+
+Unit32: all 56 HTTP cutover tests pass through real signed tenant HTTP instead
+of subprocess local-mode wrappers. Fixture transport explicitly declares fake
+reviewed model pin/installed engine; dispatch still uses real durable claim and
+execute_job, not direct alternate production execution. Slow start/submit tests
+retain responsiveness checks under actual auth. Interview finish and reads do
+not auto-start Needs. Public model switching remains 503; internal adapter still
+tests two identical replies produce one event and exact sticky default.
+Retry tests retain upstream/generation/checkpoint/duplicate/failure assertions.
+Private audit totals retain exact token/detail assertions, public audit credits
+only. Browser decision/backoffice shared UI full files:50 passed in99 seconds,
+so the earlier 22-second per-file timeout was not a test failure.
