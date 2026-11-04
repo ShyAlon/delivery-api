@@ -1,158 +1,22 @@
-"""scripts/docker/build-local-image.sh: build the full image on this Mac, smoke it, publish the tag only on success.
+"""The former native build is now an alias to the one amd64 owner workflow.
 
-Hermetic: fake docker on PATH; throwaway git repositories. Nothing touches a server or Docker.
+Build safety tests moved to test_exact_image_build.py, which executes real git
+archives and fake Docker, rather than asserting a retired shell implementation.
 """
-import os
-import platform
-import shutil
-import subprocess
 from pathlib import Path
+import os
+import subprocess
 
-import pytest
-
-REPO = Path(__file__).resolve().parents[1]
-NATIVE = {"x86_64": "amd64", "amd64": "amd64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine().lower()]
-pytestmark = pytest.mark.skipif(shutil.which("bash") is None or shutil.which("git") is None, reason="needs bash and git")
-
-FAKE_DOCKER = r'''#!/usr/bin/env bash
-echo "docker $*" >> "$FAKE_LOG"
-case "$1" in
-  info) :;;
-  buildx) :;;
-  build) [ -z "${FAKE_BUILD_RC:-}" ] || exit "$FAKE_BUILD_RC";;
-  run) case "$*" in *full-smoke.py*) [ -z "${FAKE_SMOKE_OUT:-}" ] || printf '%s\n' "$FAKE_SMOKE_OUT"; exit "${FAKE_SMOKE_RC:-0}";; esac;;
-  tag) :;;
-  image) exit 1;;
-  rmi) exit "${FAKE_RMI_RC:-0}";;
-esac
-'''
+ROOT=Path(__file__).resolve().parents[1]
 
 
-def _git(cwd, *args):
-    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
-                          env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}).stdout.strip()
-
-
-@pytest.fixture()
-def env(tmp_path):
-    root = tmp_path / "repos"
-    for name in ("delivery-api", "interview-engine", "spec-generator", "verification-loop"):
-        bare = tmp_path / "ShyAlon" / (name + ".git")
-        bare.parent.mkdir(parents=True, exist_ok=True)
-        _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(bare))
-        seed = tmp_path / ("seed-" + name)
-        _git(tmp_path, "clone", "-q", str(bare), str(seed))
-        if name == "delivery-api":
-            (seed / "scripts" / "docker").mkdir(parents=True)
-            shutil.copy(REPO / "scripts" / "docker" / "build-local-image.sh", seed / "scripts" / "docker" / "build-local-image.sh")
-            for relative in ('scripts/docker/smoke-local-image.sh','scripts/docker/smoke-context.py','scripts/docker/Dockerfile.pg-smoke','scripts/docker/owned-pg-smoke.py','scripts/docker/system-pg-smoke.py','tests/pg_harness.py','tests/pg_guardian.py','src/delivery_api/runtime_roles.py','supabase/migrations/20261030000000_test.sql'):
-                target=seed/relative;target.parent.mkdir(parents=True,exist_ok=True)
-                source=Path(__file__).resolve().parents[1]/relative
-                target.write_text(source.read_text() if source.exists() else '-- fixture migration\n')
-            (seed / "Dockerfile.full").write_text("FROM scratch\n")
-        else:
-            (seed / "README").write_text(name)
-        _git(seed, "add", "-A")
-        _git(seed, "commit", "-qm", "x")
-        _git(seed, "branch", "-M", "main")
-        _git(seed, "push", "-q", "origin", "main")
-        _git(tmp_path, "clone", "-q", str(bare), str(root / name))
-    fake = tmp_path / "bin"
-    fake.mkdir()
-    (fake / "docker").write_text(FAKE_DOCKER)
-    (fake / "docker").chmod(0o755)
-    (fake / "uname").write_text("#!/usr/bin/env bash\nif [ -n \"${FAKE_UNAME_M:-}\" ]; then echo \"$FAKE_UNAME_M\"; else /usr/bin/uname \"$@\"; fi\n")
-    (fake / "uname").chmod(0o755)
-    yes = tmp_path / "yes"
-    yes.write_text("yes\n")
-    log = tmp_path / "log"
-    log.write_text("")
-    e = {**os.environ, "PATH": "%s:%s" % (fake, os.environ["PATH"]), "REQUI_REPOS_ROOT": str(root),
-         "FAKE_LOG": str(log), "BUILD_TTY": str(yes), "TMPDIR": str(tmp_path)}
-    return root / "delivery-api", e, log, tmp_path
-
-
-def _run(api, e, **extra):
-    return subprocess.run(["bash", "scripts/docker/build-local-image.sh"], cwd=api, capture_output=True, text=True, env={**e, **extra}, timeout=60)
-
-
-def test_a_clean_set_builds_smokes_and_publishes_the_tag(env):
-    api, e, log, _ = env
-    out = _run(api, e)
-    assert out.returncode == 0, out.stdout + out.stderr
-    text = log.read_text()
-    build = [l for l in text.splitlines() if l.startswith("docker build")][0]
-    assert "--platform linux/%s" % NATIVE in build and "REQUI_BUILD_REPOS=" in build
-    for name in ("delivery-api", "interview-engine", "spec-generator", "verification-loop"):
-        assert name in build
-    lines = text.splitlines()
-    assert lines.index(build) < [i for i, l in enumerate(lines) if "full-smoke.py" in l][0] < [i for i, l in enumerate(lines) if l.startswith("docker tag")][0]
-    assert "== built requi-full:" in out.stdout and "local build, no server contact" in out.stdout
-
-
-def test_a_failed_smoke_removes_the_candidate_and_publishes_nothing(env):
-    api, e, log, _ = env
-    out = _run(api, e, FAKE_SMOKE_RC="1")
-    assert out.returncode != 0 and "ABORTED [SMOKE]" in out.stdout and "removed the failed image tag" in out.stdout
-    text = log.read_text()
-    assert "docker rmi requi-full-candidate:" in text and "docker tag" not in text
-
-
-def test_a_candidate_that_cannot_be_removed_is_not_approved(env):
-    api, e, log, _ = env
-    out = _run(api, e, FAKE_SMOKE_RC="1", FAKE_RMI_RC="1")
-    assert "ABORTED [SMOKE]" in out.stdout and "NOT approved" in out.stdout and "docker tag" not in log.read_text()
-
-
-def test_a_dirty_checkout_builds_nothing(env):
-    api, e, log, tmp = env
-    (tmp / "repos" / "interview-engine" / "README").write_text("dirty")
-    out = _run(api, e)
-    assert "ABORTED [DIRTY-interview-engine]" in out.stdout and "docker build" not in log.read_text()
-
-
-def test_without_a_typed_yes_nothing_is_built(env, tmp_path):
-    api, e, log, _ = env
-    (tmp_path / "yes").write_text("no\n")
-    out = _run(api, e)
-    assert "ABORTED [NOT-CONFIRMED]" in out.stdout and "docker build" not in log.read_text()
-
-
-def test_an_unknown_architecture_value_is_refused(env):
-    api, e, log, _ = env
-    out = _run(api, e, PREVIEW_ARCH="sparc")
-    assert "ABORTED [ARCH]" in out.stdout and "docker build" not in log.read_text()
-
-
-def test_a_silent_smoke_failure_names_the_exit_code_and_says_the_container_printed_nothing(env):
-    """2026-10-27: a smoke died with zero container output and the script said only
-    '(output above)' - nothing above. A silent death (signal kill, commonly the Docker
-    Desktop VM memory limit) must be SAID, with the docker exit code."""
-    api, e, log, _ = env
-    out = _run(api, e, FAKE_SMOKE_RC="137")
-    assert out.returncode != 0
-    assert "exit code 137" in out.stdout, out.stdout
-    assert "produced no output" in out.stdout, out.stdout
-    assert "out of memory" in out.stdout, out.stdout
-
-
-def test_a_smoke_failure_prints_the_containers_own_reason(env):
-    api, e, log, _ = env
-    out = _run(api, e, FAKE_SMOKE_RC="1",
-               FAKE_SMOKE_OUT="RuntimeError: entry exited early: [fail] engine-compatible: create_app is missing")
-    assert "entry exited early" in out.stdout, out.stdout
-    summary=next(line for line in out.stdout.splitlines() if "ABORTED [SMOKE]" in line)
-    assert "engine-compatible: create_app is missing" in summary
-    assert "exit code 1" in out.stdout, out.stdout
-
-
-def test_the_preview_exec_caller_is_not_asked_a_second_yes(env):
-    """2026-10-27 approved drop: preview-exec already collected the one typed
-    yes; it invokes the build with REQUI_BUILD_YES=1 and the build must not
-    prompt again - and must not read any tty at all (no BUILD_TTY here)."""
-    api, e, log, _ = env
-    e = {k: v for k, v in e.items() if k != "BUILD_TTY"}
-    out = _run(api, e, REQUI_BUILD_YES="1")
-    assert out.returncode == 0, out.stdout + out.stderr
-    assert "Type yes to continue" not in out.stdout
-    assert "docker build" in log.read_text()
+def test_local_build_alias_preserves_goal_and_paths_without_native_arch_fork(tmp_path):
+    docker=tmp_path/'scripts/docker';ops=tmp_path/'scripts/ops'
+    docker.mkdir(parents=True);ops.mkdir(parents=True)
+    script=docker/'build-local-image.sh';script.write_bytes((ROOT/'scripts/docker/build-local-image.sh').read_bytes())
+    output=tmp_path/'args'
+    (ops/'image.sh').write_text('#!/bin/bash\nprintf \'%s\\n\' "$@" > "$OUTPUT"\n')
+    result=subprocess.run(['bash',str(script),'--run-dir','/tmp/space path'],env=dict(os.environ,OUTPUT=str(output)),capture_output=True,text=True)
+    assert result.returncode==0,result.stderr
+    assert output.read_text().splitlines()==['--build','--run-dir','/tmp/space path']
+    assert 'uname' not in script.read_text() and 'PREVIEW_ARCH' not in script.read_text()
