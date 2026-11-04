@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from .tenancy import current_scope
 from .historical_checkpoint import HistoricalCheckpointCapability
 from .pg_revision_stage import digest,read_stage
-from .revision_install_files import _validate_plan
+from .revision_install_plan import _validate_plan
 
 
 def anchor_sha(anchor):

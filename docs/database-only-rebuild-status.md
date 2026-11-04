@@ -88,3 +88,9 @@ PG validator provenance and settled changed/vanished/appeared/current/identical
 cases replace the old file tests. 94 document/manifest/byte/policy tests passed,
 including failed publication atomicity and worker-attempt fencing. No import or
 migration route remains in these modules.
+
+Unit 14: extracted the pure exact installation-plan validator into the plan
+module and removed the unused file-lock/anchor/rename installation module.
+Removed uncalled approved-upstream file readers; PG source/stage tests own that
+contract. 40 revision plan/journal/safety/stage/policy tests passed. No route or
+installation authority is added.

@@ -1102,7 +1102,7 @@ FROM tasks t"""
     def reconcile_private_revision_installation(self,task_id,*,installation_id,artifacts_base):
         """Concrete read-only current files/DB classification, never resumes."""
         from .revision_install_recovery import classify_installation_recovery
-        from .revision_install_files import _validate_plan
+        from .revision_install_plan import _validate_plan
         from .revision_stage_evidence import read_validated_staged_receipt
         from .tenancy import session_root
         from .producer_inputs import _open_directory
@@ -1163,7 +1163,7 @@ FROM tasks t"""
         from .revision_source_review import read_source_review_snapshot
         from .revision_proposal import read_retained_revision_proposal
         from .revision_stage_evidence import read_validated_staged_receipt
-        from .revision_install_files import _validate_plan
+        from .revision_install_plan import _validate_plan
         from .tenancy import session_root
         from vmodel_contracts.execution_anchor import read_execution_anchor
         from pathlib import Path
@@ -1198,7 +1198,7 @@ FROM tasks t"""
         No route invokes this method. Owner acceptance verifier must authenticate
         retained exact review and cost acknowledgement; test fixtures aren't it.
         """
-        from .revision_install_files import _validate_plan
+        from .revision_install_plan import _validate_plan
         from .revision_install_journal import install_event
         from .phases import followers
         if not callable(validate_acceptance):raise ValueError('trusted acceptance verifier required')
@@ -1257,7 +1257,7 @@ FROM tasks t"""
     def private_approved_continuation_basis(self,task_id,*,installation_id,artifacts_base,expected_job_id=None):
         """Exact current DB approval and immutable installed files, no dispatch."""
         from .worker_capability import WorkerCapability
-        from .revision_install_files import _validate_plan
+        from .revision_install_plan import _validate_plan
         with self._task_operation_guard('task.rerun'):
             cap=WorkerCapability.capture(self,task_id);cap.validate(self)
             intent=self._execute_native('SELECT * FROM closed_revision_installations WHERE installation_id=%s AND task_id=%s',(installation_id,task_id)).fetchone()
