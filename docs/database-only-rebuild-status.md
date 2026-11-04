@@ -337,3 +337,9 @@ operator boundary changed or bypass added.
 - Signed PG HTTP phase-output projections retain previous/current/invalid/redo assertions. No unsigned compatibility middleware.
 - Dispatch lifecycle fixtures install a test engine that uses real execute_job/claims; lost claim still cannot launch. Retired mode flag cannot disable an admitted start.
 - Local bounded gate: 30 passed. Broad 40-file group: 219 passed. A combined Postgres group exceeded the outer tool budget after 81 dots, so it is not a passing result; split below before final gate.
+
+### Rebuild unit 37: private attended graph compute contract
+- Replaced deleted delivery compute-meter import with current requi_child_contract.compute.excluded_wait, using unique exact input/review identities.
+- Real full-graph fixture now captures measured_work events and replays them into production ChildComputeEvents: two attended waits are excluded exactly (3 ms work from 5 ms elapsed). Not a no-op replacement; paid same-host producers remain refused by existing guards.
+- Source-grounded local gate: private real graph plus child compute evidence, 9 passed. Unit 36 bounded signed phase/claim gate: 30 passed.
+- Full gate still incomplete. Combined process budgets are not passes. Per-file sweep through preview/production is all green so far; remaining progress/provider tail not yet collected.
