@@ -38,3 +38,9 @@ Previous environment results do not count as proof for this rebuilt branch.
 Unit 4: retired host folder/interpreter setting routes, 57 signed route/policy
 tests passed. The underlying uncalled module awaits dead-code removal with its
 remaining legacy tests; no runtime setting is written by HTTP anymore.
+
+Unit 5: coordinator uses PG documents, fence and publication unconditionally.
+31 non-SDK coordinator/recovery tests passed; 66 child/document/fence tests passed.
+Eight SDK transport variants remain unresolved: first failure is the fixture's
+missing operator expense policy (also reproduced before this edit). Production
+money checks remain intact. Full gate is not green and no PR is ready.

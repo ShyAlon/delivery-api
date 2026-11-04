@@ -484,19 +484,19 @@ def test_publication_failure_resume_never_reruns_paid_producer(worker,monkeypatc
     body=b'{"deliberately": "minimal"}'
     def producer(cap,root):
         calls.append(cap)
-        target=root/'spec';target.mkdir(parents=True,exist_ok=True)
-        (target/'srs.json').write_bytes(body)
+        from delivery_api.generator_documents import GeneratorDocuments
+        GeneratorDocuments(s,cap,job).write('spec/srs.json',body)
         admitted_invoke(lambda:SimpleNamespace(usage_metadata={'input_tokens':2,'output_tokens':3}),**OPTIONS)
-    real_publish=publication.publish_session_revision
+    real_publish=publication.publish_document_revision
     def boom(*args,**kwargs):raise RuntimeError('injected publication failure')
-    monkeypatch.setattr(publication,'publish_session_revision',boom)
+    monkeypatch.setattr(publication,'publish_document_revision',boom)
     with tenant_context(A):
         with pytest.raises(RuntimeError,match='injected publication failure'):
             asyncio.run(w.execute(job,producer))
         assert s.worker_job(job)['state']=='failed'
         pending=s.producer_result(job)
         assert pending is not None and pending['published_at'] is None
-    monkeypatch.setattr(publication,'publish_session_revision',real_publish)
+    monkeypatch.setattr(publication,'publish_document_revision',real_publish)
     with tenant_context(A):
         s.reauthorize_worker(job)
         assert asyncio.run(w.execute(job,producer))
@@ -509,36 +509,34 @@ def test_publication_failure_resume_never_reruns_paid_producer(worker,monkeypatc
     assert rows==[{'state':'settled','expense_actual':8,'retail_actual':18}]
 
 
-def _paid_producer(calls,base_body=b'{"deliberately": "minimal"}'):
+def _paid_producer(calls,store,job,base_body=b'{"deliberately": "minimal"}'):
     from spec_generator.attempt_admission import admitted_invoke
     def producer(cap,root):
         calls.append(cap)
-        target=root/'spec';target.mkdir(parents=True,exist_ok=True)
-        (target/'srs.json').write_bytes(base_body)
+        from delivery_api.generator_documents import GeneratorDocuments
+        GeneratorDocuments(store,cap,job).write('spec/srs.json',base_body)
         admitted_invoke(lambda:SimpleNamespace(usage_metadata={'input_tokens':2,'output_tokens':3}),**OPTIONS)
     return producer
 
 
-def test_cross_host_missing_files_pause_never_regenerate(worker,monkeypatch,tmp_path):
-    """Host loss: produced marker exists but the original filesystem is gone (and the
-    manifest was never published). The resume PAUSES with specific evidence; the paid
-    callable is never re-run and the settled ledger row is untouched."""
+def test_folder_loss_recovers_pg_publication_without_regeneration(worker,monkeypatch,tmp_path):
+    """Host loss does not lose PG bytes. Resume publishes without another model call."""
     from delivery_api import config
     from delivery_api.same_host_producer import ProducerRecoveryPaused
     w,s,tid,job,base=worker;calls=[]
     monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
     import delivery_api.artifact_publication as publication
-    real=publication.publish_session_revision
-    monkeypatch.setattr(publication,'publish_session_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
+    real=publication.publish_document_revision
+    monkeypatch.setattr(publication,'publish_document_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
     with tenant_context(A):
-        with pytest.raises(RuntimeError):asyncio.run(w.execute(job,_paid_producer(calls)))
-    monkeypatch.setattr(publication,'publish_session_revision',real)
+        with pytest.raises(RuntimeError):asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
+    monkeypatch.setattr(publication,'publish_document_revision',real)
     import shutil
     shutil.rmtree(base)  # host loss: the original filesystem is gone
     with tenant_context(A):
         s.reauthorize_worker(job)
-        with pytest.raises(ProducerRecoveryPaused,match='not on this host/path'):
-            asyncio.run(w.execute(job,_paid_producer(calls)))
+        assert asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
+        assert s.read_artifact_bytes(tid,'srs','srs.json')==b'{"deliberately": "minimal"}'
         with s._postgres.transaction() as c:
             rows=c.execute('SELECT state,expense_actual,retail_actual FROM provider_attempts WHERE job_id=%s',(job,)).fetchall()
     assert len(calls)==1 and rows==[{'state':'settled','expense_actual':8,'retail_actual':18}]
@@ -555,13 +553,13 @@ def test_crash_after_produce_before_marker_pauses_on_paid_evidence(worker,monkey
     monkeypatch.setattr(s,'record_producer_result',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('crash before marker')))
     with tenant_context(A):
         with pytest.raises(RuntimeError,match='crash before marker'):
-            asyncio.run(w.execute(job,_paid_producer(calls)))
+            asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
     monkeypatch.setattr(s,'record_producer_result',real)
     with tenant_context(A):
         assert s.producer_result(job) is None and s.producer_paid_evidence(job)>0
         s.reauthorize_worker(job)
         with pytest.raises(ProducerRecoveryPaused,match='provider attempt'):
-            asyncio.run(w.execute(job,_paid_producer(calls)))
+            asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
     assert len(calls)==1
 
 
@@ -571,20 +569,22 @@ def test_content_hash_mismatch_pauses(worker,monkeypatch):
     w,s,tid,job,base=worker;calls=[];roots=[]
     monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
     import delivery_api.artifact_publication as publication
-    real=publication.publish_session_revision
-    monkeypatch.setattr(publication,'publish_session_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
+    real=publication.publish_document_revision
+    monkeypatch.setattr(publication,'publish_document_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
     def producer(cap,root):
         roots.append(root)
-        return _paid_producer(calls)(cap,root)
+        return _paid_producer(calls,s,job)(cap,root)
     with tenant_context(A):
         with pytest.raises(RuntimeError):asyncio.run(w.execute(job,producer))
-    monkeypatch.setattr(publication,'publish_session_revision',real)
-    assert roots and (roots[0]/'spec'/'srs.json').is_file()
-    (roots[0]/'spec'/'srs.json').write_text('{"tampered": true}')
+    monkeypatch.setattr(publication,'publish_document_revision',real)
+    assert roots
     with tenant_context(A):
-        s.reauthorize_worker(job)
+        from delivery_api.generator_documents import GeneratorDocuments
+        s.reauthorize_worker(job);cap=s.claim_worker(job)
+        GeneratorDocuments(s,cap,job).write('spec/srs.json',b'{"tampered":true}')
+        s.pause_interrupted_worker(job)
         with pytest.raises(ProducerRecoveryPaused,match='content hash'):
-            asyncio.run(w.execute(job,_paid_producer(calls)))
+            asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
     assert len(calls)==1
 
 
@@ -596,17 +596,17 @@ def test_generation_mismatch_pauses(worker,monkeypatch):
     w,s,tid,job,base=worker;calls=[]
     monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
     import delivery_api.artifact_publication as publication
-    real=publication.publish_session_revision
-    monkeypatch.setattr(publication,'publish_session_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
+    real=publication.publish_document_revision
+    monkeypatch.setattr(publication,'publish_document_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
     with tenant_context(A):
-        with pytest.raises(RuntimeError):asyncio.run(w.execute(job,_paid_producer(calls)))
-    monkeypatch.setattr(publication,'publish_session_revision',real)
+        with pytest.raises(RuntimeError):asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
+    monkeypatch.setattr(publication,'publish_document_revision',real)
     with tenant_context(A):
         with s._postgres.transaction() as c:
             c.execute('UPDATE producer_results SET generation=generation+1000 WHERE job_id=%s',(job,))
         s.reauthorize_worker(job)
         with pytest.raises(ProducerRecoveryPaused,match='generation'):
-            asyncio.run(w.execute(job,_paid_producer(calls)))
+            asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
     assert len(calls)==1
 
 
@@ -735,7 +735,7 @@ def test_interview_document_only_worker_publishes_without_generator_runtime_or_f
     from pathlib import Path
     from interview_engine.pg_session_store import PgSessionStore
     from interview_engine.pg_documents import InterviewDocuments
-    w,s,tid,job,base=worker;w.documents_enabled=True
+    w,s,tid,job,base=worker
     monkeypatch.setattr(__import__('delivery_api.config',fromlist=['x']),'ARTIFACT_PUBLISH',False)
     produced=[]
     def producer(cap,root):

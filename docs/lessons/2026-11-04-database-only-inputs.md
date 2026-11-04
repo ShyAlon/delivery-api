@@ -48,3 +48,20 @@ PostgreSQL owns durable content. A request cannot persist `.artifacts-root` or
 `.engine-python` choices through these obsolete endpoints. Both route-absence
 regressions failed before removal; 57 signed-route/policy tests pass afterward.
 The old route-only tests were replaced, not used to broaden local permissions.
+
+## Publication coordinator
+
+The coordinator still selected marker files, produced-byte files and optional
+workflow documents. It now always uses PG documents and the PG execution fence,
+and retries publication from retained bytes rather than rerunning model work.
+Accepted Stop skips publication while preserving accounting/quiescence checks.
+
+The no-selector regression failed before removal. Non-SDK coordinator/recovery
+cases: 31 passed. Child-generator/document/fence cross-suite: 66 passed. These
+include folder-loss recovery with one original provider attempt, missing-marker,
+changed-byte and generation refusal, plus settled-work substitution refusal.
+
+Eight SDK transport variants remain unverified here: the first fails because its
+fake DeepSeek quote has no configured operator expense policy. This also failed
+before the coordinator edit. Keep the real dispatch refusal; repair the disposable
+fixture with reviewed fake policy, never bypass the production money check.
