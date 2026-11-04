@@ -368,3 +368,8 @@ operator boundary changed or bypass added.
 - Added transactional owner-scoped reservation for an explicitly open, bypassed generator gate only after its exact worker is done, generation matches, no pending/running/paused job, and successor is pending. Preserves task model resolution and fresh job/provider admission. No interview or terminal continuation; stopped/closed/replayed policy refuses.
 - Installed ChildPhaseLifecycle releases the prior serialized slot and registry before queueing/dispatching the next exact job. No global callback or automatic interview handoff.
 - Local runtime gate (same-host, actual child, installed fake-provider all-phase, zero-credit HTTP, projections and lifecycle): 76 passed. Additional real PG lifecycle and runner regression group: 111 passed. Postgres store excluding 35 long graph variants: 50 passed. Full gate remains incomplete; actual installed multi-phase open-gate child acceptance is still required.
+
+### Rebuild unit 43: actual child open-gate lifecycle acceptance
+- Real generator CLI children behind ProcessRunner and ChildGeneratorEngine now exercise Needs open policy -> fresh SRS job -> closed SRS review. Assert prior registry/process cleanup, exact bypassed/waiting gates and retained PG artifacts. Fake local HTTP model only, no paid provider.
+- Current model identifier is validated before automatic reservation. Local actual child + policy gate: 8 passed (6.5s).
+- Four long PG retained graph tamper/revocation variants passed (42.3s); first six earlier emitted only dots before outer timeout and require a complete rerun.

@@ -1679,6 +1679,8 @@ FROM tasks t"""
         if self._execute_native("SELECT job_id FROM worker_jobs WHERE task_id=%s AND state IN ('pending','running','paused') LIMIT 1",(task_id,)).fetchone():return None
         from .model_routes import task_default_model
         model,_=task_default_model(self,task_id,target.generator_stage)
+        from .model_routes import route_value
+        route,_,name=model.partition(':');route_value(route,name)
         self.update_phase(task_id,target.key,'running',detail='Starting after explicit open-gate policy')
         queued=self.enqueue_worker(task_id,'phase:'+target.key,execution_options={'mode':'start','model_route':model})
         self.audit('policy','gate.continuation_queued',task_id,{'gate':gate['gate_key'],'completed_job_id':completed_job_id,'job_id':queued,'phase':target.key})

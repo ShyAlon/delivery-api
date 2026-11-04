@@ -6,11 +6,13 @@ from delivery_api.tenancy import tenant_context,session_root
 from test_postgres_store import A,DSN
 
 
-@pytest.mark.parametrize('stage',['needs','srs','publication-recovery','paid-needs','installed-paid-srs'])
+@pytest.mark.parametrize('stage',['needs','srs','publication-recovery','paid-needs','installed-paid-srs','open-needs'])
 def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkeypatch,stage):
     pytest.importorskip('spec_generator')
     from delivery_api import config
     from vmodel_contracts import CONTRACT_VERSION
+    open_chain=stage=='open-needs'
+    if open_chain:stage='needs'
     installed=stage=='installed-paid-srs'
     paid=stage in ('paid-needs','installed-paid-srs')
     if paid:stage='srs' if installed else 'needs'
@@ -105,6 +107,27 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
                     assert await asyncio.wait_for(proc.wait(),2)==0
                 asyncio.run(recover());output=b'Stopped after stage'
                 assert store.producer_result(job)['published_at'] is not None
+            elif open_chain:
+                from delivery_api.runner import ProcessRunner
+                from delivery_api import inprocess_engine
+                from delivery_api.orchestrator import ExecutionMode
+                runner=ProcessRunner(store);seen=[]
+                store.set_model_default(tid,route);store.set_gate_open(tid,'gate-needs',True)
+                monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path))
+                class Orch:
+                    async def execute_phase(self,task_id,phase,**options):
+                        seen.append(phase)
+                        cmd=[*argv];cmd[-1]=phase
+                        code=await runner.run(task_id,cmd,cwd=tmp_path,phase=phase,infer_phase=False,
+                            env={'VMODEL_ARTIFACTS_DIR':str(root.parent),'VMODEL_PROGRESS_TASK_ID':tid,
+                                 'VMODEL_PROGRESS_SESSION_ID':sid,'SPEC_GENERATOR_MODEL_'+phase.upper():route})
+                        assert code==0
+                assert asyncio.run(engine.dispatch(store,Orch(),tid,'needs',job,{}))
+                assert seen==['needs','srs'] and not runner.processes and inprocess_engine.take(tid) is None
+                assert store.task(tid)['state']=='waiting_gate'
+                assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='needs')['state']=='bypassed'
+                assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='srs')['state']=='waiting'
+                output=b'Stopped after stage'
             else:output=asyncio.run(go())
         finally:
             server.shutdown();server.server_close()
