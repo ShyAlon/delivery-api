@@ -1,3 +1,4 @@
+import {mountOperationStatus} from '/assets/operation-status.js';
 import {renderAuthScreen,mountAccountMenu} from '/assets/account-component.js';
 import {api,setSessionExpiry,renewSessionIfDue} from '/assets/client-core.js';
 import {Page} from '/assets/page-component.js';
@@ -17,4 +18,5 @@ async function check(){
 }
 window.addEventListener('requi:signin-needed',()=>{main.classList.add('account-page');workspace.hidden=true;document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close());identity.replaceChildren();renderAuthScreen(authHost,{...lastState,authenticated:false})});
 setInterval(()=>{if(!document.hidden)renewSessionIfDue().catch(()=>{})},60000);
+const footer=Page.footer(document.body,{classes:'operator-bottom-bar'});mountOperationStatus(footer);
 check();

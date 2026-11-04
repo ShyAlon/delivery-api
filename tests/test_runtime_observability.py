@@ -235,7 +235,7 @@ def test_remaining_server_action_surfaces_share_the_guard():
 def test_guard_does_not_flatten_dom_when_no_busy_label_was_requested():
     src=r"""
 import fs from 'node:fs';
-const code=fs.readFileSync(%r,'utf8').replace("import {clientLog} from './client-core.js';","const clientLog=()=>{};");
+const code=fs.readFileSync(%r,'utf8').replace("import {clientLog} from './client-core.js';","const clientLog=()=>{};").replace("import {beginOperation} from './operation-status.js';", "const beginOperation=()=>()=>{};");
 const m=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
 let writes=0;
 const b={disabled:false,title:'',get textContent(){return 'nested label'},set textContent(x){writes++},classList:{add(){},remove(){}},setAttribute(){},removeAttribute(){}};
