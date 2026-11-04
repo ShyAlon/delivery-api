@@ -256,3 +256,8 @@ unavailable even to signed identity; their old budget assertion now calls the
 existing scoped usage accounting directly and still proves 402, budget_stopped,
 and retained $7.50 spend. No production legacy route was reopened. Detailed
 accounting is still tested privately and public audit is still credits-only.
+
+Unit31: engine-unreachable and stale decision review tests now enter the signed
+HTTP boundary with declared installed routing, never unsigned local wrappers.
+Transport/down-engine errors and stale review 409 preserve their assertions;
+12 tests pass. The old wrapper helpers are not counted as acceptance.

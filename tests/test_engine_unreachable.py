@@ -18,10 +18,10 @@ class DownEngine:
  def snapshot(self,sid):raise EngineUnreachableError('http://127.0.0.1:8010',httpx.ConnectError('refused'))
  def submit(self,sid,response):raise EngineUnreachableError('http://127.0.0.1:8010',httpx.ConnectError('refused'))
 
-def _case_start_with_engine_down_is_actionable_503(tmp_path,monkeypatch,failure_workspace):
+def _case_start_with_engine_down_is_actionable_503(tmp_path,monkeypatch,failure_workspace,pg_task_app):
  store=failure_workspace.store;task=store.create_task('Dungeon master '+__import__('uuid').uuid4().hex,'A virtual dungeon master')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',DownEngine())
- response=TestClient(module.app).post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'})
+ response=TestClient(pg_task_app(failure_workspace),headers=failure_workspace.headers).post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'})
  assert response.status_code==503
  detail=response.json()['detail']
  assert detail['error']=="The interview engine is not reachable."
@@ -30,19 +30,19 @@ def _case_start_with_engine_down_is_actionable_503(tmp_path,monkeypatch,failure_
  events=store.events(task['task_id'])
  assert not events  # Route preview fails before a session is created.
 
-def _case_answer_with_engine_down_is_actionable_503(tmp_path,monkeypatch,failure_workspace):
+def _case_answer_with_engine_down_is_actionable_503(tmp_path,monkeypatch,failure_workspace,pg_task_app):
  store=failure_workspace.store;task=store.create_task('Dungeon master '+__import__('uuid').uuid4().hex,'brief')
  store.set_engine_session(task['task_id'],'failure-'+__import__('uuid').uuid4().hex);store.update_phase(task['task_id'],'intent','running')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',DownEngine())
- response=TestClient(module.app).post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1'})
+ response=TestClient(pg_task_app(failure_workspace),headers=failure_workspace.headers).post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1'})
  assert response.status_code==503
  assert 'not reachable' in response.json()['detail']['error']
 
-def _case_view_page_renders_when_engine_down(tmp_path,monkeypatch,failure_workspace):
+def _case_view_page_renders_when_engine_down(tmp_path,monkeypatch,failure_workspace,pg_task_app):
  store=failure_workspace.store;task=store.create_task('Dungeon master '+__import__('uuid').uuid4().hex,'brief')
  store.set_engine_session(task['task_id'],'failure-'+__import__('uuid').uuid4().hex);store.update_phase(task['task_id'],'intent','running')
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',DownEngine())
- body=TestClient(module.app).get(f"/api/tasks/{task['task_id']}").json()
+ body=TestClient(pg_task_app(failure_workspace),headers=failure_workspace.headers).get(f"/api/tasks/{task['task_id']}").json()
  assert body['input_state']['process_live'] is False
  assert body['input_state']['waiting'] is False
 
@@ -52,8 +52,10 @@ def _check_start_with_engine_down_is_actionable_503(monkeypatch,tmp_path,workspa
  _case_start_with_engine_down_is_actionable_503(tmp_path,monkeypatch,workspace)
 
 
-def test_start_with_engine_down_is_actionable_503(pg_local_compat_process):
- pg_local_compat_process(_check_start_with_engine_down_is_actionable_503)
+def test_start_with_engine_down_is_actionable_503(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ from delivery_api import cloud_runtime
+ monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
+ _case_start_with_engine_down_is_actionable_503(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app)
 
 
 def _check_answer_with_engine_down_is_actionable_503(monkeypatch,tmp_path,workspace):
@@ -61,8 +63,10 @@ def _check_answer_with_engine_down_is_actionable_503(monkeypatch,tmp_path,worksp
  _case_answer_with_engine_down_is_actionable_503(tmp_path,monkeypatch,workspace)
 
 
-def test_answer_with_engine_down_is_actionable_503(pg_local_compat_process):
- pg_local_compat_process(_check_answer_with_engine_down_is_actionable_503)
+def test_answer_with_engine_down_is_actionable_503(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ from delivery_api import cloud_runtime
+ monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
+ _case_answer_with_engine_down_is_actionable_503(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app)
 
 
 def _check_view_page_renders_when_engine_down(monkeypatch,tmp_path,workspace):
@@ -70,5 +74,7 @@ def _check_view_page_renders_when_engine_down(monkeypatch,tmp_path,workspace):
  _case_view_page_renders_when_engine_down(tmp_path,monkeypatch,workspace)
 
 
-def test_view_page_renders_when_engine_down(pg_local_compat_process):
- pg_local_compat_process(_check_view_page_renders_when_engine_down)
+def test_view_page_renders_when_engine_down(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ from delivery_api import cloud_runtime
+ monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
+ _case_view_page_renders_when_engine_down(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app)
