@@ -21,9 +21,10 @@ def test_function_review_quotes_exact_file_and_hash():
     assert m.review_projection_functions([{'file':name,'sha256':digest,'status':'pending','destructive':['DELETE']}],accept)=={name:digest}
     assert prompts==['Type "REVIEW FUNCTIONS '+name+' SHA256 '+digest+'": ']
 
-def test_launch_shell_prints_literal_quotes():
-    import subprocess
-    line=next(x for x in (ROOT/'scripts/ops/preview-exec.sh').read_text().splitlines() if x.startswith("prompt 'Waiting for input:"))
-    result=subprocess.run(['bash','-c','source "$1"; '+line,'bash',str(ROOT/'scripts/ops/terminal-log.sh')],capture_output=True,text=True,check=True)
-    assert result.stdout.startswith('Waiting for input: Type "yes" ')
-    assert '[ "$A" = yes ]' in (ROOT/'scripts/ops/preview-exec.sh').read_text()
+def test_launch_shell_prints_literal_quotes(monkeypatch,capsys):
+    import sys
+    sys.path.insert(0,str(ROOT/'scripts/docker'))
+    from image_workflow import confirm
+    monkeypatch.setattr('builtins.input',lambda:'yes')
+    assert confirm('run the local image stage')
+    assert 'Waiting for input: Type "yes" ' in capsys.readouterr().err

@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 import time
-from image_workflow import WorkflowError, command, inspect_image, log
+from image_workflow import WorkflowError, command, inspect_image, log, confirm
 from runtime_spec import Target
 
 
@@ -23,7 +23,7 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
     args=Target(image_id,name,str(settings),port,network).arguments()
     log('INFO','preview review: accepted linux/amd64 image, existing settings, same shared runtime; work may spend only after explicit Start')
     if not apply:return {'state':'reviewed','image_id':image_id,'applied':False}
-    if input('Type yes to start this accepted preview (no task is started): ').strip()!='yes':
+    if not confirm('start this accepted preview (no task is started)'):
         raise WorkflowError('preview declined; nothing started')
     # No silent replacement, force-stop, schema apply or host-volume migration.
     import subprocess

@@ -44,6 +44,13 @@ def log(level: str, message: str) -> None:
     print(prefix + " elapsed=" + str(round(time.monotonic()-STARTED,1)) + "s " + message, file=sys.stderr, flush=True)
 
 
+def confirm(action: str) -> bool:
+    # A complete, flushed prompt remains visible while waiting in a terminal.
+    log('INFO', 'Waiting for input: Type "yes" to '+action+'; anything else changes nothing:')
+    try:return input().strip()=='yes'
+    except (EOFError,KeyboardInterrupt):return False
+
+
 def command(args: list[str], *, cwd: Path | None = None, timeout: int = 60) -> str:
     # Output is consumed as typed state. It may contain account config, so never
     # echo arbitrary subprocess output or include it in failure messages.
@@ -312,7 +319,7 @@ def main(argv=None) -> int:
             return 0
         if args.build or args.accept_local or args.publish:
             log('INFO','selected goal may build an amd64 image and owned local test services; no live database or paid provider')
-            if input('Type yes to run this local image stage: ').strip()!='yes':
+            if not confirm('run this local image stage'):
                 raise WorkflowError('local image stage declined; nothing built or started')
             evidence=build(args.repos_root.resolve(), state)
             if args.accept_local or args.publish:

@@ -7,7 +7,7 @@ import shlex
 import subprocess
 from image_receipt import Receipt, validate_manifest
 from runtime_spec import Target
-from image_workflow import WorkflowError, log
+from image_workflow import WorkflowError, log, confirm
 from private_publication import command_raw,require_private
 
 
@@ -27,7 +27,7 @@ def deploy(*,state,repository,host,name,env_file,port,network,previous_container
     if not previous_container_id:
         log('INFO', 'First transition only: obtain IDs with: ssh '+host+' '+shlex.quote("sudo docker inspect --format '{{.Id}} {{.Image}}' "+name))
     if not apply:return {'state':'reviewed','reference':receipt.reference,'applied':False}
-    if input('Type yes to apply this exact accepted image to '+host+': ').strip()!='yes':
+    if not confirm('apply this exact accepted image to '+host):
         raise WorkflowError('owner declined deployment; no server contact')
     username=input('GHCR username for the server read-only token: ').strip()
     token=getpass.getpass('Read-only GHCR token (hidden, not retained): ')

@@ -142,7 +142,7 @@ def test_declined_local_goal_never_builds_or_starts(tmp_path,monkeypatch,capsys)
     import builtins
     inputs={'sources':{},'runtime_contract':'fictional','acceptance_contract':'fictional'}
     monkeypatch.setattr(m,'preflight',lambda *args:inputs)
-    monkeypatch.setattr(builtins,'input',lambda prompt:'no')
+    monkeypatch.setattr(builtins,'input',lambda prompt='':'no')
     monkeypatch.setattr(m,'build',lambda *args:pytest.fail('build after decline'))
     assert m.main(['--run-dir',str(tmp_path),'--build'])==2
     assert 'declined; nothing built or started' in capsys.readouterr().err
