@@ -146,6 +146,12 @@ class StageState:
         except (ValueError, WorkflowError, KeyError, TypeError):
             return False
 
+    def invalidate_from(self, name: str) -> None:
+        if name not in STAGES:raise WorkflowError('unknown workflow stage')
+        for stage in STAGES[STAGES.index(name):]:self.state['stages'].pop(stage,None)
+        atomic_write(self.path,json.dumps(self.state,sort_keys=True,indent=2).encode())
+        (self.path.parent/'accepted-image.json').unlink(missing_ok=True)
+
     def complete(self, name: str, evidence: dict) -> None:
         if name not in STAGES or type(evidence) is not dict:
             raise WorkflowError("stage needs typed evidence")
@@ -180,6 +186,7 @@ def build(root: Path, state: StageState) -> dict:
         log("PASS", "stage 2/6 reused: immutable local image revalidated")
         return state.state["stages"]["build"]
     # Any absent/invalidated image requires a fresh build, never remote fallback.
+    state.invalidate_from("build")
     sources = source_snapshot(root)
     if sources != state.inputs["sources"]:
         raise WorkflowError("source changed after preflight")
@@ -220,6 +227,7 @@ def build(root: Path, state: StageState) -> dict:
 def local_acceptance(root: Path, state: StageState, evidence: dict) -> dict:
     """Run the same immutable service with external owned local dependencies."""
     from local_image_run import OwnedRun
+    state.invalidate_from("local-acceptance")
     image_id=evidence["image_id"]
     if inspect_image(image_id)["Id"]!=image_id:
         raise WorkflowError("acceptance image identity differs")

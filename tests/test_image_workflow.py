@@ -147,3 +147,23 @@ def test_declined_local_goal_never_builds_or_starts(tmp_path,monkeypatch,capsys)
     assert m.main(['--run-dir',str(tmp_path),'--build'])==2
     assert 'declined; nothing built or started' in capsys.readouterr().err
     assert set(m.StageState(tmp_path/'state.json',inputs).state['stages'])=={'preflight'}
+
+
+def test_failed_reacceptance_revokes_previous_preview_and_publication_evidence(tmp_path,monkeypatch):
+    import local_image_run
+    state=m.StageState(tmp_path/'state.json',{'runtime_contract':'fixture'})
+    state.complete('preflight',{});state.complete('build',{'image_id':'fixture'})
+    state.complete('local-acceptance',{'image_id':'fixture','checks':{'startup':'passed'}})
+    state.complete('publish',{'tag':'old'});state.complete('verify-manifest',{'manifest':'old'})
+    state.complete('receipt',{'manifest':'old'})
+    (tmp_path/'accepted-image.json').write_text('old receipt')
+    class Run:
+        def __init__(self,*args):pass
+        def start(self):raise m.WorkflowError('new attempt failed')
+        def close(self):pass
+    monkeypatch.setattr(local_image_run,'OwnedRun',Run)
+    monkeypatch.setattr(m,'inspect_image',lambda value:{'Id':value})
+    with pytest.raises(m.WorkflowError):m.local_acceptance(tmp_path,state,{'image_id':'fixture'})
+    restored=m.StageState(state.path,state.inputs)
+    assert set(restored.state['stages'])=={'preflight','build'}
+    assert not (tmp_path/'accepted-image.json').exists()
