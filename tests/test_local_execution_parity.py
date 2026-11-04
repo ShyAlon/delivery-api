@@ -5,19 +5,19 @@ import pytest
 from fastapi import HTTPException
 ROOT=Path(__file__).resolve().parents[1]
 
-def test_execution_preview_can_export_existing_artifacts(monkeypatch,tmp_path):
+def test_execution_preview_can_export_existing_artifacts(monkeypatch,tmp_path,pg_scoped_workspace):
     import delivery_api.app as module
-    monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
-    monkeypatch.setenv('DELIVERY_CLOUD_EXECUTION','1')
-    monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
-    monkeypatch.setattr(module,'store',SimpleNamespace(task=lambda _: {'title':'Test'}))
-    artifact=tmp_path/'architecture.json';artifact.write_text('{"test":true}')
-    monkeypatch.setattr(module,'_task_artifact_snapshot',lambda task_id:[{'phase_key':'architecture','name':artifact.name,'ref':str(artifact)}])
-    response=module.task_artifacts_zip('t1')
+    store=pg_scoped_workspace.store;tid=store.create_task('PG export')['task_id']
+    store.set_engine_session(tid,__import__('uuid').uuid4().hex)
+    payload=b'{"test":true}'
+    store.publish_task_revision_bytes(tid,[{'phase_key':'architecture','name':'architecture.json','data':payload}],writer_instance='test-only')
+    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'missing'))
+    response=module.task_artifacts_zip(tid)
     assert response.media_type=='application/zip'
     import io,zipfile
     with zipfile.ZipFile(io.BytesIO(response.body)) as z:
-        assert z.read('architecture/architecture.json')==artifact.read_bytes()
+        assert z.read('architecture/architecture.json')==payload
+
 
 def test_execution_phase_output_uses_normal_reader(monkeypatch):
     import delivery_api.app as module

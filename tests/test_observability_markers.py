@@ -177,8 +177,10 @@ def test_rerun_marks_success_and_refusal(marks, monkeypatch):
                                           rerun_prerequisite=lambda *a: None,
                                           prepare_rerun=lambda *a: 2,
                                           add_event=lambda *a, **k: None))
-    assert module.rerun("t1", module.RerunRequest(from_phase="needs", confirm=True), None, ACTOR)["generation"] == 2
-    assert "task.rerun" in _kinds(marks)
+    with pytest.raises(HTTPException) as refused:
+        module.rerun("t1", module.RerunRequest(from_phase="needs", confirm=True), None, ACTOR)
+    assert refused.value.status_code==409 and refused.value.detail['code']=='tenant_rerun_unavailable'
+    assert "task.rerun" not in _kinds(marks)
 
 
 def test_stream_close_is_marked(marks, monkeypatch):
@@ -198,6 +200,10 @@ def test_dispatch_rejection_and_claim_are_marked(marks, monkeypatch):
     from delivery_api.tenancy import TenantScope, tenant_context
     monkeypatch.setattr(config, "CLOUD_TENANTS", False)
     scope = TenantScope("00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000a")
+    class Engine:
+        async def dispatch(self,*args):return True
+    from delivery_api import inprocess_engine
+    monkeypatch.setattr(inprocess_engine,'_engine',Engine())
     store = NS(worker_job=lambda jid: None)
     with tenant_context(scope):
         with pytest.raises(PermissionError):

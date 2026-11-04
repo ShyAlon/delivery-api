@@ -273,3 +273,13 @@ Retry tests retain upstream/generation/checkpoint/duplicate/failure assertions.
 Private audit totals retain exact token/detail assertions, public audit credits
 only. Browser decision/backoffice shared UI full files:50 passed in99 seconds,
 so the earlier 22-second per-file timeout was not a test failure.
+
+Unit33: export/observability fixtures now exercise PG bytes and installed dispatch
+instead of file refs or retired local execution. Unavailable rerun remains 409;
+21 parity/observability tests pass. The 45-file bounded group completed:
+286 passed,1 skipped,9 failures. Two observability and export failures fixed
+here. Model-route/private-detail fixtures still need migration. Private full graph
+re-run with required sibling source found an actual stale test-only script import:
+scripts/item6/pipeline_executor.py imports removed compute_meter.excluded_wait at
+lines69/148; unresolved, not a timeout or passed acceptance. Installed production
+child graph acceptance is separate and previously green, but final recheck remains.
