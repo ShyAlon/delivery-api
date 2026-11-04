@@ -20,7 +20,7 @@ def context(root: Path, destination: Path):
     spec=importlib.util.spec_from_file_location('minimal_smoke_context',root/'scripts/docker/smoke-context.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     module.prepare(root,destination)
-    for relative in ('scripts/docker/Dockerfile.local-fixture','scripts/docker/local_service_fixture.py','scripts/docker/fixture_services.py'):
+    for relative in ('scripts/docker/Dockerfile.local-fixture','scripts/docker/local_service_fixture.py','scripts/docker/fixture_services.py','scripts/docker/retained_image_proof.py'):
         target=destination/relative;target.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(root/relative,target)
 
@@ -115,4 +115,9 @@ class OwnedRun:
         if result.returncode:raise WorkflowError('unchanged-image signed HTTP acceptance failed; no receipt issued')
         actual=command(['docker','container','inspect','--format','{{.Image}}',self.service])
         if actual!=self.image_id:raise WorkflowError('running image changed during acceptance')
-        return object_json(output.read_bytes())
+        result=object_json(output.read_bytes())
+        proof=object_json(command(['docker','exec',self.fixture,'python','/harness/scripts/docker/retained_image_proof.py',result['task_id']]).encode())
+        if proof.get('task_id')!=result['task_id'] or proof.get('child-lifecycle')!='passed' or proof.get('retained-outputs')!='passed':
+            raise WorkflowError('owned retained child/output proof did not pass')
+        result['retained']=proof
+        return result

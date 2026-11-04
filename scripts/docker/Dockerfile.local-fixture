@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends postgresql \
 COPY tests/pg_harness.py tests/pg_guardian.py /harness/tests/
 COPY src/delivery_api/runtime_roles.py /harness/src/delivery_api/
 COPY supabase/migrations/ /harness/supabase/migrations/
-COPY scripts/docker/fixture_services.py scripts/docker/local_service_fixture.py scripts/docker/system-pg-smoke.py /harness/scripts/docker/
+COPY scripts/docker/fixture_services.py scripts/docker/local_service_fixture.py scripts/docker/retained_image_proof.py scripts/docker/system-pg-smoke.py /harness/scripts/docker/
 ENV REQUI_SMOKE_PG_BIN=/opt/fixture-pg-bin PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 USER 10001:10001
 CMD ["python", "/harness/scripts/docker/local_service_fixture.py"]
