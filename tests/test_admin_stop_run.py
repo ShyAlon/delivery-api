@@ -61,7 +61,7 @@ def test_refused_when_nothing_runs_for_that_task_or_runs_are_threads_or_local(mo
     monkeypatch.setattr(config, "CLOUD_TENANTS", False)
     with pytest.raises(HTTPException) as local:
         _stop(True)
-    assert local.value.status_code == 404
+    assert local.value.status_code == 409
 
 
 def test_a_normal_user_cannot_stop_anyones_run(pg_workspace_factory,pg_task_app):

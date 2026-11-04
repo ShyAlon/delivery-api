@@ -223,3 +223,9 @@ Post-unit25 installed child/producer/fresh HTTP acceptance re-run: 54 passed in
 read-triggered auto-handoff branch from get_task. HTTP cutover fixture migration
 is still unfinished (latest bounded run stopped after five failures, nine passes);
 old auto-start expectations are not current acceptance. No partial run is a gate.
+
+Current whole collection: 4051 tests, 442 files. The alphabetical a-c bounded
+sweep reached 57% before its 95-second timeout and showed failures; no aggregate
+pass count is claimed. Signed identity + Stop routing/owner/admin tests:18 passed.
+Two Stop fixtures now prove flipping the retired mode constant cannot disable
+the actual process/ownership checks (same 409, not a local-only 404).
