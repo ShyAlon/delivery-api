@@ -97,13 +97,13 @@ def test_recorded_engine_session_reuses_the_request_read(monkeypatch):
     assert app._recorded_engine_session('t1', recorded='sess-1') == 'sess-1'
 
 
-def test_recorded_engine_session_legacy_scan_reuses_request_events(monkeypatch):
+def test_recorded_engine_session_rejects_legacy_event_inference(monkeypatch):
     from delivery_api import app
     monkeypatch.setattr(app.store, 'engine_session', lambda task_id: None)
     monkeypatch.setattr(app.store, 'events', lambda task_id: (_ for _ in ()).throw(AssertionError('events read twice in one request')))
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', False)
     events = [{'message': 'interview started session: legacy-9', 'payload': {}}]
-    assert app._recorded_engine_session('t1', recorded=None, events=events) == 'legacy-9'
+    assert app._recorded_engine_session('t1', recorded=None, events=events) is None
 
 
 def test_task_snapshot_is_one_statement_with_task_and_events(make_store):

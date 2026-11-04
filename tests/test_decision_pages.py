@@ -19,6 +19,7 @@ def setup(tmp_path,monkeypatch,workspace,*,signed_app=None):
   def snapshot(self,sid):return EngineSnapshot(session_id=sid,task_id=tid,sequence=self.sequence,process_status=ProcessStatus.WAITING_INPUT,next_step=NextStep.WAIT_INPUT,open_input=self.pending)
  engine=Engine();engine.pending=pending;engine.sequence=3;engine.session_id=sid
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
+ signed_app=signed_app or getattr(workspace,'signed_app',None)
  return store,tid,engine,TestClient(signed_app or module.app,headers=workspace.headers if signed_app is not None else {})
 
 def test_matching_shell_route_and_retained_old_review(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
@@ -52,9 +53,9 @@ def test_purpose_and_evidence_must_be_explicit_and_bound(tmp_path,monkeypatch,pg
  engine.pending=engine.pending.model_copy(update={'context':{'decision_purpose':'conops_concept','evidence_version':1,'session_id':'wrong','evidence_revision':'bad','evidence':{'draft':1}}})
  assert c.get(f'/api/tasks/{tid}/decisions/{wait}').status_code==404
 
-def _check_stale_review_cannot_submit(monkeypatch,tmp_path,pg_scoped_workspace):
+def _check_stale_review_cannot_submit(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
  from tests.test_decision_pages import setup
- store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace);wait=str(engine.pending.input_id)
+ store,tid,engine,c=setup(tmp_path,monkeypatch,pg_scoped_workspace,signed_app=pg_task_app(pg_scoped_workspace));wait=str(engine.pending.input_id)
  revision=c.get(f'/api/tasks/{tid}/decisions/{wait}').json()['review']['revision'];engine.sequence=4
  reply=c.post(f'/api/tasks/{tid}/answer',json={'answer':'1 - good choice','decision_id':wait,'expected_sequence':3,'review_revision':revision})
  assert reply.status_code==409
@@ -106,5 +107,7 @@ def test_review_setup_requires_pg_workspace_without_sqlite_fallback():
  assert 'SQLiteStore' not in inspect.getsource(setup)
 
 
-def test_stale_review_cannot_submit(pg_local_compat_process):
- pg_local_compat_process(_check_stale_review_cannot_submit)
+def test_stale_review_cannot_submit(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
+ from delivery_api import cloud_runtime
+ monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
+ _check_stale_review_cannot_submit(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app)

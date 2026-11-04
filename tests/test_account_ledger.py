@@ -126,7 +126,7 @@ def test_route_is_private_goes_through_the_store_and_local_mode_says_unavailable
     s=(ROOT/'app.py').read_text()
     body=s.split("@app.get('/api/account/ledger')")[1].split('\n\n')[0]
     assert 'Depends(auth.require_actor)' in body and 'store.own_ledger(' in body and 'store._db' not in body
-    assert 'if not config.CLOUD_TENANTS:return {' in body and 'text' in body
+    assert 'CLOUD_TENANTS' not in body
 
 
 def test_store_method_runs_in_a_scoped_transaction():
@@ -208,7 +208,7 @@ def test_release_route_is_private_calls_the_store_and_confirms_before_writing():
     s=(ROOT/'app.py').read_text()
     body=s.split("@app.post('/api/account/compute-release')")[1].split('\n\n\n')[0]
     assert 'Depends(auth.require_actor)' in body and 'store.release_own_compute(body.confirm)' in body and 'store._db' not in body
-    assert "if not config.CLOUD_TENANTS:raise HTTPException(404" in body and "out['status']='preview'" in body
+    assert "CLOUD_TENANTS" not in body and "out['status']='preview'" in body
 
 
 def test_debug_dialog_offers_the_release_only_when_something_is_releasable_and_asks_first():

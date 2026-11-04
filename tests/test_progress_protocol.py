@@ -1,3 +1,4 @@
+from registered_runner import registered_runner
 import pytest
 from uuid import uuid4
 from vmodel_contracts.progress_signal import ProgressSignal,ProgressPage
@@ -60,10 +61,7 @@ def test_engine_and_gate_have_same_shape_not_shared_sequence(tmp_path,progress_s
     with __import__('pytest').raises(ValueError):store.decide_gate(task['task_id'],gate.wait_id,'approve',selected_option='Approve Start',expected_revision=0)
 
 
-def test_successful_subprocess_without_configured_artifact_fails_without_gate(tmp_path,progress_store,monkeypatch):
-    from delivery_api import config
-    # Local subprocess contract uses arbitrary output paths and no cloud gateway.
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+def test_successful_subprocess_without_configured_artifact_fails_without_gate(tmp_path,progress_store,monkeypatch,registered_runner):
     import asyncio,sys
     from delivery_api.runner import ProcessRunner
     store=progress_store;task=store.create_task('No false gate')
@@ -115,11 +113,8 @@ def test_http_client_and_delivery_ingest_read_during_engine_start(tmp_path,progr
     assert pg_store.read_journal(session,scope.owner_id,0,100)
 
 
-def test_every_generator_phase_uses_one_progress_and_gate_boundary(tmp_path,progress_store,monkeypatch):
+def test_every_generator_phase_uses_one_progress_and_gate_boundary(tmp_path,progress_store,monkeypatch,registered_runner):
     """Installed-style subprocess path: framed signal and real artifact precede each gate."""
-    from delivery_api import config
-    # Local subprocess contract uses arbitrary output paths and no cloud gateway.
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     import asyncio
     import sys
     from delivery_api.phases import PHASE_DEFINITIONS
@@ -141,6 +136,8 @@ def test_every_generator_phase_uses_one_progress_and_gate_boundary(tmp_path,prog
                   "out=Path(sys.argv[sys.argv.index('--out')+1]); "
                   f"(out/{artifact!r}).write_text({payload!r}); "
                   f"print({(PREFIX + progress)!r},flush=True)")
+        from test_http_cutover import _PGUsage
+        _PGUsage(store,task_id,'spec/'+artifact).write_text(payload)
         runner = ProcessRunner(store)
         result = asyncio.run(runner.run(task_id, [sys.executable, "-c", script, "--out", str(out)],
                                         cwd=tmp_path, phase=definition.key,

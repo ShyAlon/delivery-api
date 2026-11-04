@@ -70,9 +70,26 @@ def test_private_real_full_graph_gates_persist_complete_bundle(tmp_path,monkeypa
  from delivery_api.generator_checkpoint import GeneratorCheckpoint
  runtime=JobRuntime({stage:StageModel('ollama','fixture') for stage in ('needs','srs','architecture','items','specs','tests','validation','review','srs_review','architecture_review')},str(root/'calls.jsonl'),lambda text:None,settings={'SPEC_GENERATOR_BULK':'1'},checkpoint_factory=lambda ns:GeneratorCheckpoint(workspace.store,pg_cap,job,ns))
  runtime.bind_worker(owner_id=scope.owner_id,task_id=cap.task_id,job_id=job,generation=1,session_root=root)
- with job_runtime(runtime),cli_execution(StopFence(root/'interview/stop-request.json'),UsageLog('s')):
+ from requi_child_contract.compute import measured_work
+ from delivery_api.child_compute_events import ChildComputeEvents
+ class Events:
+  def __init__(self):self.events=[]
+  def emit(self,kind,wait_id=None):
+   event={'kind':kind,'sequence':len(self.events)+1,'monotonic_ns':(len(self.events)+1)*1000000}
+   if wait_id is not None:event['wait_id']=wait_id
+   self.events.append(event)
+ events=Events()
+ with measured_work(events),job_runtime(runtime),cli_execution(StopFence(root/'interview/stop-request.json'),UsageLog('s')):
   runner.generate(cap,root)
  assert decisions==['srs','architecture']
+ assert [e['kind'] for e in events.events]==['start','wait.begin','wait.end','wait.begin','wait.end','finish']
+ assert events.events[1]['wait_id']==events.events[2]['wait_id']
+ assert events.events[3]['wait_id']==events.events[4]['wait_id']
+ assert events.events[1]['wait_id']!=events.events[3]['wait_id']
+ accounting=ChildComputeEvents()
+ for event in events.events:accounting.accept(event)
+ assert accounting.milliseconds()==3  # Five elapsed ms, two excluded attended waits.
+
  from artifact_receipts import inventory
  files,documents=inventory(root)
  assert len(files)>=11

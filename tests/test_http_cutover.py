@@ -4,6 +4,32 @@ from fastapi.testclient import TestClient
 from vmodel_contracts.interactive import *
 import delivery_api.app as module
 
+
+@pytest.fixture(autouse=True)
+def signed_http_contract(monkeypatch,pg_scoped_workspace,pg_task_app):
+ """Real signature/session/RLS, stub transport/lifecycle only; no models."""
+ from types import SimpleNamespace
+ from delivery_api import cloud_runtime,inprocess_engine
+ from delivery_api.tenant_jobs import execute_job
+ signed=pg_task_app(pg_scoped_workspace)
+ original=TestClient
+ def client(*args,**kwargs):
+  kwargs['headers']={**kwargs.get('headers',{}),**pg_scoped_workspace.headers}
+  return original(signed,**kwargs)
+ monkeypatch.setitem(globals(),'TestClient',client)
+ monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
+ monkeypatch.setattr(module,'cloud_execution_admitted',lambda:True)
+ monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(models={'ollama':'qwen2.5-coder:14b','deepseek':'deepseek-flash'}))
+ class Dispatch:
+  async def dispatch(self,store,orchestrator,tid,phase,job,options):
+   async def run(cap):
+    cap.validate(store)
+    await orchestrator.execute_phase(tid,phase,**options)
+   return await execute_job(store,job,run)
+ monkeypatch.setattr(inprocess_engine,'_engine',Dispatch())
+ monkeypatch.setattr(module.app.state,'_fixture_signed_app',signed,raising=False)
+ monkeypatch.setattr(module.app.state,'_fixture_headers',pg_scoped_workspace.headers,raising=False)
+
 def wait_for_start_event(store,task_id):
  import time
  for _ in range(100):
@@ -199,8 +225,8 @@ def _case_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch,p
  engine.start=slow_start
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  async def exercise():
-  transport=httpx.ASGITransport(app=module.app)
-  async with httpx.AsyncClient(transport=transport,base_url='http://test') as client:
+  transport=httpx.ASGITransport(app=module.app.state._fixture_signed_app)
+  async with httpx.AsyncClient(transport=transport,base_url='http://test',headers=module.app.state._fixture_headers) as client:
    pending=asyncio.create_task(client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'}))
    try:
     await asyncio.wait_for(asyncio.to_thread(entered.wait,2),timeout=3)
@@ -230,8 +256,8 @@ def _case_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch,
  engine.submit=slow_submit
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  async def exercise():
-  transport=httpx.ASGITransport(app=module.app)
-  async with httpx.AsyncClient(transport=transport,base_url='http://test') as client:
+  transport=httpx.ASGITransport(app=module.app.state._fixture_signed_app)
+  async with httpx.AsyncClient(transport=transport,base_url='http://test',headers=module.app.state._fixture_headers) as client:
    pending=asyncio.create_task(client.post(f"/api/tasks/{task['task_id']}/answer",json={'answer':'1'}))
    try:
     await asyncio.wait_for(asyncio.to_thread(entered.wait,2),timeout=3)
@@ -277,6 +303,9 @@ def _case_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path,monkeypatch,
    assert route=='ollama'
    return {'route':route,'model_map':{stage:['ollama','phi4'] for stage in ('probing','distillation','phrasing','scope_tiebreak','expert_opinion','conops')}}
  engine=Phi4Engine()
+ from delivery_api import cloud_runtime
+ from types import SimpleNamespace
+ monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(models={'ollama':'phi4'}))
  monkeypatch.setattr(module,'store',store)
  monkeypatch.setattr(module,'engine_client',engine)
  with TestClient(module.app) as client:
@@ -298,9 +327,10 @@ def _case_route_preview_shows_conflict_without_switching(monkeypatch):
    return {'route':'ollama','model_map':{stage:['ollama','phi4'] for stage in ('probing','distillation','phrasing','scope_tiebreak','expert_opinion','conops')}}
  monkeypatch.setattr(module,'engine_client',ConflictEngine())
  routes=module.model_routes(a=module.auth.Actor('test-owner','Test owner'))['routes']
- assert routes[0]['available'] and routes[0]['readiness']=='checked_on_start'
- assert routes[1]['available'] is False
- assert routes[1]['error']=='DeepSeek is temporarily unavailable. Please try again later.'
+ indexed={r['id']:r for r in routes}
+ assert indexed['ollama']['available'] and indexed['ollama']['readiness']=='checked_on_start'
+ assert indexed['deepseek']['available'] is False
+ assert 'temporarily unavailable' in indexed['deepseek']['error'] or 'not available' in indexed['deepseek']['error']
 
 
 def _case_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path,monkeypatch,pg_scoped_workspace):
@@ -351,13 +381,23 @@ def _case_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch,p
  assert snapshot['open_input']['input_id']==str(engine.pending.input_id)
  body={'model_route':'deepseek','model':'deepseek-flash','expected_sequence':snapshot['sequence'],'expected_input_id':snapshot['open_input']['input_id'],'idempotency_key':str(uuid4())}
  first=client.post(f"/api/tasks/{task['task_id']}/model-route",json=body)
- assert first.status_code==200,first.text
- again=client.post(f"/api/tasks/{task['task_id']}/model-route",json=body)
- assert again.status_code==200,again.text
- route_events=[e for e in store.events(task['task_id']) if e['kind']=='model_route']
- assert len(route_events)==1 and route_events[0]['payload']['route_version']==1
+ assert first.status_code==503
+ assert engine.switches==[]
+ assert not [e for e in store.events(task['task_id']) if e['kind']=='model_route']
+ assert store.task(task['task_id'])['model_default'] is None
+
+ # The public route stays closed. Preserve internal adapter idempotence without
+ # widening routing or claiming that the customer can switch models.
+ import asyncio
+ request=module.TaskRouteSwitchRequest(**body)
+ who=module.auth.Actor(pg_scoped_workspace.scope.owner_id,'Fixture')
+ asyncio.run(module.switch_interview_model(task['task_id'],request,who))
+ asyncio.run(module.switch_interview_model(task['task_id'],request,who))
+ events=[e for e in store.events(task['task_id']) if e['kind']=='model_route']
+ assert len(events)==1 and events[0]['payload']['route_version']==1
  assert store.task(task['task_id'])['model_route']=='deepseek'
  assert store.task(task['task_id'])['model_default']=='deepseek:deepseek-flash'
+
 
 def test_cost_segments_preserve_consecutive_route_versions():
  rows=[{'route_version':0,'provider':'ollama','model':'phi4','prompt_tokens':10,'completion_tokens':5,'price_per_mtok_prompt_usd':0,'price_per_mtok_completion_usd':0},
@@ -377,7 +417,9 @@ def _case_retired_ollama_default_still_lists_installed_switch_targets(monkeypatc
   def local_models(self):return ['phi4']
  monkeypatch.setattr(module,'engine_client',Engine())
  routes=module.model_routes(a=module.auth.Actor('test-owner','Test owner'))['routes']
- assert routes[0]['id']=='ollama' and routes[0]['available'] and routes[0]['models']==['qwen2.5-coder:14b','phi4']
+ choice=next(r for r in routes if r['id']=='ollama')
+ assert choice['available'] and choice['managed'] and choice['models']==['qwen2.5-coder:14b']
+ assert choice['model_list']['scope']=='reviewed_models'
 
 def test_recovery_does_not_reexecute_completed_http_interview(tmp_path,monkeypatch,pg_scoped_workspace):
  monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
@@ -503,9 +545,9 @@ def _case_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,
  response=TestClient(module.app).get(f'/api/tasks/{tid}')
  assert response.status_code==200,response.text
  task=response.json();states={p['phase_key']:p['state'] for p in task['phases']}
- assert states['intent']==states['conops']=='approved' and task['active_phase']=='conops'
- assert store.task(tid)['active_phase']=='needs'
- assert len([e for e in store.events(tid) if e['kind']=='progress'])==1
+ assert states['intent']=='running' and states['conops']=='pending' and states['needs']=='pending'
+ assert store.task(tid)['active_phase']=='intent'
+ assert not [e for e in store.events(tid) if e['kind']=='progress']
 
 
 def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path,monkeypatch,pg_scoped_workspace):
@@ -534,8 +576,10 @@ def test_terminal_restore_launches_real_orchestrator_from_bound_session(tmp_path
  asyncio.run(recover())
  assert len(runner.calls)==1
  command,options=runner.calls[0]
- assert str(artifacts/session/'interview'/'intent_model.json') in command
- assert str(artifacts/session/'interview'/'conops.json') in command
+ from delivery_api.tenancy import session_root
+ owned=session_root(artifacts,pg_scoped_workspace.scope,session)/'interview'
+ assert str(owned/'intent_model.json') in command
+ assert str(owned/'conops.json') in command
  assert options['phase']=='needs' and store.task(tid)['active_phase']=='needs'
  assert options['env']['SPEC_GENERATOR_MODEL_NEEDS']=='deepseek:deepseek-flash'
  assert command[0]==__import__('sys').executable
@@ -566,7 +610,8 @@ def test_final_typed_answer_reconciles_without_resubmission(tmp_path,monkeypatch
   assert await module.answer_interview(tid,module.InterviewAnswer(answer='1',decision_id=str(pending.input_id)),Actor('test','Founder'))=={'status':'accepted'}
   await asyncio.sleep(.01)
  asyncio.run(go())
- assert engine.calls==1 and launched==['conops']
+ assert engine.calls==1 and launched==[]
+ assert next(p for p in store.task(tid)['phases'] if p['phase_key']=='needs')['state']=='pending'
  assert {p['phase_key']:p['state'] for p in store.task(tid)['phases']}['conops']=='approved'
  assert len([e for e in store.events(tid) if e['kind']=='answer'])==1
 
@@ -718,7 +763,8 @@ def test_audit_rolls_up_http_interview_usage_without_double_counting(tmp_path,mo
  from fastapi import Request
  request=Request({'type':'http','headers':[]})
  result=module.task_audit(tid,request)
- totals=result['totals']
+ assert set(result['totals'])=={'price'}
+ totals=module._task_audit_totals(tid)
  assert totals['tokens']==290 and totals['price']==round(100+240*0.0000125,6)
  assert totals['interview_calls']==3 and totals['interview_unpriced_calls']==1
  assert round(totals['interview_cost_usd'],6)==0.00023
@@ -899,8 +945,8 @@ def _case_async_start_reserves_identity_shows_progress_and_rejects_duplicate(tmp
  engine.start=slow_start
  monkeypatch.setattr(module,'store',store);monkeypatch.setattr(module,'engine_client',engine)
  async def exercise():
-  transport=httpx.ASGITransport(app=module.app)
-  async with httpx.AsyncClient(transport=transport,base_url='http://test') as client:
+  transport=httpx.ASGITransport(app=module.app.state._fixture_signed_app)
+  async with httpx.AsyncClient(transport=transport,base_url='http://test',headers=module.app.state._fixture_headers) as client:
    first=await client.post(f"/api/tasks/{task['task_id']}/start",json={'model_route':'ollama'})
    assert first.status_code==202
    sid=first.json()['session_id']
@@ -1126,8 +1172,8 @@ def _check_start_and_answer_use_http_engine_not_runner(monkeypatch,tmp_path,work
  _case_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch,workspace)
 
 
-def test_start_and_answer_use_http_engine_not_runner(pg_local_compat_process):
- pg_local_compat_process(_check_start_and_answer_use_http_engine_not_runner)
+def test_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_start_and_answer_use_http_engine_not_runner(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_http_engine_session_survives_delivery_restart(monkeypatch,tmp_path,workspace):
@@ -1135,8 +1181,8 @@ def _check_http_engine_session_survives_delivery_restart(monkeypatch,tmp_path,wo
  _case_http_engine_session_survives_delivery_restart(tmp_path,monkeypatch,workspace)
 
 
-def test_http_engine_session_survives_delivery_restart(pg_local_compat_process):
- pg_local_compat_process(_check_http_engine_session_survives_delivery_restart)
+def test_http_engine_session_survives_delivery_restart(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_http_engine_session_survives_delivery_restart(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_slow_engine_start_does_not_block_other_requests(monkeypatch,tmp_path,workspace):
@@ -1144,8 +1190,8 @@ def _check_slow_engine_start_does_not_block_other_requests(monkeypatch,tmp_path,
  _case_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch,workspace)
 
 
-def test_slow_engine_start_does_not_block_other_requests(pg_local_compat_process):
- pg_local_compat_process(_check_slow_engine_start_does_not_block_other_requests)
+def test_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_slow_engine_start_does_not_block_other_requests(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_slow_engine_submit_does_not_block_other_requests(monkeypatch,tmp_path,workspace):
@@ -1153,8 +1199,8 @@ def _check_slow_engine_submit_does_not_block_other_requests(monkeypatch,tmp_path
  _case_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch,workspace)
 
 
-def test_slow_engine_submit_does_not_block_other_requests(pg_local_compat_process):
- pg_local_compat_process(_check_slow_engine_submit_does_not_block_other_requests)
+def test_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_slow_engine_submit_does_not_block_other_requests(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_start_records_interview_flash_not_downstream_chat(monkeypatch,tmp_path,workspace):
@@ -1162,8 +1208,8 @@ def _check_start_records_interview_flash_not_downstream_chat(monkeypatch,tmp_pat
  _case_start_records_interview_flash_not_downstream_chat(tmp_path,monkeypatch,workspace)
 
 
-def test_start_records_interview_flash_not_downstream_chat(pg_local_compat_process):
- pg_local_compat_process(_check_start_records_interview_flash_not_downstream_chat)
+def test_start_records_interview_flash_not_downstream_chat(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_start_records_interview_flash_not_downstream_chat(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_start_records_env_resolved_phi4_not_catalog_qwen(monkeypatch,tmp_path,workspace):
@@ -1171,8 +1217,8 @@ def _check_start_records_env_resolved_phi4_not_catalog_qwen(monkeypatch,tmp_path
  _case_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path,monkeypatch,workspace)
 
 
-def test_start_records_env_resolved_phi4_not_catalog_qwen(pg_local_compat_process):
- pg_local_compat_process(_check_start_records_env_resolved_phi4_not_catalog_qwen)
+def test_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_start_records_env_resolved_phi4_not_catalog_qwen(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_async_start_reserves_identity_shows_progress_and_rejects_duplicate(monkeypatch,tmp_path,workspace):
@@ -1180,8 +1226,8 @@ def _check_async_start_reserves_identity_shows_progress_and_rejects_duplicate(mo
  _case_async_start_reserves_identity_shows_progress_and_rejects_duplicate(tmp_path,monkeypatch,workspace)
 
 
-def test_async_start_reserves_identity_shows_progress_and_rejects_duplicate(pg_local_compat_process):
- pg_local_compat_process(_check_async_start_reserves_identity_shows_progress_and_rejects_duplicate)
+def test_async_start_reserves_identity_shows_progress_and_rejects_duplicate(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_async_start_reserves_identity_shows_progress_and_rejects_duplicate(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_interrupted_start_recovers_exact_session_without_second_start(monkeypatch,tmp_path,workspace):
@@ -1189,8 +1235,8 @@ def _check_interrupted_start_recovers_exact_session_without_second_start(monkeyp
  _case_interrupted_start_recovers_exact_session_without_second_start(tmp_path,monkeypatch,workspace)
 
 
-def test_interrupted_start_recovers_exact_session_without_second_start(pg_local_compat_process):
- pg_local_compat_process(_check_interrupted_start_recovers_exact_session_without_second_start)
+def test_interrupted_start_recovers_exact_session_without_second_start(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_interrupted_start_recovers_exact_session_without_second_start(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_task_read_recovers_completed_interview_and_returns_new_phase(monkeypatch,tmp_path,workspace):
@@ -1198,15 +1244,15 @@ def _check_task_read_recovers_completed_interview_and_returns_new_phase(monkeypa
  _case_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,monkeypatch,workspace)
 
 
-def test_task_read_recovers_completed_interview_and_returns_new_phase(pg_local_compat_process):
- pg_local_compat_process(_check_task_read_recovers_completed_interview_and_returns_new_phase)
+def test_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_task_read_recovers_completed_interview_and_returns_new_phase(tmp_path,monkeypatch,pg_scoped_workspace)
 def _check_task_snapshot_projects_http_open_input(monkeypatch,tmp_path,workspace):
  from tests.test_http_cutover import _case_task_snapshot_projects_http_open_input
  _case_task_snapshot_projects_http_open_input(tmp_path,monkeypatch,workspace)
 
 
-def test_task_snapshot_projects_http_open_input(pg_local_compat_process):
- pg_local_compat_process(_check_task_snapshot_projects_http_open_input)
+def test_task_snapshot_projects_http_open_input(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_task_snapshot_projects_http_open_input(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_engine_failure_is_not_misreported_as_dead_subprocess(monkeypatch,tmp_path,workspace):
@@ -1214,8 +1260,8 @@ def _check_engine_failure_is_not_misreported_as_dead_subprocess(monkeypatch,tmp_
  _case_engine_failure_is_not_misreported_as_dead_subprocess(tmp_path,monkeypatch,workspace)
 
 
-def test_engine_failure_is_not_misreported_as_dead_subprocess(pg_local_compat_process):
- pg_local_compat_process(_check_engine_failure_is_not_misreported_as_dead_subprocess)
+def test_engine_failure_is_not_misreported_as_dead_subprocess(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_engine_failure_is_not_misreported_as_dead_subprocess(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_rationale_is_preserved_as_typed_field(monkeypatch,tmp_path,workspace):
@@ -1223,8 +1269,8 @@ def _check_rationale_is_preserved_as_typed_field(monkeypatch,tmp_path,workspace)
  _case_rationale_is_preserved_as_typed_field(tmp_path,monkeypatch,workspace)
 
 
-def test_rationale_is_preserved_as_typed_field(pg_local_compat_process):
- pg_local_compat_process(_check_rationale_is_preserved_as_typed_field)
+def test_rationale_is_preserved_as_typed_field(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_rationale_is_preserved_as_typed_field(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_required_rationale_cannot_be_dropped(monkeypatch,tmp_path,workspace):
@@ -1232,8 +1278,8 @@ def _check_required_rationale_cannot_be_dropped(monkeypatch,tmp_path,workspace):
  _case_required_rationale_cannot_be_dropped(tmp_path,monkeypatch,workspace)
 
 
-def test_required_rationale_cannot_be_dropped(pg_local_compat_process):
- pg_local_compat_process(_check_required_rationale_cannot_be_dropped)
+def test_required_rationale_cannot_be_dropped(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_required_rationale_cannot_be_dropped(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_text_question_yields_answer_composer_mode_not_an_empty_decision(monkeypatch,tmp_path,workspace):
@@ -1241,8 +1287,8 @@ def _check_text_question_yields_answer_composer_mode_not_an_empty_decision(monke
  _case_text_question_yields_answer_composer_mode_not_an_empty_decision(tmp_path,monkeypatch,workspace)
 
 
-def test_text_question_yields_answer_composer_mode_not_an_empty_decision(pg_local_compat_process):
- pg_local_compat_process(_check_text_question_yields_answer_composer_mode_not_an_empty_decision)
+def test_text_question_yields_answer_composer_mode_not_an_empty_decision(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_text_question_yields_answer_composer_mode_not_an_empty_decision(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_choice_input_still_projects_a_structured_decision(monkeypatch,tmp_path,workspace):
@@ -1250,8 +1296,8 @@ def _check_choice_input_still_projects_a_structured_decision(monkeypatch,tmp_pat
  _case_choice_input_still_projects_a_structured_decision(tmp_path,monkeypatch,workspace)
 
 
-def test_choice_input_still_projects_a_structured_decision(pg_local_compat_process):
- pg_local_compat_process(_check_choice_input_still_projects_a_structured_decision)
+def test_choice_input_still_projects_a_structured_decision(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_choice_input_still_projects_a_structured_decision(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_waiting_input_event_synced_once_per_engine_input(monkeypatch,tmp_path,workspace):
@@ -1259,8 +1305,8 @@ def _check_waiting_input_event_synced_once_per_engine_input(monkeypatch,tmp_path
  _case_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch,workspace)
 
 
-def test_waiting_input_event_synced_once_per_engine_input(pg_local_compat_process):
- pg_local_compat_process(_check_waiting_input_event_synced_once_per_engine_input)
+def test_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_waiting_input_event_synced_once_per_engine_input(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_engine_waiting_without_open_input_stays_executing(monkeypatch,tmp_path,workspace):
@@ -1268,8 +1314,8 @@ def _check_engine_waiting_without_open_input_stays_executing(monkeypatch,tmp_pat
  _case_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch,workspace)
 
 
-def test_engine_waiting_without_open_input_stays_executing(pg_local_compat_process):
- pg_local_compat_process(_check_engine_waiting_without_open_input_stays_executing)
+def test_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_engine_waiting_without_open_input_stays_executing(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_task_snapshot_distinguishes_engine_protocol_422_from_transport(monkeypatch,tmp_path,workspace):
@@ -1277,15 +1323,15 @@ def _check_task_snapshot_distinguishes_engine_protocol_422_from_transport(monkey
  _case_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path,monkeypatch,workspace)
 
 
-def test_task_snapshot_distinguishes_engine_protocol_422_from_transport(pg_local_compat_process):
- pg_local_compat_process(_check_task_snapshot_distinguishes_engine_protocol_422_from_transport)
+def test_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_task_snapshot_distinguishes_engine_protocol_422_from_transport(tmp_path,monkeypatch,pg_scoped_workspace)
 def _check_route_preview_shows_conflict_without_switching(monkeypatch,tmp_path,workspace):
  from tests.test_http_cutover import _case_route_preview_shows_conflict_without_switching
  _case_route_preview_shows_conflict_without_switching(monkeypatch)
 
 
-def test_route_preview_shows_conflict_without_switching(pg_local_compat_process):
- pg_local_compat_process(_check_route_preview_shows_conflict_without_switching)
+def test_route_preview_shows_conflict_without_switching(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_route_preview_shows_conflict_without_switching(monkeypatch)
 
 
 def _check_retired_ollama_default_still_lists_installed_switch_targets(monkeypatch,tmp_path,workspace):
@@ -1293,8 +1339,8 @@ def _check_retired_ollama_default_still_lists_installed_switch_targets(monkeypat
  _case_retired_ollama_default_still_lists_installed_switch_targets(monkeypatch)
 
 
-def test_retired_ollama_default_still_lists_installed_switch_targets(pg_local_compat_process):
- pg_local_compat_process(_check_retired_ollama_default_still_lists_installed_switch_targets)
+def test_retired_ollama_default_still_lists_installed_switch_targets(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_retired_ollama_default_still_lists_installed_switch_targets(monkeypatch)
 
 
 def _check_switch_via_live_task_endpoint_records_one_event(monkeypatch,tmp_path,workspace):
@@ -1302,8 +1348,8 @@ def _check_switch_via_live_task_endpoint_records_one_event(monkeypatch,tmp_path,
  _case_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch,workspace)
 
 
-def test_switch_via_live_task_endpoint_records_one_event(pg_local_compat_process):
- pg_local_compat_process(_check_switch_via_live_task_endpoint_records_one_event)
+def test_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_switch_via_live_task_endpoint_records_one_event(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_generator_default_api_follows_exact_sticky_selection(monkeypatch,tmp_path,workspace):
@@ -1311,8 +1357,8 @@ def _check_generator_default_api_follows_exact_sticky_selection(monkeypatch,tmp_
  _case_generator_default_api_follows_exact_sticky_selection(tmp_path,monkeypatch,workspace)
 
 
-def test_generator_default_api_follows_exact_sticky_selection(pg_local_compat_process):
- pg_local_compat_process(_check_generator_default_api_follows_exact_sticky_selection)
+def test_generator_default_api_follows_exact_sticky_selection(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_generator_default_api_follows_exact_sticky_selection(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(monkeypatch,tmp_path,workspace):
@@ -1324,8 +1370,8 @@ def _check_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(
 
 
 @pytest.mark.engine_integration
-def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(pg_local_compat_process):
- pg_local_compat_process(_check_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive)
+def test_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tmp_path,monkeypatch,pg_scoped_workspace):
+ _case_blocked_engine_advance_keeps_task_get_and_engine_snapshot_responsive(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def test_pg_cost_refuses_corrupt_usage_without_rewriting_source(tmp_path,monkeypatch,pg_scoped_workspace):

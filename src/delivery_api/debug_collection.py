@@ -7,7 +7,7 @@ def collect(module,actor,task_id):
     from contextlib import nullcontext
     from .postgres_scope import request_stats
     sections=[];started=time.monotonic()
-    reader=getattr(module.app.state,'operator_read_store',None) if actor.admin and module.config.CLOUD_TENANTS else None
+    reader=getattr(module.app.state,'operator_read_store',None) if (actor.admin) else None
     stages=[('credits',lambda:module.account_ledger_view(actor)),('credit-history',lambda:module.account_credit_history(actor)),('startup-checks',lambda:module.debug_preflight(actor))]
     if actor.admin:
         stages += [('request-timing',lambda:module.admin_operations_request_costs(actor)),('server-capacity',lambda:module.admin_operations_capacity(actor)),('log-durability',lambda:module.debug_log_durability(actor)),('durable-diagnostics',lambda:module.debug_evidence(task_id,actor))]

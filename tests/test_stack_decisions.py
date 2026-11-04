@@ -77,7 +77,7 @@ def _case_review_carries_open_slots_and_approve_is_refused_until_all_decided(tmp
     denied = c.post(f'/api/tasks/{tid}/gates/gate-architecture/decide', json={'action': 'approve', 'selected_option': 'Proceed'})
     assert denied.status_code == 400 and '1 architecture decision' in json.dumps(denied.json())
     stored = json.loads(artifact.read_text())['stack_entry_dispositions']
-    assert stored[0]['founder_decision']['text'] == 'SQLite' and stored[0]['founder_decision']['actor'] == 'local user'
+    assert stored[0]['founder_decision']['text'] == 'SQLite' and stored[0]['founder_decision']['actor'] == 'Signed-In User'
     assert 'founder_decision' not in stored[1]
     assert not artifact.with_suffix('.md').exists()
     companion = json.loads((spec / 'architecture.decisions.json').read_text())
@@ -201,8 +201,12 @@ def _check_review_carries_open_slots_and_approve_is_refused_until_all_decided(mo
  _case_review_carries_open_slots_and_approve_is_refused_until_all_decided(tmp_path,monkeypatch,workspace)
 
 
-def test_review_carries_open_slots_and_approve_is_refused_until_all_decided(pg_local_compat_process):
- pg_local_compat_process(_check_review_carries_open_slots_and_approve_is_refused_until_all_decided)
+def test_review_carries_open_slots_and_approve_is_refused_until_all_decided(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_review_carries_open_slots_and_approve_is_refused_until_all_decided(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_blank_unknown_and_stale_are_refused(monkeypatch,tmp_path,workspace):
@@ -210,8 +214,12 @@ def _check_blank_unknown_and_stale_are_refused(monkeypatch,tmp_path,workspace):
  _case_blank_unknown_and_stale_are_refused(tmp_path,monkeypatch,workspace)
 
 
-def test_blank_unknown_and_stale_are_refused(pg_local_compat_process):
- pg_local_compat_process(_check_blank_unknown_and_stale_are_refused)
+def test_blank_unknown_and_stale_are_refused(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_blank_unknown_and_stale_are_refused(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_missing_companion_with_research_required_slots_fails_closed(monkeypatch,tmp_path,workspace):
@@ -219,8 +227,12 @@ def _check_missing_companion_with_research_required_slots_fails_closed(monkeypat
  _case_missing_companion_with_research_required_slots_fails_closed(tmp_path,monkeypatch,workspace)
 
 
-def test_missing_companion_with_research_required_slots_fails_closed(pg_local_compat_process):
- pg_local_compat_process(_check_missing_companion_with_research_required_slots_fails_closed)
+def test_missing_companion_with_research_required_slots_fails_closed(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_missing_companion_with_research_required_slots_fails_closed(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_no_research_required_slots_need_no_companion(monkeypatch,tmp_path,workspace):
@@ -228,8 +240,12 @@ def _check_no_research_required_slots_need_no_companion(monkeypatch,tmp_path,wor
  _case_no_research_required_slots_need_no_companion(tmp_path,monkeypatch,workspace)
 
 
-def test_no_research_required_slots_need_no_companion(pg_local_compat_process):
- pg_local_compat_process(_check_no_research_required_slots_need_no_companion)
+def test_no_research_required_slots_need_no_companion(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_no_research_required_slots_need_no_companion(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_approval_uses_displayed_default_without_founder_answer(monkeypatch,tmp_path,workspace):
@@ -237,8 +253,12 @@ def _check_approval_uses_displayed_default_without_founder_answer(monkeypatch,tm
  _case_approval_uses_displayed_default_without_founder_answer(tmp_path,monkeypatch,workspace)
 
 
-def test_approval_uses_displayed_default_without_founder_answer(pg_local_compat_process):
- pg_local_compat_process(_check_approval_uses_displayed_default_without_founder_answer)
+def test_approval_uses_displayed_default_without_founder_answer(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_approval_uses_displayed_default_without_founder_answer(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_override_reason_optional_and_not_replaced_by_design_reason(monkeypatch,tmp_path,workspace):
@@ -246,8 +266,12 @@ def _check_override_reason_optional_and_not_replaced_by_design_reason(monkeypatc
  _case_override_reason_optional_and_not_replaced_by_design_reason(tmp_path,monkeypatch,workspace)
 
 
-def test_override_reason_optional_and_not_replaced_by_design_reason(pg_local_compat_process):
- pg_local_compat_process(_check_override_reason_optional_and_not_replaced_by_design_reason)
+def test_override_reason_optional_and_not_replaced_by_design_reason(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_override_reason_optional_and_not_replaced_by_design_reason(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_invalid_artifact_or_mismatched_framing_is_not_approved(monkeypatch,tmp_path,workspace):
@@ -255,8 +279,12 @@ def _check_invalid_artifact_or_mismatched_framing_is_not_approved(monkeypatch,tm
  _case_invalid_artifact_or_mismatched_framing_is_not_approved(tmp_path,monkeypatch,workspace)
 
 
-def test_invalid_artifact_or_mismatched_framing_is_not_approved(pg_local_compat_process):
- pg_local_compat_process(_check_invalid_artifact_or_mismatched_framing_is_not_approved)
+def test_invalid_artifact_or_mismatched_framing_is_not_approved(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_invalid_artifact_or_mismatched_framing_is_not_approved(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_stale_review_refuses_before_default_write(monkeypatch,tmp_path,workspace):
@@ -264,8 +292,12 @@ def _check_stale_review_refuses_before_default_write(monkeypatch,tmp_path,worksp
  _case_stale_review_refuses_before_default_write(tmp_path,monkeypatch,workspace)
 
 
-def test_stale_review_refuses_before_default_write(pg_local_compat_process):
- pg_local_compat_process(_check_stale_review_refuses_before_default_write)
+def test_stale_review_refuses_before_default_write(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_stale_review_refuses_before_default_write(tmp_path,monkeypatch,pg_scoped_workspace)
 
 
 def _check_companion_mismatch_cannot_supply_a_default(monkeypatch,tmp_path,workspace):
@@ -273,5 +305,9 @@ def _check_companion_mismatch_cannot_supply_a_default(monkeypatch,tmp_path,works
  _case_companion_mismatch_cannot_supply_a_default(tmp_path,monkeypatch,workspace)
 
 
-def test_companion_mismatch_cannot_supply_a_default(pg_local_compat_process):
- pg_local_compat_process(_check_companion_mismatch_cannot_supply_a_default)
+def test_companion_mismatch_cannot_supply_a_default(tmp_path,monkeypatch,pg_scoped_workspace,pg_task_app):
+ async def queue_only(*args,**kwargs):return kwargs.get('queued_job_id')
+ monkeypatch.setattr('delivery_api.tenant_jobs.dispatch_phase',queue_only)
+ monkeypatch.setattr('delivery_api.app.cloud_execution_admitted',lambda:True)
+ pg_scoped_workspace.signed_app=pg_task_app(pg_scoped_workspace)
+ _case_companion_mismatch_cannot_supply_a_default(tmp_path,monkeypatch,pg_scoped_workspace)

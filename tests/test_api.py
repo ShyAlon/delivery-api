@@ -10,7 +10,6 @@ from delivery_api import config
 @pytest.fixture()
 def client(pg_scoped_workspace,monkeypatch,pg_task_app):
     signed_app=pg_task_app(pg_scoped_workspace)
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import store
     from delivery_api.postgres_store import PostgresStore
     assert isinstance(store,PostgresStore)
@@ -100,21 +99,8 @@ def test_completed_sessions_are_discovered_and_bundle_is_projected(client,tmp_pa
  data=client.get('/api/sessions/s1').json();assert len(data['graph']['nodes'])==3
  assert data['graph']['edges']==[{"from":"N-1","to":"R-1","kind":"realizes"},{"from":"R-1","to":"AC-1","kind":"accepts"}]
 
-def test_artifacts_root_accepts_interview_only_spec_only_and_combined(client,tmp_path,monkeypatch):
- from delivery_api import bundles
- root=tmp_path/"artifacts"
- for session,area,name in (("i","interview","intent_model.json"),("s","spec","srs.json"),("both","interview","conops.json"),("both","spec","bundle-integrity.json")):
-  p=root/session/area;p.mkdir(parents=True,exist_ok=True);(p/name).write_text('{}')
- monkeypatch.setattr(bundles,"SETTINGS_FILE",tmp_path/"setting")
- r=client.post('/api/settings/artifacts-root',json={'path':str(root)})
- assert r.status_code==200 and r.json()['count']==3
- rows={x['session_id']:x['phases'] for x in r.json()['sessions']}
- assert rows=={'i':['interview'],'s':['spec'],'both':['interview','spec']}
- r=client.post('/api/settings/artifacts-root',json={'path':str(tmp_path/'missing')})
- assert r.status_code==400 and set(r.json()['detail'])=={'error','cause','next'}
 
 def test_start_task_requires_typed_http_engine_not_subprocess(monkeypatch,tmp_path,pg_scoped_workspace):
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import app
     store=pg_scoped_workspace.store
     from fastapi.testclient import TestClient
@@ -129,7 +115,6 @@ def test_start_task_requires_typed_http_engine_not_subprocess(monkeypatch,tmp_pa
 
 
 def _check_start_task_unreachable_http_engine_is_human_readable(monkeypatch,tmp_path,pg_scoped_workspace):
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import app
     store=pg_scoped_workspace.store
     from fastapi.testclient import TestClient
@@ -142,21 +127,9 @@ def _check_start_task_unreachable_http_engine_is_human_readable(monkeypatch,tmp_
     assert store.task(tid)['state']=='not_started'
 
 
-def test_engine_python_settings_show_candidates_and_persist(monkeypatch,tmp_path,client):
-    from delivery_api import engine_runtime
-    good=tmp_path/'python';good.write_text('#!/bin/sh\nexit 0\n');good.chmod(0o755)
-    monkeypatch.setattr(engine_runtime,'SETTINGS_FILE',tmp_path/'.engine-python')
-    monkeypatch.setattr('delivery_api.app.discover_engine_runtimes',lambda _dir: __import__('asyncio').sleep(0,result=[good]))
-    async def save(path,_dir):engine_runtime.SETTINGS_FILE.write_text(path+'\n');return good
-    monkeypatch.setattr('delivery_api.app.save_python',save)
-    result=client.get('/api/settings/engine-python').json()
-    assert result['count']==1 and result['candidates']==[str(good)]
-    response=client.post('/api/settings/engine-python',json={'path':str(good)})
-    assert response.status_code==200 and response.json()['path']==str(good)
 
 def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch,pg_scoped_workspace,pg_task_app):
     signed_app=pg_task_app(pg_scoped_workspace)
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import app
     from fastapi.testclient import TestClient
     monkeypatch.setenv('DEEPSEEK_API_KEY','super-secret')
@@ -167,7 +140,6 @@ def test_model_route_preflight_unreachable_engine_does_not_leak_key(monkeypatch,
 
 
 def test_start_task_deepseek_requires_engine_preflight(monkeypatch,tmp_path,pg_scoped_workspace):
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
     from delivery_api.app import app
     store=pg_scoped_workspace.store
     from fastapi.testclient import TestClient
@@ -187,8 +159,11 @@ def test_task_audit_accumulates_tokens_and_price(pg_scoped_workspace,monkeypatch
     store.add_event(tid,'price','Price 25 units',phase_key='intent',payload={'tokens':10,'price':25,'rates':{'scale':'credits'}})
     store.add_event(tid,'price','Price 50 units',phase_key='needs',payload={'tokens':20,'price':50,'price_usd':50.0,'rates':{'scale':'credits'}})
     body=client.get(f'/api/tasks/{tid}/audit').json()
-    assert {k:body['totals'][k] for k in ('tokens','price','phases_priced')}=={'tokens':30,'price':75.0,'phases_priced':2}
-    assert body['totals']['interview_calls']==0 and body['totals']['price_usd']==75.0
+    assert body['totals']=={'price':75.0}
+    from delivery_api.app import _task_audit_totals
+    totals=_task_audit_totals(tid)
+    assert {k:totals[k] for k in ('tokens','price','phases_priced')}=={'tokens':30,'price':75.0,'phases_priced':2}
+    assert totals['interview_calls']==0 and totals['price_usd']==75.0
 
 def test_task_audit_excludes_legacy_scale_price_but_counts_tokens(pg_scoped_workspace,monkeypatch,pg_task_app):
     client=TestClient(pg_task_app(pg_scoped_workspace),headers=pg_scoped_workspace.headers)
@@ -197,7 +172,9 @@ def test_task_audit_excludes_legacy_scale_price_but_counts_tokens(pg_scoped_work
     tid=store.create_task('Legacy scale')['task_id']
     store.add_event(tid,'price','Price 1,000,000 units',phase_key='intent',payload={'tokens':500000,'price':1000000,'rates':{'price_per_token':2.0}})
     store.add_event(tid,'price','Price 2.50 credits',phase_key='needs',payload={'tokens':200000,'price':2.5,'rates':{'scale':'credits'}})
-    t=client.get(f'/api/tasks/{tid}/audit').json()['totals']
+    assert client.get(f'/api/tasks/{tid}/audit').json()['totals']=={'price':2.5}
+    from delivery_api.app import _task_audit_totals
+    t=_task_audit_totals(tid)
     assert t['tokens']==700000 and t['price']==2.5 and t['legacy_priced_phases']==1
 
 def test_task_audit_uses_latest_cumulative_price_per_phase(pg_scoped_workspace,monkeypatch,pg_task_app):
@@ -208,63 +185,59 @@ def test_task_audit_uses_latest_cumulative_price_per_phase(pg_scoped_workspace,m
     store.add_event(tid,'price','Price 10',phase_key='intent',payload={'tokens':5,'price':10,'incremental':True,'rates':{'scale':'credits'}})
     store.add_event(tid,'price','Price 30',phase_key='intent',payload={'tokens':15,'price':30,'incremental':True,'rates':{'scale':'credits'}})
     body=client.get(f'/api/tasks/{tid}/audit').json()
-    assert {k:body['totals'][k] for k in ('tokens','price','phases_priced')}=={'tokens':15,'price':30.0,'phases_priced':1}
-    assert body['totals']['interview_calls']==0
+    assert body['totals']=={'price':30.0}
+    from delivery_api.app import _task_audit_totals
+    totals=_task_audit_totals(tid)
+    assert {k:totals[k] for k in ('tokens','price','phases_priced')}=={'tokens':15,'price':30.0,'phases_priced':1}
+    assert totals['interview_calls']==0
 
 
-def test_sessions_sort_title_and_interview_status_from_live_artifacts(tmp_path):
- import json,os
- from datetime import datetime,timezone
- from delivery_api import bundles
- root=tmp_path/'artifacts';root.mkdir()
- old=root/'old';(old/'interview').mkdir(parents=True)
- (old/'interview/intent_model.json').write_text(json.dumps({'problem_statement':'Approved intent'}))
- (old/'spec').mkdir()
- (old/'spec/hands-free-run.json').write_text(json.dumps({'completed_at':'2026-09-19T00:00:00Z'}))
- live=root/'live';(live/'interview').mkdir(parents=True)
- (live/'interview/usage.jsonl').write_text('{}\n')
- (live/'interview/http-session.json').write_text(json.dumps({'status':30,'request':{'idea':'  A founder brief  '},'open_input':{'prompt':'Question?'}}))
- stamp=datetime(2026,9,27,tzinfo=timezone.utc).timestamp()
- for path in (live/'interview/usage.jsonl',live/'interview/http-session.json'):os.utime(path,(stamp,stamp))
- rows=bundles._discover(root)
- assert [row['session_id'] for row in rows]==['live','old']
- assert rows[0]['title']=='A founder brief'
- assert rows[0]['phase_status']['interview']=='in_progress'
- assert rows[0]['updated_at'].startswith('2026-09-27T00:00:00')
- assert rows[1]['phase_status']['interview']=='done'
- assert rows[1]['title']=='Approved intent'
- assert rows[1]['completed_at']=='2026-09-19T00:00:00Z'
- # Usage alone is a trace of activity, never proof of an approved result.
- (live/'interview/http-session.json').unlink()
- assert bundles._discover(root)[0]['phase_status']['interview']=='in_progress'
- # A malformed/empty persisted request still cannot blank a card.
- (live/'interview/http-session.json').write_text(json.dumps({'status':40,'request':{'idea':''}}))
- assert bundles._discover(root)[0]['title']=='live'
- assert bundles._discover(root)[0]['phase_status']['interview']=='warning'
- # Card and bundle detail use the same interview status semantics.
- original=bundles.root
- try:
-  bundles.root=lambda:root
-  assert bundles.bundle('live')['phase_status']['interview']=='warning'
- finally:bundles.root=original
-
-
-def test_sessions_spec_completion_and_http_error(tmp_path):
+def test_sessions_title_and_interview_status_from_retained_evidence(tmp_path,monkeypatch,pg_scoped_workspace):
  import json
  from delivery_api import bundles
- root=tmp_path/'artifacts';session=root/'s';(session/'interview').mkdir(parents=True);(session/'spec').mkdir()
- (session/'interview/usage.jsonl').write_text('{}\n')
- (session/'interview/http-session.json').write_text(json.dumps({'status':50}))
- (session/'spec/bundle-integrity.json').write_text(json.dumps({'files_checked':14,'diagnostics':[]}))
- (session/'spec/hands-free-run.json').write_text(json.dumps({'completed_at':'2026-09-19T00:00:00Z'}))
- row=bundles._discover(root)[0]
- assert row['phase_status']['interview']=='error'
- assert row['phase_status']['oracle']=='done'
- assert row['oracle_passed'] and row['files_checked']==14
+ from test_http_cutover import _PGUsage
+ store=pg_scoped_workspace.store
+ tid=store.create_task('Fallback title')['task_id'];store.set_engine_session(tid,'live')
+ usage=_PGUsage(store,tid,'interview/usage.jsonl');usage.write_text('{}\n')
+ http=_PGUsage(store,tid,'interview/http-session.json')
+ http.write_text(json.dumps({'status':30,'request':{'idea':'  A founder brief  '}}))
+ monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path/'missing'))
+ row=bundles.postgres_bundle(store,'live')['session']
+ assert row['title']=='A founder brief' and row['phase_status']['interview']=='in_progress'
+ http.write_text(json.dumps({'status':40,'request':{'idea':''}}))
+ row=bundles.postgres_bundle(store,'live')['session']
+ assert row['title']=='Fallback title' and row['phase_status']['interview']=='warning'
+ store.publish_task_revision_bytes(tid,[{'phase_key':'intent','name':'intent_model.json','data':b'{"problem_statement":"Approved intent"}'}],writer_instance='test-only')
+ row=bundles.postgres_bundle(store,'live')['session']
+ assert row['title']=='Approved intent' and row['phase_status']['interview']=='done'
 
 
-def test_start_task_unreachable_http_engine_is_human_readable(pg_local_compat_process,pg_scoped_workspace):
-    pg_local_compat_process(_check_start_task_unreachable_http_engine_is_human_readable)
+def test_sessions_spec_completion_and_http_error(pg_scoped_workspace):
+ import json
+ from delivery_api import bundles
+ from test_http_cutover import _PGUsage
+ store=pg_scoped_workspace.store
+ tid=store.create_task('Test')['task_id'];store.set_engine_session(tid,'completion')
+ for name,value in {'interview/http-session.json':{'status':50},'spec/bundle-integrity.json':{'files_checked':14,'diagnostics':[]},'spec/hands-free-run.json':{'completed_at':'2026-09-19T00:00:00Z'}}.items():
+  _PGUsage(store,tid,name).write_text(json.dumps(value))
+ row=bundles.postgres_bundle(store,'completion')['session']
+ assert row['phase_status']['interview']=='error' and row['phase_status']['oracle']=='done'
+ assert row['oracle_passed'] and row['files_checked']==14 and row['completed_at']=='2026-09-19T00:00:00Z'
+
+
+def test_start_task_unreachable_http_engine_is_human_readable(monkeypatch,tmp_path,pg_scoped_workspace,pg_task_app):
+    signed=pg_task_app(pg_scoped_workspace)
+    from delivery_api import app as module
+    from delivery_api.engine_client import EngineUnreachableError
+    def unreachable():raise EngineUnreachableError('http://127.0.0.1:1','fake unavailable')
+    monkeypatch.setattr(module.engine_client,'default_route',unreachable)
+    monkeypatch.setattr('delivery_api.tenant_http._interview_route_open',lambda path:True)
+    tid=pg_scoped_workspace.store.create_task('Preflight failure','A product idea')['task_id']
+    response=TestClient(signed,headers=pg_scoped_workspace.headers).post(f'/api/tasks/{tid}/start')
+    assert response.status_code==503
+    assert set(response.json()['detail'])=={'error','cause','next'}
+    assert 'interview engine is not reachable' in response.json()['detail']['error'].lower()
+    assert pg_scoped_workspace.store.task(tid)['state']=='not_started'
 
 
 def _legacy_pg_identity_client(monkeypatch,workspace):
@@ -281,13 +254,24 @@ def _legacy_pg_identity_client(monkeypatch,workspace):
     return TestClient(app)
 
 
-def test_budget_hard_stop(pg_local_compat_process):
-    pg_local_compat_process(_check_budget_hard_stop)
+def test_budget_hard_stop_retains_accounting_without_reopening_legacy_routes(pg_scoped_workspace,monkeypatch):
+    from delivery_api import app as module
+    from delivery_api.auth import Actor
+    from fastapi import HTTPException
+    store=pg_scoped_workspace.store;run=store.create_link('Budget test');rid=run['run_id']
+    monkeypatch.setattr(module.auth,'enabled',lambda:False)
+    with pytest.raises(HTTPException) as stopped:
+        from starlette.requests import Request
+        request=Request({'type':'http','headers':[]})
+        module.add_usage(rid,module.UsageRecord(record_json='{}',cost_usd=7.5),request)
+    assert stopped.value.status_code==402
+    assert store.run(rid)['state']=='budget_stopped'
+    assert store.total_spend()==7.5
 
 
-def test_unknown_link_rejected(pg_local_compat_process):
-    pg_local_compat_process(_check_unknown_link_rejected)
+def test_unknown_link_rejected(client):
+    assert client.post('/runs',json={'token':'nope','free_text':'x'}).status_code==503
 
 
-def test_links_are_admin_only(pg_local_compat_process):
-    pg_local_compat_process(_check_links_are_admin_only)
+def test_legacy_links_are_unavailable_even_with_signed_identity(client):
+    assert client.post('/links',json={'founder_label':'x'}).status_code==503

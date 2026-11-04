@@ -120,6 +120,21 @@ class ChildPhaseLifecycle:
         self._slot=None
 
     async def dispatch(self,store,orchestrator,task_id,phase,job_id,options):
+        claimed=await self._dispatch_one(store,orchestrator,task_id,phase,job_id,options)
+        if not claimed:return False
+        # The previous worker is settled and its serialized slot released before
+        # reserving another exact job. Each provider call still owns admission.
+        while store is not None:
+            continuation=store.prepare_open_gate_continuation(task_id,phase,job_id)
+            if continuation is None:break
+            phase,job_id,options=(continuation[k] for k in ('phase','job_id','options'))
+            from .orchestrator import ExecutionMode
+            options={**options,'mode':ExecutionMode(options['mode'])}
+            if not await self._dispatch_one(store,orchestrator,task_id,phase,job_id,options):
+                raise ValueError('open-gate continuation job was already claimed')
+        return True
+
+    async def _dispatch_one(self,store,orchestrator,task_id,phase,job_id,options):
         """Run one phase job: the phase lifecycle on the event loop, the generator in a worker thread.
 
         Returns False when the job was already claimed; nothing ran."""

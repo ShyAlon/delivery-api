@@ -1,5 +1,23 @@
 import io,json,zipfile
-from delivery_api.debug_export import diagnostic_zip,redact
+from delivery_api.debug_export import diagnostic_zip as _diagnostic_zip,redact
+import pytest
+
+@pytest.fixture(autouse=True)
+def pg_export_reader(pg_scoped_workspace,monkeypatch):
+ from delivery_api.generator_documents import GeneratorDocuments
+ store=pg_scoped_workspace.store;tid=store.create_task('Diagnostic evidence')['task_id']
+ store.set_engine_session(tid,__import__('uuid').uuid4().hex)
+ job=store.enqueue_worker(tid,'phase:needs');docs=GeneratorDocuments(store,store.claim_worker(job),job)
+ def export(root,*args,**kwargs):
+  # Seed only ordinary fixture files; never import a symlink or consult it in export.
+  for area in ('interview','spec'):
+   for name in ('run.log','llm-calls.jsonl','debug-http.jsonl','usage.jsonl','verification.jsonl'):
+    path=root/area/name
+    if path.is_file() and not path.is_symlink():docs.write(area+'/'+name,path.read_bytes())
+  return _diagnostic_zip(root,*args,**kwargs,document_reader=docs.read)
+ monkeypatch.setitem(globals(),'diagnostic_zip',export)
+
+diagnostic_zip=_diagnostic_zip
 
 def test_debug_zip_is_scoped_bounded_and_secret_redacted(tmp_path):
  root=tmp_path/'session';(root/'interview').mkdir(parents=True);(root/'spec').mkdir()
@@ -13,7 +31,7 @@ def test_debug_zip_is_scoped_bounded_and_secret_redacted(tmp_path):
   assert b'super-secret' not in z.read('interview/llm-calls.jsonl');assert b'secret' not in z.read('interview/llm-calls.jsonl')
   assert b'Project context' in z.read('interview/llm-calls.jsonl')
   assert b'topsecret' not in z.read('browser.json');assert b'other' not in z.read('run.log');assert b'private' not in z.read('run.log')
-  assert any(x['reason']=='not recorded' for x in manifest['omissions'])
+  assert any(x['reason']=='not recorded in owned PG documents' for x in manifest['omissions'])
   assert not any('checkpoint' in x for x in z.namelist())
 
 def test_outside_symlink_and_oversize_source_are_omitted(tmp_path):
@@ -22,7 +40,7 @@ def test_outside_symlink_and_oversize_source_are_omitted(tmp_path):
  raw=diagnostic_zip(root,'t','s',1,{}, {},[],tmp_path/'absent')
  with zipfile.ZipFile(io.BytesIO(raw)) as z:
   reasons={x['reason'] for x in json.loads(z.read('manifest.json'))['omissions']}
-  assert 'outside run root' in reasons and 'source over 2 MB limit' in reasons
+  assert 'not recorded in owned PG documents' in reasons and 'source over 2 MB limit' in reasons
 
 def test_secrets_in_nested_text_are_redacted():
  value=redact({'password':'abc','nested':[{'message':'Authorization: Bearer abc'}],'ordinary':'Keep project data'})
@@ -49,7 +67,7 @@ def test_missing_verification_scores_are_listed_not_hidden(tmp_path):
  root=tmp_path/'session';(root/'interview').mkdir(parents=True)
  raw=diagnostic_zip(root,'t','s',1,{}, {},[],tmp_path/'absent')
  with zipfile.ZipFile(io.BytesIO(raw)) as z:
-  assert {'source':'interview/verification.jsonl','reason':'not recorded'} in json.loads(z.read('manifest.json'))['omissions']
+  assert {'source':'interview/verification.jsonl','reason':'not recorded in owned PG documents'} in json.loads(z.read('manifest.json'))['omissions']
 
 def test_engine_log_tail_is_in_the_zip_filtered_to_the_task(tmp_path):
  root=tmp_path/'session';(root/'interview').mkdir(parents=True)

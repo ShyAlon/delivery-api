@@ -244,7 +244,21 @@ def test_failed_async_worker_requires_explicit_retry(store):
         store.delete_task(task['task_id'])
 
 
+
+
+def _installed_dispatch_fixture(monkeypatch):
+    from delivery_api import inprocess_engine
+    from delivery_api.tenant_jobs import execute_job
+    class Engine:
+        async def dispatch(self,store,orchestrator,tid,phase,job,options):
+            async def run(cap):
+                cap.validate(store)
+                await orchestrator.execute_phase(tid,phase,**options)
+            return await execute_job(store,job,run)
+    monkeypatch.setattr(inprocess_engine,'_engine',Engine())
+
 def test_phase_dispatch_seam_uses_durable_job_and_explicit_matching_resume(store,monkeypatch):
+    _installed_dispatch_fixture(monkeypatch)
     from delivery_api import config
     # This seam executes the local orchestrator callback, not a cloud producer.
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)
@@ -330,6 +344,7 @@ def test_atomic_gate_handoff_and_redo_job_options(store,monkeypatch,action):
 
 
 def test_resume_cannot_reauthorize_running_job_and_dispatch_cannot_report_lost_claim(store,monkeypatch):
+    _installed_dispatch_fixture(monkeypatch)
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False)  # local dispatch lost-claim contract
     import asyncio
@@ -1918,7 +1933,7 @@ def test_cloud_presentation_cold_two_statements_then_warm_zero(store,monkeypatch
     from starlette.requests import Request
     monkeypatch.setattr(app,'store',store)
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
-    monkeypatch.setattr(config,'ARTIFACT_MANIFEST_READS',True)
+    monkeypatch.setattr(config,'ARTIFACT_MANIFEST_READS',True,raising=False)
     with tenant_context(A):
         task=store.create_task('http-counts-'+uuid.uuid4().hex)
         request=Request({'type':'http','method':'GET','path':'/api/tasks/'+task['task_id'],'headers':[],'scheme':'http','server':('test',80),'query_string':b''})

@@ -1,0 +1,125 @@
+# Database-only generator input manifests
+
+The child generator manifest accepted an optional document store. Omitting it
+silently read host files instead. That made input authority depend on the host.
+
+Require the owned document reader. Canonical paths remain namespace identifiers,
+not a second source of input bytes. Missing retained bytes fail closed.
+
+Regression: a present file without a document reader was accepted before this
+change. The new test fails on that version and passes with the requirement.
+The manifest tests also prove host-file replacement cannot change its digest,
+retained-byte changes do change it, and missing retained bytes are refused.
+
+Local validation: 13 child-generator tests passed, including actual child and
+restart journeys. CI unavailable, local gate only. This is an incomplete WIP
+checkpoint, not a merge-ready theme or deployment approval.
+
+## Canonical producer/revision readers
+
+Fresh-input, phase-evidence and retained-proposal helpers still selected file
+implementations using a store attribute. Retain only their PG implementations.
+Real-PG tests replace obsolete descriptor-race tests with hostile/absent folder,
+required-byte, bounds, owner, generation and proposal identity checks. Shared
+descriptor helpers remain for other callers until their separate audit.
+
+The policy regression failed in all three readers before removal. Rebuilt PG
+reader/journal group: 33 passed. Revision-stage/job/intent cross-suite: 27 passed.
+A combined PostgreSQL store run reached the command timeout without a final
+result; it is not passing evidence and must be rerun in smaller groups.
+
+## Artifact presentation and downloads
+
+Seven read/export endpoints retained backend-selected host readers even though
+PostgreSQL already supplied their production implementation. Remove only those
+explicit function-scoped legacy paths. Keep snapshot hash reads for ZIP members,
+so a concurrent revision cannot mix ZIP bytes. Temporary package construction
+is scratch space, not persistent authority, and remains unchanged.
+
+All seven policy cases failed before the change. Route/byte/package tests: 66
+passed. Added a real authenticated route regression for absent and hostile host
+folders: exact download bytes, view JSON and ZIP bytes must agree, while a second
+owner sees 404. Full theme gate is still pending.
+
+## Retired host settings
+
+Removed folder/interpreter settings routes. An installed image owns its runtime;
+PostgreSQL owns durable content. A request cannot persist `.artifacts-root` or
+`.engine-python` choices through these obsolete endpoints. Both route-absence
+regressions failed before removal; 57 signed-route/policy tests pass afterward.
+The old route-only tests were replaced, not used to broaden local permissions.
+
+## Publication coordinator
+
+The coordinator still selected marker files, produced-byte files and optional
+workflow documents. It now always uses PG documents and the PG execution fence,
+and retries publication from retained bytes rather than rerunning model work.
+Accepted Stop skips publication while preserving accounting/quiescence checks.
+
+The no-selector regression failed before removal. Non-SDK coordinator/recovery
+cases: 31 passed. Child-generator/document/fence cross-suite: 66 passed. These
+include folder-loss recovery with one original provider attempt, missing-marker,
+changed-byte and generation refusal, plus settled-work substitution refusal.
+
+Eight SDK transport variants remain unverified here: the first fails because its
+fake DeepSeek quote has no configured operator expense policy. This also failed
+before the coordinator edit. Keep the real dispatch refusal; repair the disposable
+fixture with reviewed fake policy, never bypass the production money check.
+
+## Recording replay
+
+Imported recordings used to retain a source directory and reread it during
+replay. Store recording rows and artifact bytes in the owned PG execution at
+import time, then replay from retained bytes. HTTP upload folders are temporary
+and cleaned on success, validation failure or upload-limit refusal. Import title
+inference no longer reads an unrelated global host session directory.
+
+Source-loss regression failed before the change. Replay/import selected group:
+14 passed. No public replay route was opened; existing route guards remain.
+
+## Registered child output runner
+
+Remove the arbitrary subprocess fallback and file pricing/publication readers
+from the parent output runner. The registered child bridge is required and its
+PG documents supply settled hashes and gate evidence. The orchestrator no longer
+restores host predecessor files. Production spending and Stop controls are not
+changed.
+
+The runner policy regression failed before removal. Actual child, installed
+seven-phase fake-provider journey, and fresh zero-credit startup group: 17 passed.
+These are rebuilt-code results, not results carried over from the lost checkout.
+
+## Signed identity only
+
+Remove basic/password/OAuth identity implementations and their unused HTTP
+routes. Signup, signin, refresh and logout use the same signed tenant service
+everywhere. Config cannot make an unsigned caller a local administrator.
+
+Both identity policy regressions failed before removal. Signed identity, route,
+Supabase session and operator startup group: 84 passed. Older compatibility
+tests must be converted to real signed fixtures or retired-route refusal.
+
+## Gate decisions and lineage
+
+Gate decisions now mutate retained PG artifacts/companions and lineage in the
+same guarded transaction. Remove host-path preflight/read/rebind fallbacks,
+including the unused semantic path lookup that still touched the host namespace.
+Signed test fixtures queue continuation without executing a provider. Real
+installed execution is checked separately.
+
+Signed gate/revision/stack/identity group: 51 passed. Missing companion, changed
+review, malformed lineage and invalid replacement continue to refuse without
+mutation. Safe comments/drafts/semantic-review route exceptions preserve signed
+identity, owner RLS and CSRF, and do not open a new execution route.
+
+Private installation must have one destination guard and one retained anchor
+implementation. Removed file-lock and rename fallback from coordinator after
+red-first policy check; real PG install/crash/tamper/rollback scenarios passed.
+SDK raw-wire fixtures must seed an operator ceiling and matching quote scale,
+not bypass the actual launch admission check. Eight fake SDK variants passed.
+
+A DB-only error must not prescribe restoring/backfilling files. Settled-byte
+protection retains the complete changed/vanished/appeared checks over captured PG
+documents, and publication failure leaves the prior ready revision untouched.
+Removed retired file restore/backfill tests only alongside their implementation;
+PG publication validator provenance and failure atomicity remain exercised.

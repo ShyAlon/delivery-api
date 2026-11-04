@@ -3,7 +3,7 @@ from delivery_api import task_read_cache as cache
 
 class Store:pass
 
-def test_invalidate_never_walks_entries_and_stale_data_remains_unreadable(monkeypatch):
+def test_invalidate_never_walks_entries_and_stale_data_remains_unreadable(monkeypatch,pg_scoped_workspace):
     from delivery_api import config
     monkeypatch.setattr(config,'CLOUD_TENANTS',False);cache.clear();s=Store();other=Store()
     cache.put(s,'one',{'v':1},read_version=cache.version(s,'one'))

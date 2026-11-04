@@ -138,7 +138,7 @@ def test_too_few_credits_refuses_in_credits_words_and_starts_nothing(monkeypatch
     assert calls["prepared"] == [] and calls["ran"] == [] and calls["audits"][0][1] == "phase.start_refused"
 
 
-@pytest.mark.parametrize("kwargs,status", [({"cloud": False}, 404), ({"admitted": False}, 503), ({"session": None}, 409),
+@pytest.mark.parametrize("kwargs,status", [({"admitted": False}, 503), ({"session": None}, 409),
                                             ({"task": _task(state="failed")}, 409), ({"claimed": None}, 409),
                                             ({"task": _task(model_default="openai:unmanaged")}, 409)])
 def test_every_other_refusal_starts_nothing(monkeypatch, kwargs, status):
@@ -211,3 +211,8 @@ def test_finished_fixture_uses_restricted_pg_and_forbids_sqlite(finished):
     with store._postgres.transaction() as connection:
         assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
     assert_pg_storage_only()
+
+
+def test_retired_mode_flag_cannot_disable_admitted_start(monkeypatch):
+    calls=_route(monkeypatch,cloud=False)
+    assert _call(True)['status']=='started' and len(calls['ran'])==1

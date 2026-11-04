@@ -29,7 +29,6 @@ def cloud(monkeypatch,tmp_path,pg_workspace_factory,request):
     monkeypatch.setitem(module.app.state._state,'store',store)
     monkeypatch.setattr(module.orchestrator,'store',store)
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
-    monkeypatch.setattr(module.bundles,'root',lambda:tmp_path)
     # Cloud dispatch runs behind the job-bound admission gateway; install the
     # test double so admitted routes exercise the seam (unadmitted stays 503).
     from types import SimpleNamespace as _NS
@@ -119,7 +118,7 @@ def test_session_registry_and_file_namespace(cloud):
 def test_unsafe_settings_local_auth_and_worker_routes_denied(cloud):
     client,_,_=cloud
     for path in ['/api/settings/artifacts-root','/api/settings/engine-python']:
-        assert client.post(path,json={'path':'/tmp'},headers=header('a')).status_code==403
+        assert client.post(path,json={'path':'/tmp'},headers=header('a')).status_code==404
     for path in ['/auth/email-availability','/auth/github/start']:
         assert client.post(path,headers=header('a')).status_code==404
     for path in ['/api/tasks/guess/start','/api/tasks/guess/model-route','/api/simulations']:
@@ -595,11 +594,9 @@ def test_suspended_file_only_gate_mutations_rejected_before_artifact_effect(clou
     monkeypatch.setattr(module,'_gate_review',lambda *a: touched.append('review') or {})
     with psycopg.connect(DSN) as c:c.execute('INSERT INTO user_task_policy VALUES (%s,true,1,0)',(A.owner_id,))
     try:
-        # semantic-review's cloud protocol gate stays closed (503). stack-decisions is
-        # now an admitted file operation (the founder records decisions on the pickup
-        # host): the route wall opens, and the suspended-tenant file guard itself
-        # rejects before any artifact effect - translated to 404, no existence oracle.
-        for suffix,body,expected in (('semantic-review',{'revision':'a'*64,'decisions':[]},503),
+        # Both PG gate writes reach the suspended-owner mutation guard and
+        # reject before reading evidence, with no tenant existence oracle.
+        for suffix,body,expected in (('semantic-review',{'revision':'a'*64,'decisions':[]},404),
              ('stack-decisions',{'revision':'a'*64,'decisions':[{'key':'x','text':'y'}]},404)):
             response=client.post('/api/tasks/'+task['task_id']+'/gates/gate-srs/'+suffix,json=body,headers=header('a'))
             assert response.status_code==expected,(suffix,response.status_code,response.text)
@@ -648,8 +645,8 @@ def test_cloud_bundle_reads_only_the_registered_session_and_hides_host_paths(clo
         store.publish_task_revision_bytes(task['task_id'],[{'phase_key':'intent','name':'intent_model.json','data':b'{"problem_statement":"My bundle"}'}],writer_instance='test-only')
     path=session_root(root,A,sid)
     def global_scan(*a,**k):raise AssertionError('cloud read scanned a shared or sibling directory')
-    monkeypatch.setattr(module.bundles,'discover',global_scan)
-    monkeypatch.setattr(module.bundles,'_discover',global_scan)
+    monkeypatch.setattr(module.bundles,'discover',global_scan,raising=False)
+    monkeypatch.setattr(module.bundles,'_discover',global_scan,raising=False)
     listing=client.get('/api/sessions',headers=header('a'))
     assert listing.status_code==200,listing.text
     assert listing.json()['sessions'][0]['title']=='My bundle'
@@ -679,46 +676,40 @@ def test_cloud_download_rejects_symlink_swap_after_path_validation(cloud,monkeyp
     root=session_root(base,A,sid);folder=root/'interview';folder.mkdir(parents=True)
     artifact=folder/'intent_model.json';artifact.write_text('{"problem_statement":"private"}')
     outside=base/'foreign.json';outside.write_text('foreign-secret-bytes')
-    original=module._task_artifact
-    def swap(*args):
-        path=original(*args);artifact.unlink();artifact.symlink_to(outside);return path
-    monkeypatch.setattr(module,'_task_artifact',swap)
+    artifact.unlink();artifact.symlink_to(outside)
     response=client.get('/api/tasks/'+tid+'/artifacts/intent/intent_model.json',headers=header('a'))
     assert response.status_code==404,response.text
     assert 'foreign-secret-bytes' not in response.text
 
 
-def test_owner_read_rechecks_revocation_after_opening_file(cloud,monkeypatch):
-    import delivery_api.tenant_files as files
+def test_owner_document_read_rechecks_revocation_after_reader_created(cloud):
+    import psycopg
+    from delivery_api.generator_documents import GeneratorDocuments
     client,store,base=cloud
-    sid='revoke-read-'+uuid.uuid4().hex
     with tenant_context(A):
-        task=store.create_task(sid);store.set_engine_session(task['task_id'],sid)
-    root=session_root(base,A,sid);root.mkdir(parents=True)
-    (root/'output.txt').write_text('private bytes')
-    original=files.authorized_session;calls=[]
-    def revoke(*args,**kwargs):
-        calls.append(1)
-        if len(calls)>1:raise TenantAccessDenied('revoked after open')
-        return original(*args,**kwargs)
-    monkeypatch.setattr(files,'authorized_session',revoke)
-    with tenant_context(A),pytest.raises(TenantAccessDenied):files.read_session_bytes(base,sid,'output.txt',store)
+        task=store.create_task('revoked-doc-'+uuid.uuid4().hex);tid=task['task_id']
+        store.set_engine_session(tid,'revoke-'+uuid.uuid4().hex)
+        job=store.enqueue_worker(tid,'phase:needs');docs=GeneratorDocuments(store,store.claim_worker(job),job)
+        docs.write('spec/output.txt',b'private bytes')
+        assert docs.read('spec/output.txt')==b'private bytes'
+        with psycopg.connect(DSN) as conn:
+            conn.execute('DELETE FROM auth.sessions WHERE id=%s',(A.session_id,))
+        with pytest.raises(TenantAccessDenied):docs.read('spec/output.txt')
 
-def test_read_rejects_replaced_directory_namespace(cloud,monkeypatch):
-    import delivery_api.tenant_files as files
-    import os
+
+def test_host_directory_replacement_cannot_override_retained_documents(cloud):
+    from delivery_api.generator_documents import GeneratorDocuments
     client,store,base=cloud
-    sid='namespace-read-'+uuid.uuid4().hex
     with tenant_context(A):
-        task=store.create_task(sid);store.set_engine_session(task['task_id'],sid)
-    root=session_root(base,A,sid);folder=root/'interview';folder.mkdir(parents=True)
-    (folder/'output.txt').write_text('original')
-    original=os.fdopen
-    def swap(fd,*args,**kwargs):
-        folder.rename(root/'detached');folder.mkdir();(folder/'output.txt').write_text('replacement')
-        return original(fd,*args,**kwargs)
-    monkeypatch.setattr(os,'fdopen',swap)
-    with tenant_context(A),pytest.raises(TenantAccessDenied):files.read_session_bytes(base,sid,'interview/output.txt',store)
+        task=store.create_task('namespace-doc-'+uuid.uuid4().hex);tid=task['task_id'];sid='namespace-'+uuid.uuid4().hex
+        store.set_engine_session(tid,sid)
+        job=store.enqueue_worker(tid,'phase:needs');docs=GeneratorDocuments(store,store.claim_worker(job),job)
+        docs.write('interview/output.txt',b'original retained bytes')
+        root=session_root(base,A,sid);folder=root/'interview';folder.mkdir(parents=True)
+        (folder/'output.txt').write_text('host original')
+        folder.rename(root/'detached');folder.mkdir();(folder/'output.txt').write_text('host replacement')
+        assert docs.read('interview/output.txt')==b'original retained bytes'
+
 
 def test_cloud_startup_skips_all_legacy_recovery_and_dispatch(cloud,monkeypatch):
     import asyncio
@@ -895,3 +886,31 @@ def test_delete_requires_exact_confirmation_then_stop_hides_running_task(cloud):
     with tenant_context(A):
         assert store.worker_job(job)['state']=='running'
         assert store.delete_task(tid,confirm=True)['already_hidden']
+
+
+def test_artifact_download_view_and_zip_use_same_pg_bytes_without_host_files(cloud):
+    import io,zipfile,shutil
+    client,store,root=cloud;sid='pg-download-'+uuid.uuid4().hex
+    payload=b'{"problem_statement":"Retained exact PG bytes"}\n'
+    with tenant_context(A):
+        tid=store.create_task('download durability')['task_id'];store.set_engine_session(tid,sid)
+        store.publish_task_revision_bytes(tid,[dict(phase_key='intent',name='intent_model.json',data=payload)],writer_instance='test-only')
+    path=session_root(root,A,sid)
+    for hostile in (False,True):
+        if hostile:
+            path.mkdir(parents=True)
+            foreign=root/'foreign-download';foreign.mkdir()
+            (foreign/'intent_model.json').write_text('{"secret":"foreign"}')
+            (path/'interview').symlink_to(foreign,target_is_directory=True)
+        url=f'/api/tasks/{tid}/artifacts/intent/intent_model.json'
+        response=client.get(url,headers=header('a'))
+        assert response.status_code==200 and response.content==payload
+        view=client.get(url+'/view',headers=header('a'))
+        assert view.status_code==200 and json.loads(view.json()['raw_content'])==json.loads(payload)
+        archive=client.get(f'/api/tasks/{tid}/artifacts.zip',headers=header('a'))
+        assert archive.status_code==200
+        with zipfile.ZipFile(io.BytesIO(archive.content)) as zipped:
+            assert zipped.namelist()==['intent/intent_model.json']
+            assert zipped.read('intent/intent_model.json')==payload
+        for suffix in ('','/view'):
+            assert client.get(url+suffix,headers=header('b')).status_code==404

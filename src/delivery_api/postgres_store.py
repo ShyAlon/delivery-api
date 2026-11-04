@@ -1102,7 +1102,7 @@ FROM tasks t"""
     def reconcile_private_revision_installation(self,task_id,*,installation_id,artifacts_base):
         """Concrete read-only current files/DB classification, never resumes."""
         from .revision_install_recovery import classify_installation_recovery
-        from .revision_install_files import _validate_plan
+        from .revision_install_plan import _validate_plan
         from .revision_stage_evidence import read_validated_staged_receipt
         from .tenancy import session_root
         from .producer_inputs import _open_directory
@@ -1163,7 +1163,7 @@ FROM tasks t"""
         from .revision_source_review import read_source_review_snapshot
         from .revision_proposal import read_retained_revision_proposal
         from .revision_stage_evidence import read_validated_staged_receipt
-        from .revision_install_files import _validate_plan
+        from .revision_install_plan import _validate_plan
         from .tenancy import session_root
         from vmodel_contracts.execution_anchor import read_execution_anchor
         from pathlib import Path
@@ -1198,7 +1198,7 @@ FROM tasks t"""
         No route invokes this method. Owner acceptance verifier must authenticate
         retained exact review and cost acknowledgement; test fixtures aren't it.
         """
-        from .revision_install_files import _validate_plan
+        from .revision_install_plan import _validate_plan
         from .revision_install_journal import install_event
         from .phases import followers
         if not callable(validate_acceptance):raise ValueError('trusted acceptance verifier required')
@@ -1257,7 +1257,7 @@ FROM tasks t"""
     def private_approved_continuation_basis(self,task_id,*,installation_id,artifacts_base,expected_job_id=None):
         """Exact current DB approval and immutable installed files, no dispatch."""
         from .worker_capability import WorkerCapability
-        from .revision_install_files import _validate_plan
+        from .revision_install_plan import _validate_plan
         with self._task_operation_guard('task.rerun'):
             cap=WorkerCapability.capture(self,task_id);cap.validate(self)
             intent=self._execute_native('SELECT * FROM closed_revision_installations WHERE installation_id=%s AND task_id=%s',(installation_id,task_id)).fetchone()
@@ -1659,6 +1659,33 @@ FROM tasks t"""
         # Block internal callers too until a reviewed new-session copy exists.
         raise TenantAccessDenied('cloud rerun generation/session policy not implemented')
 
+    def prepare_open_gate_continuation(self,task_id,phase,completed_job_id):
+        """Consume one explicit generator open-gate policy after worker settlement.
+
+        Owner/session claims and row lock are retained. Never crosses the
+        interview boundary, resumes old work, or reuses a running worker.
+        """
+        from .phases import PHASE_BY_KEY,successor
+        definition=PHASE_BY_KEY.get(phase);target=successor(phase) if definition else None
+        if not definition or definition.executor!='generator' or not target or target.executor!='generator':return None
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone():return None
+        task=self.task(task_id);job=self.worker_job(completed_job_id)
+        if not task or task.get('stop_requested_at') is not None:return None
+        if not job or job['task_id']!=task_id or job['kind']!='phase:'+phase or job['state']!='done' or job['generation']!=task['generation']:return None
+        states={p['phase_key']:p['state'] for p in task['phases']}
+        gate=next((g for g in task['gates'] if g['after_phase']==phase),None)
+        if task['active_phase']!=phase or states.get(phase)!='approved' or states.get(target.key)!='pending':return None
+        if not gate or not gate['is_open'] or gate['state']!='bypassed':return None
+        if self._execute_native("SELECT job_id FROM worker_jobs WHERE task_id=%s AND state IN ('pending','running','paused') LIMIT 1",(task_id,)).fetchone():return None
+        from .model_routes import task_default_model
+        model,_=task_default_model(self,task_id,target.generator_stage)
+        from .model_routes import route_value
+        route,_,name=model.partition(':');route_value(route,name)
+        self.update_phase(task_id,target.key,'running',detail='Starting after explicit open-gate policy')
+        queued=self.enqueue_worker(task_id,'phase:'+target.key,execution_options={'mode':'start','model_route':model})
+        self.audit('policy','gate.continuation_queued',task_id,{'gate':gate['gate_key'],'completed_job_id':completed_job_id,'job_id':queued,'phase':target.key})
+        return {'job_id':queued,'phase':target.key,'options':{'mode':'start','model_route':model}}
+
     def prepare_gate_dispatch(self,task_id,gate_key,action,*,actor,model=None,comment='',review_revision=None,**decision):
         """Commit the reviewed gate and its exact next generator job together."""
         from .phases import PHASE_BY_KEY,successor
@@ -2027,22 +2054,12 @@ FROM tasks t"""
 # User-entry mutations and new work claims only. Nested accepted-worker writes,
 # progress/usage evidence and completion remain available. Never gate settlement.
     # ---- PR B: artifact manifest authority (Postgres-only) ----
-    def publish_task_artifact(self,task_id,phase_key,name,ref,*,mime_type='application/json',writer_instance,validation_report=None):
-        """Measure, store and atomically publish one artifact: bytes into tenant-owned
-        artifact_bytes (content-addressed, immutable), a staged manifest row, then one
-        CAS demote-and-promote. The whole publication is this operation's transaction.
 
-        validation_report binds a validator verdict to the EXACT bytes being stored:
-        {'validator':name,'valid':bool,'error':str|None,'sha256':hex,
-        'validator_version':str}. Its sha256 must equal the measured hash of the
-        published bytes, otherwise the verdict came from other content and the publish
-        is refused - an unvalidated artifact can never carry a verdict it did not earn.
-        validator_version is the provenance of the validation code itself (package
-        version or schema fingerprint from validator_provenance); 'unknown' must be
-        explicit. A verdict recorded under one version is never reinterpreted as
-        another."""
-        from pathlib import Path
-        return self._publish_artifact_bytes(task_id,phase_key,name,Path(ref).read_bytes(),ref=ref,mime_type=mime_type,
+    def publish_task_artifact_bytes(self,task_id,phase_key,name,data,*,mime_type='application/json',writer_instance,validation_report=None):
+        """Publish one owned byte member, with no filesystem authority."""
+        import hashlib
+        return self._publish_artifact_bytes(task_id,phase_key,name,data,
+            ref='pg-artifact:'+hashlib.sha256(data).hexdigest(),mime_type=mime_type,
             writer_instance=writer_instance,validation_report=validation_report)
 
     def _publish_artifact_bytes(self,task_id,phase_key,name,data,*,ref,mime_type,writer_instance,validation_report=None):
@@ -2116,34 +2133,6 @@ FROM tasks t"""
                 (revision_id,revision_hash,now,writer_instance,task['task_id'],task['generation'],expected_revision_id), write=True)
         if changed.rowcount!=1: raise ValueError('readiness CAS failed: a concurrent producer published a revision')
 
-    def publish_task_revision(self,task_id,artifacts,*,writer_instance):
-        """Publish one COMPLETE validated revision atomically, in this operation's
-        single transaction: every member's bytes + staged row + CAS promote, supersede
-        published members of this generation that the new revision omits, then CAS the
-        readiness marker (bound to the exact revision hash) from the expected prior
-        revision. Any failure - including losing the race to a concurrent producer -
-        rolls everything back: no partial authority, no mixed revisions.
-        artifacts: [{'phase_key','name','ref','mime_type'?,'validation_report'?}]."""
-        import uuid as _uuid
-        task=self.task(task_id)
-        if not task: raise KeyError(task_id)
-        marker=self._execute_native('SELECT revision_id FROM artifact_manifest_ready WHERE task_id=%s AND generation=%s',
-            (task_id,task['generation'])).fetchone()
-        expected=marker['revision_id'] if marker else None
-        revision_id=_uuid.uuid4().hex
-        published=[self.publish_task_artifact(task_id,a['phase_key'],a['name'],a['ref'],
-            mime_type=a.get('mime_type','application/json'),writer_instance=writer_instance,
-            validation_report=a.get('validation_report')) for a in artifacts]
-        keep={(a['phase_key'],a['name']) for a in artifacts}
-        for row in self._execute_native("SELECT phase_key,name FROM task_artifacts WHERE task_id=%s AND generation=%s AND publication_state='published'",
-            (task_id,task['generation'])).fetchall():
-            if (row['phase_key'],row['name']) not in keep:
-                self._execute_native("UPDATE task_artifacts SET publication_state='superseded' WHERE task_id=%s AND generation=%s AND phase_key=%s AND name=%s AND publication_state='published'",
-                    (task_id,task['generation'],row['phase_key'],row['name']), write=True)
-        members=self._execute_native("SELECT phase_key,name,sha256 FROM task_artifacts WHERE task_id=%s AND generation=%s AND publication_state='published'",
-            (task_id,task['generation'])).fetchall()
-        self._mark_revision_ready(task,revision_id,self._revision_hash(members),expected,writer_instance,time.time())
-        return published
 
     def publish_task_revision_bytes(self,task_id,artifacts,*,writer_instance):
         """Complete durable byte revision with the same atomic manifest CAS.
@@ -2294,7 +2283,7 @@ _TASK_ENTRY_OPERATIONS={
  'create_task':'task.create','rename_task':'task.edit','delete_task':'task.delete',
  'tombstone_stopped_task':'task.delete','request_task_stop':'task.stop',
  'configure_simulation':'task.simulate','set_gate_open':'task.gate.decide',
- 'decide_gate':'task.gate.decide','prepare_gate_dispatch':'task.gate.decide',
+ 'decide_gate':'task.gate.decide','prepare_gate_dispatch':'task.gate.decide','prepare_open_gate_continuation':'task.gate.decide',
  'add_review_comment':'task.decision.comment','save_decision_draft':'task.decision.draft',
  'set_model_route':'task.model_route','set_model_default':'task.model_route',
  'begin_interview_start':'task.start','enqueue_worker':'task.start',
@@ -2380,6 +2369,7 @@ PG_OPERATIONS = (
     'pause_interrupted_worker',
     'post_retail_contribution',
     'prepare_gate_dispatch',
+    'prepare_open_gate_continuation',
     'prepare_next_phase',
     'prepare_phase_retry',
     'prepare_private_revision_changes',
@@ -2390,8 +2380,7 @@ PG_OPERATIONS = (
     'producer_result',
     'progress_cursor',
     'provider_attempt',
-    'publish_task_artifact',
-    'publish_task_revision',
+    'publish_task_artifact_bytes',
     'publish_task_revision_bytes',
     'quota_allows',
     'read_artifact_bytes',

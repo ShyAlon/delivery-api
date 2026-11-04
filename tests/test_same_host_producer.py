@@ -185,10 +185,23 @@ def test_symlinked_marker_rejected_before_producer_contact(worker,tmp_path):
     assert calls==[] and outside.read_text()=='outside must remain'
 
 
+@pytest.fixture
+def sdk_operator_policy(worker):
+    """Real expense authorization tables, fake transport and test-only dollars."""
+    import psycopg
+    with psycopg.connect(DSN) as c:
+        c.execute("INSERT INTO operator_expense_policy_revisions(revision,limit_units,units_per_usd,operator_subject,reason) VALUES('sdk-fixture',1000000000000,1000000000000,%s,'fake transport fixture')",(A.owner_id,))
+        c.execute("INSERT INTO operator_expense_policy_head VALUES(true,'sdk-fixture')")
+    yield
+    with psycopg.connect(DSN) as c:
+        c.execute('DELETE FROM operator_expense_policy_head')
+        c.execute("DELETE FROM operator_expense_policy_revisions WHERE revision='sdk-fixture'")
+
+
 @pytest.mark.parametrize('stream',[False,True])
 @pytest.mark.parametrize('stopped',[False,True])
 @pytest.mark.parametrize('prepaid',[False,True])
-def test_private_worker_actual_sdk_factory_raw_wire_once(worker,monkeypatch,stream,stopped,prepaid):
+def test_private_worker_actual_sdk_factory_raw_wire_once(worker,sdk_operator_policy,monkeypatch,stream,stopped,prepaid):
     import httpx,json,base64
     w,s,tid,job,base=worker;clients=[];captured=[]
     from spec_generator import model_config as module
@@ -200,7 +213,7 @@ def test_private_worker_actual_sdk_factory_raw_wire_once(worker,monkeypatch,stre
     # double admission through the old wrapper fails before fake contact.
     import hashlib
     w.gateway_factory=lambda cap,jid:WorkerAdmissionGateway(s,jid,require_prepaid=False,
-        resolve_serialized=lambda **kw:({**Q,'provider':'deepseek'},hashlib.sha256(kw['serialized_request']).hexdigest()),
+        resolve_serialized=lambda **kw:({**Q,'provider':'deepseek','expense_units_per_usd':10**12},hashlib.sha256(kw['serialized_request']).hexdigest()),
         measure_raw_usage=lambda usage:{'input_tokens':usage['prompt_tokens'],'output_tokens':usage['completion_tokens']})
     if prepaid:
         import psycopg
@@ -208,7 +221,7 @@ def test_private_worker_actual_sdk_factory_raw_wire_once(worker,monkeypatch,stre
             c.execute('INSERT INTO credit_accounts(owner_id,balance_units,units_per_credit,updated_at) VALUES (%s,1,1000000,0)',(A.owner_id,))
             c.execute('UPDATE admission_limits SET expense_limit=NULL,retail_limit=0,attempt_expense_max=NULL,attempt_retail_max=1,rate_max=NULL,concurrency_max=3 WHERE owner_id=%s',(A.owner_id,))
         w.gateway_factory=lambda cap,jid:WorkerAdmissionGateway(s,jid,
-            resolve_serialized=lambda **kw:({**Q,'provider':'deepseek','retail_units_per_credit':1000000},hashlib.sha256(kw['serialized_request']).hexdigest()),
+            resolve_serialized=lambda **kw:({**Q,'provider':'deepseek','expense_units_per_usd':10**12,'retail_units_per_credit':1000000},hashlib.sha256(kw['serialized_request']).hexdigest()),
             measure_raw_usage=lambda usage:{'input_tokens':usage['prompt_tokens'],'output_tokens':usage['completion_tokens']})
     usage={'prompt_tokens':2,'completion_tokens':3,'total_tokens':5}
     def fake(request):
@@ -479,24 +492,24 @@ def test_publication_failure_resume_never_reruns_paid_producer(worker,monkeypatc
     from delivery_api import config
     import delivery_api.artifact_publication as publication
     w,s,tid,job,base=worker;calls=[]
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     from spec_generator.attempt_admission import admitted_invoke
     body=b'{"deliberately": "minimal"}'
     def producer(cap,root):
         calls.append(cap)
-        target=root/'spec';target.mkdir(parents=True,exist_ok=True)
-        (target/'srs.json').write_bytes(body)
+        from delivery_api.generator_documents import GeneratorDocuments
+        GeneratorDocuments(s,cap,job).write('spec/srs.json',body)
         admitted_invoke(lambda:SimpleNamespace(usage_metadata={'input_tokens':2,'output_tokens':3}),**OPTIONS)
-    real_publish=publication.publish_session_revision
+    real_publish=publication.publish_document_revision
     def boom(*args,**kwargs):raise RuntimeError('injected publication failure')
-    monkeypatch.setattr(publication,'publish_session_revision',boom)
+    monkeypatch.setattr(publication,'publish_document_revision',boom)
     with tenant_context(A):
         with pytest.raises(RuntimeError,match='injected publication failure'):
             asyncio.run(w.execute(job,producer))
         assert s.worker_job(job)['state']=='failed'
         pending=s.producer_result(job)
         assert pending is not None and pending['published_at'] is None
-    monkeypatch.setattr(publication,'publish_session_revision',real_publish)
+    monkeypatch.setattr(publication,'publish_document_revision',real_publish)
     with tenant_context(A):
         s.reauthorize_worker(job)
         assert asyncio.run(w.execute(job,producer))
@@ -509,36 +522,34 @@ def test_publication_failure_resume_never_reruns_paid_producer(worker,monkeypatc
     assert rows==[{'state':'settled','expense_actual':8,'retail_actual':18}]
 
 
-def _paid_producer(calls,base_body=b'{"deliberately": "minimal"}'):
+def _paid_producer(calls,store,job,base_body=b'{"deliberately": "minimal"}'):
     from spec_generator.attempt_admission import admitted_invoke
     def producer(cap,root):
         calls.append(cap)
-        target=root/'spec';target.mkdir(parents=True,exist_ok=True)
-        (target/'srs.json').write_bytes(base_body)
+        from delivery_api.generator_documents import GeneratorDocuments
+        GeneratorDocuments(store,cap,job).write('spec/srs.json',base_body)
         admitted_invoke(lambda:SimpleNamespace(usage_metadata={'input_tokens':2,'output_tokens':3}),**OPTIONS)
     return producer
 
 
-def test_cross_host_missing_files_pause_never_regenerate(worker,monkeypatch,tmp_path):
-    """Host loss: produced marker exists but the original filesystem is gone (and the
-    manifest was never published). The resume PAUSES with specific evidence; the paid
-    callable is never re-run and the settled ledger row is untouched."""
+def test_folder_loss_recovers_pg_publication_without_regeneration(worker,monkeypatch,tmp_path):
+    """Host loss does not lose PG bytes. Resume publishes without another model call."""
     from delivery_api import config
     from delivery_api.same_host_producer import ProducerRecoveryPaused
     w,s,tid,job,base=worker;calls=[]
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     import delivery_api.artifact_publication as publication
-    real=publication.publish_session_revision
-    monkeypatch.setattr(publication,'publish_session_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
+    real=publication.publish_document_revision
+    monkeypatch.setattr(publication,'publish_document_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
     with tenant_context(A):
-        with pytest.raises(RuntimeError):asyncio.run(w.execute(job,_paid_producer(calls)))
-    monkeypatch.setattr(publication,'publish_session_revision',real)
+        with pytest.raises(RuntimeError):asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
+    monkeypatch.setattr(publication,'publish_document_revision',real)
     import shutil
     shutil.rmtree(base)  # host loss: the original filesystem is gone
     with tenant_context(A):
         s.reauthorize_worker(job)
-        with pytest.raises(ProducerRecoveryPaused,match='not on this host/path'):
-            asyncio.run(w.execute(job,_paid_producer(calls)))
+        assert asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
+        assert s.read_artifact_bytes(tid,'srs','srs.json')==b'{"deliberately": "minimal"}'
         with s._postgres.transaction() as c:
             rows=c.execute('SELECT state,expense_actual,retail_actual FROM provider_attempts WHERE job_id=%s',(job,)).fetchall()
     assert len(calls)==1 and rows==[{'state':'settled','expense_actual':8,'retail_actual':18}]
@@ -550,18 +561,18 @@ def test_crash_after_produce_before_marker_pauses_on_paid_evidence(worker,monkey
     from delivery_api import config
     from delivery_api.same_host_producer import ProducerRecoveryPaused
     w,s,tid,job,base=worker;calls=[]
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     real=s.record_producer_result
     monkeypatch.setattr(s,'record_producer_result',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('crash before marker')))
     with tenant_context(A):
         with pytest.raises(RuntimeError,match='crash before marker'):
-            asyncio.run(w.execute(job,_paid_producer(calls)))
+            asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
     monkeypatch.setattr(s,'record_producer_result',real)
     with tenant_context(A):
         assert s.producer_result(job) is None and s.producer_paid_evidence(job)>0
         s.reauthorize_worker(job)
         with pytest.raises(ProducerRecoveryPaused,match='provider attempt'):
-            asyncio.run(w.execute(job,_paid_producer(calls)))
+            asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
     assert len(calls)==1
 
 
@@ -569,22 +580,24 @@ def test_content_hash_mismatch_pauses(worker,monkeypatch):
     from delivery_api import config
     from delivery_api.same_host_producer import ProducerRecoveryPaused
     w,s,tid,job,base=worker;calls=[];roots=[]
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     import delivery_api.artifact_publication as publication
-    real=publication.publish_session_revision
-    monkeypatch.setattr(publication,'publish_session_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
+    real=publication.publish_document_revision
+    monkeypatch.setattr(publication,'publish_document_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
     def producer(cap,root):
         roots.append(root)
-        return _paid_producer(calls)(cap,root)
+        return _paid_producer(calls,s,job)(cap,root)
     with tenant_context(A):
         with pytest.raises(RuntimeError):asyncio.run(w.execute(job,producer))
-    monkeypatch.setattr(publication,'publish_session_revision',real)
-    assert roots and (roots[0]/'spec'/'srs.json').is_file()
-    (roots[0]/'spec'/'srs.json').write_text('{"tampered": true}')
+    monkeypatch.setattr(publication,'publish_document_revision',real)
+    assert roots
     with tenant_context(A):
-        s.reauthorize_worker(job)
+        from delivery_api.generator_documents import GeneratorDocuments
+        s.reauthorize_worker(job);cap=s.claim_worker(job)
+        GeneratorDocuments(s,cap,job).write('spec/srs.json',b'{"tampered":true}')
+        s.pause_interrupted_worker(job)
         with pytest.raises(ProducerRecoveryPaused,match='content hash'):
-            asyncio.run(w.execute(job,_paid_producer(calls)))
+            asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
     assert len(calls)==1
 
 
@@ -594,19 +607,19 @@ def test_generation_mismatch_pauses(worker,monkeypatch):
     from delivery_api import config
     from delivery_api.same_host_producer import ProducerRecoveryPaused
     w,s,tid,job,base=worker;calls=[]
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     import delivery_api.artifact_publication as publication
-    real=publication.publish_session_revision
-    monkeypatch.setattr(publication,'publish_session_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
+    real=publication.publish_document_revision
+    monkeypatch.setattr(publication,'publish_document_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
     with tenant_context(A):
-        with pytest.raises(RuntimeError):asyncio.run(w.execute(job,_paid_producer(calls)))
-    monkeypatch.setattr(publication,'publish_session_revision',real)
+        with pytest.raises(RuntimeError):asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
+    monkeypatch.setattr(publication,'publish_document_revision',real)
     with tenant_context(A):
         with s._postgres.transaction() as c:
             c.execute('UPDATE producer_results SET generation=generation+1000 WHERE job_id=%s',(job,))
         s.reauthorize_worker(job)
         with pytest.raises(ProducerRecoveryPaused,match='generation'):
-            asyncio.run(w.execute(job,_paid_producer(calls)))
+            asyncio.run(w.execute(job,_paid_producer(calls,s,job)))
     assert len(calls)==1
 
 
@@ -619,7 +632,7 @@ def test_pg_bound_document_worker_retries_publication_without_files_or_rebilling
     from spec_generator.attempt_admission import admitted_invoke
     w,s,tid,job,base=worker;calls=[]
     w.runtime_factory=lambda cap,root:JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     def producer(cap,root):
         assert current_runtime().documents is not None
         calls.append(1);_atomic_write(root/'spec/srs.json','{"exact":1}')
@@ -646,7 +659,7 @@ def test_pg_document_worker_refuses_settled_substitution_before_manifest_publish
     from spec_generator.worker_runtime import JobRuntime
     from spec_generator.model_config import StageModel
     from spec_generator.cli import _atomic_write
-    w,s,tid,job,base=worker;monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    w,s,tid,job,base=worker;monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     w.runtime_factory=lambda cap,root:JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
     with tenant_context(A):
         # Explicitly make this fixture job SRS. Prior needs must survive unchanged.
@@ -670,7 +683,7 @@ def test_pg_document_worker_modified_pending_bytes_pause_without_rerun(worker,mo
     from spec_generator.worker_runtime import JobRuntime
     from spec_generator.model_config import StageModel
     from spec_generator.cli import _atomic_write
-    w,s,tid,job,base=worker;calls=[];monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    w,s,tid,job,base=worker;calls=[];monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     w.runtime_factory=lambda cap,root:JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
     def producer(cap,root):calls.append(1);_atomic_write(root/'spec/srs.json','{"original":true}')
     real=publication.publish_document_revision
@@ -735,8 +748,8 @@ def test_interview_document_only_worker_publishes_without_generator_runtime_or_f
     from pathlib import Path
     from interview_engine.pg_session_store import PgSessionStore
     from interview_engine.pg_documents import InterviewDocuments
-    w,s,tid,job,base=worker;w.documents_enabled=True
-    monkeypatch.setattr(__import__('delivery_api.config',fromlist=['x']),'ARTIFACT_PUBLISH',False)
+    w,s,tid,job,base=worker
+    monkeypatch.setattr(__import__('delivery_api.config',fromlist=['x']),'ARTIFACT_PUBLISH',False,raising=False)
     produced=[]
     def producer(cap,root):
         pg=PgSessionStore(s._postgres._pool,claims=(A.owner_id,A.session_id));claim=pg.claim(cap.session_id,A.owner_id,'host-documents',60)

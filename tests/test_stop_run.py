@@ -132,7 +132,7 @@ def test_the_stop_is_refused_when_nothing_is_running_or_the_task_is_not_theirs_o
     _route_setup(monkeypatch, cloud=False)
     with pytest.raises(HTTPException) as local:
         _stop(True)
-    assert local.value.status_code == 404
+    assert local.value.status_code == 409
 
 
 def test_the_task_view_offers_stop_only_for_a_running_phase_in_process_mode(monkeypatch):

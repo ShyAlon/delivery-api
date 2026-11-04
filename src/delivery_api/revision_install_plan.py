@@ -45,3 +45,22 @@ def prepare_installation_plan(*,review,review_sha256,installation_id):
             'same-host source/destination writer exclusion and provider/worker quiescence','fsynced private-to-owned destination promotion with no overwrite',
             'durable promotion/install journal and database parent-generation CAS','installed anchor/session binding readback before explicit continuation']}
     return {'plan':body,'plan_sha256':digest(body)}
+
+
+def _validate_plan(plan,plan_sha256):
+    from vmodel_contracts.execution_anchor import ExecutionAnchor
+    if (not isinstance(plan,dict) or hashlib.sha256(json.dumps(plan,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=plan_sha256
+        or plan.get('kind')!='closed_revision_installation_effect_plan' or plan.get('state')!='planned'
+        or any(plan.get(k) is not False for k in ('accepted','installed','dispatch_started','automatic_replay_allowed','source_deletion_allowed','copy_stop_marker'))):
+        raise ValueError('exact held non-effectful installation plan required')
+    edited=plan.get('edited_gate')
+    if not isinstance(edited,dict) or edited!={'phase':edited.get('phase'),'state':'decided','approval_reset':False,'approved_by_exact_acceptance':True}:
+        raise ValueError('exact accepted phase approval plan required')
+    document=plan['destination_anchor']
+    if document.get('kind')!='installed_execution_generation_anchor' or document.get('version')!=1:raise ValueError('exact prospective anchor required')
+    anchor=ExecutionAnchor(**{k:v for k,v in document.items() if k not in ('kind','version')})
+    if anchor.document()!=document:raise ValueError('canonical prospective anchor required')
+    parent=plan['expected_parent']
+    if (parent['owner_id']!=anchor.owner_id or parent['task_id']!=anchor.task_id or parent['generation']+1!=anchor.generation
+        or parent['execution_session_id']==anchor.execution_session_id):raise ValueError('exact parent/anchor binding required')
+    return anchor

@@ -1,60 +1,42 @@
-from types import SimpleNamespace
-import hashlib,os
+"""Phase evidence follows the owned PG revision, without consulting scratch."""
+import hashlib
+from uuid import uuid4
 import pytest
-from delivery_api.tenancy import TenantScope,session_root,TenantAccessDenied
+from delivery_api.tenancy import session_root,TenantAccessDenied
+from delivery_api.worker_capability import WorkerCapability
 from delivery_api.revision_evidence import read_revision_artifacts
+from delivery_api.producer_inputs import MAX_DOCUMENT_BYTES
 
 
-def setup(tmp_path):
-    scope=TenantScope('00000000-0000-0000-0000-000000000001')
-    cap=SimpleNamespace(scope=scope,session_id='s',generation=2,validate=lambda store:None)
-    root=session_root(tmp_path,scope,'s');(root/'spec').mkdir(parents=True)
-    path=root/'spec'/'srs.json';path.write_text('{"fake":"evidence"}')
-    return cap,root,path
+def setup(tmp_path,workspace,data=b'{"exact":"reviewed"}\n'):
+    store=workspace.store;tid=store.create_task('Revision evidence')['task_id']
+    store.set_engine_session(tid,'evidence-'+uuid4().hex);cap=WorkerCapability.capture(store,tid)
+    store.publish_task_revision_bytes(tid,[dict(phase_key='srs',name='srs.json',data=data)] if data is not None else [],writer_instance='fixture')
+    return store,cap,session_root(tmp_path,cap.scope,cap.session_id),data
 
 
-def test_reads_only_canonical_owned_bytes_without_mutation(tmp_path):
-    cap,root,path=setup(tmp_path);before=path.read_bytes()
-    evidence=read_revision_artifacts(None,cap,root,'srs',artifacts_base=tmp_path)
-    assert evidence==[{'phase':'srs','name':'srs.json','generation':2,'sha256':hashlib.sha256(before).hexdigest()}]
-    assert path.read_bytes()==before
+def test_reads_only_canonical_owned_bytes_without_mutation(tmp_path,pg_scoped_workspace):
+    store,cap,root,data=setup(tmp_path,pg_scoped_workspace);before=store.manifest_snapshot(cap.task_id)
+    expected=[{'phase':'srs','name':'srs.json','generation':cap.generation,'sha256':hashlib.sha256(data).hexdigest()}]
+    assert read_revision_artifacts(store,cap,root,'srs',artifacts_base=tmp_path)==expected
+    root.mkdir(parents=True);(root/'spec').symlink_to(tmp_path/'foreign')
+    assert read_revision_artifacts(store,cap,root,'srs',artifacts_base=tmp_path)==expected
+    assert store.manifest_snapshot(cap.task_id)==before
 
 
-@pytest.mark.parametrize('unsafe',['symlink','foreign','missing','directory'])
-def test_rejects_wrong_namespace_or_nonregular_artifact(tmp_path,unsafe):
-    cap,root,path=setup(tmp_path)
-    if unsafe=='symlink':path.unlink();path.symlink_to(tmp_path/'outside')
-    elif unsafe=='foreign':root=tmp_path
-    elif unsafe=='missing':path.unlink()
-    else:path.unlink();path.mkdir()
-    with pytest.raises((ValueError,PermissionError,OSError)):
-        read_revision_artifacts(None,cap,root,'srs',artifacts_base=tmp_path)
+@pytest.mark.parametrize('data',[None,b' '*(MAX_DOCUMENT_BYTES+1)])
+def test_missing_or_unbounded_evidence_refused(tmp_path,pg_scoped_workspace,data):
+    store,cap,root,_=setup(tmp_path,pg_scoped_workspace,data)
+    with pytest.raises(ValueError):read_revision_artifacts(store,cap,root,'srs',artifacts_base=tmp_path)
 
 
-def test_same_inode_mutation_during_read_is_rejected(tmp_path,monkeypatch):
-    from delivery_api import revision_evidence as module
-    cap,root,path=setup(tmp_path);original=os.fdopen
-    class Reader:
-        def __init__(self,stream):self.stream=stream
-        def __enter__(self):return self
-        def __exit__(self,*args):self.stream.close()
-        def read(self,size):
-            data=self.stream.read(size)
-            with path.open('r+b') as f:f.write(b'{"changed":true}');f.truncate()
-            return data
-    monkeypatch.setattr(module.os,'fdopen',lambda *args,**kwargs:Reader(original(*args,**kwargs)))
-    with pytest.raises(TenantAccessDenied,match='changed during'):
-        read_revision_artifacts(None,cap,root,'srs',artifacts_base=tmp_path)
-
-
-def test_parent_directory_swap_during_read_is_rejected(tmp_path,monkeypatch):
-    from delivery_api import revision_evidence as module
-    cap,root,path=setup(tmp_path);original=os.open;swapped=[]
-    def open_file(name,flags,*args,**kwargs):
-        fd=original(name,flags,*args,**kwargs)
-        if name=='srs.json' and not swapped:
-            (root/'spec').rename(root/'old-spec');(root/'spec').mkdir();swapped.append(True)
-        return fd
-    monkeypatch.setattr(module.os,'open',open_file)
-    with pytest.raises(TenantAccessDenied,match='namespace changed'):
-        read_revision_artifacts(None,cap,root,'srs',artifacts_base=tmp_path)
+def test_foreign_root_phase_owner_and_generation_refused(tmp_path,pg_scoped_workspace,pg_workspace_factory):
+    store,cap,root,_=setup(tmp_path,pg_scoped_workspace)
+    with pytest.raises(TenantAccessDenied):read_revision_artifacts(store,cap,tmp_path,'srs',artifacts_base=tmp_path)
+    with pytest.raises(ValueError):read_revision_artifacts(store,cap,root,'needs',artifacts_base=tmp_path)
+    from delivery_api.tenancy import tenant_context
+    with pg_workspace_factory() as other,tenant_context(other.scope):
+        with pytest.raises(TenantAccessDenied):read_revision_artifacts(store,cap,root,'srs',artifacts_base=tmp_path)
+    with store._task_operation_guard('task.rerun'):
+        store._execute_native('UPDATE tasks SET generation=generation+1 WHERE task_id=%s',(cap.task_id,),write=True)
+    with pytest.raises(TenantAccessDenied):read_revision_artifacts(store,cap,root,'srs',artifacts_base=tmp_path)

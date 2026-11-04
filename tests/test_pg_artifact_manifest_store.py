@@ -1,3 +1,4 @@
+from pathlib import Path
 """PR B store unit: manifest publish + hash-verified reads on the Postgres adapter.
 
 Runs against the isolated migrated Postgres (pg_harness) as delivery_app with
@@ -25,7 +26,7 @@ def store(): return PostgresStore(DSN.replace('user=sandbox','user=delivery_app'
 def publish(store, task_id, name, body: bytes, writer='host#1'):
     tmp = os.path.join(os.environ['PYTEST_TMPDIR'], name)
     with open(tmp, 'wb') as f: f.write(body)
-    return store.publish_task_artifact(task_id, 'spec', name, tmp, mime_type='application/json',
+    return store.publish_task_artifact_bytes(task_id, 'spec', name, Path(tmp).read_bytes(), mime_type='application/json',
                                        writer_instance=writer, validation_report={'validator':'SRSDocument','validator_version':'vmodel-contracts==0.28.0','valid':True,'error':None,'sha256':hashlib.sha256(body).hexdigest()})
 
 
@@ -34,7 +35,7 @@ def test_publish_records_measured_manifest_and_serves_hash_verified_bytes(store,
     body = b'{"requirements": ["one", "two"]}'
     with tenant_context(A):
         task = store.create_task('manifest-' + uuid.uuid4().hex)
-        row = store.publish_task_artifact(task['task_id'], 'spec', 'srs.json', *[_p(tmp_path, body)],
+        row = store.publish_task_artifact_bytes(task['task_id'], 'spec', 'srs.json', Path(_p(tmp_path, body)).read_bytes(),
                                           mime_type='application/json', writer_instance='host#1',
                                           validation_report={'validator':'SRSDocument','validator_version':'vmodel-contracts==0.28.0','valid':True,'error':None,'sha256':hashlib.sha256(body).hexdigest()})
         assert row['publication_state'] == 'published'
@@ -53,9 +54,9 @@ def _p(tmp_path, body, name='srs.json'):
 def test_republish_supersedes_exactly_one_pointer(store, tmp_path):
     with tenant_context(A):
         task = store.create_task('manifest-' + uuid.uuid4().hex)
-        store.publish_task_artifact(task['task_id'], 'spec', 'srs.json', _p(tmp_path, b'v1', 'v1.json'),
+        store.publish_task_artifact_bytes(task['task_id'], 'spec', 'srs.json', Path(_p(tmp_path, b'v1', 'v1.json')).read_bytes(),
                                     mime_type='application/json', writer_instance='host#1')
-        store.publish_task_artifact(task['task_id'], 'spec', 'srs.json', _p(tmp_path, b'v2-longer', 'v2.json'),
+        store.publish_task_artifact_bytes(task['task_id'], 'spec', 'srs.json', Path(_p(tmp_path, b'v2-longer', 'v2.json')).read_bytes(),
                                     mime_type='application/json', writer_instance='host#2')
         manifest = store.manifest_artifacts(task['task_id'])
         published = [r for r in manifest if r['publication_state'] == 'published']
@@ -69,7 +70,7 @@ def test_conflicting_bytes_for_recorded_hash_rejected(store, tmp_path):
     with tenant_context(A):
         task = store.create_task('manifest-' + uuid.uuid4().hex)
         body = b'original content'
-        store.publish_task_artifact(task['task_id'], 'spec', 'srs.json', _p(tmp_path, body),
+        store.publish_task_artifact_bytes(task['task_id'], 'spec', 'srs.json', Path(_p(tmp_path, body)).read_bytes(),
                                     mime_type='application/json', writer_instance='host#1')
         digest = hashlib.sha256(body).hexdigest()
         # Corrupt the content-addressed row out-of-band (superuser; the app role cannot UPDATE):
@@ -83,7 +84,7 @@ def test_conflicting_bytes_for_recorded_hash_rejected(store, tmp_path):
 def test_tenant_isolation_on_manifest_and_bytes(store, tmp_path):
     with tenant_context(A):
         task = store.create_task('manifest-' + uuid.uuid4().hex)
-        store.publish_task_artifact(task['task_id'], 'spec', 'srs.json', _p(tmp_path, b'private-a'),
+        store.publish_task_artifact_bytes(task['task_id'], 'spec', 'srs.json', Path(_p(tmp_path, b'private-a')).read_bytes(),
                                     mime_type='application/json', writer_instance='host#1')
     with tenant_context(B):
         assert store.manifest_artifacts(task['task_id']) == []
@@ -91,7 +92,7 @@ def test_tenant_isolation_on_manifest_and_bytes(store, tmp_path):
             store.read_artifact_bytes(task['task_id'], 'spec', 'srs.json')
         # Same content under B is an independent row: no cross-tenant dedup oracle.
         own = store.create_task('manifest-' + uuid.uuid4().hex)
-        store.publish_task_artifact(own['task_id'], 'spec', 'srs.json', _p(tmp_path, b'private-a', 'b.json'),
+        store.publish_task_artifact_bytes(own['task_id'], 'spec', 'srs.json', Path(_p(tmp_path, b'private-a', 'b.json')).read_bytes(),
                                     mime_type='application/json', writer_instance='host#1')
         assert store.read_artifact_bytes(own['task_id'], 'spec', 'srs.json') == b'private-a'
 

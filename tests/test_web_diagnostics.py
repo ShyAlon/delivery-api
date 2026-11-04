@@ -104,14 +104,14 @@ def _case_the_old_session_pages_send_people_home(path):
     assert response.status_code == 302 and response.headers["location"] == "/", path
 
 
-def test_the_old_session_page_code_is_gone_but_the_data_endpoints_stay():
+def test_the_old_session_page_code_and_host_storage_setting_are_gone():
     assert not (WEB / "sessions.js").exists() and not (WEB / "session-presenters.js").exists()
     for name in ("app.js", "identity.js", "session-cost.js"):
         text = (WEB / name).read_text()
         assert "sessionsDashboard" not in text and "bundleView" not in text and "/sessions/" not in text and "'/sessions'" not in text, name
     import delivery_api.app as module
     paths = {r.path for r in module.app.routes}
-    assert "/api/sessions" in paths and "/api/settings/artifacts-root" in paths
+    assert "/api/sessions" in paths and "/api/settings/artifacts-root" not in paths
 
 
 def test_server_boot_config_does_not_carry_a_runtime_mode(monkeypatch):
@@ -127,13 +127,10 @@ def test_server_boot_config_does_not_carry_a_runtime_mode(monkeypatch):
     assert config=={}
 
 
-def _check_the_old_session_pages_send_people_home(monkeypatch,tmp_path,workspace):
-    import os
-    from tests.test_web_diagnostics import _case_the_old_session_pages_send_people_home
-    _case_the_old_session_pages_send_people_home(os.environ['TEST_OLD_SESSION_PAGE'])
-
-
 @pytest.mark.parametrize("path", ["/sessions", "/sessions/abc", "/sessions/abc/view", "/sessions/abc/needs", "/sessions/abc/interview"])
-def test_the_old_session_pages_send_people_home(path,monkeypatch,pg_local_compat_process):
-    monkeypatch.setenv('TEST_OLD_SESSION_PAGE',path)
-    pg_local_compat_process(_check_the_old_session_pages_send_people_home)
+def test_the_old_session_pages_send_people_home(path,monkeypatch,pg_scoped_workspace,pg_task_app):
+    from fastapi.testclient import TestClient
+    from delivery_api import app as module
+    client=TestClient(pg_task_app(pg_scoped_workspace),headers=pg_scoped_workspace.headers,follow_redirects=False)
+    response=client.get(path,headers={'Accept':'text/html'})
+    assert response.status_code==302 and response.headers['location']=='/'

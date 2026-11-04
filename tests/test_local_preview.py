@@ -31,7 +31,6 @@ def test_missing_reference_artifact_fails_normally_without_location_wording(monk
  import delivery_api.app as module
  from fastapi import HTTPException
  monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
- monkeypatch.setattr(module,'store',SimpleNamespace())
- monkeypatch.setattr(module,'_task_artifact_snapshot',lambda _: [{'phase_key':'srs','name':'srs.json','ref':'/nonexistent-fixture/srs.json'}])
- with pytest.raises(HTTPException) as error:module._task_artifact('fixture','srs','srs.json')
- assert error.value.status_code==404 and error.value.detail=='artifact file not found'
+ monkeypatch.setattr(module,'store',SimpleNamespace(task=lambda _: {'is_test':False},read_artifact_bytes=lambda *a:(_ for _ in ()).throw(KeyError('absent'))))
+ with pytest.raises(HTTPException) as error:module.task_artifact_download('fixture','srs','srs.json')
+ assert error.value.status_code==404 and error.value.detail=='artifact not found'

@@ -67,29 +67,27 @@ def worker_state_summary(worker_state):
     return {"available":True,"worker_jobs":jobs,"provider_attempts":attempts}
 
 
-def model_calls(root,cloud,limit=300):
+def model_calls(raw,cloud,limit=300):
     """Per-call model timing for the Debug window: every llm_call_end in the
     session's llm-calls.jsonl plus a per-call-type aggregate - which types of
     calls took how long. Cloud mirrors the provider-diagnostics privacy rule:
     token counts and derived rates stay server-side; durations stay visible."""
     import json as _json
-    path=root/"llm-calls.jsonl"
     calls=[]
-    if path.is_file():
-        with path.open(errors="replace") as stream:
-            for line in stream:
-                try:entry=_json.loads(line)
-                except ValueError:continue
-                if entry.get("event")!="llm_call_end":continue
-                call={key:entry[key] for key in ("ts","stage","item","provider","model","latency_s","keep_alive") if key in entry}
-                timing=entry.get("timing")
-                if isinstance(timing,dict):
-                    if cloud:timing={k:v for k,v in timing.items() if not k.endswith("_count")}
-                    if timing:call["timing"]=timing
-                if not cloud:
-                    if entry.get("usage"):call["usage"]=entry["usage"]
-                    if entry.get("tokens_per_s") is not None:call["tokens_per_s"]=entry["tokens_per_s"]
-                calls.append(call)
+    if raw is not None:
+        for line in raw.decode('utf-8',errors='replace').splitlines():
+            try:entry=_json.loads(line)
+            except ValueError:continue
+            if not isinstance(entry,dict) or entry.get('event')!='llm_call_end':continue
+            call={key:entry[key] for key in ('ts','stage','item','provider','model','latency_s','keep_alive') if key in entry}
+            timing=entry.get('timing')
+            if isinstance(timing,dict):
+                if cloud:timing={k:v for k,v in timing.items() if not k.endswith('_count')}
+                if timing:call['timing']=timing
+            if not cloud:
+                if entry.get('usage'):call['usage']=entry['usage']
+                if entry.get('tokens_per_s') is not None:call['tokens_per_s']=entry['tokens_per_s']
+            calls.append(call)
         calls=calls[-limit:]
     by_stage={}
     for call in calls:

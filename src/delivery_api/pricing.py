@@ -1,12 +1,8 @@
 """Credit pricing from measured engine usage and process time, with the customer USD price (credits x USD_PER_CREDIT). Raw model cost_usd is kept in the payload but not displayed."""
 from __future__ import annotations
-import json,os,logging
-_logger=logging.getLogger(__name__)
-_warned_usage=set()
+import os
 from decimal import Decimal
 from .retail_pricing import RetailRates
-from pathlib import Path
-from .tenant_files import read_text as read_bound_text
 
 _DEFAULT_RATES=RetailRates.from_environment(os.environ)
 PRICE_PER_TOKEN=_DEFAULT_RATES.price_per_token
@@ -18,51 +14,8 @@ def retail_rates()->RetailRates:
 
 _STAGE_PHASE={"probing":"intent","distillation":"intent","phrasing":"intent","scope_tiebreak":"intent","expert_opinion":"intent","conops":"conops","needs":"needs","srs":"srs","architecture":"architecture","items":"specs","tests":"tests","validation":"validation","review":"tests"}
 
-class UsageRows(list):
-    rejected_rows=0
-    complete=True
-
-
-def _rows(path:Path,start:int=0)->list[dict]:
-    out=UsageRows()
-    if not path.is_file():return out
-    for line in read_bound_text(path,errors="replace").splitlines()[start:]:
-        try:
-            value=json.loads(line)
-            if isinstance(value,dict):out.append(value)
-            else:out.rejected_rows+=1
-        except json.JSONDecodeError:out.rejected_rows+=1
-    out.complete=out.rejected_rows==0
-    if not out.complete and path not in _warned_usage and len(_warned_usage)<128:
-        # Bound the warning cache and never print source bytes or private paths.
-        if len(_warned_usage)<128:_warned_usage.add(path)
-        _logger.warning('local_usage_incomplete rejected_rows=%d; source preserved',out.rejected_rows)
-    return out
-
-
-def usage_evidence(root):
-    import math
-    rejected=invalid=0
-    for area in ('interview','spec'):
-        batch=_rows(Path(root)/area/'usage.jsonl');rejected+=batch.rejected_rows
-        for row in batch:
-            bad=False
-            for key in ('prompt_tokens','completion_tokens','latency_s','price_per_mtok_prompt_usd','price_per_mtok_completion_usd'):
-                value=row.get(key)
-                if value is None:continue
-                try:
-                    number=float(value)
-                    if isinstance(value,bool) or not math.isfinite(number) or number<0 or (key.endswith('tokens') and not number.is_integer()):bad=True
-                except (ValueError,TypeError,OverflowError):bad=True
-            invalid+=int(bad)
-    return {'complete':not (rejected or invalid),'rejected_rows':rejected,
-            'invalid_numeric_rows':invalid,'scope':'local usage evidence only'}
-
-def line_count(path:Path)->int:
-    return len(read_bound_text(path,errors="replace").splitlines()) if path.is_file() else 0
-
-def price_execution(usage_path:Path,llm_path:Path,wall_ms:float,usage_start:int=0,llm_start:int=0)->list[dict]:
-    usage=_rows(usage_path,usage_start);calls=_rows(llm_path,llm_start)
+def price_rows(usage:list[dict],calls:list[dict],wall_ms:float)->list[dict]:
+    """Pure measured-evidence calculator. No path readers or durable writes."""
     llm_ms=sum(float(x.get("latency_s") or 0)*1000 for x in calls if x.get("event")=="llm_call_end")
     deterministic_ms=max(0.0,wall_ms-llm_ms)
     buckets={}
@@ -84,28 +37,8 @@ def price_execution(usage_path:Path,llm_path:Path,wall_ms:float,usage_start:int=
     return result
 
 
-def usage_tokens(path:Path)->int:
-    """Prompt plus completion tokens recorded in one usage.jsonl."""
-    return sum(int(r.get("prompt_tokens") or 0)+int(r.get("completion_tokens") or 0) for r in _rows(path))
-
 def token_credits(tokens:int|float)->float:
     return float(retail_rates().credits(tokens))
 
 def credits_to_usd(credits:float)->float:
     return float(Decimal(str(credits))*retail_rates().usd_per_credit)
-
-def write_cost_json(session_root:Path)->dict|None:
-    """Internal per-session cost rollup (contracts cost_rollup over the interview and
-    downstream usage files). It sits beside the phase folders, is not a phase
-    artifact, and is never listed, zipped or handed off. Estimate: tokens x the
-    versioned price table, an upper bound (no cache-hit or off-peak pricing)."""
-    from vmodel_contracts import cost_rollup
-    rows=[];rejected=0
-    for area in ("interview","spec"):
-        batch=_rows(session_root/area/"usage.jsonl");rows+=batch;rejected+=batch.rejected_rows
-    if not rows and not rejected:return None
-    report=cost_rollup(rows) if rows else {}
-    report['evidence']={'complete':not rejected,'rejected_rows':rejected,'scope':'local usage evidence only'}
-    target=session_root/"cost.json";tmp=session_root/".cost.json.tmp"
-    tmp.write_text(json.dumps(report,indent=1,sort_keys=True));tmp.replace(target)
-    return report

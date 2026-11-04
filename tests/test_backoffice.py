@@ -63,14 +63,14 @@ def test_task_usage_proxy_preserves_authority_and_only_exact_task_key():
  assert len(calls)==1
 
 
-def test_local_operator_routes_are_absent_before_auth_and_no_store(monkeypatch):
+def test_operator_routes_still_require_identity_when_retired_mode_is_flipped(monkeypatch):
  from delivery_api import app as service,config
  monkeypatch.setattr(config,'CLOUD_TENANTS',False)
  client=TestClient(service.app)
  for path in ('/api/operator/sessions','/api/operator/credits','/api/operator/task-debug?task_id=x','/api/operator/task-logs?task_id=x','/api/operator/expense-totals','/api/operator/payment-journal?start_at=1&end_at=2','/api/operator/payment-totals?start_at=1&end_at=2'):
   for method in ('GET','POST'):
    got=client.request(method,path)
-   assert got.status_code==404 and got.headers['cache-control']=='no-store'
+   assert got.status_code==401
 
 
 def test_vendor_status_is_proxied_to_the_operator_route_and_absent_locally(monkeypatch):
@@ -82,7 +82,7 @@ def test_vendor_status_is_proxied_to_the_operator_route_and_absent_locally(monke
  from delivery_api import app as service,config
  monkeypatch.setattr(config,'CLOUD_TENANTS',False)
  got=TestClient(service.app).get('/api/operator/vendor-status')
- assert got.status_code==404 and got.headers['cache-control']=='no-store'
+ assert got.status_code==401
 
 
 def test_payment_read_proxy_only_bounded_known_parameters_and_no_writes():

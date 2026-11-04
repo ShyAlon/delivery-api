@@ -3,10 +3,8 @@
 Caller owns same-host source/destination writer exclusion. Manifest digest and
 lineage must come from the held control-plane plan, not client-supplied paths.
 """
-import hashlib,json,os,re,stat
 from pathlib import Path
-from .producer_inputs import _open_directory,_identity,_content_stamp,MAX_DOCUMENT_BYTES
-from .tenancy import session_root,TenantAccessDenied
+from .tenancy import session_root
 
 
 
@@ -42,54 +40,6 @@ def read_validated_staged_receipt(store,capability,*,artifacts_base,lineage,line
     if read_documents(store,capability,expected)!=observed['upstream']:
         raise ValueError('staged upstream bytes differ from approved source files')
     return receipt
-
-
-def read_approved_upstream_bytes(root,*,expected_documents):
-    return {name:hashlib.sha256(raw).hexdigest() for name,raw in read_approved_upstream_documents(root,expected_documents=expected_documents).items()}
-
-
-def read_approved_upstream_documents(root,*,expected_documents):
-    """Read exact original bytes matching approved checkpoint values, no healing.
-
-    Caller supplies authorized canonical root and typed source checkpoint values.
-    Missing optional-looking documents fail closed; absence needs an explicit
-    reviewed inventory policy, never a fabricated null file.
-    """
-    allowed={'interview/intent_model.json','interview/conops.json','spec/needs.json','spec/system-baseline.json','spec/srs.json'}
-    if not isinstance(expected_documents,dict) or not expected_documents or not set(expected_documents)<=allowed:
-        raise ValueError('canonical approved upstream inventory required')
-    parent=_open_directory(root);records=[];documents={}
-    try:
-        for name,value in expected_documents.items():
-            directory,filename=name.split('/');dfd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
-            try:
-                fd=os.open(filename,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=dfd)
-                try:
-                    before=os.fstat(fd)
-                    if not stat.S_ISREG(before.st_mode) or before.st_size>MAX_DOCUMENT_BYTES:
-                        raise ValueError('bounded regular approved upstream file required')
-                    with os.fdopen(fd,'rb',closefd=False) as stream:raw=stream.read(MAX_DOCUMENT_BYTES+1)
-                    if len(raw)>MAX_DOCUMENT_BYTES or _content_stamp(os.fstat(fd))!=_content_stamp(before):
-                        raise TenantAccessDenied('approved upstream bytes changed during read')
-                    if json.loads(raw)!=value:raise ValueError('approved source file differs from checkpoint channel')
-                    if _content_stamp(os.stat(filename,dir_fd=dfd,follow_symlinks=False))!=_content_stamp(before):
-                        raise TenantAccessDenied('approved upstream namespace changed')
-                    records.append((directory,filename,_identity(dfd),_content_stamp(before)))
-                    documents[name]=raw
-                finally:os.close(fd)
-            finally:os.close(dfd)
-        current=_open_directory(root)
-        try:
-            if _identity(current)!=_identity(parent):raise TenantAccessDenied('approved upstream root changed')
-            for directory,filename,identity,stamp in records:
-                dfd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=current)
-                try:
-                    if _identity(dfd)!=identity or _content_stamp(os.stat(filename,dir_fd=dfd,follow_symlinks=False))!=stamp:
-                        raise TenantAccessDenied('approved upstream inventory changed across readback')
-                finally:os.close(dfd)
-        finally:os.close(current)
-        return documents
-    finally:os.close(parent)
 
 
 def validate_cloud_revision_conops(source,semantic_session_id):

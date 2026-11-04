@@ -114,8 +114,18 @@ def _check_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded
     _case_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_download(monkeypatch)
 
 
-def test_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_download(pg_local_compat_process):
-    pg_local_compat_process(_check_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_download)
+def test_a_non_admin_is_refused_and_an_admin_gets_the_page_data_and_a_recorded_download(pg_operator_http,pg_scoped_workspace,pg_task_app):
+    from fastapi.testclient import TestClient
+    # Signature/claims are valid for both; only the admin mapping differs.
+    customer=TestClient(pg_task_app(pg_scoped_workspace),headers=pg_scoped_workspace.headers)
+    assert customer.get('/api/admin/operations/health').status_code==403
+    assert customer.get('/api/admin/operations/log-download').status_code==403
+    health=pg_operator_http.get('/api/admin/operations/health')
+    assert health.status_code==200 and 'capacity' in health.json()
+    download=pg_operator_http.get('/api/admin/operations/log-download?minutes=15')
+    assert download.status_code==200 and download.headers['content-type']=='application/zip'
+    assert download.headers['cache-control']=='no-store'
+    assert pg_operator_http.get('/api/admin/operations/log-download?minutes=999').status_code==422
 
 
 def _check_the_page_and_its_script_are_served_without_data(monkeypatch,tmp_path,workspace):
@@ -123,5 +133,8 @@ def _check_the_page_and_its_script_are_served_without_data(monkeypatch,tmp_path,
     _case_the_page_and_its_script_are_served_without_data()
 
 
-def test_the_page_and_its_script_are_served_without_data(pg_local_compat_process):
-    pg_local_compat_process(_check_the_page_and_its_script_are_served_without_data)
+def test_the_page_and_its_script_are_served_without_data(pg_operator_http):
+    page=pg_operator_http.get('/ops');script=pg_operator_http.get('/assets/ops.js');body=pg_operator_http.get('/assets/ops-body.html')
+    assert page.status_code==200 and script.status_code==200 and 'fetch(' in script.text
+    assert body.status_code==200 and 'Server Health' in body.text
+    assert 'example.com' not in page.text

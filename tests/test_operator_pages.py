@@ -298,5 +298,10 @@ def _check_the_endpoint_serves_the_zip_to_an_admin_and_records_it(monkeypatch,tm
     _case_the_endpoint_serves_the_zip_to_an_admin_and_records_it(monkeypatch)
 
 
-def test_the_endpoint_serves_the_zip_to_an_admin_and_records_it(pg_local_compat_process):
-    pg_local_compat_process(_check_the_endpoint_serves_the_zip_to_an_admin_and_records_it)
+def test_the_endpoint_serves_the_zip_to_an_admin_and_records_it(pg_operator_http):
+    response=pg_operator_http.get('/api/admin/operations/log-download?minutes=15')
+    assert response.status_code==200,response.text
+    assert response.headers['content-type']=='application/zip'
+    assert 'attachment; filename="requi-server-log-' in response.headers['content-disposition']
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.testzip() is None and len(archive.namelist())==1

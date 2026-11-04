@@ -80,13 +80,12 @@ def test_stop_run_refusal_is_marked(marks, monkeypatch):
 
 def test_artifact_download_marks_success_and_refusal(marks, monkeypatch, tmp_path):
     f = tmp_path / "out.json"; f.write_text("{}")
-    monkeypatch.setattr(module, "_task_artifact", lambda *a: f)
     monkeypatch.setattr(config, "CLOUD_TENANTS", False)
     monkeypatch.setattr(module,"store",NS(task=lambda tid:{"task_id":tid,"is_test":False},read_artifact_bytes=lambda *a:b"{}"))
     assert module.task_artifact_download("t1", "needs", "out.json")
     assert "task.export" in _kinds(marks)
     monkeypatch.setattr(config, "CLOUD_TENANTS", True)
-    monkeypatch.setattr(config, "ARTIFACT_MANIFEST_READS", True)
+    monkeypatch.setattr(config, "ARTIFACT_MANIFEST_READS", True,raising=False)
     monkeypatch.setattr(module, "store", NS(task=lambda tid:{"task_id":tid,"is_test":False},_postgres=True,read_artifact_bytes=lambda *a: (_ for _ in ()).throw(KeyError())))
     with pytest.raises(HTTPException):
         module.task_artifact_download("t1", "needs", "out.json")
@@ -123,13 +122,10 @@ def test_package_download_refusal_is_marked(marks, monkeypatch):
     assert "task.export.refused" in _kinds(marks)
 
 
-def test_settings_writes_mark_saved_and_refused(marks, monkeypatch):
-    monkeypatch.setattr(module, "bundles", NS(save_root=lambda p: {"ok": 1}))
-    assert module.set_artifacts_root(module.ArtifactsRootRequest(path="/x"), ACTOR) == {"ok": 1}
-    monkeypatch.setattr(module, "bundles", NS(save_root=lambda p: (_ for _ in ()).throw(ValueError("bad"))))
-    with pytest.raises(HTTPException):
-        module.set_artifacts_root(module.ArtifactsRootRequest(path="/x"), ACTOR)
-    assert "settings.saved" in _kinds(marks) and "settings.save_refused" in _kinds(marks)
+def test_retired_host_settings_cannot_record_saved_markers(marks,monkeypatch):
+    assert not hasattr(module,'set_artifacts_root')
+    assert not hasattr(module,'set_engine_python')
+    assert 'settings.saved' not in _kinds(marks)
 
 
 def test_question_quality_config_marks_saved_and_refused(marks, monkeypatch):
@@ -181,8 +177,10 @@ def test_rerun_marks_success_and_refusal(marks, monkeypatch):
                                           rerun_prerequisite=lambda *a: None,
                                           prepare_rerun=lambda *a: 2,
                                           add_event=lambda *a, **k: None))
-    assert module.rerun("t1", module.RerunRequest(from_phase="needs", confirm=True), None, ACTOR)["generation"] == 2
-    assert "task.rerun" in _kinds(marks)
+    with pytest.raises(HTTPException) as refused:
+        module.rerun("t1", module.RerunRequest(from_phase="needs", confirm=True), None, ACTOR)
+    assert refused.value.status_code==409 and refused.value.detail['code']=='tenant_rerun_unavailable'
+    assert "task.rerun" not in _kinds(marks)
 
 
 def test_stream_close_is_marked(marks, monkeypatch):
@@ -202,6 +200,10 @@ def test_dispatch_rejection_and_claim_are_marked(marks, monkeypatch):
     from delivery_api.tenancy import TenantScope, tenant_context
     monkeypatch.setattr(config, "CLOUD_TENANTS", False)
     scope = TenantScope("00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000a")
+    class Engine:
+        async def dispatch(self,*args):return True
+    from delivery_api import inprocess_engine
+    monkeypatch.setattr(inprocess_engine,'_engine',Engine())
     store = NS(worker_job=lambda jid: None)
     with tenant_context(scope):
         with pytest.raises(PermissionError):

@@ -58,7 +58,6 @@ class ProcessRunner:
     pricing_wall_cursor: dict[str,float] = field(default_factory=dict)
     pricing_totals: dict[str,dict] = field(default_factory=dict)
     pricing_paths: dict[str,tuple[Path,Path]] = field(default_factory=dict)
-    on_complete: object | None = None
 
     def _phase(self, text: str, fallback: str) -> str:
         lower = text.lower()
@@ -87,7 +86,6 @@ class ProcessRunner:
         from . import config
         options=dict(cwd=cwd,phase=phase,env=env,completion_phases=completion_phases,
                      infer_phase=infer_phase,stall_timeout=stall_timeout)
-        if not config.CLOUD_TENANTS:return await self._run(task_id,command,**options)
         # Only a trusted parent can install the job-bound gateway; no public
         # environment variable enables it. Descriptor lifetime is the child run.
         from .worker_capability import WorkerCapability
@@ -115,22 +113,21 @@ class ProcessRunner:
         out_index=command.index("--out")+1 if "--out" in command else None
         artifact_dir=Path(command[out_index]) if out_index else None
         from . import config
-        if config.CLOUD_TENANTS:
-            from .worker_capability import WorkerCapability
-            from .tenant_files import authorized_session
-            from vmodel_contracts.runtime import artifacts_root
-            capability=WorkerCapability.capture(self.store,task_id)
-            capability.validate(self.store)
-            expected=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),
-                                        capability.session_id,self.store)/'spec'
-            if artifact_dir is None or artifact_dir.resolve()!=expected:
-                raise PermissionError('cloud subprocess output must match authorized session')
-            if (env or {}).get('VMODEL_ARTIFACTS_DIR')!=str(expected.parent.parent):
-                raise PermissionError('cloud subprocess root must match tenant namespace')
-        if config.CLOUD_TENANTS and virtual is None:raise PermissionError('isolated child phase required')
+        from .worker_capability import WorkerCapability
+        from .tenant_files import authorized_session
+        from vmodel_contracts.runtime import artifacts_root
+        capability=WorkerCapability.capture(self.store,task_id)
+        capability.validate(self.store)
+        expected=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),
+                                    capability.session_id,self.store)/'spec'
+        if artifact_dir is None or artifact_dir.resolve()!=expected:
+            raise PermissionError('cloud subprocess output must match authorized session')
+        if (env or {}).get('VMODEL_ARTIFACTS_DIR')!=str(expected.parent.parent):
+            raise PermissionError('cloud subprocess root must match tenant namespace')
+        if virtual is None:raise PermissionError('isolated child phase required')
         from .generator_documents import pin_document_artifacts,document_substitutions
         documents=None
-        if hasattr(self.store,'_postgres') and virtual is not None:
+        if virtual is not None:
             from .generator_documents import GeneratorDocuments,pin_document_artifacts,document_substitutions
             from .worker_capability import WorkerCapability
             documents=GeneratorDocuments.reader(self.store,WorkerCapability.capture(self.store,task_id))
@@ -139,22 +136,13 @@ class ProcessRunner:
             from .phases import PHASE_BY_KEY as _PHASE_BY_KEY
             _phase_def=_PHASE_BY_KEY.get(phase)
             if _phase_def is not None and _phase_def.executor=='generator':
-                from .artifact_publication import pin_settled_artifacts
                 _pin_task=self.store.task(task_id)
-                if _pin_task:settled_pin=pin_document_artifacts(_pin_task,documents,current_phase=phase) if documents is not None else pin_settled_artifacts(_pin_task,artifact_dir.parent,current_phase=phase)
-        usage_path=artifact_dir/"usage.jsonl" if artifact_dir else None
-        llm_path=artifact_dir/"llm-calls.jsonl" if artifact_dir else None
-        from .pricing import line_count
-        usage_start=line_count(usage_path) if usage_path else 0;llm_start=line_count(llm_path) if llm_path else 0
+                if _pin_task:settled_pin=pin_document_artifacts(_pin_task,documents,current_phase=phase)
         self.store.update_phase(task_id, phase, "running", detail="Starting engine")
         self.store.add_event(task_id, "command", "Engine process started", phase_key=phase,
                              payload={"argv": command, "cwd": str(cwd)})
         if virtual is not None:virtual.attach(command,env)
-        proc = virtual if virtual is not None else await asyncio.create_subprocess_exec(
-            *command, cwd=str(cwd), env={**os.environ, **(env or {})},
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-            start_new_session=(os.name == "posix"),
-        )
+        proc=virtual
         self.processes[task_id] = proc
         self.active_work[task_id]=ActiveWork("subprocess",phase,"running",time.time(),durable_ref=str(proc.pid) if proc.pid is not None else "in-process")
         traceback_started = False
@@ -163,7 +151,6 @@ class ProcessRunner:
         prompt_lines: list[str] = []
         line_buffer = ""
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
-        continuation_phase: str | None = None
         replaying_prompt=False
         typed_prompt_pending=False
         self.pricing_wait_seconds[task_id]=0.0
@@ -210,14 +197,6 @@ class ProcessRunner:
                 for part in parts:
                     line=part.strip()
                     if not line:continue
-                    if artifact_dir is None:
-                        session_match=re.search(r"(?:^|\s)session:\s*([A-Za-z0-9._-]+)",line)
-                        if session_match:
-                            from vmodel_contracts.runtime import artifacts_root
-                            artifact_dir=artifacts_root((env or {}).get("VMODEL_ARTIFACTS_DIR") or os.environ.get("VMODEL_ARTIFACTS_DIR"))/session_match.group(1)/"interview"
-                            usage_path=artifact_dir/"usage.jsonl";llm_path=artifact_dir/"llm-calls.jsonl"
-                            usage_start=line_count(usage_path);llm_start=line_count(llm_path)
-                            self.pricing_paths[task_id]=(usage_path,llm_path);self.pricing_usage_cursor[task_id]=usage_start;self.pricing_llm_cursor[task_id]=llm_start;self.pricing_wall_cursor[task_id]=time.perf_counter()
                     # Subprocesses are non-interactive executors. Interview control moved to
                     # the typed HTTP service; stdout/stderr are diagnostics only.
                     structured=await self._record_generator_line(task_id,line,phase,launched_phase,(env or {}).get("VMODEL_PROGRESS_SESSION_ID"))
@@ -245,18 +224,6 @@ class ProcessRunner:
                 if missing:missing_module=missing.group(1)
                 if final_line.startswith("Error:") and cli_error is None:cli_error=final_line
             code = await proc.wait()
-            if code==0 and artifact_dir and documents is None:
-                from .pricing import price_execution
-                final_usage_start=self.pricing_usage_cursor.get(task_id,usage_start);final_llm_start=self.pricing_llm_cursor.get(task_id,llm_start)
-                final_wall_ms=max(0,(time.perf_counter()-self.pricing_wall_cursor.get(task_id,run_started))*1000) if task_id in self.pricing_totals else max(0,(time.perf_counter()-run_started-self.pricing_wait_seconds.get(task_id,0))*1000)
-                for quote in price_execution(usage_path,llm_path,final_wall_ms,final_usage_start,final_llm_start):
-                    priced_phase=quote.pop("phase")
-                    self.store.add_event(task_id,"price",f"Price {quote['price']:,.2f} credits",phase_key=priced_phase,payload=quote)
-                    self.store.audit("pricing","phase.priced",task_id,{"phase":priced_phase,**quote})
-                try:
-                    from .pricing import write_cost_json
-                    write_cost_json(usage_path.parent.parent)
-                except OSError:pass
             if task_id in self.interrupted_for_shutdown:
                 # Keep the durable task phase running: startup will recover it
                 # from the latest interview session checkpoint.
@@ -271,8 +238,8 @@ class ProcessRunner:
                 from .phases import PHASE_BY_KEY
                 if phase_row["state"] != "approved" and PHASE_BY_KEY[launched_phase].executor=="generator":
                     if settled_pin is not None:
-                        from .artifact_publication import settled_substitutions, format_settled_substitution
-                        problems=document_substitutions(documents,*settled_pin) if documents is not None else settled_substitutions(artifact_dir.parent,*settled_pin)
+                        from .artifact_publication import format_settled_substitution
+                        problems=document_substitutions(documents,*settled_pin)
                         if problems:
                             error=format_settled_substitution(phase,problems)
                             self.store.update_phase(task_id,phase,"failed",detail=error)
@@ -285,9 +252,9 @@ class ProcessRunner:
                     from vmodel_contracts.runtime import artifacts_root
                     source=artifact_dir or (artifacts_root((env or {}).get("VMODEL_ARTIFACTS_DIR") or os.environ.get("VMODEL_ARTIFACTS_DIR")) / (env or {}).get("VMODEL_PROGRESS_SESSION_ID", "") / "spec")
                     expected=PHASE_BY_KEY[phase].artifacts
-                    captured=documents.capture(['spec/'+name for name in expected]) if documents is not None else None
-                    available=[source/name for name in expected if ('spec/'+name in captured if captured is not None else (source/name).is_file())]
-                    def artifact_text(path):return captured['spec/'+path.name].decode() if captured is not None else path.read_text()
+                    captured=documents.capture(['spec/'+name for name in expected])
+                    available=[source/name for name in expected if 'spec/'+name in captured]
+                    def artifact_text(path):return captured['spec/'+path.name].decode()
                     if available:
                         from pydantic import TypeAdapter
                         from vmodel_contracts.verification import AcceptanceTest
@@ -308,25 +275,17 @@ class ProcessRunner:
                         self.store.add_event(task_id,"error",error,phase_key=phase,payload={"missing_artifacts":list(expected),"source_dir":str(source),"exit_code":0})
                         return 1
                     semantic_path=source/'srs.semantic-review.json' if phase=='srs' else None
-                    if semantic_path and ('spec/'+semantic_path.name in captured if captured is not None else semantic_path.is_file()):
+                    if semantic_path and 'spec/'+semantic_path.name in captured:
                         from vmodel_contracts.semantic_review import SemanticReview
                         semantic=SemanticReview.model_validate_json(artifact_text(semantic_path))
                         decided={d.item_id for d in semantic.decisions}
                         if any(f.item_id not in decided for f in semantic.findings):
                             self.store.set_gate_open(task_id,'gate-srs',False,'semantic review policy')
                             self.store.add_event(task_id,'semantic_review','Open-gate auto approval paused for unresolved item findings',phase_key=phase,payload={'revision':semantic.revision})
-                    from .artifact_publication import publish_committed_session
                     self.store.update_phase(task_id, phase, "awaiting_approval", detail="Generated; waiting for founder approval")
-                    if documents is None:publish_committed_session(self.store,task_id,source.parent,phase_key=phase)
                     gate=self.store.wait_at_gate(task_id,phase)
                     self.store.add_event(task_id,"gate","Generated artifact is waiting for founder approval",phase_key=phase,payload={"gate_key":gate["gate_key"] if gate else None})
-                    # Explicit open-gate policy approves in wait_at_gate. It
-                    # must use the same continuation path as a founder click.
-                    if gate is None and next(p for p in self.store.task(task_id)["phases"] if p["phase_key"]==phase)["state"] == "approved":
-                        continuation_phase = phase
                 self.store.add_event(task_id, "complete", "Engine process completed", phase_key=phase)
-                if completion_phases and self.on_complete is not None:
-                    continuation_phase = completion_phases[-1]
             else:
                 if stalled:
                     error=(f"Error: the engine produced no output for {stall_timeout:g} seconds, so the run was stopped. Likely cause: "
@@ -366,16 +325,6 @@ class ProcessRunner:
             self.processes.pop(task_id, None);self.waiting.discard(task_id);self.pending_decisions.pop(task_id,None);self.active_work.pop(task_id,None);self.interrupted_for_shutdown.discard(task_id);self.pricing_wait_started.pop(task_id,None);self.pricing_wait_seconds.pop(task_id,None);self.pricing_usage_cursor.pop(task_id,None);self.pricing_llm_cursor.pop(task_id,None);self.pricing_wall_cursor.pop(task_id,None);self.pricing_totals.pop(task_id,None);self.pricing_paths.pop(task_id,None)
             # The finished process must release its task slot before the next
             # executable starts. This is the shared process boundary.
-            if not config.CLOUD_TENANTS and continuation_phase is not None and self.on_complete is not None:
-                try:
-                    await self.on_complete(task_id, continuation_phase)
-                except Exception as exc:
-                    error=(f"Error: the next V-model phase did not start. Likely cause: "
-                           f"{type(exc).__name__}: {exc}. Next: restart Requi.re; startup recovery will retry the durable handoff.")
-                    self.store.add_event(task_id,"error",error,phase_key=continuation_phase,
-                                         payload={"cause":f"{type(exc).__name__}: {exc}","next":"Restart Requi.re; startup recovery will retry the durable handoff.","completed_phase":continuation_phase})
-                    activity("orchestrator.failure","Next phase launch failed",task_id=task_id,phase=continuation_phase,error=f"{type(exc).__name__}: {exc}")
-                    raise
 
     async def shutdown(self, grace_seconds: float = 3.0) -> None:
         active=list(self.processes.items())
@@ -415,19 +364,6 @@ class ProcessRunner:
         work=self.work_state(task_id)
         return work.input_state() if work else {"waiting":False,"process_live":False,"decision":None,"requirement":None}
 
-    def _emit_incremental_price(self,task_id:str)->None:
-        paths=self.pricing_paths.get(task_id)
-        if not paths:return
-        from .pricing import line_count,price_execution
-        usage_path,llm_path=paths;now=time.perf_counter();prior=self.pricing_totals.get(task_id,{})
-        quotes=price_execution(usage_path,llm_path,max(0,(now-self.pricing_wall_cursor.get(task_id,now))*1000),self.pricing_usage_cursor.get(task_id,0),self.pricing_llm_cursor.get(task_id,0))
-        for quote in quotes:
-            phase=quote.pop("phase");total=prior.setdefault(phase,{"input_tokens":0,"output_tokens":0,"tokens":0,"deterministic_ms":0.0,"token_price":0.0,"infra_price":0.0,"price":0.0,"price_usd":0.0,"cost_usd":0.0,"unpriced_calls":0})
-            for key in total:total[key]=round(total[key]+quote[key],8)
-            payload={**total,"rates":quote["rates"],"incremental":True}
-            self.store.add_event(task_id,"price",f"Price {payload['price']:,.2f} credits",phase_key=phase,payload=payload)
-        self.pricing_usage_cursor[task_id]=line_count(usage_path);self.pricing_llm_cursor[task_id]=line_count(llm_path);self.pricing_wall_cursor[task_id]=now
-
     async def send_input(self, task_id: str, text: str, decision_id: str | None = None) -> None:
         pending=self.pending_decisions.get(task_id)
         if decision_id is not None and (not pending or pending.get("decision_id") != decision_id):
@@ -442,7 +378,6 @@ class ProcessRunner:
         if wait_started is not None:
             self.pricing_wait_seconds[task_id]=self.pricing_wait_seconds.get(task_id,0)+(time.perf_counter()-wait_started)
             self.pricing_wall_cursor[task_id]=self.pricing_wall_cursor.get(task_id,time.perf_counter())+(time.perf_counter()-wait_started)
-        self._emit_incremental_price(task_id)
         self.pending_decisions.pop(task_id,None)
         current=self.active_work.get(task_id)
         if current:self.active_work[task_id]=ActiveWork(current.owner,current.phase,"running",current.started_at,None,current.durable_ref)

@@ -68,9 +68,7 @@ class Simulation:
         # A browser upload contains only usage.jsonl, so it safely falls back to
         # the session ID unless the caller supplied a title.
         inferred=None
-        from vmodel_contracts.runtime import artifacts_root
-        canonical_intent = artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")) / sid / "interview" / "intent_model.json"
-        for intent_path in (source/"intent_model.json", source/"interview"/"intent_model.json", canonical_intent):
+        for intent_path in (source/"intent_model.json", source/"interview"/"intent_model.json"):
             if not intent_path.is_file(): continue
             try:
                 intent=json.loads(intent_path.read_text(encoding="utf-8"))
@@ -81,11 +79,35 @@ class Simulation:
             if inferred: break
         task=self.store.create_task(title or inferred or f"Recorded run {sid}",f"Simulation from {source}")
         models=sorted({f"{r['provider']}/{r['model']}" for r in rows})
-        self.store.configure_simulation(task["task_id"],str(source),", ".join(models));self.store.audit("local user","simulation.imported",task["task_id"],{"source":str(source),"events":len(rows),"validated":True});return self.store.task(task["task_id"])
+        from uuid import uuid4
+        from .generator_documents import GeneratorDocuments
+        from .worker_capability import WorkerCapability
+        tid=task['task_id']
+        with self.store._task_operation_guard('task.simulate'):
+            self.store.set_engine_session(tid,'recording-'+uuid4().hex)
+            documents=GeneratorDocuments.reader(self.store,WorkerCapability.capture(self.store,tid))
+            raw=json.dumps({'rows':rows,'session_id':sid},sort_keys=True).encode()
+            documents._put('recording.json',raw,__import__('hashlib').sha256(raw).hexdigest())
+            artifacts=[]
+            for phase,name in ARTIFACTS.items():
+                path=next((p for p in (source/name,source/'spec'/name) if p.is_file()),None)
+                if path is not None:
+                    data=path.read_bytes()
+                    if len(data)>20_000_000:raise ValueError('bounded recording artifact required')
+                    artifacts.append(dict(phase_key=phase,name=name,data=data))
+            self.store.publish_task_revision_bytes(tid,artifacts,writer_instance='recording-import')
+            self.store.configure_simulation(tid,'postgres:recording',', '.join(models))
+            self.store.audit('signed owner','simulation.imported',tid,{'events':len(rows),'validated':True,'storage':'postgres'})
+        return self.store.task(tid)
     async def replay(self,task_id:str,speed:float|None):
         task=self.store.task(task_id)
         if not task or not task.get("simulated"):raise ValueError("task is not a simulation")
-        rows,_=validate_recorded_run(Path(task["source_dir"]));previous=None
+        from .generator_documents import GeneratorDocuments
+        raw=GeneratorDocuments.owner_reader(self.store,task_id).read('recording.json')
+        if raw is None:raise ValueError('owned retained recording missing')
+        rows=json.loads(raw)['rows'];previous=None
+        artifacts=self.store.manifest_snapshot(task_id)
+        names={row['name'] for row in (artifacts or {}).get('rows',[])}
         for key,_ in PHASES:self.store.update_phase(task_id,key,"pending")
         for i,row in enumerate(rows):
             phase={"review":"tests","items":"specs"}.get(row["stage"],row["stage"])
@@ -97,12 +119,11 @@ class Simulation:
                     while self.store.task(task_id)["state"]=="waiting_gate":await asyncio.sleep(.05)
             self.store.update_phase(task_id,phase,"running",detail=f"Recorded {row['provider']}/{row['model']} call {i+1}/{len(rows)}",completed=i+1,total=len(rows));self.store.add_event(task_id,"progress",f"[{phase}] {row.get('prompt_tokens',0)} input + {row.get('completion_tokens',0)} output tokens",phase_key=phase,payload={"simulated":True,"recorded_ts":row["ts"]});previous=phase
         if previous:self.store.update_phase(task_id,previous,"done",detail="Replay complete")
-        source=Path(task["source_dir"])
         # Recordings made before the Validation phase end at Verification. They stay complete.
-        if previous=="tests" and not (source/"validation.json").exists():
+        if previous=="tests" and 'validation.json' not in names:
             self.store.update_phase(task_id,"validation","done",detail="Not part of this recording")
         for phase,name in ARTIFACTS.items():
-            if (source/name).exists():self.store.update_phase(task_id,phase,"done",detail="Imported recorded artifact");self.store.add_task_artifact(task_id,phase,name,str(source/name))
+            if name in names:self.store.update_phase(task_id,phase,"done",detail="Imported recorded artifact")
         # A recording may end after any phase. Exhausting its rows ends the
         # replay worker, even if the last V-process phase was not recorded.
         # Do not leave that task marked running forever, or claim that its

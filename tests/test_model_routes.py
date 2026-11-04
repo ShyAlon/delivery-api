@@ -40,7 +40,7 @@ def _seed_task(module, store, task_id):
                     payload={"answer": "A1", "transcript": True})
 
 
-def test_transcript_header_from_usage_jsonl(monkeypatch, tmp_path):
+def test_customer_transcript_excludes_usage_model_header(monkeypatch, tmp_path):
     from delivery_api import app as module
     store = module.store
     task_id = "provenance-usage-test"
@@ -57,13 +57,12 @@ def test_transcript_header_from_usage_jsonl(monkeypatch, tmp_path):
     usage.write_text("".join(json.dumps(r) + "\n" for r in records))
     monkeypatch.setenv("VMODEL_ARTIFACTS_DIR", str(tmp_path))
     text = module._interview_transcript_markdown(task_id)
-    assert text.splitlines()[0].startswith("Model segment unassigned: ollama:phi4")
-    assert "2 calls" in text.splitlines()[0]
+    assert "ollama:phi4" not in text and "Model segment" not in text
     assert "## Interview questions and answers" in text
     store.delete_task(task_id)
 
 
-def test_transcript_header_mixed_models_lists_stages(monkeypatch, tmp_path):
+def test_customer_transcript_excludes_mixed_model_headers(monkeypatch, tmp_path):
     from delivery_api import app as module
     store = module.store
     task_id = "provenance-mixed-test"
@@ -80,12 +79,12 @@ def test_transcript_header_mixed_models_lists_stages(monkeypatch, tmp_path):
     usage.write_text("".join(json.dumps(r) + "\n" for r in records))
     monkeypatch.setenv("VMODEL_ARTIFACTS_DIR", str(tmp_path))
     lines = module._interview_transcript_markdown(task_id).splitlines()
-    assert any(line.startswith("Model segment unassigned: ollama:qwen2.5-coder:14b") for line in lines)
-    assert any(line.startswith("Model segment unassigned: ollama:phi4") for line in lines)
+    assert not any("Model segment" in line for line in lines)
+    assert not any("ollama:phi4" in line or "ollama:qwen" in line for line in lines)
     store.delete_task(task_id)
 
 
-def test_transcript_header_falls_back_to_resolved_route_event(monkeypatch, tmp_path):
+def test_customer_transcript_does_not_expose_resolved_route_event(monkeypatch, tmp_path):
     from delivery_api import app as module
     store = module.store
     task_id = "provenance-fallback-test"
@@ -95,7 +94,7 @@ def test_transcript_header_falls_back_to_resolved_route_event(monkeypatch, tmp_p
                     payload={"route": "ollama", "resolved": "ollama:phi4", "model": "phi4", "scope": "start"})
     monkeypatch.setenv("VMODEL_ARTIFACTS_DIR", str(tmp_path))  # no usage.jsonl on disk
     text = module._interview_transcript_markdown(task_id)
-    assert text.splitlines()[0] == "Model: ollama:phi4"
+    assert "Model: ollama:phi4" not in text
     store.delete_task(task_id)
 
 
@@ -124,6 +123,8 @@ def test_execution_payload_requires_debug_and_uses_pinned_state(monkeypatch,tmp_
     monkeypatch.setattr(module.app.state,'operator_read_store',OperatorReadStore(ws.dsn.replace('user=sandbox','user=delivery_app'),OperatorPrincipal(ws.scope.owner_id,'model-debug',frozenset({'debug.read'}))),raising=False)
     from delivery_api.generator_documents import GeneratorDocuments
     docs={
+      'interview/http-session.json':json.dumps({'model_map':{'probing':['deepseek','deepseek-chat']}}).encode(),
+      'interview/debug-http.jsonl':b'{"content":"private raw response"}\n',
       'interview/usage.jsonl':(json.dumps({'stage':'probing','provider':'deepseek','model':'deepseek-chat'})+'\n').encode(),
       'interview/llm-calls.jsonl':(json.dumps({'event':'llm_call_error','model':'deepseek-chat','error':{'kind':'empty_response','raw_payload':'sensitive response'}})+'\n').encode()}
     monkeypatch.setattr(GeneratorDocuments,'owner_reader',lambda *a:type('Reader',(),{'read':staticmethod(docs.get)})())
@@ -220,7 +221,8 @@ def test_failed_optional_local_model_listing_does_not_disable_choice(monkeypatch
     monkeypatch.setattr(module,'engine_client',SimpleNamespace(default_route=lambda:{'route':'ollama','model':'pinned'},preview_route=preview,local_models=unavailable))
     result=module.model_routes()
     route=next(r for r in result['routes'] if r['id']=='ollama')
-    assert route['available'] and route['models']==['pinned']
+    assert route['available'] and route['models']==[]
+    assert route['model_list']['scope']=='reviewed_models'
     assert route['readiness']=='checked_on_start'
 
 

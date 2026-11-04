@@ -8,8 +8,6 @@ from delivery_api.simulation import validate_recorded_run
 def simulation_workspace(pg_scoped_workspace,monkeypatch):
     from delivery_api import app as module
     from delivery_api.simulation import Simulation
-    # Preserve these local route contracts, not cloud replay API availability.
-    monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
     monkeypatch.setattr(module,'simulation',Simulation(pg_scoped_workspace.store))
     yield pg_scoped_workspace
 
@@ -80,7 +78,7 @@ def test_import_title_override_and_session_fallback(tmp_path,simulation_workspac
     assert sim.import_run(source,'My replay')['title']=='My replay'
 
 
-def test_uploaded_jsonl_resolves_local_canonical_intent(monkeypatch,tmp_path,simulation_workspace):
+def test_uploaded_jsonl_does_not_consult_unrelated_host_intent(monkeypatch,tmp_path,simulation_workspace):
     from delivery_api.simulation import Simulation
     root=tmp_path/'artifacts';interview=root/'local-session'/'interview';interview.mkdir(parents=True)
     (interview/'intent_model.json').write_text(json.dumps({"problem_statement":"Track Pokémon collection goals"}))
@@ -89,7 +87,7 @@ def test_uploaded_jsonl_resolves_local_canonical_intent(monkeypatch,tmp_path,sim
     row={"stage":"probing","provider":"ollama","model":"phi4","ts":"2026-09-15T10:00:00+03:00","prompt_tokens":1,"completion_tokens":1,"session_id":"local-session"}
     (upload/'usage.jsonl').write_text(json.dumps(row)+'\n')
     task=Simulation(simulation_workspace.store).import_run(upload)
-    assert task['title']=='Track Pokémon collection goals'
+    assert task['title']=='Recorded run local-session'
 
 
 def test_simulation_fixture_uses_pg_for_http_and_replay(simulation_workspace):
@@ -103,61 +101,58 @@ def test_simulation_fixture_uses_pg_for_http_and_replay(simulation_workspace):
         assert connection.execute('SELECT current_user').fetchone()['current_user']=='requi_backend'
 
 
-def _check_file_picker_upload_validates_and_imports(monkeypatch,tmp_path,workspace):
-    from tests.test_simulation_validation import _case_file_picker_upload_validates_and_imports
+@pytest.fixture
+def simulation_helper(simulation_workspace,monkeypatch):
+    # Exercise the private validated import/replay implementation directly.
+    # Public simulation routes deliberately remain fenced everywhere.
+    import asyncio
     from delivery_api import app as module
-    from delivery_api.simulation import Simulation
-    monkeypatch.setattr(module,'simulation',Simulation(workspace.store))
+    from fastapi import UploadFile,HTTPException
+    import io
+    class Response:
+        def __init__(self,status,body):self.status_code=status;self.body=body;self.text=str(body)
+        def json(self):return self.body
+    class Client:
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def post(self,path,files=None,data=None,json=None):
+            async def call():
+                try:
+                    if files:
+                        name,raw,_=files['usage_file']
+                        result=await module.import_simulation(UploadFile(io.BytesIO(raw),filename=name),(data or {}).get('title'))
+                        return Response(201,result)
+                    result=await module.replay_simulation(path.split('/')[3],module.ReplayRequest(**json))
+                    return Response(200,result)
+                except HTTPException as exc:return Response(exc.status_code,{'detail':exc.detail})
+                finally:
+                    for task in module.simulation.running.values():
+                        if not task.done():task.cancel()
+            return asyncio.run(call())
+    monkeypatch.setitem(globals(),'TestClient',lambda *a,**kw:Client())
+
+
+def test_private_upload_validates_and_imports(simulation_helper):
     _case_file_picker_upload_validates_and_imports()
 
 
-def test_file_picker_upload_validates_and_imports(pg_local_compat_process):
-    pg_local_compat_process(_check_file_picker_upload_validates_and_imports)
-
-
-def _check_import_rejects_wrong_name_and_malformed_event_with_guidance(monkeypatch,tmp_path,workspace):
-    from tests.test_simulation_validation import _case_import_rejects_wrong_name_and_malformed_event_with_guidance
-    from delivery_api import app as module
-    from delivery_api.simulation import Simulation
-    monkeypatch.setattr(module,'simulation',Simulation(workspace.store))
+def test_private_import_rejects_wrong_name_and_malformed_event_with_guidance(simulation_helper):
     _case_import_rejects_wrong_name_and_malformed_event_with_guidance()
 
 
-def test_import_rejects_wrong_name_and_malformed_event_with_guidance(pg_local_compat_process):
-    pg_local_compat_process(_check_import_rejects_wrong_name_and_malformed_event_with_guidance)
-
-
-def _check_import_rejects_unknown_stage_and_mixed_sessions(monkeypatch,tmp_path,workspace):
-    from tests.test_simulation_validation import _case_import_rejects_unknown_stage_and_mixed_sessions
-    from delivery_api import app as module
-    from delivery_api.simulation import Simulation
-    monkeypatch.setattr(module,'simulation',Simulation(workspace.store))
+def test_private_import_rejects_unknown_stage_and_mixed_sessions(simulation_helper):
     _case_import_rejects_unknown_stage_and_mixed_sessions()
 
 
-def test_import_rejects_unknown_stage_and_mixed_sessions(pg_local_compat_process):
-    pg_local_compat_process(_check_import_rejects_unknown_stage_and_mixed_sessions)
-
-
-def _check_simulate_endpoint_runs_on_asgi_event_loop(monkeypatch,tmp_path,workspace):
-    from tests.test_simulation_validation import _case_simulate_endpoint_runs_on_asgi_event_loop
-    from delivery_api import app as module
-    from delivery_api.simulation import Simulation
-    monkeypatch.setattr(module,'simulation',Simulation(workspace.store))
+def test_private_simulate_runs_on_event_loop(tmp_path,simulation_helper):
     _case_simulate_endpoint_runs_on_asgi_event_loop(tmp_path)
 
 
-def test_simulate_endpoint_runs_on_asgi_event_loop(pg_local_compat_process):
-    pg_local_compat_process(_check_simulate_endpoint_runs_on_asgi_event_loop)
-
-
-def _check_simulate_start_failure_is_structured(monkeypatch,tmp_path,workspace):
-    from tests.test_simulation_validation import _case_simulate_start_failure_is_structured
-    from delivery_api import app as module
-    from delivery_api.simulation import Simulation
-    monkeypatch.setattr(module,'simulation',Simulation(workspace.store))
+def test_private_simulate_start_failure_is_structured(monkeypatch,simulation_helper):
     _case_simulate_start_failure_is_structured(monkeypatch)
 
 
-def test_simulate_start_failure_is_structured(pg_local_compat_process):
-    pg_local_compat_process(_check_simulate_start_failure_is_structured)
+def test_public_simulation_is_unavailable_even_to_signed_owner(pg_task_app,simulation_workspace):
+    c=TestClient(pg_task_app(simulation_workspace),headers=simulation_workspace.headers)
+    assert c.post('/api/simulations',files={'usage_file':('usage.jsonl',b'{}','application/json')}).status_code==503
+    assert c.post('/api/tasks/anything/simulate',json={'speed':0}).status_code==503

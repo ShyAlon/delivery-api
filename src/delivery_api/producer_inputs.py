@@ -36,71 +36,22 @@ def _content_stamp(info):
 def read_fresh_inputs(store,capability,root,*,artifacts_base):
     """No client path, global baseline, inferred greenfield or contract restamp.
 
-    Input files must already exist under the captured session. The graph owns
+    Input bytes must already exist in the owned ready PG manifest. The graph owns
     schema/compatibility/confirmed-concept checks before creating spec output.
     """
     capability.validate(store)
     root=Path(root)
     if root!=session_root(artifacts_base,capability.scope,capability.session_id):
         raise TenantAccessDenied('producer input root differs from owned session')
-    if hasattr(store,'_postgres'):
-        snapshot=store.manifest_snapshot(capability.task_id,capability.generation)
-        if snapshot is None:raise ValueError('owned ready input manifest required')
-        members={(row['phase_key'],row['name']):row for row in snapshot['rows']};result={}
-        for key,phase,name in [('intent','intent','intent_model.json'),('conops','conops','conops.json'),('baseline','baseline','system-baseline.json')]:
-            member=members.get((phase,name))
-            if member is None:raise ValueError('owned producer input missing')
-            raw=store.read_artifact_bytes_sha(member['sha256'])
-            if len(raw)>MAX_DOCUMENT_BYTES:raise ValueError('bounded producer input required')
-            value=json.loads(raw)
-            if not isinstance(value,dict):raise ValueError('producer input document object required')
-            result[key]=value
-        capability.validate(store);return result
-    result={};evidence=[]
-    root_fd=_open_directory(root)
-    try:
-        for key,directory,filename in (('intent','interview','intent_model.json'),('conops','interview','conops.json'),('baseline','spec','system-baseline.json')):
-            parent_fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root_fd)
-            try:
-                fd=os.open(filename,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent_fd)
-                try:
-                    info=os.fstat(fd)
-                    if not stat.S_ISREG(info.st_mode) or info.st_size>MAX_DOCUMENT_BYTES:
-                        raise ValueError('bounded regular producer input file required')
-                    with os.fdopen(fd,'rb',closefd=False) as stream:data=stream.read(MAX_DOCUMENT_BYTES+1)
-                    if len(data)>MAX_DOCUMENT_BYTES:raise ValueError('producer input grew beyond bound')
-                    if _content_stamp(os.fstat(fd))!=_content_stamp(info):
-                        raise TenantAccessDenied('producer input content changed during read')
-                    value=json.loads(data)
-                    if not isinstance(value,dict):raise ValueError('producer input document object required')
-                    # A changed namespace cannot be accepted as the original input.
-                    check_fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root_fd)
-                    try:
-                        current=os.stat(filename,dir_fd=check_fd,follow_symlinks=False)
-                        if _identity(check_fd)!=_identity(parent_fd) or _content_stamp(current)!=_content_stamp(info):
-                            raise TenantAccessDenied('producer input namespace changed during read')
-                    finally:os.close(check_fd)
-                    evidence.append((directory,filename,_identity(parent_fd),_content_stamp(info)))
-                    result[key]=value
-                finally:os.close(fd)
-            finally:os.close(parent_fd)
-        # Recheck earlier documents after later reads. Metadata checks detect
-        # observed mutation; they do not make the source files an atomic snapshot.
-        for directory,filename,parent_identity,stamp in evidence:
-            parent_fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root_fd)
-            try:
-                current=os.stat(filename,dir_fd=parent_fd,follow_symlinks=False)
-                if _identity(parent_fd)!=parent_identity or _content_stamp(current)!=stamp:
-                    raise TenantAccessDenied('producer inputs changed across snapshot read')
-            finally:os.close(parent_fd)
-        check_root=_open_directory(root)
-        try:
-            if _identity(check_root)!=_identity(root_fd):raise TenantAccessDenied('producer session namespace changed during read')
-        finally:os.close(check_root)
-        capability.validate(store)
-        return result
-    except OSError as exc:
-        if exc.errno in (errno.ELOOP,errno.ENOTDIR):
-            raise TenantAccessDenied('unsafe producer directory or file') from exc
-        raise
-    finally:os.close(root_fd)
+    snapshot=store.manifest_snapshot(capability.task_id,capability.generation)
+    if snapshot is None:raise ValueError('owned ready input manifest required')
+    members={(row['phase_key'],row['name']):row for row in snapshot['rows']};result={}
+    for key,phase,name in [('intent','intent','intent_model.json'),('conops','conops','conops.json'),('baseline','baseline','system-baseline.json')]:
+        member=members.get((phase,name))
+        if member is None:raise ValueError('owned producer input missing')
+        raw=store.read_artifact_bytes_sha(member['sha256'])
+        if len(raw)>MAX_DOCUMENT_BYTES:raise ValueError('bounded producer input required')
+        value=json.loads(raw)
+        if not isinstance(value,dict):raise ValueError('producer input document object required')
+        result[key]=value
+    capability.validate(store);return result

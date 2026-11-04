@@ -6,17 +6,19 @@ from delivery_api.tenancy import tenant_context,session_root
 from test_postgres_store import A,DSN
 
 
-@pytest.mark.parametrize('stage',['needs','srs','publication-recovery','paid-needs','installed-paid-srs'])
+@pytest.mark.parametrize('stage',['needs','srs','publication-recovery','paid-needs','installed-paid-srs','open-needs'])
 def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkeypatch,stage):
     pytest.importorskip('spec_generator')
     from delivery_api import config
     from vmodel_contracts import CONTRACT_VERSION
+    open_chain=stage=='open-needs'
+    if open_chain:stage='needs'
     installed=stage=='installed-paid-srs'
     paid=stage in ('paid-needs','installed-paid-srs')
     if paid:stage='srs' if installed else 'needs'
     publishing=stage=='publication-recovery'
     stage='needs' if publishing else stage
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',publishing)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',publishing,raising=False)
     monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
     with tenant_context(A):
         tid=store.create_task('generator child '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)
@@ -105,6 +107,27 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
                     assert await asyncio.wait_for(proc.wait(),2)==0
                 asyncio.run(recover());output=b'Stopped after stage'
                 assert store.producer_result(job)['published_at'] is not None
+            elif open_chain:
+                from delivery_api.runner import ProcessRunner
+                from delivery_api import inprocess_engine
+                from delivery_api.orchestrator import ExecutionMode
+                runner=ProcessRunner(store);seen=[]
+                store.set_model_default(tid,route);store.set_gate_open(tid,'gate-needs',True)
+                monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path))
+                class Orch:
+                    async def execute_phase(self,task_id,phase,**options):
+                        seen.append(phase)
+                        cmd=[*argv];cmd[-1]=phase
+                        code=await runner.run(task_id,cmd,cwd=tmp_path,phase=phase,infer_phase=False,
+                            env={'VMODEL_ARTIFACTS_DIR':str(root.parent),'VMODEL_PROGRESS_TASK_ID':tid,
+                                 'VMODEL_PROGRESS_SESSION_ID':sid,'SPEC_GENERATOR_MODEL_'+phase.upper():route})
+                        assert code==0
+                assert asyncio.run(engine.dispatch(store,Orch(),tid,'needs',job,{}))
+                assert seen==['needs','srs'] and not runner.processes and inprocess_engine.take(tid) is None
+                assert store.task(tid)['state']=='waiting_gate'
+                assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='needs')['state']=='bypassed'
+                assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='srs')['state']=='waiting'
+                output=b'Stopped after stage'
             else:output=asyncio.run(go())
         finally:
             server.shutdown();server.server_close()
@@ -128,18 +151,30 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
 
 
 def test_manifest_rejects_foreign_or_changed_inputs(tmp_path):
+    from types import SimpleNamespace
     root=tmp_path/'owned';root.mkdir();outside=tmp_path/'foreign.json';outside.write_text('{}')
-    with pytest.raises(PermissionError):manifest([str(outside),'--out',str(root/'spec')],root)
-    owned=root/'intent.json';owned.write_text('{}')
-    a,digest=manifest([str(owned),'--out',str(root/'spec')],root)
-    owned.write_text('{"changed":true}')
-    assert manifest([str(owned),'--out',str(root/'spec')],root)[1]!=digest
+    retained={'intent.json':b'{}'};documents=SimpleNamespace(read=retained.get)
+    with pytest.raises(PermissionError):manifest([str(outside),'--out',str(root/'spec')],root,documents)
+    owned=root/'intent.json'
+    a,digest=manifest([str(owned),'--out',str(root/'spec')],root,documents)
+    owned.write_text('{"host":"must not override PG"}')
+    assert manifest([str(owned),'--out',str(root/'spec')],root,documents)[1]==digest
+    retained['intent.json']=b'{"changed":true}';owned.unlink()
+    assert manifest([str(owned),'--out',str(root/'spec')],root,documents)[1]!=digest
+    retained.clear()
+    with pytest.raises(PermissionError,match='missing'):manifest([str(owned),'--out',str(root/'spec')],root,documents)
+
+
+def test_manifest_cannot_accept_file_only_storage(tmp_path):
+    owned=tmp_path/'intent.json';owned.write_text('{}')
+    with pytest.raises(PermissionError,match='documents required'):
+        manifest([str(owned),'--out',str(tmp_path/'spec')],tmp_path)
 
 
 @pytest.mark.parametrize('paid',[False,True])
 def test_durable_gate_answer_survives_parent_crash_without_reasking(store,tmp_path,monkeypatch,paid):
     from delivery_api import config
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',False);monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',False,raising=False);monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
     with tenant_context(A):
         tid=store.create_task('gate restart '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)
         root=session_root(tmp_path,A,sid);root.mkdir(parents=True);ip=root/'interview/intent_model.json'

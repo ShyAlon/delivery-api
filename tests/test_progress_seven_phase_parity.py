@@ -1,3 +1,4 @@
+from registered_runner import registered_runner
 """Seven-phase progress/control parity through the real source adapters and gates."""
 import asyncio
 import sys
@@ -10,10 +11,7 @@ from delivery_api.runner import ProcessRunner
 from vmodel_contracts.progress_signal import ProgressPage, ProgressSignal
 
 
-def test_all_seven_phases_share_progress_and_gate_boundary(tmp_path,pg_scoped_workspace,monkeypatch):
-    from delivery_api import config
-    # Local subprocess adapter contract, not admitted cloud execution.
-    monkeypatch.setattr(config,'CLOUD_TENANTS',False)
+def test_all_seven_phases_share_progress_and_gate_boundary(tmp_path,pg_scoped_workspace,monkeypatch,registered_runner):
     store = pg_scoped_workspace.store
     task_id = store.create_task("Seven-phase parity")["task_id"]
     session_id = str(uuid4())
@@ -49,6 +47,8 @@ def test_all_seven_phases_share_progress_and_gate_boundary(tmp_path,pg_scoped_wo
                 "out=Path(sys.argv[sys.argv.index('--out')+1]);"
                 f"(out/{artifact!r}).write_text({payload!r});"
                 f"print({(PREFIX + progress.model_dump_json())!r},flush=True)")
+            from test_http_cutover import _PGUsage
+            _PGUsage(store,task_id,'spec/'+artifact).write_text(payload)
             assert asyncio.run(runner.run(task_id,
                 [sys.executable, "-c", script, "--out", str(out)],
                 cwd=tmp_path, phase=phase.key, infer_phase=False,
