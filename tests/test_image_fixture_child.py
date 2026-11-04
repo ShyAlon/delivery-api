@@ -51,9 +51,15 @@ def test_image_fixture_real_child_with_zero_balance_production_gateway(store,tmp
                     finally:services.release.set()
                     future.result(timeout=15)
                 assert client.supervisor.last_result.reaped
+                # HTTP Start's late exception callback writes a failed phase.
+                # It must not undo the owner Stop task state.
+                store.update_phase(tid,'intent','failed',detail='stopped child')
+                assert store.task(tid)['state']=='stop_requested'
                 assert len(services.calls)==1 and not services.active.is_set()
                 stopped=request_stop(store,client,tid,reconcile=True)
                 assert stopped['state']=='stopped' and stopped['delete_allowed'] is True,stopped
+                store.update_phase(tid,'intent','running',detail='late completion')
+                assert store.task(tid)['state']=='stopped'
                 return
             result=client.start(StartSessionRequest(task_id=tid,session_id=sid,idea='A test booking app',model_route='ollama'))
             assert result.snapshot.open_input is not None

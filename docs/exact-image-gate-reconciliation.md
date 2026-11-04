@@ -262,3 +262,9 @@ Failure diagnostics now state expected vs observed Stop state, delete_allowed,
 engine_status, pending_reason and HTTP status; active failures include fixture
 hold, child/attempt state and final accounting evidence. local-failure.log is
 retained for acceptance failures, before owned cleanup.
+
+Final HTTP callback review also found that a late failed/running phase update
+could overwrite task stop_requested/stopped. Phase diagnostics still update,
+but task-state promotion now requires no durable Stop marker. The held-child
+regression explicitly simulates both late failed and late running callbacks and
+proves Stop task-state precedence. Repeated affected gate: 375 passed.

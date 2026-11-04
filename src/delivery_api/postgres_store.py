@@ -479,7 +479,9 @@ class PostgresStore:
         if state in ('done', 'approved') and phase_key == PHASES[-1][0]:
             task_state = 'done'
         if task_state:
-            self._execute_native('UPDATE tasks SET state=%s,active_phase=%s,updated_at=%s WHERE task_id=%s', (task_state, phase_key, now, task_id), write=True)
+            # Late background completion may update its phase diagnostics, but
+            # cannot undo the owner's already committed terminal Stop marker.
+            self._execute_native('UPDATE tasks SET state=%s,active_phase=%s,updated_at=%s WHERE task_id=%s AND stop_requested_at IS NULL', (task_state, phase_key, now, task_id), write=True)
         else:
             self._execute_native('UPDATE tasks SET updated_at=%s WHERE task_id=%s', (now, task_id), write=True)
 
