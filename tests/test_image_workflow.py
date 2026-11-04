@@ -122,3 +122,17 @@ def test_no_goal_or_conflicting_goals_fail_before_tools(tmp_path,monkeypatch):
     monkeypatch.setattr(m,'preflight',lambda *a,**k:pytest.fail('preflight for ambiguous goal'))
     assert m.main(['--run-dir',str(tmp_path)])==2
     assert m.main(['--run-dir',str(tmp_path),'--review','--build'])==2
+
+
+def test_log_uses_level_and_elapsed_without_control_sequences_off_tty(capsys):
+    m.log('FAIL','fixed diagnostic')
+    text=capsys.readouterr().err
+    assert '[FAIL] elapsed=' in text and 's fixed diagnostic' in text
+    assert '\x1b' not in text
+
+
+def test_failed_preflight_prints_recovery_without_private_command_output(tmp_path,monkeypatch,capsys):
+    monkeypatch.setattr(m.shutil,'which',lambda name:None)
+    assert m.main(['--review','--run-dir',str(tmp_path)])==2
+    text=capsys.readouterr().err
+    assert 'No automatic retry or alternate build path' in text and 'run directory' in text

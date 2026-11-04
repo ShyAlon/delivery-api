@@ -34,7 +34,9 @@ def inspect_task(task_id):
         if len(attempts)<2 or any(row[0]!='settled' or row[1]!=0 or row[2]!=0 or not row[3] for row in attempts):
             raise ValueError('settled zero-cost real provider attempts required')
         journal=conn.execute('SELECT count(*) FROM engine_session_journal WHERE session_id=%s',(sid,)).fetchone()[0]
-        checkpoints=conn.execute('SELECT count(*) FROM checkpoints WHERE thread_id=%s',(sid,)).fetchone()[0]
+        pointer=conn.execute('SELECT published_thread_id,published_checkpoint_id FROM engine_sessions WHERE session_id=%s',(sid,)).fetchone()
+        if not pointer or not pointer[0] or not pointer[1]:raise ValueError('published checkpoint pointer missing')
+        checkpoints=conn.execute('SELECT count(*) FROM checkpoints WHERE thread_id=%s AND checkpoint_id=%s',(pointer[0],pointer[1])).fetchone()[0]
         if journal<2 or checkpoints<1:raise ValueError('retained journal/checkpoint output missing')
         outstanding=conn.execute("SELECT count(*) FROM provider_attempts WHERE job_id=ANY(%s) AND state IN ('reserved','dispatched','uncertain')",([row[0] for row in jobs],)).fetchone()[0]
         if outstanding:raise ValueError('provider work remains outstanding')

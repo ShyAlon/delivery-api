@@ -33,12 +33,15 @@ class WorkflowError(RuntimeError):
     pass
 
 
+STARTED = time.monotonic()
+
+
 def log(level: str, message: str) -> None:
     colors = {"INFO": "36", "PASS": "32", "WARN": "33", "FAIL": "31"}
     prefix = "[" + level + "]"
     if sys.stderr.isatty() and "NO_COLOR" not in os.environ:
         prefix = "\033[" + colors[level] + "m" + prefix + "\033[0m"
-    print(prefix + " " + message, file=sys.stderr, flush=True)
+    print(prefix + " elapsed=" + str(round(time.monotonic()-STARTED,1)) + "s " + message, file=sys.stderr, flush=True)
 
 
 def command(args: list[str], *, cwd: Path | None = None, timeout: int = 60) -> str:
@@ -313,6 +316,7 @@ def main(argv=None) -> int:
         raise WorkflowError("exact-image local-service acceptance is not wired yet; no build/publication/deploy attempted")
     except (WorkflowError, InvalidReceipt) as error:
         log("FAIL", str(error))
+        log("INFO", "No automatic retry or alternate build path. Fix the named input, rerun the same command and run directory; completed image stages are revalidated.")
         return 2
 
 
