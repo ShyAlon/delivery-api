@@ -243,6 +243,13 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repos-root", type=Path, default=Path(__file__).resolve().parents[3])
     p.add_argument("--run-dir", type=Path, required=True)
+    p.add_argument("--deploy", metavar="PRIVATE_GHCR_REPOSITORY", help="review an accepted manifest; no SSH unless --apply")
+    p.add_argument("--apply", action="store_true", help="owner-confirmed deploy apply only")
+    p.add_argument("--host", help="explicit reviewed SSH user@host for deployment")
+    p.add_argument("--name", default="requi-delivery")
+    p.add_argument("--env-file", default="/etc/requi/full.env")
+    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--network", default="bridge")
     p.add_argument("--publish", metavar="PRIVATE_GHCR_REPOSITORY", help="explicitly publish after local acceptance; existing private package and login required")
     p.add_argument("--accept-local", action="store_true", help="build/reuse and exercise exact image with owned local services only")
     p.add_argument("--build", action="store_true", help="build locally only; does not grant acceptance, publication or deployment")
@@ -253,12 +260,21 @@ def parser():
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
     try:
+        if args.apply and not args.deploy:raise WorkflowError('--apply requires --deploy; no remote action inferred')
+        if sum(bool(v) for v in (args.review,args.build,args.accept_local,args.publish,args.deploy))!=1:
+            raise WorkflowError('choose exactly one review/build/accept-local/publish/deploy stage goal')
         log("INFO", "stage 1/6 preflight: local tools and four clean source revisions")
         inputs = preflight(args.repos_root.resolve())
         state = StageState(args.run_dir / "state.json", inputs)
         if not state.reusable("preflight", lambda evidence: evidence == inputs):
             state.complete("preflight", inputs)
         log("PASS", "preflight passed; platform linux/amd64, one shared runtime contract")
+        if args.deploy:
+            if not args.host:raise WorkflowError('deploy needs an explicit reviewed host')
+            from owner_image_deploy import deploy
+            deploy(state=state,repository=args.deploy,host=args.host,name=args.name,env_file=args.env_file,
+                   port=args.port,network=args.network,apply=args.apply)
+            return 0
         if args.review:
             log("INFO", "review only: nothing built, published, started or deployed")
             return 0

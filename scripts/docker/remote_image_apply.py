@@ -54,7 +54,11 @@ def apply(plan):
         if (current.get('Config',{}).get('Labels') or {}).get('requi.shared-runtime')!='1':
             raise ValueError('current container ownership unverified; nothing stopped')
         previous=name+'-rollback-'+str(time.time_ns())
-        call([*docker,'stop','--time','30',name]);call([*docker,'rename',name,previous])
+        call([*docker,'stop','--time','30',name])
+        try:call([*docker,'rename',name,previous])
+        except BaseException:
+            call([*docker,'start',name])
+            raise RuntimeError('rollback naming failed; original service restart requested') from None
     started=False
     try:
         launch=list(args);launch[1:1]=['--label','requi.shared-runtime=1']

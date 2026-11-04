@@ -110,3 +110,15 @@ def test_acceptance_hash_changes_with_script_or_schema(tmp_path):
     assert first.startswith('sha256:') and len(first)==71
     assert m.acceptance_contract(root)==first
     with pytest.raises(m.WorkflowError):m.acceptance_contract(tmp_path)
+
+
+def test_apply_alone_never_implies_deploy(tmp_path,capsys):
+    assert m.main(['--run-dir',str(tmp_path),'--apply'])==2
+    assert '--apply requires --deploy' in capsys.readouterr().err
+    assert not (tmp_path/'state.json').exists()
+
+
+def test_no_goal_or_conflicting_goals_fail_before_tools(tmp_path,monkeypatch):
+    monkeypatch.setattr(m,'preflight',lambda *a,**k:pytest.fail('preflight for ambiguous goal'))
+    assert m.main(['--run-dir',str(tmp_path)])==2
+    assert m.main(['--run-dir',str(tmp_path),'--review','--build'])==2
