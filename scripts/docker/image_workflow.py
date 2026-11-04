@@ -77,7 +77,26 @@ def preflight(root: Path, *, check_tools: bool = True) -> dict:
     for name in required:
         if not (root / "delivery-api" / name).is_file():
             raise WorkflowError("missing workflow input: " + name)
-    return {"sources": sources, "platform": "linux/amd64", "runtime_contract": digest(contract_bytes())}
+    return {"sources": sources, "platform": "linux/amd64", "runtime_contract": digest(contract_bytes()),
+            "acceptance_contract": acceptance_contract(root/"delivery-api")}
+
+
+def acceptance_contract(root: Path) -> str:
+    # Covers orchestration, schema/roles, external fixtures and the same owner
+    # acceptance entry. Any changed behavior invalidates earlier local evidence.
+    fixed=("scripts/docker/image_acceptance.py","scripts/docker/local_image_run.py",
+           "scripts/docker/local_service_fixture.py","scripts/docker/fixture_services.py",
+           "scripts/docker/retained_image_proof.py","scripts/docker/Dockerfile.local-fixture",
+           "scripts/docker/image-local-acceptance.py","scripts/owner/deepseek-acceptance.py",
+           "scripts/ops/acceptance.sh","tests/pg_harness.py","src/delivery_api/runtime_roles.py")
+    files=sorted([root/path for path in fixed]+list((root/"supabase/migrations").glob("*.sql")))
+    h=hashlib.sha256()
+    for path in files:
+        if not path.is_file():raise WorkflowError("missing acceptance contract input")
+        name=str(path.relative_to(root)).encode();raw=path.read_bytes()
+        h.update(len(name).to_bytes(8,"big"));h.update(name)
+        h.update(len(raw).to_bytes(8,"big"));h.update(raw)
+    return "sha256:"+h.hexdigest()
 
 
 class StageState:
@@ -201,10 +220,28 @@ def local_acceptance(root: Path, state: StageState, evidence: dict) -> dict:
     return accepted
 
 
+def receipt(state: StageState, publication: dict) -> dict:
+    from image_receipt import Receipt
+    accepted=state.state["stages"].get("local-acceptance",{})
+    if accepted.get("image_id")!=publication.get("config_digest"):
+        raise WorkflowError("registry config differs from local acceptance")
+    value={"schema":1,**publication,"sources":state.inputs["sources"],
+           "runtime_contract":state.inputs["runtime_contract"],
+           "acceptance_contract":state.inputs["acceptance_contract"],"checks":accepted.get("checks")}
+    raw=json.dumps(value,sort_keys=True,indent=2).encode()
+    Receipt.read(raw,sources=state.inputs["sources"],runtime_contract=state.inputs["runtime_contract"],
+                 acceptance_contract=state.inputs["acceptance_contract"])
+    atomic_write(state.path.parent/"accepted-image.json",raw)
+    state.complete("receipt",{"manifest_digest":publication["manifest_digest"],"config_digest":publication["config_digest"]})
+    log("PASS","stage 6/6 exact-image receipt written; deployment is a separate owner action")
+    return value
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repos-root", type=Path, default=Path(__file__).resolve().parents[3])
     p.add_argument("--run-dir", type=Path, required=True)
+    p.add_argument("--publish", metavar="PRIVATE_GHCR_REPOSITORY", help="explicitly publish after local acceptance; existing private package and login required")
     p.add_argument("--accept-local", action="store_true", help="build/reuse and exercise exact image with owned local services only")
     p.add_argument("--build", action="store_true", help="build locally only; does not grant acceptance, publication or deployment")
     p.add_argument("--review", action="store_true", help="check inputs only; never build, publish or contact a server")
@@ -223,10 +260,14 @@ def main(argv=None) -> int:
         if args.review:
             log("INFO", "review only: nothing built, published, started or deployed")
             return 0
-        if args.build or args.accept_local:
+        if args.build or args.accept_local or args.publish:
             evidence=build(args.repos_root.resolve(), state)
-            if args.accept_local:
-                local_acceptance(args.repos_root.resolve(),state,evidence)
+            if args.accept_local or args.publish:
+                accepted=local_acceptance(args.repos_root.resolve(),state,evidence)
+                if args.publish:
+                    from private_publication import publish
+                    publication=publish(args.publish,state,accepted)
+                    receipt(state,publication)
             return 0
         raise WorkflowError("exact-image local-service acceptance is not wired yet; no build/publication/deploy attempted")
     except (WorkflowError, InvalidReceipt) as error:

@@ -96,3 +96,17 @@ def test_local_acceptance_always_cleans_up_and_cannot_earn_receipt_on_failure(tm
     with pytest.raises(m.WorkflowError):m.local_acceptance(tmp_path,state,{'image_id':'fixture'})
     assert calls==['start','close']
     assert 'local-acceptance' not in state.state['stages'] and 'receipt' not in state.state['stages']
+
+
+def test_receipt_requires_matching_accepted_config(tmp_path):
+    state=m.StageState(tmp_path/'state.json',{})
+    with pytest.raises(m.WorkflowError,match='differs'):m.receipt(state,{'config_digest':'foreign'})
+    assert not (tmp_path/'accepted-image.json').exists()
+
+
+def test_acceptance_hash_changes_with_script_or_schema(tmp_path):
+    root=D.parents[1]
+    first=m.acceptance_contract(root)
+    assert first.startswith('sha256:') and len(first)==71
+    assert m.acceptance_contract(root)==first
+    with pytest.raises(m.WorkflowError):m.acceptance_contract(tmp_path)
