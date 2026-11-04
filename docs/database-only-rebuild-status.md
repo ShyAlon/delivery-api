@@ -387,3 +387,9 @@ operator boundary changed or bypass added.
 - Per parent 10:40 decision, unchanged shared Page sticky task-heading test stays intact and outside DB-only scope; inherited main sets relative. Track for separate small UI PR, not a DB-only gate blocker.
 - First35 browser cases (excluding sticky heading): 34 passed, stale-decision-conflict dialog failed. Investigate whether inherited before deciding scope; no assertion weakened.
 - All35 long PG retained graph variants completed green in groups 6+4+6+7+5+3+4. No combined full-gate claim.
+
+### Rebuild unit 46: browser projection fixtures and main baseline
+- Default-model route control expects admitted Ollama selected/enabled in the signed PG fixture. Route unavailable reasons hide DEEPSEEK_API_KEY and DELIVERY_LOCAL_PREVIEW, asserting readable customer text instead.
+- Everything ZIP asserts the current precise retained task-window manifest, not an obsolete bounded-tail-only sentence. No export behavior changed.
+- Actual detached origin/main source baseline confirmed by import path: four identical failures, retained unchanged for separate UI follow-up: test_page_headers_stay_sticky_and_home_has_no_evidence_vault_hero, test_stale_decision_conflict_closes_and_refreshes_dialog, test_interview_scrolls_inside_its_section_and_live_process_stays_visible, test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_known. No production web diff in DB-only branch.
+- Full browser batches: 34/35,34/35,34/35,51/54 passed, with failures above plus stale fixture assertions corrected separately. Final rerun still required, not a full browser pass. SPA combined timeout after20dots is not a pass.

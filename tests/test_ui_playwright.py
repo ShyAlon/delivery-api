@@ -1151,7 +1151,8 @@ def test_model_route_default_and_phase_override_controls(pg_page,pg_ui,pg_ids):
     page.goto(ui+f'/tasks/{tid}/view')
     picker=page.get_by_role('group',name='Default model route');picker.wait_for()
     assert picker.locator('[data-start-route]').count()==2
-    assert not page.get_by_role('button',name='Start interview').is_enabled()
+    assert page.get_by_role('button',name='Start interview').is_enabled()
+    assert picker.locator('[data-start-route=ollama]').get_attribute('aria-pressed')=='true'
     deepseek=picker.locator('[data-start-route=deepseek]')
     assert 'DeepSeek' in deepseek.inner_text()
     mock_gate_review(page,ui,sim)
@@ -2374,7 +2375,7 @@ def test_everything_zip_downloads_with_the_manifest_first(pg_page,pg_ui,pg_ids,t
     with zipfile.ZipFile(target) as z:
         assert z.testzip() is None and z.namelist()==["requi-everything.txt"]
         text=z.read("requi-everything.txt").decode("utf-8")
-    assert text.startswith("===== Known omissions =====") and "Engine process logs are included only as a bounded, scrubbed recent tail" in text
+    assert text.startswith("===== Known omissions =====") and "Task-window retained logs include all available exact task/session-attributed delivery and engine records" in text
     assert "Debug info" in text and "Client logs" in text and len(text)>200
     expect(page.locator("#debugstatus")).to_contain_text("requi-everything.zip")
     page.screenshot(path=str(_screenshots_dir / "everything-zip.png"),full_page=True)
@@ -2391,7 +2392,8 @@ def test_start_route_pills_show_all_choices_and_disabled_reasons(pg_page,pg_ui,p
     page.goto(ui+f'/tasks/{tid}/view')
     choices=page.get_by_role('group',name='Default model route');choices.wait_for()
     assert choices.get_by_role('button',name='DeepSeek').is_disabled()
-    assert 'DEEPSEEK_API_KEY' in choices.inner_text()
+    assert 'DEEPSEEK_API_KEY' not in choices.inner_text()
+    assert 'DeepSeek is temporarily unavailable' in choices.inner_text()
     assert 'Billed to your credits' in choices.inner_text()
     ollama=choices.get_by_role('button',name='Ollama');assert ollama.get_attribute('aria-pressed')=='true'
     assert 'ollama:phi4' in choices.inner_text()
@@ -2403,7 +2405,8 @@ def test_start_route_pills_show_all_choices_and_disabled_reasons(pg_page,pg_ui,p
     routes['routes'][1]={'id':'ollama','managed':True,'available':False,'error':'DELIVERY_LOCAL_PREVIEW is not enabled on this server'};routes['default_route']={'route':'deepseek'}
     page.reload();choices.wait_for()
     assert choices.get_by_role('button').count()==2
-    assert 'DELIVERY_LOCAL_PREVIEW' in choices.inner_text()
+    assert 'DELIVERY_LOCAL_PREVIEW' not in choices.inner_text()
+    assert 'Local interviews are temporarily unavailable' in choices.inner_text()
     assert choices.locator('[aria-pressed=true]').count()==0
     assert not page.get_by_role('button',name='Start interview').is_enabled()
 
