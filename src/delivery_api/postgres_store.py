@@ -172,8 +172,9 @@ class PostgresStore:
         return result
 
     def progress_cursor(self, task_id: str, source: str, session_id: str) -> int:
-        row = self._execute_native('SELECT cursor FROM progress_ingest WHERE task_id=%s AND source=%s AND session_id=%s', (task_id, source, session_id)).fetchone()
-        return int(row['cursor']) if row else 0
+        row = self._execute_native('SELECT p.cursor FROM tasks t LEFT JOIN progress_ingest p ON p.task_id=t.task_id AND p.source=%s AND p.session_id=%s WHERE t.task_id=%s AND t.deleted_at IS NULL', (source, session_id, task_id)).fetchone()
+        if row is None:raise KeyError(task_id)
+        return int(row['cursor']) if row['cursor'] is not None else 0
 
     def ingest_progress(self, signal, source: str) -> bool:
         """Deduplicate and commit task event + source cursor as one transaction."""
@@ -767,6 +768,10 @@ FROM tasks t"""
                 complete=False
             else:total+=Decimal(row['expense_actual'])/Decimal(row['scale'])
         return {'provider_usd':str(total) if complete else None,'complete':complete,'attempts':len(rows),'test':True}
+
+    def test_task_breakdown(self,task_id):
+        from .acceptance_evidence import breakdown
+        return breakdown(self,task_id)
 
     def purge_test_task(self,task_id,*,confirm=False):
         row=self._execute_native('SELECT public.requi_purge_test_task(%s,%s) AS result',(task_id,confirm),write=True).fetchone()
@@ -2361,6 +2366,7 @@ PG_OPERATIONS = (
     'list_test_tasks',
     'purge_test_task',
     'test_task_expense',
+    'test_task_breakdown',
     'manifest_artifacts',
     'manifest_ready',
     'manifest_revision',

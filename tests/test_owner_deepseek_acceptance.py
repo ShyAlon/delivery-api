@@ -465,3 +465,13 @@ def test_http_evidence_records_utc_start_for_server_correlation():
         api=a.API(client);api('GET','/api/tasks/t')
     assert datetime.datetime.fromisoformat(api.records[0]['started_at']).utcoffset()==datetime.timedelta(0)
     assert api.records[0]['path']=='/api/tasks/t'
+
+
+def test_success_breakdown_saved_before_any_purge_and_disagrees_fail_closed(tmp_path):
+    data={'task_id':'t','units_per_credit':1000000000,'parts':{'tokens':{'posted_units':'44025000','exact_units':'44025000'},'compute':{'posted_units':'2622000','exact_units':'2622000'}},'total_posted_units':'46647000','total_exact_credits':'0.046647','children':[{'reaped':True,'state':'done'}]}
+    calls=[]
+    def api(method,path):calls.append((method,path));return data
+    value,path=a.save_success_breakdown(api,'t',tmp_path,{'price':0.046647})
+    assert path.exists() and value['parts']['compute']['posted_units']=='2622000'
+    assert calls==[('GET','/api/operations/test-tasks/t/breakdown')]
+    with pytest.raises(a.Refused,match='no purge'):a.save_success_breakdown(api,'t',tmp_path,{'price':0.05})

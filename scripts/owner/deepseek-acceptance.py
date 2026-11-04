@@ -270,6 +270,24 @@ def journey(api,*,observe=lambda value:None,progress=None,base=''):
         raise
 
 
+def save_success_breakdown(api,tid,directory,cost):
+    value=api('GET','/api/operations/test-tasks/'+tid+'/breakdown')
+    if value.get('task_id')!=tid or value.get('units_per_credit')!=1000000000:
+        raise Refused('Compact accounting evidence identity/scale mismatch; no purge sent')
+    parts=value.get('parts',{})
+    if set(parts)!={'tokens','compute'} or not value.get('children') or not all(x.get('reaped') is True and x.get('state')=='done' for x in value['children']):
+        raise Refused('Compact token/compute or reaped-child evidence missing; no purge sent')
+    posted=sum(Decimal(str(x['posted_units'])) for x in parts.values())
+    exact=sum(Decimal(str(x['exact_units'])) for x in parts.values())/Decimal(1000000000)
+    if posted!=Decimal(value['total_posted_units']) or exact!=Decimal(value['total_exact_credits']) or abs(exact-Decimal(str(cost['price'])))>Decimal('0.0000005'):
+        raise Refused('Compact accounting totals do not reconcile with cost; no purge sent')
+    # A separate evidence file exists even if the subsequent purge/report fails.
+    value['http_timings']=[{k:r[k] for k in ('method','path','started_at','elapsed_seconds','status') if k in r} for r in getattr(api,'records',[]) if r.get('kind')=='acceptance.http']
+    path=directory/('breakdown-'+tid+'.json')
+    path.write_text(json.dumps(value,indent=2));path.chmod(0o600)
+    return value,path
+
+
 def save_failure(api,tid,directory,browser=None):
     if not tid:return None
     try:
@@ -391,10 +409,13 @@ def main(argv=None):
                     expect(page.locator('#currentquestion p')).to_contain_text(task['control_snapshot']['prompt'],timeout=15000)
                     progress.note('Hidden browser current question confirmed; closing verification browser')
                     browser.close()
+                progress.set('Saving compact numeric accounting and timing evidence before purge',90)
+                breakdown,breakdown_path=save_success_breakdown(api,tid,args.output,cost)
                 progress.set('Purging successful test content; accounting stays retained',90)
                 api('POST','/api/operations/test-tasks/'+tid+'/purge',{'confirm':True})
                 report={'at':stamp,'model':plan['model'],'pin_revision':pin['revision'],'elapsed_seconds':round(time.monotonic()-started,2),
                     'task_id':tid,'retail_credits':cost['price'],'retail_usd':cost['price_usd'],'provider_usd':usage['provider_expense']['provider_usd'],'usage':usage,
+                    'breakdown':breakdown,'breakdown_file':str(breakdown_path),
                     'purged':True,'money_and_audit_retained':True}
                 result_path=args.output/('result-'+tid+'.json');result_path.write_text(json.dumps(report,indent=2));result_path.chmod(0o600);print(json.dumps(report,indent=2))
             except (Exception,KeyboardInterrupt) as error:

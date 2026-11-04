@@ -316,3 +316,12 @@ def test_non_success_logs_safe_http_status_and_keeps_attempt_uncertain(caplog):
     assert g.calls==['reserve','start','uncertain'] and len(calls)==1
     assert 'child.provider.http_refusal' in caplog.text and '402' in caplog.text
     assert 'prompt-secret' not in caplog.text and 'secret-value' not in caplog.text
+
+
+def test_provider_stage_timings_are_numeric_no_response_or_credentials():
+    broker,g,j,calls=setup();broker.dispatch(request());broker.dispatch(request())
+    assert len(broker.timings)==1
+    item=broker.timings[0]
+    assert set(item)=={'stage','transport_ms','journal_ms','settlement_ms'}
+    assert all(type(v) is int and v>=0 for k,v in item.items() if k!='stage')
+    assert 'parent-only' not in str(item) and 'choices' not in str(item)
