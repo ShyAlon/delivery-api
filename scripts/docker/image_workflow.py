@@ -93,7 +93,7 @@ def acceptance_contract(root: Path) -> str:
            "scripts/docker/local_service_fixture.py","scripts/docker/fixture_services.py",
            "scripts/docker/retained_image_proof.py","scripts/docker/Dockerfile.local-fixture",
            "scripts/docker/image-local-acceptance.py","scripts/docker/private_backoffice.py",
-           "scripts/docker/local_image_preview.py","scripts/owner/deepseek-acceptance.py",
+           "scripts/docker/local_image_preview.py","scripts/ops/browser_smoke.py","scripts/owner/deepseek-acceptance.py",
            "scripts/ops/acceptance.sh","tests/pg_harness.py","src/delivery_api/runtime_roles.py")
     files=sorted([root/path for path in fixed]+list((root/"supabase/migrations").glob("*.sql")))
     h=hashlib.sha256()

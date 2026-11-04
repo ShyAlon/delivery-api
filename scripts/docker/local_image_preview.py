@@ -37,6 +37,17 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
         status=actual.get('State',{})
         if status.get('Health',{}).get('Status')=='healthy':
             log('PASS','preview healthy at http://127.0.0.1:'+str(port)+'; exact local image retained')
+            # Preserve the real browser gate, including named expected anonymous
+            # 401 classification. Never infer readiness from health alone.
+            browser=Path(__file__).resolve().parents[1]/'ops/browser_smoke.py'
+            result=subprocess.run([__import__('sys').executable,str(browser),'http://127.0.0.1:'+str(port)],
+                                  capture_output=True,text=True,timeout=90)
+            output=state.path.parent/'browser-smoke.log'
+            descriptor=__import__('os').open(output,__import__('os').O_WRONLY|__import__('os').O_CREAT|__import__('os').O_TRUNC,0o600)
+            with __import__('os').fdopen(descriptor,'w') as stream:stream.write(result.stdout+result.stderr)
+            if result.returncode:
+                log('FAIL','browser smoke failed; named browser evidence in '+str(output)+'; container retained: '+name)
+                raise WorkflowError('preview browser boot unverified; inspect docker logs '+name+' and private browser-smoke.log, no automatic restart')
             from private_backoffice import PrivateBackoffice
             backoffice=PrivateBackoffice(backoffice_port,port,state.path.parent/'backoffice.log')
             try:

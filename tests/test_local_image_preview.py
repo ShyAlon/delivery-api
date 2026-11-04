@@ -28,3 +28,29 @@ def test_dry_preview_has_no_container_mutation(tmp_path,monkeypatch):
 def test_missing_acceptance_cannot_preview(tmp_path):
     value=state();value.state['stages'].pop('local-acceptance')
     with pytest.raises(m.WorkflowError,match='exact current local acceptance'):m.preview(value,env_file=str(tmp_path/'none'))
+
+
+def test_browser_failure_keeps_container_and_named_private_evidence(tmp_path,monkeypatch):
+    import json
+    import subprocess
+    import builtins
+    value=state();value.path=tmp_path/'state.json'
+    env=tmp_path/'private.env';env.write_text('FICTIONAL=value');env.chmod(0o600)
+    monkeypatch.setattr(m,'inspect_image',lambda image:{'Id':image})
+    monkeypatch.setattr(builtins,'input',lambda prompt:'yes')
+    calls=[]
+    def command(args,**kwargs):
+        calls.append(args)
+        if 'inspect' in args:return json.dumps({'Image':ID,'State':{'Running':True,'Health':{'Status':'healthy'}}})
+        return ''
+    monkeypatch.setattr(m,'command',command)
+    def run(args,**kwargs):
+        if 'inspect' in args:return subprocess.CompletedProcess(args,1,b'',b'')
+        assert str(D.parents[1]/'scripts/ops/browser_smoke.py') in args
+        return subprocess.CompletedProcess(args,1,'browser errors during boot: HTTP 500 /api/tasks\n','')
+    monkeypatch.setattr(subprocess,'run',run)
+    with pytest.raises(m.WorkflowError,match='browser boot unverified'):m.preview(value,env_file=str(env),apply=True)
+    assert not any('rm' in args for args in calls)
+    evidence=tmp_path/'browser-smoke.log'
+    assert 'HTTP 500 /api/tasks' in evidence.read_text()
+    assert evidence.stat().st_mode&0o777==0o600
