@@ -7,6 +7,7 @@ fail(){ printf 'REQ ABORTED: %s No owner step was run.\n' "$*" >&2; exit 1; }
 command=${1:-}; shift
 # Acceptance has its own exact argparse contract; pass every argument unchanged
 # to the one repo entry rather than teaching this generic parser paid flags.
+if [ "$command" = image ]; then exec bash scripts/ops/image.sh "$@"; fi
 if [ "$command" = acceptance ]; then exec bash scripts/ops/acceptance.sh "$@"; fi
 apply=0; email=''; checks=full; acceptance_args=(); test_owner=0
 while [ "$#" -gt 0 ]; do
