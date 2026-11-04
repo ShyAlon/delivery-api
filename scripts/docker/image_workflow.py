@@ -200,6 +200,8 @@ def local_acceptance(root: Path, state: StageState, evidence: dict) -> dict:
         raise WorkflowError("acceptance image identity differs")
     # Never reuse a successful boolean from a torn-down fixture run. Each call
     # proves the current exact image anew; build stage is independently reusable.
+    # An old receipt must never outlive a new failed acceptance attempt.
+    (state.path.parent/"accepted-image.json").unlink(missing_ok=True)
     log("INFO", "stage 3/6 local acceptance: owned services, signed HTTP, real child evidence")
     run=OwnedRun(root/"delivery-api",image_id)
     try:
