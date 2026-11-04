@@ -213,3 +213,7 @@ def test_fresh_zero_credit_http_start(pg_workspace_factory,pg_task_app,pg_runtim
             if loops:loops[0].call_soon_threadsafe(stop_streams)
             server.should_exit=True;thread.join(10);vendor.shutdown();vendor.server_close()
             assert not thread.is_alive()
+            # Global test-only policy must not leak into later guard suites.
+            if paid:
+                with workspace.admin() as c:
+                    c.execute("DELETE FROM expense_guard_policy WHERE policy_version='acceptance'")

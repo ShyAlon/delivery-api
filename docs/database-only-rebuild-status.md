@@ -393,3 +393,8 @@ operator boundary changed or bypass added.
 - Everything ZIP asserts the current precise retained task-window manifest, not an obsolete bounded-tail-only sentence. No export behavior changed.
 - Actual detached origin/main source baseline confirmed by import path: four identical failures, retained unchanged for separate UI follow-up: test_page_headers_stay_sticky_and_home_has_no_evidence_vault_hero, test_stale_decision_conflict_closes_and_refreshes_dialog, test_interview_scrolls_inside_its_section_and_live_process_stays_visible, test_a_session_unavailable_in_this_environment_is_described_only_as_what_is_known. No production web diff in DB-only branch.
 - Full browser batches: 34/35,34/35,34/35,51/54 passed, with failures above plus stale fixture assertions corrected separately. Final rerun still required, not a full browser pass. SPA combined timeout after20dots is not a pass.
+
+### Rebuild unit 47: acceptance policy cleanup for order-independent gate
+- Fresh paid-fixture HTTP acceptance leaked its disposable database singleton expense policy into later tripwire tests. Explicitly remove only its 'acceptance' policy in finally after the test server stops. No production policy change.
+- First cleanup draft used wrong column 'version', caught by combined failing-test run; actual schema uses policy_version. Corrected and rerun below.
+- Final disjoint gate underway with JUnit results. Shard0 840 passed/10 skipped; shard1 504 passed/32 skipped plus this isolation failure; shard3 654 passed/10 skipped; shard4 462 passed/1 skipped. Shards2/5 outer budgets exceeded, split in halves. No full-gate claim.
