@@ -100,3 +100,9 @@ Task-read cache key is always owner/session scoped and has no artifact selector.
 Cache TTL behavior is unchanged. Red-first absent-setting policy; 97 signed auth,
 manifest, child cutover, document and runtime-contract tests passed. Tests that
 set retired flags now explicitly create ignored attributes to verify no effect.
+
+Unit 16: model-call diagnostics project retained PG bytes, not a host jsonl path.
+Signed route survives absent host directory; duration-only customer projection
+and account-debug token detail remain separate. Red-first path-policy regression;
+29 diagnostics/debug/policy tests passed. Signed classification desktop/mobile
+screenshots inspected: retained verdicts are readable, dialog scrolls correctly.

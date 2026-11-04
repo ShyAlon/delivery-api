@@ -19,3 +19,8 @@ def test_supplemental_evidence_has_no_host_authority(function):
     source=inspect.getsource(function)
     for forbidden in ('read_text(', 'read_bytes(', '.is_file(', '.glob(', 'bundles.root(', "hasattr(store,'_postgres')"):
         assert forbidden not in source
+
+def test_model_call_diagnostics_are_pure_retained_byte_projection():
+    from delivery_api import task_diagnostics
+    source=inspect.getsource(task_diagnostics.model_calls)
+    assert '.is_file(' not in source and '.open(' not in source

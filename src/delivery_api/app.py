@@ -1706,9 +1706,9 @@ def task_diagnostics(task_id:str):
         except EngineUnreachableError:error="the interview engine is not reachable"
     model_calls=None
     if session_id:
-        from vmodel_contracts.runtime import artifacts_root
-        root=authorized_session(artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR')),session_id,store)
-        model_calls=diagnostics.model_calls(root/"interview",cloud=not _account_debug_available())
+        from .generator_documents import GeneratorDocuments
+        raw=GeneratorDocuments.owner_reader(store,task_id).read('interview/llm-calls.jsonl')
+        model_calls=diagnostics.model_calls(raw,cloud=not _account_debug_available())
     return diagnostics.build(detail,detail.get("events") or [],detail.get("control_snapshot"),detail.get("input_state"),
                              diagnostics.engine_summary(snapshot,error),worker_state=store.task_worker_state(task_id) if config.CLOUD_TENANTS else None,model_calls=model_calls)
 
