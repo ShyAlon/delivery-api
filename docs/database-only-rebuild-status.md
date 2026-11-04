@@ -283,3 +283,38 @@ re-run with required sibling source found an actual stale test-only script impor
 scripts/item6/pipeline_executor.py imports removed compute_meter.excluded_wait at
 lines69/148; unresolved, not a timeout or passed acceptance. Installed production
 child graph acceptance is separate and previously green, but final recheck remains.
+
+
+Continuation checkpoint, 2026-11-04 10:01 local:
+- Latest code checkpoint2616fe9, pushed. No PR/deploy/server/paid model/live DB
+  writes or migration/merge. DB mutations in tests use disposable local harness.
+- Remaining full gate:4051 collection. Many bounded groups overlap; never sum
+  them into a whole-suite result. 45-file follow-up group finished370 passed,
+  31 skipped,4 failed:operator_pages ZIP, ops_health admin data/download,
+  ops_health shell, owner_acceptance_real_entry15s timeout. Inspect real output
+  before classifying timeout. Older 286/1skip/9fail group:export and two marks
+  fixed21pass; private graph source env exposed stale compute_meter import;
+  model_routes five private-provenance/pin fixtures still need migration.
+- HTTP cutover56pass; API15pass; cloudAPI48pass; signed failure/review12pass;
+  diagnostics18pass. Browser decision+backoffice shared files50pass99s, so
+  per-file22s timeout is insufficient for long browser files. Actual installed
+  production child+same-host+fake SDK+fresh HTTP54pass59s on82866fd; recheck
+  after remaining production edits before opening theme2 PR.
+- Open-generator-gate automatic continuation remains explicitly unverified.
+  Runner's old continuation variable has no consumer. Do not restore retired
+  callback path or silently claim preservation; ground expected current feature
+  policy and test installed admitted lifecycle. Interview is explicitly click-only.
+- Dead source audit:app legacy recovery functions remain uncalled from startup;
+  runner dead pricing fields/on_complete/continuation variable; config constant
+  CLOUD_TENANTS retained for test compatibility but no production branches except
+  startup auth-config validation; namespace helper has no content reader.
+- scripts/item6/pipeline_executor.py lines69/148 import removed compute_meter.
+  This is private test-only coordinator, not actual production ChildGeneratorEngine.
+  Research equivalent exclusion/compute semantics before changing, never replace
+  with an ungrounded no-op merely to pass a test.
+- tests/test_model_routes.py private provenance assertions expect provider data
+  deliberately excluded from transcript; preserve pure segmentation tests and
+  verify customer privacy, retain internal account-capability diagnostic checks
+  using PG http-session/debug-http docs, not host files.
+- Full build, all acceptance and final diff review still pending. CI unavailable,
+  local gate only. Push WIP after every meaningful unit, noPR until full gate.
