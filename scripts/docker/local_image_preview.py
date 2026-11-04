@@ -37,7 +37,9 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
         if actual.get('Image')!=image_id:raise WorkflowError('preview running image differs; inspect before retry')
         status=actual.get('State',{})
         if status.get('Health',{}).get('Status')=='healthy':
-            log('WARN','service health is not route admission; inspect signed Model routes before Start, no paid work approved')
+            from preview_status import summarize
+            status=summarize({'ok':True})
+            log('WARN',status['message'])
             log('PASS','preview healthy at http://127.0.0.1:'+str(port)+'; exact local image retained')
             # Preserve the real browser gate, including named expected anonymous
             # 401 classification. Never infer readiness from health alone.

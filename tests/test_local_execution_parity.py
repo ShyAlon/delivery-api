@@ -28,9 +28,14 @@ def test_execution_phase_output_uses_normal_reader(monkeypatch):
     assert module.task_phase_output('t1')=={'phase_key':'srs','generation':3,'status':'waiting','items':[]}
 
 def test_default_launcher_opens_both_routes_without_provider_prompt():
-    s=(ROOT/'scripts/ops/preview-exec.sh').read_text()
-    assert 'PROVIDER=${PREVIEW_EXEC_PROVIDER:-both}' in s
-    assert '--memory 3g --memory-swap 3g' in s
+    from delivery_api.local_route import managed_routes
+    assert managed_routes({})==['deepseek','ollama']
+    import sys
+    sys.path.insert(0,str(ROOT/'scripts/docker'))
+    from runtime_spec import OPTIONS
+    assert OPTIONS[OPTIONS.index('--memory')+1]=='3g'
+    assert OPTIONS[OPTIONS.index('--memory-swap')+1]=='3g'
+
 
 
 def test_wrapper_defaults_both_and_reads_key_as_data(tmp_path):
@@ -57,9 +62,10 @@ def test_wrapper_defaults_both_and_reads_key_as_data(tmp_path):
 
 
 def test_execution_data_and_metrics_survive_container_replacement():
-    s=(ROOT/'scripts/ops/preview-exec.sh').read_text()
-    assert 'DATA_VOLUME=${PREVIEW_DATA_VOLUME:-requi-preview-data}' in s
-    assert '-v "$DATA_VOLUME":/data' in s
-    assert 'DELIVERY_METRICS_DB=/data/requi-re/run_metrics.db' in s
-    assert 'docker volume rm' not in s
-    assert 'docker volume rm' not in (ROOT/'scripts/ops/preview-rebuild.sh').read_text()
+    # Durable state is PG, not the retired preview volume or SQLite metrics.
+    source=(ROOT/'scripts/docker/runtime_spec.py').read_text()
+    assert 'DELIVERY_METRICS_DB=' not in source and 'requi-preview-data' not in source
+    from delivery_api import postgres_metrics
+    assert 'resource_run_samples' in __import__('inspect').getsource(postgres_metrics)
+    preview=(ROOT/'scripts/docker/local_image_preview.py').read_text()
+    assert 'docker volume rm' not in preview

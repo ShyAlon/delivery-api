@@ -86,18 +86,20 @@ def test_startup_wiring_keeps_database_registry_and_active_session_checks(monkey
 
 
 def test_actual_preview_filter_preserves_only_explicit_operator_settings(tmp_path):
-    import subprocess
+    # No launcher-side filtered copy or new capability defaults: values pass
+    # unchanged, and production operator validation remains the authority.
+    import sys
     from pathlib import Path
-    script=(Path(__file__).parents[1]/'scripts/ops/preview-exec.sh').read_text()
-    fn=script[script.index('build_exec_env(){'):script.index('\nfor t in docker curl git shasum tar')]
-    source=tmp_path/'source';dest=tmp_path/'filtered'
-    source.write_text('REQUI_OPERATOR_SUBJECT=subject\nREQUI_OPERATOR_REGISTRY_VERSION=v1\nREQUI_OPERATOR_CAPABILITIES=["logs.read"]\nREQUI_OPERATOR_EVIL=no\nDEEPSEEK_API_KEY=never-copy\n')
-    result=subprocess.run(['bash','-c',fn+'\nbuild_exec_env "$1" "$2"','_',str(source),str(dest)],capture_output=True,text=True,check=True)
-    body=dest.read_text()
-    assert 'REQUI_OPERATOR_SUBJECT=subject' in body
-    assert 'REQUI_OPERATOR_REGISTRY_VERSION=v1' in body
-    assert 'REQUI_OPERATOR_CAPABILITIES=["logs.read"]' in body
-    assert 'REQUI_OPERATOR_EVIL' not in body and 'never-copy' not in body
+    sys.path.insert(0,str(Path(__file__).parents[1]/'scripts/docker'))
+    from image_settings import validate
+    source=tmp_path/'private.env'
+    raw='DELIVERY_DATABASE_URL=postgresql://fixture/db\nDELIVERY_SUPABASE_URL=https://fixture.supabase.co\nDELIVERY_SUPABASE_ANON_KEY=public\nINTERVIEW_ENGINE_TOKEN=fictional-private-token-123456\nREQUI_OPERATOR_SUBJECT=subject\nREQUI_OPERATOR_REGISTRY_VERSION=v1\nREQUI_OPERATOR_CAPABILITIES=["logs.read"]\nDEEPSEEK_API_KEY=fictional-never-copy\n'
+    source.write_text(raw);source.chmod(0o600)
+    settings=validate(source)
+    assert settings['REQUI_OPERATOR_SUBJECT']=='subject'
+    assert settings['REQUI_OPERATOR_CAPABILITIES']=='["logs.read"]'
+    assert source.read_text()==raw and list(tmp_path.iterdir())==[source]
+
 
 
 def test_admin_badge_cannot_mint_an_operator_principal(monkeypatch,store):
