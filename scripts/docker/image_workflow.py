@@ -6,6 +6,7 @@ No server is contacted by this module. Never promotes partial state to a receipt
 """
 from __future__ import annotations
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -91,7 +92,8 @@ def acceptance_contract(root: Path) -> str:
     fixed=("scripts/docker/image_acceptance.py","scripts/docker/local_image_run.py",
            "scripts/docker/local_service_fixture.py","scripts/docker/fixture_services.py",
            "scripts/docker/retained_image_proof.py","scripts/docker/Dockerfile.local-fixture",
-           "scripts/docker/image-local-acceptance.py","scripts/owner/deepseek-acceptance.py",
+           "scripts/docker/image-local-acceptance.py","scripts/docker/private_backoffice.py",
+           "scripts/docker/local_image_preview.py","scripts/owner/deepseek-acceptance.py",
            "scripts/ops/acceptance.sh","tests/pg_harness.py","src/delivery_api/runtime_roles.py")
     files=sorted([root/path for path in fixed]+list((root/"supabase/migrations").glob("*.sql")))
     h=hashlib.sha256()
@@ -183,11 +185,17 @@ def build(root: Path, state: StageState) -> dict:
                     raise WorkflowError("source archive contains links: " + name)
                 stream.extractall(target, members=members, filter="data")
             archive.unlink()
+        # Context readability must not depend on a private owner umask. Only
+        # committed source bytes are present, never settings or credentials.
+        for source in context.rglob('*'):
+            if source.is_dir():source.chmod(0o755)
+            elif source.is_file():source.chmod(0o755 if source.stat().st_mode&0o111 else 0o644)
         tag = "requi-full-candidate:" + state.key.split(":")[1][:24]
         revisions = ",".join(name + "=" + sha for name, sha in sources.items())
         log("INFO", "stage 2/6 build: linux/amd64 candidate locally, no provider keys or server")
         command(["docker", "build", "--platform", "linux/amd64", "--build-arg", "REQUI_BUILD_ID=" + state.key,
-                 "--build-arg", "REQUI_BUILD_REPOS=" + revisions, "--file", str(context/"delivery-api"/"Dockerfile.full"),
+                 "--build-arg", "REQUI_BUILD_REPOS=" + revisions, "--build-arg",
+                 "REQUI_BUILD_AT=" + datetime.datetime.now(datetime.timezone.utc).isoformat(), "--file", str(context/"delivery-api"/"Dockerfile.full"),
                  "--tag", tag, str(context)], timeout=7200)
         image = inspect_image(tag)
     evidence = {"image_id": image["Id"], "sources": sources, "platform": "linux/amd64"}
