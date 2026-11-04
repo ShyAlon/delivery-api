@@ -383,16 +383,8 @@ def _check_pool_budget(env, import_module):
         engine_max = import_module('interview_engine.pg_pool').ENGINE_POOL_MAX
     except Exception:
         engine_max = None
-    if env.get('DELIVERY_CHILD_EXECUTION'):
-        try:
-            from delivery_api.child_pool_budget import child_mode
-            if child_mode(env):
-                delivery_max=8;engine_max=4
-        except ValueError as error:
-            return Check('pool-budget','refuse','fail','valid local child selector',
-                         'local opt-in only',str(error),'DELIVERY_CHILD_EXECUTION / DELIVERY_LOCAL_PREVIEW')
-    found = 'delivery pool %d + engine pool %d = %d clients' % (delivery_max or 0, engine_max or 0, (delivery_max or 0) + (engine_max or 0))
-    if env.get('DELIVERY_CHILD_EXECUTION')=='local':found += ' (8 parent + 4 active child + 0 compatibility)'
+    engine_max=4  # one active child; no resident compatibility process
+    found = 'delivery pool %d + active child pool %d = %d clients (no compatibility process)' % (delivery_max or 0, engine_max or 0, (delivery_max or 0) + (engine_max or 0))
     if delivery_max is None or engine_max is None:
         return Check('pool-budget', 'warn', 'warn', 'the configured process pools against the pooler client limit',
                      'delivery pool + engine pool <= %d clients (Supabase pooler, session mode)' % budget,
@@ -409,30 +401,11 @@ def _check_pool_budget(env, import_module):
 
 
 def _check_provider_key(env, import_module):
-    if env.get('DELIVERY_CLOUD_EXECUTION') != '1':
-        return Check('provider-key', 'warn', 'skip', 'a provider API key when execution is open',
-                     'at least one configured provider key present (presence only - never a validation call)',
-                     'skipped: execution is closed, no provider key is needed', 'provider key environment')
-    if env.get('DELIVERY_LOCAL_PREVIEW')=='1':
-        return Check('provider-key', 'warn', 'pass', 'provider credentials scoped to the selected route',
-                     'reviewed local Ollama needs no paid provider key',
-                     'Ollama can start without paid credentials; paid routes remain gated independently', 'route admission configuration')
-    try:
-        # Providers with no key (ollama maps to None) contribute no env var; feeding
-        # None into env.get crashed this whole check into the unnamed fallback
-        # (2026-10-27: [warn] unknown - TypeError: str expected, not NoneType).
-        names = {n for n in import_module('interview_engine.model_config')._API_KEY_ENV.values() if n}
-    except Exception:
-        names = {'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'}
-    present = sorted(name for name in names if env.get(name))
-    if present:
-        return Check('provider-key', 'warn', 'pass', 'a provider API key when execution is open',
-                     'at least one configured provider key present (presence only - never a validation call)',
-                     'present: %s' % ', '.join(present), 'provider key environment')
-    return Check('provider-key', 'warn', 'warn', 'a provider API key when execution is open',
-                 'at least one configured provider key present (presence only - never a validation call)',
-                 'none of %s are set - an admitted task dies at its first provider call' % ', '.join(sorted(names)),
-                 'provider key environment', 'set a provider key or close execution')
+    present=bool((env.get('DEEPSEEK_API_KEY') or '').strip())
+    return Check('provider-key','warn','pass','provider credentials scoped by reviewed pin',
+                 'Ollama needs no key; DeepSeek requires its parent-held key at readiness and dispatch',
+                 'DeepSeek key present (not validated)' if present else 'No paid key: only independently ready nonpaid routes may run',
+                 'durable model pin and per-job admission')
 
 
 def _engine_fail(piece):

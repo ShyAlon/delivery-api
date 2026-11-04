@@ -9,7 +9,6 @@ def test_customer_route_api_never_exposes_operator_evidence_even_to_admin(monkey
     monkeypatch.setenv('REQUI_PIN_STORE','1')
     monkeypatch.setenv('DELIVERY_BACKOFFICE_URL','http://127.0.0.1:8031/#model-pins')
     monkeypatch.setenv('DEEPSEEK_API_KEY','fake')
-    monkeypatch.setattr(m.local_route,'local_preview_enabled',lambda:True)
     reply=m.model_routes(SimpleNamespace(admin=True))
     assert not reply['routes'][0]['available']
     assert reply['routes'][1]['available'] and reply['routes'][1]['readiness']=='checked_on_start'

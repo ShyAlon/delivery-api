@@ -122,7 +122,7 @@ build_exec_env(){
     # REQUI_EXPECTED_REPOS pins the build this launcher asked for, so the image's own build-staleness
     # check can compare it against the REQUI_BUILD_REPOS the image was built with (preview.sh pins it
     # too, but this script builds its env itself - that pin never covered this path).
-    printf '%s\n' "INTERVIEW_ENGINE_TOKEN=$tok" DELIVERY_CONTROL_PLANE_ONLY=0 DELIVERY_CLOUD_EXECUTION=1 DELIVERY_COOKIE_SECURE=0 DELIVERY_PREVIEW=1 DELIVERY_METRICS_DB=/data/requi-re/run_metrics.db DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 "DELIVERY_BACKOFFICE_URL=http://127.0.0.1:$BACKOFFICE_PREVIEW_PORT/#model-pins" "DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT" "DELIVERY_ALT_ORIGINS=http://localhost:$PORT" "REQUI_EXPECTED_REPOS=$REPOS" >> "$2" ) || return 1
+    printf '%s\n' "INTERVIEW_ENGINE_TOKEN=$tok" DELIVERY_METRICS_DB=/data/requi-re/run_metrics.db DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 "DELIVERY_BACKOFFICE_URL=http://127.0.0.1:$BACKOFFICE_PREVIEW_PORT/#model-pins" "DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT" "DELIVERY_ALT_ORIGINS=http://localhost:$PORT" "REQUI_EXPECTED_REPOS=$REPOS" >> "$2" ) || return 1
   chmod 600 "$2"
 }
 
@@ -346,9 +346,7 @@ build_exec_env "$WORK/loaded.env" "$WORK/preview.env" || abort NO-TOKEN "could n
 # The old saved settings cannot silently opt into paid children. Owner approval is separate.
 if [ "$PROVIDER" != ollama ]; then
   echo 'Paid route visibility is not approval: paid dispatch requires an audited Back office expense policy. Customers see credits only.'
-  printf '%s\n' DELIVERY_CHILD_EXECUTION=attended-paid DELIVERY_PAID_CHILD_PREVIEW=1 >> "$WORK/preview.env"
-else
-  printf '%s\n' DELIVERY_CHILD_EXECUTION=local >> "$WORK/preview.env"
+
 fi
 if [ "$PROVIDER" != deepseek ]; then
   preview_ollama_env "$WORK/preview.env" "$OLLAMA_MODEL" "$OLLAMA_HOST"
@@ -362,13 +360,10 @@ grep -q -i -E '^[A-Z0-9_]*(DEEPSEEK|OPENAI|ANTHROPIC|API_KEY)' "$WORK/preview.en
 if [ "$PROVIDER" = deepseek ]; then
   grep -q -E '^(OLLAMA_[A-Z0-9_]*|DELIVERY_LOCAL_PREVIEW)=' "$WORK/preview.env" && abort OLLAMA-LEAK "an Ollama setting reached the DeepSeek-only preview settings" "Nothing was started." "send me this output (not the settings file)"
 fi
-[ "$(grep -c '^DELIVERY_CLOUD_EXECUTION=1$' "$WORK/preview.env")" = 1 ] || abort EXEC-OFF "execution is not forced on in the preview-exec settings" "" "send me this output"
 [ "$(grep -c '^DELIVERY_PUBLIC_ORIGIN=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_PUBLIC_ORIGIN=http://127.0.0.1:$PORT\$" "$WORK/preview.env" || abort ORIGIN "the preview's sign-in address is not set to its own local address" "" "send me this output"
 [ "$(grep -c '^DELIVERY_ALT_ORIGINS=' "$WORK/preview.env")" = 1 ] && grep -q "^DELIVERY_ALT_ORIGINS=http://localhost:$PORT\$" "$WORK/preview.env" || abort ORIGIN "the preview's second sign-in address is not exactly localhost with its own port" "" "send me this output"
-[ "$(grep -c '^DELIVERY_PREVIEW=1$' "$WORK/preview.env")" = 1 ] || abort PREVIEW-FLAG "the preview flag is not set exactly once" "" "send me this output"
 # One durable pin store, shared with Back office and the runtime. No separate launch pin generator.
 echo '== Model pins: read from the shared store; review changes in Back office > Model pins.'
-printf '%s\n' REQUI_PIN_STORE=1 >> "$WORK/preview.env"
 case "$PROVIDER" in both) printf '%s\n' REQUI_PIN_PROVIDERS=deepseek,ollama >> "$WORK/preview.env";; *) printf 'REQUI_PIN_PROVIDERS=%s\n' "$PROVIDER" >> "$WORK/preview.env";; esac
 # Public config is resolved inside the runtime using its restricted DB identity.
 # Empty/unavailable pins keep execution closed, but the operator UI must still boot for repair.
@@ -446,10 +441,10 @@ done
 if [ "$OK" != 1 ]; then echo "== the container did not become healthy; last log lines:"; docker logs --tail 30 "$NAME" 2>&1 | scrub; abort NOT-HEALTHY "the preview did not start" "" "send me the log lines above"; fi
 # The flag/key check verifies configuration, not actual gateway readiness.
 # Application startup status is reported truthfully in the final summary below.
-PROBE='import os,re;print("EXEC="+os.environ.get("DELIVERY_CLOUD_EXECUTION","unset"));print("KEYS="+str(len([k for k in os.environ if re.search("DEEPSEEK|OPENAI|ANTHROPIC|API_KEY",k,re.I)])))'
+PROBE='import os,re;print("KEYS="+str(len([k for k in os.environ if re.search("DEEPSEEK|OPENAI|ANTHROPIC|API_KEY",k,re.I)])))'
 EXECOUT=$(docker exec "$NAME" python -c "$PROBE" 2>/dev/null || true)
 EXPECTED_KEYS=0; [ "${#KEYPASS[@]}" = 0 ] || EXPECTED_KEYS=1
-echo "$EXECOUT" | grep -qx 'EXEC=1' && echo "$EXECOUT" | grep -qx "KEYS=$EXPECTED_KEYS" || abort EXEC-UNVERIFIED "the running container's environment does not confirm execution on with the expected provider key count ($EXPECTED_KEYS)" "" "send me this output"
+echo "$EXECOUT" | grep -qx "KEYS=$EXPECTED_KEYS" || abort EXEC-UNVERIFIED "the running container's environment does not confirm the expected provider key count ($EXPECTED_KEYS)" "" "send me this output"
 step_ok
 
 step "browser smoke: the real page boots clean - only named, expected anonymous 401s tolerated"

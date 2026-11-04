@@ -1,66 +1,37 @@
-"""The local preview (DELIVERY_LOCAL_PREVIEW=1): no server copy exists, so every file-backed view says so explicitly."""
-import os
+"""Retired preview settings cannot suppress normal reads or downloads."""
 from types import SimpleNamespace
-
+from pathlib import Path
+from fastapi.testclient import TestClient
 import pytest
-from fastapi import HTTPException
 
+@pytest.mark.parametrize('origin',['http://localhost:8000','https://remote.example'])
+def test_retired_preview_input_does_not_change_boot_or_auth(monkeypatch,origin):
+ import delivery_api.app as module
+ monkeypatch.setenv('DELIVERY_PUBLIC_ORIGIN',origin)
+ monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1');monkeypatch.setenv('DELIVERY_PREVIEW','1')
+ c=TestClient(module.app)
+ assert 'local_preview' not in c.get('/api/auth').json()
+ assert 'preview' not in c.get('/api/auth').json()
+ assert '"preview": true' not in c.get('/').text
 
-def test_the_boot_config_and_auth_status_expose_the_local_preview(monkeypatch):
-    from fastapi.testclient import TestClient
-    import delivery_api.app as module
-    c = TestClient(module.app)
-    monkeypatch.delenv("DELIVERY_LOCAL_PREVIEW", raising=False)
-    assert "local_preview" not in c.get("/api/auth").json()
-    monkeypatch.setenv("DELIVERY_LOCAL_PREVIEW", "1")
-    assert c.get("/api/auth").json()["local_preview"] is True
-    page = c.get("/").text
-    assert '"local_preview": true' in page and '"preview": false' in page
+def test_phase_output_uses_regular_reader_despite_retired_preview_input(monkeypatch):
+ import delivery_api.app as module
+ monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
+ monkeypatch.setattr(module,'store',SimpleNamespace(task=lambda _: {'active_phase':'srs','generation':3,'phases':[]}))
+ monkeypatch.setattr(module,'_recorded_engine_session',lambda _:None)
+ assert module.task_phase_output('t1')=={'phase_key':'srs','generation':3,'status':'waiting','items':[]}
 
+def test_ui_has_no_environment_output_or_banner_selector():
+ root=Path(__file__).parents[1]/'src/delivery_api/web'
+ assert 'local_preview' not in (root/'phase-output.js').read_text()
+ assert 'local_preview' not in (root/'task.js').read_text()
+ assert 'previewBannerText' not in (root/'chrome.js').read_text()
 
-def test_a_missing_artifact_file_names_the_local_preview(monkeypatch):
-    import delivery_api.app as module
-    record = [{"phase_key": "architecture", "name": "architecture.json", "ref": "/nonexistent-local-preview/architecture.json"}]
-    monkeypatch.setattr(module, "_task_artifact_snapshot", lambda snapshot_task_id, **kwargs: record)
-    monkeypatch.setenv("DELIVERY_LOCAL_PREVIEW", "1")
-    with pytest.raises(HTTPException) as local:
-        module._task_artifact("t1", "architecture", "architecture.json")
-    assert local.value.status_code == 404 and local.value.detail == "Artifact files are not part of a local preview"
-    monkeypatch.delenv("DELIVERY_LOCAL_PREVIEW")
-    with pytest.raises(HTTPException) as plain:
-        module._task_artifact("t1", "architecture", "architecture.json")
-    assert plain.value.status_code == 404 and plain.value.detail == "artifact file not found"
-
-
-def test_phase_output_is_explicitly_unavailable_in_a_local_preview(monkeypatch):
-    import delivery_api.app as module
-    monkeypatch.setattr(module, "store", SimpleNamespace(task=lambda task_id: {"active_phase": "srs", "generation": 3, "phases": []}))
-    monkeypatch.setenv("DELIVERY_LOCAL_PREVIEW", "1")
-    result = module.task_phase_output("t1")
-    assert result == {"phase_key": "srs", "generation": 3, "status": "local_preview", "items": []}
-
-
-def test_the_phase_output_note_explains_the_local_preview():
-    import json
-    import pathlib
-    import shutil
-    import subprocess
-    if shutil.which("node") is None:
-        pytest.skip("needs node")
-    js = pathlib.Path(__file__).resolve().parents[1] / "src" / "delivery_api" / "web" / "phase-output.js"
-    src = r"""
-globalThis.window={addEventListener(){}};
-const {phaseOutputHtml}=await import(%r);
-console.log(JSON.stringify(phaseOutputHtml({phase_key:'srs',generation:3,status:'local_preview',items:[]})));
-""" % js.as_uri()
-    r = subprocess.run(["node", "--input-type=module", "-e", src], capture_output=True, text=True, timeout=30)
-    assert r.returncode == 0, r.stderr
-    html = json.loads(r.stdout)
-    assert "not part of a local preview" in html and 'data-status="local_preview"' in html
-
-def test_the_artifacts_zip_download_is_explicitly_unavailable_in_a_local_preview(monkeypatch):
-    import delivery_api.app as module
-    monkeypatch.setenv("DELIVERY_LOCAL_PREVIEW", "1")
-    with pytest.raises(HTTPException) as err:
-        module.task_artifacts_zip("t1")
-    assert err.value.status_code == 404 and err.value.detail == "Artifact downloads are not part of a local preview"
+def test_missing_reference_artifact_fails_normally_without_location_wording(monkeypatch):
+ import delivery_api.app as module
+ from fastapi import HTTPException
+ monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
+ monkeypatch.setattr(module,'store',SimpleNamespace())
+ monkeypatch.setattr(module,'_task_artifact_snapshot',lambda _: [{'phase_key':'srs','name':'srs.json','ref':'/nonexistent-fixture/srs.json'}])
+ with pytest.raises(HTTPException) as error:module._task_artifact('fixture','srs','srs.json')
+ assert error.value.status_code==404 and error.value.detail=='artifact file not found'

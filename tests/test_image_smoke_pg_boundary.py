@@ -5,10 +5,11 @@ import pytest
 ROOT=Path(__file__).parents[1]
 
 def test_every_full_image_smoke_caller_uses_shared_owned_pg_gate():
-    for name in ('scripts/docker/build-local-image.sh','scripts/docker/smoke-image.sh','scripts/ops/preview.sh','scripts/ops/preview-exec.sh'):
+    for name in ('scripts/docker/build-local-image.sh','scripts/docker/smoke-image.sh','scripts/ops/preview-exec.sh'):
         text=(ROOT/name).read_text()
         assert 'smoke-local-image.sh' in text,name
         assert 'python /app/full-smoke.py' not in text,name
+    assert 'preview-exec.sh' in (ROOT/'scripts/ops/preview.sh').read_text()
 
 def test_shared_gate_builds_test_derivative_and_runs_network_none(tmp_path):
     fake=tmp_path/'bin';fake.mkdir();log=tmp_path/'log'

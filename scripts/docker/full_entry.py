@@ -1,6 +1,6 @@
-"""Full-service launcher: the interview engine (loopback only) and the delivery API in one container.
+"""One delivery parent supervises per-job children on every target.
 
-Either process exiting stops the other and fails the container, so the restart policy sees it.
+Delivery exiting fails the container, so the restart policy sees it.
 `--healthcheck` is the container health probe. No provider is called by this file."""
 import json,os,signal,socket,subprocess,sys,threading,time,urllib.request
 
@@ -70,39 +70,21 @@ def check_env(env):
     token=env.get('INTERVIEW_ENGINE_TOKEN','')
     if not token or token==DEFAULT_TOKEN or len(token)<24:
         problems.append('INTERVIEW_ENGINE_TOKEN must be set to a private value of at least 24 characters (not the local default)')
-    if env.get('DELIVERY_CONTROL_PLANE_ONLY','0')!='0':
-        problems.append('DELIVERY_CONTROL_PLANE_ONLY must be 0 in the full service')
     resolved=engine_env(env)
     if not resolved.get(SESSIONS_DSN_ENV,'').startswith(('postgresql://','postgres://')):
         problems.append('PostgreSQL engine session persistence is required: set '+SESSIONS_DSN_ENV+' or DELIVERY_DATABASE_URL; retired '+SESSIONS_FILE_ENV+' cannot bypass this')
     return problems
 
 
-def commands(python=None):
-    python=python or sys.executable
-    engine=[python,'-m','uvicorn','interview_engine.http_service:app','--host',ENGINE_HOST,'--port',str(ENGINE_PORT)]
-    delivery=[python,'-m','delivery_api']
-    return engine,delivery
-
-
-def port_open(host,port,timeout=0.5):
-    try:
-        with socket.create_connection((host,port),timeout=timeout):return True
-    except OSError:return False
-
-
-def compatibility_engine_required(env):
-    from delivery_api.child_pool_budget import child_mode
-    return not child_mode(env)
+def command(python=None):
+    return [python or sys.executable,'-m','delivery_api']
 
 
 def healthcheck(env=os.environ):
     port=int(env.get('DELIVERY_PORT','8000'))
     with urllib.request.urlopen(f'http://127.0.0.1:{port}/health',timeout=3) as response:
         body=json.load(response)
-    assert body.get('ok') is True and body.get('runtime_profile')!='control_plane_only'
-    if compatibility_engine_required(env):
-        assert port_open(ENGINE_HOST,int(env.get('INTERVIEW_ENGINE_PORT',str(ENGINE_PORT))))
+    assert body.get('ok') is True
 
 
 def main():
@@ -123,24 +105,12 @@ def main():
     if report.refused:
         print('full service not started: the startup preflight found blocking problems (above)',file=sys.stderr)
         return 2
-    engine_cmd,delivery_cmd=commands()
-    engine=None;procs=[]
+    procs=[]
     def stop(*_):
         for p in procs:
             if p.poll() is None:p.terminate()
     signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
-    if compatibility_engine_required(os.environ):
-        engine=subprocess.Popen(engine_cmd,env=engine_env(os.environ),
-                                stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,errors='replace',bufsize=1)
-        tee_engine_output(engine,engine_log_path(os.environ));procs.append(engine)
-        for _ in range(120):
-            if engine.poll() is not None:
-                print('interview engine exited during start',file=sys.stderr);return 3
-            if port_open(ENGINE_HOST,ENGINE_PORT):break
-            time.sleep(0.5)
-        else:
-            stop();print('interview engine did not open its port in 60s',file=sys.stderr);return 3
-    delivery=subprocess.Popen(delivery_cmd);procs.append(delivery)
+    delivery=subprocess.Popen(command());procs.append(delivery)
     while True:
         for p in procs:
             code=p.poll()
@@ -149,7 +119,7 @@ def main():
                 for q in procs:
                     try:q.wait(timeout=20)
                     except subprocess.TimeoutExpired:q.kill()
-                print(f'{"engine" if p is engine else "delivery"} exited with {code}; stopping the container',file=sys.stderr)
+                print(f'delivery exited with {code}; stopping the container',file=sys.stderr)
                 return code or 1
         time.sleep(1)
 

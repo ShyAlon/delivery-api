@@ -140,7 +140,7 @@ def test_too_few_credits_refuses_in_credits_words_and_starts_nothing(monkeypatch
 
 @pytest.mark.parametrize("kwargs,status", [({"cloud": False}, 404), ({"admitted": False}, 503), ({"session": None}, 409),
                                             ({"task": _task(state="failed")}, 409), ({"claimed": None}, 409),
-                                            ({"task": _task(model_default="ollama:phi4")}, 409)])
+                                            ({"task": _task(model_default="openai:unmanaged")}, 409)])
 def test_every_other_refusal_starts_nothing(monkeypatch, kwargs, status):
     calls = _route(monkeypatch, **kwargs)
     with pytest.raises(HTTPException) as caught:
@@ -185,14 +185,13 @@ def test_ollama_pin_starts_only_when_the_local_route_is_managed(monkeypatch):
     assert calls["prepared"] == [("t1", "needs", "owner@example.com", "ollama:qwen2.5-coder:14b")]
 
 
-def test_ollama_pin_denied_when_the_local_route_is_not_managed(monkeypatch):
-    # A persisted or replayed ollama pin must not start once the flag is off:
-    # the check is the current managed-route policy, not the pin's shape.
-    monkeypatch.delenv("DELIVERY_LOCAL_PREVIEW", raising=False)
-    _route(monkeypatch, task=_task(model_default="ollama:qwen2.5-coder:14b"))
-    with pytest.raises(HTTPException) as caught:
-        _call(True)
-    assert caught.value.status_code == 409 and "no recorded model" in caught.value.detail["cause"]
+@pytest.mark.parametrize('flag',[None,'0','1'])
+def test_supported_ollama_route_does_not_depend_on_preview_flag(monkeypatch,flag):
+    if flag is None:monkeypatch.delenv('DELIVERY_LOCAL_PREVIEW',raising=False)
+    else:monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW',flag)
+    calls=_route(monkeypatch,task=_task(model_default='ollama:qwen2.5-coder:14b'))
+    assert _call(True)['status']=='started'
+    assert calls['prepared']==[('t1','needs','owner@example.com','ollama:qwen2.5-coder:14b')]
 
 
 def test_unknown_or_malformed_pins_are_denied(monkeypatch):

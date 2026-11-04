@@ -26,7 +26,7 @@ def combine(output,inputs):
     env={'VMODEL_REVIEWED_MODEL_PRICES':json.dumps(rows,separators=(',',':')),
          'VMODEL_REVIEWED_CONTEXT_CEILING':json.dumps(contexts,separators=(',',':'))}
     # Offline same validation, placeholder never written or sent to a transport.
-    factory=ProductionGateways(None,{**env,'DELIVERY_LOCAL_PREVIEW':'1','DEEPSEEK_API_KEY':'validation-only-not-written'})
+    factory=ProductionGateways(None,{**env,'DEEPSEEK_API_KEY':'validation-only-not-written'})
     factory.close()
     target=Path(output)/'cloud-models.env'
     fd=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)

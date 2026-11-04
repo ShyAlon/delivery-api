@@ -37,16 +37,16 @@ SUPABASE_ADMIN_SUBJECTS = {x.strip() for x in os.environ.get("DELIVERY_SUPABASE_
 OPERATOR_EMAIL = "shy.alon@gmail.com"
 
 SESSION_SECRET = os.environ.get("DELIVERY_SESSION_SECRET", "")
-BASIC_AUTH_ENABLED = os.environ.get("DELIVERY_BASIC_AUTH_ENABLED", "0") != "0"
+BASIC_AUTH_ENABLED = False  # Retained test/reference API; production always uses signed tenant Auth.
 PASSWORD_MIN_LENGTH = 12
 
 SESSION_COOKIE = "vmodel_session"
 SESSION_TTL_SECONDS = int(os.environ.get("DELIVERY_SESSION_TTL_SECONDS", "43200"))
-COOKIE_SECURE = os.environ.get("DELIVERY_COOKIE_SECURE", "1") != "0"
 PUBLIC_ORIGIN = os.environ.get("DELIVERY_PUBLIC_ORIGIN", "").rstrip("/")
+from urllib.parse import urlsplit
+COOKIE_SECURE = urlsplit(PUBLIC_ORIGIN).scheme != "http"
 def alt_origins(env=os.environ) -> frozenset:
-    """Extra exact browser origins for sign-in. Honoured ONLY in the local preview (DELIVERY_PREVIEW=1); the live service ignores the setting."""
-    if env.get("DELIVERY_PREVIEW") != "1": return frozenset()
+    """Explicit exact allowed origins, identical validation at every target."""
     return frozenset(x.strip().rstrip("/") for x in env.get("DELIVERY_ALT_ORIGINS", "").split(",") if x.strip())
 ALT_ORIGINS = alt_origins()
 GOOGLE_CLIENT_ID = os.environ.get("DELIVERY_GOOGLE_CLIENT_ID", "")
@@ -59,8 +59,8 @@ AUTH_RATE_LIMIT = int(os.environ.get("DELIVERY_AUTH_RATE_LIMIT", "20"))
 RUN_START_RATE_LIMIT = int(os.environ.get("DELIVERY_RUN_START_RATE_LIMIT", "10"))
 # Credits an account must hold before the phase after the interview can start. One place; adjust once real cost is measured.
 NEXT_PHASE_MIN_CREDITS = float(os.environ.get("DELIVERY_NEXT_PHASE_MIN_CREDITS", "5"))
-# How a generator phase runs on the server: "process" (one child process per run, the default) or "thread" (inside the service, one at a time: the rollback).
-RUN_ISOLATION = os.environ.get("DELIVERY_RUN_ISOLATION", "process").strip().lower()
+# Generator phases always run in an isolated child process.
+RUN_ISOLATION = "process"
 # Process mode only. 2 is a starting value to revisit once real memory use per run is measured (see docs/LESSONS.md).
 MAX_CONCURRENT_RUNS = max(1, int(os.environ.get("DELIVERY_MAX_CONCURRENT_RUNS", "2")))
 # A phase that runs longer than this is stopped (seconds). 30 minutes.

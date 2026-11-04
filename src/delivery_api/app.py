@@ -32,7 +32,6 @@ from fastapi.responses import JSONResponse
 from vmodel_contracts import RunState, RunStatus
 
 from . import config,local_route
-from .execution_fence import control_plane_only
 from .budget import BudgetExceeded, check_global_budget, check_run_budget
 from . import auth
 from .jobs import JobQueue
@@ -444,11 +443,9 @@ async def lifespan(application:FastAPI):
     from .run_metrics import selected_metrics
     selected_metrics(config.DATABASE_URL,os.environ)
     from . import cloud_execution
-    if cloud_execution.admitted():
-        # Open: start the in-process engines under the money gateway. A failure keeps execution closed (cloud_execution reports it).
-        from . import cloud_runtime
-        try:cloud_runtime.install(store,os.environ,_set_engine_client,watch_vendor=True)
-        except Exception as exc:print('Cloud execution: could not start the in-process engine: '+f'{type(exc).__name__}: {str(exc)[:300]}',file=sys.stderr)
+    from . import cloud_runtime
+    try:cloud_runtime.install(store,os.environ,_set_engine_client,watch_vendor=True)
+    except Exception as exc:print('Execution runtime unavailable: '+type(exc).__name__,file=sys.stderr)
     cloud_execution.log_status()
     print("Build: "+(", ".join(f"{k} {v}" for k,v in RUNTIME_VERSION["repositories"].items()) or RUNTIME_VERSION["runtime_id"]),file=sys.stderr)
     from . import run_metrics
@@ -457,7 +454,7 @@ async def lifespan(application:FastAPI):
     from .observability import LOG_PATH,stage_log_paths
     print("Server log: bounded ephemeral server files (Debug dialog)",file=sys.stderr)
     for phase,path in stage_log_paths().items():print(f"Stage log [{phase}]: {path.resolve()}",file=sys.stderr)
-    if not config.CLOUD_TENANTS and not control_plane_only():
+    if not config.CLOUD_TENANTS:
         simulation.reconcile_interrupted();await jobs.start();await _recover_tasks();await _catch_up_interview_progress()
     if threading.current_thread() is threading.main_thread():
         for signum in (signal.SIGINT,signal.SIGTERM):
@@ -542,8 +539,6 @@ def _log_request(method,path,status,duration_ms):
                   re.fullmatch(r'/api/tasks/[^/]+(?:/(?:stream|diagnostics|execution|phase-output|feedback))?',path))))
 
 async def _request_log(request, call_next):
-    if control_plane_only() and request.method not in ('GET','HEAD','OPTIONS') and not (config.CLOUD_TENANTS and request.method=='POST' and request.url.path in CONTROL_PLANE_AUTH_ROUTES):
-        return JSONResponse({'detail':'Delivery-only runtime: mutations and execution remain fenced'},status_code=503,headers={'Cache-Control':'no-store'})
     if request.url.path.startswith('/api/operator/') and not config.CLOUD_TENANTS:
         return JSONResponse({'detail':'Operator resource not found'},status_code=404,headers={'Cache-Control':'no-store'})
     try:
@@ -607,7 +602,7 @@ def _page(name,headers=None):
     from fastapi.responses import HTMLResponse
     text=(WEB_DIR/name).read_text(encoding="utf-8")
     import json as _json
-    boot=_json.dumps({"preview":os.environ.get("DELIVERY_PREVIEW")=="1","local_preview":os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1","execution_enabled":os.environ.get("DELIVERY_CLOUD_EXECUTION")=="1"})
+    boot=_json.dumps({})
     text=text.replace("<!--REQUI_CONFIG-->","<script>window.__REQUI_CONFIG__="+boot+";</script>")
     return HTMLResponse(text,headers=headers or {"Cache-Control":"no-cache"})
 
@@ -622,8 +617,6 @@ def auth_status(request: Request):
     result={"mode":mode,"authenticated":a.id not in {"anonymous"},"actor":a.email or a.label,"admin":a.admin,
             "providers":[p for p,ident in (("google",config.GOOGLE_CLIENT_ID),("github",config.GITHUB_CLIENT_ID)) if ident],"workspace":"private" if config.CLOUD_TENANTS else "shared"}
     result['debug_features']=_account_debug_available() if a.id!='anonymous' else False
-    if os.environ.get("DELIVERY_PREVIEW")=="1":result["preview"]=True
-    if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1":result["local_preview"]=True
     if config.CLOUD_TENANTS and a.id!='anonymous':
         from .supabase_sessions import ACCESS_COOKIE
         token=request.cookies.get(ACCESS_COOKIE)
@@ -1533,7 +1526,7 @@ def _task_artifact(task_id:str,phase:str,name:str)->Path:
     artifact=next((a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==phase and a["name"]==name),None)
     if not artifact:raise HTTPException(404,"artifact not found")
     path=Path(artifact["ref"]).resolve()
-    if not path.is_file():raise HTTPException(404,"Artifact files are not part of a local preview" if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1" else "artifact file not found")
+    if not hasattr(store,"_postgres") and not path.is_file():raise HTTPException(404,"artifact file not found")
     return path
 
 _OUTPUT_PARTIALS={"srs":"srs_fills.partial.json","architecture":"architecture.partial.json",
@@ -1549,7 +1542,6 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     if hasattr(store,'_postgres'):
         from .pg_phase_output import phase_output
         return phase_output(store,task)
-    if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1" and os.environ.get("DELIVERY_CLOUD_EXECUTION")!="1":return {"phase_key":phase,"generation":generation,"status":"local_preview","items":[]}
     session=_recorded_engine_session(task_id)
     if not session or not phase:return {"phase_key":phase,"generation":generation,"status":"waiting","items":[]}
     from vmodel_contracts.runtime import artifacts_root
@@ -1916,7 +1908,6 @@ def task_artifact_view(task_id:str,phase:str,name:str):
 
 @app.get("/api/tasks/{task_id}/artifacts.zip")
 def task_artifacts_zip(task_id:str):
-    if os.environ.get("DELIVERY_LOCAL_PREVIEW")=="1" and os.environ.get("DELIVERY_CLOUD_EXECUTION")!="1":raise HTTPException(404,"Artifact downloads are not part of a local preview")
     _deny_test_product_export(task_id)
     records=_task_artifact_snapshot(task_id)
     if not records:
@@ -3427,7 +3418,6 @@ def task_log_window(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 
 @app.get("/health")
 def health():
-    if control_plane_only():return {"ok":True,"runtime_profile":"control_plane_only","engine_execution":False,"payments_enabled":False}
     if config.CLOUD_TENANTS:return {"ok":True,"runtime_id":RUNTIME_VERSION["runtime_id"],"repositories":RUNTIME_VERSION["repositories"],"built_at":RUNTIME_VERSION.get("built_at")}
     return {"ok": True, "total_spend_usd": store.total_spend(), "tasks": len(store.list_tasks()), **RUNTIME_VERSION}
 
@@ -3512,8 +3502,7 @@ async def resume_cloud_worker(task_id:str,body:WorkerResumeRequest,a:auth.Actor=
 
 
 def cloud_execution_admitted()->bool:
-    """Closed unless the operator opened it (DELIVERY_CLOUD_EXECUTION=1) and every startup check passes; see cloud_execution."""
-    if control_plane_only():return False
+    """Reviewed runtime readiness; per-job owner and money admission remain mandatory."""
     from . import cloud_execution
     return cloud_execution.admitted()
 

@@ -79,7 +79,7 @@ def test_a_healthy_environment_passes(tmp_path):
     assert by_name['required-tables'].status == 'pass'
     assert by_name['feature-tables'].status == 'pass'
     assert by_name['pool-budget'].status == 'pass'
-    assert by_name['provider-key'].status == 'skip'      # execution closed: no key needed
+    assert by_name['provider-key'].status == 'pass'      # execution closed: no key needed
     assert by_name['engine-compatible'].status == 'pass'
     assert by_name['unsettled-compute-segments'].status == 'skip'  # owner-scoped: live in the Debug dialog
     assert by_name['build-staleness'].status == 'pass'
@@ -187,7 +187,7 @@ def test_provider_key_with_a_keyless_provider_does_not_crash():
     env = healthy_env(Path('/tmp/x-preflight-test')); env['DELIVERY_CLOUD_EXECUTION'] = '1'
     report = preflight.run(env, connect=healthy_pg(), import_module=fake_import(modules))
     check = {c.name: c for c in report.checks}['provider-key']
-    assert check.status == 'warn' and 'DEEPSEEK_API_KEY' in check.found and 'None' not in check.found
+    assert check.status == 'pass' and 'No paid key' in check.found and 'None' not in check.found
     env['DEEPSEEK_API_KEY'] = 'sk-test'
     report = preflight.run(env, connect=healthy_pg(), import_module=fake_import(modules))
     assert {c.name: c for c in report.checks}['provider-key'].status == 'pass'
@@ -215,7 +215,7 @@ def test_a_claims_failure_names_the_step():
 
 def test_pool_budget_over_the_pooler_limit_warns():
     report = preflight.run(healthy_env(Path('/tmp/x-preflight-test')), connect=healthy_pg(),
-                           import_module=fake_import(engine_modules(engine_pool_max=10)))
+                           import_module=fake_import(engine_modules(delivery_pool_max=16)))
     check = {c.name: c for c in report.checks}['pool-budget']
     assert check.status == 'warn' and '20' in check.found and '15' in check.expected
 
@@ -224,7 +224,7 @@ def test_provider_key_warns_only_when_execution_is_open():
     env = healthy_env(Path('/tmp/x-preflight-test')); env['DELIVERY_CLOUD_EXECUTION'] = '1'
     report = preflight.run(env, connect=healthy_pg(), import_module=fake_import(engine_modules()))
     check = {c.name: c for c in report.checks}['provider-key']
-    assert check.status == 'warn' and 'DEEPSEEK_API_KEY' in check.found
+    assert check.status == 'pass' and 'No paid key' in check.found
     env['OPENAI_API_KEY'] = 'sk-test'
     report = preflight.run(env, connect=healthy_pg(), import_module=fake_import(engine_modules()))
     assert {c.name: c for c in report.checks}['provider-key'].status == 'pass'
@@ -332,13 +332,15 @@ def test_an_engine_check_failure_names_the_missing_piece(monkeypatch):
 
 
 def test_the_launcher_pins_the_expected_build_for_the_staleness_check():
-    script = (Path(__file__).resolve().parents[1] / 'scripts' / 'ops' / 'preview.sh').read_text()
-    assert script.count('REQUI_EXPECTED_REPOS=%s') == 2   # both preview paths (local settings and server settings)
+    script = (ROOT/'scripts/ops/preview-exec.sh').read_text()
+    assert 'REQUI_EXPECTED_REPOS=$REPOS' in script
+    legacy=(ROOT/'scripts/ops/preview.sh').read_text()
+    assert 'exec bash' in legacy and 'preview-exec.sh' in legacy
 
 
 def test_child_pool_budget_counts_active_child_and_no_compatibility():
     result=preflight._check_pool_budget({'DELIVERY_CHILD_EXECUTION':'local','DELIVERY_LOCAL_PREVIEW':'1'},__import__('importlib').import_module)
-    assert '8 parent + 4 active child + 0 compatibility' in result.found
+    assert '8 + active child pool 4 = 12' in result.found and 'no compatibility process' in result.found
 
 
 def test_migrated_private_tables_use_their_intended_roles_not_backend_select():
@@ -534,4 +536,4 @@ def test_migrated_core_projection_privacy_passes_without_broadening_grants():
 def test_local_execution_does_not_misreport_missing_paid_key():
     check=preflight._check_provider_key({'DELIVERY_CLOUD_EXECUTION':'1','DELIVERY_LOCAL_PREVIEW':'1'},lambda name:None)
     assert check.status=='pass'
-    assert 'no paid provider key' in check.expected
+    assert 'Ollama needs no key' in check.expected

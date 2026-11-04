@@ -45,8 +45,6 @@ class SameHostProducerWorker:
         runs off the event loop, with captured owner scope and admission context.
         No producer input chooses a marker, owner, generation, or gateway.
         """
-        from .execution_fence import require_engine_execution
-        require_engine_execution()
         if inspect.iscoroutinefunction(producer):raise TypeError('synchronous producer required')
         from spec_generator.stop_fence import StopFence,StopRequested
         from spec_generator.cooperative_run import cli_execution

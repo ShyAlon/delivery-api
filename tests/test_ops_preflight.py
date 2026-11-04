@@ -18,7 +18,6 @@ def test_unsafe_fallback_token_origin_provider_key_and_default_profile_fail():
         ({'DELIVERY_ADMIN_TOKEN':'dev-admin-token'},'nondefault_admin_token'),
         ({'DELIVERY_PUBLIC_ORIGIN':'http://example.invalid'},'https_public_origin'),
         ({'DEEPSEEK_API_KEY':'private'},'provider_secrets_absent'),
-        ({'DELIVERY_CONTROL_PLANE_ONLY':'0'},'delivery_only_fence'),
         ({'REQUI_OPERATOR_SUBJECT':'unverified'},'no_unreviewed_operator_identity')]:
         result=preflight(config()|changes)
         assert not result['checks'][key] and not result['configuration_valid']

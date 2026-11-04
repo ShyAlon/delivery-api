@@ -6,6 +6,3 @@ export const OPERATOR_PAGES=[
   {view:'spend',label:'Credits And Spend',tip:'Credits left and used for every account.'},
   {view:'grant',label:'Grant Credits',tip:'Give credits to an account and see the recent grants.'},
 ];
-
-// The preview banner wording and its one gate: only a server-issued preview config shows it.
-export function previewBannerText(config){return config&&config.preview?`Preview: real data, execution ${config.execution_enabled?'enabled by server setting':'off'} - changes here can affect live data`:null}

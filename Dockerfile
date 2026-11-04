@@ -10,7 +10,7 @@ RUN pip wheel --no-cache-dir --no-deps --wheel-dir /wheels .
 
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 \
-    DELIVERY_CONTROL_PLANE_ONLY=1 DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 \
+    DELIVERY_HOST=0.0.0.0 DELIVERY_PORT=8000 \
     XDG_DATA_HOME=/tmp/control-plane HOME=/tmp/control-plane
 WORKDIR /app
 COPY --from=build /wheels/ /wheels/
@@ -19,5 +19,5 @@ RUN pip install --no-cache-dir '/wheels/'*.whl 'psycopg[binary]>=3.2,<4' && pip 
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
- CMD python -c "import urllib.request,json; v=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3)); assert v.get('ok') is True and v.get('runtime_profile')=='control_plane_only'"
-CMD ["python", "-m", "delivery_api.control_plane"]
+ CMD python -c "import urllib.request,json; v=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3)); assert v.get('ok') is True"
+CMD ["python", "-m", "delivery_api"]

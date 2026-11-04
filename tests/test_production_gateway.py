@@ -138,13 +138,13 @@ def test_dual_gateway_binds_one_durable_route_per_job_without_cross_provider_mon
     finally:factory.close()
 
 
-@pytest.mark.parametrize('mutation',['duplicate','missing_ceiling','wrong_model','not_preview'])
+@pytest.mark.parametrize('mutation',['duplicate','missing_ceiling','wrong_model','missing_key'])
 def test_dual_gateway_refuses_incomplete_or_ambiguous_review(mutation):
     e=dual_env();rows=json.loads(e[pg.PRICES_ENV]);contexts=json.loads(e[pg.CEILING_ENV])
     if mutation=='duplicate':rows.append(rows[1])
     if mutation=='missing_ceiling':contexts.pop()
     if mutation=='wrong_model':contexts[1]['model']='wrong'
-    if mutation=='not_preview':e.pop('DELIVERY_LOCAL_PREVIEW')
+    if mutation=='missing_key':e.pop('DEEPSEEK_API_KEY')
     e[pg.PRICES_ENV]=json.dumps(rows);e[pg.CEILING_ENV]=json.dumps(contexts)
     with pytest.raises(AdmissionDenied):pg.gateways_from_environment(None,e)
 
@@ -160,3 +160,9 @@ def test_dual_settlement_refuses_foreign_quote_before_raw_evidence_or_normalizat
         with pytest.raises(AdmissionDenied,match='quote.*selection'):
             gateway.settle_raw('foreign',{'prompt_tokens':3,'completion_tokens':2,'total_tokens':5})
     finally:factory.close()
+
+@pytest.mark.parametrize('origin',['http://localhost:8001','https://fixture.invalid'])
+def test_dual_gateway_review_is_origin_independent(origin):
+    e=dual_env();e.pop('DELIVERY_LOCAL_PREVIEW',None);e['DELIVERY_PUBLIC_ORIGIN']=origin
+    gateway=pg.gateways_from_environment(None,e)
+    assert set(gateway.models)=={'deepseek','ollama'}

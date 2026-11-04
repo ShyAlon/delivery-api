@@ -99,10 +99,8 @@ def terminate(proc,sig):
 def stage_models(env):
     """Every stage uses the one reviewed route the phase selected; managed routes only.
 
-    Deployed cloud manages exactly the DeepSeek route; the operator's local
-    execution preview (DELIVERY_LOCAL_PREVIEW=1) adds the local Ollama route.
-    This check reads the live process flag, so a legacy or replayed phase
-    setting cannot smuggle the local route onto the deployed server."""
+    Both supported providers use the same reviewed route checks everywhere.
+    """
     from spec_generator.model_config import StageModel
     routes={v for k,v in (env or {}).items() if k.startswith('SPEC_GENERATOR_MODEL_') and v}
     if len(routes)!=1:raise ValueError('exactly one model route is required for an in-process phase')

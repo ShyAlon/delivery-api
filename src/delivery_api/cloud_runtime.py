@@ -1,10 +1,9 @@
-"""Installs explicitly selected attended child previews; defaults remain closed.
+"""Installs the one reviewed child runtime at every origin.
 
 Builds the money gateway from reviewed server configuration, then installs the generator-phase engine and the interview
 host, and points the service's engine client at the hosted interview. Nothing runs until a user starts work. If any step
 fails, nothing is installed, the reason is kept and execution stays closed (cloud_execution reports it)."""
 from .diagnostic_evidence import thread_target
-CUTOVER_NOTICE='paid-child activation is pending'
 _state=None
 _failure=None
 _checked=set()
@@ -13,22 +12,9 @@ VENDOR_WATCH_SECONDS=61*60   # just over the one-hour reuse of a good check, so 
 
 
 def check_gateways(environ):
-    """Raises AdmissionDenied when the reviewed prices, context ceiling or provider key do not build a gateway."""
-    from . import production_gateway as pg
-    from .child_pool_budget import child_mode
-    if not child_mode(environ):raise ValueError(CUTOVER_NOTICE)
-    if environ.get('REQUI_PIN_STORE')=='1':
-        from .model_pins import DurableGateways
-        from .postgres_scope import ScopedPostgres
-        from types import SimpleNamespace
-        gateways=DurableGateways(SimpleNamespace(_postgres=ScopedPostgres(environ['DELIVERY_DATABASE_URL'])),environ)
-        try:gateways.available_environment()
-        finally:gateways.close()
-        return
-    key=tuple(environ.get(name) for name in (pg.PRICES_ENV,pg.CEILING_ENV,pg.KEY_ENV,'DELIVERY_LOCAL_PREVIEW'))
-    if key in _checked:return      # the switch is asked on every request; a configuration that built once is not rebuilt
-    pg.ProductionGateways(None,environ).close()
-    _checked.add(key)
+    """The installed reviewed gateway is the same at every deployment origin."""
+    if _state is None:raise ValueError('reviewed child runtime is not ready')
+    if not _state[0].models:raise ValueError('no ready reviewed provider models')
 
 
 def failure():
@@ -57,37 +43,27 @@ def install(store,environ,set_engine_client,watch_vendor=False,*,paid_runtime=No
     global _state,_failure,_watcher
     if _state is not None:return
     from . import inprocess_engine
-    from .production_gateway import ProductionGateways
     from vmodel_contracts.runtime import artifacts_root
     gateways=None
     try:
-        if environ.get('REQUI_PIN_STORE')=='1':
-            from .model_pins import DurableGateways
-            gateways=DurableGateways(store,environ)
-            gateways.refresh_launch()
-        else:gateways=ProductionGateways(store,environ)
+        from .model_pins import DurableGateways
+        gateways=DurableGateways(store,environ)
+        gateways.refresh_launch()
         if paid_runtime is None:
-            from .paid_preview import construct
+            from .provider_runtime import construct
             paid_runtime=construct(environ,gateways)
         base=artifacts_root(environ.get('VMODEL_ARTIFACTS_DIR'))
-        database_url=environ.get('DELIVERY_DATABASE_URL','')
-        session_dsn=database_url if database_url.startswith(('postgres://','postgresql://','host=')) else None
-        from .child_pool_budget import child_mode
-        if child_mode(environ):
-            if paid_runtime is not None:
-                from .child_paid_runtime import PaidChildRuntime
-                if not isinstance(paid_runtime,PaidChildRuntime):raise TypeError('typed paid child runtime required')
-                if gateways.models!=paid_runtime.models:raise ValueError('paid child models differ from reviewed gateways')
-            elif set(gateways.models)!={'ollama'}:
-                raise ValueError('local child mode requires only reviewed Ollama; paid child remains refused')
-            if not session_dsn:raise ValueError('local child mode requires Postgres session persistence')
-            from .child_generator import ChildGeneratorEngine
-            from .child_interview import ChildInterviewHost
-            endpoint=(environ.get('OLLAMA_BASE_URL') or 'http://localhost:11434/v1').rstrip('/')+'/chat/completions'
-            engine=ChildGeneratorEngine(base,gateway_factory=gateways,dsn=session_dsn,endpoint=endpoint,paid_runtime=paid_runtime)
-            host=ChildInterviewHost(store,base,gateway_factory=gateways,session_dsn=session_dsn,endpoint=endpoint,paid_runtime=paid_runtime)
-        else:
-            raise ValueError(CUTOVER_NOTICE)
+        session_dsn=environ.get('DELIVERY_DATABASE_URL','')
+        if not session_dsn:raise ValueError('Postgres session persistence is required')
+        if paid_runtime is not None:
+            from .child_paid_runtime import PaidChildRuntime
+            if not isinstance(paid_runtime,PaidChildRuntime):raise TypeError('typed parent accounting runtime required')
+            if gateways.models!=paid_runtime.models:raise ValueError('child models differ from reviewed gateways')
+        from .child_generator import ChildGeneratorEngine
+        from .child_interview import ChildInterviewHost
+        endpoint=(environ.get('OLLAMA_BASE_URL') or 'http://localhost:11434/v1').rstrip('/')+'/chat/completions'
+        engine=ChildGeneratorEngine(base,gateway_factory=gateways,dsn=session_dsn,endpoint=endpoint,paid_runtime=paid_runtime)
+        host=ChildInterviewHost(store,base,gateway_factory=gateways,session_dsn=session_dsn,endpoint=endpoint,paid_runtime=paid_runtime)
         client=host.client()
     except BaseException as exc:
         if gateways is not None:gateways.close()

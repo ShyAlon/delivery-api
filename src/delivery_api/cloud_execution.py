@@ -1,42 +1,20 @@
-"""Closed-by-default switch for running the product for cloud accounts.
+"""Readiness of the same reviewed child runtime everywhere.
 
-Execution is admitted only when the operator sets DELIVERY_CLOUD_EXECUTION=1 in the server environment AND every startup
-check below passes. Per-call protection is separate and always on: a reservation before every provider call, the prepaid
-balance check, the per-owner admission row and the concurrency limit (attempt_ledger). A failed check keeps execution
-closed; the reasons go to the server log, never to a user. Values of secrets are never logged."""
+Readiness does not grant spending: durable owner admission, prepaid balance,
+reviewed quotes and ceilings are enforced again at every dispatch.
+"""
 import os,sys
 
-FLAG='DELIVERY_CLOUD_EXECUTION'
-DEFAULT_ENGINE_TOKEN='local-interview-engine-token'
-
-
 def problems(environ=None):
-    """Reasons execution stays closed; an empty list means it is admitted."""
-    from . import config
-    from .execution_fence import control_plane_only
-    environ=os.environ if environ is None else environ
-    if environ.get(FLAG,'0')!='1':return [FLAG+' is not 1']
+    from .cloud_runtime import check_gateways,failure
     out=[]
-    if control_plane_only(environ):out.append('the delivery-only runtime profile is active')
-    if not config.CLOUD_TENANTS:out.append('cloud accounts (Supabase) are not configured')
-    token=environ.get('INTERVIEW_ENGINE_TOKEN','')
-    if not token or token==DEFAULT_ENGINE_TOKEN or len(token)<24:out.append('INTERVIEW_ENGINE_TOKEN is missing, default or shorter than 24 characters')
-    try:
-        from .cloud_runtime import check_gateways
-        check_gateways(environ)
-    except Exception as exc:
-        out.append('money gateway: '+str(exc))
-    from .cloud_runtime import failure
-    if failure():out.append('in-process engine did not start: '+failure())
+    try:check_gateways(os.environ if environ is None else environ)
+    except Exception:out.append('reviewed child runtime is not ready')
+    if failure():out.append('child runtime startup failed')
     return out
 
-
-def admitted(environ=None):
-    return not problems(environ)
-
+def admitted(environ=None):return not problems(environ)
 
 def log_status(stream=None):
-    stream=stream or sys.stderr
     reasons=problems()
-    if not reasons:print('Cloud execution: OPEN (provider calls need an admission row and prepaid balance per owner)',file=stream)
-    else:print('Cloud execution: CLOSED - '+'; '.join(reasons),file=stream)
+    print('Execution: '+('READY (per-job owner and prepaid admission required)' if not reasons else 'UNAVAILABLE - '+'; '.join(reasons)),file=stream or sys.stderr)
