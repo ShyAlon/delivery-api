@@ -403,3 +403,8 @@ operator boundary changed or bypass added.
 - Complete: shard0 840 pass/10 skip; shard1a 282 pass/2 skip; shard2a 263 pass; shard2b split129+277 pass; shard3 654 pass/10 skip; shard4 462 pass/1 skip; shard5a265 pass/1 skip; shard5b-right118pass; shard5b-left excluding launcher121pass; launcher40pass (70.5s). Shard1b latest result separately retained, not counted here.
 - Wheel built with uv build --wheel --no-sources: delivery_api-0.2.0-py3-none-any.whl, 280 files, no SQLite payload. Clean install smoke still pending.
 - Final heavy suites, SPA browser and full JUnit coverage reconciliation remain pending. Four inherited UI failures still unchanged and separate per parent instruction. No PR/full-gate claim.
+
+### Rebuild unit 48: remove final orchestrator file-only fallback
+- Final production audit found unreachable baseline file read/write branches selected by store type. Removed them rather than leave a hidden alternate storage path: baseline existence, greenfield publication and baseline recovery use PG only.
+- Preserved scratch path arguments for registered child protocol, no host artifact content or checkpoint reader.
+- Local affected gate: 122 passed (runner, policy, progress, real child including open gate). Final SPA22, heavy runtime66 and shared browser50 pass. Main UI gate so far39+39 pass excluding four explicitly recorded inherited failures.

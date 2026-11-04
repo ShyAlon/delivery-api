@@ -40,73 +40,42 @@ class PhaseOrchestrator:
         sid,_,interview,spec=self._paths(task_id);return spec/"system-baseline.json"
     def _baseline_exists(self,task_id:str)->bool:
         p=self._baseline_path(task_id)
-        if hasattr(self.store,'_postgres'):
-            try:return json.loads(self.store.read_artifact_bytes(task_id,'baseline','system-baseline.json')).get('baseline_id') not in (None,'pending-founder-choice')
-            except KeyError:return False
-        if not p.exists():return False
-        try:return json.loads(p.read_text()).get("baseline_id") not in (None,"pending-founder-choice")
-        except Exception:return False
+        try:return json.loads(self.store.read_artifact_bytes(task_id,'baseline','system-baseline.json')).get('baseline_id') not in (None,'pending-founder-choice')
+        except KeyError:return False
 
     def _ensure_greenfield(self,task_id:str)->Path:
         path=self._baseline_path(task_id)
-        if hasattr(self.store,'_postgres'):
-            from .artifact_publication import publish_preserving_revision
-            with self.store._task_operation_guard('task.rerun'):
-                self.store._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone()
-                try:existing=json.loads(self.store.read_artifact_bytes(task_id,'baseline','system-baseline.json'))
-                except KeyError:existing=None
-                if existing and existing.get('baseline_id')!='pending-founder-choice':
-                    if existing.get('mode')!='greenfield':raise ValueError('Existing-system baseline is outside the current greenfield flow; it was not overwritten')
-                    return path
-                task=self.store.task(task_id);intent=json.loads(self.store.read_artifact_bytes(task_id,'intent','intent_model.json'))
-                body={'contract_version':intent['contract_version'],'baseline_version':'1.0','baseline_id':f'{self._session(task_id)}-greenfield-v1',
-                    'system_name':task['title'],'mode':'greenfield','repositories':[],'immutable_decisions':[]}
-                from vmodel_contracts.baseline import SystemBaseline
-                SystemBaseline.model_validate(body)
-                publish_preserving_revision(self.store,task_id,{('baseline','system-baseline.json'):json.dumps(body,indent=2).encode()+b'\n'})
-                self.store.add_event(task_id,'baseline','Greenfield assumed for the current product flow',phase_key='architecture',payload={'mode':'greenfield','source':'current product policy','storage':'postgres'})
-            return path
-        if path.exists():
-            existing=json.loads(path.read_text())
-            if existing.get('baseline_id')!='pending-founder-choice':
+        from .artifact_publication import publish_preserving_revision
+        with self.store._task_operation_guard('task.rerun'):
+            self.store._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone()
+            try:existing=json.loads(self.store.read_artifact_bytes(task_id,'baseline','system-baseline.json'))
+            except KeyError:existing=None
+            if existing and existing.get('baseline_id')!='pending-founder-choice':
                 if existing.get('mode')!='greenfield':raise ValueError('Existing-system baseline is outside the current greenfield flow; it was not overwritten')
                 return path
-        task=self.store.task(task_id);_,_,interview,_=self._paths(task_id)
-        intent=json.loads((interview/'intent_model.json').read_text())
-        body={'contract_version':intent['contract_version'],'baseline_version':'1.0',
-              'baseline_id':f'{self._session(task_id)}-greenfield-v1','system_name':task['title'],
-              'mode':'greenfield','repositories':[],'immutable_decisions':[]}
-        path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(body,indent=2)+'\n')
-        self.store.add_event(task_id,'baseline','Greenfield assumed for the current product flow',phase_key='architecture',payload={'mode':'greenfield','path':str(path),'source':'current product policy'})
+            task=self.store.task(task_id);intent=json.loads(self.store.read_artifact_bytes(task_id,'intent','intent_model.json'))
+            body={'contract_version':intent['contract_version'],'baseline_version':'1.0','baseline_id':f'{self._session(task_id)}-greenfield-v1',
+                'system_name':task['title'],'mode':'greenfield','repositories':[],'immutable_decisions':[]}
+            from vmodel_contracts.baseline import SystemBaseline
+            SystemBaseline.model_validate(body)
+            publish_preserving_revision(self.store,task_id,{('baseline','system-baseline.json'):json.dumps(body,indent=2).encode()+b'\n'})
+            self.store.add_event(task_id,'baseline','Greenfield assumed for the current product flow',phase_key='architecture',payload={'mode':'greenfield','source':'current product policy','storage':'postgres'})
         return path
 
     async def resolve_baseline_requirement(self,task_id:str,action:str)->None:
         """Resolve the configured baseline prerequisite, then continue uniformly."""
         from vmodel_contracts.baseline import SystemBaseline
-        if hasattr(self.store,'_postgres'):
-            path=self._baseline_path(task_id)
-            if action=='greenfield':self._ensure_greenfield(task_id)
-            elif action=='validate_file':
-                try:raw=self.store.read_artifact_bytes(task_id,'baseline','system-baseline.json')
-                except KeyError:raise ValueError('SystemBaseline is missing from the owned PG manifest')
-                SystemBaseline.model_validate_json(raw)
-            else:raise ValueError('unknown baseline requirement action')
-            self.runner.active_work.pop(task_id,None)
-            self.store.add_event(task_id,'baseline','Architecture baseline requirement resolved',phase_key='architecture',payload={'mode':action,'storage':'postgres','resolved':True})
-            await self.execute_phase(task_id,'architecture')
-            return
-        path=self._baseline_path(task_id);path.parent.mkdir(parents=True,exist_ok=True)
-        if action=="greenfield":
-            task=self.store.task(task_id);_,_,interview,_=self._paths(task_id);intent=json.loads((interview/"intent_model.json").read_text())
-            body={"contract_version":intent["contract_version"],"baseline_version":"1.0","baseline_id":f"{self._session(task_id)}-greenfield-v1","system_name":task["title"],"mode":"greenfield","repositories":[],"immutable_decisions":[]}
-            path.write_text(json.dumps(body,indent=2)+"\n")
-        elif action=="validate_file":
-            if not path.is_file():raise ValueError(f"SystemBaseline file was not found at {path}")
-            SystemBaseline.model_validate_json(path.read_text())
-        else:raise ValueError("unknown baseline requirement action")
+        path=self._baseline_path(task_id)
+        if action=='greenfield':self._ensure_greenfield(task_id)
+        elif action=='validate_file':
+            try:raw=self.store.read_artifact_bytes(task_id,'baseline','system-baseline.json')
+            except KeyError:raise ValueError('SystemBaseline is missing from the owned PG manifest')
+            SystemBaseline.model_validate_json(raw)
+        else:raise ValueError('unknown baseline requirement action')
         self.runner.active_work.pop(task_id,None)
-        self.store.add_event(task_id,"baseline","Architecture baseline requirement resolved",phase_key="architecture",payload={"mode":action,"path":str(path),"resolved":True})
-        await self.execute_phase(task_id,"architecture")
+        self.store.add_event(task_id,'baseline','Architecture baseline requirement resolved',phase_key='architecture',payload={'mode':action,'storage':'postgres','resolved':True})
+        await self.execute_phase(task_id,'architecture')
+        return
 
     async def execute_phase(self,task_id:str,phase:str,*,mode:ExecutionMode=ExecutionMode.START,model_route:str|None=None)->None:
         """Execute any configured generator phase through one lifecycle."""
@@ -115,7 +84,6 @@ class PhaseOrchestrator:
         if definition.executor!="generator":raise ValueError(f"{phase} is owned by {definition.executor}, not generator")
         activity("orchestrator.launch","Preparing phase subprocess",task_id=task_id,phase=phase,mode=mode.value)
         sid,_,interview,spec=self._paths(task_id)
-        if not hasattr(self.store,'_postgres'):spec.mkdir(parents=True,exist_ok=True)
         baseline=self._ensure_greenfield(task_id)
         repo=Path.cwd()
         python=Path(sys.executable)
