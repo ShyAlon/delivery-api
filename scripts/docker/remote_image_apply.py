@@ -20,7 +20,7 @@ def call(args,*,secret=None,timeout=120):
 
 
 def apply(plan):
-    required={'reference','config_digest','name','env_file','port','network','username','token','runtime_arguments'}
+    required={'reference','config_digest','name','env_file','port','network','username','token','runtime_arguments','previous_container_id'}
     if set(plan)!=required:raise ValueError('remote apply schema differs')
     reference=plan['reference'];image_id=plan['config_digest'];name=plan['name']
     if not re.fullmatch(r'ghcr\.io/[a-z0-9_.-]+/[a-z0-9_./-]+@sha256:[0-9a-f]{64}',reference):raise ValueError('immutable GHCR reference required')
@@ -51,8 +51,13 @@ def apply(plan):
     if found.returncode==0:
         current=json.loads(found.stdout)
         # Refuse to hijack a same-name container outside this workflow.
-        if (current.get('Config',{}).get('Labels') or {}).get('requi.shared-runtime')!='1':
-            raise ValueError('current container ownership unverified; nothing stopped')
+        labeled=(current.get('Config',{}).get('Labels') or {}).get('requi.shared-runtime')=='1'
+        prior=plan['previous_container_id']
+        explicit=(type(prior) is str and bool(re.fullmatch(r'[a-f0-9]{64}',prior)) and current.get('Id')==prior
+                  and current.get('Name')=='/'+name
+                  and current.get('HostConfig',{}).get('PortBindings',{}).get('8000/tcp')==[{'HostIp':'127.0.0.1','HostPort':str(plan['port'])}])
+        if not labeled and not explicit:
+            raise ValueError('current container ownership unverified; supply exact reviewed previous container ID for first transition')
         previous=name+'-rollback-'+str(time.time_ns())
         call([*docker,'stop','--time','30',name])
         try:call([*docker,'rename',name,previous])

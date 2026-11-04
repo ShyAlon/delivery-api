@@ -15,7 +15,7 @@ def plan(tmp_path):
     env=tmp_path/'private.env';env.write_text('FICTIONAL=value\n');env.chmod(0o600)
     args=Target(ID,'requi-service',str(env),8000,'service').arguments()
     return dict(reference='ghcr.io/shyalon/require@'+ID,config_digest=ID,name='requi-service',
-                env_file=str(env),port=8000,network='service',username='shyalon',token='fictional-token',runtime_arguments=args)
+                env_file=str(env),port=8000,network='service',username='shyalon',token='fictional-token',runtime_arguments=args,previous_container_id=None)
 
 
 def test_runtime_argument_tamper_rejected_before_any_command(tmp_path,monkeypatch):
@@ -80,3 +80,17 @@ def test_candidate_run_failure_restores_prior_service(tmp_path,monkeypatch):
     assert any(args[:4]==['sudo','-n','docker','stop'] for args in calls)
     assert ['sudo','-n','docker','rm','--force','requi-service'] in calls
     assert ['sudo','-n','docker','start','requi-service'] in calls
+
+
+def test_old_unlabeled_container_not_adopted_by_name_alone(tmp_path,monkeypatch):
+    import json
+    value=plan(tmp_path);calls=[]
+    image={'Id':ID,'Os':'linux','Architecture':'amd64','RepoDigests':[value['reference']]}
+    current={'Id':'b'*64,'Name':'/requi-service','Config':{'Labels':{}},'HostConfig':{'PortBindings':{'8000/tcp':[{'HostIp':'127.0.0.1','HostPort':'8000'}]}}}
+    class Result:returncode=0;stdout=json.dumps(current)
+    monkeypatch.setattr(m.subprocess,'run',lambda *a,**k:Result())
+    def call(args,**kwargs):
+        calls.append(args);return json.dumps(image) if 'inspect' in args else ''
+    monkeypatch.setattr(m,'call',call)
+    with pytest.raises(ValueError,match='exact reviewed previous'):m.apply(value)
+    assert not any('stop' in args for args in calls)

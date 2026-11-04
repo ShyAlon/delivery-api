@@ -11,7 +11,7 @@ from image_workflow import WorkflowError, log
 from private_publication import command_raw,require_private
 
 
-def deploy(*,state,repository,host,name,env_file,port,network,apply=False):
+def deploy(*,state,repository,host,name,env_file,port,network,previous_container_id=None,apply=False):
     from image_receipt import object_json
     raw=(state.path.parent/'accepted-image.json').read_bytes()
     receipt=Receipt.read(raw,sources=state.inputs['sources'],runtime_contract=state.inputs['runtime_contract'],
@@ -31,7 +31,7 @@ def deploy(*,state,repository,host,name,env_file,port,network,apply=False):
     token=getpass.getpass('Read-only GHCR token (hidden, not retained): ')
     program=Path(__file__).with_name('runtime_spec.py').read_text()+'\n'+Path(__file__).with_name('remote_image_apply.py').read_text()
     plan={'reference':receipt.reference,'config_digest':receipt.config_digest,'name':name,'env_file':env_file,
-          'port':port,'network':network,'username':username,'token':token,'runtime_arguments':args}
+          'port':port,'network':network,'username':username,'token':token,'runtime_arguments':args,'previous_container_id':previous_container_id}
     try:
         result=subprocess.run(['ssh','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=15',host,
                                'python3 -c '+shlex.quote(program)],input=json.dumps(plan),text=True,capture_output=True,timeout=2400)
