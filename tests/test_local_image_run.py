@@ -54,3 +54,19 @@ def test_service_run_image_mismatch_refuses_http_success(tmp_path,monkeypatch):
     with pytest.raises(m.WorkflowError,match='running image changed'):run.http_acceptance(output)
     args,kwargs=calls[0]
     assert '--image-local' in args and 'fictional' not in args and kwargs['input']=='fictional'
+
+
+def test_active_stop_requires_observed_inflight_call_and_single_stop(tmp_path,monkeypatch):
+    import image_acceptance
+    run=m.OwnedRun(tmp_path,ID);run.base='http://127.0.0.1:8001';run.handoff={'token':'fictional'}
+    calls=[]
+    def api(method,path,body=None):
+        calls.append((method,path,body))
+        if path=='/api/tasks':return {'task_id':'active-fixture'}
+        return {'state':'stopped'}
+    monkeypatch.setattr(image_acceptance,'API',lambda *args:api)
+    monkeypatch.setattr(m,'command',lambda *a,**k:json.dumps({'active':True}))
+    proof=run.active_stop()
+    assert proof['active-call-observed'] and proof['stop']=='passed'
+    assert sum(path.endswith('/stop') for _,path,_ in calls)==1
+    assert 'EXACT_IMAGE_STOP' in calls[0][2]['brief']

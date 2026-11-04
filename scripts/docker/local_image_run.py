@@ -108,6 +108,28 @@ class OwnedRun:
         else:raise WorkflowError('unchanged candidate startup did not become healthy')
         return self
 
+    def active_stop(self):
+        from image_acceptance import API
+        api=API(self.base,self.handoff['token'])
+        task=api('POST','/api/tasks',{'title':'Owned active Stop fixture','brief':'EXACT_IMAGE_STOP: A simple web booking app for one tutor.'})
+        tid=task['task_id']
+        api('POST','/api/tasks/'+tid+'/start',{'model_route':'ollama'})
+        active=False
+        for _ in range(120):
+            health=object_json(command(['docker','exec',self.fixture,'python','-c',
+                "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:11434/health',timeout=2).read().decode())"]).encode())
+            if health.get('active') is True:active=True;break
+            time.sleep(.1)
+        if not active:raise WorkflowError('Stop fixture never reached an active real provider call')
+        # One Stop request only, never repeat a mutation to manufacture success.
+        api('POST','/api/tasks/'+tid+'/stop')
+        for _ in range(120):
+            stopped=api('GET','/api/tasks/'+tid)
+            if stopped.get('state')=='stopped':break
+            time.sleep(.25)
+        else:raise WorkflowError('active-call Stop never reached confirmed stopped state')
+        return {'task_id':tid,'active-call-observed':True,'stop':'passed'}
+
     def http_acceptance(self, output: Path):
         # One repo entry, same input identity/answer protocol as owner acceptance.
         result=subprocess.run(['bash',str(self.root/'scripts/ops/acceptance.sh'),'--image-local','--base-url',self.base,'--output',str(output)],
@@ -120,4 +142,5 @@ class OwnedRun:
         if proof.get('task_id')!=result['task_id'] or proof.get('child-lifecycle')!='passed' or proof.get('retained-outputs')!='passed':
             raise WorkflowError('owned retained child/output proof did not pass')
         result['retained']=proof
+        result['active-stop']=self.active_stop()
         return result

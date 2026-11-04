@@ -76,6 +76,8 @@ class Services:
     def __init__(self, directory: Path):
         self.material = keys(directory)
         self.calls = []
+        self.active = threading.Event()
+        active = self.active
         material, calls = self.material, self.calls
         class Handler(BaseHTTPRequestHandler):
             def send(self, status, body):
@@ -85,7 +87,7 @@ class Services:
             def do_GET(self):
                 if self.path=="/auth/v1/.well-known/jwks.json":return self.send(200,material["jwks"])
                 if self.path=="/v1/models":return self.send(200,{"data":[{"id":MODEL}]})
-                if self.path=="/health":return self.send(200,{"ok":True,"fixture":True,"calls":len(calls)})
+                if self.path=="/health":return self.send(200,{"ok":True,"fixture":True,"calls":len(calls),"active":active.is_set()})
                 return self.send(404,{"error":"fixture path absent"})
             def do_POST(self):
                 if self.path!="/v1/chat/completions":return self.send(404,{"error":"fixture path absent"})
@@ -94,6 +96,10 @@ class Services:
                 payload=json.loads(self.rfile.read(size))
                 if payload.get("model")!=MODEL:return self.send(400,{"error":"fixture model mismatch"})
                 calls.append({"model":MODEL,"call":len(calls)+1})
+                if "EXACT_IMAGE_STOP" in json.dumps(payload):
+                    active.set()
+                    try:time.sleep(5)
+                    finally:active.clear()
                 # A deterministic pause makes Stop acceptance exercise an active call.
                 if payload.get("stream") is True:return self.send(400,{"error":"fixture requires nonstreamed wire"})
                 return self.send(200,provider_response(payload))

@@ -220,6 +220,8 @@ def local_acceptance(root: Path, state: StageState, evidence: dict) -> dict:
     proof=result.get("retained",{})
     if proof.get("child-lifecycle")!="passed" or proof.get("retained-outputs")!="passed":
         raise WorkflowError("retained child/output acceptance incomplete")
+    if result.get("active-stop",{}).get("stop")!="passed" or result["active-stop"].get("active-call-observed") is not True:
+        raise WorkflowError("active-call Stop acceptance incomplete")
     accepted={"image_id":image_id,"checks":required,"runtime_contract":state.inputs["runtime_contract"]}
     state.complete("local-acceptance",accepted)
     log("PASS", "exact local image accepted; no registry publication or deployment yet")
