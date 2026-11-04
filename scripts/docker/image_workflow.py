@@ -173,10 +173,39 @@ def build(root: Path, state: StageState) -> dict:
     return evidence
 
 
+def local_acceptance(root: Path, state: StageState, evidence: dict) -> dict:
+    """Run the same immutable service with external owned local dependencies."""
+    from local_image_run import OwnedRun
+    image_id=evidence["image_id"]
+    if inspect_image(image_id)["Id"]!=image_id:
+        raise WorkflowError("acceptance image identity differs")
+    # Never reuse a successful boolean from a torn-down fixture run. Each call
+    # proves the current exact image anew; build stage is independently reusable.
+    log("INFO", "stage 3/6 local acceptance: owned services, signed HTTP, real child evidence")
+    run=OwnedRun(root/"delivery-api",image_id)
+    try:
+        run.start()
+        result=run.http_acceptance(state.path.parent/"local-http-evidence.json")
+    finally:
+        run.close()
+    required={"startup":"passed","signed-http":"passed","child-lifecycle":"passed",
+              "stop":"passed","retained-outputs":"passed"}
+    if result.get("signed-http")!="passed" or result.get("interview-start-answer-stop")!="passed":
+        raise WorkflowError("local HTTP lifecycle evidence incomplete")
+    proof=result.get("retained",{})
+    if proof.get("child-lifecycle")!="passed" or proof.get("retained-outputs")!="passed":
+        raise WorkflowError("retained child/output acceptance incomplete")
+    accepted={"image_id":image_id,"checks":required,"runtime_contract":state.inputs["runtime_contract"]}
+    state.complete("local-acceptance",accepted)
+    log("PASS", "exact local image accepted; no registry publication or deployment yet")
+    return accepted
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repos-root", type=Path, default=Path(__file__).resolve().parents[3])
     p.add_argument("--run-dir", type=Path, required=True)
+    p.add_argument("--accept-local", action="store_true", help="build/reuse and exercise exact image with owned local services only")
     p.add_argument("--build", action="store_true", help="build locally only; does not grant acceptance, publication or deployment")
     p.add_argument("--review", action="store_true", help="check inputs only; never build, publish or contact a server")
     return p
@@ -194,8 +223,10 @@ def main(argv=None) -> int:
         if args.review:
             log("INFO", "review only: nothing built, published, started or deployed")
             return 0
-        if args.build:
-            build(args.repos_root.resolve(), state)
+        if args.build or args.accept_local:
+            evidence=build(args.repos_root.resolve(), state)
+            if args.accept_local:
+                local_acceptance(args.repos_root.resolve(),state,evidence)
             return 0
         raise WorkflowError("exact-image local-service acceptance is not wired yet; no build/publication/deploy attempted")
     except (WorkflowError, InvalidReceipt) as error:

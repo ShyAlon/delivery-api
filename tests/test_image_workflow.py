@@ -79,3 +79,20 @@ def test_candidate_inspection_rejects_wrong_arch_or_mutable_id(monkeypatch,image
     import json
     monkeypatch.setattr(m,'command',lambda *a,**k:json.dumps(image))
     with pytest.raises(m.WorkflowError):m.inspect_image('candidate')
+
+
+def test_local_acceptance_always_cleans_up_and_cannot_earn_receipt_on_failure(tmp_path,monkeypatch):
+    import local_image_run
+    state=m.StageState(tmp_path/'state.json',{'runtime_contract':'fixture'})
+    state.complete('preflight',{});state.complete('build',{})
+    calls=[]
+    class Run:
+        def __init__(self,*args):pass
+        def start(self):calls.append('start')
+        def http_acceptance(self,path):raise m.WorkflowError('acceptance failed')
+        def close(self):calls.append('close')
+    monkeypatch.setattr(local_image_run,'OwnedRun',Run)
+    monkeypatch.setattr(m,'inspect_image',lambda value:{'Id':value})
+    with pytest.raises(m.WorkflowError):m.local_acceptance(tmp_path,state,{'image_id':'fixture'})
+    assert calls==['start','close']
+    assert 'local-acceptance' not in state.state['stages'] and 'receipt' not in state.state['stages']
