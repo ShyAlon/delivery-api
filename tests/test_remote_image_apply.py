@@ -15,7 +15,7 @@ def plan(tmp_path):
     env=tmp_path/'private.env';env.write_text('FICTIONAL=value\n');env.chmod(0o600)
     args=Target(ID,'requi-service',str(env),8000,'service').arguments()
     return dict(reference='ghcr.io/shyalon/require@'+ID,config_digest=ID,name='requi-service',
-                env_file=str(env),port=8000,network='service',username='shyalon',token='fictional-token',runtime_arguments=args,previous_container_id=None)
+                env_file=str(env),port=8000,network='service',username='shyalon',token='fictional-token',runtime_arguments=args,previous_container_id=None,previous_image_id=None)
 
 
 def test_runtime_argument_tamper_rejected_before_any_command(tmp_path,monkeypatch):

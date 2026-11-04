@@ -11,7 +11,7 @@ from image_workflow import WorkflowError, log
 from private_publication import command_raw,require_private
 
 
-def deploy(*,state,repository,host,name,env_file,port,network,previous_container_id=None,apply=False):
+def deploy(*,state,repository,host,name,env_file,port,network,previous_container_id=None,previous_image_id=None,apply=False):
     from image_receipt import object_json
     raw=(state.path.parent/'accepted-image.json').read_bytes()
     receipt=Receipt.read(raw,sources=state.inputs['sources'],runtime_contract=state.inputs['runtime_contract'],
@@ -24,6 +24,8 @@ def deploy(*,state,repository,host,name,env_file,port,network,previous_container
     if not re.fullmatch(r'[a-z_][a-z0-9_-]*@[a-zA-Z0-9][a-zA-Z0-9.-]*',host):
         raise WorkflowError('explicit reviewed SSH user@host required')
     log('INFO','deploy review: exact accepted private manifest and shared runtime; no remote contact yet')
+    if not previous_container_id:
+        log('INFO', 'First transition only: obtain IDs with: ssh '+host+' '+shlex.quote("sudo docker inspect --format '{{.Id}} {{.Image}}' "+name))
     if not apply:return {'state':'reviewed','reference':receipt.reference,'applied':False}
     if input('Type yes to apply this exact accepted image to '+host+': ').strip()!='yes':
         raise WorkflowError('owner declined deployment; no server contact')
@@ -31,7 +33,7 @@ def deploy(*,state,repository,host,name,env_file,port,network,previous_container
     token=getpass.getpass('Read-only GHCR token (hidden, not retained): ')
     program=Path(__file__).with_name('runtime_spec.py').read_text()+'\n'+Path(__file__).with_name('remote_image_apply.py').read_text()
     plan={'reference':receipt.reference,'config_digest':receipt.config_digest,'name':name,'env_file':env_file,
-          'port':port,'network':network,'username':username,'token':token,'runtime_arguments':args,'previous_container_id':previous_container_id}
+          'port':port,'network':network,'username':username,'token':token,'runtime_arguments':args,'previous_container_id':previous_container_id,'previous_image_id':previous_image_id}
     try:
         result=subprocess.run(['ssh','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=15',host,
                                'python3 -c '+shlex.quote(program)],input=json.dumps(plan),text=True,capture_output=True,timeout=2400)

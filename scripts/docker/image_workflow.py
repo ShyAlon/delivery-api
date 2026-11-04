@@ -249,6 +249,7 @@ def parser():
     p.add_argument("--run-dir", type=Path, required=True)
     p.add_argument("--deploy", metavar="PRIVATE_GHCR_REPOSITORY", help="review an accepted manifest; no SSH unless --apply")
     p.add_argument("--apply", action="store_true", help="owner-confirmed deploy apply only")
+    p.add_argument("--previous-image-id", help="reviewed previous image config digest paired with previous container ID")
     p.add_argument("--previous-container-id", help="exact reviewed old container ID for the first ownership transition only")
     p.add_argument("--host", help="explicit reviewed SSH user@host for deployment")
     p.add_argument("--name", default="requi-delivery")
@@ -278,7 +279,7 @@ def main(argv=None) -> int:
             if not args.host:raise WorkflowError('deploy needs an explicit reviewed host')
             from owner_image_deploy import deploy
             deploy(state=state,repository=args.deploy,host=args.host,name=args.name,env_file=args.env_file,
-                   port=args.port,network=args.network,previous_container_id=args.previous_container_id,apply=args.apply)
+                   port=args.port,network=args.network,previous_container_id=args.previous_container_id,previous_image_id=args.previous_image_id,apply=args.apply)
             return 0
         if args.review:
             log("INFO", "review only: nothing built, published, started or deployed")
