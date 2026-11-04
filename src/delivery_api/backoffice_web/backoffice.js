@@ -1,4 +1,5 @@
-import {beginOperation,requestDescription} from '/assets/operation-status.js';
+import {beginOperation} from '/assets/operation-status.js';
+import {requestDescription} from './status-description.js';
 import {Page} from '/assets/page-component.js';
 import {Table} from '/assets/table-component.js';
 import {tableSchemas} from './table-schemas.js';
