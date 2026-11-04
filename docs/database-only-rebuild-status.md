@@ -243,3 +243,10 @@ Extracted the existing private audit-total calculation without changing it;
 three detailed accounting assertions retain exact token/pricing semantics while
 signed customer route assertions explicitly verify credits-only disclosure.
 Those three audit tests pass. Legacy public-link budget wrappers still fail.
+
+Unit29: diagnostic ZIP content requires an owned PG document reader, with no
+file-content fallback. Bounded scoped ephemeral process-log tails remain the
+intentional theme1 exception. Secret redaction, malformed JSONL, verification
+scores, per-source size, omissions, exact log identity and real account capability
+checks run unchanged through PG evidence:18 passed. All 15 first d-group files
+also finished individually green, including DB-only policies and debug helpers.
