@@ -362,3 +362,9 @@ operator boundary changed or bypass added.
 - Legacy event text cannot establish an engine session; retained explicit session still wins without duplicate reads.
 - Rerun capability remains unavailable regardless of retired mode flag, including signed HTTP task detail, because new-generation checkpoint recovery is not implemented.
 - Local gate: 21 passed. Final 41-file broad sweep reached 749 passed/1 skip/6 failures, including these three fixed fixture assertions plus three old UI expectations under review. Subsequent non-UI combined run has no completed result yet and is not a pass.
+
+### Rebuild unit 42: restore generator open-gate continuation without legacy callback
+- Confirmed defect: runner set continuation_phase but nothing consumed it. Removed dead callback wiring/variable.
+- Added transactional owner-scoped reservation for an explicitly open, bypassed generator gate only after its exact worker is done, generation matches, no pending/running/paused job, and successor is pending. Preserves task model resolution and fresh job/provider admission. No interview or terminal continuation; stopped/closed/replayed policy refuses.
+- Installed ChildPhaseLifecycle releases the prior serialized slot and registry before queueing/dispatching the next exact job. No global callback or automatic interview handoff.
+- Local runtime gate (same-host, actual child, installed fake-provider all-phase, zero-credit HTTP, projections and lifecycle): 76 passed. Additional real PG lifecycle and runner regression group: 111 passed. Postgres store excluding 35 long graph variants: 50 passed. Full gate remains incomplete; actual installed multi-phase open-gate child acceptance is still required.

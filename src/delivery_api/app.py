@@ -87,7 +87,6 @@ store = create_store(config.DATABASE_URL)
 jobs = JobQueue(store)
 runner = ProcessRunner(store)
 orchestrator = PhaseOrchestrator(store,runner)
-runner.on_complete = orchestrator.continue_after
 simulation = Simulation(store)
 engine_client = HttpEngineClient(config.INTERVIEW_ENGINE_URL,token=config.INTERVIEW_ENGINE_TOKEN)
 def _set_engine_client(client):

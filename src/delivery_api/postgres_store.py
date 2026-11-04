@@ -1659,6 +1659,31 @@ FROM tasks t"""
         # Block internal callers too until a reviewed new-session copy exists.
         raise TenantAccessDenied('cloud rerun generation/session policy not implemented')
 
+    def prepare_open_gate_continuation(self,task_id,phase,completed_job_id):
+        """Consume one explicit generator open-gate policy after worker settlement.
+
+        Owner/session claims and row lock are retained. Never crosses the
+        interview boundary, resumes old work, or reuses a running worker.
+        """
+        from .phases import PHASE_BY_KEY,successor
+        definition=PHASE_BY_KEY.get(phase);target=successor(phase) if definition else None
+        if not definition or definition.executor!='generator' or not target or target.executor!='generator':return None
+        if not self._execute_native('SELECT task_id FROM tasks WHERE task_id=%s FOR UPDATE',(task_id,)).fetchone():return None
+        task=self.task(task_id);job=self.worker_job(completed_job_id)
+        if not task or task.get('stop_requested_at') is not None:return None
+        if not job or job['task_id']!=task_id or job['kind']!='phase:'+phase or job['state']!='done' or job['generation']!=task['generation']:return None
+        states={p['phase_key']:p['state'] for p in task['phases']}
+        gate=next((g for g in task['gates'] if g['after_phase']==phase),None)
+        if task['active_phase']!=phase or states.get(phase)!='approved' or states.get(target.key)!='pending':return None
+        if not gate or not gate['is_open'] or gate['state']!='bypassed':return None
+        if self._execute_native("SELECT job_id FROM worker_jobs WHERE task_id=%s AND state IN ('pending','running','paused') LIMIT 1",(task_id,)).fetchone():return None
+        from .model_routes import task_default_model
+        model,_=task_default_model(self,task_id,target.generator_stage)
+        self.update_phase(task_id,target.key,'running',detail='Starting after explicit open-gate policy')
+        queued=self.enqueue_worker(task_id,'phase:'+target.key,execution_options={'mode':'start','model_route':model})
+        self.audit('policy','gate.continuation_queued',task_id,{'gate':gate['gate_key'],'completed_job_id':completed_job_id,'job_id':queued,'phase':target.key})
+        return {'job_id':queued,'phase':target.key,'options':{'mode':'start','model_route':model}}
+
     def prepare_gate_dispatch(self,task_id,gate_key,action,*,actor,model=None,comment='',review_revision=None,**decision):
         """Commit the reviewed gate and its exact next generator job together."""
         from .phases import PHASE_BY_KEY,successor
@@ -2256,7 +2281,7 @@ _TASK_ENTRY_OPERATIONS={
  'create_task':'task.create','rename_task':'task.edit','delete_task':'task.delete',
  'tombstone_stopped_task':'task.delete','request_task_stop':'task.stop',
  'configure_simulation':'task.simulate','set_gate_open':'task.gate.decide',
- 'decide_gate':'task.gate.decide','prepare_gate_dispatch':'task.gate.decide',
+ 'decide_gate':'task.gate.decide','prepare_gate_dispatch':'task.gate.decide','prepare_open_gate_continuation':'task.gate.decide',
  'add_review_comment':'task.decision.comment','save_decision_draft':'task.decision.draft',
  'set_model_route':'task.model_route','set_model_default':'task.model_route',
  'begin_interview_start':'task.start','enqueue_worker':'task.start',
@@ -2342,6 +2367,7 @@ PG_OPERATIONS = (
     'pause_interrupted_worker',
     'post_retail_contribution',
     'prepare_gate_dispatch',
+    'prepare_open_gate_continuation',
     'prepare_next_phase',
     'prepare_phase_retry',
     'prepare_private_revision_changes',
