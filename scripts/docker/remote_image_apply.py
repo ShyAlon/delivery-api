@@ -30,21 +30,15 @@ def apply(plan):
     envfile=Path(plan['env_file'])
     if not envfile.is_absolute() or not envfile.is_file() or envfile.stat().st_mode&0o077:
         raise ValueError('private existing remote settings file required')
-    if len(plan['token'])<10:raise ValueError('read-only registry token required')
-    # Runtime arguments come from the hashed owner-side shared specification.
-    # Validate the exact structural boundary again before executing any command.
+    if type(plan['token']) is not str or len(plan['token'])<10:raise ValueError('read-only registry token required')
+    # Target is the same runtime_spec.py class prepended by the owner runner.
     args=plan['runtime_arguments']
-    if type(args) is not list or any(type(value) is not str or '\n' in value or '\0' in value for value in args):
-        raise ValueError('typed runtime arguments required')
-    if not args or args[0]!='run' or args[-1]!=image_id or '--env-file' not in args or args[args.index('--env-file')+1]!=str(envfile):
-        raise ValueError('runtime image/settings mismatch')
-    if args[args.index('--name')+1]!=name or args[args.index('--network')+1]!=plan['network']:
-        raise ValueError('runtime target differs')
-    if args[args.index('--publish')+1]!='127.0.0.1:'+str(plan['port'])+':8000':raise ValueError('runtime bind differs')
+    expected=Target(image_id,name,str(envfile),plan['port'],plan['network']).arguments()
+    if args!=expected:raise ValueError('remote runtime differs from the shared specification')
     # A temporary Docker login never persists in the deploy user's real config.
     with tempfile.TemporaryDirectory(prefix='requi-registry-') as config:
         docker=['sudo','-n','docker','--config',config]
-        call([*docker,'login','ghcr.io','--username',plan['username'],'--password-stdin'],secret=plan['token'])
+        call(['docker','--config',config,'login','ghcr.io','--username',plan['username'],'--password-stdin'],secret=plan['token'])
         plan['token']=''
         call([*docker,'pull','--platform','linux/amd64',reference],timeout=1800)
         image=json.loads(call([*docker,'image','inspect','--format','{{json .}}',reference]))
@@ -64,7 +58,10 @@ def apply(plan):
     started=False
     try:
         launch=list(args);launch[1:1]=['--label','requi.shared-runtime=1']
-        call([*docker,*launch]);started=True
+        # Docker can create the named container even when run exits nonzero.
+        # Mark the attempt before calling so rollback checks and removes it.
+        started=True
+        call([*docker,*launch])
         for _ in range(120):
             live=json.loads(call([*docker,'container','inspect','--format','{{json .}}',name]))
             if live.get('Image')!=image_id:raise ValueError('running image identity differs')
@@ -76,7 +73,12 @@ def apply(plan):
         raise RuntimeError('candidate readiness did not pass')
     except BaseException:
         if started:
-            call([*docker,'rm','--force',name])
+            candidate=subprocess.run([*docker,'container','inspect','--format','{{json .}}',name],capture_output=True,text=True,timeout=60)
+            if candidate.returncode==0:
+                found=json.loads(candidate.stdout)
+                if found.get('Image')!=image_id or (found.get('Config',{}).get('Labels') or {}).get('requi.shared-runtime')!='1':
+                    raise RuntimeError('candidate cleanup ownership differs; manual recovery required') from None
+                call([*docker,'rm','--force',name])
         if previous:
             call([*docker,'rename',previous,name]);call([*docker,'start',name])
             restored=json.loads(call([*docker,'container','inspect','--format','{{json .}}',name]))
