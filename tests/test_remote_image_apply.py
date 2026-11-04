@@ -13,6 +13,11 @@ m.validate_settings=validate
 ID='sha256:'+'a'*64
 
 
+@pytest.fixture(autouse=True)
+def native_host_contract(monkeypatch):
+    monkeypatch.setattr(m,'host_preflight',lambda:None)
+
+
 def plan(tmp_path):
     env=tmp_path/'private.env';env.write_text('DELIVERY_DATABASE_URL=postgresql://fixture/db\nDELIVERY_SUPABASE_URL=https://fixture.supabase.co\nDELIVERY_SUPABASE_ANON_KEY=public\nINTERVIEW_ENGINE_TOKEN=fixture-private-token-123456789\n');env.chmod(0o600)
     args=Target(ID,'requi-service',str(env),8000,'service').arguments()
@@ -102,3 +107,19 @@ def test_remote_missing_required_settings_refuses_before_registry_pull(tmp_path,
     value=plan(tmp_path);Path(value['env_file']).write_text('FICTIONAL=only\n')
     monkeypatch.setattr(m,'call',lambda *a,**k:pytest.fail('remote command before settings validation'))
     with pytest.raises(ValueError,match='PostgreSQL settings required'):m.apply(value)
+
+
+def test_remote_arm_host_refused_before_login_or_stop(tmp_path,monkeypatch):
+    value=plan(tmp_path);calls=[]
+    def call(args,**kw):
+        calls.append(args)
+        if args==['uname','-m']:return 'aarch64'
+        pytest.fail('remote registry/service command before architecture check')
+    monkeypatch.setattr(m,'call',call)
+    # Exercise the actual host guard even though other command tests stub it.
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('remote_guard',D/'remote_image_apply.py')
+    guard=importlib.util.module_from_spec(spec);spec.loader.exec_module(guard)
+    monkeypatch.setattr(guard,'call',call)
+    with pytest.raises(ValueError,match='linux/amd64 host required'):guard.host_preflight()
+    assert calls==[['uname','-m']]

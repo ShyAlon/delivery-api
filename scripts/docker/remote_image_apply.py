@@ -19,6 +19,11 @@ def call(args,*,secret=None,timeout=120):
     return result.stdout.strip()
 
 
+def host_preflight():
+    if call(['uname','-m']) not in ('x86_64','amd64') or call(['uname','-s'])!='Linux':
+        raise ValueError('linux/amd64 host required; current service untouched')
+
+
 def apply(plan):
     required={'reference','config_digest','name','env_file','port','network','username','token','runtime_arguments','previous_container_id','previous_image_id'}
     if set(plan)!=required:raise ValueError('remote apply schema differs')
@@ -36,6 +41,7 @@ def apply(plan):
     args=plan['runtime_arguments']
     expected=Target(image_id,name,str(envfile),plan['port'],plan['network']).arguments()
     if args!=expected:raise ValueError('remote runtime differs from the shared specification')
+    host_preflight()
     # A temporary Docker login never persists in the deploy user's real config.
     with tempfile.TemporaryDirectory(prefix='requi-registry-') as config:
         docker=['sudo','-n','docker','--config',config]
