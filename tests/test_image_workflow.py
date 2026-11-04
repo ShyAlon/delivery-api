@@ -50,3 +50,32 @@ def test_missing_docker_fails_before_source_and_no_server(tmp_path,monkeypatch,c
     assert m.main(['--repos-root',str(tmp_path),'--run-dir',str(tmp_path/'run'),'--review'])==2
     assert 'missing local tool: docker' in capsys.readouterr().err
     assert not (tmp_path/'run').exists()
+
+
+def test_build_reuse_inspects_immutable_id_and_does_not_rebuild(tmp_path,monkeypatch):
+    image_id='sha256:'+'a'*64
+    state=m.StageState(tmp_path/'state.json',{'sources':{'delivery-api':'b'*40}})
+    state.complete('preflight',{});state.complete('build',{'image_id':image_id,'sources':state.inputs['sources']})
+    seen=[]
+    def inspect(value):
+        seen.append(value);return {'Id':image_id,'Os':'linux','Architecture':'amd64'}
+    monkeypatch.setattr(m,'inspect_image',inspect)
+    monkeypatch.setattr(m,'source_snapshot',lambda root:pytest.fail('rebuild during valid reuse'))
+    assert m.build(tmp_path,state)['image_id']==image_id
+    assert seen==[image_id]
+
+
+def test_invalid_reuse_and_source_drift_never_build(tmp_path,monkeypatch):
+    state=m.StageState(tmp_path/'state.json',{'sources':{'delivery-api':'b'*40}})
+    state.complete('preflight',{});state.complete('build',{'image_id':'bad','sources':state.inputs['sources']})
+    monkeypatch.setattr(m,'inspect_image',lambda value:(_ for _ in ()).throw(m.WorkflowError('gone')))
+    monkeypatch.setattr(m,'source_snapshot',lambda root:{'delivery-api':'c'*40})
+    with pytest.raises(m.WorkflowError,match='source changed'):m.build(tmp_path,state)
+
+
+@pytest.mark.parametrize('image',[{'Id':'latest','Os':'linux','Architecture':'amd64'},
+                                  {'Id':'sha256:'+'a'*64,'Os':'linux','Architecture':'arm64'}])
+def test_candidate_inspection_rejects_wrong_arch_or_mutable_id(monkeypatch,image):
+    import json
+    monkeypatch.setattr(m,'command',lambda *a,**k:json.dumps(image))
+    with pytest.raises(m.WorkflowError):m.inspect_image('candidate')

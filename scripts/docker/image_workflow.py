@@ -14,6 +14,8 @@ import shutil
 import subprocess
 import sys
 import time
+import tempfile
+import tarfile
 
 from image_receipt import InvalidReceipt, atomic_write, digest, object_json
 from runtime_spec import contract_bytes
@@ -34,11 +36,11 @@ def log(level: str, message: str) -> None:
     print(prefix + " " + message, file=sys.stderr, flush=True)
 
 
-def command(args: list[str], *, cwd: Path | None = None) -> str:
+def command(args: list[str], *, cwd: Path | None = None, timeout: int = 60) -> str:
     # Output is consumed as typed state. It may contain account config, so never
     # echo arbitrary subprocess output or include it in failure messages.
     try:
-        result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=60, check=False)
+        result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise WorkflowError("required command unavailable or timed out: " + args[0]) from error
     if result.returncode:
@@ -119,10 +121,63 @@ class StageState:
         atomic_write(self.path, json.dumps(self.state, sort_keys=True, indent=2).encode())
 
 
+def inspect_image(image: str) -> dict:
+    from image_receipt import object_json
+    raw = command(["docker", "image", "inspect", "--format", "{{json .}}", image])
+    value = object_json(raw.encode())
+    import re
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(value.get("Id", ""))):
+        raise WorkflowError("Docker did not return an immutable image ID")
+    if value.get("Os") != "linux" or value.get("Architecture") != "amd64":
+        raise WorkflowError("candidate is not linux/amd64")
+    return value
+
+
+def build(root: Path, state: StageState) -> dict:
+    """Build only locally. Source archives pin commits, not mutable directories."""
+    def valid(evidence):
+        image = inspect_image(evidence["image_id"])
+        return image["Id"] == evidence["image_id"] and evidence["sources"] == state.inputs["sources"]
+    if state.reusable("build", valid):
+        log("PASS", "stage 2/6 reused: immutable local image revalidated")
+        return state.state["stages"]["build"]
+    # Any absent/invalidated image requires a fresh build, never remote fallback.
+    sources = source_snapshot(root)
+    if sources != state.inputs["sources"]:
+        raise WorkflowError("source changed after preflight")
+    with tempfile.TemporaryDirectory(prefix="requi-image-build-") as temporary:
+        context = Path(temporary)
+        for name, sha in sources.items():
+            archive = context / (name + ".tar")
+            command(["git", "archive", "--format=tar", "--output=" + str(archive), sha], cwd=root/name)
+            target = context/name
+            target.mkdir()
+            with tarfile.open(archive) as stream:
+                # Git archive comes from the reviewed source snapshot; reject links
+                # rather than let them escape the minimal context.
+                members = stream.getmembers()
+                if any(item.issym() or item.islnk() for item in members):
+                    raise WorkflowError("source archive contains links: " + name)
+                stream.extractall(target, members=members, filter="data")
+            archive.unlink()
+        tag = "requi-full-candidate:" + state.key.split(":")[1][:24]
+        revisions = ",".join(name + "=" + sha for name, sha in sources.items())
+        log("INFO", "stage 2/6 build: linux/amd64 candidate locally, no provider keys or server")
+        command(["docker", "build", "--platform", "linux/amd64", "--build-arg", "REQUI_BUILD_ID=" + state.key,
+                 "--build-arg", "REQUI_BUILD_REPOS=" + revisions, "--file", str(context/"delivery-api"/"Dockerfile.full"),
+                 "--tag", tag, str(context)], timeout=7200)
+        image = inspect_image(tag)
+    evidence = {"image_id": image["Id"], "sources": sources, "platform": "linux/amd64"}
+    state.complete("build", evidence)
+    log("PASS", "local immutable candidate built; acceptance still required")
+    return evidence
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repos-root", type=Path, default=Path(__file__).resolve().parents[3])
     p.add_argument("--run-dir", type=Path, required=True)
+    p.add_argument("--build", action="store_true", help="build locally only; does not grant acceptance, publication or deployment")
     p.add_argument("--review", action="store_true", help="check inputs only; never build, publish or contact a server")
     return p
 
@@ -133,10 +188,14 @@ def main(argv=None) -> int:
         log("INFO", "stage 1/6 preflight: local tools and four clean source revisions")
         inputs = preflight(args.repos_root.resolve())
         state = StageState(args.run_dir / "state.json", inputs)
-        state.complete("preflight", inputs)
+        if not state.reusable("preflight", lambda evidence: evidence == inputs):
+            state.complete("preflight", inputs)
         log("PASS", "preflight passed; platform linux/amd64, one shared runtime contract")
         if args.review:
             log("INFO", "review only: nothing built, published, started or deployed")
+            return 0
+        if args.build:
+            build(args.repos_root.resolve(), state)
             return 0
         raise WorkflowError("exact-image local-service acceptance is not wired yet; no build/publication/deploy attempted")
     except (WorkflowError, InvalidReceipt) as error:
