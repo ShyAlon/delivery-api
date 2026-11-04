@@ -380,3 +380,10 @@ operator boundary changed or bypass added.
 - Initial diagnostics fixture run failed 5 cases due to missing TestClient import (11 passed); import corrected in following checkpoint, rerun below. Long retained graph cases 0..22 now have completed passing groups (6,4,6,7). Remaining 12 group timed out after five dots; not a pass, split further.
 - Exact fetched remote/base verified at 10:33: HEAD and remote WIP 5a7a26edb20de09db5b60b9ce2bbb8a056933386; merge-base and origin/main f23feb2df0ebf8bcbada9a2f52e3b6936e9349a4.
 - Unit 44 correction: actual corrected diagnostics rerun, 16 passed. Previous mistaken 16-pass wording was corrected to preserve its initial 5 NameError failures. No production change.
+
+### Rebuild unit 45: explicit unavailable route browser fixture
+- Start-disabled layout test now supplies two unavailable model routes rather than inheriting an admitted route from PG browser config. Private environment variable name remains excluded from customer route errors; asserts readable unavailability instead.
+- Focused browser gate: 2 passed. Pixel inspection: disabled Start with two readable unavailable choices, and selected Ollama with enabled Start and scrubbed DeepSeek error; no clipping or overlap.
+- Per parent 10:40 decision, unchanged shared Page sticky task-heading test stays intact and outside DB-only scope; inherited main sets relative. Track for separate small UI PR, not a DB-only gate blocker.
+- First35 browser cases (excluding sticky heading): 34 passed, stale-decision-conflict dialog failed. Investigate whether inherited before deciding scope; no assertion weakened.
+- All35 long PG retained graph variants completed green in groups 6+4+6+7+5+3+4. No combined full-gate claim.

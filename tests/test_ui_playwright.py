@@ -147,6 +147,7 @@ def test_require_brand_is_consistent(pg_page,pg_ui,pg_ids):
 
 def test_not_started_panel_layout(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
+    page.route('**/api/model-routes',lambda route:route.fulfill(json={'routes':[{'id':'ollama','available':False,'error':'not ready'},{'id':'deepseek','available':False,'error':'not ready'}]}))
     page.goto(ui+f'/tasks/{pg_ids["empty"]}/view')
     page.get_by_role('group',name='Default model route').wait_for()
     start=page.get_by_role('button',name='Start interview')
@@ -171,7 +172,8 @@ def test_start_screen_displays_engine_resolved_model_and_conflict(pg_page,pg_ui,
     selector=page.get_by_role('group',name='Default model route');selector.wait_for()
     assert 'ollama:phi4' in selector.locator('[data-start-route=ollama]').inner_text()
     assert selector.locator('[data-start-route=deepseek]').is_disabled()
-    assert 'INTERVIEW_ENGINE_MODEL_PROBING' in selector.inner_text()
+    assert 'INTERVIEW_ENGINE_MODEL_PROBING' not in selector.inner_text()
+    assert 'DeepSeek is temporarily unavailable' in selector.inner_text()
     assert selector.locator('[data-start-route=ollama]').get_attribute('aria-pressed')=='true'
     selector.locator('[data-start-route=ollama]').click()
     assert page.get_by_role('button',name='Start interview').is_enabled()
