@@ -23,6 +23,9 @@ def context(root: Path, destination: Path):
     for relative in ('scripts/docker/Dockerfile.local-fixture','scripts/docker/local_service_fixture.py','scripts/docker/fixture_services.py','scripts/docker/retained_image_proof.py'):
         target=destination/relative;target.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(root/relative,target)
+    # Public-only context: copied paths must be readable by fixture UID10001,
+    # independently of the owner's private umask. Never add settings or keys.
+    for path in destination.rglob('*'):path.chmod(0o755 if path.is_dir() else 0o644)
 
 
 class OwnedRun:

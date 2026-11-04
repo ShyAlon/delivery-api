@@ -70,3 +70,15 @@ def test_active_stop_requires_observed_inflight_call_and_single_stop(tmp_path,mo
     assert proof['active-call-observed'] and proof['stop']=='passed'
     assert sum(path.endswith('/stop') for _,path,_ in calls)==1
     assert 'EXACT_IMAGE_STOP' in calls[0][2]['brief']
+
+
+def test_external_fixture_context_readable_under_private_umask(tmp_path):
+    import os
+    root=D.parents[1];destination=tmp_path/'context';destination.mkdir()
+    old=os.umask(0o077)
+    try:m.context(root,destination)
+    finally:os.umask(old)
+    files=list(destination.rglob('*'))
+    assert files
+    for path in files:
+        assert path.stat().st_mode & (0o005 if path.is_dir() else 0o004)==(0o005 if path.is_dir() else 0o004),path.relative_to(destination)
