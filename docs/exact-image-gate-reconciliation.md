@@ -92,3 +92,25 @@ still Shy's Mac gate. GHCR publication and remote apply have not been executed.
 Registry raw-manifest byte handling intentionally fails closed if buildx changes
 the bytes; Docker host integration and rollback health must not be claimed from
 fake-command tests. No server contact, paid work, live writes, migration or merge.
+
+## 2026-11-04 12:55 checkpoint
+
+- Affected gate with explicit sibling sources: 312 passed, no skips before the
+  final remote-host architecture refusal regression. That regression and its
+  related deployment group pass 17 checks; final combined rerun follows.
+- All 35 long retained graph scenarios now complete and pass individually.
+- All 160 UI cases complete: four unchanged main failures, 156 passes after
+  repeating block1 (40/40). Its first run additionally failed the route-switch
+  Escape dialog; isolated rerun and full-block rerun pass. Keep this transient
+  failure visible, not a fifth accepted exclusion.
+- Broad group13 with explicit source now passes all246 instead of38 source skips.
+- Enabling additional fixture inputs exposes two unchanged integration failures:
+  item6 connected graph lacks an operator expense policy; task-review lifecycle
+  uses the retired execution path and Start returns503. Both reproduce against
+  detached main a9e5851 with main imported explicitly. Parent scope decision:
+  separate inherited execution-fixture debt, named in PR, no skips/assertion edits.
+- No single full-suite pass is claimed. Some original skips remain dedicated
+  isolated payment/item6 requirements or unavailable producer export environment.
+  The source-backed item6 runner itself produces2 pass/1 inherited failure.
+- Mandatory Mac unchanged-image gate remains unrun. PR must be draft/not ready
+  to merge until that gate and owner review. See exact-image-owner-workflow.md.
