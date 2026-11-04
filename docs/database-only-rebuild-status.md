@@ -135,3 +135,38 @@ across targets, not selected by location. Red-first package route policy; source
 helper settings/provenance tests updated to current boundaries. Prior unit20
 selected run was 142 passed, 3 failures: two obsolete helper fixtures corrected
 here, one raw runner fixture still pending. No full-pass claim.
+
+## Checkpoint 2026-11-04 09:24 IST
+
+Fresh final runtime group after all unit21 code changes: 54 passed in 59 seconds
+(SameHostProducerWorker including all 8 SDK variants; actual child generator;
+installed all-phase fake-provider task through final download; fresh zero-credit
+HTTP start). This is not a paid-provider test and not the full gate.
+
+Remaining before the theme PR:
+- Replace legacy raw CLI ProcessRunner fixtures with registered child/capability
+  fixtures, retaining diagnostics/progress/Stop/error/slot release assertions.
+  tests/test_tasks.py latest complete run: 30 failures, 64 passes before later
+  bundle fixture repair. Three session-cost cases now pass. Do not delete runner
+  behavior tests simply because old arbitrary subprocess entry was removed.
+- Audit remaining constant CLOUD_TENANTS selectors in app/runner and remove the
+  unselected compatibility paths carefully. Constant is True, no environment
+  selector, but dead code still obscures the one-runtime contract.
+- Debug ZIP has owned PG document reader in production but still optional file
+  fallback in helper. Ephemeral bounded server process logs are intentional,
+  separately reviewed in theme1. Do not misclassify them as durable task storage.
+- Retire unused pricing filesystem helpers after reference/test audit; keep pure
+  rate/token arithmetic and PG usage/ledger guards.
+- Review diagnostics, retry/handoff details and source tree for remaining host
+  reads; packaging scratch and immutable build metadata are intentional.
+- Full 4000+ test collection has not completed. Broad A-F timed out at 38%; its
+  partial dots are not proof. Split browser/integration/core batches with durable
+  JSON/JUnit results and appropriate per-process bounds. Browser runtime installed.
+- Complete standalone PostgreSQL store run in bounded parameter groups; original
+  combined timeout is still unverified. Five actual install/crash/tamper/rollback
+  scenarios passed after PG coordinator edit, but other parameters remain.
+- Browser screenshots for classification desktop/mobile were inspected and sent
+  to parent. Other full browser/build gates remain. No theme PR exists.
+
+All meaningful units are pushed. No deploy, server contact, paid provider, live
+DB mutation, migration, merge or PR was performed.
