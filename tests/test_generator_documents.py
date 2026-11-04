@@ -556,7 +556,7 @@ def test_pg_artifact_snapshot_download_zip_ignore_flags_and_local_files(store,mo
     from pathlib import Path
     with tenant_context(A):
         tid=store.create_task('db-download-'+uuid.uuid4().hex)['task_id'];store.set_engine_session(tid,'docs-'+uuid.uuid4().hex)
-        monkeypatch.setattr(app,'store',store);monkeypatch.setattr(app.config,'CLOUD_TENANTS',False);monkeypatch.setattr(app.config,'ARTIFACT_MANIFEST_READS',False)
+        monkeypatch.setattr(app,'store',store);monkeypatch.setattr(app.config,'CLOUD_TENANTS',False);monkeypatch.setattr(app.config,'ARTIFACT_MANIFEST_READS',False,raising=False)
         monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(tmp_path));monkeypatch.delenv('DELIVERY_LOCAL_PREVIEW',raising=False)
         raw=b'{"needs":[]}\n'
         store.publish_task_revision_bytes(tid,[{'phase_key':'needs','name':'needs.json','data':raw}],writer_instance='test-only')
@@ -574,7 +574,7 @@ def test_pg_artifact_snapshot_without_publication_does_not_scan_or_import_files(
     from pathlib import Path
     with tenant_context(A):
         tid=store.create_task('db-no-manifest-'+uuid.uuid4().hex)['task_id'];store.set_engine_session(tid,'docs-'+uuid.uuid4().hex)
-        monkeypatch.setattr(app,'store',store);monkeypatch.setattr(app.config,'CLOUD_TENANTS',True);monkeypatch.setattr(app.config,'ARTIFACT_MANIFEST_READS',False)
+        monkeypatch.setattr(app,'store',store);monkeypatch.setattr(app.config,'CLOUD_TENANTS',True);monkeypatch.setattr(app.config,'ARTIFACT_MANIFEST_READS',False,raising=False)
         monkeypatch.setattr(Path,'is_file',lambda *a:(_ for _ in ()).throw(AssertionError('filesystem import forbidden')))
         assert app._task_artifact_snapshot(tid)==[]
 

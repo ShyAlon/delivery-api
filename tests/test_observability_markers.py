@@ -86,7 +86,7 @@ def test_artifact_download_marks_success_and_refusal(marks, monkeypatch, tmp_pat
     assert module.task_artifact_download("t1", "needs", "out.json")
     assert "task.export" in _kinds(marks)
     monkeypatch.setattr(config, "CLOUD_TENANTS", True)
-    monkeypatch.setattr(config, "ARTIFACT_MANIFEST_READS", True)
+    monkeypatch.setattr(config, "ARTIFACT_MANIFEST_READS", True,raising=False)
     monkeypatch.setattr(module, "store", NS(task=lambda tid:{"task_id":tid,"is_test":False},_postgres=True,read_artifact_bytes=lambda *a: (_ for _ in ()).throw(KeyError())))
     with pytest.raises(HTTPException):
         module.task_artifact_download("t1", "needs", "out.json")

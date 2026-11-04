@@ -94,3 +94,9 @@ module and removed the unused file-lock/anchor/rename installation module.
 Removed uncalled approved-upstream file readers; PG source/stage tests own that
 contract. 40 revision plan/journal/safety/stage/policy tests passed. No route or
 installation authority is added.
+
+Unit 15: removed dead auth/OAuth/quota settings and artifact rollout selectors.
+Task-read cache key is always owner/session scoped and has no artifact selector.
+Cache TTL behavior is unchanged. Red-first absent-setting policy; 97 signed auth,
+manifest, child cutover, document and runtime-contract tests passed. Tests that
+set retired flags now explicitly create ignored attributes to verify no effect.

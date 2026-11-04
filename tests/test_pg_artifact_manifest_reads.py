@@ -38,7 +38,7 @@ def test_flag_off_still_serves_pg_publication(pgstore, tmp_path, monkeypatch):
     from delivery_api import app
     task_id, _ = _published(pgstore, tmp_path)
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', False)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', False,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     with tenant_context(A):
         records = app._task_artifact_snapshot(task_id)
@@ -51,7 +51,7 @@ def test_flag_on_serves_published_manifest_rows(pgstore, tmp_path, monkeypatch):
     from delivery_api import app
     task_id, body = _published(pgstore, tmp_path)
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     import hashlib
     with tenant_context(A):
@@ -68,7 +68,7 @@ def test_flag_on_download_raises_without_filesystem_fallback(pgstore, tmp_path, 
     from delivery_api import app
     task_id, body = _published(pgstore, tmp_path)
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     with tenant_context(A):
         response = app.task_artifact_download(task_id, 'spec', 'srs.json')
@@ -84,7 +84,7 @@ def test_error_mapping_store_failure_never_404(pgstore, tmp_path, monkeypatch):
     from fastapi import HTTPException
     task_id, _ = _published(pgstore, tmp_path)
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
 
     def boom(*a, **k): raise RuntimeError('connection lost')
@@ -99,7 +99,7 @@ def test_error_mapping_corrupt_payload_is_500_not_404(pgstore, tmp_path, monkeyp
     from fastapi import HTTPException
     task_id, _ = _published(pgstore, tmp_path)
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     monkeypatch.setattr(pgstore, 'read_artifact_bytes',
                         lambda *a, **k: (_ for _ in ()).throw(ValueError('stored bytes failed hash verification')))
@@ -114,7 +114,7 @@ def test_error_mapping_foreign_is_404(pgstore, tmp_path, monkeypatch):
     from fastapi import HTTPException
     task_id, _ = _published(pgstore, tmp_path)
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     from delivery_api.tenancy import TenantScope
     OTHER = TenantScope('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-0000000000a2')
@@ -198,7 +198,7 @@ def test_empty_manifest_with_uncovered_legacy_fails_loud(pgstore, tmp_path, monk
     from fastapi import HTTPException
     task_id, _ = _published(pgstore, tmp_path)
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     with tenant_context(A):
         # Migration-pending state: marker moved to another generation, not deleted
@@ -214,7 +214,7 @@ def test_empty_manifest_with_uncovered_legacy_fails_loud(pgstore, tmp_path, monk
 def test_empty_manifest_and_empty_legacy_is_clean(pgstore, tmp_path, monkeypatch):
     from delivery_api import app
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     with tenant_context(A):
         task = pgstore.create_task('empty-' + uuid.uuid4().hex)
@@ -228,7 +228,7 @@ def test_partial_manifest_without_marker_fails_loud(pgstore, tmp_path, monkeypat
     from fastapi import HTTPException
     task_id, _ = _published(pgstore, tmp_path)
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     with tenant_context(A):
         with pgstore._postgres.transaction() as connection:
@@ -248,7 +248,7 @@ def test_ready_revision_served_db_only_despite_extra_legacy(pgstore, tmp_path, m
     from delivery_api import app
     task_id, _ = _published(pgstore, tmp_path)
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     with tenant_context(A):
         with pgstore._postgres.transaction() as connection:
@@ -264,7 +264,7 @@ def test_marker_for_other_generation_not_ready(pgstore, tmp_path, monkeypatch):
     from fastapi import HTTPException
     task_id, _ = _published(pgstore, tmp_path)
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     with tenant_context(A):
         with pgstore._postgres.transaction() as connection:
@@ -322,7 +322,7 @@ def test_empty_complete_set_is_ready(pgstore, tmp_path, monkeypatch):
     path serves [] with no legacy comparison."""
     from delivery_api import app
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     with tenant_context(A):
         task = pgstore.create_task('emptyrev-' + uuid.uuid4().hex)
@@ -352,7 +352,7 @@ def test_corrupt_marker_hash_fails_read_loud(pgstore, tmp_path, monkeypatch):
     from fastapi import HTTPException
     task_id, _ = _published(pgstore, tmp_path)
     monkeypatch.setattr(app, 'store', pgstore)
-    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True)
+    monkeypatch.setattr(app.config, 'ARTIFACT_MANIFEST_READS', True,raising=False)
     monkeypatch.setattr(app.config, 'CLOUD_TENANTS', True)
     with tenant_context(A):
         with pgstore._postgres.transaction() as connection:
@@ -436,7 +436,7 @@ def test_concurrent_producers_one_pure_revision(pgstore, tmp_path):
 def test_combined_task_snapshot_verifies_manifest_hash(pgstore,tmp_path,monkeypatch):
     from delivery_api import config
     task_id,_=_published(pgstore,tmp_path)
-    monkeypatch.setattr(config,'ARTIFACT_MANIFEST_READS',True)
+    monkeypatch.setattr(config,'ARTIFACT_MANIFEST_READS',True,raising=False)
     with tenant_context(A):
         snapshot=pgstore.task_snapshot(task_id)
         assert snapshot['manifest']['rows'] and snapshot['task']['task_id']==task_id
@@ -448,7 +448,7 @@ def test_combined_task_snapshot_verifies_manifest_hash(pgstore,tmp_path,monkeypa
 
 def test_snapshot_flag_off_still_checks_pg_publication_integrity(pgstore,monkeypatch,tmp_path):
     from delivery_api import config
-    monkeypatch.setattr(config,'ARTIFACT_MANIFEST_READS',False)
+    monkeypatch.setattr(config,'ARTIFACT_MANIFEST_READS',False,raising=False)
     task_id,_=_published(pgstore,tmp_path)
     assert 'artifact_manifest_ready' in pgstore._snapshot_artifacts_sql()
     with tenant_context(A):

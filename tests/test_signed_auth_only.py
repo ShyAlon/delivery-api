@@ -18,3 +18,9 @@ def test_no_basic_or_oauth_identity_implementation():
     for name in ('basic_signup','basic_signin','hash_password','verify_password','oauth_start','oauth_callback','refresh_session'):
         assert not hasattr(auth,name)
     assert 'CLOUD_TENANTS' not in inspect.getsource(auth.actor)
+
+def test_retired_storage_and_identity_settings_are_absent():
+    for name in ('ARTIFACT_PUBLISH','ARTIFACT_MANIFEST_READS','ARTIFACT_RESTORE','SESSION_SECRET',
+                 'BASIC_AUTH_ENABLED','PASSWORD_MIN_LENGTH','GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET',
+                 'GITHUB_CLIENT_ID','GITHUB_CLIENT_SECRET','ADMIN_EMAILS','DEFAULT_USER_TOKEN_QUOTA','AUTH_RATE_LIMIT','is_admin'):
+        assert not hasattr(config,name)

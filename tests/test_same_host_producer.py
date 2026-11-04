@@ -492,7 +492,7 @@ def test_publication_failure_resume_never_reruns_paid_producer(worker,monkeypatc
     from delivery_api import config
     import delivery_api.artifact_publication as publication
     w,s,tid,job,base=worker;calls=[]
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     from spec_generator.attempt_admission import admitted_invoke
     body=b'{"deliberately": "minimal"}'
     def producer(cap,root):
@@ -537,7 +537,7 @@ def test_folder_loss_recovers_pg_publication_without_regeneration(worker,monkeyp
     from delivery_api import config
     from delivery_api.same_host_producer import ProducerRecoveryPaused
     w,s,tid,job,base=worker;calls=[]
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     import delivery_api.artifact_publication as publication
     real=publication.publish_document_revision
     monkeypatch.setattr(publication,'publish_document_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
@@ -561,7 +561,7 @@ def test_crash_after_produce_before_marker_pauses_on_paid_evidence(worker,monkey
     from delivery_api import config
     from delivery_api.same_host_producer import ProducerRecoveryPaused
     w,s,tid,job,base=worker;calls=[]
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     real=s.record_producer_result
     monkeypatch.setattr(s,'record_producer_result',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('crash before marker')))
     with tenant_context(A):
@@ -580,7 +580,7 @@ def test_content_hash_mismatch_pauses(worker,monkeypatch):
     from delivery_api import config
     from delivery_api.same_host_producer import ProducerRecoveryPaused
     w,s,tid,job,base=worker;calls=[];roots=[]
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     import delivery_api.artifact_publication as publication
     real=publication.publish_document_revision
     monkeypatch.setattr(publication,'publish_document_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
@@ -607,7 +607,7 @@ def test_generation_mismatch_pauses(worker,monkeypatch):
     from delivery_api import config
     from delivery_api.same_host_producer import ProducerRecoveryPaused
     w,s,tid,job,base=worker;calls=[]
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     import delivery_api.artifact_publication as publication
     real=publication.publish_document_revision
     monkeypatch.setattr(publication,'publish_document_revision',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('down')))
@@ -632,7 +632,7 @@ def test_pg_bound_document_worker_retries_publication_without_files_or_rebilling
     from spec_generator.attempt_admission import admitted_invoke
     w,s,tid,job,base=worker;calls=[]
     w.runtime_factory=lambda cap,root:JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     def producer(cap,root):
         assert current_runtime().documents is not None
         calls.append(1);_atomic_write(root/'spec/srs.json','{"exact":1}')
@@ -659,7 +659,7 @@ def test_pg_document_worker_refuses_settled_substitution_before_manifest_publish
     from spec_generator.worker_runtime import JobRuntime
     from spec_generator.model_config import StageModel
     from spec_generator.cli import _atomic_write
-    w,s,tid,job,base=worker;monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    w,s,tid,job,base=worker;monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     w.runtime_factory=lambda cap,root:JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
     with tenant_context(A):
         # Explicitly make this fixture job SRS. Prior needs must survive unchanged.
@@ -683,7 +683,7 @@ def test_pg_document_worker_modified_pending_bytes_pause_without_rerun(worker,mo
     from spec_generator.worker_runtime import JobRuntime
     from spec_generator.model_config import StageModel
     from spec_generator.cli import _atomic_write
-    w,s,tid,job,base=worker;calls=[];monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True)
+    w,s,tid,job,base=worker;calls=[];monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False)
     w.runtime_factory=lambda cap,root:JobRuntime({'needs':StageModel('fake','fake')},str(root/'calls.jsonl'),lambda text:None)
     def producer(cap,root):calls.append(1);_atomic_write(root/'spec/srs.json','{"original":true}')
     real=publication.publish_document_revision
@@ -749,7 +749,7 @@ def test_interview_document_only_worker_publishes_without_generator_runtime_or_f
     from interview_engine.pg_session_store import PgSessionStore
     from interview_engine.pg_documents import InterviewDocuments
     w,s,tid,job,base=worker
-    monkeypatch.setattr(__import__('delivery_api.config',fromlist=['x']),'ARTIFACT_PUBLISH',False)
+    monkeypatch.setattr(__import__('delivery_api.config',fromlist=['x']),'ARTIFACT_PUBLISH',False,raising=False)
     produced=[]
     def producer(cap,root):
         pg=PgSessionStore(s._postgres._pool,claims=(A.owner_id,A.session_id));claim=pg.claim(cap.session_id,A.owner_id,'host-documents',60)

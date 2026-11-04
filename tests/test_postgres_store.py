@@ -1918,7 +1918,7 @@ def test_cloud_presentation_cold_two_statements_then_warm_zero(store,monkeypatch
     from starlette.requests import Request
     monkeypatch.setattr(app,'store',store)
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
-    monkeypatch.setattr(config,'ARTIFACT_MANIFEST_READS',True)
+    monkeypatch.setattr(config,'ARTIFACT_MANIFEST_READS',True,raising=False)
     with tenant_context(A):
         task=store.create_task('http-counts-'+uuid.uuid4().hex)
         request=Request({'type':'http','method':'GET','path':'/api/tasks/'+task['task_id'],'headers':[],'scheme':'http','server':('test',80),'query_string':b''})

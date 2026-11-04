@@ -16,7 +16,7 @@ def test_real_generator_cli_child_produces_needs_and_reaps(store,tmp_path,monkey
     if paid:stage='srs' if installed else 'needs'
     publishing=stage=='publication-recovery'
     stage='needs' if publishing else stage
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',publishing)
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',publishing,raising=False)
     monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
     with tenant_context(A):
         tid=store.create_task('generator child '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)
@@ -151,7 +151,7 @@ def test_manifest_cannot_accept_file_only_storage(tmp_path):
 @pytest.mark.parametrize('paid',[False,True])
 def test_durable_gate_answer_survives_parent_crash_without_reasking(store,tmp_path,monkeypatch,paid):
     from delivery_api import config
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',False);monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',False,raising=False);monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
     with tenant_context(A):
         tid=store.create_task('gate restart '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)
         root=session_root(tmp_path,A,sid);root.mkdir(parents=True);ip=root/'interview/intent_model.json'

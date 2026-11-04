@@ -31,9 +31,9 @@ MAX_ENTRIES = 512
 def key(store, task_id):
     from . import config
     from .tenancy import current_scope
-    identity = current_scope() if config.CLOUD_TENANTS else None
+    identity = current_scope()
     # The store object itself prevents id reuse and cross-database cache hits.
-    return (store, identity, task_id, config.ARTIFACT_MANIFEST_READS)
+    return (store, identity, task_id)
 
 
 def version(store, task_id):

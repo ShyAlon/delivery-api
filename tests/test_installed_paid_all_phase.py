@@ -39,7 +39,7 @@ def test_single_installed_paid_task_through_final_download(store,tmp_path,monkey
     original=ChildSupervisor.__init__
     def supervisor(self,*a,**kw):kw['command']=command;original(self,**kw)
     monkeypatch.setattr(ChildSupervisor,'__init__',supervisor)
-    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True);monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
+    monkeypatch.setattr(config,'ARTIFACT_PUBLISH',True,raising=False);monkeypatch.setenv('DELIVERY_LOCAL_PREVIEW','1')
     cloud_runtime.uninstall()
     try:
         with paid_child(store,endpoint) as (factory,runtime),tenant_context(A):
