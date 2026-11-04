@@ -895,3 +895,31 @@ def test_delete_requires_exact_confirmation_then_stop_hides_running_task(cloud):
     with tenant_context(A):
         assert store.worker_job(job)['state']=='running'
         assert store.delete_task(tid,confirm=True)['already_hidden']
+
+
+def test_artifact_download_view_and_zip_use_same_pg_bytes_without_host_files(cloud):
+    import io,zipfile,shutil
+    client,store,root=cloud;sid='pg-download-'+uuid.uuid4().hex
+    payload=b'{"problem_statement":"Retained exact PG bytes"}\n'
+    with tenant_context(A):
+        tid=store.create_task('download durability')['task_id'];store.set_engine_session(tid,sid)
+        store.publish_task_revision_bytes(tid,[dict(phase_key='intent',name='intent_model.json',data=payload)],writer_instance='test-only')
+    path=session_root(root,A,sid)
+    for hostile in (False,True):
+        if hostile:
+            path.mkdir(parents=True)
+            foreign=root/'foreign-download';foreign.mkdir()
+            (foreign/'intent_model.json').write_text('{"secret":"foreign"}')
+            (path/'interview').symlink_to(foreign,target_is_directory=True)
+        url=f'/api/tasks/{tid}/artifacts/intent/intent_model.json'
+        response=client.get(url,headers=header('a'))
+        assert response.status_code==200 and response.content==payload
+        view=client.get(url+'/view',headers=header('a'))
+        assert view.status_code==200 and json.loads(view.json()['raw_content'])==json.loads(payload)
+        archive=client.get(f'/api/tasks/{tid}/artifacts.zip',headers=header('a'))
+        assert archive.status_code==200
+        with zipfile.ZipFile(io.BytesIO(archive.content)) as zipped:
+            assert zipped.namelist()==['intent/intent_model.json']
+            assert zipped.read('intent/intent_model.json')==payload
+        for suffix in ('','/view'):
+            assert client.get(url+suffix,headers=header('b')).status_code==404

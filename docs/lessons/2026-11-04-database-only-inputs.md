@@ -27,3 +27,16 @@ The policy regression failed in all three readers before removal. Rebuilt PG
 reader/journal group: 33 passed. Revision-stage/job/intent cross-suite: 27 passed.
 A combined PostgreSQL store run reached the command timeout without a final
 result; it is not passing evidence and must be rerun in smaller groups.
+
+## Artifact presentation and downloads
+
+Seven read/export endpoints retained backend-selected host readers even though
+PostgreSQL already supplied their production implementation. Remove only those
+explicit function-scoped legacy paths. Keep snapshot hash reads for ZIP members,
+so a concurrent revision cannot mix ZIP bytes. Temporary package construction
+is scratch space, not persistent authority, and remains unchanged.
+
+All seven policy cases failed before the change. Route/byte/package tests: 66
+passed. Added a real authenticated route regression for absent and hostile host
+folders: exact download bytes, view JSON and ZIP bytes must agree, while a second
+owner sees 404. Full theme gate is still pending.

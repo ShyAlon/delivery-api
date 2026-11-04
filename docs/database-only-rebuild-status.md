@@ -12,6 +12,10 @@ contact, migration, or paid execution is part of this work.
 - Child generator suite: 13 passed on the rebuilt code.
 - Unit 2: canonical producer/revision readers have no file fallback. PG reader
   and journal tests: 33 passed; revision stage/job/intent: 27 passed.
+- Unit 3: artifact snapshot/output/view/download/ZIP and session list/bundle
+  endpoints use only PG. Seven policy cases failed before removal.
+  Route/byte/package group: 66 passed. Additional authenticated hostile-folder
+  regression is included.
 - Full PostgreSQL store run timed out without a final result and is unverified.
 - CI unavailable, local gate only. Full theme gate has not run.
 

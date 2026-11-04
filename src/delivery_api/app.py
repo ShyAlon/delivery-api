@@ -513,13 +513,7 @@ async def tenant_access_denied(request,exc):
 
 
 def _session_bundle(session_id):
-    if hasattr(store,'_postgres'):return _customer_events(bundles.postgres_bundle(store,session_id))
-    if config.CLOUD_TENANTS:
-        with session_reader(bundles.root(),session_id,store) as root:
-            result=bundles.bundle(session_id,base=root)
-        result["session"].pop("path",None)
-        return _customer_events(result)
-    return bundles.bundle(session_id)
+    return _customer_events(bundles.postgres_bundle(store, session_id))
 
 
 app.mount("/assets", StaticFiles(directory=WEB_DIR), name="assets")
@@ -738,23 +732,11 @@ def old_session_pages_go_home(session_id: str = "", phase: str = ""):
 
 @app.get("/api/sessions")
 def sessions():
-    if hasattr(store,'_postgres'):
-        result=[]
-        for task in store.list_tasks():
-            if task.get('engine_session_id'):
-                result.append(bundles.postgres_bundle(store,task['engine_session_id'])['session'])
-        return {'sessions':result}
-    if config.CLOUD_TENANTS:
-        result=[]
-        for task in store.list_tasks():
-            session=store.engine_session(task['task_id'])
-            if session:
-                base=authorized_session(bundles.root(),session,store)
-                with session_reader(bundles.root(),session,store):row=bundles.session_summary(base)
-                if row:
-                    row.pop('path',None);result.append(row)
-        return {"sessions":list({row['session_id']:row for row in result}.values())}
-    return {"sessions":bundles.discover(),"artifacts_root":str(bundles.root())}
+    result=[]
+    for task in store.list_tasks():
+        if task.get('engine_session_id'):
+            result.append(bundles.postgres_bundle(store,task['engine_session_id'])['session'])
+    return {'sessions':result}
 
 @app.get("/api/settings/engine-python")
 async def engine_python_settings(a:auth.Actor=Depends(auth.require_admin)):
@@ -1471,56 +1453,15 @@ def _project_manifest_rows(rows:list[dict])->list[dict]:
     return records
 
 def _task_artifact_snapshot(task_id:str, *, task=None, session=_SESSION_UNSET, events=None, stored_artifacts=None, manifest=_SESSION_UNSET)->list[dict]:
-    """PG publication is authority; legacy adapters retain their file projection."""
-    if hasattr(store,'_postgres'):
-        try:snapshot=store.manifest_snapshot(task_id) if manifest is _SESSION_UNSET else manifest
-        except ValueError:
-            log.exception('artifact manifest integrity failure task=%s',task_id)
-            raise HTTPException(500,'artifact manifest failed its integrity check')
-        if snapshot is not None:return _project_manifest_rows(snapshot['rows'])
-        if (store.task_artifacts(task_id) if stored_artifacts is None else stored_artifacts):
-            raise HTTPException(500,'artifact manifest coverage is incomplete; no ready published revision for this generation')
-        return []
-    if task is None:task=store.task(task_id)
-    if not task:return []
-    session=_recorded_engine_session(task_id,recorded=session,events=events)
-    if not session:return stored_artifacts if stored_artifacts is not None else store.task_artifacts(task_id)
-    from vmodel_contracts.runtime import artifacts_root
-    root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
-    if config.CLOUD_TENANTS and config.ARTIFACT_RESTORE:
-        # A second host boots with an empty session root: committed phase artifacts
-        # are restored from the published manifest before the filesystem projection.
-        from . import artifact_restore
-        try:artifact_restore.restore_completed_phases(store,task_id,root)
-        except artifact_restore.RestoreRefused as exc:
-            raise HTTPException(409,f'completed-phase restore refused: {exc}')
-    from .phases import PHASE_DEFINITIONS
-    records=[]
-    from .artifact_publication import ARTIFACT_VALIDATORS
-    validators=ARTIFACT_VALIDATORS
-    for phase in PHASE_DEFINITIONS:
-        folder=root/("interview" if phase.key in ("intent","conops") else "spec")
-        for filename in phase.artifacts:
-            path=folder/filename
-            if not path.is_file():continue
-            valid=None;errors=[];validator=validators.get(filename)
-            if validator:
-                try:
-                    if validator[1] in ("AcceptanceTest[]", "ItemSpec[]"):
-                        from pydantic import TypeAdapter
-                        if validator[1]=="AcceptanceTest[]":
-                            from vmodel_contracts.verification import AcceptanceTest
-                            item_type=AcceptanceTest
-                        else:
-                            from vmodel_contracts.spec import ItemSpec
-                            item_type=ItemSpec
-                        TypeAdapter(list[item_type]).validate_json(_read_task_text(task_id,path))
-                    else:
-                        model=getattr(__import__(validator[0],fromlist=[validator[1]]),validator[1]);model.model_validate_json(_read_task_text(task_id,path))
-                    valid=True
-                except Exception as exc:valid=False;errors=[f"{type(exc).__name__}: {str(exc)[:600]}"]
-            records.append({"phase_key":phase.key,"name":filename,"title":_ARTIFACT_TITLES.get(filename,Path(filename).stem.replace("_"," ").title()),"ref":str(path),"mime_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","stale":False,"generation":task["generation"],"present":True,"valid":valid,"validator":validator[1] if validator else None,"validation_errors":errors,"validation_error":errors[0] if errors else None})
-    return records if config.CLOUD_TENANTS else records or (stored_artifacts if stored_artifacts is not None else store.task_artifacts(task_id))
+    """One owned PG publication is the persistent artifact authority."""
+    try:snapshot=store.manifest_snapshot(task_id) if manifest is _SESSION_UNSET else manifest
+    except ValueError:
+        log.exception('artifact manifest integrity failure task=%s',task_id)
+        raise HTTPException(500,'artifact manifest failed its integrity check')
+    if snapshot is not None:return _project_manifest_rows(snapshot['rows'])
+    if (store.task_artifacts(task_id) if stored_artifacts is None else stored_artifacts):
+        raise HTTPException(500,'artifact manifest coverage is incomplete; no ready published revision for this generation')
+    return []
 
 def _task_artifact(task_id:str,phase:str,name:str)->Path:
     artifact=next((a for a in _task_artifact_snapshot(task_id) if a["phase_key"]==phase and a["name"]==name),None)
@@ -1539,161 +1480,26 @@ def task_phase_output(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
     task=store.task(task_id)
     if not task:raise HTTPException(404,"task not found")
     phase=task.get("active_phase");generation=task.get("generation")
-    if hasattr(store,'_postgres'):
-        from .pg_phase_output import phase_output
-        return phase_output(store,task)
-    session=_recorded_engine_session(task_id)
-    if not session or not phase:return {"phase_key":phase,"generation":generation,"status":"waiting","items":[]}
-    from vmodel_contracts.runtime import artifacts_root
-    root=authorized_session(artifacts_root(os.environ.get("VMODEL_ARTIFACTS_DIR")),session,store)
-    folder=root/("interview" if phase in ("intent","conops") else "spec")
-    # Reads are constrained to the recorded session and exact known filenames.
-    from .phases import PHASE_BY_KEY
-    names=PHASE_BY_KEY[phase].artifacts
-    # The task read projects filesystem records with the task's *current* generation.
-    # A file left on disk after a rerun must not thereby acquire that generation.
-    def fresh(record, key):
-        row=next((p for p in task.get("phases",[]) if p.get("phase_key")==key),{})
-        if row.get("state") not in ("running","awaiting_approval","approved","done"):
-            return False
-        try:
-            path=Path(record["ref"])
-            started=float(row.get("started_at") or 0)
-            return path.is_file() and (not started or path.stat().st_mtime >= started)
-        except (OSError,TypeError,ValueError):
-            return False
-    records=_task_artifact_snapshot(task_id)
-    current=[x for x in records if x["phase_key"]==phase and not x.get("stale")
-             and x.get("generation")==generation and x.get("present") and x.get("valid") is True
-             and x["name"] in names and fresh(x,phase)]
-    final=next(iter(current),None)
-    invalid_current=any(x["phase_key"]==phase and x["name"] in names and x.get("valid") is False
-                        and x.get("generation")==generation and fresh(x,phase) for x in records)
-    source=Path(final["ref"]) if final else folder/_OUTPUT_PARTIALS.get(phase,"__no_partial__")
-    display_phase=phase
-    active_row=next((x for x in task.get("phases",[]) if x.get("phase_key")==phase),{})
-    # Partial files do not carry a generation field; reject an older file after rerun.
-    if not final and source.is_file() and source.stat().st_mtime < float(active_row.get("started_at") or 0):
-        source=folder/"__stale_partial__"
-    if not final and source.is_file():
-        try:
-            partial=json.loads(_read_task_text(task_id,source))
-            if ((phase=="architecture" and isinstance(partial,dict)
-                 and not any(partial.get(k) for k in ("stack_entries","component_bodies","adr_bodies")))
-                or (phase in ("srs","tests","validation") and isinstance(partial,dict) and not partial)
-                or (phase=="specs" and isinstance(partial,list) and not partial)):
-                source=folder/"__empty_partial__"
-        except (OSError,ValueError):
-            pass  # A malformed checkpoint is shown as unavailable, not silently replaced.
-    if not source.is_file():
-        if invalid_current:
-            return {"phase_key":phase,"generation":generation,"status":"unavailable","items":[]}
-        from .phases import PHASE_DEFINITIONS, PHASE_POSITIONS
-        position=PHASE_POSITIONS[phase]
-        if position:
-            previous=PHASE_DEFINITIONS[position-1]
-            prior=[x for x in records if x["phase_key"]==previous.key
-                   and x.get("generation")==generation and not x.get("stale") and x.get("present")
-                   and x.get("valid") is True and x["name"] in previous.artifacts and fresh(x,previous.key)]
-            if not prior:
-                # The producer may have written the canonical file without a legacy
-                # task_artifacts row. Use the same contract validator as the task read.
-                from .phases import PHASE_BY_KEY
-                from pydantic import TypeAdapter
-                validators={"intent_model.json":("vmodel_contracts.interview","IntentModel"),
-                            "conops.json":("vmodel_contracts.conops","ConOpsDocument"),
-                            "needs.json":("vmodel_contracts.needs","StakeholderNeedsSet"),
-                            "srs.json":("vmodel_contracts.srs","SRSDocument"),
-                            "architecture.json":("vmodel_contracts.architecture","ArchitectureOverview")}
-                for name in PHASE_BY_KEY[previous.key].artifacts:
-                    candidate=root/("interview" if previous.key in ("intent","conops") else "spec")/name
-                    if not candidate.is_file() or not fresh({"ref":str(candidate)},previous.key):continue
-                    try:
-                        if name in validators:
-                            namespace,model=validators[name]
-                            getattr(__import__(namespace,fromlist=[model]),model).model_validate_json(_read_task_text(task_id,candidate))
-                        elif name in ("items.json","tests.json","test_specifications.json"):
-                            namespace,model=("vmodel_contracts.spec","ItemSpec") if name=="items.json" else ("vmodel_contracts.verification","AcceptanceTest")
-                            TypeAdapter(list[getattr(__import__(namespace,fromlist=[model]),model)]).validate_json(_read_task_text(task_id,candidate))
-                        elif name=="spec_items.json":
-                            from vmodel_contracts.spec import SpecBundle
-                            SpecBundle.model_validate_json(_read_task_text(task_id,candidate))
-                        else:continue
-                        prior=[{"ref":str(candidate),"name":name,"valid":True}]
-                        break
-                    except (OSError,ValueError):continue
-            if prior and not prior[0].get("valid"):
-                prior=[]
-            if prior:
-                source=Path(prior[0]["ref"])
-                display_phase=previous.key
-                final=prior[0]
-                folder=root/("interview" if display_phase in ("intent","conops") else "spec")
-        if not source.is_file():return {"phase_key":phase,"generation":generation,"status":"waiting","items":[]}
-    # No traversal and no outside-session file can be used as a phase output.
-    if source.resolve().parent!=folder.resolve():raise HTTPException(409,"phase output source outside session")
-    try:data=json.loads(_read_task_text(task_id,source))
-    except (OSError,ValueError):return {"phase_key":phase,"generation":generation,"status":"unavailable","items":[]}
-    if final:
-        if display_phase=="srs":rows=[*data.get("functional",[]),*data.get("non_functional",[])] if isinstance(data,dict) else []
-        elif display_phase=="needs":rows=data.get("needs",[]) if isinstance(data,dict) else []
-        elif display_phase=="architecture":rows=[*data.get("decisions",[]),*data.get("components",[])] if isinstance(data,dict) else []
-        elif display_phase in ("specs","tests","validation"):rows=data if isinstance(data,list) else data.get("items",[]) if isinstance(data,dict) else []
-        elif display_phase=="conops":rows=[*data.get("operational_scenarios",[]),*data.get("concept_options",[])] if isinstance(data,dict) else []
-        else:rows=[data] if isinstance(data,dict) else []
-    elif phase=="architecture" and isinstance(data,dict):
-        rows=[]
-        for key in ("stack_entries","component_bodies","adr_bodies"):
-            values=data.get(key) or {}
-            if isinstance(values,dict):
-                rows.extend({"id":str(identity),**value} for identity,value in values.items() if isinstance(value,dict))
-    elif phase=="specs" and isinstance(data,list):rows=data
-    elif phase=="validation" and isinstance(data,dict):
-        rows=[item for value in data.values() if isinstance(value,dict) for item in value.get("items") or [] if isinstance(item,dict)]
-    elif phase in ("srs","tests") and isinstance(data,dict):
-        rows=[{"id":key,**value} for key,value in data.items() if isinstance(value,dict)]
-    else:rows=[]
-    if not isinstance(rows,list):rows=[]
-    if not final and not rows and display_phase==phase:
-        return {"phase_key":phase,"generation":generation,"status":"waiting","items":[]}
-    # Persisted generator output is data, not trusted markup. Bound its size and
-    # shape before the browser interpolates it into the phase panel.
-    rows=[x for x in rows if isinstance(x,dict)][:500]
-    return {"phase_key":phase,"display_phase":display_phase,"generation":generation,
-            "status":"previous_phase" if display_phase!=phase else "complete" if final else "in_progress",
-            "source":source.name,"items":rows[:500]}
+    from .pg_phase_output import phase_output
+    return phase_output(store,task)
 
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}")
 def task_artifact_download(task_id:str,phase:str,name:str):
     _deny_test_product_export(task_id)
-    if hasattr(store,'_postgres'):
-        from fastapi.responses import Response
-        # Error mapping: genuinely missing or foreign-invisible artifact is 404; a
-        # corrupt/unverifiable payload is an explicit 500 (never a plausible missing
-        # record); database failures propagate as 5xx. No filesystem fallback.
-        try: data=store.read_artifact_bytes(task_id,phase,name)
-        except KeyError:
-            activity("task.export.refused","Artifact download refused: not found",task_id=task_id,export="artifact",reason="not_found")
-            raise HTTPException(404,'artifact not found')
-        except ValueError:
-            log.exception('artifact integrity failure task=%s phase=%s name=%s',task_id,phase,name)
-            raise HTTPException(500,'artifact failed its stored integrity check; the failure was recorded for diagnostics')
-        activity("task.export","Artifact downloaded",task_id=task_id,export="artifact",phase=phase,name=name)
-        return Response(data,media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream',
-                        headers={'Content-Disposition':f'attachment; filename="{name}"'})
-    path=_task_artifact(task_id,phase,name)
-    if config.CLOUD_TENANTS:
-        from .tenant_files import read_session_bytes
-        from vmodel_contracts.runtime import artifacts_root
-        from fastapi.responses import Response
-        base=artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'));session=_recorded_engine_session(task_id)
-        root=authorized_session(base,session,store)
-        data=read_session_bytes(base,session,str(path.relative_to(root)),store)
-        activity("task.export","Artifact downloaded",task_id=task_id,export="artifact",phase=phase,name=name)
-        return Response(data,media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream',
-                        headers={'Content-Disposition':f'attachment; filename="{name}"'})
+    from fastapi.responses import Response
+    # Error mapping: genuinely missing or foreign-invisible artifact is 404; a
+    # corrupt/unverifiable payload is an explicit 500 (never a plausible missing
+    # record); database failures propagate as 5xx. No filesystem fallback.
+    try: data=store.read_artifact_bytes(task_id,phase,name)
+    except KeyError:
+        activity("task.export.refused","Artifact download refused: not found",task_id=task_id,export="artifact",reason="not_found")
+        raise HTTPException(404,'artifact not found')
+    except ValueError:
+        log.exception('artifact integrity failure task=%s phase=%s name=%s',task_id,phase,name)
+        raise HTTPException(500,'artifact failed its stored integrity check; the failure was recorded for diagnostics')
     activity("task.export","Artifact downloaded",task_id=task_id,export="artifact",phase=phase,name=name)
-    return FileResponse(path,filename=name)
+    return Response(data,media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream',
+                    headers={'Content-Disposition':f'attachment; filename="{name}"'})
 
 _ARTIFACT_TITLES={"srs.semantic-review.json":"Requirements Semantic Review","architecture.decisions.json":"Architecture Stack Decisions","intent_model.json":"Needs and Scope","conops.json":"Concept of Operations","needs.json":"Stakeholder Needs","srs.json":"Requirements","architecture.json":"Architecture","items.json":"Item Specifications","spec_items.json":"Item Specifications","tests.json":"Verification","test_specifications.json":"Verification","validation.json":"Validation"}
 
@@ -1858,53 +1664,36 @@ def _validation_panel_for(task_id:str,raw:str)->dict|None:
 
 @app.get("/api/tasks/{task_id}/artifacts/{phase}/{name}/view")
 def task_artifact_view(task_id:str,phase:str,name:str):
-    if hasattr(store,'_postgres'):
-        from .phases import PHASE_BY_KEY
-        if phase not in PHASE_BY_KEY or name not in PHASE_BY_KEY[phase].artifacts:raise HTTPException(404,'artifact not found')
-        task=store.task(task_id)
-        if not task:raise HTTPException(404,'task not found')
-        binding=store.session_binding(task['engine_session_id'])
-        try:data=store.read_artifact_bytes(task_id,phase,name,generation=binding['generation'])
-        except KeyError:raise HTTPException(404,'artifact not found')
-        if len(data)>2_000_000:raise HTTPException(413,'artifact is too large for inline viewing')
-        text=data.decode('utf-8',errors='replace');raw=text;display_name=name;display_format='json' if name.endswith('.json') else 'text'
-        if name.endswith('.json'):
-            from .worker_capability import WorkerCapability
-            from .generator_documents import GeneratorDocuments
-            reader=GeneratorDocuments.owner_reader(store,task_id)
-            sibling=Path(name).with_suffix('.md').name
-            directory='interview/' if phase in ('intent','conops') else 'spec/'
-            companions=reader.capture([directory+name,directory+sibling])
-            readable=companions.get(directory+sibling) if companions.get(directory+name)==data else None
-            if readable is not None:
-                if len(readable)>2_000_000:raise HTTPException(413,'artifact is too large for inline viewing')
-                text=readable.decode('utf-8',errors='replace');display_name=sibling;display_format='markdown'
-            try:raw=json.dumps(json.loads(raw),indent=2)
-            except ValueError:pass
-        transcript=_interview_transcript_markdown(task_id) if name=='intent_model.json' else ''
-        if transcript:
-            if display_format!='markdown':text=f'# {_ARTIFACT_TITLES[name]}\n\n'+text;display_format='markdown'
-            text=text.rstrip()+'\n\n'+transcript+'\n'
-        provenance=_decision_provenance(task_id,json.loads(raw)) if name=='architecture.json' else None
-        panel=_validation_panel_for(task_id,raw) if name=='validation.json' else None
-        return {'name':name,'title':_ARTIFACT_TITLES.get(name,Path(name).stem.replace('_',' ').title()),'phase':phase,'format':display_format,
-            'content':text,'raw_format':'json' if name.endswith('.json') else 'text','raw_content':raw,'display_name':display_name,'decision_provenance':provenance,'validation_panel':panel}
-    path=_task_artifact(task_id,phase,name)
-    if path.stat().st_size>2_000_000:raise HTTPException(413,"artifact is too large for inline viewing")
-    text=_read_task_text(task_id,path,errors="replace");raw=text;display_path=path
-    if path.suffix==".json":
-        sibling=path.with_suffix(".md")
-        if sibling.is_file():display_path=sibling;text=_read_task_text(task_id,sibling,errors="replace")
+    from .phases import PHASE_BY_KEY
+    if phase not in PHASE_BY_KEY or name not in PHASE_BY_KEY[phase].artifacts:raise HTTPException(404,'artifact not found')
+    task=store.task(task_id)
+    if not task:raise HTTPException(404,'task not found')
+    binding=store.session_binding(task['engine_session_id'])
+    try:data=store.read_artifact_bytes(task_id,phase,name,generation=binding['generation'])
+    except KeyError:raise HTTPException(404,'artifact not found')
+    if len(data)>2_000_000:raise HTTPException(413,'artifact is too large for inline viewing')
+    text=data.decode('utf-8',errors='replace');raw=text;display_name=name;display_format='json' if name.endswith('.json') else 'text'
+    if name.endswith('.json'):
+        from .worker_capability import WorkerCapability
+        from .generator_documents import GeneratorDocuments
+        reader=GeneratorDocuments.owner_reader(store,task_id)
+        sibling=Path(name).with_suffix('.md').name
+        directory='interview/' if phase in ('intent','conops') else 'spec/'
+        companions=reader.capture([directory+name,directory+sibling])
+        readable=companions.get(directory+sibling) if companions.get(directory+name)==data else None
+        if readable is not None:
+            if len(readable)>2_000_000:raise HTTPException(413,'artifact is too large for inline viewing')
+            text=readable.decode('utf-8',errors='replace');display_name=sibling;display_format='markdown'
         try:raw=json.dumps(json.loads(raw),indent=2)
-        except Exception:pass
-    display_format="markdown" if display_path.suffix==".md" else ("json" if path.suffix==".json" else "text")
-    transcript=_interview_transcript_markdown(task_id) if name=="intent_model.json" else ""
+        except ValueError:pass
+    transcript=_interview_transcript_markdown(task_id) if name=='intent_model.json' else ''
     if transcript:
-        if display_format!="markdown":text=f"# {_ARTIFACT_TITLES[name]}\n\n"+text;display_format="markdown"
-        text=text.rstrip()+"\n\n"+transcript+"\n"
-    provenance=_decision_provenance(task_id,json.loads(raw)) if name=="architecture.json" else None
-    panel=_validation_panel_for(task_id,raw) if name=="validation.json" else None
-    return {"name":name,"title":_ARTIFACT_TITLES.get(name,Path(name).stem.replace("_"," ").title()),"phase":phase,"format":display_format,"content":text,"raw_format":"json" if path.suffix==".json" else "text","raw_content":raw,"display_name":display_path.name,"decision_provenance":provenance,"validation_panel":panel}
+        if display_format!='markdown':text=f'# {_ARTIFACT_TITLES[name]}\n\n'+text;display_format='markdown'
+        text=text.rstrip()+'\n\n'+transcript+'\n'
+    provenance=_decision_provenance(task_id,json.loads(raw)) if name=='architecture.json' else None
+    panel=_validation_panel_for(task_id,raw) if name=='validation.json' else None
+    return {'name':name,'title':_ARTIFACT_TITLES.get(name,Path(name).stem.replace('_',' ').title()),'phase':phase,'format':display_format,
+        'content':text,'raw_format':'json' if name.endswith('.json') else 'text','raw_content':raw,'display_name':display_name,'decision_provenance':provenance,'validation_panel':panel}
 
 @app.get("/api/tasks/{task_id}/artifacts.zip")
 def task_artifacts_zip(task_id:str):
@@ -1917,21 +1706,11 @@ def task_artifacts_zip(task_id:str):
     with zipfile.ZipFile(data,"w",zipfile.ZIP_DEFLATED) as archive:
         for artifact in records:
             entry=f"{artifact['phase_key']}/{artifact['name']}"
-            if hasattr(store,'_postgres'):
-                # Read by the snapshot row's content hash: the whole zip is one
-                # published revision, never a mix of generations under concurrent publish.
-                try: archive.writestr(entry,store.read_artifact_bytes_sha(artifact['sha256']))
-                except (KeyError,ValueError):
-                    log.exception('artifact integrity failure in zip task=%s entry=%s',task_id,entry)
-                    activity("task.export.failed","Artifacts zip failed an integrity check",task_id=task_id,export="zip",reason="integrity")
-                    raise HTTPException(500,'an artifact failed its stored integrity check; the failure was recorded for diagnostics')
-            elif config.CLOUD_TENANTS:
-                from .tenant_files import read_session_bytes
-                from vmodel_contracts.runtime import artifacts_root
-                base=artifacts_root(os.environ.get('VMODEL_ARTIFACTS_DIR'));session=_recorded_engine_session(task_id)
-                root=authorized_session(base,session,store)
-                archive.writestr(entry,read_session_bytes(base,session,str(Path(artifact['ref']).relative_to(root)),store))
-            else:archive.write(artifact['ref'],entry)
+            try: archive.writestr(entry,store.read_artifact_bytes_sha(artifact['sha256']))
+            except (KeyError,ValueError):
+                log.exception('artifact integrity failure in zip task=%s entry=%s',task_id,entry)
+                activity("task.export.failed","Artifacts zip failed an integrity check",task_id=task_id,export="zip",reason="integrity")
+                raise HTTPException(500,'an artifact failed its stored integrity check; the failure was recorded for diagnostics')
     from fastapi.responses import Response
     title=(store.task(task_id) or {}).get("title","task").replace(" ","-").lower()
     activity("task.export","Artifacts zip downloaded",task_id=task_id,export="zip",artifacts=len(records))
