@@ -218,3 +218,20 @@ def test_mac_gate_is_one_repo_owned_entry_and_has_no_private_settings():
     assert 'bash scripts/ops/image.sh --accept-local' in text
     assert 'bash scripts/ops/image.sh --local-pg-check' in text
     assert '--publish' not in text and '--deploy' not in text and 'preview.env' not in text
+
+
+def test_source_auth_settings_need_no_database_or_engine_token(tmp_path):
+    path=tmp_path/'auth-only.env'
+    path.write_text('DELIVERY_SUPABASE_URL=https://test.supabase.co\nDELIVERY_SUPABASE_ANON_KEY=public\nREQUI_OPERATOR_SUBJECT=00000000-0000-0000-0000-000000000001\n')
+    path.chmod(0o600)
+    result=settings(path,'a'*32,names('a'*32),8002)
+    assert result['DELIVERY_DATABASE_URL']==DSN
+    assert len(result['INTERVIEW_ENGINE_TOKEN'])>=24
+    assert result['DELIVERY_SUPABASE_URL']=='https://test.supabase.co'
+
+
+def test_source_settings_error_is_typed_and_has_no_private_value(tmp_path):
+    path=tmp_path/'bad.env';path.write_text('DELIVERY_SUPABASE_URL=http://private.invalid\n');path.chmod(0o600)
+    with pytest.raises(WorkflowError,match='Local source settings invalid') as error:
+        settings(path,'a'*32,names('a'*32),8002)
+    assert 'private.invalid' not in str(error.value)
