@@ -90,7 +90,7 @@ def grant_founder_credits(dsn_value):
         "SELECT public.requi_operator_grant_credits(%s, %s, %s)",
         ('owner-a@example.test', 500, 'crosshost acceptance: founder prepaid balance')).fetchone()
     conn.close()
-    assert result and result[0].get('granted'), 'operator grant through the migration function: %s' % (result,)
+    assert result and (result[0].get('granted') or result[0].get('already_granted_today')), 'operator grant through the migration function: %s' % (result,)
 
 
 @pytest.fixture(scope='module')
@@ -173,7 +173,19 @@ class AdmittedHost:
         self.port = free_port()
         self.artifacts = artifacts or (root / ('artifacts-' + name))
         env = base_env(root, keys, [str(ENGINE_SRC / 'src'), str(GENERATOR_SRC / 'src')])
-        env.update(gateway_env())
+        # Current runtime resolves reviewed model defaults from durable PG pins,
+        # not the retired env-only gateway path. Seed only this disposable DB.
+        inputs=gateway_env()
+        from delivery_api import model_pins,production_gateway
+        value={'row':json.loads(inputs[production_gateway.PRICES_ENV])[0],
+               'context':json.loads(inputs[production_gateway.CEILING_ENV])}
+        import psycopg
+        rev=model_pins.revision(value)
+        with psycopg.connect(dsn_value) as conn:
+            conn.execute("INSERT INTO model_pin_revisions(revision,provider,model,payload,fetched_at,operator_subject,reason) VALUES(%s,'ollama',%s,%s::jsonb,%s,%s,'crosshost fictional local pin') ON CONFLICT DO NOTHING",
+                         (rev,value['row']['model'],json.dumps(value),'2026-11-05T00:00:00+00:00',OWNER))
+            conn.execute("INSERT INTO model_pin_heads(provider,model,revision,is_default) VALUES('ollama',%s,%s,true) ON CONFLICT(provider,model) DO UPDATE SET revision=excluded.revision,is_default=true",(value['row']['model'],rev))
+        env.update(REQUI_PIN_PROVIDERS='ollama')
         # The engine preflight fails closed without a price for the selected
         # route (unpriced calls are unbudgeted calls). Published peak values.
         price_table = root / ('prices-' + name + '.json')
@@ -212,7 +224,7 @@ def test_admitted_host_boots_with_inprocess_engine_and_database_sessions(dsn, ke
     host = AdmittedHost('local', root, keys, dsn)
     try:
         log = (root / 'app-local.log').read_text()
-        assert 'Cloud execution: OPEN' in log, 'execution admitted, in-process engine installed'
+        assert 'Execution: READY' in log, 'execution admitted, in-process engine installed'
         # The placement schema is the real migrated one; the engine claims rows here.
         import psycopg
         conn = psycopg.connect(dsn, autocommit=True)

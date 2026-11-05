@@ -67,7 +67,7 @@ class PrivatePipeline:
                                 break
                             self.progress('interview.waiting','Waiting for founder input; no timeout')
                             from requi_child_contract.compute import excluded_wait
-                            with excluded_wait('item6:input:'+pending.input_id):response=self.answer(pending)
+                            with excluded_wait('item6:input:'+str(pending.input_id)):response=self.answer(pending)
                             if not isinstance(response,InputResponse) or response.input_id!=pending.input_id or response.actor_id!=scope.owner_id:
                                 raise ValueError('current exact founder input required')
                             pending=program.advance(response)

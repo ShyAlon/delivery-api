@@ -14,6 +14,28 @@ ADMIN=os.getenv('ITEM6_TEST_ADMIN_DSN')
 pytestmark=pytest.mark.skipif(not ADMIN,reason='explicit isolated item6 PostgreSQL required')
 
 
+@pytest.fixture(autouse=True)
+def operator_expense_policy_fixture():
+ # Same per-dispatch policy as production, only on the explicit owned item6 DB.
+ # Zero expense fake calls still need a valid configured scale and policy.
+ import psycopg
+ from psycopg.conninfo import conninfo_to_dict
+ info=conninfo_to_dict(ADMIN)
+ assert info['dbname'].startswith('requi_item6_') and info['host']=='/tmp'
+ with psycopg.connect(ADMIN) as conn:
+  old=conn.execute('SELECT revision FROM operator_expense_policy_head WHERE singleton').fetchone()
+  subject=conn.execute('SELECT id FROM auth.users ORDER BY id LIMIT 1').fetchone()[0]
+  revision='item6-'+uuid.uuid4().hex
+  conn.execute("INSERT INTO operator_expense_policy_revisions(revision,limit_units,units_per_usd,operator_subject,reason) VALUES(%s,4000000000000,1000000000000,%s,'fictional item6 policy')",(revision,subject))
+  conn.execute('INSERT INTO operator_expense_policy_head VALUES(true,%s) ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision',(revision,))
+ try:yield
+ finally:
+  with psycopg.connect(ADMIN) as conn:
+   if old:conn.execute('UPDATE operator_expense_policy_head SET revision=%s',(old[0],))
+   else:conn.execute('DELETE FROM operator_expense_policy_head')
+   conn.execute('DELETE FROM operator_expense_policy_revisions WHERE revision=%s',(revision,))
+
+
 def test_connected_real_graph_and_closed_revision_with_retained_approval(tmp_path,monkeypatch):
  import psycopg
  from psycopg.conninfo import conninfo_to_dict,make_conninfo
@@ -32,7 +54,7 @@ def test_connected_real_graph_and_closed_revision_with_retained_approval(tmp_pat
   def paid_fixture_stream(messages):
    gateway=_binding.get()[0]
    quote={'provider':'deepseek','model':'deepseek-chat','price_version':'hermetic','bound_version':'deepseek-chat',
-     'input_max':100000,'output_max':100000,'expense_input':0,'expense_output':0,'retail_input':1,'retail_output':1,'retail_units_per_credit':1000}
+     'input_max':100000,'output_max':100000,'expense_input':0,'expense_output':0,'retail_input':1,'retail_output':1,'retail_units_per_credit':1000,'expense_units_per_usd':1000000000000}
    attempt=gateway.store.reserve_provider_attempt(gateway.job_id,uuid.uuid4().hex,quote,'fixture-'+uuid.uuid4().hex,require_prepaid=True)['attempt_id']
    gateway.start(attempt)
    runtime=__import__('spec_generator.worker_runtime',fromlist=['current_runtime']).current_runtime()
@@ -53,7 +75,7 @@ def test_connected_real_graph_and_closed_revision_with_retained_approval(tmp_pat
   def paid_invoke(messages,invoke=invoke):
    gateway=interview_binding.get()[0]
    quote={'provider':'deepseek','model':'deepseek-chat','price_version':'hermetic','bound_version':'fixture',
-     'input_max':100000,'output_max':100000,'expense_input':0,'expense_output':0,'retail_input':1,'retail_output':1,'retail_units_per_credit':1000}
+     'input_max':100000,'output_max':100000,'expense_input':0,'expense_output':0,'retail_input':1,'retail_output':1,'retail_units_per_credit':1000,'expense_units_per_usd':1000000000000}
    attempt=gateway.store.reserve_provider_attempt(gateway.job_id,uuid.uuid4().hex,quote,'fixture-'+uuid.uuid4().hex,require_prepaid=True)['attempt_id']
    gateway.start(attempt);result=invoke(messages)
    gateway.store.transition_provider_attempt(attempt,'settle',{'input_tokens':1,'output_tokens':1});return result

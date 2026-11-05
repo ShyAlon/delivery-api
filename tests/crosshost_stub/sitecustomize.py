@@ -349,6 +349,24 @@ if os.environ.get('CROSSHOST_STUB') == '1':
         except ImportError:
             pass  # engine-only processes never import delivery_api
 
+    # ChildSupervisor intentionally strips PYTHONPATH and all service env. Do
+    # not weaken that production allowlist. This test-only launcher explicitly
+    # bootstraps the same fail-closed model fixture inside each fresh child.
+    from delivery_api.child_supervisor import ChildSupervisor as _Supervisor
+    import sys as _sys
+    from pathlib import Path as _Path
+    _supervisor_init=_Supervisor.__init__
+    _stub_path=str(_Path(__file__).resolve())
+    _source_paths=[p for p in _sys.path if p and _Path(p).is_dir()]
+    def _fixture_supervisor(self,command=None,**kwargs):
+        if command is None or command==[_sys.executable,'-m','delivery_api.child_entry']:
+            code=("import os,sys,runpy;sys.path[:0]="+repr(_source_paths)+
+                  ";os.environ['CROSSHOST_STUB']='1';runpy.run_path("+repr(_stub_path)+
+                  ");runpy.run_module('delivery_api.child_entry',run_name='__main__')")
+            command=[_sys.executable,'-c',code]
+        _supervisor_init(self,command,**kwargs)
+    _Supervisor.__init__=_fixture_supervisor
+
     # Hermetic Supabase password sign-in: the real UI login flow posts to the
     # app's own /auth routes; the app's call to the Supabase auth API is the
     # single patched seam. The minted access token verifies through the JWKS
