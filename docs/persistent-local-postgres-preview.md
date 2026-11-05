@@ -125,3 +125,45 @@ admin login is refused to that UID, and session removal denies access. It
 ownership-checks cleanup. It cannot certify the final manual hosted sign-in or
 real provider behavior. On any failure stop and return the printed failure/log;
 no automatic alternative build, remote DSN or retry is chosen.
+
+## Native Mac Ollama: discover before choosing
+
+```
+req image --local-pg check-ollama
+```
+
+Read-only. This goal does not need clean git or image acceptance. It lists Mac
+Ollama installed IDs/file bytes and already loaded memory/context, physical Mac
+RAM, and checks from the exact running owned app container. It reports missing
+provider selection, exact model selection, container-loopback mistakes,
+unreachable service and selected-model absence. It never pulls, loads or prompts
+a model. The running app settings are checked, not assumed from an edited source
+file. Optional `--ollama-base-url` and `--ollama-model` explicitly test candidates.
+
+The3GB limit belongs to the app container, NOT native Mac Ollama. Installed file
+size is not peak runtime RAM; context/KV cache, GPU allocation and other apps
+matter. A list/probe cannot certify fit. A model that already choked the Mac is
+not made safe by this check. Do not raise the app limit as an Ollama-memory fix.
+
+Once an exact installed ID and reviewed bounds are known, restart with values:
+
+```
+req image --local-pg stop --apply
+req image --local-pg start --backoffice-port 8021 --apply --pin-providers ollama --ollama-model EXACT_INSTALLED_ID --ollama-base-url http://host.docker.internal:11434/v1
+```
+
+These explicit values are written into generated local settings for that launch,
+not silently saved into the private source. Repeat them on future launches or
+store the same reviewed values in the private source. No deployment behavior flag,
+paid fallback, auto-pull or model substitution is added. For Ollama selection,
+a missing model ID or container-localhost endpoint is refused before start.
+If the Docker host endpoint is unreachable, inspect Ollama bind/firewall/Docker
+network settings; do not expose Ollama publicly as a shortcut.
+
+In Back office > Model pins > Add model > Ollama - local $0, List installed models
+reads the app's configured endpoint. Enter the exact ID, positive reviewed context
+and smaller maximum-output bound, the ceiling source (local model/server config
+or reviewed documentation) and its review version/date. Local fields start blank,
+not with DeepSeek's128k/16k. Review local $0 model creates a proposal without
+fetching vendor prices. Approve only after reviewing it. This does not load the
+model, prove RAM fit or start a task. The pin model must match the selected ID.

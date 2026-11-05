@@ -15,6 +15,8 @@ class PinAction(BaseModel):
     signature:str=''
     confirm:bool=False
     reason:str=''
+    bound_source:str=''
+    bound_version:str=''
 
 
 def install(app,owner_store,reader,activate=None):
@@ -44,6 +46,11 @@ def install(app,owner_store,reader,activate=None):
                     result['bootstrap'].append(pins.validate({'row':row,'context':context}))
             except (ValueError,TypeError,KeyError,StopIteration):pass
         return result
+    @app.get('/api/operator/ollama-models')
+    def local_models(a:auth.Actor=Depends(auth.require_actor)):
+        repo()  # services.operate permission, same as model review
+        from .ollama_readiness import probe
+        return probe(os.environ.get('OLLAMA_BASE_URL') or 'http://localhost:11434/v1',os.environ.get('DELIVERY_OLLAMA_MODEL'))
     @app.post('/api/operator/model-pins/{action}')
     def operate(action:str,body:PinAction,request:Request,a:auth.Actor=Depends(auth.require_actor)):
         repository=repo()
@@ -54,8 +61,11 @@ def install(app,owner_store,reader,activate=None):
                 from .operator_expense_policy import commit
                 return {'revision':commit(repository,owner_store,body.amount,body.expected,body.reason),'status':'saved','activation':False}
             if action=='new-local':
-                model=body.model
-                value={'row':{'provider':'ollama','model':model,'price_version':'local-reviewed','source':'Operator reviewed local server bounds','expense_input':0,'expense_output':0,'retail_input':0,'retail_output':0,'retail_units_per_credit':10**9},'context':{'model':model,'context_tokens':body.context,'maximum_output_tokens':body.maximum_output,'source':'Operator reviewed local server bounds','bound_version':'local-reviewed','protective_run_ceiling':False}}
+                model=body.model.strip()
+                if not model:raise ValueError('Installed Ollama model ID is missing. Click List installed models, then choose an exact ID.')
+                if not body.bound_source.strip() or not body.bound_version.strip():raise ValueError('Reviewed ceiling source and version are missing. Record the local model configuration/source and review version.')
+                if body.context<=0 or body.maximum_output<=0 or body.maximum_output>=body.context:raise ValueError('Bounds must be positive and maximum output must be smaller than context. Use reviewed local server/model limits, not DeepSeek defaults.')
+                value={'row':{'provider':'ollama','model':model,'price_version':'local-reviewed','source':'Operator reviewed local server bounds','expense_input':0,'expense_output':0,'retail_input':0,'retail_output':0,'retail_units_per_credit':10**9},'context':{'model':model,'context_tokens':body.context,'maximum_output_tokens':body.maximum_output,'source':body.bound_source.strip(),'bound_version':body.bound_version.strip(),'protective_run_ceiling':False}}
                 return {**pins.proposal(pins.validate(value),None,a.id),'before':None}
             if action=='new':
                 value=pins.new_deepseek(body.model,body.context,body.maximum_output)

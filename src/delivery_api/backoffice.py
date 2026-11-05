@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 ROUTES={'build':'/health','access':'/api/operator/backoffice-access','audit-events':'/api/operator/audit-events','active-jobs':'/api/operations/active-jobs','payment-journal':'/api/operator/payment-journal','payment-totals':'/api/operator/payment-totals','workspace':'/api/admin/operations/workspace','orphaned-tasks':'/api/admin/operations/orphaned-tasks',
     'operator-sessions':'/api/operator/sessions','operator-credits':'/api/operator/credits',
     'expense-totals':'/api/operator/expense-totals','vendor-status':'/api/operator/vendor-status','task-debug':'/api/operator/task-debug','task-logs':'/api/operator/task-logs','credit-account':'/api/operator/credit-account','task-usage':'/api/operator/task-usage',
-    'attempt-releases':'/api/admin/operations/attempt-releases','model-pins':'/api/operator/model-pins','acceptance-readiness':'acceptance-readiness'}
+    'attempt-releases':'/api/admin/operations/attempt-releases','model-pins':'/api/operator/model-pins','ollama-models':'/api/operator/ollama-models','acceptance-readiness':'acceptance-readiness'}
 QUERY_KEYS={'audit-events':{'before','limit','event'},'active-jobs':{'limit','before_updated_at','before_job_id'},'payment-journal':{'start_at','end_at','owner_id','limit','before_created_at','before_purchase_id'},'payment-totals':{'start_at','end_at','owner_id','limit'},'task-usage':{'task_id'},'credit-account':{'owner_id'},'task-logs':{'task_id','before_id','limit'},'task-debug':{'task_id'},'attempt-releases':{'limit'},'operator-sessions':{'limit','before_created_at','before_session_id'},
             'operator-credits':{'limit','after_owner'}}
 

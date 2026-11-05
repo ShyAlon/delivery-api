@@ -69,7 +69,7 @@ def controller(resource,nonce,payload):
     return object_json(result.stdout.encode())
 
 
-def settings(source,nonce,resource,port):
+def settings(source,nonce,resource,port,provider_values=None):
     from image_settings import read_values,validate_auth,SettingsProblem
     path=Path(source).expanduser().absolute()
     try:
@@ -80,6 +80,16 @@ def settings(source,nonce,resource,port):
     # Source may describe production, but NO data/admin address is ever copied,
     # resolved or connected. Ambient environment has no fallback at this boundary.
     result={key:value for key,value in original.items() if key in ALLOWED}
+    for key,value in (provider_values or {}).items():
+        if key not in ('REQUI_PIN_PROVIDERS','DELIVERY_OLLAMA_MODEL','OLLAMA_BASE_URL'):raise WorkflowError('unexpected provider value')
+        if value is not None:result[key]=value
+    if 'ollama' in result.get('REQUI_PIN_PROVIDERS','deepseek').split(','):
+        result.setdefault('OLLAMA_BASE_URL','http://host.docker.internal:11434/v1')
+        if not result.get('DELIVERY_OLLAMA_MODEL'):raise WorkflowError('Ollama model ID missing: run req image --local-pg check-ollama, then pass --ollama-model with an installed ID; no model guessed')
+        url=urlsplit(result['OLLAMA_BASE_URL'])
+        if url.hostname in ('localhost','127.0.0.1','::1'):raise WorkflowError('OLLAMA_BASE_URL is container loopback, not the Mac: use --ollama-base-url http://host.docker.internal:11434/v1 for native Mac Ollama')
+        if url.scheme not in ('http','https') or not url.hostname or url.username or url.password or url.query or url.fragment or url.path.rstrip('/') not in ('','/v1'):raise WorkflowError('Ollama endpoint invalid: use an HTTP(S) API origin with optional /v1, no credentials/query')
+        if not re.fullmatch(r'[a-zA-Z0-9._:/-]{1,200}',result['DELIVERY_OLLAMA_MODEL']):raise WorkflowError('Ollama model ID invalid; choose exact installed model ID')
     result.update(DELIVERY_DATABASE_URL=DSN,INTERVIEW_ENGINE_TOKEN=secrets.token_urlsafe(32),
         DELIVERY_PUBLIC_ORIGIN='http://127.0.0.1:'+str(port))
     # Operator config is a local value reviewed at launch, never copied authority.
@@ -211,7 +221,7 @@ def diagnostics(resource,nonce,home):
     return path
 
 
-def preview(*,root,state,source,home,port=8002,backoffice_port=8021,apply=False,action='start'):
+def preview(*,root,state,source,home,port=8002,backoffice_port=8021,apply=False,action='start',provider_values=None):
     home=Path(home).expanduser();home.mkdir(parents=True,exist_ok=True,mode=0o700)
     if home.is_symlink() or home.stat().st_mode&0o077:raise WorkflowError('private local PG workflow directory required')
     nonce=identity(home/'identity.json');resource=names(nonce)
@@ -232,7 +242,7 @@ def preview(*,root,state,source,home,port=8002,backoffice_port=8021,apply=False,
             for key in ('data','socket'):
                 if inspect_owned('volume',resource[key],nonce):command(['docker','volume','rm',resource[key]])
         return
-    image=accepted_image(state);values=settings(source,nonce,resource,port)
+    image=accepted_image(state);values=settings(source,nonce,resource,port,provider_values)
     log('INFO','local PG review: SAME accepted app, persistent owned Unix-socket database, real hosted Auth HTTPS. No Supabase DATA connection, no paid Start, no real payments.')
     log('WARN','Local accounting is separate from hosted accounting. Reset cannot undo provider charges. Model fit and hosted pooler/revocation parity are NOT proved.')
     if not apply:return

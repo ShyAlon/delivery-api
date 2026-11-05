@@ -169,3 +169,41 @@ def test_saved_pin_activation_warning_is_not_erased_by_refresh():
    expect(page.locator('[data-pin-status]')).to_contain_text('Pin saved; execution is still closed: fixture route is not selected')
    page.screenshot(path='/downloads/pin-saved-execution-closed.png',full_page=True);browser.close()
  finally:server.should_exit=True;thread.join(10)
+def test_local_model_review_lists_ids_requires_bounds_and_never_fetches_vendor():
+ from playwright.sync_api import sync_playwright,expect
+ calls=[]
+ def upstream(request):
+  if request.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':True,'mode':'supabase','actor':'fixture@example.com'})
+  calls.append(request)
+  if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{'services.operate':True}})
+  if request.url.path=='/api/operator/model-pins':return httpx.Response(200,json={'pins':[],'history':[],'bootstrap':[]})
+  if request.url.path=='/api/operator/ollama-models':return httpx.Response(200,json={'reachable':True,'installed_models':[{'id':'small:latest','file_bytes':1000}],'memory_fit':'unverified'})
+  if request.url.path.endswith('/new-local'):return httpx.Response(409,json={'detail':'fixture local proposal stopped before approval'})
+  return httpx.Response(403,json={'detail':'unexpected'})
+ app=create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream))
+ with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+ server=uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=port,lifespan='off',log_level='error'));thread=threading.Thread(target=server.run);thread.start()
+ try:
+  for _ in range(100):
+   if server.started:break
+   time.sleep(.02)
+  with sync_playwright() as p:
+   browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page(viewport={'width':1280,'height':1000},extra_http_headers={'Authorization':'Bearer fake'})
+   page.goto(f'http://127.0.0.1:{port}/#model-pins');page.get_by_role('button',name='Add model',exact=True).click()
+   d=page.get_by_role('dialog',name='Add reviewed model');d.get_by_label('Provider',exact=True).select_option('ollama')
+   expect(d.get_by_label('Context tokens',exact=True)).to_have_value('')
+   expect(d.get_by_label('Maximum output tokens',exact=True)).to_have_value('')
+   d.get_by_role('button',name='Review local $0 model',exact=True).click();expect(d.locator('.dialog-status')).to_contain_text('model ID is missing')
+   assert not any(r.url.path.endswith('/new-local') for r in calls)
+   d.get_by_role('button',name='List installed models').click();expect(d).to_contain_text('small:latest')
+   d.get_by_label('Provider model ID',exact=True).fill('small:latest')
+   d.get_by_label('Context tokens',exact=True).fill('4096');d.get_by_label('Maximum output tokens',exact=True).fill('512')
+   d.get_by_label('Reviewed ceiling source',exact=True).fill('Fixture server configuration, not a recommendation')
+   d.get_by_label('Reviewed ceiling version',exact=True).fill('fixture-v1')
+   d.get_by_role('button',name='Review local $0 model',exact=True).click();expect(d.locator('.dialog-status')).to_contain_text('fixture local proposal stopped')
+   assert not any(r.url.path.endswith('/new') for r in calls)
+   sent=next(r for r in calls if r.url.path.endswith('/new-local'));assert json.loads(sent.content)['bound_version']=='fixture-v1'
+   page.screenshot(path='/downloads/ollama-local-review-desktop.png')
+   page.set_viewport_size({'width':390,'height':844});assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+   page.screenshot(path='/downloads/ollama-local-review-mobile.png');browser.close()
+ finally:server.should_exit=True;thread.join(10)
