@@ -276,7 +276,7 @@ def test_dashboard_routes_local_loading_to_session_folder_not_file_picker(pg_pag
         page.goto(ui+old);page.locator(".task").first.wait_for();assert page.url==ui+"/" or page.url==ui
     assert page.get_by_role("button",name="Artifacts folder").count()==0
 
-def test_page_headers_stay_sticky_and_home_has_no_evidence_vault_hero(pg_page,pg_ui,pg_ids):
+def test_task_heading_stays_in_flow_without_overlapping_navigation_and_home_has_no_evidence_vault_hero(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     page.goto(ui+"/")
     page.locator(".task").first.wait_for()
@@ -284,7 +284,15 @@ def test_page_headers_stay_sticky_and_home_has_no_evidence_vault_hero(pg_page,pg
     assert page.get_by_text("Every decision,",exact=False).count()==0
     page.goto(ui+f'/tasks/{pg_ids["done"]}/view')
     head=page.locator('.detail-head.page-head');head.wait_for()
-    assert head.evaluate("e=>getComputedStyle(e).position")=="sticky"
+    # Nov2 2026 main 71949a5 deliberately removed overlapping sticky headings.
+    # Keep that newer layout contract; assert actual geometry, not an old sticky flag.
+    assert head.evaluate("e=>getComputedStyle(e).position")=="relative"
+    nav=page.locator('header').bounding_box();box=head.bounding_box()
+    assert box['y']>=nav['y']+nav['height']
+    before=box['y'];page.evaluate('window.scrollTo(0,250)')
+    assert head.bounding_box()['y']<before
+    assert page.locator('header').bounding_box()['y']==0
+    page.screenshot(path=str(_screenshots_dir / 'task-heading-normal-flow.png'))
 
 def test_create_task_dialog_keyboard_submit_textarea_and_cancel(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
@@ -602,21 +610,43 @@ def test_stale_structured_decision_is_not_actionable_on_load(pg_page,pg_ui,pg_id
     assert page.locator('#opendecision').count()==0 and page.locator('.decision-dialog').count()==0
 
 
-def test_stale_decision_conflict_closes_and_refreshes_dialog(pg_page,pg_ui,pg_ids):
+def test_stale_decision_preserves_readonly_rationale_until_explicit_close_then_refreshes(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     tid=pg_ids["live"]
     page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
-    live=page.request.get(ui+f'/api/tasks/{tid}').json();decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve?','rationale_required':False,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
-    live['events']=[];live['input_state']={'waiting':True,'process_live':True,'decision':decision};live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':decision,'gate':None};calls={'get':0}
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();decision={'type':'founder_decision','decision_id':'intent-approval','title':'Approve intent','prompt':'Approve?','rationale_required':True,'options':[{'value':'y','label':'Approve'},{'value':'n','label':'Reject'}]}
+    live['events']=[];live['input_state']={'waiting':True,'process_live':True,'decision':decision};live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'choice'};live['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':decision,'gate':None};calls={'get':0,'post':0}
     def task(route):
         calls['get']+=1
         if calls['get']>1:live['input_state']={'waiting':False,'process_live':False,'decision':None};live['control_snapshot']={'mode':'working'};live['ui_state']={'mode':'executing','active_phase':'needs','process_live':True,'decision':None,'gate':None}
         route.fulfill(json=_promote_control(live))
     page.route(f'**/api/tasks/{tid}',task)
-    page.route(f'**/api/tasks/{tid}/answer',lambda route:route.fulfill(status=409,json={'detail':{'error':'Stale founder decision was not submitted.','cause':'The submitted decision is no longer open.','next':'Refresh shows the current state.','stale':True,'current_state':'running','active_phase':'needs'}}))
+    def stale_answer(route):
+        calls['post']+=1
+        route.fulfill(status=409,json={'detail':{'error':'Stale founder decision was not submitted.','cause':'The submitted decision is no longer open.','next':'Refresh shows the current state.','stale':True,'current_state':'running','active_phase':'needs'}})
+    page.route(f'**/api/tasks/{tid}/answer',stale_answer)
     page.goto(ui+f'/tasks/{tid}/view');dialog=page.locator('.decision-dialog');dialog.wait_for();dialog.get_by_text('Reject',exact=True).click()
+    rationale=dialog.locator('textarea');rationale.fill('Keep my exact founder reason')
+    dialog.get_by_role('button',name='Choose & continue').click()
     page.get_by_text('Stale founder decision was not submitted.',exact=False).wait_for();page.wait_for_timeout(900)
-    assert page.locator('.decision-dialog').count()==0 and page.locator('#opendecision').count()==0 and calls['get']>=2
+    # Owner Nov1 2026 12:38:29: "when creation fails, return to the same page
+    # with the same data. It's bad UX to force the user to write everything all over again."
+    # Nov1 main d372ad9 extends this retention contract to stale founder rationale.
+    assert dialog.is_visible() and rationale.input_value()=='Keep my exact founder reason'
+    assert rationale.evaluate('e=>e.readOnly && !e.disabled')
+    rationale.focus();rationale.press('Control+Enter');rationale.press('Enter')
+    assert rationale.input_value()=='Keep my exact founder reason'
+    assert dialog.locator('input[type=radio]:enabled').count()==0
+    assert dialog.get_by_role('button',name='Choose & continue').is_disabled()
+    assert dialog.get_by_role('button',name='Close decision').is_enabled()
+    dialog.evaluate('e=>e.requestSubmit()');page.wait_for_timeout(100)
+    assert calls['post']==1 and calls['get']==1
+    assert page.locator('#opendecision').count()==0
+    page.screenshot(path=str(_screenshots_dir / 'stale-rationale-retained.png'))
+    dialog.get_by_role('button',name='Close decision').click()
+    page.wait_for_function("!document.querySelector('.decision-dialog')")
+    page.wait_for_timeout(200)
+    assert calls['get']>=2 and page.locator('#opendecision').count()==0
 
 def test_intent_approval_shows_selected_concept_and_founder_reason(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
@@ -2000,10 +2030,13 @@ def test_interview_scrolls_inside_its_section_and_live_process_stays_visible(pg_
     assert total<=inner*2,f'page stretched to {total}px on a {inner}px viewport'
     page.evaluate('window.scrollTo(0, document.documentElement.scrollHeight)'); page.wait_for_timeout(300)
     box = right.bounding_box()
-    heading = page.get_by_role('heading', name='Live process'); hb = heading.bounding_box()
-    assert 0 <= hb['y'] and hb['y'] + hb['height'] <= 800, hb  # Live process heading pinned in view after the page scrolled
+    # Nov2 main removed nested sticky titles. Preserve live status, not stacked titles.
+    heading = page.locator('.live-status-row'); hb = heading.bounding_box()
+    nav=page.locator('header').bounding_box()
+    assert nav['y']+nav['height'] <= hb['y'] and hb['y'] + hb['height'] <= inner, hb
+    assert page.get_by_role('heading',name='Live process').evaluate("e=>getComputedStyle(e.parentElement).position")=="static"
     assert heading.evaluate('e=>{const r=e.getBoundingClientRect();const t=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return e.contains(t)||t.contains(e)}')  # and not hidden behind the page header
-    page.screenshot(path=str(_screenshots_dir / 'live-process-sticky.png'))
+    page.screenshot(path=str(_screenshots_dir / 'live-status-visible.png'))
 
 
 
@@ -2726,7 +2759,7 @@ def test_runtime_browser_group_requires_signed_pg_fixture():
 def test_decision_state_browser_group_requires_signed_pg_fixture():
     import inspect
     for case in (test_stale_structured_decision_is_not_actionable_on_load,
-                 test_stale_decision_conflict_closes_and_refreshes_dialog,
+                 test_stale_decision_preserves_readonly_rationale_until_explicit_close_then_refreshes,
                  test_intent_approval_shows_selected_concept_and_founder_reason,
                  test_server_accepted_decision_event_closes_founder_box,
                  test_needs_gate_state_hides_stale_intent_prompt_and_opens_needs_gate,
