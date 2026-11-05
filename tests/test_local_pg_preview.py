@@ -210,3 +210,11 @@ def test_browser_enrolls_before_first_app_read_and_revokes_on_close(monkeypatch)
         module.browse('http://127.0.0.1:'+str(server.server_port),{'DELIVERY_SUPABASE_URL':'https://fictional.supabase.co','DELIVERY_SUPABASE_ANON_KEY':'public','REQUI_OPERATOR_SUBJECT':owner,'REQUI_OPERATOR_REGISTRY_VERSION':'owned-local-v1','REQUI_OPERATOR_CAPABILITIES':'[]'},controller,headless=True,on_open=interact)
         assert reads==[True] and events==['enroll','revoke_all']
     finally:server.shutdown();server.server_close();thread.join(5)
+
+
+def test_mac_gate_is_one_repo_owned_entry_and_has_no_private_settings():
+    text=(ROOT/'scripts/ops/test-local-pg.sh').read_text()
+    assert 'set -euo pipefail' in text
+    assert 'bash scripts/ops/image.sh --accept-local' in text
+    assert 'bash scripts/ops/image.sh --local-pg-check' in text
+    assert '--publish' not in text and '--deploy' not in text and 'preview.env' not in text

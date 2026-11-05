@@ -103,7 +103,9 @@ def build_dependency(root,nonce):
         for path in paths:
             target=context/path;target.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(root/path,target);target.chmod(0o644)
-        command(['docker','build','--file',str(context/'scripts/local-pg/Dockerfile'),'--tag',tag,str(context)],timeout=1800)
+        buildlog=Path.home()/'.local/share/requi/local-pg-builds'/('build-'+nonce+'.log')
+        log('INFO','Local PG dependency build log: '+str(buildlog))
+        command(['docker','build','--file',str(context/'scripts/local-pg/Dockerfile'),'--tag',tag,str(context)],timeout=1800,output_path=buildlog)
     return tag
 
 

@@ -107,3 +107,21 @@ Use the task's Account > Debug > Download debug ZIP when the page is available.
 For startup failures run `req image --local-pg debug` for the bounded, redacted
 owned app/dependency ZIP. Existing `req debug` targets the older standard preview
 container, not this uniquely named local PG app.
+
+## Required Mac gate before PR readiness
+
+On the reviewed clean branch, one repo-owned command:
+
+```
+bash scripts/ops/test-local-pg.sh
+```
+
+It explains each stage, runs the existing exact-image local acceptance, then a
+fresh isolated local-PG Docker gate. This never reads private preview settings,
+uses the owner's identity/data volume or contacts hosted Auth/paid providers.
+It proves app UID10001 can connect as restricted delivery_app via peer auth,
+real tenant session RLS works, enrollment persists over PG restart, postgres
+admin login is refused to that UID, and session removal denies access. It
+ownership-checks cleanup. It cannot certify the final manual hosted sign-in or
+real provider behavior. On any failure stop and return the printed failure/log;
+no automatic alternative build, remote DSN or retry is chosen.
