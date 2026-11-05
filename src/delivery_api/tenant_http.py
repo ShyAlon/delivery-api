@@ -94,7 +94,10 @@ class TenantMiddleware:
             path.startswith(('/runs','/links')) or
             path.endswith(blocked_suffixes) or ('/gates/' in path and not path.endswith(('/decide','/revision-drafts','/stack-decisions','/semantic-review','/comments','/drafts'))) or
             '/simulations' in path or '/engine/' in path) and not _interview_route_open(path):
-            return await JSONResponse({'detail':'Cloud execution pending scoped worker protocol'},status_code=503)(scope,receive,send)
+            from . import cloud_runtime
+            reason=cloud_runtime.unavailable_reason()
+            detail=({'error':'No approved model pin. Ask the operator to approve one.','reason':reason} if reason=='no_approved_model_pin' else 'Cloud execution pending scoped worker protocol')
+            return await JSONResponse({'detail':detail},status_code=503)(scope,receive,send)
         headers=dict(scope.get('headers',[]))
         raw=headers.get(b'authorization',b'').decode('latin1')
         from http.cookies import SimpleCookie

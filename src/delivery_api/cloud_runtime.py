@@ -6,6 +6,7 @@ fails, nothing is installed, the reason is kept and execution stays closed (clou
 from .diagnostic_evidence import thread_target
 _state=None
 _failure=None
+_failure_code=None
 _checked=set()
 _watcher=None
 VENDOR_WATCH_SECONDS=61*60   # just over the one-hour reuse of a good check, so each wake is a real check
@@ -26,6 +27,10 @@ def gateway_factory():
     return _state[0] if _state is not None else None
 
 
+def unavailable_reason():
+    return _failure_code if _state is None and _failure_code=='no_approved_model_pin' else 'runtime_unavailable'
+
+
 def installed():
     return _state is not None
 
@@ -40,7 +45,7 @@ def _watch(gateways,stop,seconds):
 
 
 def install(store,environ,set_engine_client,watch_vendor=False,*,paid_runtime=None):
-    global _state,_failure,_watcher
+    global _state,_failure,_failure_code,_watcher
     if _state is not None:return
     from . import inprocess_engine
     from vmodel_contracts.runtime import artifacts_root
@@ -67,9 +72,10 @@ def install(store,environ,set_engine_client,watch_vendor=False,*,paid_runtime=No
         client=host.client()
     except BaseException as exc:
         if gateways is not None:gateways.close()
+        _failure_code='no_approved_model_pin' if getattr(exc,'code',None)=='no_approved_model_pin' else 'runtime_unavailable'
         _failure=f'{type(exc).__name__}: {str(exc)[:300]}'
         raise
-    _failure=None
+    _failure=None;_failure_code=None
     inprocess_engine.configure(engine);set_engine_client(client)
     from . import engine_log
     engine_log.install_mirror()

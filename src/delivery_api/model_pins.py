@@ -118,6 +118,10 @@ def selected_environment(db,environ):
     return environment(selected)
 
 
+class NoApprovedModelPin(ValueError):
+    code='no_approved_model_pin'
+
+
 class DurableGateways:
     """One immutable reviewed pin set per task generation, restored for every job."""
     def __init__(self,store,environ):
@@ -147,6 +151,7 @@ class DurableGateways:
         route. Unavailable providers remain named in route_errors and cannot dispatch.
         """
         rows=PinRepository(self.store._postgres).list();selected=[];errors={}
+        if not rows:raise NoApprovedModelPin('No approved model pin. Approve one in Back office > Model pins.')
         for provider in self.environ.get('REQUI_PIN_PROVIDERS','deepseek').split(','):
             try:
                 if provider in self._launch_errors:raise ValueError(self._launch_errors[provider])
