@@ -106,3 +106,75 @@ def test_enroll_and_expiry_revoke_real_pg_without_credit_topup(isolated_policy_d
         service.revoke(conn)
         assert not conn.execute('SELECT 1 FROM auth.sessions WHERE id=%s',(session,)).fetchone()
         assert conn.execute('SELECT 1 FROM auth.users WHERE id=%s',(owner,)).fetchone()
+
+
+def test_owned_controller_initializes_actual_schema_and_checksum_ledger(tmp_path,monkeypatch):
+    """Fresh owned real PG, not only mocks of migration/role initialization."""
+    import pgserver,psycopg
+    service=service_module();monkeypatch.setenv('REQUI_RESOURCE_NONCE','b'*32)
+    server=pgserver.get_server(str(tmp_path/'pg'),cleanup_mode='delete')
+    try:
+        root=tmp_path/'contract';root.mkdir()
+        import shutil
+        shutil.copyfile(ROOT/'tests/pg_harness.py',root/'pg_contract.py')
+        shutil.copyfile(ROOT/'src/delivery_api/runtime_roles.py',root/'runtime_roles.py')
+        shutil.copytree(ROOT/'supabase/migrations',root/'migrations')
+        # Only connection identity check is replaced: pgserver uses its own
+        # private socket/name. Actual migration SQL and checksums run unchanged.
+        def ownership(conn):
+            assert conn.execute('SELECT nonce FROM local_controller.identity WHERE singleton').fetchone()==('b'*32,)
+        monkeypatch.setattr(service,'verify',ownership)
+        with psycopg.connect(server.get_uri()) as conn:
+            service.migrate(conn,root)
+            count=conn.execute('SELECT count(*) FROM local_controller.migrations').fetchone()[0]
+            assert count>50
+            assert conn.execute('SELECT count(*) FROM auth.users').fetchone()[0]==0
+            service.migrate(conn,root)
+            assert conn.execute('SELECT count(*) FROM local_controller.migrations').fetchone()[0]==count
+            first=sorted((root/'migrations').glob('*.sql'))[0]
+            first.write_text(first.read_text()+'\n-- changed applied source\n')
+            with pytest.raises(ValueError,match='migration changed'):service.migrate(conn,root)
+    finally:server.cleanup()
+
+
+def test_controller_refuses_networked_or_replaced_mounts(monkeypatch):
+    import local_pg_preview as module
+    n='c'*32;r=names(n)
+    base={'State':{'Running':True},'Mounts':[{'Type':'volume','Destination':'/var/lib/postgresql/data','Name':r['data']},{'Type':'volume','Destination':'/owned','Name':r['socket']}], 'HostConfig':{'PortBindings':{},'NetworkMode':'bridge'}}
+    monkeypatch.setattr(module,'inspect_owned',lambda *args:base)
+    with pytest.raises(WorkflowError,match='no network'):module.controller(r,n,{'action':'check'})
+    base['HostConfig']['NetworkMode']='none';base['Mounts'][0]['Name']='supabase-production'
+    with pytest.raises(WorkflowError,match='mount identity'):module.controller(r,n,{'action':'check'})
+
+
+def test_app_start_refuses_external_dsn_before_any_docker_access(tmp_path,monkeypatch):
+    import local_pg_preview as module
+    n='d'*32;r=names(n)
+    monkeypatch.setattr(module,'controller',lambda *args:pytest.fail('must refuse before DB access'))
+    with pytest.raises(WorkflowError,match='owned local socket'):
+        module.start_app(r,n,'sha256:'+'e'*64,source(tmp_path),8002)
+
+
+def test_first_approved_pin_can_install_previously_unready_runtime(monkeypatch):
+    from delivery_api import app as module,cloud_runtime
+    calls=[]
+    monkeypatch.setattr(module,'cloud_execution_admitted',lambda:False)
+    monkeypatch.setattr(cloud_runtime,'install',lambda *args,**kwargs:calls.append((args,kwargs)))
+    monkeypatch.setattr(cloud_runtime,'_failure','previous missing pins')
+    module._activate_reviewed_pins()
+    assert len(calls)==1 and calls[0][1]['watch_vendor'] is True
+    assert cloud_runtime._failure is None
+
+
+def test_debug_zip_is_bounded_owned_and_excludes_settings(tmp_path,monkeypatch):
+    import local_pg_preview as module
+    from types import SimpleNamespace
+    import zipfile
+    n='e'*32;r=names(n)
+    monkeypatch.setattr(module,'inspect_owned',lambda *args:{'Id':'id','Image':'sha256:'+'f'*64,'State':{'Running':True},'Config':{'Env':['secret=do-not-copy']}})
+    monkeypatch.setattr(module.subprocess,'run',lambda *args,**kwargs:SimpleNamespace(stdout='postgresql://user:private@host/db sk-abcdefghijklmno',stderr=''))
+    path=module.diagnostics(r,n,tmp_path)
+    assert not path.stat().st_mode&0o077
+    with zipfile.ZipFile(path) as archive:
+        text='\n'.join(archive.read(name).decode() for name in archive.namelist())
+        assert 'do-not-copy' not in text and 'user:private' not in text and 'sk-abcdefgh' not in text

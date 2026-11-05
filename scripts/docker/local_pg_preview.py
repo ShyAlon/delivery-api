@@ -112,11 +112,15 @@ def ensure_dependency(root,resource,nonce):
     for kind,key in [('volume','data'),('volume','socket')]:
         if inspect_owned(kind,resource[key],nonce) is None:
             command(['docker','volume','create','--label',LABEL+'='+nonce,resource[key]])
+    tag=build_dependency(root,nonce)
+    dependency_image=command(['docker','image','inspect','--format','{{.Id}}',tag])
     existing=inspect_owned('container',resource['db'],nonce)
+    if existing and existing.get('Image')!=dependency_image:
+        if existing.get('State',{}).get('Running') is True:raise WorkflowError('local PG dependency sources changed; explicit stop required before replacing its controller, data volume retained')
+        command(['docker','rm',resource['db']]);existing=None
     if existing:
         if existing.get('State',{}).get('Running') is not True:command(['docker','start',resource['db']])
     else:
-        tag=build_dependency(root,nonce)
         command(['docker','run','--detach','--name',resource['db'],'--label',LABEL+'='+nonce,
             '--network','none','--memory','512m','--pids-limit','128','--env','REQUI_RESOURCE_NONCE='+nonce,
             '--mount','type=volume,source='+resource['data']+',target=/var/lib/postgresql/data',
@@ -171,10 +175,35 @@ def stop(resource,nonce):
     if db:command(['docker','stop','--time','30',resource['db']])
 
 
+def diagnostics(resource,nonce,home):
+    import zipfile,datetime
+    from delivery_api.debug_export import redact
+    from local_image_run import OwnedRun
+    stamp=datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    path=home/('local-preview-debug-'+stamp+'.zip')
+    entries={}
+    for key in ('db','app'):
+        value=inspect_owned('container',resource[key],nonce)
+        if not value:
+            entries[key+'-state.json']=json.dumps({'present':False});continue
+        entries[key+'-state.json']=json.dumps({k:value.get(k) for k in ('Id','Image','State')},default=str)
+        result=subprocess.run(['docker','logs','--tail','200',resource[key]],capture_output=True,text=True,timeout=15)
+        # Same bounded redaction as owned acceptance, then product redaction.
+        entries[key+'-log.txt']=redact(re.sub(r'\bsk-[A-Za-z0-9_-]+','[API key redacted]',OwnedRun.scrub(object(),result.stdout+result.stderr)))
+    entries['manifest.json']=json.dumps({'scope':'owned persistent local preview','omitted':['settings','tokens','database contents','browser history'],'captured_at':stamp})
+    import io
+    output=io.BytesIO()
+    with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
+        for name,body in entries.items():archive.writestr(name,body)
+    atomic_write(path,output.getvalue());log('PASS','Owned local preview diagnostic ZIP: '+str(path))
+    return path
+
+
 def preview(*,root,state,source,home,port=8002,backoffice_port=8021,apply=False,action='start'):
     home=Path(home).expanduser();home.mkdir(parents=True,exist_ok=True,mode=0o700)
     if home.is_symlink() or home.stat().st_mode&0o077:raise WorkflowError('private local PG workflow directory required')
     nonce=identity(home/'identity.json');resource=names(nonce)
+    if action=='debug':return diagnostics(resource,nonce,home)
     if action in ('stop','reset'):
         if not apply:log('INFO',action+' review only; owned persistent local PG data untouched');return
         if not confirm('stop owned local preview'+(' and DELETE its local task/accounting data permanently; this never refunds provider charges' if action=='reset' else '; keep persistent local data')):raise WorkflowError('declined')

@@ -287,7 +287,7 @@ def parser():
     p.add_argument("--repos-root", type=Path, default=Path(__file__).resolve().parents[3])
     p.add_argument("--run-dir", type=Path, help="resume directory, defaults to a source/contract keyed private local directory")
     p.add_argument("--backoffice-port", type=int, default=8020)
-    p.add_argument("--local-pg", choices=("start","stop","reset"), help="owned persistent local PG orchestration; same accepted app image, hosted Auth")
+    p.add_argument("--local-pg", choices=("start","stop","reset","debug"), help="owned persistent local PG orchestration; same accepted app image, hosted Auth")
     p.add_argument("--local-pg-home", type=Path, default=Path.home()/".local/share/requi/local-pg")
     p.add_argument("--preview", action="store_true", help="review accepted local image with existing private settings; --apply starts it")
     p.add_argument("--deploy", metavar="PRIVATE_GHCR_REPOSITORY", help="review an accepted manifest; no SSH unless --apply")

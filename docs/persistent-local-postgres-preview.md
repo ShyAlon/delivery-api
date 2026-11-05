@@ -104,6 +104,6 @@ identity. An ownership/name/mount/network mismatch refuses before SQL or cleanup
 
 On failure keep output and data, do not repeat paid Start or delete evidence.
 Use the task's Account > Debug > Download debug ZIP when the page is available.
-Existing `req debug` targets the older standard preview container, not this
-uniquely named local PG app. Local-dependency diagnostic export remains to be
-completed before this feature is delivered.
+For startup failures run `req image --local-pg debug` for the bounded, redacted
+owned app/dependency ZIP. Existing `req debug` targets the older standard preview
+container, not this uniquely named local PG app.

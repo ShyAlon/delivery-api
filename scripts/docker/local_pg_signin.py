@@ -70,7 +70,7 @@ def browse(base,values,controller):
                     revoke()
                     route.fulfill(status=503,content_type='application/json',body=json.dumps({'detail':'Local session enrollment failed. Inspect this terminal, then sign in again. No task started.'}))
                     raise
-            page.route(base+'/auth/*',auth_request)
+            context.route(base+'/auth/*',auth_request)
             page.goto(base,wait_until='domcontentloaded')
             log('INFO','Sign in normally in this dedicated browser. Keep it and this terminal open. Refresh enrolls the verified renewed session. Closing the browser revokes local enrollment; data persists.')
             while not page.is_closed() and browser.is_connected():
