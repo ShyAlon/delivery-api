@@ -31,12 +31,13 @@ def verified_identity(token,project,subject,*,anon_key,verifier=None,client=None
         if owned:client.close()
 
 
-def browse(base,values,controller):
+def browse(base,values,controller,*,backoffice=None,headless=False,on_open=None):
     from playwright.sync_api import sync_playwright
     project=values['DELIVERY_SUPABASE_URL'];subject=values['REQUI_OPERATOR_SUBJECT']
+    origins=[base]+([backoffice] if backoffice else [])
     current={};last_token=[None];last_check=[0.0]
     with sync_playwright() as pw:
-        browser=pw.chromium.launch(headless=False)
+        browser=pw.chromium.launch(headless=headless)
         try:
             context=browser.new_context()
             page=context.new_page()
@@ -46,10 +47,12 @@ def browse(base,values,controller):
                     last_token[0]=None
             def auth_request(route):
                 path=route.request.url.split('?',1)[0]
+                matched=next((origin for origin in origins if path.startswith(origin+'/auth/')),None)
+                if not matched:raise WorkflowError('unreviewed sign-in origin')
                 response=route.fetch()
                 try:
-                    if path==base+'/auth/logout':revoke()
-                    elif response.status==200 and path in (base+'/auth/signin',base+'/auth/refresh'):
+                    if path==matched+'/auth/logout':revoke()
+                    elif response.status==200 and path in (matched+'/auth/signin',matched+'/auth/refresh'):
                         # Enroll before releasing the real sign-in response so
                         # the next app read cannot race missing local auth rows.
                         from http.cookies import SimpleCookie
@@ -70,8 +73,9 @@ def browse(base,values,controller):
                     revoke()
                     route.fulfill(status=503,content_type='application/json',body=json.dumps({'detail':'Local session enrollment failed. Inspect this terminal, then sign in again. No task started.'}))
                     raise
-            context.route(base+'/auth/*',auth_request)
+            for origin in origins:context.route(origin+'/auth/*',auth_request)
             page.goto(base,wait_until='domcontentloaded')
+            if on_open:on_open(page)
             log('INFO','Sign in normally in this dedicated browser. Keep it and this terminal open. Refresh enrolls the verified renewed session. Closing the browser revokes local enrollment; data persists.')
             while not page.is_closed() and browser.is_connected():
                 page.wait_for_timeout(500)

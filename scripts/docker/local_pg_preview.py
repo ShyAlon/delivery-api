@@ -165,12 +165,16 @@ def start_app(resource,nonce,image,envfile,port):
     raise WorkflowError('local app readiness unconfirmed; owned containers retained, no automatic retry')
 
 
-def stop(resource,nonce):
+def stop_app(resource,nonce):
     # Revoke BEFORE app stop so copied bearer tokens do not outlive the controller.
     controller(resource,nonce,{'action':'revoke_all'})
     app=inspect_owned('container',resource['app'],nonce)
     if app:
         command(['docker','stop','--time','30',resource['app']]);command(['docker','rm',resource['app']])
+
+
+def stop(resource,nonce):
+    stop_app(resource,nonce)
     db=inspect_owned('container',resource['db'],nonce)
     if db:command(['docker','stop','--time','30',resource['db']])
 
@@ -208,6 +212,9 @@ def preview(*,root,state,source,home,port=8002,backoffice_port=8021,apply=False,
         if not apply:log('INFO',action+' review only; owned persistent local PG data untouched');return
         if not confirm('stop owned local preview'+(' and DELETE its local task/accounting data permanently; this never refunds provider charges' if action=='reset' else '; keep persistent local data')):raise WorkflowError('declined')
         if action=='reset':
+            # Stop the only owned app writer before the destructive review;
+            # never allow a paid dispatch to race an earlier zero-cost check.
+            stop_app(resource,nonce)
             review=controller(resource,nonce,{'action':'reset_check'})
             if not review['reset_allowed']:raise WorkflowError('Local paid-attempt evidence exists; destructive reset refused. Preserve accounting and review an archive, never clear costs to obtain headroom.')
         stop(resource,nonce)
@@ -232,7 +239,7 @@ def preview(*,root,state,source,home,port=8002,backoffice_port=8021,apply=False,
     try:
         backoffice.start()
         log('PASS','local app http://127.0.0.1:'+str(port)+'; private Back office http://127.0.0.1:'+str(backoffice_port))
-        browse('http://127.0.0.1:'+str(port),values,lambda payload:controller(resource,nonce,payload))
+        browse('http://127.0.0.1:'+str(port),values,lambda payload:controller(resource,nonce,payload),backoffice='http://127.0.0.1:'+str(backoffice_port))
     finally:
         backoffice.close()
         try:controller(resource,nonce,{'action':'revoke_all'})

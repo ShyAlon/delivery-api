@@ -157,7 +157,8 @@ def main():
         if request['action']=='check':result={'ready':True,'nonce':nonce(),'tcp':False}
         elif request['action']=='reset_check':
             paid=conn.execute("SELECT count(*) FROM provider_attempts WHERE quote->>'provider'='deepseek' AND state NOT IN ('cancelled','released')").fetchone()[0]
-            result={'reset_allowed':paid==0,'paid_evidence_rows':paid}
+            live=conn.execute("SELECT count(*) FROM worker_jobs WHERE state IN ('pending','running')").fetchone()[0]
+            result={'reset_allowed':paid==0 and live==0,'paid_evidence_rows':paid,'active_job_rows':live}
         elif request['action']=='enroll':result=enroll(conn,request['identity'],request['config'])
         elif request['action']=='revoke_all':
             conn.execute('DELETE FROM auth.sessions WHERE id IN (SELECT session_id FROM local_controller.sessions)');conn.execute('DELETE FROM local_controller.sessions');conn.commit();result={'revoked_all':True}

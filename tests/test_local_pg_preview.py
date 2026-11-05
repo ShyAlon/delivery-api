@@ -178,3 +178,35 @@ def test_debug_zip_is_bounded_owned_and_excludes_settings(tmp_path,monkeypatch):
     with zipfile.ZipFile(path) as archive:
         text='\n'.join(archive.read(name).decode() for name in archive.namelist())
         assert 'do-not-copy' not in text and 'user:private' not in text and 'sk-abcdefgh' not in text
+
+
+def test_browser_enrolls_before_first_app_read_and_revokes_on_close(monkeypatch):
+    """Actual browser/cookie/response interception. External Auth is fictional."""
+    import threading
+    from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
+    import local_pg_signin as module
+    owner=str(uuid.uuid4());sid=str(uuid.uuid4());events=[];reads=[]
+    identity={'sub':owner,'session_id':sid,'email':'fictional@example.test','exp':time.time()+60,'iat':time.time()}
+    monkeypatch.setattr(module,'verified_identity',lambda *args,**kwargs:identity)
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path=='/api/auth':
+                reads.append('enroll' in events)
+                body=json.dumps({'authenticated':'enroll' in events}).encode()
+            else:body=b'<html><body>Fictional local sign-in fixture</body></html>'
+            self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get('Content-Length','0')))
+            self.send_response(200);self.send_header('Set-Cookie','requi_access=fictional-token; HttpOnly; Path=/; SameSite=Lax')
+            body=b'{"status":"signed_in"}';self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+        def log_message(self,*args):pass
+    server=ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    def controller(payload):events.append(payload['action']);return {'enrolled':True}
+    def interact(page):
+        result=page.evaluate("async()=>{await fetch('/auth/signin',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'fictional@example.test',password:'test-only'})});return (await fetch('/api/auth')).json()}")
+        assert result['authenticated'] is True
+        page.close()
+    try:
+        module.browse('http://127.0.0.1:'+str(server.server_port),{'DELIVERY_SUPABASE_URL':'https://fictional.supabase.co','DELIVERY_SUPABASE_ANON_KEY':'public','REQUI_OPERATOR_SUBJECT':owner,'REQUI_OPERATOR_REGISTRY_VERSION':'owned-local-v1','REQUI_OPERATOR_CAPABILITIES':'[]'},controller,headless=True,on_open=interact)
+        assert reads==[True] and events==['enroll','revoke_all']
+    finally:server.shutdown();server.server_close();thread.join(5)
