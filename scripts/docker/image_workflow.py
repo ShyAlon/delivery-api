@@ -288,7 +288,10 @@ def parser():
     p.add_argument("--run-dir", type=Path, help="resume directory, defaults to a source/contract keyed private local directory")
     p.add_argument("--backoffice-port", type=int, default=8020)
     p.add_argument("--local-pg-check",action="store_true",help="isolated Docker-host PG lifecycle gate, fictional identity only")
-    p.add_argument("--local-pg", choices=("start","stop","reset","debug"), help="owned persistent local PG orchestration; same accepted app image, hosted Auth")
+    p.add_argument("--local-pg", choices=("start","stop","reset","debug","check-ollama"), help="owned persistent local PG orchestration; same accepted app image, hosted Auth")
+    p.add_argument('--pin-providers',help='explicit comma-separated reviewed provider selection value')
+    p.add_argument('--ollama-model',help='explicit installed Ollama model ID value, no automatic substitution')
+    p.add_argument('--ollama-base-url',help='explicit Docker-reachable Ollama API base URL value')
     p.add_argument("--local-pg-home", type=Path, default=Path.home()/".local/share/requi/local-pg")
     p.add_argument("--preview", action="store_true", help="review accepted local image with existing private settings; --apply starts it")
     p.add_argument("--deploy", metavar="PRIVATE_GHCR_REPOSITORY", help="review an accepted manifest; no SSH unless --apply")
@@ -313,6 +316,10 @@ def main(argv=None) -> int:
         if args.apply and not (args.deploy or args.preview or args.local_pg):raise WorkflowError('--apply requires --deploy or --preview; no action inferred')
         if sum(bool(v) for v in (args.review,args.build,args.accept_local,args.publish,args.deploy,args.preview,args.local_pg,args.local_pg_check))!=1:
             raise WorkflowError('choose exactly one review/build/accept-local/publish/deploy stage goal')
+        if args.local_pg=='check-ollama':
+            from ollama_readiness import diagnose
+            print(json.dumps(diagnose(args.env_file or str(Path.home()/'.config/requi/preview.env'),args.local_pg_home,base=args.ollama_base_url,model=args.ollama_model),indent=2))
+            return 0
         log("INFO", "stage 1/6 preflight: local tools and four clean source revisions")
         inputs = preflight(args.repos_root.resolve())
         run_dir=args.run_dir or Path.home()/".local/share/requi/image-workflow"/digest(json.dumps(inputs,sort_keys=True).encode()).split(":")[1][:24]
@@ -329,7 +336,7 @@ def main(argv=None) -> int:
             local_pg_preview(root=args.repos_root.resolve()/'delivery-api',state=state,
                 source=args.env_file or str(Path.home()/'.config/requi/preview.env'),
                 home=args.local_pg_home,port=args.port or 8002,backoffice_port=args.backoffice_port,
-                apply=args.apply,action=args.local_pg)
+                apply=args.apply,action=args.local_pg,provider_values={'REQUI_PIN_PROVIDERS':args.pin_providers,'DELIVERY_OLLAMA_MODEL':args.ollama_model,'OLLAMA_BASE_URL':args.ollama_base_url})
             return 0
         args.name=args.name or ('requi-preview-exec' if args.preview else 'requi-delivery')
         args.port=args.port or (8001 if args.preview else 8000)

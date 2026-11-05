@@ -179,3 +179,31 @@ def test_operator_expense_policy_audit_race_and_customer_endpoint_removed(store,
         assert not any(getattr(r,'path','').endswith('/preview-spend-approval') for r in service.app.routes)
     finally:
         with psycopg.connect(DSN) as c:c.execute('DELETE FROM operator_expense_policy_head');c.execute('DELETE FROM operator_expense_policy_revisions')
+
+
+def test_local_pin_proposal_requires_id_and_reviewed_bounds_without_vendor_fetch(monkeypatch,store,repo):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from delivery_api.model_pin_api import install
+    from delivery_api import auth,ollama_readiness
+    from types import SimpleNamespace
+    app=FastAPI();reader=SimpleNamespace(db=store._postgres,principal=repo.principal)
+    install(app,store,lambda:reader)
+    app.dependency_overrides[auth.require_actor]=lambda:SimpleNamespace(id=A.owner_id)
+    monkeypatch.setattr(pins,'new_deepseek',lambda *a:(_ for _ in ()).throw(AssertionError('no vendor fetch')))
+    monkeypatch.setattr(ollama_readiness,'probe',lambda *a:{'reachable':True,'installed_models':[{'id':'small:latest'}],'memory_fit':'unverified'})
+    c=TestClient(app);headers={'origin':'http://testserver'}
+    with tenant_context(A):
+        missing=c.post('/api/operator/model-pins/new-local',headers=headers,json={'model':''})
+        assert missing.status_code==409 and 'model ID is missing' in missing.text
+        bounds=c.post('/api/operator/model-pins/new-local',headers=headers,json={'model':'small:latest'})
+        assert bounds.status_code==409 and 'source and version are missing' in bounds.text
+        invalid=c.post('/api/operator/model-pins/new-local',headers=headers,json={'model':'small:latest','bound_source':'fixture','bound_version':'v1','context':100,'maximum_output':100})
+        assert invalid.status_code==409 and 'smaller than context' in invalid.text
+        proposal=c.post('/api/operator/model-pins/new-local',headers=headers,json={'model':'small:latest','bound_source':'Fixture local server configuration','bound_version':'fixture-v1','context':4096,'maximum_output':512})
+        assert proposal.status_code==200,proposal.text
+        value=proposal.json()['review']['payload']
+        assert value['row']['expense_input']==value['row']['expense_output']==0
+        assert value['context']['source']=='Fixture local server configuration' and value['context']['bound_version']=='fixture-v1'
+        assert c.get('/api/operator/ollama-models').json()['installed_models']==[{'id':'small:latest'}]
+    with tenant_context(B):assert c.get('/api/operator/ollama-models').status_code==403
