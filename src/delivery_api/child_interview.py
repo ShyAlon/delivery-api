@@ -90,10 +90,16 @@ class ChildInterviewClient(EngineClient):
         with self._registry() as registry:return registry.get(sid,serve=False).snapshot()
     def progress(self,sid,after=0):
         with self._registry() as registry:return registry.progress(sid,after)
-    def stop(self,sid):
-        with self._registry() as registry:return registry.stop(sid)
-    def reconcile_stop(self,sid):
-        with self._registry() as registry:return registry.reconcile_stopped(sid)
+    def _stopped_snapshot(self,sid,*,reconcile=False):
+        # Fresh parent registries never own the vanished child's writer claim.
+        # Only durable parent reaping + closed jobs/providers can replace it.
+        with self._registry() as registry:
+            snapshot=registry.stop(sid) if not reconcile else registry.snapshot(sid)
+        if self.store.confirm_child_session_quiescent(sid):
+            with self._registry() as registry:return registry.snapshot(sid)
+        return snapshot
+    def stop(self,sid):return self._stopped_snapshot(sid)
+    def reconcile_stop(self,sid):return self._stopped_snapshot(sid,reconcile=True)
     def switch_route(self,sid,request):
         from .child_operation_refs import ChildOperationRefs
         from requi_child_contract import decode_operation
@@ -163,7 +169,16 @@ class ChildInterviewClient(EngineClient):
         task_id=binding['task_id'];refs=ChildOperationRefs(self.store,task_id)
         if request is not None:
             provider=request.model_route
-            model=request.initial_model or (self.paid_runtime.models.get(provider) if self.paid_runtime is not None else 'qwen2.5-coder:14b')
+            # Preview and dispatch must use the same reviewed task pin. The
+            # local-only runtime has no PaidChildRuntime; that is not permission
+            # to substitute an old model default after preflight succeeded.
+            if hasattr(self.gateway_factory,'for_task'):
+                reviewed=self.gateway_factory.for_task(task_id).models.get(provider)
+                if not reviewed or (request.initial_model is not None and request.initial_model!=reviewed):
+                    raise PermissionError('child Start differs from reviewed task model')
+                model=reviewed
+            else:
+                model=request.initial_model or (self.paid_runtime.models.get(provider) if self.paid_runtime is not None else 'qwen2.5-coder:14b')
             if self.paid_runtime is not None:self.paid_runtime.require(provider,model)
             request=request.model_copy(update={'initial_model':model})
             ref=refs.put('start',request.model_dump(mode='json'))
@@ -278,19 +293,31 @@ class ChildInterviewClient(EngineClient):
                     task=self.store.task(task_id);session=self.store.session_binding(sid)
                     if task and task.get('stop_requested_at') is None and session and session['generation']==op.binding.generation:
                         raise PermissionError('stop signal has no durable stop/revocation evidence')
+                child_error=None
                 with httpx.Client(trust_env=False,follow_redirects=False,timeout=None) as client:
                     broker=ChildProviderBroker(operation,gateway=gateway,journal=journal,client=client,
                         endpoint=endpoint,headers=headers,authorize=authority)
                     with provider_broker_channel(broker) as provider_fd,child_compute_channel(compute) as compute_fd:
                         timings['setup']=int((time.monotonic()-setup_at)*1000);supervisor_at=time.monotonic()
-                        await self.supervisor.run(operation,authorize=lambda op:capability.validate(self.store),private_config=cfg,
-                            descriptors={'broker':provider_fd.fileno(),'compute':compute_fd.fileno()},stop=stop,persist_stop=fence_stop)
+                        try:
+                            await self.supervisor.run(operation,authorize=lambda op:capability.validate(self.store),private_config=cfg,
+                                descriptors={'broker':provider_fd.fileno(),'compute':compute_fd.fileno()},stop=stop,persist_stop=fence_stop)
+                        except Exception as error:child_error=error
                 timings['supervisor']=int((time.monotonic()-supervisor_at)*1000);completion_at=time.monotonic()
                 watcher.cancel()
                 try:await watcher
                 except asyncio.CancelledError:pass
+                task_after=self.store.task(task_id)
+                stopped_by_owner=bool(task_after and task_after.get('stop_requested_at') is not None)
+                if stopped_by_owner:
+                    if self.supervisor.last_result is None or not self.supervisor.last_result.reaped:
+                        raise RuntimeError('stopped child reaping unverified')
+                    self.store.retain_decision_review(task_id,'child-job:'+job_id,'child-completion-v1',
+                        {'operation_id':operation.operation_id,'compute_ms':str(compute.value) if compute.settled else None,'compute_settled':compute.settled,'reaped':True,'stopped':True})
+                    quiescent=True
+                    raise RuntimeError('child stopped after reap and channel quiescence') from child_error
                 if not compute.settled:raise RuntimeError('child exact compute evidence incomplete')
-                if stop.is_set():raise RuntimeError('child stopped; durable state needs reconciliation')
+                if child_error is not None:raise child_error
                 timings['completion']=int((time.monotonic()-completion_at)*1000);timings['run']=int((time.monotonic()-run_at)*1000)
                 self.store.retain_decision_review(task_id,'child-job:'+job_id,'child-completion-v1',
                     {'operation_id':operation.operation_id,'compute_ms':str(compute.value),'reaped':True,'timings':timings,'provider_timings':broker.timings})
@@ -303,7 +330,10 @@ class ChildInterviewClient(EngineClient):
             timings['slot_wait']=int((time.monotonic()-slot_at)*1000)
             try:asyncio.run(run())
             except BaseException:
-                self.store.pause_interrupted_worker(job_id)
+                try:self.store.pause_interrupted_worker(job_id)
+                except Exception:
+                    from .diagnostic_evidence import failure
+                    failure('child.pause.failed')
                 raise
 
 

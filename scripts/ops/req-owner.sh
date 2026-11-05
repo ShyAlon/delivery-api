@@ -7,6 +7,7 @@ fail(){ printf 'REQ ABORTED: %s No owner step was run.\n' "$*" >&2; exit 1; }
 command=${1:-}; shift
 # Acceptance has its own exact argparse contract; pass every argument unchanged
 # to the one repo entry rather than teaching this generic parser paid flags.
+if [ "$command" = image ]; then exec bash scripts/ops/image.sh "$@"; fi
 if [ "$command" = acceptance ]; then exec bash scripts/ops/acceptance.sh "$@"; fi
 apply=0; email=''; checks=full; acceptance_args=(); test_owner=0
 while [ "$#" -gt 0 ]; do
@@ -75,11 +76,10 @@ case "$command" in
    [ "$apply" = 0 ] || args+=(--apply)
    exec .venv/bin/python "$target" "${args[@]}";;
  preview|preview-free)
-   [ "$command" != preview-free ] || echo 'preview-free is now an alias of req preview; both routes are visible, paid dispatch still needs explicit approval.'
-   if [ "$apply" = 0 ]; then
-     echo 'DRY REVIEW ONLY: one preview, both reviewed routes, no spend approval. Use req preview --apply [--fast|--full-checks].'
-     exit 0
-   fi
-   export PREVIEW_EXEC_PROVIDER=both PREVIEW_EXEC_OLLAMA_MODEL=phi4 PREVIEW_CHECKS="$checks"
-   exec bash "$target";;
+   [ "$command" != preview-free ] || echo 'preview-free is an alias of the same accepted-image runtime, not an execution-off mode.'
+   args=()
+   [ "$checks" = full ] || fail "--fast retired; exact-image acceptance is never skipped."
+   if [ "$apply" = 0 ]; then echo 'DRY REVIEW ONLY: req image --accept-local prepares the exact image; req preview --apply starts the accepted image. Nothing launched.';exit 0;fi
+   args+=(--apply)
+   exec bash "$target" "${args[@]}";;
 esac

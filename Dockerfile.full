@@ -9,10 +9,10 @@ COPY delivery-api/ delivery-api/
 COPY interview-engine/ interview-engine/
 COPY spec-generator/ spec-generator/
 COPY verification-loop/ verification-loop/
-RUN echo "bc8cb30c63719e106451d514532b28a30d8e69fbcce8a771121eab2369f0391e  delivery-api/vendor/vmodel_contracts-0.28.0-py3-none-any.whl" | sha256sum --check - \
+RUN --mount=type=cache,target=/root/.cache/pip echo "bc8cb30c63719e106451d514532b28a30d8e69fbcce8a771121eab2369f0391e  delivery-api/vendor/vmodel_contracts-0.28.0-py3-none-any.whl" | sha256sum --check - \
     && echo "ab670b145804e5571cf98e784a49115ae86993ae3e56a91b4e967f5f9b75efb9  delivery-api/vendor/requi_child_contract-0.3.0-py3-none-any.whl" | sha256sum --check - \
     && cmp delivery-api/vendor/requi_child_contract-0.3.0-py3-none-any.whl interview-engine/vendor/requi_child_contract-0.3.0-py3-none-any.whl \
-    && pip wheel --no-cache-dir --no-deps --wheel-dir /wheels ./delivery-api ./interview-engine ./spec-generator ./verification-loop \
+    && pip wheel --no-deps --wheel-dir /wheels ./delivery-api ./interview-engine ./spec-generator ./verification-loop \
     && cp delivery-api/vendor/vmodel_contracts-0.28.0-py3-none-any.whl delivery-api/vendor/requi_child_contract-0.3.0-py3-none-any.whl /wheels/ \
     && python delivery-api/scripts/docker/wheel_deps.py /wheels > /wheels/requirements.txt
 
@@ -22,12 +22,14 @@ ENV PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 \
     INTERVIEW_ENGINE_PYTHON=/usr/local/bin/python INTERVIEW_ENGINE_TENANTS=1 \
     VMODEL_ARTIFACTS_DIR=/data/artifacts XDG_DATA_HOME=/data HOME=/data
 WORKDIR /app
-COPY --from=build /wheels/ /wheels/
+COPY --from=build /wheels/requirements.txt /wheels/requirements.txt
 # Packages are installed without dependency resolution, as scripts/build-dist.sh does: verification-loop pins an old
 # vmodel-contracts commit by git URL (no git, private repo). vmodel-contracts comes from the vendored wheel instead.
-RUN pip install --no-cache-dir -r /wheels/requirements.txt 'psycopg[binary]>=3.2,<4' fastapi uvicorn pydantic httpx python-multipart \
-      langgraph langchain-core langchain-openai langchain-ollama python-dotenv 'typesafe-sdk==0.7.0' 'pyarrow>=17,<24' \
-    && pip install --no-cache-dir --no-deps /wheels/*.whl \
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /wheels/requirements.txt 'psycopg[binary]>=3.2,<4' fastapi uvicorn pydantic httpx python-multipart \
+      langgraph langchain-core langchain-openai langchain-ollama python-dotenv 'typesafe-sdk==0.7.0' 'pyarrow>=17,<24'
+
+COPY --from=build /wheels/ /wheels/
+RUN pip install --no-deps /wheels/*.whl \
     && ! { pip check || true; } | grep -v 'No broken requirements' | grep -v '^verification-loop ' | grep -q . \
     && python -c 'import delivery_api, interview_engine, spec_generator, verification_loop, langchain_core' \
     && rm -rf /wheels && useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin requi \

@@ -13,8 +13,13 @@ def provider_broker_channel(broker):
     refusal=[]
     def dispatch(value):
         try:return json.dumps(broker.dispatch(value),separators=(',',':')).encode()
-        except ProviderRefused as error:
-            refusal.append(error)
+        except BaseException as error:
+            # A child sees only channel EOF. Preserve safe parent-side cause
+            # classes/frames in the container log, never values or SDK payloads.
+            import sys
+            from .child_failure import project
+            print('parent broker failure '+json.dumps(project(error),separators=(',',':')),file=sys.stderr,flush=True)
+            if isinstance(error,ProviderRefused):refusal.append(error)
             raise
     try:
         with json_channel(dispatch,limit=2*1024*1024,name='broker',

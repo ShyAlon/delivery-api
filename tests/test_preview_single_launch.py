@@ -23,10 +23,7 @@ def test_legacy_initial_model_must_match_reviewed_gateway(monkeypatch):
 def test_single_entry_flags_and_identity_before_optional_skips():
     owner=(ROOT/'scripts/ops/req-owner.sh').read_text()
     assert 'preview|preview-free)' in owner
-    assert '--fast)' in owner and '--full-checks)' in owner
-    assert 'export PREVIEW_EXEC_PROVIDER=ollama' not in owner
-    script=(ROOT/'scripts/ops/preview-exec.sh').read_text()
-    assert '"$IDENTITIES" = "REQUI_BUILD_REPOS=$REPOS"' in script
-    for label in ('source smoke skipped','SKIPPED image smoke','SKIPPED browser smoke'):assert label in script
-    assert script.index('schema-readiness.py --offer-apply')<script.index('FAST_CURRENT=0')
-    assert 'optional Back office unavailable; preview remains usable' in script
+    assert '--fast retired; exact-image acceptance is never skipped.' in owner
+    preview=(ROOT/'scripts/docker/local_image_preview.py').read_text()
+    assert preview.index("inspect_image(image_id)['Id']")<preview.index("command(['docker',*args])")
+    assert 'SKIPPED' not in preview

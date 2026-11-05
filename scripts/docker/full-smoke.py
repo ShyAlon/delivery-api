@@ -67,31 +67,28 @@ def main():
             result['js_assets_parse']=len(assets)
         else:
             print('smoke note: node is not in the image - JS SYNTAX not verified here (preview-exec step 2 and the pytest gate cover it where node exists)',flush=True)
-        stage='checking the engine refuses a call without its token'
-        print('smoke stage: %s' % stage,flush=True)
-        try:get('http://127.0.0.1:8010/v1/model-routes/default');raise AssertionError('engine answered without its token')
-        except urllib.error.HTTPError as e:assert e.code in (401,403),e.code
-        result['engine_requires_token']=True
         stage='running the container healthcheck command'
         print('smoke stage: %s' % stage,flush=True)
         r=subprocess.run([sys.executable,os.path.join(here,'full_entry.py'),'--healthcheck'],env={**env},capture_output=True,text=True)
         assert r.returncode==0,r.stderr
         result['healthcheck_command']=True
-        # killing the engine must take the container down (restart policy then sees it)
-        stage='killing the engine and requiring the entry to stop'
+        # The shared runtime has no permanent engine service. Delivery owns
+        # per-job children; a dead delivery parent must fail the container.
+        stage='terminating delivery and requiring the entry to fail'
         print('smoke stage: %s' % stage,flush=True)
         killed=0
         for pid in os.listdir('/proc'):
             if pid.isdigit() and int(pid)!=os.getpid():
-                try:cmd=open('/proc/%s/cmdline'%pid,'rb').read().replace(b'\0',b' ')
+                try:args=open('/proc/%s/cmdline'%pid,'rb').read().split(b'\0')
                 except OSError:continue
-                if b'interview_engine.http_service' in cmd:os.kill(int(pid),9);killed+=1
-        assert killed,'engine process not found'
+                if len(args)>=3 and args[1:3]==[b'-m',b'delivery_api']:
+                    os.kill(int(pid),15);killed+=1
+        assert killed==1,'exact delivery parent not found or ambiguous'
         for _ in range(60):
             if proc.poll() is not None:break
             time.sleep(0.5)
-        assert proc.poll() is not None and proc.returncode!=0,'entry did not stop after the engine died'
-        result['engine_death_stops_container']=True
+        assert proc.poll() is not None and proc.returncode!=0,'entry did not fail after delivery exited'
+        result['delivery_death_stops_container']=True
         result['provider_calls']=0
         print(json.dumps(result));return 0
     except BaseException as error:

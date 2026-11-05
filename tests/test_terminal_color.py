@@ -40,27 +40,19 @@ def test_req_pipe_and_saved_help_are_plain():
 
 
 def test_real_launcher_prompt_is_visible_before_answer():
-    import select,time
-    script=(LOG.parent/'preview-exec.sh').read_text()
-    # Exercise exactly the production prompt and input statements. No launcher
-    # network/DB/build is needed to prove the waiting-input boundary.
-    begin=script.index("prompt 'Waiting for input:")
-    end=script.index('step_ok',begin)
-    body=script[begin:end]
+    import select,time,sys
+    module_dir=LOG.parents[1]/'docker'
+    body="import sys;sys.path.insert(0,sys.argv[1]);from image_workflow import confirm;raise SystemExit(0 if confirm('run the local image stage') else 9)"
     master,slave=pty.openpty()
-    child=subprocess.Popen(['bash','-c','source "$1"; prompt_open(){ return 0; }; abort(){ exit 9; }; exec 9<&0; '+body+'echo ACCEPTED','bash',str(LOG)],stdin=slave,stdout=slave,stderr=slave,start_new_session=True,env={k:v for k,v in os.environ.items() if k!='NO_COLOR'})
+    child=subprocess.Popen([sys.executable,'-c',body,str(module_dir)],stdin=slave,stdout=slave,stderr=slave,start_new_session=True,env={k:v for k,v in os.environ.items() if k!='NO_COLOR'})
     os.close(slave);out=b''
     try:
         deadline=time.monotonic()+3
         while b'anything else changes nothing:' not in out and time.monotonic()<deadline:
-            if select.select([master],[],[],0.1)[0]:out+=os.read(master,4096)
-        assert b'\033[36mWaiting for input:' in out,out
+            if select.select([master],[],[],.1)[0]:out+=os.read(master,4096)
+        assert b'\x1b[36m[INFO]' in out and b'Type "yes"' in out,out
         assert child.poll() is None
         os.write(master,b'yes\n')
-        while child.poll() is None:
-            if select.select([master],[],[],0.1)[0]:
-                try:out+=os.read(master,4096)
-                except OSError:break
         assert child.wait(timeout=3)==0
     finally:
         if child.poll() is None:child.kill();child.wait()

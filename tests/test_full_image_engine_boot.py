@@ -1,11 +1,8 @@
-"""The full image's real entry point boots the engine to a token challenge.
+"""The real full entry boots one delivery parent with owned PG.
 
-Regresses the 2026-10-24 deploy smoke failure: after interview-engine PR #49 the
-engine refuses every request (HTTP 500) until session persistence is chosen, and
-the full image never chose one. These checks run the actual full_entry.py as a
-subprocess: the fail-fast check is hermetic; the boot check needs the engine
-source (DELIVERY_TEST_ENGINE_SOURCE) and is marked engine_integration like the
-other cross-repo boots.
+Job-scoped phase children replace the retired permanent engine HTTP daemon.
+Startup persistence refusal and the signed data boundary remain executable
+contracts. Explicit source is required for the installed cross-repo boot.
 """
 import json,os,subprocess,sys,time,urllib.error,urllib.request
 from pathlib import Path
@@ -32,8 +29,8 @@ def test_entry_refuses_start_without_a_session_persistence_choice(tmp_path):
 
 
 @pytest.mark.engine_integration
-def test_entry_boots_engine_to_token_challenge_with_owned_pg(tmp_path,pg_runtime_environment):
-    """The real PG entry boots both services and preserves the token boundary."""
+def test_entry_boots_delivery_parent_with_owned_pg(tmp_path,pg_runtime_environment):
+    """Real entry boots delivery; anonymous health never grants signed access."""
     engine_source=os.environ.get('DELIVERY_TEST_ENGINE_SOURCE')
     if not engine_source:pytest.skip('explicit engine source required')
     import socket
@@ -54,11 +51,23 @@ def test_entry_boots_engine_to_token_challenge_with_owned_pg(tmp_path,pg_runtime
             except OSError:time.sleep(0.5)
         else:raise AssertionError('delivery health timeout')
         assert health.get('ok') is True and health.get('runtime_profile')!='control_plane_only',health
+        # Child phases are job-scoped, not an always-on HTTP daemon. Signed
+        # reads remain protected at the actual service boundary.
         try:
-            urllib.request.urlopen('http://127.0.0.1:8010/v1/model-routes/default',timeout=3)
-            raise AssertionError('engine answered without its token')
+            urllib.request.urlopen(f'http://127.0.0.1:{delivery_port}/api/tasks',timeout=3)
+            raise AssertionError('signed task data answered anonymously')
         except urllib.error.HTTPError as e:
             assert e.code in (401,403),e.code
+        children=[]
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdigit():continue
+            try:
+                status=(entry/'status').read_text()
+                if f'PPid:\t{proc.pid}\n' in status:
+                    children.append((entry/'cmdline').read_bytes().split(b'\0'))
+            except OSError:continue
+        assert len(children)==1,children
+        assert children[0][1:3]==[b'-m',b'delivery_api'],children
     finally:
         proc.terminate()
         try:proc.wait(timeout=20)

@@ -183,3 +183,24 @@ def test_child_shape_envelope_excludes_exception_values_and_source(capsys):
     assert parse(text.encode())['error_class']=='ValueError'
     for bad in (b'arbitrary stderr',b'REQUI_CHILD_FAILURE []',b'REQUI_CHILD_FAILURE {"error_class":"X","frames":[],"secret":"x"}'):
         assert parse(bad) is None
+
+
+def test_descriptor_failure_surfaces_shape_and_observed_exit_without_private_values(tmp_path,capsys):
+    script=tmp_path/'crash.py'
+    script.write_text("import os,socket,json,sys\ns=socket.socket(fileno=int(os.environ['REQUI_CHILD_FD']))\ns.makefile('rb').readline()\nsys.stderr.write('REQUI_CHILD_FAILURE '+json.dumps({'error_class':'PermissionError','frames':[{'file':'worker.py','function':'open_cache','line':42}]})+'\\n')\nsys.stderr.flush()\nraise SystemExit(23)\n")
+    s=ChildSupervisor([sys.executable,str(script)])
+    with pytest.raises(ChildRunError,match='exit=23.*PermissionError.*open_cache'):
+        run(s.run(decode_operation(frame(operation())),authorize=lambda op:None))
+    assert 'stderr_frames=' in capsys.readouterr().err
+
+
+def test_safe_envelope_keeps_cause_classes_not_values(capsys):
+    from delivery_api.child_failure import emit,parse
+    try:
+        try:raise ConnectionError('password=private prompt text')
+        except ConnectionError as inner:raise RuntimeError('private SDK input') from inner
+    except RuntimeError as error:emit(error)
+    text=capsys.readouterr().err
+    assert parse(text.encode())['cause_classes']==['ConnectionError']
+    assert 'private' not in text and 'password' not in text
+    assert parse(b'REQUI_CHILD_FAILURE {"error_class":"X","frames":[],"cause_classes":["private secret"]}') is None

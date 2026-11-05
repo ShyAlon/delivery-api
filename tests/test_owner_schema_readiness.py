@@ -8,7 +8,7 @@ m=importlib.util.module_from_spec(SPEC)
 def load():SPEC.loader.exec_module(m);return m
 
 def test_all_rollout_files_have_catalog_probes():
-    s=load();assert len(s.MIGRATIONS)==23
+    s=load();assert len(s.MIGRATIONS)==24
     assert list(s.MIGRATIONS)==sorted(s.MIGRATIONS)
     assert '20261030030000_resource_metrics_maintenance.sql' in s.MIGRATIONS
 
@@ -24,9 +24,15 @@ def test_checked_in_retention_migration_is_blocked():
     assert s.destructive(path.read_text())==['DELETE']
 
 def test_preview_checks_live_schema_before_grounding_and_build():
-    src=(ROOT/'scripts/ops/preview-exec.sh').read_text()
-    assert src.index('schema-readiness.py')<src.index('step "settings + grounding"')
-    assert src.index('schema-readiness.py')<src.index('step "build ')
+    # Image acceptance now migrates only owned disposable PG; production startup
+    # still runs its read-only schema preflight before spawning delivery.
+    fixture=(ROOT/'scripts/docker/local_service_fixture.py').read_text()
+    assert 'pg_harness.start(server_factory=Server)' in fixture
+    entry=(ROOT/'scripts/docker/full_entry.py').read_text()
+    assert entry.index('report=preflight.run')<entry.index('delivery=subprocess.Popen')
+    preview=(ROOT/'scripts/docker/local_image_preview.py').read_text()
+    assert 'apply-pg-cutover' not in preview and 'schema-readiness.py --offer-apply' not in preview
+
 
 def owner():
     spec=importlib.util.spec_from_file_location('owner_schema',ROOT/'scripts/owner/apply-pg-cutover.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
@@ -90,7 +96,7 @@ def test_apply_seven_real_migrations_to_owned_disposable_db():
             for path in sorted((ROOT/'supabase/migrations').glob('*.sql')):
                 if path.name<'20261029203000_resource_metrics.sql' and path.name[:14].isdigit():conn.execute(path.read_text())
             rows=s.plan(conn,r,ROOT)
-            assert len([x for x in rows if x['status']=='pending'])==23
+            assert len([x for x in rows if x['status']=='pending'])==24
             # New file has DELETE only inside private projection functions, but
             # does not inherit the owner's exact old retention-file grant.
             with pytest.raises(ValueError,match='destructive'):s.apply(conn,rows,r,ROOT,'delivery_app',lambda _:'APPLY 16 MIGRATIONS TO delivery_app')

@@ -63,7 +63,7 @@ class ChildSupervisor:
         if raw is not None:config_parent,config_child=socket.socketpair()
         self.active=True;self.last_result=None
         process=None;writer=None;stop_task=None;receive_task=None;stderr_task=None
-        sequence=0;state=None;child_error=None;failed=False
+        sequence=0;state=None;child_error=None;failed=False;failure_error=None
         try:
             # Deliberate allowlist: never inherit provider keys, DB URLs, auth
             # headers, cloud credentials, PYTHONPATH, proxy or shell controls.
@@ -137,8 +137,8 @@ class ChildSupervisor:
                 try:await asyncio.wait_for(asyncio.shield(receive_task),self.grace)
                 except asyncio.TimeoutError:raise ChildRunError('child did not stop cooperatively')
             else:await receive_task
-        except Exception:
-            failed=True
+        except Exception as error:
+            failed=True;failure_error=error
             from .diagnostic_evidence import bound,failure
             with bound(task_id=operation.binding.task_id,session_id=operation.binding.session_id,job_id=operation.binding.job_id):
                 failure('child.lifecycle.failed')
@@ -177,5 +177,18 @@ class ChildSupervisor:
                         if child_error:
                             record('child.failure.class',error_class=child_error['error_class'])
                             for frame in child_error['frames']:record('child.failure.frame',**frame)
+                if failed and self.last_result is not None:
+                    # Shape-only stderr evidence: arbitrary stderr may contain
+                    # prompts, database parameters or credentials. Never echo it.
+                    code=self.last_result.returncode
+                    detail='child exit='+str(code)+' signal='+str(-code if code<0 else None)+' last_state='+str(state)+' sequence='+str(sequence)+' termination_scope=observed_after_cleanup'
+                    if child_error:
+                        detail+=' error_class='+child_error['error_class']+' stderr_frames='+json.dumps(child_error['frames'],separators=(',',':'))
+                        if child_error.get('cause_classes'):detail+=' cause_classes='+json.dumps(child_error['cause_classes'],separators=(',',':'))
+                    else:detail+=' stderr_shape=unavailable (raw stderr withheld)'
+                    import sys
+                    print(detail,file=sys.stderr,flush=True)
+                    if isinstance(failure_error,ChildRunError):
+                        failure_error.args=(str(failure_error)+'; '+detail,)
                 self.active=False
         return self.last_result

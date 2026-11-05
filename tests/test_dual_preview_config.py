@@ -23,7 +23,8 @@ def test_composes_both_pins_without_repricing_or_persisting_key(tmp_path):
 
 
 def test_launcher_uses_shared_store_instead_of_per_provider_file_pins():
-    script=(ROOT/'scripts/ops/preview-exec.sh').read_text()
-    assert 'combine-provider-pins.py' not in script
-    assert 'paid-pin' not in script and 'local-pin' not in script
-    assert 'model-pins' in script or 'Model pins' in script
+    script=(ROOT/'scripts/docker/local_image_preview.py').read_text()
+    assert 'pin-local.py' not in script and 'combine-provider-pins.py' not in script
+    assert 'Pass exactly these owner settings values' in script
+    runtime=(ROOT/'src/delivery_api/cloud_runtime.py').read_text()
+    assert 'DurableGateways' in runtime
