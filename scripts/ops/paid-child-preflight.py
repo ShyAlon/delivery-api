@@ -16,7 +16,9 @@ def main():
     import psycopg
     try:
         with psycopg.connect(dsn,connect_timeout=10,options='-c default_transaction_read_only=on') as conn:
-            print(json.dumps(inspect(conn,args.email),indent=2))
+            result=inspect(conn,args.email)
+            print(json.dumps(result,indent=2))
+            if not result['database_policy_ready']:raise SystemExit('Confirmed-cost guard exhausted; nothing started.')
     except AdmissionDenied as exc:raise SystemExit(str(exc)) from None
     except Exception:raise SystemExit('Database inspection failed; private driver details excluded. Nothing changed.') from None
 

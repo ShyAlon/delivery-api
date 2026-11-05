@@ -1,8 +1,10 @@
 # Owner exact-image workflow
 
-Draft, not yet Docker-host validated. CI unavailable, local gate only.
-Do not deploy from this document. The actual amd64 build/lifecycle gate must
-pass on the Mac before this image is accepted. No paid task is started here.
+CI unavailable, local gate only. The owner passed the PR673 Mac gate on
+November 5. That earlier image does not accept later source changes: every final
+merged image still needs its own amd64 build/lifecycle gate before publication.
+Use `friday-full-run-owner-runbook.md` for the ordered local/server sequence.
+No paid task is started by the image gate.
 
 ## Before merge: test the PR checkout
 
