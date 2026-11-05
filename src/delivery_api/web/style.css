@@ -352,3 +352,7 @@ details.review-progress>summary>.progress-current{color:var(--ink);margin-top:3p
 @keyframes workspace-loading-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.loading::before{animation:none;border-style:dotted}}.review-diff dl{display:grid;grid-template-columns:minmax(120px,1fr) minmax(0,2fr);gap:10px 16px;margin:20px 0}.review-diff dt{font-weight:600}.review-diff dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}.review-diff del{color:var(--muted)}@media(max-width:600px){.review-diff dl{grid-template-columns:1fr;gap:6px}.review-diff dd{margin-bottom:12px}}.review-diff details{font-size:var(--fs-sm)}.review-diff summary{cursor:pointer;font-weight:600}
 .notice{overflow-wrap:anywhere;white-space:normal}pre.notice{white-space:pre-wrap;max-width:100%}.detail-layout>div{min-width:0}.phase small{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+
+/* Pin only the current answer status below the measured global navigation.
+   Task and panel headings stay in normal flow, avoiding stacked sticky layers. */
+@media(min-width:1101px){.panel:has(#answerform:not(.hidden))>.live-status-row{position:sticky;top:calc(var(--global-header-height,84px) + 8px);z-index:2;background:#f7f8f3}}
