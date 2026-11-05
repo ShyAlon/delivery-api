@@ -37,4 +37,3 @@ def probe(base,model=None):
         out['reason']='model_not_selected' if not model else 'ready_for_start_check' if out['selected_model_present'] else 'selected_model_missing'
         return out
     except Exception:return {**out,'reason':'ollama_unreachable_or_invalid_listing'}
-

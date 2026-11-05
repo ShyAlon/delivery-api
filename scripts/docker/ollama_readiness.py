@@ -37,7 +37,9 @@ r['selected_model_id']=model if isinstance(model,str) and __import__('re').fullm
 r['endpoint_topology']='container_loopback' if urlsplit(base).hostname in ('localhost','127.0.0.1','::1') else 'docker_host' if urlsplit(base).hostname=='host.docker.internal' else 'configured_server'
 print(json.dumps(r))
 '''
-    result=subprocess.run(['docker','exec','--interactive',resource['app'],'python','-',base_override or '',model_override or ''],input=code,capture_output=True,text=True,timeout=15)
+    try:result=subprocess.run(['docker','exec','--interactive',resource['app'],'python','-',base_override or '',model_override or ''],input=code,capture_output=True,text=True,timeout=15)
+    except (OSError,subprocess.TimeoutExpired):
+        report['container']={'reason':'container_probe_unconfirmed'};return report
     try:report['container']=json.loads(result.stdout) if result.returncode==0 else {'reason':'container_probe_failed'}
     except ValueError:report['container']={'reason':'container_probe_invalid'}
     missing=[]
