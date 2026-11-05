@@ -11,11 +11,12 @@ def test_customer_route_api_never_exposes_operator_evidence_even_to_admin(monkey
     monkeypatch.setenv('DEEPSEEK_API_KEY','fake')
     reply=m.model_routes(SimpleNamespace(admin=True))
     assert not reply['routes'][0]['available']
-    assert reply['routes'][1]['available'] and reply['routes'][1]['readiness']=='checked_on_start'
+    assert not reply['routes'][1]['available']
+    assert reply['default_route'] is None
     for actor in (SimpleNamespace(admin=True),SimpleNamespace(admin=False)):
         customer=m.model_routes(actor)
         for r in customer['routes']:
-            if r['id']=='deepseek':assert 'temporarily unavailable' in r['error']
-            else:assert 'error' not in r
+            assert r['reason']=='runtime_unavailable'
+            assert 'runtime is not ready' in r['error']
             assert 'repair' not in r
             assert not any(term in str(r).lower() for term in ('back office','model pins','money gateway','secret','postgresql:','deepseek model'))

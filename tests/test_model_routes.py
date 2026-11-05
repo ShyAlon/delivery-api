@@ -8,6 +8,8 @@ def model_workspace(pg_workspace_factory,monkeypatch):
     """Direct helper contracts keep their policy mode; storage is real tenant PG."""
     from delivery_api import app as module
     # Direct file-backed provenance/helper contracts select their policy explicitly.
+    from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
     monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
     from pg_storage_guard import assert_pg_storage_only
     from delivery_api.tenancy import tenant_context
@@ -213,6 +215,8 @@ def test_bound_legacy_session_without_exact_selection_requires_a_choice(tmp_path
 def test_failed_optional_local_model_listing_does_not_disable_choice(monkeypatch):
     from delivery_api import app as module
     from types import SimpleNamespace
+    from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
     monkeypatch.setattr(module.config,'CLOUD_TENANTS',False)
     def preview(route,**kw):
         assert route=='deepseek'

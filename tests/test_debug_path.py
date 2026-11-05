@@ -35,6 +35,8 @@ def test_assets_are_revalidated_not_refetched_and_pages_stay_uncached(client):
 @pytest.mark.parametrize('open_now',[False,True])
 def test_cloud_model_routes_are_managed_and_start_only_when_execution_is_open(monkeypatch,open_now):
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
+    from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
     monkeypatch.setattr(module,'cloud_execution_admitted',lambda:open_now)
     monkeypatch.setenv('DEEPSEEK_API_KEY','test-key')   # availability also needs the key (2026-10-27)
     from types import SimpleNamespace
@@ -71,6 +73,8 @@ def test_cloud_model_routes_keyless_deepseek_is_unavailable_with_the_reason(monk
     # Execution open but no billing key on the server: the route must say so, not
     # offer a selectable failure (2026-10-27 availability fix).
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
+    from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
     monkeypatch.setattr(module,'cloud_execution_admitted',lambda:True)
     monkeypatch.delenv('DEEPSEEK_API_KEY',raising=False)
     reply=module.model_routes(module.auth.Actor('test-owner','Test owner'))
@@ -86,6 +90,8 @@ def test_cloud_model_routes_never_enable_an_unreviewed_engine_model(monkeypatch,
     from types import SimpleNamespace
     from delivery_api import cloud_runtime
     monkeypatch.setattr(config,'CLOUD_TENANTS',True)
+    from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
     monkeypatch.setattr(module,'cloud_execution_admitted',lambda:True)
     monkeypatch.setenv('DEEPSEEK_API_KEY','test-key')
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(
