@@ -361,7 +361,7 @@ if os.environ.get('CROSSHOST_STUB') == '1':
     def _fixture_supervisor(self,command=None,**kwargs):
         if command is None or command==[_sys.executable,'-m','delivery_api.child_entry']:
             code=("import os,sys,runpy;sys.path[:0]="+repr(_source_paths)+
-                  ";os.environ['CROSSHOST_STUB']='1';runpy.run_path("+repr(_stub_path)+
+                  ";os.environ['CROSSHOST_STUB']='1';os.environ['DELIVERY_TEST_STACK_MODE']="+repr(os.environ.get('DELIVERY_TEST_STACK_MODE',''))+";runpy.run_path("+repr(_stub_path)+
                   ");runpy.run_module('delivery_api.child_entry',run_name='__main__')")
             command=[_sys.executable,'-c',code]
         _supervisor_init(self,command,**kwargs)

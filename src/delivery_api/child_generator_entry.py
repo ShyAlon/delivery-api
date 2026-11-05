@@ -24,6 +24,10 @@ def _execute_claimed(operation,cfg,store,broker,stop,output_fd,claim):
     from spec_generator.cli_io import RunIO
     from spec_generator import cli,model_config
     b=operation.binding;root=Path(cfg['owner_root'])/b.session_id
+    # Identity comes only from the validated private operation, never inherited env.
+    import os
+    os.environ.update(VMODEL_PROGRESS_TASK_ID=b.task_id,VMODEL_PROGRESS_SESSION_ID=b.session_id,
+                      VMODEL_PROGRESS_GENERATION=str(b.generation))
     from .generator_documents import ChildGeneratorDocuments
     documents=ChildGeneratorDocuments(store,claim,b,expected_attempt=cfg['worker_attempt'])
     value=cfg['input'];actual,digest=manifest(value['argv'],root,documents)
