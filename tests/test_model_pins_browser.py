@@ -142,3 +142,30 @@ def test_loaded_review_readable_values_and_pending_approval_keeps_cancel(tmp_pat
    page.set_viewport_size({'width':390,'height':844});page.screenshot(path=str(_ARTIFACTS/'loaded-model-review-mobile.png'))
    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth');browser.close()
  finally:server.should_exit=True;thread.join(10)
+
+
+def test_saved_pin_activation_warning_is_not_erased_by_refresh():
+ from playwright.sync_api import sync_playwright,expect
+ value=payload()
+ def upstream(request):
+  if request.url.path=='/api/auth':return httpx.Response(200,json={'authenticated':True,'mode':'supabase','actor':'fixture@example.com'})
+  if request.url.path=='/api/operator/backoffice-access':return httpx.Response(200,json={'capabilities':{'services.operate':True}})
+  if request.url.path=='/api/operator/model-pins':return httpx.Response(200,json={'pins':[],'history':[],'bootstrap':[]})
+  if request.url.path.endswith('/new'):return httpx.Response(200,json={'before':None,'review':{'payload':value,'expected':None},'signature':'fixture'})
+  if request.url.path.endswith('/approve'):return httpx.Response(200,json={'status':'approved','warning':'Pin saved; execution is still closed: fixture route is not selected'})
+  return httpx.Response(403,json={'detail':'unavailable'})
+ app=create_app(service_url='http://127.0.0.1:8000',transport=httpx.MockTransport(upstream))
+ with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+ server=uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=port,lifespan='off',log_level='error'));thread=threading.Thread(target=server.run);thread.start()
+ try:
+  for _ in range(100):
+   if server.started:break
+   time.sleep(.02)
+  with sync_playwright() as p:
+   browser=p.chromium.launch(args=['--no-sandbox']);page=browser.new_page(extra_http_headers={'Authorization':'Bearer fake'})
+   page.goto(f'http://127.0.0.1:{port}/#model-pins');page.get_by_role('button',name='Add model',exact=True).click()
+   page.get_by_role('button',name='Fetch prices and review',exact=True).click()
+   page.get_by_role('button',name='Approve',exact=True).click()
+   expect(page.locator('[data-pin-status]')).to_contain_text('Pin saved; execution is still closed: fixture route is not selected')
+   page.screenshot(path='/downloads/pin-saved-execution-closed.png',full_page=True);browser.close()
+ finally:server.should_exit=True;thread.join(10)
