@@ -32,7 +32,7 @@ def probe(base,model=None):
         out.update(reachable=True,installed_models=models,selected_model_present=bool(model and (model in names or ':' not in model and model+':latest' in names)))
         try:
             loaded=get('/api/ps').get('models',[])
-            out['loaded_models']=[{'id':r['name'],'resident_bytes':r.get('size'),'vram_bytes':r.get('size_vram'),'context_length':r.get('context_length')} for r in loaded if isinstance(r,dict) and r.get('name') in names]
+            out['loaded_models']=[{'id':r['name'],'resident_bytes':r.get('size') if type(r.get('size')) is int else None,'vram_bytes':r.get('size_vram') if type(r.get('size_vram')) is int else None,'context_length':r.get('context_length') if type(r.get('context_length')) is int else None} for r in loaded if isinstance(r,dict) and r.get('name') in names]
         except Exception:out['loaded_models_available']=False
         out['reason']='model_not_selected' if not model else 'ready_for_start_check' if out['selected_model_present'] else 'selected_model_missing'
         return out

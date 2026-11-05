@@ -56,3 +56,24 @@ def test_checker_is_early_readonly_goal_without_acceptance_or_git_preflight(monk
  monkeypatch.setattr(m,'diagnose',lambda *a,**kw:{'read_only':True})
  assert workflow.main(['--local-pg','check-ollama'])==0
  assert json.loads(capsys.readouterr().out)['read_only']
+
+
+def test_owned_container_check_uses_running_settings_without_writes(monkeypatch,tmp_path):
+ import local_pg_preview as preview
+ home=tmp_path/'private';home.mkdir();identity=home/'identity.json';identity.write_text(json.dumps({'nonce':'a'*32}));identity.chmod(0o600)
+ monkeypatch.setattr(preview,'inspect_owned',lambda *a:{'State':{'Running':True}})
+ monkeypatch.setattr(m,'probe',lambda *a:{'reachable':True,'installed_models':[{'id':'small:latest'}]})
+ calls=[]
+ def run(args,**kw):
+  calls.append(args)
+  if args[0]=='sysctl':return SimpleNamespace(returncode=0,stdout=str(8*1024**3))
+  assert args[:3]==['docker','exec','--interactive']
+  assert args[-2:]==['',''], 'diagnostic must use actual running app values unless override explicitly supplied'
+  assert 'os.environ.get' in kw['input'] and 'probe(base,model)' in kw['input']
+  return SimpleNamespace(returncode=0,stdout=json.dumps({'reachable':False,'model_selected':False,'ollama_provider_selected':False,'endpoint_topology':'container_loopback'}))
+ monkeypatch.setattr(m.subprocess,'run',run)
+ report=m.diagnose(source(tmp_path),home)
+ assert len(calls)==2 and len(report['missing'])==4
+ assert report['mac_physical_ram_bytes']==8*1024**3 and report['memory_fit']=='unverified'
+ assert 'production.invalid' not in str(report) and 'must-not-cross' not in str(report)
+ assert identity.exists()

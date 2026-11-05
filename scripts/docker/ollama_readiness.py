@@ -13,7 +13,7 @@ def diagnose(source,home,*,base=None,model=None):
     model=model or values.get('DELIVERY_OLLAMA_MODEL')
     providers=values.get('REQUI_PIN_PROVIDERS','deepseek').split(',')
     report={'read_only':True,'source_path':str(Path(source).expanduser().absolute()),'ollama_provider_selected':'ollama' in providers,
-      'model_selected':bool(model),'memory_fit':'unverified','app_container_limit_bytes':3*1024**3,
+      'model_selected':bool(model),'memory_fit':'unverified','app_container_limit_bytes':3*1024**3,'approved_pin_note':'Readiness still requires an explicitly approved matching Ollama model pin in Back office. This network check does not approve it.',
       'memory_note':'The 3GB limit is for Requi.re, not native Mac Ollama. File/list size is not runtime RAM. Context/KV cache and other apps matter. No model was loaded; prior phi4 failure is not a fit pass.'}
     host=probe('http://127.0.0.1:11434/v1',model)
     report['mac_loopback_ollama']=host
@@ -33,7 +33,7 @@ model=sys.argv[2] or os.environ.get('DELIVERY_OLLAMA_MODEL')
 r=probe(base,model)
 r['ollama_provider_selected']='ollama' in os.environ.get('REQUI_PIN_PROVIDERS','deepseek').split(',')
 r['model_selected']=bool(model)
-r['selected_model_id']=model
+r['selected_model_id']=model if isinstance(model,str) and __import__('re').fullmatch(r'[a-zA-Z0-9._:/-]{1,200}',model) else None
 r['endpoint_topology']='container_loopback' if urlsplit(base).hostname in ('localhost','127.0.0.1','::1') else 'docker_host' if urlsplit(base).hostname=='host.docker.internal' else 'configured_server'
 print(json.dumps(r))
 '''
