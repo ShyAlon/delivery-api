@@ -3232,7 +3232,9 @@ from .model_pin_api import install as install_model_pin_routes
 def _activate_reviewed_pins():
     from . import cloud_runtime
     cloud_runtime._failure=None  # explicit operator configuration repair retries startup checks
-    if cloud_execution_admitted():cloud_runtime.install(store,os.environ,_set_engine_client,watch_vendor=True)
+    # An empty store is intentionally unready. Explicit first-pin approval is
+    # the repair event; readiness cannot be a prerequisite for installing it.
+    cloud_runtime.install(store,os.environ,_set_engine_client,watch_vendor=True)
 install_model_pin_routes(app,store,_operator_reader,_activate_reviewed_pins)
 
 
