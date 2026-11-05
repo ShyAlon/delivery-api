@@ -287,6 +287,8 @@ def parser():
     p.add_argument("--repos-root", type=Path, default=Path(__file__).resolve().parents[3])
     p.add_argument("--run-dir", type=Path, help="resume directory, defaults to a source/contract keyed private local directory")
     p.add_argument("--backoffice-port", type=int, default=8020)
+    p.add_argument("--local-pg", choices=("start","stop","reset"), help="owned persistent local PG orchestration; same accepted app image, hosted Auth")
+    p.add_argument("--local-pg-home", type=Path, default=Path.home()/".local/share/requi/local-pg")
     p.add_argument("--preview", action="store_true", help="review accepted local image with existing private settings; --apply starts it")
     p.add_argument("--deploy", metavar="PRIVATE_GHCR_REPOSITORY", help="review an accepted manifest; no SSH unless --apply")
     p.add_argument("--apply", action="store_true", help="owner-confirmed deploy apply only")
@@ -307,8 +309,8 @@ def parser():
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
     try:
-        if args.apply and not (args.deploy or args.preview):raise WorkflowError('--apply requires --deploy or --preview; no action inferred')
-        if sum(bool(v) for v in (args.review,args.build,args.accept_local,args.publish,args.deploy,args.preview))!=1:
+        if args.apply and not (args.deploy or args.preview or args.local_pg):raise WorkflowError('--apply requires --deploy or --preview; no action inferred')
+        if sum(bool(v) for v in (args.review,args.build,args.accept_local,args.publish,args.deploy,args.preview,args.local_pg))!=1:
             raise WorkflowError('choose exactly one review/build/accept-local/publish/deploy stage goal')
         log("INFO", "stage 1/6 preflight: local tools and four clean source revisions")
         inputs = preflight(args.repos_root.resolve())
@@ -317,6 +319,13 @@ def main(argv=None) -> int:
         if not state.reusable("preflight", lambda evidence: evidence == inputs):
             state.complete("preflight", inputs)
         log("PASS", "preflight passed; platform linux/amd64, one shared runtime contract")
+        if args.local_pg:
+            from local_pg_preview import preview as local_pg_preview
+            local_pg_preview(root=args.repos_root.resolve()/'delivery-api',state=state,
+                source=args.env_file or str(Path.home()/'.config/requi/preview.env'),
+                home=args.local_pg_home,port=args.port or 8002,backoffice_port=args.backoffice_port,
+                apply=args.apply,action=args.local_pg)
+            return 0
         args.name=args.name or ('requi-preview-exec' if args.preview else 'requi-delivery')
         args.port=args.port or (8001 if args.preview else 8000)
         args.env_file=args.env_file or (str(Path.home()/'.config/requi/preview.env') if args.preview else '/etc/requi/full.env')
