@@ -27,7 +27,7 @@ def gate(root,state):
     # admin URL or engine token. Derived local runtime must validate separately.
     with tempfile.TemporaryDirectory(prefix='requi-local-auth-source-') as temp:
         authfile=Path(temp)/'auth.env'
-        authfile.write_text('DELIVERY_SUPABASE_URL=https://fictional.supabase.co\nDELIVERY_SUPABASE_ANON_KEY=fictional-public\nREQUI_OPERATOR_SUBJECT='+owner+'\n')
+        authfile.write_text("DELIVERY_SUPABASE_URL='https://fictional.supabase.co'\nDELIVERY_SUPABASE_ANON_KEY='fictional-public'\nREQUI_OPERATOR_SUBJECT='"+owner+"'\n")
         authfile.chmod(0o600)
         generated=settings(authfile,nonce,resource,8002)
         if generated['DELIVERY_DATABASE_URL']!=DSN:raise WorkflowError('auth-only source derived wrong database')
