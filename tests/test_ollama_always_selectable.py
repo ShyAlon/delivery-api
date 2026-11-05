@@ -4,17 +4,18 @@ import pytest
 from delivery_api import app as module,cloud_runtime
 
 @pytest.mark.parametrize('cloud',[True,False])
-def test_ollama_selectable_without_gateway_or_preflight(monkeypatch,cloud):
+def test_ollama_disabled_without_runtime_before_preflight(monkeypatch,cloud):
     monkeypatch.setattr(module.config,'CLOUD_TENANTS',cloud)
     monkeypatch.setattr(module,'cloud_execution_admitted',lambda:False)
+    monkeypatch.setattr(cloud_runtime,'installed',lambda:False)
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:None)
     monkeypatch.setattr(module,'engine_client',SimpleNamespace(default_route=lambda:None,
         preview_route=lambda route:(_ for _ in ()).throw(module.EngineUnreachableError('fixture',RuntimeError('not running'))),
         local_models=lambda:(_ for _ in ()).throw(module.EngineUnreachableError('fixture',RuntimeError('not running')))))
     result=module.model_routes()
     local=next(r for r in result['routes'] if r['id']=='ollama')
-    assert local['available'] is True
-    assert local['readiness']=='checked_on_start'
+    assert local['available'] is False
+    assert local['reason']=='runtime_unavailable'
 
 
 def test_child_preflight_preserves_model_missing_cause(monkeypatch,tmp_path):

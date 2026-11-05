@@ -971,7 +971,7 @@ def model_routes(a:auth.Actor=Depends(auth.require_actor)):
     admitted_models=getattr(gateway,'models',{}) if gateway else {}
     if not cloud_runtime.installed():
         reason=cloud_runtime.unavailable_reason()
-        operator=bool(a.admin)
+        operator=bool(getattr(a,'admin',False))
         message=('No approved model pin. Approve one in Back office > Model pins.' if operator else 'No approved model pin. Ask the operator to approve one.') if reason=='no_approved_model_pin' else 'Interviews are unavailable because the execution runtime is not ready. Ask the operator to check startup evidence.'
         return {'routes':[{'id':route,'available':False,'managed':True,'reason':reason,'error':message,
             'operator_repair':operator and reason=='no_approved_model_pin'} for route in ('deepseek','ollama')],

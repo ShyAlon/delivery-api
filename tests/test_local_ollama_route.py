@@ -215,6 +215,7 @@ def _cloud_app(monkeypatch, flag):
     monkeypatch.setattr(module, 'cloud_execution_admitted', lambda: True)
     from types import SimpleNamespace
     from delivery_api import cloud_runtime
+    monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(models={'ollama':LOCAL_MODEL} if flag else {'deepseek':'deepseek-flash'}))
     return module
 
@@ -332,6 +333,7 @@ def test_dual_preview_checks_paid_readiness_but_defers_local_check_to_start(monk
     from types import SimpleNamespace
     from delivery_api import cloud_runtime
     monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    monkeypatch.setattr(cloud_runtime,'installed',lambda:True)
     monkeypatch.setattr(cloud_runtime,'gateway_factory',lambda:SimpleNamespace(models={'deepseek':'deepseek-flash','ollama':LOCAL_MODEL}))
     seen=[]
     def preview(route):
