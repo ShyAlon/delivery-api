@@ -318,6 +318,17 @@ class ChildInterviewClient(EngineClient):
                     raise RuntimeError('child stopped after reap and channel quiescence') from child_error
                 if not compute.settled:raise RuntimeError('child exact compute evidence incomplete')
                 if child_error is not None:raise child_error
+                # The child commits canonical PG documents, not delivery's ready
+                # artifact manifest. Publish the terminal set while the original
+                # scoped job is still running, after reap and exact accounting.
+                from vmodel_contracts.interactive import ProcessStatus
+                if self.snapshot(sid).process_status==ProcessStatus.COMPLETED:
+                    from .generator_documents import GeneratorDocuments
+                    from .artifact_publication import publish_document_revision
+                    documents=GeneratorDocuments(self.store,capability,job_id,
+                        expected_attempt=self.store.worker_job(job_id)['attempt'])
+                    publish_document_revision(self.store,task_id,documents,
+                        writer_instance='interview-child:'+operation.operation_id)
                 timings['completion']=int((time.monotonic()-completion_at)*1000);timings['run']=int((time.monotonic()-run_at)*1000)
                 self.store.retain_decision_review(task_id,'child-job:'+job_id,'child-completion-v1',
                     {'operation_id':operation.operation_id,'compute_ms':str(compute.value),'reaped':True,'timings':timings,'provider_timings':broker.timings})

@@ -99,6 +99,11 @@ class ChildGeneratorEngine(ChildPhaseLifecycle):
             generator_stage=PHASE_BY_KEY[phase].generator_stage
             if not generator_stage:raise PermissionError('generator phase required')
             documents=__import__('spec_generator.worker_runtime',fromlist=['current_runtime']).current_runtime().documents
+            # Orchestrator creates the reviewed baseline after the worker's
+            # initial workspace seed. Bind that newly published input now,
+            # before capturing the immutable child manifest.
+            from .generator_documents import prepare_document_workspace
+            prepare_document_workspace(self.store,capability.task_id,documents,current_phase=phase)
             value,digest=manifest(argv,root,documents);refs=ChildOperationRefs(self.store,capability.task_id)
             manifest_ref=refs.put('generator-manifest',value)
             self.store.retain_decision_review(capability.task_id,'child-generator:'+job_id,'manifest-v1',
