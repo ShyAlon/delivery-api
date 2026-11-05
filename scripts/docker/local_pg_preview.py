@@ -70,8 +70,12 @@ def controller(resource,nonce,payload):
 
 
 def settings(source,nonce,resource,port):
-    from image_settings import validate
-    original=validate(Path(source).expanduser().resolve())
+    from image_settings import read_values,validate_auth
+    try:
+        original=read_values(Path(source).expanduser().resolve())
+        validate_auth(original)
+    except (ValueError,OSError) as error:
+        raise WorkflowError('Local source settings invalid: use a private regular mode600 file with valid HTTPS Supabase project URL and public key. No database URL or engine token is required in this source file; private values omitted.') from None
     # Source may describe production, but NO data/admin address is ever copied,
     # resolved or connected. Ambient environment has no fallback at this boundary.
     result={key:value for key,value in original.items() if key in ALLOWED}
@@ -86,7 +90,8 @@ def settings(source,nonce,resource,port):
     subject=original.get('REQUI_OPERATOR_SUBJECT')
     if not subject:raise WorkflowError('source settings need reviewed REQUI_OPERATOR_SUBJECT; no guessed operator')
     from uuid import UUID
-    result['REQUI_OPERATOR_SUBJECT']=str(UUID(subject))
+    try:result['REQUI_OPERATOR_SUBJECT']=str(UUID(subject))
+    except (ValueError,TypeError,AttributeError):raise WorkflowError('Local source settings invalid: reviewed operator subject must be a UUID; value omitted') from None
     if any('\n' in value or '\r' in value for value in result.values()):raise WorkflowError('single-line settings values required')
     if any(key in result for key in DB_KEYS-{'DELIVERY_DATABASE_URL'}):raise WorkflowError('external database setting refused')
     if result['DELIVERY_DATABASE_URL']!=DSN:raise WorkflowError('only owned Unix socket database allowed')

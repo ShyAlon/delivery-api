@@ -11,7 +11,7 @@ import tempfile
 import time
 import uuid
 from image_workflow import WorkflowError,command,confirm,log
-from local_pg_preview import accepted_image,names,ensure_dependency,controller,inspect_owned,LABEL
+from local_pg_preview import accepted_image,names,ensure_dependency,controller,inspect_owned,LABEL,settings,DSN
 
 
 def gate(root,state):
@@ -23,6 +23,18 @@ def gate(root,state):
     identity={'sub':owner,'session_id':session,'email':'fictional@example.test','iat':int(time.time()),'exp':int(time.time())+120}
     config={'subject':owner,'version':'owned-local-v1','capabilities':sorted(DEFAULT_CAPABILITIES|{'sessions.operate'})}
     diagnostic=Path.home()/'.local/share/requi/local-pg-builds'/('gate-'+nonce+'.log')
+    # Real owner source-file shape: hosted Auth/operator values only, no DB,
+    # admin URL or engine token. Derived local runtime must validate separately.
+    with tempfile.TemporaryDirectory(prefix='requi-local-auth-source-') as temp:
+        authfile=Path(temp)/'auth.env'
+        authfile.write_text('DELIVERY_SUPABASE_URL=https://fictional.supabase.co\nDELIVERY_SUPABASE_ANON_KEY=fictional-public\nREQUI_OPERATOR_SUBJECT='+owner+'\n')
+        authfile.chmod(0o600)
+        generated=settings(authfile,nonce,resource,8002)
+        if generated['DELIVERY_DATABASE_URL']!=DSN:raise WorkflowError('auth-only source derived wrong database')
+        runtime=Path(temp)/'runtime.env';runtime.write_text(''.join(k+'='+v+'\n' for k,v in generated.items()));runtime.chmod(0o600)
+        from image_settings import validate
+        validate(runtime)
+    log('PASS','Auth-only owner source settings accepted; owned runtime database/token derived and independently validated')
     def run(code):
         # Same exact accepted image, UID10001 and RO socket. No key, real env,
         # network, host data, production container or database URL is accepted.
