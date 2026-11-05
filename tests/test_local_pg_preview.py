@@ -40,7 +40,7 @@ def test_only_owned_local_dsn_crosses_and_no_payment_secrets(tmp_path,monkeypatc
 
 
 def test_no_implicit_operator(tmp_path):
-    with pytest.raises(WorkflowError,match='reviewed REQUI_OPERATOR_SUBJECT'):
+    with pytest.raises(WorkflowError,match='REQUI_OPERATOR_SUBJECT'):
         settings(source(tmp_path,REQUI_OPERATOR_SUBJECT=''),'a'*32,names('a'*32),8002)
 
 
@@ -235,3 +235,32 @@ def test_source_settings_error_is_typed_and_has_no_private_value(tmp_path):
     with pytest.raises(WorkflowError,match='Local source settings invalid') as error:
         settings(path,'a'*32,names('a'*32),8002)
     assert 'private.invalid' not in str(error.value)
+
+
+def test_normal_dotenv_writer_shape_is_accepted_without_db(tmp_path):
+    path=tmp_path/'quoted.env'
+    path.write_text("export DELIVERY_SUPABASE_URL='https://test.supabase.co'\nDELIVERY_SUPABASE_ANON_KEY=\"public=value\" # comment\nREQUI_OPERATOR_SUBJECT='00000000-0000-0000-0000-000000000001'\n")
+    path.chmod(0o600)
+    value=settings(path,'a'*32,names('a'*32),8002)
+    assert value['DELIVERY_SUPABASE_URL']=='https://test.supabase.co'
+    assert value['DELIVERY_SUPABASE_ANON_KEY']=='public=value'
+
+
+@pytest.mark.parametrize('kind,check',[('missing','file.exists'),('mode','file.private_mode'),('url','auth.https_scheme'),('key','auth.public_key_present')])
+def test_exact_safe_source_failure_names_path_check_and_fix(tmp_path,kind,check):
+    path=tmp_path/'source.env'
+    if kind!='missing':
+        path.write_text('DELIVERY_SUPABASE_URL='+('http://private.invalid' if kind=='url' else 'https://test.supabase.co')+'\n'+('' if kind=='key' else 'DELIVERY_SUPABASE_ANON_KEY=private-value\n'))
+        path.chmod(0o644 if kind=='mode' else 0o600)
+    with pytest.raises(WorkflowError) as error:settings(path,'a'*32,names('a'*32),8002)
+    assert str(path) in str(error.value) and check in str(error.value)
+    assert 'private.invalid' not in str(error.value) and 'private-value' not in str(error.value)
+
+
+def test_readonly_checker_prints_no_setting_values(tmp_path):
+    import subprocess
+    path=source(tmp_path)
+    result=subprocess.run([sys.executable,str(ROOT/'scripts/ops/check-local-pg-source.py'),'--env-file',str(path)],capture_output=True,text=True)
+    data=json.loads(result.stdout)
+    assert data['path']==str(path) and data['auth_valid'] is True
+    assert 'production.invalid' not in result.stdout and 'must-not-cross' not in result.stdout

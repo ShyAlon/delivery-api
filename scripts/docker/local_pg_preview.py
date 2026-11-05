@@ -70,12 +70,13 @@ def controller(resource,nonce,payload):
 
 
 def settings(source,nonce,resource,port):
-    from image_settings import read_values,validate_auth
+    from image_settings import read_values,validate_auth,SettingsProblem
+    path=Path(source).expanduser().absolute()
     try:
-        original=read_values(Path(source).expanduser().resolve())
+        original=read_values(path)
         validate_auth(original)
     except (ValueError,OSError) as error:
-        raise WorkflowError('Local source settings invalid: use a private regular mode600 file with valid HTTPS Supabase project URL and public key. No database URL or engine token is required in this source file; private values omitted.') from None
+        raise WorkflowError('Local source settings invalid ['+str(path)+']: '+(str(error) if isinstance(error,SettingsProblem) else 'file.readable: check file access and encoding; private values omitted')) from None
     # Source may describe production, but NO data/admin address is ever copied,
     # resolved or connected. Ambient environment has no fallback at this boundary.
     result={key:value for key,value in original.items() if key in ALLOWED}
@@ -88,7 +89,7 @@ def settings(source,nonce,resource,port):
     # Bind only an explicitly reviewed existing operator subject value. Session
     # enrollment must verify it, not promote any account that signs in.
     subject=original.get('REQUI_OPERATOR_SUBJECT')
-    if not subject:raise WorkflowError('source settings need reviewed REQUI_OPERATOR_SUBJECT; no guessed operator')
+    if not subject:raise WorkflowError('Local source settings invalid ['+str(path)+']: operator.subject_present: supply the reviewed REQUI_OPERATOR_SUBJECT; no guessed operator')
     from uuid import UUID
     try:result['REQUI_OPERATOR_SUBJECT']=str(UUID(subject))
     except (ValueError,TypeError,AttributeError):raise WorkflowError('Local source settings invalid: reviewed operator subject must be a UUID; value omitted') from None
