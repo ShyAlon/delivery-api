@@ -61,19 +61,33 @@ def validate_auth(result):
     return result
 
 
-def _persist_engine_token(path: Path, token: str) -> None:
-    # Atomic append of one generated value; the file is already verified private.
-    original=path.read_bytes()
-    if original and not original.endswith(b'\n'):original+=b'\n'
-    descriptor,temporary=tempfile.mkstemp(prefix='.engine-token-',dir=str(path.parent))
+def _atomic_private_write(path: Path, raw: bytes) -> None:
+    descriptor,temporary=tempfile.mkstemp(prefix='.settings-write-',dir=str(path.parent))
     try:
-        with os.fdopen(descriptor,'wb') as stream:stream.write(original+b'INTERVIEW_ENGINE_TOKEN='+token.encode('ascii')+b'\n')
+        with os.fdopen(descriptor,'wb') as stream:stream.write(raw)
         os.chmod(temporary,0o600)
         os.replace(temporary,path)
     except BaseException:
         try:os.unlink(temporary)
         except OSError:pass
         raise
+
+
+def _persist_engine_token(path: Path, token: str) -> None:
+    # Atomic append of one generated value; the file is already verified private.
+    original=path.read_bytes()
+    if original and not original.endswith(b'\n'):original+=b'\n'
+    _atomic_private_write(path,original+b'INTERVIEW_ENGINE_TOKEN='+token.encode('ascii')+b'\n')
+
+
+def write_container_env(path: Path, values: dict[str,str]) -> None:
+    # docker --env-file passes values literally: no quote stripping, no comment or
+    # expansion handling. The container must receive exactly the parsed values
+    # validate approved, regardless of how the owner file quotes them.
+    for key,value in values.items():
+        if not re.fullmatch(r'[A-Z][A-Z0-9_]*',key) or any(c in value for c in '\n\r\0'):
+            raise ValueError('settings contain a field the container cannot receive literally')
+    _atomic_private_write(path,(''.join(key+'='+value+'\n' for key,value in values.items())).encode())
 
 
 def validate(path: Path, *, generate_missing_token: bool=False) -> dict[str,str]:

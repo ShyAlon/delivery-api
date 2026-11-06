@@ -63,3 +63,50 @@ def test_declined_preview_never_runs_docker(tmp_path,monkeypatch):
     monkeypatch.setattr(builtins,'input',lambda prompt='':'no')
     monkeypatch.setattr(m,'command',lambda *args,**kwargs:pytest.fail('Docker mutation after decline'))
     with pytest.raises(m.WorkflowError,match='declined'):m.preview(state(),env_file=str(env),apply=True)
+
+
+QUOTED=('DELIVERY_DATABASE_URL="postgresql://fixture/db"\nDELIVERY_SUPABASE_URL="https://fixture.supabase.co"\n'
+        'DELIVERY_SUPABASE_ANON_KEY="fictional-public"\nINTERVIEW_ENGINE_TOKEN="fictional-private-token-123456"\n')
+UNQUOTED=('DELIVERY_DATABASE_URL=postgresql://fixture/db\nDELIVERY_SUPABASE_URL=https://fixture.supabase.co\n'
+          'DELIVERY_SUPABASE_ANON_KEY=fictional-public\nINTERVIEW_ENGINE_TOKEN=fictional-private-token-123456\n')
+
+
+def _apply_stubs(tmp_path,monkeypatch,inspect_state,exists):
+    import builtins, json, subprocess
+    value=state();value.path=tmp_path/'state.json'
+    env=tmp_path/'private.env';env.write_text(QUOTED);env.chmod(0o600)
+    monkeypatch.setattr(m,'inspect_image',lambda image:{'Id':image})
+    monkeypatch.setattr(builtins,'input',lambda prompt='':'yes')
+    runs=[]
+    def command(args,**kwargs):
+        runs.append(args)
+        if 'inspect' in args:return json.dumps({'Image':ID,'State':inspect_state})
+        return ''
+    monkeypatch.setattr(m,'command',command)
+    payload=json.dumps([{'State':{'Running':exists}}]).encode()
+    monkeypatch.setattr(subprocess,'run',lambda *a,**k:subprocess.CompletedProcess(a[0],0 if exists is not None else 1,payload,b''))
+    return value,env,runs
+
+
+def test_apply_hands_container_exact_unquoted_values(tmp_path,monkeypatch):
+    value,env,runs=_apply_stubs(tmp_path,monkeypatch,{'Running':False,'ExitCode':2},None)
+    with pytest.raises(m.WorkflowError) as error:m.preview(value,env_file=str(env),apply=True)
+    text=str(error.value)
+    assert 'exit code 2' in text and 'docker logs' in text
+    run=next(a for a in runs if a and a[0]=='docker' and 'run' in a)
+    handed=Path(run[run.index('--env-file')+1])
+    assert handed!=env and handed.read_text()==UNQUOTED and handed.stat().st_mode&0o077==0
+
+
+def test_exited_container_names_logs_and_docker_rm(tmp_path,monkeypatch):
+    value,env,runs=_apply_stubs(tmp_path,monkeypatch,{},False)
+    with pytest.raises(m.WorkflowError) as error:m.preview(value,env_file=str(env),apply=True)
+    text=str(error.value)
+    assert 'docker logs' in text and 'docker rm requi-preview-exec' in text
+    assert not any(a and a[0]=='docker' and 'run' in a for a in runs)
+
+
+def test_running_container_names_docker_stop(tmp_path,monkeypatch):
+    value,env,runs=_apply_stubs(tmp_path,monkeypatch,{},True)
+    with pytest.raises(m.WorkflowError) as error:m.preview(value,env_file=str(env),apply=True)
+    assert 'docker stop requi-preview-exec' in str(error.value)
