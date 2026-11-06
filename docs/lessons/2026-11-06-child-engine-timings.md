@@ -1,0 +1,5 @@
+# 2026-11-06: A child's stdout on DEVNULL is a debugging blind spot
+
+Problem: the paid-child engine ran with stdout=DEVNULL and stderr drained only for failure-shape parsing. Its structured timing records (advance.turn.begin/end dur_ms, saver.setup, staging) never left the process, so the Debug package's task-window retained logs held activity and diagnostics rows but zero engine rows - the per-segment timing chain had to be reconstructed by hand from worker job rows and debit timestamps.
+
+Lesson: "never echo child output" and "retain engine evidence" are reconciled by shape, not by silence. The child routes engine timing records to stderr as bare dotted-event lines; the parent forwards only lines matching the strict structured shape (dotted event, key=value fields, session id) into the bounded engine stream, and arbitrary stderr keeps the shape-only failure policy. When a safety boundary suppresses a whole stream, check whether a verifiable subset can pass without weakening the boundary.

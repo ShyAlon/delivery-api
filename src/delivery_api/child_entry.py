@@ -3,12 +3,27 @@
 No CLI parser, credentials in env, service listener or provider network. The
 parent independently resolves immutable refs and pins the launch binding.
 """
-import json,os,socket,threading
+import json,logging,os,socket,threading
 from pathlib import Path
 from requi_child_contract import decode_operation,JobBinding,require_binding,LifecycleEvent,encode_event,_unique_pairs,_invalid_constant
 
 
+def install_engine_timing_log():
+    """The child configures no logging; route engine timing records to stderr as
+    bare dotted-event lines. The parent retains only the structured timing shape
+    from stderr (child_supervisor._forward_engine_timing); nothing else changes."""
+    log=logging.getLogger('interview_engine')
+    if any(getattr(handler,'_requi_timing',False) for handler in log.handlers):return
+    handler=logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(message)s'))
+    handler._requi_timing=True
+    log.setLevel(logging.INFO)
+    log.addHandler(handler)
+    log.propagate=False
+
+
 def main():
+    install_engine_timing_log()
     channel=socket.socket(fileno=int(os.environ['REQUI_CHILD_FD']))
     stream=channel.makefile('rwb',buffering=0)
     config_socket=socket.socket(fileno=int(os.environ['REQUI_CHILD_CONFIG_FD']))
