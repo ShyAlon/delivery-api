@@ -402,6 +402,34 @@ def test_answer_failure_preserves_text_and_recovers_button(pg_page,pg_ui,pg_ids)
     assert page.locator('#answerspinner').is_hidden()
 
 
+def test_answer_send_failure_offers_a_working_retry(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    # A send that dies on a transient failure must not dead-end: the page names the
+    # failure, keeps the typed answer, and offers a Retry that resends the same payload.
+    page.add_init_script("""class FakeEventSource{addEventListener(){}}window.EventSource=FakeEventSource""")
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['active_phase']='intent'
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'test-input','precondition':{'session_sequence':1}}
+    live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'decision':None,'gate':None,'question':'What matters most?'}
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    attempts=[]
+    def flaky(route):
+        attempts.append(route.request.post_data_json)
+        if len(attempts)==1:
+            route.fulfill(status=503,json={'detail':{'error':'Answer could not be sent.','cause':'The server hit a transient error.','next':'Retry sending.'}})
+        else:
+            route.fulfill(json={'status':'accepted'})
+    page.route(f'**/api/tasks/{tid}/answer',flaky)
+    page.goto(ui+f'/tasks/{tid}/view');answer=page.locator('#answerform textarea');send=page.locator('#answerform button[type=submit]')
+    answer.fill('A recoverable answer');send.click()
+    page.get_by_text('Answer could not be sent.',exact=False).wait_for()
+    retry=page.locator('#retryanswer');retry.wait_for()
+    assert answer.input_value()=='A recoverable answer'
+    retry.click()
+    page.get_by_text('Answer sent.',exact=False).wait_for()
+    assert attempts==[{'answer':'A recoverable answer','decision_id':'test-input','expected_sequence':1}]*2
+
+
 def test_slow_answer_has_no_artificial_timeout_and_can_be_cancelled(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     tid=pg_ids["live"]

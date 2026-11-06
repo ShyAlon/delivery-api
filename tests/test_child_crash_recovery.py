@@ -48,3 +48,67 @@ def test_sigkill_after_dispatch_leaves_replay_paused_not_second_provider_call(st
             with pytest.raises(PermissionError,match='no published checkpoint|completion evidence'):client.resume(job['job_id'])
         assert len(calls)==1 and client.supervisor.last_result.reaped
     finally:release.set();server.shutdown();server.server_close()
+
+
+def test_db_drop_mid_answer_pauses_then_the_same_operation_resumes(store,tmp_path):
+    """A dropped database connection mid-answer pauses the durable job; recovery
+    re-drives the SAME operation id with exact provider accounting."""
+    pytest.importorskip('interview_engine')
+    import psycopg
+    entered=threading.Event();release=threading.Event();calls=[];armed=[]
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            from strict_provider import read_request
+            payload=read_request(self);calls.append(payload)
+            if armed and not entered.is_set():entered.set();assert release.wait(20)
+            body=json.dumps({'id':'fake','object':'chat.completion','model':payload['model'],'choices':[{'index':0,'message':{'role':'assistant','content':json.dumps({'is_web_app':True,'archetype':'saas_crud','confidence':0.9,'reason':'fake'}) if 'is_web_app' in json.dumps(payload) else json.dumps({'question':'What does a booking look like for your customers?','covered':[],'thin':[],'skipped':[],'complete':False})},'finish_reason':'stop'}],
+                'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20}}).encode()
+            self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
+            try:self.wfile.write(body)
+            except BrokenPipeError:pass
+        def log_message(self,*a):pass
+    server=HTTPServer(('127.0.0.1',0),Handler);threading.Thread(target=server.serve_forever,daemon=True).start()
+    with tenant_context(A):
+        tid=store.create_task('db drop mid answer '+uuid.uuid4().hex)['task_id'];sid=str(uuid.uuid4());store.set_engine_session(tid,sid)
+    ledger={}  # durable attempt ledger shared by the original and the resumed gateway
+    class Gateway:
+        retail_rates=None
+        def __init__(self,job):self.job_id=job;self.states=ledger
+        def reserve_serialized(self,**kw):self.states['fake']='reserved';return 'fake'
+        def start(self,a):self.states[a]='started'
+        def settle_raw(self,a,u):self.states[a]='settled'
+        def uncertain(self,a):self.states[a]='uncertain'
+        def _attempt(self,a):return {'state':self.states[a]}
+    client=ChildInterviewClient(store,tmp_path,gateway_factory=lambda cap,job:Gateway(job),dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint=f'http://127.0.0.1:{server.server_port}/v1/chat/completions',
+        command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[2]/'interview-engine/src'),str(Path(__file__).parents[2]/'spec-generator/src')])
+    try:
+        with tenant_context(A):
+            from vmodel_contracts.interactive import StartSessionRequest,InputResponse
+            started=client.start(StartSessionRequest(session_id=sid,task_id=tid,idea='Test web app',model_route='ollama',initial_model='fake'))
+            assert started.snapshot.open_input is not None
+            open_input_id=started.snapshot.open_input.input_id;armed.append(1);before=len(calls)
+            def answer():
+                with tenant_context(A),pytest.raises(Exception):
+                    client.submit(sid,InputResponse(input_id=open_input_id,value='Customers book time slots',actor_id='fake',expected_sequence=started.snapshot.sequence))
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                future=ex.submit(answer)
+                assert entered.wait(20),'answer turn never reached the fake provider'
+                with psycopg.connect(DSN,autocommit=True) as admin:
+                    admin.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename='delivery_app' AND pid<>pg_backend_pid()")
+                release.set();future.result(timeout=30)
+            # The dropped connection killed the child mid-answer: the job is durably paused.
+            from delivery_api.app import _interrupted_answer_job
+            with tenant_context(A):
+                job=_interrupted_answer_job(tid,sid,open_input_id)
+                assert job is not None,'the interrupted answer job must be findable for recovery'
+                with store._postgres.transaction() as conn:
+                    conn.execute('UPDATE engine_sessions SET lease_expires_at=0 WHERE session_id=%s',(sid,))
+                answered=client.resume(job['job_id'])
+            assert answered.sequence>started.snapshot.sequence
+            assert len(calls)==before+1,f'exact recompute, no blind provider retry: {len(calls)} calls'
+            assert store.worker_job(job['job_id'])['state']=='done'
+            completed=[e for e in store.events(tid) if e['kind']=='child.completed']
+            assert completed[-1]['payload']['job_id']==job['job_id'],'completion belongs to the SAME operation id'
+    finally:
+        release.set();server.shutdown();server.server_close()
+

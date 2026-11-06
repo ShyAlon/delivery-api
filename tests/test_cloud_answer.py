@@ -20,7 +20,8 @@ def _setup(monkeypatch, *, finished, pending=None):
     task = {"task_id": "t1", "state": "running", "active_phase": "intent", "phases": []}
     store = NS(task=lambda tid: task, events=lambda tid: [], engine_session=lambda tid: "s1",
                add_event=lambda *a, **k: seen["events"].append((a, k)),
-               add_review_comment=lambda *a, **k: None)
+               add_review_comment=lambda *a, **k: None,
+               recoverable_worker_jobs=lambda: [], decision_review=lambda *a, **k: None)
     snapshot = NS(session_id="s1", sequence=4, open_input=pending or _pending())
     def submit(session_id, response):
         seen["submitted"].append((session_id, response))

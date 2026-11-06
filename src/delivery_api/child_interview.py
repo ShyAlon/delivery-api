@@ -194,6 +194,11 @@ class ChildInterviewClient(EngineClient):
             provider,model=next(iter(pairs))
             if hasattr(self.gateway_factory,'for_task'):self.gateway_factory.for_task(task_id)
             if self.paid_runtime is not None:self.paid_runtime.require(provider,model)
+            # The HTTP contract permits an omitted sequence. Pin both the
+            # durable answer and its operation to the same published revision.
+            # Never replace an explicit caller precondition.
+            if response.expected_sequence is None:
+                response=response.model_copy(update={'expected_sequence':snapshot.sequence})
             ref=refs.put('answer',response.model_dump(mode='json'))
             body={'kind':'interview.answer','checkpoint_sha256':published_digest(row),
                 'wait_id':str(snapshot.open_input.input_id),'expected_sequence':snapshot.sequence,
