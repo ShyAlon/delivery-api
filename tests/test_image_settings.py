@@ -98,3 +98,34 @@ def test_ollama_route_with_host_gateway_url_passes(tmp_path):
 def test_non_ollama_route_needs_no_ollama_url(tmp_path):
     path=tmp_path/'private.env';path.write_text(BASE+'REQUI_PIN_PROVIDERS=deepseek\n');path.chmod(0o600)
     assert 'OLLAMA_BASE_URL' not in m.validate(path)
+
+
+def test_ollama_route_missing_base_url_derived_saved_and_reused(tmp_path):
+    path=tmp_path/'private.env';path.write_text(BASE+'REQUI_PIN_PROVIDERS=ollama\n');path.chmod(0o600)
+    values=m.validate(path,generate_missing_token=True)
+    assert values['OLLAMA_BASE_URL']==m.OLLAMA_DERIVED_BASE_URL
+    saved=path.read_text();assert saved.count('OLLAMA_BASE_URL=')==1 and 'OLLAMA_BASE_URL='+m.OLLAMA_DERIVED_BASE_URL+'\n' in saved
+    assert path.stat().st_mode&0o077==0
+    before=path.read_bytes()
+    assert m.validate(path)['OLLAMA_BASE_URL']==m.OLLAMA_DERIVED_BASE_URL
+    assert path.read_bytes()==before
+
+
+def test_ollama_route_missing_base_url_review_names_apply_derivation(tmp_path):
+    path=tmp_path/'private.env';body=BASE+'REQUI_PIN_PROVIDERS=ollama\n';path.write_text(body);path.chmod(0o600)
+    with pytest.raises(ValueError) as error:m.validate(path)
+    text=str(error.value)
+    assert 'preview --apply' in text and OLLAMA_FIX in text and path.read_text()==body
+
+
+def test_ollama_route_explicit_loopback_never_overridden(tmp_path):
+    path=tmp_path/'private.env';body=BASE+'REQUI_PIN_PROVIDERS=ollama\nOLLAMA_BASE_URL="http://localhost:11434/v1"\n'
+    path.write_text(body);path.chmod(0o600)
+    with pytest.raises(ValueError) as error:m.validate(path,generate_missing_token=True)
+    assert OLLAMA_FIX in str(error.value) and path.read_text()==body
+
+
+def test_deepseek_route_derives_no_ollama_url(tmp_path):
+    path=tmp_path/'private.env';path.write_text(BASE+'REQUI_PIN_PROVIDERS=deepseek\n');path.chmod(0o600)
+    values=m.validate(path,generate_missing_token=True)
+    assert 'OLLAMA_BASE_URL' not in values and 'OLLAMA_BASE_URL' not in path.read_text()

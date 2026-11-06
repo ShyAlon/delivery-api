@@ -21,8 +21,10 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
         known=read_values(settings)
         values=validate(settings,generate_missing_token=apply)
     except ValueError as error:raise WorkflowError(str(error)) from None
-    if apply and not known.get('INTERVIEW_ENGINE_TOKEN'):
-        log('INFO','generated a private engine token and saved it to '+str(settings)+'; the value is never shown')
+    if apply:
+        for key in ('INTERVIEW_ENGINE_TOKEN','OLLAMA_BASE_URL'):
+            if key in values and not known.get(key):
+                log('INFO','derived and saved '+key+' in '+str(settings)+'; reused on later starts'+('; the value is never shown' if key=='INTERVIEW_ENGINE_TOKEN' else ''))
     # Pass exactly these owner settings values, no filtered environment or mode.
     args=Target(image_id,name,str(settings),port,network).arguments()
     log('INFO','preview review: accepted linux/amd64 image, existing settings, same shared runtime; work may spend only after explicit Start')
