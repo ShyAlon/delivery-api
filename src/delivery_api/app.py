@@ -199,16 +199,71 @@ async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=
             return
         if page.next_cursor<=cursor:raise RuntimeError("engine progress page made no cursor advance")
 
+def _transient_db_errors()->tuple:
+    """Database failures a live connection drop produces; safe to ride out, never to die on."""
+    import psycopg
+    return (psycopg.OperationalError,)
+
+
+def _transient_answer_interruption(exc:BaseException)->bool:
+    if isinstance(exc,_transient_db_errors()):return True
+    return isinstance(exc,RuntimeError) and not isinstance(exc,EngineClientError) and str(exc)=='child exact compute evidence incomplete'
+
+
+def _interrupted_answer_job(task_id:str,session_id:str,input_id)->dict|None:
+    """The durably paused child job for THIS open input, when a prior attempt died mid-compute."""
+    for job in store.recoverable_worker_jobs():
+        if job.get('session_id')!=session_id or job.get('task_id')!=task_id:continue
+        value=store.decision_review(task_id,'child-job:'+job['job_id'],'child-operation-v1') or {}
+        operation=value.get('operation') or {}
+        if operation.get('kind')=='interview.answer' and str(operation.get('wait_id'))==str(input_id):return job
+    return None
+
+
+class _ResumedSubmission:
+    """SubmitInputResponse shape for an answer recovered through resume(): the engine journal
+    already holds the acceptance; the payload records the recovery provenance."""
+    def __init__(self,snapshot,job_id):self.snapshot=snapshot;self.job_id=job_id
+    def model_dump(self,mode="json"):return {"accepted":True,"recovered":"resumed-interrupted-child","job_id":self.job_id}
+
+
+async def _resume_interrupted_answer(task_id:str,session_id:str,job:dict,failure:BaseException|None):
+    """Re-drive the SAME durable operation. resume() never creates a new operation id and
+    refuses to replay a committed answer. Returns None only on the resume-first path when the
+    paused job refuses non-transiently, so the caller can fall back to a fresh submit."""
+    resume=getattr(engine_client,'resume',None)
+    if resume is None:
+        if failure is not None:raise failure
+        return None
+    attempts=0
+    while True:
+        try:
+            snapshot=await run_in_threadpool(resume,job['job_id'])
+            activity('engine.answer.resumed','Interrupted founder answer resumed as the same durable operation',task_id=task_id,session_id=session_id,job_id=job['job_id'],attempts=attempts+1)
+            return _ResumedSubmission(snapshot,job['job_id'])
+        except Exception as exc:
+            lease_live=isinstance(exc,PermissionError) and 'prior child lease still live' in str(exc)
+            if not lease_live and not _transient_answer_interruption(exc):
+                if failure is not None:raise failure
+                return None
+            attempts+=1
+            if attempts>=4:
+                if failure is not None:raise failure
+                raise RuntimeError('the interview is still recovering from an interrupted attempt; retry sending in a few seconds')
+            activity('engine.answer.resume_wait','Interrupted founder answer is not yet resumable; waiting before the next attempt',task_id=task_id,session_id=session_id,job_id=job['job_id'],attempt=attempts,reason='prior-lease-live' if lease_live else type(exc).__name__)
+            await asyncio.sleep(20 if lease_live else 5)
+
+
 async def _watch_engine_advance(task_id:str,session_id:str,stop:asyncio.Event)->None:
     """Fetch progress during a blocking Start/Submit and drain after it returns."""
     while not stop.is_set():
         try:await _drain_engine_progress(task_id,session_id,allow_absent=True)
-        except (EngineClientError,EngineUnreachableError,ValueError,RuntimeError,AttributeError) as exc:
+        except (EngineClientError,EngineUnreachableError,ValueError,RuntimeError,AttributeError)+_transient_db_errors() as exc:
             activity("progress.ingest.failed","Engine progress read failed without affecting control",task_id=task_id,session_id=session_id,error=str(exc)[:300])
         try:await asyncio.wait_for(stop.wait(),1)
         except asyncio.TimeoutError:pass
     try:await _drain_engine_progress(task_id,session_id,allow_absent=True)
-    except (EngineClientError,EngineUnreachableError,ValueError,RuntimeError,AttributeError) as exc:
+    except (EngineClientError,EngineUnreachableError,ValueError,RuntimeError,AttributeError)+_transient_db_errors() as exc:
         activity("progress.drain.failed","Final engine progress drain failed",task_id=task_id,session_id=session_id,error=str(exc)[:300])
 
 async def _resume_interrupted_interviews()->None:
@@ -1274,7 +1329,11 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
             session_id=store.engine_session(task_id)
             if not session_id:raise RuntimeError("task has no HTTP engine session")
             state=await run_in_threadpool(engine_client.snapshot,session_id);pending=state.open_input
-            if pending is None:raise RuntimeError("task is not waiting for input")
+            if pending is None:
+                if body.decision_id and any(record["decision_id"]==body.decision_id for record in recent_answers):
+                    activity("engine.answer.duplicate","Founder answer was already accepted; confirming the lost-response retry",task_id=task_id,phase=task_before.get("active_phase"),decision_id=body.decision_id)
+                    return {"status":"accepted"}
+                raise RuntimeError("task is not waiting for input")
             answered_input_id=str(pending.input_id)
             answered_question=pending.prompt
             if body.decision_id and str(pending.input_id)!=body.decision_id:raise RuntimeError("submitted decision does not match live input")
@@ -1296,15 +1355,29 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
             progress_watch=spawn(_watch_engine_advance(task_id,session_id,progress_stop))
             submit_at=time.monotonic()
             activity('engine.answer.submit_begin','Waiting for engine input advance, not an enqueue receipt',task_id=task_id,session_id=session_id)
+            interrupted_job=_interrupted_answer_job(task_id,session_id,pending.input_id)
+            recovered=False
             try:
-                submitted=await run_in_threadpool(engine_client.submit,session_id,InputResponse(input_id=pending.input_id,expected_sequence=body.expected_sequence,value=typed_value,
-                    rationale=rationale or None,actor_id=a.label,founder_inputs=body.founder_inputs))
+                if interrupted_job is not None:
+                    submitted=await _resume_interrupted_answer(task_id,session_id,interrupted_job,None)
+                    if submitted is None:
+                        submitted=await run_in_threadpool(engine_client.submit,session_id,InputResponse(input_id=pending.input_id,expected_sequence=body.expected_sequence,value=typed_value,
+                            rationale=rationale or None,actor_id=a.label,founder_inputs=body.founder_inputs))
+                    else:recovered=True
+                else:
+                    try:
+                        submitted=await run_in_threadpool(engine_client.submit,session_id,InputResponse(input_id=pending.input_id,expected_sequence=body.expected_sequence,value=typed_value,
+                            rationale=rationale or None,actor_id=a.label,founder_inputs=body.founder_inputs))
+                    except Exception as interruption:
+                        interrupted_job=_interrupted_answer_job(task_id,session_id,pending.input_id)
+                        if interrupted_job is None or not _transient_answer_interruption(interruption):raise
+                        submitted=await _resume_interrupted_answer(task_id,session_id,interrupted_job,interruption);recovered=True
             finally:
                 activity('engine.answer.submit_end','Engine input request finished; outcome is recorded separately',task_id=task_id,session_id=session_id,elapsed_ms=int((time.monotonic()-submit_at)*1000))
                 drain_at=time.monotonic();progress_stop.set()
                 try:await progress_watch
                 finally:activity('engine.answer.progress_drain','Final answer progress watch finished',task_id=task_id,session_id=session_id,elapsed_ms=int((time.monotonic()-drain_at)*1000))
-            store.add_event(task_id,"engine_protocol","Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
+            store.add_event(task_id,"engine_protocol","Typed founder input accepted after a transient interruption" if recovered else "Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
             source="http_interview"
             if body.comment.strip():
                 store.add_review_comment(task_id,body.decision_id or str(pending.input_id),body.review_revision or f'engine:{state.session_id}:{state.sequence}',a.label,body.comment)
