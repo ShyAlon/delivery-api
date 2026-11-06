@@ -16,9 +16,13 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
         raise WorkflowError('preview acceptance incomplete')
     if inspect_image(image_id)['Id']!=image_id:raise WorkflowError('accepted local preview image unavailable')
     settings=Path(env_file).expanduser().resolve()
-    from image_settings import validate
-    try:validate(settings)
+    from image_settings import read_values,validate
+    try:
+        known=read_values(settings)
+        validate(settings,generate_missing_token=apply)
     except ValueError as error:raise WorkflowError(str(error)) from None
+    if apply and not known.get('INTERVIEW_ENGINE_TOKEN'):
+        log('INFO','generated a private engine token and saved it to '+str(settings)+'; the value is never shown')
     # Pass exactly these owner settings values, no filtered environment or mode.
     args=Target(image_id,name,str(settings),port,network).arguments()
     log('INFO','preview review: accepted linux/amd64 image, existing settings, same shared runtime; work may spend only after explicit Start')

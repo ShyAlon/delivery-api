@@ -25,3 +25,30 @@ def test_insecure_mode_or_missing_file_refused(tmp_path):
     with pytest.raises(ValueError):m.validate(path)
     path.write_text(BASE);path.chmod(0o644)
     with pytest.raises(ValueError,match='mode 600'):m.validate(path)
+
+
+def test_missing_token_generated_saved_and_reused(tmp_path,capsys):
+    path=tmp_path/'private.env';path.write_text(BASE.replace('INTERVIEW_ENGINE_TOKEN=fictional-private-token-123456\n',''));path.chmod(0o600)
+    values=m.validate(path,generate_missing_token=True)
+    token=values['INTERVIEW_ENGINE_TOKEN']
+    assert len(token)>=24 and token not in path.read_text().replace('INTERVIEW_ENGINE_TOKEN='+token,'')
+    saved=path.read_text();assert saved.count('INTERVIEW_ENGINE_TOKEN=')==1
+    assert path.stat().st_mode&0o077==0
+    out=capsys.readouterr();assert token not in out.out and token not in out.err
+    assert m.validate(path)['INTERVIEW_ENGINE_TOKEN']==token
+    before=path.read_bytes();m.validate(path,generate_missing_token=True);assert path.read_bytes()==before
+
+
+def test_missing_token_without_apply_names_generation_fix(tmp_path):
+    path=tmp_path/'private.env';path.write_text(BASE.replace('INTERVIEW_ENGINE_TOKEN=fictional-private-token-123456\n',''));path.chmod(0o600)
+    with pytest.raises(ValueError) as error:m.validate(path)
+    text=str(error.value);assert 'preview --apply' in text and 'generated' in text
+
+
+def test_quoted_placeholder_and_short_token_name_the_removal_fix(tmp_path):
+    for raw in ('INTERVIEW_ENGINE_TOKEN="local-interview-engine-token"\n',"INTERVIEW_ENGINE_TOKEN='short'\n",'INTERVIEW_ENGINE_TOKEN=\n'):
+        path=tmp_path/'private.env';path.write_text(BASE.replace('INTERVIEW_ENGINE_TOKEN=fictional-private-token-123456\n',raw));path.chmod(0o600)
+        with pytest.raises(ValueError) as error:m.validate(path,generate_missing_token=True)
+        text=str(error.value)
+        assert 'delete the INTERVIEW_ENGINE_TOKEN line' in text and 'generated' in text
+        assert 'local-interview-engine-token' not in text and path.read_text().startswith('DELIVERY_DATABASE_URL')
