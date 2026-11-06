@@ -1,0 +1,5 @@
+# 2026-11-06: Waiting is only truthful when no answer is in flight
+
+Problem: after submitting an interview answer, the server keeps reporting engine_question until the engine publishes its next progress (~a minute on the paid-child path). The waiting-mode override (PR #285) rendered "Waiting for your answer" in the Start row, the header indicator, the Run progress line and the banner for that whole window, while the composer said "Sending answer…" - the page contradicted itself and showed no activity where work was in flight.
+
+Lesson: a client-side waiting state must be answer-in-flight-aware. The client already knows an answer is in flight (the held POST, then the stored shadow answer until the next question arrives); that knowledge has to reach every status renderer, not just the composer. The waiting banner's job is to call for an answer - once one is in flight it should disappear, not change its wording. And DOM-state reads belong to live updates only: a re-render builds its template against the previous render's DOM, so render-time decisions must come from persisted state (the shadow), live-event handlers from the current DOM.

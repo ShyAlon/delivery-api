@@ -4,6 +4,7 @@ import {humanLabel,humanizeSnakeCase} from './format.js';
 export const isProgressEvent = e => ['progress','heartbeat'].includes(e?.kind);
 export const progressLine = e => {const message=humanizeSnakeCase(e.message);return `<div class="progress-item ${esc(e.kind)}"><span title="${esc(message)}">${esc(message)}</span></div>`};
 export function elapsedLabel(startedAt){if(!startedAt)return '';let seconds=Math.max(0,Math.floor(Date.now()/1000-startedAt));if(seconds<60)return '<b>&lt;1</b> minute so far';let minutes=Math.floor(seconds/60);if(minutes<60)return `<b>${minutes}</b> ${minutes===1?'minute':'minutes'} so far`;let hours=Math.floor(minutes/60),remainder=minutes%60;return `<b>${hours}</b> ${hours===1?'hour':'hours'}${remainder?` <b>${remainder}</b> minutes`:''} so far`}
+export const ANSWER_PENDING_LABEL='Processing your answer…';
 export const WAITING_MODES={engine_question:['Waiting for your answer','The engine asked a question. Answer it below to continue.'],engine_decision:['Waiting for your decision','The engine needs a choice from you. Choose below to continue.'],phase_gate:['Waiting for your approval','This phase is ready. Review it and approve to continue.']};
 export function nextPhasePanel(label){return `<section class="next-phase-panel" id="nextphase" role="status"><div><b>Interview complete</b><span>${esc(label)} is next. It uses your credits as it runs, and nothing has been charged for it yet.</span></div><button class="primary next-phase-button" id="startnext" type="button" title="Starts ${esc(label)} and uses your credits. You can stop it at any time.">Start ${esc(label)}</button></section>`}
 export function waitingBanner(mode){const w=WAITING_MODES[mode];return w?`<div class="waiting-banner" id="waitingbanner" role="status"><b>${esc(w[0])}</b><span>${esc(w[1])}</span></div>`:''}
@@ -16,9 +17,9 @@ export const stageName=e=>e?humanizeSnakeCase(String(e.payload?.label||e.message
 // undo an explicit expansion. Nothing here writes to server state.
 const expandedProgress=new Map();
 document.addEventListener('toggle',event=>{const box=event.target;if(box.isConnected&&box.matches?.('details[data-progress-key]'))expandedProgress.set(box.dataset.progressKey,box.open)},true);
-export function activePhaseProgress(events,{phaseKey,afterId=0,mode='executing',fallback='Working',unavailable=''}={}){
+export function activePhaseProgress(events,{phaseKey,afterId=0,mode='executing',fallback='Working',unavailable='',answerPending=false}={}){
  if(unavailable)return unavailable;
- if(WAITING_MODES[mode])return WAITING_MODES[mode][0];
+ if(WAITING_MODES[mode])return answerPending?ANSWER_PENDING_LABEL:WAITING_MODES[mode][0];
  if(['error','stopped','stop_requested'].includes(mode))return fallback;
  const latest=[...(events||[])].reverse().find(e=>Number(e.id||0)>=afterId&&isProgressEvent(e)&&(!e.phase_key||e.phase_key===phaseKey));
  return latest?humanizeSnakeCase(String(latest.message||latest.payload?.label||fallback)):fallback;
