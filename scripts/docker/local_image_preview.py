@@ -16,10 +16,10 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
         raise WorkflowError('preview acceptance incomplete')
     if inspect_image(image_id)['Id']!=image_id:raise WorkflowError('accepted local preview image unavailable')
     settings=Path(env_file).expanduser().resolve()
-    from image_settings import read_values,validate
+    from image_settings import read_values,validate,write_container_env
     try:
         known=read_values(settings)
-        validate(settings,generate_missing_token=apply)
+        values=validate(settings,generate_missing_token=apply)
     except ValueError as error:raise WorkflowError(str(error)) from None
     if apply and not known.get('INTERVIEW_ENGINE_TOKEN'):
         log('INFO','generated a private engine token and saved it to '+str(settings)+'; the value is never shown')
@@ -29,17 +29,28 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
     if not apply:return {'state':'reviewed','image_id':image_id,'applied':False}
     if not confirm('start this accepted preview (no task is started)'):
         raise WorkflowError('preview declined; nothing started')
+    # docker --env-file passes values literally (no quote stripping), so hand the
+    # container the exact parsed values validate approved, not the owner file.
+    container_env=state.path.parent/'preview-container.env'
+    write_container_env(container_env,values)
+    args=Target(image_id,name,str(container_env),port,network).arguments()
     # No silent replacement, force-stop, schema apply or host-volume migration.
     import subprocess
     exists=subprocess.run(['docker','container','inspect',name],capture_output=True,timeout=60)
     if exists.returncode==0:
-        raise WorkflowError('preview container already exists; inspect and stop the reviewed container before retrying')
+        running=None
+        try:running=json.loads(exists.stdout)[0].get('State',{}).get('Running')
+        except (ValueError,IndexError,AttributeError):pass
+        if running is True:
+            raise WorkflowError('preview container already exists and is running; inspect it, then stop the reviewed container before retrying: docker stop '+name)
+        raise WorkflowError('preview container already exists from an earlier run; inspect its failure: docker logs --tail 80 '+name+'; then remove it before retrying: docker rm '+name)
     args[1:1]=['--label','requi.shared-runtime=1']
     command(['docker',*args])
+    last={}
     for _ in range(120):
         actual=json.loads(command(['docker','container','inspect','--format','{{json .}}',name]))
         if actual.get('Image')!=image_id:raise WorkflowError('preview running image differs; inspect before retry')
-        status=actual.get('State',{})
+        status=actual.get('State',{});last=status
         if status.get('Health',{}).get('Status')=='healthy':
             from preview_status import summarize
             status=summarize({'ok':True})
@@ -68,4 +79,6 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
             finally:backoffice.close()
         if status.get('Running') is not True or status.get('Health',{}).get('Status')=='unhealthy':break
         time.sleep(1)
-    raise WorkflowError('preview readiness failed; owned container retained for inspection, no task Start sent')
+    code=last.get('ExitCode')
+    detail='exit code '+str(code) if code is not None else 'exit code unknown'
+    raise WorkflowError('preview readiness failed ('+detail+'); the typed startup problem is in the container log: docker logs --tail 80 '+name+'; owned container retained for inspection, no task Start sent')

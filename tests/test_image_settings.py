@@ -52,3 +52,19 @@ def test_quoted_placeholder_and_short_token_name_the_removal_fix(tmp_path):
         text=str(error.value)
         assert 'delete the INTERVIEW_ENGINE_TOKEN line' in text and 'generated' in text
         assert 'local-interview-engine-token' not in text and path.read_text().startswith('DELIVERY_DATABASE_URL')
+
+
+def test_container_env_receives_exact_parsed_values_unquoted(tmp_path):
+    # The real owner shape: every value quoted by the settings writer, plus a generated token.
+    body=''.join(k+'="'+v+'"\n' for k,v in (
+        ('DELIVERY_DATABASE_URL','postgresql://postgres.fixture:6543/postgres?sslmode=require'),
+        ('DELIVERY_SUPABASE_URL','https://fixture.supabase.co'),
+        ('DELIVERY_SUPABASE_ANON_KEY','fictional-public')))
+    path=tmp_path/'private.env';path.write_text(body);path.chmod(0o600)
+    values=m.validate(path,generate_missing_token=True)
+    out=tmp_path/'container.env'
+    m.write_container_env(out,values)
+    text=out.read_text()
+    assert 'DELIVERY_DATABASE_URL=postgresql://postgres.fixture:6543/postgres?sslmode=require\n' in text
+    assert 'INTERVIEW_ENGINE_TOKEN='+values['INTERVIEW_ENGINE_TOKEN']+'\n' in text
+    assert '"' not in text and "'" not in text and out.stat().st_mode&0o077==0
