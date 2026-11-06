@@ -106,4 +106,14 @@ def validate(path: Path, *, generate_missing_token: bool=False) -> dict[str,str]
     token=result['INTERVIEW_ENGINE_TOKEN']
     if len(token)<24 or token=='local-interview-engine-token':
         raise ValueError('private engine token setting is empty, the known local placeholder, or under 24 characters: delete the INTERVIEW_ENGINE_TOKEN line from '+str(path)+' and rerun req preview --apply; a private token is generated and saved automatically (the value is never shown)')
+    if 'ollama' in [part.strip() for part in (result.get('REQUI_PIN_PROVIDERS') or 'deepseek').split(',')]:
+        base=(result.get('OLLAMA_BASE_URL') or '').strip()
+        fix='localhost is the container itself, not the Mac; set OLLAMA_BASE_URL=http://host.docker.internal:11434/v1 in this file for native Mac Ollama'
+        if not base:
+            raise ValueError('Ollama route selected but OLLAMA_BASE_URL missing: inside the preview container '+fix)
+        try:host=urlsplit(base).hostname
+        except ValueError:host=None
+        if host is None:raise ValueError('OLLAMA_BASE_URL is not a plain HTTP(S) host URL: '+fix)
+        if host in ('localhost','127.0.0.1','::1'):
+            raise ValueError('OLLAMA_BASE_URL points at loopback: inside the preview container '+fix)
     return result
