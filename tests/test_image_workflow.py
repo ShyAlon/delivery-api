@@ -192,3 +192,31 @@ def test_docker_logs_stderr_is_preserved_only_for_explicit_diagnostics(monkeypat
     monkeypatch.setattr(m.subprocess,'run',lambda *a,**k:SimpleNamespace(returncode=0,stdout='out',stderr='Traceback on stderr'))
     assert m.command(['docker','logs'])=='out'
     assert m.command(['docker','logs'],include_stderr=True)=='outTraceback on stderr'
+
+
+def _fresh_repos(tmp_path):
+    for name in m.REPOS:(tmp_path/name/'.git').mkdir(parents=True)
+
+
+def _snapshot_stubs(monkeypatch,head,remote,ancestor_rc):
+    import subprocess
+    def command(args,**kwargs):
+        if args[1]=='status':return ''
+        if args[1:3]==['rev-parse','HEAD']:return head
+        if args[1:3]==['rev-parse','origin/main']:return remote
+        if args[1]=='fetch':return ''
+        raise AssertionError(args)
+    monkeypatch.setattr(m,'command',command)
+    monkeypatch.setattr(subprocess,'run',lambda *a,**k:subprocess.CompletedProcess(a[0],ancestor_rc,b'',b''))
+
+
+def test_stale_sibling_refused_naming_repo_shas_and_pull(tmp_path,monkeypatch):
+    _fresh_repos(tmp_path);_snapshot_stubs(monkeypatch,'a'*40,'b'*40,1)
+    with pytest.raises(m.WorkflowError) as error:m.source_snapshot(tmp_path)
+    text=str(error.value)
+    assert 'delivery-api' in text and 'aaaaaaaa' in text and 'bbbbbbbb' in text and 'pull --ff-only' in text
+
+
+def test_current_sibling_records_head_without_refusal(tmp_path,monkeypatch):
+    _fresh_repos(tmp_path);_snapshot_stubs(monkeypatch,'c'*40,'b'*40,0)
+    assert m.source_snapshot(tmp_path)=={name:'c'*40 for name in m.REPOS}

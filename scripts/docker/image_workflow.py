@@ -80,6 +80,11 @@ def source_snapshot(root: Path) -> dict[str, str]:
         sha = command(["git", "rev-parse", "HEAD"], cwd=path)
         if not re.fullmatch(r"[0-9a-f]{40}", sha):
             raise WorkflowError("full source revision unavailable: " + name)
+        command(["git", "fetch", "origin", "main"], cwd=path, timeout=120)
+        remote = command(["git", "rev-parse", "origin/main"], cwd=path)
+        current = subprocess.run(["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"], cwd=path, capture_output=True, timeout=30)
+        if current.returncode != 0:
+            raise WorkflowError("stale source checkout: " + name + " HEAD " + sha[:8] + " does not contain origin/main " + remote[:8] + "; update it first: git -C " + str(path) + " pull --ff-only")
         sources[name] = sha
     return sources
 
