@@ -23,3 +23,12 @@ The page showed a dead end with no Retry button.
 - A failed send keeps the typed text and offers a working Retry button.
 - Fail-first tests drive the real journey: drop the DB connections mid-answer,
   assert the job pauses and the same operation resumes.
+
+## Real HTTP route follow-up
+The contract permits omitted expected_sequence, but the child operation pinned a
+sequence while its stored answer retained None. The child rejected the mismatch.
+Pin an omitted answer sequence from the same published snapshot as the operation;
+never override an explicit caller precondition. Real HTTP tests must cover both
+omitted and explicit sequence, plus a stale explicit sequence with no dispatch.
+Normal browser sends the engine control snapshot sequence; sequence-less API
+callers exposed this separate defect.
