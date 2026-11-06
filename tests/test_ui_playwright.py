@@ -1667,11 +1667,11 @@ def test_cross_ui_waiting_banner_during_slow_write(pg_page,pg_ui,pg_ids):
 def test_background_refresh_stays_quiet_and_unavailable_output_keeps_refreshing(pg_page,pg_ui,pg_ids):
     page,ui=pg_page,pg_ui
     tid=pg_ids["live"]
-    # Drive the approved 60s safety callbacks explicitly; state events are the normal refresh path.
+    # Drive the safety-refresh callbacks explicitly; state events are the normal refresh path.
     # The background read must not flash the global wait banner, and once the environment
     # reports temporarily unreadable output, both refresh legs must keep running.
     # Foreground reads must still show progress.
-    page.add_init_script("""const originalInterval=window.setInterval;window.__safety=[];window.setInterval=(fn,ms,...args)=>{if(ms===60000)window.__safety.push(()=>fn(...args));return originalInterval(fn,ms,...args)}""")
+    page.add_init_script("""const originalInterval=window.setInterval;window.__safety=[];window.setInterval=(fn,ms,...args)=>{if(ms===60000)window.__safety.push(()=>fn(...args));return originalInterval(fn,ms,...args)};const originalTimeout=window.setTimeout;window.setTimeout=(fn,ms,...args)=>{if(ms>=60000)window.__safety.push(()=>fn(...args));return originalTimeout(fn,ms,...args)}""")
     page.goto(ui + f'/tasks/{tid}/view')
     page.locator('.detail-head').wait_for()
     real = page.request.get(ui + f'/api/tasks/{tid}/phase-output').json()
@@ -1710,6 +1710,103 @@ def test_background_refresh_stays_quiet_and_unavailable_output_keeps_refreshing(
     page.unroute(f'**/api/tasks/{tid}', slow_task)
     page.unroute(f'**/api/tasks/{tid}/phase-output', terminal_output)
 
+
+
+def test_safety_refresh_backs_off_while_stream_is_live(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    # A connected progress stream already delivers every state change. The safety
+    # poller is only a backstop: while the stream is live it must poll on a slow
+    # cadence (120s), not hit the snapshot and phase-output endpoints every 60s.
+    page.clock.install()
+    page.add_init_script("""window.__es=[];
+      window.EventSource=class{constructor(url){this.url=url;this.closed=false;window.__es.push(this);setTimeout(()=>{if(!this.closed&&this.onopen)this.onopen()},0)}addEventListener(){}close(){this.closed=true}}""")
+    hits={'task':0,'output':0}
+    def count_task(route):
+        hits['task']+=1
+        route.continue_()
+    def count_output(route):
+        hits['output']+=1
+        route.continue_()
+    page.route(f'**/api/tasks/{tid}',count_task)
+    page.route(f'**/api/tasks/{tid}/phase-output',count_output)
+    page.goto(ui + f'/tasks/{tid}/view')
+    page.locator('.detail-head').wait_for()
+    page.clock.run_for(50)  # let the stream-open callback land: stream is live
+    hits['task']=0;hits['output']=0
+    for _ in range(10):  # ten minutes, letting each tick's reads settle so the pending guards clear
+        page.clock.run_for(60000)
+        page.wait_for_timeout(150)
+    assert 3 <= hits['task'] <= 7, f"snapshot safety reads over 10 min with a live stream: {hits}"
+    assert 3 <= hits['output'] <= 7, f"phase-output safety reads over 10 min with a live stream: {hits}"
+
+
+def test_overlapping_rerenders_leave_a_single_poller(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    # A state event from a stream the page already disposed can start a second
+    # render while the first is still loading. The older render must never
+    # commit over the newer one: a stale commit leaks the newer render's timers
+    # and stream, and every leaked render keeps polling forever.
+    page.clock.install()
+    page.add_init_script("""window.__es=[];
+      window.EventSource=class{constructor(url){this.url=url;this.closed=false;this._h={};window.__es.push(this);setTimeout(()=>{if(!this.closed&&this.onopen)this.onopen()},0)}
+        addEventListener(t,f){(this._h[t]=this._h[t]||[]).push(f)}
+        emit(t,e){(this._h[t]||[]).forEach(f=>f({data:JSON.stringify(e)}))}
+        close(){this.closed=true}}""")
+    snapshot=page.request.get(ui + f'/api/tasks/{tid}').json()
+    bumps=[]
+    for marker in ('overlap-bump-1','overlap-bump-2'):
+        changed=json.loads(json.dumps(snapshot))
+        changed['control_snapshot']['input_id']=marker
+        bumps.append(changed)
+    task_calls={'n':0}
+    held={'route':None}
+    feedback_calls={'n':0}
+    hits={'task':0}
+    def route_task(route):
+        task_calls['n']+=1
+        n=task_calls['n']
+        if n==2:route.fulfill(json=bumps[0]);return
+        if n==4:route.fulfill(json=bumps[1]);return
+        hits['task']+=1
+        route.continue_()
+    def route_feedback(route):
+        feedback_calls['n']+=1
+        if feedback_calls['n']==2:
+            held['route']=route  # hold the first re-render mid-load
+            return
+        route.continue_()
+    page.route(f'**/api/tasks/{tid}',route_task)
+    page.route(f'**/api/tasks/{tid}/feedback',route_feedback)
+    page.goto(ui + f'/tasks/{tid}/view')
+    page.locator('.detail-head').wait_for()
+    page.wait_for_function('window.__es.length===1')
+    page.clock.run_for(50)
+    # First stream event: normal re-render path. Render 2 starts and parks on its held feedback read.
+    page.evaluate("window.__es[0].emit('progress',{kind:'waiting_input',message:'one',payload:{}})")
+    page.clock.run_for(200)  # debounce timer
+    for _ in range(50):
+        if held['route'] is not None:break
+        page.wait_for_timeout(100)
+    assert held['route'] is not None, 'second render never started from the stream event'
+    # Second event from the stream the page already closed. Without a revision
+    # fence this starts render 3 while render 2 is parked, and the parked render
+    # commits last, leaking render 3's pollers. A fenced page ignores the dead stream.
+    page.evaluate("window.__es[0].emit('progress',{kind:'waiting_input',message:'two',payload:{}})")
+    page.clock.run_for(200)
+    page.wait_for_timeout(500)
+    # Render 2 finishes last. It must commit cleanly, or not at all.
+    held['route'].continue_()
+    page.wait_for_function('window.__es.length>=2',timeout=10000)
+    page.clock.run_for(50)
+    page.wait_for_timeout(1000)
+    open_streams=page.evaluate('window.__es.filter(e=>!e.closed).length')
+    assert open_streams==1, f"overlapping renders left {open_streams} streams open (renders: {page.evaluate('window.__es.length')})"
+    hits['task']=0
+    page.clock.fast_forward(240000)
+    page.wait_for_timeout(500)
+    assert hits['task'] <= 4, f"snapshot reads over 4 min after overlapping renders: {hits['task']} (leaked pollers keep multiplying)"
 
 
 def test_route_placeholder_holds_geometry_then_reveals_without_shell_shift(pg_page,pg_ui,pg_ids):
