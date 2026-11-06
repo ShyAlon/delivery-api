@@ -26,6 +26,8 @@ def build_inputs(tmp_path,monkeypatch):
         (path/'source.py').write_text('VALUE=1\n')
         if name=='delivery-api':(path/'Dockerfile.full').write_text('FROM scratch\n')
         git(path,'add','.');git(path,'commit','-qm','fixture')
+        remote=tmp_path/('remote-'+name);git(tmp_path,'init','-q','--bare',str(remote))
+        git(path,'remote','add','origin',str(remote));git(path,'push','-q','origin','main')
     sources=m.source_snapshot(root)
     state=m.StageState(tmp_path/'private run'/'state.json',{'sources':sources})
     state.complete('preflight',{})
