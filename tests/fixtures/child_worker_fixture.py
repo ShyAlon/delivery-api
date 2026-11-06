@@ -27,6 +27,11 @@ if mode=='descendant':
     import subprocess
     kid=subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)'],close_fds=True)
     open(sys.argv[2],'w').write(str(kid.pid))
+if mode=='timings':
+    print('advance.turn.begin session=12345678-1234-1234-1234-123456789012',file=sys.stderr,flush=True)
+    print('advance.turn.end session=12345678-1234-1234-1234-123456789012 dur_ms=17123',file=sys.stderr,flush=True)
+    print('raw answer text that must never be retained session=12345678-1234-1234-1234-123456789012',file=sys.stderr,flush=True)
+    print('Traceback (most recent call last):',file=sys.stderr,flush=True)
 if mode=='crash':os._exit(17)
 if mode=='stuck':
     signal.signal(signal.SIGTERM,signal.SIG_IGN)

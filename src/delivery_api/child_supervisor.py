@@ -12,6 +12,24 @@ import signal
 import socket
 from requi_child_contract import encode_operation,decode_event
 
+import re as _re
+
+# Structured engine timing records (dotted event, key=value fields, session id)
+# are retained in the bounded engine stream so the Debug package keeps them.
+# Everything else on child stderr keeps the shape-only failure policy: arbitrary
+# stderr may contain prompts, parameters or credentials and is never echoed.
+_STRUCTURED_TIMING=_re.compile(r'^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+(?: [a-z_]+=\S+)*$')
+_TIMING_SESSION=_re.compile(r'\bsession=([0-9a-fA-F-]{36})\b')
+
+def _forward_engine_timing(line:str):
+    text=line.strip()
+    if not text or len(text)>2000 or not _STRUCTURED_TIMING.match(text):return
+    found=_TIMING_SESSION.search(text)
+    if not found:return
+    from .process_logs import emit
+    emit('engine',text,session_id=found.group(1))
+
+
 
 class ChildRunError(RuntimeError):pass
 
@@ -86,7 +104,9 @@ class ChildSupervisor:
                         if len(pending)+len(part)>4096:discard=True;pending=b''
                         if not discard:pending+=part
                         if part.endswith(b'\n'):
-                            if not discard and child_error is None:child_error=parse(pending)
+                            if not discard:
+                                if child_error is None:child_error=parse(pending)
+                                _forward_engine_timing(pending.decode('utf-8',errors='replace'))
                             pending=b'';discard=False
             stderr_task=asyncio.create_task(drain_stderr())
             child.close()
