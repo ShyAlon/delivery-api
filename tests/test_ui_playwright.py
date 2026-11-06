@@ -1955,7 +1955,7 @@ def test_submitted_answer_stays_visible_as_shadow_copy_while_processing(pg_page,
     page.route(f'**/api/tasks/{tid}/answer', lambda route: route.fulfill(json={'status': 'accepted'}))
     page.goto(ui + f'/tasks/{tid}/view'); answer = page.locator('#answerform textarea')
     answer.fill('Speed, then cost'); answer.press('Enter')
-    page.get_by_text('Processing your answer', exact=False).wait_for()
+    page.locator('#shadowcopy').get_by_text('Processing your answer', exact=False).wait_for()
     shadow = page.locator('#shadowcopy')
     assert shadow.is_visible()
     assert page.locator('#shadowq').inner_text() == 'What matters most?'
@@ -2076,7 +2076,7 @@ def test_submitting_answer_is_prominent_and_pulses_unless_reduced_motion(pg_page
     assert size >= 16 and banner.evaluate('e=>getComputedStyle(e).animationName') == 'answer-pulse'
     assert banner.evaluate('e=>parseFloat(getComputedStyle(e).borderTopWidth)') >= 3
     page.screenshot(path=str(_screenshots_dir / 'submitting-answer.png'))
-    page.get_by_text('Processing your answer', exact=False).wait_for()
+    page.locator('#shadowcopy').get_by_text('Processing your answer', exact=False).wait_for()
     shadow = page.locator('#shadowcopy')
     assert shadow.evaluate('e=>getComputedStyle(e).animationName') == 'answer-pulse'
     assert shadow.evaluate('e=>parseFloat(getComputedStyle(e).borderTopWidth)') >= 3
@@ -2541,6 +2541,47 @@ def test_waiting_phase_status_is_not_overwritten_by_late_heartbeat(pg_page,pg_ui
     page.evaluate("liveSource.emit({id:10001,kind:'heartbeat',phase_key:'intent',message:'Old working heartbeat',payload:{stage:'probe',status:'heartbeat'},ts:Date.now()/1000})")
     expect(line).to_have_text('Waiting for your answer')
     expect(page.locator('#stageprogress > details > summary')).to_contain_text('Waiting for your answer')
+
+
+def test_submitted_answer_shows_processing_until_next_question(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
+    live['active_phase']='intent';live['state']='running'
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'test-input','precondition':{'session_sequence':1}}
+    live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'question':'What should it do?','decision':None,'gate':None,'show_question':True,'show_answer_composer':True}
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.add_init_script("window.EventSource=class{constructor(){window.liveSource=this;this.listeners={}}addEventListener(k,f){this.listeners[k]=f}close(){}emit(e){this.listeners.progress({data:JSON.stringify(e)})}}")
+    pending=[]
+    page.route(f'**/api/tasks/{tid}/answer',lambda route:pending.append(route))
+    page.goto(ui+f'/tasks/{tid}/view')
+    line=page.locator('.phase-current-progress')
+    expect(line).to_have_text('Waiting for your answer')
+    page.locator('#answerform textarea').fill('The answer is on its way')
+    page.locator('#answerform button[type=submit]').click()
+    # While the answer is in flight the page must not claim it is waiting for one.
+    expect(line).to_have_text('Processing your answer\u2026')
+    expect(page.locator('.live-indicator')).to_have_class('live-indicator working')
+    expect(page.locator('.live-indicator span')).to_have_text('Processing your answer\u2026')
+    expect(page.locator('#waitingbanner')).to_be_hidden()
+    # A late engine heartbeat during the held POST must not flip the row back to waiting.
+    page.evaluate("liveSource.emit({id:10002,kind:'heartbeat',phase_key:'intent',message:'Old working heartbeat',payload:{stage:'probe',status:'heartbeat'},ts:Date.now()/1000})")
+    expect(line).to_have_text('Processing your answer\u2026')
+    expect(page.locator('#stageprogress > details > summary')).to_contain_text('Processing your answer\u2026')
+    # After the POST settles the shadow answer keeps the processing state across re-renders.
+    pending.pop().fulfill(json={})
+    expect(page.locator('#shadowcopy')).to_be_visible()
+    page.evaluate("liveSource.emit({id:10003,kind:'heartbeat',phase_key:'intent',message:'Another late heartbeat',payload:{stage:'probe',status:'heartbeat'},ts:Date.now()/1000})")
+    expect(line).to_have_text('Processing your answer\u2026')
+    # When the engine publishes the next question, waiting-for-answer becomes truthful again.
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'next-input','precondition':{'session_sequence':2}}
+    live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'question':'And after that?','decision':None,'gate':None,'show_question':True,'show_answer_composer':True}
+    page.evaluate("liveSource.emit({id:10004,kind:'waiting_input',phase_key:'intent',message:'And after that?',payload:{question:'And after that?'},ts:Date.now()/1000})")
+    expect(line).to_have_text('Waiting for your answer')
+    expect(page.locator('.live-indicator')).to_have_class('live-indicator waiting')
+    expect(page.locator('#waitingbanner')).to_be_visible()
+    expect(page.locator('#shadowcopy')).to_be_hidden()
+    expect(page.locator('#answerform textarea')).to_be_enabled()
 
 
 def test_both_admitted_routes_can_be_selected_without_hiding_either(pg_page,pg_ui,pg_ids):
