@@ -68,3 +68,33 @@ def test_container_env_receives_exact_parsed_values_unquoted(tmp_path):
     assert 'DELIVERY_DATABASE_URL=postgresql://postgres.fixture:6543/postgres?sslmode=require\n' in text
     assert 'INTERVIEW_ENGINE_TOKEN='+values['INTERVIEW_ENGINE_TOKEN']+'\n' in text
     assert '"' not in text and "'" not in text and out.stat().st_mode&0o077==0
+
+
+OLLAMA_FIX='http://host.docker.internal:11434/v1'
+
+
+def test_ollama_route_without_base_url_names_container_loopback_fix(tmp_path):
+    path=tmp_path/'private.env';path.write_text(BASE+'REQUI_PIN_PROVIDERS=ollama\n');path.chmod(0o600)
+    with pytest.raises(ValueError) as error:m.validate(path)
+    text=str(error.value)
+    assert 'localhost is the container itself' in text and OLLAMA_FIX in text
+
+
+def test_ollama_route_with_container_loopback_url_refused_with_named_fix(tmp_path):
+    for host in ('localhost','127.0.0.1','[::1]'):
+        path=tmp_path/'private.env'
+        path.write_text(BASE+'REQUI_PIN_PROVIDERS=ollama\nOLLAMA_BASE_URL="http://'+host+':11434/v1"\n');path.chmod(0o600)
+        with pytest.raises(ValueError) as error:m.validate(path)
+        text=str(error.value)
+        assert 'localhost is the container itself' in text and OLLAMA_FIX in text
+
+
+def test_ollama_route_with_host_gateway_url_passes(tmp_path):
+    path=tmp_path/'private.env'
+    path.write_text(BASE+'REQUI_PIN_PROVIDERS=ollama\nOLLAMA_BASE_URL="'+OLLAMA_FIX+'"\n');path.chmod(0o600)
+    assert m.validate(path)['OLLAMA_BASE_URL']==OLLAMA_FIX
+
+
+def test_non_ollama_route_needs_no_ollama_url(tmp_path):
+    path=tmp_path/'private.env';path.write_text(BASE+'REQUI_PIN_PROVIDERS=deepseek\n');path.chmod(0o600)
+    assert 'OLLAMA_BASE_URL' not in m.validate(path)
