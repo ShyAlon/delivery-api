@@ -73,11 +73,14 @@ def _atomic_private_write(path: Path, raw: bytes) -> None:
         raise
 
 
-def _persist_engine_token(path: Path, token: str) -> None:
-    # Atomic append of one generated value; the file is already verified private.
+OLLAMA_DERIVED_BASE_URL='http://host.docker.internal:11434/v1'
+
+
+def _persist_setting(path: Path, name: str, value: str) -> None:
+    # Atomic append of one derived value; the file is already verified private.
     original=path.read_bytes()
     if original and not original.endswith(b'\n'):original+=b'\n'
-    _atomic_private_write(path,original+b'INTERVIEW_ENGINE_TOKEN='+token.encode('ascii')+b'\n')
+    _atomic_private_write(path,original+name.encode('ascii')+b'='+value.encode('ascii')+b'\n')
 
 
 def write_container_env(path: Path, values: dict[str,str]) -> None:
@@ -100,20 +103,24 @@ def validate(path: Path, *, generate_missing_token: bool=False) -> dict[str,str]
         if not generate_missing_token:
             raise ValueError('private engine token setting missing; run req preview --apply: a private token is generated and saved to this file automatically. To choose your own, add INTERVIEW_ENGINE_TOKEN (24+ characters) instead')
         token=secrets.token_urlsafe(32)
-        _persist_engine_token(path,token)
+        _persist_setting(path,'INTERVIEW_ENGINE_TOKEN',token)
         result['INTERVIEW_ENGINE_TOKEN']=token
-        return result
-    token=result['INTERVIEW_ENGINE_TOKEN']
-    if len(token)<24 or token=='local-interview-engine-token':
-        raise ValueError('private engine token setting is empty, the known local placeholder, or under 24 characters: delete the INTERVIEW_ENGINE_TOKEN line from '+str(path)+' and rerun req preview --apply; a private token is generated and saved automatically (the value is never shown)')
+    else:
+        token=result['INTERVIEW_ENGINE_TOKEN']
+        if len(token)<24 or token=='local-interview-engine-token':
+            raise ValueError('private engine token setting is empty, the known local placeholder, or under 24 characters: delete the INTERVIEW_ENGINE_TOKEN line from '+str(path)+' and rerun req preview --apply; a private token is generated and saved automatically (the value is never shown)')
     if 'ollama' in [part.strip() for part in (result.get('REQUI_PIN_PROVIDERS') or 'deepseek').split(',')]:
         base=(result.get('OLLAMA_BASE_URL') or '').strip()
-        fix='localhost is the container itself, not the Mac; set OLLAMA_BASE_URL=http://host.docker.internal:11434/v1 in this file for native Mac Ollama'
+        fix='localhost is the container itself, not the Mac; set OLLAMA_BASE_URL='+OLLAMA_DERIVED_BASE_URL+' in this file for native Mac Ollama'
         if not base:
-            raise ValueError('Ollama route selected but OLLAMA_BASE_URL missing: inside the preview container '+fix)
-        try:host=urlsplit(base).hostname
-        except ValueError:host=None
-        if host is None:raise ValueError('OLLAMA_BASE_URL is not a plain HTTP(S) host URL: '+fix)
-        if host in ('localhost','127.0.0.1','::1'):
-            raise ValueError('OLLAMA_BASE_URL points at loopback: inside the preview container '+fix)
+            if not generate_missing_token:
+                raise ValueError('Ollama route selected but OLLAMA_BASE_URL missing: run req preview --apply and the native Mac default '+OLLAMA_DERIVED_BASE_URL+' is derived and saved to this file automatically; inside the preview container localhost is the container itself, not the Mac. Set OLLAMA_BASE_URL yourself only for a different Ollama host')
+            _persist_setting(path,'OLLAMA_BASE_URL',OLLAMA_DERIVED_BASE_URL)
+            result['OLLAMA_BASE_URL']=OLLAMA_DERIVED_BASE_URL
+        else:
+            try:host=urlsplit(base).hostname
+            except ValueError:host=None
+            if host is None:raise ValueError('OLLAMA_BASE_URL is not a plain HTTP(S) host URL: '+fix)
+            if host in ('localhost','127.0.0.1','::1'):
+                raise ValueError('OLLAMA_BASE_URL points at loopback: inside the preview container '+fix)
     return result

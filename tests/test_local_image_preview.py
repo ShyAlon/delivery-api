@@ -110,3 +110,24 @@ def test_running_container_names_docker_stop(tmp_path,monkeypatch):
     value,env,runs=_apply_stubs(tmp_path,monkeypatch,{},True)
     with pytest.raises(m.WorkflowError) as error:m.preview(value,env_file=str(env),apply=True)
     assert 'docker stop requi-preview-exec' in str(error.value)
+
+
+def test_apply_derives_and_hands_container_ollama_host_gateway(tmp_path,monkeypatch):
+    import builtins, json, subprocess
+    value=state();value.path=tmp_path/'state.json'
+    env=tmp_path/'private.env'
+    env.write_text(QUOTED+'REQUI_PIN_PROVIDERS=ollama\n');env.chmod(0o600)
+    monkeypatch.setattr(m,'inspect_image',lambda image:{'Id':image})
+    monkeypatch.setattr(builtins,'input',lambda prompt='':'yes')
+    runs=[]
+    def command(args,**kwargs):
+        runs.append(args)
+        if 'inspect' in args:return json.dumps({'Image':ID,'State':{'Running':False,'ExitCode':2}})
+        return ''
+    monkeypatch.setattr(m,'command',command)
+    monkeypatch.setattr(subprocess,'run',lambda *a,**k:subprocess.CompletedProcess(a[0],1,b'',b''))
+    with pytest.raises(m.WorkflowError):m.preview(value,env_file=str(env),apply=True)
+    run=next(a for a in runs if a and a[0]=='docker' and 'run' in a)
+    handed=Path(run[run.index('--env-file')+1])
+    assert 'OLLAMA_BASE_URL=http://host.docker.internal:11434/v1\n' in handed.read_text()
+    assert env.read_text().count('OLLAMA_BASE_URL=')==1
