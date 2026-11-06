@@ -1,6 +1,9 @@
 """Read existing owner settings as values, never execute or rewrite them."""
 from pathlib import Path
+import os
 import re
+import secrets
+import tempfile
 from urllib.parse import urlsplit
 
 
@@ -58,13 +61,35 @@ def validate_auth(result):
     return result
 
 
-def validate(path: Path) -> dict[str,str]:
+def _persist_engine_token(path: Path, token: str) -> None:
+    # Atomic append of one generated value; the file is already verified private.
+    original=path.read_bytes()
+    if original and not original.endswith(b'\n'):original+=b'\n'
+    descriptor,temporary=tempfile.mkstemp(prefix='.engine-token-',dir=str(path.parent))
+    try:
+        with os.fdopen(descriptor,'wb') as stream:stream.write(original+b'INTERVIEW_ENGINE_TOKEN='+token.encode('ascii')+b'\n')
+        os.chmod(temporary,0o600)
+        os.replace(temporary,path)
+    except BaseException:
+        try:os.unlink(temporary)
+        except OSError:pass
+        raise
+
+
+def validate(path: Path, *, generate_missing_token: bool=False) -> dict[str,str]:
     result=read_values(path)
     db=result.get('DELIVERY_DATABASE_URL','')
     if not db.startswith(('postgresql://','postgres://')):
         raise ValueError('PostgreSQL settings required; no local storage fallback')
     validate_auth(result)
-    token=result.get('INTERVIEW_ENGINE_TOKEN','')
+    if 'INTERVIEW_ENGINE_TOKEN' not in result:
+        if not generate_missing_token:
+            raise ValueError('private engine token setting missing; run req preview --apply: a private token is generated and saved to this file automatically. To choose your own, add INTERVIEW_ENGINE_TOKEN (24+ characters) instead')
+        token=secrets.token_urlsafe(32)
+        _persist_engine_token(path,token)
+        result['INTERVIEW_ENGINE_TOKEN']=token
+        return result
+    token=result['INTERVIEW_ENGINE_TOKEN']
     if len(token)<24 or token=='local-interview-engine-token':
-        raise ValueError('private engine token setting required; use existing owner settings setup')
+        raise ValueError('private engine token setting is empty, the known local placeholder, or under 24 characters: delete the INTERVIEW_ENGINE_TOKEN line from '+str(path)+' and rerun req preview --apply; a private token is generated and saved automatically (the value is never shown)')
     return result
