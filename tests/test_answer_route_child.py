@@ -9,7 +9,7 @@ from test_cloud_api import cloud,header,A  # noqa: F401
 
 DELAY=0
 
-@pytest.mark.parametrize('sequence',['omitted','current','stale'])
+@pytest.mark.parametrize('sequence',['omitted','current','stale','drop'])
 def test_sequence_optional_http_answer_reaches_real_child(cloud,monkeypatch,sequence):
     pytest.importorskip('interview_engine')
     client,store,root=cloud
@@ -20,11 +20,12 @@ def test_sequence_optional_http_answer_reaches_real_child(cloud,monkeypatch,sequ
     from test_postgres_store import DSN
     from test_cloud_api import A as scope
     from strict_provider import read_request
-    calls=[]
+    calls=[];entered=threading.Event();release=threading.Event();armed=[]
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             payload=read_request(self);calls.append(payload)
-            if len(calls)>1:time.sleep(DELAY)
+            if armed and not entered.is_set():
+                entered.set();assert release.wait(20)
             body=json.dumps({'id':'fake','object':'chat.completion','model':payload['model'],'choices':[{'index':0,'message':{'role':'assistant','content':json.dumps({'is_web_app':True,'archetype':'saas_crud','confidence':0.9,'reason':'fake'}) if 'is_web_app' in json.dumps(payload) else json.dumps({'question':'What does a booking look like for your customers?','covered':[],'thin':[],'skipped':[],'complete':False})},'finish_reason':'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20}}).encode()
             self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(body)
         def log_message(self,*a):pass
@@ -53,9 +54,21 @@ def test_sequence_optional_http_answer_reaches_real_child(cloud,monkeypatch,sequ
             assert store.begin_interview_start(tid,sid,'ollama')
             snap=child.start(StartSessionRequest(session_id=sid,task_id=tid,idea='Test web app',model_route='ollama',initial_model='fake')).snapshot
         body={'answer':'Bookings have a customer and a time slot','decision_id':str(snap.open_input.input_id)}
-        if sequence!='omitted':body['expected_sequence']=snap.sequence if sequence=='current' else snap.sequence-1
+        if sequence!='omitted':body['expected_sequence']=snap.sequence-1 if sequence=='stale' else snap.sequence
         before=len(calls)
-        r=client.post('/api/tasks/%s/answer'%tid,json=body,headers=h)
+        if sequence=='drop':
+            from concurrent.futures import ThreadPoolExecutor
+            import psycopg
+            armed.append(True)
+            with ThreadPoolExecutor(max_workers=1) as workers:
+                pending=workers.submit(client.post,'/api/tasks/%s/answer'%tid,json=body,headers=h)
+                assert entered.wait(20),'HTTP answer never reached provider'
+                with psycopg.connect(DSN,autocommit=True) as admin:
+                    admin.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename='delivery_app' AND pid<>pg_backend_pid()")
+                release.set()
+                r=pending.result(timeout=90)
+        else:
+            r=client.post('/api/tasks/%s/answer'%tid,json=body,headers=h)
         if sequence=='stale':
             assert r.status_code==409,r.text
             assert len(calls)==before,'stale precondition must not dispatch'
@@ -64,4 +77,16 @@ def test_sequence_optional_http_answer_reaches_real_child(cloud,monkeypatch,sequ
         with tenant_context(scope):
             assert child.snapshot(sid).sequence>snap.sequence
         assert len(calls)>1
-    finally:server.shutdown();server.server_close()
+        if sequence=='drop':
+            with tenant_context(scope):
+                events=store.events(tid)
+                paused=[e for e in events if e['kind']=='child.interrupted']
+                completed=[e for e in events if e['kind']=='child.completed']
+                recovered=[e for e in events if e['kind']=='engine_protocol' and 'interruption' in e.get('message','')]
+                # The accepted response must refer to recovery, not a new submit.
+                assert any((e.get('payload') or {}).get('recovered')=='resumed-interrupted-child' for e in events)
+                recovery=next(e['payload'] for e in events if (e.get('payload') or {}).get('recovered'))
+                assert completed[-1]['payload']['job_id']==recovery['job_id']
+                assert store.worker_job(recovery['job_id'])['state']=='done'
+            assert len(calls)==before+1,'recovery must not duplicate the accepted provider call'
+    finally:release.set();server.shutdown();server.server_close()
