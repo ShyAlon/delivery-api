@@ -302,11 +302,12 @@ class ChildInterviewClient(EngineClient):
                 with httpx.Client(trust_env=False,follow_redirects=False,timeout=None) as client:
                     broker=ChildProviderBroker(operation,gateway=gateway,journal=journal,client=client,
                         endpoint=endpoint,headers=headers,authorize=authority)
-                    with provider_broker_channel(broker) as provider_fd,child_compute_channel(compute) as compute_fd:
+                    from .child_progress import progress_wake_channel
+                    with provider_broker_channel(broker) as provider_fd,child_compute_channel(compute) as compute_fd,progress_wake_channel(sid) as progress_fd:
                         timings['setup']=int((time.monotonic()-setup_at)*1000);supervisor_at=time.monotonic()
                         try:
                             await self.supervisor.run(operation,authorize=lambda op:capability.validate(self.store),private_config=cfg,
-                                descriptors={'broker':provider_fd.fileno(),'compute':compute_fd.fileno()},stop=stop,persist_stop=fence_stop)
+                                descriptors={'broker':provider_fd.fileno(),'compute':compute_fd.fileno(),'progress':progress_fd.fileno()},stop=stop,persist_stop=fence_stop)
                         except Exception as error:child_error=error
                 timings['supervisor']=int((time.monotonic()-supervisor_at)*1000);completion_at=time.monotonic()
                 watcher.cancel()

@@ -68,7 +68,7 @@ class ChildSupervisor:
         if stop is not None and persist_stop is None:raise ValueError('durable stop callback required')
         # Callback is supplied by trusted parent wiring, never from the request.
         descriptors=dict(descriptors or {})
-        if set(descriptors)-{'broker','compute','output'}:raise ValueError('unknown private child descriptor')
+        if set(descriptors)-{'broker','compute','output','progress'}:raise ValueError('unknown private child descriptor')
         if any(type(fd) is not int or fd<0 for fd in descriptors.values()):raise ValueError('valid descriptor required')
         raw=None
         if private_config is not None:
