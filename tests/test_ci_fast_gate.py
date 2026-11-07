@@ -32,8 +32,7 @@ def test_gate_job_runs_fast_scope_without_browser_or_matrix():
     assert 'playwright install' not in steps,'gate must not pay the browser download'
     assert 'check-ui-boundaries.py' in steps
     assert 'node --experimental-vm-modules scripts/ci/check-operator-modules.mjs' in steps
-    # check-process-control.py is stale on main (markers predate the current
-    # app.py) and is not part of the gate until fixed separately.
+    assert 'check-process-control.py' in steps,'gate must enforce the prose-free interview control path'
 
 def test_matrix_job_is_not_part_of_an_ordinary_pr():
     d=doc();matrix=job(d,'matrix')
