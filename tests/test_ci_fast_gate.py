@@ -41,9 +41,15 @@ def test_matrix_job_is_not_part_of_an_ordinary_pr():
     assert 'workflow_dispatch' in cond and 'schedule' in cond and 'ready_for_review' in cond,cond
     assert 'pull_request' not in cond.replace('ready_for_review',''),cond
 
-def test_nightly_schedule_keeps_full_depth():
+def test_weekly_schedule_keeps_full_depth():
     sched=(on_block(doc()) or {}).get('schedule')
-    assert sched and any('cron' in e for e in sched),'nightly full-matrix run missing'
+    assert sched,'weekly full-matrix run missing'
+    crons=[e['cron'] for e in sched if 'cron' in e]
+    assert len(crons)==1,crons
+    fields=crons[0].split()
+    assert len(fields)==5 and fields[4]!='*',(
+        'owner decision 2026-11-07: full matrix weekly, not nightly; '
+        f'cron must pin a day-of-week, got {crons[0]!r}')
 
 def test_image_still_waits_on_the_full_matrix():
     d=doc();image=job(d,'image')
