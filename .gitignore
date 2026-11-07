@@ -24,3 +24,9 @@ dist/
 runs/
 # Relative-DSN test databases created in the workdir by a local test run
 /host=/
+
+# Ad-hoc local diagnostics from the owner machine
+/grep.txt
+/requi-*.sh
+/requi-*.txt
+/requi-*.py
