@@ -8,6 +8,9 @@ on:
       - 'docs/**'
       - '**/*.md'
   workflow_dispatch:
+  # Full matrix against main every night; the every-PR gate stays under five minutes.
+  schedule:
+    - cron: '41 2 * * *'
 
 permissions:
   contents: read
@@ -21,7 +24,30 @@ env:
   IMAGE: ghcr.io/shyalon/delivery-api
 
 jobs:
-  test:
+  # Every-PR gate: fast deterministic core (no Postgres, no browser) plus
+  # boundary checks on a single runner. The full four-shard matrix below runs
+  # on workflow_dispatch, nightly, and when a PR is marked ready_for_review.
+  gate:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+      - run: python -m pip install vendor/vmodel_contracts-0.28.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl
+      - name: Enforce zero UI component exceptions
+        run: python scripts/ci/check-ui-boundaries.py
+      - name: Link real ES modules without DOM or network
+        run: node --experimental-vm-modules scripts/ci/check-operator-modules.mjs
+      - run: DELIVERY_TEST_SCOPE=gate ./scripts/test-local.sh
+
+  matrix:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event.action == 'ready_for_review'
     strategy:
       fail-fast: false
       matrix:
@@ -101,7 +127,7 @@ jobs:
 
   image:
     if: github.event_name == 'workflow_dispatch'
-    needs: [test, control-plane-wheel, fresh-start-acceptance]
+    needs: [matrix, control-plane-wheel, fresh-start-acceptance]
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}

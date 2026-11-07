@@ -45,15 +45,20 @@ fi
 PYTHON=.venv/bin/python
 "$PYTHON" -m pip install vendor/vmodel_contracts-0.28.0-py3-none-any.whl vendor/requi_child_contract-0.3.0-py3-none-any.whl
 "$PYTHON" -m pip install -e '.[dev]'
+SCOPE="${DELIVERY_TEST_SCOPE:-full}"
 # Browser system dependencies are Linux-only; macOS installs just Chromium.
-if [[ "$(uname -s)" == "Linux" ]]; then
-  "$PYTHON" -m playwright install --with-deps chromium
-else
-  "$PYTHON" -m playwright install chromium
+# The fast PR gate runs no browser tests and skips the download entirely.
+if [[ "$SCOPE" != gate ]]; then
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    "$PYTHON" -m playwright install --with-deps chromium
+  else
+    "$PYTHON" -m playwright install chromium
+  fi
 fi
-case "${DELIVERY_TEST_SCOPE:-full}" in
+case "$SCOPE" in
+  gate) exec ./scripts/ci/test-gate.sh ;;
   pr) exec ./scripts/ci/test-pr.sh ;;
   cosmetic) exec ./scripts/ci/test-cosmetic.sh ;;
   full) "$PYTHON" -m pytest -q ;;
-  *) echo "Error: unknown DELIVERY_TEST_SCOPE; expected pr, cosmetic, or full." >&2; exit 1 ;;
+  *) echo "Error: unknown DELIVERY_TEST_SCOPE; expected gate, pr, cosmetic, or full." >&2; exit 1 ;;
 esac
