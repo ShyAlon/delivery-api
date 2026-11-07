@@ -165,8 +165,9 @@ async def _resume_orphaned_handoffs()->None:
         spawn(recover())
 
 
-async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=False)->None:
-    """Read all committed journal pages; independent of the engine control lock."""
+async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=False)->bool:
+    """Read all committed pages; return whether any real progress was ingested."""
+    advanced=False
     from .progress_adapter import ingest_interview_page
     while True:
         cursor=await run_in_threadpool(store.progress_cursor,task_id,"interview",session_id)
@@ -184,6 +185,7 @@ async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=
         # and source progress read still perform their normal tenant checks.
         if page.events:
             await run_in_threadpool(ingest_interview_page,store,task_id,session_id,page)
+            advanced=True
         elif page.next_cursor!=cursor:
             raise RuntimeError('empty progress page advanced cursor')
         if page.events:
@@ -196,7 +198,7 @@ async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=
                      source_age_max_ms=max(lags),source_age_min_ms=min(lags))
         if not page.events:
             activity('progress.poll.empty','No committed progress; ingestion transaction skipped',task_id=task_id,session_id=session_id,fetch_ms=fetch_ms)
-            return
+            return advanced
         if page.next_cursor<=cursor:raise RuntimeError("engine progress page made no cursor advance")
 
 def _transient_db_errors()->tuple:
@@ -256,12 +258,19 @@ async def _resume_interrupted_answer(task_id:str,session_id:str,job:dict,failure
 
 async def _watch_engine_advance(task_id:str,session_id:str,stop:asyncio.Event)->None:
     """Fetch progress during a blocking Start/Submit and drain after it returns."""
+    from . import event_bus
+    key='engine-progress:'+session_id
+    delay=2.0
     while not stop.is_set():
-        try:await _drain_engine_progress(task_id,session_id,allow_absent=True)
+        version=event_bus.version(key)  # snapshot before read: no lost commit race
+        advanced=False
+        try:advanced=await _drain_engine_progress(task_id,session_id,allow_absent=True)
         except (EngineClientError,EngineUnreachableError,ValueError,RuntimeError,AttributeError)+_transient_db_errors() as exc:
             activity("progress.ingest.failed","Engine progress read failed without affecting control",task_id=task_id,session_id=session_id,error=str(exc)[:300])
-        try:await asyncio.wait_for(stop.wait(),1)
-        except asyncio.TimeoutError:pass
+        if stop.is_set():break
+        if advanced:delay=2.0
+        woke=await run_in_threadpool(event_bus.wait,key,delay,stop,version)
+        delay=2.0 if woke else min(15.0,delay*2)
     try:await _drain_engine_progress(task_id,session_id,allow_absent=True)
     except (EngineClientError,EngineUnreachableError,ValueError,RuntimeError,AttributeError)+_transient_db_errors() as exc:
         activity("progress.drain.failed","Final engine progress drain failed",task_id=task_id,session_id=session_id,error=str(exc)[:300])

@@ -59,7 +59,7 @@ def main():
     from contextlib import nullcontext
     from interview_engine.tenant_worker import _root
     root_token=_root.set(root)
-    pool=None
+    pool=None;progress_channel=None
     try:
         if stop.is_set():raise RuntimeError('parent stopped before dispatch')
         event('running')
@@ -71,6 +71,9 @@ def main():
                 from vmodel_contracts.interactive import StartSessionRequest,InputResponse,ModelRouteSwitchRequest
                 pool=build_pool(cfg['dsn'],max_size=4,name='child-operation')
                 store=pg_session_store(pool,str(binding.owner_id),str(binding.auth_session_id))
+                if 'REQUI_CHILD_PROGRESS_FD' in os.environ:
+                    from .child_progress import install_progress_wakes
+                    progress_channel=install_progress_wakes(store,int(os.environ['REQUI_CHILD_PROGRESS_FD']))
                 from interview_engine import question_config
                 question_config.store().put(cfg['question_quality'])
                 from interview_engine.stop_fence import _check,StopRequested
@@ -92,6 +95,7 @@ def main():
         if gone.is_set():raise RuntimeError('parent lost after dispatch')
         event('stopped' if stop.is_set() else 'completed')
     finally:
+        if progress_channel is not None:progress_channel.close()
         if pool is not None:pool.close()
         _root.reset(root_token);broker.close()
         if compute is not None:compute.close()

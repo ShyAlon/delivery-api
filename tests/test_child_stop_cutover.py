@@ -1,5 +1,5 @@
 """Stop accepted work in a fresh real graph child. Fake HTTP, disposable PG."""
-import asyncio,json,sys,threading,uuid
+import asyncio,json,sys,threading,uuid,time
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,HTTPServer
 from concurrent.futures import ThreadPoolExecutor
@@ -34,6 +34,19 @@ def test_durable_stop_drains_accepted_fake_provider_but_never_publishes_next_que
         def _attempt(self,a):return {'state':self.states[a]}
     command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[2]/'interview-engine/src'),str(Path(__file__).parents[2]/'spec-generator/src')]
     client=ChildInterviewClient(store,tmp_path,gateway_factory=lambda cap,job:Gateway(job),dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint=f'http://127.0.0.1:{server.server_port}/v1/chat/completions',command=command)
+    detected=threading.Event();latency=[];changed=[None]
+    original_run=client.supervisor.run
+    async def measured_run(*args,**kwargs):
+        async def detection():
+            await kwargs['stop'].wait()
+            latency.append(time.monotonic()-changed[0]);detected.set()
+        observer=asyncio.create_task(detection())
+        try:return await original_run(*args,**kwargs)
+        finally:
+            observer.cancel()
+            try:await observer
+            except asyncio.CancelledError:pass
+    client.supervisor.run=measured_run
     def start():
         from vmodel_contracts.interactive import StartSessionRequest
         with tenant_context(A):
@@ -43,11 +56,14 @@ def test_durable_stop_drains_accepted_fake_provider_but_never_publishes_next_que
     try:
         with ThreadPoolExecutor(max_workers=1) as ex:
             future=ex.submit(start);assert accepted.wait(10)
+            changed[0]=time.monotonic()
             with tenant_context(A):
                 if reason=='stop':store.request_task_stop(tid);client.stop(sid)
                 else:
                     import psycopg
                     with psycopg.connect(DSN) as admin:admin.execute('DELETE FROM auth.sessions WHERE id=%s',(A.session_id,))
+            assert detected.wait(1.5),'stop/revocation check exceeded its unchanged one-second cadence'
+            print('CONTROL_DETECTION',reason,round(latency[0],3))
             release.set();future.result(timeout=10)
         assert len(calls)==1 and client.supervisor.last_result.reaped
         if reason=='stop':assert len(settled)==1 and not uncertain
