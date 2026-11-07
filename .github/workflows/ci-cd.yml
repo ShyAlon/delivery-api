@@ -8,9 +8,10 @@ on:
       - 'docs/**'
       - '**/*.md'
   workflow_dispatch:
-  # Full matrix against main every night; the every-PR gate stays under five minutes.
+  # Full matrix against main once a week (Sunday 02:41 UTC, low traffic); the
+  # every-PR gate stays under five minutes.
   schedule:
-    - cron: '41 2 * * *'
+    - cron: '41 2 * * 0'
 
 permissions:
   contents: read
