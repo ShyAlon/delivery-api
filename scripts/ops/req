@@ -57,7 +57,10 @@ esac
 case "${1:-}" in
  "") WANT="";;
  download) shift; WANT=${1:-}; [ "$#" = 1 ] && [ -n "$WANT" ] || { error 'REQ ABORTED: use req download NAME for a Downloads script.' >&2; exit 1; };;
- *) error 'REQ ABORTED: unknown command. Owner commands never fall back to Downloads. Use req help, or req download NAME explicitly.' >&2; exit 1;;
+ *) SELF=$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")
+    SRC="${REQUI_ROOT:-$HOME/development/require}/delivery-api/scripts/ops/req"
+    STALE=""; [ -f "$SRC" ] && ! cmp -s "$SELF" "$SRC" && STALE=" Your req launcher is older than the repo's runner - update it: bash $SRC-install.sh"
+    error "REQ ABORTED: unknown command. Owner commands never fall back to Downloads. Use req help, or req download NAME explicitly.$STALE" >&2; exit 1;;
 esac
 PICK=""
 NOW=$(date +%s)
