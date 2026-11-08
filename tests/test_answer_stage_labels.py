@@ -89,3 +89,40 @@ def test_answer_in_flight_flag_derives_only_from_engine_truth():
     assert _answer_in_flight(base, {"waiting": False, "requirement": {"id": 1}}, starting=False) is False
     assert _answer_in_flight({**base, "state": "done"}, {"waiting": False}, starting=False) is False
     assert _answer_in_flight({**base, "engine_session_id": None}, {"waiting": False}, starting=False) is False
+
+
+def test_engine_timing_stage_maps_only_observed_records():
+    from delivery_api.child_supervisor import engine_timing_stage
+    sid='f01b0cd8-e1d9-4509-bbef-7485c4c8e8f4'
+    assert engine_timing_stage(f'staging.ready session={sid}') == (sid,'engine.session','Engine starting','started')
+    assert engine_timing_stage(f'saver.setup.begin session={sid}') == (sid,'engine.session','Engine loading session','started')
+    assert engine_timing_stage(f'advance.turn.begin session={sid}') == (sid,'engine.turn','Engine working','started')
+    assert engine_timing_stage(f'advance.turn.end session={sid} dur_ms=44076') == (sid,'engine.turn','Finishing','completed')
+    assert engine_timing_stage(f'session.saved session={sid} seq=4 pages=0 checkpoint=yes dur_ms=894 outcome=published') == (sid,'engine.persist','Session saved','completed')
+    assert engine_timing_stage(f'control_commit.enter session={sid} fenced=False') is None, 'unmapped records stay invisible'
+    assert engine_timing_stage('arbitrary child stderr with session='+sid) is None
+    assert engine_timing_stage('advance.turn.begin') is None, 'no session id, no attribution'
+
+
+def test_engine_timing_sink_records_progress_for_the_owning_task(pg_workspace_factory, monkeypatch):
+    from delivery_api import config
+    from delivery_api.postgres_store import PostgresStore
+    from delivery_api.child_interview import ChildInterviewClient
+    from delivery_api.tenancy import tenant_context
+    monkeypatch.setattr(config, 'CLOUD_TENANTS', True)
+    with pg_workspace_factory() as workspace, tenant_context(workspace.scope):
+        store = PostgresStore(workspace.dsn.replace('user=sandbox', 'user=delivery_app'))
+        task_id = store.create_task('Timing sink task')['task_id']
+        session_id = 'f01b0cd8-e1d9-4509-bbef-7485c4c8e8f4'
+        store.set_engine_session(task_id, session_id)
+        client = object.__new__(ChildInterviewClient)
+        client.store = store
+        client._record_engine_timing(session_id, 'engine.turn', 'Engine working', 'started')
+        events = store.events(task_id)
+        assert [e['message'] for e in events] == ['Engine working']
+        assert events[0]['payload']['stage'] == 'engine.turn'
+        assert events[0]['payload']['status'] == 'started'
+        unknown = object.__new__(ChildInterviewClient)
+        unknown.store = store
+        unknown._record_engine_timing('00000000-0000-0000-0000-000000000000', 'engine.turn', 'Engine working', 'started')
+        assert [e['message'] for e in store.events(task_id)] == ['Engine working'], 'no event for a session no task owns'

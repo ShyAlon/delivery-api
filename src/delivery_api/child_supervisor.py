@@ -29,6 +29,32 @@ def _forward_engine_timing(line:str):
     from .process_logs import emit
     emit('engine',text,session_id=found.group(1))
 
+# Observational stage mapping: which engine timing records the operator UI may
+# honestly surface, and as which label. A stage appears only when its record
+# was observed; nothing here implies work we have not seen.
+_TIMING_STAGES={
+    'program.construct.begin':('engine.session','Engine starting','started'),
+    'staging.ready':('engine.session','Engine starting','started'),
+    'saver.setup.begin':('engine.session','Engine loading session','started'),
+    'saver.setup.end':('engine.session','Engine loading session','completed'),
+    'advance.turn.begin':('engine.turn','Engine working','started'),
+    'advance.turn.end':('engine.turn','Finishing','completed'),
+    'session.saved':('engine.persist','Session saved','completed'),
+}
+_TIMING_EVENT=_re.compile(r'^([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)')
+
+def engine_timing_stage(line:str):
+    text=line.strip()
+    if not text or len(text)>2000 or not _STRUCTURED_TIMING.match(text):return None
+    found=_TIMING_SESSION.search(text)
+    if not found:return None
+    event=_TIMING_EVENT.match(text)
+    if not event:return None
+    mapped=_TIMING_STAGES.get(event.group(1))
+    if mapped is None:return None
+    stage,label,status=mapped
+    return found.group(1),stage,label,status
+
 
 
 class ChildRunError(RuntimeError):pass
@@ -43,10 +69,11 @@ class ChildResult:
 
 
 class ChildSupervisor:
-    def __init__(self,command,*,grace_seconds=10,kill_seconds=5):
+    def __init__(self,command,*,grace_seconds=10,kill_seconds=5,timing_sink=None):
         if not command or any(not isinstance(v,str) or not v for v in command):raise ValueError('fixed trusted command required')
         if grace_seconds<=0 or kill_seconds<=0:raise ValueError('positive stop deadlines required')
         self.command=tuple(command);self.grace=grace_seconds;self.kill=kill_seconds
+        self._timing_sink=timing_sink
         self.active=False;self.last_result=None
 
     async def _reap(self,process):
@@ -107,6 +134,9 @@ class ChildSupervisor:
                             if not discard:
                                 if child_error is None:child_error=parse(pending)
                                 _forward_engine_timing(pending.decode('utf-8',errors='replace'))
+                                if self._timing_sink is not None:
+                                    observed=engine_timing_stage(pending.decode('utf-8',errors='replace'))
+                                    if observed is not None:self._timing_sink(*observed)
                             pending=b'';discard=False
             stderr_task=asyncio.create_task(drain_stderr())
             child.close()
