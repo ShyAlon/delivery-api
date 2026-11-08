@@ -17,9 +17,16 @@ export const stageName=e=>e?humanizeSnakeCase(String(e.payload?.label||e.message
 // undo an explicit expansion. Nothing here writes to server state.
 const expandedProgress=new Map();
 document.addEventListener('toggle',event=>{const box=event.target;if(box.isConnected&&box.matches?.('details[data-progress-key]'))expandedProgress.set(box.dataset.progressKey,box.open)},true);
-export function activePhaseProgress(events,{phaseKey,afterId=0,mode='executing',fallback='Working',unavailable='',answerPending=false}={}){
+// The in-flight label names the newest engine signal observed AFTER this answer
+// was submitted; without one it stays the honest blanket label. Never a guess.
+export function answerProcessingLabel(events,{phaseKey,afterId=0,sinceMs=0}={}){
+ if(!sinceMs)return ANSWER_PENDING_LABEL;
+ const latest=[...(events||[])].reverse().find(e=>Number(e.id||0)>=afterId&&isProgressEvent(e)&&(!e.phase_key||e.phase_key===phaseKey)&&(signalTime(e)??0)*1000>sinceMs);
+ return latest?`Processing your answer · ${humanizeSnakeCase(String(latest.message||latest.payload?.label||''))}`:ANSWER_PENDING_LABEL;
+}
+export function activePhaseProgress(events,{phaseKey,afterId=0,mode='executing',fallback='Working',unavailable='',answerPending=false,answerSince=0}={}){
  if(unavailable)return unavailable;
- if(WAITING_MODES[mode])return answerPending?ANSWER_PENDING_LABEL:WAITING_MODES[mode][0];
+ if(WAITING_MODES[mode])return answerPending?answerProcessingLabel(events,{phaseKey,afterId,sinceMs:answerSince}):WAITING_MODES[mode][0];
  if(['error','stopped','stop_requested'].includes(mode))return fallback;
  const latest=[...(events||[])].reverse().find(e=>Number(e.id||0)>=afterId&&isProgressEvent(e)&&(!e.phase_key||e.phase_key===phaseKey));
  return latest?humanizeSnakeCase(String(latest.message||latest.payload?.label||fallback)):fallback;
@@ -38,7 +45,7 @@ function signalTime(event){
  const values=[Date.parse(event.payload?.timestamp)/1000,Number(event.ts)];
  return values.find(value=>Number.isFinite(value)&&value>0)??null;
 }
-export function stageProgressHtml(events,{startedAt=Date.now()/1000,connected=true,nextStep='choose the operating concept when the engine requests it',unavailable='',scopeKey='review',currentLine=''}={}){
+export function stageProgressHtml(events,{startedAt=Date.now()/1000,connected=true,nextStep='choose the operating concept when the engine requests it',unavailable='',scopeKey='review',currentLine='',signalAge=true}={}){
  // A session that is unavailable in this environment has no live counters, no estimate and no next step to promise: only what was last recorded.
  if(unavailable)return `<details class="review-progress" data-progress-key="${esc(scopeKey)}" ${expandedProgress.get(scopeKey)?'open':''} aria-label="Run progress"><summary><b>Run progress</b><span>${esc(unavailable)}</span></summary><div class="progress-history"><p>No live counters or next step can be confirmed in this environment.</p></div></details>`;
  const stages=new Map(),measurements=new Map();let lastSignal=null;
@@ -60,7 +67,7 @@ export function stageProgressHtml(events,{startedAt=Date.now()/1000,connected=tr
  const remaining=active&&Number.isFinite(active.total)&&active.total>Number(active.completed||0)?active.total-Number(active.completed||0):null;
  let eta='Estimating';
  if(samples.length&&remaining!==null){const low=samples[0]*remaining,high=Math.max(samples.at(-1),now-active.start)*remaining;eta=`Measured estimate: ${Math.max(1,Math.floor(low/60))}-${Math.max(1,Math.ceil(high/60))} minutes for the current counted work`;}
- return `<details class="review-progress" data-progress-key="${esc(scopeKey)}" ${expandedProgress.get(scopeKey)?'open':''} aria-label="Run progress"><summary><b>Run progress</b><span>${connected?'Connected to progress':'Progress connection lost; reconnecting without resubmitting'} · ${Math.max(0,Math.floor(now-startedAt))}s elapsed${lastSignal!==null?` · last engine signal ${Math.max(0,Math.floor(now-lastSignal))}s ago`:''}</span>${currentLine||latest?`<span class="progress-current">${esc(currentLine||humanizeSnakeCase(latest.message))}</span>`:''}</summary><div class="progress-history"><p>${esc(eta)}</p>${latest?progressLine(latest):''}${rows.length?`<ol>${rows.map(s=>`<li class="${esc(s.status)}"><details ${s===active?'open':''}><summary>${s.status==='completed'||s.status==='item_completed'&&s.completed===s.total?'Completed':s.status==='failed'?'Failed':'Working'} · ${esc(humanLabel(s.label))}${Number.isFinite(s.total)?` · ${Number(s.completed||0)}/${Number(s.total)}`:''}</summary>${s.detail?`<p>${esc(s.detail)}</p>`:''}</details></li>`).join('')}</ol>`:'<p>Waiting for stage progress.</p>'}<p>Next: ${esc(nextStep)}.</p></div></details>`;
+ return `<details class="review-progress" data-progress-key="${esc(scopeKey)}" ${expandedProgress.get(scopeKey)?'open':''} aria-label="Run progress"><summary><b>Run progress</b><span>${connected?'Connected to progress':'Progress connection lost; reconnecting without resubmitting'} · ${Math.max(0,Math.floor(now-startedAt))}s elapsed${lastSignal!==null&&signalAge?` · last engine signal ${Math.max(0,Math.floor(now-lastSignal))}s ago`:''}</span>${currentLine||latest?`<span class="progress-current">${esc(currentLine||humanizeSnakeCase(latest.message))}</span>`:''}</summary><div class="progress-history"><p>${esc(eta)}</p>${latest?progressLine(latest):''}${rows.length?`<ol>${rows.map(s=>`<li class="${esc(s.status)}"><details ${s===active?'open':''}><summary>${s.status==='completed'||s.status==='item_completed'&&s.completed===s.total?'Completed':s.status==='failed'?'Failed':'Working'} · ${esc(humanLabel(s.label))}${Number.isFinite(s.total)?` · ${Number(s.completed||0)}/${Number(s.total)}`:''}</summary>${s.detail?`<p>${esc(s.detail)}</p>`:''}</details></li>`).join('')}</ol>`:'<p>Waiting for stage progress.</p>'}<p>Next: ${esc(nextStep)}.</p></div></details>`;
 }
 
 // While the progress stream is open the page polls only once a minute: stream events
