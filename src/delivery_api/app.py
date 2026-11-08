@@ -1772,7 +1772,18 @@ def get_task(task_id: str, background_tasks: BackgroundTasks = None, request: Re
     _retain_decision_control(task_id,control.model_dump(mode="json"))
     control.artifact_ref=None
     artifacts=[{key:value for key,value in row.items() if key!='ref'} for row in artifacts]
-    return _customer_events({**task, "rerun_control":_rerun_control(), "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": _customer_events(task_events), "artifacts":artifacts,"artifact_projection":{"session":session,"root":None,"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"active_work":work_state,"stop_control":{"available":bool((cloud_execution_admitted()) and (session_id)),"requested":task.get("state") in ("stop_requested","stopped")},"run_control":_run_control(task_id)})
+    return _customer_events({**task, "rerun_control":_rerun_control(), "control_snapshot":control.model_dump(mode="json"), "phase_config":phase_config, "events": _customer_events(task_events), "artifacts":artifacts,"artifact_projection":{"session":session,"root":None,"count":len(artifacts),"reason":"projected canonical session artifacts" if artifacts else ("session could not be recovered" if not session else "no configured artifacts found under session")}, "input_state":input_state,"answer_in_flight":_answer_in_flight(task,input_state,starting=starting),"active_work":work_state,"stop_control":{"available":bool((cloud_execution_admitted()) and (session_id)),"requested":task.get("state") in ("stop_requested","stopped")},"run_control":_run_control(task_id)})
+
+def _answer_in_flight(task:dict,input_state:dict,*,starting:bool)->bool:
+    """Persisted render truth for the processing window: an HTTP interview task
+    whose engine holds no open input is mid-turn (answer accepted, next question
+    not yet published). The initial start has its own UI; decisions and
+    requirements are their own waiting modes."""
+    return (bool(task.get("engine_session_id")) and task.get("state")=="running"
+            and task.get("active_phase") in ("intent","conops") and not starting
+            and not input_state.get("waiting") and not input_state.get("decision")
+            and not input_state.get("requirement"))
+
 
 def _retain_decision_control(task_id:str,control:dict)->None:
     decision=control.get('decision') or {};context=decision.get('context') or {}

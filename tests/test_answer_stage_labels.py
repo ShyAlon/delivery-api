@@ -76,3 +76,16 @@ def test_render_time_in_flight_reads_the_persisted_flag():
     assert 't.answer_in_flight===true' in text, 'a mid-POST re-render must keep the processing state from server truth'
     assert 'currentQuestion&&!answerPending' in text, 'the answered question must hide while the answer is in flight'
     assert 'answerPending=Boolean(shadow)||t.answer_in_flight===true' in text
+
+
+def test_answer_in_flight_flag_derives_only_from_engine_truth():
+    from delivery_api.app import _answer_in_flight
+    base = {"engine_session_id": "s", "state": "running", "active_phase": "intent"}
+    assert _answer_in_flight(base, {"waiting": False}, starting=False) is True
+    assert _answer_in_flight(base, {"waiting": True}, starting=False) is False, 'an open question is waiting, not processing'
+    assert _answer_in_flight(base, {"waiting": False}, starting=True) is False, 'the initial start has its own UI'
+    assert _answer_in_flight({**base, "active_phase": "needs"}, {"waiting": False}, starting=False) is False
+    assert _answer_in_flight(base, {"waiting": False, "decision": {"id": 1}}, starting=False) is False
+    assert _answer_in_flight(base, {"waiting": False, "requirement": {"id": 1}}, starting=False) is False
+    assert _answer_in_flight({**base, "state": "done"}, {"waiting": False}, starting=False) is False
+    assert _answer_in_flight({**base, "engine_session_id": None}, {"waiting": False}, starting=False) is False
