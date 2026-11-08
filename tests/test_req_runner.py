@@ -180,3 +180,29 @@ def test_acceptance_dispatches_the_repo_entry_with_flags_unchanged(tmp_path):
     out=subprocess.run(['bash',str(root/'scripts/ops/req-owner.sh'),'acceptance','--dry-run','--base-url','http://127.0.0.1:8123'],capture_output=True,text=True)
     assert out.returncode==0,out.stderr
     assert 'ARG:--dry-run' in out.stdout and 'ARG:http://127.0.0.1:8123' in out.stdout
+
+
+def _bogus_run(tmp_path, launcher, repo_req):
+    shutil.copy(REQ.parent / "terminal-log.sh", launcher.parent / "terminal-log.sh")
+    root = tmp_path / "root"
+    repo_req_dir = root / "delivery-api" / "scripts" / "ops"
+    repo_req_dir.mkdir(parents=True)
+    shutil.copy(REQ, repo_req_dir / "req")
+    return subprocess.run(["bash", str(launcher), "bogus"], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60,
+                          env={**os.environ, "REQ_DOWNLOADS": str(tmp_path / "dl"), "REQUI_ROOT": str(root)})
+
+
+def test_an_unknown_command_from_a_stale_launcher_names_the_repair(tmp_path):
+    stale = tmp_path / "req"
+    stale.write_text(REQ.read_text().replace("|rebuild)", ")"))  # a launcher from before rebuild existed
+    out = _bogus_run(tmp_path, stale, REQ)
+    assert out.returncode == 1 and "unknown command" in out.stderr
+    assert "req-install.sh" in out.stderr, out.stderr
+
+
+def test_an_unknown_command_from_the_repo_runner_stays_plain(tmp_path):
+    current = tmp_path / "req"
+    shutil.copy(REQ, current)
+    out = _bogus_run(tmp_path, current, REQ)
+    assert out.returncode == 1 and "unknown command" in out.stderr
+    assert "req-install.sh" not in out.stderr, out.stderr
