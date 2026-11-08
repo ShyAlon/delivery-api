@@ -183,3 +183,41 @@ def test_accepted_receipt_matches_only_current_sources(tmp_path):
     assert found and found['image_id'] == IMAGE_ID
     missing = m.accepted_receipt(ctx(tmp_path, shas={n: '9' * 40 for n in m.REPOS}))
     assert missing is None, 'a receipt for older sources must not be reused'
+
+
+def _stage_run(tmp_path, checks, input_key=None, build_sources=None):
+    """A req image --accept-local run dir exactly where the inputs digest puts it."""
+    inputs = {'sources': build_sources or {n: SHAS[n] for n in m.IMAGE_REPOS},
+              'platform': 'linux/amd64', 'runtime_contract': 'sha256:rt',
+              'acceptance_contract': 'sha256:ac'}
+    name = m.digest(json.dumps(inputs, sort_keys=True).encode()).split(':')[1][:24]
+    key = input_key if input_key is not None else m.digest(
+        json.dumps(inputs, sort_keys=True, separators=(',', ':')).encode())
+    run = tmp_path / '.local/share/requi/image-workflow' / name
+    run.mkdir(parents=True)
+    (run / 'state.json').write_text(json.dumps({'schema': 1, 'input_key': key, 'stages': {
+        'build': {'image_id': IMAGE_ID, 'sources': inputs['sources'], 'platform': 'linux/amd64'},
+        'local-acceptance': {'image_id': IMAGE_ID, 'runtime_contract': 'sha256:rt', 'checks': checks}}}))
+    return run
+
+
+def test_local_stage_evidence_verifies_without_a_publish_receipt(tmp_path):
+    run = _stage_run(tmp_path, {name: 'passed' for name in m.ACCEPTANCE_CHECKS})
+    assert not (run / 'accepted-image.json').exists(), 'accept-local never writes the publish receipt'
+    found = m.accepted_receipt(ctx(tmp_path))
+    assert found and found['image_id'] == IMAGE_ID and found['run_dir'] == str(run)
+
+
+def test_stage_evidence_with_a_failed_acceptance_is_rejected(tmp_path):
+    checks = {name: 'passed' for name in m.ACCEPTANCE_CHECKS}
+    checks['stop'] = 'failed'
+    _stage_run(tmp_path, checks)
+    assert m.accepted_receipt(ctx(tmp_path)) is None
+
+
+def test_stage_evidence_is_bound_to_the_exact_contracts(tmp_path):
+    _stage_run(tmp_path, {name: 'passed' for name in m.ACCEPTANCE_CHECKS}, input_key='sha256:forged')
+    assert m.accepted_receipt(ctx(tmp_path)) is None
+    _stage_run(tmp_path, {name: 'passed' for name in m.ACCEPTANCE_CHECKS},
+               build_sources={n: '0' * 40 for n in m.IMAGE_REPOS})
+    assert m.accepted_receipt(ctx(tmp_path)) is None, 'evidence for other sources lives at another digest and must not match'

@@ -212,7 +212,44 @@ def accepted_receipt(ctx) -> dict | None:
         if not ctx['image_exists'](image_id):
             continue
         return {'image_id': image_id, 'run_dir': str(state_file.parent)}
-    return None
+    return stage_evidence_receipt(ctx)
+
+
+def stage_evidence_receipt(ctx) -> dict | None:
+    """Local acceptance proven by the run's own stage evidence, no publish receipt.
+
+    req image --accept-local never writes accepted-image.json - that file is the
+    publication receipt and only --publish produces it. A local run proves itself
+    in state.json instead: the run directory name and its input_key are both
+    digests of the exact inputs (four source revisions, platform, runtime and
+    acceptance contracts), so recomputing them here binds every contract without
+    trusting any stored success boolean.
+    """
+    inputs = {'sources': {name: ctx['shas'][name] for name in IMAGE_REPOS},
+              'platform': 'linux/amd64', 'runtime_contract': ctx['runtime_contract'],
+              'acceptance_contract': ctx['acceptance_contract']}
+    run_dir = ctx['home'] / '.local/share/requi/image-workflow' / digest(
+        json.dumps(inputs, sort_keys=True).encode()).split(':')[1][:24]
+    try:
+        value = json.loads((run_dir / 'state.json').read_text())
+    except (ValueError, OSError):
+        return None
+    if value.get('input_key') != digest(json.dumps(inputs, sort_keys=True, separators=(',', ':')).encode()):
+        return None
+    stages = value.get('stages', {})
+    built, accepted = stages.get('build', {}), stages.get('local-acceptance', {})
+    if built.get('sources') != inputs['sources'] or built.get('platform') != 'linux/amd64':
+        return None
+    image_id = built.get('image_id')
+    if not image_id or accepted.get('image_id') != image_id:
+        return None
+    if accepted.get('checks') != {name: 'passed' for name in ACCEPTANCE_CHECKS}:
+        return None
+    if accepted.get('runtime_contract') != ctx['runtime_contract']:
+        return None
+    if not ctx['image_exists'](image_id):
+        return None
+    return {'image_id': image_id, 'run_dir': str(run_dir)}
 
 
 def plan_cleanup(containers: list, image_rows: list, *, keep_previous: int, keep_image_ids: set) -> tuple:
