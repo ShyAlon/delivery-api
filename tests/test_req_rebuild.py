@@ -1,0 +1,185 @@
+"""req rebuild orchestrator: resume, owner gates and cleanup selection.
+
+Fail-first on main: scripts/owner/rebuild.py does not exist and neither req
+nor req-owner.sh mentions rebuild, so every test here is red.
+"""
+import datetime
+import importlib.util
+import json
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('owner_rebuild', ROOT / 'scripts/owner/rebuild.py')
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+
+SHAS = {name: ('%x' % (i + 1)) * 40 for i, name in enumerate(m.REPOS)}
+IMAGE_ID = 'sha256:' + 'ab' * 32
+
+
+def ctx(tmp_path, **over):
+    base = {'root': tmp_path, 'repos_root': tmp_path, 'req': tmp_path / 'req',
+            'home': tmp_path, 'shas': dict(SHAS),
+            'runtime_contract': 'sha256:rt', 'acceptance_contract': 'sha256:ac',
+            'state_path': tmp_path / 'state.json',
+            'state': {'schema': 1, 'key': 'k', 'steps': {}},
+            'typed': lambda prompt: '', 'run_child': lambda args, **kw: None,
+            'docker': lambda a, **kw: '', 'image_exists': lambda i: True,
+            'heads': lambda: dict(SHAS), 'now': datetime.datetime.now}
+    base.update(over)
+    return base
+
+
+def test_repos_match_pull_all_script():
+    text = (ROOT / 'scripts/pull-all.sh').read_text()
+    line = next(l for l in text.splitlines() if l.startswith('REPOS='))
+    assert set(line.split('"')[1].split()) == set(m.REPOS)
+
+
+def test_req_front_end_and_dispatcher_wire_rebuild():
+    req = (ROOT / 'scripts/ops/req').read_text()
+    owner = (ROOT / 'scripts/ops/req-owner.sh').read_text()
+    assert 'locks|rebuild)' in req, 'req must route rebuild through the clean-main sync'
+    assert 'rebuild) target=scripts/owner/rebuild.py;;' in owner
+    assert 'scripts/owner/rebuild.py' in owner and '"$PWD"' in owner
+
+
+def test_load_state_with_changed_key_starts_fresh(tmp_path):
+    path = tmp_path / 'state.json'
+    path.write_text(json.dumps({'schema': 1, 'key': 'old', 'steps': {'pull-all': {'completed_at': 'x', 'evidence': {}}}}))
+    assert m.load_state(path, 'new') == {'schema': 1, 'key': 'new', 'steps': {}}
+    assert m.load_state(path, 'old')['steps'].get('pull-all'), 'same key keeps completed steps'
+
+
+def test_pull_all_completed_and_verified_is_not_rerun(tmp_path):
+    calls = []
+    state = {'schema': 1, 'key': 'k', 'steps': {'pull-all': {'completed_at': 'x', 'evidence': {'heads': dict(SHAS)}}}}
+    m.step_pull_all(ctx(tmp_path, state=state, run_child=lambda a, **k: calls.append(a)))
+    assert calls == [], 'a recorded pull-all with matching heads must be skipped'
+
+
+def test_pull_all_rerun_when_a_checkout_moved(tmp_path):
+    calls = []
+    moved = dict(SHAS); moved['spec-generator'] = 'f' * 40
+    state = {'schema': 1, 'key': 'k', 'steps': {'pull-all': {'completed_at': 'x', 'evidence': {}}}}
+    c = ctx(tmp_path, state=state, run_child=lambda a, **k: calls.append(a), heads=lambda: moved)
+    with pytest.raises(m.WorkflowError, match='spec-generator'):
+        m.step_pull_all(c)
+    assert calls and 'pull-all.sh' in ' '.join(calls[0])
+
+
+def test_migrate_apply_is_the_owners_gate_and_records(tmp_path):
+    calls = []
+    answers = iter(['APPLY MIGRATIONS'])
+    c = ctx(tmp_path, run_child=lambda a, **k: calls.append(list(a)), typed=lambda p: next(answers))
+    m.step_migrate(c)
+    flat = [' '.join(map(str, a)) for a in calls]
+    assert flat[0].endswith('req migrate'), 'the dry review always runs first'
+    assert flat[1].endswith('req migrate --apply')
+    assert 'migrate-apply' in c['state']['steps']
+
+
+def test_migrate_skip_continues_without_applying(tmp_path):
+    calls = []
+    c = ctx(tmp_path, run_child=lambda a, **k: calls.append(a), typed=lambda p: 'SKIP')
+    m.step_migrate(c)
+    assert len(calls) == 1 and '--apply' not in ' '.join(map(str, calls[0]))
+    assert 'migrate-apply' not in c['state']['steps']
+
+
+def test_migrate_any_other_answer_stops_the_sequence(tmp_path):
+    calls = []
+    c = ctx(tmp_path, run_child=lambda a, **k: calls.append(a), typed=lambda p: 'yes')
+    with pytest.raises(m.WorkflowError, match='declined'):
+        m.step_migrate(c)
+    assert len(calls) == 1, 'req migrate --apply must not run without the exact typed string'
+
+
+def test_children_never_receive_answered_stdin(tmp_path):
+    import inspect
+    source = inspect.getsource(m.run_child)
+    assert 'stdin=' not in source and 'input=' not in source and '.communicate' not in source, \
+        'run_child must inherit the terminal, never feed a confirmation'
+
+
+def test_cleanup_keeps_running_and_previous(tmp_path):
+    containers = [
+        {'Names': 'requi-preview-exec', 'State': 'running', 'Image': IMAGE_ID, 'ID': 'cur', 'CreatedAt': '2026-11-08'},
+        {'Names': 'requi-preview-exec-20261107-090000', 'State': 'exited', 'Image': 'sha256:prev', 'ID': 'prev', 'CreatedAt': '2026-11-07'},
+        {'Names': 'requi-preview-exec-20261101-090000', 'State': 'exited', 'Image': 'sha256:old', 'ID': 'old', 'CreatedAt': '2026-11-01'},
+    ]
+    images = [{'Repository': 'requi-full-candidate', 'Tag': 'new', 'ID': IMAGE_ID},
+              {'Repository': 'requi-full-candidate', 'Tag': 'old', 'ID': 'sha256:old'},
+              {'Repository': '<none>', 'Tag': '<none>', 'ID': 'sha256:dangle'}]
+    kept, removable, old_images = m.plan_cleanup(containers, images, keep_previous=1, keep_image_ids={IMAGE_ID, 'sha256:prev'})
+    assert [k['Names'] for k in kept] == ['requi-preview-exec-20261107-090000'], 'newest renamed container is the kept previous'
+    assert [r['Names'] for r in removable] == ['requi-preview-exec-20261101-090000']
+    assert sorted(i['ID'] for i in old_images) == ['sha256:dangle', 'sha256:old'], 'kept images are never listed'
+
+
+def test_cleanup_declined_removes_nothing(tmp_path):
+    removed = []
+    containers = [{'Names': 'requi-preview-exec-20261107-090000', 'State': 'exited', 'Image': 'sha256:prev', 'ID': 'prev', 'CreatedAt': '2026-11-07'},
+                  {'Names': 'requi-preview-exec-20261101-090000', 'State': 'exited', 'Image': 'sha256:old', 'ID': 'old', 'CreatedAt': '2026-11-01'}]
+
+    def docker(args, **kw):
+        if args[0] in ('rm', 'rmi'):
+            removed.append(args)
+        if args[0] == 'ps':
+            return json.dumps(containers)
+        if args[0] == 'images':
+            return json.dumps([])
+        if args[0] == 'container':
+            raise m.WorkflowError('no such container')
+        return ''
+
+    c = ctx(tmp_path, docker=docker, typed=lambda p: 'DELETE EVERYTHING')
+    m.step_cleanup(c)
+    assert removed == [], 'anything but the exact quoted string keeps every item'
+    assert 'cleanup' not in c['state']['steps']
+
+
+def test_run_child_keyboard_interrupt_counts_only_when_interruptible():
+    class Proc:
+        def __init__(self):
+            self.waits = 0
+        def wait(self):
+            self.waits += 1
+            if self.waits == 1:
+                raise KeyboardInterrupt
+            return 0
+    m.run_child(['x'], interruptible=True, popen=lambda a: Proc())
+    with pytest.raises(m.WorkflowError, match='interrupted'):
+        m.run_child(['x'], interruptible=False, popen=lambda a: Proc())
+
+
+def test_preflight_names_the_missing_tool(tmp_path, monkeypatch):
+    root = tmp_path / 'delivery-api'
+    (root / '.git').mkdir(parents=True)
+    (root / '.venv/bin').mkdir(parents=True)
+    (root / '.venv/bin/python').write_text('')
+    tty = tmp_path / 'tty'
+    tty.write_text('')
+    monkeypatch.setattr(m, 'venv_check', lambda r: None)
+    with pytest.raises(m.WorkflowError, match='docker'):
+        m.preflight(root, tmp_path, which=lambda t: None if t == 'docker' else '/usr/bin/' + t,
+                    run=lambda *a, **k: '', tty_path=str(tty))
+
+
+def test_accepted_receipt_matches_only_current_sources(tmp_path):
+    base = tmp_path / '.local/share/requi/image-workflow'
+    for run_name, sources in (('matching', {n: SHAS[n] for n in m.IMAGE_REPOS}), ('stale', {n: '0' * 40 for n in m.IMAGE_REPOS})):
+        run = base / run_name
+        run.mkdir(parents=True)
+        (run / 'state.json').write_text(json.dumps({'stages': {'local-acceptance': {
+            'image_id': IMAGE_ID, 'runtime_contract': 'sha256:rt',
+            'checks': {name: 'passed' for name in m.ACCEPTANCE_CHECKS}}}}))
+        (run / 'accepted-image.json').write_text(json.dumps({
+            'config_digest': IMAGE_ID, 'sources': sources,
+            'runtime_contract': 'sha256:rt', 'acceptance_contract': 'sha256:ac'}))
+    found = m.accepted_receipt(ctx(tmp_path))
+    assert found and found['image_id'] == IMAGE_ID
+    missing = m.accepted_receipt(ctx(tmp_path, shas={n: '9' * 40 for n in m.REPOS}))
+    assert missing is None, 'a receipt for older sources must not be reused'
