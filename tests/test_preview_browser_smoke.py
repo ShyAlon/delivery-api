@@ -176,3 +176,16 @@ def test_missing_successful_telemetry_fails_collected_boot():
     events = _events()
     events["telemetry_success"] = False
     assert browser_smoke.classify(events)[0] == ["no successful anonymous POST /api/client-log captured"]
+
+
+def test_a_missing_browser_names_the_exact_install_remedy(tmp_path, monkeypatch, capsys):
+    """2026-11-08: Shy's preview died at the smoke with an EMPTY browser-smoke.log.
+    The only silent nonzero path is collect()->None (Chromium binary missing for
+    the interpreter); the log must name the remedy, never be empty."""
+    monkeypatch.setattr(browser_smoke, 'collect', lambda base: None)
+    monkeypatch.setattr(sys, 'argv', ['browser_smoke.py', 'http://127.0.0.1:8001'])
+    with pytest.raises(SystemExit) as error:
+        browser_smoke.main()
+    assert error.value.code == 2
+    out = capsys.readouterr().out
+    assert '-m playwright install chromium' in out and sys.executable in out and 'unverified' in out

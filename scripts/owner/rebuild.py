@@ -57,10 +57,6 @@ def origin_shas(repos_root: Path, repos=REPOS, run=command) -> dict:
     return {name: run(['git', '-C', str(repos_root / name), 'rev-parse', 'origin/main']) for name in repos}
 
 
-def local_shas(repos_root: Path, repos=REPOS, run=command) -> dict:
-    return {name: run(['git', '-C', str(repos_root / name), 'rev-parse', 'HEAD']) for name in repos}
-
-
 def run_key(shas: dict, runtime_contract: str, acceptance: str) -> str:
     text = ''.join(name + '=' + shas[name] + '\n' for name in sorted(shas))
     return digest((text + runtime_contract + '\n' + acceptance + '\n').encode())
@@ -429,7 +425,7 @@ def build_ctx(root: Path) -> dict:
            'home': Path.home(), 'shas': shas, 'runtime_contract': runtime_contract, 'acceptance_contract': acceptance,
            'state_path': Path(os.environ.get('REQUI_REBUILD_STATE', str(Path.home() / '.local/share/requi/rebuild/state.json'))),
            'typed': typed, 'run_child': run_child, 'docker': docker, 'image_exists': image_exists,
-           'heads': lambda: local_shas(repos_root, run=command), 'now': datetime.datetime.now}
+           'heads': lambda: origin_shas(repos_root), 'now': datetime.datetime.now}
     key = run_key(shas, runtime_contract, acceptance)
     ctx['state'] = load_state(ctx['state_path'], key)
     return ctx
