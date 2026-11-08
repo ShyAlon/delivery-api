@@ -9,7 +9,7 @@ set -uo pipefail
 
 . "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")")/terminal-log.sh"
 case "${1:-}" in
-image|backoffice-access|debug|migrate|policy|preflight|acceptance|force-stop|stop-all|preview|preview-free|reset-preview|locks)
+image|backoffice-access|debug|migrate|policy|preflight|acceptance|force-stop|stop-all|preview|preview-free|reset-preview|locks|rebuild)
   REPO="${REQUI_ROOT:-$HOME/development/require}/delivery-api"
   fail(){ error "REQ ABORTED: $* No owner step was run." >&2; exit 1; }
   [ -d "$REPO/.git" ] || fail "delivery-api checkout missing at $REPO."
@@ -21,7 +21,7 @@ image|backoffice-access|debug|migrate|policy|preflight|acceptance|force-stop|sto
   [ -f "$REPO/scripts/ops/req-owner.sh" ] || fail "pull main containing the req owner commands."
   exec bash "$REPO/scripts/ops/req-owner.sh" "$@";;
 help|--help|-h)
-  echo 'req image | backoffice-access | debug | migrate | policy | preflight | acceptance | force-stop | stop-all | preview | preview-free | reset-preview | locks'
+  echo 'req image | backoffice-access | debug | migrate | policy | preflight | acceptance | force-stop | stop-all | preview | preview-free | reset-preview | locks | rebuild'
   echo 'Owner commands sync clean main and default to dry review. --apply is explicit; existing confirmations stay.'
   echo 'req preflight --email your-signed-up-email; req list/status/clean; downloaded scripts require req download NAME.';exit 0;;
 esac

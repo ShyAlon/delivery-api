@@ -32,6 +32,7 @@ case "$command" in
  debug) target=scripts/ops/preview-debug.py;;
  locks) target=scripts/owner/locks.py;;
  migrate) target=scripts/owner/apply-pg-cutover.py;;
+ rebuild) target=scripts/owner/rebuild.py;;
  policy) target=scripts/ops/confirmed-expense-policy.sh;;
  preflight) target=scripts/ops/paid-child-preflight.py;;
  force-stop) target=scripts/owner/force-stop-all.py;;
@@ -54,6 +55,10 @@ case "$command" in
  migrate)
    args=("$PWD" --env-file "$envfile")
    [ "$apply" = 0 ] || args+=(--apply --review-projection-functions)
+   exec .venv/bin/python "$target" "${args[@]}";;
+ rebuild)
+   args=("$PWD")
+   [ "$apply" = 0 ] || args+=(--apply)
    exec .venv/bin/python "$target" "${args[@]}";;
  policy)
    export REQUI_POLICY_DRY_RUN=$((1-apply))
