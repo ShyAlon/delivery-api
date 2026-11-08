@@ -3091,3 +3091,42 @@ def test_answer_response_cannot_pair_previous_answer_with_next_question(pg_page,
     page.reload()
     expect(page.locator('#currentquestion')).to_contain_text('Where does the content come from?')
     assert page.locator('#shadowcopy').is_hidden()
+
+
+def test_answer_submit_walks_through_observed_stages_to_next_question(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    page.add_init_script("class FakeEventSource{constructor(){window.liveSource=this;this.handlers={}}addEventListener(k,f){this.handlers[k]=f}emit(e){if(this.handlers.progress)this.handlers.progress({data:JSON.stringify(e)})}}window.EventSource=FakeEventSource")
+    live=page.request.get(ui+f'/api/tasks/{tid}').json();live['active_phase']='conops'
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'w1','precondition':{'session_sequence':3}}
+    live['ui_state']={'mode':'engine_question','active_phase':'conops','process_live':True,'decision':None,'gate':None,'question':'What problem does it solve?'}
+    live['answer_in_flight']=False
+    box={'snap':live}
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(dict(box['snap']))))
+    held=[]
+    page.route(f'**/api/tasks/{tid}/answer',lambda route:held.append(route))
+    page.goto(ui+f'/tasks/{tid}/view');page.locator('#answerform').wait_for()
+    expect(page.locator('#currentquestion')).to_contain_text('What problem does it solve?')
+    expect(page.locator('.progress-scope')).to_contain_text('Waiting for you')
+    page.locator('#answerform textarea').fill('It solves flaky tests.')
+    page.locator('#answerform button[type=submit]').click()
+    # While the POST is still held: the question is gone, the label is the honest
+    # pending label, and nothing claims the run is waiting for the founder.
+    expect(page.locator('#currentquestion')).to_be_hidden()
+    expect(page.locator('.live-indicator span')).to_have_text('Processing your answer…')
+    assert 'Waiting for you' not in page.locator('.progress-scope').inner_text()
+    held[0].fulfill(json={'status':'accepted'})
+    expect(page.locator('#shadowcopy')).to_be_visible()
+    expect(page.locator('#shadowq')).to_have_text('What problem does it solve?')
+    expect(page.locator('#shadowa')).to_have_text('It solves flaky tests.')
+    # An observed engine timing signal refines the stage line while the answer works.
+    page.evaluate("liveSource.emit({id:900001,kind:'progress',message:'Engine working',phase_key:'conops',payload:{stage:'engine.turn',status:'started'},ts:Math.floor(Date.now()/1000)})")
+    expect(page.locator('.phase-current-progress')).to_contain_text('Engine working')
+    # The next question closes the loop: the shadow reconciles and the new question shows.
+    nxt=dict(live)
+    nxt['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'w2','precondition':{'session_sequence':4}}
+    nxt['ui_state']={'mode':'engine_question','active_phase':'conops','process_live':True,'decision':None,'gate':None,'question':'Who else has this problem?'}
+    box['snap']=nxt
+    page.evaluate("liveSource.emit({id:900002,kind:'waiting_input',message:'Waiting for founder input',phase_key:'conops',payload:{question:'Who else has this problem?'},ts:Math.floor(Date.now()/1000)})")
+    expect(page.locator('#currentquestion')).to_contain_text('Who else has this problem?')
+    expect(page.locator('#shadowcopy')).to_be_hidden()
