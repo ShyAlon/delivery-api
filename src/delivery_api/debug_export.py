@@ -33,6 +33,26 @@ def _owned_log_line(line: str, task_id: str, session_id: str) -> bool:
    matched=True
  return matched
 
+
+_FIELD=__import__('re').compile(r"(\w+)='([^']*)'")
+_BUDGET_FIELDS=('ref','method','path','status','duration_ms','db_queries','db_ms','checkout_ms','auth_ms','held_ms','engine_calls','engine_ms')
+
+def request_budgets(lines):
+ """One compact row per delivery request: the per-request stats the activity
+ record already carries (db_queries/db_ms/checkout_ms/...), so redundant-query
+ cost is visible in the export without reading raw log lines."""
+ budgets=[]
+ for line in lines or []:
+  if '| http.request' not in line:continue
+  fields=dict(_FIELD.findall(line))
+  row={'ts':line.split(' | ',1)[0].strip()}
+  for key in _BUDGET_FIELDS:
+   value=fields.get(key)
+   if value is None:continue
+   row[key]=int(value) if value.isdigit() else value
+  budgets.append(row)
+ return budgets
+
 def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:dict,control:dict,events:list,log_path:Path,engine_log_path:Path=None,*,document_reader)->bytes:
  files={};omissions=[];limit=2_000_000;total_limit=12_000_000
  def add(name,content,source):
@@ -66,7 +86,7 @@ def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:d
  # (task_id='x'); engine dotted-event lines do not (session=x) - both forms
  # are matched so the engine's markers reach the per-task ZIP.
  def add_log_tail(path,name,scope):
-  if not path or not path.is_file():omissions.append({'source':name,'reason':'not recorded'});return
+  if not path or not path.is_file():omissions.append({'source':name,'reason':'not recorded'});return []
   with path.open('rb') as stream:
    offset=max(0,path.stat().st_size-limit)
    stream.seek(offset);tail=stream.read(limit).decode(errors='replace')
@@ -76,7 +96,10 @@ def diagnostic_zip(root:Path,task_id:str,session_id:str,generation:int,browser:d
   lines=[line for line in tail.splitlines() if _owned_log_line(line,task_id,session_id)]
   if lines:add(name,'\n'.join(lines)+'\n',scope)
   else:omissions.append({'source':name,'reason':'no task/session-matched lines in bounded tail'})
- add_log_tail(log_path,'run.log','scoped server run log tail')
+  return lines
+ run_log_lines=add_log_tail(log_path,'run.log','scoped server run log tail')
+ budgets=request_budgets(run_log_lines)
+ if budgets:add('request-budgets.json',{'scope':'delivery requests matched to this task in the bounded run log tail; one row per request, values as recorded at request end','requests':budgets},'derived from scoped server run log tail')
  if engine_log_path is not None:add_log_tail(engine_log_path,'engine.log','scoped engine process log tail')
  add('task-events.json',events,'task event snapshot')
  add('control.json',control,'current control snapshot')
