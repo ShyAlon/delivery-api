@@ -10,16 +10,48 @@ import urllib.request
 from image_workflow import WorkflowError
 
 
+# A previous back office needs a moment to release its port after shutdown; a
+# retry spans that window instead of failing the preview on a dying listener.
+BIND_WAIT_SECONDS=10
+
+
 class PrivateBackoffice:
-    def __init__(self,port,upstream_port,log_path):
+    def __init__(self,port,upstream_port,log_path,bind_wait_seconds=BIND_WAIT_SECONDS):
         if type(port) is not int or not 1024<=port<=65535 or port in (upstream_port,8000,8010):
             raise WorkflowError('Back office private port conflicts or is invalid')
-        self.port=port;self.upstream_port=upstream_port;self.log_path=Path(log_path);self.process=None;self.log=None
+        if type(bind_wait_seconds) not in (int,float) or not 0<=bind_wait_seconds<=60:
+            raise WorkflowError('Back office bind wait must be a number of seconds from 0 to 60')
+        self.port=port;self.upstream_port=upstream_port;self.log_path=Path(log_path)
+        self.bind_wait_seconds=bind_wait_seconds;self.process=None;self.log=None
+
+    def _own_port(self):
+        deadline=time.monotonic()+self.bind_wait_seconds
+        while True:
+            try:
+                with socket.socket() as listener:
+                    # SO_REUSEADDR: a just-closed predecessor leaves connections
+                    # cooling down on this port; they must not block the new owner.
+                    listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+                    listener.bind(('127.0.0.1',self.port))
+                return
+            except OSError:
+                if time.monotonic()>=deadline:break
+                time.sleep(.25)
+        raise WorkflowError('Back office cannot own its private port ('+self._holder()+'); existing listener untouched') from None
+
+    def _holder(self):
+        import shutil
+        if shutil.which('lsof') is None:return 'port '+str(self.port)+' busy; lsof unavailable to name the holder'
+        try:
+            found=subprocess.run(['lsof','-nP','-iTCP:'+str(self.port),'-sTCP:LISTEN'],capture_output=True,text=True,timeout=5)
+        except (OSError,subprocess.TimeoutExpired):return 'port '+str(self.port)+' busy; holder lookup failed'
+        holders=[line for line in found.stdout.splitlines() if line.strip()]
+        if found.returncode!=0 or len(holders)<2:
+            return 'port '+str(self.port)+' has no current listener; a recently closed one may still be cooling down'
+        return 'port '+str(self.port)+' is held by: '+' | '.join(holders[1:4])
 
     def start(self):
-        try:
-            with socket.socket() as listener:listener.bind(('127.0.0.1',self.port))
-        except OSError:raise WorkflowError('Back office cannot own its private port; existing listener untouched') from None
+        self._own_port()
         self.log_path.parent.mkdir(parents=True,exist_ok=True)
         fd=os.open(self.log_path,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
         self.log=os.fdopen(fd,'w')

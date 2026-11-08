@@ -30,7 +30,7 @@ def test_real_private_listener_owned_start_health_close(tmp_path,monkeypatch):
 def test_collision_never_takes_over_listener(tmp_path):
     with socket.socket() as existing:
         existing.bind(('127.0.0.1',0));existing.listen();port=existing.getsockname()[1]
-        listener=m.PrivateBackoffice(port,free(),tmp_path/'none')
+        listener=m.PrivateBackoffice(port,free(),tmp_path/'none',bind_wait_seconds=.2)
         with pytest.raises(m.WorkflowError,match='existing listener untouched'):listener.start()
         assert listener.process is None and not (tmp_path/'none').exists()
 
@@ -38,3 +38,35 @@ def test_collision_never_takes_over_listener(tmp_path):
 @pytest.mark.parametrize('port',[80,8000,8010,8021])
 def test_conflicts_refused(tmp_path,port):
     with pytest.raises(m.WorkflowError):m.PrivateBackoffice(port,8021,tmp_path/'log')
+
+
+def _time_wait_port(reuse_old=True):
+    listener=socket.socket()
+    if reuse_old:listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+    listener.bind(('127.0.0.1',0));listener.listen();port=listener.getsockname()[1]
+    client=socket.create_connection(('127.0.0.1',port));accepted,_=listener.accept()
+    accepted.close();client.close();listener.close()
+    return port
+
+
+def test_probe_binds_across_cooldown(tmp_path):
+    m.PrivateBackoffice(_time_wait_port(),free(),tmp_path/'none')._own_port()
+
+
+def test_conflict_fail_names_holder(tmp_path):
+    with socket.socket() as existing:
+        existing.bind(('127.0.0.1',0));existing.listen();port=existing.getsockname()[1]
+        listener=m.PrivateBackoffice(port,free(),tmp_path/'none',bind_wait_seconds=.2)
+        with pytest.raises(m.WorkflowError) as error:listener.start()
+    text=str(error.value)
+    assert 'existing listener untouched' in text and str(os.getpid()) in text and not (tmp_path/'none').exists()
+
+
+def test_fail_without_holder_reports_port_state(tmp_path,monkeypatch):
+    port=free();upstream=free()
+    def broken(*args,**kwargs):raise OSError('denied')
+    monkeypatch.setattr(m.socket,'socket',broken)
+    listener=m.PrivateBackoffice(port,upstream,tmp_path/'none',bind_wait_seconds=.1)
+    with pytest.raises(m.WorkflowError) as error:listener.start()
+    import re
+    assert re.search(r'no current listener|busy',str(error.value))
