@@ -99,6 +99,8 @@ def test_engine_timing_stage_maps_only_observed_records():
     assert engine_timing_stage(f'advance.turn.begin session={sid}') == (sid,'engine.turn','Engine working','started')
     assert engine_timing_stage(f'advance.turn.end session={sid} dur_ms=44076') == (sid,'engine.turn','Finishing','completed')
     assert engine_timing_stage(f'session.saved session={sid} seq=4 pages=0 checkpoint=yes dur_ms=894 outcome=published') == (sid,'engine.persist','Session saved','completed')
+    assert engine_timing_stage(f'llm.turn.begin session={sid} stage=categorize provider=deepseek model=deepseek-chat attempt=1') == (sid,'engine.llm','Model call running','started')
+    assert engine_timing_stage(f'llm.turn.end session={sid} stage=categorize provider=deepseek model=deepseek-chat attempt=1 dur_ms=17320 outcome=ok') == (sid,'engine.llm','Model call running','completed')
     assert engine_timing_stage(f'control_commit.enter session={sid} fenced=False') is None, 'unmapped records stay invisible'
     assert engine_timing_stage('arbitrary child stderr with session='+sid) is None
     assert engine_timing_stage('advance.turn.begin') is None, 'no session id, no attribution'
