@@ -221,3 +221,24 @@ def test_stage_evidence_is_bound_to_the_exact_contracts(tmp_path):
     _stage_run(tmp_path, {name: 'passed' for name in m.ACCEPTANCE_CHECKS},
                build_sources={n: '0' * 40 for n in m.IMAGE_REPOS})
     assert m.accepted_receipt(ctx(tmp_path)) is None, 'evidence for other sources lives at another digest and must not match'
+def test_pull_all_verification_reads_checkout_heads_not_origin_refs(tmp_path, monkeypatch):
+    """build_ctx wires heads to rev-parse HEAD; origin refs alone proved nothing."""
+    monkeypatch.setenv('REQUI_REBUILD_STATE', str(tmp_path / 'rebuild-state.json'))
+    monkeypatch.setattr(m, 'preflight', lambda root, repos_root: dict(SHAS))
+    monkeypatch.setattr(m, 'contract_bytes', lambda: b'contract')
+    monkeypatch.setattr(m, 'acceptance_contract', lambda root: 'sha256:ac')
+    monkeypatch.setattr(m, 'origin_shas', lambda *a, **k: {n: '9' * 40 for n in m.REPOS})
+    stale = dict(SHAS)
+    stale['vmodel-contracts'] = '0' * 40
+    def fake_command(args, **kw):
+        return stale[Path(args[args.index('-C') + 1]).name]
+    monkeypatch.setattr(m, 'command', fake_command)
+    built = m.build_ctx(tmp_path / 'delivery-api')
+    assert built['heads']() == stale, 'heads must come from each checkout, not from origin refs'
+
+
+def test_pull_all_names_the_checkout_left_behind(tmp_path):
+    moved = dict(SHAS)
+    moved['vmodel-spec-app'] = '0' * 40
+    with pytest.raises(m.WorkflowError, match='vmodel-spec-app'):
+        m.step_pull_all(ctx(tmp_path, heads=lambda: moved))
