@@ -140,7 +140,11 @@ def main():
     base = sys.argv[1]
     events = collect(base)
     if events is None:
-        sys.exit(2)  # caller prints the playwright install hint
+        # No browser ran, so the boot state is UNKNOWN, never "failed". The log
+        # must name the repair itself - the preview caller only relays this output.
+        print("Chromium is not installed for " + sys.executable + "; no browser ran and the boot is unverified.")
+        print("Install it once for this exact interpreter: " + sys.executable + " -m playwright install chromium")
+        sys.exit(2)
     failures, tolerated = classify(events)
     for t in tolerated:
         print("tolerated:", t)

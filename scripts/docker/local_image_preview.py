@@ -1,9 +1,26 @@
 """Owner-started preview of the exact locally accepted immutable image."""
 import json
 from pathlib import Path
+import subprocess
 import time
 from image_workflow import WorkflowError, command, inspect_image, log, confirm
 from runtime_spec import Target
+
+
+def run_browser_smoke(python,script,base,*,run=None):
+    """The browser gate, self-healing on the one environment failure it can
+    repair: exit 2 means no Chromium for this interpreter, never a boot verdict.
+    Install the browser for this exact interpreter once and retry the gate once."""
+    run=run or subprocess.run  # call time, never def time: tests monkeypatch it
+    result=run([python,str(script),base],capture_output=True,text=True,timeout=90)
+    if result.returncode==2:
+        log('WARN','browser smoke found no Chromium for the preview interpreter; installing it once and retrying the gate')
+        install=run([python,'-m','playwright','install','chromium'],capture_output=True,text=True,timeout=600)
+        result=run([python,str(script),base],capture_output=True,text=True,timeout=90)
+        if result.returncode==2 and install.returncode:
+            result=type(result)(args=result.args,returncode=2,
+                                stdout=result.stdout+'\nchromium install failed: '+install.stderr[-500:],stderr=result.stderr)
+    return result
 
 
 def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge',backoffice_port=8020,apply=False):
@@ -61,8 +78,7 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
             # Preserve the real browser gate, including named expected anonymous
             # 401 classification. Never infer readiness from health alone.
             browser=Path(__file__).resolve().parents[1]/'ops/browser_smoke.py'
-            result=subprocess.run([__import__('sys').executable,str(browser),'http://127.0.0.1:'+str(port)],
-                                  capture_output=True,text=True,timeout=90)
+            result=run_browser_smoke(__import__('sys').executable,browser,'http://127.0.0.1:'+str(port))
             output=state.path.parent/'browser-smoke.log'
             descriptor=__import__('os').open(output,__import__('os').O_WRONLY|__import__('os').O_CREAT|__import__('os').O_TRUNC,0o600)
             with __import__('os').fdopen(descriptor,'w') as stream:stream.write(result.stdout+result.stderr)
