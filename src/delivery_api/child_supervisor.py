@@ -38,6 +38,8 @@ _TIMING_STAGES={
     'saver.setup.begin':('engine.session','Engine loading session','started'),
     'saver.setup.end':('engine.session','Engine loading session','completed'),
     'advance.turn.begin':('engine.turn','Engine working','started'),
+    'llm.turn.begin':('engine.llm','Model call running','started'),
+    'llm.turn.end':('engine.llm','Model call running','completed'),
     'advance.turn.end':('engine.turn','Finishing','completed'),
     'session.saved':('engine.persist','Session saved','completed'),
 }
