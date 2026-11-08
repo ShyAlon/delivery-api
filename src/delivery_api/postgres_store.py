@@ -591,6 +591,10 @@ class PostgresStore:
         """Persist the exact model selected by the founder for subsequent phases."""
         self._execute_native('UPDATE tasks SET model_default=%s,updated_at=%s WHERE task_id=%s', (model, time.time(), task_id), write=True)
 
+    def task_for_engine_session(self, session_id: str) -> str | None:
+        row = self._execute_native('SELECT task_id FROM tasks WHERE engine_session_id=%s AND deleted_at IS NULL',(session_id,)).fetchone()
+        return str(row['task_id']) if row else None
+
     def engine_session(self, task_id: str) -> str | None:
         row = self._execute_native('SELECT engine_session_id FROM tasks WHERE task_id=%s', (task_id,)).fetchone()
         return row['engine_session_id'] if row else None
@@ -2450,6 +2454,7 @@ PG_OPERATIONS = (
     'staged_response_ledger_join',
     'start_launch_provider_attempt',
     'task',
+    'task_for_engine_session',
     'task_artifacts',
     'task_phase_credits',
     'task_child_cost',

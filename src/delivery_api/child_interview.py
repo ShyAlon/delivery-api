@@ -37,7 +37,12 @@ class ChildInterviewClient(EngineClient):
         self.store=store;self.base=Path(artifacts_base);self.gateway_factory=gateway_factory;self.dsn=dsn;self.endpoint=endpoint
         from interview_engine.question_config import ConfigStore
         self.quality_store=ConfigStore(__import__('os').environ.get('INTERVIEW_ENGINE_QUESTION_QUALITY_CONFIG') or self.base/'question_quality.json')
-        self.supervisor=ChildSupervisor(command or [sys.executable,'-m','delivery_api.child_entry'])
+        self.supervisor=ChildSupervisor(command or [sys.executable,'-m','delivery_api.child_entry'],timing_sink=self._record_engine_timing)
+    def _record_engine_timing(self,session_id,stage,label,status):
+        task_id=self.store.task_for_engine_session(session_id)
+        if not task_id:return
+        self.store.add_event(task_id,"progress",label,phase_key=None,payload={"stage":stage,"status":status,"source":"engine.timing"})
+
     @contextmanager
     def _registry(self):
         from .db_pool import pool_for

@@ -133,3 +133,4 @@ def test_bounded_tail_never_promotes_partial_record(tmp_path):
  with zipfile.ZipFile(io.BytesIO(raw)) as z:
   assert 'own' in z.read('run.log').decode()
   assert 'neighboring' not in z.read('run.log').decode()
+
