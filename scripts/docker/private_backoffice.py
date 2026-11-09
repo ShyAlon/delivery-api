@@ -24,8 +24,31 @@ class PrivateBackoffice:
         self.port=port;self.upstream_port=upstream_port;self.log_path=Path(log_path)
         self.bind_wait_seconds=bind_wait_seconds;self.process=None;self.log=None
 
+    def _recycle_stale_backoffice(self):
+        """Stop a leftover Back office of ours; never touch any other listener.
+
+        Proof of ownership: the port answers /health as role=backoffice AND lsof
+        names exactly one listener pid. Anything else is left untouched.
+        """
+        import shutil,signal
+        try:
+            with urllib.request.urlopen('http://127.0.0.1:'+str(self.port)+'/health',timeout=1) as response:
+                value=json.load(response)
+        except (OSError,ValueError):return False
+        if not isinstance(value,dict) or value.get('role')!='backoffice' or value.get('ok') is not True:return False
+        if shutil.which('lsof') is None:return False
+        try:
+            found=subprocess.run(['lsof','-nP','-t','-iTCP:'+str(self.port),'-sTCP:LISTEN'],capture_output=True,text=True,timeout=5)
+        except (OSError,subprocess.TimeoutExpired):return False
+        pids=[int(line) for line in found.stdout.split() if line.isdigit()]
+        if len(pids)!=1 or pids[0]==os.getpid():return False
+        try:os.kill(pids[0],signal.SIGTERM)
+        except OSError:return False
+        return True
+
     def _own_port(self):
         deadline=time.monotonic()+self.bind_wait_seconds
+        recycled=False
         while True:
             try:
                 with socket.socket() as listener:
@@ -35,6 +58,7 @@ class PrivateBackoffice:
                     listener.bind(('127.0.0.1',self.port))
                 return
             except OSError:
+                if not recycled:recycled=self._recycle_stale_backoffice()
                 if time.monotonic()>=deadline:break
                 time.sleep(.25)
         raise WorkflowError('Back office cannot own its private port ('+self._holder()+'); existing listener untouched') from None
