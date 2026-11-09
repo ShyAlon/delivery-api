@@ -128,3 +128,62 @@ def test_engine_timing_sink_records_progress_for_the_owning_task(pg_workspace_fa
         unknown.store = store
         unknown._record_engine_timing('00000000-0000-0000-0000-000000000000', 'engine.turn', 'Engine working', 'started')
         assert [e['message'] for e in store.events(task_id)] == ['Engine working'], 'no event for a session no task owns'
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='node not installed')
+def test_shadowless_render_anchors_on_the_durable_submit_event(tmp_path):
+    out = _run(tmp_path, """
+        globalThis.window={addEventListener(){}};
+        globalThis.document={addEventListener(){},querySelectorAll:()=>[]};
+        const {answerProcessingLabel,ANSWER_PENDING_LABEL}=await import('./progress.js');
+        const anchor={id:10,kind:'answer_submitted',message:'Answer submitted; engine processing',ts:1500};
+        const pre={id:11,kind:'progress',message:'Coverage',ts:1400};
+        const post={id:12,kind:'progress',message:'coverage',ts:1600};
+        console.log(JSON.stringify({
+          noAnchor: answerProcessingLabel([pre,post],{phaseKey:'intent'}),
+          anchored: answerProcessingLabel([anchor,pre,post],{phaseKey:'intent'}),
+          staleOnly: answerProcessingLabel([anchor,pre],{phaseKey:'intent'}),
+          shadowWins: answerProcessingLabel([anchor,pre,post],{phaseKey:'intent',sinceMs:1650000}),
+        }));
+        """)
+    import json
+    got = json.loads(out)
+    assert got['noAnchor'] == 'Processing your answer…', 'no shadow and no anchor: the honest blanket'
+    assert got['anchored'] == 'Processing your answer · coverage', 'a shadow-less re-render must anchor on the durable submit event'
+    assert got['staleOnly'] == 'Processing your answer…', 'signals from before the anchor stay invisible'
+    assert got['shadowWins'] == 'Processing your answer…', 'an explicit shadow timestamp still wins over the anchor'
+
+
+def test_submit_writes_a_durable_anchor_before_the_turn_end_event(tmp_path, monkeypatch, pg_scoped_workspace):
+    """The shadow is tab-local; the submit anchor must be durable so a mid-flight
+    re-render can order post-submit signals without it."""
+    import asyncio
+    from uuid import uuid4
+    from vmodel_contracts.interactive import (EngineSnapshot, EventType, InputKind, InputRequest,
+        InteractiveEvent, NextStep, ProcessStatus, SubmitInputResponse)
+    import delivery_api.app as module
+    from delivery_api.auth import Actor
+    monkeypatch.setattr(module.config, 'CLOUD_TENANTS', False)
+    session = 'anchor-' + str(uuid4())
+    artifacts = tmp_path / 'artifacts'
+    monkeypatch.setenv('VMODEL_ARTIFACTS_DIR', str(artifacts))
+    store = pg_scoped_workspace.store
+    tid = store.create_task('Anchor', 'brief')['task_id']
+    store.set_engine_session(tid, session)
+    store.update_phase(tid, 'intent', 'running', detail='Waiting for founder input')
+    monkeypatch.setattr(module, 'store', store)
+    pending = InputRequest(input_id=uuid4(), kind=InputKind.TEXT, prompt='Q8?', options=[])
+    class Slow:
+        def snapshot(self, sid):
+            return EngineSnapshot(session_id=sid, task_id=tid, sequence=1, process_status=ProcessStatus.WAITING_INPUT, next_step=NextStep.WAIT_INPUT, open_input=pending)
+        def submit(self, sid, response):
+            return SubmitInputResponse(accepted_event=InteractiveEvent(event_id=uuid4(), session_id=session, task_id=tid, phase_id=1, sequence=2, event_type=EventType.INPUT_ACCEPTED, process_status=ProcessStatus.WAITING_INPUT, next_step=NextStep.WAIT_INPUT), snapshot=EngineSnapshot(session_id=session, task_id=tid, sequence=2, process_status=ProcessStatus.WAITING_INPUT, next_step=NextStep.WAIT_INPUT, open_input=InputRequest(input_id=uuid4(), kind=InputKind.TEXT, prompt='Q9?', options=[])))
+    monkeypatch.setattr(module, 'engine_client', Slow())
+    assert asyncio.run(module.answer_interview(tid, module.InterviewAnswer(answer='Because x', decision_id=str(pending.input_id)), Actor('test', 'Founder'))) == {'status': 'accepted'}
+    events = store.events(tid)
+    anchors = [e for e in events if e['kind'] == 'answer_submitted']
+    assert len(anchors) == 1, 'exactly one durable submit anchor per accepted answer'
+    assert anchors[0]['payload'].get('input_id') == str(pending.input_id)
+    assert anchors[0]['phase_key'] == 'intent'
+    turn_end = [e for e in events if e['kind'] == 'answer']
+    assert turn_end and anchors[0]['id'] < turn_end[0]['id'], 'the anchor lands at submit, before the turn-end answer event'

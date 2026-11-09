@@ -19,7 +19,14 @@ const expandedProgress=new Map();
 document.addEventListener('toggle',event=>{const box=event.target;if(box.isConnected&&box.matches?.('details[data-progress-key]'))expandedProgress.set(box.dataset.progressKey,box.open)},true);
 // The in-flight label names the newest engine signal observed AFTER this answer
 // was submitted; without one it stays the honest blanket label. Never a guess.
+// The anchor is the tab-local shadow when present, else the durable
+// answer_submitted event written at submit - a re-render in a fresh tab loses
+// the shadow but must not stay blanket for the whole turn.
 export function answerProcessingLabel(events,{phaseKey,afterId=0,sinceMs=0}={}){
+ if(!sinceMs){
+  const anchor=[...(events||[])].reverse().find(e=>e.kind==='answer_submitted'&&Number(e.id||0)>=afterId);
+  sinceMs=anchor?(signalTime(anchor)??0)*1000:0;
+ }
  if(!sinceMs)return ANSWER_PENDING_LABEL;
  const latest=[...(events||[])].reverse().find(e=>Number(e.id||0)>=afterId&&isProgressEvent(e)&&(!e.phase_key||e.phase_key===phaseKey)&&(signalTime(e)??0)*1000>sinceMs);
  return latest?`Processing your answer · ${humanizeSnakeCase(String(latest.message||latest.payload?.label||''))}`:ANSWER_PENDING_LABEL;
