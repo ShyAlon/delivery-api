@@ -48,19 +48,19 @@ case "$command" in
    args=("$PWD" --env-file "$envfile")
    [ "$test_owner" = 0 ] || args+=(--test-owner)
    [ "$apply" = 0 ] || args+=(--apply)
-   exec .venv/bin/python "$target" "${args[@]}";;
- debug) [ "$apply" = 0 ] || fail "debug is read-only";args=();[ -z "$debug_run_dir" ] || args+=(--run-dir "$debug_run_dir");exec .venv/bin/python "$target" "${args[@]}";;
+   exec .venv/bin/python "$target" ${args[@]+"${args[@]}"};;
+ debug) [ "$apply" = 0 ] || fail "debug is read-only";args=();[ -z "$debug_run_dir" ] || args+=(--run-dir "$debug_run_dir");exec .venv/bin/python "$target" ${args[@]+"${args[@]}"};;
  locks)
    [ "$apply" = 0 ] || fail 'locks is read-only; --apply is not supported.'
    exec .venv/bin/python "$target" "$PWD" --env-file "$envfile";;
  migrate)
    args=("$PWD" --env-file "$envfile")
    [ "$apply" = 0 ] || args+=(--apply --review-projection-functions)
-   exec .venv/bin/python "$target" "${args[@]}";;
+   exec .venv/bin/python "$target" ${args[@]+"${args[@]}"};;
  rebuild)
    args=("$PWD")
    [ "$apply" = 0 ] || args+=(--apply)
-   exec .venv/bin/python "$target" "${args[@]}";;
+   exec .venv/bin/python "$target" ${args[@]+"${args[@]}"};;
  policy)
    export REQUI_POLICY_DRY_RUN=$((1-apply))
    exec bash "$target";;
@@ -71,21 +71,21 @@ case "$command" in
    # Existing owner policy proof and acceptance checks are one command. Neither
    # result grants activation or edits a missing policy.
    .venv/bin/python "$target" "$PWD" --email "$email" || exit $?
-   exec bash scripts/ops/acceptance.sh --dry-run "${acceptance_args[@]}";;
+   exec bash scripts/ops/acceptance.sh --dry-run ${acceptance_args[@]+"${acceptance_args[@]}"};;
  force-stop) fail 'force-stop retired; use req reset-preview for a fresh dry owner reset review.';;
  stop-all)
    args=("$PWD" --env-file "$envfile")
    [ "$apply" = 1 ] || args+=(--dry-run)
-   exec .venv/bin/python "$target" "${args[@]}";;
+   exec .venv/bin/python "$target" ${args[@]+"${args[@]}"};;
  reset-preview)
    args=("$PWD" --env-file "$envfile" --owner 9ed32462-3dd0-4222-90b3-92cb38e00911 --accounting wipe)
    [ "$apply" = 0 ] || args+=(--apply)
-   exec .venv/bin/python "$target" "${args[@]}";;
+   exec .venv/bin/python "$target" ${args[@]+"${args[@]}"};;
  preview|preview-free)
    [ "$command" != preview-free ] || echo 'preview-free is an alias of the same accepted-image runtime, not an execution-off mode.'
    args=()
    [ "$checks" = full ] || fail "--fast retired; exact-image acceptance is never skipped."
    if [ "$apply" = 0 ]; then echo 'DRY REVIEW ONLY: req image --accept-local prepares the exact image; req preview --apply starts the accepted image. Nothing launched.';exit 0;fi
    args+=(--apply)
-   exec bash "$target" "${args[@]}";;
+   exec bash "$target" ${args[@]+"${args[@]}"};;
 esac
