@@ -65,13 +65,13 @@ class ChildInterviewClient(EngineClient):
     def _drop_warm(self,sid,*,recycle=False):
         entry=self._warm.pop(sid,None)
         if entry is None:return
-        def fence_stop(op):
+        def parked_fence(op):
             task=self.store.task(entry['operation'].binding.task_id);session=self.store.session_binding(sid)
             if task and task.get('stop_requested_at') is None and session and session['generation']==op.binding.generation:
                 raise PermissionError('stop signal has no durable stop/revocation evidence')
         async def finish():
             if recycle:await self.supervisor.close_parked(entry['handle'],entry['operation'])
-            else:await self.supervisor.stop_parked(entry['handle'],entry['operation'],persist_stop=fence_stop)
+            else:await self.supervisor.stop_parked(entry['handle'],entry['operation'],persist_stop=parked_fence)
         try:self._run(finish())
         except RuntimeError:pass  # a stopped loop owns teardown; process exit kills the group
         ctx=entry.get('progress_ctx')

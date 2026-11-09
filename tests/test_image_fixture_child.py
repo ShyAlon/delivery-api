@@ -68,7 +68,10 @@ def test_image_fixture_real_child_with_zero_balance_production_gateway(store,tmp
             from vmodel_contracts.interactive import InputResponse
             answered=client.submit(sid,InputResponse(input_id=result.snapshot.open_input.input_id,value='Customers book a time slot',actor_id='fixture',expected_sequence=result.snapshot.sequence))
             assert answered.snapshot.sequence>result.snapshot.sequence
-            assert client.supervisor.last_result.reaped
+            # The verified answer parks its warm child alive; the stop below
+            # releases it through the durable fence, not a reap.
+            parked=client._warm[sid]['handle']
+            assert parked.process.returncode is None
             from delivery_api.cooperative_stop import request_stop
             stopped=request_stop(store,client,tid)
             assert stopped['state']=='stopped' and stopped['delete_allowed'] is True,stopped
