@@ -79,6 +79,7 @@ MIGRATIONS={
  '20261102080000_backoffice_audit_view.sql':('audit-policy:operator_curated_audit_read',),
  '20261102220000_owner_test_tasks.sql':('signature:requi_test_task_owner()','signature:requi_purge_test_task(text,boolean)','test-marker:is_test'),
  '20261104210000_stopped_child_job_closure.sql':('worker-policy:backend_stopped_worker_close','signature:requi_stopped_worker_immutable()','worker-trigger:stopped_worker_immutable'),
+ '20261109000000_document_append_rotate_first.sql':('function-body:requi_document_append(text,integer,text,bytea,uuid,uuid,double precision):IS DISTINCT FROM auth_session',),
 }
 # Shared with installer and disposable harness: no hidden blanket grants.
 sys.path.insert(0,str(ROOT/'src'))
@@ -103,6 +104,10 @@ def object_exists(conn,probe):
         row=conn.execute("SELECT i.indisunique,pg_get_expr(i.indpred,i.indrelid) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relnamespace='public'::regnamespace AND c.relname=%s",(name,)).fetchone()
         return bool(row and row[0] and row[1] and 'deleted_at IS NULL' in row[1])
     if kind=='signature':return conn.execute('SELECT to_regprocedure(%s) IS NOT NULL',('public.'+name,)).fetchone()[0]
+    if kind=='function-body':
+        fn,marker=name.rsplit(':',1)
+        row=conn.execute('SELECT pg_get_functiondef(to_regprocedure(%s))',('public.'+fn,)).fetchone()
+        return bool(row and row[0] and marker in row[0])
     if kind=='table':return conn.execute('SELECT to_regclass(%s) IS NOT NULL',('public.'+name,)).fetchone()[0]
     if kind=='function0':return conn.execute('SELECT to_regprocedure(%s) IS NOT NULL',('public.'+name+'()',)).fetchone()[0]
     if kind=='trigger':return conn.execute("SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.operator_principals'::regclass AND tgname=%s AND NOT tgisinternal)",(name,)).fetchone()[0]

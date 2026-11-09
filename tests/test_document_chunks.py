@@ -56,3 +56,33 @@ def test_append_never_transfers_old_blob_to_parent(store,monkeypatch):
         with psycopg.connect(DSN) as c:
             size,count=c.execute('SELECT octet_length(payload),chunk_count FROM generator_documents WHERE execution_session_id=%s',(sid,)).fetchone()
             assert size==1000000 and count==30
+
+def test_append_after_auth_session_rotation_succeeds_and_rotates_ownership(store):
+    """2026-11-09: Shy's overnight-resumed interview rejected EVERY answer
+    (task 7f3b86686274, five engine respawns): the engine's first document
+    append under the NEW sign-in met document_chunks' tenant WITH CHECK, which
+    demands auth_session_id == the current claim - still yesterday's session -
+    and PG answered 42501 (InsufficientPrivilege) before any model call. The
+    append function's own final UPDATE was designed to rotate auth_session_id
+    to the caller, but the chunk insert ran before it. Rotation must happen
+    first; the row is FOR UPDATE and one transaction, so a later failure
+    rolls the rotation back with it.
+    """
+    from delivery_api.tenancy import TenantScope
+    A2=TenantScope(A.owner_id,'00000000-0000-0000-0000-0000000000b1')  # next sign-in: same founder, new auth session
+    with psycopg.connect(DSN,autocommit=True) as c:
+        c.execute('INSERT INTO auth.sessions(id,user_id) VALUES (%s,%s) ON CONFLICT DO NOTHING',(A2.session_id,A2.owner_id))
+    with tenant_context(A):
+        tid=store.create_task('rotate-'+uuid.uuid4().hex)['task_id'];sid='rotate-'+uuid.uuid4().hex;store.set_engine_session(tid,sid)
+        job=store.enqueue_worker(tid,'phase:srs');cap=store.claim_worker(job);docs=GeneratorDocuments(store,cap,job)
+        docs.write('interview/llm-calls.jsonl',b'old-session-bytes')
+        with psycopg.connect(DSN) as c:
+            stored=c.execute('SELECT auth_session_id FROM generator_documents WHERE execution_session_id=%s AND document_key=%s',(sid,'interview/llm-calls.jsonl')).fetchone()[0]
+            assert str(stored)==A.session_id
+    with tenant_context(A2):
+        job2=store.enqueue_worker(tid,'phase:srs');cap2=store.claim_worker(job2);docs2=GeneratorDocuments(store,cap2,job2)
+        docs2.append('interview/llm-calls.jsonl',b'\nnew-session-bytes')
+        assert docs2.read('interview/llm-calls.jsonl')==b'old-session-bytes\nnew-session-bytes'
+        with psycopg.connect(DSN) as c:
+            rotated=c.execute('SELECT auth_session_id FROM generator_documents WHERE execution_session_id=%s AND document_key=%s',(sid,'interview/llm-calls.jsonl')).fetchone()[0]
+            assert str(rotated)==A2.session_id,'the append must rotate the lease to the calling session'
