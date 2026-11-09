@@ -70,3 +70,30 @@ def test_fail_without_holder_reports_port_state(tmp_path,monkeypatch):
     with pytest.raises(m.WorkflowError) as error:listener.start()
     import re
     assert re.search(r'no current listener|busy',str(error.value))
+
+
+def _stale_backoffice(port,upstream):
+    import subprocess,time,urllib.request
+    env=dict(os.environ,PYTHONPATH=str(D.parents[1]/'src'),BACKOFFICE_HOST='127.0.0.1',BACKOFFICE_PORT=str(port),
+        BACKOFFICE_SERVICE_URL='http://127.0.0.1:'+str(upstream))
+    process=subprocess.Popen([sys.executable,'-m','delivery_api.backoffice'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    for _ in range(100):
+        try:
+            urllib.request.urlopen('http://127.0.0.1:'+str(port)+'/health',timeout=.5).read();return process
+        except OSError:time.sleep(.1)
+    process.kill();raise AssertionError('stale back office did not start')
+
+
+def test_stale_own_backoffice_is_recycled_not_a_failure(tmp_path,monkeypatch):
+    # Real failure: a Back office left by an earlier preview run held 8020 and
+    # the rebuild aborted with "existing listener untouched".
+    monkeypatch.setenv('PYTHONPATH',str(D.parents[1]/'src'))
+    port=free();upstream=free();stale=_stale_backoffice(port,upstream)
+    listener=m.PrivateBackoffice(port,upstream,tmp_path/'private.log')
+    try:
+        listener.start()
+        assert stale.wait(timeout=10) is not None
+        assert listener.process.poll() is None and listener.process.pid!=stale.pid
+    finally:
+        listener.close()
+        if stale.poll() is None:stale.kill()
