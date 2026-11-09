@@ -19,8 +19,17 @@ This smoke classifies instead of counting:
   classified it, by URL)
 - the page's own api.error telemetry echo is tolerated only when its structured
   detail names an expected anonymous 401 endpoint
-- every other console error, every pageerror, every failed request, and a boot
-  stuck on "Loading workspace..." or rendering nothing FAILS the smoke
+- a request Chromium reports as failed is tolerated only when a response was
+  captured for that same request: headless Chromium misreports COMPLETED
+  fetch() calls as net::ERR_ABORTED (the response event fires, the page's
+  fetch resolves 204, and requestfailed fires anyway - reproduced 2026-11-09;
+  XMLHttpRequest and document loads report correctly). The fire-and-forget
+  client-log POST always lands its 204 and still prints as a phantom failure,
+  so counting requestfailed kills every healthy boot (exactly the two lines
+  in Shy's browser-smoke.log).
+- every other console error, every pageerror, every genuinely failed request
+  (no captured response), and a boot stuck on "Loading workspace..." or
+  rendering nothing FAILS the smoke
 
 Anonymous and read-only BY CONSTRUCTION: the preview runs on the live database
 with real sign-in, so this never submits a form and never signs in. The
@@ -55,7 +64,11 @@ def classify(events):
         else:
             failures.append(f"HTTP {r['status']} {r['method']} {r['url']}")
     for f in events["request_failures"]:
-        failures.append(f"request failed: {f['method']} {f['url']} - {f['failure']}")
+        line = f"request failed: {f['method']} {f['url']} - {f['failure']}"
+        if f.get("answered"):
+            tolerated.append(f"{line} (a response was captured for this same request - Chromium misreports completed fetch calls as failed)")
+            continue
+        failures.append(line)
     for c in events["console"]:
         text = c["text"]
         m = _RESOURCE_LOAD.match(text)
@@ -110,14 +123,16 @@ def collect(base, boot_timeout_ms=20000, settle_ms=2000):
                 return None
             raise
         page = browser.new_page()
+        answered_request_ids = set()
         def on_response(r):
+            answered_request_ids.add(id(r.request))
             if r.request.method == "POST" and urlsplit(r.url).path == "/api/client-log" and 200 <= r.status < 300:
                 events["telemetry_success"] = True
             if r.status >= 400:
                 events["responses"].append({"method": r.request.method, "url": r.url, "status": r.status})
         page.on("response", on_response)
         page.on("requestfailed", lambda r: events["request_failures"].append(
-            {"method": r.method, "url": r.url, "failure": str(r.failure)}))
+            {"method": r.method, "url": r.url, "failure": str(r.failure), "_rid": id(r)}))
         page.on("console", on_console)
         page.on("pageerror", lambda e: events["pageerrors"].append(str(e)))
         page.goto(base + "/")
@@ -133,6 +148,13 @@ def collect(base, boot_timeout_ms=20000, settle_ms=2000):
             # on its first poll still shows up before the verdict.
             page.wait_for_timeout(settle_ms)
         browser.close()
+    # Chromium reports some COMPLETED requests as failed (see the module
+    # docstring). The response listener is the source of truth: a failure line
+    # whose request already produced a captured response is a misreport, not a
+    # network failure. Both events land inside the collection window, so the
+    # verdict is decided here, after close.
+    for f in events["request_failures"]:
+        f["answered"] = f.pop("_rid") in answered_request_ids
     return events
 
 

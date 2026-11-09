@@ -189,3 +189,60 @@ def test_a_missing_browser_names_the_exact_install_remedy(tmp_path, monkeypatch,
     assert error.value.code == 2
     out = capsys.readouterr().out
     assert '-m playwright install chromium' in out and sys.executable in out and 'unverified' in out
+
+
+@pytest.fixture(scope="module")
+def phantom_abort_page():
+    """The app's anonymous telemetry shape, hermetically: the page fires its
+    fire-and-forget keepalive client-log POST and the endpoint answers 204 at
+    once. Headless Chromium misreports this COMPLETED fetch as
+    net::ERR_ABORTED (2026-11-09: exactly the two lines in Shy's
+    browser-smoke.log, while telemetry_success was True - the POSTs landed)."""
+    import http.server
+    import threading
+    page = (b'<html><body><div id="app">workspace ready</div><script>'
+            b'fetch("/api/client-log",{method:"POST",headers:{"content-type":"application/json"},'
+            b'body:"{}",keepalive:true}).catch(()=>{})</script></body></html>')
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("content-type", "text/html")
+            self.send_header("content-length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+
+        def do_POST(self):
+            length = int(self.headers.get("content-length") or 0)
+            self.rfile.read(length)
+            self.send_response(204)
+            self.send_header("content-length", "0")
+            self.end_headers()
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+
+
+def test_a_completed_post_reported_as_aborted_is_not_a_boot_failure(phantom_abort_page):
+    events = browser_smoke.collect(phantom_abort_page)
+    assert events is not None, "chromium missing: .venv/bin/python -m playwright install chromium"
+    assert events["telemetry_success"], "the reproduction counts only if the 204 really landed"
+    assert events["request_failures"], \
+        "this Chromium build stopped misreporting completed fetch calls - revisit the 'answered' tolerance"
+    failures, tolerated = browser_smoke.classify(events)
+    assert failures == [], failures
+    assert any("/api/client-log" in t and "misreports completed fetch" in t for t in tolerated), tolerated
+
+
+def test_a_request_failed_without_a_captured_response_still_fails():
+    events = _events(failures_=[{"method": "POST", "url": "http://x/api/client-log",
+                                 "failure": "net::ERR_ABORTED", "answered": False}])
+    failures, _ = browser_smoke.classify(events)
+    assert failures == ["request failed: POST http://x/api/client-log - net::ERR_ABORTED"]
