@@ -49,15 +49,31 @@ class ChildInterviewClient(EngineClient):
         # Parked warm children keyed by session id: a verified completed answer
         # on a session waiting for the next input keeps its claimed child alive.
         self._warm={}
+        # One persistent supervisor loop: a parked warm child's process and
+        # stream transports are loop-bound, so every supervisor interaction
+        # (spawn, follow-up, reap, recycle) must run on the loop that spawned it.
+        self._loop=None;self._loop_thread=None;self._loop_lock=threading.Lock()
+
+    def _run(self,coro):
+        with self._loop_lock:
+            if self._loop is None:
+                loop=asyncio.new_event_loop()
+                thread=threading.Thread(target=loop.run_forever,daemon=True,name='child-supervisor-loop')
+                thread.start();self._loop=loop;self._loop_thread=thread
+        return asyncio.run_coroutine_threadsafe(coro,self._loop).result()
 
     def _drop_warm(self,sid,*,recycle=False):
         entry=self._warm.pop(sid,None)
         if entry is None:return
+        def fence_stop(op):
+            task=self.store.task(entry['operation'].binding.task_id);session=self.store.session_binding(sid)
+            if task and task.get('stop_requested_at') is None and session and session['generation']==op.binding.generation:
+                raise PermissionError('stop signal has no durable stop/revocation evidence')
         async def finish():
             if recycle:await self.supervisor.close_parked(entry['handle'],entry['operation'])
-            else:await self.supervisor.reap(entry['handle'],entry['operation'])
-        try:asyncio.run(finish())
-        except RuntimeError:pass  # a running loop owns teardown; process exit kills the group
+            else:await self.supervisor.stop_parked(entry['handle'],entry['operation'],persist_stop=fence_stop)
+        try:self._run(finish())
+        except RuntimeError:pass  # a stopped loop owns teardown; process exit kills the group
         ctx=entry.get('progress_ctx')
         if ctx is not None:ctx.__exit__(None,None,None)
     def _record_engine_timing(self,session_id,stage,label,status):
@@ -174,6 +190,10 @@ class ChildInterviewClient(EngineClient):
             return ModelRouteSwitchResponse(snapshot=session.snapshot(),accepted_event=registry._event(session,EventType.ROUTE_CHANGED,route_change=payload))
     def close(self):
         for sid in list(self._warm):self._drop_warm(sid,recycle=True)
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop_thread.join(timeout=10)
+            self._loop.close();self._loop=None;self._loop_thread=None
     def start(self,request):
         from vmodel_contracts.interactive import StartSessionResponse
         if request.model_route!='ollama' and self.paid_runtime is None:raise PermissionError('paid child dispatch remains refused')
@@ -451,7 +471,7 @@ class ChildInterviewClient(EngineClient):
                 verify_completion_quiescence=lambda cap:quiescent,verify_stopped_quiescence=lambda cap:quiescent)
         with _slot:
             timings['slot_wait']=int((time.monotonic()-slot_at)*1000)
-            try:asyncio.run(run())
+            try:self._run(run())
             except BaseException:
                 try:self.store.pause_interrupted_worker(job_id)
                 except Exception:

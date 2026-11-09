@@ -65,3 +65,27 @@ through the channel you already have (SCM_RIGHTS on the existing socket)
 instead of widening the lifetimes of machinery designed to be one-shot.
 Lifetime widening smuggles in poisoning and settlement bugs; descriptor
 passing keeps every guarantee where it was proven.
+
+## Integration pass additions (same PR)
+
+- **Loop-bound transports:** a parked warm child's asyncio process/stream
+  objects belong to the event loop that spawned them. Per-request
+  `asyncio.run` loops mean the second request reuses dead transports
+  ("Event loop is closed"). One persistent supervisor loop thread per
+  client (`_run` via run_coroutine_threadsafe) owns spawn/follow-up/reap.
+- **Stop path must stop, not reap:** recycling (`close_parked`, write-side
+  EOF) and stopping (`stop_parked`, verified fence + STOP) are different
+  exits. Reaping a live parked child is SIGTERM (-15); the parked child
+  exits 0 only through its own STOP/EOF path. The external stop route now
+  verifies the durable fence (same check as the in-flight `fence_stop`)
+  and sends STOP.
+- Sandbox-only fix, not shipped: real-child tests need the delivery_api
+  package importable in the child's allowlisted env (no PYTHONPATH); CI
+  gets it from the installed wheel, the sandbox venv needed
+  `pip install -e . --no-deps --ignore-requires-python`.
+- Proven end to end (`tests/test_child_warm_integration.py`, real child
+  subprocess + real PG + fake provider): two HTTP answers, one process
+  (same pid), one lease claim (row epoch unchanged across the follow-up),
+  identical sequence delta per answer, both UI states emitted
+  ('Warming up a fresh session', 'Reusing an existing session'), stop
+  recycles the parked child with exit 0.
