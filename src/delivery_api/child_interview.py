@@ -12,6 +12,14 @@ from .child_supervisor import ChildSupervisor
 
 _slot=threading.Lock()
 
+# Stop/auth/generation watch cadence inside the child handler. A 1s poll cost
+# three store reads per second of child life - ~300 of the 396 answer-POST
+# queries on 2026-11-09 production turn evidence (fetch_ms ~2.8s per store call
+# against the remote pooler). 5s keeps stop reaction within one graceful-stop
+# window; the stop path itself (fence + SIGTERM) is unchanged. Pinned by
+# tests/test_child_stop_watch_cadence.py.
+_STOP_WATCH_SECONDS=5.0
+
 class LocalComputeEvidence:
     def __init__(self,persist=None):
         self.persist=persist;self.transcript=[]
@@ -297,7 +305,7 @@ class ChildInterviewClient(EngineClient):
                         task=self.store.task(task_id);session=self.store.session_binding(sid)
                         if (not task or task.get('stop_requested_at') is not None or not self.store.auth_session_active()
                             or not session or session['generation']!=operation.binding.generation):stop.set();return
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(_STOP_WATCH_SECONDS)
                 watcher=asyncio.create_task(watch())
                 def fence_stop(op):
                     task=self.store.task(task_id);session=self.store.session_binding(sid)
