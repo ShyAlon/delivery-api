@@ -56,7 +56,7 @@ def test_a_cloud_answer_reaches_the_owner_session_and_is_recorded(monkeypatch):
     session_id, response = seen["submitted"][0]
     assert session_id == "s1" and response.value == "The child" and response.actor_id == "owner@example.com"
     kinds = [event[0][1] for event in seen["events"]]
-    assert kinds == ["engine_protocol", "answer"] and seen["events"][1][0][2] == "You: The child"
+    assert kinds == ["answer_submitted", "engine_protocol", "answer"] and seen["events"][2][0][2] == "You: The child"
     assert seen["continued"] == []
 
 

@@ -1364,6 +1364,10 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
             progress_watch=spawn(_watch_engine_advance(task_id,session_id,progress_stop))
             submit_at=time.monotonic()
             activity('engine.answer.submit_begin','Waiting for engine input advance, not an enqueue receipt',task_id=task_id,session_id=session_id)
+            # Durable submit anchor: the client shadow is tab-local, so a mid-flight
+            # re-render orders post-submit engine signals against this event instead.
+            # Never the answer text - the turn-end 'answer' event carries the record.
+            store.add_event(task_id,"answer_submitted","Answer submitted; engine processing",phase_key=task_before.get("active_phase") or "intent",payload={"input_id":answered_input_id,"actor":a.label})
             interrupted_job=_interrupted_answer_job(task_id,session_id,pending.input_id)
             recovered=False
             try:
