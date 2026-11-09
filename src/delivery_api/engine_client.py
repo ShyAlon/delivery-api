@@ -55,6 +55,11 @@ class EngineClient(ABC):
     def progress(self,session_id:str,after:int=0):...
     def stop(self,session_id:str)->EngineSnapshot:raise NotImplementedError("engine Stop is not supported")
     def reconcile_stop(self,session_id:str)->EngineSnapshot:raise NotImplementedError("engine Stop reconciliation is not supported")
+    def drop_task_sessions(self,task_id:str):
+        """Release any locally held session resources for a task about to be
+        purged. Remote-engine clients hold nothing; local clients recycle
+        parked warm children so the purge sees released claims."""
+        ...
     @abstractmethod
     def switch_route(self,session_id:str,request:ModelRouteSwitchRequest)->ModelRouteSwitchResponse:
         reply=self._send('POST',f'/v1/sessions/{session_id}/model-route',json=request.model_dump(mode='json'))

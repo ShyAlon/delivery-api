@@ -46,6 +46,36 @@ class ChildInterviewClient(EngineClient):
         from interview_engine.question_config import ConfigStore
         self.quality_store=ConfigStore(__import__('os').environ.get('INTERVIEW_ENGINE_QUESTION_QUALITY_CONFIG') or self.base/'question_quality.json')
         self.supervisor=ChildSupervisor(command or [sys.executable,'-m','delivery_api.child_entry'],timing_sink=self._record_engine_timing)
+        # Parked warm children keyed by session id: a verified completed answer
+        # on a session waiting for the next input keeps its claimed child alive.
+        self._warm={}
+        # One persistent supervisor loop: a parked warm child's process and
+        # stream transports are loop-bound, so every supervisor interaction
+        # (spawn, follow-up, reap, recycle) must run on the loop that spawned it.
+        self._loop=None;self._loop_thread=None;self._loop_lock=threading.Lock()
+
+    def _run(self,coro):
+        with self._loop_lock:
+            if self._loop is None:
+                loop=asyncio.new_event_loop()
+                thread=threading.Thread(target=loop.run_forever,daemon=True,name='child-supervisor-loop')
+                thread.start();self._loop=loop;self._loop_thread=thread
+        return asyncio.run_coroutine_threadsafe(coro,self._loop).result()
+
+    def _drop_warm(self,sid,*,recycle=False):
+        entry=self._warm.pop(sid,None)
+        if entry is None:return
+        def parked_fence(op):
+            task=self.store.task(entry['operation'].binding.task_id);session=self.store.session_binding(sid)
+            if task and task.get('stop_requested_at') is None and session and session['generation']==op.binding.generation:
+                raise PermissionError('stop signal has no durable stop/revocation evidence')
+        async def finish():
+            if recycle:await self.supervisor.close_parked(entry['handle'],entry['operation'])
+            else:await self.supervisor.stop_parked(entry['handle'],entry['operation'],persist_stop=parked_fence)
+        try:self._run(finish())
+        except RuntimeError:pass  # a stopped loop owns teardown; process exit kills the group
+        ctx=entry.get('progress_ctx')
+        if ctx is not None:ctx.__exit__(None,None,None)
     def _record_engine_timing(self,session_id,stage,label,status):
         task_id=self.store.task_for_engine_session(session_id)
         if not task_id:return
@@ -106,6 +136,7 @@ class ChildInterviewClient(EngineClient):
     def _stopped_snapshot(self,sid,*,reconcile=False):
         # Fresh parent registries never own the vanished child's writer claim.
         # Only durable parent reaping + closed jobs/providers can replace it.
+        if not reconcile:self._drop_warm(sid)  # the stop fence lands first; reap the parked child after
         with self._registry() as registry:
             snapshot=registry.stop(sid) if not reconcile else registry.snapshot(sid)
         if self.store.confirm_child_session_quiescent(sid):
@@ -142,6 +173,7 @@ class ChildInterviewClient(EngineClient):
         if self.paid_runtime is not None:self.paid_runtime.require(request.model_route,request.model)
         provider,model=next(iter(source));tid=snapshot.task_id
         if request.model==model:conflict('session already uses this model')
+        self._drop_warm(sid,recycle=True)  # a route switch recycles any parked child
         refs=ChildOperationRefs(self.store,tid);ref=refs.put('route',request.model_dump(mode='json'))
         job=self.store.enqueue_worker(tid,'phase:intent',execution_options={'model_route':provider+':'+model})
         binding=self.store.session_binding(sid)
@@ -156,7 +188,19 @@ class ChildInterviewClient(EngineClient):
         with self._registry() as registry:
             session=registry.get(sid,serve=False);payload=session.route_history[-1]
             return ModelRouteSwitchResponse(snapshot=session.snapshot(),accepted_event=registry._event(session,EventType.ROUTE_CHANGED,route_change=payload))
-    def close(self):pass
+    def drop_task_sessions(self,task_id):
+        # Purge/delete teardown: recycle (never fence-stop) parked children
+        # whose operation belongs to the task; their exit releases the claims
+        # the purge checks for.
+        for sid,entry in list(self._warm.items()):
+            if entry['operation'].binding.task_id==task_id:self._drop_warm(sid,recycle=True)
+
+    def close(self):
+        for sid in list(self._warm):self._drop_warm(sid,recycle=True)
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop_thread.join(timeout=10)
+            self._loop.close();self._loop=None;self._loop_thread=None
     def start(self,request):
         from vmodel_contracts.interactive import StartSessionResponse
         if request.model_route!='ollama' and self.paid_runtime is None:raise PermissionError('paid child dispatch remains refused')
@@ -241,6 +285,9 @@ class ChildInterviewClient(EngineClient):
         from interview_engine.child_step import published_digest
         scope=current_scope();job=self.store.worker_job(job_id)
         if not job:raise PermissionError('recoverable owner job required')
+        # Our own parked child only idles on this session's claim; recycle it
+        # so the liveness check below measures genuinely foreign children.
+        self._drop_warm(job['session_id'],recycle=True)
         value=self.store.decision_review(job['task_id'],'child-job:'+job_id,'child-operation-v1')
         if not value or value['binding']['session_id']!=job['session_id']:raise PermissionError('durable child operation missing')
         row=self.store.session_binding(job['session_id']);control=row.get('control') or {}
@@ -272,9 +319,16 @@ class ChildInterviewClient(EngineClient):
     def _launch(self,operation,ref,ref_kind):
         from .tenancy import current_scope
         from .child_operation_refs import ChildOperationRefs
+        from requi_child_contract import encode_operation
         scope=current_scope();sid=operation.binding.session_id;task_id=operation.binding.task_id;job_id=operation.binding.job_id
         refs=ChildOperationRefs(self.store,task_id)
         quiescent=False;timings={};slot_at=time.monotonic()
+        # A parked warm child serves this session's next answer; recycle it
+        # when it has been idle past the policy window.
+        parked_entry=self._warm.get(sid)
+        if ref_kind!='answer' or (parked_entry is not None and time.monotonic()-parked_entry['parked_at']>600):
+            if parked_entry is not None:self._drop_warm(sid,recycle=True)
+            parked_entry=None
         async def run():
             run_at=time.monotonic()
             from .tenant_jobs import execute_job
@@ -294,11 +348,16 @@ class ChildInterviewClient(EngineClient):
                 compute=LocalComputeEvidence(lambda value:self.store.retain_decision_review(task_id,'child-job:'+job_id,'compute:'+str(operation.binding.lease_epoch),value))
                 if self.paid_runtime is not None:compute=self.paid_runtime.compute(self.store,operation,gateway,'intent',journal) or compute
                 endpoint,headers=self.paid_runtime.transport(operation.binding.provider,operation.binding.model,self.endpoint) if self.paid_runtime is not None else (self.endpoint,{})
-                authority=ChildBrokerAuthority(self.store,operation,lease_epoch=operation.binding.lease_epoch+1)
+                # Cold dispatch authorizes the epoch the child will claim (row
+                # epoch + 1); a warm dispatch authorizes the epoch the parked
+                # child already holds (the row's live lease).
+                authority=ChildBrokerAuthority(self.store,operation,
+                    lease_epoch=operation.binding.lease_epoch+(0 if parked_entry is not None else 1))
                 root=session_root(self.base,scope,sid);owner_root=root.parent
                 cfg={'version':1,'provider':operation.binding.provider,'binding':operation.binding.model_dump(mode='json'),
                     'dsn':self.dsn,'owner_root':str(owner_root),'input_ref':ref,
-                    'input':refs.get(ref,ref_kind),'question_quality':self.question_quality_config()['config']}
+                    'input':refs.get(ref,ref_kind),'question_quality':self.question_quality_config()['config'],
+                    'warm':ref_kind in ('answer','route')}
                 stop=asyncio.Event()
                 async def watch():
                     while not stop.is_set():
@@ -311,21 +370,59 @@ class ChildInterviewClient(EngineClient):
                     task=self.store.task(task_id);session=self.store.session_binding(sid)
                     if task and task.get('stop_requested_at') is None and session and session['generation']==op.binding.generation:
                         raise PermissionError('stop signal has no durable stop/revocation evidence')
-                child_error=None
+                if parked_entry is not None:
+                    self.store.add_event(task_id,'progress','Reusing an existing session',phase_key=None,
+                        payload={'stage':'engine.session','status':'started','source':'engine.timing'})
+                    def on_event(event):
+                        if event.state=='running':
+                            self.store.add_event(task_id,'progress','Reusing an existing session',phase_key=None,
+                                payload={'stage':'engine.session','status':'completed','source':'engine.timing'})
+                else:
+                    self.store.add_event(task_id,'progress','Warming up a fresh session',phase_key=None,
+                        payload={'stage':'engine.session','status':'started','source':'engine.timing'})
+                    on_event=lambda event:None
+                child_error=None;handle=None;progress_ctx=None
+                def drop_entry():
+                    # The handle is reaped by the handler's own code; this only
+                    # unregisters and closes the parked progress channel.
+                    popped=self._warm.pop(sid,None)
+                    if popped is not None and popped.get('progress_ctx') is not None:
+                        popped['progress_ctx'].__exit__(None,None,None)
                 with httpx.Client(trust_env=False,follow_redirects=False,timeout=None) as client:
                     broker=ChildProviderBroker(operation,gateway=gateway,journal=journal,client=client,
                         endpoint=endpoint,headers=headers,authorize=authority)
                     from .child_progress import progress_wake_channel
-                    with provider_broker_channel(broker) as provider_fd,child_compute_channel(compute) as compute_fd,progress_wake_channel(sid) as progress_fd:
+                    with provider_broker_channel(broker) as provider_fd,child_compute_channel(compute) as compute_fd:
+                        if parked_entry is None:
+                            progress_ctx=progress_wake_channel(sid);progress_fd=progress_ctx.__enter__()
                         timings['setup']=int((time.monotonic()-setup_at)*1000);supervisor_at=time.monotonic()
                         try:
-                            await self.supervisor.run(operation,authorize=lambda op:capability.validate(self.store),private_config=cfg,
-                                descriptors={'broker':provider_fd.fileno(),'compute':compute_fd.fileno(),'progress':progress_fd.fileno()},stop=stop,persist_stop=fence_stop)
+                            if parked_entry is not None:
+                                handle=parked_entry['handle']
+                                await self.supervisor.run_operation(handle,operation,on_event=on_event,
+                                    payload={'version':1,'binding':cfg['binding'],'operation':json.loads(encode_operation(operation).decode()),
+                                        'input':cfg['input'],'input_ref':cfg['input_ref'],'fds':{'broker':0,'compute':1}},
+                                    fds=[provider_fd.fileno(),compute_fd.fileno()],stop=stop,persist_stop=fence_stop,park=True)
+                            else:
+                                handle=await self.supervisor.spawn(operation,authorize=lambda op:capability.validate(self.store),
+                                    private_config=cfg,descriptors={'broker':provider_fd.fileno(),'compute':compute_fd.fileno(),'progress':progress_fd.fileno()})
+                                await self.supervisor.run_operation(handle,operation,on_event=on_event,first=True,park=bool(cfg['warm']),
+                                    stop=stop,persist_stop=fence_stop)
+                            if handle.state!='completed':
+                                # Stopped: verify EOF/exit, then reap so the
+                                # stopped-by-owner path sees a reaped result.
+                                # Failed: finish_terminal raises.
+                                await self.supervisor.finish_terminal(handle)
+                                await self.supervisor.reap(handle,operation)
+                                drop_entry();handle=None
                         except Exception as error:child_error=error
                 timings['supervisor']=int((time.monotonic()-supervisor_at)*1000);completion_at=time.monotonic()
                 watcher.cancel()
                 try:await watcher
                 except asyncio.CancelledError:pass
+                if child_error is not None and handle is not None:
+                    await self.supervisor.reap(handle,operation,failed=True,failure_error=child_error)
+                    drop_entry();handle=None
                 task_after=self.store.task(task_id)
                 stopped_by_owner=bool(task_after and task_after.get('stop_requested_at') is not None)
                 if stopped_by_owner:
@@ -335,30 +432,56 @@ class ChildInterviewClient(EngineClient):
                         {'operation_id':operation.operation_id,'compute_ms':str(compute.value) if compute.settled else None,'compute_settled':compute.settled,'reaped':True,'stopped':True})
                     quiescent=True
                     raise RuntimeError('child stopped after reap and channel quiescence') from child_error
-                if not compute.settled:raise RuntimeError('child exact compute evidence incomplete')
-                if child_error is not None:raise child_error
-                # The child commits canonical PG documents, not delivery's ready
-                # artifact manifest. Publish the terminal set while the original
-                # scoped job is still running, after reap and exact accounting.
-                from vmodel_contracts.interactive import ProcessStatus
-                if self.snapshot(sid).process_status==ProcessStatus.COMPLETED:
-                    from .generator_documents import GeneratorDocuments
-                    from .artifact_publication import publish_document_revision
-                    documents=GeneratorDocuments(self.store,capability,job_id,
-                        expected_attempt=self.store.worker_job(job_id)['attempt'])
-                    publish_document_revision(self.store,task_id,documents,
-                        writer_instance='interview-child:'+operation.operation_id)
-                timings['completion']=int((time.monotonic()-completion_at)*1000);timings['run']=int((time.monotonic()-run_at)*1000)
-                self.store.retain_decision_review(task_id,'child-job:'+job_id,'child-completion-v1',
-                    {'operation_id':operation.operation_id,'compute_ms':str(compute.value),'reaped':True,'timings':timings,'provider_timings':broker.timings})
-                quiescent=True
-                self.store.add_event(task_id,'child.completed','Local child reaped after durable publication',
-                    payload={'job_id':job_id,'compute_ms':str(compute.value),'pid':self.supervisor.last_result.pid})
+                try:
+                    if not compute.settled:raise RuntimeError('child exact compute evidence incomplete')
+                    if child_error is not None:raise child_error
+                    # The child commits canonical PG documents, not delivery's ready
+                    # artifact manifest. Publish the terminal set while the original
+                    # scoped job is still running, after reap and exact accounting.
+                    from vmodel_contracts.interactive import ProcessStatus
+                    process_status=self.snapshot(sid).process_status
+                    if process_status==ProcessStatus.COMPLETED:
+                        from .generator_documents import GeneratorDocuments
+                        from .artifact_publication import publish_document_revision
+                        documents=GeneratorDocuments(self.store,capability,job_id,
+                            expected_attempt=self.store.worker_job(job_id)['attempt'])
+                        publish_document_revision(self.store,task_id,documents,
+                            writer_instance='interview-child:'+operation.operation_id)
+                    timings['completion']=int((time.monotonic()-completion_at)*1000);timings['run']=int((time.monotonic()-run_at)*1000)
+                    self.store.retain_decision_review(task_id,'child-job:'+job_id,'child-completion-v1',
+                        {'operation_id':operation.operation_id,'compute_ms':str(compute.value),'reaped':True,'timings':timings,'provider_timings':broker.timings})
+                    quiescent=True
+                    # Parking decision: a verified completed operation on a
+                    # warm-capable child whose session waits for the next input
+                    # keeps its claimed child alive.
+                    parking=(handle is not None and handle.state=='completed'
+                        and (parked_entry is not None or cfg['warm']) and process_status==ProcessStatus.WAITING_INPUT)
+                    self.store.add_event(task_id,'child.completed',
+                        'Local child parked after durable publication' if parking else 'Local child reaped after durable publication',
+                        payload={'job_id':job_id,'compute_ms':str(compute.value),'pid':handle.process.pid if handle is not None else self.supervisor.last_result.pid})
+                    if parking:
+                        ctx=progress_ctx if parked_entry is None else parked_entry['progress_ctx']
+                        self._warm[sid]={'handle':handle,'operation':operation,'progress_ctx':ctx,'parked_at':time.monotonic()}
+                        progress_ctx=None;handle=None
+                    if handle is not None:
+                        if cfg['warm']:await self.supervisor.close_parked(handle,operation)
+                        else:await self.supervisor.reap(handle,operation)
+                        handle=None
+                    if progress_ctx is not None:progress_ctx.__exit__(None,None,None);progress_ctx=None
+                except BaseException:
+                    if handle is not None:
+                        if handle.state=='completed' and child_error is None:
+                            try:await self.supervisor.close_parked(handle,operation)
+                            except Exception:pass
+                        else:await self.supervisor.reap(handle,operation,failed=True,failure_error=child_error)
+                    drop_entry()
+                    if progress_ctx is not None:progress_ctx.__exit__(None,None,None)
+                    raise
             return await execute_job(self.store,job_id,handler,
                 verify_completion_quiescence=lambda cap:quiescent,verify_stopped_quiescence=lambda cap:quiescent)
         with _slot:
             timings['slot_wait']=int((time.monotonic()-slot_at)*1000)
-            try:asyncio.run(run())
+            try:self._run(run())
             except BaseException:
                 try:self.store.pause_interrupted_worker(job_id)
                 except Exception:

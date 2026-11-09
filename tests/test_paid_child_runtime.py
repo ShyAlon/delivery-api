@@ -44,7 +44,9 @@ def test_paid_interview_exact_parent_accounting_reaped_and_recovery_never_rebill
             assert client.supervisor.last_result.reaped and result.snapshot.open_input is not None
             first=client.supervisor.last_result.pid
             answered=client.submit(sid,InputResponse(input_id=result.snapshot.open_input.input_id,value='A customer and available time slot',actor_id='test',expected_sequence=result.snapshot.sequence))
-            assert client.supervisor.last_result.reaped and client.supervisor.last_result.pid!=first
+            # The verified answer parks its warm child alive instead of reaping.
+            parked=client._warm[sid]['handle']
+            assert parked.process.returncode is None and parked.process.pid!=first
             job=next(e for e in reversed(store.events(tid)) if e['kind']=='child.completed')['payload']['job_id']
             with store._postgres.transaction() as conn:
                 before=conn.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']
@@ -53,6 +55,11 @@ def test_paid_interview_exact_parent_accounting_reaped_and_recovery_never_rebill
                 assert conn.execute("SELECT count(*) AS n FROM retail_contributions WHERE kind='tokens'").fetchone()['n']==len(calls)
                 conn.execute("UPDATE worker_jobs SET state='failed' WHERE job_id=%s",(job,))
             count=len(calls)
+            # Warm contract: the old client's parked child holds the session
+            # lease until it exits. Closing the client recycles it (exit
+            # releases the lease), which is exactly what an app shutdown does
+            # before a fresh instance performs owner recovery.
+            client.close()
             fresh=ChildInterviewClient(store,tmp_path,gateway_factory=lambda *a:pytest.fail('recovery redispatched'),paid_runtime=runtime,dsn=client.dsn,endpoint=endpoint)
             assert fresh.resume(job).sequence==answered.snapshot.sequence and len(calls)==count
             with store._postgres.transaction() as conn:assert conn.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']==before
@@ -62,7 +69,8 @@ def test_paid_interview_exact_parent_accounting_reaped_and_recovery_never_rebill
                 expected_sequence=current.sequence,expected_input_id=current.open_input.input_id,idempotency_key=uuid.uuid4())
             switched=client.switch_route(sid,change)
             assert switched.snapshot.model_map['probing']==('ollama','local-test')
-            assert client.supervisor.last_result.reaped and len(calls)==count
+            # The route switch runs on the parked warm child; nothing re-dispatches.
+            assert client._warm[sid]['handle'].process.returncode is None and len(calls)==count
             with store._postgres.transaction() as conn:
                 balance=conn.execute('SELECT balance_units FROM credit_accounts').fetchone()['balance_units']
                 segments=conn.execute('SELECT count(*) AS n FROM retail_compute_segments').fetchone()['n']

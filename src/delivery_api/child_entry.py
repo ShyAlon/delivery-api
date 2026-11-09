@@ -2,10 +2,47 @@
 
 No CLI parser, credentials in env, service listener or provider network. The
 parent independently resolves immutable refs and pins the launch binding.
+
+A warm child (private config 'warm' + an interview answer/advance/route
+operation) keeps its claimed session alive after the first operation and
+serves follow-up operations on the same stream: each follow-up frame is one
+sendmsg carrying the JSON operation config plus that operation's private
+broker/compute descriptors (SCM_RIGHTS). STOP and EOF keep their exact
+cold-path meanings; per-op money/quiescence machinery is constructed and
+torn down per operation exactly as in the cold path.
 """
-import json,logging,os,socket,threading
+import array,json,logging,os,queue,socket,threading
 from pathlib import Path
 from requi_child_contract import decode_operation,JobBinding,require_binding,LifecycleEvent,encode_event,_unique_pairs,_invalid_constant
+
+MAX_FRAME=65537
+MAX_DESCRIPTORS=4
+
+
+def recv_frame(channel):
+    """One warm follow-up frame: JSON line plus SCM_RIGHTS descriptors.
+
+    The parent sends exactly one sendmsg per frame, so the descriptors attach
+    to the first byte of that frame; the JSON remainder may still need more
+    reads (stream semantics). Returns (payload, fds); (None, []) on EOF;
+    ('STOP', []) on the stop sentinel.
+    """
+    fds=array.array('i')
+    try:
+        data,ancillary,_flags,_addr=channel.recvmsg(MAX_FRAME,socket.CMSG_SPACE(MAX_DESCRIPTORS*4))
+    except OSError:
+        return None,[]
+    for level,ctype,cdata in ancillary:
+        if level==socket.SOL_SOCKET and ctype==socket.SCM_RIGHTS:
+            fds.frombytes(cdata[:len(cdata)//4*4])
+    while data and not data.endswith(b'\n'):
+        chunk=channel.recv(MAX_FRAME)
+        if not chunk:break
+        data+=chunk
+    if data==b'STOP\n':return 'STOP',[]
+    if not data:return None,[]
+    if len(data)>MAX_FRAME or not data.endswith(b'\n'):raise ValueError('bounded warm frame required')
+    return json.loads(data,object_pairs_hook=_unique_pairs,parse_constant=_invalid_constant),list(fds)
 
 
 def install_engine_timing_log():
@@ -38,17 +75,30 @@ def main():
         raise PermissionError('pinned parent broker provider required')
     root=Path(cfg['owner_root'])
     if not root.is_absolute() or root.resolve()!=root:raise PermissionError('canonical owner root required')
-    sequence=0;stop=threading.Event();gone=threading.Event()
+    sequence=0;stop=threading.Event();gone=threading.Event();current=[op]
+    warm=bool(cfg.get('warm')) and op.operation.kind in ('interview.answer','interview.advance','interview.route')
+    frames=queue.Queue()
     def event(state):
         nonlocal sequence
         if gone.is_set():raise RuntimeError('parent descriptor closed')
-        sequence+=1;stream.write(encode_event(LifecycleEvent(version=1,operation_id=op.operation_id,sequence=sequence,state=state)))
+        sequence+=1;stream.write(encode_event(LifecycleEvent(version=1,operation_id=current[0].operation_id,sequence=sequence,state=state)))
     def watch():
         try:line=stream.readline(6)
         except OSError:line=b''
         if line!=b'STOP\n':gone.set()
         stop.set()
-    event('ready');threading.Thread(target=watch,daemon=True,name='child-parent-watch').start()
+    def warm_watch():
+        # Sole stream reader in warm mode: follow-up operation frames queue
+        # for the main thread; STOP and EOF keep their cold-path meanings.
+        try:
+            while not stop.is_set() and not gone.is_set():
+                payload,fds=recv_frame(channel)
+                if payload is None:gone.set();frames.put(None);return
+                if payload=='STOP':stop.set();frames.put(None);return
+                frames.put((payload,fds))
+        except OSError:
+            gone.set();frames.put(None)
+    event('ready');threading.Thread(target=warm_watch if warm else watch,daemon=True,name='child-parent-watch').start()
     from requi_child_contract.broker import BrokerClient
     from requi_child_contract.compute import ComputeClient,measured_work
     from interview_engine.child_cursor import broker_call_id
@@ -63,7 +113,7 @@ def main():
     try:
         if stop.is_set():raise RuntimeError('parent stopped before dispatch')
         event('running')
-        with measured_work(compute) if compute is not None else nullcontext():
+        with measured_work(compute) if compute is not None and not warm else nullcontext():
             if op.operation.kind.startswith('interview.'):
                 from interview_engine.pg_pool import build_pool
                 from interview_engine.tenant_worker import pg_session_store
@@ -79,12 +129,58 @@ def main():
                 from interview_engine.stop_fence import _check,StopRequested
                 def check():
                     if stop.is_set():raise StopRequested('parent requested stop')
+                def loaders(input_value,input_ref,kind):
+                    return (
+                        lambda ref:(ModelRouteSwitchRequest.model_validate(input_value) if kind=='interview.route' else StartSessionRequest.model_validate(input_value)) if ref==input_ref else None,
+                        lambda ref:InputResponse.model_validate(input_value) if ref==input_ref else None)
                 token=_check.set(check)
+                warm_handle=None
                 try:
-                    execute_operation(op,trusted_binding=binding,store=store,broker=broker,
-                        load_request=lambda ref:(ModelRouteSwitchRequest.model_validate(cfg['input']) if op.operation.kind=='interview.route' else StartSessionRequest.model_validate(cfg['input'])) if ref==cfg['input_ref'] else None,
-                        load_answer=lambda ref:InputResponse.model_validate(cfg['input']) if ref==cfg['input_ref'] else None)
-                finally:_check.reset(token)
+                    if warm:
+                        from interview_engine.child_operations import begin_warm,execute_warm
+                        from interview_engine.wire_binding import broker_clients
+                        req,ans=loaders(cfg['input'],cfg['input_ref'],op.operation.kind)
+                        with measured_work(compute) if compute is not None else nullcontext():
+                            warm_handle,_=begin_warm(op,trusted_binding=binding,store=store,broker=broker,
+                                load_request=req,load_answer=ans)
+                        event('stopped' if stop.is_set() else 'completed')
+                        # Follow-up operations on the held session: each frame
+                        # carries its own private broker/compute descriptors,
+                        # so per-op money and quiescence machinery is built
+                        # and torn down exactly as in the cold path.
+                        while not stop.is_set() and not gone.is_set():
+                            item=frames.get()
+                            if item is None:break
+                            payload,fds=item
+                            try:
+                                op2=decode_operation(json.dumps(payload['operation'],separators=(',',':'),allow_nan=False).encode()+b'\n')
+                                binding2=JobBinding.model_validate(payload['binding'])
+                                fdmap={name:fds[index] for name,index in payload.get('fds',{}).items()}
+                                current[0]=op2
+                                broker2=BrokerClient(fdmap['broker'],next_call_id=broker_call_id)
+                                compute2=ComputeClient(fdmap['compute']) if 'compute' in fdmap else None
+                                event('running')
+                                try:
+                                    req2,ans2=loaders(payload.get('input'),payload.get('input_ref'),op2.operation.kind)
+                                    with measured_work(compute2) if compute2 is not None else nullcontext():
+                                        with broker_clients(broker2):
+                                            execute_warm(warm_handle,op2,trusted_binding=binding2,
+                                                load_request=req2,load_answer=ans2)
+                                finally:
+                                    broker2.close()
+                                    if compute2 is not None:compute2.close()
+                                event('stopped' if stop.is_set() else 'completed')
+                            finally:
+                                for fd in fds:
+                                    try:os.close(fd)
+                                    except OSError:pass
+                    else:
+                        req,ans=loaders(cfg['input'],cfg['input_ref'],op.operation.kind)
+                        execute_operation(op,trusted_binding=binding,store=store,broker=broker,
+                            load_request=req,load_answer=ans)
+                finally:
+                    _check.reset(token)
+                    if warm_handle is not None:warm_handle.close()
             else:
                 from interview_engine.pg_pool import build_pool
                 from interview_engine.tenant_worker import pg_session_store
@@ -92,8 +188,10 @@ def main():
                 pool=build_pool(cfg['dsn'],max_size=4,name='child-generator')
                 store=pg_session_store(pool,str(binding.owner_id),str(binding.auth_session_id))
                 execute(op,cfg,store,broker,stop,int(os.environ['REQUI_CHILD_OUTPUT_FD']))
-        if gone.is_set():raise RuntimeError('parent lost after dispatch')
-        event('stopped' if stop.is_set() else 'completed')
+        if gone.is_set() and not warm:raise RuntimeError('parent lost after dispatch')
+        # A warm child emits per-operation terminal events inside its loop;
+        # after the loop the parent reaps by STOP or descriptor close.
+        if not warm:event('stopped' if stop.is_set() else 'completed')
     finally:
         if progress_channel is not None:progress_channel.close()
         if pool is not None:pool.close()

@@ -71,7 +71,10 @@ def test_actual_interview_start_runs_in_child_with_parent_broker(store,tmp_path,
             answered=client.submit(sid,InputResponse(input_id=result.snapshot.open_input.input_id,
                 value='Bookings contain a customer and a time slot',actor_id='fake',expected_sequence=result.snapshot.sequence))
             assert answered.snapshot.sequence>result.snapshot.sequence
-            assert client.supervisor.last_result.pid!=old_pid and client.supervisor.last_result.reaped
+            # The answer spawns a fresh warm child and parks it alive for the
+            # next answer; only the cold start child is reaped.
+            parked=client._warm[sid]['handle']
+            assert parked.process.pid!=old_pid and parked.process.returncode is None
             event=next(e for e in reversed(store.events(tid)) if e['kind']=='child.completed')
             job=event['payload']['job_id']
             # Simulate job-completion acknowledgement loss after durable graph,
@@ -79,6 +82,9 @@ def test_actual_interview_start_runs_in_child_with_parent_broker(store,tmp_path,
             with store._postgres.transaction() as conn:
                 conn.execute("UPDATE worker_jobs SET state='failed' WHERE job_id=%s",(job,))
             count=len(calls)
+            # Model process teardown before cross-instance recovery: recycling
+            # releases the parked child's claim exactly as parent death would.
+            client._drop_warm(sid,recycle=True)
             recovery=ChildInterviewClient(store,tmp_path,gateway_factory=lambda *a:(_ for _ in ()).throw(AssertionError('no dispatch')),dsn=client.dsn,endpoint=client.endpoint)
             assert recovery.resume(job).sequence==answered.snapshot.sequence
             from vmodel_contracts.interactive import ModelRouteSwitchRequest
@@ -91,8 +97,11 @@ def test_actual_interview_start_runs_in_child_with_parent_broker(store,tmp_path,
             assert switched.snapshot.model_map['probing'][1]=='other-fake'
 
             assert store.worker_job(job)['state']=='done' and len(calls)==count
-            route_pid=client.supervisor.last_result.pid
-            assert route_pid!=old_pid and client.supervisor.last_result.reaped
+            # A route switch recycles the parked answer child (clean exit) and
+            # parks its own warm child for the session.
+            assert parked.process.returncode==0
+            route_pid=client._warm[sid]['handle'].process.pid
+            assert route_pid!=parked.process.pid and client._warm[sid]['handle'].process.returncode is None
             # Durable idempotent replay is claimless and cannot spawn another graph.
             assert recovery.switch_route(sid,request).snapshot.sequence==switched.snapshot.sequence
             from delivery_api.engine_client import EngineClientError

@@ -878,6 +878,9 @@ def test_task_breakdown(task_id:str,a:auth.Actor=Depends(auth.require_actor)):
 
 @app.post('/api/operations/test-tasks/{task_id}/purge')
 def purge_test_task(task_id:str,body:TestTaskPurge,a:auth.Actor=Depends(auth.require_actor)):
+    # A parked warm child still claims the session; recycle it before the
+    # purge checks for live claims.
+    engine_client.drop_task_sessions(task_id)
     return _test_task_action(lambda:store.purge_test_task(task_id,confirm=body.confirm))
 
 
