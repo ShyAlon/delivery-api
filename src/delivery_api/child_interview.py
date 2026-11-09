@@ -188,6 +188,13 @@ class ChildInterviewClient(EngineClient):
         with self._registry() as registry:
             session=registry.get(sid,serve=False);payload=session.route_history[-1]
             return ModelRouteSwitchResponse(snapshot=session.snapshot(),accepted_event=registry._event(session,EventType.ROUTE_CHANGED,route_change=payload))
+    def drop_task_sessions(self,task_id):
+        # Purge/delete teardown: recycle (never fence-stop) parked children
+        # whose operation belongs to the task; their exit releases the claims
+        # the purge checks for.
+        for sid,entry in list(self._warm.items()):
+            if entry['operation'].binding.task_id==task_id:self._drop_warm(sid,recycle=True)
+
     def close(self):
         for sid in list(self._warm):self._drop_warm(sid,recycle=True)
         if self._loop is not None:

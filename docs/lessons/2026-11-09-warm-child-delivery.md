@@ -89,3 +89,11 @@ passing keeps every guarantee where it was proven.
   identical sequence delta per answer, both UI states emitted
   ('Warming up a fresh session', 'Reusing an existing session'), stop
   recycles the parked child with exit 0.
+
+- **Purge must recycle parked children:** a parked warm child holds the
+  session lease, so the test-task purge (which refuses live claims) 409s
+  after any answered journey. engine_client.drop_task_sessions(task_id)
+  (no-op on remote clients) recycles the task's parked children before
+  purge. Caught by test_owner_acceptance_real_entry (passed on main,
+  409'd on branch) — the full-journey wrapper is the only test that
+  answers and then purges.
