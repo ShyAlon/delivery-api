@@ -9,7 +9,7 @@ command=${1:-}; shift
 # to the one repo entry rather than teaching this generic parser paid flags.
 if [ "$command" = image ]; then exec bash scripts/ops/image.sh "$@"; fi
 if [ "$command" = acceptance ]; then exec bash scripts/ops/acceptance.sh "$@"; fi
-apply=0; email=''; checks=full; acceptance_args=(); test_owner=0
+apply=0; email=''; checks=full; acceptance_args=(); test_owner=0; debug_run_dir=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --test-owner) [ "$command" = backoffice-access ] || fail "--test-owner is only for backoffice-access.";test_owner=1;shift;;
@@ -18,6 +18,7 @@ while [ "$#" -gt 0 ]; do
     --full-checks) checks=full;shift;;
     --base-url) [ "$command" = preflight ] && [ "$#" -ge 2 ] || fail "$1 is only for preflight and needs a value.";acceptance_args+=("$1" "$2");shift 2;;
     --email) [ "$#" -ge 2 ] || fail '--email needs a value.';email=$2;shift 2;;
+    --run-dir) [ "$command" = debug ] && [ "$#" -ge 2 ] || fail '--run-dir is only for debug and needs a value.';debug_run_dir=$2;shift 2;;
     *) fail "unsupported argument $1";;
   esac
 done
@@ -48,7 +49,7 @@ case "$command" in
    [ "$test_owner" = 0 ] || args+=(--test-owner)
    [ "$apply" = 0 ] || args+=(--apply)
    exec .venv/bin/python "$target" "${args[@]}";;
- debug) [ "$apply" = 0 ] || fail "debug is read-only";exec .venv/bin/python "$target";;
+ debug) [ "$apply" = 0 ] || fail "debug is read-only";args=();[ -z "$debug_run_dir" ] || args+=(--run-dir "$debug_run_dir");exec .venv/bin/python "$target" "${args[@]}";;
  locks)
    [ "$apply" = 0 ] || fail 'locks is read-only; --apply is not supported.'
    exec .venv/bin/python "$target" "$PWD" --env-file "$envfile";;
