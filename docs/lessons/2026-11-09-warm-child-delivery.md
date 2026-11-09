@@ -97,3 +97,13 @@ passing keeps every guarantee where it was proven.
   purge. Caught by test_owner_acceptance_real_entry (passed on main,
   409'd on branch) — the full-journey wrapper is the only test that
   answers and then purges.
+
+- **resume() must recycle its own parked child first:** the liveness guard
+  ('prior child lease still live') treated an idle parked child as a
+  foreign worker, so no interrupted job on a warm session could ever be
+  resumed. resume() now drops its parked child before the guard; the guard
+  still protects against genuinely foreign claims. The cutover test models
+  cross-instance recovery by recycling before the second instance resumes
+  (parent death releases the claim the same way) and now asserts the warm
+  contract: answer parks a live child, route recycles it (exit 0) and
+  parks its own.

@@ -285,6 +285,9 @@ class ChildInterviewClient(EngineClient):
         from interview_engine.child_step import published_digest
         scope=current_scope();job=self.store.worker_job(job_id)
         if not job:raise PermissionError('recoverable owner job required')
+        # Our own parked child only idles on this session's claim; recycle it
+        # so the liveness check below measures genuinely foreign children.
+        self._drop_warm(job['session_id'],recycle=True)
         value=self.store.decision_review(job['task_id'],'child-job:'+job_id,'child-operation-v1')
         if not value or value['binding']['session_id']!=job['session_id']:raise PermissionError('durable child operation missing')
         row=self.store.session_binding(job['session_id']);control=row.get('control') or {}
