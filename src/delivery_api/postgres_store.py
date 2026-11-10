@@ -211,6 +211,31 @@ class PostgresStore:
         self._connection.get().notify_after_commit(task_id)
         return cur.fetchone()['id']
 
+    @_transactional
+    def add_engine_timing_batch(self,entries):
+        """Persist only the already-received timing chunk, ordered and scoped by the live task mapping.
+        One statement touches each matching task once and returns its ids for after-commit notifications."""
+        if not isinstance(entries,(list,tuple)) or not 0<len(entries)<=128:raise ValueError('bounded timing batch required')
+        rows=[];now=time.time()
+        for ordinal,entry in enumerate(entries):
+            if not isinstance(entry,(list,tuple)) or len(entry)!=4:raise ValueError('timing entry required')
+            sid,stage,label,status=entry
+            if not all(isinstance(v,str) and 0<len(v)<=500 for v in entry) or status not in ('started','completed'):
+                raise ValueError('bounded timing fields required')
+            rows.append({'ordinal':ordinal,'session_id':sid,'message':label,'payload':json.dumps({'stage':stage,'status':status,'source':'engine.timing'})})
+        result=self._execute_native("""WITH input AS (
+            SELECT * FROM jsonb_to_recordset(%s::jsonb) AS x(ordinal int,session_id text,message text,payload text)
+        ), ev AS (
+            INSERT INTO events(task_id,phase_key,kind,message,payload,ts)
+            SELECT t.task_id,NULL,'progress',x.message,x.payload,%s
+            FROM input x JOIN tasks t ON t.engine_session_id=x.session_id AND t.deleted_at IS NULL
+            ORDER BY x.ordinal RETURNING task_id
+        ), touched AS (
+            UPDATE tasks SET updated_at=%s WHERE task_id IN (SELECT task_id FROM ev) RETURNING task_id
+        ) SELECT task_id,(SELECT count(*) FROM ev) AS count FROM touched""",(json.dumps(rows),now,now),write=True).fetchall()
+        for row in result:self._connection.get().notify_after_commit(str(row['task_id']))
+        return result[0]['count'] if result else 0
+
     def events(self, task_id: str, after: int=0, limit: int=500) -> list[dict]:
         if after:
             rows = self._execute_native('SELECT * FROM events WHERE task_id=%s AND id>%s ORDER BY id LIMIT %s', (task_id, after, limit)).fetchall()

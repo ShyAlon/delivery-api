@@ -32,6 +32,15 @@ if mode=='timings':
     print('advance.turn.end session=12345678-1234-1234-1234-123456789012 dur_ms=17123',file=sys.stderr,flush=True)
     print('raw answer text that must never be retained session=12345678-1234-1234-1234-123456789012',file=sys.stderr,flush=True)
     print('Traceback (most recent call last):',file=sys.stderr,flush=True)
+if mode=='timings-batch':
+    lines=['advance.turn.begin session=12345678-1234-1234-1234-123456789012' for _ in range(8)]
+    os.write(2,('\n'.join(lines)+'\n').encode())
+    # The batch sink must commit/ack while the child is still running, not at answer completion.
+    from pathlib import Path
+    deadline=time.monotonic()+3
+    while not Path(sys.argv[2]).exists():
+        if time.monotonic()>deadline:raise RuntimeError('timing batch was not flushed live')
+        time.sleep(.01)
 if mode=='crash':os._exit(17)
 if mode=='stuck':
     signal.signal(signal.SIGTERM,signal.SIG_IGN)
