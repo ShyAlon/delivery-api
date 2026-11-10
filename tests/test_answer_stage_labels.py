@@ -59,8 +59,8 @@ def test_signal_age_hidden_while_waiting_for_the_user(tmp_path):
         """)
     import json
     got = json.loads(out)
-    assert 'last engine signal' not in got['waiting'], 'signal age while waiting masquerades as a stall'
-    assert 'last engine signal' in got['working']
+    assert 'last update' not in got['waiting'], 'signal age while waiting masquerades as a stall'
+    assert 'last update' in got['working']
 
 
 def test_shadow_is_written_at_submit_not_at_response():
@@ -137,7 +137,7 @@ def test_shadowless_render_anchors_on_the_durable_submit_event(tmp_path):
         globalThis.document={addEventListener(){},querySelectorAll:()=>[]};
         const {answerProcessingLabel,ANSWER_PENDING_LABEL}=await import('./progress.js');
         const anchor={id:10,kind:'answer_submitted',message:'Answer submitted; engine processing',ts:1500};
-        const pre={id:11,kind:'progress',message:'Coverage',ts:1400};
+        const pre={id:9,kind:'progress',message:'Coverage',ts:1400};
         const post={id:12,kind:'progress',message:'coverage',ts:1600};
         console.log(JSON.stringify({
           noAnchor: answerProcessingLabel([pre,post],{phaseKey:'intent'}),
@@ -151,7 +151,7 @@ def test_shadowless_render_anchors_on_the_durable_submit_event(tmp_path):
     assert got['noAnchor'] == 'Processing your answer…', 'no shadow and no anchor: the honest blanket'
     assert got['anchored'] == 'Processing your answer · coverage', 'a shadow-less re-render must anchor on the durable submit event'
     assert got['staleOnly'] == 'Processing your answer…', 'signals from before the anchor stay invisible'
-    assert got['shadowWins'] == 'Processing your answer…', 'an explicit shadow timestamp still wins over the anchor'
+    assert got['shadowWins'] == 'Processing your answer · coverage', 'the durable submit event orders by id; a tab clock never overrides it'
 
 
 def test_submit_writes_a_durable_anchor_before_the_turn_end_event(tmp_path, monkeypatch, pg_scoped_workspace):
@@ -205,3 +205,36 @@ def test_the_answer_path_stage_events_become_the_in_flight_label(tmp_path):
     assert json.loads(out) == ['Processing your answer…',
         'Processing your answer · Interview engine is working on your answer',
         'Processing your answer · Recording your answer and preparing the next question']
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='node not installed')
+def test_label_refines_whatever_the_clock_skew_between_tab_and_server(tmp_path):
+    """The server clock can run behind the browser's (Docker VM drift). Ordering by timestamp then hid every
+    stage event of the answer and the label stayed generic. Ordering is by event id: no clock agreement needed."""
+    out = _run(tmp_path, """
+        globalThis.window={addEventListener(){}};
+        globalThis.document={addEventListener(){},querySelectorAll:()=>[]};
+        const {answerProcessingLabel,activePhaseProgress,ANSWER_PENDING_LABEL}=await import('./progress.js');
+        const tabNow=Date.now(), res={};
+        for (const skew of [0,-30,-600,+600]) {
+          const sv=Math.floor(tabNow/1000)+skew;
+          const before={id:7,kind:'progress',message:'Earlier turn',phase_key:null,ts:sv-5};
+          const after={id:9,kind:'progress',message:'engine.llm',phase_key:null,ts:sv+2};
+          res['id'+skew]=answerProcessingLabel([before,after],{phaseKey:'intent',sinceMs:tabNow,sinceId:8});
+          res['only_before'+skew]=answerProcessingLabel([before],{phaseKey:'intent',sinceMs:tabNow,sinceId:8});
+          res['active'+skew]=activePhaseProgress([before,after],{phaseKey:'intent',mode:'engine_question',answerPending:true,answerSince:tabNow,answerSinceId:8});
+        }
+        console.log(JSON.stringify(res));
+        """)
+    import json
+    got = json.loads(out)
+    for skew in (0, -30, -600, 600):
+        assert got[f'id{skew}'] == 'Processing your answer · engine.llm', skew
+        assert got[f'active{skew}'] == 'Processing your answer · engine.llm', skew
+        assert got[f'only_before{skew}'] == 'Processing your answer…', 'an event older than the submit never names the stage'
+
+
+def test_submit_shadow_records_the_newest_event_id_it_had():
+    text = _web('task.js')
+    assert 'after_id:Math.max(0,...(t.events||[]).map(e=>Number(e.id||0)))' in text
+    assert text.count('answerSinceId') >= 5, 'every render path that passes answerSince must pass the id floor'
