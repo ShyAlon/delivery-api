@@ -104,10 +104,11 @@ def test_a_heavy_request_writes_its_own_purpose_breakdown_to_the_log(monkeypatch
     finally:
         postgres_scope.request_stats.reset(token)
     request_costs.record_request('POST', '/api/tasks/7f3b86686274/answer', 200, 10, stats)
-    assert len(seen) == 1 and seen[0][0] == 'db.statement_trace'
+    # Header line plus one line per ranked row (a joined field was truncated by the log's 500-character cap).
+    assert [k for k, _ in seen] == ['db.statement_trace', 'db.statement_row', 'db.statement_row']
     f = seen[0][1]
     assert f['request_type'] == 'POST /api/tasks/<id>/answer' and f['round_trips'] == 61
-    assert 'SELECT * FROM tasks WHERE task_id=?' in f['rows'] and '7f3b86686274' not in str(f)
+    assert seen[1][1]['shape'] == 'SELECT * FROM tasks WHERE task_id=?' and seen[1][1]['count'] == 60 and '7f3b86686274' not in str(seen)
 
 
 def test_a_light_request_writes_no_trace_line(monkeypatch):
@@ -122,3 +123,18 @@ def test_a_light_request_writes_no_trace_line(monkeypatch):
         postgres_scope.request_stats.reset(token)
     request_costs.record_request('GET', '/api/auth', 200, 5, stats)
     assert seen == []
+
+
+def test_heavy_request_logs_every_ranked_row_untruncated(monkeypatch):
+    """2026-11-10: one joined 'rows' field was cut at 500 characters, so an 845-round-trip answer showed 5 rows."""
+    from delivery_api import observability, log_safety
+    lines = []
+    monkeypatch.setattr(observability, 'event', lambda kind, message, **fields: lines.append(observability._line(kind, message, fields)))
+    stats = postgres_scope.RequestStats()
+    stats.trace = [('postgres_store:purpose_%d<very_long_caller_chain<another_caller<http_service:progress' % (i % 12), 'SELECT col_a, col_b FROM table_%d WHERE x=?' % (i % 12), 3) for i in range(120)]
+    request_costs.record_request('POST', '/api/tasks/7f3b86686274/answer', 200, 10, stats)
+    text = '\n'.join(lines)
+    assert '[truncated]' not in text, text
+    for i in range(12):
+        assert 'purpose_%d<' % i in text and 'table_%d ' % i in text
+    assert text.count('db.statement_row') == 12
