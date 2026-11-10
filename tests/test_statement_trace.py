@@ -88,3 +88,37 @@ def test_a_store_call_records_its_overhead_and_its_caller():
     assert any(s.startswith('SELECT t.*') for s in shapes)
     assert all('task' not in r['purpose'] or ':' in r['purpose'] for r in rows)
     assert task_id not in repr(rows)
+
+
+def test_a_heavy_request_writes_its_own_purpose_breakdown_to_the_log(monkeypatch):
+    """The debug ZIP carries logs, not the admin request-costs view, so a heavy request logs its breakdown itself."""
+    from delivery_api import observability
+    seen = []
+    monkeypatch.setattr(observability, 'event', lambda kind, message, **fields: seen.append((kind, fields)))
+    stats = postgres_scope.RequestStats()
+    token = postgres_scope.request_stats.set(stats)
+    try:
+        for _ in range(60):
+            postgres_scope.note_statement(postgres_scope.statement_label("SELECT * FROM tasks WHERE task_id='abc'"), 0.002)
+        statement_trace.record('commit', 'COMMIT')
+    finally:
+        postgres_scope.request_stats.reset(token)
+    request_costs.record_request('POST', '/api/tasks/7f3b86686274/answer', 200, 10, stats)
+    assert len(seen) == 1 and seen[0][0] == 'db.statement_trace'
+    f = seen[0][1]
+    assert f['request_type'] == 'POST /api/tasks/<id>/answer' and f['round_trips'] == 61
+    assert 'SELECT * FROM tasks WHERE task_id=?' in f['rows'] and '7f3b86686274' not in str(f)
+
+
+def test_a_light_request_writes_no_trace_line(monkeypatch):
+    from delivery_api import observability
+    seen = []
+    monkeypatch.setattr(observability, 'event', lambda kind, message, **fields: seen.append(kind))
+    stats = postgres_scope.RequestStats()
+    token = postgres_scope.request_stats.set(stats)
+    try:
+        postgres_scope.note_statement('SELECT 1', 0.001)
+    finally:
+        postgres_scope.request_stats.reset(token)
+    request_costs.record_request('GET', '/api/auth', 200, 5, stats)
+    assert seen == []

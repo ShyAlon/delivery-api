@@ -72,8 +72,29 @@ def _fold(request_type, entries):
             row[1] += ms
 
 
+LOG_MIN_ROUND_TRIPS = 40   # lighter requests are not worth a log line
+LOG_ROWS = 30
+
+
+def request_rows(entries, limit=LOG_ROWS):
+    """One request's round trips grouped by (purpose, shape), most frequent first, as 'count x ms purpose | shape' text."""
+    grouped = {}
+    for where, shape, ms in entries:
+        row = grouped.setdefault((where, shape), [0, 0])
+        row[0] += 1
+        row[1] += ms
+    ranked = sorted(grouped.items(), key=lambda kv: (-kv[1][0], kv[0]))[:limit]
+    return ' ## '.join('%dx %dms %s | %s' % (n, ms, where, shape) for (where, shape), (n, ms) in ranked)
+
+
 def fold_request(request_type, stats):
-    _fold(request_type, stats.trace)
+    entries = stats.trace
+    if len(entries) >= LOG_MIN_ROUND_TRIPS:
+        # The debug ZIP carries logs, not the admin request-costs view: a heavy request reports its own breakdown.
+        from . import observability
+        observability.event('db.statement_trace', 'Request round trips by purpose',
+                            request_type=request_type, round_trips=len(entries), rows=request_rows(entries))
+    _fold(request_type, entries)
     stats.trace = []
 
 

@@ -32,9 +32,11 @@ def repos():
     if base.is_dir():
         for d in sorted(base.iterdir()):
             if not (d/'.git').exists():continue
+            # Porcelain lines are 'XY path' (tracked edits, '??' untracked). Names only, no content, bounded.
+            changed=[l.strip() for l in read(['git','-C',str(d),'status','--porcelain']).splitlines() if l.strip()]
             out[d.name]={'branch':read(['git','-C',str(d),'rev-parse','--abbrev-ref','HEAD']).strip(),
                          'head':read(['git','-C',str(d),'rev-parse','HEAD']).strip(),
-                         'dirty':len([l for l in read(['git','-C',str(d),'status','--porcelain']).splitlines() if l.strip()])}
+                         'dirty':len(changed),'dirty_files':changed[:20]}
     if not out:missing.append('no git repos under '+str(base))
     return out
 def pick_run_dir():
@@ -69,7 +71,7 @@ fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
 with os.fdopen(fd,'wb') as out,zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
     z.writestr('facts.json',json.dumps(facts,indent=2))
     z.writestr('host.txt',clean(host_facts()))
-    z.writestr('repos.txt','\n'.join('%s %s %s dirty=%s'%(n,r['branch'],r['head'],r['dirty']) for n,r in repo_facts.items()))
+    z.writestr('repos.txt','\n'.join('%s %s %s dirty=%s %s'%(n,r['branch'],r['head'],r['dirty'],'; '.join(r['dirty_files'])) for n,r in repo_facts.items()))
     z.writestr('images.txt',clean(read(['docker','images','--format','{{.Repository}}:{{.Tag}} {{.ID}} {{.CreatedSince}}','--filter','reference=requi*'])))
     if run_dir:
         for f in sorted(run_dir.iterdir()):
