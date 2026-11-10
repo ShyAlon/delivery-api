@@ -72,7 +72,7 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
     if not isinstance(request_digest,str) or not request_digest:raise AdmissionDenied('exact request digest required')
     # Same global-before-owner order as settlement and projection triggers.
     store._execute_native('SELECT pg_advisory_xact_lock(73194720315621::bigint)')
-    _job(store,job_id);owner=current_scope().owner_id
+    owner=current_scope().owner_id   # authority is read once, after both locks (below): a read before the lock proves nothing the one after does not
     # Shared owner lock serializes independent processes, not just one API worker.
     lock_key=int.from_bytes(hashlib.sha256(owner.encode()).digest()[:8],'big',signed=True)
     store._execute_native('SELECT pg_advisory_xact_lock(%s)',(lock_key,)).fetchone()
@@ -101,11 +101,11 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
         raise AdmissionDenied('attempt exceeds reviewed maximum')
     if (limits['expense_limit'] is not None and used_expense+expense>limits['expense_limit']) or (not require_prepaid and limits['retail_limit'] is not None and used_retail+retail>limits['retail_limit']):
         raise AdmissionDenied('owner spend allowance exhausted')
-    store._execute_native("INSERT INTO provider_attempts (attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,expense_actual,retail_actual,usage,created_at,updated_at) VALUES (%s,%s,%s,%s,%s, %s,'reserved',%s,%s,NULL,NULL,NULL,%s,%s)",
+    inserted=store._execute_native("INSERT INTO provider_attempts (attempt_id,owner_id,job_id,config_version,quote,fingerprint,state,expense_reserved,retail_reserved,expense_actual,retail_actual,usage,created_at,updated_at) VALUES (%s,%s,%s,%s,%s, %s,'reserved',%s,%s,NULL,NULL,NULL,%s,%s) RETURNING *",
       (attempt_id,owner,job_id,limits['config_version'],json.dumps(quote),fingerprint,expense,retail,now,now), write=True)
-    return store.provider_attempt(attempt_id)
+    return dict(inserted.fetchone())
 
-def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
+def transition(store,attempt_id,action,usage=None,*,require_prepaid=False,observed=None):
     # Same lock order as admission: owner first, attempt/account rows second.
     from .prepaid import owner_lock
     # Same global-first ordering as launch dispatch. Accepted settlements never
@@ -114,6 +114,7 @@ def transition(store,attempt_id,action,usage=None,*,require_prepaid=False):
     owner_lock(store)
     row=store._execute_native('SELECT * FROM provider_attempts WHERE attempt_id=%s FOR UPDATE',(attempt_id,)).fetchone()
     if not row:raise AdmissionDenied('owner attempt not found')
+    if observed is not None:observed['state']=row['state']   # the state this transition started from, read once under the row lock
     if action=='start':
         if 'estimate_policy' in row['quote']:
             from .provider_balance import validate_balance

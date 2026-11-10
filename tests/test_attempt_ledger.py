@@ -832,7 +832,15 @@ def test_reserve_rechecks_generation_after_waiting_for_stop_lock(ledger,monkeypa
                 c.execute('SELECT pg_advisory_xact_lock(%s)',(key,))
                 c.execute("UPDATE tasks SET generation=generation+1,state='stop_requested',stop_requested_at=1 WHERE task_id=%s",(tid,))
                 result=pool.submit(reserve)
-                assert checked.wait(5) # Pre-lock read still sees the old committed generation.
+                # The pre-lock authority read is gone (2026-11-10: one read after both locks is what counts), so synchronize on
+                # the reserve being blocked on the owner lock instead of on that read. The assertions below are unchanged:
+                # the stale generation is still denied after the wait and nothing is reserved.
+                import time as _t
+                deadline=_t.time()+5
+                while _t.time()<deadline:
+                    if c.execute("SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted AND pid<>pg_backend_pid()").fetchone():break
+                    _t.sleep(0.02)
+                else:raise AssertionError('reserve never waited on the owner lock')
                 assert not result.done()
             assert result.result(timeout=5)=='stale'
         with tenant_context(A):assert s.provider_attempt(aid) is None

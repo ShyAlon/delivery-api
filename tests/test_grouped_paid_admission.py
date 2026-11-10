@@ -45,5 +45,8 @@ def test_measure_admit_and_settle(ledger):
         assert r == 'allowed'
         _, b, st2 = _syncs(lambda: s.transition_provider_attempt(attempt, 'settle', {'input_tokens': 2, 'output_tokens': 3}))
     print('SYNCS admit/settle', a, b)
+    for n,t in (('admit',st),('settle',st2)):
+        for e in t.trace:
+            if e[3]:print('  ',n,e[3],e[0].split('<')[0][:45],'|',e[1][:60])
     # main: 25 / 11. A lock the transaction already holds is not asked for again (WIP target, lowered as grouping lands).
-    assert a <= 21 and b <= 9, (a, b)
+    assert a <= 17 and b <= 8, (a, b)
