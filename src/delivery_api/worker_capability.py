@@ -43,10 +43,31 @@ class WorkerCapability:
     def require_job(cls,store,job):
         """Fresh shared owner/job/session/generation authority, never cached admission."""
         if not job:raise TenantAccessDenied('worker job required')
-        cap=cls.capture(store,job['task_id']);task=cap.validate(store)
+        if hasattr(store,'worker_authority'):cap,task=cls._capture_and_validate(store,job['task_id'])
+        else:cap=cls.capture(store,job['task_id']);task=cap.validate(store)
         if task.get('stop_requested_at') is not None:raise TenantAccessDenied('worker stopped')
         cap.validate_job(job)
         return cap
+
+    @classmethod
+    def _capture_and_validate(cls,store,task_id):
+        """capture + validate from one read. Same checks and messages; the second read of the same rows is gone."""
+        scope=current_scope()
+        task,session,binding,active=store.worker_authority(task_id)
+        if not task or task['owner_id']!=scope.owner_id:
+            raise TenantAccessDenied('authorized worker task required')
+        if not session or not binding or binding['task_id']!=task_id or str(binding['owner_id'])!=scope.owner_id or binding['generation']!=task['generation']:
+            raise TenantAccessDenied('current generation session binding required')
+        anchor=None;anchor_sha256=None
+        if task['generation']>1:
+            if not hasattr(store,'installed_execution_anchor'):raise TenantAccessDenied('installed lineage reader required')
+            installed=store.installed_execution_anchor(session)
+            if not installed:raise TenantAccessDenied('later-generation installed lineage required')
+            anchor=installed['anchor'];anchor_sha256=installed['anchor_sha256']
+            if (anchor.owner_id!=scope.owner_id or anchor.task_id!=task_id or anchor.execution_session_id!=session
+                or anchor.generation!=task['generation']):raise TenantAccessDenied('installed worker lineage mismatch')
+        if not active:raise TenantAccessDenied('worker auth session revoked')
+        return cls(scope,task_id,session,task['generation'],anchor,anchor_sha256),task
 
     def validate(self,store):
         if current_scope()!=self.scope:

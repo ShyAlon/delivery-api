@@ -43,6 +43,9 @@ def purpose(depth=3):
             if short not in _PLUMBING and name not in _GENERIC:
                 found.append('%s:%s' % (short, name))
         frame = frame.f_back
+        # The authority check runs from many places; the 3 nearest frames stop inside it and hide who asked.
+        if len(found) == depth and found[-1].endswith(':require_job') and depth < 6:
+            depth += 2
     return '<'.join(found) or 'unattributed'
 
 
