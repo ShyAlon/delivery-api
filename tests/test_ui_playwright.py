@@ -2626,12 +2626,12 @@ def test_active_phase_line_replaces_and_progress_stays_collapsed_until_expanded(
     expect(line).to_have_text('Reading source inputs')
     box=page.locator('#stageprogress > details')
     expect(box).not_to_have_attribute('open','')
-    expect(box.locator(':scope > summary')).to_contain_text('Connected to progress')
+    expect(box.locator(':scope > summary')).to_contain_text('Live ·')
     expect(box.locator('.progress-history')).not_to_be_visible()
     page.evaluate('liveSource.onerror()')
-    expect(box.locator(':scope > summary')).to_contain_text('Progress connection lost')
+    expect(box.locator(':scope > summary')).to_contain_text('Live updates paused, retrying')
     page.evaluate('liveSource.onopen()')
-    expect(box.locator(':scope > summary')).to_contain_text('Connected to progress')
+    expect(box.locator(':scope > summary')).to_contain_text('Live ·')
     page.evaluate("liveSource.emit({id:102,kind:'progress',phase_key:"+json.dumps(phase)+",message:'Drafting the next item',payload:{stage:'draft',status:'started'},ts:Date.now()/1000})")
     expect(line).to_have_text('Drafting the next item')
     expect(box).not_to_have_attribute('open','')
@@ -3156,5 +3156,76 @@ def test_stream_events_never_throw_and_refine_every_processing_surface(pg_page,p
     page.evaluate("liveSource.emit({id:910001,kind:'progress',message:'Model call running',phase_key:null,payload:{stage:'engine.llm',status:'started'},ts:Date.now()/1000+1})")
     expect(page.locator('.live-indicator span')).to_contain_text('Model call running')
     expect(page.locator('.phase-current-progress')).to_contain_text('Model call running')
-    expect(page.locator('#stageprogress > details > summary')).to_contain_text('Connected to progress')
+    expect(page.locator('#stageprogress > details > summary')).to_contain_text('Live ·')
     assert errors==[],errors
+
+
+def _waiting_question_task(page,ui,tid):
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
+    live['active_phase']='intent';live['state']='running'
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'w1','precondition':{'session_sequence':1}}
+    live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'question':'What should it do?','decision':None,'gate':None,'show_question':True,'show_answer_composer':True}
+    live['events']=[e for e in live['events'] if e.get('kind')!='command']+[{'id':900000,'kind':'command','phase_key':'intent','message':'Interview starting','payload':{},'ts':time.time()-57*3600}]
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.add_init_script("window.EventSource=class{constructor(){window.liveSource=this;this.listeners={}}addEventListener(k,f){this.listeners[k]=f}close(){}emit(e){this.listeners.progress({data:JSON.stringify(e)})}}")
+    return live
+
+
+def test_progress_box_while_waiting_for_the_user_claims_no_connection_loss_and_no_elapsed(pg_page,pg_ui,pg_ids):
+    """2026-11-10 screenshot: 'Progress connection lost ... 207491s elapsed' while the page only waited for a decision."""
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    _waiting_question_task(page,ui,tid)
+    page.goto(ui+f'/tasks/{tid}/view')
+    summary=page.locator('#stageprogress > details > summary')
+    expect(summary).to_contain_text('Nothing is running. The engine is waiting for you.')
+    page.evaluate("liveSource.onerror&&liveSource.onerror()")
+    text=summary.inner_text()
+    assert 'lost' not in text.lower() and 'elapsed' not in text and 'resubmitting' not in text,text
+
+
+def test_progress_box_elapsed_counts_from_this_answer_not_the_interview_start(pg_page,pg_ui,pg_ids):
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    _waiting_question_task(page,ui,tid)
+    page.route(f'**/api/tasks/{tid}/answer',lambda route:None)
+    page.goto(ui+f'/tasks/{tid}/view')
+    page.locator('#answerform textarea').fill('answer')
+    page.locator('#answerform button[type=submit]').click()
+    summary=page.locator('#stageprogress > details > summary')
+    expect(summary).to_contain_text('Connecting to live updates')
+    page.evaluate("liveSource.onopen&&liveSource.onopen()")
+    page.evaluate("liveSource.emit({id:910001,kind:'progress',message:'Model call running',phase_key:null,payload:{stage:'engine.llm',status:'started'},ts:Date.now()/1000+1})")
+    expect(summary).to_contain_text('s on this step')
+    seconds=int(__import__("re").search(r'(\d+)s on this step',summary.inner_text()).group(1))
+    assert seconds<120,seconds
+
+
+def _flagged_inputs_snapshot(live):
+    nxt=json.loads(json.dumps(live))
+    nxt['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'approval','wait_id':'w2','revision':'engine:s:4','precondition':{'session_sequence':4},
+        'decision':{'type':'founder_decision','title':'Review flagged inputs','prompt':'Review','options':[{'value':1,'label':'Proceed'}],'context':{'decision_purpose':'semantic_review','evidence':{}}}}
+    nxt['ui_state']={'mode':'engine_decision','active_phase':'intent','process_live':True,'decision':nxt['control_snapshot']['decision'],'gate':None}
+    return nxt
+
+
+@pytest.mark.parametrize('typed',[False,True])
+def test_transition_to_a_decision_opens_its_page_unless_the_user_is_typing(pg_page,pg_ui,pg_ids,typed):
+    """2026-11-10: the page sat on 'Waiting for your decision' instead of opening Review flagged inputs."""
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    live=_waiting_question_task(page,ui,tid)
+    box={'snap':live}
+    page.unroute(f'**/api/tasks/{tid}')
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(json.loads(json.dumps(box['snap'])))))
+    page.goto(ui+f'/tasks/{tid}/view')
+    page.locator('#answerform textarea').wait_for()
+    if typed:page.locator('#answerform textarea').fill('half written thought')
+    box['snap']=_flagged_inputs_snapshot(live)
+    page.evaluate("liveSource.emit({id:920001,kind:'founder_decision',message:'Review',phase_key:'intent',payload:{waiting_input:true},ts:Math.floor(Date.now()/1000)})")
+    if typed:
+        page.wait_for_timeout(1500)
+        assert '/view' in page.url and page.locator('#answerform textarea').count()==0 or page.url.endswith('/view')
+        assert 'step=' not in page.url
+    else:
+        page.wait_for_url(lambda url:'step=findings' in url,timeout=5000)

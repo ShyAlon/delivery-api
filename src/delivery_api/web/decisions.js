@@ -168,6 +168,8 @@ export function createDecisions(ctx){
    if(applying||accepted)blockers.push({text:accepted?'Decisions recorded. Waiting for task progress.':'Applying these decisions. Wait for the result.'});
    items.forEach((finding,i)=>{if(!form.elements[`action-${i}`].value)blockers.push({text:`Choose what happens to ${findingTitle(finding)}.`,jump:`#semantic-${i}`})});
    refreshDecision(form,blockers,{gated:['button[type="submit"]']});
+   // The progress block already says this; a second banner repeating it is noise.
+   const list=form.querySelector('#decision-checklist');if(list)list.hidden=Boolean(applying||accepted);
   };
   form.addEventListener('change',sync);sync();
   if(item)document.querySelector(`#semantic-${items.findIndex(f=>f.item_id===item)}`)?.scrollIntoView();

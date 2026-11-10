@@ -356,3 +356,9 @@ details.review-progress>summary>.progress-current{color:var(--ink);margin-top:3p
 /* Pin only the current answer status below the measured global navigation.
    Task and panel headings stay in normal flow, avoiding stacked sticky layers. */
 @media(min-width:1101px){.panel:has(#answerform:not(.hidden))>.live-status-row{position:sticky;top:calc(var(--global-header-height,84px) + 8px);z-index:2;background:#f7f8f3}}
+/* 2026-11-10: a 150px sticky header covered the field being edited; the sticky footer carries the actions. */
+@media(max-height:900px){.semantic-page .semantic-head{position:static}}
+details.review-progress>summary{padding:10px 12px;border-radius:10px;cursor:pointer;display:grid;gap:4px}
+details.review-progress>summary:focus-visible{outline:2px solid #16a36a;outline-offset:2px}
+details.review-progress .progress-history{padding:0 12px 10px}
+.semantic-footer #semanticstatus{flex:1 1 auto;min-width:0}.semantic-footer #semanticstatus:empty{display:none}
