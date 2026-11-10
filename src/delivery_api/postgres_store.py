@@ -170,8 +170,11 @@ class PostgresStore:
         return row.fetchone()['id']
 
     def add_event(self, task_id: str, kind: str, message: str, *, phase_key: str | None=None, payload: dict | None=None) -> int:
-        cur = self._execute_native('INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id', (task_id, phase_key, kind, message, json.dumps(payload or {}), time.time()), write=True)
-        self._execute_native('UPDATE tasks SET updated_at=%s WHERE task_id=%s', (time.time(), task_id), write=True)
+        # One statement: the event row and the task's updated_at touch share a round trip (was INSERT then UPDATE).
+        now = time.time()
+        cur = self._execute_native('WITH ev AS (INSERT INTO events(task_id,phase_key,kind,message,payload,ts) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id), '
+                                   'touched AS (UPDATE tasks SET updated_at=%s WHERE task_id=%s) SELECT id FROM ev',
+                                   (task_id, phase_key, kind, message, json.dumps(payload or {}), now, now, task_id), write=True)
         self._connection.get().notify_after_commit(task_id)
         return cur.fetchone()['id']
 
