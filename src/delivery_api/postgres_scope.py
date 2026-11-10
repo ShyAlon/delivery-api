@@ -264,7 +264,7 @@ class ScopedPostgres:
         # Process shutdown calls db_pool.close_all().
         pass
 
-    def _begin(self,scope,repeatable_read):
+    def _begin(self,scope,repeatable_read,savepoint=False):
         """Starts the scoped transaction. A reused connection the server has closed is dropped and replaced directly
         with one fresh connection, before any work runs: the replacement skips the idle pool, so a burst of
         server-killed idles costs one doomed round trip plus one connect, never one round trip per dead idle.
@@ -295,11 +295,14 @@ class ScopedPostgres:
                     transaction.__enter__()
                     if repeatable_read:connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
                     connection.execute(_SETUP,(scope.owner_id,scope.session_id or ''))
+                    # Rides the same batch as BEGIN + identity: its own round trip otherwise (2026-11-10 trace).
+                    if savepoint:connection.execute('SAVEPOINT operation_start')
                 # A pipelined execute only measures enqueue time. Label each
                 # statement once; attach the synchronized batch wall time to
                 # identity setup (includes BEGIN), not invented per-SQL times.
                 if repeatable_read:note_statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ [batched]',0)
                 note_statement(statement_label(_SETUP),time.monotonic()-batch_started)
+                if savepoint:note_statement('SAVEPOINT operation_start',0)
                 if stats is not None:
                     stats.transactions+=1;stats.queries+=1;stats.db_seconds+=time.monotonic()-started
                     if reused:stats.reused+=1
@@ -315,7 +318,7 @@ class ScopedPostgres:
             'reused database connections were already broken and their replacement failed before any statement ran') from last_error
 
     @contextmanager
-    def transaction(self,*,repeatable_read=False):
+    def transaction(self,*,repeatable_read=False,savepoint=False):
         scope = current_scope()
         shared=_request_tx.get()
         if shared is not None and not repeatable_read and shared.postgres is self and shared.scope==scope:
@@ -332,7 +335,10 @@ class ScopedPostgres:
             if connection is not None:
                 try:
                     before=set(shared.notifications)
-                    try:yield TimingConnection(connection,shared.notifications)
+                    try:
+                        timed=TimingConnection(connection,shared.notifications)
+                        if savepoint:timed.execute('SAVEPOINT operation_start')
+                        yield timed
                     except BaseException:
                         shared.notifications.intersection_update(before)
                         # Undo only the failed operation; if that cannot be done the request's transaction is discarded at its end
@@ -343,7 +349,7 @@ class ScopedPostgres:
                 finally:shared.lock.release()
                 return
             shared.lock.release()
-        connection,transaction=self._begin(scope,repeatable_read)
+        connection,transaction=self._begin(scope,repeatable_read,savepoint)
         notifications=set()
         try:
             yield TimingConnection(connection,notifications)
