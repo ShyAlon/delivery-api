@@ -127,10 +127,14 @@ def test_cleanup_declined_removes_nothing(tmp_path):
     def docker(args, **kw):
         if args[0] in ('rm', 'rmi'):
             removed.append(args)
+        if args[0] == 'ps' and '-q' in args:
+            return '\n'.join(c['ID'] for c in containers)
         if args[0] == 'ps':
             return json.dumps(containers)
         if args[0] == 'images':
             return json.dumps([])
+        if args[:2] == ['container', 'inspect'] and args[3] == '{{.Image}}':
+            return ''
         if args[0] == 'container':
             raise m.WorkflowError('no such container')
         return ''
@@ -242,3 +246,77 @@ def test_pull_all_names_the_checkout_left_behind(tmp_path):
     moved['vmodel-spec-app'] = '0' * 40
     with pytest.raises(m.WorkflowError, match='vmodel-spec-app'):
         m.step_pull_all(ctx(tmp_path, heads=lambda: moved))
+
+
+# --- 2026-11-10: cleanup compared full image ids with `docker images` short ids ---
+FULL = 'sha256:' + '8fbb4befdb29' + 'c0' * 26   # what `docker container inspect` returns
+SHORT = '8fbb4befdb29'                           # what `docker images` prints
+
+
+def test_cleanup_keep_list_matches_short_and_full_image_ids():
+    containers = [{'Names': 'requi-preview-exec', 'State': 'running', 'Image': 'x', 'ID': 'cur', 'CreatedAt': '2026-11-10'}]
+    images = [{'Repository': 'requi-full-candidate', 'Tag': 'new', 'ID': SHORT},
+              {'Repository': 'requi-full-candidate', 'Tag': 'old', 'ID': 'aaaaaaaaaaaa'}]
+    _, _, old = m.plan_cleanup(containers, images, keep_previous=1, keep_image_ids={FULL})
+    assert [i['ID'] for i in old] == ['aaaaaaaaaaaa'], \
+        'the running preview image (full id) must be protected from its short-id listing'
+
+
+def _cleanup_docker(containers, images, in_use, fail=None, calls=None):
+    def docker(args, **kw):
+        if args[0] == 'ps' and '-q' in args:
+            return '\n'.join(c['ID'] for c in containers)
+        if args[0] == 'ps':
+            return json.dumps(containers)
+        if args[0] == 'images':
+            return json.dumps(images)
+        if args[:2] == ['container', 'inspect']:
+            target = args[-1]
+            if args[3] == '{{.Image}}':
+                return '\n'.join(in_use[t] for t in args[4:] if t in in_use)
+            if target == 'requi-preview-exec':
+                return json.dumps({'Image': FULL, 'State': {'Running': True}})
+            if target in in_use:
+                return json.dumps({'Image': in_use[target], 'State': {'Running': False}})
+            raise m.WorkflowError('no such container')
+        return ''
+
+    def docker_try(args, **kw):
+        if calls is not None:
+            calls.append(args)
+        if fail and args[-1] in fail:
+            return 1, fail[args[-1]]
+        return 0, ''
+    return docker, docker_try
+
+
+def test_cleanup_reports_item_and_docker_reason_and_continues(tmp_path):
+    containers = [{'Names': 'requi-preview-exec-20261101-090000', 'State': 'exited', 'Image': 'o', 'ID': 'old1', 'CreatedAt': '2026-11-01'},
+                  {'Names': 'requi-preview-exec-20261107-090000', 'State': 'exited', 'Image': 'p', 'ID': 'prev', 'CreatedAt': '2026-11-07'}]
+    images = [{'Repository': 'requi-full-candidate', 'Tag': 't1', 'ID': 'bbbbbbbbbbbb'},
+              {'Repository': 'requi-full-candidate', 'Tag': 't2', 'ID': 'cccccccccccc'}]
+    calls = []
+    docker, docker_try = _cleanup_docker(containers, images, {}, fail={'bbbbbbbbbbbb': 'Error response from daemon: conflict: image is being used by stopped container 1a2b'}, calls=calls)
+    c = ctx(tmp_path, docker=docker, docker_try=docker_try, typed=lambda p: 'DELETE 1 CONTAINERS AND 2 IMAGES')
+    try:
+        m.step_cleanup(c)
+    except m.WorkflowError as error:
+        text = str(error)
+    else:
+        raise AssertionError('a failed removal must fail the step')
+    assert 'docker rmi bbbbbbbbbbbb' in text and 'requi-full-candidate:t1' in text, text
+    assert 'conflict: image is being used by stopped container 1a2b' in text, 'docker reason must be printed'
+    assert ['rmi', 'cccccccccccc'] in calls, 'one failing item must not stop the remaining removals'
+    assert 'cleanup' not in c['state']['steps']
+
+
+def test_cleanup_never_lists_image_used_by_a_surviving_container(tmp_path):
+    containers = [{'Names': 'requi-preview-exec-20261107-090000', 'State': 'exited', 'Image': 'p', 'ID': 'prev', 'CreatedAt': '2026-11-07'}]
+    images = [{'Repository': 'requi-full-candidate', 'Tag': 'p', 'ID': 'dddddddddddd'},
+              {'Repository': '<none>', 'Tag': '<none>', 'ID': 'eeeeeeeeeeee'}]
+    calls = []
+    docker, docker_try = _cleanup_docker(containers, images, {'prev': 'sha256:' + 'dddddddddddd' + '00' * 26}, calls=calls)
+    c = ctx(tmp_path, docker=docker, docker_try=docker_try, typed=lambda p: 'DELETE 0 CONTAINERS AND 1 IMAGES')
+    m.step_cleanup(c)
+    assert calls == [['rmi', 'eeeeeeeeeeee']], calls
+    assert 'cleanup' in c['state']['steps']
