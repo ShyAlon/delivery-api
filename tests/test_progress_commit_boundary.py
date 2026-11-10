@@ -10,6 +10,7 @@ def test_notify_sees_committed_row_on_independent_connection(pg_scoped_workspace
     def read():
         with tenant_context(w.scope):return any(e['message']=='probe' for e in s.events(t))
     def notify(task):
+        if task.startswith('task-stop:'):return   # a Stop wake (fixture teardown stops tasks), not a progress event
         assert task==t
         with ThreadPoolExecutor(1) as executor:seen.append(executor.submit(read).result(timeout=10))
     monkeypatch.setattr(event_bus,'notify',notify)

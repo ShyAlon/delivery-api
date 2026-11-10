@@ -878,6 +878,9 @@ FROM tasks t"""
         if not task or task['deleted_at'] is not None:raise KeyError(task_id)
         if task['stop_requested_at'] is None:
             self._execute_native("UPDATE tasks SET state='stop_requested',generation=generation+1,stop_requested_at=%s,updated_at=%s WHERE task_id=%s",(time.time(),time.time(),task_id), write=True)
+            # A running answer's stop watcher waits on this key instead of polling; woken after commit.
+            from .stop_watch import stop_key
+            self._connection.get().notify_after_commit(stop_key(task_id))
         return self.task(task_id)
 
     def confirm_child_session_quiescent(self,session_id):

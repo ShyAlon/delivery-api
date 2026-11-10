@@ -10,7 +10,11 @@ from test_postgres_store import A,DSN
 
 
 @pytest.mark.parametrize('reason',['stop','auth-revoked'])
-def test_durable_stop_drains_accepted_fake_provider_but_never_publishes_next_question(store,tmp_path,reason):
+def test_durable_stop_drains_accepted_fake_provider_but_never_publishes_next_question(store,tmp_path,reason,monkeypatch):
+    # Owner ruling 2026-11-10: a Stop click wakes the watcher at once (default 30 s safety interval must NOT be what
+    # delivers it); revocation is read on the safety interval, shortened here so the test stays fast.
+    from delivery_api import stop_watch
+    monkeypatch.setattr(stop_watch,'STOP_SAFETY_SECONDS',30.0 if reason=='stop' else 1.0)
     pytest.importorskip('interview_engine')
     accepted=threading.Event();release=threading.Event();calls=[];settled=[];uncertain=[]
     class Handler(BaseHTTPRequestHandler):
@@ -35,8 +39,9 @@ def test_durable_stop_drains_accepted_fake_provider_but_never_publishes_next_que
     command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[2]/'interview-engine/src'),str(Path(__file__).parents[2]/'spec-generator/src')]
     client=ChildInterviewClient(store,tmp_path,gateway_factory=lambda cap,job:Gateway(job),dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint=f'http://127.0.0.1:{server.server_port}/v1/chat/completions',command=command)
     detected=threading.Event();latency=[];changed=[None]
-    original_run=client.supervisor.run
+    original_run=client.supervisor.run_operation
     async def measured_run(*args,**kwargs):
+        if kwargs.get('stop') is None:return await original_run(*args,**kwargs)
         async def detection():
             await kwargs['stop'].wait()
             latency.append(time.monotonic()-changed[0]);detected.set()
@@ -46,7 +51,7 @@ def test_durable_stop_drains_accepted_fake_provider_but_never_publishes_next_que
             observer.cancel()
             try:await observer
             except asyncio.CancelledError:pass
-    client.supervisor.run=measured_run
+    client.supervisor.run_operation=measured_run
     def start():
         from vmodel_contracts.interactive import StartSessionRequest
         with tenant_context(A):
@@ -62,7 +67,7 @@ def test_durable_stop_drains_accepted_fake_provider_but_never_publishes_next_que
                 else:
                     import psycopg
                     with psycopg.connect(DSN) as admin:admin.execute('DELETE FROM auth.sessions WHERE id=%s',(A.session_id,))
-            assert detected.wait(1.5),'stop/revocation check exceeded its unchanged one-second cadence'
+            assert detected.wait(1.5),'Stop must wake at once; revocation must be read on the safety interval'
             print('CONTROL_DETECTION',reason,round(latency[0],3))
             release.set();future.result(timeout=10)
         assert len(calls)==1 and client.supervisor.last_result.reaped

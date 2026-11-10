@@ -12,13 +12,8 @@ from .child_supervisor import ChildSupervisor
 
 _slot=threading.Lock()
 
-# Stop/auth/generation watch cadence inside the child handler. A 1s poll cost
-# three store reads per second of child life - ~300 of the 396 answer-POST
-# queries on 2026-11-09 production turn evidence (fetch_ms ~2.8s per store call
-# against the remote pooler). 5s keeps stop reaction within one graceful-stop
-# window; the stop path itself (fence + SIGTERM) is unchanged. Pinned by
-# tests/test_child_stop_watch_cadence.py.
-_STOP_WATCH_SECONDS=5.0
+# The stop/auth/generation watch lives in stop_watch.py: a Stop click wakes it at once, revocation is read every
+# 30 s. Pinned by tests/test_child_stop_watch_cadence.py and tests/test_stop_watch_wake.py.
 
 class LocalComputeEvidence:
     def __init__(self,persist=None):
@@ -359,13 +354,8 @@ class ChildInterviewClient(EngineClient):
                     'input':refs.get(ref,ref_kind),'question_quality':self.question_quality_config()['config'],
                     'warm':ref_kind in ('answer','route')}
                 stop=asyncio.Event()
-                async def watch():
-                    while not stop.is_set():
-                        task=self.store.task(task_id);session=self.store.session_binding(sid)
-                        if (not task or task.get('stop_requested_at') is not None or not self.store.auth_session_active()
-                            or not session or session['generation']!=operation.binding.generation):stop.set();return
-                        await asyncio.sleep(_STOP_WATCH_SECONDS)
-                watcher=asyncio.create_task(watch())
+                from .stop_watch import watch_for_stop
+                watcher=asyncio.create_task(watch_for_stop(store=self.store,task_id=task_id,session_id=sid,generation=operation.binding.generation,stop=stop))
                 def fence_stop(op):
                     task=self.store.task(task_id);session=self.store.session_binding(sid)
                     if task and task.get('stop_requested_at') is None and session and session['generation']==op.binding.generation:
