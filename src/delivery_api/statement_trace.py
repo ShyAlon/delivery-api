@@ -49,7 +49,7 @@ def purpose(depth=3):
     return '<'.join(found) or 'unattributed'
 
 
-_SKIP_RAW = ('contextlib', 'psycopg', 'psycopg_pool', 'functools')
+_SKIP_RAW = ('contextlib', 'psycopg', 'psycopg_pool', 'functools', 'threading')
 
 
 def _raw_callers(depth=4):
