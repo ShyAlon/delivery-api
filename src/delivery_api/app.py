@@ -2002,13 +2002,19 @@ async def _loop_lag_monitor():
     database. Rate-limited; routine ticks are not logged."""
     import asyncio as _asyncio
     from .observability import event as _activity
-    expected=time.monotonic()+1.0;last_report=0.0
-    while True:
-        await _asyncio.sleep(1.0)
-        now=time.monotonic();lag=loop_lag_ms(expected,now);expected=now+1.0
+    import threading as _threading
+    from .loop_stall import StallWatchdog
+    watchdog=StallWatchdog(lambda late_ms,stack:_activity("loop.stall.stack","Event loop blocked; stack of the blocked loop thread",level=_logging.WARNING,late_ms=late_ms,stack=stack),_threading.get_ident()).start()
+    expected=time.monotonic()+0.2;last_report=0.0
+    try:
+      while True:
+        await _asyncio.sleep(0.2)
+        watchdog.beat()
+        now=time.monotonic();lag=loop_lag_ms(expected,now);expected=now+0.2
         if lag>=500 and now-last_report>=60:
             last_report=now
             _activity("loop.lag","Event loop stall",level=_logging.WARNING,lag_ms=lag)
+    finally:watchdog.stop()
 
 
 @app.get("/api/tasks/{task_id}/stream")
