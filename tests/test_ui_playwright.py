@@ -3130,3 +3130,31 @@ def test_answer_submit_walks_through_observed_stages_to_next_question(pg_page,pg
     page.evaluate("liveSource.emit({id:900002,kind:'waiting_input',message:'Waiting for founder input',phase_key:'conops',payload:{question:'Who else has this problem?'},ts:Math.floor(Date.now()/1000)})")
     expect(page.locator('#currentquestion')).to_contain_text('Who else has this problem?')
     expect(page.locator('#shadowcopy')).to_be_hidden()
+
+
+def test_stream_events_never_throw_and_refine_every_processing_surface(pg_page,pg_ui,pg_ids):
+    """2026-11-08..10: answerInFlight named a local of detail() and threw ReferenceError on every stream event,
+    so no stage label ever refined and the Run progress box stayed 'connection lost'. All three surfaces must
+    show the same observed stage, and the stream open must mark the box connected."""
+    page,ui=pg_page,pg_ui
+    tid=pg_ids["live"]
+    errors=[]
+    page.on('pageerror',lambda error:errors.append(str(error)))
+    live=page.request.get(ui+f'/api/tasks/{tid}').json()
+    live['active_phase']='intent';live['state']='running'
+    live['control_snapshot']={'mode':'waiting_input','owner':'engine','kind':'text','wait_id':'w1','precondition':{'session_sequence':1}}
+    live['ui_state']={'mode':'engine_question','active_phase':'intent','process_live':True,'question':'What should it do?','decision':None,'gate':None,'show_question':True,'show_answer_composer':True}
+    page.route(f'**/api/tasks/{tid}',lambda route:route.fulfill(json=_promote_control(live)))
+    page.add_init_script("window.EventSource=class{constructor(){window.liveSource=this;this.listeners={}}addEventListener(k,f){this.listeners[k]=f}close(){}emit(e){this.listeners.progress({data:JSON.stringify(e)})}}")
+    held=[]
+    page.route(f'**/api/tasks/{tid}/answer',lambda route:held.append(route))
+    page.goto(ui+f'/tasks/{tid}/view')
+    page.locator('#answerform textarea').fill('answer')
+    page.locator('#answerform button[type=submit]').click()
+    expect(page.locator('.live-indicator span')).to_have_text('Processing your answer\u2026')
+    page.evaluate("liveSource.onopen&&liveSource.onopen()")
+    page.evaluate("liveSource.emit({id:910001,kind:'progress',message:'Model call running',phase_key:null,payload:{stage:'engine.llm',status:'started'},ts:Date.now()/1000+1})")
+    expect(page.locator('.live-indicator span')).to_contain_text('Model call running')
+    expect(page.locator('.phase-current-progress')).to_contain_text('Model call running')
+    expect(page.locator('#stageprogress > details > summary')).to_contain_text('Connected to progress')
+    assert errors==[],errors
