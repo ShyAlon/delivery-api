@@ -24,19 +24,7 @@ def _syncs(fn):
     return result, sum(e[3] for e in stats.trace), stats
 
 
-def _unused_measure_current_shape(ledger):
-    s, tid, job = ledger
-    attempt = uuid.uuid4().hex
-    with tenant_context(A):
-        _, a, st1 = _syncs(lambda: s.reserve_provider_attempt(job, attempt, Q, 'digest'))
-        _, b, st2 = _syncs(lambda: s.transition_provider_attempt(attempt, 'start'))
-        _, c, st3 = _syncs(lambda: s.transition_provider_attempt(attempt, 'settle', {'input_tokens': 2, 'output_tokens': 3}))
-    print('SYNCS reserve/start/settle', a, b, c)
-    for st in (st1, st2, st3):
-        print([e[:2] for e in st.trace])
-
-
-def test_measure_admit_and_settle(ledger):
+def test_admit_and_settle_trip_budget_and_replay_does_not_charge_twice(ledger):
     s, tid, job = ledger
     attempt = uuid.uuid4().hex
     with tenant_context(A):
@@ -44,9 +32,28 @@ def test_measure_admit_and_settle(ledger):
                                                           authorize=lambda: None, require_prepaid=False, launch_guard=False))
         assert r == 'allowed'
         _, b, st2 = _syncs(lambda: s.transition_provider_attempt(attempt, 'settle', {'input_tokens': 2, 'output_tokens': 3}))
-    print('SYNCS admit/settle', a, b)
-    for n,t in (('admit',st),('settle',st2)):
-        for e in t.trace:
-            if e[3]:print('  ',n,e[3],e[0].split('<')[0][:45],'|',e[1][:60])
-    # main: 25 / 11. A lock the transaction already holds is not asked for again (WIP target, lowered as grouping lands).
+    # main: 25 / 11. A lock the transaction already holds is not asked for again, authority is read once after both locks,
+    # the insert returns its row, and transition reports its start state instead of a separate read.
     assert a <= 17 and b <= 8, (a, b)
+    with tenant_context(A):
+        first = s.provider_attempt(attempt)
+        again = s.transition_provider_attempt(attempt, 'settle', {'input_tokens': 2, 'output_tokens': 3})
+        assert again['state'] == 'settled' and again['expense_actual'] == first['expense_actual'] == 8
+        assert again['retail_actual'] == first['retail_actual'] == 18 and again['settled_at'] == first['settled_at']
+
+
+def test_a_held_advisory_lock_is_asked_for_once_and_asked_again_after_a_savepoint_rollback(ledger):
+    s, tid, job = ledger
+    lock = 'SELECT pg_advisory_xact_lock(73194720315621::bigint)'
+    def twice():
+        s._execute_native(lock); s._execute_native(lock)
+    with tenant_context(A):
+        _, syncs, _ = _syncs(lambda: s.run_grouped(twice))
+        assert syncs == 3, syncs   # identity batch + one lock + commit; the second lock rode no trip
+        def after_rollback():
+            s._connection.get().execute('SAVEPOINT held_test')
+            s._execute_native(lock)
+            s._connection.get().execute('ROLLBACK TO SAVEPOINT held_test')
+            s._execute_native(lock)
+        _, syncs, _ = _syncs(lambda: s.run_grouped(after_rollback))
+        assert syncs == 6, syncs  # identity + savepoint + lock + rollback + reacquire + commit

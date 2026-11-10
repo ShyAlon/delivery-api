@@ -127,6 +127,8 @@ class TimingConnection:
         if self._notifications is None:raise RuntimeError('transaction notification scope required')
         self._notifications.add(task_id)
     def execute(self,sql,params=()):
+        if str(sql).lstrip().upper().startswith(('ROLLBACK','COMMIT')):
+            self.held_locks.clear()
         started=time.monotonic()
         try:return self._inner.execute(sql,params)
         except Exception as error:

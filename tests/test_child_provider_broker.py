@@ -6,7 +6,7 @@ import httpx
 import pytest
 from delivery_api.child_provider_broker import ChildProviderBroker,BrokerPaused
 from test_child_execution_contract import operation,frame
-from test_attempt_ledger import ledger
+from test_attempt_ledger import ledger, credit_account
 from delivery_api.child_execution_contract import decode_operation
 
 RAW=json.dumps({'model':'deepseek-flash','max_tokens':10,'messages':[]}).encode()
@@ -134,8 +134,11 @@ def test_durable_journal_survives_new_broker_instance(ledger):
     op=decode_operation(frame(value));journal=ChildBrokerJournal(store,op);key=(op.operation_id,'call-1','intent')
     digest=hashlib.sha256(RAW).hexdigest();response={'status':200,'content_type':'application/json','body':base64.b64encode(BODY).decode(),'sha256':hashlib.sha256(BODY).hexdigest()}
     with tenant_context(A):
-        journal.begin(key,digest,'deepseek','deepseek-flash');journal.bind(key,'attempt-1');journal.complete(key,response,{'tokens':1})
+        journal.begin(key,digest,'deepseek','deepseek-flash');journal.bind(key,'attempt-1');stored=journal.complete(key,response,{'tokens':1})
+        assert stored['response']==response and stored['attempt_id']=='attempt-1'   # the committed row comes back: no read-back trip
         fresh=ChildBrokerJournal(store,op)
+        # claim = load + begin in one transaction: an existing row is returned, never overwritten or re-begun.
+        assert fresh.claim(key,digest,'deepseek','deepseek-flash')['response']==response
         assert fresh.load(key)['response']==response
         with pytest.raises(Exception):fresh.begin(key,digest,'deepseek','deepseek-flash')
         with pytest.raises(Exception):fresh.complete(key,{'different':True},{})
@@ -148,7 +151,8 @@ def test_durable_journal_survives_new_broker_instance(ledger):
         conn.execute('DELETE FROM retail_contributions WHERE job_id=%s',(job,))
 
 
-def test_broker_actual_ledger_settles_once_and_reuses_durable_bytes(ledger):
+@pytest.mark.parametrize('prepaid',[False,True])
+def test_broker_actual_ledger_settles_once_and_reuses_durable_bytes(credit_account,prepaid):
     import hashlib,uuid
     from delivery_api.producer_admission import WorkerAdmissionGateway
     from delivery_api.child_broker_journal import ChildBrokerJournal
@@ -156,16 +160,16 @@ def test_broker_actual_ledger_settles_once_and_reuses_durable_bytes(ledger):
     from test_postgres_store import A,DSN
     from test_attempt_ledger import Q
     import psycopg
-    store,tid,job=ledger;calls=[]
+    store,tid,job=credit_account;calls=[]
     value=operation();value['binding'].update(owner_id=A.owner_id,auth_session_id=A.session_id,task_id=tid,job_id=job)
     with tenant_context(A):value['binding']['session_id']=store.worker_job(job)['session_id']
     op=decode_operation(frame(value))
-    quote={**Q,'provider':'deepseek','model':'deepseek-flash','expense_units_per_usd':10**12}
+    quote={**Q,'provider':'deepseek','model':'deepseek-flash','expense_units_per_usd':10**12,'retail_units_per_credit':1000000}
     with psycopg.connect(DSN) as conn:
         conn.execute('DELETE FROM operator_expense_policy_head');conn.execute('DELETE FROM operator_expense_policy_revisions')
         conn.execute("INSERT INTO operator_expense_policy_revisions(revision,limit_units,units_per_usd,operator_subject,reason) VALUES('broker-fixture',1000000000000,1000000000000,%s,'fake fixture')",(A.owner_id,))
         conn.execute("INSERT INTO operator_expense_policy_head VALUES(true,'broker-fixture')")
-    gateway=WorkerAdmissionGateway(store,job,require_prepaid=False,
+    gateway=WorkerAdmissionGateway(store,job,require_prepaid=prepaid,
         resolve_serialized=lambda **kw:(quote,hashlib.sha256(kw['serialized_request']).hexdigest()),
         measure_raw_usage=lambda raw:{'input_tokens':raw['prompt_tokens'],'output_tokens':raw['completion_tokens']})
     def provider(request):
@@ -182,11 +186,17 @@ def test_broker_actual_ledger_settles_once_and_reuses_durable_bytes(ledger):
         stats=postgres_scope.RequestStats();token=postgres_scope.request_stats.set(stats)
         try:first=broker.dispatch(request())
         finally:postgres_scope.request_stats.reset(token)
-        syncs=sum(e[3] for e in stats.trace);[print('  ',e[3],e[0].split('<')[0][:50],'|',e[0].split('<')[-1][:30],'|',e[1][:50]) for e in stats.trace];print('PAID_DISPATCH_SYNCS',syncs,'tx',sum(1 for e in stats.trace if e[1].startswith('SELECT set_config')))
+        syncs=sum(e[3] for e in stats.trace);tx=stats.transactions
+        # main worktree: 74 syncs without prepaid, 80 with prepaid; 12 transactions in both. Exact caps and fences unchanged.
+        assert syncs<=(59 if prepaid else 53) and tx<=8,(syncs,tx)
         assert broker.dispatch(request())==first
         row=journal.load((op.operation_id,'call-1','intent'));attempt=store.provider_attempt(row['attempt_id'])
         assert attempt['state']=='settled' and attempt['expense_actual']==8 and attempt['retail_actual']==18
         assert len(calls)==1
+        if prepaid:
+            with psycopg.connect(DSN) as conn:
+                assert conn.execute('SELECT balance_units FROM credit_accounts WHERE owner_id=%s',(A.owner_id,)).fetchone()==(-17,)
+                assert conn.execute('SELECT state,charged_units FROM credit_charges WHERE attempt_id=%s',(row['attempt_id'],)).fetchone()==('settled',18)
     with psycopg.connect(DSN) as conn:
         conn.execute('DELETE FROM operator_expense_policy_head');conn.execute('DELETE FROM operator_expense_policy_revisions')
     client.close()

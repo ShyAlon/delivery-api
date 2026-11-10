@@ -151,6 +151,7 @@ def test_dual_gateway_refuses_incomplete_or_ambiguous_review(mutation):
 
 def test_dual_settlement_refuses_foreign_quote_before_raw_evidence_or_normalization():
     class Store:
+        def run_grouped(self,work):return work()  # same transaction seam as the real store
         def worker_job(self,j):return {'execution_options':{'model_route':'ollama:phi4'}}
         def provider_attempt(self,a):return {'job_id':'local','quote':{'provider':'deepseek','model':MODEL}}
         def record_raw_provider_usage(self,*a):raise AssertionError('wrong provider evidence must not be recorded')
