@@ -800,6 +800,15 @@ def retained_revision_store(monkeypatch,isolated_policy_database):
     monkeypatch.setitem(globals(),'DSN',isolated_policy_database)
     return PostgresStore(isolated_policy_database.replace('user=sandbox','user=delivery_app'))
 
+def _set_auth_live(monkeypatch,store,live):
+    """Deliberate test-only auth-session expiry. Authority reads are one merged statement (authority_snapshot), so the
+    liveness it reports is forced alongside auth_session_active."""
+    monkeypatch.setattr(store,'auth_session_active',lambda:live)
+    if hasattr(store,'authority_snapshot'):
+        real=type(store).authority_snapshot.__get__(store)
+        monkeypatch.setattr(store,'authority_snapshot',(lambda t,s_:real(t,s_)[:2]+(live,)) if not live else real)
+
+
 @pytest.mark.parametrize('coordinated',['pg_child_control','pg_control_stop','pg_architecture_continue','pg_real_architecture','pg_anchor_tamper','pg_stage_tamper','pg_source_tamper','pg_continuation_tamper','pg_successor_revoked','pg_successor_expired','pg_successor_snapshot_swap','pg_successor_prepared_swap','pg_successor_provider_hold','pg_install_only','pg_continuation_only','pg_continuation_consume','pg_continuation_consume_revoked','pg_continuation_failure','pg_activation_rollback',False,True,'before_promotion','after_promotion','revoked_before_promotion','ask_changes','continuation_failure','continuation_consume','continuation_consume_revoked','continuation_real_graph','architecture_continuation','successor_revoked','successor_expired','successor_swap','successor_prepared_swap','successor_provider_hold'])
 def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(retained_revision_store,tmp_path,monkeypatch,coordinated):
     store=retained_revision_store
@@ -1334,7 +1343,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(retained_r
                                     if pg_fault and not getattr(fake_items,'faulted',False):
                                         fake_items.faulted=True
                                         if pg_fault=='pg_successor_revoked':store.revoke_private_revision_acceptance(tid,acceptance_reference=receipt['acceptance_reference'])
-                                        elif pg_fault=='pg_successor_expired':monkeypatch.setattr(store,'auth_session_active',lambda:False)
+                                        elif pg_fault=='pg_successor_expired':_set_auth_live(monkeypatch,store,False)
                                         elif pg_fault=='pg_successor_provider_hold':
                                             import psycopg
                                             from test_attempt_ledger import Q
@@ -1616,7 +1625,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(retained_r
                                             admin.execute('INSERT INTO admission_limits VALUES (%s,%s,1000,300,700,300,700,60,100,2) ON CONFLICT(owner_id) DO NOTHING',(A.owner_id,'test-only'))
                                         attempt=store.reserve_provider_attempt(next_job,uuid.uuid4().hex,Q,'constructed-test-hold')
                                         fake_next_items.held=attempt['attempt_id']
-                                elif fault=='successor_expired':monkeypatch.setattr(store,'auth_session_active',lambda:False)
+                                elif fault=='successor_expired':_set_auth_live(monkeypatch,store,False)
                                 else:
                                     if not getattr(fake_next_items,'swapped',False):
                                         fake_next_items.swapped=True
@@ -1634,7 +1643,7 @@ def test_real_sqlite_files_and_pg_retained_snapshot_to_staged_journal(retained_r
                                 asyncio.run(execute_private_successor(store,next_worker,next_job,installation_id=intent_kw['installation_id'],artifacts_base=tmp_path,review_sha256=shown['review_sha256']))
                             if fault=='successor_expired':
                                 with pytest.raises(TenantAccessDenied,match='revoked'):installed_checkpoint()
-                                monkeypatch.setattr(store,'auth_session_active',lambda:True)  # End the deliberate test-only expiry before owned evidence readback.
+                                _set_auth_live(monkeypatch,store,True)  # End the deliberate test-only expiry before owned evidence readback.
                             assert store.worker_job(next_job)['state']==('running' if fault=='successor_expired' else 'failed')
                             assert result_receipt(shown['review_sha256']) is None
                             assert next(g for g in store.task(tid)['gates'] if g['after_phase']=='specs')['state']!='waiting'

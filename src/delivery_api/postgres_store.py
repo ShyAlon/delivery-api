@@ -131,6 +131,24 @@ class PostgresStore:
                 finally:self._connection.reset(token)
         return guard()
 
+    def authority_snapshot(self,task_id,session_id):
+        """Task record, session binding and auth-session liveness from ONE statement, one snapshot.
+
+        Replaces three separate reads (each its own pool check, identity statement and commit on a
+        pooled link). Returns (task or None, binding or None, active)."""
+        sql=self._TASK_PROJECTION.replace("\nFROM tasks t",
+            ",\n  (SELECT to_jsonb(e)::text FROM engine_sessions e WHERE e.session_id=%s) AS binding_json,"
+            "\n  public.requi_session_active() AS session_active\nFROM tasks t",1)
+        row=self._execute_native(sql+' WHERE t.task_id=%s AND t.deleted_at IS NULL',(session_id,task_id)).fetchone()
+        if not row:
+            # No task row (deleted or other tenant): still report liveness, one cheap statement on the denial path only.
+            return None,None,self.auth_session_active()
+        row=dict(row);binding_json=row.pop('binding_json');active=bool(row.pop('session_active'))
+        task=self._task_record(row)
+        binding=json.loads(binding_json) if binding_json else None
+        if binding:binding['owner_id']=str(binding['owner_id'])
+        return task,binding,active
+
     def auth_session_active(self):
         return bool(self._execute_native('SELECT public.requi_session_active() AS active').fetchone()['active'])
 
@@ -2338,7 +2356,7 @@ PG_OPERATIONS = (
     'attribute_run',
     'audit',
     'audit_entries',
-    'auth_session_active',
+    'auth_session_active','authority_snapshot',
     'begin_interview_start',
     'begin_retail_compute',
     'bind_interview_schema',
