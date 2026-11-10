@@ -120,6 +120,9 @@ class TimingConnection:
     statement list. Attributes other than execute pass through to the driver connection."""
     def __init__(self,inner,notifications=None):
         self._inner=inner;self._notifications=notifications
+        # Transaction advisory locks already held by this operation's transaction; asking again is a no-op the database
+        # would answer after a round trip. Cleared whenever a savepoint rollback could have released one.
+        self.held_locks=set()
     def notify_after_commit(self,task_id):
         if self._notifications is None:raise RuntimeError('transaction notification scope required')
         self._notifications.add(task_id)

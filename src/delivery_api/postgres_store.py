@@ -109,6 +109,13 @@ def validator_provenance(module_path,model=None):
     return f'{parts};source={source}'
 
 
+class _HeldLock:
+    """Stands in for the result of an advisory-lock statement that was skipped because this transaction already holds it."""
+    rowcount=0
+    def fetchone(self):return None
+    def fetchall(self):return []
+
+
 class PostgresStore:
     def __init__(self,dsn):
         self._postgres = ScopedPostgres(dsn)
@@ -252,6 +259,7 @@ class PostgresStore:
             self._execute_native('UPDATE tasks SET updated_at=%s WHERE task_id=%s', (time.time(), signal.task_id), write=True)
             self._connection.get().notify_after_commit(signal.task_id)
         except Exception:
+            self._connection.get().held_locks.clear()
             self._connection.get().execute('ROLLBACK TO SAVEPOINT operation_start')
             raise
         return True
@@ -862,9 +870,15 @@ FROM tasks t"""
             if session_task_cache.affects_mapping(sql):
                 session_task_cache.invalidate(self);self._map_dirty.set(True)
                 if shared is not None:shared.map_invalidations.add(self)
+        held = getattr(connection, 'held_locks', None)
+        lock = (sql, tuple(parameters)) if held is not None and sql.startswith('SELECT pg_advisory_xact_lock(') else None
+        if lock in (held or ()):
+            return _HeldLock()   # a transaction-level advisory lock is re-entrant and held to commit: re-asking is a wasted trip
         started = time.monotonic()
         try:
-            return connection.execute(sql, parameters)
+            result = connection.execute(sql, parameters)
+            if lock is not None:held.add(lock)
+            return result
         finally:
             note_query(time.monotonic()-started)
 
@@ -1007,6 +1021,7 @@ FROM tasks t"""
             "WHERE task_id=%s AND state='not_started' AND engine_session_id IS NULL",
             (session_id,route,now,task_id), write=True)
         if result.rowcount != 1:
+            self._connection.get().held_locks.clear()
             self._connection.get().execute('ROLLBACK TO SAVEPOINT operation_start')
             return False
         self._execute_native("UPDATE phases SET state='running',detail='Starting interview',started_at=%s WHERE task_id=%s AND phase_key='intent'",
