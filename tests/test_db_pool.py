@@ -29,7 +29,12 @@ def test_pool_for_memoizes_one_pool_per_dsn(monkeypatch):
     a2 = db_pool.pool_for('postgresql://a')
     b = db_pool.pool_for('postgresql://b')
     assert a1 is a2 and a1 is not b and len(made) == 2
-    assert a1.kwargs["check"] is db_pool.ConnectionPool.check_connection
+    # The pool-level check is psycopg_pool's own liveness check, wrapped only to count its round trip in the statement trace.
+    assert a1.kwargs["check"] is db_pool._traced_check
+    calls = []
+    monkeypatch.setattr(db_pool.ConnectionPool, 'check_connection', staticmethod(lambda connection: calls.append(connection)))
+    db_pool._traced_check('conn')
+    assert calls == ['conn'], 'the traced check must still run the real liveness check'
     db_pool.close_all()
     assert a1.closed and b.closed
 

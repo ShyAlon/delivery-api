@@ -25,12 +25,12 @@ class RequestStats:
     """What one request cost, split by where it went: database, engine calls, pool checkout
     waits, auth checks and the window a connection was pinned. Shown in the Server-Timing
     header and the Debug dialog so slowness is measured, not guessed."""
-    __slots__=('transactions','queries','db_seconds','reused','opened','engine_calls','engine_seconds','checkout_seconds','auth_seconds','tx_held_seconds','statements')
+    __slots__=('transactions','queries','db_seconds','reused','opened','engine_calls','engine_seconds','checkout_seconds','auth_seconds','tx_held_seconds','statements','trace')
     MAX_STATEMENTS=500   # one pathological request cannot grow memory without bound
     def __init__(self):
         self.transactions=self.queries=self.reused=self.opened=0;self.db_seconds=0.0
         self.engine_calls=0;self.engine_seconds=self.checkout_seconds=self.auth_seconds=self.tx_held_seconds=0.0
-        self.statements=[]
+        self.statements=[];self.trace=[]
     def top_statement(self):
         """The (label, ms) of the slowest statement this request ran, or (None, 0)."""
         if not self.statements:return None,0
@@ -66,6 +66,11 @@ def note_auth(seconds):
     stats=request_stats.get()
     if stats is not None:stats.auth_seconds+=seconds
 
+def note_commit():
+    """One COMMIT round trip, for the statement trace."""
+    from . import statement_trace
+    statement_trace.record('commit','COMMIT')
+
 def statement_label(sql):
     """SQL shape only: redact literals, quoted identifiers and comments."""
     import re
@@ -98,7 +103,9 @@ def statement_label(sql):
     return ' '.join(''.join(out).split())[:64] or 'statement'
 
 def note_statement(label,seconds):
-    """One timed statement with its label. No request context: a no-op."""
+    """One timed statement with its label. The slowest-statement list needs a request; the trace also counts background statements."""
+    from . import statement_trace
+    statement_trace.record('statement',label,seconds)
     stats=request_stats.get()
     if stats is not None and len(stats.statements)<RequestStats.MAX_STATEMENTS:
         stats.statements.append((label,int(seconds*1000)))
@@ -153,6 +160,7 @@ class _RequestTransaction:
                 self.postgres._drop(connection) if self.broken else self.postgres._release(connection)
             else:
                 transaction.__exit__(None,None,None)
+                note_commit()
                 self.postgres._release(connection)
                 _publish_notifications(self.notifications)
         except BaseException:
@@ -347,6 +355,7 @@ class ScopedPostgres:
         try:transaction.__exit__(None,None,None)
         except BaseException:
             self._drop(connection);raise
+        note_commit()
         self._release(connection)
         _publish_notifications(notifications)
 

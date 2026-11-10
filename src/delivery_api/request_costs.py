@@ -41,6 +41,8 @@ def record(entry):
 def record_request(method, path, status, duration_ms, stats):
     """One HTTP request with its measured decomposition. Called by the request-log middleware."""
     top_label, top_ms = stats.top_statement()
+    from . import statement_trace
+    statement_trace.fold_request(request_type(method, path), stats)
     record({'type': request_type(method, path), 'status': int(status), 'duration_ms': int(duration_ms),
             'db_ms': int(stats.db_seconds * 1000), 'db_queries': int(stats.queries),
             'engine_ms': int(stats.engine_seconds * 1000), 'engine_calls': int(stats.engine_calls),
@@ -79,11 +81,14 @@ def summary(slowest=10):
                       'p50': {f: _percentile([r[f] for r in rows], 50) for f in FIELDS},
                       'p95': {f: _percentile([r[f] for r in rows], 95) for f in FIELDS}})
     slow = sorted(entries, key=lambda r: r['duration_ms'], reverse=True)[:slowest]
+    from . import statement_trace
     return {'count': len(entries), 'since': entries[0]['at'] if entries else None,
-            'types': types, 'slowest': slow}
+            'types': types, 'slowest': slow, 'statement_trace': statement_trace.summary()}
 
 
 def reset():
     """Tests only: drop the window."""
+    from . import statement_trace
+    statement_trace.reset()
     with _lock:
         _entries.clear()
