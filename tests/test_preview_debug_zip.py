@@ -89,6 +89,8 @@ def test_the_bundle_carries_run_dir_docker_and_host_evidence_scrubbed(owner_mach
             assert facts['repos']['delivery-api']['head'] == 'fakehead-delivery-api'
             assert facts['repos']['interview-engine']['head'] == 'fakehead-interview-engine'
             assert facts['missing'] == [], facts['missing']
+            # A bare count could not say WHAT made a clone dirty (2026-11-10: dirty=1 with nobody editing). Name the files.
+            assert facts['repos']['delivery-api']['dirty'] == 1 and facts['repos']['delivery-api']['dirty_files'] == ['M dirty.txt']
             smoke = z.read('run/413a76bd7770f2da551e65a7/browser-smoke.log').decode()
             assert 'net::ERR_ABORTED' in smoke
             assert 'macOS' in z.read('host.txt').decode() and '27.3.1' in z.read('host.txt').decode()
