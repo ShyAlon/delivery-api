@@ -23,12 +23,17 @@ document.addEventListener('toggle',event=>{const box=event.target;if(box.isConne
 // answer_submitted event written at submit - a re-render in a fresh tab loses
 // the shadow but must not stay blanket for the whole turn.
 export function answerProcessingLabel(events,{phaseKey,afterId=0,sinceMs=0}={}){
+ const list=events||[];
+ let floorMs=sinceMs?sinceMs-1500:0;   // tab-local ms vs whole-second stamps: tolerate rounding, never a stale turn
  if(!sinceMs){
-  const anchor=[...(events||[])].reverse().find(e=>e.kind==='answer_submitted'&&Number(e.id||0)>=afterId);
-  sinceMs=anchor?(signalTime(anchor)??0)*1000:0;
+  // The durable submit event is a server stamp (no clock agreement needed). One followed by a turn-ending
+  // event belongs to an earlier turn and proves nothing about this one.
+  const at=list.findLastIndex(e=>e.kind==='answer_submitted'&&Number(e.id||0)>=afterId);
+  const live=at>=0&&!list.slice(at+1).some(e=>['waiting_input','answer','gate','complete','error'].includes(e.kind));
+  floorMs=live?(signalTime(list[at])??0)*1000:0;
  }
- if(!sinceMs)return ANSWER_PENDING_LABEL;
- const latest=[...(events||[])].reverse().find(e=>Number(e.id||0)>=afterId&&isProgressEvent(e)&&(!e.phase_key||e.phase_key===phaseKey)&&(signalTime(e)??0)*1000>sinceMs);
+ if(!floorMs)return ANSWER_PENDING_LABEL;
+ const latest=[...list].reverse().find(e=>e.kind==='progress'&&Number(e.id||0)>=afterId&&(!e.phase_key||e.phase_key===phaseKey)&&(signalTime(e)??0)*1000>floorMs);
  return latest?`Processing your answer · ${humanizeSnakeCase(String(latest.message||latest.payload?.label||''))}`:ANSWER_PENDING_LABEL;
 }
 export function activePhaseProgress(events,{phaseKey,afterId=0,mode='executing',fallback='Working',unavailable='',answerPending=false,answerSince=0}={}){
