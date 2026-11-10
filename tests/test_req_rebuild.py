@@ -381,3 +381,35 @@ def test_fetched_origin_shas_sees_a_merge_made_after_the_run_started(tmp_path):
     after = m.fetched_origin_shas(root, repos=['delivery-api'])
     assert after != before, 'the check must fetch, not read a stale origin ref'
     assert m.checkout_heads(root, repos=['delivery-api']) == before, 'checkout HEAD stays where it was'
+
+
+def _run_dir(tmp_path, name, *, receipt, state='{}'):
+    run = tmp_path / '.local/share/requi/image-workflow' / name
+    run.mkdir(parents=True)
+    (run / 'state.json').write_text(state)
+    if receipt is not None:
+        (run / 'accepted-image.json').write_text(receipt)
+
+
+def test_runs_that_never_reached_acceptance_are_one_summary_line_not_one_warning_each(tmp_path, capfd):
+    """2026-11-10: about 30 identical [WARN] lines on every rebuild. A run with no accepted-image.json never finished; that is
+    expected, so it is counted once, and accepted_receipt running twice must not repeat it."""
+    m._REPORTED_RUN_DIRS.clear()
+    for i in range(15):
+        _run_dir(tmp_path, 'stale-%02d' % i, receipt=None)
+    m.accepted_receipt(ctx(tmp_path))
+    m.accepted_receipt(ctx(tmp_path))
+    err = capfd.readouterr().err
+    assert err.count('never reached acceptance') == 1 and '15 earlier' in err
+    assert 'WARN' not in err and 'unreadable image-workflow run dir' not in err
+
+
+def test_a_corrupt_receipt_is_still_reported_as_a_warning_once_with_the_count(tmp_path, capfd):
+    m._REPORTED_RUN_DIRS.clear()
+    for i in range(3):
+        _run_dir(tmp_path, 'bad-%d' % i, receipt='{not json')
+    _run_dir(tmp_path, 'unfinished', receipt=None)
+    m.accepted_receipt(ctx(tmp_path))
+    err = capfd.readouterr().err
+    assert err.count('[WARN]') == 1 and '3 image-workflow run dir(s)' in err and 'unreadable' in err
+    assert err.count('never reached acceptance') == 1 and '1 earlier' in err
