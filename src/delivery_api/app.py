@@ -1371,6 +1371,9 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
             # re-render orders post-submit engine signals against this event instead.
             # Never the answer text - the turn-end 'answer' event carries the record.
             store.add_event(task_id,"answer_submitted","Answer submitted; engine processing",phase_key=task_before.get("active_phase") or "intent",payload={"input_id":answered_input_id,"actor":a.label})
+            # Stage boundaries the founder can see, each a real point of this path (no timers): the engine call is about to
+            # block for most of the answer, and after it returns the answer is recorded. Engine-side signals land between.
+            store.add_event(task_id,"progress","Interview engine is working on your answer",phase_key=None,payload={"stage":"answer.engine","status":"started","source":"delivery.answer"})
             interrupted_job=_interrupted_answer_job(task_id,session_id,pending.input_id)
             recovered=False
             try:
@@ -1393,6 +1396,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
                 drain_at=time.monotonic();progress_stop.set()
                 try:await progress_watch
                 finally:activity('engine.answer.progress_drain','Final answer progress watch finished',task_id=task_id,session_id=session_id,elapsed_ms=int((time.monotonic()-drain_at)*1000))
+            store.add_event(task_id,"progress","Recording your answer and preparing the next question",phase_key=None,payload={"stage":"answer.record","status":"started","source":"delivery.answer"})
             store.add_event(task_id,"engine_protocol","Typed founder input accepted after a transient interruption" if recovered else "Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
             source="http_interview"
             if body.comment.strip():

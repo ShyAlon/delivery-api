@@ -56,7 +56,11 @@ def test_a_cloud_answer_reaches_the_owner_session_and_is_recorded(monkeypatch):
     session_id, response = seen["submitted"][0]
     assert session_id == "s1" and response.value == "The child" and response.actor_id == "owner@example.com"
     kinds = [event[0][1] for event in seen["events"]]
-    assert kinds == ["answer_submitted", "engine_protocol", "answer"] and seen["events"][2][0][2] == "You: The child"
+    # Real stage boundaries of the answer path, in order: the engine starts working, the engine call returns, the answer is recorded.
+    assert kinds == ["answer_submitted", "progress", "progress", "engine_protocol", "answer"] and seen["events"][4][0][2] == "You: The child"
+    labels = [event[0][2] for event in seen["events"] if event[0][1] == "progress"]
+    assert labels == ["Interview engine is working on your answer", "Recording your answer and preparing the next question"]
+    assert all(event[1]["payload"]["source"] == "delivery.answer" for event in seen["events"] if event[0][1] == "progress")
     assert seen["continued"] == []
 
 
