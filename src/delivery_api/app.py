@@ -165,12 +165,38 @@ async def _resume_orphaned_handoffs()->None:
         spawn(recover())
 
 
-async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=False)->bool:
+PROGRESS_CURSOR_REFRESH_SECONDS=30.0
+
+
+class _ProgressCursor:
+    """One watcher's in-memory progress cursor (2026-11-10, owner-approved option B).
+
+    The database cursor was re-read before EVERY drain: 28 reads in one 153 s answer, 5 round trips each. The watcher
+    now reads it at start, every PROGRESS_CURSOR_REFRESH_SECONDS, and after any error. Between reads the cursor
+    advances from the pages this watcher ingested. It is bookkeeping, not authority: ingest deduplicates, so a
+    stale value can only refetch a page; the engine read and the stop event keep their own checks. A deleted task
+    is noticed at the next refresh (at most 30 s) instead of at the next drain."""
+    def __init__(self,clock=time.monotonic):
+        self._clock=clock;self.value=None;self._read_at=0.0
+    def fresh(self):
+        return self.value is not None and self._clock()-self._read_at<PROGRESS_CURSOR_REFRESH_SECONDS
+    def set_from_db(self,value):
+        self.value=value;self._read_at=self._clock()
+    def advance(self,value):
+        self.value=value
+    def clear(self):
+        self.value=None
+
+
+async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=False,cursor_cache:"_ProgressCursor|None"=None)->bool:
     """Read all committed pages; return whether any real progress was ingested."""
     advanced=False
     from .progress_adapter import ingest_interview_page
     while True:
-        cursor=await run_in_threadpool(store.progress_cursor,task_id,"interview",session_id)
+        if cursor_cache is not None and cursor_cache.fresh():cursor=cursor_cache.value
+        else:
+            cursor=await run_in_threadpool(store.progress_cursor,task_id,"interview",session_id)
+            if cursor_cache is not None:cursor_cache.set_from_db(cursor)
         fetched_at=time.monotonic()
         try:page=await run_in_threadpool(engine_client.progress,session_id,cursor)
         except KeyError:
@@ -186,6 +212,7 @@ async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=
         if page.events:
             await run_in_threadpool(ingest_interview_page,store,task_id,session_id,page)
             advanced=True
+            if cursor_cache is not None:cursor_cache.advance(page.next_cursor)
         elif page.next_cursor!=cursor:
             raise RuntimeError('empty progress page advanced cursor')
         if page.events:
@@ -260,12 +287,13 @@ async def _watch_engine_advance(task_id:str,session_id:str,stop:asyncio.Event)->
     """Fetch progress during a blocking Start/Submit and drain after it returns."""
     from . import event_bus
     key='engine-progress:'+session_id
-    delay=2.0
+    delay=2.0;cursor_cache=_ProgressCursor()
     while not stop.is_set():
         version=event_bus.version(key)  # snapshot before read: no lost commit race
         advanced=False
-        try:advanced=await _drain_engine_progress(task_id,session_id,allow_absent=True)
+        try:advanced=await _drain_engine_progress(task_id,session_id,allow_absent=True,cursor_cache=cursor_cache)
         except (EngineClientError,EngineUnreachableError,ValueError,RuntimeError,AttributeError)+_transient_db_errors() as exc:
+            cursor_cache.clear()
             activity("progress.ingest.failed","Engine progress read failed without affecting control",task_id=task_id,session_id=session_id,error=str(exc)[:300])
         if stop.is_set():break
         if advanced:delay=2.0
