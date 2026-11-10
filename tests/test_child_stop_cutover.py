@@ -39,8 +39,9 @@ def test_durable_stop_drains_accepted_fake_provider_but_never_publishes_next_que
     command=[sys.executable,'-c',"import sys,runpy;sys.path[:0]=sys.argv[1:];runpy.run_module('delivery_api.child_entry',run_name='__main__')",str(Path(__file__).parents[2]/'interview-engine/src'),str(Path(__file__).parents[2]/'spec-generator/src')]
     client=ChildInterviewClient(store,tmp_path,gateway_factory=lambda cap,job:Gateway(job),dsn=DSN.replace('user=sandbox','user=delivery_app'),endpoint=f'http://127.0.0.1:{server.server_port}/v1/chat/completions',command=command)
     detected=threading.Event();latency=[];changed=[None]
-    original_run=client.supervisor.run
+    original_run=client.supervisor.run_operation
     async def measured_run(*args,**kwargs):
+        if kwargs.get('stop') is None:return await original_run(*args,**kwargs)
         async def detection():
             await kwargs['stop'].wait()
             latency.append(time.monotonic()-changed[0]);detected.set()
@@ -50,7 +51,7 @@ def test_durable_stop_drains_accepted_fake_provider_but_never_publishes_next_que
             observer.cancel()
             try:await observer
             except asyncio.CancelledError:pass
-    client.supervisor.run=measured_run
+    client.supervisor.run_operation=measured_run
     def start():
         from vmodel_contracts.interactive import StartSessionRequest
         with tenant_context(A):
