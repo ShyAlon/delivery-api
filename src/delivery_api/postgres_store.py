@@ -1914,6 +1914,12 @@ FROM tasks t"""
         rows=self._execute_native('SELECT r.*, a.state AS attempt_state, a.usage AS attempt_usage FROM staged_provider_responses r LEFT JOIN provider_attempts a ON a.attempt_id=r.attempt_id WHERE r.session_id=%s AND r.generation=%s ORDER BY r.execution_point,r.node,r.stage,r.item,r.ordinal',(session_id,generation)).fetchall()
         return [dict(r) for r in rows]
 
+    @_transactional
+    def run_grouped(self,work):
+        """Runs `work()` in ONE operation transaction (one identity batch, one commit) when none is open. For callers that
+        would otherwise open a transaction per store call; whatever `work` commits is committed together, at its end."""
+        return work()
+
     def provider_attempt(self,attempt_id):
         row=self._execute_native('SELECT * FROM provider_attempts WHERE attempt_id=%s',(attempt_id,)).fetchone()
         return dict(row) if row else None

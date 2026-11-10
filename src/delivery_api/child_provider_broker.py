@@ -64,14 +64,16 @@ class ChildProviderBroker:
         digest=hashlib.sha256(raw).hexdigest();key=(self.operation.operation_id,call.call_id,call.stage)
         with self.lock:
             self.authorize(self.operation,call)
-            prior=self.journal.load(key)
+            # load + begin in one transaction when the journal offers it (fakes keep the two-call seam).
+            claim=getattr(self.journal,'claim',None)
+            prior=claim(key,digest,call.provider,call.model) if claim else self.journal.load(key)
             if prior is not None:
                 if (prior['request_sha256'],prior['provider'],prior['model'])!=(digest,call.provider,call.model):
                     raise BrokerPaused('logical provider call conflicts with recorded bytes')
                 if prior.get('response') is None or not prior.get('attempt_id'):
                     raise BrokerPaused('incomplete provider evidence; reconcile, never redispatch')
                 return self._deliver(prior)
-            self.journal.begin(key,digest,call.provider,call.model)
+            if not claim:self.journal.begin(key,digest,call.provider,call.model)
             attempt=None;step='admission'
             try:
                 args=dict(attempt_id=uuid.uuid4().hex,stage=call.stage,provider=call.provider,model=call.model,
@@ -98,7 +100,7 @@ class ChildProviderBroker:
                 reply={'status':200,'content_type':content_type,
                     'body':base64.b64encode(body).decode(),'sha256':hashlib.sha256(body).hexdigest()}
                 step='journal_complete'
-                journal_at=time.monotonic();self.journal.complete(key,reply,usage)
+                journal_at=time.monotonic();stored=self.journal.complete(key,reply,usage)
                 journal_ms=int((time.monotonic()-journal_at)*1000)
             except BaseException as exc:
                 from .diagnostic_evidence import record
@@ -111,7 +113,7 @@ class ChildProviderBroker:
                 from .provider_http import ProviderHTTPError
                 if type(exc) is ProviderHTTPError:raise ProviderRefused(exc) from exc
                 raise BrokerPaused('provider outcome incomplete; reconcile before retry') from exc
-            settlement_at=time.monotonic();result=self._deliver(self.journal.load(key))
+            settlement_at=time.monotonic();result=self._deliver(stored if isinstance(stored,dict) else self.journal.load(key))
             self.timings.append({'stage':call.stage,'transport_ms':transport_ms,'journal_ms':journal_ms,'settlement_ms':int((time.monotonic()-settlement_at)*1000)})
             return result
 

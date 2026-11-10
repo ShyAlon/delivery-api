@@ -178,7 +178,12 @@ def test_broker_actual_ledger_settles_once_and_reuses_durable_bytes(ledger):
     with tenant_context(A):
         journal=ChildBrokerJournal(store,op)
         broker=ChildProviderBroker(op,gateway=gateway,journal=journal,client=client,endpoint='https://fixed.invalid/chat/completions',headers={},authorize=lambda *a:None)
-        first=broker.dispatch(request());assert broker.dispatch(request())==first
+        from delivery_api import postgres_scope
+        stats=postgres_scope.RequestStats();token=postgres_scope.request_stats.set(stats)
+        try:first=broker.dispatch(request())
+        finally:postgres_scope.request_stats.reset(token)
+        syncs=sum(e[3] for e in stats.trace);[print('  ',e[3],e[0].split('<')[0][:50],'|',e[0].split('<')[-1][:30],'|',e[1][:50]) for e in stats.trace];print('PAID_DISPATCH_SYNCS',syncs,'tx',sum(1 for e in stats.trace if e[1].startswith('SELECT set_config')))
+        assert broker.dispatch(request())==first
         row=journal.load((op.operation_id,'call-1','intent'));attempt=store.provider_attempt(row['attempt_id'])
         assert attempt['state']=='settled' and attempt['expense_actual']==8 and attempt['retail_actual']==18
         assert len(calls)==1

@@ -44,6 +44,20 @@ class ChildBrokerJournal:
                 'request_sha256,provider,model,dispatched_at) VALUES (%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
                 (*identity,digest,provider,model,time.time()))
 
+    def claim(self,key,digest,provider,model):
+        """load + begin in ONE transaction: returns the prior row, or None after recording the intent (committed before any
+        admission). A prior row is never overwritten: begin runs only when the load found nothing."""
+        identity=self._identity(key)
+        with self._transaction() as conn:
+            row=conn.execute('SELECT request_sha256,provider,model,attempt_id,response,usage '
+                'FROM staged_provider_responses WHERE owner_id=%s::uuid AND session_id=%s AND generation=%s '
+                'AND execution_point=%s AND node=%s AND stage=%s AND item=%s AND ordinal=%s',identity).fetchone()
+            if row:return dict(row)
+            conn.execute('INSERT INTO staged_provider_responses(owner_id,session_id,generation,execution_point,node,stage,item,ordinal,'
+                'request_sha256,provider,model,dispatched_at) VALUES (%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                (*identity,digest,provider,model,time.time()))
+            return None
+
     def bind(self,key,attempt):
         identity=self._identity(key)
         with self._transaction() as conn:
@@ -57,6 +71,8 @@ class ChildBrokerJournal:
         with self._transaction() as conn:
             row=conn.execute('UPDATE staged_provider_responses SET response=%s::jsonb,usage=%s::jsonb,completed_at=%s '
                 'WHERE owner_id=%s::uuid AND session_id=%s AND generation=%s AND execution_point=%s AND node=%s '
-                'AND stage=%s AND item=%s AND ordinal=%s AND response IS NULL RETURNING ordinal',
+                'AND stage=%s AND item=%s AND ordinal=%s AND response IS NULL RETURNING request_sha256,provider,model,attempt_id,response,usage',
                 (json.dumps(response),json.dumps(usage),time.time(),*identity)).fetchone()
             if row is None:raise BrokerPaused('raw response completion missing or repeated')
+            stored=dict(row)
+        return stored   # the committed row, same shape as load(): the broker delivers what is durable without a read-back trip

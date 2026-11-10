@@ -140,8 +140,9 @@ class WorkerAdmissionGateway:
         except Exception as exc:raise AdmissionDenied('provider balance read failed: '+str(exc)[:300]) from exc
 
     def settle_raw(self,attempt,raw_usage):
-        self._attempt(attempt)
-        self.store.record_raw_provider_usage(attempt,raw_usage)
+        # Ownership check and raw-usage evidence in one transaction, committed before the snapshot verification below
+        # exactly as the two separate transactions were.
+        self.store.run_grouped(lambda:(self._attempt(attempt),self.store.record_raw_provider_usage(attempt,raw_usage)))
         try:self._verify_snapshot()
         except Exception:
             self.uncertain(attempt)

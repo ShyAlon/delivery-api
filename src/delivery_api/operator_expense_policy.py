@@ -4,9 +4,16 @@ from .preview_spend import limit_units,SCALE
 from .attempt_ledger import AdmissionDenied
 
 
+_POLICY_SQL='SELECT r.revision,r.limit_units,r.units_per_usd FROM public.operator_expense_policy_head h JOIN public.operator_expense_policy_revisions r USING(revision) WHERE h.singleton'
+
+
 def configured(store):
+    if store._connection.get() is not None:
+        # Inside the dispatch transaction: same identity, same committed policy rows (READ COMMITTED), one statement instead of
+        # a second connection with its own pool check, identity batch and commit (4 trips, 2026-11-10 trace).
+        return store._execute_native(_POLICY_SQL).fetchone()
     with store._postgres.transaction() as conn:
-        return conn.execute('SELECT r.revision,r.limit_units,r.units_per_usd FROM public.operator_expense_policy_head h JOIN public.operator_expense_policy_revisions r USING(revision) WHERE h.singleton').fetchone()
+        return conn.execute(_POLICY_SQL).fetchone()
 
 
 def require(store,row):
