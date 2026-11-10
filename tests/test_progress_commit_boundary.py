@@ -44,7 +44,7 @@ def test_failed_operation_does_not_leave_a_request_wake(pg_scoped_workspace,monk
     original=s._execute_native
     def fail(sql,*args,**kw):
         result=original(sql,*args,**kw)
-        if sql.startswith('UPDATE tasks SET updated_at'):raise RuntimeError('fixture rollback')
+        if sql.startswith('WITH ev AS (INSERT INTO events'):raise RuntimeError('fixture rollback')   # add_event is one statement (event + updated_at touch); fail after it wrote
         return result
     monkeypatch.setattr(event_bus,'notify',seen.append)
     handle,token=s._postgres.begin_request(w.scope)

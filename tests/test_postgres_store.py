@@ -1802,7 +1802,7 @@ def test_request_tx_row_lock_never_deadlocks_concurrent_store_call(store):
                 # not left to scheduling luck.
                 with psycopg.connect(DSN,autocommit=True) as watch:
                     for _ in range(100):
-                        if watch.execute("SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE 'UPDATE tasks SET updated_at%'").fetchone():
+                        if watch.execute("SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%UPDATE tasks SET updated_at%'").fetchone():
                             break
                         time.sleep(0.05)
                     else: raise AssertionError('second request never waited on the row lock')
