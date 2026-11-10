@@ -27,7 +27,7 @@ def ctx(tmp_path, **over):
             'state': {'schema': 1, 'key': 'k', 'steps': {}},
             'typed': lambda prompt: '', 'run_child': lambda args, **kw: None,
             'docker': lambda a, **kw: '', 'image_exists': lambda i: True,
-            'heads': lambda: dict(SHAS), 'now': datetime.datetime.now}
+            'heads': lambda: dict(SHAS), 'latest_origin': lambda: dict(SHAS), 'reexec': lambda: None, 'now': datetime.datetime.now}
     base.update(over)
     return base
 
@@ -320,3 +320,64 @@ def test_cleanup_never_lists_image_used_by_a_surviving_container(tmp_path):
     m.step_cleanup(c)
     assert calls == [['rmi', 'eeeeeeeeeeee']], calls
     assert 'cleanup' in c['state']['steps']
+
+
+# --- 2026-11-10: origin/main moved during the run; each child `req` re-syncs main ---
+def _moved(name='delivery-api'):
+    moved = dict(SHAS)
+    moved[name] = '7' * 40
+    return moved
+
+
+def test_ensure_current_is_quiet_when_origin_did_not_move(tmp_path):
+    called = []
+    c = ctx(tmp_path, latest_origin=lambda: dict(SHAS), reexec=lambda: called.append(1))
+    m.ensure_current(c, 'preview')
+    assert called == []
+
+
+def test_ensure_current_restarts_naming_what_moved(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv('REQUI_REBUILD_RESTARTS', raising=False)
+    called = []
+    c = ctx(tmp_path, latest_origin=lambda: _moved(), reexec=lambda: called.append(1))
+    m.ensure_current(c, 'preview restart')
+    assert called == [1], 'a moved origin/main must restart the sequence, never continue on stale acceptance'
+    assert 'delivery-api' in capsys.readouterr().err
+    assert m.os.environ['REQUI_REBUILD_RESTARTS'] == '1'
+
+
+def test_ensure_current_stops_after_repeated_moves(tmp_path, monkeypatch):
+    monkeypatch.setenv('REQUI_REBUILD_RESTARTS', '3')
+    c = ctx(tmp_path, latest_origin=lambda: _moved(), reexec=lambda: None)
+    with pytest.raises(m.WorkflowError, match='delivery-api'):
+        m.ensure_current(c, 'preview restart')
+
+
+def test_apply_checks_for_a_moved_origin_before_every_long_or_gated_step(tmp_path, monkeypatch):
+    order = []
+    for name in ('step_pull_all', 'step_accept_local', 'step_migrate', 'step_preview_restart', 'step_cleanup'):
+        monkeypatch.setattr(m, name, lambda c, n=name: order.append(n))
+    monkeypatch.setattr(m, 'ensure_current', lambda c, where: order.append('guard:' + where))
+    m.apply(ctx(tmp_path))
+    assert order.index('guard:accept-local') < order.index('step_accept_local')
+    assert order.index('guard:migrate') < order.index('step_migrate')
+    assert order.index('guard:preview restart') < order.index('step_preview_restart')
+
+
+def test_fetched_origin_shas_sees_a_merge_made_after_the_run_started(tmp_path):
+    import subprocess as sp
+    def git(*a, cwd=None):
+        return sp.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    origin, root = tmp_path / 'origin.git', tmp_path / 'work'
+    git('init', '-q', '--bare', '-b', 'main', str(origin))
+    git('clone', '-q', str(origin), str(root / 'delivery-api'))
+    git('commit', '-q', '--allow-empty', '-m', 'one', cwd=root / 'delivery-api')
+    git('push', '-q', 'origin', 'main', cwd=root / 'delivery-api')
+    before = m.fetched_origin_shas(root, repos=['delivery-api'])
+    other = tmp_path / 'other'
+    git('clone', '-q', str(origin), str(other))
+    git('commit', '-q', '--allow-empty', '-m', 'two', cwd=other)
+    git('push', '-q', 'origin', 'main', cwd=other)
+    after = m.fetched_origin_shas(root, repos=['delivery-api'])
+    assert after != before, 'the check must fetch, not read a stale origin ref'
+    assert m.checkout_heads(root, repos=['delivery-api']) == before, 'checkout HEAD stays where it was'

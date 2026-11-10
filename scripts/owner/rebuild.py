@@ -57,6 +57,23 @@ def origin_shas(repos_root: Path, repos=REPOS, run=command) -> dict:
     return {name: run(['git', '-C', str(repos_root / name), 'rev-parse', 'origin/main']) for name in repos}
 
 
+def checkout_heads(repos_root: Path, repos=REPOS, run=None) -> dict:
+    run = run or command
+    return {name: run(['git', '-C', str(repos_root / name), 'rev-parse', 'HEAD']) for name in repos}
+
+
+def fetched_origin_shas(repos_root: Path, repos=REPOS, run=None) -> dict:
+    run = run or command
+    for name in repos:
+        run(['git', '-C', str(repos_root / name), 'fetch', 'origin', 'main'], timeout=120)
+    return origin_shas(repos_root, repos, run=run)
+
+
+def reexec_front_end(root: Path) -> None:
+    # The req front-end fast-forwards delivery-api, then starts the new rebuild.py.
+    os.execv('/bin/bash', ['bash', str(root / 'scripts/ops/req'), 'rebuild', '--apply'])
+
+
 def run_key(shas: dict, runtime_contract: str, acceptance: str) -> str:
     text = ''.join(name + '=' + shas[name] + '\n' for name in sorted(shas))
     return digest((text + runtime_contract + '\n' + acceptance + '\n').encode())
@@ -432,12 +449,39 @@ def plan(ctx) -> None:
     print('No registry, application server or paid provider is contacted. Owner typed confirmations stay his gates.')
 
 
+MAX_RESTARTS = 3
+
+
+def ensure_current(ctx, where: str) -> None:
+    """Every child `req` re-fetches and fast-forwards main, and image_workflow
+    refuses a checkout behind origin/main. If main moved after this run pinned
+    its revisions (a merge during the build or a long typed prompt), the accepted
+    image no longer matches the sources the next child sees. Restart through the
+    req front-end (fresh code, fresh contracts) instead of failing in a child."""
+    latest = ctx['latest_origin']()
+    moved = sorted(name for name, sha in latest.items() if sha != ctx['shas'].get(name))
+    if not moved:
+        return
+    detail = ', '.join(name + ' ' + str(ctx['shas'].get(name))[:8] + ' -> ' + sha[:8] for name, sha in sorted(latest.items()) if name in moved)
+    count = int(os.environ.get('REQUI_REBUILD_RESTARTS', '0'))
+    if count >= MAX_RESTARTS:
+        raise WorkflowError('origin/main kept moving (' + str(count) + ' restarts); stopped before ' + where + ': ' + detail
+                            + '; rerun the same command once merges settle')
+    os.environ['REQUI_REBUILD_RESTARTS'] = str(count + 1)
+    log('WARN', 'origin/main moved during this run before ' + where + ' (' + detail
+        + '); restarting the sequence on the new revisions so the accepted image matches')
+    ctx['reexec']()
+
+
 def apply(ctx) -> None:
     ctx['run_child'](['bash', str(ctx['req']), 'status'])
     step_pull_all(ctx)
     ctx['run_child'](['bash', str(ctx['req']), 'image', '--review'])
+    ensure_current(ctx, 'accept-local')
     step_accept_local(ctx)
+    ensure_current(ctx, 'migrate')
     step_migrate(ctx)
+    ensure_current(ctx, 'preview restart')
     step_preview_restart(ctx)
     step_cleanup(ctx)
     log('PASS', 'rebuild sequence complete; every owner gate was answered at the terminal')
@@ -468,7 +512,8 @@ def build_ctx(root: Path) -> dict:
            'home': Path.home(), 'shas': shas, 'runtime_contract': runtime_contract, 'acceptance_contract': acceptance,
            'state_path': Path(os.environ.get('REQUI_REBUILD_STATE', str(Path.home() / '.local/share/requi/rebuild/state.json'))),
            'typed': typed, 'run_child': run_child, 'docker': docker, 'docker_try': docker_try, 'image_exists': image_exists,
-           'heads': lambda: origin_shas(repos_root), 'now': datetime.datetime.now}
+           'heads': lambda: checkout_heads(repos_root), 'latest_origin': lambda: fetched_origin_shas(repos_root),
+           'reexec': lambda: reexec_front_end(root), 'now': datetime.datetime.now}
     key = run_key(shas, runtime_contract, acceptance)
     ctx['state'] = load_state(ctx['state_path'], key)
     return ctx
