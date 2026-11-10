@@ -46,10 +46,14 @@ def purpose(depth=3):
     return '<'.join(found) or 'unattributed'
 
 
-def record(kind, shape, seconds=0.0):
-    """One round trip. kind: 'statement', 'pool_check' or 'commit'."""
+def record(kind, shape, seconds=0.0, syncs=1):
+    """One trace entry. kind: 'statement', 'pool_check' or 'commit'. syncs is the network round trips it cost:
+    1 normally, 0 for a statement that rode another statement's pipelined batch (BEGIN, identity, SAVEPOINT)."""
     from . import postgres_scope
-    entry = (purpose(), shape, int(seconds * 1000))
+    where = purpose()
+    if where == 'unattributed':   # a worker thread has no delivery frame; its name says which pool it came from
+        where = 'unattributed[thread=%s]' % threading.current_thread().name.split('_')[0]
+    entry = (where, shape, int(seconds * 1000), syncs)
     stats = postgres_scope.request_stats.get()
     if stats is None:
         _fold(NO_REQUEST, [entry])
@@ -60,7 +64,7 @@ def record(kind, shape, seconds=0.0):
 def _fold(request_type, entries):
     global _dropped
     with _lock:
-        for where, shape, ms in entries:
+        for where, shape, ms, *_ in entries:
             key = (request_type, where, shape)
             row = _agg.get(key)
             if row is None:
@@ -79,7 +83,7 @@ LOG_ROWS = 30
 def request_row_list(entries, limit=LOG_ROWS):
     """(count, ms, purpose, shape) per group, most frequent first."""
     grouped = {}
-    for where, shape, ms in entries:
+    for where, shape, ms, *_ in entries:
         row = grouped.setdefault((where, shape), [0, 0])
         row[0] += 1
         row[1] += ms
@@ -90,12 +94,60 @@ def request_row_list(entries, limit=LOG_ROWS):
 def request_rows(entries, limit=LOG_ROWS):
     """One request's round trips grouped by (purpose, shape), most frequent first, as 'count x ms purpose | shape' text."""
     grouped = {}
-    for where, shape, ms in entries:
+    for where, shape, ms, *_ in entries:
         row = grouped.setdefault((where, shape), [0, 0])
         row[0] += 1
         row[1] += ms
     ranked = sorted(grouped.items(), key=lambda kv: (-kv[1][0], kv[0]))[:limit]
     return ' ## '.join('%dx %dms %s | %s' % (n, ms, where, shape) for (where, shape), (n, ms) in ranked)
+
+
+PURPOSE_ROWS = 80   # every purpose of a request, collapsed over statement shape
+
+# First matching keyword in the purpose chain wins. Phases name where an answer spends its trips.
+_PHASES = (('handler', ('answer_interview',)), ('authority', ('worker_capability', 'authority_snapshot')),
+           ('watcher', ('stop_watch',)), ('engine_events', ('_record_engine_timing',)),
+           ('admission', ('attempt_ledger', 'admit_provider', 'child_broker', 'child_provider_broker', 'prepaid', 'retail_ledger')),
+           ('job', ('execute_job', 'claim_worker', 'child_interview', 'tenant_jobs')),
+           ('progress', ('progress', 'ingest_interview')), ('model_pins', ('model_pins',)),
+           ('pool', ('pg_pool',)))
+
+
+def phase_of(purpose):
+    for phase, words in _PHASES:
+        if any(w in purpose for w in words):
+            return phase
+    return 'other'
+
+
+def _syncs(entry):
+    return entry[3] if len(entry) > 3 else 1
+
+
+def purpose_rows(entries, limit=PURPOSE_ROWS):
+    """Per purpose (shapes collapsed): entries, real network syncs, transactions (identity batches), ms. Most syncs first.
+    Unlike request_row_list this is not cut to the 30 most frequent shapes, so the rows account for the request."""
+    grouped = {}
+    for entry in entries:
+        where, shape, ms = entry[0], entry[1], entry[2]
+        row = grouped.setdefault(where, [0, 0, 0, 0])
+        row[0] += 1
+        row[1] += _syncs(entry)
+        row[2] += 1 if shape.startswith('SELECT set_config') else 0
+        row[3] += ms
+    ranked = sorted(grouped.items(), key=lambda kv: (-kv[1][1], kv[0]))[:limit]
+    return [(where, n, syncs, tx, ms) for where, (n, syncs, tx, ms) in ranked]
+
+
+def phase_totals(entries):
+    """{phase: [entries, syncs, transactions]} for one request."""
+    totals = {}
+    for entry in entries:
+        row = totals.setdefault(phase_of(entry[0]), [0, 0, 0])
+        row[0] += 1
+        row[1] += _syncs(entry)
+        row[2] += 1 if entry[1].startswith('SELECT set_config') else 0
+    return totals
 
 
 def fold_request(request_type, stats):
@@ -105,11 +157,24 @@ def fold_request(request_type, stats):
         from . import observability
         # One line per row: the log keeps 500 characters per field, and one joined 'rows' field lost everything after
         # the first five rows of the 845-round-trip answer (2026-11-10 debug ZIP).
+        total_syncs = sum(_syncs(e) for e in entries)
+        total_tx = sum(1 for e in entries if e[1].startswith('SELECT set_config'))
         observability.event('db.statement_trace', 'Request round trips by purpose',
-                            request_type=request_type, round_trips=len(entries), rows_logged=min(LOG_ROWS, len(request_row_list(entries))))
+                            request_type=request_type, round_trips=len(entries), rows_logged=min(LOG_ROWS, len(request_row_list(entries))),
+                            network_syncs=total_syncs, transactions=total_tx)
         for rank, (count, ms, where, shape) in enumerate(request_row_list(entries), 1):
             observability.event('db.statement_row', 'Round trips for one purpose',
                                 request_type=request_type, rank=rank, count=count, ms=ms, purpose=where, shape=shape)
+        rows = purpose_rows(entries)
+        for rank, (where, n, syncs, tx, ms) in enumerate(rows, 1):
+            observability.event('db.purpose_row', 'Every round trip of one purpose, shapes collapsed',
+                                request_type=request_type, rank=rank, entries=n, syncs=syncs, transactions=tx, ms=ms,
+                                phase=phase_of(where), purpose=where)
+        # The row sum is the request total: a ZIP reader can check nothing was cut.
+        observability.event('db.answer_budget', 'Round trips of one request by phase',
+                            request_type=request_type, entries=len(entries), network_syncs=total_syncs, transactions=total_tx,
+                            purposes_logged=len(rows), purposes_total=len({e[0] for e in entries}),
+                            **{('phase_%s' % p): '%d entries, %d syncs, %d tx' % tuple(v) for p, v in sorted(phase_totals(entries).items())})
     _fold(request_type, entries)
     stats.trace = []
 

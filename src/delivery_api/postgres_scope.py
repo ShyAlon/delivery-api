@@ -102,10 +102,10 @@ def statement_label(sql):
         else:out.append(text[i]);i+=1
     return ' '.join(''.join(out).split())[:64] or 'statement'
 
-def note_statement(label,seconds):
+def note_statement(label,seconds,syncs=1):
     """One timed statement with its label. The slowest-statement list needs a request; the trace also counts background statements."""
     from . import statement_trace
-    statement_trace.record('statement',label,seconds)
+    statement_trace.record('statement',label,seconds,syncs)
     stats=request_stats.get()
     if stats is not None and len(stats.statements)<RequestStats.MAX_STATEMENTS:
         stats.statements.append((label,int(seconds*1000)))
@@ -303,9 +303,9 @@ class ScopedPostgres:
                 # A pipelined execute only measures enqueue time. Label each
                 # statement once; attach the synchronized batch wall time to
                 # identity setup (includes BEGIN), not invented per-SQL times.
-                if repeatable_read:note_statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ [batched]',0)
+                if repeatable_read:note_statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ [batched]',0,0)
                 note_statement(statement_label(_SETUP),time.monotonic()-batch_started)
-                if savepoint:note_statement('SAVEPOINT operation_start',0)
+                if savepoint:note_statement('SAVEPOINT operation_start',0,0)   # rode the identity batch: no trip of its own
                 if stats is not None:
                     stats.transactions+=1;stats.queries+=1;stats.db_seconds+=time.monotonic()-started
                     if reused:stats.reused+=1

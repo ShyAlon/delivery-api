@@ -105,7 +105,8 @@ def test_a_heavy_request_writes_its_own_purpose_breakdown_to_the_log(monkeypatch
         postgres_scope.request_stats.reset(token)
     request_costs.record_request('POST', '/api/tasks/7f3b86686274/answer', 200, 10, stats)
     # Header line plus one line per ranked row (a joined field was truncated by the log's 500-character cap).
-    assert [k for k, _ in seen] == ['db.statement_trace', 'db.statement_row', 'db.statement_row']
+    # The 2026-11-10 budget adds one line per purpose (not cut to 30 rows) and a per-phase summary at the end.
+    assert [k for k, _ in seen] == ['db.statement_trace', 'db.statement_row', 'db.statement_row', 'db.purpose_row', 'db.answer_budget']
     f = seen[0][1]
     assert f['request_type'] == 'POST /api/tasks/<id>/answer' and f['round_trips'] == 61
     assert seen[1][1]['shape'] == 'SELECT * FROM tasks WHERE task_id=?' and seen[1][1]['count'] == 60 and '7f3b86686274' not in str(seen)
