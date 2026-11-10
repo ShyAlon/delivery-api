@@ -320,6 +320,61 @@ class ScopedPostgres:
         raise psycopg.OperationalError(
             'reused database connections were already broken and their replacement failed before any statement ran') from last_error
 
+    def read_one(self,sql,params=()):
+        """A read-only statement in its own scoped transaction, in ONE network round trip.
+
+        BEGIN, the identity claim, the statement and COMMIT leave as one pipelined batch (2026-11-10: a transaction cost
+        about 3 trips: the identity batch, the statement and a COMMIT that the trace showed as 0 ms). Rows are fetched
+        after the batch and the connection is released. Reads only, enforced: a read that dies with the connection can
+        be repeated; a write cannot, because it may have committed before the answer was lost. Returns every row."""
+        import psycopg
+        head=' '.join(str(sql).split()).upper()
+        if not head.startswith(('SELECT ','WITH ')) or ' FOR UPDATE' in head or ' FOR SHARE' in head or ' FOR NO KEY UPDATE' in head:
+            raise ValueError('read_one runs a plain read-only SELECT/WITH in one trip; use transaction() for anything else')
+        scope=current_scope()
+        stats=request_stats.get()
+        last_error=None
+        for attempt in range(POOL_OPEN_MAX+1):
+            started=time.monotonic()
+            connection,reused=self._checkout()
+            restore=connection.autocommit
+            try:
+                connection.autocommit=True   # BEGIN and COMMIT are ours, so they can ride the same batch
+                batch_started=time.monotonic()
+                with connection.pipeline():
+                    connection.execute('BEGIN READ ONLY')
+                    connection.execute(_SETUP,(scope.owner_id,scope.session_id or ''))
+                    cursor=connection.execute(sql,params)
+                    connection.execute('COMMIT')
+                rows=cursor.fetchall()
+                connection.autocommit=restore
+                elapsed=time.monotonic()-batch_started
+                note_statement(statement_label(_SETUP)+' [one trip]',0,0)
+                note_statement(statement_label(sql),elapsed,1)
+                if stats is not None:
+                    stats.transactions+=1;stats.queries+=1;stats.db_seconds+=time.monotonic()-started
+                    if reused:stats.reused+=1
+                    else:stats.opened+=1
+                self._release(connection)
+                return rows
+            except psycopg.OperationalError as error:
+                self._drop(connection)
+                if not reused:raise
+                last_error=error
+            except BaseException as error:
+                try:
+                    from .diagnostic_evidence import query_failure
+                    query_failure(error)
+                except Exception:pass
+                try:connection.rollback()
+                except BaseException:pass
+                try:connection.autocommit=restore
+                except BaseException:pass
+                self._release(connection)   # closes the connection when it is not idle
+                raise
+        raise psycopg.OperationalError(
+            'reused database connections were already broken and their replacement failed before any statement ran') from last_error
+
     @contextmanager
     def transaction(self,*,repeatable_read=False,savepoint=False):
         scope = current_scope()
