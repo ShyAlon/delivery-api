@@ -22,6 +22,14 @@ document.addEventListener('toggle',event=>{const box=event.target;if(box.isConne
 // The anchor is the tab-local shadow when present, else the durable
 // answer_submitted event written at submit - a re-render in a fresh tab loses
 // the shadow but must not stay blanket for the whole turn.
+// Seconds when the answer now being processed was sent: this tab's own stamp, else the durable
+// answer_submitted event of an unfinished turn. null when neither exists: never the run start.
+export function answerStartedAt(events,{afterId=0,sinceMs=0}={}){
+ if(sinceMs)return sinceMs/1000;
+ const list=events||[],at=list.findLastIndex(e=>e.kind==='answer_submitted'&&Number(e.id||0)>=afterId);
+ if(at<0||list.slice(at+1).some(e=>['waiting_input','answer','gate','complete','error'].includes(e.kind)))return null;
+ return signalTime(list[at]);
+}
 export function answerProcessingLabel(events,{phaseKey,afterId=0,sinceMs=0}={}){
  const list=events||[];
  let floorMs=sinceMs?sinceMs-1500:0;   // tab-local ms vs whole-second stamps: tolerate rounding, never a stale turn
@@ -57,7 +65,15 @@ function signalTime(event){
  const values=[Date.parse(event.payload?.timestamp)/1000,Number(event.ts)];
  return values.find(value=>Number.isFinite(value)&&value>0)??null;
 }
-export function stageProgressHtml(events,{startedAt=Date.now()/1000,connected=true,nextStep='choose the operating concept when the engine requests it',unavailable='',scopeKey='review',currentLine='',signalAge=true}={}){
+// Plain words for the one shared progress summary. connected is tri-state: null
+// means the stream has not answered yet (never reported as lost). While the user
+// owes the next step nothing is running, so no elapsed time is claimed.
+export function progressStatusText({connected,waiting,elapsed,signalAgo}){
+ if(waiting)return 'Nothing is running. The engine is waiting for you.';
+ const link=connected===null?'Connecting to live updates':connected?'Live':'Live updates paused, retrying. Your work is safe';
+ return `${link} · ${elapsed}s on this step${signalAgo!==null?` · last update ${signalAgo}s ago`:''}`;
+}
+export function stageProgressHtml(events,{startedAt=Date.now()/1000,connected=true,nextStep='choose the operating concept when the engine requests it',unavailable='',scopeKey='review',currentLine='',signalAge=true,waiting=false}={}){
  // A session that is unavailable in this environment has no live counters, no estimate and no next step to promise: only what was last recorded.
  if(unavailable)return `<details class="review-progress" data-progress-key="${esc(scopeKey)}" ${expandedProgress.get(scopeKey)?'open':''} aria-label="Run progress"><summary><b>Run progress</b><span>${esc(unavailable)}</span></summary><div class="progress-history"><p>No live counters or next step can be confirmed in this environment.</p></div></details>`;
  const stages=new Map(),measurements=new Map();let lastSignal=null;
@@ -79,7 +95,7 @@ export function stageProgressHtml(events,{startedAt=Date.now()/1000,connected=tr
  const remaining=active&&Number.isFinite(active.total)&&active.total>Number(active.completed||0)?active.total-Number(active.completed||0):null;
  let eta='Estimating';
  if(samples.length&&remaining!==null){const low=samples[0]*remaining,high=Math.max(samples.at(-1),now-active.start)*remaining;eta=`Measured estimate: ${Math.max(1,Math.floor(low/60))}-${Math.max(1,Math.ceil(high/60))} minutes for the current counted work`;}
- return `<details class="review-progress" data-progress-key="${esc(scopeKey)}" ${expandedProgress.get(scopeKey)?'open':''} aria-label="Run progress"><summary><b>Run progress</b><span>${connected?'Connected to progress':'Progress connection lost; reconnecting without resubmitting'} · ${Math.max(0,Math.floor(now-startedAt))}s elapsed${lastSignal!==null&&signalAge?` · last engine signal ${Math.max(0,Math.floor(now-lastSignal))}s ago`:''}</span>${currentLine||latest?`<span class="progress-current">${esc(currentLine||humanizeSnakeCase(latest.message))}</span>`:''}</summary><div class="progress-history"><p>${esc(eta)}</p>${latest?progressLine(latest):''}${rows.length?`<ol>${rows.map(s=>`<li class="${esc(s.status)}"><details ${s===active?'open':''}><summary>${s.status==='completed'||s.status==='item_completed'&&s.completed===s.total?'Completed':s.status==='failed'?'Failed':'Working'} · ${esc(humanLabel(s.label))}${Number.isFinite(s.total)?` · ${Number(s.completed||0)}/${Number(s.total)}`:''}</summary>${s.detail?`<p>${esc(s.detail)}</p>`:''}</details></li>`).join('')}</ol>`:'<p>Waiting for stage progress.</p>'}<p>Next: ${esc(nextStep)}.</p></div></details>`;
+ return `<details class="review-progress" data-progress-key="${esc(scopeKey)}" ${expandedProgress.get(scopeKey)?'open':''} aria-label="Run progress"><summary><b>Run progress</b><span>${esc(progressStatusText({connected,waiting,elapsed:Math.max(0,Math.floor(now-startedAt)),signalAgo:lastSignal!==null&&signalAge?Math.max(0,Math.floor(now-lastSignal)):null}))}</span>${currentLine||latest?`<span class="progress-current">${esc(currentLine||humanizeSnakeCase(latest.message))}</span>`:''}</summary><div class="progress-history"><p>${esc(eta)}</p>${latest?progressLine(latest):''}${rows.length?`<ol>${rows.map(s=>`<li class="${esc(s.status)}"><details ${s===active?'open':''}><summary>${s.status==='completed'||s.status==='item_completed'&&s.completed===s.total?'Completed':s.status==='failed'?'Failed':'Working'} · ${esc(humanLabel(s.label))}${Number.isFinite(s.total)?` · ${Number(s.completed||0)}/${Number(s.total)}`:''}</summary>${s.detail?`<p>${esc(s.detail)}</p>`:''}</details></li>`).join('')}</ol>`:'<p>Waiting for stage progress.</p>'}<p>Next: ${esc(nextStep)}.</p></div></details>`;
 }
 
 // While the progress stream is open the page polls only once a minute: stream events
@@ -89,8 +105,8 @@ export const REVIEW_POLL_STREAM_MS=60000;
 export const shouldPollNow=(streamOpen,lastPollMs,nowMs)=>!streamOpen||nowMs-lastPollMs>=REVIEW_POLL_STREAM_MS;
 
 export function watchReviewProgress(taskId,host){
- const events=[],startedAt=Date.now()/1000;let connected=false,after=0,busy=false,closed=false,lastPoll=0,streamOpen=false;
- const render=()=>{if(host?.isConnected)renderStageProgress(host,events,{startedAt,connected,scopeKey:'review:'+taskId,currentLine:'Recording decisions. Reading engine progress without resubmitting.'})};
+ const events=[],startedAt=Date.now()/1000;let connected=null,after=0,busy=false,closed=false,lastPoll=0,streamOpen=false;
+ const render=()=>{if(host?.isConnected)renderStageProgress(host,events,{startedAt,connected,scopeKey:'review:'+taskId,currentLine:'Saving your decisions. The engine checks them before the next step; nothing is resent.'})};
  const poll=async(force)=>{if(closed||busy||!host?.isConnected)return;if(!force&&!shouldPollNow(streamOpen,lastPoll,Date.now()))return;busy=true;lastPoll=Date.now();try{
   const response=await fetch(`/api/tasks/${encodeURIComponent(taskId)}/events?after=${after}`,{cache:'no-store'});
   if(!response.ok)throw new Error('progress unavailable');

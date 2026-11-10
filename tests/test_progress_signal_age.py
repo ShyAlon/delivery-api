@@ -21,12 +21,12 @@ def test_signal_age_requires_valid_event_time(pg_browser,event,expected):
       try{return stageProgressHtml([event],{startedAt:1999999900})}
       finally{Date.now=original}
     }''',event)
-    assert '100s elapsed' in result
+    assert '100s on this step' in result
     assert 'Drafting' in result or 'Still working' in result
     if expected is None:
-        assert 'last engine signal' not in result
+        assert 'last update' not in result
     else:
-        assert f'last engine signal {expected}s ago' in result
+        assert f'last update {expected}s ago' in result
 
     if expected is None and 'ts' not in event and not event['payload']:
         page.evaluate("html=>document.querySelector('#app').innerHTML=html",result)

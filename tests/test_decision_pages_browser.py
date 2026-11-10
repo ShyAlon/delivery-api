@@ -288,7 +288,7 @@ def _slow_flag_page(p,base,fail=False):
 def test_apply_shows_busy_then_success_feedback(page):
  p,base,root=page;held=_slow_flag_page(p,base)
  p.locator('input[name="action-0"][value="remove"]').check();btn=p.get_by_role('button',name='Apply decisions and continue');btn.click()
- expect(p.locator('#semanticstatus')).to_contain_text('Recording decisions');expect(p.locator('#semanticform button[type=submit]')).to_contain_text('Applying decisions');expect(p.locator('#semanticform button[type=submit]')).to_be_disabled();expect(p.locator('#semanticform .waiting-spinner')).to_be_visible()
+ expect(p.locator('#semanticstatus')).to_contain_text('Saving your decisions');expect(p.locator('#semanticform button[type=submit]')).to_contain_text('Applying decisions');expect(p.locator('#semanticform button[type=submit]')).to_be_disabled();expect(p.locator('#semanticform .waiting-spinner')).to_be_visible()
  p.screenshot(path=str(root/'semantic-applying.png'))
  expect(p.locator('#semanticstatus')).to_contain_text('Estimating');assert '1-2 minutes' not in p.locator('#semanticstatus').inner_text()
  for _ in range(50):
@@ -684,3 +684,38 @@ def test_child_cost_pending_is_not_zero_or_legacy_corruption(page):
  p.screenshot(path='/tmp/requi-test-artifacts/child-cost-pending.png',full_page=True)
  totals['evidence']['complete']=True
  _return_to_tab_until(p,host,'0.73 credits')
+
+
+def _applying_semantic_page(p,base):
+ control=review();control['kind']='semantic_review';control['options']=[]
+ control['decision']={'options':[],'context':{'decision_purpose':'semantic_review','evidence':{'semantic_review':{'revision':'a'*64,'findings':[{'finding_id':'f1','item_id':'FD-1','path':['constraints',0],'reason':'Repeats a need','kind':'semantic','original':'Fast app'}]}}}}
+ held=[]
+ def route(r):
+  if r.request.method=='POST':held.append(r);return
+  r.fulfill(json={'task_id':'concept','title':'Habit tracking','review':control,'current':control,'actionable':True,'draft':None})
+ p.route('**/api/tasks/concept**',route)
+ p.add_init_script("window.EventSource=class{constructor(){this.l={}}addEventListener(){}close(){}}")
+ p.set_viewport_size({'width':1404,'height':819})
+ p.goto(base+'/tasks/concept/decisions/wait-concept?step=findings');expect(p.locator('h1')).to_have_text('Review Flagged Inputs')
+ p.locator('input[name="action-0"][value="accept"]').check()
+ p.get_by_role('button',name='Apply decisions and continue').click()
+ expect(p.locator('#semanticstatus details.review-progress')).to_be_visible()
+
+
+def test_applying_decisions_shows_one_plain_progress_block_without_a_gap_or_duplicate_banner(page):
+ p,base,root=page;_applying_semantic_page(p,base)
+ p.screenshot(path='/tmp/applying.png',full_page=True)
+ summary=p.locator('#semanticstatus details.review-progress > summary').inner_text()
+ assert 'resubmitting' not in summary and 'engine signal' not in summary and 'Connected to progress' not in summary,summary
+ # The 'Before you can continue' checklist must not repeat the applying state.
+ checklist=p.locator('#decision-checklist')
+ assert checklist.count()==0 or not checklist.is_visible()
+ # No dead space between the progress block and the buttons.
+ box=p.locator('#semanticstatus details.review-progress').bounding_box();button=p.get_by_role('button',name='Save draft',exact=True).bounding_box()
+ assert button['y']-(box['y']+box['height'])<24,(box,button)
+
+
+def test_sticky_header_never_covers_the_field_being_edited(page):
+ p,base,root=page;_applying_semantic_page(p,base)
+ head=p.locator('.semantic-head').bounding_box()
+ assert head['height']<=90 or p.locator('.semantic-head').evaluate("e=>getComputedStyle(e).position")!='sticky',head
