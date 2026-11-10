@@ -171,9 +171,9 @@ class DurableGateways:
     def verify_vendor(self):
         return self._factory(self.available_environment()).verify_vendor
     def for_task(self,task_id):
-        task=self.store.task(task_id)
-        if not task:raise KeyError(task_id)
-        name='model-pins:'+str(task['generation']);old=self.store.decision_review(task_id,name,'model-pins-v1')
+        pin=self.store.task_model_pin(task_id)
+        if pin is None:raise KeyError(task_id)
+        name='model-pins:'+str(pin['generation']);old=pin['environment']
         if old is None:
             self.store.retain_decision_review(task_id,name,'model-pins-v1',self.available_environment())
             old=self.store.decision_review(task_id,name,'model-pins-v1')
