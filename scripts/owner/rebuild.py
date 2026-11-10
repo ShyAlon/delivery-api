@@ -259,9 +259,37 @@ def plan_cleanup(containers: list, image_rows: list, *, keep_previous: int, keep
                      key=lambda c: str(c.get('CreatedAt', '')), reverse=True)
     kept, rest = renamed[:keep_previous], renamed[keep_previous:]
     removable = [c for c in rest if c.get('State') != 'running']
+    keep = {image_key(i) for i in keep_image_ids}
     images = [i for i in image_rows
-              if i.get('Repository') in ('<none>', 'requi-full-candidate') and i.get('ID') not in keep_image_ids]
+              if i.get('Repository') in ('<none>', 'requi-full-candidate') and image_key(i.get('ID')) not in keep]
     return kept, removable, images
+
+
+def image_key(image_id) -> str:
+    """`docker images` prints a 12-hex short id; inspect prints sha256:<64 hex>.
+    Both name the same image once the prefix and length are normalized."""
+    text = str(image_id or '')
+    return text[7:19] if text.startswith('sha256:') else text[:12]
+
+
+def containers_images(ctx, container_ids: list) -> set:
+    """Full image ids used by the given containers (running or stopped)."""
+    if not container_ids:
+        return set()
+    raw = ctx['docker'](['container', 'inspect', '--format', '{{.Image}}', *container_ids])
+    return {line.strip() for line in str(raw).splitlines() if line.strip()}
+
+
+def remove_item(ctx, args: list, label: str):
+    """Run one docker removal; return None on success or the full reason.
+    Removal output is a Docker daemon message, safe to show (unlike state reads)."""
+    try:
+        code, text = ctx['docker_try'](args)
+    except Exception as error:  # reported, never swallowed
+        return 'docker ' + ' '.join(args) + ' (' + label + ') raised ' + type(error).__name__ + ': ' + str(error)
+    if code:
+        return 'docker ' + ' '.join(args) + ' (' + label + ') exit ' + str(code) + ': ' + (str(text).strip() or 'no output')
+    return None
 
 
 def container_image(ctx, name: str):
@@ -348,8 +376,14 @@ def step_cleanup(ctx) -> None:
     provisional = sorted((c for c in containers if str(c.get('Names', '')).startswith(PREVIEW_NAME + '-')),
                          key=lambda c: str(c.get('CreatedAt', '')), reverse=True)
     for kept in provisional[:1]:
-        if kept.get('Image'):
-            keep_ids.add(kept['Image'])
+        found = container_image(ctx, str(kept.get('ID') or kept.get('Names')))
+        if found is not None:
+            keep_ids.add(found[0])
+    removable_ids = {str(c.get('ID')) for c in plan_cleanup(containers, [], keep_previous=1, keep_image_ids=set())[1]}
+    survivors = [str(c.get('ID')) for c in containers if str(c.get('ID')) not in removable_ids]
+    # Any other container (not just preview ones) that survives pins its image.
+    others = [x for x in ctx['docker'](['ps', '-a', '-q']).split() if x not in removable_ids]
+    keep_ids |= containers_images(ctx, sorted(set(survivors) | set(others)))
     kept, removable, images = plan_cleanup(containers, image_rows, keep_previous=1, keep_image_ids=keep_ids)
     if kept:
         log('INFO', 'cleanup keeps: the running ' + PREVIEW_NAME + ' and previous ' + ', '.join(str(k.get('Names')) for k in kept))
@@ -365,13 +399,18 @@ def step_cleanup(ctx) -> None:
     if ctx['typed']('Type "' + expected + '" to remove exactly the items listed above; anything else keeps them:') != expected:
         log('WARN', 'cleanup declined; every listed container and image kept')
         return
-    removed = []
+    removed, failures = [], []
     for container in removable:
-        ctx['docker'](['rm', str(container.get('ID'))])
-        removed.append(str(container.get('Names')))
+        label = str(container.get('Names'))
+        reason = remove_item(ctx, ['rm', str(container.get('ID'))], label)
+        (failures.append(reason) if reason else removed.append(label))
     for image in images:
-        ctx['docker'](['rmi', str(image.get('ID'))])
-        removed.append(str(image.get('Repository')) + ':' + str(image.get('Tag')))
+        label = str(image.get('Repository')) + ':' + str(image.get('Tag'))
+        reason = remove_item(ctx, ['rmi', str(image.get('ID'))], label)
+        (failures.append(reason) if reason else removed.append(label))
+    if failures:
+        raise WorkflowError('cleanup removed ' + str(len(removed)) + ' of ' + str(len(removed) + len(failures)) +
+                            ' items and left cleanup incomplete; failed: ' + ' | '.join(failures))
     mark_complete(ctx['state_path'], ctx['state'], 'cleanup', {'removed': removed})
 
 
@@ -414,6 +453,10 @@ def build_ctx(root: Path) -> dict:
         raw = command(['docker', *[str(a) for a in args]], timeout=timeout)
         return '[' + ','.join(raw.splitlines()) + ']' if multiline else raw
 
+    def docker_try(args, timeout=120):
+        result = subprocess.run(['docker', *[str(a) for a in args]], capture_output=True, text=True, timeout=timeout, check=False)
+        return result.returncode, (result.stderr or result.stdout)
+
     def image_exists(image_id: str) -> bool:
         try:
             command(['docker', 'image', 'inspect', '--format', '{{.Id}}', image_id])
@@ -424,7 +467,7 @@ def build_ctx(root: Path) -> dict:
     ctx = {'root': root, 'repos_root': repos_root, 'req': root / 'scripts/ops/req',
            'home': Path.home(), 'shas': shas, 'runtime_contract': runtime_contract, 'acceptance_contract': acceptance,
            'state_path': Path(os.environ.get('REQUI_REBUILD_STATE', str(Path.home() / '.local/share/requi/rebuild/state.json'))),
-           'typed': typed, 'run_child': run_child, 'docker': docker, 'image_exists': image_exists,
+           'typed': typed, 'run_child': run_child, 'docker': docker, 'docker_try': docker_try, 'image_exists': image_exists,
            'heads': lambda: origin_shas(repos_root), 'now': datetime.datetime.now}
     key = run_key(shas, runtime_contract, acceptance)
     ctx['state'] = load_state(ctx['state_path'], key)
