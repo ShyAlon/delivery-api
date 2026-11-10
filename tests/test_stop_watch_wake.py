@@ -28,6 +28,11 @@ class FakeStore:
         return {'generation': self.generation}
     def auth_session_active(self):
         return self.active
+    def stop_state(self, task_id, session_id):
+        t = self.task(task_id)
+        b = self.session_binding(session_id)
+        return {'task_present': bool(t), 'stop_requested_at': t and t['stop_requested_at'],
+                'session_generation': b and b['generation'], 'active': self.auth_session_active()}
 
 
 def _run(coro):

@@ -46,23 +46,27 @@ def preview(state,*,env_file,name='requi-preview-exec',port=8001,network='bridge
     args=Target(image_id,name,str(settings),port,network).arguments()
     log('INFO','preview review: accepted linux/amd64 image, existing settings, same shared runtime; work may spend only after explicit Start')
     if not apply:return {'state':'reviewed','image_id':image_id,'applied':False}
-    if not confirm('start this accepted preview (no task is started)'):
+    if not confirm('start this accepted preview; an existing '+name+' is stopped and kept renamed for rollback (no task is started)'):
         raise WorkflowError('preview declined; nothing started')
     # docker --env-file passes values literally (no quote stripping), so hand the
     # container the exact parsed values validate approved, not the owner file.
     container_env=state.path.parent/'preview-container.env'
     write_container_env(container_env,values)
     args=Target(image_id,name,str(container_env),port,network).arguments()
-    # No silent replacement, force-stop, schema apply or host-volume migration.
+    # The owner just typed yes to this exact replacement. The old container is stopped (graceful, 180 s) and RENAMED, never
+    # removed: its logs and image stay for rollback and the rebuild cleanup step reviews it. No force-stop, schema apply or
+    # host-volume migration. 2026-11-10: refusing here sent the owner to a manual docker stop after `req preview --apply`.
     import subprocess
     exists=subprocess.run(['docker','container','inspect',name],capture_output=True,timeout=60)
     if exists.returncode==0:
         running=None
         try:running=json.loads(exists.stdout)[0].get('State',{}).get('Running')
         except (ValueError,IndexError,AttributeError):pass
-        if running is True:
-            raise WorkflowError('preview container already exists and is running; inspect it, then stop the reviewed container before retrying: docker stop '+name)
-        raise WorkflowError('preview container already exists from an earlier run; inspect its failure: docker logs --tail 80 '+name+'; then remove it before retrying: docker rm '+name)
+        if running is not False:
+            command(['docker','stop',name],timeout=180)
+        renamed=name+'-'+time.strftime('%Y%m%d-%H%M%S')
+        command(['docker','rename',name,renamed])
+        log('INFO','previous preview container '+('was stopped and ' if running is not False else '')+'renamed to '+renamed+'; kept for rollback and reviewed by the rebuild cleanup step')
     args[1:1]=['--label','requi.shared-runtime=1']
     command(['docker',*args])
     last={}

@@ -3229,3 +3229,17 @@ def test_transition_to_a_decision_opens_its_page_unless_the_user_is_typing(pg_pa
         assert 'step=' not in page.url
     else:
         page.wait_for_url(lambda url:'step=findings' in url,timeout=5000)
+
+
+def test_main_column_fills_the_page_whatever_the_content_width(pg_page,pg_ui,pg_ids):
+    """The body is a flex row and main has auto margins, so main shrank to its content: a task page with short
+    text rendered as a ~780px column in the middle of a 1424px window. Width must not depend on content."""
+    page=pg_page
+    page.set_viewport_size({'width':1424,'height':807})
+    for path in (f'/tasks/{pg_ids["empty"]}/view',f'/tasks/{pg_ids["live"]}/view','/'):
+        page.goto(pg_ui+path);page.wait_for_timeout(1000)
+        widths=page.evaluate("[...document.querySelectorAll('main')].map(e=>Math.round(e.getBoundingClientRect().width))")
+        assert widths and all(w==1424 for w in widths),(path,widths)
+    page.set_viewport_size({'width':1900,'height':900})
+    page.goto(pg_ui+f'/tasks/{pg_ids["empty"]}/view');page.wait_for_timeout(1000)
+    assert page.evaluate("Math.round(document.querySelector('main').getBoundingClientRect().width)")==1500
