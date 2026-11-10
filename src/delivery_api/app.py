@@ -1343,20 +1343,20 @@ def semantic_answer_display(review,decisions:list[dict])->str:
 
 @app.post("/api/tasks/{task_id}/answer")
 async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends(auth.require_actor)):
-    task_before=store.task(task_id) or {};input_before=runner.input_state(task_id)
+    task_before=(await run_in_threadpool(store.task,task_id)) or {};input_before=(await run_in_threadpool(runner.input_state,task_id))
     if body.review_revision:
-        live=get_task(task_id)['control_snapshot']
+        live=(await run_in_threadpool(get_task,task_id))['control_snapshot']
         if live.get('wait_id')!=body.decision_id or live.get('revision')!=body.review_revision or live.get('owner')!='engine' or live.get('mode')!='waiting_input':
             raise HTTPException(409,{"error":"Review changed.","cause":"The decision revision is no longer current.","next":"Open the live review before continuing.","stale":True})
-        if not store.decision_review(task_id,body.decision_id,body.review_revision):raise HTTPException(409,'review evidence is unavailable')
+        if not (await run_in_threadpool(store.decision_review,task_id,body.decision_id,body.review_revision)):raise HTTPException(409,'review evidence is unavailable')
 
-    recent_answers=[{"event_id":event["id"],"phase_key":event.get("phase_key"),"decision_id":event.get("payload",{}).get("decision_id")} for event in store.events(task_id) if event.get("kind")=="answer"][-10:]
+    recent_answers=[{"event_id":event["id"],"phase_key":event.get("phase_key"),"decision_id":event.get("payload",{}).get("decision_id")} for event in (await run_in_threadpool(store.events,task_id)) if event.get("kind")=="answer"][-10:]
     activity("api.answer.attempt","Founder answer submission received",endpoint=f"/api/tasks/{task_id}/answer",task_id=task_id,task_state=task_before.get("state"),active_phase=task_before.get("active_phase"),submitted_decision_id=body.decision_id,open_decision_id=(input_before.get("decision") or {}).get("decision_id"),process_live=input_before["process_live"],waiting=input_before["waiting"],recent_answer_events=json.dumps(recent_answers,separators=(",",":")))
     answer_display=None
     answered_input_id=body.decision_id
     answered_question=None
     try:
-        work=runner.work_state(task_id)
+        work=(await run_in_threadpool(runner.work_state,task_id))
         if work and work.owner=="decision" and work.phase==task_before.get("active_phase"):
             if not work.input_state()["waiting"]:raise RuntimeError("local decision is no longer waiting for input")
             await runner.send_input(task_id,body.answer,body.decision_id)
@@ -1366,7 +1366,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
                 raise RuntimeError("the local decision or requirement has changed; refresh the task")
             if task_before.get("active_phase") not in ("intent","conops"):
                 raise RuntimeError("this phase has no interview input; refresh the task")
-            session_id=store.engine_session(task_id)
+            session_id=(await run_in_threadpool(store.engine_session,task_id))
             if not session_id:raise RuntimeError("task has no HTTP engine session")
             state=await run_in_threadpool(engine_client.snapshot,session_id);pending=state.open_input
             if pending is None:
@@ -1398,10 +1398,10 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
             # Durable submit anchor: the client shadow is tab-local, so a mid-flight
             # re-render orders post-submit engine signals against this event instead.
             # Never the answer text - the turn-end 'answer' event carries the record.
-            store.add_event(task_id,"answer_submitted","Answer submitted; engine processing",phase_key=task_before.get("active_phase") or "intent",payload={"input_id":answered_input_id,"actor":a.label})
+            (await run_in_threadpool(store.add_event,task_id,"answer_submitted","Answer submitted; engine processing",phase_key=task_before.get("active_phase") or "intent",payload={"input_id":answered_input_id,"actor":a.label}))
             # Stage boundaries the founder can see, each a real point of this path (no timers): the engine call is about to
             # block for most of the answer, and after it returns the answer is recorded. Engine-side signals land between.
-            store.add_event(task_id,"progress","Interview engine is working on your answer",phase_key=None,payload={"stage":"answer.engine","status":"started","source":"delivery.answer"})
+            (await run_in_threadpool(store.add_event,task_id,"progress","Interview engine is working on your answer",phase_key=None,payload={"stage":"answer.engine","status":"started","source":"delivery.answer"}))
             interrupted_job=_interrupted_answer_job(task_id,session_id,pending.input_id)
             recovered=False
             try:
@@ -1424,36 +1424,36 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
                 drain_at=time.monotonic();progress_stop.set()
                 try:await progress_watch
                 finally:activity('engine.answer.progress_drain','Final answer progress watch finished',task_id=task_id,session_id=session_id,elapsed_ms=int((time.monotonic()-drain_at)*1000))
-            store.add_event(task_id,"progress","Recording your answer and preparing the next question",phase_key=None,payload={"stage":"answer.record","status":"started","source":"delivery.answer"})
-            store.add_event(task_id,"engine_protocol","Typed founder input accepted after a transient interruption" if recovered else "Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json"))
+            (await run_in_threadpool(store.add_event,task_id,"progress","Recording your answer and preparing the next question",phase_key=None,payload={"stage":"answer.record","status":"started","source":"delivery.answer"}))
+            (await run_in_threadpool(store.add_event,task_id,"engine_protocol","Typed founder input accepted after a transient interruption" if recovered else "Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json")))
             source="http_interview"
             if body.comment.strip():
-                store.add_review_comment(task_id,body.decision_id or str(pending.input_id),body.review_revision or f'engine:{state.session_id}:{state.sequence}',a.label,body.comment)
-                store.add_event(task_id,'artifact_comment',body.comment,phase_key=task_before.get('active_phase'),
-                    payload={'wait_id':body.decision_id,'revision':body.review_revision,'actor':a.label,'comment':body.comment})
+                (await run_in_threadpool(store.add_review_comment,task_id,body.decision_id or str(pending.input_id),body.review_revision or f'engine:{state.session_id}:{state.sequence}',a.label,body.comment))
+                (await run_in_threadpool(store.add_event,task_id,'artifact_comment',body.comment,phase_key=task_before.get('active_phase'),
+                    payload={'wait_id':body.decision_id,'revision':body.review_revision,'actor':a.label,'comment':body.comment}))
 
     except EngineUnreachableError as e:
-        task=store.task(task_id) or {}
+        task=(await run_in_threadpool(store.task,task_id)) or {}
         payload={"endpoint":f"/api/tasks/{task_id}/answer",**_engine_unreachable_payload(e)}
-        store.add_event(task_id,"error",f"Error: the interview engine is not reachable. Likely cause: nothing accepted the connection at {e.base_url} - the engine service stopped mid-interview. Next: restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Your previous answers are checkpointed; the interview resumes from them. Then retry.",phase_key=task.get("active_phase"),payload=payload)
+        (await run_in_threadpool(store.add_event,task_id,"error",f"Error: the interview engine is not reachable. Likely cause: nothing accepted the connection at {e.base_url} - the engine service stopped mid-interview. Next: restart scripts/run-ui.sh (it starts the engine automatically), or start the engine by hand: {ENGINE_START_HINT}. Your previous answers are checkpointed; the interview resumes from them. Then retry.",phase_key=task.get("active_phase"),payload=payload))
         activity("engine.unreachable","Interview engine unreachable while answering",task_id=task_id,phase=task.get("active_phase"),base_url=e.base_url,cause=str(e.cause))
         raise _engine_unreachable(e)
     except EngineClientError as e:
-        task=store.task(task_id) or {}
+        task=(await run_in_threadpool(store.task,task_id)) or {}
         payload={"endpoint":f"/api/tasks/{task_id}/answer","http_status":e.http_status,"task_state":task.get("state"),"active_phase":task.get("active_phase"),"decision_id":body.decision_id,"protocol_error":e.error.model_dump(mode="json")}
-        store.add_event(task_id,"error",f"Error: interview engine rejected the input. Likely cause: {e.error.detail} Next: retry this typed input if the protocol marks it retryable; otherwise refresh the live question.",phase_key=task.get("active_phase"),payload=payload)
+        (await run_in_threadpool(store.add_event,task_id,"error",f"Error: interview engine rejected the input. Likely cause: {e.error.detail} Next: retry this typed input if the protocol marks it retryable; otherwise refresh the live question.",phase_key=task.get("active_phase"),payload=payload))
         activity("engine.answer.rejected","Interview engine rejected founder input",task_id=task_id,phase=task.get("active_phase"),**payload)
         raise HTTPException(e.http_status,e.error.model_dump(mode="json"))
     except RuntimeError as e:
-        task=store.task(task_id) or {};cause=str(e);next_step="Refresh the task and answer only the current typed input."
+        task=(await run_in_threadpool(store.task,task_id)) or {};cause=str(e);next_step="Refresh the task and answer only the current typed input."
         payload={"endpoint":f"/api/tasks/{task_id}/answer","http_status":409,"task_state":task.get("state"),"active_phase":task.get("active_phase"),"decision_id":body.decision_id,"recent_answer_events":recent_answers,"reason":cause,"next":next_step}
-        store.add_event(task_id,"error",f"Error: stale founder decision was not submitted. Likely cause: {cause} Next: {next_step}",phase_key=task.get("active_phase"),payload=payload)
+        (await run_in_threadpool(store.add_event,task_id,"error",f"Error: stale founder decision was not submitted. Likely cause: {cause} Next: {next_step}",phase_key=task.get("active_phase"),payload=payload))
         activity("api.answer.stale","Stale founder decision was not submitted",task_id=task_id,phase=task.get("active_phase"),**payload)
         raise HTTPException(409,{"error":"Stale founder decision was not submitted.","cause":cause,"next":next_step,"stale":True,"current_state":task.get("state"),"active_phase":task.get("active_phase")})
     active_phase=task_before.get("active_phase") or "intent"
     answer_payload={"actor":a.label,"character_count":len(body.answer),"transcript":True,"decision_id":answered_input_id,"input_id":answered_input_id,"question":answered_question,"answer":body.answer}
     if answer_display:answer_payload["answer_display"]=answer_display
-    store.add_event(task_id,"answer",f"You: {answer_display or body.answer}",phase_key=active_phase,payload=answer_payload)
+    (await run_in_threadpool(store.add_event,task_id,"answer",f"You: {answer_display or body.answer}",phase_key=active_phase,payload=answer_payload))
     activity("engine.answer","Founder answer submitted",task_id=task_id,phase=active_phase,actor=a.label,character_count=len(body.answer))
     if source=="http_interview":
         _finish_cloud_interview(task_id,submitted.snapshot)
