@@ -26,6 +26,10 @@ from .tenancy import current_scope, TenantAccessDenied
 def _transactional(method):
     @wraps(method)
     def call(self,*args,**kwargs):
+        if method.__name__=='task_for_engine_session' and not self._map_dirty.get() and len(args)==1 and not kwargs:
+            from . import session_task_cache
+            hit=session_task_cache.get(self,args[0])    # a hit needs no transaction at all
+            if hit is not None:return hit
         if self._connection.get() is not None:
             return method(self,*args,**kwargs)
         with contextlib.ExitStack() as cleanup:
@@ -43,6 +47,14 @@ def _transactional(method):
                     from . import task_read_cache
                     task_read_cache.invalidate(self)
             cleanup.callback(invalidate_after_transaction)
+            map_token=self._map_dirty.set(False)
+            def invalidate_mapping_after_transaction():
+                dirty=self._map_dirty.get()
+                self._map_dirty.reset(map_token)
+                if dirty:
+                    from . import session_task_cache
+                    session_task_cache.invalidate(self)     # commit or rollback: either way drop what this transaction touched
+            cleanup.callback(invalidate_mapping_after_transaction)
             connection=cleanup.enter_context(self._postgres.transaction(savepoint=True))
             token = self._connection.set(connection)
             try:
@@ -102,6 +114,7 @@ class PostgresStore:
         self._postgres = ScopedPostgres(dsn)
         self._connection = ContextVar('postgres_operation',default=None)
         self._cache_dirty = ContextVar('postgres_cache_dirty',default=False)
+        self._map_dirty = ContextVar('postgres_session_map_dirty',default=False)
 
     def ensure_waiting_input_event(self,task_id:str,message:str,*,phase_key:str,payload:dict)->int:
         # Lock before checking. Under READ COMMITTED, a waiter then sees the
@@ -611,8 +624,14 @@ class PostgresStore:
         self._execute_native('UPDATE tasks SET model_default=%s,updated_at=%s WHERE task_id=%s', (model, time.time(), task_id), write=True)
 
     def task_for_engine_session(self, session_id: str) -> str | None:
+        from . import session_task_cache
+        # Same-transaction writer or an uncommitted mapping change: read the database, store nothing.
+        cacheable = not self._map_dirty.get()
+        read_version = session_task_cache.version(self)
         row = self._execute_native('SELECT task_id FROM tasks WHERE engine_session_id=%s AND deleted_at IS NULL',(session_id,)).fetchone()
-        return str(row['task_id']) if row else None
+        task_id = str(row['task_id']) if row else None
+        if cacheable:session_task_cache.put(self, session_id, task_id, read_version=read_version)
+        return task_id
 
     def engine_session(self, task_id: str) -> str | None:
         row = self._execute_native('SELECT engine_session_id FROM tasks WHERE task_id=%s', (task_id,)).fetchone()
@@ -819,6 +838,10 @@ FROM tasks t"""
             shared = _request_tx.get()
             if shared is not None:
                 shared.cache_invalidations.add(self)
+            from . import session_task_cache
+            if session_task_cache.affects_mapping(sql):
+                session_task_cache.invalidate(self);self._map_dirty.set(True)
+                if shared is not None:shared.map_invalidations.add(self)
         started = time.monotonic()
         try:
             return connection.execute(sql, parameters)

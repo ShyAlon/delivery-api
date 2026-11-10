@@ -143,6 +143,7 @@ class _RequestTransaction:
         self.connection=self.transaction=None
         self.broken=self.done=False
         self.cache_invalidations=set()
+        self.map_invalidations=set()
         self.notifications=set()
         self.first_begin=None   # when the shared transaction actually opened; the pin window
 
@@ -168,6 +169,8 @@ class _RequestTransaction:
         finally:
             from . import task_read_cache
             for store in self.cache_invalidations:task_read_cache.invalidate(store)
+            from . import session_task_cache
+            for store in self.map_invalidations:session_task_cache.invalidate(store)
             stats=request_stats.get()
             if stats is not None:
                 stats.db_seconds+=time.monotonic()-started
