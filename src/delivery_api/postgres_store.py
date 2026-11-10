@@ -906,6 +906,18 @@ FROM tasks t"""
             self._connection.get().notify_after_commit(stop_key(task_id))
         return self.task(task_id)
 
+    def stop_state(self,task_id,session_id):
+        """What the stop watcher needs, from ONE statement: is the task still there, has a stop been requested,
+        the session's generation (None when the binding is gone) and whether the sign-in is still valid.
+        The watcher used to read task, binding and sign-in as three transactions every cycle."""
+        row=self._execute_native(
+            "SELECT t.task_id AS task_present,t.stop_requested_at,e.generation AS session_generation,"
+            "public.requi_session_active() AS active FROM (SELECT 1) one "
+            "LEFT JOIN tasks t ON t.task_id=%s AND t.deleted_at IS NULL "
+            "LEFT JOIN engine_sessions e ON e.session_id=%s",(task_id,session_id)).fetchone()
+        return {'task_present':row['task_present'] is not None,'stop_requested_at':row['stop_requested_at'],
+            'session_generation':row['session_generation'],'active':bool(row['active'])}
+
     def confirm_child_session_quiescent(self,session_id):
         """Reaped child evidence, never lease expiry or an empty local registry.
 
@@ -2385,7 +2397,7 @@ PG_OPERATIONS = (
     'attribute_run',
     'audit',
     'audit_entries',
-    'auth_session_active','authority_snapshot',
+    'auth_session_active','stop_state','authority_snapshot',
     'begin_interview_start',
     'begin_retail_compute',
     'bind_interview_schema',
