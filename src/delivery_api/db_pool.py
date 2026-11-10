@@ -75,6 +75,13 @@ def _configure(connection):
     connection._delivery_pool_new = True
 
 
+def _traced_check(connection):
+    """psycopg_pool's own liveness check (one empty-statement round trip), counted in the statement trace."""
+    from . import statement_trace
+    statement_trace.record('pool_check','POOL CHECK (empty statement)')
+    return ConnectionPool.check_connection(connection)
+
+
 def pool_for(dsn: str) -> ConnectionPool:
     """The shared pool for this DSN, created on first use. Every borrower in the
     process - stores, operator reads, the hosted engine - gets the same object."""
@@ -91,7 +98,7 @@ def pool_for(dsn: str) -> ConnectionPool:
                 # before delivery has consumed its diagnostic "new" marker.
                 # Only an empty protocol query runs here, before any caller SQL;
                 # psycopg_pool discards failures within the checkout timeout.
-                check=ConnectionPool.check_connection,
+                check=_traced_check,
                 kwargs={'row_factory': psycopg.rows.dict_row, 'autocommit': False,
                         'options': '-c client_encoding=UTF8', 'prepare_threshold': None,
                         'keepalives': 1, 'keepalives_idle': 30, 'keepalives_interval': 10,
