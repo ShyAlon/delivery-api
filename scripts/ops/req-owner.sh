@@ -9,11 +9,12 @@ command=${1:-}; shift
 # to the one repo entry rather than teaching this generic parser paid flags.
 if [ "$command" = image ]; then exec bash scripts/ops/image.sh "$@"; fi
 if [ "$command" = acceptance ]; then exec bash scripts/ops/acceptance.sh "$@"; fi
-apply=0; email=''; checks=full; acceptance_args=(); test_owner=0; debug_run_dir=''
+check=0; apply=0; email=''; checks=full; acceptance_args=(); test_owner=0; debug_run_dir=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --test-owner) [ "$command" = backoffice-access ] || fail "--test-owner is only for backoffice-access.";test_owner=1;shift;;
     --apply) apply=1;shift;;
+    --check) [ "$command" = migrate ] || fail '--check is only for migrate.';check=1;shift;;
     --fast) checks=fast;shift;;
     --full-checks) checks=full;shift;;
     --base-url) [ "$command" = preflight ] && [ "$#" -ge 2 ] || fail "$1 is only for preflight and needs a value.";acceptance_args+=("$1" "$2");shift 2;;
@@ -56,6 +57,7 @@ case "$command" in
  migrate)
    args=("$PWD" --env-file "$envfile")
    [ "$apply" = 0 ] || args+=(--apply --review-projection-functions)
+   [ "$check" = 0 ] || args+=(--check)
    exec .venv/bin/python "$target" ${args[@]+"${args[@]}"};;
  rebuild)
    args=("$PWD")
