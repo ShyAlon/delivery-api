@@ -49,13 +49,32 @@ def purpose(depth=3):
     return '<'.join(found) or 'unattributed'
 
 
+_SKIP_RAW = ('contextlib', 'psycopg', 'psycopg_pool', 'functools')
+
+
+def _raw_callers(depth=4):
+    """Nearest `depth` frames outside the DB plumbing and context-manager glue, as module:function, innermost first."""
+    frame = sys._getframe(2)
+    found = []
+    while frame is not None and len(found) < depth:
+        module = frame.f_globals.get('__name__', '')
+        short = module.rsplit('.', 1)[-1]
+        top = module.split('.', 1)[0]
+        if short not in _PLUMBING and top not in _SKIP_RAW and frame.f_code.co_name not in _GENERIC:
+            found.append('%s:%s' % (short, frame.f_code.co_name))
+        frame = frame.f_back
+    return '<'.join(found) or 'none'
+
+
 def record(kind, shape, seconds=0.0, syncs=1):
     """One trace entry. kind: 'statement', 'pool_check' or 'commit'. syncs is the network round trips it cost:
     1 normally, 0 for a statement that rode another statement's pipelined batch (BEGIN, identity, SAVEPOINT)."""
     from . import postgres_scope
     where = purpose()
-    if where == 'unattributed':   # a worker thread has no delivery frame; its name says which pool it came from
-        where = 'unattributed[thread=%s]' % threading.current_thread().name.split('_')[0]
+    if where == 'unattributed':
+        # No delivery frame: name the thread and the nearest frames that are not our own plumbing (2026-11-10 ZIP: 28
+        # syncs sat under "unattributed[thread=AnyIO worker thread]" and nothing said which code asked).
+        where = 'unattributed[thread=%s;from=%s]' % (threading.current_thread().name.split('_')[0], _raw_callers())
     entry = (where, shape, int(seconds * 1000), syncs)
     stats = postgres_scope.request_stats.get()
     if stats is None:
@@ -105,7 +124,7 @@ def request_rows(entries, limit=LOG_ROWS):
     return ' ## '.join('%dx %dms %s | %s' % (n, ms, where, shape) for (where, shape), (n, ms) in ranked)
 
 
-PURPOSE_ROWS = 80   # every purpose of a request, collapsed over statement shape
+PURPOSE_ROWS = 250   # every purpose of a request, collapsed over statement shape
 
 # First matching keyword in the purpose chain wins. Phases name where an answer spends its trips.
 _PHASES = (('handler', ('answer_interview',)), ('authority', ('worker_capability', 'authority_snapshot')),

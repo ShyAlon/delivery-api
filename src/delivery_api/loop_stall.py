@@ -46,5 +46,10 @@ class StallWatchdog:
             frame = sys._current_frames().get(self._tid)
             if frame is None:
                 continue
-            frames = traceback.extract_stack(frame)[-8:]
-            self._emit(int(late * 1000), ' < '.join('%s:%d %s' % (f.filename.rsplit('/', 1)[-1], f.lineno, f.name) for f in reversed(frames)))
+            frames = list(reversed(traceback.extract_stack(frame)))
+            fmt = lambda f: '%s:%d %s' % (f.filename.rsplit('/', 1)[-1], f.lineno, f.name)
+            # The innermost frames say what blocked; the log keeps 500 characters per field, so the delivery frames that
+            # asked get their own part instead of being cut off after the library frames (2026-11-10: the one remaining
+            # 437 ms stall showed only psycopg and contextlib frames).
+            ours = [f for f in frames[4:] if '/delivery_api/' in f.filename or '/interview_engine/' in f.filename][:6]
+            self._emit(int(late * 1000), ' < '.join(fmt(f) for f in frames[:4]) + ' || asked by: ' + ' < '.join(fmt(f) for f in ours))
