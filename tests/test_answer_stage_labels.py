@@ -187,3 +187,21 @@ def test_submit_writes_a_durable_anchor_before_the_turn_end_event(tmp_path, monk
     assert anchors[0]['phase_key'] == 'intent'
     turn_end = [e for e in events if e['kind'] == 'answer']
     assert turn_end and anchors[0]['id'] < turn_end[0]['id'], 'the anchor lands at submit, before the turn-end answer event'
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='node not installed')
+def test_the_answer_path_stage_events_become_the_in_flight_label(tmp_path):
+    """The two server stage events (engine working, recording) surface as the label, newest wins, never a timer."""
+    out = _run(tmp_path, """
+        globalThis.window={addEventListener(){}};
+        globalThis.document={addEventListener(){},querySelectorAll:()=>[]};
+        const {answerProcessingLabel}=await import('./progress.js');
+        const base=[{id:5,kind:'answer_submitted',message:'Answer submitted; engine processing',phase_key:'intent',ts:2000}];
+        const working=[...base,{id:6,kind:'progress',message:'Interview engine is working on your answer',phase_key:null,ts:2000.5,payload:{stage:'answer.engine',status:'started',source:'delivery.answer'}}];
+        const recording=[...working,{id:7,kind:'progress',message:'Recording your answer and preparing the next question',phase_key:null,ts:2080,payload:{stage:'answer.record',status:'started',source:'delivery.answer'}}];
+        console.log(JSON.stringify([answerProcessingLabel(base,{phaseKey:'intent'}),answerProcessingLabel(working,{phaseKey:'intent'}),answerProcessingLabel(recording,{phaseKey:'intent'})]));
+        """)
+    import json
+    assert json.loads(out) == ['Processing your answer…',
+        'Processing your answer · Interview engine is working on your answer',
+        'Processing your answer · Recording your answer and preparing the next question']
