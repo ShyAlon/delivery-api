@@ -39,6 +39,7 @@ class ObservedPool(ConnectionPool):
         # Remove BEFORE handing to a waiting borrower: otherwise its new entry
         # can be erased by this borrower's finally block after handoff.
         with self._borrower_lock:self._borrowers.pop(id(conn),None)
+        conn._delivery_returned_at=time.monotonic()   # before the handoff to a waiting borrower
         return super().putconn(conn)
     def _timeout_evidence(self,elapsed):
         # Diagnostic failures must not replace the original checkout exception.
@@ -75,9 +76,22 @@ def _configure(connection):
     connection._delivery_pool_new = True
 
 
+# A connection the delivery path itself returned less than this long ago is not re-checked: the check is one
+# network round trip per checkout (74% of a warm answer's round trips were overhead). A connection the server
+# killed inside the window fails its first statement, and ScopedPostgres._begin drops and replaces a reused
+# connection that dies before any caller statement ran. Other borrowers (the engine) keep the full check.
+DELIVERY_RECHECK_AFTER_SECONDS = 10
+
+
 def _traced_check(connection):
     """psycopg_pool's own liveness check (one empty-statement round trip), counted in the statement trace."""
     from . import statement_trace
+    if borrower_operation.get() == "delivery-scoped-transaction":
+        returned = getattr(connection, '_delivery_returned_at', None)
+        # A connection still carrying the new-connection marker has not been through the delivery start, which
+        # is what replaces a reused connection that died; it is always checked.
+        if (returned is not None and not getattr(connection, '_delivery_pool_new', False)
+                and time.monotonic() - returned < DELIVERY_RECHECK_AFTER_SECONDS):return
     statement_trace.record('pool_check','POOL CHECK (empty statement)')
     return ConnectionPool.check_connection(connection)
 

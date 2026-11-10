@@ -43,8 +43,7 @@ def _transactional(method):
                     from . import task_read_cache
                     task_read_cache.invalidate(self)
             cleanup.callback(invalidate_after_transaction)
-            connection=cleanup.enter_context(self._postgres.transaction())
-            connection.execute('SAVEPOINT operation_start')
+            connection=cleanup.enter_context(self._postgres.transaction(savepoint=True))
             token = self._connection.set(connection)
             try:
                 action=_TASK_ENTRY_OPERATIONS.get(method.__name__)
@@ -124,8 +123,7 @@ class PostgresStore:
                 owner_lock(self);require_task_operation(self,action)
                 yield
                 return
-            with self._postgres.transaction() as connection:
-                connection.execute('SAVEPOINT operation_start')
+            with self._postgres.transaction(savepoint=True) as connection:
                 token=self._connection.set(connection)
                 try:
                     owner_lock(self);require_task_operation(self,action)
