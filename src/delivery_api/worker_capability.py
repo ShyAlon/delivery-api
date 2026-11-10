@@ -51,8 +51,9 @@ class WorkerCapability:
     def validate(self,store):
         if current_scope()!=self.scope:
             raise TenantAccessDenied('worker scope changed')
-        task=store.task(self.task_id)
-        binding=store.session_binding(self.session_id)
+        merged=hasattr(store,'authority_snapshot')
+        if merged:task,binding,active=store.authority_snapshot(self.task_id,self.session_id)
+        else:task=store.task(self.task_id);binding=store.session_binding(self.session_id);active=None
         if not task or task['generation']!=self.generation or not binding or binding['task_id']!=self.task_id or binding['generation']!=self.generation:
             raise TenantAccessDenied('worker capability stale or revoked')
         if self.generation>1:
@@ -61,6 +62,6 @@ class WorkerCapability:
             installed=store.installed_execution_anchor(self.session_id)
             if not installed or installed!={'anchor':self.execution_anchor,'anchor_sha256':self.anchor_sha256}:
                 raise TenantAccessDenied('installed worker lineage changed')
-        if hasattr(store,'auth_session_active') and not store.auth_session_active():
+        if (not active if merged else hasattr(store,'auth_session_active') and not store.auth_session_active()):
             raise TenantAccessDenied('worker auth session revoked')
         return task
