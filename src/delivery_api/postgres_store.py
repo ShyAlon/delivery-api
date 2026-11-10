@@ -1903,6 +1903,18 @@ FROM tasks t"""
         row=self._execute_native('SELECT * FROM provider_attempts WHERE attempt_id=%s',(attempt_id,)).fetchone()
         return dict(row) if row else None
 
+    def _reservation_reads(self,attempt_id):
+        """Independent reads after the admission locks. Totals is deliberately excluded: its SELECT calls a function
+        that writes the projection. It must stay conditional on the policy/configuration and replay checks."""
+        conn=self._connection.get()
+        if conn is None:raise TenantAccessDenied('scoped transaction required')
+        policy,limits,existing=conn.read_batch((
+            ('SELECT suspended FROM user_task_policy WHERE owner_id=%s',(current_scope().owner_id,)),
+            ('SELECT * FROM admission_limits WHERE owner_id=%s',(current_scope().owner_id,)),
+            ('SELECT * FROM provider_attempts WHERE attempt_id=%s',(attempt_id,)),
+        ))
+        return policy,limits,dict(existing) if existing else None
+
     def reserve_provider_attempt(self,job_id,attempt_id,quote,request_digest,*,require_prepaid=False):
         from .attempt_ledger import reserve
         return reserve(self,job_id,attempt_id,quote,request_digest,require_prepaid=require_prepaid)

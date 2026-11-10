@@ -131,6 +131,28 @@ class TimingConnection:
             query_failure(error)
             raise
         finally:note_statement(statement_label(sql),time.monotonic()-started)
+    def read_batch(self,statements):
+        """Queue a fixed caller-reviewed group of independent SELECTs, then synchronize once.
+
+        SELECT syntax is not proof of read-only behavior. Callers must not pass mutating functions or statements
+        whose execution depends on an earlier result. Results are returned only after the whole batch succeeds.
+        No writes/retries, transaction boundary changes, or cross-call storage here.
+        """
+        started=time.monotonic();cursors=[]
+        try:
+            with self._inner.pipeline():
+                for sql,params in statements:cursors.append(self._inner.execute(sql,params))
+            return [cursor.fetchone() for cursor in cursors]
+        except Exception as error:
+            from .diagnostic_evidence import query_failure
+            query_failure(error)
+            raise
+        finally:
+            elapsed=time.monotonic()-started
+            for i,(sql,_) in enumerate(statements):
+                note_statement(statement_label(sql),elapsed if i==len(statements)-1 else 0,1 if i==len(statements)-1 else 0)
+            note_query(elapsed)
+
     def __getattr__(self,name):return getattr(self._inner,name)
 
 

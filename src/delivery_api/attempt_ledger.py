@@ -79,12 +79,11 @@ def reserve(store,job_id,attempt_id,quote,request_digest,*,require_prepaid=False
     # Authority can change while waiting on the shared Stop/admission lock.
     # READ COMMITTED re-read after the lock, before replay or any new hold.
     _job(store,job_id)
-    from .suspension_policy import require_task_operation
-    require_task_operation(store,'provider.reserve')
-    limits=store._execute_native('SELECT * FROM admission_limits WHERE owner_id=%s',(owner,)).fetchone()
+    policy,limits,existing=store._reservation_reads(attempt_id)
+    from .suspension_policy import require_policy_operation
+    require_policy_operation(policy,'provider.reserve')
     if not limits:raise AdmissionDenied('reviewed owner admission configuration missing')
     fingerprint=hashlib.sha256(json.dumps({'job':job_id,'quote':quote,'request':request_digest},sort_keys=True).encode()).hexdigest()
-    existing=store.provider_attempt(attempt_id)
     if existing:
         if existing['fingerprint']!=fingerprint:raise AdmissionDenied('conflicting admission replay')
         return existing
