@@ -1968,9 +1968,10 @@ def task_events(task_id: str, after: int = Query(default=0, ge=0)):
     return {"events": _customer_events(store.events(task_id, after))}
 
 def stream_events_timed(store, task_id, cursor, acc):
-    """One stream event read, timed. These sync DB reads run ON the event loop: while one
-    executes, every in-flight request waits. The accumulated blocked time is reported on
-    stream disconnect so loop stalls are measured, not guessed."""
+    """One stream event read, timed. Callers run this in the threadpool, so the time is THREAD time (a slow checkout or
+    statement), not event-loop blocking (loop.lag measures that). The log fields keep their historical names
+    loop_blocked_ms/max_cycle_ms: read them as 'summed/max stream read time'. 2026-11-10: a 59 s max_cycle_ms was one read
+    stuck on a dead connection, while loop.lag stayed at 1.1-1.4 s."""
     started=time.monotonic()
     events=store.events(task_id,cursor)
     blocked=int((time.monotonic()-started)*1000)

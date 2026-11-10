@@ -82,6 +82,13 @@ def _configure(connection):
 # connection that dies before any caller statement ran. Other borrowers (the engine) keep the full check.
 DELIVERY_RECHECK_AFTER_SECONDS = 10
 
+# A peer that vanished without closing (laptop VM, NAT or pooler idle drop) hangs the next check or statement until the
+# kernel gives up. The old budget (idle 30 s + 3 x 10 s) is exactly the 59.4 s one progress-stream read took on 2026-11-10.
+# TCP_USER_TIMEOUT bounds unacknowledged data (a slow query still ACKs, so it is unaffected); keepalives cover the idle case
+# (10 + 3 x 3 = 19 s).
+DEAD_PEER_KWARGS = {'keepalives': 1, 'keepalives_idle': 10, 'keepalives_interval': 3, 'keepalives_count': 3,
+                    'tcp_user_timeout': 10000}
+
 
 def _traced_check(connection):
     """psycopg_pool's own liveness check (one empty-statement round trip), counted in the statement trace."""
@@ -115,8 +122,7 @@ def pool_for(dsn: str) -> ConnectionPool:
                 check=_traced_check,
                 kwargs={'row_factory': psycopg.rows.dict_row, 'autocommit': False,
                         'options': '-c client_encoding=UTF8', 'prepare_threshold': None,
-                        'keepalives': 1, 'keepalives_idle': 30, 'keepalives_interval': 10,
-                        'keepalives_count': 3})
+                        **DEAD_PEER_KWARGS})
             pool.open()
             _pools[dsn] = pool
         return pool
