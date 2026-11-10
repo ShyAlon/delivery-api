@@ -162,6 +162,26 @@ class PostgresStore:
         if binding:binding['owner_id']=str(binding['owner_id'])
         return task,binding,active
 
+    def worker_authority(self,task_id):
+        """What WorkerCapability.require_job needs, from ONE statement and one snapshot: the task record, its
+        engine session id, that session's binding, and whether the sign-in is still valid.
+
+        require_job used to read task, session id and binding (capture) and then read task, binding and sign-in
+        again (authority_snapshot) in four separate transactions. Nothing can change between reads that the later
+        read would not see, so the first three were dead weight; this is the same fence in one trip.
+        Returns (task or None, session_id or None, binding or None, active)."""
+        sql=self._TASK_PROJECTION.replace("\nFROM tasks t",
+            ",\n  (SELECT to_jsonb(e)::text FROM engine_sessions e WHERE e.session_id=t.engine_session_id) AS binding_json,"
+            "\n  public.requi_session_active() AS session_active\nFROM tasks t",1)
+        row=self._execute_native(sql+' WHERE t.task_id=%s AND t.deleted_at IS NULL',(task_id,)).fetchone()
+        if not row:return None,None,None,self.auth_session_active()
+        row=dict(row);binding_json=row.pop('binding_json');active=bool(row.pop('session_active'))
+        session_id=row.get('engine_session_id')
+        task=self._task_record(row)
+        binding=json.loads(binding_json) if binding_json else None
+        if binding:binding['owner_id']=str(binding['owner_id'])
+        return task,session_id,binding,active
+
     def auth_session_active(self):
         return bool(self._execute_native('SELECT public.requi_session_active() AS active').fetchone()['active'])
 
@@ -2385,7 +2405,7 @@ PG_OPERATIONS = (
     'attribute_run',
     'audit',
     'audit_entries',
-    'auth_session_active','authority_snapshot',
+    'auth_session_active','authority_snapshot','worker_authority',
     'begin_interview_start',
     'begin_retail_compute',
     'bind_interview_schema',
