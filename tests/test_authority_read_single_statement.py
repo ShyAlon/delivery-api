@@ -69,4 +69,7 @@ def test_validate_denies_revoked_auth_session(store):
         cap.validate(store)
         import psycopg
         with psycopg.connect(DSN) as admin:admin.execute('DELETE FROM auth.sessions WHERE id=%s',(A.session_id,))
-        with pytest.raises(TenantAccessDenied):cap.validate(store)
+        try:
+            with pytest.raises(TenantAccessDenied):cap.validate(store)
+        finally:   # the seeded session is shared by every later test on this database
+            with psycopg.connect(DSN) as admin:admin.execute('INSERT INTO auth.sessions(id,user_id) VALUES (%s,%s) ON CONFLICT DO NOTHING',(A.session_id,A.owner_id))
