@@ -98,36 +98,29 @@ def test_apply_hands_container_exact_unquoted_values(tmp_path,monkeypatch):
     assert handed!=env and handed.read_text()==UNQUOTED and handed.stat().st_mode&0o077==0
 
 
-def test_exited_container_names_logs_and_docker_rm(tmp_path,monkeypatch):
-    value,env,runs=_apply_stubs(tmp_path,monkeypatch,{},False)
-    with pytest.raises(m.WorkflowError) as error:m.preview(value,env_file=str(env),apply=True)
-    text=str(error.value)
-    assert 'docker logs' in text and 'docker rm requi-preview-exec' in text
-    assert not any(a and a[0]=='docker' and 'run' in a for a in runs)
+def test_running_preview_is_stopped_renamed_and_replaced(tmp_path,monkeypatch):
+    """2026-11-10: `req preview --apply` refused with 'docker stop requi-preview-exec'. The owner already typed yes to the
+    replacement; the old container is stopped and renamed (kept for rollback), then the accepted image starts."""
+    value,env,runs=_apply_stubs(tmp_path,monkeypatch,{'Running':True,'Health':{'Status':'healthy'}},True)
+    monkeypatch.setattr(m,'run_browser_smoke',lambda *a:pytest.fail('browser smoke is outside this test'),raising=False)
+    with pytest.raises(BaseException):m.preview(value,env_file=str(env),apply=True)
+    docker=[a for a in runs if a and a[0]=='docker']
+    kinds=[a[1] for a in docker]
+    assert kinds.index('stop')<kinds.index('rename')<kinds.index('run')
+    stop=next(a for a in docker if a[1]=='stop');rename=next(a for a in docker if a[1]=='rename')
+    assert stop[2]=='requi-preview-exec' and rename[2]=='requi-preview-exec' and rename[3].startswith('requi-preview-exec-')
+    assert not any(a[1] in ('rm','kill') for a in docker)
 
 
-def test_running_container_names_docker_stop(tmp_path,monkeypatch):
-    value,env,runs=_apply_stubs(tmp_path,monkeypatch,{},True)
-    with pytest.raises(m.WorkflowError) as error:m.preview(value,env_file=str(env),apply=True)
-    assert 'docker stop requi-preview-exec' in str(error.value)
-
-
-def test_apply_derives_and_hands_container_ollama_host_gateway(tmp_path,monkeypatch):
-    import builtins, json, subprocess
-    value=state();value.path=tmp_path/'state.json'
-    env=tmp_path/'private.env'
-    env.write_text(QUOTED+'REQUI_PIN_PROVIDERS=ollama\n');env.chmod(0o600)
-    monkeypatch.setattr(m,'inspect_image',lambda image:{'Id':image})
-    monkeypatch.setattr(builtins,'input',lambda prompt='':'yes')
-    runs=[]
-    def command(args,**kwargs):
-        runs.append(args)
-        if 'inspect' in args:return json.dumps({'Image':ID,'State':{'Running':False,'ExitCode':2}})
-        return ''
-    monkeypatch.setattr(m,'command',command)
-    monkeypatch.setattr(subprocess,'run',lambda *a,**k:subprocess.CompletedProcess(a[0],1,b'',b''))
+def test_exited_preview_is_renamed_not_stopped_or_removed(tmp_path,monkeypatch):
+    value,env,runs=_apply_stubs(tmp_path,monkeypatch,{'Running':False,'ExitCode':2},False)
     with pytest.raises(m.WorkflowError):m.preview(value,env_file=str(env),apply=True)
-    run=next(a for a in runs if a and a[0]=='docker' and 'run' in a)
-    handed=Path(run[run.index('--env-file')+1])
-    assert 'OLLAMA_BASE_URL=http://host.docker.internal:11434/v1\n' in handed.read_text()
-    assert env.read_text().count('OLLAMA_BASE_URL=')==1
+    kinds=[a[1] for a in runs if a and a[0]=='docker']
+    assert 'stop' not in kinds and kinds.index('rename')<kinds.index('run') and 'rm' not in kinds
+
+
+def test_no_existing_container_is_started_without_stop_or_rename(tmp_path,monkeypatch):
+    value,env,runs=_apply_stubs(tmp_path,monkeypatch,{'Running':False,'ExitCode':2},None)
+    with pytest.raises(m.WorkflowError):m.preview(value,env_file=str(env),apply=True)
+    kinds=[a[1] for a in runs if a and a[0]=='docker']
+    assert 'stop' not in kinds and 'rename' not in kinds and 'run' in kinds
