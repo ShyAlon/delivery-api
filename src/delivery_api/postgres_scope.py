@@ -151,7 +151,7 @@ class TimingConnection:
             elapsed=time.monotonic()-started
             for i,(sql,_) in enumerate(statements):
                 note_statement(statement_label(sql),elapsed if i==len(statements)-1 else 0,1 if i==len(statements)-1 else 0)
-            note_query(elapsed)
+                note_query(elapsed if i==len(statements)-1 else 0)
 
     def __getattr__(self,name):return getattr(self._inner,name)
 
