@@ -30,23 +30,27 @@ export function answerStartedAt(events,{afterId=0,sinceMs=0}={}){
  if(at<0||list.slice(at+1).some(e=>['waiting_input','answer','gate','complete','error'].includes(e.kind)))return null;
  return signalTime(list[at]);
 }
-export function answerProcessingLabel(events,{phaseKey,afterId=0,sinceMs=0}={}){
+// Which progress belongs to the answer being processed is decided by event id, a server-ordered sequence that
+// needs no clock agreement between this tab and the server. The id floor is the newest event this tab had when it
+// submitted (sinceId), else the durable answer_submitted event of an unfinished turn. Only when neither exists
+// (an older stored shadow) does it fall back to the tab clock against server stamps.
+export function answerProcessingLabel(events,{phaseKey,afterId=0,sinceMs=0,sinceId=0}={}){
  const list=events||[];
- let floorMs=sinceMs?sinceMs-1500:0;   // tab-local ms vs whole-second stamps: tolerate rounding, never a stale turn
- if(!sinceMs){
-  // The durable submit event is a server stamp (no clock agreement needed). One followed by a turn-ending
-  // event belongs to an earlier turn and proves nothing about this one.
+ let floorId=Number(sinceId||0),floorMs=0;
+ if(!floorId){
   const at=list.findLastIndex(e=>e.kind==='answer_submitted'&&Number(e.id||0)>=afterId);
   const live=at>=0&&!list.slice(at+1).some(e=>['waiting_input','answer','gate','complete','error'].includes(e.kind));
-  floorMs=live?(signalTime(list[at])??0)*1000:0;
+  if(live&&Number(list[at].id||0)>0)floorId=Number(list[at].id);
+  else if(sinceMs)floorMs=sinceMs-1500;
+  else if(live)floorMs=(signalTime(list[at])??0)*1000;
  }
- if(!floorMs)return ANSWER_PENDING_LABEL;
- const latest=[...list].reverse().find(e=>e.kind==='progress'&&Number(e.id||0)>=afterId&&(!e.phase_key||e.phase_key===phaseKey)&&(signalTime(e)??0)*1000>floorMs);
+ if(!floorId&&!floorMs)return ANSWER_PENDING_LABEL;
+ const latest=[...list].reverse().find(e=>e.kind==='progress'&&Number(e.id||0)>=afterId&&(!e.phase_key||e.phase_key===phaseKey)&&(floorId?Number(e.id||0)>floorId:(signalTime(e)??0)*1000>floorMs));
  return latest?`Processing your answer · ${humanizeSnakeCase(String(latest.message||latest.payload?.label||''))}`:ANSWER_PENDING_LABEL;
 }
-export function activePhaseProgress(events,{phaseKey,afterId=0,mode='executing',fallback='Working',unavailable='',answerPending=false,answerSince=0}={}){
+export function activePhaseProgress(events,{phaseKey,afterId=0,mode='executing',fallback='Working',unavailable='',answerPending=false,answerSince=0,answerSinceId=0}={}){
  if(unavailable)return unavailable;
- if(WAITING_MODES[mode])return answerPending?answerProcessingLabel(events,{phaseKey,afterId,sinceMs:answerSince}):WAITING_MODES[mode][0];
+ if(WAITING_MODES[mode])return answerPending?answerProcessingLabel(events,{phaseKey,afterId,sinceMs:answerSince,sinceId:answerSinceId}):WAITING_MODES[mode][0];
  if(['error','stopped','stop_requested'].includes(mode))return fallback;
  const latest=[...(events||[])].reverse().find(e=>Number(e.id||0)>=afterId&&isProgressEvent(e)&&(!e.phase_key||e.phase_key===phaseKey));
  return latest?humanizeSnakeCase(String(latest.message||latest.payload?.label||fallback)):fallback;
