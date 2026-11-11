@@ -55,7 +55,8 @@ case "$command" in
    [ "$apply" = 0 ] || fail 'locks is read-only; --apply is not supported.'
    exec .venv/bin/python "$target" "$PWD" --env-file "$envfile";;
  migrate)
-   args=("$PWD" --env-file "$envfile")
+   args=("$PWD")
+   [ -z "${PREVIEW_SETTINGS_FILE:-}" ] || args+=(--env-file "$PREVIEW_SETTINGS_FILE")
    [ "$apply" = 0 ] || args+=(--apply --review-projection-functions)
    [ "$check" = 0 ] || args+=(--check)
    exec .venv/bin/python "$target" ${args[@]+"${args[@]}"};;

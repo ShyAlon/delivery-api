@@ -5,6 +5,7 @@ Never source dotenv as shell, interpolate values, or print values. Only known
 configuration names cross this boundary. No connection or mutation is made here.
 """
 import argparse
+import json
 import termios
 import os
 from pathlib import Path
@@ -45,7 +46,7 @@ def read_file(path):
 
 def target_path(env=None):
     env=os.environ if env is None else env
-    return Path(env.get('PREVIEW_SETTINGS_FILE') or str(Path(env.get('XDG_CONFIG_HOME',str(Path.home()/'.config')))/'requi/preview.env')).expanduser()
+    return Path(env.get('PREVIEW_SETTINGS_FILE') or env.get('REQUI_PREVIEW_ENV') or str(Path(env.get('XDG_CONFIG_HOME',str(Path.home()/'.config')))/'requi/preview.env')).expanduser()
 
 class SettingsValues(dict):
     pass
@@ -89,7 +90,28 @@ def load(root,env=None,explicit=None):
             if name.startswith('DELIVERY_SUPABASE_') or name in IDENTITY:
                 if file_identity:continue
             result[name]=value
+    # A parent owner command can carry already-resolved, hidden-prompt gaps to
+    # subprocesses in memory only. Never override a nonempty file value or bypass
+    # the file/project conflict checks above. No save, argv or logging channel.
+    if env.get('REQUI_RUN_SETTINGS_JSON'):
+        try:resolved=json.loads(env['REQUI_RUN_SETTINGS_JSON'])
+        except (ValueError,TypeError):raise SettingsError('invalid run settings; values hidden') from None
+        if not isinstance(resolved,dict):raise SettingsError('invalid run settings; values hidden')
+        for name,value in resolved.items():
+            if not allowed(name) or not isinstance(value,str) or any(c in value for c in '\n\r\x00'):
+                raise SettingsError('invalid run settings; values hidden')
+            if name in IDENTITY and result.get(name) and result[name]!=value:
+                raise SettingsError('project settings conflict for '+name+'; values hidden')
+            if value and name not in result:result[name]=value
     return result
+
+
+def child_environment(values,env=None):
+    result=dict(os.environ if env is None else env)
+    result.update(values)
+    result['REQUI_RUN_SETTINGS_JSON']=json.dumps(dict(values))
+    return result
+
 
 def terminal_line(prompt,hidden=False):
     # Buffered r+ requires seekability and fails on actual terminal devices.

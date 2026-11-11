@@ -100,3 +100,13 @@ carries the three turn traces and cold29/nextcold29/warm26 table in its ZIP.
 macOS has no memfd_create. Trace via an anonymous pipe drained on a dedicated
 thread, never a temporary disk file; failed tracing remains incomplete, not zero.
 Tests cover the missing-Linux-API path and the real free proof still counts29/26.
+
+Owner retry11:16 exposed a settings regression: the new runner read only repo
+.env and hard-forced it downstream, although normal preview uses private
+preview.env. A real resolver fixture reproduced the exact missing-DB failure
+before the fix. Use the shared settings.load/require path, including preview
+path overrides, private-file checks and identity conflicts. Hidden terminal
+prompts fill only gaps, without saving; propagate the resolved gaps to child
+settings readers through a run-scoped environment, never argv/files/logs.
+Migration dispatch must not reintroduce a default single-file restriction.
+Reachability still precedes the admin prompt, git, installs or mutation.

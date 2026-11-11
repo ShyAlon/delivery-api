@@ -54,14 +54,14 @@ def main(argv=None):
     for name in ('scripts/ops/req','scripts/owner/answer-proof.py','scripts/owner/apply-pg-cutover.py','tests/test_answer_host_integration.py'):
         if not (root/name).is_file():raise Refused('candidate file missing: '+name+'; do not merge/test an older package')
     if not (root/'.venv/bin/python').is_file():raise Refused('repo .venv/bin/python missing')
-    settings=module(root/'scripts/ops/settings.py');values=settings.read_file(root/'.env')
-    if not values.get('DELIVERY_DATABASE_URL'):raise Refused('DELIVERY_DATABASE_URL missing from private repo .env; values are never requested in chat')
+    settings=module(root/'scripts/ops/settings.py');values=settings.load(root)
+    settings.require(values,['DELIVERY_DATABASE_URL'])
     # Network is the cheapest known failing input on this WiFi. No git fetch,
     # install, schema write, image build or preview restart precedes it.
-    print('PREFLIGHT: read-only DB reachability; repo .env values hidden',flush=True)
+    print('PREFLIGHT: read-only DB reachability; shared preview/repo settings, values hidden',flush=True)
     database_preflight(values['DELIVERY_DATABASE_URL'])
     print('PASS: DB TCP and read-only login reachable',flush=True)
-    if not values.get('REQUI_ADMIN_DATABASE_URL'):raise Refused('REQUI_ADMIN_DATABASE_URL missing from private repo .env; no schema apply or rebuild')
+    settings.require(values,['REQUI_ADMIN_DATABASE_URL'])
     for name in ('delivery-api','interview-engine','spec-generator','vmodel-contracts','verification-loop','vmodel-spec-app'):
         checkout=root.parent/name
         if not (checkout/'.git').exists():raise Refused(name+' checkout missing; no schema changes')
@@ -74,7 +74,8 @@ def main(argv=None):
     for name in ('psycopg','dotenv'):
         try:__import__(name)
         except ImportError:raise Refused('repo test prerequisite missing: '+name+'; no schema apply or rebuild') from None
-    env={**os.environ,'REQUI_ROOT':str(root.parent),'PREVIEW_SETTINGS_FILE':str(root/'.env')}
+    env=settings.child_environment(values)
+    env['REQUI_ROOT']=str(root.parent)
     for command in (['docker','version','--format','{{.Server.Version}}'],['gh','auth','status']):
         result=subprocess.run(command,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=env)
         if result.returncode:raise Refused(command[0]+' preflight failed; no schema apply or rebuild')
@@ -89,9 +90,9 @@ def main(argv=None):
         'python']
     proof_env={key:value for key,value in os.environ.items() if key in ('PATH','HOME','LANG','TMPDIR','SYSTEMROOT','SSL_CERT_FILE')}
     run([*proof_prefix,'-c','import pytest, pgserver, psycopg, interview_engine, delivery_api, langchain_ollama'],root=root,env=proof_env)
-    # The reviewed owner migration entry reads this same explicit .env. The
+    # The reviewed owner migration entry uses the same shared resolver. The
     # exact phrase is requested only when check reports pending work (exit3).
-    migration=[sys.executable,root/'scripts/owner/apply-pg-cutover.py',root,'--env-file',root/'.env']
+    migration=[sys.executable,root/'scripts/owner/apply-pg-cutover.py',root]
     pending=run([*migration,'--check'],root=root,env=env,allowed=(0,3))
     if pending==3:
         # The migration command owns the one exact count/login phrase.

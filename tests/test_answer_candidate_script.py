@@ -20,7 +20,7 @@ def fixture(tmp_path,monkeypatch):
     for name in ('scripts/ops/req','scripts/owner/answer-proof.py','scripts/owner/apply-pg-cutover.py','tests/test_answer_host_integration.py','.venv/bin/python'):
         p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.touch()
     (root/'.env').write_text('fake secret never printed');(root/'.env').chmod(0o600)
-    monkeypatch.setattr(m,'module',lambda path:SimpleNamespace(read_file=lambda p:{'DELIVERY_DATABASE_URL':'test-only-dsn','REQUI_ADMIN_DATABASE_URL':'test-only-admin-dsn'}))
+    monkeypatch.setattr(m,'module',lambda path:SimpleNamespace(load=lambda p:{'DELIVERY_DATABASE_URL':'test-only-dsn','REQUI_ADMIN_DATABASE_URL':'test-only-admin-dsn'},require=lambda v,n:None,child_environment=lambda v:dict(v)))
     monkeypatch.setattr(m,'git',lambda root,*args:'main' if args[0]=='branch' else 'https://github.com/fake/test.git' if args[0]=='remote' else '')
     monkeypatch.setattr(m,'database_preflight',lambda dsn:None)
     monkeypatch.setattr(m.subprocess,'run',lambda *a,**kw:SimpleNamespace(returncode=0))
@@ -46,7 +46,9 @@ def test_owner_sequence_applies_only_pending_and_always_collects_proof(tmp_path,
     assert cmds[-1][-3:-1]==['debug','--run-dir']
     for c,kw in calls:
         if c[0]=='uv':assert 'DELIVERY_DATABASE_URL' not in kw['env'] and 'PREVIEW_SETTINGS_FILE' not in kw['env']
-        else:assert kw['env']['PREVIEW_SETTINGS_FILE']==str(root/'.env')
+        else:
+            assert 'PREVIEW_SETTINGS_FILE' not in kw['env']
+            assert '--env-file' not in c
 
 
 def test_unreachable_db_fails_before_git_or_any_effect(tmp_path,monkeypatch,capsys):
@@ -87,3 +89,31 @@ def test_missing_proof_dependency_stops_before_schema_or_rebuild(tmp_path,monkey
     monkeypatch.setattr(m,'run',run)
     with pytest.raises(m.Refused,match='proof dependency failed'):m.main([str(root)])
     assert len(calls)==1 and calls[0][0]=='uv'
+
+
+def test_preview_only_database_reaches_preflight_without_prompt(tmp_path,monkeypatch):
+    m,root=fixture(tmp_path,monkeypatch)
+    settings_spec=importlib.util.spec_from_file_location('actual_settings',ROOT/'scripts/ops/settings.py')
+    settings=importlib.util.module_from_spec(settings_spec);settings_spec.loader.exec_module(settings)
+    (root/'.env').write_text('DEEPSEEK_API_KEY=fixture-only\n')
+    preview=tmp_path/'cfg/requi/preview.env';preview.parent.mkdir(parents=True)
+    preview.write_text('DELIVERY_DATABASE_URL=postgresql://fixture-preview\nREQUI_ADMIN_DATABASE_URL=postgresql://fixture-admin\n');preview.chmod(0o600)
+    monkeypatch.setenv('XDG_CONFIG_HOME',str(tmp_path/'cfg'));monkeypatch.delenv('PREVIEW_SETTINGS_FILE',raising=False)
+    monkeypatch.setattr(m,'module',lambda path:settings)
+    monkeypatch.setattr(settings,'hidden_prompt',lambda name:pytest.fail('existing settings must not prompt'))
+    seen=[]
+    def preflight(dsn):
+        seen.append(dsn);raise m.Refused('reached-network')
+    monkeypatch.setattr(m,'database_preflight',preflight)
+    with pytest.raises(m.Refused,match='reached-network'):m.main([str(root)])
+    assert seen==['postgresql://fixture-preview']
+
+
+def test_missing_admin_prompt_is_after_network_and_no_save(tmp_path,monkeypatch):
+    m,root=fixture(tmp_path,monkeypatch);events=[]
+    settings=SimpleNamespace(load=lambda root:{},require=lambda values,names:(events.append(names[0]),values.update({names[0]:'postgresql://fixture'})),child_environment=lambda values:dict(values))
+    monkeypatch.setattr(m,'module',lambda path:settings)
+    monkeypatch.setattr(m,'database_preflight',lambda dsn:events.append('network'))
+    monkeypatch.setattr(m,'git',lambda *a:(_ for _ in ()).throw(m.Refused('stop after inputs')))
+    with pytest.raises(m.Refused,match='stop after inputs'):m.main([str(root)])
+    assert events==['DELIVERY_DATABASE_URL','network','REQUI_ADMIN_DATABASE_URL']
