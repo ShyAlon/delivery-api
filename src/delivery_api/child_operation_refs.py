@@ -7,7 +7,7 @@ import hashlib,json
 from .tenancy import current_scope
 
 class ChildOperationRefs:
-    def __init__(self,store,task_id):self.store=store;self.task_id=task_id
+    def __init__(self,store,task_id,*,retain=None):self.store=store;self.task_id=task_id;self.retain=retain or store.retain_decision_review
     def _owner(self):
         task=self.store.task(self.task_id)
         if not task or str(task.get('owner_id'))!=current_scope().owner_id:
@@ -17,8 +17,16 @@ class ChildOperationRefs:
         owner=self._owner()
         payload={'version':1,'owner_id':owner,'task_id':self.task_id,'kind':kind,'value':value}
         ref='child:'+hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
-        self.store.retain_decision_review(self.task_id,ref,'child-input-v1',payload)
+        self.retain(self.task_id,ref,'child-input-v1',payload)
         return ref
+    def frozen(self,ref,kind,value):
+        """Verify an input already retained by this same request, without reread."""
+        from copy import deepcopy
+        payload={'version':1,'owner_id':current_scope().owner_id,'task_id':self.task_id,'kind':kind,'value':value}
+        digest='child:'+hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+        if digest!=ref:raise PermissionError('frozen operation input digest changed')
+        return deepcopy(value)
+
     def get(self,ref,kind):
         owner=self._owner();payload=self.store.decision_review(self.task_id,ref,'child-input-v1')
         if (not payload or payload.get('owner_id')!=owner or payload.get('task_id')!=self.task_id

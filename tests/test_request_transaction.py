@@ -23,6 +23,7 @@ class FakeTransaction:
 
 
 class FakeConnection:
+    autocommit=False  # explicit setup temporarily switches it, then restores at checkin
     def __init__(self,world):
         self.world,self.closed,self.log=world,False,[]
         self.info=types.SimpleNamespace(transaction_status=Status.IDLE)

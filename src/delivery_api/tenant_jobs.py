@@ -6,16 +6,33 @@ Auth session to re-authorize interrupted work; rate/spend admission is separate.
 from .tenancy import current_scope,tenant_context
 
 
-async def execute_job(store,job_id,handler,*,verify_stopped_quiescence=None,verify_completion_quiescence=None):
+async def execute_job(store,job_id,handler,*,verify_stopped_quiescence=None,verify_completion_quiescence=None,reuse_answer_authority=False,claimed_answer=None):
     scope=current_scope()
     with tenant_context(scope):
-        capability=store.claim_worker(job_id)
+        if claimed_answer is not None:
+            if not reuse_answer_authority or claimed_answer[0].scope!=scope or claimed_answer[2]!=job_id:raise PermissionError('scoped answer entry required')
+            capability=claimed_answer[0]
+        else:capability=store.claim_worker(job_id)
         if capability is None:return False
         from .diagnostic_evidence import bound
         with bound(task_id=capability.task_id,session_id=capability.session_id,job_id=job_id):
             try:
-                capability.validate(store)
-                await handler(capability)
+                task=claimed_answer[1] if claimed_answer is not None else capability.validate(store)
+                from contextlib import nullcontext
+                from .worker_capability import answer_authority
+                with answer_authority(store,capability,task) if reuse_answer_authority else nullcontext():
+                    completion=await handler(capability)
+                if reuse_answer_authority:
+                    def finish_answer():
+                        # The conditional status write is the fresh final
+                        # authority/Stop check, not a preflight snapshot.
+                        if capability.generation!=1:capability.validate(store)
+                        if verify_completion_quiescence is not None and verify_completion_quiescence(capability) is not True:return True
+                        if completion is None:raise PermissionError('answer completion evidence missing')
+                        record,event=completion
+                        store.finish_answer_worker(capability,job_id,completion=record,event=event)
+                        return True
+                    return store.run_answer_batch(finish_answer)
                 task=store.task(capability.task_id)
                 if task and task.get('stop_requested_at') is not None:
                     # Handler return, cancellation, timeout or an engine snapshot

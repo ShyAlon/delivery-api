@@ -157,6 +157,7 @@ def _dead_transaction_double(monkeypatch):
 
 
 class _Dead:
+    autocommit=False
     closed=False
     class _Tx:
         def __enter__(self):

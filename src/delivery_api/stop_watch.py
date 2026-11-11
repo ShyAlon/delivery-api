@@ -22,10 +22,15 @@ def stop_key(task_id):
     return 'task-stop:' + task_id
 
 
-async def watch_for_stop(*, store, task_id, session_id, generation, stop):
+async def watch_for_stop(*, store, task_id, session_id, generation, stop,entry_version=None):
     key = stop_key(task_id)
     gone = threading.Event()   # set on exit so a waiting worker thread ends promptly
     try:
+        if entry_version is not None:
+            # The answer entry already verified Stop/auth/generation. Capture
+            # its wake version before that check, then wait from that version:
+            # a Stop between entry and watch startup cannot disappear.
+            await asyncio.to_thread(event_bus.wait,key,STOP_SAFETY_SECONDS,gone,entry_version)
         while not stop.is_set():
             version = event_bus.version(key)   # before the reads: a Stop landing between read and wait still wakes
             state = store.stop_state(task_id, session_id)   # one statement, one transaction

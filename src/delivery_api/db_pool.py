@@ -19,6 +19,8 @@ import time
 import contextvars
 from psycopg_pool import PoolTimeout,ConnectionPool
 
+answer_pool_reuse=contextvars.ContextVar("answer_pool_reuse",default=False)
+
 borrower_operation=contextvars.ContextVar("db_borrower_operation",default="engine-or-background")
 
 
@@ -93,11 +95,12 @@ DEAD_PEER_KWARGS = {'keepalives': 1, 'keepalives_idle': 10, 'keepalives_interval
 def _traced_check(connection):
     """psycopg_pool's own liveness check (one empty-statement round trip), counted in the statement trace."""
     from . import statement_trace
-    if borrower_operation.get() == "delivery-scoped-transaction":
+    if borrower_operation.get() == "delivery-scoped-transaction" or answer_pool_reuse.get():
         returned = getattr(connection, '_delivery_returned_at', None)
         # A connection still carrying the new-connection marker has not been through the delivery start, which
         # is what replaces a reused connection that died; it is always checked.
-        if (returned is not None and not getattr(connection, '_delivery_pool_new', False)
+        if (returned is not None and not getattr(connection, 'closed', False) and not getattr(connection, 'broken', False)
+                and not getattr(connection, '_delivery_pool_new', False)
                 and time.monotonic() - returned < DELIVERY_RECHECK_AFTER_SECONDS):return
     statement_trace.record('pool_check','POOL CHECK (empty statement)')
     return ConnectionPool.check_connection(connection)

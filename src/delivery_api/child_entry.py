@@ -110,6 +110,10 @@ def main():
     from interview_engine.tenant_worker import _root
     root_token=_root.set(root)
     pool=None;progress_channel=None
+    wire_trace=None
+    if cfg.get('answer_trace'):
+        from .answer_trace import WireTrace
+        wire_trace=WireTrace();wire_trace.install()
     try:
         if stop.is_set():raise RuntimeError('parent stopped before dispatch')
         event('running')
@@ -120,7 +124,7 @@ def main():
                 from interview_engine.child_operations import execute_operation
                 from vmodel_contracts.interactive import StartSessionRequest,InputResponse,ModelRouteSwitchRequest
                 pool=build_pool(cfg['dsn'],max_size=4,name='child-operation')
-                store=pg_session_store(pool,str(binding.owner_id),str(binding.auth_session_id))
+                store=pg_session_store(pool,str(binding.owner_id),str(binding.auth_session_id),entry_verified=bool(cfg.get('answer_trace')))
                 if 'REQUI_CHILD_PROGRESS_FD' in os.environ:
                     from .child_progress import install_progress_wakes
                     progress_channel=install_progress_wakes(store,int(os.environ['REQUI_CHILD_PROGRESS_FD']))
@@ -140,9 +144,42 @@ def main():
                         from interview_engine.child_operations import begin_warm,execute_warm
                         from interview_engine.wire_binding import broker_clients
                         req,ans=loaders(cfg['input'],cfg['input_ref'],op.operation.kind)
-                        with measured_work(compute) if compute is not None else nullcontext():
-                            warm_handle,_=begin_warm(op,trusted_binding=binding,store=store,broker=broker,
+                        from interview_engine.document_diagnostics import answer_batch
+                        from contextlib import ExitStack,contextmanager
+                        @contextmanager
+                        def diagnostics(operation):
+                            from interview_engine.pg_journal import transient_progress
+                            with ExitStack() as stack:
+                                if cfg.get('answer_trace'):
+                                    from interview_engine.pg_checkpoint import answer_checkpoint_memory
+                                    stack.enter_context(answer_checkpoint_memory())
+                                    if operation.operation.kind=='interview.answer':
+                                        from interview_engine.pg_checkpoint import answer_checkpoint_publication
+                                        existing=getattr(getattr(getattr(warm_handle,'session',None),'program',None),'saver',None)
+                                        stack.enter_context(answer_checkpoint_publication(existing))
+                                    from interview_engine.pg_session_store import answer_publication
+                                    stack.enter_context(answer_publication(operation))
+                                    stack.enter_context(transient_progress(lambda page:print('REQUI_ANSWER_PROGRESS '+json.dumps({'operation_id':operation.operation_id,'page':page},separators=(',',':')),file=__import__('sys').stderr,flush=True)))
+                                stack.enter_context(diagnostic_batch(operation))
+                                yield
+                        def diagnostic_batch(operation):
+                            return answer_batch(root/'.diagnostic-recovery'/__import__('hashlib').sha256(operation.binding.session_id.encode()).hexdigest(),
+                                {'owner_id':str(operation.binding.owner_id),'auth_session_id':str(operation.binding.auth_session_id),
+                                 'session_id':operation.binding.session_id,'task_id':operation.binding.task_id,
+                                 'generation':operation.binding.generation,'lease_epoch':operation.binding.lease_epoch,
+                                 'operation_id':operation.operation_id}) if cfg.get('answer_trace') else nullcontext()
+                        def final_result(operation,snapshot,token):
+                            if not cfg.get('answer_trace') or operation.operation.kind!='interview.answer':return
+                            from .answer_result import result_frames
+                            from vmodel_contracts.interactive import EventType
+                            accepted=warm_handle.registry._event(warm_handle.session,EventType.INPUT_ACCEPTED)
+                            for frame in result_frames(operation,snapshot,accepted,token):
+                                print('REQUI_ANSWER_RESULT '+json.dumps(frame,separators=(',',':')),file=__import__('sys').stderr,flush=True)
+                        with diagnostics(op),measured_work(compute) if compute is not None else nullcontext():
+                            warm_handle,completed_snapshot=begin_warm(op,trusted_binding=binding,store=store,broker=broker,
                                 load_request=req,load_answer=ans)
+                        final_result(op,completed_snapshot,cfg.get('answer_result_token'))
+                        if wire_trace is not None:wire_trace.emit(op.operation_id)
                         event('stopped' if stop.is_set() else 'completed')
                         # Follow-up operations on the held session: each frame
                         # carries its own private broker/compute descriptors,
@@ -159,16 +196,19 @@ def main():
                                 current[0]=op2
                                 broker2=BrokerClient(fdmap['broker'],next_call_id=broker_call_id)
                                 compute2=ComputeClient(fdmap['compute']) if 'compute' in fdmap else None
+                                if wire_trace is not None:wire_trace.reset()
                                 event('running')
                                 try:
                                     req2,ans2=loaders(payload.get('input'),payload.get('input_ref'),op2.operation.kind)
-                                    with measured_work(compute2) if compute2 is not None else nullcontext():
+                                    with diagnostics(op2),measured_work(compute2) if compute2 is not None else nullcontext():
                                         with broker_clients(broker2):
-                                            execute_warm(warm_handle,op2,trusted_binding=binding2,
+                                            completed_snapshot=execute_warm(warm_handle,op2,trusted_binding=binding2,
                                                 load_request=req2,load_answer=ans2)
                                 finally:
                                     broker2.close()
                                     if compute2 is not None:compute2.close()
+                                final_result(op2,completed_snapshot,payload.get('answer_result_token'))
+                                if wire_trace is not None:wire_trace.emit(op2.operation_id)
                                 event('stopped' if stop.is_set() else 'completed')
                             finally:
                                 for fd in fds:
@@ -186,13 +226,17 @@ def main():
                 from interview_engine.tenant_worker import pg_session_store
                 from .child_generator_entry import execute
                 pool=build_pool(cfg['dsn'],max_size=4,name='child-generator')
-                store=pg_session_store(pool,str(binding.owner_id),str(binding.auth_session_id))
+                store=pg_session_store(pool,str(binding.owner_id),str(binding.auth_session_id),entry_verified=bool(cfg.get('answer_trace')))
                 execute(op,cfg,store,broker,stop,int(os.environ['REQUI_CHILD_OUTPUT_FD']))
         if gone.is_set() and not warm:raise RuntimeError('parent lost after dispatch')
         # A warm child emits per-operation terminal events inside its loop;
         # after the loop the parent reaps by STOP or descriptor close.
-        if not warm:event('stopped' if stop.is_set() else 'completed')
+        if not warm:
+            if wire_trace is not None:wire_trace.emit(op.operation_id)
+            event('stopped' if stop.is_set() else 'completed')
     finally:
+        if wire_trace is not None:
+            wire_trace.emit(current[0].operation_id);wire_trace.restore()
         if progress_channel is not None:progress_channel.close()
         if pool is not None:pool.close()
         _root.reset(root_token);broker.close()

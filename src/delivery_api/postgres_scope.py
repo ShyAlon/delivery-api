@@ -254,6 +254,11 @@ class ScopedPostgres:
     def _release(self,connection):
         import psycopg
         usable=not connection.closed and not getattr(connection,'broken',False) and connection.info.transaction_status==psycopg.pq.TransactionStatus.IDLE
+        if usable and hasattr(connection,'_delivery_restore_autocommit'):
+            try:
+                connection.autocommit=connection._delivery_restore_autocommit
+                del connection._delivery_restore_autocommit
+            except Exception:usable=False
         if not usable:
             # Never hand a mid-transaction connection to the next borrower.
             try:connection.close()
@@ -290,6 +295,10 @@ class ScopedPostgres:
             # COMMIT, accidentally deferring later write errors to another call.
             transaction=psycopg.Transaction(connection)
             try:
+                # BEGIN is queued while libpq still reports IDLE. In implicit
+                # mode the first execute would add another BEGIN and Sync.
+                connection._delivery_restore_autocommit=connection.autocommit
+                connection.autocommit=True
                 # psycopg pipeline batches BEGIN + transaction-local identity
                 # on ONE connection. Exit synchronizes before any caller may
                 # fetch private data; failed setup never dispatches a read.

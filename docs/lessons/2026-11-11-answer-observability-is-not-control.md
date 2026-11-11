@@ -1,0 +1,102 @@
+# Measure real barriers, then remove redundant boundaries
+
+The protocol trace counts simple Query as well as Sync. Queuing BEGIN while the
+connection still reports IDLE must not cause an implicit second BEGIN. Temporary
+autocommit during explicit setup removes that duplicate; restore mode at checkin.
+Context-scoped tracing isolates concurrent answers and includes child persistence.
+
+Owner-reviewed answer changes remain internal opt-in only: diagnostic/usage
+buffering, transient progress, no DB writes for timing chunks, one short entry
+helper transaction, and reuse of an already validated published snapshot.
+Policies still execute inside the helper batch; no transaction spans provider
+work. No RLS, money-touch, cold restore or final publication relaxation is implied.
+
+Local success measurements from one real graph/fake provider/disposable PG:
+175 baseline; 160 diagnostics; 145 transient progress; 121 timing memory/log;
+113 parent snapshot reuse. Full counts include parent and child. Entry batching
+removed three helper barriers, initially hidden by timing-chunk variability.
+These measurements are not production latency estimates or <30 proof.
+
+Follow-on proofs: minimal recovery records lower success 113 -> 107;
+checkpoint memory 107 -> 101; immutable handler authority 101 -> 98;
+recent healthy socket reuse 98 -> 97. Pool probes are skipped only in answer
+mode, not for idle/broken sockets. Authority scope changes still fail and the
+post-handler authority check stays fresh. Trace teardown follows fallback
+correction, including exceptional paths. No target claim: 97 remains above 30.
+
+Entry claim now shares the short entry transaction and immutable capability.
+Input reload is gone: the parent verifies the retained content-addressed input
+in memory; recovery still reads immutable DB records. Completion evidence,
+completion event and fenced worker status share one short finish transaction.
+The final status write locks live task/session rows and checks original
+owner/auth/generation/Stop. No DB transaction spans provider execution.
+
+Later whole-answer local proof: cold success 58 (parent 29, child 29), genuine
+warm follow-up 39 (parent 27, child 12). Three turns settle exactly six money
+touches and the summed actual balance. This is still NOT the <30 target.
+Do not mistake the child-only warm count for the whole answer.
+
+Final success counts after the cold-claim and result-channel changes: 29 cold,
+29 next cold, 26 warm. Missing usage 28; provider refusal 32; Stop 50-51 in the
+observed runs. Only the measured success and missing-usage cases are under 30.
+The trace counts the entire submit path, including both money touches.
+
+The private result channel chunks the actual post-publication snapshot and
+accepted event, including the real phase. Frames require the operation's
+private nonce, ordering, size limit and digest. Missing/malformed/oversized
+results use the durable fallback. Final completion SQL also checks the DB's
+answer operation and published sequence, so a memory-only result cannot mark
+work complete. Reuse the binding's control instead of re-reading the same row.
+
+The watcher reuses the verified entry and captures its event version BEFORE
+entry validation, so an intervening Stop wake is not lost. Later revocation/
+cross-process checks keep the existing safety cadence and final fences.
+
+The exact `req rebuild --apply` harness runs the real launcher, dispatcher and
+orchestrator against local git origins, with effect doubles for image, migration
+and preview work. It proves routing and owner gates, not real Docker acceptance
+or live deployment. No Docker executable is available in this environment.
+
+The collector integration now uses real retained answer trace rows from the
+real-graph/fake-provider/disposable-PG test, with only Docker transport doubled.
+The ZIP contains parent/child completeness, whole barriers, money evidence and
+engine timings, not raw private result frames. Failed trace-export commands or
+empty retention are recorded as missing sources in facts.json after collection.
+A successfully written ZIP does not prove all sources were captured.
+
+Latest hardened counts: cold29/nextcold29/warm26, missing28, refusal29, Stop47.
+The broad candidate engine group passed105 tests (4 skips); the explicit-source
+answer/collector/watcher group passed107. A wider unrelated delivery sweep is
+not green in this environment: spec-generator's sibling link is broken, and
+some older tests prepend the old engine sibling during collection. Preload the
+candidate engine when running its focused answer checks. Do not mix test results
+from different engine source trees or call missing prerequisites a feature pass.
+The transient-error watcher double accepts the cursor_cache keyword already
+used by the current app and retains the original recovery assertion.
+
+The missing test prerequisite was recovered from the repo's pinned generator
+wheel into an isolated fixture. A separate Python environment loads candidate
+engine and delivery sources consistently, including child processes. Expanded
+answer/watch/debug tests then passed124 with no skips, and child/generator
+cutover/recovery tests passed30. No dependency pin or existing checkout changed.
+
+req debug now includes a redacted, read-only local diagnostic recovery export.
+Decode JSON before scrubbing its string values: scrubbing serialized JSON can
+consume escaped newlines and corrupt the export. The real-spool collector test
+caught this. Export never consumes evidence, starts work, imports documents or
+replays paid calls. No automatic expiry; capacity exhaustion is visible as a
+best-effort-copy failure. Stop remains41 barriers, known above-target debt.
+
+Owner test handoff needs a real executable route, not a guessed preview action.
+The candidate accounting path remains inactive. `answer-candidate-test.py` first
+checks DB TCP/read-only login from the repo's private .env, then checkout/tool
+inputs, the migration inventory (its existing exact phrase only if pending),
+rebuild, a free isolated proof and req debug. The proof uses a fake HTTP provider
+and disposable PG, with default0.1 estimate. It does not prove live-pooler answer
+latency or activate the runtime. Use an isolated uv proof environment rather
+than assume delivery's venv contains engine dependencies. The real collector
+carries the three turn traces and cold29/nextcold29/warm26 table in its ZIP.
+
+macOS has no memfd_create. Trace via an anonymous pipe drained on a dedicated
+thread, never a temporary disk file; failed tracing remains incomplete, not zero.
+Tests cover the missing-Linux-API path and the real free proof still counts29/26.

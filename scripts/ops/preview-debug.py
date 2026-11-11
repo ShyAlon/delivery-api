@@ -14,13 +14,30 @@ p=argparse.ArgumentParser();p.add_argument('--code',default='manual');p.add_argu
 root=Path(__file__).resolve().parents[2];target=root/'runs'/'preview-debug';target.mkdir(parents=True,exist_ok=True)
 home=Path.home();missing=[]
 LIMIT=200000
-def read(command,timeout=15):
-    try:return subprocess.run(command,cwd=root,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=timeout).stdout[-LIMIT:]
-    except (OSError,subprocess.TimeoutExpired) as exc:return type(exc).__name__
+def read(command,timeout=15,source=None):
+    try:
+        result=subprocess.run(command,cwd=root,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=timeout)
+        if source and getattr(result,'returncode',0)!=0:missing.append(source+': command failed')
+        return result.stdout[-LIMIT:]
+    except (OSError,subprocess.TimeoutExpired) as exc:
+        if source:missing.append(source+': '+type(exc).__name__)
+        return type(exc).__name__
 def clean(text):
     text=re.sub(r'postgres(?:ql)?://[^\s]+','postgresql://[REDACTED]',text)
     text=re.sub(r'\bsk-[A-Za-z0-9_-]+','[REDACTED]',text)
     return redact(text)
+def clean_json(text,source):
+    # Decode before scrubbing string values. Scrubbing serialized JSON treats
+    # escaped newlines as ordinary bytes and can corrupt the JSON document.
+    def values(value):
+        if isinstance(value,dict):return {key:values(item) for key,item in value.items()}
+        if isinstance(value,list):return [values(item) for item in value]
+        return clean(value) if isinstance(value,str) else value
+    try:return json.dumps(values(redact(json.loads(text))),ensure_ascii=False)
+    except (ValueError,TypeError):
+        missing.append(source+': malformed or unavailable diagnostic export')
+        return json.dumps({'omitted':source,'reason':'malformed or unavailable diagnostic export'})
+
 def tail(path):
     size=path.stat().st_size
     with open(path,'rb') as f:
@@ -69,7 +86,6 @@ facts={'captured_at':now.isoformat(),'failure_code':args.code,'step':args.step,'
 path=target/('preview-'+now.strftime('%Y%m%dT%H%M%S%fZ')+'.zip')
 fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
 with os.fdopen(fd,'wb') as out,zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
-    z.writestr('facts.json',json.dumps(facts,indent=2))
     z.writestr('host.txt',clean(host_facts()))
     z.writestr('repos.txt','\n'.join('%s %s %s dirty=%s %s'%(n,r['branch'],r['head'],r['dirty'],'; '.join(r['dirty_files'])) for n,r in repo_facts.items()))
     z.writestr('images.txt',clean(read(['docker','images','--format','{{.Repository}}:{{.Tag}} {{.ID}} {{.CreatedSince}}','--filter','reference=requi*'])))
@@ -79,6 +95,17 @@ with os.fdopen(fd,'wb') as out,zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as 
     if rebuild_state:z.writestr('rebuild-state.json',clean(tail(rebuild_state)))
     if names:
         z.writestr('containers.txt','\n'.join(clean(read(['docker','inspect','--format',INSPECT,n])) for n in names))
-        for n in names:z.writestr('docker-'+n+'.log',clean(read(['docker','logs','--tail','300',n])))
+        answer_traces=[]
+        for n in names:
+            z.writestr('docker-'+n+'.log',clean(read(['docker','logs','--tail','300',n])))
+            trace=read(['docker','exec',n,'python','-c','from delivery_api.answer_trace import exported_lines; print(exported_lines())'],source='answer traces '+n)
+            if not trace.strip():missing.append('answer traces '+n+': no retained trace rows')
+            answer_traces.append('CONTAINER '+n+'\n'+trace)
+            recovery=read(['docker','exec',n,'python','-c','from delivery_api.answer_diagnostics import exported_json; print(exported_json())'],source='answer diagnostic recovery '+n)
+            z.writestr('answer-diagnostics-'+n+'.json',clean_json(recovery,'answer diagnostic recovery '+n))
+        z.writestr('answer-traces.jsonl',clean('\n'.join(answer_traces)))
+    # Write after collection so failures discovered during docker exec appear
+    # in the ZIP as well as on stderr. A ZIP is not evidence of full capture.
+    z.writestr('facts.json',json.dumps(facts,indent=2))
 for m in missing:print('MISSING: '+m,file=sys.stderr)
 print('Debug ZIP: '+str(path));print('Failure: '+args.code+'; step: '+args.step+'; build: '+facts['delivery_head'])

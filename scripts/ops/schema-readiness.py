@@ -80,6 +80,7 @@ MIGRATIONS={
  '20261102220000_owner_test_tasks.sql':('signature:requi_test_task_owner()','signature:requi_purge_test_task(text,boolean)','test-marker:is_test'),
  '20261104210000_stopped_child_job_closure.sql':('worker-policy:backend_stopped_worker_close','signature:requi_stopped_worker_immutable()','worker-trigger:stopped_worker_immutable'),
  '20261109000000_document_append_rotate_first.sql':('function-body:requi_document_append(text,integer,text,bytea,uuid,uuid,double precision):IS DISTINCT FROM auth_session',),
+ '20261111070000_answer_charge_receipts.sql':('table:answer_charge_receipts','table:answer_charge_usage','signature:requi_answer_start(text,text,text,text,jsonb)','signature:requi_answer_finish(text,jsonb)'),
 }
 # Shared with installer and disposable harness: no hidden blanket grants.
 sys.path.insert(0,str(ROOT/'src'))

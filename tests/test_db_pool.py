@@ -53,3 +53,25 @@ def test_pool_shape_matches_the_engine_contract():
     from psycopg_pool import ConnectionPool
     for method in ('getconn', 'putconn', 'connection', 'close'):
         assert callable(getattr(ConnectionPool, method)), method
+
+
+def test_answer_engine_checkout_skips_only_recent_healthy_socket(monkeypatch):
+    from types import SimpleNamespace
+    calls=[]
+    monkeypatch.setattr(db_pool.ConnectionPool,'check_connection',staticmethod(lambda c:calls.append(c)))
+    monkeypatch.setattr(db_pool.time,'monotonic',lambda:100)
+    conn=SimpleNamespace(_delivery_returned_at=99,_delivery_pool_new=False,closed=False,broken=False)
+    token=db_pool.answer_pool_reuse.set(True)
+    try:
+        db_pool._traced_check(conn)
+        assert not calls
+        conn._delivery_returned_at=80
+        db_pool._traced_check(conn)
+        assert calls==[conn]
+        conn._delivery_returned_at=99;conn.broken=True
+        db_pool._traced_check(conn)
+        assert calls==[conn,conn]
+    finally:db_pool.answer_pool_reuse.reset(token)
+    conn.broken=False
+    db_pool._traced_check(conn)
+    assert len(calls)==3,'legacy engine checks remain unchanged'

@@ -13,7 +13,9 @@ from test_cloud_answer import ACTOR, _answer, _pending, _setup
 
 def test_watcher_survives_a_transient_db_error(monkeypatch):
     calls = {"n": 0}
-    async def drain(task_id, session_id, *, allow_absent=False):
+    # The watcher now carries its cursor cache between drain calls. Keep the
+    # transient-error double on that contract without changing the assertion.
+    async def drain(task_id, session_id, *, allow_absent=False, cursor_cache=None):
         calls["n"] += 1
         if calls["n"] == 1:
             raise psycopg.OperationalError("server closed the connection unexpectedly")
