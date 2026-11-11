@@ -349,8 +349,10 @@ class ScopedPostgres:
                 rows=cursor.fetchall()
                 connection.autocommit=restore
                 elapsed=time.monotonic()-batch_started
+                note_statement('BEGIN READ ONLY [one trip]',0,0)
                 note_statement(statement_label(_SETUP)+' [one trip]',0,0)
                 note_statement(statement_label(sql),elapsed,1)
+                note_statement('COMMIT',0,0)   # committed in the same pipeline Sync, not another trip
                 if stats is not None:
                     stats.transactions+=1;stats.queries+=1;stats.db_seconds+=time.monotonic()-started
                     if reused:stats.reused+=1
