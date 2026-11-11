@@ -43,7 +43,7 @@ def test_local_pin_cannot_acquire_a_nonzero_price(monkeypatch):
 
 def test_task_generation_captures_only_valid_independent_routes(monkeypatch):
  env,payload=setup(monkeypatch);saved={}
- store=SimpleNamespace(_postgres=object(),task=lambda t:{'generation':4},decision_review=lambda *a:saved.get('pin'),retain_decision_review=lambda *a:saved.update(pin=a[-1]))
+ store=SimpleNamespace(_postgres=object(),task_model_pin=lambda t:{'generation':4,'environment':saved.get('pin')},decision_review=lambda *a:saved.get('pin'),retain_decision_review=lambda *a:saved.update(pin=a[-1]))
  gateway=pins.DurableGateways(store,env)
  assert gateway.for_task('task').models=={'ollama':payload['row']['model']}
  payload['context']['model']='later-invalid'

@@ -431,6 +431,17 @@ class PostgresStore:
         if retained is None or json.loads(retained['payload']) != json.loads(json.dumps(payload)):
             raise ValueError('conflicting retained decision review revision')
 
+    @_transactional
+    def task_model_pin(self,task_id):
+        """Current task generation and its retained immutable model-pin environment in one snapshot.
+        This reads only the generation and retained review, never admission authority or a cached task projection."""
+        row=self._execute_native("""SELECT t.generation,r.payload
+            FROM tasks t LEFT JOIN decision_reviews r ON r.task_id=t.task_id
+                AND r.wait_id='model-pins:'||t.generation::text AND r.revision='model-pins-v1'
+            WHERE t.task_id=%s AND t.deleted_at IS NULL""",(task_id,)).fetchone()
+        if row is None:return None
+        return {'generation':row['generation'],'environment':json.loads(row['payload']) if row['payload'] is not None else None}
+
     def decision_review(self, task_id: str, wait_id: str, revision: str | None=None) -> dict | None:
         if revision:
             row = self._execute_native('SELECT payload FROM decision_reviews WHERE task_id=%s AND wait_id=%s AND revision=%s', (task_id, wait_id, revision)).fetchone()
