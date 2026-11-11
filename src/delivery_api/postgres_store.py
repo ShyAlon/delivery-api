@@ -25,6 +25,25 @@ from .tenancy import current_scope, TenantAccessDenied
 
 # Store reads that are exactly one plain SELECT. Outside a shared request transaction they run as ONE network round trip
 # (BEGIN + identity + statement + COMMIT in one batch) instead of three. A second statement in one of them fails loudly.
+_answer_admission=ContextVar('answer_admission',default=None)
+
+@contextlib.contextmanager
+def answer_admission(store):
+    token=_answer_admission.set((store,current_scope(),[]))
+    try:yield
+    finally:_answer_admission.reset(token)
+
+def _entry_policy(store,name,action):
+    from .prepaid import owner_lock
+    from .suspension_policy import require_task_operation
+    admitted=_answer_admission.get()
+    if admitted is not None and admitted[0] is store and admitted[1]==current_scope() and name in ('enqueue_worker','claim_worker'):
+        if not admitted[2]:
+            require_task_operation(store,'task.answer')
+            admitted[2].append(True)
+        return
+    owner_lock(store);require_task_operation(store,action)
+
 _ONE_TRIP_READS=frozenset({'stop_state','worker_authority','task','session_binding','engine_session','progress_cursor','auth_session_active'})
 
 
@@ -68,9 +87,7 @@ def _transactional(method):
             if self._answer_batch_policies.get():
                 action=_TASK_ENTRY_OPERATIONS.get(method.__name__)
                 if action:
-                    from .prepaid import owner_lock
-                    from .suspension_policy import require_task_operation
-                    owner_lock(self);require_task_operation(self,action)
+                    _entry_policy(self,method.__name__,action)
             return method(self,*args,**kwargs)
         with contextlib.ExitStack() as cleanup:
             if method.__name__ in ('ensure_waiting_input_event','retain_decision_review','ingest_interview_progress_page','admit_provider_attempt'):
@@ -100,10 +117,7 @@ def _transactional(method):
             try:
                 action=_TASK_ENTRY_OPERATIONS.get(method.__name__)
                 if action:
-                    from .prepaid import owner_lock
-                    from .suspension_policy import require_task_operation
-                    owner_lock(self)
-                    require_task_operation(self,action)
+                    _entry_policy(self,method.__name__,action)
                 return method(self,*args,**kwargs)
             finally: self._connection.reset(token)
     return call
@@ -1988,6 +2002,24 @@ FROM tasks t"""
         if not task or task['stop_requested_at'] is None or str(job['auth_session_id'])!=current_scope().session_id:
             raise AdmissionDenied('original owner stop authority required')
         self._execute_native("UPDATE worker_jobs SET state='done',updated_at=%s WHERE job_id=%s AND state='running'",(time.time(),job_id), write=True)
+
+    @_transactional
+    def finish_answer_worker(self,capability,job_id):
+        """Atomic final answer status with live owner/auth/generation/Stop fence."""
+        if current_scope()!=capability.scope:raise TenantAccessDenied('answer finish scope changed')
+        row=self._execute_native("""WITH live AS (
+            SELECT t.task_id,e.session_id FROM tasks t JOIN engine_sessions e ON e.task_id=t.task_id
+            WHERE t.task_id=%s AND t.owner_id=%s::uuid AND t.generation=%s
+              AND t.stop_requested_at IS NULL AND t.deleted_at IS NULL
+              AND e.session_id=%s AND e.owner_id=t.owner_id AND e.generation=t.generation
+              AND public.requi_session_active() FOR UPDATE OF t,e)
+            UPDATE worker_jobs j SET state='done',updated_at=%s FROM live
+            WHERE j.job_id=%s AND j.task_id=live.task_id AND j.session_id=live.session_id
+              AND j.owner_id=%s::uuid AND j.auth_session_id=%s::uuid AND j.generation=%s
+              AND j.state='running' RETURNING j.job_id""",
+            (capability.task_id,capability.scope.owner_id,capability.generation,capability.session_id,
+             time.time(),job_id,capability.scope.owner_id,capability.scope.session_id,capability.generation),write=True).fetchone()
+        if row is None:raise TenantAccessDenied('answer finish stale, stopped or revoked')
 
     def finish_worker(self,job_id,failed=False):
         job=self.worker_job(job_id)

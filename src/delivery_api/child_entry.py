@@ -124,7 +124,7 @@ def main():
                 from interview_engine.child_operations import execute_operation
                 from vmodel_contracts.interactive import StartSessionRequest,InputResponse,ModelRouteSwitchRequest
                 pool=build_pool(cfg['dsn'],max_size=4,name='child-operation')
-                store=pg_session_store(pool,str(binding.owner_id),str(binding.auth_session_id))
+                store=pg_session_store(pool,str(binding.owner_id),str(binding.auth_session_id),entry_verified=bool(cfg.get('answer_trace')))
                 if 'REQUI_CHILD_PROGRESS_FD' in os.environ:
                     from .child_progress import install_progress_wakes
                     progress_channel=install_progress_wakes(store,int(os.environ['REQUI_CHILD_PROGRESS_FD']))
@@ -153,6 +153,8 @@ def main():
                                 if cfg.get('answer_trace'):
                                     from interview_engine.pg_checkpoint import answer_checkpoint_memory
                                     stack.enter_context(answer_checkpoint_memory())
+                                    from interview_engine.pg_session_store import answer_publication
+                                    stack.enter_context(answer_publication(operation))
                                     stack.enter_context(transient_progress(lambda page:print('REQUI_ANSWER_PROGRESS '+json.dumps({'operation_id':operation.operation_id,'page':page},separators=(',',':')),file=__import__('sys').stderr,flush=True)))
                                 stack.enter_context(diagnostic_batch(operation))
                                 yield
@@ -211,7 +213,7 @@ def main():
                 from interview_engine.tenant_worker import pg_session_store
                 from .child_generator_entry import execute
                 pool=build_pool(cfg['dsn'],max_size=4,name='child-generator')
-                store=pg_session_store(pool,str(binding.owner_id),str(binding.auth_session_id))
+                store=pg_session_store(pool,str(binding.owner_id),str(binding.auth_session_id),entry_verified=bool(cfg.get('answer_trace')))
                 execute(op,cfg,store,broker,stop,int(os.environ['REQUI_CHILD_OUTPUT_FD']))
         if gone.is_set() and not warm:raise RuntimeError('parent lost after dispatch')
         # A warm child emits per-operation terminal events inside its loop;

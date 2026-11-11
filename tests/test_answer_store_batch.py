@@ -41,3 +41,31 @@ def test_answer_review_one_statement_keeps_conflicting_bytes_and_rolls_back(pg_w
                 w.store.retain_answer_review(tid,'input','v1',{'answer':'other'})
             assert w.store.decision_review(tid,'input','v1')=={'answer':'one'}
         finally:trace.restore()
+
+
+def test_answer_admission_checks_policy_once_without_duplicate_outer_lock(pg_workspace_factory,monkeypatch):
+    from delivery_api import suspension_policy,prepaid
+    from delivery_api.postgres_store import answer_admission
+    with pg_workspace_factory() as w,tenant_context(w.scope):
+        tid=w.store.create_task('single answer policy')['task_id'];sid=str(uuid.uuid4());w.store.set_engine_session(tid,sid)
+        calls=[];original=suspension_policy.require_task_operation
+        def checked(store,action):calls.append(action);return original(store,action)
+        monkeypatch.setattr(suspension_policy,'require_task_operation',checked)
+        def forbidden(*a):raise AssertionError('duplicate owner lock')
+        with monkeypatch.context() as patch,answer_admission(w.store):
+            patch.setattr(prepaid,'owner_lock',forbidden)
+            job=w.store.run_answer_batch(lambda:w.store.enqueue_worker(tid,'phase:intent'))
+            assert w.store.claim_worker(job) is not None
+        assert calls==['task.answer']
+
+
+def test_final_answer_worker_rejects_stop_and_scope_change(pg_workspace_factory):
+    from delivery_api.tenancy import TenantScope,TenantAccessDenied
+    with pg_workspace_factory() as w,tenant_context(w.scope):
+        tid=w.store.create_task('final answer fence')['task_id'];sid=str(uuid.uuid4());w.store.set_engine_session(tid,sid)
+        job=w.store.enqueue_worker(tid,'phase:intent');cap=w.store.claim_worker(job)
+        with tenant_context(TenantScope(str(uuid.uuid4()),str(uuid.uuid4()))),pytest.raises(TenantAccessDenied):
+            w.store.finish_answer_worker(cap,job)
+        w.store.request_task_stop(tid)
+        with pytest.raises(TenantAccessDenied,match='stale, stopped or revoked'):w.store.finish_answer_worker(cap,job)
+        assert w.store.worker_job(job)['state']=='running'

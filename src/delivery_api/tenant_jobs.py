@@ -6,19 +6,39 @@ Auth session to re-authorize interrupted work; rate/spend admission is separate.
 from .tenancy import current_scope,tenant_context
 
 
-async def execute_job(store,job_id,handler,*,verify_stopped_quiescence=None,verify_completion_quiescence=None,reuse_answer_authority=False):
+async def execute_job(store,job_id,handler,*,verify_stopped_quiescence=None,verify_completion_quiescence=None,reuse_answer_authority=False,claimed_answer=None):
     scope=current_scope()
     with tenant_context(scope):
-        capability=store.claim_worker(job_id)
+        if claimed_answer is not None:
+            if not reuse_answer_authority or claimed_answer[0].scope!=scope or claimed_answer[2]!=job_id:raise PermissionError('scoped answer entry required')
+            capability=claimed_answer[0]
+        else:capability=store.claim_worker(job_id)
         if capability is None:return False
         from .diagnostic_evidence import bound
         with bound(task_id=capability.task_id,session_id=capability.session_id,job_id=job_id):
             try:
-                task=capability.validate(store)
+                task=claimed_answer[1] if claimed_answer is not None else capability.validate(store)
                 from contextlib import nullcontext
                 from .worker_capability import answer_authority
                 with answer_authority(store,capability,task) if reuse_answer_authority else nullcontext():
-                    await handler(capability)
+                    completion=await handler(capability)
+                if reuse_answer_authority:
+                    def finish_answer():
+                        # Fresh final authority in one short transaction. The
+                        # immutable capability is reused only for nested helpers.
+                        fresh=capability.validate(store)
+                        if fresh.get('stop_requested_at') is not None:
+                            if verify_stopped_quiescence is not None and verify_stopped_quiescence(capability) is True:
+                                store.finish_stopped_worker(job_id,worker_quiescent=True)
+                            return True
+                        if verify_completion_quiescence is not None and verify_completion_quiescence(capability) is not True:return True
+                        if completion is None:raise PermissionError('answer completion evidence missing')
+                        record,event=completion
+                        store.retain_answer_review(capability.task_id,'child-job:'+job_id,'child-completion-v1',record)
+                        store.add_event(capability.task_id,'child.completed',event[0],payload=event[1])
+                        store.finish_answer_worker(capability,job_id)
+                        return True
+                    return store.run_answer_batch(finish_answer)
                 task=store.task(capability.task_id)
                 if task and task.get('stop_requested_at') is not None:
                     # Handler return, cancellation, timeout or an engine snapshot

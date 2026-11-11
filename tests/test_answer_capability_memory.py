@@ -20,3 +20,18 @@ def test_frozen_answer_authority_reused_only_in_scope_and_final_is_fresh():
                 with pytest.raises(TenantAccessDenied):cap.validate(store)
         cap.validate(store)
     assert len(calls)==2
+
+
+def test_frozen_input_verifies_retained_digest_without_owner_reread():
+    from delivery_api.child_operation_refs import ChildOperationRefs
+    scope=TenantScope('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000a1')
+    class Store:
+        def task(self,tid):return {'owner_id':scope.owner_id}
+        def retain_decision_review(self,*a):pass
+    with tenant_context(scope):
+        refs=ChildOperationRefs(Store(),'t')
+        value={'answer':[1]};ref=refs.put('answer',value)
+        got=refs.frozen(ref,'answer',value);got['answer'].append(2)
+        assert value=={'answer':[1]}
+        with pytest.raises(PermissionError):refs.frozen(ref,'answer',{'answer':[2]})
+        with tenant_context(TenantScope('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-0000000000a2')),pytest.raises(PermissionError):refs.frozen(ref,'answer',value)

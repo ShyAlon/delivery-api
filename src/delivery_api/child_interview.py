@@ -277,6 +277,8 @@ class ChildInterviewClient(EngineClient):
         from .db_pool import answer_pool_reuse
         pool_token=answer_pool_reuse.set(True)
         wire=WireTrace();wire.install(context_only=True)
+        from .postgres_store import answer_admission
+        admission=answer_admission(self.store);admission.__enter__()
         try:
             if not self.answer_accounting.replay(self.store,sid,response):self._execute(sid,response=response)
             completion=self._answer_snapshots.pop(sid,None)
@@ -308,15 +310,16 @@ class ChildInterviewClient(EngineClient):
                 self._answer_trace_ready.pop(job,None)
                 self._progress_operations.pop(job,None)
             else:wire.restore()
+            admission.__exit__(None,None,None)
             answer_pool_reuse.reset(pool_token)
             if token is not None:request_stats.reset(token)
     def _execute(self,sid,*,request=None,response=None):
         if self.answer_accounting is not None and response is not None:
-            operation,ref,kind=self.store.run_answer_batch(lambda:self._prepare_execute(sid,request=request,response=response))
-        else:operation,ref,kind=self._prepare_execute(sid,request=request,response=response)
+            operation,ref,kind,frozen_input,claimed_answer=self.store.run_answer_batch(lambda:self._prepare_execute(sid,request=request,response=response))
+        else:operation,ref,kind,frozen_input,claimed_answer=self._prepare_execute(sid,request=request,response=response)
         # Entry transaction has committed and its owner lock is released before
         # the child, provider, watcher or payment connection is touched.
-        self._launch(operation,ref,kind)
+        self._launch(operation,ref,kind,frozen_input=frozen_input,claimed_answer=claimed_answer)
 
     def _prepare_execute(self,sid,*,request=None,response=None):
         from .tenancy import current_scope
@@ -373,16 +376,30 @@ class ChildInterviewClient(EngineClient):
                 if claim is None:raise PermissionError('bootstrap lease held')
                 if not registry._store.release(claim):raise PermissionError('bootstrap release lost')
         options={'model_route':provider+':'+model}
-        job_id=self.store.enqueue_worker(task_id,'phase:intent',execution_options=options)
+        answer_entry=self.answer_accounting is not None and response is not None and provider=='deepseek'
+        if answer_entry:
+            from .worker_capability import WorkerCapability,answer_authority
+            capability,entry_task=WorkerCapability._capture_and_validate(self.store,task_id)
+            if capability.session_id!=sid or capability.generation!=binding['generation']:
+                raise PermissionError('answer entry identity changed')
+            with answer_authority(self.store,capability,entry_task):
+                job_id=self.store.enqueue_worker(task_id,'phase:intent',execution_options=options)
+        else:job_id=self.store.enqueue_worker(task_id,'phase:intent',execution_options=options)
         # The durable job id is the logical operation id, reused by recovery.
-        binding=self.store.session_binding(sid)
+        if not answer_entry:binding=self.store.session_binding(sid)
         value={'version':1,'operation_id':job_id,'binding':{'owner_id':scope.owner_id,'auth_session_id':scope.session_id,
             'task_id':task_id,'session_id':sid,'job_id':job_id,'generation':binding['generation'],
             'lease_epoch':binding['lease_epoch'],'provider':provider,'model':model},'operation':body}
         if binding['generation']>1:value['binding']['execution_anchor_sha256']=self.store.installed_execution_anchor(sid)['anchor_sha256']
         operation=decode_operation(json.dumps(value).encode()+b'\n')
         retain(task_id,'child-job:'+job_id,'child-operation-v1',value)
-        return operation,ref,'start' if request is not None else 'answer'
+        claimed_answer=None
+        if answer_entry:
+            with answer_authority(self.store,capability,entry_task):
+                claimed=self.store.claim_worker(job_id)
+            if claimed is None:raise PermissionError('answer entry job already claimed')
+            claimed_answer=(claimed,entry_task,job_id)
+        return operation,ref,'start' if request is not None else 'answer',response.model_dump(mode='json') if answer_entry else None,claimed_answer
 
     def resume(self,job_id):
         """Explicit owner recovery, never automatic retry or a new operation id."""
@@ -435,7 +452,7 @@ class ChildInterviewClient(EngineClient):
         self._launch(operation,ref,kind)
         return self.snapshot(job['session_id'])
 
-    def _launch(self,operation,ref,ref_kind):
+    def _launch(self,operation,ref,ref_kind,*,frozen_input=None,claimed_answer=None):
         from .tenancy import current_scope
         from .child_operation_refs import ChildOperationRefs
         from requi_child_contract import encode_operation
@@ -467,15 +484,23 @@ class ChildInterviewClient(EngineClient):
                 if self.answer_accounting is not None:
                     self._answer_traces[job_id]={'complete':False,'callers':{}}
                     self._answer_trace_ready[job_id]=asyncio.Event()
-                input_payload=refs.get(ref,ref_kind)
+                input_payload=refs.frozen(ref,ref_kind,frozen_input) if frozen_input is not None else refs.get(ref,ref_kind)
                 answer_run=None
                 if self.answer_accounting is not None and ref_kind=='answer' and operation.binding.provider=='deepseek':
                     answer_run=self.answer_accounting.begin(self.store,operation,input_payload,gateway)
                     self._active_answers[sid]=answer_run
                     from collections import deque
                     with self._progress_lock:
-                        target=self._transient_progress.setdefault(sid,{'sid':sid,'task_id':task_id,'scope':scope,'cursor':int(time.time()*1000000),'events':deque(maxlen=256),'timings':deque(maxlen=128)})
-                        if target['scope']!=scope:raise PermissionError('transient progress scope changed')
+                        # Observability memory is bounded across completed sessions,
+                        # not only within each stream. Never evict an active turn.
+                        active_sids={item['sid'] for item in self._progress_operations.values()}
+                        for old in list(self._transient_progress):
+                            if len(self._transient_progress)<128:break
+                            if old not in active_sids and old!=sid:self._transient_progress.pop(old,None)
+                        target=self._transient_progress.get(sid)
+                        if target is None or target['scope']!=scope:
+                            target={'sid':sid,'task_id':task_id,'scope':scope,'cursor':int(time.time()*1000000),'events':deque(maxlen=256),'timings':deque(maxlen=128)}
+                            self._transient_progress[sid]=target
                         self._progress_operations[job_id]=target
                 journal=None if answer_run is not None else ChildBrokerJournal(self.store,operation)
                 compute=LocalComputeEvidence(lambda value:self.store.retain_decision_review(task_id,'child-job:'+job_id,'compute:'+str(operation.binding.lease_epoch),value))
@@ -502,15 +527,12 @@ class ChildInterviewClient(EngineClient):
                     if task and task.get('stop_requested_at') is None and session and session['generation']==op.binding.generation:
                         raise PermissionError('stop signal has no durable stop/revocation evidence')
                 if parked_entry is not None:
-                    self.store.add_event(task_id,'progress','Reusing an existing session',phase_key=None,
-                        payload={'stage':'engine.session','status':'started','source':'engine.timing'})
+                    self._record_engine_timings([(sid,'engine.session','Reusing an existing session','started')])
                     def on_event(event):
                         if event.state=='running':
-                            self.store.add_event(task_id,'progress','Reusing an existing session',phase_key=None,
-                                payload={'stage':'engine.session','status':'completed','source':'engine.timing'})
+                            self._record_engine_timings([(sid,'engine.session','Reusing an existing session','completed')])
                 else:
-                    self.store.add_event(task_id,'progress','Warming up a fresh session',phase_key=None,
-                        payload={'stage':'engine.session','status':'started','source':'engine.timing'})
+                    self._record_engine_timings([(sid,'engine.session','Warming up a fresh session','started')])
                     on_event=lambda event:None
                 child_error=None;handle=None;progress_ctx=None
                 def drop_entry():
@@ -584,8 +606,10 @@ class ChildInterviewClient(EngineClient):
                     await self.supervisor.reap(handle,operation,failed=True,failure_error=child_error)
                     drop_entry();handle=None
                 retain=self.store.retain_answer_review if answer_run is not None else self.store.retain_decision_review
-                task_after=self.store.task(task_id)
-                stopped_by_owner=bool(task_after and task_after.get('stop_requested_at') is not None)
+                if answer_run is not None:stopped_by_owner=stop.is_set()
+                else:
+                    task_after=self.store.task(task_id)
+                    stopped_by_owner=bool(task_after and task_after.get('stop_requested_at') is not None)
                 if stopped_by_owner:
                     if self.supervisor.last_result is None or not self.supervisor.last_result.reaped:
                         raise RuntimeError('stopped child reaping unverified')
@@ -615,17 +639,17 @@ class ChildInterviewClient(EngineClient):
                         publish_document_revision(self.store,task_id,documents,
                             writer_instance='interview-child:'+operation.operation_id)
                     timings['completion']=int((time.monotonic()-completion_at)*1000);timings['run']=int((time.monotonic()-run_at)*1000)
-                    retain(task_id,'child-job:'+job_id,'child-completion-v1',
-                        {'operation_id':operation.operation_id,'compute_ms':str(compute.value),'reaped':True,'timings':timings,'provider_timings':broker.timings})
+                    completion_record={'operation_id':operation.operation_id,'compute_ms':str(compute.value),'reaped':True,'timings':timings,'provider_timings':broker.timings}
+                    if answer_run is None:retain(task_id,'child-job:'+job_id,'child-completion-v1',completion_record)
                     quiescent=True
                     # Parking decision: a verified completed operation on a
                     # warm-capable child whose session waits for the next input
                     # keeps its claimed child alive.
                     parking=(handle is not None and handle.state=='completed'
                         and (parked_entry is not None or cfg['warm']) and process_status==ProcessStatus.WAITING_INPUT)
-                    self.store.add_event(task_id,'child.completed',
-                        'Local child parked after durable publication' if parking else 'Local child reaped after durable publication',
-                        payload={'job_id':job_id,'compute_ms':str(compute.value),'pid':handle.process.pid if handle is not None else self.supervisor.last_result.pid})
+                    completion_event=('Local child parked after durable publication' if parking else 'Local child reaped after durable publication',
+                        {'job_id':job_id,'compute_ms':str(compute.value),'pid':handle.process.pid if handle is not None else self.supervisor.last_result.pid})
+                    if answer_run is None:self.store.add_event(task_id,'child.completed',completion_event[0],payload=completion_event[1])
                     if parking:
                         ctx=progress_ctx if parked_entry is None else parked_entry['progress_ctx']
                         self._warm[sid]={'handle':handle,'operation':operation,'progress_ctx':ctx,'parked_at':time.monotonic()}
@@ -644,13 +668,16 @@ class ChildInterviewClient(EngineClient):
                     drop_entry()
                     if progress_ctx is not None:progress_ctx.__exit__(None,None,None)
                     raise
+                return (completion_record,completion_event) if answer_run is not None else None
             return await execute_job(self.store,job_id,handler,
                 verify_completion_quiescence=lambda cap:quiescent,verify_stopped_quiescence=lambda cap:quiescent,
-                reuse_answer_authority=self.answer_accounting is not None and ref_kind=='answer' and operation.binding.provider=='deepseek')
+                reuse_answer_authority=self.answer_accounting is not None and ref_kind=='answer' and operation.binding.provider=='deepseek',
+                claimed_answer=claimed_answer)
         with _slot:
             timings['slot_wait']=int((time.monotonic()-slot_at)*1000)
             try:self._run(run())
             except BaseException:
+                if claimed_answer is not None:self._drop_warm(sid,recycle=True)
                 try:self.store.pause_interrupted_worker(job_id)
                 except Exception:
                     from .diagnostic_evidence import failure

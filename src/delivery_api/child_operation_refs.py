@@ -19,6 +19,14 @@ class ChildOperationRefs:
         ref='child:'+hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
         self.retain(self.task_id,ref,'child-input-v1',payload)
         return ref
+    def frozen(self,ref,kind,value):
+        """Verify an input already retained by this same request, without reread."""
+        from copy import deepcopy
+        payload={'version':1,'owner_id':current_scope().owner_id,'task_id':self.task_id,'kind':kind,'value':value}
+        digest='child:'+hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+        if digest!=ref:raise PermissionError('frozen operation input digest changed')
+        return deepcopy(value)
+
     def get(self,ref,kind):
         owner=self._owner();payload=self.store.decision_review(self.task_id,ref,'child-input-v1')
         if (not payload or payload.get('owner_id')!=owner or payload.get('task_id')!=self.task_id

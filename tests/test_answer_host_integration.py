@@ -124,6 +124,27 @@ def test_real_paid_answer_uses_one_start_finish_without_per_call_ledger(pg_works
                 else:
                     with pytest.raises(PermissionError,match='stopped'):client.resume(receipt[3])
                 assert len(calls)==before
+                if outcome=='success':
+                    # Resume above deliberately recycled the original child.
+                    # Prove a cold next answer and then a genuine warm follow-up.
+                    current=result.snapshot
+                    parked_pid=None
+                    for turn in range(2):
+                        next_response=InputResponse(input_id=current.open_input.input_id,value='Customers choose the slot and confirm',actor_id='fake',expected_sequence=current.sequence)
+                        current=client.submit(sid,next_response).snapshot
+                        assert current.sequence>next_response.expected_sequence
+                        live_pid=client._warm[sid]['handle'].process.pid
+                        if parked_pid is not None:assert live_pid==parked_pid
+                        parked_pid=live_pid
+                        trace2=client._last_answer_trace
+                        print('ANSWER_FOLLOWUP',turn,trace2['total_syncs'],trace2['parent']['syncs'],sum(v['syncs'] for v in trace2['child']['callers'].values()))
+                        assert trace2['child']['complete'] and trace2['parent_wire_complete']
+                    with w.admin() as c:
+                        receipts=c.execute('SELECT state,actual_units FROM answer_charge_receipts WHERE owner_id=%s',(w.scope.owner_id,)).fetchall()
+                        balance=c.execute('SELECT balance_units FROM credit_accounts WHERE owner_id=%s',(w.scope.owner_id,)).fetchone()[0]
+                    assert len(receipts)==3 and all(row[0]=='settled' for row in receipts)
+                    assert balance==1000000000-sum(row[1] for row in receipts)
+                    assert len(payments)==6
                 if outcome=='stop':
                     assert len(calls)-call_count==1
                     assert client.snapshot(sid).open_input is None

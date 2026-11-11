@@ -26,6 +26,8 @@ class WorkerCapability:
     @classmethod
     def capture(cls,store,task_id):
         scope=current_scope()
+        cached=_answer_authority.get()
+        if cached is not None and cached[0] is store and cached[1].task_id==task_id and cached[1].scope==scope:return cached[1]
         task=store.task(task_id)
         if not task or task['owner_id']!=scope.owner_id:
             raise TenantAccessDenied('authorized worker task required')
@@ -64,6 +66,9 @@ class WorkerCapability:
     def _capture_and_validate(cls,store,task_id):
         """capture + validate from one read. Same checks and messages; the second read of the same rows is gone."""
         scope=current_scope()
+        cached=_answer_authority.get()
+        if cached is not None and cached[0] is store and cached[1].task_id==task_id and cached[1].scope==scope:
+            return cached[1],deepcopy(cached[2])
         task,session,binding,active=store.worker_authority(task_id)
         if not task or task['owner_id']!=scope.owner_id:
             raise TenantAccessDenied('authorized worker task required')

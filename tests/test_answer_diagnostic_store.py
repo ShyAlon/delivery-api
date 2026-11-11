@@ -26,7 +26,8 @@ def test_diagnostic_flush_exact_bytes_one_transaction_and_stop_spool(pg_workspac
                         append(tmp_path/'session/interview/log.jsonl','second\n')
                         write(tmp_path/'session/interview/debug/raw.txt','  exact raw\n')
                         docs.append('interview/usage.jsonl',b'{"usage":1}\n')
-                assert sum(row['syncs'] for row in trace.snapshot())==5,trace.snapshot()
+                # Joined task+lease guard replaces two sequential guard reads.
+                assert sum(row['syncs'] for row in trace.snapshot())==4,trace.snapshot()
             finally:trace.restore()
             assert docs.read('interview/log.jsonl')==b'old\nfirst\nsecond\n'
             assert docs.read('interview/debug/raw.txt')==b'  exact raw\n'

@@ -23,3 +23,15 @@ recent healthy socket reuse 98 -> 97. Pool probes are skipped only in answer
 mode, not for idle/broken sockets. Authority scope changes still fail and the
 post-handler authority check stays fresh. Trace teardown follows fallback
 correction, including exceptional paths. No target claim: 97 remains above 30.
+
+Entry claim now shares the short entry transaction and immutable capability.
+Input reload is gone: the parent verifies the retained content-addressed input
+in memory; recovery still reads immutable DB records. Completion evidence,
+completion event and fenced worker status share one short finish transaction.
+The final status write locks live task/session rows and checks original
+owner/auth/generation/Stop. No DB transaction spans provider execution.
+
+Later whole-answer local proof: cold success 58 (parent 29, child 29), genuine
+warm follow-up 39 (parent 27, child 12). Three turns settle exactly six money
+touches and the summed actual balance. This is still NOT the <30 target.
+Do not mistake the child-only warm count for the whole answer.
