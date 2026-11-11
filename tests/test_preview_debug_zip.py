@@ -21,6 +21,8 @@ def _fake_subprocess_run(command, **kwargs):
         return SimpleNamespace(stdout='requi-preview-exec\nrequi-preview-exec-b3\nunrelated\n')
     if command[:2] == ['docker', 'exec']:
         assert command[3:5]==['python','-c']
+        if command[5]=='from delivery_api.answer_diagnostics import exported_json; print(exported_json())':
+            return SimpleNamespace(stdout='{"kind":"diagnostic-only-not-execution-replay","records":[]}')
         assert command[5]=='from delivery_api.answer_trace import exported_lines; print(exported_lines())'
         return SimpleNamespace(stdout='answer.trace {"total_syncs":199,"source":"child"}\n')
     if command[:2] == ['docker', 'logs']:
@@ -88,6 +90,7 @@ def test_the_bundle_carries_run_dir_docker_and_host_evidence_scrubbed(owner_mach
                     'run/413a76bd7770f2da551e65a7/browser-smoke.log',
                     'docker-requi-preview-exec.log', 'docker-requi-preview-exec-b3.log'} <= names
             assert not any('unrelated' in n for n in names), 'only requi-preview-exec* containers are collected'
+            assert json.loads(z.read('answer-diagnostics-requi-preview-exec.json'))['kind']=='diagnostic-only-not-execution-replay'
             assert b'199' in z.read('answer-traces.jsonl')
             assert b'child' in z.read('answer-traces.jsonl')
             facts = json.loads(z.read('facts.json'))
@@ -150,4 +153,31 @@ def test_failed_trace_collection_is_not_reported_as_complete(owner_machine,monke
             facts=json.loads(z.read('facts.json'))
             assert any('answer traces' in item for item in facts['missing'])
             assert 'unavailable' in z.read('answer-traces.jsonl').decode()
+    finally:path.unlink()
+
+
+def test_bundle_carries_real_diagnostic_recovery_without_consuming_it(owner_machine,monkeypatch,capsys,tmp_path):
+    from interview_engine.document_diagnostics import answer_batch,bind,append
+    from delivery_api.answer_diagnostics import exported_json
+    import subprocess
+    artifacts=tmp_path/'artifacts';monkeypatch.setenv('VMODEL_ARTIFACTS_DIR',str(artifacts))
+    root=artifacts/'tenants/owner/sessions/.diagnostic-recovery'/('a'*64)
+    class Docs:
+        def diagnostic_many(self,ops):raise RuntimeError('test unavailable')
+    with answer_batch(root,{'owner_id':'owner','operation_id':'fake'}):
+        with bind(Docs(),tmp_path/'session'):
+            append(tmp_path/'session/interview/run.log','API_KEY=test-only-secret\nproject evidence\n')
+    evidence=next(root.glob('*.json'));before=evidence.read_bytes()
+    def real_export(command,**kwargs):
+        if command[:2]==['docker','exec'] and 'answer_diagnostics' in command[5]:
+            return SimpleNamespace(stdout=exported_json(),returncode=0)
+        return _fake_subprocess_run(command,**kwargs)
+    monkeypatch.setattr(subprocess,'run',real_export)
+    path=_run_bundle(monkeypatch,capsys,['preview-debug.py'])
+    try:
+        with zipfile.ZipFile(path) as z:
+            raw=z.read('answer-diagnostics-requi-preview-exec.json')
+            assert b'project evidence' in raw and b'test-only-secret' not in raw
+            assert json.loads(raw)['kind']=='diagnostic-only-not-execution-replay'
+        assert evidence.read_bytes()==before
     finally:path.unlink()

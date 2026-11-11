@@ -105,6 +105,9 @@ def test_real_paid_answer_uses_one_start_finish_without_per_call_ledger(pg_works
                     if command[:2]==['docker','ps']:
                         return SimpleNamespace(stdout='requi-preview-exec-local-proof\n',returncode=0)
                     if command[:2]==['docker','exec']:
+                        if 'answer_diagnostics' in command[5]:
+                            from delivery_api.answer_diagnostics import exported_json
+                            return SimpleNamespace(stdout=exported_json(),returncode=0)
                         return SimpleNamespace(stdout=retained,returncode=0)
                     if command[0]=='docker':
                         return SimpleNamespace(stdout='local test transport, not real Docker\n',returncode=0)

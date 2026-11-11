@@ -26,6 +26,18 @@ def clean(text):
     text=re.sub(r'postgres(?:ql)?://[^\s]+','postgresql://[REDACTED]',text)
     text=re.sub(r'\bsk-[A-Za-z0-9_-]+','[REDACTED]',text)
     return redact(text)
+def clean_json(text,source):
+    # Decode before scrubbing string values. Scrubbing serialized JSON treats
+    # escaped newlines as ordinary bytes and can corrupt the JSON document.
+    def values(value):
+        if isinstance(value,dict):return {key:values(item) for key,item in value.items()}
+        if isinstance(value,list):return [values(item) for item in value]
+        return clean(value) if isinstance(value,str) else value
+    try:return json.dumps(values(redact(json.loads(text))),ensure_ascii=False)
+    except (ValueError,TypeError):
+        missing.append(source+': malformed or unavailable diagnostic export')
+        return json.dumps({'omitted':source,'reason':'malformed or unavailable diagnostic export'})
+
 def tail(path):
     size=path.stat().st_size
     with open(path,'rb') as f:
@@ -89,6 +101,8 @@ with os.fdopen(fd,'wb') as out,zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as 
             trace=read(['docker','exec',n,'python','-c','from delivery_api.answer_trace import exported_lines; print(exported_lines())'],source='answer traces '+n)
             if not trace.strip():missing.append('answer traces '+n+': no retained trace rows')
             answer_traces.append('CONTAINER '+n+'\n'+trace)
+            recovery=read(['docker','exec',n,'python','-c','from delivery_api.answer_diagnostics import exported_json; print(exported_json())'],source='answer diagnostic recovery '+n)
+            z.writestr('answer-diagnostics-'+n+'.json',clean_json(recovery,'answer diagnostic recovery '+n))
         z.writestr('answer-traces.jsonl',clean('\n'.join(answer_traces)))
     # Write after collection so failures discovered during docker exec appear
     # in the ZIP as well as on stderr. A ZIP is not evidence of full capture.

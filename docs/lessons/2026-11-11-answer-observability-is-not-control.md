@@ -73,3 +73,16 @@ candidate engine when running its focused answer checks. Do not mix test results
 from different engine source trees or call missing prerequisites a feature pass.
 The transient-error watcher double accepts the cursor_cache keyword already
 used by the current app and retains the original recovery assertion.
+
+The missing test prerequisite was recovered from the repo's pinned generator
+wheel into an isolated fixture. A separate Python environment loads candidate
+engine and delivery sources consistently, including child processes. Expanded
+answer/watch/debug tests then passed124 with no skips, and child/generator
+cutover/recovery tests passed30. No dependency pin or existing checkout changed.
+
+req debug now includes a redacted, read-only local diagnostic recovery export.
+Decode JSON before scrubbing its string values: scrubbing serialized JSON can
+consume escaped newlines and corrupt the export. The real-spool collector test
+caught this. Export never consumes evidence, starts work, imports documents or
+replays paid calls. No automatic expiry; capacity exhaustion is visible as a
+best-effort-copy failure. Stop remains41 barriers, known above-target debt.
