@@ -35,3 +35,17 @@ def test_frozen_input_verifies_retained_digest_without_owner_reread():
         assert value=={'answer':[1]}
         with pytest.raises(PermissionError):refs.frozen(ref,'answer',{'answer':[2]})
         with tenant_context(TenantScope('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-0000000000a2')),pytest.raises(PermissionError):refs.frozen(ref,'answer',value)
+
+
+def test_answer_watch_reuses_verified_entry_but_catches_intervening_wake(monkeypatch):
+    import asyncio,threading
+    from delivery_api import stop_watch
+    calls=[];stop=threading.Event()
+    class Store:
+        def stop_state(self,*a):calls.append(a);return {'task_present':True,'stop_requested_at':1,'active':True,'session_generation':1}
+    def wait(key,seconds,gone,version):
+        assert version==7
+        return 8  # A Stop committed after the entry verified version 7.
+    monkeypatch.setattr(stop_watch.event_bus,'wait',wait)
+    asyncio.run(stop_watch.watch_for_stop(store=Store(),task_id='t',session_id='s',generation=1,stop=stop,entry_version=7))
+    assert stop.is_set() and len(calls)==1

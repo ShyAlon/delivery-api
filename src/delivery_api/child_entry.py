@@ -153,6 +153,10 @@ def main():
                                 if cfg.get('answer_trace'):
                                     from interview_engine.pg_checkpoint import answer_checkpoint_memory
                                     stack.enter_context(answer_checkpoint_memory())
+                                    if operation.operation.kind=='interview.answer':
+                                        from interview_engine.pg_checkpoint import answer_checkpoint_publication
+                                        existing=getattr(getattr(getattr(warm_handle,'session',None),'program',None),'saver',None)
+                                        stack.enter_context(answer_checkpoint_publication(existing))
                                     from interview_engine.pg_session_store import answer_publication
                                     stack.enter_context(answer_publication(operation))
                                     stack.enter_context(transient_progress(lambda page:print('REQUI_ANSWER_PROGRESS '+json.dumps({'operation_id':operation.operation_id,'page':page},separators=(',',':')),file=__import__('sys').stderr,flush=True)))
@@ -164,9 +168,17 @@ def main():
                                  'session_id':operation.binding.session_id,'task_id':operation.binding.task_id,
                                  'generation':operation.binding.generation,'lease_epoch':operation.binding.lease_epoch,
                                  'operation_id':operation.operation_id}) if cfg.get('answer_trace') else nullcontext()
+                        def final_result(operation,snapshot,token):
+                            if not cfg.get('answer_trace') or operation.operation.kind!='interview.answer':return
+                            from .answer_result import result_frames
+                            from vmodel_contracts.interactive import EventType
+                            accepted=warm_handle.registry._event(warm_handle.session,EventType.INPUT_ACCEPTED)
+                            for frame in result_frames(operation,snapshot,accepted,token):
+                                print('REQUI_ANSWER_RESULT '+json.dumps(frame,separators=(',',':')),file=__import__('sys').stderr,flush=True)
                         with diagnostics(op),measured_work(compute) if compute is not None else nullcontext():
-                            warm_handle,_=begin_warm(op,trusted_binding=binding,store=store,broker=broker,
+                            warm_handle,completed_snapshot=begin_warm(op,trusted_binding=binding,store=store,broker=broker,
                                 load_request=req,load_answer=ans)
+                        final_result(op,completed_snapshot,cfg.get('answer_result_token'))
                         if wire_trace is not None:wire_trace.emit(op.operation_id)
                         event('stopped' if stop.is_set() else 'completed')
                         # Follow-up operations on the held session: each frame
@@ -190,11 +202,12 @@ def main():
                                     req2,ans2=loaders(payload.get('input'),payload.get('input_ref'),op2.operation.kind)
                                     with diagnostics(op2),measured_work(compute2) if compute2 is not None else nullcontext():
                                         with broker_clients(broker2):
-                                            execute_warm(warm_handle,op2,trusted_binding=binding2,
+                                            completed_snapshot=execute_warm(warm_handle,op2,trusted_binding=binding2,
                                                 load_request=req2,load_answer=ans2)
                                 finally:
                                     broker2.close()
                                     if compute2 is not None:compute2.close()
+                                final_result(op2,completed_snapshot,payload.get('answer_result_token'))
                                 if wire_trace is not None:wire_trace.emit(op2.operation_id)
                                 event('stopped' if stop.is_set() else 'completed')
                             finally:

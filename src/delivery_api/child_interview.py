@@ -45,7 +45,7 @@ class ChildInterviewClient(EngineClient):
         self.store=store;self.base=Path(artifacts_base);self.gateway_factory=gateway_factory;self.dsn=dsn;self.endpoint=endpoint
         from interview_engine.question_config import ConfigStore
         self.quality_store=ConfigStore(__import__('os').environ.get('INTERVIEW_ENGINE_QUESTION_QUALITY_CONFIG') or self.base/'question_quality.json')
-        self.supervisor=ChildSupervisor(command or [sys.executable,'-m','delivery_api.child_entry'],timing_sink=self._record_engine_timing,timing_batch_sink=self._record_engine_timings,trace_sink=self._record_answer_trace,progress_sink=self._record_answer_progress)
+        self.supervisor=ChildSupervisor(command or [sys.executable,'-m','delivery_api.child_entry'],timing_sink=self._record_engine_timing,timing_batch_sink=self._record_engine_timings,trace_sink=self._record_answer_trace,progress_sink=self._record_answer_progress,result_sink=self._record_answer_result)
         # Parked warm children keyed by session id: a verified completed answer
         # on a session waiting for the next input keeps its claimed child alive.
         self._warm={}
@@ -53,6 +53,7 @@ class ChildInterviewClient(EngineClient):
         self._answer_trace_ready={}
         self._active_answers={}
         self._answer_snapshots={}
+        self._answer_results={}
         self._transient_progress={}
         self._progress_operations={}
         self._progress_lock=threading.Lock()
@@ -95,6 +96,11 @@ class ChildInterviewClient(EngineClient):
         if not isinstance(row.get('caller'),str) or len(row['caller'])>300:return
         if any(type(row.get(k)) not in (int,float) or row[k]<0 for k in ('waits','syncs','duration_ms')):return
         value['callers'][row['caller']]={k:row[k] for k in ('waits','syncs','duration_ms')}
+
+    def _record_answer_result(self,row):
+        if not isinstance(row,dict):return
+        result=self._answer_results.get(row.get('operation_id'))
+        if result is not None:result.accept(row)
 
     def _record_answer_progress(self,row):
         from vmodel_contracts.progress_signal import ProgressSignal
@@ -308,6 +314,7 @@ class ChildInterviewClient(EngineClient):
                     from .diagnostic_evidence import failure
                     failure('answer.trace.flush_failed')
                 self._answer_trace_ready.pop(job,None)
+                self._answer_results.pop(job,None)
                 self._progress_operations.pop(job,None)
             else:wire.restore()
             admission.__exit__(None,None,None)
@@ -349,7 +356,9 @@ class ChildInterviewClient(EngineClient):
             body={'kind':'interview.start','request_ref':ref}
         else:
             with self._registry() as registry:
-                row=registry._store.load_published(sid,scope.owner_id)
+                # session_binding already returned this exact published control
+                # row under tenant RLS in the short entry transaction.
+                row=binding if self.answer_accounting is not None else registry._store.load_published(sid,scope.owner_id)
                 if row is None or not row.get('control'):raise PermissionError('published input required')
                 payload=dict(row['control'])
                 session=registry._restore_payload(payload,sid)
@@ -382,6 +391,9 @@ class ChildInterviewClient(EngineClient):
         answer_entry=self.answer_accounting is not None and response is not None and provider=='deepseek'
         if answer_entry:
             from .worker_capability import WorkerCapability,answer_authority
+            from .stop_watch import stop_key
+            from . import event_bus
+            entry_stop_version=event_bus.version(stop_key(task_id))
             capability,entry_task=WorkerCapability._capture_and_validate(self.store,task_id)
             if capability.session_id!=sid or capability.generation!=binding['generation']:
                 raise PermissionError('answer entry identity changed')
@@ -401,7 +413,7 @@ class ChildInterviewClient(EngineClient):
             with answer_authority(self.store,capability,entry_task):
                 claimed=self.store.claim_worker(job_id)
             if claimed is None:raise PermissionError('answer entry job already claimed')
-            claimed_answer=(claimed,entry_task,job_id)
+            claimed_answer=(claimed,entry_task,job_id,entry_stop_version)
         return operation,ref,'start' if request is not None else 'answer',response.model_dump(mode='json') if answer_entry else None,claimed_answer
 
     def resume(self,job_id):
@@ -487,6 +499,9 @@ class ChildInterviewClient(EngineClient):
                 if self.answer_accounting is not None:
                     self._answer_traces[job_id]={'complete':False,'callers':{}}
                     self._answer_trace_ready[job_id]=asyncio.Event()
+                    if ref_kind=='answer':
+                        from .answer_result import AnswerResult
+                        self._answer_results[job_id]=AnswerResult(operation)
                 input_payload=refs.frozen(ref,ref_kind,frozen_input) if frozen_input is not None else refs.get(ref,ref_kind)
                 answer_run=None
                 if self.answer_accounting is not None and ref_kind=='answer' and operation.binding.provider=='deepseek':
@@ -521,10 +536,11 @@ class ChildInterviewClient(EngineClient):
                 cfg={'version':1,'provider':operation.binding.provider,'binding':operation.binding.model_dump(mode='json'),
                     'dsn':self.dsn,'owner_root':str(owner_root),'input_ref':ref,
                     'input':input_payload,'question_quality':self.question_quality_config()['config'],
-                    'warm':ref_kind in ('answer','route'),'answer_trace':answer_run is not None}
+                    'warm':ref_kind in ('answer','route'),'answer_trace':answer_run is not None,
+                    'answer_result_token':self._answer_results[job_id].token if answer_run is not None else None}
                 stop=asyncio.Event()
                 from .stop_watch import watch_for_stop
-                watcher=asyncio.create_task(watch_for_stop(store=self.store,task_id=task_id,session_id=sid,generation=operation.binding.generation,stop=stop))
+                watcher=asyncio.create_task(watch_for_stop(store=self.store,task_id=task_id,session_id=sid,generation=operation.binding.generation,stop=stop,entry_version=claimed_answer[3] if claimed_answer is not None else None))
                 def fence_stop(op):
                     task=self.store.task(task_id);session=self.store.session_binding(sid)
                     if task and task.get('stop_requested_at') is None and session and session['generation']==op.binding.generation:
@@ -562,7 +578,7 @@ class ChildInterviewClient(EngineClient):
                                 handle=parked_entry['handle']
                                 await self.supervisor.run_operation(handle,operation,on_event=on_event,
                                     payload={'version':1,'binding':cfg['binding'],'operation':json.loads(encode_operation(operation).decode()),
-                                        'input':cfg['input'],'input_ref':cfg['input_ref'],'fds':{'broker':0,'compute':1}},
+                                        'input':cfg['input'],'input_ref':cfg['input_ref'],'answer_result_token':cfg['answer_result_token'],'fds':{'broker':0,'compute':1}},
                                     fds=[provider_fd.fileno(),compute_fd.fileno()],stop=stop,persist_stop=fence_stop,park=True)
                             else:
                                 handle=await self.supervisor.spawn(operation,authorize=lambda op:capability.validate(self.store),
@@ -627,12 +643,17 @@ class ChildInterviewClient(EngineClient):
                     # artifact manifest. Publish the terminal set while the original
                     # scoped job is still running, after reap and exact accounting.
                     from vmodel_contracts.interactive import ProcessStatus
-                    with self._registry() as registry:
-                        completed_session=registry.get(sid,serve=False)
-                        completion_snapshot=completed_session.snapshot()
-                        if answer_run is not None:
-                            from vmodel_contracts.interactive import EventType
-                            self._answer_snapshots[sid]=(completion_snapshot,registry._event(completed_session,EventType.INPUT_ACCEPTED))
+                    result_receiver=self._answer_results.get(job_id)
+                    completion_snapshot=result_receiver.snapshot if answer_run is not None and result_receiver is not None else None
+                    accepted=result_receiver.accepted_event if completion_snapshot is not None else None
+                    if completion_snapshot is None:
+                        with self._registry() as registry:
+                            completed_session=registry.get(sid,serve=False)
+                            completion_snapshot=completed_session.snapshot()
+                            if answer_run is not None:
+                                from vmodel_contracts.interactive import EventType
+                                accepted=registry._event(completed_session,EventType.INPUT_ACCEPTED)
+                    if answer_run is not None:self._answer_snapshots[sid]=(completion_snapshot,accepted)
                     process_status=completion_snapshot.process_status
                     if process_status==ProcessStatus.COMPLETED:
                         from .generator_documents import GeneratorDocuments
@@ -642,7 +663,7 @@ class ChildInterviewClient(EngineClient):
                         publish_document_revision(self.store,task_id,documents,
                             writer_instance='interview-child:'+operation.operation_id)
                     timings['completion']=int((time.monotonic()-completion_at)*1000);timings['run']=int((time.monotonic()-run_at)*1000)
-                    completion_record={'operation_id':operation.operation_id,'compute_ms':str(compute.value),'reaped':True,'timings':timings,'provider_timings':broker.timings}
+                    completion_record={'operation_id':operation.operation_id,'published_sequence':completion_snapshot.sequence,'compute_ms':str(compute.value),'reaped':True,'timings':timings,'provider_timings':broker.timings}
                     if answer_run is None:retain(task_id,'child-job:'+job_id,'child-completion-v1',completion_record)
                     quiescent=True
                     # Parking decision: a verified completed operation on a

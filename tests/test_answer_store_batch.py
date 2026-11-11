@@ -1,5 +1,6 @@
 """Short helper batches share identity/commit, never provider work."""
 import uuid
+import json
 import pytest
 from delivery_api.tenancy import tenant_context
 from delivery_api.answer_trace import WireTrace
@@ -69,3 +70,18 @@ def test_final_answer_worker_rejects_stop_and_scope_change(pg_workspace_factory)
         w.store.request_task_stop(tid)
         with pytest.raises(TenantAccessDenied,match='stale, stopped or revoked'):w.store.finish_answer_worker(cap,job)
         assert w.store.worker_job(job)['state']=='running'
+
+
+def test_final_completion_composite_keeps_conflicting_record_and_rolls_back_event(pg_workspace_factory):
+    from delivery_api.tenancy import TenantAccessDenied
+    with pg_workspace_factory() as w,tenant_context(w.scope):
+        tid=w.store.create_task('composite completion')['task_id'];sid=str(uuid.uuid4());w.store.set_engine_session(tid,sid)
+        job=w.store.enqueue_worker(tid,'phase:intent');cap=w.store.claim_worker(job)
+        w.store.retain_answer_review(tid,'child-job:'+job,'child-completion-v1',{'original':True})
+        with w.admin() as c:c.execute('UPDATE engine_sessions SET control=%s::jsonb WHERE session_id=%s',(json.dumps({'sequence':2,'_answer_operation_id':job}),sid))
+        before=w.store.events(tid)
+        with pytest.raises(TenantAccessDenied,match='conflicting'):
+            w.store.finish_answer_worker(cap,job,completion={'different':True,'published_sequence':2},event=('complete',{'job_id':job}))
+        assert w.store.worker_job(job)['state']=='running'
+        assert w.store.events(tid)==before
+        assert w.store.decision_review(tid,'child-job:'+job,'child-completion-v1')=={'original':True}

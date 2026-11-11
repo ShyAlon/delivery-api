@@ -2004,9 +2004,35 @@ FROM tasks t"""
         self._execute_native("UPDATE worker_jobs SET state='done',updated_at=%s WHERE job_id=%s AND state='running'",(time.time(),job_id), write=True)
 
     @_transactional
-    def finish_answer_worker(self,capability,job_id):
+    def finish_answer_worker(self,capability,job_id,*,completion=None,event=None):
         """Atomic final answer status with live owner/auth/generation/Stop fence."""
         if current_scope()!=capability.scope:raise TenantAccessDenied('answer finish scope changed')
+        if completion is not None and event is not None:
+            now=time.time();payload=json.dumps(completion);message,event_payload=event
+            row=self._execute_native("""WITH live AS (
+                SELECT t.task_id,e.session_id FROM tasks t JOIN engine_sessions e ON e.task_id=t.task_id
+                WHERE t.task_id=%s AND t.owner_id=%s::uuid AND t.generation=%s
+                  AND t.stop_requested_at IS NULL AND t.deleted_at IS NULL
+                  AND e.session_id=%s AND e.owner_id=t.owner_id AND e.generation=t.generation
+                  AND public.requi_session_active()
+                  AND e.control->>'_answer_operation_id'=%s AND (e.control->>'sequence')::bigint=%s
+                  FOR UPDATE OF t,e),
+                record AS (INSERT INTO decision_reviews AS d(task_id,wait_id,revision,payload,created_at)
+                    SELECT task_id,%s,'child-completion-v1',%s,%s FROM live
+                    ON CONFLICT(task_id,wait_id,revision) DO UPDATE SET payload=d.payload RETURNING task_id,payload),
+                ev AS (INSERT INTO events(task_id,phase_key,kind,message,payload,ts)
+                    SELECT task_id,NULL,'child.completed',%s,%s,%s FROM record WHERE payload::jsonb=%s::jsonb RETURNING task_id),
+                touched AS (UPDATE tasks SET updated_at=%s WHERE task_id IN (SELECT task_id FROM ev))
+                UPDATE worker_jobs j SET state='done',updated_at=%s FROM live,ev
+                WHERE j.job_id=%s AND j.task_id=live.task_id AND j.task_id=ev.task_id AND j.session_id=live.session_id
+                  AND j.owner_id=%s::uuid AND j.auth_session_id=%s::uuid AND j.generation=%s
+                  AND j.state='running' RETURNING j.job_id""",
+                (capability.task_id,capability.scope.owner_id,capability.generation,capability.session_id,
+                 job_id,completion.get('published_sequence'),'child-job:'+job_id,payload,now,message,json.dumps(event_payload),now,payload,now,now,job_id,
+                 capability.scope.owner_id,capability.scope.session_id,capability.generation),write=True).fetchone()
+            if row is None:raise TenantAccessDenied('answer finish stale, stopped, revoked or conflicting')
+            self._connection.get().notify_after_commit(capability.task_id)
+            return
         row=self._execute_native("""WITH live AS (
             SELECT t.task_id,e.session_id FROM tasks t JOIN engine_sessions e ON e.task_id=t.task_id
             WHERE t.task_id=%s AND t.owner_id=%s::uuid AND t.generation=%s

@@ -24,19 +24,13 @@ async def execute_job(store,job_id,handler,*,verify_stopped_quiescence=None,veri
                     completion=await handler(capability)
                 if reuse_answer_authority:
                     def finish_answer():
-                        # Fresh final authority in one short transaction. The
-                        # immutable capability is reused only for nested helpers.
-                        fresh=capability.validate(store)
-                        if fresh.get('stop_requested_at') is not None:
-                            if verify_stopped_quiescence is not None and verify_stopped_quiescence(capability) is True:
-                                store.finish_stopped_worker(job_id,worker_quiescent=True)
-                            return True
+                        # The conditional status write is the fresh final
+                        # authority/Stop check, not a preflight snapshot.
+                        if capability.generation!=1:capability.validate(store)
                         if verify_completion_quiescence is not None and verify_completion_quiescence(capability) is not True:return True
                         if completion is None:raise PermissionError('answer completion evidence missing')
                         record,event=completion
-                        store.retain_answer_review(capability.task_id,'child-job:'+job_id,'child-completion-v1',record)
-                        store.add_event(capability.task_id,'child.completed',event[0],payload=event[1])
-                        store.finish_answer_worker(capability,job_id)
+                        store.finish_answer_worker(capability,job_id,completion=record,event=event)
                         return True
                     return store.run_answer_batch(finish_answer)
                 task=store.task(capability.task_id)

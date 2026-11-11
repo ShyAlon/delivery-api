@@ -35,3 +35,24 @@ Later whole-answer local proof: cold success 58 (parent 29, child 29), genuine
 warm follow-up 39 (parent 27, child 12). Three turns settle exactly six money
 touches and the summed actual balance. This is still NOT the <30 target.
 Do not mistake the child-only warm count for the whole answer.
+
+Final success counts after the cold-claim and result-channel changes: 29 cold,
+29 next cold, 26 warm. Missing usage 28; provider refusal 32; Stop 50-51 in the
+observed runs. Only the measured success and missing-usage cases are under 30.
+The trace counts the entire submit path, including both money touches.
+
+The private result channel chunks the actual post-publication snapshot and
+accepted event, including the real phase. Frames require the operation's
+private nonce, ordering, size limit and digest. Missing/malformed/oversized
+results use the durable fallback. Final completion SQL also checks the DB's
+answer operation and published sequence, so a memory-only result cannot mark
+work complete. Reuse the binding's control instead of re-reading the same row.
+
+The watcher reuses the verified entry and captures its event version BEFORE
+entry validation, so an intervening Stop wake is not lost. Later revocation/
+cross-process checks keep the existing safety cadence and final fences.
+
+The exact `req rebuild --apply` harness runs the real launcher, dispatcher and
+orchestrator against local git origins, with effect doubles for image, migration
+and preview work. It proves routing and owner gates, not real Docker acceptance
+or live deployment. No Docker executable is available in this environment.
