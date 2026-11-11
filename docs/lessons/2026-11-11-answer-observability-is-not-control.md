@@ -56,3 +56,20 @@ The exact `req rebuild --apply` harness runs the real launcher, dispatcher and
 orchestrator against local git origins, with effect doubles for image, migration
 and preview work. It proves routing and owner gates, not real Docker acceptance
 or live deployment. No Docker executable is available in this environment.
+
+The collector integration now uses real retained answer trace rows from the
+real-graph/fake-provider/disposable-PG test, with only Docker transport doubled.
+The ZIP contains parent/child completeness, whole barriers, money evidence and
+engine timings, not raw private result frames. Failed trace-export commands or
+empty retention are recorded as missing sources in facts.json after collection.
+A successfully written ZIP does not prove all sources were captured.
+
+Latest hardened counts: cold29/nextcold29/warm26, missing28, refusal29, Stop47.
+The broad candidate engine group passed105 tests (4 skips); the explicit-source
+answer/collector/watcher group passed107. A wider unrelated delivery sweep is
+not green in this environment: spec-generator's sibling link is broken, and
+some older tests prepend the old engine sibling during collection. Preload the
+candidate engine when running its focused answer checks. Do not mix test results
+from different engine source trees or call missing prerequisites a feature pass.
+The transient-error watcher double accepts the cursor_cache keyword already
+used by the current app and retains the original recovery assertion.

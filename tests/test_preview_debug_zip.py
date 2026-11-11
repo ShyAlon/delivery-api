@@ -135,3 +135,19 @@ def test_missing_sources_are_named_and_the_zip_still_ships(owner_machine, monkey
     finally:
         path.unlink()
     assert 'MISSING:' in _run_bundle.captured.err
+
+
+def test_failed_trace_collection_is_not_reported_as_complete(owner_machine,monkeypatch,capsys):
+    import subprocess
+    def failed(command,**kwargs):
+        if command[:2]==['docker','exec']:
+            return SimpleNamespace(stdout='trace exporter unavailable\n',returncode=1)
+        return _fake_subprocess_run(command,**kwargs)
+    monkeypatch.setattr(subprocess,'run',failed)
+    path=_run_bundle(monkeypatch,capsys,['preview-debug.py'])
+    try:
+        with zipfile.ZipFile(path) as z:
+            facts=json.loads(z.read('facts.json'))
+            assert any('answer traces' in item for item in facts['missing'])
+            assert 'unavailable' in z.read('answer-traces.jsonl').decode()
+    finally:path.unlink()

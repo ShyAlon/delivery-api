@@ -95,6 +95,38 @@ def test_real_paid_answer_uses_one_start_finish_without_per_call_ledger(pg_works
             assert '"category":"callers"' in exported_lines()
             for line in exported_lines().splitlines():json.loads(line[len('answer.trace '):])
             if outcome=='success':
+                # Exercise the exact req-debug collector with REAL retained
+                # answer rows. Only the unavailable Docker transport is doubled;
+                # this is not a claim of target-container/Docker verification.
+                import contextlib,io,runpy,subprocess,zipfile
+                from types import SimpleNamespace
+                retained=exported_lines();run=subprocess.run
+                def local_transport(command,**kwargs):
+                    if command[:2]==['docker','ps']:
+                        return SimpleNamespace(stdout='requi-preview-exec-local-proof\n',returncode=0)
+                    if command[:2]==['docker','exec']:
+                        return SimpleNamespace(stdout=retained,returncode=0)
+                    if command[0]=='docker':
+                        return SimpleNamespace(stdout='local test transport, not real Docker\n',returncode=0)
+                    return run(command,**kwargs)
+                output=io.StringIO()
+                with monkeypatch.context() as patch:
+                    patch.setattr(subprocess,'run',local_transport)
+                    patch.setattr(sys,'argv',['preview-debug.py','--code','LOCAL-ANSWER-PROOF'])
+                    patch.setattr(Path,'home',classmethod(lambda cls:tmp_path))
+                    with contextlib.redirect_stdout(output):runpy.run_path('scripts/ops/preview-debug.py',run_name='__main__')
+                bundle=Path(output.getvalue().split('Debug ZIP: ')[1].splitlines()[0])
+                try:
+                    with zipfile.ZipFile(bundle) as z:
+                        lines=z.read('answer-traces.jsonl').decode()
+                        own=[json.loads(line[len('answer.trace '):]) for line in lines.splitlines() if line.startswith('answer.trace ') and sid in line]
+                        assert any(row.get('field')=='total_syncs' and row['value']==trace['total_syncs'] for row in own)
+                        assert any(row.get('source')=='parent_wire' and row.get('complete') is True for row in own)
+                        assert any(row.get('source')=='child' and row.get('complete') is True for row in own)
+                        assert any(row.get('category')=='accounting' for row in own)
+                        assert any(row.get('source')=='engine_timing' for row in own)
+                        assert 'fake-parent-only' not in lines and 'REQUI_ANSWER_RESULT' not in lines
+                finally:bundle.unlink()
                 page=client.progress(sid,after=10)
                 assert page.events and page.next_cursor>10
                 assert all(e.session_id==sid and e.task_id==tid for e in page.events)
