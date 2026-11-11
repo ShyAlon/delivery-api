@@ -144,7 +144,25 @@ def main():
                         from interview_engine.child_operations import begin_warm,execute_warm
                         from interview_engine.wire_binding import broker_clients
                         req,ans=loaders(cfg['input'],cfg['input_ref'],op.operation.kind)
-                        with measured_work(compute) if compute is not None else nullcontext():
+                        from interview_engine.document_diagnostics import answer_batch
+                        from contextlib import ExitStack,contextmanager
+                        @contextmanager
+                        def diagnostics(operation):
+                            from interview_engine.pg_journal import transient_progress
+                            with ExitStack() as stack:
+                                if cfg.get('answer_trace'):
+                                    from interview_engine.pg_checkpoint import answer_checkpoint_memory
+                                    stack.enter_context(answer_checkpoint_memory())
+                                    stack.enter_context(transient_progress(lambda page:print('REQUI_ANSWER_PROGRESS '+json.dumps({'operation_id':operation.operation_id,'page':page},separators=(',',':')),file=__import__('sys').stderr,flush=True)))
+                                stack.enter_context(diagnostic_batch(operation))
+                                yield
+                        def diagnostic_batch(operation):
+                            return answer_batch(root/'.diagnostic-recovery'/__import__('hashlib').sha256(operation.binding.session_id.encode()).hexdigest(),
+                                {'owner_id':str(operation.binding.owner_id),'auth_session_id':str(operation.binding.auth_session_id),
+                                 'session_id':operation.binding.session_id,'task_id':operation.binding.task_id,
+                                 'generation':operation.binding.generation,'lease_epoch':operation.binding.lease_epoch,
+                                 'operation_id':operation.operation_id}) if cfg.get('answer_trace') else nullcontext()
+                        with diagnostics(op),measured_work(compute) if compute is not None else nullcontext():
                             warm_handle,_=begin_warm(op,trusted_binding=binding,store=store,broker=broker,
                                 load_request=req,load_answer=ans)
                         if wire_trace is not None:wire_trace.emit(op.operation_id)
@@ -168,7 +186,7 @@ def main():
                                 event('running')
                                 try:
                                     req2,ans2=loaders(payload.get('input'),payload.get('input_ref'),op2.operation.kind)
-                                    with measured_work(compute2) if compute2 is not None else nullcontext():
+                                    with diagnostics(op2),measured_work(compute2) if compute2 is not None else nullcontext():
                                         with broker_clients(broker2):
                                             execute_warm(warm_handle,op2,trusted_binding=binding2,
                                                 load_request=req2,load_answer=ans2)

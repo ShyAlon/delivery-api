@@ -1,5 +1,16 @@
 """Captured worker authority. Never recover owner by client path/event scanning."""
 from dataclasses import dataclass
+from contextvars import ContextVar
+from contextlib import contextmanager
+from copy import deepcopy
+_answer_authority=ContextVar('answer_authority',default=None)
+
+@contextmanager
+def answer_authority(store,capability,task):
+    token=_answer_authority.set((store,capability,deepcopy(task)))
+    try:yield
+    finally:_answer_authority.reset(token)
+
 from .tenancy import TenantScope,current_scope,TenantAccessDenied
 
 
@@ -72,6 +83,8 @@ class WorkerCapability:
     def validate(self,store):
         if current_scope()!=self.scope:
             raise TenantAccessDenied('worker scope changed')
+        cached=_answer_authority.get()
+        if cached is not None and cached[0] is store and cached[1]==self:return deepcopy(cached[2])
         merged=hasattr(store,'authority_snapshot')
         if merged:task,binding,active=store.authority_snapshot(self.task_id,self.session_id)
         else:task=store.task(self.task_id);binding=store.session_binding(self.session_id);active=None

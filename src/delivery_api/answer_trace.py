@@ -1,11 +1,25 @@
 """In-memory operation tracing. No SQL, parameters or project text is retained."""
 import collections,json,os,sys,threading,time
+from contextvars import ContextVar
+_active=ContextVar('answer_wire_trace',default=None)
+_install_lock=threading.Lock()
+_original_wait=None
+_installed=set()
+_process_trace=None
+
+
+def _measured_wait(conn,generator,*args,**kw):
+    trace=_active.get() or _process_trace
+    original=_original_wait
+    if trace is None:return original(conn,generator,*args,**kw)
+    return trace._wait(original,conn,generator,*args,**kw)
+
 from contextlib import contextmanager
 
 
 def caller():
     frame=sys._getframe(2);names=[]
-    while frame is not None and len(names)<3:
+    while frame is not None and (len(names)<3 or (len(names)==3 and names[-1]=='postgres_store:_execute_native')):
         module=frame.f_globals.get('__name__','')
         if module.startswith(('delivery_api.','interview_engine.','langgraph.checkpoint.postgres')) and not module.endswith('answer_trace'):
             names.append(module.rsplit('.',1)[-1]+':'+frame.f_code.co_name)
@@ -14,7 +28,7 @@ def caller():
 
 
 class WireTrace:
-    """Count actual outgoing Sync/simple Query barriers in a child process.
+    """Count actual outgoing Sync/simple Query barriers in an operation.
 
     libpq protocol bytes exist only in an anonymous RAM fd while wait runs.
     They are discarded before returning. Only counts, duration and code callers
@@ -25,39 +39,54 @@ class WireTrace:
         with self.lock:self.rows.clear();self.failed=False
     def snapshot(self):
         with self.lock:return [{'caller':k,'waits':v[0],'syncs':v[1],'duration_ms':round(v[2],3)} for k,v in sorted(self.rows.items())]
-    def install(self):
-        import psycopg
-        original=psycopg.Connection.wait;collector=self
-        def measured(conn,generator,*args,**kw):
-            # A wait may run on another writer thread. Never keep transaction-local state here.
-            name=caller();began=time.monotonic();fd=None;count=None
+    def _wait(self,original,conn,generator,*args,**kw):
+        # A wait may run on another writer thread. Never keep transaction-local state here.
+        name=caller();began=time.monotonic();fd=None;count=None
+        try:
             try:
-                try:
-                    fd=os.memfd_create('answer-protocol',os.MFD_CLOEXEC)
-                    conn.pgconn.trace(fd)
-                except (OSError,AttributeError):
-                    return original(conn,generator,*args,**kw)
-                try:return original(conn,generator,*args,**kw)
-                finally:
-                    try:
-                        conn.pgconn.untrace();os.lseek(fd,0,0)
-                        chunks=[]
-                        while True:
-                            part=os.read(fd,65536)
-                            if not part:break
-                            chunks.append(part)
-                        # Exact protocol type, never a SQL keyword or row count.
-                        lines=b''.join(chunks).splitlines()
-                        count=sum(b'\tF\t' in line and (b'\tSync' in line or b'\tQuery\t' in line) for line in lines)
-                        del chunks,lines
-                    except (OSError,AttributeError):pass
+                fd=os.memfd_create('answer-protocol',os.MFD_CLOEXEC)
+                conn.pgconn.trace(fd)
+            except (OSError,AttributeError):
+                return original(conn,generator,*args,**kw)
+            try:return original(conn,generator,*args,**kw)
             finally:
-                if fd is not None:os.close(fd)
-                with collector.lock:
-                    row=collector.rows[name];row[0]+=1;row[1]+=count or 0;row[2]+=(time.monotonic()-began)*1000
-                    if count is None:collector.failed=True
-        psycopg.Connection.wait=measured
-        self.restore=lambda:setattr(psycopg.Connection,'wait',original)
+                try:
+                    conn.pgconn.untrace();os.lseek(fd,0,0)
+                    chunks=[]
+                    while True:
+                        part=os.read(fd,65536)
+                        if not part:break
+                        chunks.append(part)
+                    # Exact protocol type, never a SQL keyword or row count.
+                    lines=b''.join(chunks).splitlines()
+                    count=sum(b'\tF\t' in line and (b'\tSync' in line or b'\tQuery\t' in line) for line in lines)
+                    del chunks,lines
+                except (OSError,AttributeError):pass
+        finally:
+            if fd is not None:os.close(fd)
+            with self.lock:
+                row=self.rows[name];row[0]+=1;row[1]+=count or 0;row[2]+=(time.monotonic()-began)*1000
+                if count is None:self.failed=True
+    def install(self,*,context_only=False):
+        import psycopg
+        global _original_wait,_process_trace
+        token=_active.set(self)
+        with _install_lock:
+            if not _installed:
+                _original_wait=psycopg.Connection.wait
+                psycopg.Connection.wait=_measured_wait
+            _installed.add(self)
+            if not context_only:_process_trace=self
+        def restore():
+            global _original_wait,_process_trace
+            _active.reset(token)
+            with _install_lock:
+                _installed.discard(self)
+                if _process_trace is self:_process_trace=None
+                if not _installed:
+                    psycopg.Connection.wait=_original_wait
+                    _original_wait=None
+        self.restore=restore
     def emit(self,operation_id):
         for row in self.snapshot():print('REQUI_ANSWER_TRACE '+json.dumps({'operation_id':operation_id,**row},separators=(',',':')),file=sys.stderr,flush=True)
         print('REQUI_ANSWER_TRACE '+json.dumps({'operation_id':operation_id,'complete':not self.failed},separators=(',',':')),file=sys.stderr,flush=True)
@@ -85,6 +114,10 @@ def flush(value):
         if key!='answer_id':write({'category':'accounting','field':key,'value':item})
     for category in ('phases','callers'):
         for row in value['parent'][category]:write({'source':'parent','category':category,**row})
+    for row in value.get('parent_wire',[]):write({'source':'parent_wire','category':'callers',**row})
+    write({'source':'parent_wire','complete':value.get('parent_wire_complete',False)})
+    for sid,stage,label,status in value.get('engine_timings',[]):
+        write({'source':'engine_timing','stage':stage,'label':label[:120],'status':status})
     child=value.get('child')
     write({'source':'child','complete':child['complete'] if child else False,'syncs':sum(r['syncs'] for r in child['callers'].values()) if child and child['complete'] else None})
     if child:

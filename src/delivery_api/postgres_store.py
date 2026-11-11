@@ -65,6 +65,12 @@ def _transactional(method):
             hit=session_task_cache.get(self,args[0])    # a hit needs no transaction at all
             if hit is not None:return hit
         if self._connection.get() is not None:
+            if self._answer_batch_policies.get():
+                action=_TASK_ENTRY_OPERATIONS.get(method.__name__)
+                if action:
+                    from .prepaid import owner_lock
+                    from .suspension_policy import require_task_operation
+                    owner_lock(self);require_task_operation(self,action)
             return method(self,*args,**kwargs)
         with contextlib.ExitStack() as cleanup:
             if method.__name__ in ('ensure_waiting_input_event','retain_decision_review','ingest_interview_progress_page','admit_provider_attempt'):
@@ -149,6 +155,19 @@ class PostgresStore:
         self._connection = ContextVar('postgres_operation',default=None)
         self._cache_dirty = ContextVar('postgres_cache_dirty',default=False)
         self._map_dirty = ContextVar('postgres_session_map_dirty',default=False)
+        self._answer_batch_policies=ContextVar('answer_batch_policies',default=False)
+
+    @_transactional
+    def run_answer_batch(self,callback):
+        """Explicit short local helper transaction. Never run provider work here.
+
+        Keep entry policies even though nested store helpers now share a handle.
+        Cache invalidation, notifications and rollback stay owned by the existing
+        outer transactional wrapper.
+        """
+        token=self._answer_batch_policies.set(True)
+        try:return callback()
+        finally:self._answer_batch_policies.reset(token)
 
     def ensure_waiting_input_event(self,task_id:str,message:str,*,phase_key:str,payload:dict)->int:
         # Lock before checking. Under READ COMMITTED, a waiter then sees the
@@ -455,6 +474,19 @@ class PostgresStore:
         retained = self._execute_native('SELECT payload FROM decision_reviews WHERE task_id=%s AND wait_id=%s AND revision=%s', (task_id, wait_id, revision)).fetchone()
         if retained is None or json.loads(retained['payload']) != json.loads(json.dumps(payload)):
             raise ValueError('conflicting retained decision review revision')
+
+    @_transactional
+    def retain_answer_review(self,task_id,wait_id,revision,payload):
+        """Answer reconciliation evidence, one atomic immutable insert/check.
+
+        Conflict returns the stored payload without changing it. Never replace
+        the original answer input/operation or accept a different replay.
+        """
+        row=self._execute_native("INSERT INTO decision_reviews AS d(task_id,wait_id,revision,payload,created_at) VALUES(%s,%s,%s,%s,%s) "
+            "ON CONFLICT(task_id,wait_id,revision) DO UPDATE SET payload=d.payload RETURNING payload",
+            (task_id,wait_id,revision,json.dumps(payload),time.time()),write=True).fetchone()
+        if row is None or json.loads(row['payload'])!=json.loads(json.dumps(payload)):
+            raise ValueError('conflicting retained answer review')
 
     @_transactional
     def task_model_pin(self,task_id):

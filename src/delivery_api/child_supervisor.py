@@ -83,11 +83,11 @@ class ChildResult:
 
 
 class ChildSupervisor:
-    def __init__(self,command,*,grace_seconds=10,kill_seconds=5,timing_sink=None,timing_batch_sink=None,trace_sink=None):
+    def __init__(self,command,*,grace_seconds=10,kill_seconds=5,timing_sink=None,timing_batch_sink=None,trace_sink=None,progress_sink=None):
         if not command or any(not isinstance(v,str) or not v for v in command):raise ValueError('fixed trusted command required')
         if grace_seconds<=0 or kill_seconds<=0:raise ValueError('positive stop deadlines required')
         self.command=tuple(command);self.grace=grace_seconds;self.kill=kill_seconds
-        self._trace_sink=trace_sink
+        self._trace_sink=trace_sink;self._progress_sink=progress_sink
         self._timing_sink=timing_sink;self._timing_batch_sink=timing_batch_sink
         self.active=False;self.last_result=None
 
@@ -151,6 +151,9 @@ class ChildSupervisor:
                                 if handle.child_error is None:handle.child_error=parse(pending)
                                 if pending.startswith(b'REQUI_ANSWER_TRACE ') and self._trace_sink is not None:
                                     try:self._trace_sink(json.loads(pending[len(b'REQUI_ANSWER_TRACE '):]))
+                                    except (ValueError,TypeError,KeyError):pass
+                                if pending.startswith(b'REQUI_ANSWER_PROGRESS ') and self._progress_sink is not None:
+                                    try:self._progress_sink(json.loads(pending[len(b'REQUI_ANSWER_PROGRESS '):]))
                                     except (ValueError,TypeError,KeyError):pass
                                 _forward_engine_timing(pending.decode('utf-8',errors='replace'))
                                 if self._timing_sink is not None or self._timing_batch_sink is not None:

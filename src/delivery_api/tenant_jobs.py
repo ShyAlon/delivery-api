@@ -6,7 +6,7 @@ Auth session to re-authorize interrupted work; rate/spend admission is separate.
 from .tenancy import current_scope,tenant_context
 
 
-async def execute_job(store,job_id,handler,*,verify_stopped_quiescence=None,verify_completion_quiescence=None):
+async def execute_job(store,job_id,handler,*,verify_stopped_quiescence=None,verify_completion_quiescence=None,reuse_answer_authority=False):
     scope=current_scope()
     with tenant_context(scope):
         capability=store.claim_worker(job_id)
@@ -14,8 +14,11 @@ async def execute_job(store,job_id,handler,*,verify_stopped_quiescence=None,veri
         from .diagnostic_evidence import bound
         with bound(task_id=capability.task_id,session_id=capability.session_id,job_id=job_id):
             try:
-                capability.validate(store)
-                await handler(capability)
+                task=capability.validate(store)
+                from contextlib import nullcontext
+                from .worker_capability import answer_authority
+                with answer_authority(store,capability,task) if reuse_answer_authority else nullcontext():
+                    await handler(capability)
                 task=store.task(capability.task_id)
                 if task and task.get('stop_requested_at') is not None:
                     # Handler return, cancellation, timeout or an engine snapshot
