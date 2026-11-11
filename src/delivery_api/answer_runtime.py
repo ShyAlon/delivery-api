@@ -200,3 +200,32 @@ class AnswerComputeAccounting:
         self.value=self.events.milliseconds();self.run.record_compute(self.value);self.settled=True
         return self.value
     def abort(self):pass  # Missing complete clock leaves E retained, never guessed.
+
+
+class AnswerAccountingMode:
+    """Explicit internal injection only; no production constructor selects it.
+
+    The existing reviewed task gateway supplies its frozen retail rates, not the
+    child or current process defaults. Transport still belongs to PaidChildRuntime.
+    """
+    def __init__(self,*,start_credits='0.1'):
+        from .retail_pricing import RetailRates
+        # Validate E without taking a model/rate snapshot prematurely.
+        self.start_credits=AnswerPricing(start_credits,RetailRates.from_environment({})).start_credits
+
+    def begin(self,store,operation,input_payload,gateway):
+        if operation.operation.kind!='interview.answer' or operation.binding.provider!='deepseek':
+            raise ValueError('two-touch mode currently supports paid interview answers only')
+        if getattr(gateway,'retail_rates',None) is None:
+            raise ValueError('reviewed task retail rates required')
+        payload=json.dumps(input_payload,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
+        identity=[str(operation.binding.owner_id),operation.binding.session_id,
+                  operation.binding.generation,operation.operation.wait_id]
+        answer_id=hashlib.sha256(json.dumps(identity,separators=(',',':')).encode()).hexdigest()
+        run=AnswerRun.begin(AnswerReceiptStore(store._postgres),answer_id=answer_id,
+            job_id=operation.binding.job_id,input_id=operation.operation.wait_id,
+            input_digest=hashlib.sha256(payload).hexdigest(),
+            pricing=AnswerPricing(self.start_credits,gateway.retail_rates))
+        if not run.execute_allowed:
+            raise RuntimeError('answer already belongs to original job '+run.receipt['job_id']+'; recover without replacement dispatch')
+        return run

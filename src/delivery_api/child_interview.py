@@ -32,10 +32,15 @@ class LocalComputeEvidence:
 
 
 class ChildInterviewClient(EngineClient):
-    def __init__(self,store,artifacts_base,*,gateway_factory,dsn,endpoint,command=None,paid_runtime=None):
+    def __init__(self,store,artifacts_base,*,gateway_factory,dsn,endpoint,command=None,paid_runtime=None,answer_accounting=None):
         if paid_runtime is not None:
             from .child_paid_runtime import PaidChildRuntime
             if not isinstance(paid_runtime,PaidChildRuntime):raise TypeError('typed parent accounting runtime required')
+        if answer_accounting is not None:
+            from .answer_runtime import AnswerAccountingMode
+            if not isinstance(answer_accounting,AnswerAccountingMode):raise TypeError('typed answer accounting mode required')
+            if paid_runtime is None:raise ValueError('answer accounting requires paid parent transport')
+        self.answer_accounting=answer_accounting
         self.paid_runtime=paid_runtime
         self.store=store;self.base=Path(artifacts_base);self.gateway_factory=gateway_factory;self.dsn=dsn;self.endpoint=endpoint
         from interview_engine.question_config import ConfigStore
@@ -342,9 +347,15 @@ class ChildInterviewClient(EngineClient):
                 import httpx
                 gateway=self.gateway_factory(capability,job_id)
                 if getattr(gateway,'retail_rates',None) is not None and self.paid_runtime is None:raise PermissionError('paid child dispatch remains refused')
-                journal=ChildBrokerJournal(self.store,operation)
+                answer_run=None
+                if self.answer_accounting is not None and ref_kind=='answer' and operation.binding.provider=='deepseek':
+                    answer_run=self.answer_accounting.begin(self.store,operation,refs.get(ref,ref_kind),gateway)
+                journal=None if answer_run is not None else ChildBrokerJournal(self.store,operation)
                 compute=LocalComputeEvidence(lambda value:self.store.retain_decision_review(task_id,'child-job:'+job_id,'compute:'+str(operation.binding.lease_epoch),value))
-                if self.paid_runtime is not None:compute=self.paid_runtime.compute(self.store,operation,gateway,'intent',journal) or compute
+                if answer_run is not None:
+                    from .answer_runtime import AnswerComputeAccounting
+                    compute=AnswerComputeAccounting(answer_run)
+                elif self.paid_runtime is not None:compute=self.paid_runtime.compute(self.store,operation,gateway,'intent',journal) or compute
                 endpoint,headers=self.paid_runtime.transport(operation.binding.provider,operation.binding.model,self.endpoint) if self.paid_runtime is not None else (self.endpoint,{})
                 # Cold dispatch authorizes the epoch the child will claim (row
                 # epoch + 1); a warm dispatch authorizes the epoch the parked
@@ -382,8 +393,13 @@ class ChildInterviewClient(EngineClient):
                     if popped is not None and popped.get('progress_ctx') is not None:
                         popped['progress_ctx'].__exit__(None,None,None)
                 with httpx.Client(trust_env=False,follow_redirects=False,timeout=None) as client:
-                    broker=ChildProviderBroker(operation,gateway=gateway,journal=journal,client=client,
-                        endpoint=endpoint,headers=headers,authorize=authority)
+                    if answer_run is not None:
+                        from .answer_runtime import AnswerProviderBroker
+                        broker=AnswerProviderBroker(answer_run,provider=operation.binding.provider,model=operation.binding.model,
+                            client=client,endpoint=endpoint,headers=headers,stop=stop)
+                    else:
+                        broker=ChildProviderBroker(operation,gateway=gateway,journal=journal,client=client,
+                            endpoint=endpoint,headers=headers,authorize=authority)
                     from .child_progress import progress_wake_channel
                     with provider_broker_channel(broker) as provider_fd,child_compute_channel(compute) as compute_fd:
                         if parked_entry is None:
@@ -409,6 +425,9 @@ class ChildInterviewClient(EngineClient):
                                 await self.supervisor.reap(handle,operation)
                                 drop_entry();handle=None
                         except Exception as error:child_error=error
+                # Both descriptor receivers have drained before the one correction.
+                # Unknown provider/compute evidence retains E, never fabricates a refund.
+                if answer_run is not None:answer_run.finish()
                 timings['supervisor']=int((time.monotonic()-supervisor_at)*1000);completion_at=time.monotonic()
                 watcher.cancel()
                 try:await watcher
