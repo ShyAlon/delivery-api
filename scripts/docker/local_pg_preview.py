@@ -208,7 +208,7 @@ def diagnostics(resource,nonce,home):
         value=inspect_owned('container',resource[key],nonce)
         if not value:
             entries[key+'-state.json']=json.dumps({'present':False});continue
-        entries[key+'-state.json']=json.dumps({k:value.get(k) for k in ('Id','Image','State')},default=str)
+        entries[key+'-state.json']=json.dumps(redact({k:value.get(k) for k in ('Id','Image','State')}),default=str)
         result=subprocess.run(['docker','logs','--tail','200',resource[key]],capture_output=True,text=True,timeout=15)
         # Same bounded redaction as owned acceptance, then product redaction.
         entries[key+'-log.txt']=redact(re.sub(r'\bsk-[A-Za-z0-9_-]+','[API key redacted]',OwnedRun.scrub(object(),result.stdout+result.stderr)))
