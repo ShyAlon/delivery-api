@@ -77,13 +77,16 @@ def test_a_store_call_records_its_overhead_and_its_caller():
                 store.task(task_id)
             finally:
                 postgres_scope.request_stats.reset(token)
+            assert sum(e[3] for e in stats.trace) == 1
             request_costs.record_request('GET', '/api/tasks/%s' % task_id, 200, 5, stats)
         finally:
             store.delete_task(task_id)
     rows = statement_trace.summary()['types']['GET /api/tasks/<id>']
     shapes = [r['shape'] for r in rows]
     assert any(s.startswith('SELECT set_config') for s in shapes), shapes
-    assert 'SAVEPOINT operation_start' in shapes
+    # This plain read now commits in one pipeline, not a savepoint-wrapped write transaction.
+    assert 'SAVEPOINT operation_start' not in shapes
+    assert 'BEGIN READ ONLY [one trip]' in shapes
     assert 'COMMIT' in shapes
     assert any(s.startswith('SELECT t.*') for s in shapes)
     assert all('task' not in r['purpose'] or ':' in r['purpose'] for r in rows)

@@ -142,6 +142,12 @@ def run_child(args, *, interruptible: bool = False, popen=subprocess.Popen) -> N
         raise WorkflowError('step command failed with exit code ' + str(code) + ': ' + ' '.join(str(a) for a in args))
 
 
+def probe(args, *, run=subprocess.run) -> int:
+    """Like run_child but returns the exit code instead of raising, for a step whose exit code is its answer."""
+    log('INFO', 'running: ' + ' '.join(str(a) for a in args))
+    return run([str(a) for a in args]).returncode
+
+
 def venv_check(root: Path) -> None:
     """The exact venv gate the owner steps rely on, moved to the front.
 
@@ -197,7 +203,36 @@ def preflight(root: Path, repos_root: Path, *, which=shutil.which, run=command, 
     return origin_shas(repos_root, run=run)
 
 
+_REPORTED_RUN_DIRS: set = set()
+
+
+def _report_skipped_run_dirs(base, incomplete, broken) -> None:
+    """One line per kind, once per process, never one line per run dir (2026-11-10: about 30 identical WARN lines
+    on every rebuild, because accepted_receipt runs twice and a run that never reached acceptance has no receipt)."""
+    key = (tuple(sorted(map(str, incomplete))), tuple(sorted(str(p) for p, _ in broken)))
+    if key in _REPORTED_RUN_DIRS or not (incomplete or broken):
+        return
+    _REPORTED_RUN_DIRS.add(key)
+    if broken:
+        first_dir, first_error = broken[0]
+        log('WARN', str(len(broken)) + ' image-workflow run dir(s) under ' + str(base) + ' have unreadable state or receipt files '
+            + 'and were ignored; first: ' + str(first_dir) + ': ' + str(first_error))
+    if incomplete:
+        log('INFO', str(len(incomplete)) + ' earlier image-workflow run(s) never reached acceptance (no accepted-image.json); '
+            + 'not a problem, they are never reused. Old runs live under ' + str(base))
+
+
 def accepted_receipt(ctx) -> dict | None:
+    base = ctx['home'] / '.local/share/requi/image-workflow'
+    incomplete: list = []
+    broken: list = []
+    try:
+        return _accepted_receipt(ctx, incomplete, broken)
+    finally:
+        _report_skipped_run_dirs(base, incomplete, broken)
+
+
+def _accepted_receipt(ctx, incomplete, broken) -> dict | None:
     """The durable accepted-image receipt for the current sources and contracts.
 
     Reuse matches local_image_preview, which reads the same local-acceptance
@@ -212,8 +247,11 @@ def accepted_receipt(ctx) -> dict | None:
             stages = json.loads(state_file.read_text()).get('stages', {})
             accepted = stages.get('local-acceptance', {})
             receipt = json.loads((state_file.parent / 'accepted-image.json').read_bytes())
+        except FileNotFoundError:
+            incomplete.append(state_file.parent)   # a run that never reached acceptance has no receipt: expected
+            continue
         except (ValueError, OSError) as error:
-            log('WARN', 'ignoring unreadable image-workflow run dir ' + str(state_file.parent) + ': ' + str(error))
+            broken.append((state_file.parent, error))   # truly unreadable: reported, never silently dropped
             continue
         if accepted.get('checks') != {name: 'passed' for name in ACCEPTANCE_CHECKS}:
             continue
@@ -346,7 +384,14 @@ def step_accept_local(ctx) -> None:
 
 
 def step_migrate(ctx) -> None:
-    ctx['run_child'](['bash', str(ctx['req']), 'migrate'])  # dry review, always shown
+    # Dry review, always shown. Exit 0 = nothing to apply (no typed gate: a gate guards a change); 3 = a migration or
+    # role membership is pending (the typed gate below, which lists them in the review above).
+    code = ctx['probe'](['bash', str(ctx['req']), 'migrate', '--check'])
+    if code == 0:
+        log('INFO', 'step 5/7: 0 migrations pending; nothing to apply')
+        return
+    if code != 3:
+        raise WorkflowError('migrate dry review failed with exit code ' + str(code) + '; nothing applied')
     if 'migrate-apply' in ctx['state']['steps']:
         log('PASS', 'step 5/7 reused: migrations recorded applied for these inputs')
         return
@@ -511,7 +556,7 @@ def build_ctx(root: Path) -> dict:
     ctx = {'root': root, 'repos_root': repos_root, 'req': root / 'scripts/ops/req',
            'home': Path.home(), 'shas': shas, 'runtime_contract': runtime_contract, 'acceptance_contract': acceptance,
            'state_path': Path(os.environ.get('REQUI_REBUILD_STATE', str(Path.home() / '.local/share/requi/rebuild/state.json'))),
-           'typed': typed, 'run_child': run_child, 'docker': docker, 'docker_try': docker_try, 'image_exists': image_exists,
+           'typed': typed, 'run_child': run_child, 'probe': probe, 'docker': docker, 'docker_try': docker_try, 'image_exists': image_exists,
            'heads': lambda: checkout_heads(repos_root), 'latest_origin': lambda: fetched_origin_shas(repos_root),
            'reexec': lambda: reexec_front_end(root), 'now': datetime.datetime.now}
     key = run_key(shas, runtime_contract, acceptance)

@@ -25,7 +25,7 @@ def ctx(tmp_path, **over):
             'runtime_contract': 'sha256:rt', 'acceptance_contract': 'sha256:ac',
             'state_path': tmp_path / 'state.json',
             'state': {'schema': 1, 'key': 'k', 'steps': {}},
-            'typed': lambda prompt: '', 'run_child': lambda args, **kw: None,
+            'typed': lambda prompt: '', 'run_child': lambda args, **kw: None, 'probe': lambda args: 3,
             'docker': lambda a, **kw: '', 'image_exists': lambda i: True,
             'heads': lambda: dict(SHAS), 'latest_origin': lambda: dict(SHAS), 'reexec': lambda: None, 'now': datetime.datetime.now}
     base.update(over)
@@ -73,10 +73,11 @@ def test_pull_all_rerun_when_a_checkout_moved(tmp_path):
 def test_migrate_apply_is_the_owners_gate_and_records(tmp_path):
     calls = []
     answers = iter(['APPLY MIGRATIONS'])
-    c = ctx(tmp_path, run_child=lambda a, **k: calls.append(list(a)), typed=lambda p: next(answers))
+    c = ctx(tmp_path, run_child=lambda a, **k: calls.append(list(a)), typed=lambda p: next(answers),
+            probe=lambda a: (calls.append(list(a)), 3)[1])   # 3 = something pending, so the gate asks
     m.step_migrate(c)
     flat = [' '.join(map(str, a)) for a in calls]
-    assert flat[0].endswith('req migrate'), 'the dry review always runs first'
+    assert flat[0].endswith('req migrate --check'), 'the dry review always runs first'
     assert flat[1].endswith('req migrate --apply')
     assert 'migrate-apply' in c['state']['steps']
 
@@ -85,7 +86,7 @@ def test_migrate_skip_continues_without_applying(tmp_path):
     calls = []
     c = ctx(tmp_path, run_child=lambda a, **k: calls.append(a), typed=lambda p: 'SKIP')
     m.step_migrate(c)
-    assert len(calls) == 1 and '--apply' not in ' '.join(map(str, calls[0]))
+    assert calls == [], 'SKIP must not run migrate --apply (the dry review is the probe now)'
     assert 'migrate-apply' not in c['state']['steps']
 
 
@@ -94,7 +95,7 @@ def test_migrate_any_other_answer_stops_the_sequence(tmp_path):
     c = ctx(tmp_path, run_child=lambda a, **k: calls.append(a), typed=lambda p: 'yes')
     with pytest.raises(m.WorkflowError, match='declined'):
         m.step_migrate(c)
-    assert len(calls) == 1, 'req migrate --apply must not run without the exact typed string'
+    assert len(calls) == 0, 'req migrate --apply must not run without the exact typed string'
 
 
 def test_children_never_receive_answered_stdin(tmp_path):
@@ -381,3 +382,35 @@ def test_fetched_origin_shas_sees_a_merge_made_after_the_run_started(tmp_path):
     after = m.fetched_origin_shas(root, repos=['delivery-api'])
     assert after != before, 'the check must fetch, not read a stale origin ref'
     assert m.checkout_heads(root, repos=['delivery-api']) == before, 'checkout HEAD stays where it was'
+
+
+def _run_dir(tmp_path, name, *, receipt, state='{}'):
+    run = tmp_path / '.local/share/requi/image-workflow' / name
+    run.mkdir(parents=True)
+    (run / 'state.json').write_text(state)
+    if receipt is not None:
+        (run / 'accepted-image.json').write_text(receipt)
+
+
+def test_runs_that_never_reached_acceptance_are_one_summary_line_not_one_warning_each(tmp_path, capfd):
+    """2026-11-10: about 30 identical [WARN] lines on every rebuild. A run with no accepted-image.json never finished; that is
+    expected, so it is counted once, and accepted_receipt running twice must not repeat it."""
+    m._REPORTED_RUN_DIRS.clear()
+    for i in range(15):
+        _run_dir(tmp_path, 'stale-%02d' % i, receipt=None)
+    m.accepted_receipt(ctx(tmp_path))
+    m.accepted_receipt(ctx(tmp_path))
+    err = capfd.readouterr().err
+    assert err.count('never reached acceptance') == 1 and '15 earlier' in err
+    assert 'WARN' not in err and 'unreadable image-workflow run dir' not in err
+
+
+def test_a_corrupt_receipt_is_still_reported_as_a_warning_once_with_the_count(tmp_path, capfd):
+    m._REPORTED_RUN_DIRS.clear()
+    for i in range(3):
+        _run_dir(tmp_path, 'bad-%d' % i, receipt='{not json')
+    _run_dir(tmp_path, 'unfinished', receipt=None)
+    m.accepted_receipt(ctx(tmp_path))
+    err = capfd.readouterr().err
+    assert err.count('[WARN]') == 1 and '3 image-workflow run dir(s)' in err and 'unreadable' in err
+    assert err.count('never reached acceptance') == 1 and '1 earlier' in err

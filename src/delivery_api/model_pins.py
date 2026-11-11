@@ -151,7 +151,9 @@ class DurableGateways:
         route. Unavailable providers remain named in route_errors and cannot dispatch.
         """
         rows=PinRepository(self.store._postgres).list();selected=[];errors={}
-        if not rows:raise NoApprovedModelPin('No approved model pin. Approve one in Back office > Model pins.')
+        if not rows:
+            self.route_errors={provider:'No approved model pin' for provider in self.environ.get('REQUI_PIN_PROVIDERS','deepseek').split(',')}
+            raise NoApprovedModelPin('No approved model pin. Approve one in Back office > Model pins.')
         for provider in self.environ.get('REQUI_PIN_PROVIDERS','deepseek').split(','):
             try:
                 if provider in self._launch_errors:raise ValueError(self._launch_errors[provider])
@@ -171,9 +173,9 @@ class DurableGateways:
     def verify_vendor(self):
         return self._factory(self.available_environment()).verify_vendor
     def for_task(self,task_id):
-        task=self.store.task(task_id)
-        if not task:raise KeyError(task_id)
-        name='model-pins:'+str(task['generation']);old=self.store.decision_review(task_id,name,'model-pins-v1')
+        pin=self.store.task_model_pin(task_id)
+        if pin is None:raise KeyError(task_id)
+        name='model-pins:'+str(pin['generation']);old=pin['environment']
         if old is None:
             self.store.retain_decision_review(task_id,name,'model-pins-v1',self.available_environment())
             old=self.store.decision_review(task_id,name,'model-pins-v1')

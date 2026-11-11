@@ -23,9 +23,43 @@ from .postgres_scope import ScopedPostgres, note_query, note_statement, statemen
 from .tenancy import current_scope, TenantAccessDenied
 
 
+# Store reads that are exactly one plain SELECT. Outside a shared request transaction they run as ONE network round trip
+# (BEGIN + identity + statement + COMMIT in one batch) instead of three. A second statement in one of them fails loudly.
+_ONE_TRIP_READS=frozenset({'stop_state','worker_authority','task','session_binding','engine_session','progress_cursor','auth_session_active'})
+
+
+class _OneStatementRows:
+    def __init__(self,rows):self._rows=list(rows);self._next=0
+    @property
+    def rowcount(self):return len(self._rows)
+    def fetchone(self):
+        if self._next>=len(self._rows):return None
+        self._next+=1;return self._rows[self._next-1]
+    def fetchall(self):
+        rest=self._rows[self._next:];self._next=len(self._rows);return rest
+    def __iter__(self):return iter(self.fetchall())
+
+
+class _OneTripConnection:
+    """Stands in for the transaction connection of a one-statement read: the first execute runs the whole transaction in one trip."""
+    def __init__(self,postgres):self._postgres=postgres;self._used=False
+    def execute(self,sql,params=()):
+        if self._used:
+            raise RuntimeError('a one-trip read ran a second statement; take it out of _ONE_TRIP_READS or make it one statement')
+        self._used=True
+        return _OneStatementRows(self._postgres.read_one(sql,params))
+    def notify_after_commit(self,task_id):raise RuntimeError('a one-trip read cannot notify')
+
+
 def _transactional(method):
     @wraps(method)
     def call(self,*args,**kwargs):
+        if method.__name__ in _ONE_TRIP_READS and self._connection.get() is None and method.__name__ not in _TASK_ENTRY_OPERATIONS:
+            from .postgres_scope import _request_tx
+            if _request_tx.get() is None:
+                token=self._connection.set(_OneTripConnection(self._postgres))
+                try:return method(self,*args,**kwargs)
+                finally:self._connection.reset(token)
         if method.__name__=='task_for_engine_session' and not self._map_dirty.get() and len(args)==1 and not kwargs:
             from . import session_task_cache
             hit=session_task_cache.get(self,args[0])    # a hit needs no transaction at all
@@ -174,7 +208,12 @@ class PostgresStore:
             ",\n  (SELECT to_jsonb(e)::text FROM engine_sessions e WHERE e.session_id=t.engine_session_id) AS binding_json,"
             "\n  public.requi_session_active() AS session_active\nFROM tasks t",1)
         row=self._execute_native(sql+' WHERE t.task_id=%s AND t.deleted_at IS NULL',(task_id,)).fetchone()
-        if not row:return None,None,None,self.auth_session_active()
+        if not row:
+            # No task: the caller denies whatever the sign-in says, so its flag needs no shared snapshot. A one-trip read has
+            # already committed its only statement, so this flag is its own one-trip read.
+            if isinstance(self._connection.get(),_OneTripConnection):
+                return None,None,None,bool(self._postgres.read_one('SELECT public.requi_session_active() AS active')[0]['active'])
+            return None,None,None,self.auth_session_active()
         row=dict(row);binding_json=row.pop('binding_json');active=bool(row.pop('session_active'))
         session_id=row.get('engine_session_id')
         task=self._task_record(row)
@@ -210,6 +249,31 @@ class PostgresStore:
                                    (task_id, phase_key, kind, message, json.dumps(payload or {}), now, now, task_id), write=True)
         self._connection.get().notify_after_commit(task_id)
         return cur.fetchone()['id']
+
+    @_transactional
+    def add_engine_timing_batch(self,entries):
+        """Persist only the already-received timing chunk, ordered and scoped by the live task mapping.
+        One statement touches each matching task once and returns its ids for after-commit notifications."""
+        if not isinstance(entries,(list,tuple)) or not 0<len(entries)<=128:raise ValueError('bounded timing batch required')
+        rows=[];now=time.time()
+        for ordinal,entry in enumerate(entries):
+            if not isinstance(entry,(list,tuple)) or len(entry)!=4:raise ValueError('timing entry required')
+            sid,stage,label,status=entry
+            if not all(isinstance(v,str) and 0<len(v)<=500 for v in entry) or status not in ('started','completed'):
+                raise ValueError('bounded timing fields required')
+            rows.append({'ordinal':ordinal,'session_id':sid,'message':label,'payload':json.dumps({'stage':stage,'status':status,'source':'engine.timing'})})
+        result=self._execute_native("""WITH input AS (
+            SELECT * FROM jsonb_to_recordset(%s::jsonb) AS x(ordinal int,session_id text,message text,payload text)
+        ), ev AS (
+            INSERT INTO events(task_id,phase_key,kind,message,payload,ts)
+            SELECT t.task_id,NULL,'progress',x.message,x.payload,%s
+            FROM input x JOIN tasks t ON t.engine_session_id=x.session_id AND t.deleted_at IS NULL
+            ORDER BY x.ordinal RETURNING task_id
+        ), touched AS (
+            UPDATE tasks SET updated_at=%s WHERE task_id IN (SELECT task_id FROM ev) RETURNING task_id
+        ) SELECT task_id,(SELECT count(*) FROM ev) AS count FROM touched""",(json.dumps(rows),now,now),write=True).fetchall()
+        for row in result:self._connection.get().notify_after_commit(str(row['task_id']))
+        return result[0]['count'] if result else 0
 
     def events(self, task_id: str, after: int=0, limit: int=500) -> list[dict]:
         if after:
@@ -391,6 +455,17 @@ class PostgresStore:
         retained = self._execute_native('SELECT payload FROM decision_reviews WHERE task_id=%s AND wait_id=%s AND revision=%s', (task_id, wait_id, revision)).fetchone()
         if retained is None or json.loads(retained['payload']) != json.loads(json.dumps(payload)):
             raise ValueError('conflicting retained decision review revision')
+
+    @_transactional
+    def task_model_pin(self,task_id):
+        """Current task generation and its retained immutable model-pin environment in one snapshot.
+        This reads only the generation and retained review, never admission authority or a cached task projection."""
+        row=self._execute_native("""SELECT t.generation,r.payload
+            FROM tasks t LEFT JOIN decision_reviews r ON r.task_id=t.task_id
+                AND r.wait_id='model-pins:'||t.generation::text AND r.revision='model-pins-v1'
+            WHERE t.task_id=%s AND t.deleted_at IS NULL""",(task_id,)).fetchone()
+        if row is None:return None
+        return {'generation':row['generation'],'environment':json.loads(row['payload']) if row['payload'] is not None else None}
 
     def decision_review(self, task_id: str, wait_id: str, revision: str | None=None) -> dict | None:
         if revision:
