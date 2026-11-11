@@ -119,3 +119,28 @@ def test_provider_key_prefers_repo_file_over_preview_file(tmp_path):
     values=s.load(tmp_path,{'PREVIEW_SETTINGS_FILE':str(preview),'DEEPSEEK_API_KEY':'shell-last'})
     assert values['DEEPSEEK_API_KEY']=='repo-first'
     assert str(repo) in s.source_report(tmp_path,'DEEPSEEK_API_KEY',{'PREVIEW_SETTINGS_FILE':str(preview)}).split(';')[0]
+
+
+def test_preview_alias_matches_preview_exec_source(tmp_path):
+    s=module();preview=tmp_path/'chosen.env';save(preview,'DELIVERY_DATABASE_URL=postgresql://alias\n')
+    assert s.load(tmp_path,{'REQUI_PREVIEW_ENV':str(preview)})['DELIVERY_DATABASE_URL']=='postgresql://alias'
+
+
+def test_hidden_gap_propagates_in_memory_without_file_or_second_prompt(tmp_path):
+    s=module();save(tmp_path/'.env','DELIVERY_SUPABASE_URL=https://fixture\n')
+    env={'XDG_CONFIG_HOME':str(tmp_path/'cfg')};values=s.load(tmp_path,env)
+    calls=[]
+    s.require(values,['DELIVERY_DATABASE_URL'],prompt=lambda name:calls.append(name) or 'postgresql://hidden-fixture')
+    child=s.child_environment(values,env)
+    again=s.load(tmp_path,child)
+    s.require(again,['DELIVERY_DATABASE_URL'],prompt=lambda name:pytest.fail('no repeated prompt'))
+    assert calls==['DELIVERY_DATABASE_URL'] and again['DELIVERY_DATABASE_URL']=='postgresql://hidden-fixture'
+    assert (tmp_path/'.env').read_text()=='DELIVERY_SUPABASE_URL=https://fixture\n'
+    assert not (tmp_path/'cfg').exists()
+
+
+def test_run_overlay_cannot_override_project_identity(tmp_path):
+    import json
+    s=module();save(tmp_path/'.env','DELIVERY_DATABASE_URL=postgresql://file\n')
+    with pytest.raises(s.SettingsError,match='conflict'):
+        s.load(tmp_path,{'XDG_CONFIG_HOME':str(tmp_path/'cfg'),'REQUI_RUN_SETTINGS_JSON':json.dumps({'DELIVERY_DATABASE_URL':'postgresql://other'})})

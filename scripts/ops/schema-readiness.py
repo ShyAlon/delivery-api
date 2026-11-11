@@ -200,7 +200,7 @@ def check_connection(dsn):
 
 def main():
     s=settings();values=s.load(ROOT)
-    if not values.get('DELIVERY_DATABASE_URL'):raise ValueError('DELIVERY_DATABASE_URL missing from protected settings')
+    s.require(values,['DELIVERY_DATABASE_URL'])
     return check_connection(values['DELIVERY_DATABASE_URL'])
 
 if __name__=='__main__':
