@@ -85,3 +85,20 @@ def test_final_completion_composite_keeps_conflicting_record_and_rolls_back_even
         assert w.store.worker_job(job)['state']=='running'
         assert w.store.events(tid)==before
         assert w.store.decision_review(tid,'child-job:'+job,'child-completion-v1')=={'original':True}
+
+
+def test_task_event_batch_order_atomicity_and_scope(pg_workspace_factory,monkeypatch):
+    from delivery_api.postgres_scope import RequestStats,request_stats
+    with pg_workspace_factory() as a,pg_workspace_factory() as b:
+        with tenant_context(a.scope):
+            tid=a.store.create_task('Atomic event batch')['task_id']
+            rows=[{'kind':'answer_submitted','message':'submitted'},{'kind':'progress','message':'working','payload':{'stage':'answer.engine'}}]
+            stats=RequestStats();token=request_stats.set(stats)
+            try:ids=a.store.add_event_batch(tid,rows)
+            finally:request_stats.reset(token)
+            assert sum(e[3] for e in stats.trace)==3
+            assert ids==sorted(ids) and len(ids)==2
+            assert [e['message'] for e in a.store.events(tid)]==['submitted','working']
+            with pytest.raises(Exception):a.store.add_event_batch(tid,[rows[0],{'kind':None,'message':'invalid'}])
+            assert len(a.store.events(tid))==2
+        with tenant_context(b.scope),pytest.raises(Exception):a.store.add_event_batch(tid,rows)

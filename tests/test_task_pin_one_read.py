@@ -17,8 +17,8 @@ def test_existing_generation_pin_is_one_statement_in_one_transaction(store,monke
         try:assert factory.for_task(tid)==expected
         finally:postgres_scope.request_stats.reset(token)
         assert stats.transactions==1,stats.transactions
-        assert stats.queries==2,stats.queries  # identity + single joined read, not task projection plus review
-        assert sum(e[3] for e in stats.trace)==3,stats.trace
+        assert stats.queries==2,stats.queries  # bookkeeping includes scoped batch plus statement
+        assert sum(e[3] for e in stats.trace)==1,stats.trace  # same fresh read, one pipelined Sync
         # No cache: a later generation gets only its own durable pin, never the old one.
         import psycopg
         from test_postgres_store import DSN

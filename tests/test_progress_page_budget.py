@@ -83,7 +83,7 @@ def test_page_sql_failure_rolls_back_every_write(pg_scoped_workspace,monkeypatch
     original=s._execute_native
     def fail(sql,*args,**kwargs):
         result=original(sql,*args,**kwargs)
-        if sql.startswith('WITH incoming'):raise RuntimeError('after writes before commit')
+        if sql.startswith('WITH source_cursor'):raise RuntimeError('after writes before commit')
         return result
     with monkeypatch.context() as m:
         m.setattr(s,'_execute_native',fail)
@@ -124,7 +124,7 @@ def test_page_measurement_against_original_path(pg_scoped_workspace,monkeypatch)
         samples.append((stats.queries,stats.transactions,round((time.monotonic()-start)*1000)))
     print('BEFORE_AFTER_10MS',samples)
     assert samples[0][:2]==(47,6)
-    assert samples[1][:2]==(4,1)
+    assert samples[1][:2]==(3,1)
     assert samples[1][2]<samples[0][2]/3
 
 
@@ -183,4 +183,65 @@ def test_combined_source_and_delivery_budget(pg_scoped_workspace):
     print('COMBINED_BEFORE_AFTER_10MS',results)
     assert (results[0]['source_queries'],results[0]['source_transactions'],results[0]['source_rows'])==(15,5,5)
     assert (results[1]['source_queries'],results[1]['source_transactions'],results[1]['source_rows'])==(6,2,2)
-    assert (results[0]['delivery_queries'],results[1]['delivery_queries'])==(47,4)
+    assert (results[0]['delivery_queries'],results[1]['delivery_queries'])==(47,3)
+
+
+def test_current_page_is_four_wire_syncs_and_preserves_overlap(pg_scoped_workspace):
+    s=pg_scoped_workspace.store;t=s.create_task('Wire budget');sid=str(uuid4())
+    p=page(t['task_id'],sid,['started','heartbeat','call','completed'])
+    first=p.model_copy(update={'events':p.events[:2],'next_cursor':2})
+    ingest_interview_page(s,t['task_id'],sid,first)
+    stats=RequestStats();token=request_stats.set(stats)
+    try:assert ingest_interview_page(s,t['task_id'],sid,p)==1
+    finally:request_stats.reset(token)
+    print('CURRENT_PROGRESS_SYNC',sum(e[3] for e in stats.trace),stats.queries,stats.transactions)
+    assert sum(e[3] for e in stats.trace)==4  # identity, lock, cursor/write CTE, commit
+    assert s.progress_cursor(t['task_id'],'interview',sid)==4
+    assert len([e for e in s.events(t['task_id']) if e['kind']=='progress'])==2
+    with pytest.raises(ValueError,match='backwards'):ingest_interview_page(s,t['task_id'],sid,first)
+    assert s.progress_cursor(t['task_id'],'interview',sid)==4
+
+
+def test_answer_observation_never_advances_durable_cursor(pg_scoped_workspace):
+    from delivery_api.progress_adapter import ingest_answer_page
+    s=pg_scoped_workspace.store;t=s.create_task('Separate streams');sid=str(uuid4())
+    p=page(t['task_id'],sid,['started','completed'])
+    ingest_interview_page(s,t['task_id'],sid,p)
+    transient=page(t['task_id'],sid,['started','heartbeat','call','completed','failed'])
+    for signal in transient.events:signal.cursor+=10**15
+    transient.next_cursor+=10**15
+    assert ingest_answer_page(s,t['task_id'],sid,transient)==3
+    assert s.progress_cursor(t['task_id'],'interview',sid)==2
+    count=len(s.events(t['task_id']))
+    ingest_answer_page(s,t['task_id'],sid,transient)
+    assert len(s.events(t['task_id']))==count
+    # After a parent restart only the committed source journal resumes here.
+    next_page=page(t['task_id'],sid,['started','completed','started'])
+    ingest_interview_page(s,t['task_id'],sid,next_page)
+    assert s.progress_cursor(t['task_id'],'interview',sid)==3
+
+
+def test_answer_observation_foreign_and_revoked_fail_closed(pg_workspace_factory):
+    from delivery_api.progress_adapter import ingest_answer_page
+    with pg_workspace_factory() as a,pg_workspace_factory() as b:
+        with tenant_context(a.scope):t=a.store.create_task('Answer privacy')
+        p=page(t['task_id'],str(uuid4()),['started'])
+        with tenant_context(b.scope),pytest.raises(KeyError):ingest_answer_page(a.store,t['task_id'],p.events[0].session_id,p)
+        with a.admin() as c:c.execute('DELETE FROM auth.sessions WHERE id=%s',(a.scope.session_id,))
+        with tenant_context(a.scope),pytest.raises(KeyError):ingest_answer_page(a.store,t['task_id'],p.events[0].session_id,p)
+
+
+def test_answer_observation_write_failure_rolls_back(pg_scoped_workspace,monkeypatch):
+    from delivery_api.progress_adapter import ingest_answer_page
+    s=pg_scoped_workspace.store;t=s.create_task('Answer rollback');sid=str(uuid4())
+    p=page(t['task_id'],sid,['started','completed']);original=s._execute_native
+    def fail(sql,*a,**kw):
+        result=original(sql,*a,**kw)
+        if sql.startswith('WITH source_cursor'):raise RuntimeError('answer stage write failed')
+        return result
+    with monkeypatch.context() as m:
+        m.setattr(s,'_execute_native',fail)
+        with pytest.raises(RuntimeError):ingest_answer_page(s,t['task_id'],sid,p)
+    assert not s.events(t['task_id'])
+    assert s.progress_cursor(t['task_id'],'interview',sid)==0
+    assert ingest_answer_page(s,t['task_id'],sid,p)==2

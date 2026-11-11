@@ -17,6 +17,8 @@ class PaidChildRuntime:
     def models(self):return self.pin_factory.models if self.pin_factory is not None else self._models
 
     def require(self,provider,model):
+        # Task factories are immutable reviewed pins, independent of new defaults.
+        if self.pin_factory is not None and self.pin_factory.accepts(provider,model):return
         if self.models.get(provider)!=model:
             from .tenancy import current_scope
             if self.pin_factory is None or not self.pin_factory.accepts(provider,model):raise PermissionError('child route differs from reviewed parent model')

@@ -177,7 +177,7 @@ class _ProgressCursor:
     stale value can only refetch a page; the engine read and the stop event keep their own checks. A deleted task
     is noticed at the next refresh (at most 30 s) instead of at the next drain."""
     def __init__(self,clock=time.monotonic):
-        self._clock=clock;self.value=None;self._read_at=0.0
+        self._clock=clock;self.value=None;self._read_at=0.0;self.answer_cursor=0
     def fresh(self):
         return self.value is not None and self._clock()-self._read_at<PROGRESS_CURSOR_REFRESH_SECONDS
     def set_from_db(self,value):
@@ -191,14 +191,26 @@ class _ProgressCursor:
 async def _drain_engine_progress(task_id:str,session_id:str,*,allow_absent:bool=False,cursor_cache:"_ProgressCursor|None"=None)->bool:
     """Read all committed pages; return whether any real progress was ingested."""
     advanced=False
-    from .progress_adapter import ingest_interview_page
+    # One drain owns one cursor even without a long-lived watcher.
+    if cursor_cache is None:cursor_cache=_ProgressCursor()
+    from .progress_adapter import ingest_interview_page,ingest_answer_page
     while True:
+        answer_progress=getattr(engine_client,'answer_progress',None)
+        answer_page=await run_in_threadpool(answer_progress,session_id,cursor_cache.answer_cursor) if callable(answer_progress) else None
+        if answer_page is not None:
+            if not answer_page.events:
+                if answer_page.next_cursor!=cursor_cache.answer_cursor:raise RuntimeError('empty answer progress page advanced cursor')
+                return advanced
+            await run_in_threadpool(ingest_answer_page,store,task_id,session_id,answer_page)
+            cursor_cache.answer_cursor=answer_page.next_cursor
+            advanced=True
+            continue
         if cursor_cache is not None and cursor_cache.fresh():cursor=cursor_cache.value
         else:
             cursor=await run_in_threadpool(store.progress_cursor,task_id,"interview",session_id)
             if cursor_cache is not None:cursor_cache.set_from_db(cursor)
         fetched_at=time.monotonic()
-        try:page=await run_in_threadpool(engine_client.progress,session_id,cursor)
+        try:page=await run_in_threadpool(getattr(engine_client,'durable_progress',engine_client.progress),session_id,cursor)
         except KeyError:
             if allow_absent:return
             raise
@@ -299,7 +311,7 @@ async def _watch_engine_advance(task_id:str,session_id:str,stop:asyncio.Event)->
         if advanced:delay=2.0
         woke=await run_in_threadpool(event_bus.wait,key,delay,stop,version)
         delay=2.0 if woke else min(15.0,delay*2)
-    try:await _drain_engine_progress(task_id,session_id,allow_absent=True)
+    try:await _drain_engine_progress(task_id,session_id,allow_absent=True,cursor_cache=cursor_cache)
     except (EngineClientError,EngineUnreachableError,ValueError,RuntimeError,AttributeError)+_transient_db_errors() as exc:
         activity("progress.drain.failed","Final engine progress drain failed",task_id=task_id,session_id=session_id,error=str(exc)[:300])
 
@@ -1398,11 +1410,12 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
             # Durable submit anchor: the client shadow is tab-local, so a mid-flight
             # re-render orders post-submit engine signals against this event instead.
             # Never the answer text - the turn-end 'answer' event carries the record.
-            (await run_in_threadpool(store.add_event,task_id,"answer_submitted","Answer submitted; engine processing",phase_key=task_before.get("active_phase") or "intent",payload={"input_id":answered_input_id,"actor":a.label}))
-            # Stage boundaries the founder can see, each a real point of this path (no timers): the engine call is about to
-            # block for most of the answer, and after it returns the answer is recorded. Engine-side signals land between.
-            (await run_in_threadpool(store.add_event,task_id,"progress","Interview engine is working on your answer",phase_key=None,payload={"stage":"answer.engine","status":"started","source":"delivery.answer"}))
-            interrupted_job=_interrupted_answer_job(task_id,session_id,pending.input_id)
+            await run_in_threadpool(store.add_event_batch,task_id,[
+                {"kind":"answer_submitted","message":"Answer submitted; engine processing",
+                 "phase_key":task_before.get("active_phase") or "intent","payload":{"input_id":answered_input_id,"actor":a.label}},
+                {"kind":"progress","message":"Interview engine is working on your answer",
+                 "payload":{"stage":"answer.engine","status":"started","source":"delivery.answer"}}])
+            interrupted_job=await run_in_threadpool(_interrupted_answer_job,task_id,session_id,pending.input_id)
             recovered=False
             try:
                 if interrupted_job is not None:
@@ -1416,7 +1429,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
                         submitted=await run_in_threadpool(engine_client.submit,session_id,InputResponse(input_id=pending.input_id,expected_sequence=body.expected_sequence,value=typed_value,
                             rationale=rationale or None,actor_id=a.label,founder_inputs=body.founder_inputs))
                     except Exception as interruption:
-                        interrupted_job=_interrupted_answer_job(task_id,session_id,pending.input_id)
+                        interrupted_job=await run_in_threadpool(_interrupted_answer_job,task_id,session_id,pending.input_id)
                         if interrupted_job is None or not _transient_answer_interruption(interruption):raise
                         submitted=await _resume_interrupted_answer(task_id,session_id,interrupted_job,interruption);recovered=True
             finally:
@@ -1424,8 +1437,11 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
                 drain_at=time.monotonic();progress_stop.set()
                 try:await progress_watch
                 finally:activity('engine.answer.progress_drain','Final answer progress watch finished',task_id=task_id,session_id=session_id,elapsed_ms=int((time.monotonic()-drain_at)*1000))
-            (await run_in_threadpool(store.add_event,task_id,"progress","Recording your answer and preparing the next question",phase_key=None,payload={"stage":"answer.record","status":"started","source":"delivery.answer"}))
-            (await run_in_threadpool(store.add_event,task_id,"engine_protocol","Typed founder input accepted after a transient interruption" if recovered else "Typed founder input accepted",phase_key=task_before.get("active_phase") or "intent",payload=submitted.model_dump(mode="json")))
+            await run_in_threadpool(store.add_event_batch,task_id,[
+                {"kind":"progress","message":"Recording your answer and preparing the next question",
+                 "payload":{"stage":"answer.record","status":"started","source":"delivery.answer"}},
+                {"kind":"engine_protocol","message":"Typed founder input accepted after a transient interruption" if recovered else "Typed founder input accepted",
+                 "phase_key":task_before.get("active_phase") or "intent","payload":submitted.model_dump(mode="json")}])
             source="http_interview"
             if body.comment.strip():
                 (await run_in_threadpool(store.add_review_comment,task_id,body.decision_id or str(pending.input_id),body.review_revision or f'engine:{state.session_id}:{state.sequence}',a.label,body.comment))
@@ -1456,7 +1472,7 @@ async def answer_interview(task_id:str,body:InterviewAnswer,a:auth.Actor=Depends
     (await run_in_threadpool(store.add_event,task_id,"answer",f"You: {answer_display or body.answer}",phase_key=active_phase,payload=answer_payload))
     activity("engine.answer","Founder answer submitted",task_id=task_id,phase=active_phase,actor=a.label,character_count=len(body.answer))
     if source=="http_interview":
-        _finish_cloud_interview(task_id,submitted.snapshot)
+        await run_in_threadpool(_finish_cloud_interview,task_id,submitted.snapshot)
     return {"status":"accepted"}
 
 
