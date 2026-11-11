@@ -14,6 +14,11 @@ p=argparse.ArgumentParser();p.add_argument('--code',default='manual');p.add_argu
 root=Path(__file__).resolve().parents[2];target=root/'runs'/'preview-debug';target.mkdir(parents=True,exist_ok=True)
 home=Path.home();missing=[]
 LIMIT=200000
+# Evidence names are explicit. Never open arbitrary files in a run directory:
+# preview-container.env/service.env and future credentials do not belong in ZIPs.
+RUN_EVIDENCE=frozenset(('state.json','build.log','fixture-build.log','local-failure.log',
+ 'local-http-evidence.json','browser-smoke.log','backoffice.log',
+ 'answer-proof.json','answer-traces.jsonl','answer-sync-table.txt'))
 def read(command,timeout=15,source=None):
     try:
         result=subprocess.run(command,cwd=root,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=timeout)
@@ -90,8 +95,9 @@ with os.fdopen(fd,'wb') as out,zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as 
     z.writestr('repos.txt','\n'.join('%s %s %s dirty=%s %s'%(n,r['branch'],r['head'],r['dirty'],'; '.join(r['dirty_files'])) for n,r in repo_facts.items()))
     z.writestr('images.txt',clean(read(['docker','images','--format','{{.Repository}}:{{.Tag}} {{.ID}} {{.CreatedSince}}','--filter','reference=requi*'])))
     if run_dir:
-        for f in sorted(run_dir.iterdir()):
-            if f.is_file():z.writestr('run/'+run_dir.name+'/'+f.name,clean(tail(f)))
+        for name in sorted(RUN_EVIDENCE):
+            f=run_dir/name
+            if not f.is_symlink() and f.is_file():z.writestr('run/'+run_dir.name+'/'+f.name,clean(tail(f)))
     if rebuild_state:z.writestr('rebuild-state.json',clean(tail(rebuild_state)))
     if names:
         z.writestr('containers.txt','\n'.join(clean(read(['docker','inspect','--format',INSPECT,n])) for n in names))

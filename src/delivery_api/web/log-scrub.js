@@ -13,7 +13,7 @@ export function scrubText(value){
   s=s.replace(/\b(?:sk|pk|rk|sb)[-_][A-Za-z0-9_-]{12,}/g,'[key]');
   s=s.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/gi,m=>m.split('://')[0]+'://[redacted]@');
   s=s.replace(/([?&][^=&\s"']+=)[^&\s"']+/g,'$1[redacted]');
-  s=s.replace(new RegExp('("?'+SECRET_KEY+'[A-Za-z_]*"?\\s*[:=]\\s*)("[^"]*"|\'[^\']*\'|[^\\s,;}]+)','gi'),'$1[redacted]');
+  s=s.replace(new RegExp('(["\']?[A-Za-z0-9_.-]*'+SECRET_KEY+'[A-Za-z0-9_.-]*["\']?\\s*[:=]\\s*)("[^"]*"|\'[^\']*\'|[^\\s,;}]+)','gi'),'$1[redacted]');
   s=s.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g,'[email]');
   s=s.replace(/\b[A-Fa-f0-9]{32,}\b/g,'[hex]');
   s=s.replace(/(?<![A-Za-z0-9_\/.-])[A-Za-z0-9_-]{40,}={0,2}(?![A-Za-z0-9_\/.-])/g,m=>/\d/.test(m)&&/[A-Za-z]/.test(m)?'[token]':m);

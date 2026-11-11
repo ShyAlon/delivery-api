@@ -181,3 +181,30 @@ def test_bundle_carries_real_diagnostic_recovery_without_consuming_it(owner_mach
             assert json.loads(raw)['kind']=='diagnostic-only-not-execution-replay'
         assert evidence.read_bytes()==before
     finally:path.unlink()
+
+
+def test_run_evidence_allowlist_never_opens_settings_or_unknown_files(owner_machine,monkeypatch,capsys):
+    run=owner_machine/'.local/share/requi/image-workflow/413a76bd7770f2da551e65a7'
+    for name in ('preview-container.env','service.env','credentials.json','mystery.txt'):
+        (run/name).write_text('INTERVIEW_ENGINE_TOKEN=FAKE-DO-NOT-EXPORT-1234')
+    original=Path.open
+    def guarded(path,*args,**kwargs):
+        if path.parent==run and path.name in ('preview-container.env','service.env','credentials.json','mystery.txt'):
+            pytest.fail('collector must never open '+path.name)
+        return original(path,*args,**kwargs)
+    monkeypatch.setattr(Path,'open',guarded)
+    path=_run_bundle(monkeypatch,capsys,['preview-debug.py'])
+    with zipfile.ZipFile(path) as z:
+        assert not any(name.endswith(('.env','credentials.json','mystery.txt')) for name in z.namelist())
+    path.unlink()
+
+
+def test_allowlisted_symlink_is_not_followed(owner_machine,monkeypatch,capsys):
+    run=owner_machine/'.local/share/requi/image-workflow/413a76bd7770f2da551e65a7'
+    secret=owner_machine/'private.env';secret.write_text('INTERVIEW_ENGINE_TOKEN=FAKE-NO-EXPORT-1234')
+    (run/'answer-sync-table.txt').symlink_to(secret)
+    path=_run_bundle(monkeypatch,capsys,['preview-debug.py'])
+    with zipfile.ZipFile(path) as z:
+        assert not any(name.endswith('answer-sync-table.txt') for name in z.namelist())
+        assert b'FAKE-NO-EXPORT-1234' not in b''.join(z.read(name) for name in z.namelist())
+    path.unlink()

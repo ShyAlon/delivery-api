@@ -4,8 +4,8 @@ import io,json,re,zipfile,os,shlex
 from pathlib import Path
 from datetime import datetime,timezone
 
-SENSITIVE=re.compile(r'(password|passcode|secret|token|authorization|cookie|api[_-]?key|credential|private[_-]?key)',re.I)
-SECRET_TEXT=re.compile(r'''(?ix)(\b(?:authorization|cookie|password|api[_-]?key|token|secret)\b["']?\s*[:=]\s*)[^\n,;]+''')
+SENSITIVE=re.compile(r'(password|passwd|passcode|secret|token|authorization|cookie|api[_-]?key|credential|private[_-]?key)',re.I)
+SECRET_TEXT=re.compile(r'''(?ix)(["']?\b[A-Za-z0-9_.-]*(?:password|passwd|passcode|secret|token|authorization|cookie|api[_-]?key|credential|private[_-]?key)[A-Za-z0-9_.-]*\b["']?\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;}]+)''')
 BEARER=re.compile(r'(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+')
 
 def redact(value):
